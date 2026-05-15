@@ -193,6 +193,7 @@ require_once __DIR__ . '/includes/auth.php';
 
 require_once __DIR__ . '/models/BaseModel.php';
 require_once __DIR__ . '/models/UserModel.php';
+require_once __DIR__ . '/models/LoginEmailCodeModel.php';
 require_once __DIR__ . '/models/ModuleModel.php';
 require_once __DIR__ . '/models/VehicleCouplingModel.php';
 require_once __DIR__ . '/models/TireModel.php';
@@ -232,9 +233,19 @@ try {
         case 'login':
             $authController = new AuthController($db);
             if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-                $authController->autentificare();
+                if ($action === 'verify_code') {
+                    $authController->verificaCod();
+                } elseif ($action === 'resend_code') {
+                    $authController->retrimiteCod();
+                } else {
+                    $authController->autentificare();
+                }
             } else {
-                $authController->index();
+                if ($action === 'verify') {
+                    $authController->verifyCodePage();
+                } else {
+                    $authController->index();
+                }
             }
             break;
 

@@ -24,6 +24,7 @@ DROP TABLE IF EXISTS anvelope;
 DROP TABLE IF EXISTS vehicule_cuplaje;
 DROP TABLE IF EXISTS soferi;
 DROP TABLE IF EXISTS vehicule;
+DROP TABLE IF EXISTS login_email_codes;
 DROP TABLE IF EXISTS utilizatori;
 
 SET FOREIGN_KEY_CHECKS = 1;
@@ -39,6 +40,23 @@ CREATE TABLE utilizatori (
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_utilizatori_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE login_email_codes (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id INT UNSIGNED NOT NULL,
+    email VARCHAR(190) NOT NULL,
+    code_hash VARCHAR(255) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    sent_at DATETIME NOT NULL,
+    attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    max_attempts TINYINT UNSIGNED NOT NULL DEFAULT 5,
+    used_at DATETIME NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_login_email_codes_user_active (user_id, used_at, expires_at),
+    INDEX idx_login_email_codes_email_active (email, used_at, expires_at),
+    INDEX idx_login_email_codes_sent_at (sent_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE vehicule (
@@ -156,6 +174,7 @@ CREATE TABLE soferi (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     nume VARCHAR(100) NOT NULL,
     telefon VARCHAR(20) NOT NULL,
+    salariu DECIMAL(10,2) NULL,
     vehicle_id INT UNSIGNED NULL,
     permis_expira_la DATE NOT NULL,
     status ENUM('activ', 'inactiv') NOT NULL DEFAULT 'activ',
@@ -491,10 +510,10 @@ INSERT INTO vehicule (nr_inmatriculare, marca, model, tip_vehicul, an_fabricatie
 ('B-202-FLT', 'Ford', 'Transit', 'camion', 2020, 120300, 130000, 'WF0XXXTTGXLA02021', 'Garaj Ilfov', NULL, NULL, NULL, 'activ', 'Autoutilitara transport marfa', NOW(), NOW()),
 ('B-303-FLT', 'Renault', 'Clio', 'autovehicul', 2019, 142210, 150000, 'VF1RCLIOFLEET3030', 'Garaj Brasov', NULL, NULL, NULL, 'inactiv', 'In service prelungit', NOW(), NOW());
 
-INSERT INTO soferi (nume, telefon, vehicle_id, permis_expira_la, status, observatii, created_at, updated_at) VALUES
-('Ionescu Mihai', '0722000001', 1, DATE_ADD(CURDATE(), INTERVAL 300 DAY), 'activ', 'Disponibil full-time', NOW(), NOW()),
-('Popescu Andrei', '0722000002', 2, DATE_ADD(CURDATE(), INTERVAL 120 DAY), 'activ', 'Route urban', NOW(), NOW()),
-('Marin Elena', '0722000003', NULL, DATE_ADD(CURDATE(), INTERVAL 45 DAY), 'inactiv', 'Concediu medical', NOW(), NOW());
+INSERT INTO soferi (nume, telefon, salariu, vehicle_id, permis_expira_la, status, observatii, created_at, updated_at) VALUES
+('Ionescu Mihai', '0722000001', 5200.00, 1, DATE_ADD(CURDATE(), INTERVAL 300 DAY), 'activ', 'Disponibil full-time', NOW(), NOW()),
+('Popescu Andrei', '0722000002', 5000.00, 2, DATE_ADD(CURDATE(), INTERVAL 120 DAY), 'activ', 'Route urban', NOW(), NOW()),
+('Marin Elena', '0722000003', 4700.00, NULL, DATE_ADD(CURDATE(), INTERVAL 45 DAY), 'inactiv', 'Concediu medical', NOW(), NOW());
 
 INSERT INTO concedii (
     driver_id,

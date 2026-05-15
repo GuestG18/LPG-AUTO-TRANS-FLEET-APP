@@ -201,8 +201,8 @@ return [
         ],
     ],
     'soferi' => [
-        'title' => 'È˜oferi',
-        'singular' => 'È™ofer',
+        'title' => 'ÃˆËœoferi',
+        'singular' => 'Ãˆâ„¢ofer',
         'table' => 'soferi',
         'select' => "t.*,
             CASE
@@ -222,24 +222,35 @@ return [
         'list_columns' => [
             'nume' => ['label' => 'Nume'],
             'telefon' => ['label' => 'Telefon'],
+            'salariu' => ['label' => 'Salariu', 'type' => 'currency'],
             'vehicul_label' => ['label' => 'Vehicul alocat'],
-            'permis_expira_la' => ['label' => 'Permis expirÄƒ la', 'type' => 'date'],
+            'permis_expira_la' => ['label' => 'Permis expirÃ„Æ’ la', 'type' => 'date'],
             'status' => ['label' => 'Status', 'type' => 'status'],
             'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
         ],
         'detail_fields' => [
             'nume' => ['label' => 'Nume'],
             'telefon' => ['label' => 'Telefon'],
+            'salariu' => ['label' => 'Salariu', 'type' => 'currency'],
             'vehicul_label' => ['label' => 'Vehicul alocat'],
-            'permis_expira_la' => ['label' => 'Permis expirÄƒ la', 'type' => 'date'],
+            'permis_expira_la' => ['label' => 'Permis expirÃ„Æ’ la', 'type' => 'date'],
             'status' => ['label' => 'Status', 'type' => 'status'],
-            'observatii' => ['label' => 'ObservaÈ›ii', 'type' => 'textarea'],
+            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea'],
             'created_at' => ['label' => 'Creat la', 'type' => 'datetime'],
             'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
         ],
         'form_fields' => [
             'nume' => ['label' => 'Nume', 'type' => 'text', 'required' => true, 'maxlength' => 100],
             'telefon' => ['label' => 'Telefon', 'type' => 'text', 'required' => true, 'maxlength' => 20],
+            'salariu' => [
+                'label' => 'Salariu',
+                'type' => 'number',
+                'required' => false,
+                'nullable' => true,
+                'step' => '0.01',
+                'min' => '0',
+                'placeholder' => 'Ex: 4500',
+            ],
             'vehicle_id' => [
                 'label' => 'Vehicul alocat',
                 'type' => 'select',
@@ -277,9 +288,9 @@ return [
                     'where' => "status = 'activ' AND tip_vehicul <> 'semiremorca'",
                     'order' => 'nr_inmatriculare ASC',
                 ],
-                'placeholder' => 'FÄƒrÄƒ vehicul alocat',
+                'placeholder' => 'FÃ„Æ’rÃ„Æ’ vehicul alocat',
             ],
-            'permis_expira_la' => ['label' => 'Permis expirÄƒ la', 'type' => 'date', 'required' => true],
+            'permis_expira_la' => ['label' => 'Permis expirÃ„Æ’ la', 'type' => 'date', 'required' => true],
             'status' => [
                 'label' => 'Status',
                 'type' => 'select',
@@ -287,7 +298,7 @@ return [
                 'options' => ['activ' => 'Activ', 'inactiv' => 'Inactiv'],
                 'default' => 'activ',
             ],
-            'observatii' => ['label' => 'ObservaÈ›ii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
+            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
         ],
         'filters' => [
             'status' => [
@@ -301,7 +312,7 @@ return [
     ],
 
     'alimentari' => [
-        'title' => 'AlimentÄƒri',
+        'title' => 'AlimentÃ„Æ’ri',
         'singular' => 'alimentare',
         'table' => 'alimentari',
         'select' => 't.*, v.nr_inmatriculare AS vehicul_label, CONCAT(v.marca, " ", v.model) AS vehicul_model, s.nume AS sofer_label',
@@ -314,19 +325,19 @@ return [
         'list_columns' => [
             'data_alimentare' => ['label' => 'Data alimentare', 'type' => 'date'],
             'vehicul_label' => ['label' => 'Vehicul'],
-            'sofer_label' => ['label' => 'È˜ofer'],
+            'sofer_label' => ['label' => 'ÃˆËœofer'],
             'litri' => ['label' => 'Litri', 'type' => 'number', 'decimals' => 2],
             'cost_total' => ['label' => 'Cost total', 'type' => 'currency'],
             'km_bord' => ['label' => 'Km bord', 'type' => 'integer'],
         ],
         'detail_fields' => [
             'vehicul_label' => ['label' => 'Vehicul'],
-            'sofer_label' => ['label' => 'È˜ofer'],
+            'sofer_label' => ['label' => 'ÃˆËœofer'],
             'data_alimentare' => ['label' => 'Data alimentare', 'type' => 'date'],
             'litri' => ['label' => 'Litri', 'type' => 'number', 'decimals' => 2],
             'cost_total' => ['label' => 'Cost total', 'type' => 'currency'],
             'km_bord' => ['label' => 'Km bord', 'type' => 'integer'],
-            'observatii' => ['label' => 'ObservaÈ›ii', 'type' => 'textarea'],
+            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea'],
             'created_at' => ['label' => 'Creat la', 'type' => 'datetime'],
             'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
         ],
@@ -343,7 +354,7 @@ return [
                 ],
             ],
             'driver_id' => [
-                'label' => 'È˜ofer (opÈ›ional)',
+                'label' => 'ÃˆËœofer (opÃˆâ€ºional)',
                 'type' => 'select',
                 'required' => false,
                 'nullable' => true,
@@ -359,7 +370,7 @@ return [
             'litri' => ['label' => 'Litri', 'type' => 'number', 'required' => true, 'min' => 0, 'step' => '0.01'],
             'cost_total' => ['label' => 'Cost total (lei)', 'type' => 'number', 'required' => true, 'min' => 0, 'step' => '0.01'],
             'km_bord' => ['label' => 'Km bord', 'type' => 'number', 'required' => true, 'min' => 0, 'integer' => true],
-            'observatii' => ['label' => 'ObservaÈ›ii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
+            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
         ],
         'filters' => [
             'vehicle_id' => [
@@ -375,13 +386,13 @@ return [
                 ],
             ],
             'data_start' => ['label' => 'Data de la', 'type' => 'date', 'column' => 't.data_alimentare', 'operator' => '>='],
-            'data_end' => ['label' => 'Data pÃ¢nÄƒ la', 'type' => 'date', 'column' => 't.data_alimentare', 'operator' => '<='],
+            'data_end' => ['label' => 'Data pÃƒÂ¢nÃ„Æ’ la', 'type' => 'date', 'column' => 't.data_alimentare', 'operator' => '<='],
         ],
     ],
 
     'mentenanta' => [
-        'title' => 'MentenanÈ›Äƒ',
-        'singular' => 'intervenÈ›ie',
+        'title' => 'MentenanÃˆâ€ºÃ„Æ’',
+        'singular' => 'intervenÃˆâ€ºie',
         'table' => 'mentenanta',
         'select' => 't.*, v.nr_inmatriculare AS vehicul_label, CONCAT(v.marca, " ", v.model) AS vehicul_model',
         'joins' => [
@@ -390,9 +401,9 @@ return [
         'default_order' => 't.data_interventie DESC, t.id DESC',
         'search_fields' => ['v.nr_inmatriculare', 't.tip_interventie', 't.atelier', 't.furnizor_piesa', 't.observatii'],
         'list_columns' => [
-            'data_interventie' => ['label' => 'Data intervenÈ›ie', 'type' => 'date'],
+            'data_interventie' => ['label' => 'Data intervenÃˆâ€ºie', 'type' => 'date'],
             'vehicul_label' => ['label' => 'Vehicul'],
-            'tip_interventie' => ['label' => 'Tip intervenÈ›ie'],
+            'tip_interventie' => ['label' => 'Tip intervenÃˆâ€ºie'],
             'cost' => ['label' => 'Cost', 'type' => 'currency'],
             'atelier' => ['label' => 'Atelier'],
             'furnizor_piesa' => ['label' => 'Furnizor piesa'],
@@ -400,12 +411,12 @@ return [
         ],
         'detail_fields' => [
             'vehicul_label' => ['label' => 'Vehicul'],
-            'tip_interventie' => ['label' => 'Tip intervenÈ›ie'],
-            'data_interventie' => ['label' => 'Data intervenÈ›ie', 'type' => 'date'],
+            'tip_interventie' => ['label' => 'Tip intervenÃˆâ€ºie'],
+            'data_interventie' => ['label' => 'Data intervenÃˆâ€ºie', 'type' => 'date'],
             'cost' => ['label' => 'Cost', 'type' => 'currency'],
             'atelier' => ['label' => 'Atelier'],
             'furnizor_piesa' => ['label' => 'Furnizor piesa'],
-            'observatii' => ['label' => 'ObservaÈ›ii', 'type' => 'textarea'],
+            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea'],
             'created_at' => ['label' => 'Creat la', 'type' => 'datetime'],
             'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
         ],
@@ -421,11 +432,11 @@ return [
                     'order' => 'nr_inmatriculare ASC',
                 ],
             ],
-            'tip_interventie' => ['label' => 'Tip intervenÈ›ie', 'type' => 'text', 'required' => true, 'maxlength' => 150],
-            'data_interventie' => ['label' => 'Data intervenÈ›ie', 'type' => 'date', 'required' => true],
+            'tip_interventie' => ['label' => 'Tip intervenÃˆâ€ºie', 'type' => 'text', 'required' => true, 'maxlength' => 150],
+            'data_interventie' => ['label' => 'Data intervenÃˆâ€ºie', 'type' => 'date', 'required' => true],
             'cost' => ['label' => 'Cost (lei)', 'type' => 'number', 'required' => true, 'min' => 0, 'step' => '0.01'],
             'atelier' => ['label' => 'Atelier', 'type' => 'text', 'required' => false, 'nullable' => true, 'maxlength' => 120],
-            'observatii' => ['label' => 'ObservaÈ›ii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
+            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
         ],
         'filters' => [
             'vehicle_id' => [
@@ -441,7 +452,7 @@ return [
                 ],
             ],
             'data_start' => ['label' => 'Data de la', 'type' => 'date', 'column' => 't.data_interventie', 'operator' => '>='],
-            'data_end' => ['label' => 'Data pÃ¢nÄƒ la', 'type' => 'date', 'column' => 't.data_interventie', 'operator' => '<='],
+            'data_end' => ['label' => 'Data pÃƒÂ¢nÃ„Æ’ la', 'type' => 'date', 'column' => 't.data_interventie', 'operator' => '<='],
         ],
     ],
 
@@ -458,8 +469,8 @@ return [
         'list_columns' => [
             'vehicul_label' => ['label' => 'Vehicul'],
             'tip_document' => ['label' => 'Tip document'],
-            'numar_document' => ['label' => 'NumÄƒr document'],
-            'fisier_original' => ['label' => 'FiÈ™ier', 'type' => 'document_file'],
+            'numar_document' => ['label' => 'NumÃ„Æ’r document'],
+            'fisier_original' => ['label' => 'FiÃˆâ„¢ier', 'type' => 'document_file'],
             'data_expirare' => ['label' => 'Data expirare', 'type' => 'expiry'],
             'zile_expirare' => ['label' => 'Zile expirare', 'type' => 'integer'],
             'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
@@ -467,9 +478,9 @@ return [
         'detail_fields' => [
             'vehicul_label' => ['label' => 'Vehicul'],
             'tip_document' => ['label' => 'Tip document'],
-            'numar_document' => ['label' => 'NumÄƒr document'],
+            'numar_document' => ['label' => 'NumÃ„Æ’r document'],
             'data_expirare' => ['label' => 'Data expirare', 'type' => 'expiry'],
-            'observatii' => ['label' => 'ObservaÈ›ii', 'type' => 'textarea'],
+            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea'],
             'created_at' => ['label' => 'Creat la', 'type' => 'datetime'],
             'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
         ],
@@ -486,9 +497,9 @@ return [
                 ],
             ],
             'tip_document' => ['label' => 'Tip document', 'type' => 'text', 'required' => true, 'maxlength' => 100],
-            'numar_document' => ['label' => 'NumÄƒr document', 'type' => 'text', 'required' => true, 'maxlength' => 100],
+            'numar_document' => ['label' => 'NumÃ„Æ’r document', 'type' => 'text', 'required' => true, 'maxlength' => 100],
             'data_expirare' => ['label' => 'Data expirare', 'type' => 'date', 'required' => true],
-            'observatii' => ['label' => 'ObservaÈ›ii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
+            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
         ],
         'filters' => [
             'vehicle_id' => [
@@ -503,14 +514,14 @@ return [
                     'order' => 'nr_inmatriculare ASC',
                 ],
             ],
-            'data_start' => ['label' => 'ExpirÄƒ de la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '>='],
-            'data_end' => ['label' => 'ExpirÄƒ pÃ¢nÄƒ la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '<='],
+            'data_start' => ['label' => 'ExpirÃ„Æ’ de la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '>='],
+            'data_end' => ['label' => 'ExpirÃ„Æ’ pÃƒÂ¢nÃ„Æ’ la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '<='],
         ],
     ],
 
     'documente_soferi' => [
-        'title' => 'Documente È™oferi',
-        'singular' => 'document È™ofer',
+        'title' => 'Documente Ãˆâ„¢oferi',
+        'singular' => 'document Ãˆâ„¢ofer',
         'table' => 'documente_soferi',
         'select' => 't.*, s.nume AS sofer_label, s.telefon AS sofer_telefon, v.nr_inmatriculare AS vehicul_label',
         'joins' => [
@@ -520,28 +531,28 @@ return [
         'default_order' => 't.data_expirare ASC, t.id DESC',
         'search_fields' => ['s.nume', 's.telefon', 't.tip_document', 't.numar_document', 't.observatii', 't.fisier_original'],
         'list_columns' => [
-            'sofer_label' => ['label' => 'È˜ofer'],
+            'sofer_label' => ['label' => 'ÃˆËœofer'],
             'vehicul_label' => ['label' => 'Vehicul alocat'],
             'tip_document' => ['label' => 'Tip document'],
-            'numar_document' => ['label' => 'NumÄƒr document'],
-            'fisier_original' => ['label' => 'FiÈ™ier', 'type' => 'document_file'],
+            'numar_document' => ['label' => 'NumÃ„Æ’r document'],
+            'fisier_original' => ['label' => 'FiÃˆâ„¢ier', 'type' => 'document_file'],
             'data_expirare' => ['label' => 'Data expirare', 'type' => 'expiry'],
             'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
         ],
         'detail_fields' => [
-            'sofer_label' => ['label' => 'È˜ofer'],
-            'sofer_telefon' => ['label' => 'Telefon È™ofer'],
+            'sofer_label' => ['label' => 'ÃˆËœofer'],
+            'sofer_telefon' => ['label' => 'Telefon Ãˆâ„¢ofer'],
             'vehicul_label' => ['label' => 'Vehicul alocat'],
             'tip_document' => ['label' => 'Tip document'],
-            'numar_document' => ['label' => 'NumÄƒr document'],
+            'numar_document' => ['label' => 'NumÃ„Æ’r document'],
             'data_expirare' => ['label' => 'Data expirare', 'type' => 'expiry'],
-            'observatii' => ['label' => 'ObservaÈ›ii', 'type' => 'textarea'],
+            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea'],
             'created_at' => ['label' => 'Creat la', 'type' => 'datetime'],
             'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
         ],
         'form_fields' => [
             'driver_id' => [
-                'label' => 'È˜ofer',
+                'label' => 'ÃˆËœofer',
                 'type' => 'select',
                 'required' => true,
                 'source' => [
@@ -552,13 +563,13 @@ return [
                 ],
             ],
             'tip_document' => ['label' => 'Tip document', 'type' => 'text', 'required' => true, 'maxlength' => 100],
-            'numar_document' => ['label' => 'NumÄƒr document', 'type' => 'text', 'required' => false, 'nullable' => true, 'maxlength' => 100],
+            'numar_document' => ['label' => 'NumÃ„Æ’r document', 'type' => 'text', 'required' => false, 'nullable' => true, 'maxlength' => 100],
             'data_expirare' => ['label' => 'Data expirare', 'type' => 'date', 'required' => true],
-            'observatii' => ['label' => 'ObservaÈ›ii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
+            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
         ],
         'filters' => [
             'driver_id' => [
-                'label' => 'È˜ofer',
+                'label' => 'ÃˆËœofer',
                 'type' => 'select',
                 'column' => 't.driver_id',
                 'operator' => '=',
@@ -569,8 +580,8 @@ return [
                     'order' => 'nume ASC',
                 ],
             ],
-            'data_start' => ['label' => 'ExpirÄƒ de la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '>='],
-            'data_end' => ['label' => 'ExpirÄƒ pÃ¢nÄƒ la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '<='],
+            'data_start' => ['label' => 'ExpirÃ„Æ’ de la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '>='],
+            'data_end' => ['label' => 'ExpirÃ„Æ’ pÃƒÂ¢nÃ„Æ’ la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '<='],
         ],
         'nav_parent' => 'soferi',
     ],
@@ -601,9 +612,9 @@ return [
         'form_fields' => [
             'nume' => ['label' => 'Nume', 'type' => 'text', 'required' => true, 'maxlength' => 120],
             'email' => ['label' => 'Email', 'type' => 'email', 'required' => true, 'maxlength' => 190],
-            'parola' => ['label' => 'ParolÄƒ', 'type' => 'password', 'required_on' => 'create', 'minlength' => 8, 'hash' => true],
+            'parola' => ['label' => 'ParolÃ„Æ’', 'type' => 'password', 'required_on' => 'create', 'minlength' => 8, 'hash' => true],
             'confirmare_parola' => [
-                'label' => 'Confirmare parolÄƒ',
+                'label' => 'Confirmare parolÃ„Æ’',
                 'type' => 'password',
                 'required_on' => 'create',
                 'store' => false,
@@ -645,3 +656,4 @@ return [
         ],
     ],
 ];
+
