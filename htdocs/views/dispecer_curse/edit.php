@@ -1,0 +1,853 @@
+﻿<?php
+$zoneTariffJson = json_encode($zoneTariffs, JSON_UNESCAPED_UNICODE);
+if (!is_string($zoneTariffJson)) {
+    $zoneTariffJson = '{}';
+}
+$zoneExtraKmJson = json_encode($zoneExtraKmCosts ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($zoneExtraKmJson)) {
+    $zoneExtraKmJson = '{}';
+}
+$beneficiaryPricingJson = json_encode($beneficiaryPricing ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($beneficiaryPricingJson)) {
+    $beneficiaryPricingJson = '{}';
+}
+$loadLocationTariffJson = json_encode($loadLocationTariffs ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($loadLocationTariffJson)) {
+    $loadLocationTariffJson = '{}';
+}
+$vehicleDefaultLoadLocationJson = json_encode($vehicleDefaultLoadLocationMap ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($vehicleDefaultLoadLocationJson)) {
+    $vehicleDefaultLoadLocationJson = '{}';
+}
+$vehicleGarageJson = json_encode($vehicleGarageMap ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($vehicleGarageJson)) {
+    $vehicleGarageJson = '{}';
+}
+$vehicleDefaultDistributionZoneJson = json_encode($vehicleDefaultDistributionZoneMap ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($vehicleDefaultDistributionZoneJson)) {
+    $vehicleDefaultDistributionZoneJson = '{}';
+}
+$loadLocationsByBeneficiaryJson = json_encode($loadLocationsByBeneficiary ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($loadLocationsByBeneficiaryJson)) {
+    $loadLocationsByBeneficiaryJson = '{}';
+}
+$distributionZonesByBeneficiaryJson = json_encode($distributionZonesByBeneficiary ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($distributionZonesByBeneficiaryJson)) {
+    $distributionZonesByBeneficiaryJson = '{}';
+}
+$distributionRouteTariffMapJson = json_encode($distributionRouteTariffMap ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($distributionRouteTariffMapJson)) {
+    $distributionRouteTariffMapJson = '{}';
+}
+$primaryRouteKmMapJson = json_encode($primaryRouteKmMap ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($primaryRouteKmMapJson)) {
+    $primaryRouteKmMapJson = '{}';
+}
+$vehicleDefaultLoadLocationByBeneficiaryJson = json_encode($vehicleDefaultLoadLocationMapByBeneficiary ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($vehicleDefaultLoadLocationByBeneficiaryJson)) {
+    $vehicleDefaultLoadLocationByBeneficiaryJson = '{}';
+}
+$vehicleDefaultDistributionZoneByBeneficiaryJson = json_encode($vehicleDefaultDistributionZoneMapByBeneficiary ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($vehicleDefaultDistributionZoneByBeneficiaryJson)) {
+    $vehicleDefaultDistributionZoneByBeneficiaryJson = '{}';
+}
+$compressorVehicleByBeneficiaryJson = json_encode($compressorVehicleMapByBeneficiary ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($compressorVehicleByBeneficiaryJson)) {
+    $compressorVehicleByBeneficiaryJson = '{}';
+}
+$activeDriverVehicleIdsJson = json_encode(array_values(array_unique(array_map('intval', (array) ($activeDriverVehicleIds ?? [])))), JSON_UNESCAPED_UNICODE);
+if (!is_string($activeDriverVehicleIdsJson)) {
+    $activeDriverVehicleIdsJson = '[]';
+}
+$driversByVehicleJson = json_encode($driversByVehicle ?? [], JSON_UNESCAPED_UNICODE);
+if (!is_string($driversByVehicleJson)) {
+    $driversByVehicleJson = '{}';
+}
+$selectedTransportType = (string) ($raceFormData['tip_transport'] ?? 'primar');
+$isDistributionSelected = in_array($selectedTransportType, ['distributie', 'primar_distributie'], true);
+$isPrimarySelected = in_array($selectedTransportType, ['primar', 'primar_tona'], true);
+$isPrimaryDistributionSelected = $selectedTransportType === 'primar_distributie';
+$isAgreedKmNamingSelected = in_array($selectedTransportType, ['primar', 'primar_distributie'], true);
+$isKmTotalSelected = $isPrimarySelected || $isPrimaryDistributionSelected;
+$isCompressorSelected = $selectedTransportType === 'compresor';
+
+$selectedGoodsTypeKeys = [];
+foreach ((array) ($raceFormData['tip_marfa'] ?? []) as $selectedGoodsTypeKey) {
+    $selectedGoodsTypeKey = trim((string) $selectedGoodsTypeKey);
+    if ($selectedGoodsTypeKey === '') {
+        continue;
+    }
+    $selectedGoodsTypeKeys[$selectedGoodsTypeKey] = $selectedGoodsTypeKey;
+}
+$selectedGoodsTypeKeys = array_values($selectedGoodsTypeKeys);
+$selectedGoodsTypeLabels = [];
+foreach ($selectedGoodsTypeKeys as $selectedGoodsTypeKey) {
+    if (isset($goodsTypeOptions[$selectedGoodsTypeKey])) {
+        $selectedGoodsTypeLabels[] = (string) $goodsTypeOptions[$selectedGoodsTypeKey];
+    }
+}
+$selectedGoodsTypeButtonLabel = $selectedGoodsTypeLabels !== [] ? implode(', ', $selectedGoodsTypeLabels) : '-- Selecteaza --';
+
+$formatDurationLabel = static function (?int $minutes): string {
+    if ($minutes === null || $minutes < 0) {
+        return '-';
+    }
+
+    $hours = intdiv($minutes, 60);
+    $mins = $minutes % 60;
+
+    if ($hours > 0 && $mins > 0) {
+        return $hours . 'h ' . $mins . 'm';
+    }
+    if ($hours > 0) {
+        return $hours . 'h';
+    }
+
+    return $mins . 'm';
+};
+$formStartTimeValueRaw = trim((string) ($raceFormData['ora_inceput'] ?? ''));
+$formStartTimeValue = $formStartTimeValueRaw !== '' ? substr($formStartTimeValueRaw, 0, 5) : '';
+$formEndTimeValueRaw = trim((string) ($raceFormData['ora_sfarsit'] ?? ''));
+$formEndTimeValue = $formEndTimeValueRaw !== '' ? substr($formEndTimeValueRaw, 0, 5) : '';
+$formDurationMinutes = null;
+$formDurationMinutesRaw = $raceFormData['durata_cursa_minute'] ?? null;
+if ($formDurationMinutesRaw !== null && $formDurationMinutesRaw !== '' && is_numeric((string) $formDurationMinutesRaw)) {
+    $formDurationMinutes = max(0, (int) $formDurationMinutesRaw);
+}
+$formDurationPreviewText = $formDurationMinutes !== null
+    ? 'Durata cursa calculata: ' . $formatDurationLabel($formDurationMinutes) . ' (' . $formDurationMinutes . ' min)'
+    : 'Durata cursa se calculeaza automat dupa ora inceput/sfarsit.';
+
+$raceId = (int) ($race['id'] ?? 0);
+$editExpenseId = (int) ($expenseFormData['expense_id'] ?? 0);
+$editingExpense = $expenseBeingEdited !== null || $editExpenseId > 0;
+$existingExpenseDoc = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['file_path'] ?? '') : '';
+$existingExpenseDocName = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['original_name'] ?? '') : '';
+$existingExpenseDocUrl = $existingExpenseDoc !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($existingExpenseDoc)) : null;
+
+$expensesTotal = 0.0;
+foreach ($expenses as $expenseRow) {
+    $expensesTotal += (float) ($expenseRow['suma'] ?? 0);
+}
+?>
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <h2 class="h4 mb-0">Editeaza cursa</h2>
+    <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Inapoi la lista</a>
+</div>
+
+<div class="card border-0 shadow-sm mb-3">
+    <div class="card-header bg-white">
+        <h3 class="h6 mb-0">Date cursa</h3>
+    </div>
+    <div class="card-body">
+        <form method="post"
+              action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'update', 'id' => $raceId])) ?>"
+              class="dispatcher-race-form"
+              data-zone-tariffs='<?= e($zoneTariffJson) ?>'
+              data-zone-extra-km-costs='<?= e($zoneExtraKmJson) ?>'
+              data-distribution-route-tariffs='<?= e($distributionRouteTariffMapJson) ?>'
+              data-primary-route-km-map='<?= e($primaryRouteKmMapJson) ?>'
+              data-beneficiary-pricing='<?= e($beneficiaryPricingJson) ?>'
+              data-load-location-tariffs='<?= e($loadLocationTariffJson) ?>'
+              data-vehicle-default-load-locations='<?= e($vehicleDefaultLoadLocationJson) ?>'
+              data-vehicle-default-distribution-zones='<?= e($vehicleDefaultDistributionZoneJson) ?>'
+              data-vehicle-garages='<?= e($vehicleGarageJson) ?>'
+              data-load-locations-by-beneficiary='<?= e($loadLocationsByBeneficiaryJson) ?>'
+              data-distribution-zones-by-beneficiary='<?= e($distributionZonesByBeneficiaryJson) ?>'
+              data-vehicle-default-load-locations-by-beneficiary='<?= e($vehicleDefaultLoadLocationByBeneficiaryJson) ?>'
+              data-vehicle-default-distribution-zones-by-beneficiary='<?= e($vehicleDefaultDistributionZoneByBeneficiaryJson) ?>'
+              data-compresor-vehicles-by-beneficiary='<?= e($compressorVehicleByBeneficiaryJson) ?>'
+              data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>'
+              data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>'
+              novalidate>
+            <?= csrf_field() ?>
+            <datalist id="edit_race_time_options">
+                <?php for ($hour = 0; $hour < 24; $hour++): ?>
+                    <?php foreach (['00', '15', '30', '45'] as $minute): ?>
+                        <option value="<?= e(sprintf('%02d:%s', $hour, $minute)) ?>"></option>
+                    <?php endforeach; ?>
+                <?php endfor; ?>
+            </datalist>
+
+            <div class="row g-3">
+                <div class="col-12 col-md-6 dispatcher-top-field">
+                    <label class="form-label" for="edit_race_vehicle_id">Nr. Inmatriculare <span class="text-danger">*</span></label>
+                    <select class="form-select <?= isset($raceFormErrors['vehicle_id']) ? 'is-invalid' : '' ?>" id="edit_race_vehicle_id" name="vehicle_id" required>
+                        <option value="">-- Selecteaza --</option>
+                        <?php foreach ($vehicles as $vehicle): ?>
+                            <?php $vehicleId = (int) ($vehicle['id'] ?? 0); ?>
+                            <option
+                                value="<?= e((string) $vehicleId) ?>"
+                                data-capacitate-transport="<?= e((string) ($vehicle['capacitate_transport'] ?? '')) ?>"
+                                <?= (string) ($raceFormData['vehicle_id'] ?? '') === (string) $vehicleId ? 'selected' : '' ?>
+                            >
+                                <?= e((string) ($vehicle['nr_inmatriculare'] ?? '-')) ?> - <?= e((string) ($vehicle['marca'] ?? '')) ?> <?= e((string) ($vehicle['model'] ?? '')) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <?php if (isset($raceFormErrors['vehicle_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['vehicle_id']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 dispatcher-top-field">
+                    <label class="form-label" for="edit_race_driver_id">Sofer <span class="text-danger">*</span></label>
+                    <select class="form-select <?= isset($raceFormErrors['driver_id']) ? 'is-invalid' : '' ?>" id="edit_race_driver_id" name="driver_id" required>
+                        <option value="">-- Selecteaza mai intai vehiculul --</option>
+                        <?php
+                            $selectedVehicleForDriver = (int) ($raceFormData['vehicle_id'] ?? 0);
+                            $selectedDriverId = (string) ($raceFormData['driver_id'] ?? '');
+                            $driverOptions = $selectedVehicleForDriver > 0
+                                ? (array) ($driversByVehicle[$selectedVehicleForDriver] ?? [])
+                                : [];
+                        ?>
+                        <?php foreach ($driverOptions as $driver): ?>
+                            <?php $driverId = (int) ($driver['id'] ?? 0); ?>
+                            <?php if ($driverId <= 0) { continue; } ?>
+                            <option value="<?= e((string) $driverId) ?>" <?= $selectedDriverId === (string) $driverId ? 'selected' : '' ?>>
+                                <?= e((string) ($driver['nume'] ?? '-')) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <?php if (isset($raceFormErrors['driver_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['driver_id']) ?></div><?php endif; ?>
+                    <div class="form-text">Soferii se incarca automat dupa vehiculul selectat.</div>
+                </div>
+
+                <div class="col-12 col-md-6 dispatcher-top-field">
+                    <label class="form-label" for="edit_race_tip_transport">Tip transport <span class="text-danger">*</span></label>
+                    <select class="form-select <?= isset($raceFormErrors['tip_transport']) ? 'is-invalid' : '' ?>" id="edit_race_tip_transport" name="tip_transport" data-role="tip-transport" required>
+                        <?php foreach ($transportTypes as $value => $label): ?>
+                            <option value="<?= e((string) $value) ?>" <?= (string) ($raceFormData['tip_transport'] ?? 'primar') === (string) $value ? 'selected' : '' ?>>
+                                <?= e((string) $label) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <?php if (isset($raceFormErrors['tip_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tip_transport']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 dispatcher-top-field">
+                    <label class="form-label" for="edit_race_beneficiar_id">Beneficiar transport <span class="text-danger">*</span></label>
+                    <select class="form-select <?= isset($raceFormErrors['beneficiar_id']) ? 'is-invalid' : '' ?>" id="edit_race_beneficiar_id" name="beneficiar_id" required>
+                        <option value="">-- Selecteaza --</option>
+                        <?php foreach ($beneficiaries as $beneficiary): ?>
+                            <?php
+                                $beneficiaryId = (int) ($beneficiary['id'] ?? 0);
+                                $beneficiaryName = (string) ($beneficiary['nume'] ?? '-');
+                                $beneficiaryIsActive = !empty($beneficiary['activ']);
+                            ?>
+                            <option value="<?= e((string) $beneficiaryId) ?>" <?= (string) ($raceFormData['beneficiar_id'] ?? '') === (string) $beneficiaryId ? 'selected' : '' ?>>
+                                <?= e($beneficiaryName) ?><?= $beneficiaryIsActive ? '' : ' (inactiv)' ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <?php if (isset($raceFormErrors['beneficiar_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['beneficiar_id']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 dispatcher-schedule-field">
+                    <label class="form-label" for="edit_race_data_inceput">Data inceput <span class="text-danger">*</span></label>
+                    <input type="date" class="form-control <?= isset($raceFormErrors['data_inceput']) ? 'is-invalid' : '' ?>" id="edit_race_data_inceput" name="data_inceput" value="<?= e((string) ($raceFormData['data_inceput'] ?? ($raceFormData['data_cursa'] ?? ''))) ?>" required>
+                    <?php if (isset($raceFormErrors['data_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_inceput']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 dispatcher-schedule-field">
+                    <label class="form-label" for="edit_race_ora_inceput">Ora inceput</label>
+                    <div class="input-group">
+                        <input
+                            type="text"
+                            class="form-control <?= isset($raceFormErrors['ora_inceput']) ? 'is-invalid' : '' ?>"
+                            id="edit_race_ora_inceput"
+                            name="ora_inceput"
+                            value="<?= e($formStartTimeValue) ?>"
+                            placeholder="HH:mm"
+                            inputmode="numeric"
+                            autocomplete="off"
+                            pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]"
+                            list="edit_race_time_options"
+                            data-role="ora-inceput"
+                        >
+                        <button type="button" class="btn btn-outline-secondary" data-role="time-now" data-target-role="ora-inceput" title="Completeaza cu ora curenta">Acum</button>
+                    </div>
+                    <div class="form-text">Format 24h (HH:mm). Poti scrie si 0930.</div>
+                    <?php if (isset($raceFormErrors['ora_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['ora_inceput']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 dispatcher-schedule-field">
+                    <label class="form-label" for="edit_race_data_sfarsit">Data sfarsit <span class="text-danger">*</span></label>
+                    <input type="date" class="form-control <?= isset($raceFormErrors['data_sfarsit']) ? 'is-invalid' : '' ?>" id="edit_race_data_sfarsit" name="data_sfarsit" value="<?= e((string) ($raceFormData['data_sfarsit'] ?? ($raceFormData['data_cursa'] ?? ''))) ?>" required>
+                    <?php if (isset($raceFormErrors['data_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_sfarsit']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 dispatcher-schedule-field">
+                    <label class="form-label" for="edit_race_ora_sfarsit">Ora sfarsit</label>
+                    <div class="input-group">
+                        <input
+                            type="text"
+                            class="form-control <?= isset($raceFormErrors['ora_sfarsit']) ? 'is-invalid' : '' ?>"
+                            id="edit_race_ora_sfarsit"
+                            name="ora_sfarsit"
+                            value="<?= e($formEndTimeValue) ?>"
+                            placeholder="HH:mm"
+                            inputmode="numeric"
+                            autocomplete="off"
+                            pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]"
+                            list="edit_race_time_options"
+                            data-role="ora-sfarsit"
+                        >
+                        <button type="button" class="btn btn-outline-secondary" data-role="time-now" data-target-role="ora-sfarsit" title="Completeaza cu ora curenta">Acum</button>
+                    </div>
+                    <?php if (isset($raceFormErrors['ora_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['ora_sfarsit']) ?></div><?php endif; ?>
+                    <div class="form-text" data-role="durata-cursa-hint" data-default-text="<?= e($formDurationPreviewText) ?>"><?= e($formDurationPreviewText) ?></div>
+                </div>
+
+                <div class="col-12 col-md-6">
+                    <label class="form-label" for="edit_race_loc_incarcare_id">Loc incarcare <span class="text-danger">*</span></label>
+                    <select class="form-select <?= isset($raceFormErrors['loc_incarcare_id']) ? 'is-invalid' : '' ?>" id="edit_race_loc_incarcare_id" name="loc_incarcare_id" required>
+                        <option value="">-- Selecteaza --</option>
+                        <?php foreach ($loadLocations as $location): ?>
+                            <?php $locationId = (int) ($location['id'] ?? 0); ?>
+                            <option value="<?= e((string) $locationId) ?>" <?= (string) ($raceFormData['loc_incarcare_id'] ?? '') === (string) $locationId ? 'selected' : '' ?>>
+                                <?= e((string) ($location['nume'] ?? '-')) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <?php if (isset($raceFormErrors['loc_incarcare_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['loc_incarcare_id']) ?></div><?php endif; ?>
+                    <div class="form-text text-muted <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="distributie-note-loc">
+                        Pentru Distributie / Primar+Distributie: regula de ruta are prioritate pe perechile configurate bidirectional (Loc ↔ Zona). Daca nu exista pereche, se aplica fallback loc/zona/beneficiar.
+                    </div>
+                    <div class="form-text text-muted <?= $isPrimarySelected ? '' : 'd-none' ?>" data-role="primar-note-loc">
+                        Pentru Primar km / Primar tone: sunt afisate doar locurile din Setari Primar, iar Km efectuati este luat automat din perechea Loc ↔ Zona.
+                    </div>
+                </div>
+
+                <div class="col-12 col-md-6">
+                    <label class="form-label" for="edit_race_tip_marfa">Tip marfa <span class="text-danger">*</span></label>
+                    <div class="dropdown transport-multiselect-dropdown goods-multiselect-dropdown" data-role="goods-type-dropdown">
+                        <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start transport-multiselect-toggle <?= isset($raceFormErrors['tip_marfa']) ? 'is-invalid' : '' ?>" type="button" id="edit_race_tip_marfa" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+                            <span class="goods-multiselect-label" data-default-label="-- Selecteaza --"><?= e($selectedGoodsTypeButtonLabel) ?></span>
+                        </button>
+                        <div class="dropdown-menu w-100 transport-multiselect-menu p-2" aria-labelledby="edit_race_tip_marfa">
+                            <?php foreach (($goodsTypeOptions ?? []) as $goodsTypeKey => $goodsTypeLabel): ?>
+                                <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 transport-multiselect-option">
+                                    <input class="form-check-input m-0" type="checkbox" name="tip_marfa[]" value="<?= e((string) $goodsTypeKey) ?>" <?= in_array((string) $goodsTypeKey, $selectedGoodsTypeKeys, true) ? 'checked' : '' ?>>
+                                    <span><?= e((string) $goodsTypeLabel) ?></span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                    <div class="form-text">Poti selecta unul sau mai multe tipuri de marfa.</div>
+                    <?php if (isset($raceFormErrors['tip_marfa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tip_marfa']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6" data-role="field-cantitate">
+                    <label class="form-label" for="edit_race_cantitate_incarcata">Cantitate incarcata</label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['cantitate_incarcata']) ? 'is-invalid' : '' ?>" id="edit_race_cantitate_incarcata" name="cantitate_incarcata" step="0.01" min="0" value="<?= e((string) ($raceFormData['cantitate_incarcata'] ?? '')) ?>" data-role="cantitate">
+                    <div class="form-text text-muted">Valoarea introdusa este folosita direct in calcule, fara conversie automata.</div>
+                    <?php if (isset($raceFormErrors['cantitate_incarcata'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['cantitate_incarcata']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6">
+                    <label class="form-label" for="edit_race_nr_clienti">Nr. clienti</label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['nr_clienti']) ? 'is-invalid' : '' ?>" id="edit_race_nr_clienti" name="nr_clienti" min="0" step="1" value="<?= e((string) ($raceFormData['nr_clienti'] ?? '')) ?>">
+                    <?php if (isset($raceFormErrors['nr_clienti'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['nr_clienti']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6">
+                    <label class="form-label" for="edit_race_capacitate_transport">Capacitate transport</label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['capacitate_transport']) ? 'is-invalid' : '' ?>" id="edit_race_capacitate_transport" name="capacitate_transport" step="0.01" min="0" value="<?= e((string) ($raceFormData['capacitate_transport'] ?? '')) ?>" data-role="capacitate-transport" readonly>
+                    <?php if (isset($raceFormErrors['capacitate_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['capacitate_transport']) ?></div><?php endif; ?>
+                    <div class="form-text">Se completeaza automat din fisa vehiculului.</div>
+                </div>
+
+                <div class="col-12 col-md-6" data-role="field-km">
+                    <label class="form-label" for="edit_race_km_cursa" data-role="km-label" data-default-label="Km efectuati" data-primary-km-label="Km agreati"><?= $isAgreedKmNamingSelected ? 'Km agreati' : 'Km efectuati' ?></label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['km_cursa']) ? 'is-invalid' : '' ?>" id="edit_race_km_cursa" name="km_cursa" min="0" step="1" value="<?= e((string) ($raceFormData['km_cursa'] ?? '')) ?>" data-role="km">
+                    <?php if (isset($raceFormErrors['km_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_cursa']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6">
+                    <label class="form-label" for="edit_race_ore_functionare">Ore functionare</label>
+                    <input type="text" class="form-control <?= isset($raceFormErrors['ore_functionare']) ? 'is-invalid' : '' ?>" id="edit_race_ore_functionare" name="ore_functionare" value="<?= e((string) ($raceFormData['ore_functionare'] ?? '')) ?>" placeholder="ex: 2h sau 2">
+                    <?php if (isset($raceFormErrors['ore_functionare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['ore_functionare']) ?></div><?php endif; ?>
+                    <div class="form-text">1h = 40 km echivalenti pentru scaderea Km revizie.</div>
+                </div>
+
+                <div class="col-12 col-md-6 <?= $isKmTotalSelected ? '' : 'd-none' ?>" data-role="field-km-totali">
+                    <label class="form-label" for="edit_race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['km_totali']) ? 'is-invalid' : '' ?>" id="edit_race_km_totali" name="km_totali" min="0" step="1" value="<?= e((string) ($raceFormData['km_totali'] ?? '')) ?>" data-role="km-totali">
+                    <?php if (isset($raceFormErrors['km_totali'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_totali']) ?></div><?php endif; ?>
+                    <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Km Distributie (calcul): 0 - 0 = 0 km</div>
+                </div>
+
+                <div class="col-12 col-md-6" data-role="field-zona">
+                    <label class="form-label" for="edit_race_zona_distributie_id" data-role="zona-label" data-default-label="Zona distributie" data-primary-label="Zona descarcare">Zona distributie</label>
+                    <select class="form-select <?= isset($raceFormErrors['zona_distributie_id']) ? 'is-invalid' : '' ?>" id="edit_race_zona_distributie_id" name="zona_distributie_id" data-role="zona">
+                        <option value="">-- Selecteaza --</option>
+                        <?php foreach ($distributionZones as $zone): ?>
+                            <?php $zoneId = (int) ($zone['id'] ?? 0); ?>
+                            <?php $zoneExtraKmCost = (float) ($zone['cost_extra_km'] ?? 0); ?>
+                            <option value="<?= e((string) $zoneId) ?>" <?= (string) ($raceFormData['zona_distributie_id'] ?? '') === (string) $zoneId ? 'selected' : '' ?>>
+                                <?= e((string) ($zone['nume'] ?? '-')) ?>
+                                (tarif zonÃ„Æ’: <?= e(format_number_ro((float) ($zone['tarif_distributie'] ?? 0), 2)) ?> lei<?php if ($zoneExtraKmCost > 0): ?>, extra km: <?= e(format_number_ro($zoneExtraKmCost, 2)) ?> lei/km<?php endif; ?>)
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <?php if (isset($raceFormErrors['zona_distributie_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['zona_distributie_id']) ?></div><?php endif; ?>
+                    <div class="form-text text-muted <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="distributie-note-zone">
+                        Prioritate calcul: regula de ruta (Loc ↔ Zona), apoi regulile loc/zona, apoi fallback beneficiar. Distributie = Cantitate × Tariful activ; Primar+Distributie = Cantitate × Tariful activ + Km × Cost extra/km activ.
+                    </div>
+                    <div class="form-text text-muted <?= $isPrimarySelected ? '' : 'd-none' ?>" data-role="primar-note-zone">
+                        Pentru Primar km / Primar tone, selectia Loc ↔ Zona este filtrata din Setari Primar si se aplica bidirectional.
+                    </div>
+                </div>
+
+                <div class="col-12 col-md-6" data-role="field-ore-aspirare">
+                    <label class="form-label" for="edit_race_ore_aspirare">Ore aspirare</label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['ore_aspirare']) ? 'is-invalid' : '' ?>" id="edit_race_ore_aspirare" name="ore_aspirare" step="0.01" min="0" value="<?= e((string) ($raceFormData['ore_aspirare'] ?? '')) ?>" data-role="ore-aspirare">
+                    <?php if (isset($raceFormErrors['ore_aspirare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['ore_aspirare']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6" data-role="field-km-dislocare">
+                    <label class="form-label" for="edit_race_km_dislocare">Km dislocare</label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['km_dislocare']) ? 'is-invalid' : '' ?>" id="edit_race_km_dislocare" name="km_dislocare" step="0.01" min="0" value="<?= e((string) ($raceFormData['km_dislocare'] ?? '')) ?>" data-role="km-dislocare">
+                    <?php if (isset($raceFormErrors['km_dislocare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_dislocare']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6" data-role="field-tona-livrata">
+                    <label class="form-label" for="edit_race_tona_livrata">Tona livrata</label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['tona_livrata']) ? 'is-invalid' : '' ?>" id="edit_race_tona_livrata" name="tona_livrata" step="0.01" min="0" value="<?= e((string) ($raceFormData['tona_livrata'] ?? '')) ?>" data-role="tona-livrata">
+                    <?php if (isset($raceFormErrors['tona_livrata'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tona_livrata']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 d-none" data-role="field-tona-aspirata-lichida">
+                    <label class="form-label" for="edit_race_tona_aspirata_lichida">Tona lichida aspirata</label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['tona_aspirata_lichida']) ? 'is-invalid' : '' ?>" id="edit_race_tona_aspirata_lichida" name="tona_aspirata_lichida" step="0.01" min="0" value="<?= e((string) ($raceFormData['tona_aspirata_lichida'] ?? '')) ?>" data-role="tona-aspirata-lichida">
+                    <?php if (isset($raceFormErrors['tona_aspirata_lichida'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tona_aspirata_lichida']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 d-none" data-role="field-tona-aspirata-gazoasa">
+                    <label class="form-label" for="edit_race_tona_aspirata_gazoasa">Tona gazoasa aspirata</label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['tona_aspirata_gazoasa']) ? 'is-invalid' : '' ?>" id="edit_race_tona_aspirata_gazoasa" name="tona_aspirata_gazoasa" step="0.01" min="0" value="<?= e((string) ($raceFormData['tona_aspirata_gazoasa'] ?? '')) ?>" data-role="tona-aspirata-gazoasa">
+                    <?php if (isset($raceFormErrors['tona_aspirata_gazoasa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tona_aspirata_gazoasa']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6" data-role="preview-total-field">
+                    <label class="form-label">Total facturare (estimare)</label>
+                    <div class="dispatcher-total-preview" data-role="total-preview"><?= e(format_number_ro((float) ($raceFormData['total_facturare'] ?? 0), 2)) ?> lei</div>
+                </div>
+
+                <div class="col-12 col-md-6" data-role="preview-cost-km-primar-field">
+                    <label class="form-label">Cost/km Primar</label>
+                    <div class="dispatcher-total-preview" data-role="cost-km-primar-preview"><?= e(format_number_ro((float) ($raceFormData['cost_km_primar'] ?? 0), 2)) ?> lei/km</div>
+                </div>
+
+                <div class="col-12 col-md-6" data-role="preview-cost-km-distributie-field">
+                    <label class="form-label">Cost/km Distribuție</label>
+                    <div class="dispatcher-total-preview" data-role="cost-km-distributie-preview"><?= e(format_number_ro((float) ($raceFormData['cost_km_distributie'] ?? 0), 2)) ?> lei/km</div>
+                </div>
+
+                <div class="col-12 col-md-6" data-role="preview-cost-km-mixt-field">
+                    <label class="form-label">Cost/km Mixt</label>
+                    <div class="dispatcher-total-preview" data-role="cost-km-mixt-preview"><?= e(format_number_ro((float) ($raceFormData['cost_km_mixt'] ?? 0), 2)) ?> lei/km</div>
+                </div>
+
+                <div class="col-12 col-md-6">
+                    <label class="form-label" for="edit_race_status_facturare">Status</label>
+                    <select class="form-select <?= isset($raceFormErrors['status_facturare']) ? 'is-invalid' : '' ?>" id="edit_race_status_facturare" name="status_facturare">
+                        <?php foreach (($billingStatuses ?? []) as $statusKey => $statusLabel): ?>
+                            <option value="<?= e((string) $statusKey) ?>" <?= (string) ($raceFormData['status_facturare'] ?? 'in_curs_facturare') === (string) $statusKey ? 'selected' : '' ?>>
+                                <?= e((string) $statusLabel) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <?php if (isset($raceFormErrors['status_facturare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['status_facturare']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12">
+                    <label class="form-label" for="edit_race_observatii">Observatii</label>
+                    <textarea class="form-control <?= isset($raceFormErrors['observatii']) ? 'is-invalid' : '' ?>" id="edit_race_observatii" name="observatii" rows="3"><?= e((string) ($raceFormData['observatii'] ?? '')) ?></textarea>
+                    <?php if (isset($raceFormErrors['observatii'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['observatii']) ?></div><?php endif; ?>
+                </div>
+            </div>
+
+            <div class="mt-3 d-flex flex-wrap gap-2">
+                <button type="submit" class="btn btn-primary">Salveaza cursa</button>
+                <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Inapoi</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="row g-3 align-items-start">
+    <div class="col-12 col-xl-5" id="expense-section">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
+                <h3 class="h6 mb-0"><?= $editingExpense ? 'Editeaza cheltuiala' : 'Adauga cheltuiala' ?></h3>
+                <?php if ($editingExpense): ?>
+                    <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">Anuleaza editarea</a>
+                <?php endif; ?>
+            </div>
+            <div class="card-body">
+                <form method="post"
+                      action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'save_expense', 'id' => $raceId])) ?>"
+                      enctype="multipart/form-data"
+                      novalidate>
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="expense_id" value="<?= e((string) ($expenseFormData['expense_id'] ?? '')) ?>">
+
+                    <div class="mb-3">
+                        <label class="form-label" for="expense_tip_cheltuiala">Tip cheltuiala <span class="text-danger">*</span></label>
+                        <select class="form-select <?= isset($expenseFormErrors['tip_cheltuiala']) ? 'is-invalid' : '' ?>" id="expense_tip_cheltuiala" name="tip_cheltuiala" required>
+                            <?php foreach ($expenseTypes as $value => $label): ?>
+                                <option value="<?= e((string) $value) ?>" <?= (string) ($expenseFormData['tip_cheltuiala'] ?? 'motorina') === (string) $value ? 'selected' : '' ?>>
+                                    <?= e((string) $label) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <?php if (isset($expenseFormErrors['tip_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['tip_cheltuiala']) ?></div><?php endif; ?>
+                    </div>
+
+                    <div class="mb-3 d-none" data-role="expense-road-tax-breakdown">
+                        <label class="form-label mb-2">Detalii Taxe drum</label>
+                        <div class="row g-2 mb-2">
+                            <div class="col-12 col-md-4"><strong>Taxa acces</strong></div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['taxa_acces_bucati']) ? 'is-invalid' : '' ?>"
+                                    id="expense_taxa_acces_bucati"
+                                    name="taxa_acces_bucati"
+                                    min="0"
+                                    step="1"
+                                    placeholder="Bucati"
+                                    value="<?= e((string) ($expenseFormData['taxa_acces_bucati'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['taxa_acces_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['taxa_acces_bucati']) ?></div><?php endif; ?>
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['taxa_acces_pret']) ? 'is-invalid' : '' ?>"
+                                    id="expense_taxa_acces_pret"
+                                    name="taxa_acces_pret"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="Pret / buc"
+                                    value="<?= e((string) ($expenseFormData['taxa_acces_pret'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['taxa_acces_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['taxa_acces_pret']) ?></div><?php endif; ?>
+                            </div>
+                        </div>
+
+                        <div class="row g-2 mb-2">
+                            <div class="col-12 col-md-4"><strong>Port</strong></div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['port_bucati']) ? 'is-invalid' : '' ?>"
+                                    id="expense_port_bucati"
+                                    name="port_bucati"
+                                    min="0"
+                                    step="1"
+                                    placeholder="Bucati"
+                                    value="<?= e((string) ($expenseFormData['port_bucati'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['port_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['port_bucati']) ?></div><?php endif; ?>
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['port_pret']) ? 'is-invalid' : '' ?>"
+                                    id="expense_port_pret"
+                                    name="port_pret"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="Pret / buc"
+                                    value="<?= e((string) ($expenseFormData['port_pret'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['port_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['port_pret']) ?></div><?php endif; ?>
+                            </div>
+                        </div>
+
+                        <div class="row g-2">
+                            <div class="col-12 col-md-4"><strong>Trece</strong></div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['trece_bucati']) ? 'is-invalid' : '' ?>"
+                                    id="expense_trece_bucati"
+                                    name="trece_bucati"
+                                    min="0"
+                                    step="1"
+                                    placeholder="Bucati"
+                                    value="<?= e((string) ($expenseFormData['trece_bucati'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['trece_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['trece_bucati']) ?></div><?php endif; ?>
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['trece_pret']) ? 'is-invalid' : '' ?>"
+                                    id="expense_trece_pret"
+                                    name="trece_pret"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="Pret / buc"
+                                    value="<?= e((string) ($expenseFormData['trece_pret'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['trece_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['trece_pret']) ?></div><?php endif; ?>
+                            </div>
+                        </div>
+
+                        <div class="form-text mt-2">Suma se calculeaza automat din: bucati x pret pentru fiecare taxa.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="expense_suma">Suma <span class="text-danger">*</span></label>
+                        <input type="number" class="form-control <?= isset($expenseFormErrors['suma']) ? 'is-invalid' : '' ?>" id="expense_suma" name="suma" min="0.01" step="0.01" value="<?= e((string) ($expenseFormData['suma'] ?? '')) ?>" required>
+                        <?php if (isset($expenseFormErrors['suma'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['suma']) ?></div><?php endif; ?>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="expense_data_cheltuiala">Data cheltuiala <span class="text-danger">*</span></label>
+                        <input type="date" class="form-control <?= isset($expenseFormErrors['data_cheltuiala']) ? 'is-invalid' : '' ?>" id="expense_data_cheltuiala" name="data_cheltuiala" value="<?= e((string) ($expenseFormData['data_cheltuiala'] ?? '')) ?>" required>
+                        <?php if (isset($expenseFormErrors['data_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['data_cheltuiala']) ?></div><?php endif; ?>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="expense_observatii">Observatii</label>
+                        <textarea class="form-control <?= isset($expenseFormErrors['observatii']) ? 'is-invalid' : '' ?>" id="expense_observatii" name="observatii" rows="3"><?= e((string) ($expenseFormData['observatii'] ?? '')) ?></textarea>
+                        <?php if (isset($expenseFormErrors['observatii'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['observatii']) ?></div><?php endif; ?>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="expense_document_upload">Document doveditor (upload)</label>
+                        <input type="file" class="form-control <?= isset($expenseFormErrors['document_upload']) ? 'is-invalid' : '' ?>" id="expense_document_upload" name="document_upload" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
+                        <div class="form-text">Formate acceptate: PDF, JPG, PNG, WEBP, DOC, DOCX. Maxim 5 MB.</div>
+                        <?php if (isset($expenseFormErrors['document_upload'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['document_upload']) ?></div><?php endif; ?>
+                    </div>
+
+                    <?php if ($existingExpenseDocUrl !== null): ?>
+                        <div class="alert alert-light border">
+                            <div class="small text-muted mb-1">Document existent</div>
+                            <a href="<?= e($existingExpenseDocUrl) ?>" target="_blank" rel="noopener">
+                                <?= e($existingExpenseDocName !== '' ? $existingExpenseDocName : basename($existingExpenseDoc)) ?>
+                            </a>
+                            <div class="form-check mt-2">
+                                <input class="form-check-input" type="checkbox" value="1" id="expense_sterge_document" name="sterge_document">
+                                <label class="form-check-label" for="expense_sterge_document">
+                                    Sterge documentul curent la salvare
+                                </label>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+
+                    <button type="submit" class="btn btn-primary"><?= $editingExpense ? 'Actualizeaza cheltuiala' : 'Adauga cheltuiala' ?></button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-7">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
+                <h3 class="h6 mb-0">Cheltuieli cursa</h3>
+                <div class="small text-muted">Total cheltuieli: <strong><?= e(format_number_ro($expensesTotal, 2)) ?> lei</strong></div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <th>Data</th>
+                            <th>Tip</th>
+                            <th>Suma</th>
+                            <th>Document</th>
+                            <th class="text-end pe-3">Actiuni</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php if ($expenses === []): ?>
+                            <tr>
+                                <td colspan="5" class="text-center text-muted py-4">Nu exista cheltuieli pentru aceasta cursa.</td>
+                            </tr>
+                        <?php else: ?>
+                            <?php foreach ($expenses as $expense): ?>
+                                <?php
+                                $expenseId = (int) ($expense['id'] ?? 0);
+                                $docPath = (string) ($expense['file_path'] ?? '');
+                                $docName = (string) ($expense['original_name'] ?? '');
+                                $docUrl = $docPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($docPath)) : null;
+                                ?>
+                                <tr>
+                                    <td><?= e(format_date_ro((string) ($expense['data_cheltuiala'] ?? ''))) ?></td>
+                                    <td><?= e((string) ($expenseTypes[(string) ($expense['tip_cheltuiala'] ?? '')] ?? '-')) ?></td>
+                                    <td><?= e(format_number_ro((float) ($expense['suma'] ?? 0), 2)) ?> lei</td>
+                                    <td>
+                                        <?php if ($docUrl !== null): ?>
+                                            <a class="btn btn-sm btn-outline-secondary" href="<?= e($docUrl) ?>" target="_blank" rel="noopener">
+                                                <?= e($docName !== '' ? $docName : basename($docPath)) ?>
+                                            </a>
+                                        <?php else: ?>
+                                            <span class="text-muted">-</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-end pe-3">
+                                        <div class="d-inline-flex gap-1">
+                                            <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'expense_id' => $expenseId])) ?>">Editeaza</a>
+                                            <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'delete_expense', 'id' => $raceId])) ?>" class="d-inline">
+                                                <?= csrf_field() ?>
+                                                <input type="hidden" name="expense_id" value="<?= e((string) $expenseId) ?>">
+                                                <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur doresti sa stergi aceasta cheltuiala?">Sterge</button>
+                                            </form>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var expenseTypeEl = document.getElementById('expense_tip_cheltuiala');
+    var expenseAmountEl = document.getElementById('expense_suma');
+    var roadTaxBoxEl = document.querySelector('[data-role=\"expense-road-tax-breakdown\"]');
+    if (!(expenseTypeEl instanceof HTMLSelectElement) || !(expenseAmountEl instanceof HTMLInputElement) || !(roadTaxBoxEl instanceof HTMLElement)) {
+        return;
+    }
+
+    var roadTaxFields = [
+        {
+            qty: document.getElementById('expense_taxa_acces_bucati'),
+            price: document.getElementById('expense_taxa_acces_pret')
+        },
+        {
+            qty: document.getElementById('expense_port_bucati'),
+            price: document.getElementById('expense_port_pret')
+        },
+        {
+            qty: document.getElementById('expense_trece_bucati'),
+            price: document.getElementById('expense_trece_pret')
+        }
+    ];
+    var initialExpenseAmount = String(expenseAmountEl.value || '');
+
+    var parseNumber = function (value) {
+        var normalized = String(value || '').trim().replace(',', '.');
+        if (normalized === '') {
+            return null;
+        }
+        var parsed = Number(normalized);
+        return Number.isFinite(parsed) ? parsed : null;
+    };
+
+    var formatAmount = function (value) {
+        return (Math.round(value * 100) / 100).toFixed(2);
+    };
+
+    var calculateRoadTaxTotal = function () {
+        var total = 0;
+        roadTaxFields.forEach(function (field) {
+            if (!(field.qty instanceof HTMLInputElement) || !(field.price instanceof HTMLInputElement)) {
+                return;
+            }
+
+            var qty = parseNumber(field.qty.value);
+            var price = parseNumber(field.price.value);
+            if (qty !== null && qty > 0 && price !== null && price > 0) {
+                total += qty * price;
+            }
+        });
+        return Math.round(total * 100) / 100;
+    };
+
+    var hasAnyRoadTaxInput = function () {
+        for (var i = 0; i < roadTaxFields.length; i++) {
+            var field = roadTaxFields[i];
+            if (!(field.qty instanceof HTMLInputElement) || !(field.price instanceof HTMLInputElement)) {
+                continue;
+            }
+            if (String(field.qty.value || '').trim() !== '' || String(field.price.value || '').trim() !== '') {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    var syncExpenseTaxMode = function () {
+        var isRoadTax = expenseTypeEl.value === 'taxe_drum';
+        roadTaxBoxEl.classList.toggle('d-none', !isRoadTax);
+
+        if (isRoadTax) {
+            var total = calculateRoadTaxTotal();
+            expenseAmountEl.readOnly = true;
+            if (total > 0) {
+                expenseAmountEl.value = formatAmount(total);
+            } else if (hasAnyRoadTaxInput() || initialExpenseAmount === '') {
+                expenseAmountEl.value = '';
+            }
+        } else {
+            expenseAmountEl.readOnly = false;
+        }
+    };
+
+    expenseTypeEl.addEventListener('change', syncExpenseTaxMode);
+    roadTaxFields.forEach(function (field) {
+        if (field.qty instanceof HTMLInputElement) {
+            field.qty.addEventListener('input', syncExpenseTaxMode);
+        }
+        if (field.price instanceof HTMLInputElement) {
+            field.price.addEventListener('input', syncExpenseTaxMode);
+        }
+    });
+
+    syncExpenseTaxMode();
+});
+</script>
+
+<?php if (!empty($maintenancePopupMessages)): ?>
+    <div class="modal fade" id="kmRevizieAlertModalEdit" tabindex="-1" aria-labelledby="kmRevizieAlertEditTitle" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="kmRevizieAlertEditTitle">AlertÄƒ revizie vehicul</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="ÃŽnchide"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-2">Unul sau mai multe vehicule au ajuns la pragul de revizie:</p>
+                    <ul class="mb-0">
+                        <?php foreach ((array) $maintenancePopupMessages as $popupMessage): ?>
+                            <li><?= e((string) $popupMessage) ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Am Ã®nÈ›eles</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var modalElement = document.getElementById('kmRevizieAlertModalEdit');
+            if (!modalElement) {
+                return;
+            }
+
+            if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                var modal = new bootstrap.Modal(modalElement);
+                modal.show();
+                return;
+            }
+
+            alert(<?= json_encode(implode("\n", (array) $maintenancePopupMessages), JSON_UNESCAPED_UNICODE) ?>);
+        });
+    </script>
+<?php endif; ?>
+
+<script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
+

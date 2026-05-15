@@ -1,0 +1,24 @@
+﻿# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Runtime / logs / cache
+*.log
+*.tmp
+*.cache
+
+# Dependencies
+vendor/
+node_modules/
+
+# Local environment
+.env
+.env.*
+
+# Runtime uploads
+htdocs/uploads/
+
+# Archives / backups
+*.zip
