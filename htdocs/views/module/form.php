@@ -4,6 +4,9 @@ $formAction = $isEdit
     ? build_query_url(['page' => $moduleKey, 'action' => 'update', 'id' => $recordId])
     : build_query_url(['page' => $moduleKey, 'action' => 'store']);
 $hasFileField = false;
+$vehicleKmBordById = is_array($vehicleKmBordById ?? null) ? $vehicleKmBordById : [];
+$driverVehicleById = is_array($driverVehicleById ?? null) ? $driverVehicleById : [];
+$fuelConsumptionSummary = is_array($fuelConsumptionSummary ?? null) ? $fuelConsumptionSummary : null;
 
 foreach ($module['form_fields'] as $fieldMeta) {
     if (($fieldMeta['type'] ?? 'text') === 'file') {
@@ -17,6 +20,23 @@ foreach ($module['form_fields'] as $fieldMeta) {
     <h2 class="h4 mb-0"><?= e($isEdit ? 'Editeaza ' . $module['singular'] : 'Adauga ' . $module['singular']) ?></h2>
     <a class="btn btn-outline-secondary" href="<?= e($backUrl ?? build_query_url(['page' => $moduleKey])) ?>">Inapoi la lista</a>
 </div>
+
+<?php if ($moduleKey === 'alimentari'): ?>
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
+            <div class="small text-uppercase text-muted fw-semibold mb-1">Consum mediu curent</div>
+            <?php if ($fuelConsumptionSummary === null): ?>
+                <div class="text-muted">L/100km apare dupa cel putin 2 alimentari pentru acelasi vehicul, cu Km alimentare crescator.</div>
+            <?php else: ?>
+                <div class="h4 mb-1"><?= e(format_number_ro((float) ($fuelConsumptionSummary['average_l_per_100km'] ?? 0), 2)) ?> L/100km</div>
+                <div class="small text-muted">
+                    Distanta analizata: <?= e(format_number_ro((float) ($fuelConsumptionSummary['total_distance_km'] ?? 0), 0)) ?> km |
+                    Combustibil: <?= e(format_number_ro((float) ($fuelConsumptionSummary['total_fuel_liters'] ?? 0), 2)) ?> L
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+<?php endif; ?>
 
 <?php if ($moduleKey === 'vehicule'): ?>
 <script>
@@ -59,6 +79,100 @@ document.addEventListener('DOMContentLoaded', function () {
 
     vehicleTypeEl.addEventListener('change', refreshAxleFormula);
     refreshAxleFormula();
+});
+</script>
+<?php endif; ?>
+
+<?php if ($moduleKey === 'alimentari'): ?>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const vehicleSelectEl = document.getElementById('field_vehicle_id');
+    const kmBordEl = document.getElementById('field_km_bord');
+    const driverSelectEl = document.getElementById('field_driver_id');
+
+    if (!(vehicleSelectEl instanceof HTMLSelectElement) || !(kmBordEl instanceof HTMLInputElement)) {
+        return;
+    }
+
+    const readSelectedVehicleKmBord = function () {
+        const selectedOption = vehicleSelectEl.selectedOptions.length > 0 ? vehicleSelectEl.selectedOptions[0] : null;
+        if (!(selectedOption instanceof HTMLOptionElement)) {
+            return null;
+        }
+
+        const rawKm = selectedOption.getAttribute('data-km-bord');
+        if (rawKm === null || rawKm.trim() === '') {
+            return null;
+        }
+
+        const parsedKm = Number(rawKm);
+        if (!Number.isFinite(parsedKm)) {
+            return null;
+        }
+
+        return Math.max(0, Math.trunc(parsedKm));
+    };
+
+    const syncKmBordFromSelectedVehicle = function (forceOverwrite) {
+        const selectedKmBord = readSelectedVehicleKmBord();
+        if (selectedKmBord === null) {
+            return;
+        }
+
+        const currentValue = kmBordEl.value.trim();
+        if (!forceOverwrite && currentValue !== '') {
+            return;
+        }
+
+        kmBordEl.value = String(selectedKmBord);
+        kmBordEl.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+
+    syncKmBordFromSelectedVehicle(false);
+    vehicleSelectEl.addEventListener('change', function () {
+        syncKmBordFromSelectedVehicle(true);
+    });
+
+    if (!(driverSelectEl instanceof HTMLSelectElement)) {
+        return;
+    }
+
+    const driverOptions = Array.from(driverSelectEl.options).filter(function (option) {
+        return option.value !== '';
+    });
+
+    const selectedVehicleId = function () {
+        const raw = vehicleSelectEl.value.trim();
+        if (raw === '') {
+            return '';
+        }
+        return raw;
+    };
+
+    const syncDriverOptionsForVehicle = function () {
+        const vehicleId = selectedVehicleId();
+        let hasVisibleSelectedDriver = false;
+
+        driverOptions.forEach(function (option) {
+            const assignedVehicleId = (option.getAttribute('data-assigned-vehicle-id') || '').trim();
+            const visible = vehicleId !== '' && assignedVehicleId !== '' && assignedVehicleId === vehicleId;
+
+            option.hidden = !visible;
+            option.disabled = !visible;
+            if (visible && option.selected) {
+                hasVisibleSelectedDriver = true;
+            }
+        });
+
+        if (!hasVisibleSelectedDriver) {
+            driverSelectEl.value = '';
+        }
+    };
+
+    syncDriverOptionsForVehicle();
+    vehicleSelectEl.addEventListener('change', function () {
+        syncDriverOptionsForVehicle();
+    });
 });
 </script>
 <?php endif; ?>
@@ -113,7 +227,22 @@ document.addEventListener('DOMContentLoaded', function () {
                             >
                                 <option value=""><?= e((string) ($placeholder ?? '-- Selecteaza --')) ?></option>
                                 <?php foreach (($selectOptions[$field] ?? []) as $optionValue => $optionLabel): ?>
-                                    <option value="<?= e((string) $optionValue) ?>" <?= (string) $value === (string) $optionValue ? 'selected' : '' ?>>
+                                    <?php
+                                    $optionExtraAttributes = '';
+                                    if ($moduleKey === 'alimentari' && $field === 'vehicle_id') {
+                                        $kmBordForOption = $vehicleKmBordById[(string) $optionValue] ?? null;
+                                        if ($kmBordForOption !== null && is_numeric((string) $kmBordForOption)) {
+                                            $optionExtraAttributes = ' data-km-bord="' . e((string) max(0, (int) $kmBordForOption)) . '"';
+                                        }
+                                    }
+                                    if ($moduleKey === 'alimentari' && $field === 'driver_id') {
+                                        $assignedVehicleId = $driverVehicleById[(string) $optionValue] ?? null;
+                                        if ($assignedVehicleId !== null && is_numeric((string) $assignedVehicleId)) {
+                                            $optionExtraAttributes = ' data-assigned-vehicle-id="' . e((string) max(0, (int) $assignedVehicleId)) . '"';
+                                        }
+                                    }
+                                    ?>
+                                    <option value="<?= e((string) $optionValue) ?>"<?= $optionExtraAttributes ?> <?= (string) $value === (string) $optionValue ? 'selected' : '' ?>>
                                         <?= e((string) $optionLabel) ?>
                                     </option>
                                 <?php endforeach; ?>

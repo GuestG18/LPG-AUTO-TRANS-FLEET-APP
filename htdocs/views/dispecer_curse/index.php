@@ -748,8 +748,13 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
                             }
                         }
                         $billingStatusRowClass = 'race-status-' . preg_replace('/[^a-z0-9_]/', '', strtolower($billingStatus));
+                        $missingEndTimeInListRow = trim((string) ($row['ora_sfarsit'] ?? '')) === '';
+                        $rowClasses = [$billingStatusRowClass];
+                        if ($missingEndTimeInListRow) {
+                            $rowClasses[] = 'race-missing-end-time';
+                        }
                         ?>
-                        <tr class="<?= e($billingStatusRowClass) ?>" data-billing-status="<?= e($billingStatus) ?>">
+                        <tr class="<?= e(implode(' ', $rowClasses)) ?>" data-billing-status="<?= e($billingStatus) ?>" data-missing-end-time="<?= $missingEndTimeInListRow ? '1' : '0' ?>">
                             <td class="col-plate">
                                 <label class="dispatcher-plate-cell mb-0" for="bulk-race-id-<?= e((string) $raceId) ?>">
                                     <input
@@ -865,11 +870,18 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
         </button>
         <div class="dispatcher-open-races-panel" id="open-races-panel" data-open-races-panel>
             <div class="dispatcher-open-races-head">
-                <strong>Clasificare lipsuri</strong>
-                <small class="text-muted">
-                    Fara ora sfarsit: <?= e((string) $openRacesMissingEndTimeCount) ?> |
-                    Fara cheltuieli: <?= e((string) $openRacesMissingExpensesCount) ?>
-                </small>
+                <div class="dispatcher-open-races-head-main">
+                    <div>
+                        <strong>Clasificare lipsuri</strong>
+                        <small class="text-muted d-block">
+                            Fara ora sfarsit: <?= e((string) $openRacesMissingEndTimeCount) ?> |
+                            Fara cheltuieli: <?= e((string) $openRacesMissingExpensesCount) ?>
+                        </small>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-open-races-close aria-label="Inchide meniul alerte">
+                        Inchide
+                    </button>
+                </div>
             </div>
             <ul class="list-group list-group-flush">
                 <?php foreach ($openRacesRows as $openRace): ?>
@@ -917,13 +929,27 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
                         $openMetaParts[] = 'Cheltuieli: ' . $openExpenseCount;
                         $openMeta = implode(' | ', $openMetaParts);
                     ?>
+                    <?php
+                        $openEditQuery = ['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId];
+                        $openEditHash = '';
+                        if ($openMissingEndTime) {
+                            // Prioritate: daca lipseste ora de sfarsit, utilizatorul trebuie trimis direct acolo,
+                            // inclusiv in cazurile in care lipsesc si cheltuielile.
+                            $openEditQuery['focus'] = 'end_time';
+                            $openEditHash = '#edit_race_ora_sfarsit';
+                        } elseif ($openMissingExpenses) {
+                            $openEditHash = '#expense-section';
+                        }
+                        $openEditUrl = build_query_url($openEditQuery) . $openEditHash;
+                        $openEditLabel = $openMissingEndTime ? 'Completeaza ora' : ($openMissingExpenses ? 'Adauga cheltuieli' : 'Editeaza');
+                    ?>
                     <li class="list-group-item d-flex justify-content-between align-items-start gap-2">
                         <div class="dispatcher-open-race-text">
                             <div class="fw-semibold"><?= e($openTitle) ?></div>
                             <div class="small text-muted"><?= e($openMeta) ?></div>
                         </div>
-                        <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId])) ?>">
-                            Editeaza
+                        <a class="btn btn-sm btn-outline-primary" href="<?= e($openEditUrl) ?>">
+                            <?= e($openEditLabel) ?>
                         </a>
                     </li>
                 <?php endforeach; ?>
@@ -1009,13 +1035,46 @@ document.addEventListener('DOMContentLoaded', function () {
 
     refreshBulkDeleteState();
 
+    var openRacesTabEl = document.querySelector('[data-open-races-tab]');
     var openRacesToggleEl = document.querySelector('[data-open-races-toggle]');
     var openRacesPanelEl = document.querySelector('[data-open-races-panel]');
-    if (openRacesToggleEl instanceof HTMLButtonElement && openRacesPanelEl instanceof HTMLElement) {
+    var openRacesCloseEl = document.querySelector('[data-open-races-close]');
+    if (
+        openRacesTabEl instanceof HTMLElement
+        && openRacesToggleEl instanceof HTMLButtonElement
+        && openRacesPanelEl instanceof HTMLElement
+    ) {
+        var setOpenRacesExpanded = function (expanded) {
+            openRacesToggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            openRacesPanelEl.classList.toggle('d-none', !expanded);
+        };
+
         openRacesToggleEl.addEventListener('click', function () {
             var expanded = openRacesToggleEl.getAttribute('aria-expanded') === 'true';
-            openRacesToggleEl.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-            openRacesPanelEl.classList.toggle('d-none', expanded);
+            setOpenRacesExpanded(!expanded);
+        });
+
+        if (openRacesCloseEl instanceof HTMLButtonElement) {
+            openRacesCloseEl.addEventListener('click', function () {
+                setOpenRacesExpanded(false);
+                openRacesToggleEl.focus();
+            });
+        }
+
+        document.addEventListener('click', function (event) {
+            var targetEl = event.target;
+            if (!(targetEl instanceof Node)) {
+                return;
+            }
+            if (!openRacesTabEl.contains(targetEl)) {
+                setOpenRacesExpanded(false);
+            }
+        });
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') {
+                setOpenRacesExpanded(false);
+            }
         });
     }
 

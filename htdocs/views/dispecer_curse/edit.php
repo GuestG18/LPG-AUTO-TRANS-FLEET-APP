@@ -129,6 +129,7 @@ $expensesTotal = 0.0;
 foreach ($expenses as $expenseRow) {
     $expensesTotal += (float) ($expenseRow['suma'] ?? 0);
 }
+$focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
 ?>
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
@@ -281,7 +282,7 @@ foreach ($expenses as $expenseRow) {
                     <div class="input-group">
                         <input
                             type="text"
-                            class="form-control <?= isset($raceFormErrors['ora_sfarsit']) ? 'is-invalid' : '' ?>"
+                            class="form-control <?= isset($raceFormErrors['ora_sfarsit']) ? 'is-invalid' : '' ?><?= $focusEndTime ? ' dispatcher-end-time-focus' : '' ?>"
                             id="edit_race_ora_sfarsit"
                             name="ora_sfarsit"
                             value="<?= e($formEndTimeValue) ?>"
@@ -710,6 +711,24 @@ foreach ($expenses as $expenseRow) {
         </div>
     </div>
 </div>
+
+<?php if ($focusEndTime): ?>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var endTimeInputEl = document.getElementById('edit_race_ora_sfarsit');
+    if (!(endTimeInputEl instanceof HTMLInputElement)) {
+        return;
+    }
+
+    endTimeInputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    try {
+        endTimeInputEl.focus({ preventScroll: true });
+    } catch (error) {
+        endTimeInputEl.focus();
+    }
+});
+</script>
+<?php endif; ?>
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {

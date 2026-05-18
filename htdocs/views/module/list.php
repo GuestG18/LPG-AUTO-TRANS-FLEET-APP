@@ -14,6 +14,8 @@ $urgentDocuments = $urgentDocuments ?? [];
 $isVehicleList = $moduleKey === 'vehicule';
 $isDocumentList = $moduleKey === 'documente';
 $isMaintenanceList = $moduleKey === 'mentenanta';
+$isFuelList = $moduleKey === 'alimentari';
+$fuelConsumptionSummary = is_array($fuelConsumptionSummary ?? null) ? $fuelConsumptionSummary : null;
 $maintenanceTireStockContext = $maintenanceTireStockContext ?? null;
 $hasMultiselectFilters = false;
 foreach ($module['filters'] ?? [] as $filterMeta) {
@@ -545,6 +547,31 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
                     <?php endif; ?>
                     </tbody>
                 </table>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
+
+<?php if ($isFuelList): ?>
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div>
+                    <h3 class="h6 mb-1">Consum mediu combustibil (filtre curente)</h3>
+                    <?php if ($fuelConsumptionSummary === null): ?>
+                        <div class="text-muted">Nu sunt suficiente date pentru calcul (ai nevoie de cel putin 2 alimentari pe vehicul, cu Km alimentare crescator).</div>
+                    <?php else: ?>
+                        <div class="display-6 fw-semibold mb-1">
+                            <?= e(format_number_ro((float) ($fuelConsumptionSummary['average_l_per_100km'] ?? 0), 2)) ?> L/100km
+                        </div>
+                        <div class="text-muted small">
+                            Distanta: <?= e(format_number_ro((float) ($fuelConsumptionSummary['total_distance_km'] ?? 0), 0)) ?> km |
+                            Combustibil: <?= e(format_number_ro((float) ($fuelConsumptionSummary['total_fuel_liters'] ?? 0), 2)) ?> L |
+                            Intervale: <?= e((string) ((int) ($fuelConsumptionSummary['interval_count'] ?? 0))) ?> |
+                            Vehicule: <?= e((string) ((int) ($fuelConsumptionSummary['vehicle_count'] ?? 0))) ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
             </div>
         </div>
     </div>

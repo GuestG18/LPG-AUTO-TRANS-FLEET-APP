@@ -12,12 +12,21 @@ if ($scriptDirectory === '/' || $scriptDirectory === '.' || $scriptDirectory ===
 }
 define('BASE_URL', rtrim($scriptDirectory, '/'));
 
+$httpHost = trim((string) ($_SERVER['HTTP_HOST'] ?? ''));
+$normalizedHttpHost = strtolower((string) (preg_replace('/:\d+$/', '', $httpHost) ?? $httpHost));
+$isLocalHttpHost = in_array($normalizedHttpHost, ['127.0.0.1', 'localhost'], true)
+    || str_ends_with($normalizedHttpHost, '.local');
+$appEnvRaw = strtolower(trim((string) (getenv('APP_ENV') ?: 'development')));
+$isProductionEnv = in_array($appEnvRaw, ['production', 'prod'], true);
+$defaultAuthEmailTransport = ($isLocalHttpHost && !$isProductionEnv) ? 'mail' : 'smtp';
+
 define('APP_NAME', 'Fleet Management MVP');
 define('APP_DEBUG', false);
+define('APP_ENV', $appEnvRaw);
 define('ITEMS_PER_PAGE', 10);
 define('AUTH_EMAIL_FROM', (string) (getenv('AUTH_EMAIL_FROM') ?: 'no-reply@fleet.local'));
 define('AUTH_EMAIL_FROM_NAME', (string) (getenv('AUTH_EMAIL_FROM_NAME') ?: APP_NAME));
-define('AUTH_EMAIL_TRANSPORT', strtolower((string) (getenv('AUTH_EMAIL_TRANSPORT') ?: 'smtp'))); // smtp | mail
+define('AUTH_EMAIL_TRANSPORT', strtolower((string) (getenv('AUTH_EMAIL_TRANSPORT') ?: $defaultAuthEmailTransport))); // smtp | mail | resend
 define('AUTH_EMAIL_FALLBACK_TRANSPORT', strtolower((string) (getenv('AUTH_EMAIL_FALLBACK_TRANSPORT') ?: ''))); // smtp | mail | resend | ''
 define('SMTP_HOST', (string) (getenv('SMTP_HOST') ?: 'smtp.migadu.com'));
 define('SMTP_PORT', (int) (getenv('SMTP_PORT') ?: 587));
@@ -42,7 +51,6 @@ define('DB_PASS', 'root123');
 define('DB_CHARSET', 'utf8mb4');
 
 $isHttps = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
-$httpHost = trim((string) ($_SERVER['HTTP_HOST'] ?? ''));
 $defaultAppUrl = $httpHost !== ''
     ? (($isHttps ? 'https://' : 'http://') . $httpHost . BASE_URL)
     : 'http://127.0.0.1:8000';

@@ -42,7 +42,74 @@ function normalize_romanian_text(string $value): string
         "\u{00C3}\u{2026}\u{00C2}\u{00A3}" => "\u{021B}",
     ];
 
-    return strtr($value, $replacements);
+    $normalized = repair_utf8_mojibake($value);
+
+    return strtr($normalized, $replacements);
+}
+
+function repair_utf8_mojibake(string $value): string
+{
+    if (!has_mojibake_markers($value) || !function_exists('iconv')) {
+        return $value;
+    }
+
+    $current = $value;
+    $previousScore = mojibake_marker_score($current);
+
+    for ($i = 0; $i < 6; $i++) {
+        if ($previousScore === 0) {
+            break;
+        }
+
+        // Reverse one accidental UTF-8 -> cp1252 reinterpretation layer.
+        $bytes = @iconv('UTF-8', 'Windows-1252//IGNORE', $current);
+        if (!is_string($bytes) || $bytes === '') {
+            break;
+        }
+
+        // Scrub invalid UTF-8 bytes similarly to decode(..., errors='ignore').
+        $candidate = @iconv('UTF-8', 'UTF-8//IGNORE', $bytes);
+        if (!is_string($candidate) || $candidate === '' || $candidate === $current) {
+            break;
+        }
+
+        $candidateScore = mojibake_marker_score($candidate);
+        if ($candidateScore > $previousScore) {
+            break;
+        }
+
+        $current = $candidate;
+        $previousScore = $candidateScore;
+    }
+
+    return $current;
+}
+
+function has_mojibake_markers(string $value): bool
+{
+    return str_contains($value, 'Ã')
+        || str_contains($value, 'Ä')
+        || str_contains($value, 'Å')
+        || str_contains($value, 'È')
+        || str_contains($value, 'â€')
+        || str_contains($value, 'â‚')
+        || str_contains($value, 'â„')
+        || str_contains($value, 'â€¦');
+}
+
+function mojibake_marker_score(string $value): int
+{
+    $score = 0;
+    $score += substr_count($value, 'Ã');
+    $score += substr_count($value, 'Ä');
+    $score += substr_count($value, 'Å');
+    $score += substr_count($value, 'È');
+    $score += substr_count($value, 'â€');
+    $score += substr_count($value, 'â‚');
+    $score += substr_count($value, 'â„');
+    $score += substr_count($value, 'â€¦');
+
+    return $score;
 }
 
 function url(string $path = ''): string

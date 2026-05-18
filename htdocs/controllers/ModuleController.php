@@ -181,6 +181,11 @@ class ModuleController
             }
         }
 
+        if ($moduleKey === 'alimentari') {
+            $allRows = $this->moduleModel->getAll($module, $search, $filters);
+            $viewData['fuelConsumptionSummary'] = $this->buildFuelConsumptionSummary($allRows);
+        }
+
         render('module/list.php', $viewData);
     }
 
@@ -219,6 +224,16 @@ class ModuleController
             }
         }
 
+        $vehicleKmBordById = $moduleKey === 'alimentari'
+            ? $this->buildVehicleKmBordMapForAlimentari($module)
+            : [];
+        $driverVehicleById = $moduleKey === 'alimentari'
+            ? $this->buildDriverVehicleMapForAlimentari($module)
+            : [];
+        $fuelConsumptionSummary = $moduleKey === 'alimentari'
+            ? $this->buildFuelConsumptionSummary($this->moduleModel->getAll($module, '', []))
+            : null;
+
         render('module/form.php', [
             'pageTitle' => 'Adauga ' . ucfirst($module['singular']),
             'currentPage' => $currentPage,
@@ -229,6 +244,9 @@ class ModuleController
             'formData' => $formData,
             'errors' => $errors,
             'selectOptions' => $this->buildFormSelectOptions($module),
+            'vehicleKmBordById' => $vehicleKmBordById,
+            'driverVehicleById' => $driverVehicleById,
+            'fuelConsumptionSummary' => $fuelConsumptionSummary,
             'backUrl' => $backUrl,
             'keepDocumentVehicleContext' => $keepDocumentVehicleContext,
         ]);
@@ -243,6 +261,9 @@ class ModuleController
         ensure_csrf_or_redirect(build_query_url(['page' => $moduleKey, 'action' => 'create']));
 
         [$data, $errors] = $this->validateAndPrepareData($module, $_POST, $_FILES, 'create', null);
+        if ($moduleKey === 'alimentari') {
+            $this->validateAlimentareDriverSelection($data, $errors);
+        }
         $keepDocumentVehicleContext = $moduleKey === 'documente'
             && (string) ($_POST['keep_vehicle_context'] ?? '') === '1';
         $documentVehicleId = (int) ($_POST['vehicle_id'] ?? 0);
@@ -404,6 +425,16 @@ class ModuleController
             $formData = array_merge($formData, $old);
         }
 
+        $vehicleKmBordById = $moduleKey === 'alimentari'
+            ? $this->buildVehicleKmBordMapForAlimentari($module)
+            : [];
+        $driverVehicleById = $moduleKey === 'alimentari'
+            ? $this->buildDriverVehicleMapForAlimentari($module)
+            : [];
+        $fuelConsumptionSummary = $moduleKey === 'alimentari'
+            ? $this->buildFuelConsumptionSummary($this->moduleModel->getAll($module, '', []))
+            : null;
+
         render('module/form.php', [
             'pageTitle' => 'Editeaza ' . ucfirst($module['singular']),
             'currentPage' => $currentPage,
@@ -414,6 +445,9 @@ class ModuleController
             'formData' => $formData,
             'errors' => $errors,
             'selectOptions' => $this->buildFormSelectOptions($module),
+            'vehicleKmBordById' => $vehicleKmBordById,
+            'driverVehicleById' => $driverVehicleById,
+            'fuelConsumptionSummary' => $fuelConsumptionSummary,
             'backUrl' => $this->buildModuleBackUrl($moduleKey, $module, $record, $formData),
         ]);
     }
@@ -440,6 +474,9 @@ class ModuleController
         }
 
         [$data, $errors] = $this->validateAndPrepareData($module, $_POST, $_FILES, 'edit', $id);
+        if ($moduleKey === 'alimentari') {
+            $this->validateAlimentareDriverSelection($data, $errors);
+        }
         if ($moduleKey === 'utilizatori') {
             $this->validateUserSafetyOnUpdate($id, $existing, $data, $errors);
         }
@@ -1826,6 +1863,103 @@ class ModuleController
         return $options;
     }
 
+    private function buildVehicleKmBordMapForAlimentari(array $module): array
+    {
+        $vehicleField = $module['form_fields']['vehicle_id'] ?? null;
+        if (!is_array($vehicleField)) {
+            return [];
+        }
+
+        $source = $vehicleField['source'] ?? null;
+        if (!is_array($source)) {
+            return [];
+        }
+
+        $kmSource = $source;
+        $kmSource['label'] = 'COALESCE(km_bord, 0)';
+
+        try {
+            $rows = $this->moduleModel->getSelectOptions($kmSource);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][alimentari][km-bord] ' . $exception->getMessage());
+            return [];
+        }
+
+        $map = [];
+        foreach ($rows as $row) {
+            $vehicleId = isset($row['value']) ? (int) $row['value'] : 0;
+            if ($vehicleId <= 0) {
+                continue;
+            }
+
+            $map[(string) $vehicleId] = max(0, (int) ($row['label'] ?? 0));
+        }
+
+        return $map;
+    }
+
+    private function buildDriverVehicleMapForAlimentari(array $module): array
+    {
+        $driverField = $module['form_fields']['driver_id'] ?? null;
+        if (!is_array($driverField)) {
+            return [];
+        }
+
+        $source = $driverField['source'] ?? null;
+        if (!is_array($source)) {
+            return [];
+        }
+
+        $driverSource = $source;
+        $driverSource['label'] = 'COALESCE(vehicle_id, 0)';
+
+        try {
+            $rows = $this->moduleModel->getSelectOptions($driverSource);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][alimentari][driver-vehicle-map] ' . $exception->getMessage());
+            return [];
+        }
+
+        $map = [];
+        foreach ($rows as $row) {
+            $driverId = isset($row['value']) ? (int) $row['value'] : 0;
+            if ($driverId <= 0) {
+                continue;
+            }
+
+            $map[(string) $driverId] = max(0, (int) ($row['label'] ?? 0));
+        }
+
+        return $map;
+    }
+
+    private function validateAlimentareDriverSelection(array $data, array &$errors): void
+    {
+        if (!isset($errors['vehicle_id'])) {
+            $vehicleId = (int) ($data['vehicle_id'] ?? 0);
+            if ($vehicleId > 0 && !$this->moduleModel->isVehicleEligibleForRefuel($vehicleId)) {
+                $errors['vehicle_id'] = 'Vehiculul selectat nu este eligibil pentru alimentare (inactiv sau semiremorca).';
+            }
+        }
+
+        if (isset($errors['vehicle_id']) || isset($errors['driver_id'])) {
+            return;
+        }
+
+        $vehicleId = (int) ($data['vehicle_id'] ?? 0);
+        $driverId = isset($data['driver_id']) && $data['driver_id'] !== null && $data['driver_id'] !== ''
+            ? (int) $data['driver_id']
+            : 0;
+
+        if ($vehicleId <= 0 || $driverId <= 0) {
+            return;
+        }
+
+        if (!$this->moduleModel->isDriverAssignedToVehicle($driverId, $vehicleId, true)) {
+            $errors['driver_id'] = 'Soferul selectat nu este alocat vehiculului ales.';
+        }
+    }
+
     private function defaultFormData(array $module): array
     {
         $data = [];
@@ -2113,6 +2247,15 @@ class ModuleController
             return 'Structura bazei de date pentru Mentenanta nu este actualizata. Ruleaza scriptul database/update_mentenanta_invoice_and_suppliers.sql, apoi incearca din nou.';
         }
 
+        if ($moduleKey === 'alimentari'
+            && (
+                str_contains($exceptionMessage, 'km_alimentare')
+                || (($sqlState === '42S22' || str_contains($exceptionMessage, 'unknown column')) && str_contains($exceptionMessage, 'alimentari'))
+            )
+        ) {
+            return 'Structura bazei de date pentru campul Km alimentare nu este actualizata. Ruleaza scriptul database/update_alimentari_km_alimentare.sql, apoi incearca din nou.';
+        }
+
         if ($moduleKey === 'vehicule'
             && (
                 str_contains($exceptionMessage, 'km_revizie')
@@ -2232,6 +2375,97 @@ class ModuleController
         $vehicleId = (int) $vehicleId;
 
         return $vehicleId > 0 ? $vehicleId : null;
+    }
+
+    private function buildFuelConsumptionSummary(array $rows): ?array
+    {
+        if ($rows === []) {
+            return null;
+        }
+
+        $grouped = [];
+        foreach ($rows as $row) {
+            $vehicleId = (int) ($row['vehicle_id'] ?? 0);
+            if ($vehicleId <= 0) {
+                continue;
+            }
+
+            $grouped[$vehicleId][] = $row;
+        }
+
+        if ($grouped === []) {
+            return null;
+        }
+
+        $totalDistanceKm = 0.0;
+        $totalFuelLiters = 0.0;
+        $intervalCount = 0;
+        $vehicleCount = 0;
+
+        foreach ($grouped as $vehicleRows) {
+            usort($vehicleRows, static function (array $a, array $b): int {
+                $dateA = (string) ($a['data_alimentare'] ?? '');
+                $dateB = (string) ($b['data_alimentare'] ?? '');
+                if ($dateA !== $dateB) {
+                    return strcmp($dateA, $dateB);
+                }
+
+                return ((int) ($a['id'] ?? 0)) <=> ((int) ($b['id'] ?? 0));
+            });
+
+            $prevKm = null;
+            $hasValidIntervalForVehicle = false;
+
+            foreach ($vehicleRows as $row) {
+                $currentKmRaw = $row['km_alimentare'] ?? null;
+                if ($currentKmRaw === null || $currentKmRaw === '' || !is_numeric((string) $currentKmRaw)) {
+                    continue;
+                }
+
+                $currentKm = (float) $currentKmRaw;
+                if ($prevKm === null) {
+                    $prevKm = $currentKm;
+                    continue;
+                }
+
+                $distanceKm = $currentKm - $prevKm;
+                $prevKm = $currentKm;
+                if ($distanceKm <= 0) {
+                    continue;
+                }
+
+                $litersRaw = $row['litri'] ?? null;
+                if ($litersRaw === null || $litersRaw === '' || !is_numeric((string) $litersRaw)) {
+                    continue;
+                }
+
+                $liters = (float) $litersRaw;
+                if ($liters < 0) {
+                    continue;
+                }
+
+                $totalDistanceKm += $distanceKm;
+                $totalFuelLiters += $liters;
+                $intervalCount++;
+                $hasValidIntervalForVehicle = true;
+            }
+
+            if ($hasValidIntervalForVehicle) {
+                $vehicleCount++;
+            }
+        }
+
+        if ($totalDistanceKm <= 0 || $intervalCount === 0) {
+            return null;
+        }
+
+        return [
+            'average_l_per_100km' => round(($totalFuelLiters / $totalDistanceKm) * 100, 2),
+            'total_distance_km' => round($totalDistanceKm, 2),
+            'total_fuel_liters' => round($totalFuelLiters, 2),
+            'interval_count' => $intervalCount,
+            'vehicle_count' => $vehicleCount,
+        ];
     }
 
     private function storeUploadedDocumentFile(?array $file): array

@@ -215,6 +215,7 @@ CREATE TABLE alimentari (
     litri DECIMAL(8,2) NOT NULL,
     cost_total DECIMAL(10,2) NOT NULL,
     km_bord INT UNSIGNED NOT NULL,
+    km_alimentare INT UNSIGNED NOT NULL,
     observatii TEXT NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
@@ -532,11 +533,11 @@ INSERT INTO concedii (
 (1, 'medical', DATE_ADD(CURDATE(), INTERVAL 16 DAY), DATE_ADD(CURDATE(), INTERVAL 18 DAY), NULL, 'Consultații și recuperare.', 'in_asteptare_aprobare', 2, NOW(), NOW()),
 (2, 'fara_plata', DATE_ADD(CURDATE(), INTERVAL 25 DAY), DATE_ADD(CURDATE(), INTERVAL 26 DAY), NULL, 'Rezolvare urgentă familie.', 'respins', 2, NOW(), NOW());
 
-INSERT INTO alimentari (vehicle_id, driver_id, data_alimentare, litri, cost_total, km_bord, observatii, created_at, updated_at) VALUES
-(1, 1, DATE_SUB(CURDATE(), INTERVAL 3 DAY), 45.50, 355.40, 85420, 'Motorina statia A', NOW(), NOW()),
-(2, 2, DATE_SUB(CURDATE(), INTERVAL 2 DAY), 60.00, 468.00, 120300, 'Motorina statia B', NOW(), NOW()),
-(1, 1, DATE_SUB(CURDATE(), INTERVAL 15 DAY), 42.00, 327.60, 84920, 'Alimentare traseu Brasov', NOW(), NOW()),
-(3, NULL, DATE_SUB(CURDATE(), INTERVAL 20 DAY), 30.00, 240.00, 142210, 'Alimentare inainte de intrare service', NOW(), NOW());
+INSERT INTO alimentari (vehicle_id, driver_id, data_alimentare, litri, cost_total, km_bord, km_alimentare, observatii, created_at, updated_at) VALUES
+(1, 1, DATE_SUB(CURDATE(), INTERVAL 3 DAY), 45.50, 355.40, 85420, 85420, 'Motorina statia A', NOW(), NOW()),
+(2, 2, DATE_SUB(CURDATE(), INTERVAL 2 DAY), 60.00, 468.00, 120300, 120300, 'Motorina statia B', NOW(), NOW()),
+(1, 1, DATE_SUB(CURDATE(), INTERVAL 15 DAY), 42.00, 327.60, 84920, 84920, 'Alimentare traseu Brasov', NOW(), NOW()),
+(3, NULL, DATE_SUB(CURDATE(), INTERVAL 20 DAY), 30.00, 240.00, 142210, 142210, 'Alimentare inainte de intrare service', NOW(), NOW());
 
 INSERT INTO mentenanta (vehicle_id, tip_interventie, data_interventie, cost, atelier, furnizor_piesa, fisier_original, fisier_stocat, observatii, created_at, updated_at) VALUES
 (1, 'Schimb ulei si filtre', DATE_SUB(CURDATE(), INTERVAL 12 DAY), 780.00, 'Service Rapid SRL', 'Piese Auto Nord', NULL, NULL, 'Revizie periodica', NOW(), NOW()),

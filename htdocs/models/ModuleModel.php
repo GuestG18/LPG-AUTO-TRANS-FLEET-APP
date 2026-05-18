@@ -363,6 +363,59 @@ class ModuleModel extends BaseModel
         return (int) $stmt->fetchColumn() > 0;
     }
 
+    public function isDriverAssignedToVehicle(int $driverId, int $vehicleId, bool $onlyActive = true): bool
+    {
+        if ($driverId <= 0 || $vehicleId <= 0) {
+            return false;
+        }
+
+        $sql = 'SELECT COUNT(*) FROM soferi WHERE id = :driver_id AND vehicle_id = :vehicle_id';
+        if ($onlyActive) {
+            $sql .= " AND status = 'activ'";
+        }
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':driver_id', $driverId, PDO::PARAM_INT);
+        $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    public function isVehicleActive(int $vehicleId): bool
+    {
+        if ($vehicleId <= 0) {
+            return false;
+        }
+
+        $sql = "SELECT COUNT(*) FROM vehicule WHERE id = :vehicle_id AND status = 'activ'";
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    public function isVehicleEligibleForRefuel(int $vehicleId): bool
+    {
+        if ($vehicleId <= 0) {
+            return false;
+        }
+
+        $sql = "
+            SELECT COUNT(*)
+            FROM vehicule
+            WHERE id = :vehicle_id
+              AND status = 'activ'
+              AND tip_vehicul <> 'semiremorca'
+        ";
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
     public function getSelectOptions(array $source): array
     {
         $table = $source['table'];
