@@ -375,7 +375,7 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                     <label class="form-label" for="edit_race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['km_totali']) ? 'is-invalid' : '' ?>" id="edit_race_km_totali" name="km_totali" min="0" step="1" value="<?= e((string) ($raceFormData['km_totali'] ?? '')) ?>" data-role="km-totali">
                     <?php if (isset($raceFormErrors['km_totali'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_totali']) ?></div><?php endif; ?>
-                    <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Km Distributie (calcul): 0 - 0 = 0 km</div>
+                    <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Cost/km Distributie (calcul): (Cantitate × Tarif tona) / Km agreati</div>
                 </div>
 
                 <div class="col-12 col-md-6" data-role="field-zona">
@@ -435,17 +435,17 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                     <div class="dispatcher-total-preview" data-role="total-preview"><?= e(format_number_ro((float) ($raceFormData['total_facturare'] ?? 0), 2)) ?> lei</div>
                 </div>
 
-                <div class="col-12 col-md-6" data-role="preview-cost-km-primar-field">
+                <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-primar-field">
                     <label class="form-label">Cost/km Primar</label>
                     <div class="dispatcher-total-preview" data-role="cost-km-primar-preview"><?= e(format_number_ro((float) ($raceFormData['cost_km_primar'] ?? 0), 2)) ?> lei/km</div>
                 </div>
 
-                <div class="col-12 col-md-6" data-role="preview-cost-km-distributie-field">
+                <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-distributie-field">
                     <label class="form-label">Cost/km Distribuție</label>
                     <div class="dispatcher-total-preview" data-role="cost-km-distributie-preview"><?= e(format_number_ro((float) ($raceFormData['cost_km_distributie'] ?? 0), 2)) ?> lei/km</div>
                 </div>
 
-                <div class="col-12 col-md-6" data-role="preview-cost-km-mixt-field">
+                <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-mixt-field">
                     <label class="form-label">Cost/km Mixt</label>
                     <div class="dispatcher-total-preview" data-role="cost-km-mixt-preview"><?= e(format_number_ro((float) ($raceFormData['cost_km_mixt'] ?? 0), 2)) ?> lei/km</div>
                 </div>
@@ -712,24 +712,6 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
     </div>
 </div>
 
-<?php if ($focusEndTime): ?>
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-    var endTimeInputEl = document.getElementById('edit_race_ora_sfarsit');
-    if (!(endTimeInputEl instanceof HTMLInputElement)) {
-        return;
-    }
-
-    endTimeInputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    try {
-        endTimeInputEl.focus({ preventScroll: true });
-    } catch (error) {
-        endTimeInputEl.focus();
-    }
-});
-</script>
-<?php endif; ?>
-
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     var expenseTypeEl = document.getElementById('expense_tip_cheltuiala');
@@ -869,4 +851,45 @@ document.addEventListener('DOMContentLoaded', function () {
 <?php endif; ?>
 
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
+
+<?php if ($focusEndTime): ?>
+<script>
+(function () {
+    var focusEndTimeField = function () {
+        var endTimeInputEl = document.getElementById('edit_race_ora_sfarsit');
+        if (!(endTimeInputEl instanceof HTMLInputElement)) {
+            return;
+        }
+
+        var alignEndTimeField = function () {
+            var topOffset = 112;
+            var targetTop = endTimeInputEl.getBoundingClientRect().top + window.pageYOffset - topOffset;
+            window.scrollTo({
+                top: Math.max(0, Math.round(targetTop)),
+                behavior: 'auto'
+            });
+        };
+
+        alignEndTimeField();
+        window.requestAnimationFrame(function () {
+            alignEndTimeField();
+            window.setTimeout(function () {
+                alignEndTimeField();
+                try {
+                    endTimeInputEl.focus({ preventScroll: true });
+                } catch (error) {
+                    endTimeInputEl.focus();
+                }
+            }, 120);
+        });
+    };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', focusEndTimeField);
+    } else {
+        focusEndTimeField();
+    }
+})();
+</script>
+<?php endif; ?>
 

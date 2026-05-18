@@ -2620,16 +2620,9 @@
             }
 
             var kmAgreati = Math.max(0, parseNumber(kmAgreatiValue));
-            var kmEfectuati = Math.max(0, parseNumber(kmEfectuatiValue));
-            var kmDistributie = Math.max(0, kmEfectuati - kmAgreati);
             kmDistributionCalculationNote.textContent =
-                'Km Distributie (calcul): '
-                + formatKmValueRo(kmEfectuati)
-                + ' - '
-                + formatKmValueRo(kmAgreati)
-                + ' = '
-                + formatKmValueRo(kmDistributie)
-                + ' km';
+                'Cost/km Distributie (calcul): (Cantitate × Tarif tona) / Km agreati'
+                + (kmAgreati > 0 ? (' (' + formatKmValueRo(kmAgreati) + ' km)') : '');
         }
 
         function shouldShowCompressorLiquidSuctionField(transportType, rates) {
@@ -2658,21 +2651,10 @@
         }
 
         function syncPreviewFieldsVisibility(transportType) {
-            var normalizedTransportType = String(transportType || '').trim();
             var showTotal = true;
             var showCostPrimar = false;
             var showCostDistributie = false;
             var showCostMixt = false;
-
-            if (normalizedTransportType === 'primar' || normalizedTransportType === 'primar_tona') {
-                showCostPrimar = true;
-            } else if (normalizedTransportType === 'distributie') {
-                showCostDistributie = true;
-            } else if (normalizedTransportType === 'primar_distributie') {
-                showCostPrimar = true;
-                showCostDistributie = true;
-                showCostMixt = true;
-            }
 
             setPreviewFieldVisibility(totalPreviewField, showTotal);
             setPreviewFieldVisibility(costKmPrimarPreviewField, showCostPrimar);
@@ -2878,13 +2860,20 @@
             var costKmPrimar = includesPrimarySegment && kmPrimar > 0
                 ? safeDivide(totalPrimar, kmPrimar)
                 : 0;
-            var costKmDistributie = includesDistributionSegment && kmDistributie > 0
-                ? safeDivide(totalDistributie, kmDistributie)
-                : 0;
+            var costKmDistributie = 0;
+            if (transportType === 'primar_distributie') {
+                // Regula stabilita: Cost/km Distributie foloseste Km agreati.
+                costKmDistributie = kmPrimar > 0
+                    ? safeDivide(totalDistributie, kmPrimar)
+                    : 0;
+            } else if (includesDistributionSegment && kmDistributie > 0) {
+                costKmDistributie = safeDivide(totalDistributie, kmDistributie);
+            }
             var costKmMixt = 0;
             if (transportType === 'primar_distributie') {
-                costKmMixt = kmTotalValue > 0
-                    ? safeDivide(total, kmTotalValue)
+                // Regula stabilita: Cost/km Mixt foloseste Km agreati.
+                costKmMixt = kmPrimar > 0
+                    ? safeDivide(total, kmPrimar)
                     : 0;
             } else if (includesPrimarySegment && !includesDistributionSegment) {
                 costKmMixt = costKmPrimar;

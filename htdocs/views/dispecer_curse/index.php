@@ -399,7 +399,7 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
                             <label class="form-label" for="race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
                             <input type="number" class="form-control <?= isset($formErrors['km_totali']) ? 'is-invalid' : '' ?>" id="race_km_totali" name="km_totali" min="0" step="1" value="<?= e((string) ($formData['km_totali'] ?? '')) ?>" data-role="km-totali">
                             <?php if (isset($formErrors['km_totali'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['km_totali']) ?></div><?php endif; ?>
-                            <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Km Distributie (calcul): 0 - 0 = 0 km</div>
+                            <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Cost/km Distributie (calcul): (Cantitate × Tarif tona) / Km agreati</div>
                         </div>
 
                         <div class="col-12 col-md-6" data-role="field-ore-aspirare">
@@ -437,17 +437,17 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
                             <div class="dispatcher-total-preview" data-role="total-preview">0,00 lei</div>
                         </div>
 
-                        <div class="col-12 col-md-6" data-role="preview-cost-km-primar-field">
+                        <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-primar-field">
                             <label class="form-label">Cost/km Primar</label>
                             <div class="dispatcher-total-preview" data-role="cost-km-primar-preview">0,00 lei/km</div>
                         </div>
 
-                        <div class="col-12 col-md-6" data-role="preview-cost-km-distributie-field">
+                        <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-distributie-field">
                             <label class="form-label">Cost/km Distribuție</label>
                             <div class="dispatcher-total-preview" data-role="cost-km-distributie-preview">0,00 lei/km</div>
                         </div>
 
-                        <div class="col-12 col-md-6" data-role="preview-cost-km-mixt-field">
+                        <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-mixt-field">
                             <label class="form-label">Cost/km Mixt</label>
                             <div class="dispatcher-total-preview" data-role="cost-km-mixt-preview">0,00 lei/km</div>
                         </div>
@@ -741,6 +741,13 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
                         $costKmDistributieValue = (float) ($row['cost_km_distributie'] ?? 0);
                         $costKmMixtValue = (float) ($row['cost_km_mixt'] ?? 0);
                         $costKmCompresorValue = (float) ($row['cost_km_compresor'] ?? 0);
+                        if ($transportType === 'primar_distributie' && $kmCursaValue !== null && $kmCursaValue > 0) {
+                            $qtyForDistribution = $loadedQtyValue !== null ? max(0.0, (float) $loadedQtyValue) : 0.0;
+                            $tonRateForDistribution = max(0.0, (float) ($row['pret_tarifare'] ?? 0));
+                            $distributionComponent = $qtyForDistribution * $tonRateForDistribution;
+                            $costKmDistributieValue = round($distributionComponent / $kmCursaValue, 2);
+                            $costKmMixtValue = round(((float) ($row['total_facturare'] ?? 0)) / $kmCursaValue, 2);
+                        }
                         if ($transportType === 'compresor' && $costKmCompresorValue <= 0) {
                             $kmCompresor = isset($row['km_dislocare']) ? (float) $row['km_dislocare'] : 0.0;
                             if ($kmCompresor > 0) {
@@ -748,13 +755,8 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
                             }
                         }
                         $billingStatusRowClass = 'race-status-' . preg_replace('/[^a-z0-9_]/', '', strtolower($billingStatus));
-                        $missingEndTimeInListRow = trim((string) ($row['ora_sfarsit'] ?? '')) === '';
-                        $rowClasses = [$billingStatusRowClass];
-                        if ($missingEndTimeInListRow) {
-                            $rowClasses[] = 'race-missing-end-time';
-                        }
                         ?>
-                        <tr class="<?= e(implode(' ', $rowClasses)) ?>" data-billing-status="<?= e($billingStatus) ?>" data-missing-end-time="<?= $missingEndTimeInListRow ? '1' : '0' ?>">
+                        <tr class="<?= e($billingStatusRowClass) ?>" data-billing-status="<?= e($billingStatus) ?>">
                             <td class="col-plate">
                                 <label class="dispatcher-plate-cell mb-0" for="bulk-race-id-<?= e((string) $raceId) ?>">
                                     <input
@@ -863,12 +865,12 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
             type="button"
             class="dispatcher-open-races-toggle"
             data-open-races-toggle
-            aria-expanded="true"
+            aria-expanded="false"
             aria-controls="open-races-panel"
         >
             Atentie: curse cu informatii lipsa (<?= e((string) $openRacesCount) ?>)
         </button>
-        <div class="dispatcher-open-races-panel" id="open-races-panel" data-open-races-panel>
+        <div class="dispatcher-open-races-panel d-none" id="open-races-panel" data-open-races-panel>
             <div class="dispatcher-open-races-head">
                 <div class="dispatcher-open-races-head-main">
                     <div>
@@ -936,7 +938,6 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
                             // Prioritate: daca lipseste ora de sfarsit, utilizatorul trebuie trimis direct acolo,
                             // inclusiv in cazurile in care lipsesc si cheltuielile.
                             $openEditQuery['focus'] = 'end_time';
-                            $openEditHash = '#edit_race_ora_sfarsit';
                         } elseif ($openMissingExpenses) {
                             $openEditHash = '#expense-section';
                         }
@@ -1044,14 +1045,20 @@ document.addEventListener('DOMContentLoaded', function () {
         && openRacesToggleEl instanceof HTMLButtonElement
         && openRacesPanelEl instanceof HTMLElement
     ) {
+        var isOpenRacesExpanded = function () {
+            return openRacesToggleEl.getAttribute('aria-expanded') === 'true';
+        };
+
         var setOpenRacesExpanded = function (expanded) {
+            if (expanded === isOpenRacesExpanded()) {
+                return;
+            }
             openRacesToggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
             openRacesPanelEl.classList.toggle('d-none', !expanded);
         };
 
         openRacesToggleEl.addEventListener('click', function () {
-            var expanded = openRacesToggleEl.getAttribute('aria-expanded') === 'true';
-            setOpenRacesExpanded(!expanded);
+            setOpenRacesExpanded(!isOpenRacesExpanded());
         });
 
         if (openRacesCloseEl instanceof HTMLButtonElement) {
@@ -1062,17 +1069,22 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         document.addEventListener('click', function (event) {
+            if (!isOpenRacesExpanded()) {
+                return;
+            }
+
             var targetEl = event.target;
             if (!(targetEl instanceof Node)) {
                 return;
             }
+
             if (!openRacesTabEl.contains(targetEl)) {
                 setOpenRacesExpanded(false);
             }
         });
 
         document.addEventListener('keydown', function (event) {
-            if (event.key === 'Escape') {
+            if (event.key === 'Escape' && isOpenRacesExpanded()) {
                 setOpenRacesExpanded(false);
             }
         });

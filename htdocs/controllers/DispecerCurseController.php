@@ -3258,14 +3258,19 @@ class DispecerCurseController
             if ($includesPrimarySegment && $kmPrimar > 0) {
                 $costKmPrimar = $totalPrimar / $kmPrimar;
             }
-            if ($includesDistributionSegment && $kmDistributie > 0) {
+            if ($transportType === 'primar_distributie') {
+                // Regula stabilita: Cost/km Distributie foloseste Km agreati (km_cursa), nu diferenta de km.
+                if ($kmPrimar > 0) {
+                    $costKmDistributie = $totalDistributie / $kmPrimar;
+                }
+            } elseif ($includesDistributionSegment && $kmDistributie > 0) {
                 $costKmDistributie = $totalDistributie / $kmDistributie;
             }
 
             if ($transportType === 'primar_distributie') {
-                $kmEfectuatiMixt = max(0.0, (float) ($kmTotal ?? 0));
-                if ($kmEfectuatiMixt > 0) {
-                    $costKmMixt = $total / $kmEfectuatiMixt;
+                // Regula stabilita: Cost/km Mixt foloseste acelasi divizor Km agreati.
+                if ($kmPrimar > 0) {
+                    $costKmMixt = $total / $kmPrimar;
                 }
             } elseif ($includesPrimarySegment && !$includesDistributionSegment) {
                 $costKmMixt = $costKmPrimar;

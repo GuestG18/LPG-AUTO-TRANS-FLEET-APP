@@ -581,6 +581,7 @@ body {
     border: 2px solid #f97316;
     background: #fff7ed;
     box-shadow: 0 0 0 0.2rem rgba(249, 115, 22, 0.18);
+    scroll-margin-top: 112px;
 }
 
 .dispatcher-race-form .dispatcher-total-preview {
@@ -738,21 +739,6 @@ body {
 .curse-table tbody tr.race-status-facturat .dispatcher-status-select {
     background-color: #9fe7b0;
     border-color: #2e7d32;
-}
-
-.dispatcher-races-table tbody tr.race-missing-end-time > td,
-.curse-table tbody tr.race-missing-end-time > td {
-    box-shadow: inset 0 2px 0 #c2410c, inset 0 -2px 0 #c2410c;
-}
-
-.dispatcher-races-table tbody tr.race-missing-end-time > td:first-child,
-.curse-table tbody tr.race-missing-end-time > td:first-child {
-    box-shadow: inset 6px 0 0 #c2410c, inset 0 2px 0 #c2410c, inset 0 -2px 0 #c2410c;
-}
-
-.dispatcher-races-table tbody tr.race-missing-end-time > td:last-child,
-.curse-table tbody tr.race-missing-end-time > td:last-child {
-    box-shadow: inset -2px 0 0 #c2410c, inset 0 2px 0 #c2410c, inset 0 -2px 0 #c2410c;
 }
 
 .dispatcher-cell-text {
