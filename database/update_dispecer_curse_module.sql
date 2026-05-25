@@ -92,6 +92,8 @@ CREATE TABLE IF NOT EXISTS configurare_rute_distributie (
     tarif_tona DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     cost_extra_km DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     km_tarifare INT UNSIGNED NOT NULL DEFAULT 0,
+    cost_cursa DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    aplica_cost_cursa TINYINT(1) NOT NULL DEFAULT 0,
     vehicle_ids TEXT NULL,
     activ TINYINT(1) NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL,
@@ -148,6 +150,10 @@ CREATE TABLE IF NOT EXISTS curse_dispecer (
     data_inceput DATE NOT NULL,
     data_sfarsit DATE NOT NULL,
     loc_incarcare_id INT UNSIGNED NULL,
+    loc_plecare VARCHAR(255) NULL,
+    loc_aspirare VARCHAR(255) NULL,
+    loc_livrare VARCHAR(255) NULL,
+    loc_livrare_cursa VARCHAR(255) NULL,
     beneficiar_id INT UNSIGNED NULL,
     tip_marfa VARCHAR(255) NULL,
     capacitate_transport DECIMAL(10,2) NULL,
@@ -322,6 +328,70 @@ SET @sql_add_curse_capacitate_transport := IF(
 PREPARE stmt_add_curse_capacitate_transport FROM @sql_add_curse_capacitate_transport;
 EXECUTE stmt_add_curse_capacitate_transport;
 DEALLOCATE PREPARE stmt_add_curse_capacitate_transport;
+
+SET @has_curse_loc_plecare := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'curse_dispecer'
+      AND COLUMN_NAME = 'loc_plecare'
+);
+SET @sql_add_curse_loc_plecare := IF(
+    @has_curse_loc_plecare = 0,
+    'ALTER TABLE curse_dispecer ADD COLUMN loc_plecare VARCHAR(255) NULL AFTER loc_incarcare_id',
+    'SELECT 1'
+);
+PREPARE stmt_add_curse_loc_plecare FROM @sql_add_curse_loc_plecare;
+EXECUTE stmt_add_curse_loc_plecare;
+DEALLOCATE PREPARE stmt_add_curse_loc_plecare;
+
+SET @has_curse_loc_aspirare := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'curse_dispecer'
+      AND COLUMN_NAME = 'loc_aspirare'
+);
+SET @sql_add_curse_loc_aspirare := IF(
+    @has_curse_loc_aspirare = 0,
+    'ALTER TABLE curse_dispecer ADD COLUMN loc_aspirare VARCHAR(255) NULL AFTER loc_plecare',
+    'SELECT 1'
+);
+PREPARE stmt_add_curse_loc_aspirare FROM @sql_add_curse_loc_aspirare;
+EXECUTE stmt_add_curse_loc_aspirare;
+DEALLOCATE PREPARE stmt_add_curse_loc_aspirare;
+
+SET @has_curse_loc_livrare := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'curse_dispecer'
+      AND COLUMN_NAME = 'loc_livrare'
+);
+SET @sql_add_curse_loc_livrare := IF(
+    @has_curse_loc_livrare = 0,
+    'ALTER TABLE curse_dispecer ADD COLUMN loc_livrare VARCHAR(255) NULL AFTER loc_aspirare',
+    'SELECT 1'
+);
+PREPARE stmt_add_curse_loc_livrare FROM @sql_add_curse_loc_livrare;
+EXECUTE stmt_add_curse_loc_livrare;
+DEALLOCATE PREPARE stmt_add_curse_loc_livrare;
+
+SET @has_curse_loc_livrare_cursa := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'curse_dispecer'
+      AND COLUMN_NAME = 'loc_livrare_cursa'
+);
+SET @sql_add_curse_loc_livrare_cursa := IF(
+    @has_curse_loc_livrare_cursa = 0,
+    'ALTER TABLE curse_dispecer ADD COLUMN loc_livrare_cursa VARCHAR(255) NULL AFTER loc_livrare',
+    'SELECT 1'
+);
+PREPARE stmt_add_curse_loc_livrare_cursa FROM @sql_add_curse_loc_livrare_cursa;
+EXECUTE stmt_add_curse_loc_livrare_cursa;
+DEALLOCATE PREPARE stmt_add_curse_loc_livrare_cursa;
 
 SET @has_status_facturare := (
     SELECT COUNT(*)
@@ -539,6 +609,15 @@ CREATE TABLE IF NOT EXISTS curse_cheltuieli (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     cursa_id INT UNSIGNED NOT NULL,
     tip_cheltuiala ENUM('motorina', 'taxe_drum', 'diurna', 'service', 'alte') NOT NULL,
+    refacturare_tip_cheltuiala ENUM('motorina', 'taxe_drum', 'diurna', 'service', 'alte') NULL,
+    refacturare_detalii TEXT NULL,
+    refacturare_suma DECIMAL(12,2) NULL,
+    refacturare_data DATE NULL,
+    refacturare_observatii TEXT NULL,
+    refacturare_document_path VARCHAR(255) NULL,
+    refacturare_document_original_name VARCHAR(255) NULL,
+    refacturare_document_mime_type VARCHAR(150) NULL,
+    refacturare_document_file_size INT UNSIGNED NULL,
     suma DECIMAL(12,2) NOT NULL,
     data_cheltuiala DATE NOT NULL,
     observatii TEXT NULL,
@@ -548,6 +627,129 @@ CREATE TABLE IF NOT EXISTS curse_cheltuieli (
     INDEX idx_curse_cheltuieli_data (data_cheltuiala),
     CONSTRAINT fk_curse_cheltuieli_cursa FOREIGN KEY (cursa_id) REFERENCES curse_dispecer(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+SET @has_expense_refacturare := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'curse_cheltuieli'
+      AND COLUMN_NAME = 'refacturare_tip_cheltuiala'
+);
+SET @sql_add_expense_refacturare := IF(
+    @has_expense_refacturare = 0,
+    'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_tip_cheltuiala ENUM(''motorina'', ''taxe_drum'', ''diurna'', ''service'', ''alte'') NULL AFTER tip_cheltuiala',
+    'SELECT 1'
+);
+PREPARE stmt_add_expense_refacturare FROM @sql_add_expense_refacturare;
+EXECUTE stmt_add_expense_refacturare;
+DEALLOCATE PREPARE stmt_add_expense_refacturare;
+
+SET @has_expense_refacturare_detalii := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'curse_cheltuieli'
+      AND COLUMN_NAME = 'refacturare_detalii'
+);
+SET @sql_add_expense_refacturare_detalii := IF(
+    @has_expense_refacturare_detalii = 0,
+    'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_detalii TEXT NULL AFTER refacturare_tip_cheltuiala',
+    'SELECT 1'
+);
+PREPARE stmt_add_expense_refacturare_detalii FROM @sql_add_expense_refacturare_detalii;
+EXECUTE stmt_add_expense_refacturare_detalii;
+DEALLOCATE PREPARE stmt_add_expense_refacturare_detalii;
+
+SET @has_expense_refacturare_suma := (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'curse_cheltuieli' AND COLUMN_NAME = 'refacturare_suma'
+);
+SET @sql_add_expense_refacturare_suma := IF(
+    @has_expense_refacturare_suma = 0,
+    'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_suma DECIMAL(12,2) NULL AFTER refacturare_detalii',
+    'SELECT 1'
+);
+PREPARE stmt_add_expense_refacturare_suma FROM @sql_add_expense_refacturare_suma;
+EXECUTE stmt_add_expense_refacturare_suma;
+DEALLOCATE PREPARE stmt_add_expense_refacturare_suma;
+
+SET @has_expense_refacturare_data := (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'curse_cheltuieli' AND COLUMN_NAME = 'refacturare_data'
+);
+SET @sql_add_expense_refacturare_data := IF(
+    @has_expense_refacturare_data = 0,
+    'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_data DATE NULL AFTER refacturare_suma',
+    'SELECT 1'
+);
+PREPARE stmt_add_expense_refacturare_data FROM @sql_add_expense_refacturare_data;
+EXECUTE stmt_add_expense_refacturare_data;
+DEALLOCATE PREPARE stmt_add_expense_refacturare_data;
+
+SET @has_expense_refacturare_observatii := (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'curse_cheltuieli' AND COLUMN_NAME = 'refacturare_observatii'
+);
+SET @sql_add_expense_refacturare_observatii := IF(
+    @has_expense_refacturare_observatii = 0,
+    'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_observatii TEXT NULL AFTER refacturare_data',
+    'SELECT 1'
+);
+PREPARE stmt_add_expense_refacturare_observatii FROM @sql_add_expense_refacturare_observatii;
+EXECUTE stmt_add_expense_refacturare_observatii;
+DEALLOCATE PREPARE stmt_add_expense_refacturare_observatii;
+
+SET @has_expense_refacturare_document_path := (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'curse_cheltuieli' AND COLUMN_NAME = 'refacturare_document_path'
+);
+SET @sql_add_expense_refacturare_document_path := IF(
+    @has_expense_refacturare_document_path = 0,
+    'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_document_path VARCHAR(255) NULL AFTER refacturare_observatii',
+    'SELECT 1'
+);
+PREPARE stmt_add_expense_refacturare_document_path FROM @sql_add_expense_refacturare_document_path;
+EXECUTE stmt_add_expense_refacturare_document_path;
+DEALLOCATE PREPARE stmt_add_expense_refacturare_document_path;
+
+SET @has_expense_refacturare_document_original_name := (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'curse_cheltuieli' AND COLUMN_NAME = 'refacturare_document_original_name'
+);
+SET @sql_add_expense_refacturare_document_original_name := IF(
+    @has_expense_refacturare_document_original_name = 0,
+    'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_document_original_name VARCHAR(255) NULL AFTER refacturare_document_path',
+    'SELECT 1'
+);
+PREPARE stmt_add_expense_refacturare_document_original_name FROM @sql_add_expense_refacturare_document_original_name;
+EXECUTE stmt_add_expense_refacturare_document_original_name;
+DEALLOCATE PREPARE stmt_add_expense_refacturare_document_original_name;
+
+SET @has_expense_refacturare_document_mime_type := (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'curse_cheltuieli' AND COLUMN_NAME = 'refacturare_document_mime_type'
+);
+SET @sql_add_expense_refacturare_document_mime_type := IF(
+    @has_expense_refacturare_document_mime_type = 0,
+    'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_document_mime_type VARCHAR(150) NULL AFTER refacturare_document_original_name',
+    'SELECT 1'
+);
+PREPARE stmt_add_expense_refacturare_document_mime_type FROM @sql_add_expense_refacturare_document_mime_type;
+EXECUTE stmt_add_expense_refacturare_document_mime_type;
+DEALLOCATE PREPARE stmt_add_expense_refacturare_document_mime_type;
+
+SET @has_expense_refacturare_document_file_size := (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'curse_cheltuieli' AND COLUMN_NAME = 'refacturare_document_file_size'
+);
+SET @sql_add_expense_refacturare_document_file_size := IF(
+    @has_expense_refacturare_document_file_size = 0,
+    'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_document_file_size INT UNSIGNED NULL AFTER refacturare_document_mime_type',
+    'SELECT 1'
+);
+PREPARE stmt_add_expense_refacturare_document_file_size FROM @sql_add_expense_refacturare_document_file_size;
+EXECUTE stmt_add_expense_refacturare_document_file_size;
+DEALLOCATE PREPARE stmt_add_expense_refacturare_document_file_size;
 
 CREATE TABLE IF NOT EXISTS curse_cheltuieli_documente (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1169,6 +1371,38 @@ SET @sql_add_route_km_tarifare_column := IF(
 PREPARE stmt_add_route_km_tarifare_column FROM @sql_add_route_km_tarifare_column;
 EXECUTE stmt_add_route_km_tarifare_column;
 DEALLOCATE PREPARE stmt_add_route_km_tarifare_column;
+
+SET @has_route_cost_cursa_column := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'configurare_rute_distributie'
+      AND COLUMN_NAME = 'cost_cursa'
+);
+SET @sql_add_route_cost_cursa_column := IF(
+    @has_route_cost_cursa_column = 0,
+    'ALTER TABLE configurare_rute_distributie ADD COLUMN cost_cursa DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER km_tarifare',
+    'SELECT 1'
+);
+PREPARE stmt_add_route_cost_cursa_column FROM @sql_add_route_cost_cursa_column;
+EXECUTE stmt_add_route_cost_cursa_column;
+DEALLOCATE PREPARE stmt_add_route_cost_cursa_column;
+
+SET @has_route_apply_cost_cursa_column := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'configurare_rute_distributie'
+      AND COLUMN_NAME = 'aplica_cost_cursa'
+);
+SET @sql_add_route_apply_cost_cursa_column := IF(
+    @has_route_apply_cost_cursa_column = 0,
+    'ALTER TABLE configurare_rute_distributie ADD COLUMN aplica_cost_cursa TINYINT(1) NOT NULL DEFAULT 0 AFTER cost_cursa',
+    'SELECT 1'
+);
+PREPARE stmt_add_route_apply_cost_cursa_column FROM @sql_add_route_apply_cost_cursa_column;
+EXECUTE stmt_add_route_apply_cost_cursa_column;
+DEALLOCATE PREPARE stmt_add_route_apply_cost_cursa_column;
 
 SET @loc_incarcare_is_nullable := (
     SELECT CASE WHEN IS_NULLABLE = 'YES' THEN 1 ELSE 0 END

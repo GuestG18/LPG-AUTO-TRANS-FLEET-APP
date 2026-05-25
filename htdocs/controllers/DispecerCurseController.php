@@ -16,7 +16,7 @@ class DispecerCurseController
         'motorina' => 'Motorina',
         'taxe_drum' => 'Taxe drum',
         'diurna' => 'Diurna',
-        'service' => 'Service',
+        'service' => 'Reparatii',
         'alte' => 'Alte cheltuieli',
     ];
 
@@ -256,6 +256,7 @@ class DispecerCurseController
         }
 
         $now = date('Y-m-d H:i:s');
+        $data['created_by'] = $this->currentUserId();
         $data['created_at'] = $now;
         $data['updated_at'] = $now;
 
@@ -305,14 +306,23 @@ class DispecerCurseController
             if ($expense !== null && (int) ($expense['cursa_id'] ?? 0) === $raceId) {
                 $parsedExpenseObservations = $this->splitExpenseObservationsAndRoadTaxDetails((string) ($expense['observatii'] ?? ''));
                 $roadTaxFormValues = $this->buildRoadTaxFormValuesFromDetails($parsedExpenseObservations['road_tax_details']);
+                $refacturareDetails = json_decode((string) ($expense['refacturare_detalii'] ?? ''), true);
+                $refacturareRoadTaxFormValues = is_array($refacturareDetails)
+                    ? $this->buildRoadTaxFormValuesFromDetails($this->normalizeRoadTaxDetailsPayload($refacturareDetails), 'refacturare_')
+                    : [];
                 $expenseBeingEdited = $expense;
                 $expenseFormData = array_merge($expenseFormData, [
                     'expense_id' => (int) $expense['id'],
                     'tip_cheltuiala' => (string) ($expense['tip_cheltuiala'] ?? ''),
+                    'refacturare_enabled' => trim((string) ($expense['refacturare_tip_cheltuiala'] ?? '')) !== '' ? '1' : '0',
+                    'refacturare_tip_cheltuiala' => (string) ($expense['refacturare_tip_cheltuiala'] ?? 'motorina'),
+                    'refacturare_suma' => (string) ($expense['refacturare_suma'] ?? ''),
+                    'refacturare_data' => (string) ($expense['refacturare_data'] ?? date('Y-m-d')),
+                    'refacturare_observatii' => (string) ($expense['refacturare_observatii'] ?? ''),
                     'suma' => (string) ($expense['suma'] ?? ''),
                     'data_cheltuiala' => (string) ($expense['data_cheltuiala'] ?? ''),
                     'observatii' => $parsedExpenseObservations['plain_observations'],
-                ], $roadTaxFormValues);
+                ], $roadTaxFormValues, $refacturareRoadTaxFormValues);
             }
         }
 
@@ -548,15 +558,23 @@ class DispecerCurseController
             }
         }
 
+        $isRefacturareSubmit = (string) ($_POST['submit_intent'] ?? '') === 'refacturare';
         [$data, $errors, $old] = $this->validateExpenseInput($_POST);
         [$uploadedDocument, $uploadError] = $this->storeUploadedExpenseDocument($_FILES['document_upload'] ?? null);
         if ($uploadError !== null) {
             $errors['document_upload'] = $uploadError;
         }
+        [$uploadedRefacturareDocument, $refacturareUploadError] = $this->storeUploadedExpenseDocument($_FILES['refacturare_document_upload'] ?? null);
+        if ($refacturareUploadError !== null) {
+            $errors['refacturare_document_upload'] = $refacturareUploadError;
+        }
 
         if ($errors !== []) {
             if ($uploadedDocument !== null) {
                 $this->deleteExpensePhysicalFile((string) $uploadedDocument['file_path']);
+            }
+            if ($uploadedRefacturareDocument !== null) {
+                $this->deleteExpensePhysicalFile((string) $uploadedRefacturareDocument['file_path']);
             }
 
             $this->setFormFlash('expense_' . $raceId, $old, $errors);
@@ -568,6 +586,7 @@ class DispecerCurseController
         }
 
         $removeExistingDocuments = isset($_POST['sterge_document']) && (string) $_POST['sterge_document'] === '1';
+        $removeExistingRefacturareDocument = isset($_POST['sterge_refacturare_document']) && (string) $_POST['sterge_refacturare_document'] === '1';
 
         try {
             $now = date('Y-m-d H:i:s');
@@ -596,12 +615,33 @@ class DispecerCurseController
                 ]);
             }
 
+            $refacturareEnabledForSave = $data['refacturare_tip_cheltuiala'] !== null;
+            if (!$refacturareEnabledForSave && $uploadedRefacturareDocument !== null) {
+                $this->deleteExpensePhysicalFile((string) $uploadedRefacturareDocument['file_path']);
+                $uploadedRefacturareDocument = null;
+            }
+            $existingRefacturareDocumentPath = $existingExpense !== null ? (string) ($existingExpense['refacturare_document_path'] ?? '') : '';
+            if ((!$refacturareEnabledForSave || $removeExistingRefacturareDocument || $uploadedRefacturareDocument !== null) && $existingRefacturareDocumentPath !== '') {
+                $this->deleteExpensePhysicalFile($existingRefacturareDocumentPath);
+            }
+
+            if (!$refacturareEnabledForSave || $removeExistingRefacturareDocument || $uploadedRefacturareDocument !== null) {
+                $this->model->updateExpenseRefacturareDocument($expenseId, $uploadedRefacturareDocument);
+            }
+
             // La modificari de cheltuieli, cursa reintra automat in etapa de facturare.
             $this->model->updateRaceBillingStatus($raceId, self::DEFAULT_BILLING_STATUS, $now);
-            flash_set('success', $existingExpense !== null ? 'Cheltuiala a fost actualizatÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢.' : 'Cheltuiala a fost adÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ugatÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢.');
+            if ($isRefacturareSubmit) {
+                flash_set('success', $existingExpense !== null ? 'Refacturarea a fost actualizata.' : 'Refacturarea a fost adaugata.');
+            } else {
+                flash_set('success', $existingExpense !== null ? 'Cheltuiala a fost actualizata.' : 'Cheltuiala a fost adaugata.');
+            }
         } catch (PDOException $exception) {
             if ($uploadedDocument !== null) {
                 $this->deleteExpensePhysicalFile((string) $uploadedDocument['file_path']);
+            }
+            if ($uploadedRefacturareDocument !== null) {
+                $this->deleteExpensePhysicalFile((string) $uploadedRefacturareDocument['file_path']);
             }
 
             error_log('[DispecerCurseController][save_expense] ' . $exception->getMessage());
@@ -638,6 +678,10 @@ class DispecerCurseController
         }
 
         try {
+            $refacturareDocumentPath = (string) ($expense['refacturare_document_path'] ?? '');
+            if ($refacturareDocumentPath !== '') {
+                $this->deleteExpensePhysicalFile($refacturareDocumentPath);
+            }
             $this->deleteExpenseDocumentsByExpenseId($expenseId);
             $this->model->deleteExpense($expenseId);
             flash_set('success', 'Cheltuiala a fost ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â¹ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢tearsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢.');
@@ -918,6 +962,8 @@ class DispecerCurseController
             'tarif_tona' => '',
             'cost_extra_km' => '',
             'km_tarifare' => '',
+            'cost_cursa' => '',
+            'aplica_cost_cursa' => '0',
             'vehicle_ids' => [],
             'activ' => '1',
         ];
@@ -940,6 +986,8 @@ class DispecerCurseController
                 $defaultDistributionRouteForm['tarif_tona'] = number_format((float) ($prefillRouteRule['tarif_tona'] ?? 0), 2, '.', '');
                 $defaultDistributionRouteForm['cost_extra_km'] = number_format((float) ($prefillRouteRule['cost_extra_km'] ?? 0), 2, '.', '');
                 $defaultDistributionRouteForm['km_tarifare'] = (string) ((int) max(0, (int) ($prefillRouteRule['km_tarifare'] ?? 0)));
+                $defaultDistributionRouteForm['cost_cursa'] = number_format((float) ($prefillRouteRule['cost_cursa'] ?? 0), 2, '.', '');
+                $defaultDistributionRouteForm['aplica_cost_cursa'] = !empty($prefillRouteRule['aplica_cost_cursa']) ? '1' : '0';
                 $routeVehicleIdsRaw = trim((string) ($prefillRouteRule['vehicle_ids'] ?? ''));
                 if ($routeVehicleIdsRaw !== '') {
                     $routeVehicleIds = [];
@@ -959,7 +1007,7 @@ class DispecerCurseController
             }
         }
         if ($routeEditId > 0 && $distributionBeneficiaryId > 0) {
-            $routeEditRule = $this->model->getDistributionRouteRuleById($routeEditId, $distributionBeneficiaryId);
+            $routeEditRule = $this->model->getDistributionRouteRuleById($routeEditId);
             if ($routeEditRule !== null) {
                 $defaultDistributionRouteForm['route_id'] = (string) ((int) ($routeEditRule['id'] ?? 0));
                 $defaultDistributionRouteForm['loc_id'] = (string) ((int) ($routeEditRule['loc_incarcare_id'] ?? 0));
@@ -967,6 +1015,8 @@ class DispecerCurseController
                 $defaultDistributionRouteForm['tarif_tona'] = number_format((float) ($routeEditRule['tarif_tona'] ?? 0), 2, '.', '');
                 $defaultDistributionRouteForm['cost_extra_km'] = number_format((float) ($routeEditRule['cost_extra_km'] ?? 0), 2, '.', '');
                 $defaultDistributionRouteForm['km_tarifare'] = (string) ((int) max(0, (int) ($routeEditRule['km_tarifare'] ?? 0)));
+                $defaultDistributionRouteForm['cost_cursa'] = number_format((float) ($routeEditRule['cost_cursa'] ?? 0), 2, '.', '');
+                $defaultDistributionRouteForm['aplica_cost_cursa'] = !empty($routeEditRule['aplica_cost_cursa']) ? '1' : '0';
                 $defaultDistributionRouteForm['activ'] = !empty($routeEditRule['activ']) ? '1' : '0';
                 $routeVehicleIdsRaw = trim((string) ($routeEditRule['vehicle_ids'] ?? ''));
                 if ($routeVehicleIdsRaw !== '') {
@@ -1082,6 +1132,8 @@ class DispecerCurseController
         $routeTariffRaw = trim((string) ($_POST['route_tarif_tona'] ?? ($_POST['ruta_tarif_tona'] ?? '')));
         $routeExtraKmCostRaw = trim((string) ($_POST['route_cost_extra_km'] ?? ($_POST['ruta_cost_extra_km'] ?? '')));
         $routeKmTariffRaw = trim((string) ($_POST['route_km_tarifare'] ?? ($_POST['ruta_km_tarifare'] ?? '')));
+        $routeRideCostRaw = trim((string) ($_POST['route_cost_cursa'] ?? ''));
+        $routeApplyRideCost = isset($_POST['route_aplica_cost_cursa']) ? (string) $_POST['route_aplica_cost_cursa'] === '1' : false;
         $routeVehicleIdsInput = isset($_POST['route_vehicle_ids']) && is_array($_POST['route_vehicle_ids'])
             ? $_POST['route_vehicle_ids']
             : [];
@@ -1120,12 +1172,25 @@ class DispecerCurseController
 
         $routeKmTariff = null;
         if ($routeKmTariffRaw === '' || !ctype_digit($routeKmTariffRaw)) {
-            $errors['km_tarifare'] = 'Km tarifare este invalid.';
+            $errors['km_tarifare'] = 'Km agreati este invalid.';
         } else {
             $routeKmTariff = (int) $routeKmTariffRaw;
             if ($routeKmTariff <= 0) {
-                $errors['km_tarifare'] = 'Km tarifare trebuie sa fie mai mare ca 0.';
+                $errors['km_tarifare'] = 'Km agreati trebuie sa fie mai mare ca 0.';
             }
+        }
+
+        $routeRideCost = 0.0;
+        if ($routeRideCostRaw !== '') {
+            $parsedRideCost = $this->normalizeDecimal($routeRideCostRaw);
+            if ($parsedRideCost === null || $parsedRideCost < 0) {
+                $errors['cost_cursa'] = 'Costul de cursa este invalid.';
+            } else {
+                $routeRideCost = (float) $parsedRideCost;
+            }
+        }
+        if ($routeApplyRideCost && $routeRideCost <= 0) {
+            $errors['cost_cursa'] = 'Completeaza Cost cursa cu o valoare mai mare ca 0 pentru a activa regula pe ruta.';
         }
 
         $routeVehicleIds = [];
@@ -1157,7 +1222,7 @@ class DispecerCurseController
         }
 
         if ($routeEditId > 0) {
-            $existingRoute = $this->model->getDistributionRouteRuleById($routeEditId, $beneficiaryId);
+            $existingRoute = $this->model->getDistributionRouteRuleById($routeEditId);
             if ($existingRoute === null) {
                 $errors['route_id'] = 'Configuratia selectata pentru editare nu mai exista.';
             }
@@ -1170,6 +1235,8 @@ class DispecerCurseController
             'tarif_tona' => $routeTariffRaw,
             'cost_extra_km' => $routeExtraKmCostRaw,
             'km_tarifare' => $routeKmTariffRaw,
+            'cost_cursa' => $routeRideCostRaw,
+            'aplica_cost_cursa' => $routeApplyRideCost ? '1' : '0',
             'vehicle_ids' => array_map('strval', $routeVehicleIds),
             'activ' => $routeActive ? '1' : '0',
         ];
@@ -1190,7 +1257,9 @@ class DispecerCurseController
                     (float) $routeExtraKmCost,
                     (int) ($routeKmTariff ?? 0),
                     $routeActive,
-                    $routeVehicleIds
+                    $routeVehicleIds,
+                    (float) $routeRideCost,
+                    $routeApplyRideCost
                 );
                 if (!$updated) {
                     throw new RuntimeException('Nu s-a putut actualiza configuratia de ruta.');
@@ -1205,7 +1274,9 @@ class DispecerCurseController
                     (float) $routeExtraKmCost,
                     (int) ($routeKmTariff ?? 0),
                     $routeActive,
-                    $routeVehicleIds
+                    $routeVehicleIds,
+                    (float) $routeRideCost,
+                    $routeApplyRideCost
                 );
                 flash_set('success', 'Configuratia de ruta a fost salvata.');
             }
@@ -1410,7 +1481,7 @@ class DispecerCurseController
         }
 
         try {
-            $this->model->deleteDistributionRouteRule($routeId, $beneficiaryId);
+            $this->model->deleteDistributionRouteRule($routeId);
             flash_set('success', 'Configuratia de ruta a fost stearsa.');
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][config_delete_ruta] ' . $exception->getMessage());
@@ -2434,6 +2505,10 @@ class DispecerCurseController
             'durata_cursa_minute' => '',
             'capacitate_transport' => '',
             'loc_incarcare_id' => '',
+            'loc_plecare' => '',
+            'loc_aspirare' => '',
+            'loc_livrare' => '',
+            'loc_livrare_cursa' => '',
             'beneficiar_id' => '',
             'tip_marfa' => [],
             'cantitate_incarcata' => '',
@@ -2462,6 +2537,11 @@ class DispecerCurseController
         return [
             'expense_id' => '',
             'tip_cheltuiala' => 'motorina',
+            'refacturare_enabled' => '0',
+            'refacturare_tip_cheltuiala' => 'motorina',
+            'refacturare_suma' => '',
+            'refacturare_data' => date('Y-m-d'),
+            'refacturare_observatii' => '',
             'suma' => '',
             'data_cheltuiala' => date('Y-m-d'),
             'observatii' => '',
@@ -2471,6 +2551,12 @@ class DispecerCurseController
             'port_pret' => '',
             'trece_bucati' => '',
             'trece_pret' => '',
+            'refacturare_taxa_acces_bucati' => '',
+            'refacturare_taxa_acces_pret' => '',
+            'refacturare_port_bucati' => '',
+            'refacturare_port_pret' => '',
+            'refacturare_trece_bucati' => '',
+            'refacturare_trece_pret' => '',
         ];
     }
 
@@ -2479,6 +2565,11 @@ class DispecerCurseController
         $base = $this->defaultExpenseFormData();
         $defaultItem = [
             'tip_cheltuiala' => (string) ($base['tip_cheltuiala'] ?? 'motorina'),
+            'refacturare_enabled' => (string) ($base['refacturare_enabled'] ?? '0'),
+            'refacturare_tip_cheltuiala' => (string) ($base['refacturare_tip_cheltuiala'] ?? 'motorina'),
+            'refacturare_suma' => (string) ($base['refacturare_suma'] ?? ''),
+            'refacturare_data' => (string) ($base['refacturare_data'] ?? date('Y-m-d')),
+            'refacturare_observatii' => (string) ($base['refacturare_observatii'] ?? ''),
             'suma' => (string) ($base['suma'] ?? ''),
             'data_cheltuiala' => (string) ($base['data_cheltuiala'] ?? date('Y-m-d')),
             'observatii' => (string) ($base['observatii'] ?? ''),
@@ -2488,6 +2579,12 @@ class DispecerCurseController
             'port_pret' => (string) ($base['port_pret'] ?? ''),
             'trece_bucati' => (string) ($base['trece_bucati'] ?? ''),
             'trece_pret' => (string) ($base['trece_pret'] ?? ''),
+            'refacturare_taxa_acces_bucati' => (string) ($base['refacturare_taxa_acces_bucati'] ?? ''),
+            'refacturare_taxa_acces_pret' => (string) ($base['refacturare_taxa_acces_pret'] ?? ''),
+            'refacturare_port_bucati' => (string) ($base['refacturare_port_bucati'] ?? ''),
+            'refacturare_port_pret' => (string) ($base['refacturare_port_pret'] ?? ''),
+            'refacturare_trece_bucati' => (string) ($base['refacturare_trece_bucati'] ?? ''),
+            'refacturare_trece_pret' => (string) ($base['refacturare_trece_pret'] ?? ''),
         ];
 
         return [
@@ -2515,6 +2612,11 @@ class DispecerCurseController
 
                 $values['items'][] = [
                     'tip_cheltuiala' => trim((string) ($rawItem['tip_cheltuiala'] ?? 'motorina')),
+                    'refacturare_enabled' => isset($rawItem['refacturare_enabled']) && (string) $rawItem['refacturare_enabled'] === '1' ? '1' : '0',
+                    'refacturare_tip_cheltuiala' => trim((string) ($rawItem['refacturare_tip_cheltuiala'] ?? 'motorina')),
+                    'refacturare_suma' => trim((string) ($rawItem['refacturare_suma'] ?? '')),
+                    'refacturare_data' => trim((string) ($rawItem['refacturare_data'] ?? date('Y-m-d'))),
+                    'refacturare_observatii' => trim((string) ($rawItem['refacturare_observatii'] ?? '')),
                     'suma' => trim((string) ($rawItem['suma'] ?? '')),
                     'data_cheltuiala' => trim((string) ($rawItem['data_cheltuiala'] ?? date('Y-m-d'))),
                     'observatii' => trim((string) ($rawItem['observatii'] ?? '')),
@@ -2524,6 +2626,12 @@ class DispecerCurseController
                     'port_pret' => trim((string) ($rawItem['port_pret'] ?? '')),
                     'trece_bucati' => trim((string) ($rawItem['trece_bucati'] ?? '')),
                     'trece_pret' => trim((string) ($rawItem['trece_pret'] ?? '')),
+                    'refacturare_taxa_acces_bucati' => trim((string) ($rawItem['refacturare_taxa_acces_bucati'] ?? '')),
+                    'refacturare_taxa_acces_pret' => trim((string) ($rawItem['refacturare_taxa_acces_pret'] ?? '')),
+                    'refacturare_port_bucati' => trim((string) ($rawItem['refacturare_port_bucati'] ?? '')),
+                    'refacturare_port_pret' => trim((string) ($rawItem['refacturare_port_pret'] ?? '')),
+                    'refacturare_trece_bucati' => trim((string) ($rawItem['refacturare_trece_bucati'] ?? '')),
+                    'refacturare_trece_pret' => trim((string) ($rawItem['refacturare_trece_pret'] ?? '')),
                 ];
             }
         }
@@ -2586,6 +2694,11 @@ class DispecerCurseController
             $mappedInput = [
                 'expense_id' => '',
                 'tip_cheltuiala' => trim((string) ($rawItem['tip_cheltuiala'] ?? 'motorina')),
+                'refacturare_enabled' => isset($rawItem['refacturare_enabled']) && (string) $rawItem['refacturare_enabled'] === '1' ? '1' : '0',
+                'refacturare_tip_cheltuiala' => trim((string) ($rawItem['refacturare_tip_cheltuiala'] ?? 'motorina')),
+                'refacturare_suma' => trim((string) ($rawItem['refacturare_suma'] ?? '')),
+                'refacturare_data' => trim((string) ($rawItem['refacturare_data'] ?? date('Y-m-d'))),
+                'refacturare_observatii' => trim((string) ($rawItem['refacturare_observatii'] ?? '')),
                 'suma' => trim((string) ($rawItem['suma'] ?? '')),
                 'data_cheltuiala' => trim((string) ($rawItem['data_cheltuiala'] ?? date('Y-m-d'))),
                 'observatii' => trim((string) ($rawItem['observatii'] ?? '')),
@@ -2595,6 +2708,12 @@ class DispecerCurseController
                 'port_pret' => trim((string) ($rawItem['port_pret'] ?? '')),
                 'trece_bucati' => trim((string) ($rawItem['trece_bucati'] ?? '')),
                 'trece_pret' => trim((string) ($rawItem['trece_pret'] ?? '')),
+                'refacturare_taxa_acces_bucati' => trim((string) ($rawItem['refacturare_taxa_acces_bucati'] ?? '')),
+                'refacturare_taxa_acces_pret' => trim((string) ($rawItem['refacturare_taxa_acces_pret'] ?? '')),
+                'refacturare_port_bucati' => trim((string) ($rawItem['refacturare_port_bucati'] ?? '')),
+                'refacturare_port_pret' => trim((string) ($rawItem['refacturare_port_pret'] ?? '')),
+                'refacturare_trece_bucati' => trim((string) ($rawItem['refacturare_trece_bucati'] ?? '')),
+                'refacturare_trece_pret' => trim((string) ($rawItem['refacturare_trece_pret'] ?? '')),
             ];
 
             $hasMeaningfulInput = $mappedInput['suma'] !== ''
@@ -2605,6 +2724,15 @@ class DispecerCurseController
                 || $mappedInput['port_pret'] !== ''
                 || $mappedInput['trece_bucati'] !== ''
                 || $mappedInput['trece_pret'] !== ''
+                || $mappedInput['refacturare_enabled'] === '1'
+                || $mappedInput['refacturare_suma'] !== ''
+                || $mappedInput['refacturare_observatii'] !== ''
+                || $mappedInput['refacturare_taxa_acces_bucati'] !== ''
+                || $mappedInput['refacturare_taxa_acces_pret'] !== ''
+                || $mappedInput['refacturare_port_bucati'] !== ''
+                || $mappedInput['refacturare_port_pret'] !== ''
+                || $mappedInput['refacturare_trece_bucati'] !== ''
+                || $mappedInput['refacturare_trece_pret'] !== ''
                 || $mappedInput['tip_cheltuiala'] !== 'motorina';
 
             if (!$hasMeaningfulInput) {
@@ -2614,15 +2742,26 @@ class DispecerCurseController
             [$expenseData, $expenseErrors, $expenseOld] = $this->validateExpenseInput($mappedInput);
             $normalizedOldItem = [
                 'tip_cheltuiala' => (string) ($expenseOld['tip_cheltuiala'] ?? $mappedInput['tip_cheltuiala']),
+                'refacturare_enabled' => (string) ($expenseOld['refacturare_enabled'] ?? $mappedInput['refacturare_enabled']),
+                'refacturare_tip_cheltuiala' => (string) ($expenseOld['refacturare_tip_cheltuiala'] ?? $mappedInput['refacturare_tip_cheltuiala']),
                 'suma' => (string) ($expenseOld['suma'] ?? $mappedInput['suma']),
                 'data_cheltuiala' => (string) ($expenseOld['data_cheltuiala'] ?? $mappedInput['data_cheltuiala']),
                 'observatii' => (string) ($expenseOld['observatii'] ?? $mappedInput['observatii']),
+                'refacturare_suma' => (string) ($expenseOld['refacturare_suma'] ?? $mappedInput['refacturare_suma']),
+                'refacturare_data' => (string) ($expenseOld['refacturare_data'] ?? $mappedInput['refacturare_data']),
+                'refacturare_observatii' => (string) ($expenseOld['refacturare_observatii'] ?? $mappedInput['refacturare_observatii']),
                 'taxa_acces_bucati' => (string) ($expenseOld['taxa_acces_bucati'] ?? $mappedInput['taxa_acces_bucati']),
                 'taxa_acces_pret' => (string) ($expenseOld['taxa_acces_pret'] ?? $mappedInput['taxa_acces_pret']),
                 'port_bucati' => (string) ($expenseOld['port_bucati'] ?? $mappedInput['port_bucati']),
                 'port_pret' => (string) ($expenseOld['port_pret'] ?? $mappedInput['port_pret']),
                 'trece_bucati' => (string) ($expenseOld['trece_bucati'] ?? $mappedInput['trece_bucati']),
                 'trece_pret' => (string) ($expenseOld['trece_pret'] ?? $mappedInput['trece_pret']),
+                'refacturare_taxa_acces_bucati' => (string) ($expenseOld['refacturare_taxa_acces_bucati'] ?? $mappedInput['refacturare_taxa_acces_bucati']),
+                'refacturare_taxa_acces_pret' => (string) ($expenseOld['refacturare_taxa_acces_pret'] ?? $mappedInput['refacturare_taxa_acces_pret']),
+                'refacturare_port_bucati' => (string) ($expenseOld['refacturare_port_bucati'] ?? $mappedInput['refacturare_port_bucati']),
+                'refacturare_port_pret' => (string) ($expenseOld['refacturare_port_pret'] ?? $mappedInput['refacturare_port_pret']),
+                'refacturare_trece_bucati' => (string) ($expenseOld['refacturare_trece_bucati'] ?? $mappedInput['refacturare_trece_bucati']),
+                'refacturare_trece_pret' => (string) ($expenseOld['refacturare_trece_pret'] ?? $mappedInput['refacturare_trece_pret']),
             ];
 
             $itemIndex = count($oldItems);
@@ -2640,6 +2779,11 @@ class DispecerCurseController
         if ($oldItems === []) {
             $oldItems[] = array_merge([
                 'tip_cheltuiala' => 'motorina',
+                'refacturare_enabled' => '0',
+                'refacturare_tip_cheltuiala' => 'motorina',
+                'refacturare_suma' => '',
+                'refacturare_data' => date('Y-m-d'),
+                'refacturare_observatii' => '',
                 'suma' => '',
                 'data_cheltuiala' => date('Y-m-d'),
                 'observatii' => '',
@@ -2649,6 +2793,12 @@ class DispecerCurseController
                 'port_pret' => '',
                 'trece_bucati' => '',
                 'trece_pret' => '',
+                'refacturare_taxa_acces_bucati' => '',
+                'refacturare_taxa_acces_pret' => '',
+                'refacturare_port_bucati' => '',
+                'refacturare_port_pret' => '',
+                'refacturare_trece_bucati' => '',
+                'refacturare_trece_pret' => '',
             ], $defaultItem);
         }
 
@@ -2697,6 +2847,7 @@ class DispecerCurseController
         $isPrimaryTransport = $isPrimaryKmTransport || $isPrimaryTonTransport;
         $isDistributionTransport = $this->isDistributionTransportType($transportType);
         $isDistributionWithKmTransport = $this->isDistributionWithKmTransportType($transportType);
+        $isCompressorTransport = $transportType === 'compresor';
 
         $startDate = trim((string) ($input['data_inceput'] ?? ($input['data_cursa'] ?? '')));
         if (!$this->isValidDate($startDate)) {
@@ -2745,11 +2896,45 @@ class DispecerCurseController
             }
         }
 
+        $departureLocationRaw = trim((string) ($input['loc_plecare'] ?? ''));
+        $suctionLocationRaw = trim((string) ($input['loc_aspirare'] ?? ''));
+        $deliveryLocationRaw = trim((string) ($input['loc_livrare'] ?? ''));
+        $routeDeliveryLocationRaw = trim((string) ($input['loc_livrare_cursa'] ?? ''));
+
+        if ($isCompressorTransport) {
+            if ($departureLocationRaw === '') {
+                $errors['loc_plecare'] = 'Completeaza Loc plecare.';
+            }
+            if ($suctionLocationRaw === '') {
+                $errors['loc_aspirare'] = 'Completeaza Loc aspirare.';
+            }
+            if ($deliveryLocationRaw === '') {
+                $errors['loc_livrare'] = 'Completeaza Loc livrare.';
+            }
+            if ($routeDeliveryLocationRaw === '') {
+                $errors['loc_livrare_cursa'] = 'Completeaza Loc inchidere cursa.';
+            }
+        }
+
+        foreach ([
+            'loc_plecare' => $departureLocationRaw,
+            'loc_aspirare' => $suctionLocationRaw,
+            'loc_livrare' => $deliveryLocationRaw,
+            'loc_livrare_cursa' => $routeDeliveryLocationRaw,
+        ] as $fieldKey => $fieldValue) {
+            if ($fieldValue !== '' && mb_strlen($fieldValue) > 255) {
+                $errors[$fieldKey] = 'Campul este prea lung (maxim 255 caractere).';
+            }
+        }
+
         $loadLocationIdRaw = trim((string) ($input['loc_incarcare_id'] ?? ''));
         $loadLocationId = $loadLocationIdRaw === '' ? null : (int) $loadLocationIdRaw;
         $loadLocation = null;
         $loadLocationTariff = 0.0;
-        if ($loadLocationId === null || $loadLocationId <= 0 || !$this->model->existsLoadLocation($loadLocationId)) {
+        if ($isCompressorTransport) {
+            $loadLocationIdRaw = '';
+            $loadLocationId = null;
+        } elseif ($loadLocationId === null || $loadLocationId <= 0 || !$this->model->existsLoadLocation($loadLocationId)) {
             $errors['loc_incarcare_id'] = 'Selecteaza un loc de incarcare valid.';
         } else {
             $loadLocation = $this->model->getLoadLocationById($loadLocationId);
@@ -2817,14 +3002,6 @@ class DispecerCurseController
             $errors['km_cursa'] = 'Km efectuati nu poate fi negativ.';
         }
 
-        $operatingHoursRaw = trim((string) ($input['ore_functionare'] ?? ''));
-        $operatingHours = $operatingHoursRaw === ''
-            ? null
-            : $this->normalizeOperatingHours($operatingHoursRaw);
-        if ($operatingHoursRaw !== '' && ($operatingHours === null || $operatingHours < 0)) {
-            $errors['ore_functionare'] = 'Ore functionare este invalid (ex: 2 sau 2h).';
-        }
-
         $kmTotalRaw = trim((string) ($input['km_totali'] ?? ''));
         $kmTotal = $kmTotalRaw === '' ? null : (int) $kmTotalRaw;
         if ($kmTotal !== null && $kmTotal < 0) {
@@ -2845,10 +3022,12 @@ class DispecerCurseController
         }
 
         $hoursRaw = trim((string) ($input['ore_aspirare'] ?? ''));
-        $hours = $hoursRaw === '' ? null : $this->normalizeDecimal($hoursRaw);
+        $hours = $hoursRaw === '' ? null : $this->normalizeOperatingHours($hoursRaw);
         if ($hoursRaw !== '' && ($hours === null || $hours < 0)) {
-            $errors['ore_aspirare'] = 'Numarul de ore aspirare este invalid.';
+            $errors['ore_aspirare'] = 'Ore aspirare este invalid (ex: 2 sau 2h).';
         }
+        $operatingHoursRaw = $hoursRaw;
+        $operatingHours = $hours;
 
         $relocationKmRaw = trim((string) ($input['km_dislocare'] ?? ''));
         $relocationKm = $relocationKmRaw === '' ? null : $this->normalizeDecimal($relocationKmRaw);
@@ -2896,6 +3075,8 @@ class DispecerCurseController
 
         $routeTariffPerTon = 0.0;
         $routeExtraKmCost = 0.0;
+        $routeRideCost = 0.0;
+        $routeApplyRideCost = false;
         $distributionRouteKmTariff = null;
         $hasMatchedDistributionRouteRule = false;
         $primaryRouteKmTariff = null;
@@ -3032,6 +3213,8 @@ class DispecerCurseController
                     if ($selectedRouteRule !== null) {
                         $routeTariffPerTon = max(0, (float) ($selectedRouteRule['tarif_tona'] ?? 0));
                         $routeExtraKmCost = max(0, (float) ($selectedRouteRule['cost_extra_km'] ?? 0));
+                        $routeRideCost = max(0, (float) ($selectedRouteRule['cost_cursa'] ?? 0));
+                        $routeApplyRideCost = !empty($selectedRouteRule['aplica_cost_cursa']) && $routeRideCost > 0;
                         $distributionRouteKmTariff = max(0, (int) ($selectedRouteRule['km_tarifare'] ?? 0));
                         $hasMatchedDistributionRouteRule = true;
                     }
@@ -3051,6 +3234,8 @@ class DispecerCurseController
                     if ($routeRule !== null) {
                         $routeTariffPerTon = max(0, (float) ($routeRule['tarif_tona'] ?? 0));
                         $routeExtraKmCost = max(0, (float) ($routeRule['cost_extra_km'] ?? 0));
+                        $routeRideCost = max(0, (float) ($routeRule['cost_cursa'] ?? 0));
+                        $routeApplyRideCost = !empty($routeRule['aplica_cost_cursa']) && $routeRideCost > 0;
                         $distributionRouteKmTariff = max(0, (int) ($routeRule['km_tarifare'] ?? 0));
                         $hasMatchedDistributionRouteRule = true;
                     }
@@ -3059,7 +3244,7 @@ class DispecerCurseController
                 }
             }
 
-            if ($beneficiaryId !== null && $beneficiaryId > 0 && !empty($distributionRouteScope['has_active_rules'])) {
+            if ($beneficiaryId !== null && $beneficiaryId > 0 && !empty($distributionRouteScope['has_vehicle_scoped_rules'])) {
                 $scopedRules = is_array($distributionRouteScope['scoped_rules'] ?? null)
                     ? $distributionRouteScope['scoped_rules']
                     : [];
@@ -3123,11 +3308,11 @@ class DispecerCurseController
                     $effectiveKmRate = $routeExtraKmCost > 0
                         ? $routeExtraKmCost
                         : ($zoneExtraKmCost > 0 ? $zoneExtraKmCost : $beneficiaryDistributionPerKm);
-                    if ($effectiveTonRate <= 0 && $effectiveKmRate <= 0) {
+                    if ($effectiveTonRate <= 0 && $effectiveKmRate <= 0 && !$routeApplyRideCost) {
                         $errors['zona_distributie_id'] = 'Configureaza un tarif valid pentru distributie (Loc incarcare, Zona sau Cost extra km).';
                     } else {
-                        // In pret_tarifare stocam componenta pe tona rezultata din regula de ruta (loc vs zona).
-                        $price = $effectiveTonRate;
+                        // In pret_tarifare stocam componenta de baza pentru distributie.
+                        $price = $routeApplyRideCost ? $routeRideCost : $effectiveTonRate;
                     }
                 }
             } else {
@@ -3203,11 +3388,14 @@ class DispecerCurseController
                     : ($zoneExtraKmCost > 0 ? $zoneExtraKmCost : $beneficiaryDistributionPerKm);
                 $effectiveDistributionTonRate = max(0, (float) $effectiveTonRate);
                 $effectiveDistributionKmRate = max(0, (float) $effectiveKmRate);
-                $tonComponent = (float) ((float) ($qtyForTonPricing ?? 0) * $effectiveTonRate);
-                $extraKmComponent = $isDistributionWithKmTransport
+                $fixedRideComponent = $routeApplyRideCost ? $routeRideCost : 0.0;
+                $tonComponent = $routeApplyRideCost
+                    ? 0.0
+                    : (float) ((float) ($qtyForTonPricing ?? 0) * $effectiveTonRate);
+                $extraKmComponent = ($isDistributionWithKmTransport && !$routeApplyRideCost)
                     ? (float) ((float) ($km ?? 0) * $effectiveKmRate)
                     : 0.0;
-                $total = $tonComponent + $extraKmComponent;
+                $total = $fixedRideComponent + $tonComponent + $extraKmComponent;
             } else {
                 $compressorRates = $this->resolveCompressorRates($beneficiary ?? []);
                 $hasCompressorLiquidSuctionPricing = $compressorRates['pret_tona_aspirata_lichida'] > 0;
@@ -3253,7 +3441,14 @@ class DispecerCurseController
                 }
             }
             $totalPrimar = $includesPrimarySegment ? ($kmPrimar * $primaryPerKmRate) : 0.0;
-            $totalDistributie = $includesDistributionSegment ? ((float) ($qtyForTonPricing ?? 0) * $distributionPerTonRate) : 0.0;
+            $distributionFixedRideCost = ($includesDistributionSegment && $routeApplyRideCost)
+                ? max(0.0, (float) $routeRideCost)
+                : 0.0;
+            $totalDistributie = $includesDistributionSegment
+                ? ($distributionFixedRideCost > 0
+                    ? $distributionFixedRideCost
+                    : ((float) ($qtyForTonPricing ?? 0) * $distributionPerTonRate))
+                : 0.0;
 
             if ($includesPrimarySegment && $kmPrimar > 0) {
                 $costKmPrimar = $totalPrimar / $kmPrimar;
@@ -3307,6 +3502,10 @@ class DispecerCurseController
             'durata_cursa_minute' => $durationMinutes !== null ? (string) $durationMinutes : '',
             'capacitate_transport' => $vehicleTransportCapacity !== null ? (string) $vehicleTransportCapacity : '',
             'loc_incarcare_id' => $loadLocationId !== null ? (string) $loadLocationId : '',
+            'loc_plecare' => $departureLocationRaw,
+            'loc_aspirare' => $suctionLocationRaw,
+            'loc_livrare' => $deliveryLocationRaw,
+            'loc_livrare_cursa' => $routeDeliveryLocationRaw,
             'beneficiar_id' => $beneficiaryId !== null ? (string) $beneficiaryId : '',
             'tip_marfa' => $goodsTypeValues,
             'cantitate_incarcata' => $qtyRaw,
@@ -3341,15 +3540,19 @@ class DispecerCurseController
             'durata_cursa_minute' => $durationMinutes,
             'capacitate_transport' => $vehicleTransportCapacity,
             'loc_incarcare_id' => $loadLocationId,
+            'loc_plecare' => $isCompressorTransport ? ($departureLocationRaw !== '' ? $departureLocationRaw : null) : null,
+            'loc_aspirare' => $isCompressorTransport ? ($suctionLocationRaw !== '' ? $suctionLocationRaw : null) : null,
+            'loc_livrare' => $isCompressorTransport ? ($deliveryLocationRaw !== '' ? $deliveryLocationRaw : null) : null,
+            'loc_livrare_cursa' => $isCompressorTransport ? ($routeDeliveryLocationRaw !== '' ? $routeDeliveryLocationRaw : null) : null,
             'beneficiar_id' => $beneficiaryId,
             'tip_marfa' => implode(',', $goodsTypeValues),
             'cantitate_incarcata' => $qty,
             'cantitate_prelevata' => $transportType === 'compresor' ? $prelevataQty : null,
-            'tona_aspirata_lichida' => $transportType === 'compresor' && $hasCompressorLiquidSuctionPricing ? $liquidSuctionTon : null,
-            'tona_aspirata_gazoasa' => $transportType === 'compresor' && $hasCompressorGasSuctionPricing ? $gasSuctionTon : null,
+            'tona_aspirata_lichida' => $transportType === 'compresor' ? $liquidSuctionTon : null,
+            'tona_aspirata_gazoasa' => $transportType === 'compresor' ? $gasSuctionTon : null,
             'nr_clienti' => $clients,
             'km_cursa' => $transportType === 'compresor' ? null : $km,
-            'ore_functionare' => $operatingHours,
+            'ore_functionare' => $transportType === 'compresor' ? $operatingHours : null,
             'km_totali' => $kmTotal,
             'ore_aspirare' => $transportType === 'compresor' ? $hours : null,
             'km_dislocare' => $transportType === 'compresor' ? $relocationKm : null,
@@ -3457,10 +3660,24 @@ class DispecerCurseController
     private function validateExpenseInput(array $input): array
     {
         $errors = [];
+        $submitIntent = trim((string) ($input['submit_intent'] ?? 'expense'));
+        $isRefacturareOnlySubmit = $submitIntent === 'refacturare' && (int) ($input['expense_id'] ?? 0) <= 0;
 
         $type = trim((string) ($input['tip_cheltuiala'] ?? ''));
         if (!array_key_exists($type, self::EXPENSE_TYPES)) {
             $errors['tip_cheltuiala'] = 'Tipul cheltuielii este invalid.';
+        }
+
+        $refacturareEnabled = isset($input['refacturare_enabled']) && (string) $input['refacturare_enabled'] === '1';
+        $refacturareType = trim((string) ($input['refacturare_tip_cheltuiala'] ?? ''));
+        if ($refacturareEnabled && !array_key_exists($refacturareType, self::EXPENSE_TYPES)) {
+            $errors['refacturare_tip_cheltuiala'] = 'Tipul pentru refacturare este invalid.';
+        }
+        if (!$refacturareEnabled) {
+            $refacturareType = '';
+        }
+        if ($isRefacturareOnlySubmit && !$refacturareEnabled) {
+            $errors['refacturare_suma'] = 'Bifeaza Refacturare pentru a adauga refacturarea.';
         }
 
         $amountRaw = trim((string) ($input['suma'] ?? ''));
@@ -3525,7 +3742,7 @@ class DispecerCurseController
             }
         }
 
-        if ($type === 'taxe_drum') {
+        if ($type === 'taxe_drum' && !$isRefacturareOnlySubmit) {
             if ($roadTaxLineCount === 0) {
                 $errors['suma'] = 'Pentru Taxe drum completeaza cel putin o linie (bucati si pret).';
             }
@@ -3533,7 +3750,107 @@ class DispecerCurseController
             $amountRaw = $roadTaxTotal > 0 ? number_format($roadTaxTotal, 2, '.', '') : '';
         }
 
-        if (($amount === null || $amount <= 0) && !isset($errors['suma'])) {
+        $refacturareRoadTaxInputRaw = [
+            'refacturare_taxa_acces_bucati' => trim((string) ($input['refacturare_taxa_acces_bucati'] ?? '')),
+            'refacturare_taxa_acces_pret' => trim((string) ($input['refacturare_taxa_acces_pret'] ?? '')),
+            'refacturare_port_bucati' => trim((string) ($input['refacturare_port_bucati'] ?? '')),
+            'refacturare_port_pret' => trim((string) ($input['refacturare_port_pret'] ?? '')),
+            'refacturare_trece_bucati' => trim((string) ($input['refacturare_trece_bucati'] ?? '')),
+            'refacturare_trece_pret' => trim((string) ($input['refacturare_trece_pret'] ?? '')),
+        ];
+        $refacturareRoadTaxDetails = [];
+        $refacturareRoadTaxTotal = 0.0;
+        $refacturareRoadTaxLineCount = 0;
+
+        foreach ($roadTaxRows as $rowKey => $rowConfig) {
+            $qtyField = 'refacturare_' . $rowConfig['qty'];
+            $priceField = 'refacturare_' . $rowConfig['price'];
+            $qtyRaw = $refacturareRoadTaxInputRaw[$qtyField];
+            $priceRaw = $refacturareRoadTaxInputRaw[$priceField];
+            $qty = $qtyRaw === '' ? null : $this->normalizeDecimal($qtyRaw);
+            $price = $priceRaw === '' ? null : $this->normalizeDecimal($priceRaw);
+            $label = 'Refacturare ' . $rowConfig['label'];
+
+            if ($qtyRaw !== '' && ($qty === null || $qty <= 0)) {
+                $errors[$qtyField] = $label . ': completeaza un numar de bucati valid (> 0).';
+            }
+
+            if ($priceRaw !== '' && ($price === null || $price <= 0)) {
+                $errors[$priceField] = $label . ': completeaza un pret valid (> 0).';
+            }
+
+            if (($qtyRaw !== '' && $priceRaw === '') || ($qtyRaw === '' && $priceRaw !== '')) {
+                if ($qtyRaw === '') {
+                    $errors[$qtyField] = $label . ': completeaza numarul de bucati.';
+                }
+                if ($priceRaw === '') {
+                    $errors[$priceField] = $label . ': completeaza pretul.';
+                }
+            }
+
+            if ($qty !== null && $qty > 0 && $price !== null && $price > 0) {
+                $lineTotal = round($qty * $price, 2);
+                $refacturareRoadTaxDetails[$rowKey] = [
+                    'bucati' => round($qty, 2),
+                    'pret' => round($price, 2),
+                    'total' => $lineTotal,
+                ];
+                $refacturareRoadTaxTotal += $lineTotal;
+                $refacturareRoadTaxLineCount++;
+            }
+        }
+
+        if ($refacturareEnabled && $refacturareType === 'taxe_drum' && $refacturareRoadTaxLineCount === 0) {
+            $errors['refacturare_tip_cheltuiala'] = 'Pentru Refacturare Taxe drum completeaza cel putin o linie (bucati si pret).';
+        }
+        if (!$refacturareEnabled || $refacturareType !== 'taxe_drum') {
+            $refacturareRoadTaxDetails = [];
+        }
+
+        $refacturareDetailsJson = null;
+        if ($refacturareRoadTaxDetails !== []) {
+            $encodedRefacturareDetails = json_encode($refacturareRoadTaxDetails, JSON_UNESCAPED_UNICODE);
+            if (is_string($encodedRefacturareDetails) && $encodedRefacturareDetails !== '') {
+                $refacturareDetailsJson = $encodedRefacturareDetails;
+            }
+        }
+
+        $refacturareAmountRaw = trim((string) ($input['refacturare_suma'] ?? ''));
+        $refacturareAmount = $refacturareAmountRaw === '' ? null : $this->normalizeDecimal($refacturareAmountRaw);
+        if ($refacturareEnabled && $refacturareType === 'taxe_drum') {
+            $refacturareAmount = $refacturareRoadTaxTotal;
+            $refacturareAmountRaw = $refacturareRoadTaxTotal > 0 ? number_format($refacturareRoadTaxTotal, 2, '.', '') : '';
+        }
+        if ($refacturareEnabled && ($refacturareAmount === null || $refacturareAmount <= 0)) {
+            $errors['refacturare_suma'] = 'Suma Refacturare trebuie sa fie mai mare decat 0.';
+        }
+
+        $refacturareDate = trim((string) ($input['refacturare_data'] ?? ''));
+        if ($refacturareEnabled && !$this->isValidDate($refacturareDate)) {
+            $errors['refacturare_data'] = 'Data Refacturare este invalida.';
+        }
+
+        $refacturareObservations = trim((string) ($input['refacturare_observatii'] ?? ''));
+        if ($refacturareEnabled && $refacturareObservations !== '' && mb_strlen($refacturareObservations) > 5000) {
+            $errors['refacturare_observatii'] = 'Observatiile Refacturare sunt prea lungi.';
+        }
+
+        if (!$refacturareEnabled) {
+            $refacturareAmount = null;
+            $refacturareAmountRaw = '';
+            $refacturareDate = '';
+            $refacturareObservations = '';
+        }
+
+        if ($isRefacturareOnlySubmit) {
+            $amount = 0.0;
+            $amountRaw = '0.00';
+            if ($refacturareType !== '') {
+                $type = $refacturareType;
+            }
+        }
+
+        if (!$isRefacturareOnlySubmit && ($amount === null || $amount <= 0) && !isset($errors['suma'])) {
             $errors['suma'] = 'Suma trebuie sa fie mai mare decat 0.';
         }
 
@@ -3548,6 +3865,11 @@ class DispecerCurseController
         $old = [
             'expense_id' => trim((string) ($input['expense_id'] ?? '')),
             'tip_cheltuiala' => $type,
+            'refacturare_enabled' => $refacturareEnabled ? '1' : '0',
+            'refacturare_tip_cheltuiala' => $refacturareType !== '' ? $refacturareType : 'motorina',
+            'refacturare_suma' => $refacturareAmountRaw,
+            'refacturare_data' => $refacturareDate !== '' ? $refacturareDate : date('Y-m-d'),
+            'refacturare_observatii' => $refacturareObservations,
             'suma' => $amountRaw,
             'data_cheltuiala' => $expenseDate,
             'observatii' => $observations,
@@ -3557,6 +3879,12 @@ class DispecerCurseController
             'port_pret' => $roadTaxInputRaw['port_pret'],
             'trece_bucati' => $roadTaxInputRaw['trece_bucati'],
             'trece_pret' => $roadTaxInputRaw['trece_pret'],
+            'refacturare_taxa_acces_bucati' => $refacturareRoadTaxInputRaw['refacturare_taxa_acces_bucati'],
+            'refacturare_taxa_acces_pret' => $refacturareRoadTaxInputRaw['refacturare_taxa_acces_pret'],
+            'refacturare_port_bucati' => $refacturareRoadTaxInputRaw['refacturare_port_bucati'],
+            'refacturare_port_pret' => $refacturareRoadTaxInputRaw['refacturare_port_pret'],
+            'refacturare_trece_bucati' => $refacturareRoadTaxInputRaw['refacturare_trece_bucati'],
+            'refacturare_trece_pret' => $refacturareRoadTaxInputRaw['refacturare_trece_pret'],
         ];
 
         if ($errors !== []) {
@@ -3565,6 +3893,11 @@ class DispecerCurseController
 
         return [[
             'tip_cheltuiala' => $type,
+            'refacturare_tip_cheltuiala' => $refacturareType !== '' ? $refacturareType : null,
+            'refacturare_detalii' => $refacturareDetailsJson,
+            'refacturare_suma' => $refacturareAmount !== null ? round((float) $refacturareAmount, 2) : null,
+            'refacturare_data' => $refacturareDate !== '' ? $refacturareDate : null,
+            'refacturare_observatii' => $refacturareObservations !== '' ? $refacturareObservations : null,
             'suma' => round((float) $amount, 2),
             'data_cheltuiala' => $expenseDate,
             'observatii' => $storedObservations,
@@ -3663,21 +3996,21 @@ class DispecerCurseController
         return $result;
     }
 
-    private function buildRoadTaxFormValuesFromDetails(array $details): array
+    private function buildRoadTaxFormValuesFromDetails(array $details, string $fieldPrefix = ''): array
     {
         $values = [
-            'taxa_acces_bucati' => '',
-            'taxa_acces_pret' => '',
-            'port_bucati' => '',
-            'port_pret' => '',
-            'trece_bucati' => '',
-            'trece_pret' => '',
+            $fieldPrefix . 'taxa_acces_bucati' => '',
+            $fieldPrefix . 'taxa_acces_pret' => '',
+            $fieldPrefix . 'port_bucati' => '',
+            $fieldPrefix . 'port_pret' => '',
+            $fieldPrefix . 'trece_bucati' => '',
+            $fieldPrefix . 'trece_pret' => '',
         ];
 
         $mapping = [
-            'taxa_acces' => ['qty' => 'taxa_acces_bucati', 'price' => 'taxa_acces_pret'],
-            'port' => ['qty' => 'port_bucati', 'price' => 'port_pret'],
-            'trece' => ['qty' => 'trece_bucati', 'price' => 'trece_pret'],
+            'taxa_acces' => ['qty' => $fieldPrefix . 'taxa_acces_bucati', 'price' => $fieldPrefix . 'taxa_acces_pret'],
+            'port' => ['qty' => $fieldPrefix . 'port_bucati', 'price' => $fieldPrefix . 'port_pret'],
+            'trece' => ['qty' => $fieldPrefix . 'trece_bucati', 'price' => $fieldPrefix . 'trece_pret'],
         ];
 
         foreach ($mapping as $rowKey => $fields) {
@@ -4142,6 +4475,8 @@ class DispecerCurseController
                 'tarif_tona' => max(0, (float) ($rule['tarif_tona'] ?? 0)),
                 'cost_extra_km' => max(0, (float) ($rule['cost_extra_km'] ?? 0)),
                 'km_tarifare' => max(0, (int) ($rule['km_tarifare'] ?? 0)),
+                'cost_cursa' => max(0, (float) ($rule['cost_cursa'] ?? 0)),
+                'aplica_cost_cursa' => !empty($rule['aplica_cost_cursa']),
                 'vehicle_ids' => $routeVehicleIds,
                 'loc_nume' => trim((string) ($rule['loc_nume'] ?? '')),
                 'zona_nume' => trim((string) ($rule['zona_nume'] ?? '')),
@@ -4836,6 +5171,17 @@ class DispecerCurseController
         return array_values(array_unique($clean));
     }
 
+    private function currentUserId(): ?int
+    {
+        $userId = current_user()['id'] ?? null;
+        if (!is_int($userId) && !is_numeric((string) $userId)) {
+            return null;
+        }
+
+        $userId = (int) $userId;
+        return $userId > 0 ? $userId : null;
+    }
+
     private function buildPersistenceErrorMessage(Throwable $exception): string
     {
         $sqlState = strtoupper((string) $exception->getCode());
@@ -4864,8 +5210,14 @@ class DispecerCurseController
             || str_contains($message, 'pret_tona_aspirata_gazoasa')
             || str_contains($message, 'beneficiar_id')
             || str_contains($message, 'loc_incarcare_id')
+            || str_contains($message, 'loc_plecare')
+            || str_contains($message, 'loc_aspirare')
+            || str_contains($message, 'loc_livrare')
+            || str_contains($message, 'loc_livrare_cursa')
             || str_contains($message, 'cost_extra_km')
             || str_contains($message, 'km_tarifare')
+            || str_contains($message, 'cost_cursa')
+            || str_contains($message, 'aplica_cost_cursa')
             || str_contains($message, 'vehicle_ids')
             || str_contains($message, 'capacitate_transport')
             || str_contains($message, 'cantitate_prelevata')
@@ -4876,7 +5228,10 @@ class DispecerCurseController
             || str_contains($message, 'durata_cursa_minute')
             || str_contains($message, 'driver_id')
             || str_contains($message, 'fk_curse_driver')
+            || str_contains($message, 'created_by')
+            || str_contains($message, 'fk_curse_created_by')
             || str_contains($message, 'soferi')
+            || str_contains($message, 'utilizatori')
             || str_contains($message, 'km_totali')
             || str_contains($message, 'ore_functionare')
             || str_contains($message, 'cost_km_primar')
@@ -4884,7 +5239,7 @@ class DispecerCurseController
             || str_contains($message, 'cost_km_mixt')
             || str_contains($message, 'cost_km_compresor')
             || str_contains($message, 'tarif')) {
-            return 'Structura bazei de date pentru Dispecer curse nu este actualizata. Ruleaza scripturile database/update_dispecer_curse_module.sql, database/update_dispecer_locuri_tarif.sql, database/update_dispecer_beneficiar_compresor.sql, database/update_dispecer_vehicle_default_assignments.sql, database/update_dispecer_curse_capacitate_transport.sql, database/update_dispecer_primar_routes.sql, database/update_dispecer_curse_cantitate_prelevata.sql, database/update_dispecer_curse_driver_id.sql, database/update_dispecer_curse_schedule.sql, database/update_dispecer_curse_ore_functionare.sql, database/update_dispecer_compresor_aspirare_split.sql, database/update_dispecer_distribution_route_km.sql si database/update_dispecer_curse_cost_km.sql, apoi incearca din nou.';
+            return 'Structura bazei de date pentru Dispecer curse nu este actualizata. Ruleaza scripturile database/update_dispecer_curse_module.sql, database/update_dispecer_locuri_tarif.sql, database/update_dispecer_beneficiar_compresor.sql, database/update_dispecer_vehicle_default_assignments.sql, database/update_dispecer_curse_capacitate_transport.sql, database/update_dispecer_primar_routes.sql, database/update_dispecer_curse_cantitate_prelevata.sql, database/update_dispecer_curse_driver_id.sql, database/update_dispecer_curse_schedule.sql, database/update_dispecer_curse_ore_functionare.sql, database/update_dispecer_compresor_aspirare_split.sql, database/update_dispecer_compresor_locatii_text.sql, database/update_dispecer_distribution_route_km.sql si database/update_dispecer_curse_cost_km.sql, apoi incearca din nou.';
         }
 
         return 'A aparut o eroare la salvare. Te rugam sa reincerci.';

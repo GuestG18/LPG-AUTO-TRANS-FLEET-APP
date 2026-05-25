@@ -24,6 +24,7 @@
     var chartRegistry = {};
     var refreshTimer = null;
     var activeRequestId = 0;
+    var inFlightController = null;
 
     function safeNumber(value) {
         var num = Number(value);
@@ -105,12 +106,68 @@
         }
     }
 
+    function hasChartData(data) {
+        if (!data || typeof data !== 'object') {
+            return false;
+        }
+
+        if (!Array.isArray(data.datasets) || data.datasets.length === 0) {
+            return false;
+        }
+
+        return data.datasets.some(function (dataset) {
+            if (!Array.isArray(dataset.data) || dataset.data.length === 0) {
+                return false;
+            }
+
+            return dataset.data.some(function (point) {
+                if (point && typeof point === 'object') {
+                    if (Object.prototype.hasOwnProperty.call(point, 'x') || Object.prototype.hasOwnProperty.call(point, 'y')) {
+                        return safeNumber(point.x) !== 0 || safeNumber(point.y) !== 0;
+                    }
+
+                    if (Object.prototype.hasOwnProperty.call(point, 'r')) {
+                        return safeNumber(point.r) > 0;
+                    }
+
+                    return true;
+                }
+
+                return safeNumber(point) !== 0;
+            });
+        });
+    }
+
+    function setChartEmptyState(canvas, isEmpty) {
+        if (!canvas) {
+            return;
+        }
+
+        var wrapper = canvas.closest('[data-chart-wrapper]');
+        if (!wrapper) {
+            return;
+        }
+
+        var emptyEl = wrapper.querySelector('.dashboard-analytic-chart-empty');
+        if (!emptyEl) {
+            return;
+        }
+
+        if (isEmpty) {
+            emptyEl.classList.remove('d-none');
+            return;
+        }
+
+        emptyEl.classList.add('d-none');
+    }
+
     function renderChart(key, config) {
         var canvas = document.getElementById(key);
         if (!canvas) {
             return;
         }
 
+        setChartEmptyState(canvas, !hasChartData(config.data));
         destroyChart(key);
         chartRegistry[key] = new Chart(canvas, config);
     }
@@ -177,6 +234,7 @@
     function renderFleetKpis(fleet) {
         setText('kpi_total_curse', String(Math.round(safeNumber(fleet.total_curse))));
         setText('kpi_total_facturare', formatMoney(fleet.total_facturare));
+        setText('kpi_total_refacturare', formatMoney(fleet.total_refacturare));
         setText('kpi_total_cheltuieli', formatMoney(fleet.total_cheltuieli));
         setText('kpi_profit_total', formatMoney(fleet.profit_total));
         setText('kpi_total_km', formatKm(fleet.total_km));
@@ -191,7 +249,7 @@
         }
 
         if (!Array.isArray(vehicles) || vehicles.length === 0) {
-            vehicleBody.innerHTML = '<tr><td colspan="12" class="text-center text-muted py-4">Nu exista date.</td></tr>';
+            vehicleBody.innerHTML = '<tr><td colspan="13" class="text-center text-muted py-4">Nu exista date.</td></tr>';
             return;
         }
 
@@ -203,6 +261,7 @@
                 '<td class="text-end">' + formatKmCell(row.km_totali) + '</td>' +
                 '<td class="text-end">' + formatTonsCell(row.tone_livrate) + '</td>' +
                 '<td class="text-end">' + formatMoneyCell(row.facturare) + '</td>' +
+                '<td class="text-end text-primary fw-semibold">' + formatMoneyCell(row.refacturare) + '</td>' +
                 '<td class="text-end">' + formatMoneyCell(row.cheltuieli) + '</td>' +
                 '<td class="text-end ' + (safeNumber(row.profit) < 0 ? 'text-danger fw-semibold' : 'text-success fw-semibold') + '">' + formatMoneyCell(row.profit) + '</td>' +
                 '<td class="text-end">' + formatRatioCell(row.venit_km) + '</td>' +
@@ -222,7 +281,7 @@
         }
 
         if (!Array.isArray(drivers) || drivers.length === 0) {
-            driverBody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">Nu exista date.</td></tr>';
+            driverBody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-4">Nu exista date.</td></tr>';
             return;
         }
 
@@ -234,6 +293,7 @@
                 '<td class="text-end">' + formatKmCell(row.km_totali) + '</td>' +
                 '<td class="text-end">' + formatTonsCell(row.tone_livrate) + '</td>' +
                 '<td class="text-end">' + formatMoneyCell(row.facturare_generata) + '</td>' +
+                '<td class="text-end text-primary fw-semibold">' + formatMoneyCell(row.refacturare_generata) + '</td>' +
                 '<td class="text-end ' + (safeNumber(row.profit_generat) < 0 ? 'text-danger fw-semibold' : 'text-success fw-semibold') + '">' + formatMoneyCell(row.profit_generat) + '</td>' +
                 '<td class="text-end">' + formatTonsCell(row.tone_per_cursa) + '</td>' +
                 '<td class="text-end">' + formatKmCell(row.km_per_cursa) + '</td>' +
@@ -294,6 +354,13 @@
                         data: profitEvolution.cheltuieli || [],
                         borderColor: palette.red,
                         backgroundColor: 'rgba(220,38,38,0.12)',
+                        tension: 0.3
+                    },
+                    {
+                        label: 'Refacturare',
+                        data: profitEvolution.refacturare || [],
+                        borderColor: palette.amber,
+                        backgroundColor: 'rgba(245,158,11,0.12)',
                         tension: 0.3
                     },
                     {
@@ -529,6 +596,14 @@
         var silent = !!options.silent;
         var requestId = ++activeRequestId;
 
+        if (inFlightController !== null) {
+            inFlightController.abort();
+            inFlightController = null;
+        }
+
+        var requestController = new AbortController();
+        inFlightController = requestController;
+
         if (!silent) {
             setLoadingState(true);
         }
@@ -536,7 +611,8 @@
         try {
             var response = await fetch(buildApiUrl(), {
                 method: 'GET',
-                headers: { 'Accept': 'application/json' }
+                headers: { 'Accept': 'application/json' },
+                signal: requestController.signal
             });
 
             if (!response.ok) {
@@ -551,9 +627,17 @@
             renderPayload(payload);
             updateLastRefresh();
         } catch (error) {
+            if (error && error.name === 'AbortError') {
+                return;
+            }
+
             console.error('[dashboard-analitic] fetch error:', error);
             setContentVisibility(false);
         } finally {
+            if (inFlightController === requestController) {
+                inFlightController = null;
+            }
+
             if (!silent) {
                 setLoadingState(false);
             }

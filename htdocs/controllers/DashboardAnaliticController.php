@@ -67,6 +67,7 @@ class DashboardAnaliticController
                 'fleet' => [
                     'total_curse' => 0,
                     'total_facturare' => 0,
+                    'total_refacturare' => 0,
                     'total_cheltuieli' => 0,
                     'profit_total' => 0,
                     'total_km' => 0,
@@ -79,7 +80,7 @@ class DashboardAnaliticController
                 'vehicles' => [],
                 'drivers' => [],
                 'charts' => [
-                    'profit_evolution' => ['labels' => [], 'facturare' => [], 'cheltuieli' => [], 'profit' => []],
+                    'profit_evolution' => ['labels' => [], 'facturare' => [], 'refacturare' => [], 'cheltuieli' => [], 'profit' => []],
                     'km_billed_vs_unbilled' => ['labels' => ['Km'], 'km_facturati' => [0], 'km_nefacturati' => [0]],
                     'transport_distribution' => ['labels' => [], 'values' => []],
                     'top_vehicle_profit' => ['labels' => [], 'values' => []],

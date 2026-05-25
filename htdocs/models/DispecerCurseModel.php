@@ -6,7 +6,10 @@ class DispecerCurseModel extends BaseModel
     private bool $distributionRouteTableEnsured = false;
     private bool $primaryRouteTableEnsured = false;
     private bool $compressorVehicleAssignmentTableEnsured = false;
+    private bool $raceCompressorLocationColumnsEnsured = false;
     private bool $raceCostPerKmColumnsEnsured = false;
+    private bool $raceCreatedByColumnEnsured = false;
+    private bool $expenseRefacturareColumnEnsured = false;
 
     public function getVehicleOptions(bool $onlyActive = false): array
     {
@@ -777,7 +780,9 @@ class DispecerCurseModel extends BaseModel
         float $extraKmCost,
         int $kmTariff,
         bool $active,
-        array $vehicleIds = []
+        array $vehicleIds = [],
+        float $rideCost = 0.0,
+        bool $applyRideCost = false
     ): bool {
         if ($beneficiaryId <= 0 || $locationId <= 0 || $zoneId <= 0) {
             return false;
@@ -795,6 +800,8 @@ class DispecerCurseModel extends BaseModel
                 tarif_tona,
                 cost_extra_km,
                 km_tarifare,
+                cost_cursa,
+                aplica_cost_cursa,
                 vehicle_ids,
                 activ,
                 created_at,
@@ -806,6 +813,8 @@ class DispecerCurseModel extends BaseModel
                 :tarif_tona,
                 :cost_extra_km,
                 :km_tarifare,
+                :cost_cursa,
+                :aplica_cost_cursa,
                 :vehicle_ids,
                 :activ,
                 :created_at,
@@ -821,6 +830,8 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':tarif_tona', max(0, $tariffPerTon));
         $stmt->bindValue(':cost_extra_km', max(0, $extraKmCost));
         $stmt->bindValue(':km_tarifare', max(0, $kmTariff), PDO::PARAM_INT);
+        $stmt->bindValue(':cost_cursa', max(0, $rideCost));
+        $stmt->bindValue(':aplica_cost_cursa', $applyRideCost ? 1 : 0, PDO::PARAM_INT);
         if ($vehicleIdsCsv === null) {
             $stmt->bindValue(':vehicle_ids', null, PDO::PARAM_NULL);
         } else {
@@ -849,6 +860,8 @@ class DispecerCurseModel extends BaseModel
                 tarif_tona,
                 cost_extra_km,
                 km_tarifare,
+                cost_cursa,
+                aplica_cost_cursa,
                 vehicle_ids,
                 activ
             FROM configurare_rute_distributie
@@ -877,9 +890,11 @@ class DispecerCurseModel extends BaseModel
         float $extraKmCost,
         int $kmTariff,
         bool $active,
-        array $vehicleIds = []
+        array $vehicleIds = [],
+        float $rideCost = 0.0,
+        bool $applyRideCost = false
     ): bool {
-        if ($id <= 0 || $beneficiaryId <= 0 || $locationId <= 0 || $zoneId <= 0) {
+        if ($id <= 0 || $locationId <= 0 || $zoneId <= 0) {
             return false;
         }
 
@@ -895,22 +910,24 @@ class DispecerCurseModel extends BaseModel
                 tarif_tona = :tarif_tona,
                 cost_extra_km = :cost_extra_km,
                 km_tarifare = :km_tarifare,
+                cost_cursa = :cost_cursa,
+                aplica_cost_cursa = :aplica_cost_cursa,
                 vehicle_ids = :vehicle_ids,
                 activ = :activ,
                 updated_at = :updated_at
             WHERE id = :id
-              AND beneficiar_id = :beneficiar_id
             LIMIT 1
         ";
 
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':id', $id, PDO::PARAM_INT);
-        $stmt->bindValue(':beneficiar_id', $beneficiaryId, PDO::PARAM_INT);
         $stmt->bindValue(':loc_incarcare_id', $locationId, PDO::PARAM_INT);
         $stmt->bindValue(':zona_distributie_id', $zoneId, PDO::PARAM_INT);
         $stmt->bindValue(':tarif_tona', max(0, $tariffPerTon));
         $stmt->bindValue(':cost_extra_km', max(0, $extraKmCost));
         $stmt->bindValue(':km_tarifare', max(0, $kmTariff), PDO::PARAM_INT);
+        $stmt->bindValue(':cost_cursa', max(0, $rideCost));
+        $stmt->bindValue(':aplica_cost_cursa', $applyRideCost ? 1 : 0, PDO::PARAM_INT);
         if ($vehicleIdsCsv === null) {
             $stmt->bindValue(':vehicle_ids', null, PDO::PARAM_NULL);
         } else {
@@ -929,12 +946,13 @@ class DispecerCurseModel extends BaseModel
         bool $onlyActive = true,
         ?int $vehicleId = null
     ): ?array {
-        if ($beneficiaryId <= 0 || $locationId <= 0 || $zoneId <= 0) {
+        if ($locationId <= 0 || $zoneId <= 0) {
             return null;
         }
 
         $this->ensureDistributionRouteTable();
         $filterByVehicle = $vehicleId !== null && $vehicleId > 0;
+        $hasBeneficiaryPriority = $beneficiaryId > 0;
 
         $sql = "
             SELECT
@@ -945,22 +963,28 @@ class DispecerCurseModel extends BaseModel
                 tarif_tona,
                 cost_extra_km,
                 km_tarifare,
+                cost_cursa,
+                aplica_cost_cursa,
                 vehicle_ids,
                 activ
             FROM configurare_rute_distributie
-            WHERE beneficiar_id = :beneficiar_id
-              AND loc_incarcare_id = :loc_incarcare_id
+            WHERE loc_incarcare_id = :loc_incarcare_id
               AND zona_distributie_id = :zona_distributie_id
               " . ($onlyActive ? " AND activ = 1" : "") . "
               " . ($filterByVehicle ? " AND (COALESCE(TRIM(vehicle_ids), '') = '' OR FIND_IN_SET(:vehicle_id_filter, vehicle_ids) > 0)" : "") . "
-            " . ($filterByVehicle ? " ORDER BY CASE WHEN FIND_IN_SET(:vehicle_id_order, vehicle_ids) > 0 THEN 1 ELSE 0 END DESC, id DESC" : " ORDER BY id DESC") . "
+            ORDER BY
+              " . ($hasBeneficiaryPriority ? "CASE WHEN beneficiar_id = :beneficiar_id_priority THEN 1 ELSE 0 END DESC," : "") . "
+              " . ($filterByVehicle ? "CASE WHEN FIND_IN_SET(:vehicle_id_order, vehicle_ids) > 0 THEN 1 ELSE 0 END DESC," : "") . "
+              id DESC
             LIMIT 1
         ";
 
         $stmt = $this->db->prepare($sql);
-        $stmt->bindValue(':beneficiar_id', $beneficiaryId, PDO::PARAM_INT);
         $stmt->bindValue(':loc_incarcare_id', $locationId, PDO::PARAM_INT);
         $stmt->bindValue(':zona_distributie_id', $zoneId, PDO::PARAM_INT);
+        if ($hasBeneficiaryPriority) {
+            $stmt->bindValue(':beneficiar_id_priority', $beneficiaryId, PDO::PARAM_INT);
+        }
         if ($filterByVehicle) {
             $stmt->bindValue(':vehicle_id_filter', $vehicleId, PDO::PARAM_INT);
             $stmt->bindValue(':vehicle_id_order', $vehicleId, PDO::PARAM_INT);
@@ -1006,6 +1030,8 @@ class DispecerCurseModel extends BaseModel
                 r.tarif_tona,
                 r.cost_extra_km,
                 r.km_tarifare,
+                r.cost_cursa,
+                r.aplica_cost_cursa,
                 r.vehicle_ids,
                 r.activ,
                 l.nume AS loc_nume,
@@ -1032,14 +1058,13 @@ class DispecerCurseModel extends BaseModel
     {
         $map = [];
         foreach ($this->getDistributionRouteRules($onlyActive) as $rule) {
-            $beneficiaryId = (int) ($rule['beneficiar_id'] ?? 0);
             $locationId = (int) ($rule['loc_incarcare_id'] ?? 0);
             $zoneId = (int) ($rule['zona_distributie_id'] ?? 0);
-            if ($beneficiaryId <= 0 || $locationId <= 0 || $zoneId <= 0) {
+            if ($locationId <= 0 || $zoneId <= 0) {
                 continue;
             }
 
-            $key = $beneficiaryId . '|' . $locationId . '|' . $zoneId;
+            $key = $locationId . '|' . $zoneId;
             $vehicleIdsRaw = trim((string) ($rule['vehicle_ids'] ?? ''));
             $vehicleIds = [];
             if ($vehicleIdsRaw !== '') {
@@ -1062,9 +1087,12 @@ class DispecerCurseModel extends BaseModel
 
             $map[$key][] = [
                 'id' => (int) ($rule['id'] ?? 0),
+                'beneficiar_id' => (int) ($rule['beneficiar_id'] ?? 0),
                 'tarif_tona' => (float) ($rule['tarif_tona'] ?? 0),
                 'cost_extra_km' => (float) ($rule['cost_extra_km'] ?? 0),
                 'km_tarifare' => (int) max(0, (int) ($rule['km_tarifare'] ?? 0)),
+                'cost_cursa' => (float) ($rule['cost_cursa'] ?? 0),
+                'aplica_cost_cursa' => !empty($rule['aplica_cost_cursa']),
                 'vehicle_ids' => $vehicleIds,
                 'activ' => !empty($rule['activ']),
             ];
@@ -1319,6 +1347,8 @@ class DispecerCurseModel extends BaseModel
                 tarif_tona DECIMAL(10,2) NOT NULL DEFAULT 0.00,
                 cost_extra_km DECIMAL(10,2) NOT NULL DEFAULT 0.00,
                 km_tarifare INT UNSIGNED NOT NULL DEFAULT 0,
+                cost_cursa DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                aplica_cost_cursa TINYINT(1) NOT NULL DEFAULT 0,
                 vehicle_ids TEXT NULL,
                 activ TINYINT(1) NOT NULL DEFAULT 1,
                 created_at DATETIME NOT NULL,
@@ -1357,6 +1387,30 @@ class DispecerCurseModel extends BaseModel
         $hasKmTariffColumn = (int) $kmTariffColumnCheckStmt->fetchColumn() > 0;
         if (!$hasKmTariffColumn) {
             $this->db->exec("ALTER TABLE configurare_rute_distributie ADD COLUMN km_tarifare INT UNSIGNED NOT NULL DEFAULT 0 AFTER cost_extra_km");
+        }
+        $rideCostColumnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'configurare_rute_distributie'
+              AND COLUMN_NAME = 'cost_cursa'
+        ");
+        $rideCostColumnCheckStmt->execute();
+        $hasRideCostColumn = (int) $rideCostColumnCheckStmt->fetchColumn() > 0;
+        if (!$hasRideCostColumn) {
+            $this->db->exec("ALTER TABLE configurare_rute_distributie ADD COLUMN cost_cursa DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER km_tarifare");
+        }
+        $applyRideCostColumnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'configurare_rute_distributie'
+              AND COLUMN_NAME = 'aplica_cost_cursa'
+        ");
+        $applyRideCostColumnCheckStmt->execute();
+        $hasApplyRideCostColumn = (int) $applyRideCostColumnCheckStmt->fetchColumn() > 0;
+        if (!$hasApplyRideCostColumn) {
+            $this->db->exec("ALTER TABLE configurare_rute_distributie ADD COLUMN aplica_cost_cursa TINYINT(1) NOT NULL DEFAULT 0 AFTER cost_cursa");
         }
         $legacyUniqueIndexCheckStmt = $this->db->prepare("
             SELECT COUNT(*)
@@ -1472,6 +1526,154 @@ class DispecerCurseModel extends BaseModel
         $this->raceCostPerKmColumnsEnsured = true;
     }
 
+    private function ensureRaceCompressorLocationColumns(): void
+    {
+        if ($this->raceCompressorLocationColumnsEnsured) {
+            return;
+        }
+
+        $columnsToEnsure = [
+            'loc_plecare' => "ALTER TABLE curse_dispecer ADD COLUMN loc_plecare VARCHAR(255) NULL AFTER loc_incarcare_id",
+            'loc_aspirare' => "ALTER TABLE curse_dispecer ADD COLUMN loc_aspirare VARCHAR(255) NULL AFTER loc_plecare",
+            'loc_livrare' => "ALTER TABLE curse_dispecer ADD COLUMN loc_livrare VARCHAR(255) NULL AFTER loc_aspirare",
+            'loc_livrare_cursa' => "ALTER TABLE curse_dispecer ADD COLUMN loc_livrare_cursa VARCHAR(255) NULL AFTER loc_livrare",
+        ];
+
+        $columnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_dispecer'
+              AND COLUMN_NAME = :column_name
+        ");
+
+        foreach ($columnsToEnsure as $columnName => $alterSql) {
+            $columnCheckStmt->bindValue(':column_name', $columnName, PDO::PARAM_STR);
+            $columnCheckStmt->execute();
+            $hasColumn = (int) $columnCheckStmt->fetchColumn() > 0;
+            if ($hasColumn) {
+                continue;
+            }
+
+            $this->db->exec($alterSql);
+        }
+
+        $this->raceCompressorLocationColumnsEnsured = true;
+    }
+
+    private function ensureRaceCreatedByColumn(): void
+    {
+        if ($this->raceCreatedByColumnEnsured) {
+            return;
+        }
+
+        $columnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_dispecer'
+              AND COLUMN_NAME = 'created_by'
+        ");
+        $columnCheckStmt->execute();
+        $hasColumn = (int) $columnCheckStmt->fetchColumn() > 0;
+
+        if (!$hasColumn) {
+            $this->db->exec("ALTER TABLE curse_dispecer ADD COLUMN created_by INT UNSIGNED NULL AFTER observatii");
+        }
+
+        $indexCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_dispecer'
+              AND INDEX_NAME = 'idx_curse_created_by'
+        ");
+        $indexCheckStmt->execute();
+        $hasIndex = (int) $indexCheckStmt->fetchColumn() > 0;
+        if (!$hasIndex) {
+            $this->db->exec("ALTER TABLE curse_dispecer ADD INDEX idx_curse_created_by (created_by)");
+        }
+
+        $fkCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_dispecer'
+              AND COLUMN_NAME = 'created_by'
+              AND REFERENCED_TABLE_NAME = 'utilizatori'
+              AND REFERENCED_COLUMN_NAME = 'id'
+        ");
+        $fkCheckStmt->execute();
+        $hasForeignKey = (int) $fkCheckStmt->fetchColumn() > 0;
+        if (!$hasForeignKey) {
+            $this->db->exec("
+                ALTER TABLE curse_dispecer
+                ADD CONSTRAINT fk_curse_created_by
+                FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+            ");
+        }
+
+        $this->raceCreatedByColumnEnsured = true;
+    }
+
+    private function ensureExpenseRefacturareColumn(): void
+    {
+        if ($this->expenseRefacturareColumnEnsured) {
+            return;
+        }
+
+        $columnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_cheltuieli'
+              AND COLUMN_NAME = :column_name
+        ");
+        $columnCheckStmt->bindValue(':column_name', 'refacturare_tip_cheltuiala', PDO::PARAM_STR);
+        $columnCheckStmt->execute();
+        $hasColumn = (int) $columnCheckStmt->fetchColumn() > 0;
+
+        if (!$hasColumn) {
+            $this->db->exec("
+                ALTER TABLE curse_cheltuieli
+                ADD COLUMN refacturare_tip_cheltuiala ENUM('motorina', 'taxe_drum', 'diurna', 'service', 'alte') NULL
+                AFTER tip_cheltuiala
+            ");
+        }
+
+        $columnCheckStmt->bindValue(':column_name', 'refacturare_detalii', PDO::PARAM_STR);
+        $columnCheckStmt->execute();
+        $hasDetailsColumn = (int) $columnCheckStmt->fetchColumn() > 0;
+
+        if (!$hasDetailsColumn) {
+            $this->db->exec("
+                ALTER TABLE curse_cheltuieli
+                ADD COLUMN refacturare_detalii TEXT NULL
+                AFTER refacturare_tip_cheltuiala
+            ");
+        }
+
+        $columnsToEnsure = [
+            'refacturare_suma' => "ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_suma DECIMAL(12,2) NULL AFTER refacturare_detalii",
+            'refacturare_data' => "ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_data DATE NULL AFTER refacturare_suma",
+            'refacturare_observatii' => "ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_observatii TEXT NULL AFTER refacturare_data",
+            'refacturare_document_path' => "ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_document_path VARCHAR(255) NULL AFTER refacturare_observatii",
+            'refacturare_document_original_name' => "ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_document_original_name VARCHAR(255) NULL AFTER refacturare_document_path",
+            'refacturare_document_mime_type' => "ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_document_mime_type VARCHAR(150) NULL AFTER refacturare_document_original_name",
+            'refacturare_document_file_size' => "ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_document_file_size INT UNSIGNED NULL AFTER refacturare_document_mime_type",
+        ];
+
+        foreach ($columnsToEnsure as $columnName => $alterSql) {
+            $columnCheckStmt->bindValue(':column_name', $columnName, PDO::PARAM_STR);
+            $columnCheckStmt->execute();
+            if ((int) $columnCheckStmt->fetchColumn() === 0) {
+                $this->db->exec($alterSql);
+            }
+        }
+
+        $this->expenseRefacturareColumnEnsured = true;
+    }
+
     private function normalizeRouteVehicleIds(array $vehicleIds): array
     {
         $normalized = [];
@@ -1582,6 +1784,7 @@ class DispecerCurseModel extends BaseModel
                 v.marca,
                 v.model,
                 s.nume AS sofer_nume,
+                uc.nume AS creat_de_nume,
                 li.nume AS loc_incarcare_nume,
                 bt.nume AS beneficiar_nume,
                 zd.nume AS zona_distributie_nume,
@@ -1603,6 +1806,373 @@ class DispecerCurseModel extends BaseModel
             'total_pages' => $totalPages,
             'page' => $page,
         ];
+    }
+
+    public function getBillingCentralizer(array $filters, string $search, int $page, int $perPage): array
+    {
+        $page = max(1, $page);
+        $perPage = max(1, $perPage);
+
+        $whereData = $this->buildBillingCentralizerWhere($filters, $search, true);
+        $from = $this->raceFromSql();
+        $kmDoneExpr = "
+            CASE
+                WHEN c.tip_transport = 'compresor' AND COALESCE(c.km_dislocare, 0) > 0 THEN COALESCE(c.km_dislocare, 0)
+                WHEN COALESCE(c.km_totali, 0) > 0 THEN COALESCE(c.km_totali, 0)
+                WHEN COALESCE(c.km_cursa, 0) > 0 THEN COALESCE(c.km_cursa, 0)
+                ELSE 0
+            END
+        ";
+        $loadedTonsExpr = "
+            CASE
+                WHEN c.cantitate_incarcata IS NULL OR c.cantitate_incarcata <= 0 THEN 0
+                WHEN c.capacitate_transport IS NOT NULL
+                     AND c.capacitate_transport > 0
+                     AND c.cantitate_incarcata > (c.capacitate_transport * 3)
+                THEN c.cantitate_incarcata / 1000
+                WHEN c.cantitate_incarcata >= 1000 THEN c.cantitate_incarcata / 1000
+                ELSE c.cantitate_incarcata
+            END
+        ";
+        $prelevataTonsExpr = "
+            CASE
+                WHEN c.cantitate_prelevata IS NULL OR c.cantitate_prelevata <= 0 THEN 0
+                WHEN c.capacitate_transport IS NOT NULL
+                     AND c.capacitate_transport > 0
+                     AND c.cantitate_prelevata > (c.capacitate_transport * 3)
+                THEN c.cantitate_prelevata / 1000
+                WHEN c.cantitate_prelevata >= 1000 THEN c.cantitate_prelevata / 1000
+                ELSE c.cantitate_prelevata
+            END
+        ";
+        $deliveredTonsExpr = "
+            CASE
+                WHEN c.tip_transport = 'compresor' THEN COALESCE(c.tona_livrata, 0)
+                WHEN c.tona_livrata IS NOT NULL AND c.tona_livrata > 0 THEN c.tona_livrata
+                ELSE (" . $loadedTonsExpr . ")
+            END
+        ";
+
+        $countSql = "SELECT COUNT(*)" . $from . $whereData['where'];
+        $countStmt = $this->db->prepare($countSql);
+        $this->bindParams($countStmt, $whereData['params']);
+        $countStmt->execute();
+        $totalRows = (int) $countStmt->fetchColumn();
+
+        $totalPages = max(1, (int) ceil($totalRows / $perPage));
+        $page = min($page, $totalPages);
+        $offset = ($page - 1) * $perPage;
+
+        $summarySql = "
+            SELECT
+                COALESCE(NULLIF(TRIM(c.status_facturare), ''), 'in_curs_facturare') AS status_facturare,
+                COUNT(*) AS total_curse,
+                COALESCE(SUM(c.total_facturare), 0) AS total_facturare,
+                COALESCE(SUM(COALESCE(exp.total_refacturare, 0)), 0) AS total_refacturare,
+                COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS total_cheltuieli,
+                COALESCE(SUM(COALESCE(exp.expense_count, 0)), 0) AS expense_count,
+                COALESCE(SUM(COALESCE(exp.refacturare_count, 0)), 0) AS refacturare_count,
+                COALESCE(SUM(CASE WHEN COALESCE(exp.total_refacturare, 0) > 0 THEN 1 ELSE 0 END), 0) AS curse_de_refacturat,
+                COALESCE(SUM(" . $kmDoneExpr . "), 0) AS total_km,
+                COALESCE(SUM(COALESCE(c.km_cursa, 0)), 0) AS total_km_facturati,
+                COALESCE(SUM(" . $loadedTonsExpr . "), 0) AS total_tone_incarcate,
+                COALESCE(SUM(" . $prelevataTonsExpr . "), 0) AS total_tone_prelevate,
+                COALESCE(SUM(" . $deliveredTonsExpr . "), 0) AS total_tone_livrate,
+                COALESCE(SUM(c.total_facturare + COALESCE(exp.total_refacturare, 0) - COALESCE(exp.total_cheltuieli, 0)), 0) AS sold_estimativ
+            " . $from . $whereData['where'] . "
+            GROUP BY COALESCE(NULLIF(TRIM(c.status_facturare), ''), 'in_curs_facturare')
+        ";
+        $summaryStmt = $this->db->prepare($summarySql);
+        $this->bindParams($summaryStmt, $whereData['params']);
+        $summaryStmt->execute();
+
+        $summaryByStatus = [];
+        foreach ($summaryStmt->fetchAll() as $summaryRow) {
+            $statusKey = (string) ($summaryRow['status_facturare'] ?? '');
+            if ($statusKey === '') {
+                $statusKey = 'in_curs_facturare';
+            }
+            $summaryByStatus[$statusKey] = $summaryRow;
+        }
+
+        $summaryTotalsSql = "
+            SELECT
+                COUNT(*) AS total_curse,
+                COALESCE(SUM(c.total_facturare), 0) AS total_facturare,
+                COALESCE(SUM(COALESCE(exp.total_refacturare, 0)), 0) AS total_refacturare,
+                COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS total_cheltuieli,
+                COALESCE(SUM(COALESCE(exp.expense_count, 0)), 0) AS expense_count,
+                COALESCE(SUM(COALESCE(exp.refacturare_count, 0)), 0) AS refacturare_count,
+                COALESCE(SUM(CASE WHEN COALESCE(exp.total_refacturare, 0) > 0 THEN 1 ELSE 0 END), 0) AS curse_de_refacturat,
+                COALESCE(SUM(" . $kmDoneExpr . "), 0) AS total_km,
+                COALESCE(SUM(COALESCE(c.km_cursa, 0)), 0) AS total_km_facturati,
+                COALESCE(SUM(COALESCE(c.km_totali, 0)), 0) AS total_km_totali,
+                COALESCE(SUM(COALESCE(c.km_dislocare, 0)), 0) AS total_km_dislocare,
+                COALESCE(SUM(" . $loadedTonsExpr . "), 0) AS total_tone_incarcate,
+                COALESCE(SUM(" . $prelevataTonsExpr . "), 0) AS total_tone_prelevate,
+                COALESCE(SUM(" . $deliveredTonsExpr . "), 0) AS total_tone_livrate,
+                COALESCE(SUM(c.total_facturare + COALESCE(exp.total_refacturare, 0) - COALESCE(exp.total_cheltuieli, 0)), 0) AS sold_estimativ
+            " . $from . $whereData['where'];
+        $summaryTotalsStmt = $this->db->prepare($summaryTotalsSql);
+        $this->bindParams($summaryTotalsStmt, $whereData['params']);
+        $summaryTotalsStmt->execute();
+        $summaryTotals = $summaryTotalsStmt->fetch() ?: [];
+
+        $summaryByTransportSql = "
+            SELECT
+                COALESCE(NULLIF(TRIM(c.status_facturare), ''), 'in_curs_facturare') AS status_facturare,
+                COALESCE(NULLIF(TRIM(c.tip_transport), ''), '-') AS tip_transport,
+                COUNT(*) AS total_curse,
+                COALESCE(SUM(c.total_facturare), 0) AS total_facturare,
+                COALESCE(SUM(COALESCE(exp.total_refacturare, 0)), 0) AS total_refacturare,
+                COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS total_cheltuieli,
+                COALESCE(SUM(COALESCE(exp.expense_count, 0)), 0) AS expense_count,
+                COALESCE(SUM(COALESCE(exp.refacturare_count, 0)), 0) AS refacturare_count,
+                COALESCE(SUM(CASE WHEN COALESCE(exp.total_refacturare, 0) > 0 THEN 1 ELSE 0 END), 0) AS curse_de_refacturat,
+                COALESCE(SUM(" . $kmDoneExpr . "), 0) AS total_km,
+                COALESCE(SUM(COALESCE(c.km_cursa, 0)), 0) AS total_km_facturati,
+                COALESCE(SUM(COALESCE(c.km_totali, 0)), 0) AS total_km_totali,
+                COALESCE(SUM(COALESCE(c.km_dislocare, 0)), 0) AS total_km_dislocare,
+                COALESCE(SUM(COALESCE(c.ore_aspirare, 0)), 0) AS total_ore_aspirare,
+                COALESCE(SUM(" . $loadedTonsExpr . "), 0) AS total_tone_incarcate,
+                COALESCE(SUM(" . $prelevataTonsExpr . "), 0) AS total_tone_prelevate,
+                COALESCE(SUM(" . $deliveredTonsExpr . "), 0) AS total_tone_livrate,
+                COALESCE(SUM(COALESCE(c.tona_aspirata_lichida, 0)), 0) AS total_tone_lichid,
+                COALESCE(SUM(COALESCE(c.tona_aspirata_gazoasa, 0)), 0) AS total_tone_gazos
+            " . $from . $whereData['where'] . "
+            GROUP BY
+                COALESCE(NULLIF(TRIM(c.status_facturare), ''), 'in_curs_facturare'),
+                COALESCE(NULLIF(TRIM(c.tip_transport), ''), '-')
+            ORDER BY status_facturare ASC, total_facturare DESC, tip_transport ASC
+        ";
+        $summaryByTransportStmt = $this->db->prepare($summaryByTransportSql);
+        $this->bindParams($summaryByTransportStmt, $whereData['params']);
+        $summaryByTransportStmt->execute();
+
+        $summaryByStatusTransport = [];
+        foreach ($summaryByTransportStmt->fetchAll() as $transportSummaryRow) {
+            $statusKey = (string) ($transportSummaryRow['status_facturare'] ?? '');
+            if ($statusKey === '') {
+                $statusKey = 'in_curs_facturare';
+            }
+
+            if (!isset($summaryByStatusTransport[$statusKey])) {
+                $summaryByStatusTransport[$statusKey] = [];
+            }
+
+            $summaryByStatusTransport[$statusKey][] = $transportSummaryRow;
+        }
+
+        $vehicleKmSql = "
+            SELECT
+                c.vehicle_id,
+                COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), '-') AS nr_inmatriculare,
+                COUNT(*) AS total_curse,
+                COALESCE(SUM(" . $kmDoneExpr . "), 0) AS total_km,
+                COALESCE(SUM(COALESCE(c.km_cursa, 0)), 0) AS km_facturati,
+                COALESCE(SUM(COALESCE(c.km_totali, 0)), 0) AS km_totali,
+                COALESCE(SUM(COALESCE(c.km_dislocare, 0)), 0) AS km_dislocare,
+                COALESCE(SUM(COALESCE(c.total_facturare, 0)), 0) AS total_facturare,
+                COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS total_cheltuieli,
+                COALESCE(SUM(COALESCE(exp.total_refacturare, 0)), 0) AS total_refacturare,
+                COALESCE(SUM(COALESCE(exp.refacturare_count, 0)), 0) AS refacturare_count
+            " . $from . $whereData['where'] . "
+            GROUP BY c.vehicle_id, v.nr_inmatriculare
+            ORDER BY total_km DESC, v.nr_inmatriculare ASC
+        ";
+        $vehicleKmStmt = $this->db->prepare($vehicleKmSql);
+        $this->bindParams($vehicleKmStmt, $whereData['params']);
+        $vehicleKmStmt->execute();
+        $vehicleKmRows = $vehicleKmStmt->fetchAll();
+
+        $expenseTypeTotalsSql = "
+            SELECT
+                e.tip_cheltuiala,
+                COUNT(*) AS total_linii,
+                COALESCE(SUM(e.suma), 0) AS total_suma
+            FROM curse_cheltuieli e
+            INNER JOIN curse_dispecer c ON c.id = e.cursa_id
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
+            LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+            LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
+            " . $whereData['where'] . "
+            GROUP BY e.tip_cheltuiala
+            ORDER BY total_suma DESC, e.tip_cheltuiala ASC
+        ";
+        $expenseTypeTotalsStmt = $this->db->prepare($expenseTypeTotalsSql);
+        $this->bindParams($expenseTypeTotalsStmt, $whereData['params']);
+        $expenseTypeTotalsStmt->execute();
+        $expenseTypeTotals = $expenseTypeTotalsStmt->fetchAll();
+
+        $refacturareTypeTotalsSql = "
+            SELECT
+                e.refacturare_tip_cheltuiala,
+                COUNT(*) AS total_linii,
+                COALESCE(SUM(e.refacturare_suma), 0) AS total_suma
+            FROM curse_cheltuieli e
+            INNER JOIN curse_dispecer c ON c.id = e.cursa_id
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
+            LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+            LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
+            " . $whereData['where'] . "
+              " . ($whereData['where'] === '' ? 'WHERE' : 'AND') . " COALESCE(e.refacturare_suma, 0) > 0
+            GROUP BY e.refacturare_tip_cheltuiala
+            ORDER BY total_suma DESC, e.refacturare_tip_cheltuiala ASC
+        ";
+        $refacturareTypeTotalsStmt = $this->db->prepare($refacturareTypeTotalsSql);
+        $this->bindParams($refacturareTypeTotalsStmt, $whereData['params']);
+        $refacturareTypeTotalsStmt->execute();
+        $refacturareTypeTotals = $refacturareTypeTotalsStmt->fetchAll();
+
+        $dataSql = "
+            SELECT
+                c.id,
+                c.tip_transport,
+                c.data_cursa,
+                c.data_inceput,
+                c.data_sfarsit,
+                c.ora_inceput,
+                c.ora_sfarsit,
+                c.durata_cursa_minute,
+                c.status_facturare,
+                c.loc_plecare,
+                c.loc_aspirare,
+                c.loc_livrare,
+                c.loc_livrare_cursa,
+                c.tip_marfa,
+                c.capacitate_transport,
+                c.km_cursa,
+                c.km_totali,
+                c.km_dislocare,
+                c.cantitate_incarcata,
+                c.cantitate_prelevata,
+                c.nr_clienti,
+                c.ore_functionare,
+                c.ore_aspirare,
+                c.tona_livrata,
+                c.tona_aspirata_lichida,
+                c.tona_aspirata_gazoasa,
+                c.pret_tarifare,
+                c.total_facturare,
+                c.cost_km_primar,
+                c.cost_km_distributie,
+                c.cost_km_mixt,
+                c.cost_km_compresor,
+                c.observatii,
+                c.created_at,
+                c.updated_at,
+                v.nr_inmatriculare,
+                v.marca,
+                v.model,
+                s.nume AS sofer_nume,
+                li.nume AS loc_incarcare_nume,
+                bt.nume AS beneficiar_nume,
+                c.zona_distributie_id,
+                zd.nume AS zona_distributie_nume,
+                (" . $kmDoneExpr . ") AS km_rulati,
+                COALESCE(exp.expense_count, 0) AS expense_count,
+                COALESCE(exp.refacturare_count, 0) AS refacturare_count,
+                COALESCE(exp.total_refacturare, 0) AS total_refacturare,
+                COALESCE(exp.total_cheltuieli, 0) AS total_cheltuieli
+            " . $from . $whereData['where'] . "
+            ORDER BY c.data_inceput DESC, c.data_sfarsit DESC, c.id DESC
+            LIMIT :limit_rows OFFSET :offset_rows
+        ";
+
+        $dataStmt = $this->db->prepare($dataSql);
+        $this->bindParams($dataStmt, $whereData['params']);
+        $dataStmt->bindValue(':limit_rows', $perPage, PDO::PARAM_INT);
+        $dataStmt->bindValue(':offset_rows', $offset, PDO::PARAM_INT);
+        $dataStmt->execute();
+        $rows = $dataStmt->fetchAll();
+        $raceIds = [];
+        foreach ($rows as $row) {
+            $raceId = (int) ($row['id'] ?? 0);
+            if ($raceId > 0) {
+                $raceIds[$raceId] = $raceId;
+            }
+        }
+        if ($raceIds !== []) {
+            $expenseRows = $this->getBillingCentralizerExpenses(array_values($raceIds));
+            foreach ($rows as &$row) {
+                $raceId = (int) ($row['id'] ?? 0);
+                $row['expenses_breakdown'] = $expenseRows[$raceId] ?? [];
+            }
+            unset($row);
+        }
+
+        return [
+            'rows' => $rows,
+            'summary_by_status' => $summaryByStatus,
+            'summary_by_status_transport' => $summaryByStatusTransport,
+            'summary_totals' => $summaryTotals,
+            'vehicle_km' => $vehicleKmRows,
+            'expense_type_totals' => $expenseTypeTotals,
+            'refacturare_type_totals' => $refacturareTypeTotals,
+            'total_rows' => $totalRows,
+            'total_pages' => $totalPages,
+            'page' => $page,
+        ];
+    }
+
+    private function getBillingCentralizerExpenses(array $raceIds): array
+    {
+        $raceIds = array_values(array_unique(array_filter(array_map('intval', $raceIds), static fn (int $raceId): bool => $raceId > 0)));
+        if ($raceIds === []) {
+            return [];
+        }
+
+        $placeholders = [];
+        $params = [];
+        foreach ($raceIds as $index => $raceId) {
+            $placeholder = ':billing_expense_race_' . $index;
+            $placeholders[] = $placeholder;
+            $params[$placeholder] = $raceId;
+        }
+
+        $this->ensureExpenseRefacturareColumn();
+        $sql = "
+            SELECT
+                id,
+                cursa_id,
+                tip_cheltuiala,
+                suma,
+                data_cheltuiala,
+                observatii,
+                refacturare_tip_cheltuiala,
+                refacturare_detalii,
+                refacturare_suma,
+                refacturare_data,
+                refacturare_observatii
+            FROM curse_cheltuieli
+            WHERE cursa_id IN (" . implode(', ', $placeholders) . ")
+            ORDER BY data_cheltuiala ASC, id ASC
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        foreach ($params as $placeholder => $raceId) {
+            $stmt->bindValue($placeholder, $raceId, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        $grouped = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $raceId = (int) ($row['cursa_id'] ?? 0);
+            if ($raceId <= 0) {
+                continue;
+            }
+
+            if (!isset($grouped[$raceId])) {
+                $grouped[$raceId] = [];
+            }
+            $grouped[$raceId][] = $row;
+        }
+
+        return $grouped;
     }
 
     public function getOpenRacesOverview(int $limit = 25): array
@@ -1693,6 +2263,7 @@ class DispecerCurseModel extends BaseModel
                 v.marca,
                 v.model,
                 s.nume AS sofer_nume,
+                uc.nume AS creat_de_nume,
                 li.nume AS loc_incarcare_nume,
                 bt.nume AS beneficiar_nume,
                 zd.nume AS zona_distributie_nume,
@@ -1712,7 +2283,9 @@ class DispecerCurseModel extends BaseModel
 
     public function createRace(array $data): int
     {
+        $this->ensureRaceCompressorLocationColumns();
         $this->ensureRaceCostPerKmColumns();
+        $this->ensureRaceCreatedByColumn();
 
         $sql = "
             INSERT INTO curse_dispecer (
@@ -1726,6 +2299,10 @@ class DispecerCurseModel extends BaseModel
                 ora_sfarsit,
                 durata_cursa_minute,
                 loc_incarcare_id,
+                loc_plecare,
+                loc_aspirare,
+                loc_livrare,
+                loc_livrare_cursa,
                 beneficiar_id,
                 tip_marfa,
                 capacitate_transport,
@@ -1749,6 +2326,7 @@ class DispecerCurseModel extends BaseModel
                 cost_km_mixt,
                 cost_km_compresor,
                 observatii,
+                created_by,
                 created_at,
                 updated_at
             ) VALUES (
@@ -1762,6 +2340,10 @@ class DispecerCurseModel extends BaseModel
                 :ora_sfarsit,
                 :durata_cursa_minute,
                 :loc_incarcare_id,
+                :loc_plecare,
+                :loc_aspirare,
+                :loc_livrare,
+                :loc_livrare_cursa,
                 :beneficiar_id,
                 :tip_marfa,
                 :capacitate_transport,
@@ -1785,6 +2367,7 @@ class DispecerCurseModel extends BaseModel
                 :cost_km_mixt,
                 :cost_km_compresor,
                 :observatii,
+                :created_by,
                 :created_at,
                 :updated_at
             )
@@ -1822,6 +2405,7 @@ class DispecerCurseModel extends BaseModel
 
     public function updateRace(int $id, array $data): bool
     {
+        $this->ensureRaceCompressorLocationColumns();
         $this->ensureRaceCostPerKmColumns();
 
         $sql = "
@@ -1837,6 +2421,10 @@ class DispecerCurseModel extends BaseModel
                 ora_sfarsit = :ora_sfarsit,
                 durata_cursa_minute = :durata_cursa_minute,
                 loc_incarcare_id = :loc_incarcare_id,
+                loc_plecare = :loc_plecare,
+                loc_aspirare = :loc_aspirare,
+                loc_livrare = :loc_livrare,
+                loc_livrare_cursa = :loc_livrare_cursa,
                 beneficiar_id = :beneficiar_id,
                 tip_marfa = :tip_marfa,
                 capacitate_transport = :capacitate_transport,
@@ -1953,6 +2541,8 @@ class DispecerCurseModel extends BaseModel
 
     public function getRaceExpenses(int $raceId): array
     {
+        $this->ensureExpenseRefacturareColumn();
+
         $sql = "
             SELECT
                 e.*,
@@ -1983,6 +2573,8 @@ class DispecerCurseModel extends BaseModel
 
     public function getExpenseById(int $expenseId): ?array
     {
+        $this->ensureExpenseRefacturareColumn();
+
         $sql = "
             SELECT
                 e.*,
@@ -2014,10 +2606,17 @@ class DispecerCurseModel extends BaseModel
 
     public function createExpense(array $data): int
     {
+        $this->ensureExpenseRefacturareColumn();
+
         $sql = "
             INSERT INTO curse_cheltuieli (
                 cursa_id,
                 tip_cheltuiala,
+                refacturare_tip_cheltuiala,
+                refacturare_detalii,
+                refacturare_suma,
+                refacturare_data,
+                refacturare_observatii,
                 suma,
                 data_cheltuiala,
                 observatii,
@@ -2026,6 +2625,11 @@ class DispecerCurseModel extends BaseModel
             ) VALUES (
                 :cursa_id,
                 :tip_cheltuiala,
+                :refacturare_tip_cheltuiala,
+                :refacturare_detalii,
+                :refacturare_suma,
+                :refacturare_data,
+                :refacturare_observatii,
                 :suma,
                 :data_cheltuiala,
                 :observatii,
@@ -2037,6 +2641,11 @@ class DispecerCurseModel extends BaseModel
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':cursa_id', (int) $data['cursa_id'], PDO::PARAM_INT);
         $stmt->bindValue(':tip_cheltuiala', (string) $data['tip_cheltuiala']);
+        $this->bindNullableString($stmt, ':refacturare_tip_cheltuiala', $data['refacturare_tip_cheltuiala'] ?? null);
+        $this->bindNullableString($stmt, ':refacturare_detalii', $data['refacturare_detalii'] ?? null);
+        $this->bindNullableDecimal($stmt, ':refacturare_suma', $data['refacturare_suma'] ?? null);
+        $this->bindNullableString($stmt, ':refacturare_data', $data['refacturare_data'] ?? null);
+        $this->bindNullableString($stmt, ':refacturare_observatii', $data['refacturare_observatii'] ?? null);
         $stmt->bindValue(':suma', (float) $data['suma']);
         $stmt->bindValue(':data_cheltuiala', (string) $data['data_cheltuiala']);
         $this->bindNullableString($stmt, ':observatii', $data['observatii'] ?? null);
@@ -2049,10 +2658,17 @@ class DispecerCurseModel extends BaseModel
 
     public function updateExpense(int $id, array $data): bool
     {
+        $this->ensureExpenseRefacturareColumn();
+
         $sql = "
             UPDATE curse_cheltuieli
             SET
                 tip_cheltuiala = :tip_cheltuiala,
+                refacturare_tip_cheltuiala = :refacturare_tip_cheltuiala,
+                refacturare_detalii = :refacturare_detalii,
+                refacturare_suma = :refacturare_suma,
+                refacturare_data = :refacturare_data,
+                refacturare_observatii = :refacturare_observatii,
                 suma = :suma,
                 data_cheltuiala = :data_cheltuiala,
                 observatii = :observatii,
@@ -2062,6 +2678,11 @@ class DispecerCurseModel extends BaseModel
 
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':tip_cheltuiala', (string) $data['tip_cheltuiala']);
+        $this->bindNullableString($stmt, ':refacturare_tip_cheltuiala', $data['refacturare_tip_cheltuiala'] ?? null);
+        $this->bindNullableString($stmt, ':refacturare_detalii', $data['refacturare_detalii'] ?? null);
+        $this->bindNullableDecimal($stmt, ':refacturare_suma', $data['refacturare_suma'] ?? null);
+        $this->bindNullableString($stmt, ':refacturare_data', $data['refacturare_data'] ?? null);
+        $this->bindNullableString($stmt, ':refacturare_observatii', $data['refacturare_observatii'] ?? null);
         $stmt->bindValue(':suma', (float) $data['suma']);
         $stmt->bindValue(':data_cheltuiala', (string) $data['data_cheltuiala']);
         $this->bindNullableString($stmt, ':observatii', $data['observatii'] ?? null);
@@ -2074,6 +2695,34 @@ class DispecerCurseModel extends BaseModel
     public function deleteExpense(int $id): bool
     {
         $stmt = $this->db->prepare("DELETE FROM curse_cheltuieli WHERE id = :id");
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+
+        return $stmt->execute();
+    }
+
+    public function updateExpenseRefacturareDocument(int $id, ?array $document): bool
+    {
+        $this->ensureExpenseRefacturareColumn();
+
+        $sql = "
+            UPDATE curse_cheltuieli
+            SET
+                refacturare_document_path = :file_path,
+                refacturare_document_original_name = :original_name,
+                refacturare_document_mime_type = :mime_type,
+                refacturare_document_file_size = :file_size
+            WHERE id = :id
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        $this->bindNullableString($stmt, ':file_path', $document['file_path'] ?? null);
+        $this->bindNullableString($stmt, ':original_name', $document['original_name'] ?? null);
+        $this->bindNullableString($stmt, ':mime_type', $document['mime_type'] ?? null);
+        if ($document !== null && isset($document['file_size']) && is_numeric((string) $document['file_size'])) {
+            $stmt->bindValue(':file_size', (int) $document['file_size'], PDO::PARAM_INT);
+        } else {
+            $stmt->bindValue(':file_size', null, PDO::PARAM_NULL);
+        }
         $stmt->bindValue(':id', $id, PDO::PARAM_INT);
 
         return $stmt->execute();
@@ -2129,11 +2778,19 @@ class DispecerCurseModel extends BaseModel
 
     public function getExpenseDocumentsByRaceId(int $raceId): array
     {
+        $this->ensureExpenseRefacturareColumn();
+
         $sql = "
             SELECT d.id, d.file_path
             FROM curse_cheltuieli_documente d
             INNER JOIN curse_cheltuieli e ON e.id = d.cheltuiala_id
             WHERE e.cursa_id = :cursa_id
+            UNION ALL
+            SELECT 0 AS id, e.refacturare_document_path AS file_path
+            FROM curse_cheltuieli e
+            WHERE e.cursa_id = :cursa_id
+              AND e.refacturare_document_path IS NOT NULL
+              AND e.refacturare_document_path <> ''
         ";
 
         $stmt = $this->db->prepare($sql);
@@ -2795,6 +3452,13 @@ class DispecerCurseModel extends BaseModel
                 ELSE 0
             END
         ";
+        $kmBilledExpr = "
+            CASE
+                WHEN c.km_cursa IS NOT NULL AND c.km_cursa > 0 THEN c.km_cursa
+                WHEN c.km_totali IS NOT NULL AND c.km_totali > 0 THEN c.km_totali
+                ELSE 0
+            END
+        ";
         $loadedTonsExpr = "
             CASE
                 WHEN c.cantitate_incarcata IS NULL OR c.cantitate_incarcata <= 0 THEN 0
@@ -2825,8 +3489,10 @@ class DispecerCurseModel extends BaseModel
             SELECT
                 COUNT(*) AS total_curse,
                 COALESCE(SUM(COALESCE(c.total_facturare, 0)), 0) AS total_facturare,
+                COALESCE(SUM(COALESCE(exp.total_refacturare, 0)), 0) AS total_refacturare,
                 COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS total_cheltuieli,
                 COALESCE(SUM(" . $kmEffectiveExpr . "), 0) AS total_km,
+                COALESCE(SUM(" . $kmBilledExpr . "), 0) AS km_facturati,
                 COALESCE(SUM(" . $deliveredTonsExpr . "), 0) AS tone_livrate,
                 COALESCE(SUM(" . $kmNefacturatiExpr . "), 0) AS km_nefacturati,
                 COALESCE(AVG(" . $gradIncarcareExpr . "), 0) AS grad_incarcare_mediu
@@ -2840,17 +3506,20 @@ class DispecerCurseModel extends BaseModel
 
         $totalCurse = (int) ($fleetRow['total_curse'] ?? 0);
         $totalFacturare = (float) ($fleetRow['total_facturare'] ?? 0);
+        $totalRefacturare = (float) ($fleetRow['total_refacturare'] ?? 0);
         $totalCheltuieli = (float) ($fleetRow['total_cheltuieli'] ?? 0);
         $profitTotal = $totalFacturare - $totalCheltuieli;
         $totalKm = max(0.0, (float) ($fleetRow['total_km'] ?? 0));
+        $totalKmBilled = max(0.0, (float) ($fleetRow['km_facturati'] ?? 0));
         $kmNefacturatiTotal = max(0.0, (float) ($fleetRow['km_nefacturati'] ?? 0));
-        $kmFacturatiTotal = max(0.0, $totalKm - $kmNefacturatiTotal);
-        $profitPerKm = $totalKm > 0 ? $profitTotal / $totalKm : 0.0;
+        $kmFacturatiTotal = $totalKmBilled > 0 ? $totalKmBilled : max(0.0, $totalKm - $kmNefacturatiTotal);
+        $profitPerKm = $kmFacturatiTotal > 0 ? $profitTotal / $kmFacturatiTotal : 0.0;
 
         $profitEvolutionSql = "
             SELECT
                 c.data_inceput AS data_zi,
                 COALESCE(SUM(COALESCE(c.total_facturare, 0)), 0) AS facturare,
+                COALESCE(SUM(COALESCE(exp.total_refacturare, 0)), 0) AS refacturare,
                 COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS cheltuieli
             {$from}
             {$whereData['where']}
@@ -2864,16 +3533,19 @@ class DispecerCurseModel extends BaseModel
 
         $profitEvolutionLabels = [];
         $profitEvolutionFacturare = [];
+        $profitEvolutionRefacturare = [];
         $profitEvolutionCheltuieli = [];
         $profitEvolutionProfit = [];
         foreach ($profitEvolutionRows as $row) {
             $labelDate = (string) ($row['data_zi'] ?? '');
             $facturareValue = (float) ($row['facturare'] ?? 0);
+            $refacturareValue = (float) ($row['refacturare'] ?? 0);
             $cheltuieliValue = (float) ($row['cheltuieli'] ?? 0);
             $profitValue = $facturareValue - $cheltuieliValue;
 
             $profitEvolutionLabels[] = $labelDate;
             $profitEvolutionFacturare[] = round($facturareValue, 2);
+            $profitEvolutionRefacturare[] = round($refacturareValue, 2);
             $profitEvolutionCheltuieli[] = round($cheltuieliValue, 2);
             $profitEvolutionProfit[] = round($profitValue, 2);
         }
@@ -2905,8 +3577,10 @@ class DispecerCurseModel extends BaseModel
                 COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut') AS nr_inmatriculare,
                 COUNT(*) AS curse,
                 COALESCE(SUM(" . $kmEffectiveExpr . "), 0) AS km_totali,
+                COALESCE(SUM(" . $kmBilledExpr . "), 0) AS km_facturati,
                 COALESCE(SUM(" . $deliveredTonsExpr . "), 0) AS tone_livrate,
                 COALESCE(SUM(COALESCE(c.total_facturare, 0)), 0) AS facturare,
+                COALESCE(SUM(COALESCE(exp.total_refacturare, 0)), 0) AS refacturare,
                 COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS cheltuieli,
                 COALESCE(SUM(" . $kmNefacturatiExpr . "), 0) AS km_nefacturati,
                 COALESCE(AVG(" . $gradIncarcareExpr . "), 0) AS grad_incarcare_mediu
@@ -2927,12 +3601,15 @@ class DispecerCurseModel extends BaseModel
 
         foreach ($vehicleRows as $row) {
             $km = max(0.0, (float) ($row['km_totali'] ?? 0));
+            $kmBilled = max(0.0, (float) ($row['km_facturati'] ?? 0));
             $facturare = (float) ($row['facturare'] ?? 0);
+            $refacturare = (float) ($row['refacturare'] ?? 0);
             $cheltuieli = (float) ($row['cheltuieli'] ?? 0);
             $profit = $facturare - $cheltuieli;
-            $venitKm = $km > 0 ? $facturare / $km : 0.0;
-            $costKm = $km > 0 ? $cheltuieli / $km : 0.0;
-            $profitKm = $km > 0 ? $profit / $km : 0.0;
+            $kmRatioBase = $kmBilled > 0 ? $kmBilled : $km;
+            $venitKm = $kmRatioBase > 0 ? $facturare / $kmRatioBase : 0.0;
+            $costKm = $kmRatioBase > 0 ? $cheltuieli / $kmRatioBase : 0.0;
+            $profitKm = $kmRatioBase > 0 ? $profit / $kmRatioBase : 0.0;
             $kmNefPercent = $km > 0 ? (((float) ($row['km_nefacturati'] ?? 0)) / $km) * 100 : 0.0;
             $gradMediu = (float) ($row['grad_incarcare_mediu'] ?? 0);
             $plate = (string) ($row['nr_inmatriculare'] ?? 'Necunoscut');
@@ -2943,6 +3620,7 @@ class DispecerCurseModel extends BaseModel
                 'km_totali' => round($km, 2),
                 'tone_livrate' => round((float) ($row['tone_livrate'] ?? 0), 2),
                 'facturare' => round($facturare, 2),
+                'refacturare' => round($refacturare, 2),
                 'cheltuieli' => round($cheltuieli, 2),
                 'profit' => round($profit, 2),
                 'venit_km' => round($venitKm, 4),
@@ -3021,6 +3699,7 @@ class DispecerCurseModel extends BaseModel
                 COALESCE(SUM(" . $kmEffectiveExpr . "), 0) AS km_totali,
                 COALESCE(SUM(" . $deliveredTonsExpr . "), 0) AS tone_livrate,
                 COALESCE(SUM(COALESCE(c.total_facturare, 0)), 0) AS facturare,
+                COALESCE(SUM(COALESCE(exp.total_refacturare, 0)), 0) AS refacturare,
                 COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS cheltuieli,
                 COALESCE(AVG(" . $gradIncarcareExpr . "), 0) AS grad_incarcare_mediu
             {$from}
@@ -3044,6 +3723,7 @@ class DispecerCurseModel extends BaseModel
             $km = max(0.0, (float) ($row['km_totali'] ?? 0));
             $tones = max(0.0, (float) ($row['tone_livrate'] ?? 0));
             $facturare = (float) ($row['facturare'] ?? 0);
+            $refacturare = (float) ($row['refacturare'] ?? 0);
             $cheltuieli = (float) ($row['cheltuieli'] ?? 0);
             $profit = $facturare - $cheltuieli;
             $tonePerCursa = $curse > 0 ? $tones / $curse : 0.0;
@@ -3056,6 +3736,7 @@ class DispecerCurseModel extends BaseModel
                 'km_totali' => round($km, 2),
                 'tone_livrate' => round($tones, 2),
                 'facturare_generata' => round($facturare, 2),
+                'refacturare_generata' => round($refacturare, 2),
                 'profit_generat' => round($profit, 2),
                 'tone_per_cursa' => round($tonePerCursa, 2),
                 'km_per_cursa' => round($kmPerCursa, 2),
@@ -3095,6 +3776,7 @@ class DispecerCurseModel extends BaseModel
             'fleet' => [
                 'total_curse' => $totalCurse,
                 'total_facturare' => round($totalFacturare, 2),
+                'total_refacturare' => round($totalRefacturare, 2),
                 'total_cheltuieli' => round($totalCheltuieli, 2),
                 'profit_total' => round($profitTotal, 2),
                 'total_km' => round($totalKm, 2),
@@ -3110,6 +3792,7 @@ class DispecerCurseModel extends BaseModel
                 'profit_evolution' => [
                     'labels' => $profitEvolutionLabels,
                     'facturare' => $profitEvolutionFacturare,
+                    'refacturare' => $profitEvolutionRefacturare,
                     'cheltuieli' => $profitEvolutionCheltuieli,
                     'profit' => $profitEvolutionProfit,
                 ],
@@ -3148,13 +3831,18 @@ class DispecerCurseModel extends BaseModel
 
     private function dashboardFromSql(): string
     {
+        $this->ensureExpenseRefacturareColumn();
+
         return "
             FROM curse_dispecer c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             LEFT JOIN soferi s ON s.id = c.driver_id
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             LEFT JOIN (
-                SELECT cursa_id, SUM(suma) AS total_cheltuieli
+                SELECT
+                    cursa_id,
+                    SUM(suma) AS total_cheltuieli,
+                    SUM(COALESCE(refacturare_suma, 0)) AS total_refacturare
                 FROM curse_cheltuieli
                 GROUP BY cursa_id
             ) exp ON exp.cursa_id = c.id
@@ -3257,6 +3945,10 @@ class DispecerCurseModel extends BaseModel
 
     private function raceFromSql(): string
     {
+        $this->ensureRaceCompressorLocationColumns();
+        $this->ensureRaceCreatedByColumn();
+        $this->ensureExpenseRefacturareColumn();
+
         return "
             FROM curse_dispecer c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
@@ -3264,8 +3956,14 @@ class DispecerCurseModel extends BaseModel
             LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
+            LEFT JOIN utilizatori uc ON uc.id = c.created_by
             LEFT JOIN (
-                SELECT cursa_id, SUM(suma) AS total_cheltuieli
+                SELECT
+                    cursa_id,
+                    COUNT(*) AS expense_count,
+                    SUM(CASE WHEN COALESCE(refacturare_suma, 0) > 0 THEN 1 ELSE 0 END) AS refacturare_count,
+                    SUM(suma) AS total_cheltuieli,
+                    SUM(COALESCE(refacturare_suma, 0)) AS total_refacturare
                 FROM curse_cheltuieli
                 GROUP BY cursa_id
             ) exp ON exp.cursa_id = c.id
@@ -3283,6 +3981,10 @@ class DispecerCurseModel extends BaseModel
                 OR v.marca LIKE :search
                 OR v.model LIKE :search
                 OR COALESCE(li.nume, '') LIKE :search
+                OR COALESCE(c.loc_plecare, '') LIKE :search
+                OR COALESCE(c.loc_aspirare, '') LIKE :search
+                OR COALESCE(c.loc_livrare, '') LIKE :search
+                OR COALESCE(c.loc_livrare_cursa, '') LIKE :search
                 OR COALESCE(bt.nume, '') LIKE :search
                 OR COALESCE(zd.nume, '') LIKE :search
                 OR COALESCE(c.observatii, '') LIKE :search
@@ -3331,6 +4033,66 @@ class DispecerCurseModel extends BaseModel
         ];
     }
 
+    private function buildBillingCentralizerWhere(array $filters, string $search, bool $includeStatusFilter): array
+    {
+        $where = [];
+        $params = [];
+
+        if ($search !== '') {
+            $where[] = "(
+                v.nr_inmatriculare LIKE :billing_search
+                OR v.marca LIKE :billing_search
+                OR v.model LIKE :billing_search
+                OR COALESCE(s.nume, '') LIKE :billing_search
+                OR COALESCE(li.nume, '') LIKE :billing_search
+                OR COALESCE(bt.nume, '') LIKE :billing_search
+                OR COALESCE(zd.nume, '') LIKE :billing_search
+                OR COALESCE(c.observatii, '') LIKE :billing_search
+            )";
+            $params[':billing_search'] = '%' . $search . '%';
+        }
+
+        if ($includeStatusFilter && ($filters['status_facturare'] ?? '') !== '') {
+            $where[] = "c.status_facturare = :billing_status";
+            $params[':billing_status'] = (string) $filters['status_facturare'];
+        }
+
+        if (($filters['tip_transport'] ?? '') !== '') {
+            $where[] = "c.tip_transport = :billing_tip_transport";
+            $params[':billing_tip_transport'] = (string) $filters['tip_transport'];
+        }
+
+        if (($filters['vehicle_id'] ?? '') !== '') {
+            $where[] = "c.vehicle_id = :billing_vehicle_id";
+            $params[':billing_vehicle_id'] = (int) $filters['vehicle_id'];
+        }
+
+        if (($filters['beneficiar_id'] ?? '') !== '') {
+            $where[] = "c.beneficiar_id = :billing_beneficiar_id";
+            $params[':billing_beneficiar_id'] = (int) $filters['beneficiar_id'];
+        }
+
+        if (($filters['zona_distributie_id'] ?? '') !== '') {
+            $where[] = "c.zona_distributie_id = :billing_zona_distributie_id";
+            $params[':billing_zona_distributie_id'] = (int) $filters['zona_distributie_id'];
+        }
+
+        if (($filters['data_start'] ?? '') !== '') {
+            $where[] = "COALESCE(c.data_inceput, c.data_cursa) >= :billing_data_start";
+            $params[':billing_data_start'] = (string) $filters['data_start'];
+        }
+
+        if (($filters['data_end'] ?? '') !== '') {
+            $where[] = "COALESCE(c.data_inceput, c.data_cursa) <= :billing_data_end";
+            $params[':billing_data_end'] = (string) $filters['data_end'];
+        }
+
+        return [
+            'where' => $where === [] ? '' : ' WHERE ' . implode(' AND ', $where),
+            'params' => $params,
+        ];
+    }
+
     private function bindParams(PDOStatement $stmt, array $params): void
     {
         foreach ($params as $key => $value) {
@@ -3360,6 +4122,10 @@ class DispecerCurseModel extends BaseModel
         $this->bindNullableString($stmt, ':ora_sfarsit', $data['ora_sfarsit'] ?? null);
         $this->bindNullableInt($stmt, ':durata_cursa_minute', $data['durata_cursa_minute'] ?? null);
         $this->bindNullableInt($stmt, ':loc_incarcare_id', $data['loc_incarcare_id'] ?? null);
+        $this->bindNullableString($stmt, ':loc_plecare', $data['loc_plecare'] ?? null);
+        $this->bindNullableString($stmt, ':loc_aspirare', $data['loc_aspirare'] ?? null);
+        $this->bindNullableString($stmt, ':loc_livrare', $data['loc_livrare'] ?? null);
+        $this->bindNullableString($stmt, ':loc_livrare_cursa', $data['loc_livrare_cursa'] ?? null);
         $this->bindNullableInt($stmt, ':beneficiar_id', $data['beneficiar_id'] ?? null);
         $this->bindNullableString($stmt, ':tip_marfa', $data['tip_marfa'] ?? null);
         $this->bindNullableDecimal($stmt, ':capacitate_transport', $data['capacitate_transport'] ?? null);
@@ -3383,6 +4149,9 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':cost_km_mixt', (float) ($data['cost_km_mixt'] ?? 0));
         $stmt->bindValue(':cost_km_compresor', (float) ($data['cost_km_compresor'] ?? 0));
         $this->bindNullableString($stmt, ':observatii', $data['observatii'] ?? null);
+        if (array_key_exists('created_by', $data)) {
+            $this->bindNullableInt($stmt, ':created_by', $data['created_by']);
+        }
 
         if (isset($data['created_at'])) {
             $stmt->bindValue(':created_at', (string) $data['created_at']);
@@ -3432,7 +4201,7 @@ class DispecerCurseModel extends BaseModel
     private function getRaceSnapshotForUpdate(int $raceId): ?array
     {
         $sql = "
-            SELECT id, vehicle_id, km_cursa, ore_functionare, km_totali
+            SELECT id, vehicle_id, km_cursa, ore_functionare, ore_aspirare, km_totali
             FROM curse_dispecer
             WHERE id = :id
             LIMIT 1
@@ -3530,7 +4299,10 @@ class DispecerCurseModel extends BaseModel
         }
 
         $kmFromRace = $this->getRaceEffectiveKmForSync($race);
-        $hoursRaw = $race['ore_functionare'] ?? null;
+        $hoursRaw = $race['ore_aspirare'] ?? null;
+        if ($hoursRaw === null || $hoursRaw === '') {
+            $hoursRaw = $race['ore_functionare'] ?? null;
+        }
         $hoursValue = $hoursRaw !== null && $hoursRaw !== ''
             ? max(0, (float) $hoursRaw)
             : 0.0;

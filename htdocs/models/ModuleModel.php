@@ -68,6 +68,23 @@ class ModuleModel extends BaseModel
         $conditions = [];
         $params = [];
 
+        $baseConditions = $module['base_conditions'] ?? [];
+        if (is_string($baseConditions)) {
+            $baseConditions = [trim($baseConditions)];
+        }
+        if (is_array($baseConditions)) {
+            foreach ($baseConditions as $baseCondition) {
+                if (!is_string($baseCondition)) {
+                    continue;
+                }
+                $baseCondition = trim($baseCondition);
+                if ($baseCondition === '') {
+                    continue;
+                }
+                $conditions[] = $baseCondition;
+            }
+        }
+
         if ($search !== '' && !empty($module['search_fields'])) {
             $searchMode = (string) ($module['search_mode'] ?? '');
             if ($searchMode === 'vehicle_plate') {

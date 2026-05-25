@@ -6,6 +6,11 @@ return [
         'title' => 'Vehicule',
         'singular' => 'vehicul',
         'table' => 'vehicule',
+        // Exclude internal technical row used by tire stock bookkeeping.
+        'base_conditions' => [
+            "t.nr_inmatriculare <> 'STOC-ANVELOPE'",
+            "t.serie_sasiu <> 'STOCANVELOPE00001'",
+        ],
         'select' => 't.*',
         'default_order' => 't.created_at DESC',
         'search_mode' => 'vehicle_plate',
@@ -221,6 +226,7 @@ return [
         'search_fields' => ['t.nume', 't.telefon', 't.observatii', 'v.nr_inmatriculare', 'vs.nr_inmatriculare', 'v.marca', 'v.model'],
         'list_columns' => [
             'nume' => ['label' => 'Nume'],
+            'data_nasterii' => ['label' => 'Data nasterii', 'type' => 'date'],
             'telefon' => ['label' => 'Telefon'],
             'salariu' => ['label' => 'Salariu', 'type' => 'currency'],
             'vehicul_label' => ['label' => 'Vehicul alocat'],
@@ -230,6 +236,7 @@ return [
         ],
         'detail_fields' => [
             'nume' => ['label' => 'Nume'],
+            'data_nasterii' => ['label' => 'Data nasterii', 'type' => 'date'],
             'telefon' => ['label' => 'Telefon'],
             'salariu' => ['label' => 'Salariu', 'type' => 'currency'],
             'vehicul_label' => ['label' => 'Vehicul alocat'],
@@ -241,6 +248,7 @@ return [
         ],
         'form_fields' => [
             'nume' => ['label' => 'Nume', 'type' => 'text', 'required' => true, 'maxlength' => 100],
+            'data_nasterii' => ['label' => 'Data nasterii', 'type' => 'date', 'required' => false, 'nullable' => true],
             'telefon' => ['label' => 'Telefon', 'type' => 'text', 'required' => true, 'maxlength' => 20],
             'salariu' => [
                 'label' => 'Salariu',

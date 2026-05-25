@@ -86,7 +86,7 @@ Aplicatie web MVP pentru management de flota, construita in PHP 8+, MySQL si Boo
 
 1. Creeaza baza de date local.
 2. Importa `database/database.sql`.
-3. Editeaza `htdocs/config/config.php` cu datele locale pentru DB.
+3. Creeaza fisierul `.env` in radacina proiectului si configureaza variabilele necesare (vezi `.env.example`).
 4. Ruleaza serverul local:
 
 ```powershell
@@ -99,6 +99,14 @@ php -S 127.0.0.1:8000 -t htdocs
 ```text
 http://127.0.0.1:8000/
 ```
+
+## Configurare email verificare
+
+- Configureaza SMTP in `.env` folosind `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_ENCRYPTION`.
+- `MAIL_CONNECT_TIMEOUT` controleaza timeout-ul de conectare SMTP (secunde).
+- Recomandat pentru stabilitate: `MAIL_CONNECT_TIMEOUT=15`, `MAIL_TIMEOUT=45`.
+- `MAIL_RETRY_ATTEMPTS` si `MAIL_RETRY_DELAY_MS` permit retry automat la erori temporare de conectare SMTP.
+- `AUTH_VERIFY_RESEND_COOLDOWN_SECONDS` controleaza dupa cate secunde utilizatorul poate cere retrimiterea codului.
 
 ## Migrare baza existenta (CAMION + Km bord)
 

@@ -50,6 +50,171 @@
         return parseNumber(numerator) / denominatorValue;
     }
 
+    function initTableMiddleMouseScroll() {
+        var scrollWraps = document.querySelectorAll('.dispatcher-races-table-wrap, .table-container');
+        if (!scrollWraps.length) {
+            return;
+        }
+
+        var activeState = null;
+        var animationFrame = 0;
+        var previousUserSelect = '';
+        var previousCursor = '';
+        var suppressNextClick = false;
+        var indicator = null;
+        var ignoreSelector = 'a, button, input, select, textarea, label, [role="button"], [data-bs-toggle]';
+
+        var stop = function () {
+            if (animationFrame) {
+                window.cancelAnimationFrame(animationFrame);
+                animationFrame = 0;
+            }
+
+            if (activeState !== null) {
+                document.body.style.userSelect = previousUserSelect;
+                document.body.style.cursor = previousCursor;
+            }
+            if (indicator !== null) {
+                indicator.remove();
+                indicator = null;
+            }
+
+            activeState = null;
+        };
+
+        var showIndicator = function (x, y) {
+            if (indicator !== null) {
+                indicator.remove();
+            }
+
+            indicator = document.createElement('div');
+            indicator.className = 'dispatcher-middle-scroll-indicator';
+            indicator.style.left = x + 'px';
+            indicator.style.top = y + 'px';
+            document.body.appendChild(indicator);
+        };
+
+        var clampSpeed = function (value) {
+            var deadZone = 12;
+            if (Math.abs(value) <= deadZone) {
+                return 0;
+            }
+
+            var direction = value < 0 ? -1 : 1;
+            return Math.max(-34, Math.min(34, direction * ((Math.abs(value) - deadZone) * 0.18)));
+        };
+
+        var tick = function () {
+            if (activeState === null) {
+                return;
+            }
+
+            var horizontalSpeed = clampSpeed(activeState.currentX - activeState.originX);
+            var verticalSpeed = clampSpeed(activeState.currentY - activeState.originY);
+
+            if (horizontalSpeed !== 0) {
+                activeState.wrapper.scrollLeft += horizontalSpeed;
+            }
+            if (verticalSpeed !== 0) {
+                window.scrollBy(0, verticalSpeed);
+            }
+
+            animationFrame = window.requestAnimationFrame(tick);
+        };
+
+        scrollWraps.forEach(function (wrapper) {
+            if (!(wrapper instanceof HTMLElement) || wrapper.dataset.middleMouseScrollBound === '1') {
+                return;
+            }
+
+            wrapper.addEventListener('mousedown', function (event) {
+                var eventTarget = event.target instanceof Element
+                    ? event.target
+                    : (event.target && event.target.parentElement instanceof Element ? event.target.parentElement : null);
+                if (event.button !== 1 || (eventTarget !== null && eventTarget.closest(ignoreSelector) !== null)) {
+                    return;
+                }
+                if (wrapper.scrollWidth <= wrapper.clientWidth && document.documentElement.scrollHeight <= window.innerHeight) {
+                    return;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                stop();
+                previousUserSelect = document.body.style.userSelect;
+                previousCursor = document.body.style.cursor;
+                document.body.style.userSelect = 'none';
+                document.body.style.cursor = 'all-scroll';
+
+                activeState = {
+                    wrapper: wrapper,
+                    originX: event.clientX,
+                    originY: event.clientY,
+                    currentX: event.clientX,
+                    currentY: event.clientY
+                };
+
+                showIndicator(event.clientX, event.clientY);
+                animationFrame = window.requestAnimationFrame(tick);
+            });
+
+            wrapper.addEventListener('auxclick', function (event) {
+                if (event.button === 1 && activeState !== null) {
+                    event.preventDefault();
+                }
+            });
+
+            wrapper.dataset.middleMouseScrollBound = '1';
+        });
+
+        document.addEventListener('mousemove', function (event) {
+            if (activeState === null) {
+                return;
+            }
+
+            activeState.currentX = event.clientX;
+            activeState.currentY = event.clientY;
+        });
+
+        document.addEventListener('mousedown', function (event) {
+            if (activeState === null) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            suppressNextClick = true;
+            stop();
+        }, true);
+
+        document.addEventListener('click', function (event) {
+            if (!suppressNextClick) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            suppressNextClick = false;
+        }, true);
+
+        document.addEventListener('auxclick', function (event) {
+            if (event.button === 1 && (activeState !== null || suppressNextClick)) {
+                event.preventDefault();
+                event.stopPropagation();
+                suppressNextClick = false;
+            }
+        }, true);
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') {
+                stop();
+            }
+        });
+
+        window.addEventListener('blur', stop);
+    }
+
     function normalizeTonInputToKgForPricing(value, vehicleCapacityTon) {
         var normalizedValue = parseNumber(value);
         if (!isFinite(normalizedValue) || normalizedValue <= 0) {
@@ -67,9 +232,14 @@
         var vehicleField = form.querySelector('[name="vehicle_id"]');
         var driverField = form.querySelector('[name="driver_id"]');
         var loadLocationField = form.querySelector('[name="loc_incarcare_id"]');
+        var departureLocationField = form.querySelector('[data-role="loc-plecare"]');
+        var suctionLocationField = form.querySelector('[data-role="loc-aspirare"]');
+        var deliveryLocationField = form.querySelector('[data-role="loc-livrare"]');
+        var raceDeliveryLocationField = form.querySelector('[data-role="loc-livrare-cursa"]');
         var kmField = form.querySelector('[data-role="km"]');
         var kmTotalField = form.querySelector('[data-role="km-totali"]');
         var quantityField = form.querySelector('[data-role="cantitate"]');
+        var clientsField = form.querySelector('[name="nr_clienti"]');
         var zoneField = form.querySelector('[data-role="zona"]');
         var suctionHoursField = form.querySelector('[data-role="ore-aspirare"]');
         var relocationKmField = form.querySelector('[data-role="km-dislocare"]');
@@ -139,7 +309,14 @@
         }
 
         var kmWrapper = form.querySelector('[data-role="field-km"]');
+        var loadLocationWrapper = form.querySelector('[data-role="field-loc-incarcare"]');
+        var departureLocationWrapper = form.querySelector('[data-role="field-loc-plecare"]');
+        var suctionLocationWrapper = form.querySelector('[data-role="field-loc-aspirare"]');
+        var deliveryLocationWrapper = form.querySelector('[data-role="field-loc-livrare"]');
+        var raceDeliveryLocationWrapper = form.querySelector('[data-role="field-loc-livrare-cursa"]');
         var quantityWrapper = form.querySelector('[data-role="field-cantitate"]');
+        var clientsWrapper = form.querySelector('[data-role="field-nr-clienti"]');
+        var transportCapacityWrapper = form.querySelector('[data-role="field-capacitate-transport"]');
         var zoneWrapper = form.querySelector('[data-role="field-zona"]');
         var kmTotalWrapper = form.querySelector('[data-role="field-km-totali"]');
         var suctionHoursWrapper = form.querySelector('[data-role="field-ore-aspirare"]');
@@ -695,14 +872,23 @@
 
             Object.keys(routeMap).forEach(function (routeKey) {
                 var parts = String(routeKey || '').split('|');
-                if (parts.length !== 3) {
+                if (parts.length !== 3 && parts.length !== 2) {
                     return;
                 }
 
-                var beneficiaryId = String(parts[0] || '').trim();
-                var locationId = String(parts[1] || '').trim();
-                var zoneId = String(parts[2] || '').trim();
-                if (beneficiaryId === '' || locationId === '' || zoneId === '') {
+                var defaultBeneficiaryId = '';
+                var locationId = '';
+                var zoneId = '';
+                if (parts.length === 3) {
+                    defaultBeneficiaryId = String(parts[0] || '').trim();
+                    locationId = String(parts[1] || '').trim();
+                    zoneId = String(parts[2] || '').trim();
+                } else {
+                    defaultBeneficiaryId = '__global__';
+                    locationId = String(parts[0] || '').trim();
+                    zoneId = String(parts[1] || '').trim();
+                }
+                if (locationId === '' || zoneId === '') {
                     return;
                 }
 
@@ -716,13 +902,21 @@
                     ? String(zoneNamesById[zoneId] || '').trim()
                     : '';
 
-                if (!Object.prototype.hasOwnProperty.call(grouped, beneficiaryId)) {
-                    grouped[beneficiaryId] = [];
-                }
-
                 rulesForPair.forEach(function (routeRule) {
                     if (!routeRule || typeof routeRule !== 'object') {
                         return;
+                    }
+
+                    var rawRouteBeneficiaryId = String(routeRule.beneficiar_id || '').trim();
+                    var routeBeneficiaryId = rawRouteBeneficiaryId !== ''
+                        ? rawRouteBeneficiaryId
+                        : defaultBeneficiaryId;
+                    if (routeBeneficiaryId === '') {
+                        routeBeneficiaryId = '__global__';
+                    }
+
+                    if (!Object.prototype.hasOwnProperty.call(grouped, routeBeneficiaryId)) {
+                        grouped[routeBeneficiaryId] = [];
                     }
 
                     var vehicleIds = normalizeRouteVehicleIds(routeRule);
@@ -731,14 +925,17 @@
                         vehicleIdSet[vehicleId] = true;
                     });
 
-                    grouped[beneficiaryId].push({
+                    grouped[routeBeneficiaryId].push({
                         ruleId: parseInt(routeRule.id, 10) || 0,
+                        beneficiaryId: routeBeneficiaryId,
                         locationId: locationId,
                         zoneId: zoneId,
                         active: !!routeRule.activ,
                         tariffPerTon: parseNumber(routeRule.tarif_tona),
                         extraKmCost: parseNumber(routeRule.cost_extra_km),
                         kmTariff: Math.max(0, Math.round(parseNumber(routeRule.km_tarifare))),
+                        rideCost: parseNumber(routeRule.cost_cursa),
+                        applyRideCost: !!routeRule.aplica_cost_cursa,
                         vehicleIds: vehicleIds,
                         vehicleIdSet: vehicleIdSet,
                         locationName: locationName,
@@ -751,6 +948,18 @@
         }
 
         var distributionRouteRulesByBeneficiary = buildDistributionRouteRulesByBeneficiary(distributionRouteTariffs);
+        var distributionGlobalRules = Object.prototype.hasOwnProperty.call(distributionRouteRulesByBeneficiary, '__global__')
+            ? (distributionRouteRulesByBeneficiary.__global__ || [])
+            : [];
+
+        function getDistributionRulesForBeneficiary(beneficiaryId) {
+            var beneficiaryKey = String(beneficiaryId || '').trim();
+            var beneficiaryRules = beneficiaryKey !== '' && Object.prototype.hasOwnProperty.call(distributionRouteRulesByBeneficiary, beneficiaryKey)
+                ? (distributionRouteRulesByBeneficiary[beneficiaryKey] || [])
+                : [];
+
+            return beneficiaryRules.concat(distributionGlobalRules);
+        }
 
         function buildPrimaryRouteRulesByBeneficiary(routeMap) {
             var grouped = {};
@@ -1033,11 +1242,11 @@
             var vehicleSet = {};
             var hasScopedRules = false;
 
-            if (beneficiaryKey === '' || !Object.prototype.hasOwnProperty.call(distributionRouteRulesByBeneficiary, beneficiaryKey)) {
+            if (beneficiaryKey === '') {
                 return { hasScopedRules: false, vehicleSet: {} };
             }
 
-            var rules = distributionRouteRulesByBeneficiary[beneficiaryKey] || [];
+            var rules = getDistributionRulesForBeneficiary(beneficiaryKey);
             rules.forEach(function (rule) {
                 if (!rule || typeof rule !== 'object' || !rule.active) {
                     return;
@@ -1380,8 +1589,8 @@
         function getVehicleScopedRouteRules(beneficiaryId, vehicleId) {
             var beneficiaryKey = String(beneficiaryId || '').trim();
             var selectedVehicleId = String(vehicleId || '').trim();
-            var rules = beneficiaryKey !== '' && Object.prototype.hasOwnProperty.call(distributionRouteRulesByBeneficiary, beneficiaryKey)
-                ? (distributionRouteRulesByBeneficiary[beneficiaryKey] || [])
+            var rules = beneficiaryKey !== ''
+                ? getDistributionRulesForBeneficiary(beneficiaryKey)
                 : [];
 
             var activeRules = rules.filter(function (rule) {
@@ -1400,17 +1609,21 @@
                 return Array.isArray(rule.vehicleIds) && rule.vehicleIds.length > 0;
             });
 
+            if (!hasVehicleScopedRules) {
+                return {
+                    hasActiveRules: false,
+                    hasVehicleScopedRules: false,
+                    scopedRules: []
+                };
+            }
+
             var scopedRules = [];
-            if (hasVehicleScopedRules) {
-                if (selectedVehicleId !== '') {
-                    scopedRules = activeRules.filter(function (rule) {
-                        return Array.isArray(rule.vehicleIds)
-                            && rule.vehicleIds.length > 0
-                            && Object.prototype.hasOwnProperty.call(rule.vehicleIdSet || {}, selectedVehicleId);
-                    });
-                }
-            } else {
-                scopedRules = activeRules.slice();
+            if (selectedVehicleId !== '') {
+                scopedRules = activeRules.filter(function (rule) {
+                    return Array.isArray(rule.vehicleIds)
+                        && rule.vehicleIds.length > 0
+                        && Object.prototype.hasOwnProperty.call(rule.vehicleIdSet || {}, selectedVehicleId);
+                });
             }
 
             return {
@@ -1429,13 +1642,6 @@
             }
 
             if (!routeScope || !routeScope.hasActiveRules) {
-                var noRouteText = 'Nu exista perechi de ruta configurate pentru acest beneficiar/vehicul.';
-                if (distributionLocationNote) {
-                    distributionLocationNote.textContent = noRouteText;
-                }
-                if (distributionZoneNote) {
-                    distributionZoneNote.textContent = noRouteText;
-                }
                 syncFieldHoverHints(String(tipField ? (tipField.value || '') : ''));
                 return;
             }
@@ -1479,8 +1685,8 @@
             var scopedRules = routeScope && Array.isArray(routeScope.scopedRules) ? routeScope.scopedRules : [];
             if (scopedRules.length === 0) {
                 return {
-                    locationOptions: [],
-                    zoneOptions: []
+                    locationOptions: safeLocationOptions,
+                    zoneOptions: safeZoneOptions
                 };
             }
 
@@ -2159,10 +2365,10 @@
         }
 
         function getDistributionRouteRule(beneficiaryId, locationId, zoneId, vehicleId) {
-            var beneficiaryKey = String(beneficiaryId || '');
+            var beneficiaryKey = String(beneficiaryId || '').trim();
             var locationKey = String(locationId || '');
             var zoneKey = String(zoneId || '');
-            if (beneficiaryKey === '' || locationKey === '' || zoneKey === '') {
+            if (locationKey === '' || zoneKey === '') {
                 return null;
             }
 
@@ -2181,6 +2387,11 @@
                 for (var index = 0; index < candidateRules.length; index += 1) {
                     var rule = candidateRules[index];
                     if (!rule || typeof rule !== 'object') {
+                        continue;
+                    }
+
+                    var ruleBeneficiaryId = String(rule.beneficiar_id || '').trim();
+                    if (beneficiaryKey !== '' && ruleBeneficiaryId !== '' && ruleBeneficiaryId !== beneficiaryKey) {
                         continue;
                     }
 
@@ -2210,6 +2421,8 @@
                             tariffPerTon: parseNumber(rule.tarif_tona),
                             extraKmCost: parseNumber(rule.cost_extra_km),
                             kmTariff: Math.max(0, Math.round(parseNumber(rule.km_tarifare))),
+                            rideCost: parseNumber(rule.cost_cursa),
+                            applyRideCost: !!rule.aplica_cost_cursa,
                             vehicleIds: scopedVehicleIds,
                             active: !!rule.activ,
                             matchDirection: matchDirection
@@ -2220,17 +2433,33 @@
                 return bestRule;
             };
 
-            var directKey = beneficiaryKey + '|' + locationKey + '|' + zoneKey;
-            var directRule = resolveRuleForKey(directKey, 'direct');
-            if (directRule) {
-                return directRule;
+            if (beneficiaryKey !== '') {
+                var directBeneficiaryKey = beneficiaryKey + '|' + locationKey + '|' + zoneKey;
+                var directBeneficiaryRule = resolveRuleForKey(directBeneficiaryKey, 'direct');
+                if (directBeneficiaryRule) {
+                    return directBeneficiaryRule;
+                }
+
+                if (locationKey !== zoneKey) {
+                    var reverseBeneficiaryKey = beneficiaryKey + '|' + zoneKey + '|' + locationKey;
+                    var reverseBeneficiaryRule = resolveRuleForKey(reverseBeneficiaryKey, 'reverse');
+                    if (reverseBeneficiaryRule) {
+                        return reverseBeneficiaryRule;
+                    }
+                }
+            }
+
+            var directGlobalKey = locationKey + '|' + zoneKey;
+            var directGlobalRule = resolveRuleForKey(directGlobalKey, 'global_direct');
+            if (directGlobalRule) {
+                return directGlobalRule;
             }
 
             if (locationKey !== zoneKey) {
-                var reverseKey = beneficiaryKey + '|' + zoneKey + '|' + locationKey;
-                var reverseRule = resolveRuleForKey(reverseKey, 'reverse');
-                if (reverseRule) {
-                    return reverseRule;
+                var reverseGlobalKey = zoneKey + '|' + locationKey;
+                var reverseGlobalRule = resolveRuleForKey(reverseGlobalKey, 'global_reverse');
+                if (reverseGlobalRule) {
+                    return reverseGlobalRule;
                 }
             }
 
@@ -2240,9 +2469,7 @@
                 return null;
             }
 
-            var beneficiaryScopedRules = Object.prototype.hasOwnProperty.call(distributionRouteRulesByBeneficiary, beneficiaryKey)
-                ? (distributionRouteRulesByBeneficiary[beneficiaryKey] || [])
-                : [];
+            var beneficiaryScopedRules = getDistributionRulesForBeneficiary(beneficiaryKey);
 
             var resolveRuleFromNames = function (expectedLocationName, expectedZoneName, matchDirection) {
                 var bestRule = null;
@@ -2286,6 +2513,8 @@
                             tariffPerTon: parseNumber(scopedRule.tariffPerTon),
                             extraKmCost: parseNumber(scopedRule.extraKmCost),
                             kmTariff: Math.max(0, Math.round(parseNumber(scopedRule.kmTariff))),
+                            rideCost: parseNumber(scopedRule.rideCost),
+                            applyRideCost: !!scopedRule.applyRideCost,
                             vehicleIds: scopedVehicleIds,
                             active: true,
                             matchDirection: matchDirection
@@ -2338,6 +2567,8 @@
                     tariffPerTon: parseNumber(scopedRule.tariffPerTon),
                     extraKmCost: parseNumber(scopedRule.extraKmCost),
                     kmTariff: Math.max(0, Math.round(parseNumber(scopedRule.kmTariff))),
+                    rideCost: parseNumber(scopedRule.rideCost),
+                    applyRideCost: !!scopedRule.applyRideCost,
                     vehicleIds: Array.isArray(scopedRule.vehicleIds) ? scopedRule.vehicleIds : [],
                     active: true
                 };
@@ -2576,7 +2807,14 @@
 
             var defaultLabel = String(zoneLabel.getAttribute('data-default-label') || 'Zona distributie').trim();
             var primaryLabel = String(zoneLabel.getAttribute('data-primary-label') || 'Zona descarcare').trim();
-            zoneLabel.textContent = isPrimaryTransport(transportType) ? primaryLabel : defaultLabel;
+            var primaryKmLabel = String(zoneLabel.getAttribute('data-primary-km-label') || 'Loc descarcare').trim();
+
+            if (isPrimaryKmTransport(transportType)) {
+                zoneLabel.textContent = primaryKmLabel;
+                return;
+            }
+
+            zoneLabel.textContent = isPrimaryTonTransport(transportType) ? primaryLabel : defaultLabel;
         }
 
         function syncKmFieldLabels(transportType) {
@@ -2626,21 +2864,11 @@
         }
 
         function shouldShowCompressorLiquidSuctionField(transportType, rates) {
-            if (transportType !== 'compresor') {
-                return false;
-            }
-
-            var liquidTonRate = rates && typeof rates === 'object' ? parseNumber(rates.perSuctionLiquidTon) : 0;
-            return liquidTonRate > 0;
+            return transportType === 'compresor';
         }
 
         function shouldShowCompressorGasSuctionField(transportType, rates) {
-            if (transportType !== 'compresor') {
-                return false;
-            }
-
-            var gasTonRate = rates && typeof rates === 'object' ? parseNumber(rates.perSuctionGasTon) : 0;
-            return gasTonRate > 0;
+            return transportType === 'compresor';
         }
 
         function setPreviewFieldVisibility(fieldWrapper, isVisible) {
@@ -2672,8 +2900,6 @@
             var isPrimary = isPrimaryTransport(transportType);
             var isDistribution = isDistributionTransport(transportType);
             var isCompressor = transportType === 'compresor';
-            var showCompressorLiquidSuctionField = shouldShowCompressorLiquidSuctionField(transportType, rates);
-            var showCompressorGasSuctionField = shouldShowCompressorGasSuctionField(transportType, rates);
             form.classList.toggle('dispatcher-primary-layout', transportType === '' || isPrimary || isDistributionTransport(transportType));
             form.classList.toggle('dispatcher-compressor-layout', isCompressor);
             form.classList.toggle('dispatcher-primar-km-compact-layout', isPrimaryKm);
@@ -2681,6 +2907,11 @@
             syncZoneFieldLabel(transportType);
             syncKmFieldLabels(transportType);
 
+            setFieldState(loadLocationWrapper, loadLocationField, !isCompressor, true);
+            setFieldState(departureLocationWrapper, departureLocationField, isCompressor, true);
+            setFieldState(suctionLocationWrapper, suctionLocationField, isCompressor, true);
+            setFieldState(deliveryLocationWrapper, deliveryLocationField, isCompressor, true);
+            setFieldState(raceDeliveryLocationWrapper, raceDeliveryLocationField, isCompressor, true);
             setFieldState(kmWrapper, kmField, !isCompressor, true);
             setFieldState(kmTotalWrapper, kmTotalField, isPrimary || isDistributionWithKmTransport(transportType), true);
             syncKmDistributionCalculationNote(
@@ -2696,12 +2927,14 @@
                 // dar calculul total continua sa foloseasca doar km-ul de tarifare.
                 setFieldState(quantityWrapper, quantityField, true, false);
             }
+            setFieldState(clientsWrapper, clientsField, isDistribution, true);
+            setFieldState(transportCapacityWrapper, transportCapacityField, !isCompressor, true);
             setFieldState(zoneWrapper, zoneField, (isDistribution || isPrimaryKm || isPrimaryTon), true);
             setFieldState(suctionHoursWrapper, suctionHoursField, isCompressor, true);
             setFieldState(relocationKmWrapper, relocationKmField, isCompressor, true);
             setFieldState(deliveredTonWrapper, deliveredTonField, isCompressor, true);
-            setFieldState(suctionLiquidTonWrapper, suctionLiquidTonField, showCompressorLiquidSuctionField, true);
-            setFieldState(suctionGasTonWrapper, suctionGasTonField, showCompressorGasSuctionField, true);
+            setFieldState(suctionLiquidTonWrapper, suctionLiquidTonField, isCompressor, true);
+            setFieldState(suctionGasTonWrapper, suctionGasTonField, isCompressor, true);
 
             if (distributionLocationNote) {
                 distributionLocationNote.classList.toggle('d-none', !isDistribution);
@@ -2738,11 +2971,28 @@
                 zoneField.removeAttribute('required');
             }
 
+            if (loadLocationField && !isCompressor) {
+                loadLocationField.setAttribute('required', 'required');
+            } else if (loadLocationField) {
+                loadLocationField.removeAttribute('required');
+            }
+
             if (suctionHoursField && isCompressor) {
                 suctionHoursField.setAttribute('required', 'required');
             } else if (suctionHoursField) {
                 suctionHoursField.removeAttribute('required');
             }
+
+            [departureLocationField, suctionLocationField, deliveryLocationField, raceDeliveryLocationField].forEach(function (field) {
+                if (!(field instanceof HTMLInputElement)) {
+                    return;
+                }
+                if (isCompressor) {
+                    field.setAttribute('required', 'required');
+                } else {
+                    field.removeAttribute('required');
+                }
+            });
 
             syncScopedLocationZoneOptions();
             if (isDistribution) {
@@ -2786,6 +3036,9 @@
             var selectedVehicleId = vehicleField ? vehicleField.value : '';
             var selectedLocationId = loadLocationField ? loadLocationField.value : '';
             var selectedZoneId = zoneField ? zoneField.value : '';
+            var hasDistributionLocationSelection = String(selectedLocationId || '').trim() !== '';
+            var hasDistributionZoneSelection = String(selectedZoneId || '').trim() !== '';
+            var hasCompleteDistributionSelection = hasDistributionLocationSelection && hasDistributionZoneSelection;
             var locationTariff = getLoadLocationTariff(loadLocationField ? loadLocationField.value : '');
             var zoneTariff = getZoneTariff(zoneField ? zoneField.value : '');
             var zoneExtraKmCost = getZoneExtraKmCost(zoneField ? zoneField.value : '');
@@ -2803,19 +3056,27 @@
             } else if (isPrimaryTonTransport(transportType)) {
                 total = quantityValue * rates.perTon;
             } else if (isDistributionTransport(transportType)) {
-                var sameRoute = isSameDistributionRoute();
-                var effectiveRouteRule = routeRule;
-                var effectiveTonRate = effectiveRouteRule && effectiveRouteRule.active && effectiveRouteRule.tariffPerTon > 0
-                    ? effectiveRouteRule.tariffPerTon
-                    : resolveDistributionTonRate(locationTariff, zoneTariff, rates.perTon, sameRoute);
-                var effectiveKmRate = effectiveRouteRule && effectiveRouteRule.active && effectiveRouteRule.extraKmCost > 0
-                    ? effectiveRouteRule.extraKmCost
-                    : (zoneExtraKmCost > 0 ? zoneExtraKmCost : rates.perKm);
-                effectiveDistributionKmRate = Math.max(0, effectiveKmRate);
-                var distributionKmComponent = isDistributionWithKmTransport(transportType)
-                    ? (kmValue * effectiveKmRate)
-                    : 0;
-                total = (quantityValue * effectiveTonRate) + distributionKmComponent;
+                if (!hasCompleteDistributionSelection) {
+                    total = 0;
+                    effectiveDistributionKmRate = 0;
+                } else {
+                    var sameRoute = isSameDistributionRoute();
+                    var effectiveRouteRule = routeRule;
+                    var effectiveTonRate = effectiveRouteRule && effectiveRouteRule.active && effectiveRouteRule.tariffPerTon > 0
+                        ? effectiveRouteRule.tariffPerTon
+                        : resolveDistributionTonRate(locationTariff, zoneTariff, rates.perTon, sameRoute);
+                    var effectiveKmRate = effectiveRouteRule && effectiveRouteRule.active && effectiveRouteRule.extraKmCost > 0
+                        ? effectiveRouteRule.extraKmCost
+                        : (zoneExtraKmCost > 0 ? zoneExtraKmCost : rates.perKm);
+                    var fixedRideCost = effectiveRouteRule && effectiveRouteRule.active && effectiveRouteRule.applyRideCost && effectiveRouteRule.rideCost > 0
+                        ? effectiveRouteRule.rideCost
+                        : 0;
+                    effectiveDistributionKmRate = Math.max(0, effectiveKmRate);
+                    var distributionKmComponent = isDistributionWithKmTransport(transportType) && fixedRideCost <= 0
+                        ? (kmValue * effectiveKmRate)
+                        : 0;
+                    total = fixedRideCost + ((fixedRideCost > 0 ? 0 : (quantityValue * effectiveTonRate))) + distributionKmComponent;
+                }
             } else if (transportType === 'compresor') {
                 total = (suctionHoursValue * rates.perHourSuction)
                     + (relocationKmValue * rates.perKmRelocation)
@@ -2834,7 +3095,7 @@
                     : Math.max(0, parseNumber(primaryRates.perKm));
             }
             var distributionTonRate = 0;
-            if (includesDistributionSegment) {
+            if (includesDistributionSegment && hasCompleteDistributionSelection) {
                 var sameRouteForCost = isSameDistributionRoute();
                 var effectiveRouteRuleForCost = routeRule;
                 distributionTonRate = effectiveRouteRuleForCost && effectiveRouteRuleForCost.active && effectiveRouteRuleForCost.tariffPerTon > 0
@@ -2842,6 +3103,13 @@
                     : resolveDistributionTonRate(locationTariff, zoneTariff, rates.perTon, sameRouteForCost);
             }
             distributionTonRate = Math.max(0, distributionTonRate);
+            var distributionFixedRideCost = includesDistributionSegment
+                && routeRule
+                && routeRule.active
+                && routeRule.applyRideCost
+                && routeRule.rideCost > 0
+                ? routeRule.rideCost
+                : 0;
 
             var kmPrimar = 0;
             var kmDistributie = 0;
@@ -2856,7 +3124,9 @@
             }
 
             var totalPrimar = includesPrimarySegment ? (kmPrimar * primaryPerKmRate) : 0;
-            var totalDistributie = includesDistributionSegment ? (Math.max(0, quantityValue) * distributionTonRate) : 0;
+            var totalDistributie = includesDistributionSegment
+                ? (distributionFixedRideCost > 0 ? distributionFixedRideCost : (Math.max(0, quantityValue) * distributionTonRate))
+                : 0;
             var costKmPrimar = includesPrimarySegment && kmPrimar > 0
                 ? safeDivide(totalPrimar, kmPrimar)
                 : 0;
@@ -2907,30 +3177,39 @@
                         ' | tona: ' + rates.perTon.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                     );
                 } else if (isDistributionTransport(transportType)) {
-                    var sameRouteForDisplay = isSameDistributionRoute();
-                    var effectiveDisplayRule = routeRule;
-                    var routeSourceLabel = 'fallback';
-                    if (effectiveDisplayRule && effectiveDisplayRule.active) {
-                        routeSourceLabel = 'exact';
+                    if (!hasCompleteDistributionSelection) {
+                        priceDisplayField.value = 'Selecteaza locul de incarcare si zona de distributie pentru calcul.';
+                    } else {
+                        var sameRouteForDisplay = isSameDistributionRoute();
+                        var effectiveDisplayRule = routeRule;
+                        var routeSourceLabel = 'fallback';
+                        if (effectiveDisplayRule && effectiveDisplayRule.active) {
+                            routeSourceLabel = 'exact';
+                        }
+                        var hasActiveRouteRule = !!(effectiveDisplayRule && effectiveDisplayRule.active);
+                        var effectiveDisplayTonRate = hasActiveRouteRule && effectiveDisplayRule.tariffPerTon > 0
+                            ? effectiveDisplayRule.tariffPerTon
+                            : resolveDistributionTonRate(locationTariff, zoneTariff, rates.perTon, sameRouteForDisplay);
+                        var effectiveDisplayKmRate = hasActiveRouteRule && effectiveDisplayRule.extraKmCost > 0
+                            ? effectiveDisplayRule.extraKmCost
+                            : (zoneExtraKmCost > 0 ? zoneExtraKmCost : rates.perKm);
+                        var displayFixedRideCost = hasActiveRouteRule && effectiveDisplayRule.applyRideCost && effectiveDisplayRule.rideCost > 0
+                            ? effectiveDisplayRule.rideCost
+                            : 0;
+                        priceDisplayField.value =
+                            'regula ruta: ' + routeSourceLabel +
+                            ' | ' +
+                            'ruta: ' + (sameRouteForDisplay ? 'aceeasi localitate' : 'localitati diferite') +
+                            ' | ' +
+                            'loc: ' + locationTariff.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+                            ' | zona: ' + zoneTariff.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+                            ' | extra km: ' + zoneExtraKmCost.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+                            ' | tarif tona activ: ' + effectiveDisplayTonRate.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+                            ' | tarif km activ: ' + effectiveDisplayKmRate.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+                            ' | mod calcul: ' + (displayFixedRideCost > 0
+                                ? ('cost cursa fix (' + displayFixedRideCost.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ')')
+                                : (isDistributionWithKmTransport(transportType) ? 'tona + km' : 'doar tona'));
                     }
-                    var hasActiveRouteRule = !!(effectiveDisplayRule && effectiveDisplayRule.active);
-                    var effectiveDisplayTonRate = hasActiveRouteRule && effectiveDisplayRule.tariffPerTon > 0
-                        ? effectiveDisplayRule.tariffPerTon
-                        : resolveDistributionTonRate(locationTariff, zoneTariff, rates.perTon, sameRouteForDisplay);
-                    var effectiveDisplayKmRate = hasActiveRouteRule && effectiveDisplayRule.extraKmCost > 0
-                        ? effectiveDisplayRule.extraKmCost
-                        : (zoneExtraKmCost > 0 ? zoneExtraKmCost : rates.perKm);
-                    priceDisplayField.value =
-                        'regula ruta: ' + routeSourceLabel +
-                        ' | ' +
-                        'ruta: ' + (sameRouteForDisplay ? 'aceeasi localitate' : 'localitati diferite') +
-                        ' | ' +
-                        'loc: ' + locationTariff.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
-                        ' | zona: ' + zoneTariff.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
-                        ' | extra km: ' + zoneExtraKmCost.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
-                        ' | tarif tona activ: ' + effectiveDisplayTonRate.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
-                        ' | tarif km activ: ' + effectiveDisplayKmRate.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
-                        ' | mod calcul: ' + (isDistributionWithKmTransport(transportType) ? 'tona + km' : 'doar tona');
                 } else if (transportType === 'compresor') {
                     priceDisplayField.value =
                         'ora: ' + rates.perHourSuction.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
@@ -3301,6 +3580,8 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
+        initTableMiddleMouseScroll();
+
         var forms = document.querySelectorAll('.dispatcher-race-form');
         if (!forms.length) {
             return;

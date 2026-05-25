@@ -212,7 +212,7 @@ $vehicleTireContext = $vehicleTireContext ?? null;
                         <th>Anvelopa</th>
                         <th>Status</th>
                         <th>Uzura km</th>
-                        <th>DOT / banda</th>
+                        <th>DOT</th>
                         <th class="text-end pe-3">Actiuni</th>
                     </tr>
                     </thead>
@@ -264,9 +264,6 @@ $vehicleTireContext = $vehicleTireContext ?? null;
                                 <td>
                                     <?php if ($tire !== null): ?>
                                         <div>DOT: <?= e((string) (($tire['dot_code'] ?? '') !== '' ? $tire['dot_code'] : '-')) ?></div>
-                                        <div class="small text-muted">
-                                            Banda: <?= e(isset($tire['tread_depth_mm']) && $tire['tread_depth_mm'] !== null ? number_format((float) $tire['tread_depth_mm'], 2, ',', '.') : '-') ?> mm
-                                        </div>
                                     <?php else: ?>
                                         <span class="text-muted">-</span>
                                     <?php endif; ?>
@@ -279,10 +276,10 @@ $vehicleTireContext = $vehicleTireContext ?? null;
                                             <input type="hidden" name="allocation_id" value="<?= e((string) ((int) $position['allocation_id'])) ?>">
                                             <input type="hidden" name="unmount_date" value="<?= e($todayDate) ?>">
                                             <select class="form-select form-select-sm" name="status_end">
-                                                <option value="spare">Spare</option>
-                                                <option value="removed">Removed</option>
-                                                <option value="damaged">Damaged</option>
-                                                <option value="retreaded">Retreaded</option>
+                                                <option value="spare">Rezerva</option>
+                                                <option value="removed">Scoasa din uz</option>
+                                                <option value="damaged">Deteriorata</option>
+                                                <option value="retreaded">Resapata</option>
                                             </select>
                                             <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur doresti demontarea anvelopei de pe aceasta pozitie?">Demonteaza</button>
                                         </form>
@@ -403,14 +400,6 @@ $vehicleTireContext = $vehicleTireContext ?? null;
                         <div class="col-12 col-md-6">
                             <label class="form-label" for="tire_estimated_life_km">Durata estimata (km)</label>
                             <input type="number" min="0" step="1" class="form-control" id="tire_estimated_life_km" name="tire_estimated_life_km" placeholder="Ex: 180000">
-                        </div>
-                        <div class="col-12 col-md-6">
-                            <label class="form-label" for="tire_tread_depth_mm">Banda curenta (mm)</label>
-                            <input type="number" min="0" step="0.01" class="form-control" id="tire_tread_depth_mm" name="tire_tread_depth_mm" placeholder="Ex: 10.50">
-                        </div>
-                        <div class="col-12 col-md-6">
-                            <label class="form-label" for="tire_min_tread_depth_mm">Prag minim banda (mm)</label>
-                            <input type="number" min="0" step="0.01" class="form-control" id="tire_min_tread_depth_mm" name="tire_min_tread_depth_mm" value="2.00">
                         </div>
                         <div class="col-12">
                             <label class="form-label" for="mount_position_new_tire">Monteaza direct pe pozitie (optional)</label>

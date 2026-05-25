@@ -158,6 +158,10 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                 <div class="kpi-value" id="kpi_total_facturare">0 lei</div>
             </article>
             <article class="dashboard-analytic-kpi">
+                <div class="kpi-name">Total Refacturare</div>
+                <div class="kpi-value" id="kpi_total_refacturare">0 lei</div>
+            </article>
+            <article class="dashboard-analytic-kpi">
                 <div class="kpi-name">Total Cheltuieli</div>
                 <div class="kpi-value" id="kpi_total_cheltuieli">0 lei</div>
             </article>
@@ -191,11 +195,12 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                 <div class="col-12 col-xl-6">
                     <div class="card border-0 shadow-sm h-100">
                         <div class="card-header bg-white border-0 pb-0">
-                            <h4 class="h6 mb-0">Evolutie Profit si Facturare</h4>
+                            <h4 class="h6 mb-0">Evolutie Profit, Facturare si Refacturare</h4>
                         </div>
                         <div class="card-body">
-                            <div class="dashboard-analytic-canvas-wrap">
+                            <div class="dashboard-analytic-canvas-wrap" data-chart-wrapper>
                                 <canvas id="chart_profit_evolution"></canvas>
+                                <div class="dashboard-analytic-chart-empty d-none">Nu exista date pentru acest grafic.</div>
                             </div>
                         </div>
                     </div>
@@ -206,8 +211,9 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                             <h4 class="h6 mb-0">Km Facturati vs Km Nefacturati</h4>
                         </div>
                         <div class="card-body">
-                            <div class="dashboard-analytic-canvas-wrap">
+                            <div class="dashboard-analytic-canvas-wrap" data-chart-wrapper>
                                 <canvas id="chart_km_billed_unbilled"></canvas>
+                                <div class="dashboard-analytic-chart-empty d-none">Nu exista date pentru acest grafic.</div>
                             </div>
                         </div>
                     </div>
@@ -218,8 +224,9 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                             <h4 class="h6 mb-0">Distributie Tip Transport</h4>
                         </div>
                         <div class="card-body">
-                            <div class="dashboard-analytic-canvas-wrap">
+                            <div class="dashboard-analytic-canvas-wrap" data-chart-wrapper>
                                 <canvas id="chart_transport_distribution"></canvas>
+                                <div class="dashboard-analytic-chart-empty d-none">Nu exista date pentru acest grafic.</div>
                             </div>
                         </div>
                     </div>
@@ -238,8 +245,9 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                             <h4 class="h6 mb-0">Top Vehicule dupa Profit</h4>
                         </div>
                         <div class="card-body">
-                            <div class="dashboard-analytic-canvas-wrap">
+                            <div class="dashboard-analytic-canvas-wrap" data-chart-wrapper>
                                 <canvas id="chart_vehicle_top_profit"></canvas>
+                                <div class="dashboard-analytic-chart-empty d-none">Nu exista date pentru acest grafic.</div>
                             </div>
                         </div>
                     </div>
@@ -250,8 +258,9 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                             <h4 class="h6 mb-0">Profit/Km per Vehicul</h4>
                         </div>
                         <div class="card-body">
-                            <div class="dashboard-analytic-canvas-wrap">
+                            <div class="dashboard-analytic-canvas-wrap" data-chart-wrapper>
                                 <canvas id="chart_vehicle_profit_km"></canvas>
+                                <div class="dashboard-analytic-chart-empty d-none">Nu exista date pentru acest grafic.</div>
                             </div>
                         </div>
                     </div>
@@ -269,8 +278,8 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
             </div>
             <div class="card border-0 shadow-sm">
                 <div class="card-body p-0">
-                    <div class="table-responsive">
-                        <table class="table table-striped table-hover mb-0">
+                    <div class="table-responsive dashboard-analytic-table-wrap">
+                        <table class="table table-striped table-hover mb-0 dashboard-analytic-data-table">
                             <thead>
                             <tr>
                                 <th>Nr. Inmatriculare</th>
@@ -278,6 +287,7 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                                 <th class="text-end">Km Totali</th>
                                 <th class="text-end">Tone Livrate</th>
                                 <th class="text-end">Facturare</th>
+                                <th class="text-end">Refacturare</th>
                                 <th class="text-end">Cheltuieli</th>
                                 <th class="text-end">Profit</th>
                                 <th class="text-end">Venit/Km</th>
@@ -305,8 +315,9 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                             <h4 class="h6 mb-0">Curse per Sofer</h4>
                         </div>
                         <div class="card-body">
-                            <div class="dashboard-analytic-canvas-wrap">
+                            <div class="dashboard-analytic-canvas-wrap" data-chart-wrapper>
                                 <canvas id="chart_driver_rides"></canvas>
+                                <div class="dashboard-analytic-chart-empty d-none">Nu exista date pentru acest grafic.</div>
                             </div>
                         </div>
                     </div>
@@ -317,8 +328,9 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                             <h4 class="h6 mb-0">Tone Livrate per Sofer</h4>
                         </div>
                         <div class="card-body">
-                            <div class="dashboard-analytic-canvas-wrap">
+                            <div class="dashboard-analytic-canvas-wrap" data-chart-wrapper>
                                 <canvas id="chart_driver_tons"></canvas>
+                                <div class="dashboard-analytic-chart-empty d-none">Nu exista date pentru acest grafic.</div>
                             </div>
                         </div>
                     </div>
@@ -329,8 +341,9 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                             <h4 class="h6 mb-0">Driver Activity Matrix</h4>
                         </div>
                         <div class="card-body">
-                            <div class="dashboard-analytic-canvas-wrap">
+                            <div class="dashboard-analytic-canvas-wrap" data-chart-wrapper>
                                 <canvas id="chart_driver_matrix"></canvas>
+                                <div class="dashboard-analytic-chart-empty d-none">Nu exista date pentru acest grafic.</div>
                             </div>
                         </div>
                     </div>
@@ -338,8 +351,8 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
             </div>
             <div class="card border-0 shadow-sm">
                 <div class="card-body p-0">
-                    <div class="table-responsive">
-                        <table class="table table-striped table-hover mb-0">
+                    <div class="table-responsive dashboard-analytic-table-wrap">
+                        <table class="table table-striped table-hover mb-0 dashboard-analytic-data-table">
                             <thead>
                             <tr>
                                 <th>Sofer</th>
@@ -347,6 +360,7 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                                 <th class="text-end">Km Totali</th>
                                 <th class="text-end">Tone Livrate</th>
                                 <th class="text-end">Facturare Generata</th>
+                                <th class="text-end">Refacturare</th>
                                 <th class="text-end">Profit Generat</th>
                                 <th class="text-end">Tone/Cursa</th>
                                 <th class="text-end">Km/Cursa</th>

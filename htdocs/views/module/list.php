@@ -170,158 +170,179 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
             </div>
 
             <details class="maintenance-stock-details mb-3" open>
-                <summary class="maintenance-stock-summary">Operatii stoc anvelope</summary>
+                <summary class="maintenance-stock-summary">Adaugare in stoc (simplificat)</summary>
                 <div class="pt-3">
+                    <div class="small text-muted mb-3">
+                        Foloseste <strong>Adaugare rapida</strong> pentru loturi mici sau <strong>Generare bulk</strong> pentru completarea necesarului pe tipuri de vehicul.
+                    </div>
                     <div class="row g-3">
                         <div class="col-12 col-xl-6">
-                            <div class="border rounded p-3 h-100">
-                                <h4 class="h6 mb-3">Adauga lot nou in stoc</h4>
-                                <form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'add_tire_stock'])) ?>" class="row g-2">
-                                    <?= csrf_field() ?>
-                                    <div class="col-12 col-md-6">
-                                        <label class="form-label" for="stock_brand">Brand *</label>
-                                        <input type="text" class="form-control" id="stock_brand" name="stock_brand" maxlength="100" required>
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <label class="form-label" for="stock_model">Model</label>
-                                        <input type="text" class="form-control" id="stock_model" name="stock_model" maxlength="120">
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <label class="form-label" for="stock_tire_size">Dimensiune</label>
-                                        <input type="text" class="form-control" id="stock_tire_size" name="stock_tire_size" maxlength="50" placeholder="Ex: 315/80 R22.5">
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <label class="form-label" for="stock_dot_code">DOT</label>
-                                        <input type="text" class="form-control" id="stock_dot_code" name="stock_dot_code" maxlength="20" placeholder="Ex: 3423">
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <label class="form-label" for="stock_target_vehicle_type">Compatibil cu</label>
-                                        <select class="form-select" id="stock_target_vehicle_type" name="stock_target_vehicle_type">
-                                            <?php foreach ($targetTypeOptions as $typeValue => $typeLabel): ?>
-                                                <option value="<?= e((string) $typeValue) ?>"><?= e((string) $typeLabel) ?></option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <label class="form-label" for="stock_status">Status</label>
-                                        <select class="form-select" id="stock_status" name="stock_status">
-                                            <option value="spare">Spare</option>
-                                            <option value="retreaded">Retreaded</option>
-                                            <option value="damaged">Damaged</option>
-                                            <option value="removed">Removed</option>
-                                        </select>
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <label class="form-label" for="stock_serial_prefix">Prefix serie</label>
-                                        <input type="text" class="form-control" id="stock_serial_prefix" name="stock_serial_prefix" maxlength="36" value="STOC">
-                                    </div>
-                                    <div class="col-12 col-md-3">
-                                        <label class="form-label" for="stock_quantity">Cantitate *</label>
-                                        <input type="number" class="form-control" id="stock_quantity" name="stock_quantity" min="1" max="1000" value="1" required>
-                                    </div>
-                                    <div class="col-12 col-md-3">
-                                        <label class="form-label" for="stock_mount_date">Data *</label>
-                                        <input type="date" class="form-control" id="stock_mount_date" name="stock_mount_date" value="<?= e(date('Y-m-d')) ?>" required>
-                                    </div>
-                                    <div class="col-12 col-md-4">
-                                        <label class="form-label" for="stock_km_initial">Km initial</label>
-                                        <input type="number" class="form-control" id="stock_km_initial" name="stock_km_initial" min="0" step="1" value="0">
-                                    </div>
-                                    <div class="col-12 col-md-4">
-                                        <label class="form-label" for="stock_estimated_life_km">Durata estimata (km)</label>
-                                        <input type="number" class="form-control" id="stock_estimated_life_km" name="stock_estimated_life_km" min="0" step="1" placeholder="Ex: 180000">
-                                    </div>
-                                    <div class="col-12 col-md-4">
-                                        <label class="form-label" for="stock_tread_depth_mm">Banda curenta (mm)</label>
-                                        <input type="number" class="form-control" id="stock_tread_depth_mm" name="stock_tread_depth_mm" min="0" step="0.01">
-                                    </div>
-                                    <div class="col-12 col-md-4">
-                                        <label class="form-label" for="stock_min_tread_depth_mm">Prag minim banda (mm)</label>
-                                        <input type="number" class="form-control" id="stock_min_tread_depth_mm" name="stock_min_tread_depth_mm" min="0" step="0.01" value="2.00">
-                                    </div>
-                                    <div class="col-12">
-                                        <label class="form-label" for="stock_notes">Observatii</label>
-                                        <textarea class="form-control" id="stock_notes" name="stock_notes" rows="2" placeholder="Ex: lot rezerva pentru sezon iarna"></textarea>
-                                    </div>
-                                    <div class="col-12">
-                                        <button type="submit" class="btn btn-primary">Adauga lot in stoc</button>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
+                            <details class="maintenance-stock-form-details" open>
+                                <summary class="maintenance-stock-form-summary">1) Adaugare rapida in stoc</summary>
+                                <div class="pt-3">
+                                    <form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'add_tire_stock'])) ?>" class="row g-2">
+                                        <?= csrf_field() ?>
+                                        <div class="col-12 col-md-6">
+                                            <label class="form-label" for="stock_brand">Brand *</label>
+                                            <input type="text" class="form-control" id="stock_brand" name="stock_brand" maxlength="100" required>
+                                        </div>
+                                        <div class="col-12 col-md-3">
+                                            <label class="form-label" for="stock_quantity">Cantitate *</label>
+                                            <input type="number" class="form-control" id="stock_quantity" name="stock_quantity" min="1" max="1000" value="1" required>
+                                        </div>
+                                        <div class="col-12 col-md-3">
+                                            <label class="form-label" for="stock_mount_date">Data *</label>
+                                            <input type="date" class="form-control" id="stock_mount_date" name="stock_mount_date" value="<?= e(date('Y-m-d')) ?>" required>
+                                        </div>
+                                        <div class="col-12 col-md-6">
+                                            <label class="form-label" for="stock_target_vehicle_type">Compatibil cu</label>
+                                            <select class="form-select" id="stock_target_vehicle_type" name="stock_target_vehicle_type">
+                                                <?php foreach ($targetTypeOptions as $typeValue => $typeLabel): ?>
+                                                    <option value="<?= e((string) $typeValue) ?>"><?= e((string) $typeLabel) ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+                                        <div class="col-12 col-md-6">
+                                            <label class="form-label" for="stock_status">Stare anvelopa</label>
+                                            <select class="form-select" id="stock_status" name="stock_status">
+                                                <option value="spare">Rezerva</option>
+                                                <option value="retreaded">Resapata</option>
+                                                <option value="damaged">Deteriorata</option>
+                                                <option value="removed">Scoasa din uz</option>
+                                            </select>
+                                        </div>
 
-                        <div class="col-12 col-xl-6">
-                            <div class="border rounded p-3 h-100">
-                                <h4 class="h6 mb-3">Bulk pentru vehicule active (necesar + rezerve)</h4>
-                                <form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'bulk_tire_stock'])) ?>" class="row g-2">
-                                    <?= csrf_field() ?>
-                                    <div class="col-12 col-md-6">
-                                        <label class="form-label" for="bulk_brand">Brand *</label>
-                                        <input type="text" class="form-control" id="bulk_brand" name="bulk_brand" maxlength="100" required>
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <label class="form-label" for="bulk_model">Model</label>
-                                        <input type="text" class="form-control" id="bulk_model" name="bulk_model" maxlength="120">
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <label class="form-label" for="bulk_tire_size">Dimensiune</label>
-                                        <input type="text" class="form-control" id="bulk_tire_size" name="bulk_tire_size" maxlength="50" placeholder="Ex: 315/80 R22.5">
-                                    </div>
-                                    <div class="col-12 col-md-6">
-                                        <label class="form-label" for="bulk_serial_prefix">Prefix serie</label>
-                                        <input type="text" class="form-control" id="bulk_serial_prefix" name="bulk_serial_prefix" maxlength="36" value="BULK">
-                                    </div>
-                                    <div class="col-12 col-md-4">
-                                        <label class="form-label" for="bulk_mount_date">Data *</label>
-                                        <input type="date" class="form-control" id="bulk_mount_date" name="bulk_mount_date" value="<?= e(date('Y-m-d')) ?>" required>
-                                    </div>
-                                    <div class="col-12 col-md-4">
-                                        <label class="form-label" for="bulk_estimated_life_km">Durata estimata (km)</label>
-                                        <input type="number" class="form-control" id="bulk_estimated_life_km" name="bulk_estimated_life_km" min="0" step="1">
-                                    </div>
-                                    <div class="col-12 col-md-4">
-                                        <label class="form-label" for="bulk_status">Status</label>
-                                        <select class="form-select" id="bulk_status" name="bulk_status">
-                                            <option value="spare">Spare</option>
-                                            <option value="retreaded">Retreaded</option>
-                                        </select>
-                                    </div>
-                                    <div class="col-12">
-                                        <div class="small text-muted mb-2">Selecteaza tipurile si completeaza cate rezerve extra vrei pe langa lipsa curenta.</div>
-                                        <div class="row g-2">
-                                            <?php foreach ($stockNeedsByType as $needRow): ?>
-                                                <?php
-                                                $typeValue = (string) ($needRow['vehicle_type'] ?? '');
-                                                $typeLabel = (string) ($needRow['vehicle_type_label'] ?? $typeValue);
-                                                $missingCount = (int) ($needRow['missing_tires'] ?? 0);
-                                                $recommendedAdd = (int) ($needRow['recommended_to_add'] ?? 0);
-                                                ?>
-                                                <div class="col-12">
-                                                    <div class="d-flex flex-wrap align-items-center gap-2 border rounded px-2 py-2">
-                                                        <label class="form-check d-flex align-items-center gap-2 mb-0">
-                                                            <input class="form-check-input mt-0" type="checkbox" name="bulk_vehicle_types[]" value="<?= e($typeValue) ?>" <?= $missingCount > 0 ? 'checked' : '' ?>>
-                                                            <span class="fw-semibold"><?= e($typeLabel) ?></span>
-                                                        </label>
-                                                        <span class="badge text-bg-light border">Lipsa: <?= e((string) $missingCount) ?></span>
-                                                        <span class="badge text-bg-light border">Recomandat de adaugat: <?= e((string) $recommendedAdd) ?></span>
-                                                        <div class="ms-auto d-flex align-items-center gap-2">
-                                                            <label class="small text-muted mb-0" for="<?= e('bulk_spare_extra_' . $typeValue) ?>">Rezerve extra</label>
-                                                            <input type="number" class="form-control form-control-sm" style="width:96px;" id="<?= e('bulk_spare_extra_' . $typeValue) ?>" name="bulk_spare_extra[<?= e($typeValue) ?>]" min="0" step="1" value="0">
+                                        <div class="col-12">
+                                            <details class="maintenance-stock-form-details">
+                                                <summary class="maintenance-stock-form-summary">Campuri optionale</summary>
+                                                <div class="pt-3">
+                                                    <div class="row g-2">
+                                                        <div class="col-12 col-md-6">
+                                                            <label class="form-label" for="stock_model">Model</label>
+                                                            <input type="text" class="form-control" id="stock_model" name="stock_model" maxlength="120">
+                                                        </div>
+                                                        <div class="col-12 col-md-6">
+                                                            <label class="form-label" for="stock_tire_size">Dimensiune</label>
+                                                            <input type="text" class="form-control" id="stock_tire_size" name="stock_tire_size" maxlength="50" placeholder="Ex: 315/80 R22.5">
+                                                        </div>
+                                                        <div class="col-12 col-md-6">
+                                                            <label class="form-label" for="stock_dot_code">DOT</label>
+                                                            <input type="text" class="form-control" id="stock_dot_code" name="stock_dot_code" maxlength="20" placeholder="Ex: 3423">
+                                                        </div>
+                                                        <div class="col-12 col-md-6">
+                                                            <label class="form-label" for="stock_serial_prefix">Prefix serie</label>
+                                                            <input type="text" class="form-control" id="stock_serial_prefix" name="stock_serial_prefix" maxlength="36" value="STOC">
+                                                        </div>
+                                                        <div class="col-12 col-md-4">
+                                                            <label class="form-label" for="stock_km_initial">Km la intrare</label>
+                                                            <input type="number" class="form-control" id="stock_km_initial" name="stock_km_initial" min="0" step="1" value="0">
+                                                        </div>
+                                                        <div class="col-12 col-md-4">
+                                                            <label class="form-label" for="stock_estimated_life_km">Durata de viata estimata (km)</label>
+                                                            <input type="number" class="form-control" id="stock_estimated_life_km" name="stock_estimated_life_km" min="0" step="1" placeholder="Ex: 180000">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="stock_notes">Observatii</label>
+                                                            <textarea class="form-control" id="stock_notes" name="stock_notes" rows="2" placeholder="Ex: lot rezerva pentru sezon iarna"></textarea>
                                                         </div>
                                                     </div>
                                                 </div>
-                                            <?php endforeach; ?>
+                                            </details>
                                         </div>
-                                    </div>
-                                    <div class="col-12">
-                                        <label class="form-label" for="bulk_notes">Observatii</label>
-                                        <textarea class="form-control" id="bulk_notes" name="bulk_notes" rows="2" placeholder="Ex: lot nou pentru sezon vara"></textarea>
-                                    </div>
-                                    <div class="col-12">
-                                        <button type="submit" class="btn btn-primary">Genereaza stoc bulk</button>
-                                    </div>
-                                </form>
-                            </div>
+
+                                        <div class="col-12">
+                                            <button type="submit" class="btn btn-primary">Adauga in stoc</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </details>
+                        </div>
+
+                        <div class="col-12 col-xl-6">
+                            <details class="maintenance-stock-form-details">
+                                <summary class="maintenance-stock-form-summary">2) Generare bulk pentru vehicule active</summary>
+                                <div class="pt-3">
+                                    <form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'bulk_tire_stock'])) ?>" class="row g-2">
+                                        <?= csrf_field() ?>
+                                        <div class="col-12 col-md-6">
+                                            <label class="form-label" for="bulk_brand">Brand *</label>
+                                            <input type="text" class="form-control" id="bulk_brand" name="bulk_brand" maxlength="100" required>
+                                        </div>
+                                        <div class="col-12 col-md-3">
+                                            <label class="form-label" for="bulk_mount_date">Data *</label>
+                                            <input type="date" class="form-control" id="bulk_mount_date" name="bulk_mount_date" value="<?= e(date('Y-m-d')) ?>" required>
+                                        </div>
+                                        <div class="col-12 col-md-3">
+                                            <label class="form-label" for="bulk_status">Stare anvelopa</label>
+                                            <select class="form-select" id="bulk_status" name="bulk_status">
+                                                <option value="spare">Rezerva</option>
+                                                <option value="retreaded">Resapata</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-12">
+                                            <div class="small text-muted mb-2">Bifeaza tipurile si seteaza cate rezerve extra vrei peste lipsa curenta.</div>
+                                            <div class="row g-2">
+                                                <?php foreach ($stockNeedsByType as $needRow): ?>
+                                                    <?php
+                                                    $typeValue = (string) ($needRow['vehicle_type'] ?? '');
+                                                    $typeLabel = (string) ($needRow['vehicle_type_label'] ?? $typeValue);
+                                                    $missingCount = (int) ($needRow['missing_tires'] ?? 0);
+                                                    $recommendedAdd = (int) ($needRow['recommended_to_add'] ?? 0);
+                                                    ?>
+                                                    <div class="col-12">
+                                                        <div class="d-flex flex-wrap align-items-center gap-2 border rounded px-2 py-2">
+                                                            <label class="form-check d-flex align-items-center gap-2 mb-0">
+                                                                <input class="form-check-input mt-0" type="checkbox" name="bulk_vehicle_types[]" value="<?= e($typeValue) ?>" <?= $missingCount > 0 ? 'checked' : '' ?>>
+                                                                <span class="fw-semibold"><?= e($typeLabel) ?></span>
+                                                            </label>
+                                                            <span class="badge text-bg-light border">Lipsa: <?= e((string) $missingCount) ?></span>
+                                                            <span class="badge text-bg-light border">Recomandat: <?= e((string) $recommendedAdd) ?></span>
+                                                            <div class="ms-auto d-flex align-items-center gap-2">
+                                                                <label class="small text-muted mb-0" for="<?= e('bulk_spare_extra_' . $typeValue) ?>">Rezerve extra</label>
+                                                                <input type="number" class="form-control form-control-sm" style="width:96px;" id="<?= e('bulk_spare_extra_' . $typeValue) ?>" name="bulk_spare_extra[<?= e($typeValue) ?>]" min="0" step="1" value="0">
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        </div>
+
+                                        <div class="col-12">
+                                            <details class="maintenance-stock-form-details">
+                                                <summary class="maintenance-stock-form-summary">Campuri optionale</summary>
+                                                <div class="pt-3">
+                                                    <div class="row g-2">
+                                                        <div class="col-12 col-md-6">
+                                                            <label class="form-label" for="bulk_model">Model</label>
+                                                            <input type="text" class="form-control" id="bulk_model" name="bulk_model" maxlength="120">
+                                                        </div>
+                                                        <div class="col-12 col-md-6">
+                                                            <label class="form-label" for="bulk_tire_size">Dimensiune</label>
+                                                            <input type="text" class="form-control" id="bulk_tire_size" name="bulk_tire_size" maxlength="50" placeholder="Ex: 315/80 R22.5">
+                                                        </div>
+                                                        <div class="col-12 col-md-6">
+                                                            <label class="form-label" for="bulk_serial_prefix">Prefix serie</label>
+                                                            <input type="text" class="form-control" id="bulk_serial_prefix" name="bulk_serial_prefix" maxlength="36" value="BULK">
+                                                        </div>
+                                                        <div class="col-12 col-md-6">
+                                                            <label class="form-label" for="bulk_estimated_life_km">Durata de viata estimata (km)</label>
+                                                            <input type="number" class="form-control" id="bulk_estimated_life_km" name="bulk_estimated_life_km" min="0" step="1">
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <label class="form-label" for="bulk_notes">Observatii</label>
+                                                            <textarea class="form-control" id="bulk_notes" name="bulk_notes" rows="2" placeholder="Ex: lot nou pentru sezon vara"></textarea>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </details>
+                                        </div>
+
+                                        <div class="col-12">
+                                            <button type="submit" class="btn btn-primary">Genereaza lot bulk</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </details>
                         </div>
                     </div>
                 </div>
@@ -370,21 +391,21 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
                         </div>
 
                         <div class="col-12 col-xl-7">
-                            <h4 class="h6 mt-1">Stoc liber rapid</h4>
+                            <h4 class="h6 mt-1">Anvelope disponibile in stoc</h4>
                             <div class="small text-muted mb-2">
-                                Spare: <?= e((string) ((int) ($stockStatusCounts['spare'] ?? 0))) ?> |
-                                Retreaded: <?= e((string) ((int) ($stockStatusCounts['retreaded'] ?? 0))) ?> |
-                                Damaged: <?= e((string) ((int) ($stockStatusCounts['damaged'] ?? 0))) ?> |
-                                Removed: <?= e((string) ((int) ($stockStatusCounts['removed'] ?? 0))) ?>
+                                Rezerva: <?= e((string) ((int) ($stockStatusCounts['spare'] ?? 0))) ?> |
+                                Resapata: <?= e((string) ((int) ($stockStatusCounts['retreaded'] ?? 0))) ?> |
+                                Deteriorata: <?= e((string) ((int) ($stockStatusCounts['damaged'] ?? 0))) ?> |
+                                Scoasa din uz: <?= e((string) ((int) ($stockStatusCounts['removed'] ?? 0))) ?>
                             </div>
                             <div class="table-responsive">
                                 <table class="table table-sm align-middle mb-0">
                                     <thead>
                                     <tr>
-                                        <th>SN</th>
+                                        <th>Serie</th>
                                         <th>Anvelopa</th>
-                                        <th>Tip tinta</th>
-                                        <th>Status</th>
+                                        <th>Compatibil cu</th>
+                                        <th>Stare</th>
                                         <th>Observatii</th>
                                         <th class="text-end">Actiuni</th>
                                     </tr>
@@ -455,16 +476,16 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
                                                             <input type="text" class="form-control form-control-sm" name="stock_edit_dot_code" value="<?= e((string) ($stockRow['dot_code'] ?? '')) ?>" maxlength="20">
                                                         </div>
                                                         <div class="col-12 col-md-3">
-                                                            <label class="form-label mb-1">Status</label>
+                                                            <label class="form-label mb-1">Stare anvelopa</label>
                                                             <select class="form-select form-select-sm" name="stock_edit_status">
                                                                 <?php $currentStatus = strtolower(trim((string) ($stockRow['status'] ?? 'spare'))); ?>
-                                                                <?php foreach (['spare' => 'Spare', 'retreaded' => 'Retreaded', 'damaged' => 'Damaged', 'removed' => 'Removed', 'active' => 'Active'] as $statusValue => $statusLabel): ?>
+                                                                <?php foreach (['spare' => 'Rezerva', 'retreaded' => 'Resapata', 'damaged' => 'Deteriorata', 'removed' => 'Scoasa din uz', 'active' => 'Montata'] as $statusValue => $statusLabel): ?>
                                                                     <option value="<?= e($statusValue) ?>" <?= $currentStatus === $statusValue ? 'selected' : '' ?>><?= e($statusLabel) ?></option>
                                                                 <?php endforeach; ?>
                                                             </select>
                                                         </div>
                                                         <div class="col-12 col-md-3">
-                                                            <label class="form-label mb-1">Tip tinta</label>
+                                                            <label class="form-label mb-1">Compatibil cu</label>
                                                             <select class="form-select form-select-sm" name="stock_edit_target_vehicle_type">
                                                                 <?php $currentTargetType = (string) ($stockRow['target_vehicle_type'] ?? 'universal'); ?>
                                                                 <?php foreach ($targetTypeOptions as $typeValue => $typeLabel): ?>
@@ -479,14 +500,6 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
                                                         <div class="col-12 col-md-3">
                                                             <label class="form-label mb-1">Durata estimata (km)</label>
                                                             <input type="number" class="form-control form-control-sm" name="stock_edit_estimated_life_km" min="0" step="1" value="<?= e((string) ($stockRow['estimated_life_km'] ?? '')) ?>">
-                                                        </div>
-                                                        <div class="col-12 col-md-3">
-                                                            <label class="form-label mb-1">Banda curenta (mm)</label>
-                                                            <input type="number" class="form-control form-control-sm" name="stock_edit_tread_depth_mm" min="0" step="0.01" value="<?= e((string) ($stockRow['tread_depth_mm'] ?? '')) ?>">
-                                                        </div>
-                                                        <div class="col-12 col-md-3">
-                                                            <label class="form-label mb-1">Prag minim (mm)</label>
-                                                            <input type="number" class="form-control form-control-sm" name="stock_edit_min_tread_depth_mm" min="0" step="0.01" value="<?= e((string) ($stockRow['min_tread_depth_mm'] ?? '2.00')) ?>">
                                                         </div>
                                                         <div class="col-12">
                                                             <label class="form-label mb-1">Observatii</label>

@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 $zoneTariffJson = json_encode($zoneTariffs, JSON_UNESCAPED_UNICODE);
 if (!is_string($zoneTariffJson)) {
     $zoneTariffJson = '{}';
@@ -124,6 +124,15 @@ $editingExpense = $expenseBeingEdited !== null || $editExpenseId > 0;
 $existingExpenseDoc = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['file_path'] ?? '') : '';
 $existingExpenseDocName = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['original_name'] ?? '') : '';
 $existingExpenseDocUrl = $existingExpenseDoc !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($existingExpenseDoc)) : null;
+$existingRefacturareDoc = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['refacturare_document_path'] ?? '') : '';
+$existingRefacturareDocName = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['refacturare_document_original_name'] ?? '') : '';
+$existingRefacturareDocUrl = $existingRefacturareDoc !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($existingRefacturareDoc)) : null;
+$expenseRefacturareEnabled = (string) ($expenseFormData['refacturare_enabled'] ?? '0') === '1';
+$selectedRefacturareExpenseType = (string) ($expenseFormData['refacturare_tip_cheltuiala'] ?? 'motorina');
+if (!isset($expenseTypes[$selectedRefacturareExpenseType])) {
+    $selectedRefacturareExpenseType = 'motorina';
+}
+$showRefacturareRoadTaxDetails = $expenseRefacturareEnabled && $selectedRefacturareExpenseType === 'taxe_drum';
 
 $expensesTotal = 0.0;
 foreach ($expenses as $expenseRow) {
@@ -299,7 +308,7 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                     <div class="form-text" data-role="durata-cursa-hint" data-default-text="<?= e($formDurationPreviewText) ?>"><?= e($formDurationPreviewText) ?></div>
                 </div>
 
-                <div class="col-12 col-md-6">
+                <div class="col-12 col-md-6" data-role="field-loc-incarcare">
                     <label class="form-label" for="edit_race_loc_incarcare_id">Loc incarcare <span class="text-danger">*</span></label>
                     <select class="form-select <?= isset($raceFormErrors['loc_incarcare_id']) ? 'is-invalid' : '' ?>" id="edit_race_loc_incarcare_id" name="loc_incarcare_id" required>
                         <option value="">-- Selecteaza --</option>
@@ -312,14 +321,38 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                     </select>
                     <?php if (isset($raceFormErrors['loc_incarcare_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['loc_incarcare_id']) ?></div><?php endif; ?>
                     <div class="form-text text-muted <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="distributie-note-loc">
-                        Pentru Distributie / Primar+Distributie: regula de ruta are prioritate pe perechile configurate bidirectional (Loc ↔ Zona). Daca nu exista pereche, se aplica fallback loc/zona/beneficiar.
+                        Pentru Distributie / Primar+Distributie: regula de ruta are prioritate pe perechile configurate bidirectional (Loc - Zona). Daca nu exista pereche, se aplica fallback loc/zona/beneficiar.
                     </div>
                     <div class="form-text text-muted <?= $isPrimarySelected ? '' : 'd-none' ?>" data-role="primar-note-loc">
-                        Pentru Primar km / Primar tone: sunt afisate doar locurile din Setari Primar, iar Km efectuati este luat automat din perechea Loc ↔ Zona.
+                        Pentru Primar km / Primar tone: sunt afisate doar locurile din Setari Primar, iar Km efectuati este luat automat din perechea Loc - Zona.
                     </div>
                 </div>
 
-                <div class="col-12 col-md-6">
+                <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-plecare">
+                    <label class="form-label" for="edit_race_loc_plecare">Loc plecare <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control <?= isset($raceFormErrors['loc_plecare']) ? 'is-invalid' : '' ?>" id="edit_race_loc_plecare" name="loc_plecare" value="<?= e((string) ($raceFormData['loc_plecare'] ?? '')) ?>" data-role="loc-plecare">
+                    <?php if (isset($raceFormErrors['loc_plecare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['loc_plecare']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-aspirare">
+                    <label class="form-label" for="edit_race_loc_aspirare">Loc aspirare <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control <?= isset($raceFormErrors['loc_aspirare']) ? 'is-invalid' : '' ?>" id="edit_race_loc_aspirare" name="loc_aspirare" value="<?= e((string) ($raceFormData['loc_aspirare'] ?? '')) ?>" data-role="loc-aspirare">
+                    <?php if (isset($raceFormErrors['loc_aspirare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['loc_aspirare']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-livrare">
+                    <label class="form-label" for="edit_race_loc_livrare">Loc livrare <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control <?= isset($raceFormErrors['loc_livrare']) ? 'is-invalid' : '' ?>" id="edit_race_loc_livrare" name="loc_livrare" value="<?= e((string) ($raceFormData['loc_livrare'] ?? '')) ?>" data-role="loc-livrare">
+                    <?php if (isset($raceFormErrors['loc_livrare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['loc_livrare']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-livrare-cursa">
+                    <label class="form-label" for="edit_race_loc_livrare_cursa">Loc inchidere cursa <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control <?= isset($raceFormErrors['loc_livrare_cursa']) ? 'is-invalid' : '' ?>" id="edit_race_loc_livrare_cursa" name="loc_livrare_cursa" value="<?= e((string) ($raceFormData['loc_livrare_cursa'] ?? '')) ?>" data-role="loc-livrare-cursa">
+                    <?php if (isset($raceFormErrors['loc_livrare_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['loc_livrare_cursa']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-tip-marfa">
                     <label class="form-label" for="edit_race_tip_marfa">Tip marfa <span class="text-danger">*</span></label>
                     <div class="dropdown transport-multiselect-dropdown goods-multiselect-dropdown" data-role="goods-type-dropdown">
                         <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start transport-multiselect-toggle <?= isset($raceFormErrors['tip_marfa']) ? 'is-invalid' : '' ?>" type="button" id="edit_race_tip_marfa" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
@@ -345,13 +378,13 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                     <?php if (isset($raceFormErrors['cantitate_incarcata'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['cantitate_incarcata']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6">
+                <div class="col-12 col-md-6 <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="field-nr-clienti">
                     <label class="form-label" for="edit_race_nr_clienti">Nr. clienti</label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['nr_clienti']) ? 'is-invalid' : '' ?>" id="edit_race_nr_clienti" name="nr_clienti" min="0" step="1" value="<?= e((string) ($raceFormData['nr_clienti'] ?? '')) ?>">
                     <?php if (isset($raceFormErrors['nr_clienti'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['nr_clienti']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6">
+                <div class="col-12 col-md-6" data-role="field-capacitate-transport">
                     <label class="form-label" for="edit_race_capacitate_transport">Capacitate transport</label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['capacitate_transport']) ? 'is-invalid' : '' ?>" id="edit_race_capacitate_transport" name="capacitate_transport" step="0.01" min="0" value="<?= e((string) ($raceFormData['capacitate_transport'] ?? '')) ?>" data-role="capacitate-transport" readonly>
                     <?php if (isset($raceFormErrors['capacitate_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['capacitate_transport']) ?></div><?php endif; ?>
@@ -364,13 +397,6 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                     <?php if (isset($raceFormErrors['km_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_cursa']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6">
-                    <label class="form-label" for="edit_race_ore_functionare">Ore functionare</label>
-                    <input type="text" class="form-control <?= isset($raceFormErrors['ore_functionare']) ? 'is-invalid' : '' ?>" id="edit_race_ore_functionare" name="ore_functionare" value="<?= e((string) ($raceFormData['ore_functionare'] ?? '')) ?>" placeholder="ex: 2h sau 2">
-                    <?php if (isset($raceFormErrors['ore_functionare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['ore_functionare']) ?></div><?php endif; ?>
-                    <div class="form-text">1h = 40 km echivalenti pentru scaderea Km revizie.</div>
-                </div>
-
                 <div class="col-12 col-md-6 <?= $isKmTotalSelected ? '' : 'd-none' ?>" data-role="field-km-totali">
                     <label class="form-label" for="edit_race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['km_totali']) ? 'is-invalid' : '' ?>" id="edit_race_km_totali" name="km_totali" min="0" step="1" value="<?= e((string) ($raceFormData['km_totali'] ?? '')) ?>" data-role="km-totali">
@@ -379,7 +405,7 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                 </div>
 
                 <div class="col-12 col-md-6" data-role="field-zona">
-                    <label class="form-label" for="edit_race_zona_distributie_id" data-role="zona-label" data-default-label="Zona distributie" data-primary-label="Zona descarcare">Zona distributie</label>
+                    <label class="form-label" for="edit_race_zona_distributie_id" data-role="zona-label" data-default-label="Zona distributie" data-primary-label="Zona descarcare" data-primary-km-label="Loc descarcare">Zona distributie</label>
                     <select class="form-select <?= isset($raceFormErrors['zona_distributie_id']) ? 'is-invalid' : '' ?>" id="edit_race_zona_distributie_id" name="zona_distributie_id" data-role="zona">
                         <option value="">-- Selecteaza --</option>
                         <?php foreach ($distributionZones as $zone): ?>
@@ -393,44 +419,44 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                     </select>
                     <?php if (isset($raceFormErrors['zona_distributie_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['zona_distributie_id']) ?></div><?php endif; ?>
                     <div class="form-text text-muted <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="distributie-note-zone">
-                        Prioritate calcul: regula de ruta (Loc ↔ Zona), apoi regulile loc/zona, apoi fallback beneficiar. Distributie = Cantitate × Tariful activ; Primar+Distributie = Cantitate × Tariful activ + Km × Cost extra/km activ.
+                        Prioritate calcul: regula de ruta (Loc - Zona), apoi regulile loc/zona, apoi fallback beneficiar. Distributie = Cantitate x Tariful activ; Primar+Distributie = Cantitate x Tariful activ + Km x Cost extra/km activ.
                     </div>
                     <div class="form-text text-muted <?= $isPrimarySelected ? '' : 'd-none' ?>" data-role="primar-note-zone">
-                        Pentru Primar km / Primar tone, selectia Loc ↔ Zona este filtrata din Setari Primar si se aplica bidirectional.
+                        Pentru Primar km / Primar tone, selectia Loc - Zona este filtrata din Setari Primar si se aplica bidirectional.
                     </div>
                 </div>
 
-                <div class="col-12 col-md-6" data-role="field-ore-aspirare">
+                <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-ore-aspirare">
                     <label class="form-label" for="edit_race_ore_aspirare">Ore aspirare</label>
-                    <input type="number" class="form-control <?= isset($raceFormErrors['ore_aspirare']) ? 'is-invalid' : '' ?>" id="edit_race_ore_aspirare" name="ore_aspirare" step="0.01" min="0" value="<?= e((string) ($raceFormData['ore_aspirare'] ?? '')) ?>" data-role="ore-aspirare">
+                    <input type="text" class="form-control <?= isset($raceFormErrors['ore_aspirare']) ? 'is-invalid' : '' ?>" id="edit_race_ore_aspirare" name="ore_aspirare" value="<?= e((string) ($raceFormData['ore_aspirare'] ?? '')) ?>" data-role="ore-aspirare" placeholder="ex: 2h sau 2">
                     <?php if (isset($raceFormErrors['ore_aspirare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['ore_aspirare']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6" data-role="field-km-dislocare">
-                    <label class="form-label" for="edit_race_km_dislocare">Km dislocare</label>
-                    <input type="number" class="form-control <?= isset($raceFormErrors['km_dislocare']) ? 'is-invalid' : '' ?>" id="edit_race_km_dislocare" name="km_dislocare" step="0.01" min="0" value="<?= e((string) ($raceFormData['km_dislocare'] ?? '')) ?>" data-role="km-dislocare">
-                    <?php if (isset($raceFormErrors['km_dislocare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_dislocare']) ?></div><?php endif; ?>
-                </div>
-
-                <div class="col-12 col-md-6" data-role="field-tona-livrata">
-                    <label class="form-label" for="edit_race_tona_livrata">Tona livrata</label>
-                    <input type="number" class="form-control <?= isset($raceFormErrors['tona_livrata']) ? 'is-invalid' : '' ?>" id="edit_race_tona_livrata" name="tona_livrata" step="0.01" min="0" value="<?= e((string) ($raceFormData['tona_livrata'] ?? '')) ?>" data-role="tona-livrata">
-                    <?php if (isset($raceFormErrors['tona_livrata'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tona_livrata']) ?></div><?php endif; ?>
-                </div>
-
-                <div class="col-12 col-md-6 d-none" data-role="field-tona-aspirata-lichida">
+                <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-metric-field" data-role="field-tona-aspirata-lichida">
                     <label class="form-label" for="edit_race_tona_aspirata_lichida">Tona lichida aspirata</label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['tona_aspirata_lichida']) ? 'is-invalid' : '' ?>" id="edit_race_tona_aspirata_lichida" name="tona_aspirata_lichida" step="0.01" min="0" value="<?= e((string) ($raceFormData['tona_aspirata_lichida'] ?? '')) ?>" data-role="tona-aspirata-lichida">
                     <?php if (isset($raceFormErrors['tona_aspirata_lichida'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tona_aspirata_lichida']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 d-none" data-role="field-tona-aspirata-gazoasa">
+                <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-metric-field" data-role="field-tona-aspirata-gazoasa">
                     <label class="form-label" for="edit_race_tona_aspirata_gazoasa">Tona gazoasa aspirata</label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['tona_aspirata_gazoasa']) ? 'is-invalid' : '' ?>" id="edit_race_tona_aspirata_gazoasa" name="tona_aspirata_gazoasa" step="0.01" min="0" value="<?= e((string) ($raceFormData['tona_aspirata_gazoasa'] ?? '')) ?>" data-role="tona-aspirata-gazoasa">
                     <?php if (isset($raceFormErrors['tona_aspirata_gazoasa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tona_aspirata_gazoasa']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6" data-role="preview-total-field">
+                <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-tona-livrata">
+                    <label class="form-label" for="edit_race_tona_livrata">Cantitate livrata (tone)</label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['tona_livrata']) ? 'is-invalid' : '' ?>" id="edit_race_tona_livrata" name="tona_livrata" step="0.01" min="0" value="<?= e((string) ($raceFormData['tona_livrata'] ?? '')) ?>" data-role="tona-livrata">
+                    <?php if (isset($raceFormErrors['tona_livrata'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tona_livrata']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-km-dislocare">
+                    <label class="form-label" for="edit_race_km_dislocare">Km efectuati</label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['km_dislocare']) ? 'is-invalid' : '' ?>" id="edit_race_km_dislocare" name="km_dislocare" step="0.01" min="0" value="<?= e((string) ($raceFormData['km_dislocare'] ?? '')) ?>" data-role="km-dislocare">
+                    <?php if (isset($raceFormErrors['km_dislocare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_dislocare']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="preview-total-field">
                     <label class="form-label">Total facturare (estimare)</label>
                     <div class="dispatcher-total-preview" data-role="total-preview"><?= e(format_number_ro((float) ($raceFormData['total_facturare'] ?? 0), 2)) ?> lei</div>
                 </div>
@@ -441,7 +467,7 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                 </div>
 
                 <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-distributie-field">
-                    <label class="form-label">Cost/km Distribuție</label>
+                    <label class="form-label">Cost/km Distributie</label>
                     <div class="dispatcher-total-preview" data-role="cost-km-distributie-preview"><?= e(format_number_ro((float) ($raceFormData['cost_km_distributie'] ?? 0), 2)) ?> lei/km</div>
                 </div>
 
@@ -450,7 +476,7 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                     <div class="dispatcher-total-preview" data-role="cost-km-mixt-preview"><?= e(format_number_ro((float) ($raceFormData['cost_km_mixt'] ?? 0), 2)) ?> lei/km</div>
                 </div>
 
-                <div class="col-12 col-md-6">
+                <div class="col-12 col-md-6 dispatcher-compressor-metric-field">
                     <label class="form-label" for="edit_race_status_facturare">Status</label>
                     <select class="form-select <?= isset($raceFormErrors['status_facturare']) ? 'is-invalid' : '' ?>" id="edit_race_status_facturare" name="status_facturare">
                         <?php foreach (($billingStatuses ?? []) as $statusKey => $statusLabel): ?>
@@ -477,8 +503,8 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
     </div>
 </div>
 
-<div class="row g-3 align-items-start">
-    <div class="col-12 col-xl-5" id="expense-section">
+<div class="row g-3 align-items-start dispatcher-expense-layout <?= $expenseRefacturareEnabled ? 'has-refacturare' : '' ?>" data-role="expense-layout">
+    <div class="col-12 col-xl-5 dispatcher-expense-form-column" id="expense-section">
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
                 <h3 class="h6 mb-0"><?= $editingExpense ? 'Editeaza cheltuiala' : 'Adauga cheltuiala' ?></h3>
@@ -490,23 +516,59 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                 <form method="post"
                       action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'save_expense', 'id' => $raceId])) ?>"
                       enctype="multipart/form-data"
+                      class="dispatcher-expense-form <?= $expenseRefacturareEnabled ? 'has-refacturare' : '' ?>"
+                      data-role="expense-form"
                       novalidate>
                     <?= csrf_field() ?>
                     <input type="hidden" name="expense_id" value="<?= e((string) ($expenseFormData['expense_id'] ?? '')) ?>">
 
-                    <div class="mb-3">
-                        <label class="form-label" for="expense_tip_cheltuiala">Tip cheltuiala <span class="text-danger">*</span></label>
-                        <select class="form-select <?= isset($expenseFormErrors['tip_cheltuiala']) ? 'is-invalid' : '' ?>" id="expense_tip_cheltuiala" name="tip_cheltuiala" required>
-                            <?php foreach ($expenseTypes as $value => $label): ?>
-                                <option value="<?= e((string) $value) ?>" <?= (string) ($expenseFormData['tip_cheltuiala'] ?? 'motorina') === (string) $value ? 'selected' : '' ?>>
-                                    <?= e((string) $label) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                        <?php if (isset($expenseFormErrors['tip_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['tip_cheltuiala']) ?></div><?php endif; ?>
+                    <div class="row g-2 mb-3 align-items-start expense-type-row">
+                        <div class="col-12 col-md-6">
+                            <label class="form-label" for="expense_tip_cheltuiala">Tip cheltuiala <span class="text-danger">*</span></label>
+                            <select class="form-select <?= isset($expenseFormErrors['tip_cheltuiala']) ? 'is-invalid' : '' ?>" id="expense_tip_cheltuiala" name="tip_cheltuiala" required>
+                                <?php foreach ($expenseTypes as $value => $label): ?>
+                                    <option value="<?= e((string) $value) ?>" <?= (string) ($expenseFormData['tip_cheltuiala'] ?? 'motorina') === (string) $value ? 'selected' : '' ?>>
+                                        <?= e((string) $label) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <?php if (isset($expenseFormErrors['tip_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['tip_cheltuiala']) ?></div><?php endif; ?>
+                        </div>
+
+                        <div class="col-12 col-md-6">
+                            <div class="form-check mb-2">
+                                <input
+                                    class="form-check-input"
+                                    type="checkbox"
+                                    value="1"
+                                    id="expense_refacturare_enabled"
+                                    name="refacturare_enabled"
+                                    data-role="expense-refacturare-toggle"
+                                    <?= $expenseRefacturareEnabled ? 'checked' : '' ?>
+                                >
+                                <label class="form-check-label" for="expense_refacturare_enabled">Refacturare</label>
+                            </div>
+                            <div class="<?= $expenseRefacturareEnabled ? '' : 'd-none' ?>" data-role="expense-refacturare-menu">
+                                <label class="form-label visually-hidden" for="expense_refacturare_tip_cheltuiala">Refacturare</label>
+                                <select
+                                    class="form-select <?= isset($expenseFormErrors['refacturare_tip_cheltuiala']) ? 'is-invalid' : '' ?>"
+                                    id="expense_refacturare_tip_cheltuiala"
+                                    name="refacturare_tip_cheltuiala"
+                                    <?= $expenseRefacturareEnabled ? '' : 'disabled' ?>
+                                >
+                                    <?php foreach ($expenseTypes as $value => $label): ?>
+                                        <option value="<?= e((string) $value) ?>" <?= $selectedRefacturareExpenseType === (string) $value ? 'selected' : '' ?>>
+                                            <?= e((string) $label) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <?php if (isset($expenseFormErrors['refacturare_tip_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_tip_cheltuiala']) ?></div><?php endif; ?>
+                            </div>
+                        </div>
                     </div>
 
-                    <div class="mb-3 d-none" data-role="expense-road-tax-breakdown">
+                    <div class="expense-main-panel">
+                    <div class="mb-3 d-none expense-main-field" data-role="expense-road-tax-breakdown">
                         <label class="form-label mb-2">Detalii Taxe drum</label>
                         <div class="row g-2 mb-2">
                             <div class="col-12 col-md-4"><strong>Taxa acces</strong></div>
@@ -601,25 +663,25 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                         <div class="form-text mt-2">Suma se calculeaza automat din: bucati x pret pentru fiecare taxa.</div>
                     </div>
 
-                    <div class="mb-3">
+                    <div class="mb-3 expense-main-field">
                         <label class="form-label" for="expense_suma">Suma <span class="text-danger">*</span></label>
                         <input type="number" class="form-control <?= isset($expenseFormErrors['suma']) ? 'is-invalid' : '' ?>" id="expense_suma" name="suma" min="0.01" step="0.01" value="<?= e((string) ($expenseFormData['suma'] ?? '')) ?>" required>
                         <?php if (isset($expenseFormErrors['suma'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['suma']) ?></div><?php endif; ?>
                     </div>
 
-                    <div class="mb-3">
+                    <div class="mb-3 expense-main-field">
                         <label class="form-label" for="expense_data_cheltuiala">Data cheltuiala <span class="text-danger">*</span></label>
                         <input type="date" class="form-control <?= isset($expenseFormErrors['data_cheltuiala']) ? 'is-invalid' : '' ?>" id="expense_data_cheltuiala" name="data_cheltuiala" value="<?= e((string) ($expenseFormData['data_cheltuiala'] ?? '')) ?>" required>
                         <?php if (isset($expenseFormErrors['data_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['data_cheltuiala']) ?></div><?php endif; ?>
                     </div>
 
-                    <div class="mb-3">
+                    <div class="mb-3 expense-main-field">
                         <label class="form-label" for="expense_observatii">Observatii</label>
                         <textarea class="form-control <?= isset($expenseFormErrors['observatii']) ? 'is-invalid' : '' ?>" id="expense_observatii" name="observatii" rows="3"><?= e((string) ($expenseFormData['observatii'] ?? '')) ?></textarea>
                         <?php if (isset($expenseFormErrors['observatii'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['observatii']) ?></div><?php endif; ?>
                     </div>
 
-                    <div class="mb-3">
+                    <div class="mb-3 expense-main-field">
                         <label class="form-label" for="expense_document_upload">Document doveditor (upload)</label>
                         <input type="file" class="form-control <?= isset($expenseFormErrors['document_upload']) ? 'is-invalid' : '' ?>" id="expense_document_upload" name="document_upload" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
                         <div class="form-text">Formate acceptate: PDF, JPG, PNG, WEBP, DOC, DOCX. Maxim 5 MB.</div>
@@ -627,7 +689,7 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                     </div>
 
                     <?php if ($existingExpenseDocUrl !== null): ?>
-                        <div class="alert alert-light border">
+                        <div class="alert alert-light border expense-main-field">
                             <div class="small text-muted mb-1">Document existent</div>
                             <a href="<?= e($existingExpenseDocUrl) ?>" target="_blank" rel="noopener">
                                 <?= e($existingExpenseDocName !== '' ? $existingExpenseDocName : basename($existingExpenseDoc)) ?>
@@ -641,13 +703,156 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                         </div>
                     <?php endif; ?>
 
-                    <button type="submit" class="btn btn-primary"><?= $editingExpense ? 'Actualizeaza cheltuiala' : 'Adauga cheltuiala' ?></button>
+                    <button type="submit" class="btn btn-primary expense-submit-row" name="submit_intent" value="expense"><?= $editingExpense ? 'Actualizeaza cheltuiala' : 'Adauga cheltuiala' ?></button>
+                    </div>
+                    <div class="border rounded p-3 mb-3 expense-refacturare-panel <?= $expenseRefacturareEnabled ? '' : 'd-none' ?>" data-role="expense-refacturare-fields">
+                        <div class="fw-semibold mb-3">Detalii Refacturare</div>
+
+                    <div class="mb-3 <?= $showRefacturareRoadTaxDetails ? '' : 'd-none' ?>" data-role="refacturare-road-tax-breakdown">
+                        <label class="form-label mb-2">Detalii Refacturare Taxe drum</label>
+                        <div class="row g-2 mb-2">
+                            <div class="col-12 col-md-4"><strong>Taxa acces</strong></div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_taxa_acces_bucati']) ? 'is-invalid' : '' ?>"
+                                    id="expense_refacturare_taxa_acces_bucati"
+                                    name="refacturare_taxa_acces_bucati"
+                                    min="0"
+                                    step="1"
+                                    placeholder="Bucati"
+                                    value="<?= e((string) ($expenseFormData['refacturare_taxa_acces_bucati'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['refacturare_taxa_acces_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_taxa_acces_bucati']) ?></div><?php endif; ?>
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_taxa_acces_pret']) ? 'is-invalid' : '' ?>"
+                                    id="expense_refacturare_taxa_acces_pret"
+                                    name="refacturare_taxa_acces_pret"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="Pret / buc"
+                                    value="<?= e((string) ($expenseFormData['refacturare_taxa_acces_pret'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['refacturare_taxa_acces_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_taxa_acces_pret']) ?></div><?php endif; ?>
+                            </div>
+                        </div>
+
+                        <div class="row g-2 mb-2">
+                            <div class="col-12 col-md-4"><strong>Port</strong></div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_port_bucati']) ? 'is-invalid' : '' ?>"
+                                    id="expense_refacturare_port_bucati"
+                                    name="refacturare_port_bucati"
+                                    min="0"
+                                    step="1"
+                                    placeholder="Bucati"
+                                    value="<?= e((string) ($expenseFormData['refacturare_port_bucati'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['refacturare_port_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_port_bucati']) ?></div><?php endif; ?>
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_port_pret']) ? 'is-invalid' : '' ?>"
+                                    id="expense_refacturare_port_pret"
+                                    name="refacturare_port_pret"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="Pret / buc"
+                                    value="<?= e((string) ($expenseFormData['refacturare_port_pret'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['refacturare_port_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_port_pret']) ?></div><?php endif; ?>
+                            </div>
+                        </div>
+
+                        <div class="row g-2">
+                            <div class="col-12 col-md-4"><strong>Trece</strong></div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_trece_bucati']) ? 'is-invalid' : '' ?>"
+                                    id="expense_refacturare_trece_bucati"
+                                    name="refacturare_trece_bucati"
+                                    min="0"
+                                    step="1"
+                                    placeholder="Bucati"
+                                    value="<?= e((string) ($expenseFormData['refacturare_trece_bucati'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['refacturare_trece_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_trece_bucati']) ?></div><?php endif; ?>
+                            </div>
+                            <div class="col-6 col-md-4">
+                                <input
+                                    type="number"
+                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_trece_pret']) ? 'is-invalid' : '' ?>"
+                                    id="expense_refacturare_trece_pret"
+                                    name="refacturare_trece_pret"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="Pret / buc"
+                                    value="<?= e((string) ($expenseFormData['refacturare_trece_pret'] ?? '')) ?>"
+                                >
+                                <?php if (isset($expenseFormErrors['refacturare_trece_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_trece_pret']) ?></div><?php endif; ?>
+                            </div>
+                        </div>
+
+                        <div class="form-text mt-2">Suma se calculeaza automat din: bucati x pret pentru fiecare taxa.</div>
+                    </div>
+
+                        <div class="mb-3">
+                            <label class="form-label" for="expense_refacturare_suma">Suma Refacturare <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control <?= isset($expenseFormErrors['refacturare_suma']) ? 'is-invalid' : '' ?>" id="expense_refacturare_suma" name="refacturare_suma" min="0.01" step="0.01" value="<?= e((string) ($expenseFormData['refacturare_suma'] ?? '')) ?>">
+                            <?php if (isset($expenseFormErrors['refacturare_suma'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_suma']) ?></div><?php endif; ?>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label" for="expense_refacturare_data">Data Refacturare <span class="text-danger">*</span></label>
+                            <input type="date" class="form-control <?= isset($expenseFormErrors['refacturare_data']) ? 'is-invalid' : '' ?>" id="expense_refacturare_data" name="refacturare_data" value="<?= e((string) ($expenseFormData['refacturare_data'] ?? date('Y-m-d'))) ?>">
+                            <?php if (isset($expenseFormErrors['refacturare_data'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_data']) ?></div><?php endif; ?>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label" for="expense_refacturare_observatii">Observatii Refacturare</label>
+                            <textarea class="form-control <?= isset($expenseFormErrors['refacturare_observatii']) ? 'is-invalid' : '' ?>" id="expense_refacturare_observatii" name="refacturare_observatii" rows="3"><?= e((string) ($expenseFormData['refacturare_observatii'] ?? '')) ?></textarea>
+                            <?php if (isset($expenseFormErrors['refacturare_observatii'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_observatii']) ?></div><?php endif; ?>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label" for="expense_refacturare_document_upload">Document Refacturare (upload)</label>
+                            <input type="file" class="form-control <?= isset($expenseFormErrors['refacturare_document_upload']) ? 'is-invalid' : '' ?>" id="expense_refacturare_document_upload" name="refacturare_document_upload" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
+                            <div class="form-text">Formate acceptate: PDF, JPG, PNG, WEBP, DOC, DOCX. Maxim 5 MB.</div>
+                            <?php if (isset($expenseFormErrors['refacturare_document_upload'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_document_upload']) ?></div><?php endif; ?>
+                        </div>
+
+                        <?php if ($existingRefacturareDocUrl !== null): ?>
+                            <div class="alert alert-light border mb-0">
+                                <div class="small text-muted mb-1">Document Refacturare existent</div>
+                                <a href="<?= e($existingRefacturareDocUrl) ?>" target="_blank" rel="noopener">
+                                    <?= e($existingRefacturareDocName !== '' ? $existingRefacturareDocName : basename($existingRefacturareDoc)) ?>
+                                </a>
+                                <div class="form-check mt-2">
+                                    <input class="form-check-input" type="checkbox" value="1" id="expense_sterge_refacturare_document" name="sterge_refacturare_document">
+                                    <label class="form-check-label" for="expense_sterge_refacturare_document">
+                                        Sterge documentul Refacturare curent la salvare
+                                    </label>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+
+                        <button type="submit" class="btn btn-primary w-100 mt-3 expense-refacturare-submit" name="submit_intent" value="refacturare" formnovalidate>
+                            <?= $editingExpense ? 'Actualizeaza Refacturare' : 'Adauga Refacturare' ?>
+                        </button>
+                    </div>
                 </form>
             </div>
         </div>
     </div>
 
-    <div class="col-12 col-xl-7">
+    <div class="col-12 col-xl-7 dispatcher-expense-list-column">
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
                 <h3 class="h6 mb-0">Cheltuieli cursa</h3>
@@ -677,17 +882,46 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                                 $docPath = (string) ($expense['file_path'] ?? '');
                                 $docName = (string) ($expense['original_name'] ?? '');
                                 $docUrl = $docPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($docPath)) : null;
+                                $refacturareDocPath = (string) ($expense['refacturare_document_path'] ?? '');
+                                $refacturareDocName = (string) ($expense['refacturare_document_original_name'] ?? '');
+                                $refacturareDocUrl = $refacturareDocPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($refacturareDocPath)) : null;
+                                $expenseTypeLabel = (string) ($expenseTypes[(string) ($expense['tip_cheltuiala'] ?? '')] ?? '-');
+                                $refacturareTypeKey = (string) ($expense['refacturare_tip_cheltuiala'] ?? '');
+                                $refacturareTypeLabel = $refacturareTypeKey !== '' ? (string) ($expenseTypes[$refacturareTypeKey] ?? '') : '';
+                                $refacturareAmountValue = (float) ($expense['refacturare_suma'] ?? 0);
+                                $refacturareDetailsRows = json_decode((string) ($expense['refacturare_detalii'] ?? ''), true);
+                                $refacturareDetailsTotal = 0.0;
+                                if (is_array($refacturareDetailsRows)) {
+                                    foreach ($refacturareDetailsRows as $refacturareDetailsRow) {
+                                        if (is_array($refacturareDetailsRow)) {
+                                            $refacturareDetailsTotal += (float) ($refacturareDetailsRow['total'] ?? 0);
+                                        }
+                                    }
+                                }
                                 ?>
                                 <tr>
                                     <td><?= e(format_date_ro((string) ($expense['data_cheltuiala'] ?? ''))) ?></td>
-                                    <td><?= e((string) ($expenseTypes[(string) ($expense['tip_cheltuiala'] ?? '')] ?? '-')) ?></td>
+                                    <td>
+                                        <?= e($expenseTypeLabel) ?>
+                                        <?php if ($refacturareTypeLabel !== ''): ?>
+                                            <div class="small text-muted">
+                                                Refacturare: <?= e($refacturareTypeLabel) ?><?= $refacturareAmountValue > 0 ? ' (' . e(format_number_ro($refacturareAmountValue, 2)) . ' lei)' : ($refacturareDetailsTotal > 0 ? ' (' . e(format_number_ro($refacturareDetailsTotal, 2)) . ' lei)' : '') ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
                                     <td><?= e(format_number_ro((float) ($expense['suma'] ?? 0), 2)) ?> lei</td>
                                     <td>
                                         <?php if ($docUrl !== null): ?>
                                             <a class="btn btn-sm btn-outline-secondary" href="<?= e($docUrl) ?>" target="_blank" rel="noopener">
                                                 <?= e($docName !== '' ? $docName : basename($docPath)) ?>
                                             </a>
-                                        <?php else: ?>
+                                        <?php endif; ?>
+                                        <?php if ($refacturareDocUrl !== null): ?>
+                                            <a class="btn btn-sm btn-outline-secondary mt-1" href="<?= e($refacturareDocUrl) ?>" target="_blank" rel="noopener">
+                                                Refacturare: <?= e($refacturareDocName !== '' ? $refacturareDocName : basename($refacturareDocPath)) ?>
+                                            </a>
+                                        <?php endif; ?>
+                                        <?php if ($docUrl === null && $refacturareDocUrl === null): ?>
                                             <span class="text-muted">-</span>
                                         <?php endif; ?>
                                     </td>
@@ -712,11 +946,130 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
     </div>
 </div>
 
+<style>
+.expense-refacturare-panel {
+    background: #f8fafc;
+    border-color: #d8dee8 !important;
+}
+
+.expense-main-panel,
+.expense-refacturare-panel {
+    display: flex;
+    flex-direction: column;
+}
+
+.dispatcher-expense-form .form-control,
+.dispatcher-expense-form .form-select {
+    min-width: 0;
+}
+
+.dispatcher-expense-form .form-text {
+    overflow-wrap: anywhere;
+}
+
+@media (min-width: 1200px) {
+    .dispatcher-expense-layout.has-refacturare > .dispatcher-expense-form-column,
+    .dispatcher-expense-layout.has-refacturare > .dispatcher-expense-list-column {
+        flex: 0 0 100%;
+        max-width: 100%;
+        width: 100%;
+    }
+
+    .dispatcher-expense-form.has-refacturare {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        column-gap: 1.25rem;
+        align-items: stretch;
+    }
+
+    .dispatcher-expense-form.has-refacturare > .expense-type-row {
+        grid-column: 1 / -1;
+    }
+
+    .dispatcher-expense-form.has-refacturare > .expense-main-panel {
+        grid-column: 1;
+        min-height: 100%;
+        padding: 1rem;
+        border: 1px solid transparent;
+        border-radius: 0.375rem;
+    }
+
+    .dispatcher-expense-form.has-refacturare .expense-submit-row,
+    .dispatcher-expense-form.has-refacturare .expense-refacturare-submit {
+        margin-top: auto !important;
+        width: 100%;
+    }
+
+    .dispatcher-expense-form.has-refacturare > [data-role="expense-refacturare-fields"] {
+        grid-column: 2;
+        margin-bottom: 0 !important;
+        min-height: 100%;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .dispatcher-expense-form .expense-type-row > div {
+        width: 100%;
+    }
+
+    .expense-refacturare-panel {
+        padding: 1rem !important;
+    }
+}
+</style>
+
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     var expenseTypeEl = document.getElementById('expense_tip_cheltuiala');
     var expenseAmountEl = document.getElementById('expense_suma');
     var roadTaxBoxEl = document.querySelector('[data-role=\"expense-road-tax-breakdown\"]');
+    var expenseFormEl = document.querySelector('[data-role=\"expense-form\"]');
+    var expenseLayoutEl = document.querySelector('[data-role=\"expense-layout\"]');
+    var refacturareToggleEl = document.querySelector('[data-role=\"expense-refacturare-toggle\"]');
+    var refacturareMenuEl = document.querySelector('[data-role=\"expense-refacturare-menu\"]');
+    var refacturareFieldsEl = document.querySelector('[data-role=\"expense-refacturare-fields\"]');
+    var refacturareSelectEl = document.getElementById('expense_refacturare_tip_cheltuiala');
+    var refacturareRoadTaxBoxEl = document.querySelector('[data-role=\"refacturare-road-tax-breakdown\"]');
+    var refacturareAmountEl = document.getElementById('expense_refacturare_suma');
+    var refacturareDateEl = document.getElementById('expense_refacturare_data');
+
+    var syncRefacturareMenu = function () {
+        if (!(refacturareToggleEl instanceof HTMLInputElement) || !(refacturareMenuEl instanceof HTMLElement) || !(refacturareSelectEl instanceof HTMLSelectElement)) {
+            return;
+        }
+
+        var enabled = refacturareToggleEl.checked;
+        if (expenseFormEl instanceof HTMLElement) {
+            expenseFormEl.classList.toggle('has-refacturare', enabled);
+        }
+        if (expenseLayoutEl instanceof HTMLElement) {
+            expenseLayoutEl.classList.toggle('has-refacturare', enabled);
+        }
+        refacturareMenuEl.classList.toggle('d-none', !enabled);
+        if (refacturareFieldsEl instanceof HTMLElement) {
+            refacturareFieldsEl.classList.toggle('d-none', !enabled);
+        }
+        refacturareSelectEl.disabled = !enabled;
+        refacturareSelectEl.required = enabled;
+        if (refacturareAmountEl instanceof HTMLInputElement) {
+            refacturareAmountEl.required = enabled;
+        }
+        if (refacturareDateEl instanceof HTMLInputElement) {
+            refacturareDateEl.required = enabled;
+        }
+        if (refacturareRoadTaxBoxEl instanceof HTMLElement) {
+            refacturareRoadTaxBoxEl.classList.toggle('d-none', !enabled || refacturareSelectEl.value !== 'taxe_drum');
+        }
+    };
+
+    if (refacturareToggleEl instanceof HTMLInputElement) {
+        refacturareToggleEl.addEventListener('change', syncRefacturareMenu);
+        syncRefacturareMenu();
+    }
+    if (refacturareSelectEl instanceof HTMLSelectElement) {
+        refacturareSelectEl.addEventListener('change', syncRefacturareMenu);
+    }
+
     if (!(expenseTypeEl instanceof HTMLSelectElement) || !(expenseAmountEl instanceof HTMLInputElement) || !(roadTaxBoxEl instanceof HTMLElement)) {
         return;
     }
@@ -733,6 +1086,20 @@ document.addEventListener('DOMContentLoaded', function () {
         {
             qty: document.getElementById('expense_trece_bucati'),
             price: document.getElementById('expense_trece_pret')
+        }
+    ];
+    var refacturareRoadTaxFields = [
+        {
+            qty: document.getElementById('expense_refacturare_taxa_acces_bucati'),
+            price: document.getElementById('expense_refacturare_taxa_acces_pret')
+        },
+        {
+            qty: document.getElementById('expense_refacturare_port_bucati'),
+            price: document.getElementById('expense_refacturare_port_pret')
+        },
+        {
+            qty: document.getElementById('expense_refacturare_trece_bucati'),
+            price: document.getElementById('expense_refacturare_trece_pret')
         }
     ];
     var initialExpenseAmount = String(expenseAmountEl.value || '');
@@ -766,6 +1133,22 @@ document.addEventListener('DOMContentLoaded', function () {
         return Math.round(total * 100) / 100;
     };
 
+    var calculateRefacturareRoadTaxTotal = function () {
+        var total = 0;
+        refacturareRoadTaxFields.forEach(function (field) {
+            if (!(field.qty instanceof HTMLInputElement) || !(field.price instanceof HTMLInputElement)) {
+                return;
+            }
+
+            var qty = parseNumber(field.qty.value);
+            var price = parseNumber(field.price.value);
+            if (qty !== null && qty > 0 && price !== null && price > 0) {
+                total += qty * price;
+            }
+        });
+        return Math.round(total * 100) / 100;
+    };
+
     var hasAnyRoadTaxInput = function () {
         for (var i = 0; i < roadTaxFields.length; i++) {
             var field = roadTaxFields[i];
@@ -779,8 +1162,25 @@ document.addEventListener('DOMContentLoaded', function () {
         return false;
     };
 
+    var hasAnyRefacturareRoadTaxInput = function () {
+        for (var i = 0; i < refacturareRoadTaxFields.length; i++) {
+            var field = refacturareRoadTaxFields[i];
+            if (!(field.qty instanceof HTMLInputElement) || !(field.price instanceof HTMLInputElement)) {
+                continue;
+            }
+            if (String(field.qty.value || '').trim() !== '' || String(field.price.value || '').trim() !== '') {
+                return true;
+            }
+        }
+        return false;
+    };
+
     var syncExpenseTaxMode = function () {
         var isRoadTax = expenseTypeEl.value === 'taxe_drum';
+        var isRefacturareRoadTax = refacturareToggleEl instanceof HTMLInputElement
+            && refacturareSelectEl instanceof HTMLSelectElement
+            && refacturareToggleEl.checked
+            && refacturareSelectEl.value === 'taxe_drum';
         roadTaxBoxEl.classList.toggle('d-none', !isRoadTax);
 
         if (isRoadTax) {
@@ -794,6 +1194,18 @@ document.addEventListener('DOMContentLoaded', function () {
         } else {
             expenseAmountEl.readOnly = false;
         }
+
+        if (isRefacturareRoadTax && refacturareAmountEl instanceof HTMLInputElement) {
+            var refacturareTotal = calculateRefacturareRoadTaxTotal();
+            refacturareAmountEl.readOnly = true;
+            if (refacturareTotal > 0) {
+                refacturareAmountEl.value = formatAmount(refacturareTotal);
+            } else if (hasAnyRefacturareRoadTaxInput()) {
+                refacturareAmountEl.value = '';
+            }
+        } else if (refacturareAmountEl instanceof HTMLInputElement) {
+            refacturareAmountEl.readOnly = false;
+        }
     };
 
     expenseTypeEl.addEventListener('change', syncExpenseTaxMode);
@@ -805,6 +1217,20 @@ document.addEventListener('DOMContentLoaded', function () {
             field.price.addEventListener('input', syncExpenseTaxMode);
         }
     });
+    refacturareRoadTaxFields.forEach(function (field) {
+        if (field.qty instanceof HTMLInputElement) {
+            field.qty.addEventListener('input', syncExpenseTaxMode);
+        }
+        if (field.price instanceof HTMLInputElement) {
+            field.price.addEventListener('input', syncExpenseTaxMode);
+        }
+    });
+    if (refacturareToggleEl instanceof HTMLInputElement) {
+        refacturareToggleEl.addEventListener('change', syncExpenseTaxMode);
+    }
+    if (refacturareSelectEl instanceof HTMLSelectElement) {
+        refacturareSelectEl.addEventListener('change', syncExpenseTaxMode);
+    }
 
     syncExpenseTaxMode();
 });

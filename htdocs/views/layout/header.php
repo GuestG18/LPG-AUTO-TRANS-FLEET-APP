@@ -1,6 +1,7 @@
 <?php
 $user = function_exists('current_user') ? current_user() : null;
 $alerts = flash_messages();
+$styleVersion = (string) @filemtime(BASE_PATH . '/assets/css/style.css');
 ?>
 <!DOCTYPE html>
 <html lang="ro">
@@ -10,9 +11,19 @@ $alerts = flash_messages();
     <title><?= e($pageTitle) ?> - <?= e(APP_NAME) ?></title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-    <link rel="stylesheet" href="<?= e(url('assets/css/style.css')) ?>">
+    <link rel="stylesheet" href="<?= e(url('assets/css/style.css?v=' . $styleVersion)) ?>">
 </head>
 <body>
+<?php if ($showSidebar && is_logged_in()): ?>
+<script>
+try {
+    if (window.localStorage.getItem('fleet.sidebarCollapsed') === '1') {
+        document.body.classList.add('sidebar-collapsed');
+    }
+} catch (error) {
+}
+</script>
+<?php endif; ?>
 <?php if ($showSidebar && is_logged_in()): ?>
     <div class="app-shell">
         <aside class="sidebar p-3">
@@ -25,6 +36,7 @@ $alerts = flash_messages();
                 <a class="nav-link <?= $currentPage === 'dashboard' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard'])) ?>">Tablou de bord</a>
                 <a class="nav-link <?= $currentPage === 'dashboard_analitic' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard_analitic'])) ?>">Dashboard Analitic</a>
                 <a class="nav-link <?= $currentPage === 'dispecer_curse' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Dispecer curse</a>
+                <a class="nav-link <?= $currentPage === 'centralizator_facturare' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'centralizator_facturare'])) ?>">Centralizator Facturare</a>
                 <a class="nav-link <?= $currentPage === 'programare_concedii' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'programare_concedii'])) ?>">Programare concedii</a>
                 <a class="nav-link <?= $currentPage === 'vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'vehicule'])) ?>">Vehicule</a>
                 <a class="nav-link <?= $currentPage === 'soferi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'soferi'])) ?>">&#536;oferi</a>
@@ -41,7 +53,17 @@ $alerts = flash_messages();
 
         <div class="app-content">
             <header class="topbar d-flex justify-content-between align-items-center px-4 py-3 border-bottom bg-white">
-                <div>
+                <div class="d-flex align-items-center gap-2">
+                    <button
+                        type="button"
+                        class="btn btn-sm btn-outline-secondary sidebar-toggle-btn"
+                        data-sidebar-toggle
+                        aria-label="Ascunde sau afiseaza meniul"
+                        aria-expanded="true"
+                        title="Ascunde sau afiseaza meniul"
+                    >
+                        <i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i>
+                    </button>
                     <h1 class="h5 mb-0"><?= e($pageTitle) ?></h1>
                 </div>
                 <div class="d-flex align-items-center gap-3">

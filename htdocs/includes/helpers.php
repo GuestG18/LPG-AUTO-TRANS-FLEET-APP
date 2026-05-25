@@ -333,11 +333,11 @@ function vehicle_type_label(string $type): string
 function tire_status_label(string $status): string
 {
     return match (strtolower(trim($status))) {
-        'active' => 'Active',
-        'spare' => 'Spare',
-        'removed' => 'Removed',
-        'damaged' => 'Damaged',
-        'retreaded' => 'Retreaded',
+        'active' => 'Montata',
+        'spare' => 'Rezerva',
+        'removed' => 'Scoasa din uz',
+        'damaged' => 'Deteriorata',
+        'retreaded' => 'Resapata',
         default => '-',
     };
 }
@@ -347,23 +347,23 @@ function tire_status_badge_html(string $status): string
     $normalized = strtolower(trim($status));
 
     if ($normalized === 'active') {
-        return '<span class="badge text-bg-success">Active</span>';
+        return '<span class="badge text-bg-success">Montata</span>';
     }
 
     if ($normalized === 'spare') {
-        return '<span class="badge text-bg-primary">Spare</span>';
+        return '<span class="badge text-bg-primary">Rezerva</span>';
     }
 
     if ($normalized === 'removed') {
-        return '<span class="badge text-bg-secondary">Removed</span>';
+        return '<span class="badge text-bg-secondary">Scoasa din uz</span>';
     }
 
     if ($normalized === 'damaged') {
-        return '<span class="badge text-bg-danger">Damaged</span>';
+        return '<span class="badge text-bg-danger">Deteriorata</span>';
     }
 
     if ($normalized === 'retreaded') {
-        return '<span class="badge text-bg-warning text-dark">Retreaded</span>';
+        return '<span class="badge text-bg-warning text-dark">Resapata</span>';
     }
 
     return '<span class="badge text-bg-light border">' . e($status) . '</span>';

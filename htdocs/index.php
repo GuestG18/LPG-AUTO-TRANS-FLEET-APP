@@ -3,6 +3,10 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/config/config.php';
 require_once __DIR__ . '/config/database.php';
+$composerAutoload = dirname(__DIR__) . '/vendor/autoload.php';
+if (is_file($composerAutoload)) {
+    require_once $composerAutoload;
+}
 $modules = require __DIR__ . '/config/modules.php';
 
 $modules['documente']['detail_fields']['fisier_original'] = [
@@ -203,6 +207,7 @@ require_once __DIR__ . '/models/DispecerCurseModel.php';
 require_once __DIR__ . '/models/ProgramareConcediiModel.php';
 
 require_once __DIR__ . '/services/EntityStatusService.php';
+require_once __DIR__ . '/services/EmailService.php';
 
 require_once __DIR__ . '/controllers/AuthController.php';
 require_once __DIR__ . '/controllers/DashboardController.php';
@@ -210,6 +215,7 @@ require_once __DIR__ . '/controllers/DashboardAnaliticController.php';
 require_once __DIR__ . '/controllers/ModuleController.php';
 require_once __DIR__ . '/controllers/ProfileController.php';
 require_once __DIR__ . '/controllers/DispecerCurseController.php';
+require_once __DIR__ . '/controllers/CentralizatorFacturareController.php';
 require_once __DIR__ . '/controllers/ProgramareConcediiController.php';
 
 $db = get_pdo();
@@ -293,6 +299,11 @@ try {
         case 'dispecer_curse':
             require_auth();
             (new DispecerCurseController($db))->handle($action);
+            break;
+
+        case 'centralizator_facturare':
+            require_auth();
+            (new CentralizatorFacturareController($db))->handle($action);
             break;
 
         case 'programare_concedii':

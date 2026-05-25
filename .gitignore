@@ -16,6 +16,7 @@ node_modules/
 # Local environment
 .env
 .env.*
+!.env.example
 
 # Runtime uploads
 htdocs/uploads/

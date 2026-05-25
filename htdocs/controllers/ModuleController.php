@@ -810,8 +810,6 @@ class ModuleController
         $mountDate = trim((string) ($_POST['tire_mount_date'] ?? date('Y-m-d')));
         $estimatedLifeKmRaw = trim((string) ($_POST['tire_estimated_life_km'] ?? ''));
         $kmInitialRaw = trim((string) ($_POST['tire_km_initial'] ?? ''));
-        $treadDepthRaw = trim((string) ($_POST['tire_tread_depth_mm'] ?? ''));
-        $minTreadDepthRaw = trim((string) ($_POST['tire_min_tread_depth_mm'] ?? '2.00'));
         $notes = trim((string) ($_POST['tire_notes'] ?? ''));
         $mountPositionId = (int) ($_POST['mount_position_id'] ?? 0);
         $now = date('Y-m-d H:i:s');
@@ -841,26 +839,6 @@ class ModuleController
             redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
         }
 
-        $treadDepth = null;
-        if ($treadDepthRaw !== '') {
-            $treadDepthNormalized = str_replace(',', '.', $treadDepthRaw);
-            if (!is_numeric($treadDepthNormalized)) {
-                flash_set('danger', 'Adancimea benzii trebuie sa fie numerica.');
-                redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
-            }
-            $treadDepth = (float) $treadDepthNormalized;
-        }
-
-        $minTreadDepth = 2.0;
-        if ($minTreadDepthRaw !== '') {
-            $minTreadDepthNormalized = str_replace(',', '.', $minTreadDepthRaw);
-            if (!is_numeric($minTreadDepthNormalized)) {
-                flash_set('danger', 'Pragul minim pentru banda trebuie sa fie numeric.');
-                redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
-            }
-            $minTreadDepth = (float) $minTreadDepthNormalized;
-        }
-
         $vehicleKmBord = max(0, (int) ($vehicle['km_bord'] ?? 0));
         $kmInitial = $kmInitialRaw !== '' ? (int) $kmInitialRaw : $vehicleKmBord;
         if ($kmInitial === $vehicleKmBord) {
@@ -879,8 +857,8 @@ class ModuleController
             'mount_date' => $mountDate,
             'km_initial' => $kmInitial,
             'estimated_life_km' => $estimatedLifeKmRaw !== '' ? (int) $estimatedLifeKmRaw : null,
-            'tread_depth_mm' => $treadDepth,
-            'min_tread_depth_mm' => $minTreadDepth,
+            'tread_depth_mm' => null,
+            'min_tread_depth_mm' => 2.0,
             'status' => $mountPositionId > 0 ? TireModel::STATUS_ACTIVE : TireModel::STATUS_SPARE,
             'notes' => $notes !== '' ? $notes : null,
             'created_at' => $now,
@@ -1070,8 +1048,6 @@ class ModuleController
         $kmInitialRaw = trim((string) ($_POST['stock_km_initial'] ?? '0'));
         $estimatedLifeRaw = trim((string) ($_POST['stock_estimated_life_km'] ?? ''));
         $statusRaw = strtolower(trim((string) ($_POST['stock_status'] ?? TireModel::STATUS_SPARE)));
-        $treadDepthRaw = trim((string) ($_POST['stock_tread_depth_mm'] ?? ''));
-        $minTreadRaw = trim((string) ($_POST['stock_min_tread_depth_mm'] ?? '2.00'));
         $notes = trim((string) ($_POST['stock_notes'] ?? ''));
 
         if ($brand === '') {
@@ -1105,26 +1081,6 @@ class ModuleController
             $estimatedLifeKm = max(0, (int) $estimatedLifeRaw);
         }
 
-        $treadDepth = null;
-        if ($treadDepthRaw !== '') {
-            $normalized = str_replace(',', '.', $treadDepthRaw);
-            if (!is_numeric($normalized)) {
-                flash_set('danger', 'Banda curenta trebuie sa fie numerica.');
-                redirect(build_query_url(['page' => 'mentenanta']));
-            }
-            $treadDepth = (float) $normalized;
-        }
-
-        $minTreadDepth = 2.0;
-        if ($minTreadRaw !== '') {
-            $normalized = str_replace(',', '.', $minTreadRaw);
-            if (!is_numeric($normalized)) {
-                flash_set('danger', 'Pragul minim banda trebuie sa fie numeric.');
-                redirect(build_query_url(['page' => 'mentenanta']));
-            }
-            $minTreadDepth = (float) $normalized;
-        }
-
         $allowedStatuses = [TireModel::STATUS_SPARE, TireModel::STATUS_RETREADED, TireModel::STATUS_DAMAGED, TireModel::STATUS_REMOVED];
         $status = in_array($statusRaw, $allowedStatuses, true) ? $statusRaw : TireModel::STATUS_SPARE;
         $targetVehicleType = $this->tireModel->normalizeTargetVehicleType($targetVehicleTypeRaw);
@@ -1142,8 +1098,8 @@ class ModuleController
                 'km_initial' => $kmInitial,
                 'estimated_life_km' => $estimatedLifeKm,
                 'status' => $status,
-                'tread_depth_mm' => $treadDepth,
-                'min_tread_depth_mm' => $minTreadDepth,
+                'tread_depth_mm' => null,
+                'min_tread_depth_mm' => 2.0,
                 'notes' => $notes !== '' ? $notes : null,
                 'now' => date('Y-m-d H:i:s'),
             ]);
@@ -1349,8 +1305,6 @@ class ModuleController
         $statusRaw = strtolower(trim((string) ($_POST['stock_edit_status'] ?? TireModel::STATUS_SPARE)));
         $mountDate = trim((string) ($_POST['stock_edit_mount_date'] ?? date('Y-m-d')));
         $estimatedLifeRaw = trim((string) ($_POST['stock_edit_estimated_life_km'] ?? ''));
-        $treadDepthRaw = trim((string) ($_POST['stock_edit_tread_depth_mm'] ?? ''));
-        $minTreadRaw = trim((string) ($_POST['stock_edit_min_tread_depth_mm'] ?? '2.00'));
         $notes = trim((string) ($_POST['stock_edit_notes'] ?? ''));
 
         if ($brand === '') {
@@ -1370,26 +1324,6 @@ class ModuleController
                 redirect(build_query_url(['page' => 'mentenanta']));
             }
             $estimatedLifeKm = max(0, (int) $estimatedLifeRaw);
-        }
-
-        $treadDepth = null;
-        if ($treadDepthRaw !== '') {
-            $normalized = str_replace(',', '.', $treadDepthRaw);
-            if (!is_numeric($normalized)) {
-                flash_set('danger', 'Banda curenta trebuie sa fie numerica.');
-                redirect(build_query_url(['page' => 'mentenanta']));
-            }
-            $treadDepth = (float) $normalized;
-        }
-
-        $minTreadDepth = 2.0;
-        if ($minTreadRaw !== '') {
-            $normalized = str_replace(',', '.', $minTreadRaw);
-            if (!is_numeric($normalized)) {
-                flash_set('danger', 'Pragul minim banda trebuie sa fie numeric.');
-                redirect(build_query_url(['page' => 'mentenanta']));
-            }
-            $minTreadDepth = (float) $normalized;
         }
 
         $allowedStatuses = [
@@ -1412,8 +1346,6 @@ class ModuleController
                 'mount_date' => $mountDate,
                 'estimated_life_km' => $estimatedLifeKm,
                 'status' => $status,
-                'tread_depth_mm' => $treadDepth,
-                'min_tread_depth_mm' => $minTreadDepth,
                 'notes' => $notes !== '' ? $notes : null,
                 'updated_at' => date('Y-m-d H:i:s'),
             ]);
