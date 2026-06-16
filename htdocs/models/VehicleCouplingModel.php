@@ -221,7 +221,7 @@ class VehicleCouplingModel extends BaseModel
                 v.model
             FROM vehicule v
             LEFT JOIN vehicule_cuplaje vc ON vc.semiremorca_id = v.id AND vc.activ = 1
-            WHERE v.tip_vehicul = 'semiremorca'
+            WHERE v.tip_vehicul IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')
               AND v.status = 'activ'
               AND vc.id IS NULL
             ORDER BY v.nr_inmatriculare ASC

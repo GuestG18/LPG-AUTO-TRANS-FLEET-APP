@@ -16,6 +16,15 @@ function is_admin(): bool
     return is_logged_in() && (($_SESSION['auth_user']['rol'] ?? '') === 'admin');
 }
 
+function is_accountancy_user(): bool
+{
+    if (!is_logged_in()) {
+        return false;
+    }
+
+    return in_array((string) ($_SESSION['auth_user']['rol'] ?? ''), ['admin', 'contabilitate'], true);
+}
+
 function login_user(array $user): void
 {
     session_regenerate_id(true);
@@ -45,6 +54,20 @@ function require_auth(): void
 function require_admin_or_403(): void
 {
     if (is_admin()) {
+        return;
+    }
+
+    http_response_code(403);
+    render('errors/403.php', [
+        'pageTitle' => 'Acces interzis',
+        'currentPage' => '',
+    ]);
+    exit;
+}
+
+function require_accountancy_or_403(): void
+{
+    if (is_accountancy_user()) {
         return;
     }
 

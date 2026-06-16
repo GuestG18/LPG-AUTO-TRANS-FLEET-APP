@@ -7,6 +7,14 @@
     }
 
     var filtersForm = document.getElementById('dashboard-analytic-filters');
+    var dateStartIsoInput = document.getElementById('da_date_start');
+    var dateEndIsoInput = document.getElementById('da_date_end');
+    var dateStartDisplayInput = document.getElementById('da_date_start_display');
+    var dateEndDisplayInput = document.getElementById('da_date_end_display');
+    var dateStartNativeInput = document.getElementById('da_date_start_native');
+    var dateEndNativeInput = document.getElementById('da_date_end_native');
+    var dateStartPickerBtn = document.getElementById('da_date_start_picker_btn');
+    var dateEndPickerBtn = document.getElementById('da_date_end_picker_btn');
     var loadingEl = document.getElementById('dashboard-analytic-loading');
     var emptyEl = document.getElementById('dashboard-analytic-empty');
     var contentEl = document.getElementById('dashboard-analytic-content');
@@ -14,6 +22,11 @@
     var vehicleBody = document.getElementById('vehicle-profitability-body');
     var driverBody = document.getElementById('driver-performance-body');
     var alertsList = document.getElementById('vehicle-risk-alerts');
+    var tonePrimarCard = document.getElementById('kpi_tone_primar');
+    var toneDistributieCard = document.getElementById('kpi_tone_distributie');
+
+    tonePrimarCard = tonePrimarCard ? tonePrimarCard.closest('.dashboard-analytic-kpi') : null;
+    toneDistributieCard = toneDistributieCard ? toneDistributieCard.closest('.dashboard-analytic-kpi') : null;
 
     var endpointBase = root.getAttribute('data-endpoint') || '';
     var refreshMs = parseInt(root.getAttribute('data-refresh-ms') || '30000', 10);
@@ -56,6 +69,13 @@
         return new Intl.NumberFormat('ro-RO', {
             minimumFractionDigits: 1,
             maximumFractionDigits: 1
+        }).format(safeNumber(value)) + '%';
+    }
+
+    function formatUtilizationPercent(value) {
+        return new Intl.NumberFormat('ro-RO', {
+            minimumFractionDigits: 1,
+            maximumFractionDigits: 2
         }).format(safeNumber(value)) + '%';
     }
 
@@ -172,7 +192,161 @@
         chartRegistry[key] = new Chart(canvas, config);
     }
 
+    function pad2(value) {
+        var number = Number(value);
+        if (!Number.isFinite(number)) {
+            return '00';
+        }
+
+        return number < 10 ? '0' + String(number) : String(number);
+    }
+
+    function isValidIsoDate(value) {
+        var raw = (value || '').toString().trim();
+        var match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!match) {
+            return false;
+        }
+
+        var year = Number(match[1]);
+        var month = Number(match[2]);
+        var day = Number(match[3]);
+        var date = new Date(Date.UTC(year, month - 1, day));
+
+        return date.getUTCFullYear() === year
+            && date.getUTCMonth() === (month - 1)
+            && date.getUTCDate() === day;
+    }
+
+    function formatIsoDateToRo(value) {
+        var raw = (value || '').toString().trim();
+        if (!isValidIsoDate(raw)) {
+            return '';
+        }
+
+        return raw.slice(8, 10) + '/' + raw.slice(5, 7) + '/' + raw.slice(0, 4);
+    }
+
+    function parseRoDateToIso(value) {
+        var raw = (value || '').toString().trim();
+        if (raw === '') {
+            return '';
+        }
+
+        if (isValidIsoDate(raw)) {
+            return raw;
+        }
+
+        var match = raw.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})$/);
+        if (!match) {
+            return null;
+        }
+
+        var day = Number(match[1]);
+        var month = Number(match[2]);
+        var year = Number(match[3]);
+
+        if (year < 100) {
+            year += 2000;
+        }
+
+        var date = new Date(Date.UTC(year, month - 1, day));
+        if (
+            date.getUTCFullYear() !== year
+            || date.getUTCMonth() !== (month - 1)
+            || date.getUTCDate() !== day
+        ) {
+            return null;
+        }
+
+        return String(year) + '-' + pad2(month) + '-' + pad2(day);
+    }
+
+    function openNativeDatePicker(nativeInput, displayInput) {
+        if (!nativeInput) {
+            return;
+        }
+
+        if (!isValidIsoDate(nativeInput.value)) {
+            var displayRaw = displayInput ? displayInput.value : '';
+            var fallbackIsoDate = parseRoDateToIso(displayRaw);
+            nativeInput.value = (fallbackIsoDate && fallbackIsoDate !== null) ? fallbackIsoDate : '';
+        }
+
+        try {
+            if (typeof nativeInput.showPicker === 'function') {
+                nativeInput.showPicker();
+                return;
+            }
+        } catch (error) {
+            // Ignore and fallback to focus+click for older browsers.
+        }
+
+        try {
+            nativeInput.focus({ preventScroll: true });
+        } catch (error) {
+            nativeInput.focus();
+        }
+        nativeInput.click();
+    }
+
+    function syncDateHiddenFields() {
+        var startSource = '';
+        var endSource = '';
+
+        if (dateStartDisplayInput && dateStartDisplayInput.value.trim() !== '') {
+            startSource = dateStartDisplayInput.value;
+        } else if (dateStartNativeInput && dateStartNativeInput.value.trim() !== '') {
+            startSource = dateStartNativeInput.value;
+        } else if (dateStartIsoInput) {
+            startSource = dateStartIsoInput.value;
+        }
+
+        if (dateEndDisplayInput && dateEndDisplayInput.value.trim() !== '') {
+            endSource = dateEndDisplayInput.value;
+        } else if (dateEndNativeInput && dateEndNativeInput.value.trim() !== '') {
+            endSource = dateEndNativeInput.value;
+        } else if (dateEndIsoInput) {
+            endSource = dateEndIsoInput.value;
+        }
+
+        var normalizedStart = parseRoDateToIso(startSource);
+        var normalizedEnd = parseRoDateToIso(endSource);
+        var startIsValid = normalizedStart !== null;
+        var endIsValid = normalizedEnd !== null;
+
+        if (dateStartIsoInput) {
+            dateStartIsoInput.value = startIsValid ? normalizedStart : '';
+        }
+        if (dateEndIsoInput) {
+            dateEndIsoInput.value = endIsValid ? normalizedEnd : '';
+        }
+        if (dateStartNativeInput) {
+            dateStartNativeInput.value = startIsValid ? normalizedStart : '';
+        }
+        if (dateEndNativeInput) {
+            dateEndNativeInput.value = endIsValid ? normalizedEnd : '';
+        }
+
+        if (dateStartDisplayInput) {
+            dateStartDisplayInput.classList.toggle('is-invalid', !startIsValid);
+            if (startIsValid) {
+                dateStartDisplayInput.value = normalizedStart === '' ? '' : formatIsoDateToRo(normalizedStart);
+            }
+        }
+        if (dateEndDisplayInput) {
+            dateEndDisplayInput.classList.toggle('is-invalid', !endIsValid);
+            if (endIsValid) {
+                dateEndDisplayInput.value = normalizedEnd === '' ? '' : formatIsoDateToRo(normalizedEnd);
+            }
+        }
+
+        return startIsValid && endIsValid;
+    }
+
     function buildApiUrl() {
+        syncDateHiddenFields();
+
         var baseUrl = new URL(endpointBase, window.location.origin);
         var params = new URLSearchParams();
         params.set('page', 'dashboard_analytic_data');
@@ -213,6 +387,8 @@
     }
 
     function syncBrowserUrl() {
+        syncDateHiddenFields();
+
         var url = new URL(window.location.href);
         url.searchParams.set('page', 'dashboard_analitic');
 
@@ -231,16 +407,58 @@
         history.replaceState({}, '', url.toString());
     }
 
+    function getSelectedTransportType() {
+        if (!filtersForm) {
+            return '';
+        }
+
+        var formData = new FormData(filtersForm);
+        return (formData.get('tip_transport') || '').toString().trim();
+    }
+
+    function syncTransportSplitKpiVisibility() {
+        var hasTransportFilter = getSelectedTransportType() !== '';
+
+        if (tonePrimarCard) {
+            tonePrimarCard.classList.toggle('d-none', !hasTransportFilter);
+        }
+
+        if (toneDistributieCard) {
+            toneDistributieCard.classList.toggle('d-none', !hasTransportFilter);
+        }
+    }
+
     function renderFleetKpis(fleet) {
+        var totalFacturare = safeNumber(fleet.total_facturare);
+        var totalRefacturare = safeNumber(fleet.total_refacturare);
+        var totalIncasare = fleet.total_incasare !== undefined && fleet.total_incasare !== null
+            ? safeNumber(fleet.total_incasare)
+            : (totalFacturare + totalRefacturare);
+        var totalZileActive = Math.max(0, Math.round(safeNumber(fleet.total_zile_active)));
+        var totalZileDisponibile = Math.max(0, Math.round(safeNumber(fleet.total_zile_disponibile)));
+
         setText('kpi_total_curse', String(Math.round(safeNumber(fleet.total_curse))));
-        setText('kpi_total_facturare', formatMoney(fleet.total_facturare));
-        setText('kpi_total_refacturare', formatMoney(fleet.total_refacturare));
+        setText('kpi_total_facturare', formatMoney(totalFacturare));
+        setText('kpi_total_refacturare', formatMoney(totalRefacturare));
+        setText('kpi_total_incasare', formatMoney(totalIncasare));
         setText('kpi_total_cheltuieli', formatMoney(fleet.total_cheltuieli));
         setText('kpi_profit_total', formatMoney(fleet.profit_total));
         setText('kpi_total_km', formatKm(fleet.total_km));
+        setText('kpi_km_primar', formatKm(fleet.km_primar));
+        setText('kpi_km_distributie', formatKm(fleet.km_distributie));
         setText('kpi_tone_livrate', formatTons(fleet.tone_livrate));
+        setText('kpi_tone_primar', formatTons(fleet.tone_primar));
+        setText('kpi_tone_distributie', formatTons(fleet.tone_distributie));
         setText('kpi_profit_km', formatRatio(fleet.profit_km) + ' lei');
+        setText('kpi_venit_to', formatRatio(fleet.venit_tona) + ' lei');
+        setText('kpi_km_tona', formatRatio(fleet.km_tona));
+        setText('kpi_tona_km', formatRatio(fleet.tona_km));
         setText('kpi_grad_mediu', formatPercent(fleet.grad_incarcare_mediu));
+        setText('kpi_grad_utilizare_flota_percent', formatUtilizationPercent(fleet.grad_utilizare_flota_percent));
+        setText(
+            'kpi_grad_utilizare_flota_details',
+            String(totalZileActive) + ' zile active din ' + String(totalZileDisponibile) + ' zile disponibile'
+        );
     }
 
     function renderVehicleTable(vehicles) {
@@ -657,18 +875,86 @@
     filtersForm.addEventListener('submit', function (event) {
         event.preventDefault();
         syncBrowserUrl();
+        syncTransportSplitKpiVisibility();
         fetchAndRender();
         restartRefreshTimer();
     });
 
-    filtersForm.querySelectorAll('select,input[type="date"]').forEach(function (element) {
+    filtersForm.querySelectorAll('select').forEach(function (element) {
         element.addEventListener('change', function () {
             syncBrowserUrl();
+            syncTransportSplitKpiVisibility();
             fetchAndRender({ silent: true });
             restartRefreshTimer();
         });
     });
 
+    function applyFiltersFromDateChange() {
+        syncBrowserUrl();
+        syncTransportSplitKpiVisibility();
+        fetchAndRender({ silent: true });
+        restartRefreshTimer();
+    }
+
+    [dateStartDisplayInput, dateEndDisplayInput].forEach(function (element) {
+        if (!element) {
+            return;
+        }
+
+        element.addEventListener('change', function () {
+            applyFiltersFromDateChange();
+        });
+
+        element.addEventListener('blur', function () {
+            syncDateHiddenFields();
+        });
+    });
+
+    [
+        { nativeInput: dateStartNativeInput, displayInput: dateStartDisplayInput },
+        { nativeInput: dateEndNativeInput, displayInput: dateEndDisplayInput }
+    ].forEach(function (entry) {
+        if (!entry.nativeInput) {
+            return;
+        }
+
+        entry.nativeInput.addEventListener('change', function () {
+            if (entry.displayInput) {
+                entry.displayInput.value = formatIsoDateToRo(entry.nativeInput.value);
+            }
+            applyFiltersFromDateChange();
+        });
+    });
+
+    [
+        {
+            button: dateStartPickerBtn,
+            nativeInput: dateStartNativeInput,
+            displayInput: dateStartDisplayInput
+        },
+        {
+            button: dateEndPickerBtn,
+            nativeInput: dateEndNativeInput,
+            displayInput: dateEndDisplayInput
+        }
+    ].forEach(function (entry) {
+        if (entry.button) {
+            entry.button.addEventListener('click', function (event) {
+                event.preventDefault();
+                openNativeDatePicker(entry.nativeInput, entry.displayInput);
+            });
+        }
+
+        if (entry.displayInput) {
+            entry.displayInput.addEventListener('click', function () {
+                openNativeDatePicker(entry.nativeInput, entry.displayInput);
+            });
+        }
+    });
+
+    syncDateHiddenFields();
+    syncTransportSplitKpiVisibility();
     fetchAndRender();
     restartRefreshTimer();
 })();
+

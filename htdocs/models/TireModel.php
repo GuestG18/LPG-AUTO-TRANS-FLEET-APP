@@ -17,10 +17,10 @@ class TireModel extends BaseModel
         $normalized = strtolower(trim($vehicleType));
 
         return match ($normalized) {
-            'autovehicul', 'autoturism' => 'autovehicul',
+            'autovehicul', 'autoturism', 'autoutilitara' => 'autovehicul',
             'camion' => 'camion',
             'cap_tractor' => 'cap_tractor',
-            'semiremorca' => 'semiremorca',
+            'semiremorca', 'semiremorca_primar', 'semiremorca_distributie' => 'semiremorca',
             default => 'autovehicul',
         };
     }
@@ -166,7 +166,32 @@ class TireModel extends BaseModel
         $layoutValueLower = strtolower($layoutValue);
 
         if ($vehicleType === 'autovehicul') {
-            return '2x2';
+            return '4x2';
+        }
+
+        if ($vehicleType === 'camion') {
+            if (preg_match('/^(\d+)\s*x\s*(\d+)$/', $layoutValueLower, $matches) === 1) {
+                $formula = ((int) $matches[1]) . 'x' . ((int) $matches[2]);
+                if (in_array($formula, ['4x2', '6x2', '8x2'], true)) {
+                    return $formula;
+                }
+                if ($formula === '6x4') {
+                    return '6x2';
+                }
+                if ($formula === '8x4') {
+                    return '8x2';
+                }
+            }
+
+            $axleCount = $this->parseAxleCountFromLayout($layoutValueLower);
+            if ($axleCount === 3) {
+                return '6x2';
+            }
+            if ($axleCount === 4) {
+                return '8x2';
+            }
+
+            return '4x2';
         }
 
         if ($vehicleType === 'semiremorca') {
@@ -179,15 +204,23 @@ class TireModel extends BaseModel
         }
 
         if (preg_match('/^(\d+)\s*x\s*(\d+)$/', $layoutValueLower, $matches) === 1) {
-            $left = (int) $matches[1];
-            $right = (int) $matches[2];
-            if ($left >= 4 && $left <= 12 && $left % 2 === 0 && $right >= 2 && $right <= $left && $right % 2 === 0) {
-                return $left . 'x' . $right;
+            $formula = ((int) $matches[1]) . 'x' . ((int) $matches[2]);
+            if (in_array($formula, ['4x2', '6x2', '6x4', '8x4'], true)) {
+                return $formula;
             }
         }
 
-        if ($vehicleType === 'cap_tractor') {
+        $axleCount = $this->parseAxleCountFromLayout($layoutValueLower);
+        if ($axleCount === 2) {
             return '4x2';
+        }
+
+        if ($axleCount === 3) {
+            return '6x2';
+        }
+
+        if ($axleCount === 4) {
+            return '8x4';
         }
 
         return '4x2';
@@ -198,15 +231,23 @@ class TireModel extends BaseModel
         $vehicleType = $this->normalizeVehicleType($vehicleType);
 
         if ($vehicleType === 'autovehicul') {
-            return ['2x2' => 'Standard 2 axe (4 anvelope)'];
+            return ['4x2' => '2 axe / 4x2 (4 anvelope)'];
+        }
+
+        if ($vehicleType === 'camion') {
+            return [
+                '4x2' => '4x2 (2 axe / 6 anvelope)',
+                '6x2' => '6x2 (3 axe / 8 anvelope)',
+                '8x2' => '8x2 (4 axe / 10 anvelope)',
+            ];
         }
 
         if ($vehicleType === 'semiremorca') {
             return [
-                '2 axe' => '2 axe (8 anvelope)',
-                '3 axe' => '3 axe (12 anvelope)',
-                '4 axe' => '4 axe (16 anvelope)',
-                '6 axe' => '6 axe (24 anvelope)',
+                '2 axe' => '2 axe (4 anvelope)',
+                '3 axe' => '3 axe (6 anvelope)',
+                '4 axe' => '4 axe (8 anvelope)',
+                '6 axe' => '6 axe (12 anvelope)',
             ];
         }
 
@@ -215,16 +256,147 @@ class TireModel extends BaseModel
                 '4x2' => '4x2 (2 axe / 6 anvelope)',
                 '6x2' => '6x2 (3 axe / 10 anvelope)',
                 '6x4' => '6x4 (3 axe / 10 anvelope)',
-                '8x4' => '8x4 (4 axe / 14 anvelope)',
+                '8x4' => '8x4 (4 axe / 12 anvelope)',
             ];
         }
 
-        return [
-            '4x2' => '4x2 (2 axe / 6 anvelope)',
-            '6x2' => '6x2 (3 axe / 10 anvelope)',
-            '6x4' => '6x4 (3 axe / 10 anvelope)',
-            '8x4' => '8x4 (4 axe / 14 anvelope)',
-        ];
+        return ['4x2' => '2 axe / 4x2 (4 anvelope)'];
+    }
+
+    private function appendSingleAxlePositions(array &$positions, int $axle, int &$positionOrder): void
+    {
+        foreach (['L' => 'Stanga', 'R' => 'Dreapta'] as $sideCode => $sideLabel) {
+            $positions[] = [
+                'position_code' => 'A' . $axle . '-' . $sideCode,
+                'position_label' => 'Axa ' . $axle . ' - ' . $sideLabel,
+                'axle_no' => $axle,
+                'side_code' => $sideCode,
+                'wheel_kind' => 'single',
+                'position_order' => $positionOrder++,
+            ];
+        }
+    }
+
+    private function appendDualAxlePositions(array &$positions, int $axle, int &$positionOrder): void
+    {
+        foreach (
+            [
+                'LO' => 'Stanga exterior',
+                'LI' => 'Stanga interior',
+                'RI' => 'Dreapta interior',
+                'RO' => 'Dreapta exterior',
+            ] as $sideCode => $sideLabel
+        ) {
+            $positions[] = [
+                'position_code' => 'A' . $axle . '-' . $sideCode,
+                'position_label' => 'Axa ' . $axle . ' - ' . $sideLabel,
+                'axle_no' => $axle,
+                'side_code' => $sideCode,
+                'wheel_kind' => 'dual',
+                'position_order' => $positionOrder++,
+            ];
+        }
+    }
+
+    private function resolveReplacementPositionCode(string $positionCode, array $activeCodes): ?string
+    {
+        $positionCode = strtoupper(trim($positionCode));
+
+        if (preg_match('/^A(\d+)-L[OI]$/', $positionCode, $matches) === 1) {
+            $candidate = 'A' . $matches[1] . '-L';
+            return isset($activeCodes[$candidate]) ? $candidate : null;
+        }
+
+        if (preg_match('/^A(\d+)-R[IO]$/', $positionCode, $matches) === 1) {
+            $candidate = 'A' . $matches[1] . '-R';
+            return isset($activeCodes[$candidate]) ? $candidate : null;
+        }
+
+        if (preg_match('/^A(\d+)-L$/', $positionCode, $matches) === 1) {
+            $candidate = 'A' . $matches[1] . '-LO';
+            return isset($activeCodes[$candidate]) ? $candidate : null;
+        }
+
+        if (preg_match('/^A(\d+)-R$/', $positionCode, $matches) === 1) {
+            $candidate = 'A' . $matches[1] . '-RO';
+            return isset($activeCodes[$candidate]) ? $candidate : null;
+        }
+
+        return null;
+    }
+
+    private function getVehicleKmBordForTireSync(int $vehicleId): int
+    {
+        $stmt = $this->db->prepare('SELECT km_bord FROM vehicule WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $vehicleId]);
+        $rawKm = (string) ($stmt->fetchColumn() ?: '');
+
+        if (is_numeric($rawKm)) {
+            return max(0, (int) $rawKm);
+        }
+
+        $normalizedKm = preg_replace('/[^\d-]+/', '', $rawKm) ?? '';
+        if ($normalizedKm !== '' && is_numeric($normalizedKm)) {
+            return max(0, (int) $normalizedKm);
+        }
+
+        return 0;
+    }
+
+    private function closeActiveAllocationsForObsoletePosition(
+        int $positionId,
+        int $vehicleId,
+        int $vehicleKmBord,
+        string $dataEnd,
+        string $updatedAt
+    ): void {
+        $stmt = $this->db->prepare(
+            'SELECT id, tire_id
+             FROM anvelope_alocari
+             WHERE position_id = :position_id
+               AND vehicle_id = :vehicle_id
+               AND data_end IS NULL'
+        );
+        $stmt->execute([
+            ':position_id' => $positionId,
+            ':vehicle_id' => $vehicleId,
+        ]);
+        $allocations = $stmt->fetchAll();
+
+        if ($allocations === []) {
+            return;
+        }
+
+        $close = $this->db->prepare(
+            'UPDATE anvelope_alocari
+             SET data_end = :data_end,
+                 km_end = :km_end,
+                 status_end = :status_end,
+                 updated_at = :updated_at
+             WHERE id = :id'
+        );
+        $updateTire = $this->db->prepare(
+            'UPDATE anvelope
+             SET status = :status,
+                 updated_at = :updated_at
+             WHERE id = :id'
+        );
+
+        foreach ($allocations as $allocation) {
+            $close->execute([
+                ':data_end' => $dataEnd,
+                ':km_end' => $vehicleKmBord,
+                ':status_end' => self::STATUS_SPARE,
+                ':updated_at' => $updatedAt,
+                ':id' => (int) ($allocation['id'] ?? 0),
+            ]);
+
+            $updateTire->execute([
+                ':status' => self::STATUS_SPARE,
+                ':updated_at' => $updatedAt,
+                ':id' => (int) ($allocation['tire_id'] ?? 0),
+            ]);
+        }
     }
 
     public function describeVehicleLayout(string $vehicleType, ?string $layout): array
@@ -238,18 +410,28 @@ class TireModel extends BaseModel
 
         if ($vehicleType === 'autovehicul') {
             $axleCount = 2;
-
-            for ($axle = 1; $axle <= $axleCount; $axle++) {
-                foreach (['L' => 'Stanga', 'R' => 'Dreapta'] as $sideCode => $sideLabel) {
-                    $positions[] = [
-                        'position_code' => 'A' . $axle . '-' . $sideCode,
-                        'position_label' => 'Axa ' . $axle . ' - ' . $sideLabel,
-                        'axle_no' => $axle,
-                        'side_code' => $sideCode,
-                        'wheel_kind' => 'single',
-                        'position_order' => $positionOrder++,
-                    ];
-                }
+            $this->appendSingleAxlePositions($positions, 1, $positionOrder);
+            $this->appendSingleAxlePositions($positions, 2, $positionOrder);
+        } elseif ($vehicleType === 'camion') {
+            if ($layout === '4x2') {
+                $axleCount = 2;
+                $this->appendSingleAxlePositions($positions, 1, $positionOrder);
+                $this->appendDualAxlePositions($positions, 2, $positionOrder);
+            } elseif ($layout === '6x2') {
+                $axleCount = 3;
+                $this->appendSingleAxlePositions($positions, 1, $positionOrder);
+                $this->appendSingleAxlePositions($positions, 2, $positionOrder);
+                $this->appendDualAxlePositions($positions, 3, $positionOrder);
+            } elseif ($layout === '8x2') {
+                $axleCount = 4;
+                $this->appendSingleAxlePositions($positions, 1, $positionOrder);
+                $this->appendSingleAxlePositions($positions, 2, $positionOrder);
+                $this->appendSingleAxlePositions($positions, 3, $positionOrder);
+                $this->appendDualAxlePositions($positions, 4, $positionOrder);
+            } else {
+                $axleCount = 2;
+                $this->appendSingleAxlePositions($positions, 1, $positionOrder);
+                $this->appendDualAxlePositions($positions, 2, $positionOrder);
             }
         } elseif ($vehicleType === 'semiremorca') {
             $axleCount = $this->parseAxleCountFromLayout($layout) ?? 3;
@@ -258,63 +440,28 @@ class TireModel extends BaseModel
             }
 
             for ($axle = 1; $axle <= $axleCount; $axle++) {
-                foreach (
-                    [
-                        'LO' => 'Stanga exterior',
-                        'LI' => 'Stanga interior',
-                        'RI' => 'Dreapta interior',
-                        'RO' => 'Dreapta exterior',
-                    ] as $sideCode => $sideLabel
-                ) {
-                    $positions[] = [
-                        'position_code' => 'A' . $axle . '-' . $sideCode,
-                        'position_label' => 'Axa ' . $axle . ' - ' . $sideLabel,
-                        'axle_no' => $axle,
-                        'side_code' => $sideCode,
-                        'wheel_kind' => 'dual',
-                        'position_order' => $positionOrder++,
-                    ];
-                }
+                $this->appendSingleAxlePositions($positions, $axle, $positionOrder);
             }
         } else {
-            if (preg_match('/^(\d+)\s*x\s*(\d+)$/', $layout, $matches) === 1) {
-                $axleCount = max(2, (int) ((int) $matches[1] / 2));
+            if ($layout === '4x2') {
+                $axleCount = 2;
+                $this->appendSingleAxlePositions($positions, 1, $positionOrder);
+                $this->appendDualAxlePositions($positions, 2, $positionOrder);
+            } elseif (in_array($layout, ['6x2', '6x4'], true)) {
+                $axleCount = 3;
+                $this->appendSingleAxlePositions($positions, 1, $positionOrder);
+                $this->appendDualAxlePositions($positions, 2, $positionOrder);
+                $this->appendDualAxlePositions($positions, 3, $positionOrder);
+            } elseif ($layout === '8x4') {
+                $axleCount = 4;
+                $this->appendSingleAxlePositions($positions, 1, $positionOrder);
+                $this->appendSingleAxlePositions($positions, 2, $positionOrder);
+                $this->appendDualAxlePositions($positions, 3, $positionOrder);
+                $this->appendDualAxlePositions($positions, 4, $positionOrder);
             } else {
                 $axleCount = 2;
-            }
-
-            for ($axle = 1; $axle <= $axleCount; $axle++) {
-                if ($axle === 1) {
-                    foreach (['L' => 'Stanga', 'R' => 'Dreapta'] as $sideCode => $sideLabel) {
-                        $positions[] = [
-                            'position_code' => 'A' . $axle . '-' . $sideCode,
-                            'position_label' => 'Axa ' . $axle . ' - ' . $sideLabel,
-                            'axle_no' => $axle,
-                            'side_code' => $sideCode,
-                            'wheel_kind' => 'single',
-                            'position_order' => $positionOrder++,
-                        ];
-                    }
-                    continue;
-                }
-
-                foreach (
-                    [
-                        'LO' => 'Stanga exterior',
-                        'LI' => 'Stanga interior',
-                        'RI' => 'Dreapta interior',
-                        'RO' => 'Dreapta exterior',
-                    ] as $sideCode => $sideLabel
-                ) {
-                    $positions[] = [
-                        'position_code' => 'A' . $axle . '-' . $sideCode,
-                        'position_label' => 'Axa ' . $axle . ' - ' . $sideLabel,
-                        'axle_no' => $axle,
-                        'side_code' => $sideCode,
-                        'wheel_kind' => 'dual',
-                        'position_order' => $positionOrder++,
-                    ];
-                }
+                $this->appendSingleAxlePositions($positions, 1, $positionOrder);
+                $this->appendDualAxlePositions($positions, 2, $positionOrder);
             }
         }
 
@@ -342,7 +489,9 @@ class TireModel extends BaseModel
         }
 
         $now = date('Y-m-d H:i:s');
+        $today = date('Y-m-d');
         $activeCodes = [];
+        $vehicleKmBord = null;
 
         foreach ($positions as $position) {
             $code = (string) $position['position_code'];
@@ -389,6 +538,7 @@ class TireModel extends BaseModel
                 ':created_at' => $now,
                 ':updated_at' => $now,
             ]);
+            $existingByCode[$code] = (int) $this->db->lastInsertId();
         }
 
         foreach ($existingByCode as $code => $positionId) {
@@ -403,7 +553,49 @@ class TireModel extends BaseModel
             $hasActiveAllocation = (int) $hasActiveAllocationStmt->fetchColumn() > 0;
 
             if ($hasActiveAllocation) {
-                continue;
+                $replacementCode = $this->resolveReplacementPositionCode($code, $activeCodes);
+                $replacementPositionId = $replacementCode !== null ? (int) ($existingByCode[$replacementCode] ?? 0) : 0;
+
+                if ($replacementPositionId > 0 && $replacementPositionId !== $positionId) {
+                    $replacementActiveAllocationStmt = $this->db->prepare(
+                        'SELECT COUNT(*) FROM anvelope_alocari WHERE position_id = :position_id AND data_end IS NULL'
+                    );
+                    $replacementActiveAllocationStmt->execute([':position_id' => $replacementPositionId]);
+                    $replacementHasActiveAllocation = (int) $replacementActiveAllocationStmt->fetchColumn() > 0;
+
+                    if (!$replacementHasActiveAllocation) {
+                        $moveAllocation = $this->db->prepare(
+                            'UPDATE anvelope_alocari
+                             SET position_id = :replacement_position_id,
+                                 updated_at = :updated_at
+                             WHERE position_id = :position_id
+                               AND data_end IS NULL'
+                        );
+                        $moveAllocation->execute([
+                            ':replacement_position_id' => $replacementPositionId,
+                            ':updated_at' => $now,
+                            ':position_id' => $positionId,
+                        ]);
+
+                        $hasActiveAllocation = false;
+                    }
+                }
+
+                if ($hasActiveAllocation) {
+                    if ($vehicleKmBord === null) {
+                        $vehicleKmBord = $this->getVehicleKmBordForTireSync($vehicleId);
+                    }
+
+                    // Obsolete position codes must not stay active after a layout change.
+                    $this->closeActiveAllocationsForObsoletePosition(
+                        $positionId,
+                        $vehicleId,
+                        $vehicleKmBord,
+                        $today,
+                        $now
+                    );
+                    $hasActiveAllocation = false;
+                }
             }
 
             $deactivate = $this->db->prepare(
@@ -426,6 +618,19 @@ class TireModel extends BaseModel
             ':updated_at' => $updatedAt,
             ':id' => $vehicleId,
         ]);
+    }
+
+    public function countMountedTiresForVehicle(int $vehicleId): int
+    {
+        $stmt = $this->db->prepare(
+            'SELECT COUNT(*)
+             FROM anvelope_alocari
+             WHERE vehicle_id = :vehicle_id
+               AND data_end IS NULL'
+        );
+        $stmt->execute([':vehicle_id' => $vehicleId]);
+
+        return (int) $stmt->fetchColumn();
     }
 
     public function getAvailableTires(?string $vehicleType = null): array
@@ -1558,6 +1763,7 @@ class TireModel extends BaseModel
                 p.position_code,
                 p.position_label,
                 p.axle_no,
+                p.side_code,
                 p.wheel_kind,
                 p.position_order,
                 a.id AS allocation_id,
@@ -1606,6 +1812,7 @@ class TireModel extends BaseModel
                 'position_code' => (string) ($row['position_code'] ?? '-'),
                 'position_label' => (string) ($row['position_label'] ?? '-'),
                 'axle_no' => (int) ($row['axle_no'] ?? 0),
+                'side_code' => (string) ($row['side_code'] ?? ''),
                 'wheel_kind' => (string) ($row['wheel_kind'] ?? 'single'),
                 'position_order' => (int) ($row['position_order'] ?? 0),
                 'allocation_id' => $row['allocation_id'] !== null ? (int) $row['allocation_id'] : null,

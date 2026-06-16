@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS documente_soferi (
     driver_id INT UNSIGNED NOT NULL,
     tip_document VARCHAR(100) NOT NULL,
     numar_document VARCHAR(100) NULL,
-    data_expirare DATE NOT NULL,
+    data_expirare DATE NULL,
     fisier_original VARCHAR(255) NULL,
     fisier_stocat VARCHAR(255) NULL,
     observatii TEXT NULL,

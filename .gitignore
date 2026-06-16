@@ -8,10 +8,13 @@ Thumbs.db
 *.log
 *.tmp
 *.cache
+__pycache__/
+*.pyc
 
 # Dependencies
 vendor/
 node_modules/
+notification_service/.venv/
 
 # Local environment
 .env
@@ -23,3 +26,7 @@ htdocs/uploads/
 
 # Archives / backups
 *.zip
+
+# Test / generated artifacts
+playwright-artifacts/
+test-results/

@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS configurare_beneficiari_transport (
     pret_tarifare DECIMAL(12,2) NOT NULL DEFAULT 0.00,
     suporta_primar TINYINT(1) NOT NULL DEFAULT 1,
     suporta_distributie TINYINT(1) NOT NULL DEFAULT 1,
+    suporta_primar_distributie TINYINT(1) NOT NULL DEFAULT 0,
     suporta_compresor TINYINT(1) NOT NULL DEFAULT 0,
     pret_km DECIMAL(12,2) NOT NULL DEFAULT 0.00,
     pret_tona DECIMAL(12,2) NOT NULL DEFAULT 0.00,
@@ -89,6 +90,7 @@ CREATE TABLE IF NOT EXISTS configurare_rute_distributie (
     beneficiar_id INT UNSIGNED NOT NULL,
     loc_incarcare_id INT UNSIGNED NOT NULL,
     zona_distributie_id INT UNSIGNED NOT NULL,
+    tarif_mod ENUM('tona_km', 'tona', 'km') NOT NULL DEFAULT 'tona_km',
     tarif_tona DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     cost_extra_km DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     km_tarifare INT UNSIGNED NOT NULL DEFAULT 0,
@@ -828,6 +830,29 @@ PREPARE stmt_add_benef_suporta_distributie FROM @sql_add_benef_suporta_distribut
 EXECUTE stmt_add_benef_suporta_distributie;
 DEALLOCATE PREPARE stmt_add_benef_suporta_distributie;
 
+SET @has_benef_suporta_primar_distributie := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'configurare_beneficiari_transport'
+      AND COLUMN_NAME = 'suporta_primar_distributie'
+);
+SET @sql_add_benef_suporta_primar_distributie := IF(
+    @has_benef_suporta_primar_distributie = 0,
+    'ALTER TABLE configurare_beneficiari_transport ADD COLUMN suporta_primar_distributie TINYINT(1) NOT NULL DEFAULT 0 AFTER suporta_distributie',
+    'SELECT 1'
+);
+PREPARE stmt_add_benef_suporta_primar_distributie FROM @sql_add_benef_suporta_primar_distributie;
+EXECUTE stmt_add_benef_suporta_primar_distributie;
+DEALLOCATE PREPARE stmt_add_benef_suporta_primar_distributie;
+
+UPDATE configurare_beneficiari_transport
+SET suporta_primar_distributie = CASE
+    WHEN COALESCE(suporta_primar, 0) = 1 AND COALESCE(suporta_distributie, 0) = 1 THEN 1
+    ELSE COALESCE(suporta_primar_distributie, 0)
+END
+WHERE @has_benef_suporta_primar_distributie = 0;
+
 SET @has_benef_suporta_compresor := (
     SELECT COUNT(*)
     FROM information_schema.COLUMNS
@@ -837,7 +862,7 @@ SET @has_benef_suporta_compresor := (
 );
 SET @sql_add_benef_suporta_compresor := IF(
     @has_benef_suporta_compresor = 0,
-    'ALTER TABLE configurare_beneficiari_transport ADD COLUMN suporta_compresor TINYINT(1) NOT NULL DEFAULT 0 AFTER suporta_distributie',
+    'ALTER TABLE configurare_beneficiari_transport ADD COLUMN suporta_compresor TINYINT(1) NOT NULL DEFAULT 0 AFTER suporta_primar_distributie',
     'SELECT 1'
 );
 PREPARE stmt_add_benef_suporta_compresor FROM @sql_add_benef_suporta_compresor;
@@ -1355,6 +1380,28 @@ SET @sql_add_route_vehicle_ids_column := IF(
 PREPARE stmt_add_route_vehicle_ids_column FROM @sql_add_route_vehicle_ids_column;
 EXECUTE stmt_add_route_vehicle_ids_column;
 DEALLOCATE PREPARE stmt_add_route_vehicle_ids_column;
+
+SET @has_route_tarif_mod_column := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'configurare_rute_distributie'
+      AND COLUMN_NAME = 'tarif_mod'
+);
+SET @sql_add_route_tarif_mod_column := IF(
+    @has_route_tarif_mod_column = 0,
+    'ALTER TABLE configurare_rute_distributie ADD COLUMN tarif_mod ENUM(''tona_km'', ''tona'', ''km'') NOT NULL DEFAULT ''tona_km'' AFTER zona_distributie_id',
+    'SELECT 1'
+);
+PREPARE stmt_add_route_tarif_mod_column FROM @sql_add_route_tarif_mod_column;
+EXECUTE stmt_add_route_tarif_mod_column;
+DEALLOCATE PREPARE stmt_add_route_tarif_mod_column;
+
+UPDATE configurare_rute_distributie
+SET tarif_mod = 'tona_km'
+WHERE tarif_mod IS NULL
+   OR tarif_mod = ''
+   OR tarif_mod NOT IN ('tona_km', 'tona', 'km');
 
 SET @has_route_km_tarifare_column := (
     SELECT COUNT(*)

@@ -138,7 +138,10 @@ $expensesTotal = 0.0;
 foreach ($expenses as $expenseRow) {
     $expensesTotal += (float) ($expenseRow['suma'] ?? 0);
 }
+$invoicedRefacturareTotal = (float) ($race['total_refacturare_facturata'] ?? 0);
+$expensesTotal = max(0.0, $expensesTotal - $invoicedRefacturareTotal);
 $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
+$displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invoicedRefacturareTotal;
 ?>
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
@@ -170,6 +173,7 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
               data-compresor-vehicles-by-beneficiary='<?= e($compressorVehicleByBeneficiaryJson) ?>'
               data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>'
               data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>'
+              data-invoiced-refacturare-total='<?= e((string) $invoicedRefacturareTotal) ?>'
               novalidate>
             <?= csrf_field() ?>
             <datalist id="edit_race_time_options">
@@ -401,7 +405,7 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                     <label class="form-label" for="edit_race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['km_totali']) ? 'is-invalid' : '' ?>" id="edit_race_km_totali" name="km_totali" min="0" step="1" value="<?= e((string) ($raceFormData['km_totali'] ?? '')) ?>" data-role="km-totali">
                     <?php if (isset($raceFormErrors['km_totali'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_totali']) ?></div><?php endif; ?>
-                    <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Cost/km Distributie (calcul): (Cantitate × Tarif tona) / Km agreati</div>
+                    <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Cost/km Distributie (calcul): Km distributie = Km efectuati - Km agreati; Cost/km Distributie = Cost distributie (Pret tona x tone) / Km distributie.</div>
                 </div>
 
                 <div class="col-12 col-md-6" data-role="field-zona">
@@ -458,7 +462,7 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
 
                 <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="preview-total-field">
                     <label class="form-label">Total facturare (estimare)</label>
-                    <div class="dispatcher-total-preview" data-role="total-preview"><?= e(format_number_ro((float) ($raceFormData['total_facturare'] ?? 0), 2)) ?> lei</div>
+                    <div class="dispatcher-total-preview" data-role="total-preview"><?= e(format_number_ro($displayTotalFacturare, 2)) ?> lei</div>
                 </div>
 
                 <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-primar-field">
@@ -521,6 +525,8 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                       novalidate>
                     <?= csrf_field() ?>
                     <input type="hidden" name="expense_id" value="<?= e((string) ($expenseFormData['expense_id'] ?? '')) ?>">
+                    <input type="hidden" name="race_id" value="<?= e((string) $raceId) ?>">
+                    <input type="hidden" name="return_to" value="edit">
 
                     <div class="row g-2 mb-3 align-items-start expense-type-row">
                         <div class="col-12 col-md-6">
@@ -843,7 +849,14 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                             </div>
                         <?php endif; ?>
 
-                        <button type="submit" class="btn btn-primary w-100 mt-3 expense-refacturare-submit" name="submit_intent" value="refacturare" formnovalidate>
+                        <button
+                            type="submit"
+                            class="btn btn-primary w-100 mt-3 expense-refacturare-submit"
+                            name="submit_intent"
+                            value="refacturare"
+                            formaction="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store_refacturare'])) ?>"
+                            formnovalidate
+                        >
                             <?= $editingExpense ? 'Actualizeaza Refacturare' : 'Adauga Refacturare' ?>
                         </button>
                     </div>
@@ -885,10 +898,11 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                                 $refacturareDocPath = (string) ($expense['refacturare_document_path'] ?? '');
                                 $refacturareDocName = (string) ($expense['refacturare_document_original_name'] ?? '');
                                 $refacturareDocUrl = $refacturareDocPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($refacturareDocPath)) : null;
+                                $refacturareIsInvoiced = (int) ($expense['refacturare_facturata'] ?? 0) === 1;
                                 $expenseTypeLabel = (string) ($expenseTypes[(string) ($expense['tip_cheltuiala'] ?? '')] ?? '-');
                                 $refacturareTypeKey = (string) ($expense['refacturare_tip_cheltuiala'] ?? '');
-                                $refacturareTypeLabel = $refacturareTypeKey !== '' ? (string) ($expenseTypes[$refacturareTypeKey] ?? '') : '';
-                                $refacturareAmountValue = (float) ($expense['refacturare_suma'] ?? 0);
+                                $refacturareTypeLabel = (!$refacturareIsInvoiced && $refacturareTypeKey !== '') ? (string) ($expenseTypes[$refacturareTypeKey] ?? '') : '';
+                                $refacturareAmountValue = !$refacturareIsInvoiced ? (float) ($expense['refacturare_suma'] ?? 0) : 0.0;
                                 $refacturareDetailsRows = json_decode((string) ($expense['refacturare_detalii'] ?? ''), true);
                                 $refacturareDetailsTotal = 0.0;
                                 if (is_array($refacturareDetailsRows)) {
@@ -916,7 +930,7 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
                                                 <?= e($docName !== '' ? $docName : basename($docPath)) ?>
                                             </a>
                                         <?php endif; ?>
-                                        <?php if ($refacturareDocUrl !== null): ?>
+                                        <?php if ($refacturareDocUrl !== null && !$refacturareIsInvoiced): ?>
                                             <a class="btn btn-sm btn-outline-secondary mt-1" href="<?= e($refacturareDocUrl) ?>" target="_blank" rel="noopener">
                                                 Refacturare: <?= e($refacturareDocName !== '' ? $refacturareDocName : basename($refacturareDocPath)) ?>
                                             </a>
@@ -947,15 +961,11 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
 </div>
 
 <style>
-.expense-refacturare-panel {
-    background: #f8fafc;
-    border-color: #d8dee8 !important;
-}
-
 .expense-main-panel,
 .expense-refacturare-panel {
     display: flex;
     flex-direction: column;
+    min-width: 0;
 }
 
 .dispatcher-expense-form .form-control,
@@ -990,7 +1000,7 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
         grid-column: 1;
         min-height: 100%;
         padding: 1rem;
-        border: 1px solid transparent;
+        border: 1px solid #dee2e6;
         border-radius: 0.375rem;
     }
 
@@ -1004,6 +1014,8 @@ $focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
         grid-column: 2;
         margin-bottom: 0 !important;
         min-height: 100%;
+        background: transparent;
+        overflow: hidden;
     }
 }
 

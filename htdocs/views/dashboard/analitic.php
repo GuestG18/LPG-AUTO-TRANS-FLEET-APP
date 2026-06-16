@@ -4,6 +4,19 @@ $driverSelected = (string) ((int) (($filters['driver_ids'][0] ?? 0)));
 $beneficiarySelected = (string) ((int) (($filters['beneficiary_ids'][0] ?? 0)));
 $transportSelected = (string) ($filters['transport_types'][0] ?? '');
 $statusSelected = (string) ($filters['statuses'][0] ?? '');
+$formatDateRo = static function (string $isoDate): string {
+    $isoDate = trim($isoDate);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $isoDate)) {
+        return '';
+    }
+
+    $date = DateTimeImmutable::createFromFormat('Y-m-d', $isoDate);
+    if (!$date || $date->format('Y-m-d') !== $isoDate) {
+        return '';
+    }
+
+    return $date->format('d/m/Y');
+};
 ?>
 
 <div
@@ -27,23 +40,75 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
         <div class="card-body">
             <form id="dashboard-analytic-filters" class="row g-3" autocomplete="off">
                 <div class="col-12 col-md-6 col-xl-2">
-                    <label class="form-label" for="da_date_start">Perioada de la</label>
+                    <label class="form-label" for="da_date_start_display">Perioada de la</label>
                     <input
-                        type="date"
-                        class="form-control"
+                        type="hidden"
                         id="da_date_start"
                         name="date_start"
                         value="<?= e((string) ($filters['date_start'] ?? '')) ?>"
                     >
-                </div>
-                <div class="col-12 col-md-6 col-xl-2">
-                    <label class="form-label" for="da_date_end">Perioada pana la</label>
+                    <div class="input-group">
+                        <input
+                            type="text"
+                            class="form-control"
+                            id="da_date_start_display"
+                            value="<?= e($formatDateRo((string) ($filters['date_start'] ?? ''))) ?>"
+                            placeholder="dd/mm/yyyy"
+                            inputmode="numeric"
+                            autocomplete="off"
+                        >
+                        <button
+                            class="btn btn-outline-secondary"
+                            type="button"
+                            id="da_date_start_picker_btn"
+                            aria-label="Deschide calendar data start"
+                        >
+                            <i class="bi bi-calendar3"></i>
+                        </button>
+                    </div>
                     <input
                         type="date"
-                        class="form-control"
+                        id="da_date_start_native"
+                        class="dashboard-date-native-input"
+                        value="<?= e((string) ($filters['date_start'] ?? '')) ?>"
+                        tabindex="-1"
+                        aria-hidden="true"
+                    >
+                </div>
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label class="form-label" for="da_date_end_display">Perioada pana la</label>
+                    <input
+                        type="hidden"
                         id="da_date_end"
                         name="date_end"
                         value="<?= e((string) ($filters['date_end'] ?? '')) ?>"
+                    >
+                    <div class="input-group">
+                        <input
+                            type="text"
+                            class="form-control"
+                            id="da_date_end_display"
+                            value="<?= e($formatDateRo((string) ($filters['date_end'] ?? ''))) ?>"
+                            placeholder="dd/mm/yyyy"
+                            inputmode="numeric"
+                            autocomplete="off"
+                        >
+                        <button
+                            class="btn btn-outline-secondary"
+                            type="button"
+                            id="da_date_end_picker_btn"
+                            aria-label="Deschide calendar data final"
+                        >
+                            <i class="bi bi-calendar3"></i>
+                        </button>
+                    </div>
+                    <input
+                        type="date"
+                        id="da_date_end_native"
+                        class="dashboard-date-native-input"
+                        value="<?= e((string) ($filters['date_end'] ?? '')) ?>"
+                        tabindex="-1"
+                        aria-hidden="true"
                     >
                 </div>
                 <div class="col-12 col-md-6 col-xl-2">
@@ -154,7 +219,7 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                 <div class="kpi-value" id="kpi_total_curse">0</div>
             </article>
             <article class="dashboard-analytic-kpi">
-                <div class="kpi-name">Total Facturare</div>
+                <div class="kpi-name">Servicii</div>
                 <div class="kpi-value" id="kpi_total_facturare">0 lei</div>
             </article>
             <article class="dashboard-analytic-kpi">
@@ -162,11 +227,15 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                 <div class="kpi-value" id="kpi_total_refacturare">0 lei</div>
             </article>
             <article class="dashboard-analytic-kpi">
+                <div class="kpi-name">Total Facturare</div>
+                <div class="kpi-value" id="kpi_total_incasare">0 lei</div>
+            </article>
+            <article class="dashboard-analytic-kpi">
                 <div class="kpi-name">Total Cheltuieli</div>
                 <div class="kpi-value" id="kpi_total_cheltuieli">0 lei</div>
             </article>
             <article class="dashboard-analytic-kpi">
-                <div class="kpi-name">Profit Total</div>
+                <div class="kpi-name">Venit</div>
                 <div class="kpi-value" id="kpi_profit_total">0 lei</div>
             </article>
             <article class="dashboard-analytic-kpi">
@@ -174,16 +243,50 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                 <div class="kpi-value" id="kpi_total_km">0 km</div>
             </article>
             <article class="dashboard-analytic-kpi">
-                <div class="kpi-name">Tone Livrate</div>
+                <div class="kpi-name">Km primar</div>
+                <div class="kpi-value" id="kpi_km_primar">0 km</div>
+            </article>
+            <article class="dashboard-analytic-kpi">
+                <div class="kpi-name">Km distributie</div>
+                <div class="kpi-value" id="kpi_km_distributie">0 km</div>
+            </article>
+            <article class="dashboard-analytic-kpi">
+                <div class="kpi-name">Total tone transportare</div>
                 <div class="kpi-value" id="kpi_tone_livrate">0 t</div>
             </article>
             <article class="dashboard-analytic-kpi">
-                <div class="kpi-name">Profit / Km</div>
+                <div class="kpi-name">Tone primar</div>
+                <div class="kpi-value" id="kpi_tone_primar">0 t</div>
+            </article>
+            <article class="dashboard-analytic-kpi">
+                <div class="kpi-name">Tone distributie</div>
+                <div class="kpi-value" id="kpi_tone_distributie">0 t</div>
+            </article>
+            <article class="dashboard-analytic-kpi">
+                <div class="kpi-name">Venit / Km</div>
                 <div class="kpi-value" id="kpi_profit_km">0 lei</div>
             </article>
             <article class="dashboard-analytic-kpi">
-                <div class="kpi-name">Grad Incarcare Mediu</div>
+                <div class="kpi-name">Venit/tona</div>
+                <div class="kpi-value" id="kpi_venit_to">0 lei</div>
+            </article>
+            <article class="dashboard-analytic-kpi">
+                <div class="kpi-name">Km/tona</div>
+                <div class="kpi-value" id="kpi_km_tona">0</div>
+            </article>
+            <article class="dashboard-analytic-kpi">
+                <div class="kpi-name">Tona/km</div>
+                <div class="kpi-value" id="kpi_tona_km">0</div>
+            </article>
+            <article class="dashboard-analytic-kpi">
+                <div class="kpi-name">Grad Incarcare (Umplere)</div>
                 <div class="kpi-value" id="kpi_grad_mediu">0%</div>
+            </article>
+            <article class="dashboard-analytic-kpi">
+                <div class="kpi-name">Grad Utilizare</div>
+                <div class="kpi-value" id="kpi_grad_utilizare_flota_percent">0%</div>
+                <div class="kpi-subvalue" id="kpi_grad_utilizare_flota_details">0 zile active din 0 zile disponibile</div>
+                <div class="kpi-note">Calculat pe baza curselor din Dispecer curse</div>
             </article>
         </div>
 
@@ -294,7 +397,7 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                                 <th class="text-end">Cost/Km</th>
                                 <th class="text-end">Profit/Km</th>
                                 <th class="text-end">Km Nefacturati %</th>
-                                <th class="text-end">Grad Incarcare Mediu</th>
+                                <th class="text-end">Grad Incarcare (Umplere)</th>
                             </tr>
                             </thead>
                             <tbody id="vehicle-profitability-body"></tbody>
@@ -364,7 +467,7 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
                                 <th class="text-end">Profit Generat</th>
                                 <th class="text-end">Tone/Cursa</th>
                                 <th class="text-end">Km/Cursa</th>
-                                <th class="text-end">Grad Incarcare Mediu</th>
+                                <th class="text-end">Grad Incarcare (Umplere)</th>
                             </tr>
                             </thead>
                             <tbody id="driver-performance-body"></tbody>
@@ -378,3 +481,5 @@ $statusSelected = (string) ($filters['statuses'][0] ?? '');
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script src="<?= e(url('assets/js/dashboard-analitic.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dashboard-analitic.js'))) ?>"></script>
+
+

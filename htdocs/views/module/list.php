@@ -14,9 +14,22 @@ $urgentDocuments = $urgentDocuments ?? [];
 $isVehicleList = $moduleKey === 'vehicule';
 $isDocumentList = $moduleKey === 'documente';
 $isMaintenanceList = $moduleKey === 'mentenanta';
+$isMaintenanceTireStockPage = (bool) ($isMaintenanceTireStockPage ?? false);
 $isFuelList = $moduleKey === 'alimentari';
+$isDocumentCostOverrideList = $moduleKey === 'configurare_costuri_documente_vehicule_override';
 $fuelConsumptionSummary = is_array($fuelConsumptionSummary ?? null) ? $fuelConsumptionSummary : null;
 $maintenanceTireStockContext = $maintenanceTireStockContext ?? null;
+$documentTypeVehicleOptions = is_array($documentTypeVehicleOptions ?? null) ? $documentTypeVehicleOptions : [];
+$driverDocumentCostModule = is_array($driverDocumentCostModule ?? null) ? $driverDocumentCostModule : null;
+$driverDocumentCostRows = is_array($driverDocumentCostRows ?? null) ? $driverDocumentCostRows : [];
+$driverDocumentCostPagination = is_array($driverDocumentCostPagination ?? null) ? $driverDocumentCostPagination : null;
+$driverDocumentModule = is_array($driverDocumentModule ?? null) ? $driverDocumentModule : null;
+$driverDocumentRows = is_array($driverDocumentRows ?? null) ? $driverDocumentRows : [];
+$driverDocumentPagination = is_array($driverDocumentPagination ?? null) ? $driverDocumentPagination : null;
+$mainPaginationBaseQuery = $baseQuery;
+if ($isDocumentCostOverrideList && $driverDocumentCostPagination !== null) {
+    $mainPaginationBaseQuery['driver_cost_p'] = (int) ($driverDocumentCostPagination['page'] ?? 1);
+}
 $hasMultiselectFilters = false;
 foreach ($module['filters'] ?? [] as $filterMeta) {
     if ((string) ($filterMeta['type'] ?? '') === 'multiselect') {
@@ -26,13 +39,147 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
 }
 ?>
 
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3<?= $isDocumentCostOverrideList ? ' document-cost-header' : '' ?>">
     <h2 class="h4 mb-0"><?= e($module['title']) ?></h2>
-    <div class="d-flex gap-2">
-        <a class="btn btn-outline-secondary" href="<?= e(build_query_url(array_merge($baseQuery, ['action' => 'export']))) ?>">Export CSV</a>
-        <a class="btn btn-primary" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'create'])) ?>">Adaugă <?= e($module['singular']) ?></a>
+    <div class="d-flex gap-2<?= $isDocumentCostOverrideList ? ' document-cost-actions' : '' ?>">
+        <?php if ($isDocumentCostOverrideList): ?>
+            <div class="document-cost-action-group document-cost-action-tabs">
+        <?php endif; ?>
+        <?php if ($isDocumentCostOverrideList && function_exists('is_admin') && is_admin()): ?>
+            <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config'])) ?>">
+                Gestionare tipuri documente
+            </a>
+            <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addDocumentTypeConfigModal">
+                Tip document nou pe tip vehicul
+            </button>
+        <?php endif; ?>
+        <?php if ($isMaintenanceList && !$isMaintenanceTireStockPage): ?>
+            <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock'])) ?>">Stoc anvelope</a>
+        <?php endif; ?>
+        <?php if ($isMaintenanceTireStockPage): ?>
+            <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'mentenanta'])) ?>">Inapoi la Mentenanta</a>
+        <?php else: ?>
+            <a class="btn btn-outline-secondary<?= $isDocumentCostOverrideList ? ' document-cost-export-btn' : '' ?>" href="<?= e(build_query_url(array_merge($baseQuery, ['action' => 'export']))) ?>">Export CSV</a>
+        <?php endif; ?>
+        <?php if ($isDocumentCostOverrideList): ?>
+            </div>
+            <div class="document-cost-action-group document-cost-action-primary">
+        <?php endif; ?>
+        <?php if ($isDocumentCostOverrideList && function_exists('is_admin') && is_admin() && $driverDocumentCostModule !== null): ?>
+            <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config'])) ?>">
+                Gestionare tipuri documente soferi
+            </a>
+            <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addDriverDocumentTypeConfigModal">
+                Tip document nou soferi
+            </button>
+            <a class="btn btn-primary" href="<?= e(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'create'])) ?>">Adauga configurare cost document sofer</a>
+        <?php endif; ?>
+        <?php if (!$isMaintenanceTireStockPage): ?>
+            <a class="btn btn-primary" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'create'])) ?>">Adaugă <?= e($module['singular']) ?></a>
+        <?php endif; ?>
+        <?php if ($isDocumentCostOverrideList): ?>
+            </div>
+        <?php endif; ?>
     </div>
 </div>
+
+<?php if ($isDocumentCostOverrideList && function_exists('is_admin') && is_admin()): ?>
+    <div class="modal fade" id="addDocumentTypeConfigModal" tabindex="-1" aria-labelledby="addDocumentTypeConfigModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form method="post" action="<?= e(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'add_document_type_config'])) ?>">
+                    <?= csrf_field() ?>
+                    <div class="modal-header">
+                        <h3 class="modal-title fs-5" id="addDocumentTypeConfigModalLabel">Adauga tip document pe tip vehicul</h3>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label" for="doc_cfg_vehicle_type">Tip vehicul *</label>
+                            <select class="form-select" id="doc_cfg_vehicle_type" name="doc_cfg_vehicle_type" required>
+                                <?php foreach ($documentTypeVehicleOptions as $typeValue => $typeLabel): ?>
+                                    <option value="<?= e((string) $typeValue) ?>"><?= e((string) $typeLabel) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label" for="doc_cfg_document_type">Tip document *</label>
+                            <input
+                                type="text"
+                                class="form-control"
+                                id="doc_cfg_document_type"
+                                name="doc_cfg_document_type"
+                                maxlength="120"
+                                placeholder="Ex: CASCO"
+                                required
+                            >
+                        </div>
+
+                        <div class="form-text mt-2">
+                            Dupa salvare, noul tip document apare automat in formularele de adaugare documente.
+                        </div>
+
+                        <div class="form-check mt-3">
+                            <input class="form-check-input" type="checkbox" value="1" id="doc_cfg_requires_expiry" name="doc_cfg_requires_expiry" checked>
+                            <label class="form-check-label" for="doc_cfg_requires_expiry">
+                                Cere data de expirare in formularul Documente
+                            </label>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Renunta</button>
+                        <button type="submit" class="btn btn-primary">Salveaza tipul</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="addDriverDocumentTypeConfigModal" tabindex="-1" aria-labelledby="addDriverDocumentTypeConfigModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form method="post" action="<?= e(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'add_driver_document_type_config'])) ?>">
+                    <?= csrf_field() ?>
+                    <div class="modal-header">
+                        <h3 class="modal-title fs-5" id="addDriverDocumentTypeConfigModalLabel">Adauga tip document soferi</h3>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label" for="driver_doc_cfg_document_type_modal">Tip document *</label>
+                            <input
+                                type="text"
+                                class="form-control"
+                                id="driver_doc_cfg_document_type_modal"
+                                name="driver_doc_cfg_document_type"
+                                maxlength="100"
+                                placeholder="Ex: Aviz medical"
+                                required
+                            >
+                        </div>
+
+                        <div class="form-check mb-3">
+                            <input type="hidden" name="driver_doc_cfg_requires_expiry" value="0">
+                            <input class="form-check-input" type="checkbox" value="1" id="driver_doc_cfg_requires_expiry_modal" name="driver_doc_cfg_requires_expiry" checked>
+                            <label class="form-check-label" for="driver_doc_cfg_requires_expiry_modal">
+                                Cere data principala
+                            </label>
+                        </div>
+
+                        <div class="form-text mt-2">
+                            Dupa salvare, tipul apare automat in formularul Documente soferi si devine necesar pentru toti soferii.
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Renunta</button>
+                        <button type="submit" class="btn btn-primary">Salveaza tipul</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
 
 <?php if ($moduleKey === 'documente' && is_array($documentSummary)): ?>
     <?php
@@ -114,7 +261,7 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
     <?php endif; ?>
 <?php endif; ?>
 
-<?php if ($isMaintenanceList && is_array($maintenanceTireStockContext)): ?>
+<?php if ($isMaintenanceList && $isMaintenanceTireStockPage && is_array($maintenanceTireStockContext)): ?>
     <?php
     $stockTotals = is_array($maintenanceTireStockContext['totals'] ?? null) ? $maintenanceTireStockContext['totals'] : [];
     $stockStatusCounts = is_array($maintenanceTireStockContext['status_counts'] ?? null) ? $maintenanceTireStockContext['status_counts'] : [];
@@ -565,6 +712,10 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
     </div>
 <?php endif; ?>
 
+<?php if ($isMaintenanceTireStockPage): ?>
+    <?php return; ?>
+<?php endif; ?>
+
 <?php if ($isFuelList): ?>
     <div class="card border-0 shadow-sm mb-3">
         <div class="card-body">
@@ -671,6 +822,10 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
     </div>
 </div>
 
+<?php if ($isDocumentList || $isDocumentCostOverrideList): ?>
+    <h3 class="h5 mt-4 mb-2">Documente mașini</h3>
+<?php endif; ?>
+
 <div class="card border-0 shadow-sm">
     <div class="card-body p-0">
         <div class="table-responsive module-list-table-wrap<?= $isVehicleList ? ' module-list-table-wrap-vehicule' : '' ?><?= $isDocumentList ? ' module-list-table-wrap-documente' : '' ?>">
@@ -728,32 +883,208 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
             <small class="text-muted">Total rezultate: <?= e((string) $pagination['total_rows']) ?></small>
 
-            <?php if ($pagination['total_pages'] > 1): ?>
-                <nav aria-label="Paginare">
-                    <ul class="pagination pagination-sm mb-0">
-                        <?php
-                        $prevPage = max(1, (int) $pagination['page'] - 1);
-                        $nextPage = min((int) $pagination['total_pages'], (int) $pagination['page'] + 1);
-                        ?>
-                        <li class="page-item <?= (int) $pagination['page'] <= 1 ? 'disabled' : '' ?>">
-                            <a class="page-link" href="<?= e(build_query_url(array_merge($baseQuery, ['p' => $prevPage]))) ?>">Anterior</a>
-                        </li>
-
-                        <?php for ($i = 1; $i <= (int) $pagination['total_pages']; $i++): ?>
-                            <li class="page-item <?= (int) $pagination['page'] === $i ? 'active' : '' ?>">
-                                <a class="page-link" href="<?= e(build_query_url(array_merge($baseQuery, ['p' => $i]))) ?>"><?= e((string) $i) ?></a>
+            <?php if ($isDocumentCostOverrideList || (int) $pagination['total_pages'] > 1): ?>
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <small class="text-muted">Pagina <?= e((string) $pagination['page']) ?> din <?= e((string) $pagination['total_pages']) ?></small>
+                    <nav aria-label="Paginare documente mașini">
+                        <ul class="pagination pagination-sm mb-0">
+                            <?php
+                            $prevPage = max(1, (int) $pagination['page'] - 1);
+                            $nextPage = min((int) $pagination['total_pages'], (int) $pagination['page'] + 1);
+                            ?>
+                            <li class="page-item <?= (int) $pagination['page'] <= 1 ? 'disabled' : '' ?>">
+                                <a class="page-link" href="<?= e(build_query_url(array_merge($mainPaginationBaseQuery, ['p' => $prevPage]))) ?>" <?= (int) $pagination['page'] <= 1 ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Anterior</a>
                             </li>
-                        <?php endfor; ?>
 
-                        <li class="page-item <?= (int) $pagination['page'] >= (int) $pagination['total_pages'] ? 'disabled' : '' ?>">
-                            <a class="page-link" href="<?= e(build_query_url(array_merge($baseQuery, ['p' => $nextPage]))) ?>">Următor</a>
-                        </li>
-                    </ul>
-                </nav>
+                            <?php for ($i = 1; $i <= (int) $pagination['total_pages']; $i++): ?>
+                                <li class="page-item <?= (int) $pagination['page'] === $i ? 'active' : '' ?>">
+                                    <a class="page-link" href="<?= e(build_query_url(array_merge($mainPaginationBaseQuery, ['p' => $i]))) ?>"><?= e((string) $i) ?></a>
+                                </li>
+                            <?php endfor; ?>
+
+                            <li class="page-item <?= (int) $pagination['page'] >= (int) $pagination['total_pages'] ? 'disabled' : '' ?>">
+                                <a class="page-link" href="<?= e(build_query_url(array_merge($mainPaginationBaseQuery, ['p' => $nextPage]))) ?>" <?= (int) $pagination['page'] >= (int) $pagination['total_pages'] ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Următor</a>
+                            </li>
+                        </ul>
+                    </nav>
+                </div>
             <?php endif; ?>
         </div>
     </div>
 </div>
+
+<?php if ($isDocumentList && $driverDocumentModule !== null && $driverDocumentPagination !== null): ?>
+    <?php
+    $driverDocumentBaseQuery = array_merge($baseQuery, [
+        'p' => (int) ($pagination['page'] ?? 1),
+    ]);
+    ?>
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-4 mb-2">
+        <h3 class="h5 mb-0">Documente șoferi</h3>
+        <a class="btn btn-sm btn-primary" href="<?= e(build_query_url(['page' => 'documente_soferi', 'action' => 'create'])) ?>">Adauga document sofer</a>
+    </div>
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-0">
+            <div class="table-responsive module-list-table-wrap module-list-table-wrap-documente">
+                <table class="table table-hover align-middle mb-0 module-list-table module-list-table-documente">
+                    <thead>
+                    <tr>
+                        <?php foreach ($driverDocumentModule['list_columns'] as $column => $meta): ?>
+                            <th><?= e($meta['label']) ?></th>
+                        <?php endforeach; ?>
+                        <th class="text-end pe-3">Acțiuni</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <?php if ($driverDocumentRows === []): ?>
+                        <tr>
+                            <td colspan="<?= e((string) (count($driverDocumentModule['list_columns']) + 1)) ?>" class="text-center text-muted py-4">Nu exista inregistrari.</td>
+                        </tr>
+                    <?php else: ?>
+                        <?php foreach ($driverDocumentRows as $row): ?>
+                            <tr>
+                                <?php foreach ($driverDocumentModule['list_columns'] as $column => $meta): ?>
+                                    <td><?= format_value_html($row[$column] ?? null, $meta, $row) ?></td>
+                                <?php endforeach; ?>
+                                <td class="text-end pe-3">
+                                    <div class="d-inline-flex gap-1">
+                                        <?php if (!empty($row['fisier_stocat'])): ?>
+                                            <a class="btn btn-sm btn-outline-dark" href="<?= e(build_query_url(['page' => 'documente_soferi', 'action' => 'preview', 'id' => (int) $row['id']])) ?>">Vezi in aplicatie</a>
+                                        <?php endif; ?>
+                                        <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'documente_soferi', 'action' => 'show', 'id' => (int) $row['id']])) ?>">Detalii</a>
+                                        <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'documente_soferi', 'action' => 'edit', 'id' => (int) $row['id']])) ?>">Editează</a>
+                                        <form method="post" action="<?= e(build_query_url(['page' => 'documente_soferi', 'action' => 'delete'])) ?>" class="d-inline">
+                                            <?= csrf_field() ?>
+                                            <input type="hidden" name="id" value="<?= e((string) $row['id']) ?>">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur dorești să ștergi această înregistrare?">
+                                                Șterge
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card-footer bg-white">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <small class="text-muted">Total rezultate: <?= e((string) $driverDocumentPagination['total_rows']) ?></small>
+
+                <?php if ((int) $driverDocumentPagination['total_pages'] > 1): ?>
+                    <nav aria-label="Paginare documente soferi">
+                        <ul class="pagination pagination-sm mb-0">
+                            <?php
+                            $driverPrevPage = max(1, (int) $driverDocumentPagination['page'] - 1);
+                            $driverNextPage = min((int) $driverDocumentPagination['total_pages'], (int) $driverDocumentPagination['page'] + 1);
+                            ?>
+                            <li class="page-item <?= (int) $driverDocumentPagination['page'] <= 1 ? 'disabled' : '' ?>">
+                                <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentBaseQuery, ['driver_p' => $driverPrevPage]))) ?>">Anterior</a>
+                            </li>
+
+                            <?php for ($i = 1; $i <= (int) $driverDocumentPagination['total_pages']; $i++): ?>
+                                <li class="page-item <?= (int) $driverDocumentPagination['page'] === $i ? 'active' : '' ?>">
+                                    <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentBaseQuery, ['driver_p' => $i]))) ?>"><?= e((string) $i) ?></a>
+                                </li>
+                            <?php endfor; ?>
+
+                            <li class="page-item <?= (int) $driverDocumentPagination['page'] >= (int) $driverDocumentPagination['total_pages'] ? 'disabled' : '' ?>">
+                                <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentBaseQuery, ['driver_p' => $driverNextPage]))) ?>">Urmator</a>
+                            </li>
+                        </ul>
+                    </nav>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
+
+<?php if ($isDocumentCostOverrideList && $driverDocumentCostModule !== null && $driverDocumentCostPagination !== null): ?>
+    <?php
+    $driverDocumentCostBaseQuery = array_merge($baseQuery, [
+        'p' => (int) ($pagination['page'] ?? 1),
+    ]);
+    ?>
+    <h3 class="h5 mt-4 mb-2">Documente șoferi</h3>
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-0">
+            <div class="table-responsive module-list-table-wrap">
+                <table class="table table-hover align-middle mb-0 module-list-table">
+                    <thead>
+                    <tr>
+                        <?php foreach ($driverDocumentCostModule['list_columns'] as $column => $meta): ?>
+                            <th><?= e($meta['label']) ?></th>
+                        <?php endforeach; ?>
+                        <th class="text-end pe-3">Acțiuni</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <?php if ($driverDocumentCostRows === []): ?>
+                        <tr>
+                            <td colspan="<?= e((string) (count($driverDocumentCostModule['list_columns']) + 1)) ?>" class="text-center text-muted py-4">Nu existÄƒ Ã®nregistrÄƒri.</td>
+                        </tr>
+                    <?php else: ?>
+                        <?php foreach ($driverDocumentCostRows as $row): ?>
+                            <tr>
+                                <?php foreach ($driverDocumentCostModule['list_columns'] as $column => $meta): ?>
+                                    <td><?= format_value_html($row[$column] ?? null, $meta, $row) ?></td>
+                                <?php endforeach; ?>
+                                <td class="text-end pe-3">
+                                    <div class="d-inline-flex gap-1">
+                                        <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'show', 'id' => (int) $row['id']])) ?>">Detalii</a>
+                                        <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'edit', 'id' => (int) $row['id']])) ?>">Editează</a>
+                                        <form method="post" action="<?= e(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'delete'])) ?>" class="d-inline">
+                                            <?= csrf_field() ?>
+                                            <input type="hidden" name="id" value="<?= e((string) $row['id']) ?>">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur dorești să ștergi această înregistrare?">
+                                                Șterge
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card-footer bg-white">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <small class="text-muted">Total rezultate: <?= e((string) $driverDocumentCostPagination['total_rows']) ?></small>
+
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <small class="text-muted">Pagina <?= e((string) $driverDocumentCostPagination['page']) ?> din <?= e((string) $driverDocumentCostPagination['total_pages']) ?></small>
+                    <nav aria-label="Paginare documente șoferi">
+                        <ul class="pagination pagination-sm mb-0">
+                            <?php
+                            $driverCostPrevPage = max(1, (int) $driverDocumentCostPagination['page'] - 1);
+                            $driverCostNextPage = min((int) $driverDocumentCostPagination['total_pages'], (int) $driverDocumentCostPagination['page'] + 1);
+                            ?>
+                            <li class="page-item <?= (int) $driverDocumentCostPagination['page'] <= 1 ? 'disabled' : '' ?>">
+                                <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentCostBaseQuery, ['driver_cost_p' => $driverCostPrevPage]))) ?>" <?= (int) $driverDocumentCostPagination['page'] <= 1 ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Anterior</a>
+                            </li>
+
+                            <?php for ($i = 1; $i <= (int) $driverDocumentCostPagination['total_pages']; $i++): ?>
+                                <li class="page-item <?= (int) $driverDocumentCostPagination['page'] === $i ? 'active' : '' ?>">
+                                    <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentCostBaseQuery, ['driver_cost_p' => $i]))) ?>"><?= e((string) $i) ?></a>
+                                </li>
+                            <?php endfor; ?>
+
+                            <li class="page-item <?= (int) $driverDocumentCostPagination['page'] >= (int) $driverDocumentCostPagination['total_pages'] ? 'disabled' : '' ?>">
+                                <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentCostBaseQuery, ['driver_cost_p' => $driverCostNextPage]))) ?>" <?= (int) $driverDocumentCostPagination['page'] >= (int) $driverDocumentCostPagination['total_pages'] ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Următor</a>
+                            </li>
+                        </ul>
+                    </nav>
+                </div>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
 
 <?php if ($hasMultiselectFilters): ?>
 <script>

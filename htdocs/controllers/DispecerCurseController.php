@@ -34,6 +34,17 @@ class DispecerCurseController
 
     private const DEFAULT_BILLING_STATUS = 'in_curs_facturare';
     private const ROAD_TAX_DETAILS_MARKER = '[ROAD_TAX_DETAILS]';
+    private const DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE = 'distributie';
+    private const DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE = 'primar_distributie';
+    private const DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH = 'tona_km';
+    private const DISTRIBUTION_ROUTE_TARIFF_MODE_TON = 'tona';
+    private const DISTRIBUTION_ROUTE_TARIFF_MODE_KM = 'km';
+
+    private const DISTRIBUTION_ROUTE_TARIFF_MODE_LABELS = [
+        self::DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH => 'Pret tona + Pret km',
+        self::DISTRIBUTION_ROUTE_TARIFF_MODE_TON => 'Doar Pret tona',
+        self::DISTRIBUTION_ROUTE_TARIFF_MODE_KM => 'Doar Pret km',
+    ];
 
     public function __construct(PDO $db)
     {
@@ -71,8 +82,20 @@ class DispecerCurseController
             case 'update_status':
                 $this->updateStatusAction();
                 return;
+            case 'update_expense_status':
+                $this->updateExpenseStatusAction();
+                return;
             case 'config':
                 $this->configAction();
+                return;
+            case 'refacturari':
+                $this->refacturariAction();
+                return;
+            case 'store_refacturare':
+                $this->storeRefacturareAction();
+                return;
+            case 'toggle_refacturare_facturata':
+                $this->toggleRefacturareInvoicedAction();
                 return;
             case 'config_store_distributie':
                 $this->configStoreDistributionAction();
@@ -693,13 +716,296 @@ class DispecerCurseController
         redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
     }
 
+    private function refacturariAction(): void
+    {
+        $formFlash = $this->consumeFormFlash('refacturare_create');
+        $formData = $this->defaultRefacturareFormData();
+        if ($formFlash['old'] !== []) {
+            $formData = array_merge($formData, $formFlash['old']);
+        }
+
+        $selectedRaceId = (int) ($_GET['race_id'] ?? 0);
+        if ($selectedRaceId <= 0) {
+            $selectedRaceId = (int) ($formData['race_id'] ?? 0);
+        }
+        $formData['race_id'] = $selectedRaceId > 0 ? (string) $selectedRaceId : '';
+
+        $raceOptions = [];
+        $refacturareRows = [];
+        try {
+            $raceOptions = $this->model->getRefacturareRaceOptions(500);
+            $refacturareRows = $this->model->getRefacturareEntries($selectedRaceId > 0 ? $selectedRaceId : null, 250);
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseController][refacturari] ' . $exception->getMessage());
+            flash_set('danger', $this->buildPersistenceErrorMessage($exception));
+        }
+
+        $selectedRace = null;
+        if ($selectedRaceId > 0) {
+            foreach ($raceOptions as $raceOption) {
+                if ((int) ($raceOption['id'] ?? 0) !== $selectedRaceId) {
+                    continue;
+                }
+
+                $selectedRace = $raceOption;
+                break;
+            }
+        }
+
+        render('dispecer_curse/refacturari.php', [
+            'pageTitle' => 'Refacturari curse',
+            'currentPage' => 'dispecer_curse',
+            'raceOptions' => $raceOptions,
+            'selectedRaceId' => $selectedRaceId,
+            'selectedRace' => $selectedRace,
+            'refacturareRows' => $refacturareRows,
+            'transportTypes' => self::TRANSPORT_TYPES,
+            'expenseTypes' => self::EXPENSE_TYPES,
+            'formData' => $formData,
+            'formErrors' => $formFlash['errors'],
+        ]);
+    }
+
+    private function storeRefacturareAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'refacturari']));
+        }
+
+        $raceId = (int) ($_POST['race_id'] ?? 0);
+        $returnToEdit = trim((string) ($_POST['return_to'] ?? '')) === 'edit';
+        $redirectUrl = $this->buildRefacturareRedirectUrl($raceId, $returnToEdit);
+
+        ensure_csrf_or_redirect($redirectUrl);
+
+        if ($raceId <= 0 || !$this->model->existsRace($raceId)) {
+            $accountingDate = $this->resolveRefacturareAccountingDate($_POST, $returnToEdit);
+            $old = $this->defaultRefacturareFormData();
+            $old = array_merge($old, [
+                'race_id' => $raceId > 0 ? (string) $raceId : '',
+                'expense_id' => trim((string) ($_POST['expense_id'] ?? '')),
+                'tip_cheltuiala' => trim((string) ($_POST['tip_cheltuiala'] ?? 'motorina')),
+                'refacturare_enabled' => '1',
+                'refacturare_tip_cheltuiala' => trim((string) ($_POST['refacturare_tip_cheltuiala'] ?? 'motorina')),
+                'refacturare_suma' => trim((string) ($_POST['refacturare_suma'] ?? '')),
+                'refacturare_data' => trim((string) ($_POST['refacturare_data'] ?? date('Y-m-d'))),
+                'refacturare_observatii' => trim((string) ($_POST['refacturare_observatii'] ?? '')),
+                'suma' => trim((string) ($_POST['suma'] ?? '')),
+                'data_cheltuiala' => $accountingDate,
+                'observatii' => trim((string) ($_POST['observatii'] ?? '')),
+            ]);
+            $this->setRefacturareFormFlash($raceId, $returnToEdit, $old, [
+                'race_id' => 'Selecteaza o cursa valida.',
+            ]);
+            redirect($redirectUrl);
+        }
+
+        $refacturareType = trim((string) ($_POST['refacturare_tip_cheltuiala'] ?? 'motorina'));
+        if ($refacturareType === '') {
+            $refacturareType = 'motorina';
+        }
+
+        $mappedInput = [
+            'expense_id' => '',
+            'submit_intent' => 'refacturare',
+            'tip_cheltuiala' => $refacturareType,
+            'refacturare_enabled' => '1',
+            'refacturare_tip_cheltuiala' => $refacturareType,
+            'refacturare_suma' => trim((string) ($_POST['refacturare_suma'] ?? '')),
+            'refacturare_data' => trim((string) ($_POST['refacturare_data'] ?? date('Y-m-d'))),
+            'refacturare_observatii' => trim((string) ($_POST['refacturare_observatii'] ?? '')),
+            'suma' => '0.00',
+            'data_cheltuiala' => $this->resolveRefacturareAccountingDate($_POST, $returnToEdit),
+            'observatii' => trim((string) ($_POST['refacturare_observatii'] ?? '')),
+            'taxa_acces_bucati' => '',
+            'taxa_acces_pret' => '',
+            'port_bucati' => '',
+            'port_pret' => '',
+            'trece_bucati' => '',
+            'trece_pret' => '',
+            'refacturare_taxa_acces_bucati' => trim((string) ($_POST['refacturare_taxa_acces_bucati'] ?? '')),
+            'refacturare_taxa_acces_pret' => trim((string) ($_POST['refacturare_taxa_acces_pret'] ?? '')),
+            'refacturare_port_bucati' => trim((string) ($_POST['refacturare_port_bucati'] ?? '')),
+            'refacturare_port_pret' => trim((string) ($_POST['refacturare_port_pret'] ?? '')),
+            'refacturare_trece_bucati' => trim((string) ($_POST['refacturare_trece_bucati'] ?? '')),
+            'refacturare_trece_pret' => trim((string) ($_POST['refacturare_trece_pret'] ?? '')),
+        ];
+
+        [$data, $errors, $old] = $this->validateExpenseInput($mappedInput);
+        $old['race_id'] = (string) $raceId;
+        $old['refacturare_enabled'] = '1';
+        if ($returnToEdit) {
+            $old = $this->buildEditRefacturareFlashOld($old, $_POST);
+        }
+        [$uploadedRefacturareDocument, $refacturareUploadError] = $this->storeUploadedExpenseDocument($_FILES['refacturare_document_upload'] ?? null);
+        if ($refacturareUploadError !== null) {
+            $errors['refacturare_document_upload'] = $refacturareUploadError;
+        }
+
+        if ($errors !== []) {
+            if ($uploadedRefacturareDocument !== null) {
+                $this->deleteExpensePhysicalFile((string) $uploadedRefacturareDocument['file_path']);
+            }
+            $this->setRefacturareFormFlash($raceId, $returnToEdit, $old, $errors);
+            redirect($redirectUrl);
+        }
+
+        try {
+            $now = date('Y-m-d H:i:s');
+            $data['cursa_id'] = $raceId;
+            $data['created_at'] = $now;
+            $data['updated_at'] = $now;
+            $expenseId = $this->model->createExpense($data);
+
+            if ($uploadedRefacturareDocument !== null) {
+                $this->model->updateExpenseRefacturareDocument($expenseId, $uploadedRefacturareDocument);
+            }
+
+            $this->model->updateRaceBillingStatus($raceId, self::DEFAULT_BILLING_STATUS, $now);
+            flash_set('success', 'Refacturarea a fost adaugata.');
+        } catch (PDOException $exception) {
+            if ($uploadedRefacturareDocument !== null) {
+                $this->deleteExpensePhysicalFile((string) $uploadedRefacturareDocument['file_path']);
+            }
+
+            error_log('[DispecerCurseController][store_refacturare] ' . $exception->getMessage());
+            flash_set('danger', 'Nu s-a putut salva refacturarea.');
+            $this->setRefacturareFormFlash($raceId, $returnToEdit, $old, []);
+        }
+
+        redirect($redirectUrl);
+    }
+
+    private function buildRefacturareRedirectUrl(int $raceId, bool $returnToEdit): string
+    {
+        if ($returnToEdit && $raceId > 0) {
+            return build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]);
+        }
+
+        $redirectQuery = [
+            'page' => 'dispecer_curse',
+            'action' => 'refacturari',
+        ];
+        if ($raceId > 0) {
+            $redirectQuery['race_id'] = $raceId;
+        }
+
+        return build_query_url($redirectQuery);
+    }
+
+    private function setRefacturareFormFlash(int $raceId, bool $returnToEdit, array $old, array $errors): void
+    {
+        if ($returnToEdit && $raceId > 0) {
+            $this->setFormFlash('expense_' . $raceId, $old, $errors);
+            return;
+        }
+
+        $this->setFormFlash('refacturare_create', $old, $errors);
+    }
+
+    private function buildEditRefacturareFlashOld(array $old, array $input): array
+    {
+        return array_merge($old, [
+            'expense_id' => trim((string) ($input['expense_id'] ?? '')),
+            'tip_cheltuiala' => trim((string) ($input['tip_cheltuiala'] ?? ($old['tip_cheltuiala'] ?? 'motorina'))),
+            'suma' => trim((string) ($input['suma'] ?? '')),
+            'data_cheltuiala' => trim((string) ($input['data_cheltuiala'] ?? date('Y-m-d'))),
+            'observatii' => trim((string) ($input['observatii'] ?? '')),
+            'refacturare_enabled' => '1',
+        ]);
+    }
+
+    private function resolveRefacturareAccountingDate(array $input, bool $returnToEdit): string
+    {
+        if ($returnToEdit) {
+            $date = trim((string) ($input['refacturare_data'] ?? ''));
+            return $this->isValidDate($date) ? $date : date('Y-m-d');
+        }
+
+        $date = trim((string) ($input['data_cheltuiala'] ?? ''));
+        return $date !== '' ? $date : date('Y-m-d');
+    }
+
+    private function toggleRefacturareInvoicedAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'refacturari']));
+        }
+
+        $raceId = (int) ($_POST['race_id'] ?? 0);
+        $redirectQuery = [
+            'page' => 'dispecer_curse',
+            'action' => 'refacturari',
+        ];
+        if ($raceId > 0) {
+            $redirectQuery['race_id'] = $raceId;
+        }
+        $redirectUrl = build_query_url($redirectQuery);
+        ensure_csrf_or_redirect($redirectUrl);
+
+        $expenseId = (int) ($_POST['expense_id'] ?? 0);
+        if ($expenseId <= 0) {
+            flash_set('warning', 'Refacturarea selectata este invalida.');
+            redirect($redirectUrl);
+        }
+
+        $expense = $this->model->getExpenseById($expenseId);
+        if ($expense === null) {
+            flash_set('warning', 'Refacturarea selectata nu exista.');
+            redirect($redirectUrl);
+        }
+
+        $expenseRaceId = (int) ($expense['cursa_id'] ?? 0);
+        if ($raceId > 0 && $expenseRaceId > 0 && $raceId !== $expenseRaceId) {
+            flash_set('warning', 'Refacturarea selectata nu apartine cursei curente.');
+            redirect($redirectUrl);
+        }
+
+        $refacturareAmount = (float) ($expense['refacturare_suma'] ?? 0);
+        if ($refacturareAmount <= 0) {
+            flash_set('warning', 'Doar intrarile cu suma de refacturare pot fi marcate ca facturate.');
+            redirect($redirectUrl);
+        }
+
+        $isInvoiced = (string) ($_POST['is_invoiced'] ?? '0') === '1';
+        $invoicedAt = $isInvoiced ? date('Y-m-d H:i:s') : null;
+
+        try {
+            $this->model->updateRefacturareInvoicedStatus($expenseId, $isInvoiced, $invoicedAt);
+            if ($isInvoiced) {
+                flash_set('success', 'Refacturarea a fost marcata ca facturata. Suma a fost mutata in Total Facturare.');
+            } else {
+                flash_set('success', 'Marcarea facturarii a fost anulata. Suma a revenit in Total Refacturare.');
+            }
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseController][toggle_refacturare_facturata] ' . $exception->getMessage());
+            flash_set('danger', 'Nu s-a putut actualiza statusul facturarii pentru refacturare.');
+        }
+
+        if ($raceId <= 0 && $expenseRaceId > 0) {
+            $redirectQuery['race_id'] = $expenseRaceId;
+            $redirectUrl = build_query_url($redirectQuery);
+        }
+
+        redirect($redirectUrl);
+    }
+
     private function configAction(): void
     {
         require_admin_or_403();
 
         $locFlash = $this->consumeFormFlash('config_loc');
         $zoneFlash = $this->consumeFormFlash('config_zona');
-        $distributionRouteFlash = $this->consumeFormFlash('config_distributie_route');
+        $distributionOnlyRouteFlash = $this->consumeFormFlash(
+            $this->distributionRouteFlashKey(self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE)
+        );
+        $primaryDistributionRouteFlash = $this->consumeFormFlash(
+            $this->distributionRouteFlashKey(self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE)
+        );
+        $legacyDistributionRouteFlash = $this->consumeFormFlash('config_distributie_route');
+        if ($primaryDistributionRouteFlash['old'] === [] && $primaryDistributionRouteFlash['errors'] === []) {
+            $primaryDistributionRouteFlash = $legacyDistributionRouteFlash;
+        }
         $primaryRouteFlash = $this->consumeFormFlash('config_primar_route');
         $beneficiaryFlash = $this->consumeFormFlash('config_beneficiar');
 
@@ -711,6 +1017,8 @@ class DispecerCurseController
         $locations = [];
         $zones = [];
         $distributionRouteRules = [];
+        $distributionOnlyRouteRules = [];
+        $primaryDistributionRouteRules = [];
         $primaryRouteRules = [];
         $viewBeneficiary = null;
         $editBeneficiary = null;
@@ -725,6 +1033,7 @@ class DispecerCurseController
         $transportTypeOptions = [
             'primar' => 'Primar km',
             'distributie' => 'Distributie',
+            'primar_distributie' => 'Primar+Distributie',
             'compresor' => 'Compresor',
         ];
 
@@ -735,6 +1044,7 @@ class DispecerCurseController
             'tip_transporturi' => ['primar'],
             'suporta_primar' => '1',
             'suporta_distributie' => '0',
+            'suporta_primar_distributie' => '0',
             'suporta_compresor' => '0',
             'pret_km' => '',
             'pret_tona' => '',
@@ -777,6 +1087,9 @@ class DispecerCurseController
                 if (!empty($editBeneficiary['suporta_distributie'])) {
                     $selectedTransportTypes[] = 'distributie';
                 }
+                if (!empty($editBeneficiary['suporta_primar_distributie'])) {
+                    $selectedTransportTypes[] = 'primar_distributie';
+                }
                 if (!empty($editBeneficiary['suporta_compresor'])) {
                     $selectedTransportTypes[] = 'compresor';
                 }
@@ -788,6 +1101,7 @@ class DispecerCurseController
                     'tip_transporturi' => $selectedTransportTypes,
                     'suporta_primar' => !empty($editBeneficiary['suporta_primar']) ? '1' : '0',
                     'suporta_distributie' => !empty($editBeneficiary['suporta_distributie']) ? '1' : '0',
+                    'suporta_primar_distributie' => !empty($editBeneficiary['suporta_primar_distributie']) ? '1' : '0',
                     'suporta_compresor' => !empty($editBeneficiary['suporta_compresor']) ? '1' : '0',
                     'pret_km' => number_format((float) ($editBeneficiary['pret_km'] ?? 0), 2, '.', ''),
                     'pret_tona' => number_format((float) ($editBeneficiary['pret_tona'] ?? 0), 2, '.', ''),
@@ -825,10 +1139,11 @@ class DispecerCurseController
         $distributionBeneficiaryId = (int) ($beneficiaryFormData['id'] ?? 0);
         $distributionEnabled = in_array('distributie', $selectedTransportTypes, true);
         $primaryEnabled = in_array('primar', $selectedTransportTypes, true);
+        $primaryDistributionEnabled = in_array('primar_distributie', $selectedTransportTypes, true);
 
         try {
             if ($distributionBeneficiaryId > 0) {
-                if ($primaryEnabled) {
+                if ($primaryEnabled || $primaryDistributionEnabled) {
                     try {
                         $this->syncPrimaryRouteBidirectionalCatalog($distributionBeneficiaryId);
                     } catch (Throwable $exception) {
@@ -839,6 +1154,16 @@ class DispecerCurseController
                 $locations = $this->model->getLoadLocations(false, $distributionBeneficiaryId);
                 $zones = $this->model->getDistributionZones(false, $distributionBeneficiaryId);
                 $distributionRouteRules = $this->model->getDistributionRouteRules(false, $distributionBeneficiaryId);
+                $distributionOnlyRouteRules = $this->model->getDistributionRouteRules(
+                    false,
+                    $distributionBeneficiaryId,
+                    self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE
+                );
+                $primaryDistributionRouteRules = $this->model->getDistributionRouteRules(
+                    false,
+                    $distributionBeneficiaryId,
+                    self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE
+                );
                 $primaryRouteRules = $this->model->getPrimaryRouteRules(false, $distributionBeneficiaryId);
                 $vehicleDefaultLoadLocationMap = $this->model->getVehicleDefaultLoadLocationMap($distributionBeneficiaryId);
                 $vehicleDefaultDistributionZoneMap = $this->model->getVehicleDefaultDistributionZoneMap($distributionBeneficiaryId);
@@ -955,94 +1280,143 @@ class DispecerCurseController
         $locFormMode = trim((string) ($locFormData['id'] ?? '')) !== '' ? 'edit' : 'create';
         $zoneFormMode = trim((string) ($zoneFormData['id'] ?? '')) !== '' ? 'edit' : 'create';
 
-        $defaultDistributionRouteForm = [
-            'route_id' => '',
-            'loc_id' => '',
-            'zona_id' => '',
-            'tarif_tona' => '',
-            'cost_extra_km' => '',
-            'km_tarifare' => '',
-            'cost_cursa' => '',
-            'aplica_cost_cursa' => '0',
-            'vehicle_ids' => [],
-            'activ' => '1',
-        ];
-        $routeEditId = (int) ($_GET['route_edit_id'] ?? 0);
-        $routeEditRule = null;
-        if ($editLocation !== null) {
-            $defaultDistributionRouteForm['loc_id'] = (string) ((int) ($editLocation['id'] ?? 0));
-        }
-        if ($editZone !== null) {
-            $defaultDistributionRouteForm['zona_id'] = (string) ((int) ($editZone['id'] ?? 0));
-        }
-        if ($editLocation !== null && $editZone !== null && $distributionBeneficiaryId > 0) {
-            $prefillRouteRule = $this->model->getDistributionRouteRuleForBeneficiary(
-                $distributionBeneficiaryId,
-                (int) ($editLocation['id'] ?? 0),
-                (int) ($editZone['id'] ?? 0),
-                false
-            );
-            if ($prefillRouteRule !== null) {
-                $defaultDistributionRouteForm['tarif_tona'] = number_format((float) ($prefillRouteRule['tarif_tona'] ?? 0), 2, '.', '');
-                $defaultDistributionRouteForm['cost_extra_km'] = number_format((float) ($prefillRouteRule['cost_extra_km'] ?? 0), 2, '.', '');
-                $defaultDistributionRouteForm['km_tarifare'] = (string) ((int) max(0, (int) ($prefillRouteRule['km_tarifare'] ?? 0)));
-                $defaultDistributionRouteForm['cost_cursa'] = number_format((float) ($prefillRouteRule['cost_cursa'] ?? 0), 2, '.', '');
-                $defaultDistributionRouteForm['aplica_cost_cursa'] = !empty($prefillRouteRule['aplica_cost_cursa']) ? '1' : '0';
-                $routeVehicleIdsRaw = trim((string) ($prefillRouteRule['vehicle_ids'] ?? ''));
-                if ($routeVehicleIdsRaw !== '') {
-                    $routeVehicleIds = [];
-                    foreach (explode(',', $routeVehicleIdsRaw) as $routeVehicleIdRaw) {
-                        $routeVehicleIdRaw = trim($routeVehicleIdRaw);
-                        if ($routeVehicleIdRaw === '' || !ctype_digit($routeVehicleIdRaw)) {
-                            continue;
-                        }
+        $buildDistributionRouteDefaultForm = function (string $routeScope) use ($distributionBeneficiaryId, $editLocation, $editZone): array {
+            $defaultForm = [
+                'route_id' => '',
+                'route_scope' => $routeScope,
+                'loc_id' => '',
+                'zona_id' => '',
+                'tarif_mod' => self::DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH,
+                'tarif_tona' => '',
+                'cost_extra_km' => '',
+                'km_tarifare' => '',
+                'cost_cursa' => '',
+                'aplica_cost_cursa' => '0',
+                'vehicle_ids' => [],
+                'activ' => '1',
+            ];
 
-                        $routeVehicleId = (int) $routeVehicleIdRaw;
-                        if ($routeVehicleId > 0) {
-                            $routeVehicleIds[] = (string) $routeVehicleId;
+            $routeEditParamName = $routeScope === self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE
+                ? 'route_distributie_edit_id'
+                : 'route_primar_distributie_edit_id';
+            $routeEditId = (int) ($_GET[$routeEditParamName] ?? 0);
+            if ($routeEditId <= 0 && $routeScope === self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE) {
+                $routeEditId = (int) ($_GET['route_edit_id'] ?? 0);
+            }
+
+            if ($editLocation !== null) {
+                $defaultForm['loc_id'] = (string) ((int) ($editLocation['id'] ?? 0));
+            }
+            if ($editZone !== null) {
+                $defaultForm['zona_id'] = (string) ((int) ($editZone['id'] ?? 0));
+            }
+
+            if ($editLocation !== null && $editZone !== null && $distributionBeneficiaryId > 0) {
+                $prefillRouteRule = $this->model->getDistributionRouteRuleForBeneficiary(
+                    $distributionBeneficiaryId,
+                    (int) ($editLocation['id'] ?? 0),
+                    (int) ($editZone['id'] ?? 0),
+                    false,
+                    null,
+                    $routeScope
+                );
+                if ($prefillRouteRule !== null) {
+                    $defaultForm['tarif_mod'] = $this->normalizeDistributionRouteTariffModeInput((string) ($prefillRouteRule['tarif_mod'] ?? ''));
+                    $defaultForm['tarif_tona'] = number_format((float) ($prefillRouteRule['tarif_tona'] ?? 0), 2, '.', '');
+                    $defaultForm['cost_extra_km'] = number_format((float) ($prefillRouteRule['cost_extra_km'] ?? 0), 2, '.', '');
+                    $defaultForm['km_tarifare'] = (string) ((int) max(0, (int) ($prefillRouteRule['km_tarifare'] ?? 0)));
+                    $defaultForm['cost_cursa'] = number_format((float) ($prefillRouteRule['cost_cursa'] ?? 0), 2, '.', '');
+                    $defaultForm['aplica_cost_cursa'] = !empty($prefillRouteRule['aplica_cost_cursa']) ? '1' : '0';
+                    $routeVehicleIdsRaw = trim((string) ($prefillRouteRule['vehicle_ids'] ?? ''));
+                    if ($routeVehicleIdsRaw !== '') {
+                        $routeVehicleIds = [];
+                        foreach (explode(',', $routeVehicleIdsRaw) as $routeVehicleIdRaw) {
+                            $routeVehicleIdRaw = trim($routeVehicleIdRaw);
+                            if ($routeVehicleIdRaw === '' || !ctype_digit($routeVehicleIdRaw)) {
+                                continue;
+                            }
+
+                            $routeVehicleId = (int) $routeVehicleIdRaw;
+                            if ($routeVehicleId > 0) {
+                                $routeVehicleIds[] = (string) $routeVehicleId;
+                            }
                         }
+                        $defaultForm['vehicle_ids'] = array_values(array_unique($routeVehicleIds));
                     }
-                    $defaultDistributionRouteForm['vehicle_ids'] = array_values(array_unique($routeVehicleIds));
                 }
             }
-        }
-        if ($routeEditId > 0 && $distributionBeneficiaryId > 0) {
-            $routeEditRule = $this->model->getDistributionRouteRuleById($routeEditId);
-            if ($routeEditRule !== null) {
-                $defaultDistributionRouteForm['route_id'] = (string) ((int) ($routeEditRule['id'] ?? 0));
-                $defaultDistributionRouteForm['loc_id'] = (string) ((int) ($routeEditRule['loc_incarcare_id'] ?? 0));
-                $defaultDistributionRouteForm['zona_id'] = (string) ((int) ($routeEditRule['zona_distributie_id'] ?? 0));
-                $defaultDistributionRouteForm['tarif_tona'] = number_format((float) ($routeEditRule['tarif_tona'] ?? 0), 2, '.', '');
-                $defaultDistributionRouteForm['cost_extra_km'] = number_format((float) ($routeEditRule['cost_extra_km'] ?? 0), 2, '.', '');
-                $defaultDistributionRouteForm['km_tarifare'] = (string) ((int) max(0, (int) ($routeEditRule['km_tarifare'] ?? 0)));
-                $defaultDistributionRouteForm['cost_cursa'] = number_format((float) ($routeEditRule['cost_cursa'] ?? 0), 2, '.', '');
-                $defaultDistributionRouteForm['aplica_cost_cursa'] = !empty($routeEditRule['aplica_cost_cursa']) ? '1' : '0';
-                $defaultDistributionRouteForm['activ'] = !empty($routeEditRule['activ']) ? '1' : '0';
-                $routeVehicleIdsRaw = trim((string) ($routeEditRule['vehicle_ids'] ?? ''));
-                if ($routeVehicleIdsRaw !== '') {
-                    $routeVehicleIds = [];
-                    foreach (explode(',', $routeVehicleIdsRaw) as $routeVehicleIdRaw) {
-                        $routeVehicleIdRaw = trim($routeVehicleIdRaw);
-                        if ($routeVehicleIdRaw === '' || !ctype_digit($routeVehicleIdRaw)) {
-                            continue;
-                        }
 
-                        $routeVehicleId = (int) $routeVehicleIdRaw;
-                        if ($routeVehicleId > 0) {
-                            $routeVehicleIds[] = (string) $routeVehicleId;
+            if ($routeEditId > 0 && $distributionBeneficiaryId > 0) {
+                $routeEditRule = $this->model->getDistributionRouteRuleById($routeEditId);
+                if (
+                    $routeEditRule !== null
+                    && (int) ($routeEditRule['beneficiar_id'] ?? 0) === $distributionBeneficiaryId
+                    && $this->normalizeDistributionRouteScopeInput((string) ($routeEditRule['transport_scope'] ?? ''), $routeScope) === $routeScope
+                ) {
+                    $defaultForm['route_id'] = (string) ((int) ($routeEditRule['id'] ?? 0));
+                    $defaultForm['loc_id'] = (string) ((int) ($routeEditRule['loc_incarcare_id'] ?? 0));
+                    $defaultForm['zona_id'] = (string) ((int) ($routeEditRule['zona_distributie_id'] ?? 0));
+                    $defaultForm['tarif_mod'] = $this->normalizeDistributionRouteTariffModeInput((string) ($routeEditRule['tarif_mod'] ?? ''));
+                    $defaultForm['tarif_tona'] = number_format((float) ($routeEditRule['tarif_tona'] ?? 0), 2, '.', '');
+                    $defaultForm['cost_extra_km'] = number_format((float) ($routeEditRule['cost_extra_km'] ?? 0), 2, '.', '');
+                    $defaultForm['km_tarifare'] = (string) ((int) max(0, (int) ($routeEditRule['km_tarifare'] ?? 0)));
+                    $defaultForm['cost_cursa'] = number_format((float) ($routeEditRule['cost_cursa'] ?? 0), 2, '.', '');
+                    $defaultForm['aplica_cost_cursa'] = !empty($routeEditRule['aplica_cost_cursa']) ? '1' : '0';
+                    $defaultForm['activ'] = !empty($routeEditRule['activ']) ? '1' : '0';
+                    $defaultForm['route_scope'] = $routeScope;
+                    $routeVehicleIdsRaw = trim((string) ($routeEditRule['vehicle_ids'] ?? ''));
+                    if ($routeVehicleIdsRaw !== '') {
+                        $routeVehicleIds = [];
+                        foreach (explode(',', $routeVehicleIdsRaw) as $routeVehicleIdRaw) {
+                            $routeVehicleIdRaw = trim($routeVehicleIdRaw);
+                            if ($routeVehicleIdRaw === '' || !ctype_digit($routeVehicleIdRaw)) {
+                                continue;
+                            }
+
+                            $routeVehicleId = (int) $routeVehicleIdRaw;
+                            if ($routeVehicleId > 0) {
+                                $routeVehicleIds[] = (string) $routeVehicleId;
+                            }
                         }
+                        $defaultForm['vehicle_ids'] = array_values(array_unique($routeVehicleIds));
+                    } else {
+                        $defaultForm['vehicle_ids'] = [];
                     }
-                    $defaultDistributionRouteForm['vehicle_ids'] = array_values(array_unique($routeVehicleIds));
-                } else {
-                    $defaultDistributionRouteForm['vehicle_ids'] = [];
                 }
             }
-        }
-        $distributionRouteFormData = array_merge($defaultDistributionRouteForm, $distributionRouteFlash['old']);
-        $distributionRouteFormData['vehicle_ids'] = is_array($distributionRouteFormData['vehicle_ids'] ?? null)
-            ? array_values(array_unique(array_map('strval', $distributionRouteFormData['vehicle_ids'])))
+
+            return $defaultForm;
+        };
+
+        $distributionOnlyRouteFormData = array_merge(
+            $buildDistributionRouteDefaultForm(self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE),
+            $distributionOnlyRouteFlash['old']
+        );
+        $distributionOnlyRouteFormData['route_scope'] = $this->normalizeDistributionRouteScopeInput(
+            (string) ($distributionOnlyRouteFormData['route_scope'] ?? ''),
+            self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE
+        );
+        $distributionOnlyRouteFormData['tarif_mod'] = $this->normalizeDistributionRouteTariffModeInput(
+            (string) ($distributionOnlyRouteFormData['tarif_mod'] ?? '')
+        );
+        $distributionOnlyRouteFormData['vehicle_ids'] = is_array($distributionOnlyRouteFormData['vehicle_ids'] ?? null)
+            ? array_values(array_unique(array_map('strval', $distributionOnlyRouteFormData['vehicle_ids'])))
             : [];
-        $distributionRouteFormMode = trim((string) ($distributionRouteFormData['route_id'] ?? '')) !== '' ? 'edit' : 'create';
+        $distributionOnlyRouteFormMode = trim((string) ($distributionOnlyRouteFormData['route_id'] ?? '')) !== '' ? 'edit' : 'create';
+
+        $primaryDistributionRouteFormData = array_merge(
+            $buildDistributionRouteDefaultForm(self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE),
+            $primaryDistributionRouteFlash['old']
+        );
+        $primaryDistributionRouteFormData['route_scope'] = $this->normalizeDistributionRouteScopeInput(
+            (string) ($primaryDistributionRouteFormData['route_scope'] ?? ''),
+            self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE
+        );
+        $primaryDistributionRouteFormData['tarif_mod'] = self::DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH;
+        $primaryDistributionRouteFormData['vehicle_ids'] = is_array($primaryDistributionRouteFormData['vehicle_ids'] ?? null)
+            ? array_values(array_unique(array_map('strval', $primaryDistributionRouteFormData['vehicle_ids'])))
+            : [];
+        $primaryDistributionRouteFormMode = trim((string) ($primaryDistributionRouteFormData['route_id'] ?? '')) !== '' ? 'edit' : 'create';
 
         $defaultPrimaryRouteForm = [
             'route_id' => '',
@@ -1073,6 +1447,8 @@ class DispecerCurseController
             'locations' => $locations,
             'zones' => $zones,
             'distributionRouteRules' => $distributionRouteRules,
+            'distributionOnlyRouteRules' => $distributionOnlyRouteRules,
+            'primaryDistributionRouteRules' => $primaryDistributionRouteRules,
             'primaryRouteRules' => $primaryRouteRules,
             'beneficiaries' => $beneficiaries,
             'vehicles' => $configVehicles,
@@ -1087,9 +1463,13 @@ class DispecerCurseController
             'zoneFormData' => $zoneFormData,
             'zoneFormErrors' => $zoneFlash['errors'],
             'zoneFormMode' => $zoneFormMode,
-            'distributionRouteFormData' => $distributionRouteFormData,
-            'distributionRouteFormErrors' => $distributionRouteFlash['errors'],
-            'distributionRouteFormMode' => $distributionRouteFormMode,
+            'distributionOnlyRouteFormData' => $distributionOnlyRouteFormData,
+            'distributionOnlyRouteFormErrors' => $distributionOnlyRouteFlash['errors'],
+            'distributionOnlyRouteFormMode' => $distributionOnlyRouteFormMode,
+            'distributionRouteTariffModeOptions' => self::DISTRIBUTION_ROUTE_TARIFF_MODE_LABELS,
+            'primaryDistributionRouteFormData' => $primaryDistributionRouteFormData,
+            'primaryDistributionRouteFormErrors' => $primaryDistributionRouteFlash['errors'],
+            'primaryDistributionRouteFormMode' => $primaryDistributionRouteFormMode,
             'primaryRouteFormData' => $primaryRouteFormData,
             'primaryRouteFormErrors' => $primaryRouteFlash['errors'],
             'primaryRouteFormMode' => $primaryRouteFormMode,
@@ -1110,14 +1490,30 @@ class DispecerCurseController
         ensure_csrf_or_redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config']));
 
         $beneficiaryId = (int) ($_POST['beneficiar_id'] ?? 0);
+        $routeScope = $this->normalizeDistributionRouteScopeInput(
+            (string) ($_POST['route_scope'] ?? ''),
+            self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE
+        );
         if ($beneficiaryId <= 0 || !$this->model->existsTransportBeneficiary($beneficiaryId)) {
             flash_set('warning', 'Selecteaza un beneficiar valid pentru configurarea distributiei.');
             redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config']));
         }
 
         $beneficiary = $this->model->getTransportBeneficiaryById($beneficiaryId);
-        if ($beneficiary === null || empty($beneficiary['suporta_distributie'])) {
-            flash_set('warning', 'Beneficiarul selectat nu este configurat pentru transport Distributie.');
+        if (
+            $beneficiary === null
+            || (
+                $routeScope === self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE
+                && empty($beneficiary['suporta_distributie'])
+            )
+            || (
+                $routeScope === self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE
+                && empty($beneficiary['suporta_primar_distributie'])
+            )
+        ) {
+            flash_set('warning', $routeScope === self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE
+                ? 'Beneficiarul selectat nu este configurat pentru transport Distributie.'
+                : 'Beneficiarul selectat nu este configurat pentru transport Primar+Distributie.');
             redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $beneficiaryId]));
         }
 
@@ -1126,14 +1522,37 @@ class DispecerCurseController
             redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $beneficiaryId]));
         }
 
+        $routeFlashKey = $this->distributionRouteFlashKey($routeScope);
         $routeEditId = (int) ($_POST['route_id'] ?? 0);
         $locationId = (int) ($_POST['route_loc_id'] ?? ($_POST['loc_id'] ?? 0));
         $zoneId = (int) ($_POST['route_zona_id'] ?? ($_POST['zona_id'] ?? 0));
+        $routeTariffMode = $routeScope === self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE
+            ? $this->normalizeDistributionRouteTariffModeInput((string) ($_POST['route_tarif_mod'] ?? ''))
+            : self::DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH;
         $routeTariffRaw = trim((string) ($_POST['route_tarif_tona'] ?? ($_POST['ruta_tarif_tona'] ?? '')));
         $routeExtraKmCostRaw = trim((string) ($_POST['route_cost_extra_km'] ?? ($_POST['ruta_cost_extra_km'] ?? '')));
         $routeKmTariffRaw = trim((string) ($_POST['route_km_tarifare'] ?? ($_POST['ruta_km_tarifare'] ?? '')));
         $routeRideCostRaw = trim((string) ($_POST['route_cost_cursa'] ?? ''));
         $routeApplyRideCost = isset($_POST['route_aplica_cost_cursa']) ? (string) $_POST['route_aplica_cost_cursa'] === '1' : false;
+        if ($routeScope === self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE) {
+            $routeKmTariffRaw = '0';
+            $routeRideCostRaw = '';
+            $routeApplyRideCost = false;
+        }
+        $routeUsesTonTariff = in_array($routeTariffMode, [
+            self::DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH,
+            self::DISTRIBUTION_ROUTE_TARIFF_MODE_TON,
+        ], true);
+        $routeUsesKmTariff = in_array($routeTariffMode, [
+            self::DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH,
+            self::DISTRIBUTION_ROUTE_TARIFF_MODE_KM,
+        ], true);
+        if (!$routeUsesTonTariff) {
+            $routeTariffRaw = '0';
+        }
+        if (!$routeUsesKmTariff) {
+            $routeExtraKmCostRaw = '0';
+        }
         $routeVehicleIdsInput = isset($_POST['route_vehicle_ids']) && is_array($_POST['route_vehicle_ids'])
             ? $_POST['route_vehicle_ids']
             : [];
@@ -1161,23 +1580,31 @@ class DispecerCurseController
         }
 
         $routeTariff = $this->normalizeDecimal($routeTariffRaw);
-        if ($routeTariffRaw === '' || $routeTariff === null || $routeTariff < 0) {
+        if ($routeUsesTonTariff && ($routeTariffRaw === '' || $routeTariff === null || $routeTariff < 0)) {
             $errors['tarif_tona'] = 'Pretul pe tona este invalid.';
+        } elseif (!$routeUsesTonTariff) {
+            $routeTariff = 0.0;
         }
 
         $routeExtraKmCost = $this->normalizeDecimal($routeExtraKmCostRaw);
-        if ($routeExtraKmCostRaw === '' || $routeExtraKmCost === null || $routeExtraKmCost < 0) {
+        if ($routeUsesKmTariff && ($routeExtraKmCostRaw === '' || $routeExtraKmCost === null || $routeExtraKmCost < 0)) {
             $errors['cost_extra_km'] = 'Pretul pe km este invalid.';
+        } elseif (!$routeUsesKmTariff) {
+            $routeExtraKmCost = 0.0;
         }
 
-        $routeKmTariff = null;
-        if ($routeKmTariffRaw === '' || !ctype_digit($routeKmTariffRaw)) {
-            $errors['km_tarifare'] = 'Km agreati este invalid.';
-        } else {
-            $routeKmTariff = (int) $routeKmTariffRaw;
-            if ($routeKmTariff <= 0) {
-                $errors['km_tarifare'] = 'Km agreati trebuie sa fie mai mare ca 0.';
+        $routeKmTariff = 0;
+        if ($routeScope === self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE) {
+            if ($routeKmTariffRaw === '' || !ctype_digit($routeKmTariffRaw)) {
+                $errors['km_tarifare'] = 'Km agreati este invalid.';
+            } else {
+                $routeKmTariff = (int) $routeKmTariffRaw;
+                if ($routeKmTariff <= 0) {
+                    $errors['km_tarifare'] = 'Km agreati trebuie sa fie mai mare ca 0.';
+                }
             }
+        } elseif ($routeKmTariffRaw !== '' && ctype_digit($routeKmTariffRaw)) {
+            $routeKmTariff = (int) $routeKmTariffRaw;
         }
 
         $routeRideCost = 0.0;
@@ -1222,16 +1649,25 @@ class DispecerCurseController
         }
 
         if ($routeEditId > 0) {
-            $existingRoute = $this->model->getDistributionRouteRuleById($routeEditId);
+            $existingRoute = $this->model->getDistributionRouteRuleById($routeEditId, $beneficiaryId);
             if ($existingRoute === null) {
                 $errors['route_id'] = 'Configuratia selectata pentru editare nu mai exista.';
+            } elseif (
+                $this->normalizeDistributionRouteScopeInput(
+                    (string) ($existingRoute['transport_scope'] ?? ''),
+                    self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE
+                ) !== $routeScope
+            ) {
+                $errors['route_id'] = 'Configuratia selectata apartine altui panel de tarifare.';
             }
         }
 
         $old = [
             'route_id' => $routeEditId > 0 ? (string) $routeEditId : '',
+            'route_scope' => $routeScope,
             'loc_id' => $locationId > 0 ? (string) $locationId : '',
             'zona_id' => $zoneId > 0 ? (string) $zoneId : '',
+            'tarif_mod' => $routeTariffMode,
             'tarif_tona' => $routeTariffRaw,
             'cost_extra_km' => $routeExtraKmCostRaw,
             'km_tarifare' => $routeKmTariffRaw,
@@ -1242,7 +1678,7 @@ class DispecerCurseController
         ];
 
         if ($errors !== []) {
-            $this->setFormFlash('config_distributie_route', $old, $errors);
+            $this->setFormFlash($routeFlashKey, $old, $errors);
             redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $beneficiaryId]));
         }
 
@@ -1259,7 +1695,9 @@ class DispecerCurseController
                     $routeActive,
                     $routeVehicleIds,
                     (float) $routeRideCost,
-                    $routeApplyRideCost
+                    $routeApplyRideCost,
+                    $routeScope,
+                    $routeTariffMode
                 );
                 if (!$updated) {
                     throw new RuntimeException('Nu s-a putut actualiza configuratia de ruta.');
@@ -1276,7 +1714,9 @@ class DispecerCurseController
                     $routeActive,
                     $routeVehicleIds,
                     (float) $routeRideCost,
-                    $routeApplyRideCost
+                    $routeApplyRideCost,
+                    $routeScope,
+                    $routeTariffMode
                 );
                 flash_set('success', 'Configuratia de ruta a fost salvata.');
             }
@@ -1287,15 +1727,16 @@ class DispecerCurseController
                 $sqlState === '23000'
                 || str_contains($message, 'duplicate')
                 || str_contains($message, 'uk_config_rute_beneficiar_loc_zona')
+                || str_contains($message, 'uk_config_rute_beneficiar_loc_zona_scope')
             ) {
                 $errors = ['zona_id' => 'Exista deja o configuratie pentru aceasta combinatie Loc incarcare -> Zona descarcare.'];
-                $this->setFormFlash('config_distributie_route', $old, $errors);
+                $this->setFormFlash($routeFlashKey, $old, $errors);
                 flash_set('warning', 'Combinatia selectata exista deja. Editeaza configuratia existenta sau alege alta combinatie.');
                 redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $beneficiaryId]));
             }
 
             error_log('[DispecerCurseController][config_store_distributie] ' . $exception->getMessage());
-            $this->setFormFlash('config_distributie_route', $old, []);
+            $this->setFormFlash($routeFlashKey, $old, []);
             flash_set('danger', $routeEditId > 0 ? 'Nu s-a putut actualiza configuratia de ruta.' : 'Nu s-a putut salva configuratia de ruta.');
         }
 
@@ -1470,6 +1911,10 @@ class DispecerCurseController
 
         $beneficiaryId = (int) ($_POST['beneficiar_id'] ?? 0);
         $routeId = (int) ($_POST['id'] ?? 0);
+        $routeScope = $this->normalizeDistributionRouteScopeInput(
+            (string) ($_POST['route_scope'] ?? ''),
+            self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE
+        );
         if ($beneficiaryId <= 0 || !$this->model->existsTransportBeneficiary($beneficiaryId)) {
             flash_set('warning', 'Beneficiar invalid pentru stergere configuratie.');
             redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config']));
@@ -1481,6 +1926,21 @@ class DispecerCurseController
         }
 
         try {
+            $existingRoute = $this->model->getDistributionRouteRuleById($routeId);
+            if ($existingRoute === null || (int) ($existingRoute['beneficiar_id'] ?? 0) !== $beneficiaryId) {
+                flash_set('warning', 'Configuratia selectata nu exista pentru beneficiarul curent.');
+                redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $beneficiaryId]));
+            }
+
+            $existingScope = $this->normalizeDistributionRouteScopeInput(
+                (string) ($existingRoute['transport_scope'] ?? ''),
+                self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE
+            );
+            if ($existingScope !== $routeScope) {
+                flash_set('warning', 'Configuratia selectata apartine altui panel de tarifare.');
+                redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $beneficiaryId]));
+            }
+
             $this->model->deleteDistributionRouteRule($routeId);
             flash_set('success', 'Configuratia de ruta a fost stearsa.');
         } catch (Throwable $exception) {
@@ -1513,9 +1973,10 @@ class DispecerCurseController
             || (
                 empty($beneficiary['suporta_distributie'])
                 && empty($beneficiary['suporta_primar'])
+                && empty($beneficiary['suporta_primar_distributie'])
             )
         ) {
-            flash_set('warning', 'Beneficiarul selectat nu este configurat pentru transport Primar sau Distributie.');
+            flash_set('warning', 'Beneficiarul selectat nu este configurat pentru transport Primar, Distributie sau Primar+Distributie.');
             redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $beneficiaryId]));
         }
 
@@ -1837,9 +2298,10 @@ class DispecerCurseController
             || (
                 empty($beneficiary['suporta_distributie'])
                 && empty($beneficiary['suporta_primar'])
+                && empty($beneficiary['suporta_primar_distributie'])
             )
         ) {
-            flash_set('warning', 'Beneficiarul selectat nu este configurat pentru transport Primar sau Distributie.');
+            flash_set('warning', 'Beneficiarul selectat nu este configurat pentru transport Primar, Distributie sau Primar+Distributie.');
             redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $beneficiaryId]));
         }
 
@@ -1990,9 +2452,10 @@ class DispecerCurseController
             || (
                 empty($beneficiary['suporta_distributie'])
                 && empty($beneficiary['suporta_primar'])
+                && empty($beneficiary['suporta_primar_distributie'])
             )
         ) {
-            flash_set('warning', 'Beneficiarul selectat nu este configurat pentru transport Primar sau Distributie.');
+            flash_set('warning', 'Beneficiarul selectat nu este configurat pentru transport Primar, Distributie sau Primar+Distributie.');
             redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $beneficiaryId]));
         }
 
@@ -2158,7 +2621,7 @@ class DispecerCurseController
             ? $_POST['tip_transporturi']
             : [];
         $selectedTransportTypes = [];
-        foreach (['primar', 'distributie', 'compresor'] as $allowedTransportType) {
+        foreach (['primar', 'distributie', 'primar_distributie', 'compresor'] as $allowedTransportType) {
             if (in_array($allowedTransportType, $selectedTransportTypesRaw, true)) {
                 $selectedTransportTypes[] = $allowedTransportType;
             }
@@ -2166,6 +2629,7 @@ class DispecerCurseController
 
         $supportsPrimary = in_array('primar', $selectedTransportTypes, true);
         $supportsDistribution = in_array('distributie', $selectedTransportTypes, true);
+        $supportsPrimaryDistribution = in_array('primar_distributie', $selectedTransportTypes, true);
         $supportsCompressor = in_array('compresor', $selectedTransportTypes, true);
         $active = isset($_POST['activ']) && (string) $_POST['activ'] === '1';
         $errors = [];
@@ -2180,7 +2644,7 @@ class DispecerCurseController
             $errors['id'] = 'Beneficiarul selectat pentru actualizare nu exista.';
         }
 
-        if (!$supportsPrimary && !$supportsDistribution && !$supportsCompressor) {
+        if (!$supportsPrimary && !$supportsDistribution && !$supportsPrimaryDistribution && !$supportsCompressor) {
             $errors['tip_transport'] = 'Selecteaza cel putin un tip de transport.';
         }
 
@@ -2299,6 +2763,7 @@ class DispecerCurseController
                 'tip_transporturi' => $selectedTransportTypes,
                 'suporta_primar' => $supportsPrimary ? '1' : '0',
                 'suporta_distributie' => $supportsDistribution ? '1' : '0',
+                'suporta_primar_distributie' => $supportsPrimaryDistribution ? '1' : '0',
                 'suporta_compresor' => $supportsCompressor ? '1' : '0',
                 'activ' => $active ? '1' : '0',
             ], $errors);
@@ -2319,6 +2784,7 @@ class DispecerCurseController
                     (float) $baseRate,
                     $supportsPrimary,
                     $supportsDistribution,
+                    $supportsPrimaryDistribution,
                     $supportsCompressor,
                     (float) $pricePerKm,
                     (float) $pricePerTon,
@@ -2339,6 +2805,7 @@ class DispecerCurseController
                     (float) $baseRate,
                     $supportsPrimary,
                     $supportsDistribution,
+                    $supportsPrimaryDistribution,
                     $supportsCompressor,
                     (float) $pricePerKm,
                     (float) $pricePerTon,
@@ -2558,6 +3025,19 @@ class DispecerCurseController
             'refacturare_trece_bucati' => '',
             'refacturare_trece_pret' => '',
         ];
+    }
+
+    private function defaultRefacturareFormData(): array
+    {
+        $base = $this->defaultExpenseFormData();
+        $base['race_id'] = '';
+        $base['refacturare_enabled'] = '1';
+        $base['tip_cheltuiala'] = 'motorina';
+        $base['refacturare_tip_cheltuiala'] = 'motorina';
+        $base['suma'] = '0.00';
+        $base['observatii'] = '';
+
+        return $base;
     }
 
     private function defaultCreateRaceExpenseFormData(): array
@@ -3077,6 +3557,7 @@ class DispecerCurseController
         $routeExtraKmCost = 0.0;
         $routeRideCost = 0.0;
         $routeApplyRideCost = false;
+        $distributionRouteTariffMode = self::DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH;
         $distributionRouteKmTariff = null;
         $hasMatchedDistributionRouteRule = false;
         $primaryRouteKmTariff = null;
@@ -3087,9 +3568,14 @@ class DispecerCurseController
             'scoped_rules' => [],
             'scoped_rule_map' => [],
         ];
+        $distributionRouteTransportScope = $this->resolveDistributionRouteScopeFromTransportType($transportType);
         if ($isDistributionTransport && $beneficiaryId !== null && $beneficiaryId > 0) {
             try {
-                $distributionRouteScope = $this->resolveDistributionRouteScopeForVehicle($beneficiaryId, $vehicleId);
+                $distributionRouteScope = $this->resolveDistributionRouteScopeForVehicle(
+                    $beneficiaryId,
+                    $vehicleId,
+                    $distributionRouteTransportScope
+                );
             } catch (Throwable $exception) {
                 error_log('[DispecerCurseController][route_scope_lookup] ' . $exception->getMessage());
             }
@@ -3211,6 +3697,7 @@ class DispecerCurseController
                         $zone
                     );
                     if ($selectedRouteRule !== null) {
+                        $distributionRouteTariffMode = $this->normalizeDistributionRouteTariffModeInput((string) ($selectedRouteRule['tarif_mod'] ?? ''));
                         $routeTariffPerTon = max(0, (float) ($selectedRouteRule['tarif_tona'] ?? 0));
                         $routeExtraKmCost = max(0, (float) ($selectedRouteRule['cost_extra_km'] ?? 0));
                         $routeRideCost = max(0, (float) ($selectedRouteRule['cost_cursa'] ?? 0));
@@ -3229,9 +3716,11 @@ class DispecerCurseController
                         $beneficiaryId,
                         $loadLocationId,
                         $zoneId,
-                        $vehicleId
+                        $vehicleId,
+                        $distributionRouteTransportScope
                     );
                     if ($routeRule !== null) {
+                        $distributionRouteTariffMode = $this->normalizeDistributionRouteTariffModeInput((string) ($routeRule['tarif_mod'] ?? ''));
                         $routeTariffPerTon = max(0, (float) ($routeRule['tarif_tona'] ?? 0));
                         $routeExtraKmCost = max(0, (float) ($routeRule['cost_extra_km'] ?? 0));
                         $routeRideCost = max(0, (float) ($routeRule['cost_cursa'] ?? 0));
@@ -3291,28 +3780,38 @@ class DispecerCurseController
                         : ($pricePerKm > 0 ? $pricePerKm : $pricePerTon);
                 }
             } elseif ($isDistributionTransport) {
-                if (empty($beneficiary['suporta_distributie'])) {
-                    $errors['beneficiar_id'] = 'Beneficiarul selectat nu este configurat pentru transport distributie.';
+                if (!$this->beneficiarySupportsDistributionTransport($beneficiary, $transportType)) {
+                    $errors['beneficiar_id'] = $transportType === 'distributie'
+                        ? 'Beneficiarul selectat nu este configurat pentru transport distributie.'
+                        : 'Beneficiarul selectat nu este configurat pentru transport Primar+Distributie.';
                 } else {
                     $beneficiaryDistributionPerTon = max(0, (float) ($beneficiary['pret_distributie_tona'] ?? 0));
                     $beneficiaryDistributionPerKm = max(0, (float) ($beneficiary['pret_distributie_km'] ?? 0));
                     $isSameDistributionRoute = $this->isSameDistributionRoute($loadLocation, $zone);
-                    $effectiveTonRate = $routeTariffPerTon > 0
-                        ? $routeTariffPerTon
-                        : $this->resolveDistributionTonRate(
-                        $loadLocationTariff,
-                        $zoneTariff,
-                        $beneficiaryDistributionPerTon,
-                        $isSameDistributionRoute
-                    );
-                    $effectiveKmRate = $routeExtraKmCost > 0
-                        ? $routeExtraKmCost
-                        : ($zoneExtraKmCost > 0 ? $zoneExtraKmCost : $beneficiaryDistributionPerKm);
+                    $routeUsesTonTariff = $this->distributionRouteUsesTonTariff($distributionRouteTariffMode);
+                    $routeUsesKmTariff = $this->distributionRouteUsesKmTariff($distributionRouteTariffMode);
+                    $effectiveTonRate = $routeUsesTonTariff
+                        ? (
+                            $routeTariffPerTon > 0
+                                ? $routeTariffPerTon
+                                : $this->resolveDistributionTonRate(
+                                    $loadLocationTariff,
+                                    $zoneTariff,
+                                    $beneficiaryDistributionPerTon,
+                                    $isSameDistributionRoute
+                                )
+                        )
+                        : 0.0;
+                    $effectiveKmRate = $routeUsesKmTariff
+                        ? ($routeExtraKmCost > 0 ? $routeExtraKmCost : ($zoneExtraKmCost > 0 ? $zoneExtraKmCost : $beneficiaryDistributionPerKm))
+                        : 0.0;
                     if ($effectiveTonRate <= 0 && $effectiveKmRate <= 0 && !$routeApplyRideCost) {
                         $errors['zona_distributie_id'] = 'Configureaza un tarif valid pentru distributie (Loc incarcare, Zona sau Cost extra km).';
                     } else {
                         // In pret_tarifare stocam componenta de baza pentru distributie.
-                        $price = $routeApplyRideCost ? $routeRideCost : $effectiveTonRate;
+                        $price = $routeApplyRideCost
+                            ? $routeRideCost
+                            : ($effectiveTonRate > 0 ? $effectiveTonRate : $effectiveKmRate);
                     }
                 }
             } else {
@@ -3375,24 +3874,39 @@ class DispecerCurseController
                 $beneficiaryDistributionPerTon = max(0, (float) (($beneficiary ?? [])['pret_distributie_tona'] ?? 0));
                 $beneficiaryDistributionPerKm = max(0, (float) (($beneficiary ?? [])['pret_distributie_km'] ?? 0));
                 $isSameDistributionRoute = $this->isSameDistributionRoute($loadLocation, $zone);
-                $effectiveTonRate = $routeTariffPerTon > 0
-                    ? $routeTariffPerTon
-                    : $this->resolveDistributionTonRate(
-                    $loadLocationTariff,
-                    $zoneTariff,
-                    $beneficiaryDistributionPerTon,
-                    $isSameDistributionRoute
-                );
-                $effectiveKmRate = $routeExtraKmCost > 0
-                    ? $routeExtraKmCost
-                    : ($zoneExtraKmCost > 0 ? $zoneExtraKmCost : $beneficiaryDistributionPerKm);
+                $routeUsesTonTariff = $this->distributionRouteUsesTonTariff($distributionRouteTariffMode);
+                $routeUsesKmTariff = $this->distributionRouteUsesKmTariff($distributionRouteTariffMode);
+                $effectiveTonRate = $routeUsesTonTariff
+                    ? (
+                        $routeTariffPerTon > 0
+                            ? $routeTariffPerTon
+                            : $this->resolveDistributionTonRate(
+                                $loadLocationTariff,
+                                $zoneTariff,
+                                $beneficiaryDistributionPerTon,
+                                $isSameDistributionRoute
+                            )
+                    )
+                    : 0.0;
+                $effectiveKmRate = $routeUsesKmTariff
+                    ? ($routeExtraKmCost > 0 ? $routeExtraKmCost : ($zoneExtraKmCost > 0 ? $zoneExtraKmCost : $beneficiaryDistributionPerKm))
+                    : 0.0;
                 $effectiveDistributionTonRate = max(0, (float) $effectiveTonRate);
                 $effectiveDistributionKmRate = max(0, (float) $effectiveKmRate);
                 $fixedRideComponent = $routeApplyRideCost ? $routeRideCost : 0.0;
                 $tonComponent = $routeApplyRideCost
                     ? 0.0
                     : (float) ((float) ($qtyForTonPricing ?? 0) * $effectiveTonRate);
-                $extraKmComponent = ($isDistributionWithKmTransport && !$routeApplyRideCost)
+                $shouldApplyDistributionKmComponent = false;
+                if (!$routeApplyRideCost) {
+                    if ($transportType === 'distributie') {
+                        // Distributie simpla foloseste Pret/km (optional) din setarile distributiei.
+                        $shouldApplyDistributionKmComponent = $effectiveKmRate > 0;
+                    } elseif ($isDistributionWithKmTransport) {
+                        $shouldApplyDistributionKmComponent = true;
+                    }
+                }
+                $extraKmComponent = $shouldApplyDistributionKmComponent
                     ? (float) ((float) ($km ?? 0) * $effectiveKmRate)
                     : 0.0;
                 $total = $fixedRideComponent + $tonComponent + $extraKmComponent;
@@ -3418,7 +3932,7 @@ class DispecerCurseController
             $kmDistributie = 0.0;
             if ($transportType === 'primar_distributie') {
                 $kmPrimar = max(0.0, (float) ($km ?? 0));
-                $kmDistributie = max(0.0, (float) ($kmTotal ?? 0) - $kmPrimar);
+                $kmDistributie = max(0.0, max(0.0, (float) ($kmTotal ?? 0)) - $kmPrimar);
             } elseif ($transportType === 'distributie') {
                 // Pentru Distributie simpla, cost/km distributie foloseste direct Km efectuati.
                 $kmDistributie = max(0.0, (float) ($km ?? 0));
@@ -3431,41 +3945,40 @@ class DispecerCurseController
                     ? $effectiveDistributionKmRate
                     : max(0.0, (float) $this->resolveBeneficiaryRate($beneficiary ?? [], 'primar', false));
             }
-            $distributionPerTonRate = 0.0;
-            if ($includesDistributionSegment) {
-                if ($transportType === 'distributie') {
-                    // Pentru Distributie simpla, Cost/km Distribuitie foloseste strict tariful zonei.
-                    $distributionPerTonRate = max(0.0, $zoneTariff);
-                } else {
-                    $distributionPerTonRate = $effectiveDistributionTonRate;
-                }
-            }
+            $distributionPerTonRate = $includesDistributionSegment ? $effectiveDistributionTonRate : 0.0;
             $totalPrimar = $includesPrimarySegment ? ($kmPrimar * $primaryPerKmRate) : 0.0;
             $distributionFixedRideCost = ($includesDistributionSegment && $routeApplyRideCost)
                 ? max(0.0, (float) $routeRideCost)
                 : 0.0;
-            $totalDistributie = $includesDistributionSegment
-                ? ($distributionFixedRideCost > 0
-                    ? $distributionFixedRideCost
-                    : ((float) ($qtyForTonPricing ?? 0) * $distributionPerTonRate))
-                : 0.0;
+            $totalDistributie = 0.0;
+            if ($includesDistributionSegment) {
+                if ($transportType === 'distributie') {
+                    // Pentru Distributie simpla folosim totalul complet (tona + componenta km optionala).
+                    $totalDistributie = $total;
+                } else {
+                    $totalDistributie = $distributionFixedRideCost > 0
+                        ? $distributionFixedRideCost
+                        : ((float) ($qtyForTonPricing ?? 0) * $distributionPerTonRate);
+                }
+            }
 
             if ($includesPrimarySegment && $kmPrimar > 0) {
                 $costKmPrimar = $totalPrimar / $kmPrimar;
             }
             if ($transportType === 'primar_distributie') {
-                // Regula stabilita: Cost/km Distributie foloseste Km agreati (km_cursa), nu diferenta de km.
-                if ($kmPrimar > 0) {
-                    $costKmDistributie = $totalDistributie / $kmPrimar;
+                // Primar+Distributie foloseste doar valoarea componentei de distributie.
+                if ($kmDistributie > 0) {
+                    $costKmDistributie = $totalDistributie / $kmDistributie;
                 }
             } elseif ($includesDistributionSegment && $kmDistributie > 0) {
                 $costKmDistributie = $totalDistributie / $kmDistributie;
             }
 
-            if ($transportType === 'primar_distributie') {
-                // Regula stabilita: Cost/km Mixt foloseste acelasi divizor Km agreati.
-                if ($kmPrimar > 0) {
-                    $costKmMixt = $total / $kmPrimar;
+            if ($transportType === 'primar_distributie' || $transportType === 'mixt') {
+                // Regula stabilita: Cost/km Mixt = Total facturare / Km efectuati.
+                $kmTotaliMixt = max(0.0, (float) ($kmTotal ?? 0));
+                if ($kmTotaliMixt > 0) {
+                    $costKmMixt = $total / $kmTotaliMixt;
                 }
             } elseif ($includesPrimarySegment && !$includesDistributionSegment) {
                 $costKmMixt = $costKmPrimar;
@@ -3574,6 +4087,84 @@ class DispecerCurseController
     private function isDistributionTransportType(string $transportType): bool
     {
         return $transportType === 'distributie' || $transportType === 'primar_distributie';
+    }
+
+    private function resolveDistributionRouteScopeFromTransportType(string $transportType): ?string
+    {
+        $normalizedTransportType = trim(strtolower($transportType));
+
+        if ($normalizedTransportType === 'distributie') {
+            return self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE;
+        }
+        if ($normalizedTransportType === 'primar_distributie' || $normalizedTransportType === 'mixt') {
+            return self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE;
+        }
+
+        return null;
+    }
+
+    private function beneficiarySupportsDistributionTransport(array $beneficiary, string $transportType): bool
+    {
+        $routeScope = $this->resolveDistributionRouteScopeFromTransportType($transportType);
+        if ($routeScope === self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE) {
+            return !empty($beneficiary['suporta_distributie']);
+        }
+        if ($routeScope === self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE) {
+            return !empty($beneficiary['suporta_primar_distributie']);
+        }
+
+        return false;
+    }
+
+    private function normalizeDistributionRouteScopeInput(
+        string $scope,
+        string $fallback = self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE
+    ): string {
+        $normalizedScope = trim(strtolower($scope));
+        if (
+            $normalizedScope === self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE
+            || $normalizedScope === self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE
+        ) {
+            return $normalizedScope;
+        }
+
+        return $fallback === self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE
+            ? self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE
+            : self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE;
+    }
+
+    private function normalizeDistributionRouteTariffModeInput(string $mode): string
+    {
+        $normalizedMode = trim(strtolower($mode));
+        if (array_key_exists($normalizedMode, self::DISTRIBUTION_ROUTE_TARIFF_MODE_LABELS)) {
+            return $normalizedMode;
+        }
+
+        return self::DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH;
+    }
+
+    private function distributionRouteUsesTonTariff(string $mode): bool
+    {
+        $normalizedMode = $this->normalizeDistributionRouteTariffModeInput($mode);
+
+        return $normalizedMode === self::DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH
+            || $normalizedMode === self::DISTRIBUTION_ROUTE_TARIFF_MODE_TON;
+    }
+
+    private function distributionRouteUsesKmTariff(string $mode): bool
+    {
+        $normalizedMode = $this->normalizeDistributionRouteTariffModeInput($mode);
+
+        return $normalizedMode === self::DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH
+            || $normalizedMode === self::DISTRIBUTION_ROUTE_TARIFF_MODE_KM;
+    }
+
+    private function distributionRouteFlashKey(string $scope): string
+    {
+        return $this->normalizeDistributionRouteScopeInput($scope, self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE)
+            === self::DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE
+            ? 'config_distributie_route_distributie'
+            : 'config_distributie_route_primar_distributie';
     }
 
     private function syncPrimaryRouteBidirectionalCatalog(int $beneficiaryId): void
@@ -4087,6 +4678,43 @@ class DispecerCurseController
         $this->redirectToSafeDispecerUrl($returnUrl);
     }
 
+    private function updateExpenseStatusAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'dispecer_curse']));
+
+        $raceId = (int) ($_POST['id'] ?? 0);
+        $choice = trim((string) ($_POST['cheltuieli_choice'] ?? ''));
+        $returnUrl = trim((string) ($_POST['return_url'] ?? ''));
+        $expenseStatus = $choice === 'not_applicable' ? 'not_applicable' : 'pending';
+
+        if ($raceId <= 0 || !$this->model->existsRace($raceId)) {
+            flash_set('warning', 'Cursa selectata nu exista.');
+            $this->redirectToSafeDispecerUrl($returnUrl);
+        }
+
+        try {
+            $updated = $this->model->updateRaceExpenseStatus($raceId, $expenseStatus, date('Y-m-d H:i:s'));
+            if ($updated) {
+                if ($expenseStatus === 'not_applicable') {
+                    flash_set('success', 'Cursa nu va mai aparea la lipsa cheltuieli.');
+                } else {
+                    flash_set('success', 'Cursa ramane in atentii pentru cheltuieli.');
+                }
+            } else {
+                flash_set('warning', 'Alegerea pentru cheltuieli nu a putut fi salvata.');
+            }
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][update_expense_status] ' . $exception->getMessage());
+            flash_set('danger', $this->buildPersistenceErrorMessage($exception));
+        }
+
+        $this->redirectToSafeDispecerUrl($returnUrl);
+    }
+
     private function redirectToSafeDispecerUrl(string $returnUrl): void
     {
         if ($returnUrl !== '') {
@@ -4124,11 +4752,12 @@ class DispecerCurseController
                 'pret_km_dislocare' => (float) ($beneficiary['pret_km_dislocare'] ?? 0),
                 'pret_tona_livrata' => (float) ($beneficiary['pret_tona_livrata'] ?? 0),
                 'pret_tona_aspirata_lichida' => (float) ($beneficiary['pret_tona_aspirata_lichida'] ?? 0),
-                'pret_tona_aspirata_gazoasa' => (float) ($beneficiary['pret_tona_aspirata_gazoasa'] ?? 0),
-                'suporta_primar' => !empty($beneficiary['suporta_primar']),
-                'suporta_distributie' => !empty($beneficiary['suporta_distributie']),
-                'suporta_compresor' => !empty($beneficiary['suporta_compresor']),
-            ];
+            'pret_tona_aspirata_gazoasa' => (float) ($beneficiary['pret_tona_aspirata_gazoasa'] ?? 0),
+            'suporta_primar' => !empty($beneficiary['suporta_primar']),
+            'suporta_distributie' => !empty($beneficiary['suporta_distributie']),
+            'suporta_primar_distributie' => !empty($beneficiary['suporta_primar_distributie']),
+            'suporta_compresor' => !empty($beneficiary['suporta_compresor']),
+        ];
         }
 
         return $map;
@@ -4213,6 +4842,7 @@ class DispecerCurseController
     {
         $supportsPrimary = !empty($beneficiary['suporta_primar']);
         $supportsDistribution = !empty($beneficiary['suporta_distributie']);
+        $supportsPrimaryDistribution = !empty($beneficiary['suporta_primar_distributie']);
         $supportsCompressor = !empty($beneficiary['suporta_compresor']);
         $baseRate = max(0, (float) ($beneficiary['pret_tarifare'] ?? 0));
         $pricePerKm = max(0, (float) ($beneficiary['pret_km'] ?? 0));
@@ -4232,7 +4862,10 @@ class DispecerCurseController
         }
 
         if ($this->isDistributionTransportType($transportType)) {
-            if (!$supportsDistribution) {
+            if (
+                ($transportType === 'distributie' && !$supportsDistribution)
+                || ($transportType !== 'distributie' && !$supportsPrimaryDistribution)
+            ) {
                 return 0.0;
             }
 
@@ -4295,7 +4928,7 @@ class DispecerCurseController
                 return false;
             }
         } elseif ($this->isDistributionTransportType($transportType)) {
-            if (empty($beneficiary['suporta_distributie'])) {
+            if (!$this->beneficiarySupportsDistributionTransport($beneficiary, $transportType)) {
                 return false;
             }
         } elseif ($transportType === 'compresor') {
@@ -4315,8 +4948,12 @@ class DispecerCurseController
                 }
             }
         } elseif ($this->isDistributionTransportType($transportType)) {
+            $distributionRouteScope = $this->resolveDistributionRouteScopeFromTransportType($transportType);
             $allowedVehicleIds = $this->collectConfiguredVehicleIdsForBeneficiary($beneficiaryId);
-            $distributionVehicleScope = $this->collectDistributionVehicleScopeForBeneficiary($beneficiaryId);
+            $distributionVehicleScope = $this->collectDistributionVehicleScopeForBeneficiary(
+                $beneficiaryId,
+                $distributionRouteScope
+            );
             if (!empty($distributionVehicleScope['has_scoped_rules'])) {
                 $scopedIds = [];
                 foreach ($distributionVehicleScope['vehicle_ids'] as $distributionVehicleId) {
@@ -4398,7 +5035,7 @@ class DispecerCurseController
         return $ids;
     }
 
-    private function collectDistributionVehicleScopeForBeneficiary(int $beneficiaryId): array
+    private function collectDistributionVehicleScopeForBeneficiary(int $beneficiaryId, ?string $transportScope = null): array
     {
         $scope = [
             'has_scoped_rules' => false,
@@ -4409,7 +5046,7 @@ class DispecerCurseController
         }
 
         $ids = [];
-        $rules = $this->model->getDistributionRouteRules(true, $beneficiaryId);
+        $rules = $this->model->getDistributionRouteRules(true, $beneficiaryId, $transportScope);
         foreach ($rules as $rule) {
             if (!is_array($rule)) {
                 continue;
@@ -4433,7 +5070,7 @@ class DispecerCurseController
         return $scope;
     }
 
-    private function resolveDistributionRouteScopeForVehicle(int $beneficiaryId, int $vehicleId): array
+    private function resolveDistributionRouteScopeForVehicle(int $beneficiaryId, int $vehicleId, ?string $transportScope = null): array
     {
         $scope = [
             'has_active_rules' => false,
@@ -4446,7 +5083,7 @@ class DispecerCurseController
             return $scope;
         }
 
-        $rules = $this->model->getDistributionRouteRules(true, $beneficiaryId);
+        $rules = $this->model->getDistributionRouteRules(true, $beneficiaryId, $transportScope);
         if ($rules === []) {
             return $scope;
         }
@@ -4472,6 +5109,7 @@ class DispecerCurseController
             $normalizedRules[] = [
                 'loc_incarcare_id' => $locationId,
                 'zona_distributie_id' => $zoneId,
+                'tarif_mod' => $this->normalizeDistributionRouteTariffModeInput((string) ($rule['tarif_mod'] ?? '')),
                 'tarif_tona' => max(0, (float) ($rule['tarif_tona'] ?? 0)),
                 'cost_extra_km' => max(0, (float) ($rule['cost_extra_km'] ?? 0)),
                 'km_tarifare' => max(0, (int) ($rule['km_tarifare'] ?? 0)),
@@ -4480,6 +5118,10 @@ class DispecerCurseController
                 'vehicle_ids' => $routeVehicleIds,
                 'loc_nume' => trim((string) ($rule['loc_nume'] ?? '')),
                 'zona_nume' => trim((string) ($rule['zona_nume'] ?? '')),
+                'transport_scope' => $this->normalizeDistributionRouteScopeInput(
+                    (string) ($rule['transport_scope'] ?? ''),
+                    self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE
+                ),
             ];
         }
 
@@ -4624,14 +5266,16 @@ class DispecerCurseController
         int $beneficiaryId,
         int $locationId,
         int $zoneId,
-        ?int $vehicleId = null
+        ?int $vehicleId = null,
+        ?string $transportScope = null
     ): ?array {
         $directRule = $this->model->getDistributionRouteRuleForBeneficiary(
             $beneficiaryId,
             $locationId,
             $zoneId,
             true,
-            $vehicleId
+            $vehicleId,
+            $transportScope
         );
         if ($directRule !== null) {
             return $directRule;
@@ -4643,7 +5287,8 @@ class DispecerCurseController
                 $zoneId,
                 $locationId,
                 true,
-                $vehicleId
+                $vehicleId,
+                $transportScope
             );
             if ($reverseRule !== null) {
                 return $reverseRule;

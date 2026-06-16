@@ -17,12 +17,6 @@
 
             <button id="login-submit" type="submit" class="btn btn-primary w-100">Intra in aplicatie</button>
         </form>
-
-        <hr class="my-4">
-        <p class="small text-muted mb-0">
-            Cont demo administrator: <strong>admin@example.com</strong><br>
-            Parola demo: <strong>Admin123!</strong>
-        </p>
     </div>
 </div>
 

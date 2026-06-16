@@ -3,6 +3,8 @@ Options -Indexes
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
+    RewriteRule ^dev-login/?$ index.php?page=dev-login [QSA,L]
+
     RewriteRule ^api/concedii/calendar/?$ index.php?page=programare_concedii&action=api_calendar [QSA,L]
     RewriteRule ^api/concedii/([0-9]+)/?$ index.php?page=programare_concedii&action=api_item&id=$1 [QSA,L]
     RewriteRule ^api/concedii/?$ index.php?page=programare_concedii&action=api_collection [QSA,L]

@@ -270,10 +270,21 @@
         var costKmDistributiePreviewField = form.querySelector('[data-role="preview-cost-km-distributie-field"]');
         var costKmMixtPreviewField = form.querySelector('[data-role="preview-cost-km-mixt-field"]');
         var kmDistributionCalculationNote = form.querySelector('[data-role="km-distributie-calculation"]');
+        var costKmMixtCalculationNote = form.querySelector('[data-role="cost-km-mixt-calculation"]');
+
+        if (!(costKmMixtCalculationNote instanceof HTMLElement) && costKmMixtPreviewField instanceof HTMLElement) {
+            costKmMixtCalculationNote = document.createElement('div');
+            costKmMixtCalculationNote.className = 'form-text text-muted d-none';
+            costKmMixtCalculationNote.setAttribute('data-role', 'cost-km-mixt-calculation');
+            costKmMixtCalculationNote.textContent = 'Cost/km Mixt (calcul): Total facturare estimata / Km efectuati.';
+            costKmMixtPreviewField.appendChild(costKmMixtCalculationNote);
+        }
 
         if (!tipField || !beneficiaryField || !totalPreview) {
             return;
         }
+
+        var invoicedRefacturareTotal = Math.max(0, parseNumber(form.getAttribute('data-invoiced-refacturare-total') || '0'));
 
         function syncConfigTransportLink() {
             if (!(configTransportLink instanceof HTMLAnchorElement)) {
@@ -836,6 +847,42 @@
             return transportType === 'primar_distributie';
         }
 
+        function normalizeDistributionRouteScope(scope) {
+            var normalizedScope = String(scope || '').trim().toLowerCase();
+            return normalizedScope === 'distributie' ? 'distributie' : 'primar_distributie';
+        }
+
+        function normalizeDistributionRouteTariffMode(mode) {
+            var normalizedMode = String(mode || '').trim().toLowerCase();
+            if (normalizedMode === 'tona' || normalizedMode === 'km') {
+                return normalizedMode;
+            }
+
+            return 'tona_km';
+        }
+
+        function distributionRouteUsesTonTariff(mode) {
+            var normalizedMode = normalizeDistributionRouteTariffMode(mode);
+            return normalizedMode === 'tona_km' || normalizedMode === 'tona';
+        }
+
+        function distributionRouteUsesKmTariff(mode) {
+            var normalizedMode = normalizeDistributionRouteTariffMode(mode);
+            return normalizedMode === 'tona_km' || normalizedMode === 'km';
+        }
+
+        function resolveDistributionRouteScopeForTransport(transportType) {
+            var normalizedTransportType = String(transportType || '').trim();
+            if (normalizedTransportType === 'distributie') {
+                return 'distributie';
+            }
+            if (normalizedTransportType === 'primar_distributie' || normalizedTransportType === 'mixt') {
+                return 'primar_distributie';
+            }
+
+            return null;
+        }
+
         function isPrimaryKmTransport(transportType) {
             return transportType === 'primar';
         }
@@ -930,6 +977,8 @@
                         beneficiaryId: routeBeneficiaryId,
                         locationId: locationId,
                         zoneId: zoneId,
+                        transportScope: normalizeDistributionRouteScope(routeRule.transport_scope),
+                        tariffMode: normalizeDistributionRouteTariffMode(routeRule.tarif_mod),
                         active: !!routeRule.activ,
                         tariffPerTon: parseNumber(routeRule.tarif_tona),
                         extraKmCost: parseNumber(routeRule.cost_extra_km),
@@ -952,13 +1001,23 @@
             ? (distributionRouteRulesByBeneficiary.__global__ || [])
             : [];
 
-        function getDistributionRulesForBeneficiary(beneficiaryId) {
+        function getDistributionRulesForBeneficiary(beneficiaryId, transportType) {
             var beneficiaryKey = String(beneficiaryId || '').trim();
             var beneficiaryRules = beneficiaryKey !== '' && Object.prototype.hasOwnProperty.call(distributionRouteRulesByBeneficiary, beneficiaryKey)
                 ? (distributionRouteRulesByBeneficiary[beneficiaryKey] || [])
                 : [];
+            var targetScope = resolveDistributionRouteScopeForTransport(transportType);
+            if (targetScope === null) {
+                return [];
+            }
 
-            return beneficiaryRules.concat(distributionGlobalRules);
+            return beneficiaryRules.concat(distributionGlobalRules).filter(function (rule) {
+                if (!rule || typeof rule !== 'object') {
+                    return false;
+                }
+
+                return normalizeDistributionRouteScope(rule.transportScope) === targetScope;
+            });
         }
 
         function buildPrimaryRouteRulesByBeneficiary(routeMap) {
@@ -1174,7 +1233,9 @@
                 return !!pricingConfig.suporta_primar;
             }
             if (isDistributionTransport(transportType)) {
-                return !!pricingConfig.suporta_distributie;
+                return transportType === 'distributie'
+                    ? !!pricingConfig.suporta_distributie
+                    : !!pricingConfig.suporta_primar_distributie;
             }
             if (transportType === 'compresor') {
                 return !!pricingConfig.suporta_compresor;
@@ -1237,7 +1298,7 @@
             return assigned;
         }
 
-        function getDistributionScopedVehicleSetForBeneficiary(beneficiaryId) {
+        function getDistributionScopedVehicleSetForBeneficiary(beneficiaryId, transportType) {
             var beneficiaryKey = String(beneficiaryId || '').trim();
             var vehicleSet = {};
             var hasScopedRules = false;
@@ -1246,7 +1307,7 @@
                 return { hasScopedRules: false, vehicleSet: {} };
             }
 
-            var rules = getDistributionRulesForBeneficiary(beneficiaryKey);
+            var rules = getDistributionRulesForBeneficiary(beneficiaryKey, transportType);
             rules.forEach(function (rule) {
                 if (!rule || typeof rule !== 'object' || !rule.active) {
                     return;
@@ -1279,7 +1340,7 @@
             if (isPrimaryTransport(transportType)) {
                 allowedVehicleSet = activeDriverVehicleSet;
             } else if (isDistributionTransport(transportType)) {
-                var scopedDistributionVehicles = getDistributionScopedVehicleSetForBeneficiary(beneficiaryKey);
+                var scopedDistributionVehicles = getDistributionScopedVehicleSetForBeneficiary(beneficiaryKey, transportType);
                 if (scopedDistributionVehicles.hasScopedRules) {
                     allowedVehicleSet = scopedDistributionVehicles.vehicleSet;
                 } else {
@@ -1291,7 +1352,7 @@
                 if (Object.keys(compressorAssignedVehicleSet).length > 0) {
                     allowedVehicleSet = compressorAssignedVehicleSet;
                 } else {
-                    var distributionScopedFallback = getDistributionScopedVehicleSetForBeneficiary(beneficiaryKey);
+                    var distributionScopedFallback = getDistributionScopedVehicleSetForBeneficiary(beneficiaryKey, 'distributie');
                     if (distributionScopedFallback.hasScopedRules && Object.keys(distributionScopedFallback.vehicleSet).length > 0) {
                         allowedVehicleSet = distributionScopedFallback.vehicleSet;
                     } else {
@@ -1586,11 +1647,11 @@
             });
         }
 
-        function getVehicleScopedRouteRules(beneficiaryId, vehicleId) {
+        function getVehicleScopedRouteRules(beneficiaryId, vehicleId, transportType) {
             var beneficiaryKey = String(beneficiaryId || '').trim();
             var selectedVehicleId = String(vehicleId || '').trim();
             var rules = beneficiaryKey !== ''
-                ? getDistributionRulesForBeneficiary(beneficiaryKey)
+                ? getDistributionRulesForBeneficiary(beneficiaryKey, transportType)
                 : [];
 
             var activeRules = rules.filter(function (rule) {
@@ -2091,7 +2152,7 @@
             var locationId = String(loadLocationField ? (loadLocationField.value || '') : '').trim();
             var zoneId = String(zoneField ? (zoneField.value || '') : '').trim();
             var vehicleId = String(vehicleField ? (vehicleField.value || '') : '').trim();
-            var routeRule = getDistributionRouteRule(beneficiaryId, locationId, zoneId, vehicleId);
+            var routeRule = getDistributionRouteRule(beneficiaryId, locationId, zoneId, vehicleId, transportType);
             var kmTariffValue = routeRule && routeRule.active
                 ? Math.max(0, Math.round(parseNumber(routeRule.kmTariff)))
                 : 0;
@@ -2126,7 +2187,7 @@
                 var scopedZoneOptionsBase = beneficiaryId !== ''
                     ? getDistributionZoneOptionsForBeneficiary(beneficiaryId)
                     : [];
-                var routeScope = getVehicleScopedRouteRules(beneficiaryId, vehicleId);
+                var routeScope = getVehicleScopedRouteRules(beneficiaryId, vehicleId, transportType);
                 var scopedOptions = getScopedDistributionOptions(
                     routeScope,
                     scopedLocationOptionsBase,
@@ -2209,6 +2270,7 @@
             var perSuctionGasTon = parseNumber(config.pret_tona_aspirata_gazoasa);
             var supportsPrimary = !!config.suporta_primar;
             var supportsDistribution = !!config.suporta_distributie;
+            var supportsPrimaryDistribution = !!config.suporta_primar_distributie;
             var supportsCompressor = !!config.suporta_compresor;
 
             if (isPrimaryKmTransport(transportType) || isPrimaryTonTransport(transportType)) {
@@ -2236,7 +2298,10 @@
             }
 
             if (isDistributionTransport(transportType)) {
-                if (!supportsDistribution) {
+                if (
+                    (transportType === 'distributie' && !supportsDistribution)
+                    || (transportType !== 'distributie' && !supportsPrimaryDistribution)
+                ) {
                     return {
                         perKm: 0,
                         perTon: 0,
@@ -2364,11 +2429,15 @@
             return parseNumber(zoneExtraKmCosts[key]);
         }
 
-        function getDistributionRouteRule(beneficiaryId, locationId, zoneId, vehicleId) {
+        function getDistributionRouteRule(beneficiaryId, locationId, zoneId, vehicleId, transportType) {
             var beneficiaryKey = String(beneficiaryId || '').trim();
             var locationKey = String(locationId || '');
             var zoneKey = String(zoneId || '');
+            var targetRouteScope = resolveDistributionRouteScopeForTransport(transportType);
             if (locationKey === '' || zoneKey === '') {
+                return null;
+            }
+            if (targetRouteScope === null) {
                 return null;
             }
 
@@ -2392,6 +2461,9 @@
 
                     var ruleBeneficiaryId = String(rule.beneficiar_id || '').trim();
                     if (beneficiaryKey !== '' && ruleBeneficiaryId !== '' && ruleBeneficiaryId !== beneficiaryKey) {
+                        continue;
+                    }
+                    if (normalizeDistributionRouteScope(rule.transport_scope) !== targetRouteScope) {
                         continue;
                     }
 
@@ -2418,6 +2490,7 @@
                         bestRuleId = ruleId;
                         bestRule = {
                             ruleId: ruleId,
+                            tariffMode: normalizeDistributionRouteTariffMode(rule.tarif_mod),
                             tariffPerTon: parseNumber(rule.tarif_tona),
                             extraKmCost: parseNumber(rule.cost_extra_km),
                             kmTariff: Math.max(0, Math.round(parseNumber(rule.km_tarifare))),
@@ -2469,7 +2542,7 @@
                 return null;
             }
 
-            var beneficiaryScopedRules = getDistributionRulesForBeneficiary(beneficiaryKey);
+            var beneficiaryScopedRules = getDistributionRulesForBeneficiary(beneficiaryKey, transportType);
 
             var resolveRuleFromNames = function (expectedLocationName, expectedZoneName, matchDirection) {
                 var bestRule = null;
@@ -2510,6 +2583,7 @@
                         bestRuleId = scopedRuleId;
                         bestRule = {
                             ruleId: scopedRuleId,
+                            tariffMode: normalizeDistributionRouteTariffMode(scopedRule.tariffMode),
                             tariffPerTon: parseNumber(scopedRule.tariffPerTon),
                             extraKmCost: parseNumber(scopedRule.extraKmCost),
                             kmTariff: Math.max(0, Math.round(parseNumber(scopedRule.kmTariff))),
@@ -2564,6 +2638,7 @@
                 }
 
                 return {
+                    tariffMode: normalizeDistributionRouteTariffMode(scopedRule.tariffMode),
                     tariffPerTon: parseNumber(scopedRule.tariffPerTon),
                     extraKmCost: parseNumber(scopedRule.extraKmCost),
                     kmTariff: Math.max(0, Math.round(parseNumber(scopedRule.kmTariff))),
@@ -2846,7 +2921,20 @@
             }
         }
 
-        function syncKmDistributionCalculationNote(transportType, kmAgreatiValue, kmEfectuatiValue) {
+        function formatSignedKmValueRo(value) {
+            var normalized = parseNumber(value);
+            var isInteger = Math.abs(normalized - Math.round(normalized)) < 0.0001;
+            try {
+                return Number(normalized).toLocaleString('ro-RO', {
+                    minimumFractionDigits: isInteger ? 0 : 2,
+                    maximumFractionDigits: isInteger ? 0 : 2
+                });
+            } catch (error) {
+                return String(isInteger ? Math.round(normalized) : roundToTwo(normalized)).replace('.', ',');
+            }
+        }
+
+        function syncKmDistributionCalculationNote(transportType, kmAgreatiValue, kmEfectuatiValue, distributionBillingValue, costKmDistributieValue) {
             if (!(kmDistributionCalculationNote instanceof HTMLElement)) {
                 return;
             }
@@ -2858,9 +2946,57 @@
             }
 
             var kmAgreati = Math.max(0, parseNumber(kmAgreatiValue));
+            var kmEfectuati = Math.max(0, parseNumber(kmEfectuatiValue));
+            var kmDistributie = Math.max(0, kmEfectuati - kmAgreati);
+            var distributionBilling = Math.max(0, parseNumber(distributionBillingValue));
             kmDistributionCalculationNote.textContent =
-                'Cost/km Distributie (calcul): (Cantitate × Tarif tona) / Km agreati'
-                + (kmAgreati > 0 ? (' (' + formatKmValueRo(kmAgreati) + ' km)') : '');
+                'Cost/km Distributie (calcul): Km distributie = Km efectuati - Km agreati'
+                + ' (' + formatKmValueRo(kmEfectuati) + ' - ' + formatKmValueRo(kmAgreati) + ' = ' + formatKmValueRo(kmDistributie) + ')'
+                + '; Cost/km Distributie = Cost distributie (Pret tona x tone) / Km distributie.';
+            if (distributionBilling > 0 && kmDistributie > 0) {
+                kmDistributionCalculationNote.textContent += ' '
+                    + formatCurrencyRo(distributionBilling)
+                    + ' / '
+                    + formatKmValueRo(kmDistributie)
+                    + ' km'
+                    + ' = '
+                    + formatCostPerKmRo(costKmDistributieValue);
+            }
+        }
+
+        function syncCostKmMixtCalculationNote(transportType, totalValue, kmTotaliValue, costKmMixtValue) {
+            if (!(costKmMixtCalculationNote instanceof HTMLElement)) {
+                return;
+            }
+
+            var normalizedTransportType = String(transportType || '').trim();
+            var isMixedTransport = normalizedTransportType === 'primar_distributie' || normalizedTransportType === 'mixt';
+            costKmMixtCalculationNote.classList.toggle('d-none', !isMixedTransport);
+            if (!isMixedTransport) {
+                return;
+            }
+
+            var kmTotali = Math.max(0, parseNumber(kmTotaliValue));
+            if (kmTotali <= 0) {
+                costKmMixtCalculationNote.textContent =
+                    'Cost/km Mixt (calcul): Total facturare estimata / Km efectuati (introdu Km efectuati > 0).';
+                return;
+            }
+
+            if (parseNumber(totalValue) <= 0) {
+                costKmMixtCalculationNote.textContent =
+                    'Cost/km Mixt (calcul): Total facturare estimata / Km efectuati (Total facturare trebuie sa fie > 0).';
+                return;
+            }
+
+            costKmMixtCalculationNote.textContent =
+                'Cost/km Mixt (calcul): Total facturare estimata / Km efectuati = '
+                + formatCurrencyRo(totalValue)
+                + ' / '
+                + formatKmValueRo(kmTotali)
+                + ' km'
+                + ' = '
+                + formatCostPerKmRo(costKmMixtValue);
         }
 
         function shouldShowCompressorLiquidSuctionField(transportType, rates) {
@@ -2881,8 +3017,11 @@
         function syncPreviewFieldsVisibility(transportType) {
             var showTotal = true;
             var showCostPrimar = false;
-            var showCostDistributie = false;
-            var showCostMixt = false;
+            var showCostDistributie = String(transportType || '').trim() === 'distributie'
+                || String(transportType || '').trim() === 'primar_distributie'
+                || String(transportType || '').trim() === 'mixt';
+            var showCostMixt = String(transportType || '').trim() === 'primar_distributie'
+                || String(transportType || '').trim() === 'mixt';
 
             setPreviewFieldVisibility(totalPreviewField, showTotal);
             setPreviewFieldVisibility(costKmPrimarPreviewField, showCostPrimar);
@@ -3046,7 +3185,8 @@
                 selectedBeneficiaryId,
                 selectedLocationId,
                 selectedZoneId,
-                selectedVehicleId
+                selectedVehicleId,
+                transportType
             );
             var total = 0;
             var effectiveDistributionKmRate = 0;
@@ -3062,17 +3202,37 @@
                 } else {
                     var sameRoute = isSameDistributionRoute();
                     var effectiveRouteRule = routeRule;
-                    var effectiveTonRate = effectiveRouteRule && effectiveRouteRule.active && effectiveRouteRule.tariffPerTon > 0
-                        ? effectiveRouteRule.tariffPerTon
-                        : resolveDistributionTonRate(locationTariff, zoneTariff, rates.perTon, sameRoute);
-                    var effectiveKmRate = effectiveRouteRule && effectiveRouteRule.active && effectiveRouteRule.extraKmCost > 0
-                        ? effectiveRouteRule.extraKmCost
-                        : (zoneExtraKmCost > 0 ? zoneExtraKmCost : rates.perKm);
+                    var hasActiveEffectiveRouteRule = !!(effectiveRouteRule && effectiveRouteRule.active);
+                    var routeUsesTonTariff = !hasActiveEffectiveRouteRule || distributionRouteUsesTonTariff(effectiveRouteRule.tariffMode);
+                    var routeUsesKmTariff = !hasActiveEffectiveRouteRule || distributionRouteUsesKmTariff(effectiveRouteRule.tariffMode);
+                    var effectiveTonRate = routeUsesTonTariff
+                        ? (
+                            effectiveRouteRule && effectiveRouteRule.active && effectiveRouteRule.tariffPerTon > 0
+                                ? effectiveRouteRule.tariffPerTon
+                                : resolveDistributionTonRate(locationTariff, zoneTariff, rates.perTon, sameRoute)
+                        )
+                        : 0;
+                    var effectiveKmRate = routeUsesKmTariff
+                        ? (
+                            effectiveRouteRule && effectiveRouteRule.active && effectiveRouteRule.extraKmCost > 0
+                                ? effectiveRouteRule.extraKmCost
+                                : (zoneExtraKmCost > 0 ? zoneExtraKmCost : rates.perKm)
+                        )
+                        : 0;
                     var fixedRideCost = effectiveRouteRule && effectiveRouteRule.active && effectiveRouteRule.applyRideCost && effectiveRouteRule.rideCost > 0
                         ? effectiveRouteRule.rideCost
                         : 0;
                     effectiveDistributionKmRate = Math.max(0, effectiveKmRate);
-                    var distributionKmComponent = isDistributionWithKmTransport(transportType) && fixedRideCost <= 0
+                    var shouldApplyDistributionKmComponent = false;
+                    if (fixedRideCost <= 0) {
+                        if (transportType === 'distributie') {
+                            // Distributie simpla foloseste strict Pret/km (optional) din setarile de distributie.
+                            shouldApplyDistributionKmComponent = effectiveKmRate > 0;
+                        } else if (isDistributionWithKmTransport(transportType)) {
+                            shouldApplyDistributionKmComponent = true;
+                        }
+                    }
+                    var distributionKmComponent = shouldApplyDistributionKmComponent
                         ? (kmValue * effectiveKmRate)
                         : 0;
                     total = fixedRideCost + ((fixedRideCost > 0 ? 0 : (quantityValue * effectiveTonRate))) + distributionKmComponent;
@@ -3098,9 +3258,15 @@
             if (includesDistributionSegment && hasCompleteDistributionSelection) {
                 var sameRouteForCost = isSameDistributionRoute();
                 var effectiveRouteRuleForCost = routeRule;
-                distributionTonRate = effectiveRouteRuleForCost && effectiveRouteRuleForCost.active && effectiveRouteRuleForCost.tariffPerTon > 0
-                    ? effectiveRouteRuleForCost.tariffPerTon
-                    : resolveDistributionTonRate(locationTariff, zoneTariff, rates.perTon, sameRouteForCost);
+                var costRouteUsesTonTariff = !(effectiveRouteRuleForCost && effectiveRouteRuleForCost.active)
+                    || distributionRouteUsesTonTariff(effectiveRouteRuleForCost.tariffMode);
+                distributionTonRate = costRouteUsesTonTariff
+                    ? (
+                        effectiveRouteRuleForCost && effectiveRouteRuleForCost.active && effectiveRouteRuleForCost.tariffPerTon > 0
+                            ? effectiveRouteRuleForCost.tariffPerTon
+                            : resolveDistributionTonRate(locationTariff, zoneTariff, rates.perTon, sameRouteForCost)
+                    )
+                    : 0;
             }
             distributionTonRate = Math.max(0, distributionTonRate);
             var distributionFixedRideCost = includesDistributionSegment
@@ -3124,26 +3290,34 @@
             }
 
             var totalPrimar = includesPrimarySegment ? (kmPrimar * primaryPerKmRate) : 0;
-            var totalDistributie = includesDistributionSegment
-                ? (distributionFixedRideCost > 0 ? distributionFixedRideCost : (Math.max(0, quantityValue) * distributionTonRate))
-                : 0;
+            var totalDistributie = 0;
+            if (includesDistributionSegment) {
+                if (transportType === 'distributie') {
+                    // Pentru Distributie simpla folosim totalul complet (tona + componenta km optionala).
+                    totalDistributie = total;
+                } else {
+                    totalDistributie = distributionFixedRideCost > 0
+                        ? distributionFixedRideCost
+                        : (Math.max(0, quantityValue) * distributionTonRate);
+                }
+            }
             var costKmPrimar = includesPrimarySegment && kmPrimar > 0
                 ? safeDivide(totalPrimar, kmPrimar)
                 : 0;
             var costKmDistributie = 0;
             if (transportType === 'primar_distributie') {
-                // Regula stabilita: Cost/km Distributie foloseste Km agreati.
-                costKmDistributie = kmPrimar > 0
-                    ? safeDivide(totalDistributie, kmPrimar)
+                // Primar+Distributie foloseste doar valoarea componentei de distributie.
+                costKmDistributie = kmDistributie > 0
+                    ? safeDivide(totalDistributie, kmDistributie)
                     : 0;
             } else if (includesDistributionSegment && kmDistributie > 0) {
                 costKmDistributie = safeDivide(totalDistributie, kmDistributie);
             }
             var costKmMixt = 0;
-            if (transportType === 'primar_distributie') {
-                // Regula stabilita: Cost/km Mixt foloseste Km agreati.
-                costKmMixt = kmPrimar > 0
-                    ? safeDivide(total, kmPrimar)
+            if (transportType === 'primar_distributie' || transportType === 'mixt') {
+                // Regula stabilita: Cost/km Mixt = Total facturare / Km efectuati.
+                costKmMixt = kmTotalValue > 0
+                    ? safeDivide(total, kmTotalValue)
                     : 0;
             } else if (includesPrimarySegment && !includesDistributionSegment) {
                 costKmMixt = costKmPrimar;
@@ -3154,6 +3328,7 @@
             costKmPrimar = roundToTwo(costKmPrimar);
             costKmDistributie = roundToTwo(costKmDistributie);
             costKmMixt = roundToTwo(costKmMixt);
+            syncKmDistributionCalculationNote(transportType, kmValue, kmTotalValue, totalDistributie, costKmDistributie);
 
             if (costKmPrimarPreview) {
                 costKmPrimarPreview.textContent = formatCostPerKmRo(costKmPrimar);
@@ -3164,6 +3339,7 @@
             if (costKmMixtPreview) {
                 costKmMixtPreview.textContent = formatCostPerKmRo(costKmMixt);
             }
+            syncCostKmMixtCalculationNote(transportType, total, kmTotalValue, costKmMixt);
 
             if (priceDisplayField) {
                 if (isPrimaryKmTransport(transportType)) {
@@ -3187,15 +3363,28 @@
                             routeSourceLabel = 'exact';
                         }
                         var hasActiveRouteRule = !!(effectiveDisplayRule && effectiveDisplayRule.active);
-                        var effectiveDisplayTonRate = hasActiveRouteRule && effectiveDisplayRule.tariffPerTon > 0
-                            ? effectiveDisplayRule.tariffPerTon
-                            : resolveDistributionTonRate(locationTariff, zoneTariff, rates.perTon, sameRouteForDisplay);
-                        var effectiveDisplayKmRate = hasActiveRouteRule && effectiveDisplayRule.extraKmCost > 0
-                            ? effectiveDisplayRule.extraKmCost
-                            : (zoneExtraKmCost > 0 ? zoneExtraKmCost : rates.perKm);
+                        var displayUsesTonTariff = !hasActiveRouteRule || distributionRouteUsesTonTariff(effectiveDisplayRule.tariffMode);
+                        var displayUsesKmTariff = !hasActiveRouteRule || distributionRouteUsesKmTariff(effectiveDisplayRule.tariffMode);
+                        var effectiveDisplayTonRate = displayUsesTonTariff
+                            ? (
+                                hasActiveRouteRule && effectiveDisplayRule.tariffPerTon > 0
+                                    ? effectiveDisplayRule.tariffPerTon
+                                    : resolveDistributionTonRate(locationTariff, zoneTariff, rates.perTon, sameRouteForDisplay)
+                            )
+                            : 0;
+                        var effectiveDisplayKmRate = displayUsesKmTariff
+                            ? (
+                                hasActiveRouteRule && effectiveDisplayRule.extraKmCost > 0
+                                    ? effectiveDisplayRule.extraKmCost
+                                    : (zoneExtraKmCost > 0 ? zoneExtraKmCost : rates.perKm)
+                            )
+                            : 0;
                         var displayFixedRideCost = hasActiveRouteRule && effectiveDisplayRule.applyRideCost && effectiveDisplayRule.rideCost > 0
                             ? effectiveDisplayRule.rideCost
                             : 0;
+                        var displayCalculationMode = displayUsesTonTariff && displayUsesKmTariff
+                            ? 'tona + km'
+                            : (displayUsesTonTariff ? 'doar tona' : 'doar km');
                         priceDisplayField.value =
                             'regula ruta: ' + routeSourceLabel +
                             ' | ' +
@@ -3208,7 +3397,7 @@
                             ' | tarif km activ: ' + effectiveDisplayKmRate.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
                             ' | mod calcul: ' + (displayFixedRideCost > 0
                                 ? ('cost cursa fix (' + displayFixedRideCost.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ')')
-                                : (isDistributionWithKmTransport(transportType) ? 'tona + km' : 'doar tona'));
+                                : displayCalculationMode);
                     }
                 } else if (transportType === 'compresor') {
                     priceDisplayField.value =
@@ -3223,7 +3412,8 @@
                 }
             }
 
-            totalPreview.textContent = formatCurrencyRo(total);
+            var totalForDisplay = total + invoicedRefacturareTotal;
+            totalPreview.textContent = formatCurrencyRo(totalForDisplay);
         }
 
         tipField.addEventListener('change', syncTransportMode);

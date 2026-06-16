@@ -2,7 +2,13 @@
 $transportTypeOptions = is_array($transportTypeOptions ?? null) ? $transportTypeOptions : [
     'primar' => 'Primar km',
     'distributie' => 'Distributie',
+    'primar_distributie' => 'Primar+Distributie',
     'compresor' => 'Compresor',
+];
+$distributionRouteTariffModeOptions = is_array($distributionRouteTariffModeOptions ?? null) ? $distributionRouteTariffModeOptions : [
+    'tona_km' => 'Pret tona + Pret km',
+    'tona' => 'Doar Pret tona',
+    'km' => 'Doar Pret km',
 ];
 
 $selectedTransportTypes = $beneficiaryFormData['tip_transporturi'] ?? [];
@@ -21,8 +27,9 @@ $selectedTransportButtonLabel = $selectedTransportLabels !== [] ? implode(', ', 
 
 $isPrimarSelected = in_array('primar', $selectedTransportTypes, true);
 $isDistributieSelected = in_array('distributie', $selectedTransportTypes, true);
+$isPrimaryDistributionSelected = in_array('primar_distributie', $selectedTransportTypes, true);
 $isCompresorSelected = in_array('compresor', $selectedTransportTypes, true);
-$isCatalogSelected = $isPrimarSelected || $isDistributieSelected;
+$isCatalogSelected = $isPrimarSelected || $isDistributieSelected || $isPrimaryDistributionSelected;
 
 $distributionBeneficiaryId = (int) ($distributionBeneficiaryId ?? 0);
 $distributionConfigReady = $distributionBeneficiaryId > 0 && $isDistributieSelected;
@@ -51,13 +58,20 @@ foreach (($vehicles ?? []) as $vehicle) {
 }
 $zoneVehicleButtonLabel = $zoneSelectedVehicleLabels !== [] ? implode(', ', $zoneSelectedVehicleLabels) : '-- Fara alocare --';
 
-$distributionRouteFormData = is_array($distributionRouteFormData ?? null) ? $distributionRouteFormData : [];
-$distributionRouteFormErrors = is_array($distributionRouteFormErrors ?? null) ? $distributionRouteFormErrors : [];
-$distributionRouteFormMode = trim((string) ($distributionRouteFormMode ?? '')) !== ''
-    ? (string) $distributionRouteFormMode
-    : (trim((string) ($distributionRouteFormData['route_id'] ?? '')) !== '' ? 'edit' : 'create');
-$isRouteEditMode = $distributionRouteFormMode === 'edit';
-$routeSelectedVehicleIds = array_map('strval', (array) ($distributionRouteFormData['vehicle_ids'] ?? []));
+$distributionOnlyRouteRules = is_array($distributionOnlyRouteRules ?? null) ? $distributionOnlyRouteRules : [];
+$primaryDistributionRouteRules = is_array($primaryDistributionRouteRules ?? null) ? $primaryDistributionRouteRules : [];
+$distributionOnlyRouteFormData = is_array($distributionOnlyRouteFormData ?? null) ? $distributionOnlyRouteFormData : [];
+$distributionOnlyRouteFormErrors = is_array($distributionOnlyRouteFormErrors ?? null) ? $distributionOnlyRouteFormErrors : [];
+$distributionOnlyRouteFormMode = trim((string) ($distributionOnlyRouteFormMode ?? '')) !== ''
+    ? (string) $distributionOnlyRouteFormMode
+    : (trim((string) ($distributionOnlyRouteFormData['route_id'] ?? '')) !== '' ? 'edit' : 'create');
+$isDistributionOnlyRouteEditMode = $distributionOnlyRouteFormMode === 'edit';
+$primaryDistributionRouteFormData = is_array($primaryDistributionRouteFormData ?? null) ? $primaryDistributionRouteFormData : [];
+$primaryDistributionRouteFormErrors = is_array($primaryDistributionRouteFormErrors ?? null) ? $primaryDistributionRouteFormErrors : [];
+$primaryDistributionRouteFormMode = trim((string) ($primaryDistributionRouteFormMode ?? '')) !== ''
+    ? (string) $primaryDistributionRouteFormMode
+    : (trim((string) ($primaryDistributionRouteFormData['route_id'] ?? '')) !== '' ? 'edit' : 'create');
+$isPrimaryDistributionRouteEditMode = $primaryDistributionRouteFormMode === 'edit';
 $vehicleLabelById = [];
 $vehiclePlateById = [];
 foreach (($vehicles ?? []) as $vehicle) {
@@ -74,15 +88,23 @@ foreach (($vehicles ?? []) as $vehicle) {
     $vehicleLabelById[$vehicleId] = trim($vehicleLabel);
     $vehiclePlateById[$vehicleId] = $vehiclePlate;
 }
-$routeSelectedVehicleLabels = [];
-foreach ($routeSelectedVehicleIds as $routeSelectedVehicleId) {
-    $vehicleId = (int) $routeSelectedVehicleId;
-    if ($vehicleId <= 0 || !isset($vehicleLabelById[$vehicleId])) {
-        continue;
+$buildRouteVehicleButtonLabel = static function (array $selectedVehicleIds, array $labelsById): string {
+    $selectedLabels = [];
+    foreach ($selectedVehicleIds as $selectedVehicleId) {
+        $vehicleId = (int) $selectedVehicleId;
+        if ($vehicleId <= 0 || !isset($labelsById[$vehicleId])) {
+            continue;
+        }
+
+        $selectedLabels[] = $labelsById[$vehicleId];
     }
-    $routeSelectedVehicleLabels[] = $vehicleLabelById[$vehicleId];
-}
-$routeVehicleButtonLabel = $routeSelectedVehicleLabels !== [] ? implode(', ', $routeSelectedVehicleLabels) : '-- Selecteaza vehiculele --';
+
+    return $selectedLabels !== [] ? implode(', ', $selectedLabels) : '-- Selecteaza vehiculele --';
+};
+$distributionOnlyRouteSelectedVehicleIds = array_map('strval', (array) ($distributionOnlyRouteFormData['vehicle_ids'] ?? []));
+$distributionOnlyRouteVehicleButtonLabel = $buildRouteVehicleButtonLabel($distributionOnlyRouteSelectedVehicleIds, $vehicleLabelById);
+$primaryDistributionRouteSelectedVehicleIds = array_map('strval', (array) ($primaryDistributionRouteFormData['vehicle_ids'] ?? []));
+$primaryDistributionRouteVehicleButtonLabel = $buildRouteVehicleButtonLabel($primaryDistributionRouteSelectedVehicleIds, $vehicleLabelById);
 $compresorSelectedVehicleIds = array_map('strval', (array) ($beneficiaryFormData['compresor_vehicle_ids'] ?? []));
 $compresorSelectedVehicleLabels = [];
 $compresorSelectedVehiclePlates = [];
@@ -132,10 +154,6 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
             <span class="transport-config-shell-kicker">Administrare</span>
         </div>
         <div class="card-body transport-config-shell-body">
-        <div class="alert alert-info transport-config-note mb-4">
-            Configureaza tarifele pe beneficiar si tip de transport. Pentru Distributie, regulile de ruta sunt globale si se pot aplica pe orice beneficiar compatibil.
-        </div>
-
         <section class="transport-config-block transport-config-block-primary">
             <div class="transport-config-block-header">
                 <h4 class="h6 mb-0">Date beneficiar si tipuri transport</h4>
@@ -148,6 +166,8 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                 <?= csrf_field() ?>
                 <input type="hidden" name="id" value="<?= e((string) ($beneficiaryFormData['id'] ?? '')) ?>">
                 <input type="hidden" name="pret_tarifare" value="<?= e((string) ($beneficiaryFormData['pret_tarifare'] ?? '0')) ?>">
+                <input type="hidden" name="pret_distributie_tona" value="<?= e((string) ($beneficiaryFormData['pret_distributie_tona'] ?? '0')) ?>">
+                <input type="hidden" name="pret_distributie_km" value="<?= e((string) ($beneficiaryFormData['pret_distributie_km'] ?? '0')) ?>">
 
                 <?php if (isset($beneficiaryFormErrors['id'])): ?>
                     <div class="col-12">
@@ -209,25 +229,6 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                                     <label class="form-label" for="config_primar_pret_tona">Pret/tona</label>
                                     <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona']) ? 'is-invalid' : '' ?>" id="config_primar_pret_tona" name="pret_tona" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_tona'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_tona']) ?></div><?php endif; ?>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section class="transport-type-rule-card" data-transport-card="distributie" <?= $isDistributieSelected ? '' : 'hidden' ?>>
-                            <div class="transport-type-rule-card-header">
-                                <h5 class="mb-1">Regula tarifare Distributie</h5>
-                                <p class="text-muted mb-0">Configurezi tarifele de baza pentru distributie. Setarile de Loc si Zona se fac mai jos, pe acelasi beneficiar.</p>
-                            </div>
-                            <div class="row g-3 mt-1">
-                                <div class="col-12 col-md-6">
-                                    <label class="form-label" for="config_distributie_pret_tona">Pret/tona</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_distributie_tona']) ? 'is-invalid' : '' ?>" id="config_distributie_pret_tona" name="pret_distributie_tona" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_distributie_tona'] ?? '')) ?>">
-                                    <?php if (isset($beneficiaryFormErrors['pret_distributie_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_distributie_tona']) ?></div><?php endif; ?>
-                                </div>
-                                <div class="col-12 col-md-6">
-                                    <label class="form-label" for="config_distributie_pret_km">Pret/km (optional)</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_distributie_km']) ? 'is-invalid' : '' ?>" id="config_distributie_pret_km" name="pret_distributie_km" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_distributie_km'] ?? '')) ?>">
-                                    <?php if (isset($beneficiaryFormErrors['pret_distributie_km'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_distributie_km']) ?></div><?php endif; ?>
                                 </div>
                             </div>
                         </section>
@@ -320,6 +321,12 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
 
             <?php if (!$catalogConfigReady): ?>
                 <div class="alert alert-warning mt-3 mb-0">Salveaza mai intai regula beneficiarului cu tipul Primar sau Distributie bifat.</div>
+                <div class="alert alert-warning mt-3 mb-0" data-transport-card="distributie" <?= $isDistributieSelected ? '' : 'hidden' ?>>
+                    Salveaza mai intai regula beneficiarului cu tipul Distributie bifat, apoi poti configura rutele Distributie.
+                </div>
+                <div class="alert alert-warning mt-3 mb-0" data-transport-card="primar_distributie" <?= $isPrimaryDistributionSelected ? '' : 'hidden' ?>>
+                    Salveaza mai intai regula beneficiarului cu tipul Primar+Distributie bifat, apoi poti configura rutele Primar+Distributie.
+                </div>
             <?php else: ?>
                 <div class="transport-distribution-panel transport-distribution-catalog-panel mt-2">
                     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
@@ -357,114 +364,293 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                         <div class="alert alert-warning mt-3 mb-0">Adauga cel putin un Loc incarcare si o Zona descarcare, apoi poti crea configuratii de ruta.</div>
                     <?php endif; ?>
 
-                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_store_distributie'])) ?>" novalidate class="mt-3 transport-route-form">
+                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_store_distributie'])) ?>" novalidate class="mt-3 transport-route-form" data-transport-card="distributie">
                         <?= csrf_field() ?>
                         <input type="hidden" name="beneficiar_id" value="<?= e((string) $distributionBeneficiaryId) ?>">
-                        <input type="hidden" name="route_id" value="<?= e((string) ($distributionRouteFormData['route_id'] ?? '')) ?>">
+                        <input type="hidden" name="route_scope" value="distributie">
+                        <input type="hidden" name="route_id" value="<?= e((string) ($distributionOnlyRouteFormData['route_id'] ?? '')) ?>">
 
-                    <div class="transport-distribution-panel transport-distribution-route-panel">
-                        <?php if ($isRouteEditMode): ?>
-                            <div class="alert alert-info py-2 mb-3">Editezi o configuratie existenta. Poti modifica perechea, preturile si vehiculele alocate.</div>
-                        <?php endif; ?>
-                        <div class="row g-3 align-items-end transport-distribution-route-grid">
-                            <div class="col-12 col-xl-2">
-                                <label class="form-label" for="config_route_loc_id">Loc incarcare <span class="text-danger">*</span></label>
-                                <select class="form-select <?= isset($distributionRouteFormErrors['loc_id']) ? 'is-invalid' : '' ?>" id="config_route_loc_id" name="route_loc_id" required>
-                                    <option value="">Selecteaza locatia de incarcare</option>
-                                    <?php foreach (($locations ?? []) as $location): ?>
-                                        <?php $locationId = (int) ($location['id'] ?? 0); ?>
-                                        <option value="<?= e((string) $locationId) ?>" <?= (string) ($distributionRouteFormData['loc_id'] ?? '') === (string) $locationId ? 'selected' : '' ?>>
-                                            <?= e((string) ($location['nume'] ?? '-')) ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <?php if (isset($distributionRouteFormErrors['loc_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionRouteFormErrors['loc_id']) ?></div><?php endif; ?>
+                        <div class="transport-distribution-panel transport-distribution-route-panel">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                                <h5 class="h6 mb-0">Configuratii rute Distributie</h5>
+                                <span class="text-muted small">Acest panel este folosit strict pentru cursele cu Tip Transport: Distributie.</span>
                             </div>
-
-                            <div class="col-12 col-xl-2">
-                                <label class="form-label" for="config_route_zona_id">Zona descarcare <span class="text-danger">*</span></label>
-                                <select class="form-select <?= isset($distributionRouteFormErrors['zona_id']) ? 'is-invalid' : '' ?>" id="config_route_zona_id" name="route_zona_id" required>
-                                    <option value="">Selecteaza zona de descarcare</option>
-                                    <?php foreach (($zones ?? []) as $zone): ?>
-                                        <?php $zoneId = (int) ($zone['id'] ?? 0); ?>
-                                        <option value="<?= e((string) $zoneId) ?>" <?= (string) ($distributionRouteFormData['zona_id'] ?? '') === (string) $zoneId ? 'selected' : '' ?>>
-                                            <?= e((string) ($zone['nume'] ?? '-')) ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <?php if (isset($distributionRouteFormErrors['zona_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionRouteFormErrors['zona_id']) ?></div><?php endif; ?>
-                            </div>
-
-                            <div class="col-12 col-md-6 col-xl-2">
-                                <label class="form-label" for="config_route_tarif_tona">Pret tona (RON) <span class="text-danger">*</span></label>
-                                <input type="number" class="form-control <?= isset($distributionRouteFormErrors['tarif_tona']) ? 'is-invalid' : '' ?>" id="config_route_tarif_tona" name="route_tarif_tona" min="0" step="0.01" value="<?= e((string) ($distributionRouteFormData['tarif_tona'] ?? '')) ?>" required>
-                                <?php if (isset($distributionRouteFormErrors['tarif_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionRouteFormErrors['tarif_tona']) ?></div><?php endif; ?>
-                            </div>
-
-                            <div class="col-12 col-md-6 col-xl-2">
-                                <label class="form-label" for="config_route_cost_extra_km">Pret km (RON) <span class="text-danger">*</span></label>
-                                <input type="number" class="form-control <?= isset($distributionRouteFormErrors['cost_extra_km']) ? 'is-invalid' : '' ?>" id="config_route_cost_extra_km" name="route_cost_extra_km" min="0" step="0.01" value="<?= e((string) ($distributionRouteFormData['cost_extra_km'] ?? '')) ?>" required>
-                                <?php if (isset($distributionRouteFormErrors['cost_extra_km'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionRouteFormErrors['cost_extra_km']) ?></div><?php endif; ?>
-                            </div>
-
-                            <div class="col-12 col-md-6 col-xl-2">
-                                <label class="form-label" for="config_route_km_tarifare">Km agreati <span class="text-danger">*</span></label>
-                                <input type="number" class="form-control <?= isset($distributionRouteFormErrors['km_tarifare']) ? 'is-invalid' : '' ?>" id="config_route_km_tarifare" name="route_km_tarifare" min="1" step="1" value="<?= e((string) ($distributionRouteFormData['km_tarifare'] ?? '')) ?>" required>
-                                <?php if (isset($distributionRouteFormErrors['km_tarifare'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionRouteFormErrors['km_tarifare']) ?></div><?php endif; ?>
-                            </div>
-
-                            <div class="col-12 col-md-6 col-xl-2">
-                                <label class="form-label" for="config_route_cost_cursa">Cost cursa (RON)</label>
-                                <input type="number" class="form-control <?= isset($distributionRouteFormErrors['cost_cursa']) ? 'is-invalid' : '' ?>" id="config_route_cost_cursa" name="route_cost_cursa" min="0" step="0.01" value="<?= e((string) ($distributionRouteFormData['cost_cursa'] ?? '')) ?>">
-                                <?php if (isset($distributionRouteFormErrors['cost_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionRouteFormErrors['cost_cursa']) ?></div><?php endif; ?>
-                            </div>
-
-                            <div class="col-12 col-xl-2">
-                                <label class="form-label" for="config_route_vehicle_ids_toggle">Vehicule <span class="text-danger">*</span></label>
-                                <div class="dropdown vehicle-multiselect-dropdown">
-                                    <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start vehicle-multiselect-toggle <?= isset($distributionRouteFormErrors['vehicle_ids']) ? 'is-invalid' : '' ?>" type="button" id="config_route_vehicle_ids_toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
-                                        <span class="vehicle-multiselect-label" data-default-label="-- Selecteaza vehiculele --"><?= e($routeVehicleButtonLabel) ?></span>
-                                    </button>
-                                    <div class="dropdown-menu w-100 p-2 vehicle-multiselect-menu" aria-labelledby="config_route_vehicle_ids_toggle">
-                                        <?php foreach (($vehicles ?? []) as $vehicle): ?>
-                                            <?php $vehicleId = (int) ($vehicle['id'] ?? 0); ?>
-                                            <?php $vehicleLabel = trim((string) ($vehicle['nr_inmatriculare'] ?? '-')) . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? '')); ?>
-                                            <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option">
-                                                <input class="form-check-input m-0" type="checkbox" name="route_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" <?= in_array((string) $vehicleId, $routeSelectedVehicleIds, true) ? 'checked' : '' ?>>
-                                                <span><?= e(trim($vehicleLabel)) ?></span>
-                                            </label>
+                            <?php if ($isDistributionOnlyRouteEditMode): ?>
+                                <div class="alert alert-info py-2 mb-3">Editezi o configuratie Distributie existenta.</div>
+                            <?php endif; ?>
+                            <div class="row g-3 align-items-end transport-distribution-route-grid">
+                                <div class="col-12 col-xl-2">
+                                    <label class="form-label" for="config_distribution_only_route_loc_id">Loc incarcare <span class="text-danger">*</span></label>
+                                    <select class="form-select <?= isset($distributionOnlyRouteFormErrors['loc_id']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_loc_id" name="route_loc_id" required>
+                                        <option value="">Selecteaza locatia de incarcare</option>
+                                        <?php foreach (($locations ?? []) as $location): ?>
+                                            <?php $locationId = (int) ($location['id'] ?? 0); ?>
+                                            <option value="<?= e((string) $locationId) ?>" <?= (string) ($distributionOnlyRouteFormData['loc_id'] ?? '') === (string) $locationId ? 'selected' : '' ?>>
+                                                <?= e((string) ($location['nume'] ?? '-')) ?>
+                                            </option>
                                         <?php endforeach; ?>
+                                    </select>
+                                    <?php if (isset($distributionOnlyRouteFormErrors['loc_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionOnlyRouteFormErrors['loc_id']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-xl-2">
+                                    <label class="form-label" for="config_distribution_only_route_zona_id">Zona descarcare <span class="text-danger">*</span></label>
+                                    <select class="form-select <?= isset($distributionOnlyRouteFormErrors['zona_id']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_zona_id" name="route_zona_id" required>
+                                        <option value="">Selecteaza zona de descarcare</option>
+                                        <?php foreach (($zones ?? []) as $zone): ?>
+                                            <?php $zoneId = (int) ($zone['id'] ?? 0); ?>
+                                            <option value="<?= e((string) $zoneId) ?>" <?= (string) ($distributionOnlyRouteFormData['zona_id'] ?? '') === (string) $zoneId ? 'selected' : '' ?>>
+                                                <?= e((string) ($zone['nume'] ?? '-')) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <?php if (isset($distributionOnlyRouteFormErrors['zona_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionOnlyRouteFormErrors['zona_id']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-md-6 col-xl-2">
+                                    <label class="form-label" for="config_distribution_only_route_tarif_mod">Tarife aplicate <span class="text-danger">*</span></label>
+                                    <select class="form-select <?= isset($distributionOnlyRouteFormErrors['tarif_mod']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_tarif_mod" name="route_tarif_mod" required>
+                                        <?php foreach ($distributionRouteTariffModeOptions as $tariffModeValue => $tariffModeLabel): ?>
+                                            <option value="<?= e((string) $tariffModeValue) ?>" <?= (string) ($distributionOnlyRouteFormData['tarif_mod'] ?? 'tona_km') === (string) $tariffModeValue ? 'selected' : '' ?>>
+                                                <?= e((string) $tariffModeLabel) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <?php if (isset($distributionOnlyRouteFormErrors['tarif_mod'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionOnlyRouteFormErrors['tarif_mod']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-md-6 col-xl-2">
+                                    <label class="form-label" for="config_distribution_only_route_tarif_tona">Pret tona (RON) <span class="text-danger">*</span></label>
+                                    <input type="number" class="form-control <?= isset($distributionOnlyRouteFormErrors['tarif_tona']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_tarif_tona" name="route_tarif_tona" min="0" step="0.01" value="<?= e((string) ($distributionOnlyRouteFormData['tarif_tona'] ?? '')) ?>">
+                                    <?php if (isset($distributionOnlyRouteFormErrors['tarif_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionOnlyRouteFormErrors['tarif_tona']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-md-6 col-xl-2">
+                                    <label class="form-label" for="config_distribution_only_route_cost_extra_km">Pret km (RON) <span class="text-danger">*</span></label>
+                                    <input type="number" class="form-control <?= isset($distributionOnlyRouteFormErrors['cost_extra_km']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_cost_extra_km" name="route_cost_extra_km" min="0" step="0.01" value="<?= e((string) ($distributionOnlyRouteFormData['cost_extra_km'] ?? '')) ?>">
+                                    <?php if (isset($distributionOnlyRouteFormErrors['cost_extra_km'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionOnlyRouteFormErrors['cost_extra_km']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-xl-2">
+                                    <label class="form-label" for="config_distribution_only_route_vehicle_ids_toggle">Vehicule <span class="text-danger">*</span></label>
+                                    <div class="dropdown vehicle-multiselect-dropdown">
+                                        <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start vehicle-multiselect-toggle <?= isset($distributionOnlyRouteFormErrors['vehicle_ids']) ? 'is-invalid' : '' ?>" type="button" id="config_distribution_only_route_vehicle_ids_toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+                                            <span class="vehicle-multiselect-label" data-default-label="-- Selecteaza vehiculele --"><?= e($distributionOnlyRouteVehicleButtonLabel) ?></span>
+                                        </button>
+                                        <div class="dropdown-menu w-100 p-2 vehicle-multiselect-menu" aria-labelledby="config_distribution_only_route_vehicle_ids_toggle">
+                                            <?php foreach (($vehicles ?? []) as $vehicle): ?>
+                                                <?php $vehicleId = (int) ($vehicle['id'] ?? 0); ?>
+                                                <?php $vehicleLabel = trim((string) ($vehicle['nr_inmatriculare'] ?? '-')) . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? '')); ?>
+                                                <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option">
+                                                    <input class="form-check-input m-0" type="checkbox" name="route_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" <?= in_array((string) $vehicleId, $distributionOnlyRouteSelectedVehicleIds, true) ? 'checked' : '' ?>>
+                                                    <span><?= e(trim($vehicleLabel)) ?></span>
+                                                </label>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                    <?php if (isset($distributionOnlyRouteFormErrors['vehicle_ids'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionOnlyRouteFormErrors['vehicle_ids']) ?></div><?php endif; ?>
+                                </div>
+                            </div>
+                            <?php if (isset($distributionOnlyRouteFormErrors['route_id'])): ?><div class="invalid-feedback d-block mt-2"><?= e((string) $distributionOnlyRouteFormErrors['route_id']) ?></div><?php endif; ?>
+
+                            <div class="mt-3 d-flex justify-content-end gap-2 transport-config-inline-actions">
+                                <?php if ($isDistributionOnlyRouteEditMode): ?>
+                                    <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId])) ?>">Renunta editarea</a>
+                                <?php endif; ?>
+                                <button type="submit" class="btn btn-primary" name="panel_action" value="add_route" <?= $canAddDistributionRoute ? '' : 'disabled' ?>>
+                                    <?= $isDistributionOnlyRouteEditMode ? 'Actualizeaza configuratia' : 'Adauga configuratie' ?>
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+
+                    <div class="transport-distribution-panel transport-distribution-route-panel mt-3" data-transport-card="distributie">
+                        <div class="transport-data-table-panel">
+                            <h5 class="h6 mb-3">Configuratii Distributie existente</h5>
+                            <div class="table-responsive transport-config-table-wrap transport-route-table-wrap">
+                                <table class="table table-sm align-middle mb-0 transport-config-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Loc incarcare</th>
+                                            <th>Zona descarcare</th>
+                                            <th>Tarife aplicate</th>
+                                            <th>Pret tona (RON)</th>
+                                            <th>Pret km (RON)</th>
+                                            <th>Vehicule</th>
+                                            <th class="text-end">Actiuni</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                    <?php if ($distributionOnlyRouteRules === []): ?>
+                                        <tr><td colspan="7" class="text-center text-muted py-3">Nu exista configuratii Distributie salvate pentru beneficiarul curent.</td></tr>
+                                    <?php else: ?>
+                                        <?php foreach ($distributionOnlyRouteRules as $routeRule): ?>
+                                            <?php
+                                            $routeId = (int) ($routeRule['id'] ?? 0);
+                                            $routeTariffMode = (string) ($routeRule['tarif_mod'] ?? 'tona_km');
+                                            if (!isset($distributionRouteTariffModeOptions[$routeTariffMode])) {
+                                                $routeTariffMode = 'tona_km';
+                                            }
+                                            $routeUsesTonTariff = in_array($routeTariffMode, ['tona_km', 'tona'], true);
+                                            $routeUsesKmTariff = in_array($routeTariffMode, ['tona_km', 'km'], true);
+                                            $routeVehicleLabels = [];
+                                            $routeVehicleIdsRaw = trim((string) ($routeRule['vehicle_ids'] ?? ''));
+                                            if ($routeVehicleIdsRaw !== '') {
+                                                foreach (explode(',', $routeVehicleIdsRaw) as $routeVehicleIdRaw) {
+                                                    $routeVehicleIdRaw = trim($routeVehicleIdRaw);
+                                                    if ($routeVehicleIdRaw === '' || !ctype_digit($routeVehicleIdRaw)) {
+                                                        continue;
+                                                    }
+
+                                                    $routeVehicleId = (int) $routeVehicleIdRaw;
+                                                    if ($routeVehicleId > 0 && isset($vehicleLabelById[$routeVehicleId])) {
+                                                        $routeVehicleLabels[] = $vehicleLabelById[$routeVehicleId];
+                                                    } elseif ($routeVehicleId > 0) {
+                                                        $routeVehicleLabels[] = 'Vehicul #' . $routeVehicleId;
+                                                    }
+                                                }
+                                            }
+                                            $routeVehicleText = $routeVehicleLabels !== [] ? implode(', ', array_values(array_unique($routeVehicleLabels))) : '-';
+                                            ?>
+                                            <tr>
+                                                <td><?= e((string) ($routeRule['loc_nume'] ?? '-')) ?></td>
+                                                <td><?= e((string) ($routeRule['zona_nume'] ?? '-')) ?></td>
+                                                <td><?= e((string) $distributionRouteTariffModeOptions[$routeTariffMode]) ?></td>
+                                                <td><?= $routeUsesTonTariff ? e(format_number_ro((float) ($routeRule['tarif_tona'] ?? 0), 2)) : '-' ?></td>
+                                                <td><?= $routeUsesKmTariff ? e(format_number_ro((float) ($routeRule['cost_extra_km'] ?? 0), 2)) : '-' ?></td>
+                                                <td><span class="dispatcher-cell-text" title="<?= e($routeVehicleText) ?>"><?= e($routeVehicleText) ?></span></td>
+                                                <td class="text-end">
+                                                    <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_distributie_edit_id' => $routeId])) ?>">Editeaza</a>
+                                                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_ruta'])) ?>" class="d-inline ms-1">
+                                                        <?= csrf_field() ?>
+                                                        <input type="hidden" name="id" value="<?= e((string) $routeId) ?>">
+                                                        <input type="hidden" name="beneficiar_id" value="<?= e((string) $distributionBeneficiaryId) ?>">
+                                                        <input type="hidden" name="route_scope" value="distributie">
+                                                        <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur doresti sa stergi aceasta configuratie Distributie?">Sterge</button>
+                                                    </form>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    <?php endif; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                <?php endif; ?>
+
+                <?php if ($isPrimaryDistributionSelected): ?>
+                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_store_distributie'])) ?>" novalidate class="mt-3 transport-route-form" data-transport-card="primar_distributie">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="beneficiar_id" value="<?= e((string) $distributionBeneficiaryId) ?>">
+                        <input type="hidden" name="route_scope" value="primar_distributie">
+                        <input type="hidden" name="route_id" value="<?= e((string) ($primaryDistributionRouteFormData['route_id'] ?? '')) ?>">
+
+                        <div class="transport-distribution-panel transport-distribution-route-panel">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                                <h5 class="h6 mb-0">Configuratii rute Primar+Distributie</h5>
+                                <span class="text-muted small">Acest panel este folosit strict pentru cursele cu Tip Transport: Primar+Distributie.</span>
+                            </div>
+                            <?php if ($isPrimaryDistributionRouteEditMode): ?>
+                                <div class="alert alert-info py-2 mb-3">Editezi o configuratie Primar+Distributie existenta.</div>
+                            <?php endif; ?>
+                            <div class="row g-3 align-items-end transport-distribution-route-grid">
+                                <div class="col-12 col-xl-2">
+                                    <label class="form-label" for="config_primary_distribution_route_loc_id">Loc incarcare <span class="text-danger">*</span></label>
+                                    <select class="form-select <?= isset($primaryDistributionRouteFormErrors['loc_id']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_loc_id" name="route_loc_id" required>
+                                        <option value="">Selecteaza locatia de incarcare</option>
+                                        <?php foreach (($locations ?? []) as $location): ?>
+                                            <?php $locationId = (int) ($location['id'] ?? 0); ?>
+                                            <option value="<?= e((string) $locationId) ?>" <?= (string) ($primaryDistributionRouteFormData['loc_id'] ?? '') === (string) $locationId ? 'selected' : '' ?>>
+                                                <?= e((string) ($location['nume'] ?? '-')) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <?php if (isset($primaryDistributionRouteFormErrors['loc_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['loc_id']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-xl-2">
+                                    <label class="form-label" for="config_primary_distribution_route_zona_id">Zona descarcare <span class="text-danger">*</span></label>
+                                    <select class="form-select <?= isset($primaryDistributionRouteFormErrors['zona_id']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_zona_id" name="route_zona_id" required>
+                                        <option value="">Selecteaza zona de descarcare</option>
+                                        <?php foreach (($zones ?? []) as $zone): ?>
+                                            <?php $zoneId = (int) ($zone['id'] ?? 0); ?>
+                                            <option value="<?= e((string) $zoneId) ?>" <?= (string) ($primaryDistributionRouteFormData['zona_id'] ?? '') === (string) $zoneId ? 'selected' : '' ?>>
+                                                <?= e((string) ($zone['nume'] ?? '-')) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <?php if (isset($primaryDistributionRouteFormErrors['zona_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['zona_id']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-md-6 col-xl-2">
+                                    <label class="form-label" for="config_primary_distribution_route_tarif_tona">Pret tona (RON) <span class="text-danger">*</span></label>
+                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['tarif_tona']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_tarif_tona" name="route_tarif_tona" min="0" step="0.01" value="<?= e((string) ($primaryDistributionRouteFormData['tarif_tona'] ?? '')) ?>" required>
+                                    <?php if (isset($primaryDistributionRouteFormErrors['tarif_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['tarif_tona']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-md-6 col-xl-2">
+                                    <label class="form-label" for="config_primary_distribution_route_cost_extra_km">Pret km (RON) <span class="text-danger">*</span></label>
+                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['cost_extra_km']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_cost_extra_km" name="route_cost_extra_km" min="0" step="0.01" value="<?= e((string) ($primaryDistributionRouteFormData['cost_extra_km'] ?? '')) ?>" required>
+                                    <?php if (isset($primaryDistributionRouteFormErrors['cost_extra_km'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['cost_extra_km']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-md-6 col-xl-2">
+                                    <label class="form-label" for="config_primary_distribution_route_km_tarifare">Km agreati <span class="text-danger">*</span></label>
+                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['km_tarifare']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_km_tarifare" name="route_km_tarifare" min="1" step="1" value="<?= e((string) ($primaryDistributionRouteFormData['km_tarifare'] ?? '')) ?>" required>
+                                    <?php if (isset($primaryDistributionRouteFormErrors['km_tarifare'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['km_tarifare']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-md-6 col-xl-2">
+                                    <label class="form-label" for="config_primary_distribution_route_cost_cursa">Cost cursa (RON)</label>
+                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['cost_cursa']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_cost_cursa" name="route_cost_cursa" min="0" step="0.01" value="<?= e((string) ($primaryDistributionRouteFormData['cost_cursa'] ?? '')) ?>">
+                                    <?php if (isset($primaryDistributionRouteFormErrors['cost_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['cost_cursa']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-xl-2">
+                                    <label class="form-label" for="config_primary_distribution_route_vehicle_ids_toggle">Vehicule <span class="text-danger">*</span></label>
+                                    <div class="dropdown vehicle-multiselect-dropdown">
+                                        <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start vehicle-multiselect-toggle <?= isset($primaryDistributionRouteFormErrors['vehicle_ids']) ? 'is-invalid' : '' ?>" type="button" id="config_primary_distribution_route_vehicle_ids_toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+                                            <span class="vehicle-multiselect-label" data-default-label="-- Selecteaza vehiculele --"><?= e($primaryDistributionRouteVehicleButtonLabel) ?></span>
+                                        </button>
+                                        <div class="dropdown-menu w-100 p-2 vehicle-multiselect-menu" aria-labelledby="config_primary_distribution_route_vehicle_ids_toggle">
+                                            <?php foreach (($vehicles ?? []) as $vehicle): ?>
+                                                <?php $vehicleId = (int) ($vehicle['id'] ?? 0); ?>
+                                                <?php $vehicleLabel = trim((string) ($vehicle['nr_inmatriculare'] ?? '-')) . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? '')); ?>
+                                                <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option">
+                                                    <input class="form-check-input m-0" type="checkbox" name="route_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" <?= in_array((string) $vehicleId, $primaryDistributionRouteSelectedVehicleIds, true) ? 'checked' : '' ?>>
+                                                    <span><?= e(trim($vehicleLabel)) ?></span>
+                                                </label>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                    <?php if (isset($primaryDistributionRouteFormErrors['vehicle_ids'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['vehicle_ids']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-xl-2">
+                                    <label class="form-label d-block">Aplicare Cost Cursa</label>
+                                    <div class="form-check form-switch mt-2">
+                                        <input class="form-check-input" type="checkbox" role="switch" id="config_primary_distribution_route_aplica_cost_cursa" name="route_aplica_cost_cursa" value="1" <?= (string) ($primaryDistributionRouteFormData['aplica_cost_cursa'] ?? '0') === '1' ? 'checked' : '' ?>>
+                                        <label class="form-check-label" for="config_primary_distribution_route_aplica_cost_cursa">Aplica doar pe aceasta ruta</label>
                                     </div>
                                 </div>
-                                <?php if (isset($distributionRouteFormErrors['vehicle_ids'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionRouteFormErrors['vehicle_ids']) ?></div><?php endif; ?>
                             </div>
+                            <?php if (isset($primaryDistributionRouteFormErrors['route_id'])): ?><div class="invalid-feedback d-block mt-2"><?= e((string) $primaryDistributionRouteFormErrors['route_id']) ?></div><?php endif; ?>
 
-                            <div class="col-12 col-xl-2">
-                                <label class="form-label d-block">Aplicare Cost Cursa</label>
-                                <div class="form-check form-switch mt-2">
-                                    <input class="form-check-input" type="checkbox" role="switch" id="config_route_aplica_cost_cursa" name="route_aplica_cost_cursa" value="1" <?= (string) ($distributionRouteFormData['aplica_cost_cursa'] ?? '0') === '1' ? 'checked' : '' ?>>
-                                    <label class="form-check-label" for="config_route_aplica_cost_cursa">Aplica doar pe aceasta ruta</label>
-                                </div>
+                            <div class="mt-3 d-flex justify-content-end gap-2 transport-config-inline-actions">
+                                <?php if ($isPrimaryDistributionRouteEditMode): ?>
+                                    <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId])) ?>">Renunta editarea</a>
+                                <?php endif; ?>
+                                <button type="submit" class="btn btn-primary" name="panel_action" value="add_route" <?= $canAddDistributionRoute ? '' : 'disabled' ?>>
+                                    <?= $isPrimaryDistributionRouteEditMode ? 'Actualizeaza configuratia' : 'Adauga configuratie' ?>
+                                </button>
                             </div>
                         </div>
-                        <?php if (isset($distributionRouteFormErrors['route_id'])): ?><div class="invalid-feedback d-block mt-2"><?= e((string) $distributionRouteFormErrors['route_id']) ?></div><?php endif; ?>
+                    </form>
 
-                        <div class="mt-3 d-flex justify-content-end gap-2 transport-config-inline-actions">
-                            <?php if ($isRouteEditMode): ?>
-                                <a
-                                    class="btn btn-outline-secondary"
-                                    href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId])) ?>"
-                                >
-                                    Renunta editarea
-                                </a>
-                            <?php endif; ?>
-                            <button type="submit" class="btn btn-primary" name="panel_action" value="add_route" <?= $canAddDistributionRoute ? '' : 'disabled' ?>>
-                                <?= $isRouteEditMode ? 'Actualizeaza configuratia' : 'Adauga configuratie' ?>
-                            </button>
-                        </div>
-
-                        <div class="mt-4 transport-data-table-panel">
-                            <h5 class="h6 mb-3">Configuratii existente</h5>
+                    <div class="transport-distribution-panel transport-distribution-route-panel mt-3" data-transport-card="primar_distributie">
+                        <div class="transport-data-table-panel">
+                            <h5 class="h6 mb-3">Configuratii Primar+Distributie existente</h5>
                             <div class="table-responsive transport-config-table-wrap transport-route-table-wrap">
                                 <table class="table table-sm align-middle mb-0 transport-config-table">
                                     <thead>
@@ -481,10 +667,10 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                                         </tr>
                                     </thead>
                                     <tbody>
-                                    <?php if (($distributionRouteRules ?? []) === []): ?>
-                                        <tr><td colspan="9" class="text-center text-muted py-3">Nu exista configuratii salvate pentru beneficiarul curent.</td></tr>
+                                    <?php if ($primaryDistributionRouteRules === []): ?>
+                                        <tr><td colspan="9" class="text-center text-muted py-3">Nu exista configuratii Primar+Distributie salvate pentru beneficiarul curent.</td></tr>
                                     <?php else: ?>
-                                        <?php foreach (($distributionRouteRules ?? []) as $routeRule): ?>
+                                        <?php foreach ($primaryDistributionRouteRules as $routeRule): ?>
                                             <?php
                                             $routeId = (int) ($routeRule['id'] ?? 0);
                                             $routeVehicleLabels = [];
@@ -516,17 +702,13 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                                                 <td><?= !empty($routeRule['aplica_cost_cursa']) ? 'Da' : 'Nu' ?></td>
                                                 <td><span class="dispatcher-cell-text" title="<?= e($routeVehicleText) ?>"><?= e($routeVehicleText) ?></span></td>
                                                 <td class="text-end">
-                                                    <a
-                                                        class="btn btn-sm btn-outline-primary"
-                                                        href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_edit_id' => $routeId])) ?>"
-                                                    >
-                                                        Editeaza
-                                                    </a>
+                                                    <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_primar_distributie_edit_id' => $routeId])) ?>">Editeaza</a>
                                                     <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_ruta'])) ?>" class="d-inline ms-1">
                                                         <?= csrf_field() ?>
                                                         <input type="hidden" name="id" value="<?= e((string) $routeId) ?>">
                                                         <input type="hidden" name="beneficiar_id" value="<?= e((string) $distributionBeneficiaryId) ?>">
-                                                        <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur doresti sa stergi aceasta configuratie?">Sterge</button>
+                                                        <input type="hidden" name="route_scope" value="primar_distributie">
+                                                        <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur doresti sa stergi aceasta configuratie Primar+Distributie?">Sterge</button>
                                                     </form>
                                                 </td>
                                             </tr>
@@ -536,10 +718,8 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                                 </table>
                             </div>
                         </div>
-
                     </div>
-                    </form>
-                <?php endif; ?>
+                    <?php endif; ?>
             <?php endif; ?>
         </section>
 
@@ -725,6 +905,7 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                             $transportModes = [];
                             if (!empty($beneficiary['suporta_primar'])) { $transportModes[] = 'Primar'; }
                             if (!empty($beneficiary['suporta_distributie'])) { $transportModes[] = 'Distributie'; }
+                            if (!empty($beneficiary['suporta_primar_distributie'])) { $transportModes[] = 'Primar+Distributie'; }
                             if (!empty($beneficiary['suporta_compresor'])) { $transportModes[] = 'Compresor'; }
                             if ($transportModes === []) { $transportModes[] = '-'; }
                             $beneficiaryName = (string) ($beneficiary['nume'] ?? '-');
@@ -809,12 +990,16 @@ document.addEventListener('DOMContentLoaded', function () {
         const label = transportTypeDropdown.querySelector('.transport-multiselect-label');
         const defaultLabel = label ? (label.getAttribute('data-default-label') || '-- Selecteaza --') : '-- Selecteaza --';
         const selectedLabels = [];
+        const selectedTypes = new Set();
 
         checkboxes.forEach(function (checkbox) {
             if (!(checkbox instanceof HTMLInputElement)) {
                 return;
             }
             const typeKey = String(checkbox.value || '');
+            if (checkbox.checked) {
+                selectedTypes.add(typeKey);
+            }
             const cards = document.querySelectorAll('[data-transport-card="' + typeKey + '"]');
             cards.forEach(function (card) {
                 card.hidden = !checkbox.checked;
@@ -832,12 +1017,19 @@ document.addEventListener('DOMContentLoaded', function () {
                 return false;
             }
             const typeKey = String(checkbox.value || '');
-            return typeKey === 'primar' || typeKey === 'distributie';
+            return typeKey === 'primar' || typeKey === 'distributie' || typeKey === 'primar_distributie';
         });
         const catalogCards = document.querySelectorAll('[data-transport-card="catalog"]');
         catalogCards.forEach(function (card) {
             card.hidden = !showCatalogCard;
             setCardControlsEnabled(card, showCatalogCard);
+        });
+
+        const showPrimaryDistributionCard = selectedTypes.has('primar_distributie');
+        const primaryDistributionCards = document.querySelectorAll('[data-transport-card="primar_distributie"]');
+        primaryDistributionCards.forEach(function (card) {
+            card.hidden = !showPrimaryDistributionCard;
+            setCardControlsEnabled(card, showPrimaryDistributionCard);
         });
 
         if (label) {
@@ -850,6 +1042,32 @@ document.addEventListener('DOMContentLoaded', function () {
             checkbox.addEventListener('change', updateTransportTypeCards);
         });
         updateTransportTypeCards();
+    }
+
+    const distributionTariffModeSelect = document.getElementById('config_distribution_only_route_tarif_mod');
+    const distributionTonInput = document.getElementById('config_distribution_only_route_tarif_tona');
+    const distributionKmInput = document.getElementById('config_distribution_only_route_cost_extra_km');
+    const updateDistributionTariffInputs = function () {
+        if (!(distributionTariffModeSelect instanceof HTMLSelectElement)) {
+            return;
+        }
+
+        const mode = distributionTariffModeSelect.value || 'tona_km';
+        const usesTon = mode === 'tona_km' || mode === 'tona';
+        const usesKm = mode === 'tona_km' || mode === 'km';
+        if (distributionTonInput instanceof HTMLInputElement) {
+            distributionTonInput.required = usesTon;
+            distributionTonInput.disabled = !usesTon;
+        }
+        if (distributionKmInput instanceof HTMLInputElement) {
+            distributionKmInput.required = usesKm;
+            distributionKmInput.disabled = !usesKm;
+        }
+    };
+
+    if (distributionTariffModeSelect) {
+        distributionTariffModeSelect.addEventListener('change', updateDistributionTariffInputs);
+        updateDistributionTariffInputs();
     }
 
     const primarTonField = document.getElementById('config_primar_pret_tona');

@@ -167,12 +167,14 @@ $modules['documente']['filters']['stare_expirare'] = [
         'expira_7_zile' => 'Expira in 7 zile',
         'expira_30_zile' => 'Expira in 30 zile',
         'valabile' => 'Valabile peste 30 zile',
+        'fara_expirare' => 'Fara expirare',
     ],
     'custom_conditions' => [
         'expirate' => ['sql' => 't.data_expirare < CURDATE()'],
         'expira_7_zile' => ['sql' => 't.data_expirare BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)'],
         'expira_30_zile' => ['sql' => 't.data_expirare BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)'],
         'valabile' => ['sql' => 't.data_expirare > DATE_ADD(CURDATE(), INTERVAL 30 DAY)'],
+        'fara_expirare' => ['sql' => 't.data_expirare IS NULL'],
     ],
 ];
 
@@ -198,13 +200,18 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/models/BaseModel.php';
 require_once __DIR__ . '/models/UserModel.php';
 require_once __DIR__ . '/models/LoginEmailCodeModel.php';
+require_once __DIR__ . '/models/NotificationDeliveryModel.php';
 require_once __DIR__ . '/models/ModuleModel.php';
 require_once __DIR__ . '/models/VehicleCouplingModel.php';
 require_once __DIR__ . '/models/TireModel.php';
 require_once __DIR__ . '/models/DashboardModel.php';
 require_once __DIR__ . '/models/DocumentModel.php';
+require_once __DIR__ . '/models/VehicleEquipmentInventoryModel.php';
 require_once __DIR__ . '/models/DispecerCurseModel.php';
 require_once __DIR__ . '/models/ProgramareConcediiModel.php';
+require_once __DIR__ . '/models/NotificationRuleModel.php';
+require_once __DIR__ . '/models/StaffAccountancyModel.php';
+require_once __DIR__ . '/models/OfficeExpenseModel.php';
 
 require_once __DIR__ . '/services/EntityStatusService.php';
 require_once __DIR__ . '/services/EmailService.php';
@@ -213,10 +220,14 @@ require_once __DIR__ . '/controllers/AuthController.php';
 require_once __DIR__ . '/controllers/DashboardController.php';
 require_once __DIR__ . '/controllers/DashboardAnaliticController.php';
 require_once __DIR__ . '/controllers/ModuleController.php';
+require_once __DIR__ . '/controllers/VehicleEquipmentInventoryController.php';
 require_once __DIR__ . '/controllers/ProfileController.php';
 require_once __DIR__ . '/controllers/DispecerCurseController.php';
 require_once __DIR__ . '/controllers/CentralizatorFacturareController.php';
 require_once __DIR__ . '/controllers/ProgramareConcediiController.php';
+require_once __DIR__ . '/controllers/NotificationRuleController.php';
+require_once __DIR__ . '/controllers/StaffAccountancyController.php';
+require_once __DIR__ . '/controllers/OfficeExpenseController.php';
 
 $db = get_pdo();
 
@@ -226,7 +237,7 @@ $page = $_GET['page'] ?? (is_logged_in() ? 'dashboard' : 'login');
 $action = $_GET['action'] ?? 'index';
 
 try {
-    if (!is_logged_in() && !in_array($page, ['login'], true)) {
+    if (!is_logged_in() && $page !== 'login') {
         flash_set('warning', "Te rug\u{0103}m s\u{0103} te autentifici pentru a continua.");
         redirect(url('index.php?page=login'));
     }
@@ -291,9 +302,16 @@ try {
         case 'mentenanta':
         case 'documente':
         case 'documente_soferi':
+        case 'configurare_costuri_documente_vehicule_override':
+        case 'configurare_costuri_documente_soferi':
         case 'utilizatori':
             require_auth();
             (new ModuleController($db, $modules))->handle($page, $action);
+            break;
+
+        case 'inventar_dotari_vehicule':
+            require_auth();
+            (new VehicleEquipmentInventoryController($db))->handle($action);
             break;
 
         case 'dispecer_curse':
@@ -309,6 +327,21 @@ try {
         case 'programare_concedii':
             require_auth();
             (new ProgramareConcediiController($db))->handle($action);
+            break;
+
+        case 'contabilitate_personal':
+            require_auth();
+            (new StaffAccountancyController($db))->handle($action);
+            break;
+
+        case 'cheltuieli_birou':
+            require_auth();
+            (new OfficeExpenseController($db))->handle($action);
+            break;
+
+        case 'notificari':
+            require_auth();
+            (new NotificationRuleController($db))->handle($action);
             break;
 
         default:

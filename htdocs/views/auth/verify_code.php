@@ -5,6 +5,38 @@
             Am trimis un cod din 6 cifre la <strong><?= e((string) ($emailMasked ?? '')) ?></strong>.
         </p>
 
+        <?php if (!(bool) ($deliverySent ?? true)): ?>
+            <div class="alert alert-warning" role="alert">
+                <div class="fw-semibold mb-1">Emailul nu a fost acceptat de serverul SMTP.</div>
+
+                <?php if ((string) ($localFallbackCode ?? '') !== ''): ?>
+                    <div class="mb-2">
+                        Pentru modul local, foloseste codul:
+                        <code class="fs-5"><?= e((string) $localFallbackCode) ?></code>
+                    </div>
+                <?php endif; ?>
+
+                <div class="small">
+                    Furnizor: <?= e((string) ($deliveryProvider ?? 'smtp')) ?>
+                    <?php if ((int) ($deliveryLogId ?? 0) > 0): ?>
+                        - log #<?= e((string) (int) $deliveryLogId) ?>
+                    <?php endif; ?>
+                </div>
+
+                <?php if ((string) ($deliveryError ?? '') !== ''): ?>
+                    <div class="small mt-1">Eroare: <?= e((string) $deliveryError) ?></div>
+                <?php endif; ?>
+
+                <?php if (!empty($deliveryWarnings)): ?>
+                    <ul class="small mb-0 mt-2 ps-3">
+                        <?php foreach ((array) $deliveryWarnings as $warning): ?>
+                            <li><?= e((string) $warning) ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
+
         <form method="post" action="<?= e(build_query_url(['page' => 'login', 'action' => 'verify_code'])) ?>" novalidate>
             <?= csrf_field() ?>
             <div class="mb-3">

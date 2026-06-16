@@ -61,6 +61,11 @@ class DashboardAnaliticController
             $this->sendJson($payload);
         } catch (Throwable $exception) {
             error_log('[DashboardAnaliticController][data] ' . $exception->getMessage());
+            $fallbackDateRaw = (string) ($filters['date_start'] ?? $filters['date_end'] ?? '');
+            $fallbackDate = DateTimeImmutable::createFromFormat('Y-m-d', $fallbackDateRaw);
+            if (!$fallbackDate || $fallbackDate->format('Y-m-d') !== $fallbackDateRaw) {
+                $fallbackDate = new DateTimeImmutable('today');
+            }
 
             http_response_code(500);
             $this->sendJson([
@@ -68,14 +73,28 @@ class DashboardAnaliticController
                     'total_curse' => 0,
                     'total_facturare' => 0,
                     'total_refacturare' => 0,
+                    'total_incasare' => 0,
                     'total_cheltuieli' => 0,
                     'profit_total' => 0,
                     'total_km' => 0,
+                    'km_primar' => 0,
+                    'km_distributie' => 0,
                     'tone_livrate' => 0,
+                    'tone_primar' => 0,
+                    'tone_distributie' => 0,
                     'profit_km' => 0,
+                    'venit_tona' => 0,
+                    'km_tona' => 0,
+                    'tona_km' => 0,
                     'grad_incarcare_mediu' => 0,
                     'km_nefacturati' => 0,
                     'km_facturati' => 0,
+                    'grad_utilizare_flota_percent' => 0,
+                    'total_zile_active' => 0,
+                    'total_zile_disponibile' => 0,
+                    'numar_vehicule_active' => 0,
+                    'luna_selectata' => (int) $fallbackDate->format('n'),
+                    'an_selectat' => (int) $fallbackDate->format('Y'),
                 ],
                 'vehicles' => [],
                 'drivers' => [],

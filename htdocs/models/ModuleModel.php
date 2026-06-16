@@ -424,7 +424,7 @@ class ModuleModel extends BaseModel
             FROM vehicule
             WHERE id = :vehicle_id
               AND status = 'activ'
-              AND tip_vehicul <> 'semiremorca'
+              AND tip_vehicul NOT IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')
         ";
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);

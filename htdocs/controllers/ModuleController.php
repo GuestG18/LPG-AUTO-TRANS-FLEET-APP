@@ -44,6 +44,9 @@ class ModuleController
             case 'list':
                 $this->indexAction($moduleKey, $module);
                 return;
+            case 'tire_stock':
+                $this->maintenanceTireStockAction($moduleKey, $module);
+                return;
             case 'create':
                 $this->createAction($moduleKey, $module);
                 return;
@@ -85,6 +88,42 @@ class ModuleController
                 return;
             case 'delete_tire_stock':
                 $this->deleteMaintenanceTireStockAction($moduleKey, $module);
+                return;
+            case 'add_document_type_config':
+                $this->addDocumentTypeConfigAction($moduleKey, $module);
+                return;
+            case 'manage_document_type_config':
+                $this->manageDocumentTypeConfigAction($moduleKey, $module);
+                return;
+            case 'update_document_type_expiry':
+                $this->updateDocumentTypeExpiryAction($moduleKey, $module);
+                return;
+            case 'delete_document_type_config':
+                $this->deleteDocumentTypeConfigAction($moduleKey, $module);
+                return;
+            case 'add_document_custom_field_config':
+                $this->addDocumentCustomFieldConfigAction($moduleKey, $module);
+                return;
+            case 'delete_document_custom_field_config':
+                $this->deleteDocumentCustomFieldConfigAction($moduleKey, $module);
+                return;
+            case 'add_driver_document_type_config':
+                $this->addDriverDocumentTypeConfigAction($moduleKey, $module);
+                return;
+            case 'manage_driver_document_type_config':
+                $this->manageDriverDocumentTypeConfigAction($moduleKey, $module);
+                return;
+            case 'update_driver_document_type_expiry':
+                $this->updateDriverDocumentTypeExpiryAction($moduleKey, $module);
+                return;
+            case 'delete_driver_document_type_config':
+                $this->deleteDriverDocumentTypeConfigAction($moduleKey, $module);
+                return;
+            case 'add_driver_document_custom_field_config':
+                $this->addDriverDocumentCustomFieldConfigAction($moduleKey, $module);
+                return;
+            case 'delete_driver_document_custom_field_config':
+                $this->deleteDriverDocumentCustomFieldConfigAction($moduleKey, $module);
                 return;
             case 'delete':
                 $this->deleteAction($moduleKey, $module);
@@ -169,15 +208,22 @@ class ModuleController
             $vehicleId = $this->extractVehicleIdFromFilters($filters);
             $viewData['documentSummary'] = $this->documentModel->getNotificationSummary($vehicleId);
             $viewData['urgentDocuments'] = $this->documentModel->getUrgentDocuments($vehicleId, 5);
-        }
 
-        if ($moduleKey === 'mentenanta') {
-            try {
-                $viewData['maintenanceTireStockContext'] = $this->tireModel->buildMaintenanceStockContext();
-            } catch (Throwable $exception) {
-                error_log('[ModuleController][mentenanta][tire-stock-context] ' . $exception->getMessage());
-                flash_set('warning', 'Modulul de stoc anvelope necesita actualizare baza de date. Ruleaza scripturile database/update_tire_stock_target_type.sql si database/update_tire_maintenance_link.sql.');
-                $viewData['maintenanceTireStockContext'] = null;
+            $driverDocumentModule = $this->modules['documente_soferi'] ?? null;
+            if (is_array($driverDocumentModule)) {
+                $driverDocumentModule = $this->buildDocumentPageDriverModule($driverDocumentModule);
+                $driverDocumentFilters = $this->collectFilters($driverDocumentModule);
+                $driverDocumentPage = max(1, (int) ($_GET['driver_p'] ?? 1));
+                $driverDocumentResult = $this->moduleModel->getPaginated($driverDocumentModule, $search, $driverDocumentFilters, $driverDocumentPage, ITEMS_PER_PAGE);
+
+                $viewData['driverDocumentModule'] = $driverDocumentModule;
+                $viewData['driverDocumentRows'] = $driverDocumentResult['rows'];
+                $viewData['driverDocumentPagination'] = [
+                    'page' => $driverDocumentResult['page'],
+                    'total_pages' => $driverDocumentResult['total_pages'],
+                    'total_rows' => $driverDocumentResult['total_rows'],
+                    'per_page' => ITEMS_PER_PAGE,
+                ];
             }
         }
 
@@ -186,7 +232,87 @@ class ModuleController
             $viewData['fuelConsumptionSummary'] = $this->buildFuelConsumptionSummary($allRows);
         }
 
+        if ($moduleKey === 'configurare_costuri_documente_vehicule_override') {
+            $viewData['documentTypeVehicleOptions'] = $this->getDocumentTypeVehicleOptions();
+            $driverCostModule = $this->modules['configurare_costuri_documente_soferi'] ?? null;
+            if (is_array($driverCostModule)) {
+                try {
+                    $driverCostModule = $this->buildDocumentCostPageDriverModule($driverCostModule);
+                    $driverCostFilters = $this->collectFilters($driverCostModule);
+                    $driverCostPage = max(1, (int) ($_GET['driver_cost_p'] ?? 1));
+                    $driverCostResult = $this->moduleModel->getPaginated($driverCostModule, $search, $driverCostFilters, $driverCostPage, ITEMS_PER_PAGE);
+
+                    $viewData['driverDocumentCostModule'] = $driverCostModule;
+                    $viewData['driverDocumentCostRows'] = $this->applyRemainingValidityDaysToDriverCostRows(
+                        $driverCostResult['rows']
+                    );
+                    $viewData['driverDocumentCostPagination'] = [
+                        'page' => $driverCostResult['page'],
+                        'total_pages' => $driverCostResult['total_pages'],
+                        'total_rows' => $driverCostResult['total_rows'],
+                        'per_page' => ITEMS_PER_PAGE,
+                    ];
+                } catch (Throwable $exception) {
+                    error_log('[ModuleController][driver-doc-cost-list] ' . $exception->getMessage());
+                    $viewData['driverDocumentCostModule'] = $driverCostModule;
+                    $viewData['driverDocumentCostRows'] = [];
+                    $viewData['driverDocumentCostPagination'] = [
+                        'page' => 1,
+                        'total_pages' => 1,
+                        'total_rows' => 0,
+                        'per_page' => ITEMS_PER_PAGE,
+                    ];
+                    flash_set('warning', 'Configurarea costurilor pentru documentele soferilor necesita actualizare baza de date. Ruleaza scriptul database/update_configurare_costuri_documente_soferi.sql.');
+                }
+            }
+        }
+
         render('module/list.php', $viewData);
+    }
+
+    private function maintenanceTireStockAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'mentenanta') {
+            redirect(build_query_url(['page' => 'mentenanta']));
+        }
+
+        try {
+            if ($this->tireModel->hasMaintenanceSyncGaps()) {
+                $this->tireModel->syncTireMaintenanceEntries();
+            }
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][mentenanta][tire-stock-sync] ' . $exception->getMessage());
+        }
+
+        $stockContext = null;
+        try {
+            $stockContext = $this->tireModel->buildMaintenanceStockContext();
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][mentenanta][tire-stock-context] ' . $exception->getMessage());
+            flash_set('warning', 'Modulul de stoc anvelope necesita actualizare baza de date. Ruleaza scripturile database/update_tire_stock_target_type.sql si database/update_tire_maintenance_link.sql.');
+        }
+
+        $stockModule = $module;
+        $stockModule['title'] = 'Stoc anvelope in Mentenanta';
+
+        render('module/list.php', [
+            'pageTitle' => 'Stoc anvelope in Mentenanta',
+            'currentPage' => $this->resolveCurrentPage($moduleKey, $module),
+            'moduleKey' => $moduleKey,
+            'module' => $stockModule,
+            'rows' => [],
+            'search' => '',
+            'filters' => [],
+            'filterOptions' => [],
+            'pagination' => [
+                'page' => 1,
+                'total_pages' => 1,
+                'total_rows' => 0,
+                'per_page' => ITEMS_PER_PAGE,
+            ],
+            'maintenanceTireStockContext' => $stockContext,
+            'isMaintenanceTireStockPage' => true,
+        ]);
     }
 
     private function createAction(string $moduleKey, array $module): void
@@ -196,9 +322,34 @@ class ModuleController
         $errors = $formFlash['errors'];
         $currentPage = $this->resolveCurrentPage($moduleKey, $module);
         $keepDocumentVehicleContext = false;
+        $vehicleDocumentCustomFieldErrors = [];
+        $driverDocumentCustomFieldErrors = [];
 
         $formData = $old !== [] ? $old : $this->defaultFormData($module);
         $backUrl = $this->buildModuleBackUrl($moduleKey, $module, null, $formData);
+
+        if ($moduleKey === 'documente') {
+            $vehicleDocumentCustomFieldErrors = is_array($errors['_vehicle_custom_fields'] ?? null)
+                ? $errors['_vehicle_custom_fields']
+                : [];
+            unset($errors['_vehicle_custom_fields']);
+        }
+
+        if ($moduleKey === 'documente_soferi') {
+            $driverDocumentCustomFieldErrors = is_array($errors['_driver_custom_fields'] ?? null)
+                ? $errors['_driver_custom_fields']
+                : [];
+            unset($errors['_driver_custom_fields']);
+        }
+
+        if ($moduleKey === 'vehicule') {
+            $formData['tip_vehicul'] = normalize_vehicle_type_for_form_select((string) ($formData['tip_vehicul'] ?? 'autovehicul'));
+        }
+
+        if ($moduleKey === 'vehicule' && $old === []) {
+            $vehicleType = (string) ($formData['tip_vehicul'] ?? 'autovehicul');
+            $formData['formula_axelor'] = $this->tireModel->normalizeLayoutForType($vehicleType, (string) ($formData['formula_axelor'] ?? ''));
+        }
 
         if ($moduleKey === 'documente' && $old === []) {
             $prefillVehicleId = (int) ($_GET['vehicle_id'] ?? 0);
@@ -233,6 +384,94 @@ class ModuleController
         $fuelConsumptionSummary = $moduleKey === 'alimentari'
             ? $this->buildFuelConsumptionSummary($this->moduleModel->getAll($module, '', []))
             : null;
+        $selectOptions = $this->buildFormSelectOptions($module);
+        $documentTypeOptionsByVehicleType = [];
+        $documentVehicleTypeByVehicleId = [];
+        $documentTypeOptionsByVehicleId = [];
+        $documentValidityDaysByVehicleIdAndType = [];
+        $documentExpiryRequirementByVehicleType = [];
+        $vehicleDocumentCustomFieldsByVehicleType = [];
+        $vehicleDocumentCustomFieldValues = $moduleKey === 'documente'
+            ? $this->extractDocumentCustomFieldValuesForForm($formData)
+            : [];
+        $documentTypeOptionsByDriverId = [];
+        $documentValidityDaysByDriverIdAndType = [];
+        $driverDocumentExpiryRequirementByType = [];
+        $driverDocumentCustomFieldsByType = [];
+        $driverDocumentCustomFieldValues = $moduleKey === 'documente_soferi'
+            ? $this->extractDriverDocumentCustomFieldValuesForForm($formData)
+            : [];
+        $usesVehicleDocumentTypeConfig = in_array($moduleKey, ['documente', 'configurare_costuri_documente_vehicule_override'], true);
+
+        if ($usesVehicleDocumentTypeConfig) {
+            try {
+                $vehicleIds = array_map('intval', array_keys($selectOptions['vehicle_id'] ?? []));
+                $selectedVehicleId = (int) ($formData['vehicle_id'] ?? 0);
+
+                if ($moduleKey === 'documente') {
+                    $documentVehicleTypeByVehicleId = $this->documentModel->getVehicleTypeByVehicleIds($vehicleIds);
+                    $documentTypeOptionsByVehicleType = $this->documentModel->getVehicleDocumentTypeOptionsByVehicleType();
+                    $documentExpiryRequirementByVehicleType = $this->documentModel->getDocumentExpiryRequirementByVehicleType();
+                    $vehicleDocumentCustomFieldsByVehicleType = $this->documentModel->getVehicleDocumentCustomFieldConfigsByVehicleType();
+                    $selectedVehicleType = $documentVehicleTypeByVehicleId[(string) $selectedVehicleId] ?? '';
+                    $selectOptions['tip_document'] = is_string($selectedVehicleType)
+                        ? ($documentTypeOptionsByVehicleType[$selectedVehicleType] ?? [])
+                        : [];
+                } else {
+                    $documentTypeOptionsByVehicleId = $this->documentModel->getExistingDocumentTypeOptionsByVehicleIds($vehicleIds);
+                    $documentValidityDaysByVehicleIdAndType = $this->documentModel->getRemainingValidityDaysByVehicleIds($vehicleIds);
+                    $selectOptions['document_type'] = $documentTypeOptionsByVehicleId[(string) $selectedVehicleId] ?? [];
+                    $formData = $this->applyRemainingValidityDaysToCostFormData($formData, 'vehicle_id', $documentValidityDaysByVehicleIdAndType);
+                }
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][doc-config][form-config] ' . $exception->getMessage());
+                flash_set('warning', 'Configurarea costurilor documente pe tip de vehicul nu este disponibila. Ruleaza scriptul database/update_configurare_costuri_documente_vehicule.sql.');
+                if ($moduleKey === 'documente') {
+                    $selectOptions['tip_document'] = [];
+                    $documentExpiryRequirementByVehicleType = [];
+                    $vehicleDocumentCustomFieldsByVehicleType = [];
+                } else {
+                    $selectOptions['document_type'] = [];
+                    $documentTypeOptionsByVehicleId = [];
+                    $documentValidityDaysByVehicleIdAndType = [];
+                }
+            }
+        }
+
+        if (in_array($moduleKey, ['documente_soferi', 'configurare_costuri_documente_soferi'], true)) {
+            try {
+                $driverIds = array_map('intval', array_keys($selectOptions['driver_id'] ?? []));
+                $selectedDriverId = (int) ($formData['driver_id'] ?? 0);
+
+                if ($moduleKey === 'documente_soferi') {
+                    $documentTypeOptionsByDriverId = $this->documentModel->getAvailableDriverDocumentTypeOptionsByDriverIds($driverIds);
+                    $driverDocumentExpiryRequirementByType = $this->documentModel->getDriverDocumentExpiryRequirementByType();
+                    $driverDocumentCustomFieldsByType = $this->documentModel->getDriverDocumentCustomFieldConfigsByType();
+                    $selectOptions['tip_document'] = $documentTypeOptionsByDriverId[(string) $selectedDriverId] ?? [];
+                } else {
+                    $documentTypeOptionsByDriverId = $this->documentModel->getExistingDriverDocumentTypeOptionsByDriverIds($driverIds);
+                    $documentValidityDaysByDriverIdAndType = $this->documentModel->getRemainingValidityDaysByDriverIds($driverIds);
+                    $selectOptions['document_type'] = $documentTypeOptionsByDriverId[(string) $selectedDriverId] ?? [];
+                    $formData = $this->applyRemainingValidityDaysToCostFormData($formData, 'driver_id', $documentValidityDaysByDriverIdAndType);
+                }
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][driver-doc-config][form-config] ' . $exception->getMessage());
+                $exceptionMessage = strtolower($exception->getMessage());
+                if (str_contains($exceptionMessage, 'custom_fields_json') || str_contains($exceptionMessage, 'unknown column')) {
+                    flash_set('warning', 'Configurarea campurilor personalizate pentru documentele soferilor nu este disponibila. Ruleaza scriptul database/update_driver_document_custom_fields.sql.');
+                } else {
+                    flash_set('warning', 'Configurarea costurilor documente soferi nu este disponibila. Ruleaza scriptul database/update_configurare_costuri_documente_soferi.sql.');
+                }
+                if ($moduleKey === 'documente_soferi') {
+                    $selectOptions['tip_document'] = [];
+                    $driverDocumentExpiryRequirementByType = [];
+                    $driverDocumentCustomFieldsByType = [];
+                } else {
+                    $selectOptions['document_type'] = [];
+                    $documentValidityDaysByDriverIdAndType = [];
+                }
+            }
+        }
 
         render('module/form.php', [
             'pageTitle' => 'Adauga ' . ucfirst($module['singular']),
@@ -243,12 +482,28 @@ class ModuleController
             'recordId' => null,
             'formData' => $formData,
             'errors' => $errors,
-            'selectOptions' => $this->buildFormSelectOptions($module),
+            'selectOptions' => $selectOptions,
             'vehicleKmBordById' => $vehicleKmBordById,
             'driverVehicleById' => $driverVehicleById,
             'fuelConsumptionSummary' => $fuelConsumptionSummary,
             'backUrl' => $backUrl,
             'keepDocumentVehicleContext' => $keepDocumentVehicleContext,
+            'documentTypeOptionsByVehicleType' => $documentTypeOptionsByVehicleType,
+            'documentVehicleTypeByVehicleId' => $documentVehicleTypeByVehicleId,
+            'documentTypeOptionsByVehicleId' => $documentTypeOptionsByVehicleId,
+            'documentValidityDaysByVehicleIdAndType' => $documentValidityDaysByVehicleIdAndType,
+            'documentExpiryRequirementByVehicleType' => $documentExpiryRequirementByVehicleType,
+            'vehicleDocumentCustomFieldsByVehicleType' => $vehicleDocumentCustomFieldsByVehicleType,
+            'vehicleDocumentCustomFieldValues' => $vehicleDocumentCustomFieldValues,
+            'vehicleDocumentCustomFieldErrors' => $vehicleDocumentCustomFieldErrors,
+            'documentTypeOptionsByDriverId' => $documentTypeOptionsByDriverId,
+            'documentValidityDaysByDriverIdAndType' => $documentValidityDaysByDriverIdAndType,
+            'driverDocumentExpiryRequirementByType' => $driverDocumentExpiryRequirementByType,
+            'driverDocumentCustomFieldsByType' => $driverDocumentCustomFieldsByType,
+            'driverDocumentCustomFieldValues' => $driverDocumentCustomFieldValues,
+            'driverDocumentCustomFieldErrors' => $driverDocumentCustomFieldErrors,
+            'vehicleMountedTires' => 0,
+            'vehicleLayoutOptionsByType' => $moduleKey === 'vehicule' ? $this->buildVehicleLayoutOptionsByType() : [],
         ]);
     }
 
@@ -260,9 +515,74 @@ class ModuleController
 
         ensure_csrf_or_redirect(build_query_url(['page' => $moduleKey, 'action' => 'create']));
 
+        if ($moduleKey === 'configurare_costuri_documente_vehicule_override') {
+            $postedValidity = trim((string) ($_POST['validity_days'] ?? ''));
+            if ($postedValidity === '') {
+                $vehicleId = (int) ($_POST['vehicle_id'] ?? 0);
+                $documentType = trim((string) ($_POST['document_type'] ?? ''));
+                $resolvedValidityDays = $this->resolveRemainingValidityDaysForVehicleDocument($vehicleId, $documentType);
+                if ($resolvedValidityDays !== null) {
+                    $_POST['validity_days'] = (string) $resolvedValidityDays;
+                }
+            }
+        }
+
+        if ($moduleKey === 'configurare_costuri_documente_soferi') {
+            $postedValidity = trim((string) ($_POST['validity_days'] ?? ''));
+            if ($postedValidity === '') {
+                $driverId = (int) ($_POST['driver_id'] ?? 0);
+                $documentType = trim((string) ($_POST['document_type'] ?? ''));
+                $resolvedValidityDays = $this->resolveRemainingValidityDaysForDriverDocument($driverId, $documentType);
+                if ($resolvedValidityDays !== null) {
+                    $_POST['validity_days'] = (string) $resolvedValidityDays;
+                }
+            }
+        }
+
+        $module = $this->applyDynamicDocumentTypeOptions($moduleKey, $module, $_POST, null);
+        $module = $this->applyDynamicDocumentExpiryRequirement($moduleKey, $module, $_POST, null);
         [$data, $errors] = $this->validateAndPrepareData($module, $_POST, $_FILES, 'create', null);
         if ($moduleKey === 'alimentari') {
             $this->validateAlimentareDriverSelection($data, $errors);
+        }
+        if (in_array($moduleKey, ['documente', 'configurare_costuri_documente_vehicule_override'], true)) {
+            $this->validateVehicleDocumentTypeSelection($moduleKey, $data, $errors);
+        }
+        if ($moduleKey === 'documente_soferi') {
+            $this->validateDriverDocumentTypeSelection($data, $errors, null);
+        }
+        if ($moduleKey === 'configurare_costuri_documente_soferi') {
+            $this->validateDriverDocumentCostTypeSelection($data, $errors);
+        }
+
+        if ($moduleKey === 'documente') {
+            try {
+                [$customFieldsJson, $customFieldErrors, $hasConfiguredCustomFields] = $this->validateDocumentCustomFieldValues($data, $_POST);
+                if ($customFieldErrors !== []) {
+                    $errors['_vehicle_custom_fields'] = $customFieldErrors;
+                }
+                if ($hasConfiguredCustomFields || $customFieldsJson !== null || array_key_exists('custom_field_values', $_POST)) {
+                    $data['custom_fields_json'] = $customFieldsJson;
+                }
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][doc-config][custom-fields-create] ' . $exception->getMessage());
+                $errors['tip_document'] = 'Configurarea campurilor personalizate pentru documentele vehiculelor nu este disponibila. Ruleaza scriptul database/update_vehicle_document_custom_fields.sql.';
+            }
+        }
+
+        if ($moduleKey === 'documente_soferi') {
+            try {
+                [$customFieldsJson, $customFieldErrors, $hasConfiguredCustomFields] = $this->validateDriverDocumentCustomFieldValues($data, $_POST);
+                if ($customFieldErrors !== []) {
+                    $errors['_driver_custom_fields'] = $customFieldErrors;
+                }
+                if ($hasConfiguredCustomFields || $customFieldsJson !== null || array_key_exists('custom_field_values', $_POST)) {
+                    $data['custom_fields_json'] = $customFieldsJson;
+                }
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][driver-doc-config][custom-fields-create] ' . $exception->getMessage());
+                $errors['tip_document'] = 'Configurarea campurilor personalizate pentru documentele soferilor nu este disponibila. Ruleaza scriptul database/update_driver_document_custom_fields.sql.';
+            }
         }
         $keepDocumentVehicleContext = $moduleKey === 'documente'
             && (string) ($_POST['keep_vehicle_context'] ?? '') === '1';
@@ -276,8 +596,10 @@ class ModuleController
             if ($uploadError !== null) {
                 $errors['fisier_upload'] = $uploadError;
             }
-        } elseif ($moduleKey === 'vehicule' && $errors === []) {
-            [$uploadedFileData, $uploadError] = $this->storeUploadedVehiclePhoto($_FILES['poza_upload'] ?? null);
+        } elseif (in_array($moduleKey, ['vehicule', 'soferi'], true) && $errors === []) {
+            [$uploadedFileData, $uploadError] = $moduleKey === 'soferi'
+                ? $this->storeUploadedDriverPhoto($_FILES['poza_upload'] ?? null)
+                : $this->storeUploadedVehiclePhoto($_FILES['poza_upload'] ?? null);
 
             if ($uploadError !== null) {
                 $errors['poza_upload'] = $uploadError;
@@ -298,6 +620,11 @@ class ModuleController
 
         if ($uploadedFileData !== null) {
             $data = array_merge($data, $uploadedFileData);
+        }
+
+        if ($moduleKey === 'soferi' && !array_key_exists('permis_expira_la', $data)) {
+            // Legacy non-null column; the actual expiry is tracked in documente_soferi.
+            $data['permis_expira_la'] = '9999-12-31';
         }
 
         $now = date('Y-m-d H:i:s');
@@ -342,8 +669,8 @@ class ModuleController
             }
         } catch (PDOException $exception) {
             if ($uploadedFileData !== null) {
-                if ($moduleKey === 'vehicule') {
-                    $this->cleanupUploadedVehiclePhoto($uploadedFileData);
+                if (in_array($moduleKey, ['vehicule', 'soferi'], true)) {
+                    $this->cleanupUploadedPhotoForModule($moduleKey, $uploadedFileData);
                 } else {
                     $this->cleanupUploadedDocumentFile($uploadedFileData);
                 }
@@ -419,10 +746,35 @@ class ModuleController
         $old = $formFlash['old'];
         $errors = $formFlash['errors'];
         $currentPage = $this->resolveCurrentPage($moduleKey, $module);
+        $vehicleDocumentCustomFieldErrors = [];
+        $driverDocumentCustomFieldErrors = [];
 
         $formData = $record;
         if ($old !== []) {
             $formData = array_merge($formData, $old);
+        }
+
+        if ($moduleKey === 'documente') {
+            $vehicleDocumentCustomFieldErrors = is_array($errors['_vehicle_custom_fields'] ?? null)
+                ? $errors['_vehicle_custom_fields']
+                : [];
+            unset($errors['_vehicle_custom_fields']);
+        }
+
+        if ($moduleKey === 'documente_soferi') {
+            $driverDocumentCustomFieldErrors = is_array($errors['_driver_custom_fields'] ?? null)
+                ? $errors['_driver_custom_fields']
+                : [];
+            unset($errors['_driver_custom_fields']);
+        }
+
+        if ($moduleKey === 'vehicule') {
+            $formData['tip_vehicul'] = normalize_vehicle_type_for_form_select((string) ($formData['tip_vehicul'] ?? 'autovehicul'));
+        }
+
+        if ($old === [] && $moduleKey === 'vehicule') {
+            $vehicleType = (string) ($formData['tip_vehicul'] ?? 'autovehicul');
+            $formData['formula_axelor'] = $this->tireModel->normalizeLayoutForType($vehicleType, (string) ($formData['formula_axelor'] ?? ''));
         }
 
         $vehicleKmBordById = $moduleKey === 'alimentari'
@@ -434,6 +786,94 @@ class ModuleController
         $fuelConsumptionSummary = $moduleKey === 'alimentari'
             ? $this->buildFuelConsumptionSummary($this->moduleModel->getAll($module, '', []))
             : null;
+        $selectOptions = $this->buildFormSelectOptions($module);
+        $documentTypeOptionsByVehicleType = [];
+        $documentVehicleTypeByVehicleId = [];
+        $documentTypeOptionsByVehicleId = [];
+        $documentValidityDaysByVehicleIdAndType = [];
+        $documentExpiryRequirementByVehicleType = [];
+        $vehicleDocumentCustomFieldsByVehicleType = [];
+        $vehicleDocumentCustomFieldValues = $moduleKey === 'documente'
+            ? $this->extractDocumentCustomFieldValuesForForm($formData)
+            : [];
+        $documentTypeOptionsByDriverId = [];
+        $documentValidityDaysByDriverIdAndType = [];
+        $driverDocumentExpiryRequirementByType = [];
+        $driverDocumentCustomFieldsByType = [];
+        $driverDocumentCustomFieldValues = $moduleKey === 'documente_soferi'
+            ? $this->extractDriverDocumentCustomFieldValuesForForm($formData)
+            : [];
+        $usesVehicleDocumentTypeConfig = in_array($moduleKey, ['documente', 'configurare_costuri_documente_vehicule_override'], true);
+
+        if ($usesVehicleDocumentTypeConfig) {
+            try {
+                $vehicleIds = array_map('intval', array_keys($selectOptions['vehicle_id'] ?? []));
+                $selectedVehicleId = (int) ($formData['vehicle_id'] ?? 0);
+
+                if ($moduleKey === 'documente') {
+                    $documentVehicleTypeByVehicleId = $this->documentModel->getVehicleTypeByVehicleIds($vehicleIds);
+                    $documentTypeOptionsByVehicleType = $this->documentModel->getVehicleDocumentTypeOptionsByVehicleType();
+                    $documentExpiryRequirementByVehicleType = $this->documentModel->getDocumentExpiryRequirementByVehicleType();
+                    $vehicleDocumentCustomFieldsByVehicleType = $this->documentModel->getVehicleDocumentCustomFieldConfigsByVehicleType();
+                    $selectedVehicleType = $documentVehicleTypeByVehicleId[(string) $selectedVehicleId] ?? '';
+                    $selectOptions['tip_document'] = is_string($selectedVehicleType)
+                        ? ($documentTypeOptionsByVehicleType[$selectedVehicleType] ?? [])
+                        : [];
+                } else {
+                    $documentTypeOptionsByVehicleId = $this->documentModel->getExistingDocumentTypeOptionsByVehicleIds($vehicleIds);
+                    $documentValidityDaysByVehicleIdAndType = $this->documentModel->getRemainingValidityDaysByVehicleIds($vehicleIds);
+                    $selectOptions['document_type'] = $documentTypeOptionsByVehicleId[(string) $selectedVehicleId] ?? [];
+                    $formData = $this->applyRemainingValidityDaysToCostFormData($formData, 'vehicle_id', $documentValidityDaysByVehicleIdAndType);
+                }
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][doc-config][form-config-edit] ' . $exception->getMessage());
+                flash_set('warning', 'Configurarea costurilor documente pe tip de vehicul nu este disponibila. Ruleaza scriptul database/update_configurare_costuri_documente_vehicule.sql.');
+                if ($moduleKey === 'documente') {
+                    $selectOptions['tip_document'] = [];
+                    $documentExpiryRequirementByVehicleType = [];
+                    $vehicleDocumentCustomFieldsByVehicleType = [];
+                } else {
+                    $selectOptions['document_type'] = [];
+                    $documentTypeOptionsByVehicleId = [];
+                    $documentValidityDaysByVehicleIdAndType = [];
+                }
+            }
+        }
+
+        if (in_array($moduleKey, ['documente_soferi', 'configurare_costuri_documente_soferi'], true)) {
+            try {
+                $driverIds = array_map('intval', array_keys($selectOptions['driver_id'] ?? []));
+                $selectedDriverId = (int) ($formData['driver_id'] ?? 0);
+
+                if ($moduleKey === 'documente_soferi') {
+                    $documentTypeOptionsByDriverId = $this->documentModel->getAvailableDriverDocumentTypeOptionsByDriverIds($driverIds, $id);
+                    $driverDocumentExpiryRequirementByType = $this->documentModel->getDriverDocumentExpiryRequirementByType();
+                    $driverDocumentCustomFieldsByType = $this->documentModel->getDriverDocumentCustomFieldConfigsByType();
+                    $selectOptions['tip_document'] = $documentTypeOptionsByDriverId[(string) $selectedDriverId] ?? [];
+                } else {
+                    $documentTypeOptionsByDriverId = $this->documentModel->getExistingDriverDocumentTypeOptionsByDriverIds($driverIds);
+                    $documentValidityDaysByDriverIdAndType = $this->documentModel->getRemainingValidityDaysByDriverIds($driverIds);
+                    $selectOptions['document_type'] = $documentTypeOptionsByDriverId[(string) $selectedDriverId] ?? [];
+                    $formData = $this->applyRemainingValidityDaysToCostFormData($formData, 'driver_id', $documentValidityDaysByDriverIdAndType);
+                }
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][driver-doc-config][form-config-edit] ' . $exception->getMessage());
+                $exceptionMessage = strtolower($exception->getMessage());
+                if (str_contains($exceptionMessage, 'custom_fields_json') || str_contains($exceptionMessage, 'unknown column')) {
+                    flash_set('warning', 'Configurarea campurilor personalizate pentru documentele soferilor nu este disponibila. Ruleaza scriptul database/update_driver_document_custom_fields.sql.');
+                } else {
+                    flash_set('warning', 'Configurarea costurilor documente soferi nu este disponibila. Ruleaza scriptul database/update_configurare_costuri_documente_soferi.sql.');
+                }
+                if ($moduleKey === 'documente_soferi') {
+                    $selectOptions['tip_document'] = [];
+                    $driverDocumentExpiryRequirementByType = [];
+                    $driverDocumentCustomFieldsByType = [];
+                } else {
+                    $selectOptions['document_type'] = [];
+                    $documentValidityDaysByDriverIdAndType = [];
+                }
+            }
+        }
 
         render('module/form.php', [
             'pageTitle' => 'Editeaza ' . ucfirst($module['singular']),
@@ -444,11 +884,27 @@ class ModuleController
             'recordId' => $id,
             'formData' => $formData,
             'errors' => $errors,
-            'selectOptions' => $this->buildFormSelectOptions($module),
+            'selectOptions' => $selectOptions,
             'vehicleKmBordById' => $vehicleKmBordById,
             'driverVehicleById' => $driverVehicleById,
             'fuelConsumptionSummary' => $fuelConsumptionSummary,
             'backUrl' => $this->buildModuleBackUrl($moduleKey, $module, $record, $formData),
+            'documentTypeOptionsByVehicleType' => $documentTypeOptionsByVehicleType,
+            'documentVehicleTypeByVehicleId' => $documentVehicleTypeByVehicleId,
+            'documentTypeOptionsByVehicleId' => $documentTypeOptionsByVehicleId,
+            'documentValidityDaysByVehicleIdAndType' => $documentValidityDaysByVehicleIdAndType,
+            'documentExpiryRequirementByVehicleType' => $documentExpiryRequirementByVehicleType,
+            'vehicleDocumentCustomFieldsByVehicleType' => $vehicleDocumentCustomFieldsByVehicleType,
+            'vehicleDocumentCustomFieldValues' => $vehicleDocumentCustomFieldValues,
+            'vehicleDocumentCustomFieldErrors' => $vehicleDocumentCustomFieldErrors,
+            'documentTypeOptionsByDriverId' => $documentTypeOptionsByDriverId,
+            'documentValidityDaysByDriverIdAndType' => $documentValidityDaysByDriverIdAndType,
+            'driverDocumentExpiryRequirementByType' => $driverDocumentExpiryRequirementByType,
+            'driverDocumentCustomFieldsByType' => $driverDocumentCustomFieldsByType,
+            'driverDocumentCustomFieldValues' => $driverDocumentCustomFieldValues,
+            'driverDocumentCustomFieldErrors' => $driverDocumentCustomFieldErrors,
+            'vehicleMountedTires' => $moduleKey === 'vehicule' ? $this->getVehicleMountedTireCountSafe($id) : 0,
+            'vehicleLayoutOptionsByType' => $moduleKey === 'vehicule' ? $this->buildVehicleLayoutOptionsByType() : [],
         ]);
     }
 
@@ -473,9 +929,82 @@ class ModuleController
             redirect(build_query_url(['page' => $moduleKey]));
         }
 
+        if ($moduleKey === 'configurare_costuri_documente_vehicule_override') {
+            $postedValidity = trim((string) ($_POST['validity_days'] ?? ''));
+            if ($postedValidity === '') {
+                $vehicleId = (int) ($_POST['vehicle_id'] ?? ($existing['vehicle_id'] ?? 0));
+                $documentType = trim((string) ($_POST['document_type'] ?? ($existing['document_type'] ?? '')));
+                $resolvedValidityDays = $this->resolveRemainingValidityDaysForVehicleDocument($vehicleId, $documentType);
+                if ($resolvedValidityDays !== null) {
+                    $_POST['validity_days'] = (string) $resolvedValidityDays;
+                }
+            }
+        }
+
+        if ($moduleKey === 'configurare_costuri_documente_soferi') {
+            $postedValidity = trim((string) ($_POST['validity_days'] ?? ''));
+            if ($postedValidity === '') {
+                $driverId = (int) ($_POST['driver_id'] ?? ($existing['driver_id'] ?? 0));
+                $documentType = trim((string) ($_POST['document_type'] ?? ($existing['document_type'] ?? '')));
+                $resolvedValidityDays = $this->resolveRemainingValidityDaysForDriverDocument($driverId, $documentType);
+                if ($resolvedValidityDays !== null) {
+                    $_POST['validity_days'] = (string) $resolvedValidityDays;
+                }
+            }
+        }
+
+        $module = $this->applyDynamicDocumentTypeOptions($moduleKey, $module, $_POST, $id);
+        $module = $this->applyDynamicDocumentExpiryRequirement($moduleKey, $module, $_POST, $id);
         [$data, $errors] = $this->validateAndPrepareData($module, $_POST, $_FILES, 'edit', $id);
         if ($moduleKey === 'alimentari') {
             $this->validateAlimentareDriverSelection($data, $errors);
+        }
+        if (in_array($moduleKey, ['documente', 'configurare_costuri_documente_vehicule_override'], true)) {
+            $this->validateVehicleDocumentTypeSelection($moduleKey, $data, $errors);
+        }
+        if ($moduleKey === 'documente_soferi') {
+            $this->validateDriverDocumentTypeSelection($data, $errors, $id);
+        }
+        if ($moduleKey === 'configurare_costuri_documente_soferi') {
+            $this->validateDriverDocumentCostTypeSelection($data, $errors);
+        }
+        if ($moduleKey === 'documente') {
+            try {
+                [$customFieldsJson, $customFieldErrors, $hasConfiguredCustomFields] = $this->validateDocumentCustomFieldValues($data, $_POST);
+                if ($customFieldErrors !== []) {
+                    $errors['_vehicle_custom_fields'] = $customFieldErrors;
+                }
+                if (
+                    $hasConfiguredCustomFields
+                    || $customFieldsJson !== null
+                    || array_key_exists('custom_field_values', $_POST)
+                    || !empty($existing['custom_fields_json'])
+                ) {
+                    $data['custom_fields_json'] = $customFieldsJson;
+                }
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][doc-config][custom-fields-update] ' . $exception->getMessage());
+                $errors['tip_document'] = 'Configurarea campurilor personalizate pentru documentele vehiculelor nu este disponibila. Ruleaza scriptul database/update_vehicle_document_custom_fields.sql.';
+            }
+        }
+        if ($moduleKey === 'documente_soferi') {
+            try {
+                [$customFieldsJson, $customFieldErrors, $hasConfiguredCustomFields] = $this->validateDriverDocumentCustomFieldValues($data, $_POST);
+                if ($customFieldErrors !== []) {
+                    $errors['_driver_custom_fields'] = $customFieldErrors;
+                }
+                if (
+                    $hasConfiguredCustomFields
+                    || $customFieldsJson !== null
+                    || array_key_exists('custom_field_values', $_POST)
+                    || !empty($existing['custom_fields_json'])
+                ) {
+                    $data['custom_fields_json'] = $customFieldsJson;
+                }
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][driver-doc-config][custom-fields-update] ' . $exception->getMessage());
+                $errors['tip_document'] = 'Configurarea campurilor personalizate pentru documentele soferilor nu este disponibila. Ruleaza scriptul database/update_driver_document_custom_fields.sql.';
+            }
         }
         if ($moduleKey === 'utilizatori') {
             $this->validateUserSafetyOnUpdate($id, $existing, $data, $errors);
@@ -500,8 +1029,10 @@ class ModuleController
                     $data['fisier_stocat'] = null;
                 }
             }
-        } elseif ($moduleKey === 'vehicule' && $errors === []) {
-            [$uploadedFileData, $uploadError] = $this->storeUploadedVehiclePhoto($_FILES['poza_upload'] ?? null);
+        } elseif (in_array($moduleKey, ['vehicule', 'soferi'], true) && $errors === []) {
+            [$uploadedFileData, $uploadError] = $moduleKey === 'soferi'
+                ? $this->storeUploadedDriverPhoto($_FILES['poza_upload'] ?? null)
+                : $this->storeUploadedVehiclePhoto($_FILES['poza_upload'] ?? null);
 
             if ($uploadError !== null) {
                 $errors['poza_upload'] = $uploadError;
@@ -520,8 +1051,8 @@ class ModuleController
 
         if ($errors !== []) {
             if ($uploadedFileData !== null) {
-                if ($moduleKey === 'vehicule') {
-                    $this->cleanupUploadedVehiclePhoto($uploadedFileData);
+                if (in_array($moduleKey, ['vehicule', 'soferi'], true)) {
+                    $this->cleanupUploadedPhotoForModule($moduleKey, $uploadedFileData);
                 } else {
                     $this->cleanupUploadedDocumentFile($uploadedFileData);
                 }
@@ -556,17 +1087,19 @@ class ModuleController
                         $this->documentAuditSnapshot($updatedRecord)
                     );
                 }
-            } elseif ($moduleKey === 'vehicule') {
+            } elseif (in_array($moduleKey, ['vehicule', 'soferi'], true)) {
                 if (($uploadedFileData !== null || $removeExistingFile) && !empty($existing['poza_stocata'])) {
-                    $this->deleteVehiclePhotoPhysicalFile((string) $existing['poza_stocata']);
+                    $this->deletePhotoPhysicalFileForModule($moduleKey, (string) $existing['poza_stocata']);
                 }
 
-                $updatedVehicle = $this->moduleModel->findById($module, $id);
-                if ($updatedVehicle !== null) {
-                    $currentRecordForStatus = $updatedVehicle;
-                    $this->syncVehicleTireLayoutSafe($updatedVehicle);
-                } else {
-                    $this->syncVehicleTireLayoutSafe($data + $existing + ['id' => $id]);
+                if ($moduleKey === 'vehicule') {
+                    $updatedVehicle = $this->moduleModel->findById($module, $id);
+                    if ($updatedVehicle !== null) {
+                        $currentRecordForStatus = $updatedVehicle;
+                        $this->syncVehicleTireLayoutSafe($updatedVehicle);
+                    } else {
+                        $this->syncVehicleTireLayoutSafe($data + $existing + ['id' => $id]);
+                    }
                 }
             }
 
@@ -575,8 +1108,8 @@ class ModuleController
             flash_set('success', ucfirst($module['singular']) . ' actualizat cu succes.');
         } catch (PDOException $exception) {
             if ($uploadedFileData !== null) {
-                if ($moduleKey === 'vehicule') {
-                    $this->cleanupUploadedVehiclePhoto($uploadedFileData);
+                if (in_array($moduleKey, ['vehicule', 'soferi'], true)) {
+                    $this->cleanupUploadedPhotoForModule($moduleKey, $uploadedFileData);
                 } else {
                     $this->cleanupUploadedDocumentFile($uploadedFileData);
                 }
@@ -628,7 +1161,7 @@ class ModuleController
             redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $tractorId]));
         }
 
-        if ((string) ($trailer['tip_vehicul'] ?? '') !== 'semiremorca') {
+        if (!is_trailer_vehicle_type((string) ($trailer['tip_vehicul'] ?? ''))) {
             flash_set('danger', 'Vehiculul selectat ca semiremorca nu este de tip semiremorca.');
             redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $trailerId]));
         }
@@ -710,7 +1243,7 @@ class ModuleController
                 $updated = $this->vehicleCouplingModel->detachByTractor($tractorId);
             } elseif ($trailerId > 0) {
                 $trailer = $this->vehicleCouplingModel->getVehicleById($trailerId);
-                if ($trailer === null || (string) ($trailer['tip_vehicul'] ?? '') !== 'semiremorca') {
+                if ($trailer === null || !is_trailer_vehicle_type((string) ($trailer['tip_vehicul'] ?? ''))) {
                     flash_set('danger', 'Vehiculul selectat nu este semiremorca.');
                     redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $trailerId]));
                 }
@@ -1029,13 +1562,20 @@ class ModuleController
         redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
     }
 
+    private function maintenanceTireStockUrl(): string
+    {
+        return build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock']);
+    }
+
     private function addMaintenanceTireStockAction(string $moduleKey, array $module): void
     {
+        $stockRedirectUrl = $this->maintenanceTireStockUrl();
+
         if ($moduleKey !== 'mentenanta' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
-        ensure_csrf_or_redirect(build_query_url(['page' => 'mentenanta']));
+        ensure_csrf_or_redirect($stockRedirectUrl);
 
         $brand = trim((string) ($_POST['stock_brand'] ?? ''));
         $modelName = trim((string) ($_POST['stock_model'] ?? ''));
@@ -1052,23 +1592,23 @@ class ModuleController
 
         if ($brand === '') {
             flash_set('danger', 'Brandul este obligatoriu pentru adaugarea in stoc.');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
         if ($quantityRaw === '' || !preg_match('/^\d+$/', $quantityRaw)) {
             flash_set('danger', 'Cantitatea trebuie sa fie un numar intreg pozitiv.');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
         $quantity = max(1, min(1000, (int) $quantityRaw));
 
         if (!$this->isValidDate($mountDate)) {
             flash_set('danger', 'Data este invalida. Foloseste formatul YYYY-MM-DD.');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
         if ($kmInitialRaw === '' || !preg_match('/^\d+$/', $kmInitialRaw)) {
             flash_set('danger', 'Km initial trebuie sa fie numeric.');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
         $kmInitial = max(0, (int) $kmInitialRaw);
 
@@ -1076,7 +1616,7 @@ class ModuleController
         if ($estimatedLifeRaw !== '') {
             if (!preg_match('/^\d+$/', $estimatedLifeRaw)) {
                 flash_set('danger', 'Durata estimata (km) trebuie sa fie numerica.');
-                redirect(build_query_url(['page' => 'mentenanta']));
+                redirect($stockRedirectUrl);
             }
             $estimatedLifeKm = max(0, (int) $estimatedLifeRaw);
         }
@@ -1115,16 +1655,18 @@ class ModuleController
             flash_set('danger', $exception->getMessage());
         }
 
-        redirect(build_query_url(['page' => 'mentenanta']));
+        redirect($stockRedirectUrl);
     }
 
     private function bulkMaintenanceTireStockAction(string $moduleKey, array $module): void
     {
+        $stockRedirectUrl = $this->maintenanceTireStockUrl();
+
         if ($moduleKey !== 'mentenanta' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
-        ensure_csrf_or_redirect(build_query_url(['page' => 'mentenanta']));
+        ensure_csrf_or_redirect($stockRedirectUrl);
 
         $brand = trim((string) ($_POST['bulk_brand'] ?? ''));
         $modelName = trim((string) ($_POST['bulk_model'] ?? ''));
@@ -1139,19 +1681,19 @@ class ModuleController
 
         if ($brand === '') {
             flash_set('danger', 'Brandul este obligatoriu pentru generare bulk.');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
         if (!$this->isValidDate($mountDate)) {
             flash_set('danger', 'Data este invalida. Foloseste formatul YYYY-MM-DD.');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
         $estimatedLifeKm = null;
         if ($estimatedLifeRaw !== '') {
             if (!preg_match('/^\d+$/', $estimatedLifeRaw)) {
                 flash_set('danger', 'Durata estimata (km) trebuie sa fie numerica.');
-                redirect(build_query_url(['page' => 'mentenanta']));
+                redirect($stockRedirectUrl);
             }
             $estimatedLifeKm = max(0, (int) $estimatedLifeRaw);
         }
@@ -1209,7 +1751,7 @@ class ModuleController
 
             if ($selectedTypes === []) {
                 flash_set('info', 'Nu exista tipuri selectate pentru generare sau nu exista vehicule active cu necesar.');
-                redirect(build_query_url(['page' => 'mentenanta']));
+                redirect($stockRedirectUrl);
             }
 
             $totalCreated = 0;
@@ -1269,32 +1811,34 @@ class ModuleController
             flash_set('danger', $exception->getMessage());
         }
 
-        redirect(build_query_url(['page' => 'mentenanta']));
+        redirect($stockRedirectUrl);
     }
 
     private function updateMaintenanceTireStockAction(string $moduleKey, array $module): void
     {
+        $stockRedirectUrl = $this->maintenanceTireStockUrl();
+
         if ($moduleKey !== 'mentenanta' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
-        ensure_csrf_or_redirect(build_query_url(['page' => 'mentenanta']));
+        ensure_csrf_or_redirect($stockRedirectUrl);
 
         $tireId = (int) ($_POST['stock_tire_id'] ?? 0);
         if ($tireId <= 0) {
             flash_set('danger', 'Anvelopa selectata pentru editare este invalida.');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
         $tire = $this->tireModel->getStockTireById($tireId);
         if ($tire === null) {
             flash_set('danger', 'Anvelopa selectata nu exista.');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
         if ((int) ($tire['active_allocation_id'] ?? 0) > 0) {
             flash_set('danger', 'Anvelopa este montata pe vehicul. Editeaza din Detalii Vehicul.');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
         $brand = trim((string) ($_POST['stock_edit_brand'] ?? ''));
@@ -1309,19 +1853,19 @@ class ModuleController
 
         if ($brand === '') {
             flash_set('danger', 'Brandul anvelopei este obligatoriu.');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
         if (!$this->isValidDate($mountDate)) {
             flash_set('danger', 'Data montaj este invalida (format YYYY-MM-DD).');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
         $estimatedLifeKm = null;
         if ($estimatedLifeRaw !== '') {
             if (!preg_match('/^\d+$/', $estimatedLifeRaw)) {
                 flash_set('danger', 'Durata estimata (km) trebuie sa fie numerica.');
-                redirect(build_query_url(['page' => 'mentenanta']));
+                redirect($stockRedirectUrl);
             }
             $estimatedLifeKm = max(0, (int) $estimatedLifeRaw);
         }
@@ -1358,21 +1902,23 @@ class ModuleController
             flash_set('danger', $exception->getMessage());
         }
 
-        redirect(build_query_url(['page' => 'mentenanta']));
+        redirect($stockRedirectUrl);
     }
 
     private function deleteMaintenanceTireStockAction(string $moduleKey, array $module): void
     {
+        $stockRedirectUrl = $this->maintenanceTireStockUrl();
+
         if ($moduleKey !== 'mentenanta' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
-        ensure_csrf_or_redirect(build_query_url(['page' => 'mentenanta']));
+        ensure_csrf_or_redirect($stockRedirectUrl);
 
         $tireId = (int) ($_POST['stock_tire_id'] ?? 0);
         if ($tireId <= 0) {
             flash_set('danger', 'Anvelopa selectata pentru stergere este invalida.');
-            redirect(build_query_url(['page' => 'mentenanta']));
+            redirect($stockRedirectUrl);
         }
 
         try {
@@ -1384,7 +1930,671 @@ class ModuleController
             flash_set('danger', $exception->getMessage());
         }
 
-        redirect(build_query_url(['page' => 'mentenanta']));
+        redirect($stockRedirectUrl);
+    }
+
+    private function addDocumentTypeConfigAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_vehicule_override' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']));
+
+        $vehicleTypeRaw = strtolower(trim((string) ($_POST['doc_cfg_vehicle_type'] ?? '')));
+        if ($vehicleTypeRaw === 'semiremorca') {
+            $vehicleTypeRaw = 'semiremorca_primar';
+        }
+
+        $documentTypeRaw = trim((string) ($_POST['doc_cfg_document_type'] ?? ''));
+        $documentTypeRaw = preg_replace('/\s+/u', ' ', $documentTypeRaw);
+        $documentType = is_string($documentTypeRaw) ? trim($documentTypeRaw) : '';
+
+
+        $vehicleTypeOptions = $this->getDocumentTypeVehicleOptions();
+        if (!array_key_exists($vehicleTypeRaw, $vehicleTypeOptions)) {
+            flash_set('danger', 'Tipul de vehicul selectat pentru configurare document nu este valid.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']));
+        }
+
+        if ($documentType === '') {
+            flash_set('danger', 'Tipul de document este obligatoriu.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']));
+        }
+
+        if (mb_strlen($documentType) > 120) {
+            flash_set('danger', 'Tipul de document poate avea maximum 120 caractere.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']));
+        }
+
+        $validityDays = 365;
+
+        $documentCost = '0.00';
+        $requiresExpiry = isset($_POST['doc_cfg_requires_expiry']) && (string) $_POST['doc_cfg_requires_expiry'] === '1';
+
+        $now = date('Y-m-d H:i:s');
+        try {
+            $this->moduleModel->insertRecord('configurare_costuri_documente_vehicule', [
+                'vehicle_type' => $vehicleTypeRaw,
+                'document_type' => $documentType,
+                'document_cost' => $documentCost,
+                'validity_days' => $validityDays,
+                'requires_expiry' => $requiresExpiry ? 1 : 0,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            $this->syncVehicleStatusesForDocumentTypeConfig(null, $vehicleTypeRaw);
+            flash_set('success', 'Tipul de document a fost adaugat pentru ' . vehicle_type_label($vehicleTypeRaw) . '.');
+        } catch (PDOException $exception) {
+            $sqlState = strtoupper((string) $exception->getCode());
+            $exceptionMessage = strtolower($exception->getMessage());
+
+            if ($sqlState === '23000') {
+                flash_set('danger', 'Acest tip de document este deja configurat pentru tipul de vehicul selectat.');
+            } elseif ($sqlState === '42S22'
+                || $sqlState === '42S02'
+                || str_contains($exceptionMessage, 'unknown column')
+                || str_contains($exceptionMessage, 'configurare_costuri_documente_vehicule')
+            ) {
+                flash_set('danger', 'Structura bazei de date pentru configurarea tipurilor de documente nu este actualizata. Ruleaza scriptul database/update_documente_expiry_requirement.sql, apoi incearca din nou.');
+            } else {
+                flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'salvare'));
+            }
+        }
+
+        redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']));
+    }
+
+    private function manageDocumentTypeConfigAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_vehicule_override') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']));
+        }
+
+        require_admin_or_403();
+
+        $search = trim((string) ($_GET['q'] ?? ''));
+
+        try {
+            $documentTypeRows = $this->documentModel->getConfiguredDocumentTypes();
+            $customFieldsByVehicleType = $this->documentModel->getVehicleDocumentCustomFieldConfigsByVehicleType();
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][manage_document_type_config] ' . $exception->getMessage());
+            $exceptionMessage = strtolower($exception->getMessage());
+            if (str_contains($exceptionMessage, 'custom_fields_json') || str_contains($exceptionMessage, 'unknown column')) {
+                flash_set('danger', 'Structura bazei de date pentru campurile personalizate ale documentelor vehiculelor nu este actualizata. Ruleaza scriptul database/update_vehicle_document_custom_fields.sql, apoi incearca din nou.');
+            } else {
+                flash_set('danger', 'Nu s-au putut incarca tipurile de documente configurate.');
+            }
+            $documentTypeRows = [];
+            $customFieldsByVehicleType = [];
+        }
+
+        if ($search !== '') {
+            $searchNeedle = mb_strtolower($search, 'UTF-8');
+            $documentTypeRows = array_values(array_filter($documentTypeRows, static function (array $row) use ($searchNeedle): bool {
+                $documentType = mb_strtolower((string) ($row['document_type'] ?? ''), 'UTF-8');
+                $vehicleType = mb_strtolower(vehicle_type_label((string) ($row['vehicle_type'] ?? '')), 'UTF-8');
+
+                return str_contains($documentType, $searchNeedle) || str_contains($vehicleType, $searchNeedle);
+            }));
+        }
+
+        render('module/document_type_config.php', [
+            'pageTitle' => 'Gestionare tipuri documente',
+            'currentPage' => $this->resolveCurrentPage($moduleKey, $module),
+            'moduleKey' => $moduleKey,
+            'module' => $module,
+            'documentTypeRows' => $documentTypeRows,
+            'customFieldsByVehicleType' => $customFieldsByVehicleType,
+            'customFieldTypeOptions' => $this->documentCustomFieldTypeOptions(),
+            'search' => $search,
+            'backUrl' => build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']),
+        ]);
+    }
+
+    private function updateDocumentTypeExpiryAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_vehicule_override' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+        }
+
+        require_admin_or_403();
+        ensure_csrf_or_redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+
+        $id = (int) ($_POST['id'] ?? 0);
+        $requiresExpiry = (string) ($_POST['requires_expiry'] ?? '1') === '1';
+
+        if ($id <= 0) {
+            flash_set('danger', 'Tipul de document selectat este invalid.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+        }
+
+        try {
+            $configuredDocumentType = $this->documentModel->getConfiguredDocumentTypeById($id);
+            $this->documentModel->updateConfiguredDocumentTypeRequiresExpiry($id, $requiresExpiry);
+            $this->syncVehicleStatusesForDocumentTypeConfig($configuredDocumentType);
+            flash_set('success', 'Regula pentru data de expirare a fost actualizata.');
+        } catch (PDOException $exception) {
+            $message = strtolower($exception->getMessage());
+            if (str_contains($message, 'requires_expiry') || str_contains($message, 'unknown column')) {
+                flash_set('danger', 'Structura bazei de date nu este actualizata. Ruleaza scriptul database/update_documente_expiry_requirement.sql.');
+            } else {
+                flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'actualizare'));
+            }
+        }
+
+        redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+    }
+
+    private function deleteDocumentTypeConfigAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_vehicule_override' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+        }
+
+        require_admin_or_403();
+        ensure_csrf_or_redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+
+        $id = (int) ($_POST['id'] ?? 0);
+        if ($id <= 0) {
+            flash_set('danger', 'Tipul de document selectat pentru stergere este invalid.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+        }
+
+        try {
+            $configuredDocumentType = $this->documentModel->getConfiguredDocumentTypeById($id);
+            $this->documentModel->deleteConfiguredDocumentType($id);
+            $this->syncVehicleStatusesForDocumentTypeConfig($configuredDocumentType);
+            flash_set('success', 'Tipul de document a fost sters din lista configurata.');
+        } catch (PDOException $exception) {
+            flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'stergere'));
+        }
+
+        redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+    }
+
+    private function addDocumentCustomFieldConfigAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_vehicule_override' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+        }
+
+        require_admin_or_403();
+        ensure_csrf_or_redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+
+        $documentTypeId = (int) ($_POST['document_type_id'] ?? 0);
+        $fieldLabel = trim((string) ($_POST['doc_custom_field_label'] ?? ''));
+        $fieldLabel = preg_replace('/\s+/u', ' ', $fieldLabel);
+        $fieldLabel = is_string($fieldLabel) ? trim($fieldLabel) : '';
+        $fieldType = strtolower(trim((string) ($_POST['doc_custom_field_type'] ?? 'text')));
+        $showWhenChecked = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($_POST['doc_custom_field_show_when_checked'] ?? ''));
+        $showWhenChecked = is_string($showWhenChecked) ? $showWhenChecked : '';
+        $allowedTypes = array_keys($this->documentCustomFieldTypeOptions());
+
+        if ($documentTypeId <= 0) {
+            flash_set('danger', 'Tipul de document selectat este invalid.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+        }
+
+        if ($fieldLabel === '') {
+            flash_set('danger', 'Eticheta campului este obligatorie.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+        }
+
+        if (mb_strlen($fieldLabel) > 120) {
+            flash_set('danger', 'Eticheta campului poate avea maximum 120 de caractere.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+        }
+
+        if (!in_array($fieldType, $allowedTypes, true)) {
+            flash_set('danger', 'Tipul campului selectat este invalid.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+        }
+
+        try {
+            $documentTypeRow = $this->documentModel->getConfiguredDocumentTypeById($documentTypeId);
+            if ($documentTypeRow === null) {
+                flash_set('danger', 'Tipul de document selectat nu exista.');
+                redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+            }
+
+            $customFields = $this->documentModel->getVehicleDocumentCustomFieldConfigsForVehicleType(
+                (string) ($documentTypeRow['vehicle_type'] ?? ''),
+                (string) ($documentTypeRow['document_type'] ?? '')
+            );
+            $checkboxFieldKeys = [];
+            foreach ($customFields as $customField) {
+                if (mb_strtolower((string) ($customField['label'] ?? ''), 'UTF-8') === mb_strtolower($fieldLabel, 'UTF-8')) {
+                    flash_set('danger', 'Exista deja un camp cu aceasta eticheta pentru tipul de document selectat.');
+                    redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+                }
+
+                if ((string) ($customField['type'] ?? 'text') === 'checkbox') {
+                    $checkboxFieldKeys[(string) ($customField['key'] ?? '')] = true;
+                }
+            }
+
+            if ($showWhenChecked !== '' && !isset($checkboxFieldKeys[$showWhenChecked])) {
+                flash_set('danger', 'Regula de afisare conditionata este invalida. Selecteaza un camp de tip checkbox.');
+                redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+            }
+
+            if ($fieldType === 'checkbox') {
+                $showWhenChecked = '';
+            }
+
+            $customFields[] = [
+                'key' => $this->generateDocumentCustomFieldKey(),
+                'label' => $fieldLabel,
+                'type' => $fieldType,
+                'show_when_checked' => $showWhenChecked,
+            ];
+
+            $this->documentModel->updateConfiguredDocumentTypeCustomFields($documentTypeId, $customFields);
+            $this->syncVehicleStatusesForDocumentTypeConfig($documentTypeRow);
+            flash_set('success', 'Campul personalizat a fost adaugat pentru tipul de document selectat.');
+        } catch (PDOException $exception) {
+            $sqlState = strtoupper((string) $exception->getCode());
+            $exceptionMessage = strtolower($exception->getMessage());
+
+            if ($sqlState === '42S22'
+                || $sqlState === '42S02'
+                || str_contains($exceptionMessage, 'custom_fields_json')
+                || str_contains($exceptionMessage, 'configurare_costuri_documente_vehicule')
+            ) {
+                flash_set('danger', 'Structura bazei de date pentru campurile personalizate ale documentelor vehiculelor nu este actualizata. Ruleaza scriptul database/update_vehicle_document_custom_fields.sql, apoi incearca din nou.');
+            } else {
+                flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'actualizare'));
+            }
+        }
+
+        redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+    }
+
+    private function deleteDocumentCustomFieldConfigAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_vehicule_override' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+        }
+
+        require_admin_or_403();
+        ensure_csrf_or_redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+
+        $documentTypeId = (int) ($_POST['document_type_id'] ?? 0);
+        $fieldKey = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($_POST['custom_field_key'] ?? ''));
+        $fieldKey = is_string($fieldKey) ? $fieldKey : '';
+
+        if ($documentTypeId <= 0 || $fieldKey === '') {
+            flash_set('danger', 'Campul selectat pentru stergere este invalid.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+        }
+
+        try {
+            $documentTypeRow = $this->documentModel->getConfiguredDocumentTypeById($documentTypeId);
+            if ($documentTypeRow === null) {
+                flash_set('danger', 'Tipul de document selectat nu exista.');
+                redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+            }
+
+            $customFields = $this->documentModel->getVehicleDocumentCustomFieldConfigsForVehicleType(
+                (string) ($documentTypeRow['vehicle_type'] ?? ''),
+                (string) ($documentTypeRow['document_type'] ?? '')
+            );
+            $remainingFields = [];
+            foreach ($customFields as $customField) {
+                if ((string) ($customField['key'] ?? '') === $fieldKey) {
+                    continue;
+                }
+
+                if ((string) ($customField['show_when_checked'] ?? '') === $fieldKey) {
+                    unset($customField['show_when_checked']);
+                }
+
+                $remainingFields[] = $customField;
+            }
+
+            $this->documentModel->updateConfiguredDocumentTypeCustomFields($documentTypeId, $remainingFields);
+            $this->syncVehicleStatusesForDocumentTypeConfig($documentTypeRow);
+            flash_set('success', 'Campul personalizat a fost sters din tipul de document selectat.');
+        } catch (PDOException $exception) {
+            $sqlState = strtoupper((string) $exception->getCode());
+            $exceptionMessage = strtolower($exception->getMessage());
+
+            if ($sqlState === '42S22'
+                || $sqlState === '42S02'
+                || str_contains($exceptionMessage, 'custom_fields_json')
+                || str_contains($exceptionMessage, 'configurare_costuri_documente_vehicule')
+            ) {
+                flash_set('danger', 'Structura bazei de date pentru campurile personalizate ale documentelor vehiculelor nu este actualizata. Ruleaza scriptul database/update_vehicle_document_custom_fields.sql, apoi incearca din nou.');
+            } else {
+                flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'actualizare'));
+            }
+        }
+
+        redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config']));
+    }
+
+    private function addDriverDocumentTypeConfigAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_soferi' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']));
+        }
+
+        require_admin_or_403();
+        ensure_csrf_or_redirect($this->driverDocumentTypeConfigRedirectUrl());
+
+        $documentTypeRaw = trim((string) ($_POST['driver_doc_cfg_document_type'] ?? ''));
+        $documentTypeRaw = preg_replace('/\s+/u', ' ', $documentTypeRaw);
+        $documentType = is_string($documentTypeRaw) ? trim($documentTypeRaw) : '';
+        $requiresExpiry = (string) ($_POST['driver_doc_cfg_requires_expiry'] ?? '1') === '1';
+
+        if ($documentType === '') {
+            flash_set('danger', 'Tipul de document este obligatoriu.');
+            redirect($this->driverDocumentTypeConfigRedirectUrl());
+        }
+
+        if (mb_strlen($documentType) > 100) {
+            flash_set('danger', 'Tipul de document poate avea maximum 100 caractere.');
+            redirect($this->driverDocumentTypeConfigRedirectUrl());
+        }
+
+        $now = date('Y-m-d H:i:s');
+        try {
+            $this->moduleModel->insertRecord('configurare_documente_obligatorii_soferi', [
+                'document_type' => $documentType,
+                'requires_expiry' => $requiresExpiry ? 1 : 0,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            $this->entityStatusService->syncAllDriverStatuses();
+            flash_set('success', 'Tipul de document a fost adaugat in lista necesara pentru soferi.');
+        } catch (PDOException $exception) {
+            $sqlState = strtoupper((string) $exception->getCode());
+            $exceptionMessage = strtolower($exception->getMessage());
+
+            if ($sqlState === '23000') {
+                flash_set('danger', 'Acest tip de document este deja configurat in lista necesara pentru soferi.');
+            } elseif ($sqlState === '42S22'
+                || $sqlState === '42S02'
+                || str_contains($exceptionMessage, 'unknown column')
+                || str_contains($exceptionMessage, 'requires_expiry')
+                || str_contains($exceptionMessage, 'configurare_documente_obligatorii_soferi')
+            ) {
+                flash_set('danger', 'Structura bazei de date pentru documentele necesare soferilor nu este actualizata. Ruleaza scripturile database/update_documente_obligatorii_soferi.sql si database/update_driver_document_expiry_requirement.sql, apoi incearca din nou.');
+            } else {
+                flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'salvare'));
+            }
+        }
+
+        redirect($this->driverDocumentTypeConfigRedirectUrl());
+    }
+
+    private function manageDriverDocumentTypeConfigAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_soferi') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']));
+        }
+
+        require_admin_or_403();
+
+        $search = trim((string) ($_GET['q'] ?? ''));
+
+        try {
+            $documentTypeRows = $this->documentModel->getConfiguredDriverDocumentTypes();
+            $customFieldsByType = $this->documentModel->getDriverDocumentCustomFieldConfigsByType();
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][manage_driver_document_type_config] ' . $exception->getMessage());
+            $exceptionMessage = strtolower($exception->getMessage());
+            if (str_contains($exceptionMessage, 'custom_fields_json') || str_contains($exceptionMessage, 'unknown column')) {
+                flash_set('danger', 'Structura bazei de date pentru campurile personalizate ale documentelor soferilor nu este actualizata. Ruleaza scriptul database/update_driver_document_custom_fields.sql, apoi incearca din nou.');
+            } else {
+                flash_set('danger', 'Nu s-au putut incarca tipurile de documente configurate pentru soferi.');
+            }
+            $documentTypeRows = [];
+            $customFieldsByType = [];
+        }
+
+        if ($search !== '') {
+            $searchNeedle = mb_strtolower($search, 'UTF-8');
+            $documentTypeRows = array_values(array_filter($documentTypeRows, static function (array $row) use ($searchNeedle): bool {
+                $documentType = mb_strtolower((string) ($row['document_type'] ?? ''), 'UTF-8');
+
+                return str_contains($documentType, $searchNeedle);
+            }));
+        }
+
+        render('module/driver_document_type_config.php', [
+            'pageTitle' => 'Gestionare tipuri documente soferi',
+            'currentPage' => $this->resolveCurrentPage($moduleKey, $module),
+            'moduleKey' => $moduleKey,
+            'module' => $module,
+            'documentTypeRows' => $documentTypeRows,
+            'customFieldsByType' => $customFieldsByType,
+            'customFieldTypeOptions' => $this->driverDocumentCustomFieldTypeOptions(),
+            'search' => $search,
+            'backUrl' => build_query_url(['page' => 'configurare_costuri_documente_soferi']),
+        ]);
+    }
+
+    private function updateDriverDocumentTypeExpiryAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_soferi' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+        }
+
+        require_admin_or_403();
+        ensure_csrf_or_redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+
+        $id = (int) ($_POST['id'] ?? 0);
+        $requiresExpiry = (string) ($_POST['requires_expiry'] ?? '1') === '1';
+
+        if ($id <= 0) {
+            flash_set('danger', 'Tipul de document sofer selectat este invalid.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+        }
+
+        try {
+            $this->documentModel->updateConfiguredDriverDocumentTypeRequiresExpiry($id, $requiresExpiry);
+            $this->entityStatusService->syncAllDriverStatuses();
+            flash_set('success', 'Regula pentru data de expirare a documentului sofer a fost actualizata.');
+        } catch (PDOException $exception) {
+            $message = strtolower($exception->getMessage());
+            if (str_contains($message, 'requires_expiry') || str_contains($message, 'unknown column')) {
+                flash_set('danger', 'Structura bazei de date nu este actualizata. Ruleaza scriptul database/update_driver_document_expiry_requirement.sql.');
+            } else {
+                flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'actualizare'));
+            }
+        }
+
+        redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+    }
+
+    private function deleteDriverDocumentTypeConfigAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_soferi' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+        }
+
+        require_admin_or_403();
+        ensure_csrf_or_redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+
+        $id = (int) ($_POST['id'] ?? 0);
+        if ($id <= 0) {
+            flash_set('danger', 'Tipul de document selectat pentru stergere este invalid.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+        }
+
+        try {
+            $this->documentModel->deleteConfiguredDriverDocumentType($id);
+
+            $this->entityStatusService->syncAllDriverStatuses();
+
+            flash_set('success', 'Tipul de document a fost sters din lista necesara pentru soferi.');
+        } catch (PDOException $exception) {
+            flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'stergere'));
+        }
+
+        redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+    }
+
+    private function addDriverDocumentCustomFieldConfigAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_soferi' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+        }
+
+        require_admin_or_403();
+        ensure_csrf_or_redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+
+        $documentTypeId = (int) ($_POST['document_type_id'] ?? 0);
+        $fieldLabel = trim((string) ($_POST['driver_doc_custom_field_label'] ?? ''));
+        $fieldLabel = preg_replace('/\s+/u', ' ', $fieldLabel);
+        $fieldLabel = is_string($fieldLabel) ? trim($fieldLabel) : '';
+        $fieldType = strtolower(trim((string) ($_POST['driver_doc_custom_field_type'] ?? 'text')));
+        $showWhenChecked = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($_POST['driver_doc_custom_field_show_when_checked'] ?? ''));
+        $showWhenChecked = is_string($showWhenChecked) ? $showWhenChecked : '';
+        $allowedTypes = array_keys($this->driverDocumentCustomFieldTypeOptions());
+
+        if ($documentTypeId <= 0) {
+            flash_set('danger', 'Tipul de document selectat este invalid.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+        }
+
+        if ($fieldLabel === '') {
+            flash_set('danger', 'Eticheta campului este obligatorie.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+        }
+
+        if (mb_strlen($fieldLabel) > 120) {
+            flash_set('danger', 'Eticheta campului poate avea maximum 120 de caractere.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+        }
+
+        if (!in_array($fieldType, $allowedTypes, true)) {
+            flash_set('danger', 'Tipul campului selectat este invalid.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+        }
+
+        try {
+            $documentTypeRow = $this->documentModel->getConfiguredDriverDocumentTypeById($documentTypeId);
+            if ($documentTypeRow === null) {
+                flash_set('danger', 'Tipul de document selectat nu exista.');
+                redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+            }
+
+            $customFields = $this->documentModel->getDriverDocumentCustomFieldConfigsForDocumentType(
+                (string) ($documentTypeRow['document_type'] ?? '')
+            );
+            $checkboxFieldKeys = [];
+            foreach ($customFields as $customField) {
+                if (mb_strtolower((string) ($customField['label'] ?? ''), 'UTF-8') === mb_strtolower($fieldLabel, 'UTF-8')) {
+                    flash_set('danger', 'Exista deja un camp cu aceasta eticheta pentru tipul de document selectat.');
+                    redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+                }
+
+                if ((string) ($customField['type'] ?? 'text') === 'checkbox') {
+                    $checkboxFieldKeys[(string) ($customField['key'] ?? '')] = true;
+                }
+            }
+
+            if ($showWhenChecked !== '' && !isset($checkboxFieldKeys[$showWhenChecked])) {
+                flash_set('danger', 'Regula de afisare conditionata este invalida. Selecteaza un camp de tip checkbox.');
+                redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+            }
+
+            if ($fieldType === 'checkbox') {
+                $showWhenChecked = '';
+            }
+
+            $customFields[] = [
+                'key' => $this->generateDriverDocumentCustomFieldKey(),
+                'label' => $fieldLabel,
+                'type' => $fieldType,
+                'show_when_checked' => $showWhenChecked,
+            ];
+
+            $this->documentModel->updateConfiguredDriverDocumentTypeCustomFields($documentTypeId, $customFields);
+            $this->entityStatusService->syncAllDriverStatuses();
+            flash_set('success', 'Campul personalizat a fost adaugat pentru tipul de document selectat.');
+        } catch (PDOException $exception) {
+            $sqlState = strtoupper((string) $exception->getCode());
+            $exceptionMessage = strtolower($exception->getMessage());
+
+            if ($sqlState === '42S22'
+                || $sqlState === '42S02'
+                || str_contains($exceptionMessage, 'custom_fields_json')
+                || str_contains($exceptionMessage, 'configurare_documente_obligatorii_soferi')
+            ) {
+                flash_set('danger', 'Structura bazei de date pentru campurile personalizate ale documentelor soferilor nu este actualizata. Ruleaza scriptul database/update_driver_document_custom_fields.sql, apoi incearca din nou.');
+            } else {
+                flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'actualizare'));
+            }
+        }
+
+        redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+    }
+
+    private function deleteDriverDocumentCustomFieldConfigAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'configurare_costuri_documente_soferi' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+        }
+
+        require_admin_or_403();
+        ensure_csrf_or_redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+
+        $documentTypeId = (int) ($_POST['document_type_id'] ?? 0);
+        $fieldKey = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($_POST['custom_field_key'] ?? ''));
+        $fieldKey = is_string($fieldKey) ? $fieldKey : '';
+
+        if ($documentTypeId <= 0 || $fieldKey === '') {
+            flash_set('danger', 'Campul selectat pentru stergere este invalid.');
+            redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+        }
+
+        try {
+            $documentTypeRow = $this->documentModel->getConfiguredDriverDocumentTypeById($documentTypeId);
+            if ($documentTypeRow === null) {
+                flash_set('danger', 'Tipul de document selectat nu exista.');
+                redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
+            }
+
+            $customFields = $this->documentModel->getDriverDocumentCustomFieldConfigsForDocumentType(
+                (string) ($documentTypeRow['document_type'] ?? '')
+            );
+            $remainingFields = [];
+            foreach ($customFields as $customField) {
+                if ((string) ($customField['key'] ?? '') === $fieldKey) {
+                    continue;
+                }
+
+                if ((string) ($customField['show_when_checked'] ?? '') === $fieldKey) {
+                    unset($customField['show_when_checked']);
+                }
+
+                $remainingFields[] = $customField;
+            }
+
+            $this->documentModel->updateConfiguredDriverDocumentTypeCustomFields($documentTypeId, $remainingFields);
+            $this->entityStatusService->syncAllDriverStatuses();
+            flash_set('success', 'Campul personalizat a fost sters din tipul de document selectat.');
+        } catch (PDOException $exception) {
+            $sqlState = strtoupper((string) $exception->getCode());
+            $exceptionMessage = strtolower($exception->getMessage());
+
+            if ($sqlState === '42S22'
+                || $sqlState === '42S02'
+                || str_contains($exceptionMessage, 'custom_fields_json')
+                || str_contains($exceptionMessage, 'configurare_documente_obligatorii_soferi')
+            ) {
+                flash_set('danger', 'Structura bazei de date pentru campurile personalizate ale documentelor soferilor nu este actualizata. Ruleaza scriptul database/update_driver_document_custom_fields.sql, apoi incearca din nou.');
+            } else {
+                flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'actualizare'));
+            }
+        }
+
+        redirect(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']));
     }
 
     private function buildVehicleCouplingContext(array $vehicle): array
@@ -1400,7 +2610,7 @@ class ModuleController
             if ($activeCoupling !== null) {
                 $currentLabel = 'Semiremorca: ' . (string) ($activeCoupling['semiremorca_nr'] ?? '-');
             }
-        } elseif ($vehicleType === 'semiremorca') {
+        } elseif (is_trailer_vehicle_type($vehicleType)) {
             $activeCoupling = $this->vehicleCouplingModel->getActiveCouplingByTrailer($vehicleId);
             if ($activeCoupling !== null) {
                 $currentLabel = 'Tractor: ' . (string) ($activeCoupling['tractor_nr'] ?? '-');
@@ -1523,8 +2733,8 @@ class ModuleController
                         null
                     );
                 }
-            } elseif ($moduleKey === 'vehicule' && !empty($record['poza_stocata'])) {
-                $this->deleteVehiclePhotoPhysicalFile((string) $record['poza_stocata']);
+            } elseif (in_array($moduleKey, ['vehicule', 'soferi'], true) && !empty($record['poza_stocata'])) {
+                $this->deletePhotoPhysicalFileForModule($moduleKey, (string) $record['poza_stocata']);
             }
 
             $this->syncStatusesAfterMutation($moduleKey, null, $record);
@@ -1569,11 +2779,22 @@ class ModuleController
 
         if ($moduleKey === 'documente') {
             $viewData['documentAuditLogs'] = $this->documentModel->getAuditLogsForDocument($id);
+            $viewData['documentCustomFieldRows'] = $this->buildDocumentCustomFieldDisplayRows($record);
+        }
+
+        if ($moduleKey === 'documente_soferi') {
+            $viewData['driverDocumentCustomFieldRows'] = $this->buildDriverDocumentCustomFieldDisplayRows($record);
         }
 
         if ($moduleKey === 'vehicule') {
             $syncedStatusContext = $this->entityStatusService->syncVehicleStatus($id);
-            $viewData['vehicleDocuments'] = $this->documentModel->getDocumentsForVehicle($id);
+            $vehicleDocuments = $this->documentModel->getDocumentsForVehicle($id);
+            foreach ($vehicleDocuments as &$vehicleDocument) {
+                $vehicleDocument['custom_field_display_rows'] = $this->buildDocumentCustomFieldDisplayRows($vehicleDocument);
+            }
+            unset($vehicleDocument);
+
+            $viewData['vehicleDocuments'] = $vehicleDocuments;
             $viewData['statusContext'] = $syncedStatusContext ?? $this->entityStatusService->evaluateVehicleStatus($id);
             if ($syncedStatusContext !== null) {
                 $viewData['record']['status'] = $syncedStatusContext['status'];
@@ -1600,7 +2821,13 @@ class ModuleController
         }
 
         if ($moduleKey === 'soferi') {
-            $viewData['driverDocuments'] = $this->documentModel->getDocumentsForDriver($id);
+            $driverDocuments = $this->documentModel->getDocumentsForDriver($id);
+            foreach ($driverDocuments as &$driverDocument) {
+                $driverDocument['custom_field_display_rows'] = $this->buildDriverDocumentCustomFieldDisplayRows($driverDocument);
+            }
+            unset($driverDocument);
+
+            $viewData['driverDocuments'] = $driverDocuments;
             $viewData['statusContext'] = $this->entityStatusService->evaluateDriverStatus($id);
         }
 
@@ -1704,6 +2931,7 @@ class ModuleController
             'currency' => format_number_ro($value, 2) . ' lei',
             'status' => (string) $value,
             'vehicle_type' => vehicle_type_label((string) $value),
+            'vehicle_photo', 'vehicle_photo_detail', 'driver_photo', 'driver_photo_detail' => (string) $value,
             'role' => (string) $value,
             'expiry' => format_date_ro((string) $value),
             default => (string) $value,
@@ -1733,10 +2961,162 @@ class ModuleController
                 $value = trim($value);
             }
 
+            if (
+                ($module['table'] ?? '') === 'vehicule'
+                && $key === 'tip_vehicul'
+                && is_array($value)
+                && in_array('semiremorca_primar', $value, true)
+                && !in_array('semiremorca', $value, true)
+            ) {
+                // Keep legacy trailer rows filterable while older records still use semiremorca.
+                $value[] = 'semiremorca';
+            }
+
             $filters[$key] = $value;
         }
 
         return $filters;
+    }
+
+    private function buildDocumentPageDriverModule(array $driverDocumentModule): array
+    {
+        $driverDocumentModule['select'] = 't.*, DATEDIFF(t.data_expirare, CURDATE()) AS zile_expirare, s.nume AS sofer_label, s.telefon AS sofer_telefon, v.nr_inmatriculare AS vehicul_label';
+        $driverDocumentModule['default_order'] = 't.data_expirare IS NULL ASC, t.data_expirare ASC, t.id DESC';
+        $driverDocumentModule['list_columns'] = [
+            'sofer_label' => ['label' => 'Șofer'],
+            'vehicul_label' => ['label' => 'Vehicul alocat'],
+            'tip_document' => ['label' => 'Tip document'],
+            'numar_document' => ['label' => 'Serie / numar'],
+            'fisier_original' => ['label' => 'Fisier', 'type' => 'document_file'],
+            'data_expirare' => ['label' => 'Data expirare', 'type' => 'expiry'],
+            'zile_expirare' => ['label' => 'Zile expirare', 'type' => 'integer'],
+            'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
+        ];
+
+        $driverDocumentModule['filters']['vehicle_id'] = [
+            'label' => 'Vehicul',
+            'type' => 'select',
+            'column' => 'v.id',
+            'operator' => '=',
+            'source' => [
+                'table' => 'vehicule',
+                'value' => 'id',
+                'label' => "CONCAT(nr_inmatriculare, ' - ', marca, ' ', model)",
+                'order' => 'nr_inmatriculare ASC',
+            ],
+        ];
+
+        $driverDocumentModule['filters']['stare_expirare'] = [
+            'label' => 'Stare expirare',
+            'type' => 'select',
+            'options' => [
+                'expirate' => 'Expirate',
+                'expira_7_zile' => 'Expira in 7 zile',
+                'expira_30_zile' => 'Expira in 30 zile',
+                'valabile' => 'Valabile peste 30 zile',
+                'fara_expirare' => 'Fara expirare',
+            ],
+            'custom_conditions' => [
+                'expirate' => ['sql' => 't.data_expirare < CURDATE()'],
+                'expira_7_zile' => ['sql' => 't.data_expirare BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)'],
+                'expira_30_zile' => ['sql' => 't.data_expirare BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)'],
+                'valabile' => ['sql' => 't.data_expirare > DATE_ADD(CURDATE(), INTERVAL 30 DAY)'],
+                'fara_expirare' => ['sql' => 't.data_expirare IS NULL'],
+            ],
+        ];
+
+        $driverDocumentModule['filters']['are_fisier'] = [
+            'label' => 'Fisier atasat',
+            'type' => 'select',
+            'options' => [
+                'da' => 'Da',
+                'nu' => 'Nu',
+            ],
+            'custom_conditions' => [
+                'da' => ['sql' => "COALESCE(t.fisier_stocat, '') <> ''"],
+                'nu' => ['sql' => "COALESCE(t.fisier_stocat, '') = ''"],
+            ],
+        ];
+
+        return $driverDocumentModule;
+    }
+
+    private function buildDocumentCostPageDriverModule(array $driverCostModule): array
+    {
+        $driverCostModule['select'] = 't.*, s.nume AS sofer_label, s.telefon AS sofer_telefon, v.id AS assigned_vehicle_id, v.nr_inmatriculare AS vehicul_label';
+        $driverCostModule['list_columns']['sofer_label']['label'] = 'Șofer';
+        $driverCostModule['detail_fields']['sofer_label']['label'] = 'Șofer';
+        $driverCostModule['detail_fields']['sofer_telefon']['label'] = 'Telefon șofer';
+        $driverCostModule['filters']['vehicle_id'] = [
+            'label' => 'Vehicul',
+            'type' => 'select',
+            'column' => 'v.id',
+            'operator' => '=',
+            'source' => [
+                'table' => 'vehicule',
+                'value' => 'id',
+                'label' => "CONCAT(nr_inmatriculare, ' - ', marca, ' ', model)",
+                'where' => "nr_inmatriculare <> 'STOC-ANVELOPE' AND serie_sasiu <> 'STOCANVELOPE00001'",
+                'order' => 'nr_inmatriculare ASC',
+            ],
+        ];
+
+        return $driverCostModule;
+    }
+
+    private function applyRemainingValidityDaysToDriverCostRows(array $rows): array
+    {
+        if ($rows === []) {
+            return [];
+        }
+
+        $driverIds = [];
+        foreach ($rows as $row) {
+            $driverId = (int) ($row['driver_id'] ?? 0);
+            if ($driverId > 0) {
+                $driverIds[] = $driverId;
+            }
+        }
+
+        if ($driverIds === []) {
+            return $rows;
+        }
+
+        try {
+            $validityDaysByDriverIdAndType = $this->documentModel->getRemainingValidityDaysByDriverIds($driverIds);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][driver-doc-cost-list-validity] ' . $exception->getMessage());
+            return $rows;
+        }
+
+        foreach ($rows as &$row) {
+            $driverId = (int) ($row['driver_id'] ?? 0);
+            $documentType = trim((string) ($row['document_type'] ?? ''));
+            $validityDays = (int) ($validityDaysByDriverIdAndType[(string) $driverId][$documentType] ?? 0);
+
+            if ($driverId > 0 && $documentType !== '' && $validityDays > 0) {
+                $row['validity_days'] = $validityDays;
+            }
+        }
+        unset($row);
+
+        return $rows;
+    }
+
+    private function applyRemainingValidityDaysToCostFormData(array $formData, string $ownerField, array $validityDaysByOwnerIdAndType): array
+    {
+        $ownerId = (int) ($formData[$ownerField] ?? 0);
+        $documentType = trim((string) ($formData['document_type'] ?? ''));
+        if ($ownerId <= 0 || $documentType === '') {
+            return $formData;
+        }
+
+        $validityDays = (int) ($validityDaysByOwnerIdAndType[(string) $ownerId][$documentType] ?? 0);
+        if ($validityDays > 0) {
+            $formData['validity_days'] = (string) $validityDays;
+        }
+
+        return $formData;
     }
 
     private function buildFilterOptions(array $module): array
@@ -1892,6 +3272,257 @@ class ModuleController
         }
     }
 
+    private function applyDynamicDocumentTypeOptions(string $moduleKey, array $module, array $input, ?int $recordId): array
+    {
+        if ($moduleKey === 'documente_soferi') {
+            $driverId = (int) ($input['driver_id'] ?? 0);
+            if ($driverId <= 0 && $recordId !== null && $recordId > 0) {
+                $existing = $this->moduleModel->findById($module, $recordId);
+                if (is_array($existing)) {
+                    $driverId = (int) ($existing['driver_id'] ?? 0);
+                }
+            }
+
+            try {
+                $module['form_fields']['tip_document']['options'] = $this->documentModel->getAvailableDriverDocumentTypeOptionsForDriver($driverId, $recordId);
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][driver-doc-config][dynamic-options] ' . $exception->getMessage());
+                $module['form_fields']['tip_document']['options'] = [];
+            }
+
+            return $module;
+        }
+
+        if ($moduleKey === 'configurare_costuri_documente_soferi') {
+            $driverId = (int) ($input['driver_id'] ?? 0);
+            if ($driverId <= 0 && $recordId !== null && $recordId > 0) {
+                $existing = $this->moduleModel->findById($module, $recordId);
+                if (is_array($existing)) {
+                    $driverId = (int) ($existing['driver_id'] ?? 0);
+                }
+            }
+
+            try {
+                $module['form_fields']['document_type']['options'] = $this->documentModel->getExistingDriverDocumentTypeOptionsForDriver($driverId);
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][driver-doc-config][dynamic-cost-options] ' . $exception->getMessage());
+                $module['form_fields']['document_type']['options'] = [];
+            }
+
+            return $module;
+        }
+
+        if (!in_array($moduleKey, ['documente', 'configurare_costuri_documente_vehicule_override'], true)) {
+            return $module;
+        }
+
+        $vehicleId = (int) ($input['vehicle_id'] ?? 0);
+        if ($vehicleId <= 0 && $recordId !== null && $recordId > 0) {
+            $existing = $this->moduleModel->findById($module, $recordId);
+            if (is_array($existing)) {
+                $vehicleId = (int) ($existing['vehicle_id'] ?? 0);
+            }
+        }
+
+        try {
+            $documentTypeField = $moduleKey === 'documente' ? 'tip_document' : 'document_type';
+            if ($moduleKey === 'documente') {
+                $module['form_fields'][$documentTypeField]['options'] = $this->documentModel->getDocumentTypeOptionsForVehicle($vehicleId);
+            } else {
+                $module['form_fields'][$documentTypeField]['options'] = $this->documentModel->getExistingDocumentTypeOptionsForVehicle($vehicleId);
+            }
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][doc-config][dynamic-options] ' . $exception->getMessage());
+            $documentTypeField = $moduleKey === 'documente' ? 'tip_document' : 'document_type';
+            $module['form_fields'][$documentTypeField]['options'] = [];
+        }
+
+        return $module;
+    }
+
+    private function applyDynamicDocumentExpiryRequirement(string $moduleKey, array $module, array &$input, ?int $recordId): array
+    {
+        if (!in_array($moduleKey, ['documente', 'documente_soferi'], true) || !isset($module['form_fields']['data_expirare'])) {
+            return $module;
+        }
+
+        $documentType = trim((string) ($input['tip_document'] ?? ''));
+
+        if ($moduleKey === 'documente') {
+            $vehicleId = (int) ($input['vehicle_id'] ?? 0);
+            if (($vehicleId <= 0 || $documentType === '') && $recordId !== null && $recordId > 0) {
+                $existing = $this->moduleModel->findById($module, $recordId);
+                if (is_array($existing)) {
+                    if ($vehicleId <= 0) {
+                        $vehicleId = (int) ($existing['vehicle_id'] ?? 0);
+                    }
+                    if ($documentType === '') {
+                        $documentType = trim((string) ($existing['tip_document'] ?? ''));
+                    }
+                }
+            }
+
+            if ($vehicleId <= 0 || $documentType === '') {
+                return $module;
+            }
+
+            try {
+                $requiresExpiry = $this->documentModel->documentTypeRequiresExpiryForVehicle($vehicleId, $documentType);
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][doc-config][expiry-requirement] ' . $exception->getMessage());
+                $requiresExpiry = true;
+            }
+        } else {
+            if ($documentType === '' && $recordId !== null && $recordId > 0) {
+                $existing = $this->moduleModel->findById($module, $recordId);
+                if (is_array($existing)) {
+                    $documentType = trim((string) ($existing['tip_document'] ?? ''));
+                }
+            }
+
+            if ($documentType === '') {
+                return $module;
+            }
+
+            try {
+                $requiresExpiry = $this->documentModel->driverDocumentTypeRequiresExpiry($documentType);
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][driver-doc-config][expiry-requirement] ' . $exception->getMessage());
+                $requiresExpiry = true;
+            }
+        }
+
+        if (!$requiresExpiry) {
+            $module['form_fields']['data_expirare']['required'] = false;
+            $module['form_fields']['data_expirare']['nullable'] = true;
+            $input['data_expirare'] = '';
+        }
+
+        return $module;
+    }
+
+    private function validateVehicleDocumentTypeSelection(string $moduleKey, array $data, array &$errors): void
+    {
+        if (isset($errors['vehicle_id'])) {
+            return;
+        }
+
+        $documentTypeField = $moduleKey === 'documente'
+            ? 'tip_document'
+            : ($moduleKey === 'configurare_costuri_documente_vehicule_override' ? 'document_type' : null);
+        if ($documentTypeField === null) {
+            return;
+        }
+
+        $vehicleId = (int) ($data['vehicle_id'] ?? 0);
+        $documentType = trim((string) ($data[$documentTypeField] ?? ''));
+
+        if ($vehicleId <= 0) {
+            return;
+        }
+
+        try {
+            if ($moduleKey === 'documente') {
+                $allowedOptions = $this->documentModel->getDocumentTypeOptionsForVehicle($vehicleId);
+            } else {
+                $allowedOptions = $this->documentModel->getExistingDocumentTypeOptionsForVehicle($vehicleId);
+            }
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][doc-config][validate-type] ' . $exception->getMessage());
+            $errors[$documentTypeField] = $moduleKey === 'documente'
+                ? 'Configurarea costurilor documente pe tip de vehicul nu este disponibila. Ruleaza scriptul database/update_configurare_costuri_documente_vehicule.sql.'
+                : 'Nu s-au putut incarca documentele deja adaugate pentru vehiculul selectat.';
+            return;
+        }
+
+        if ($allowedOptions === []) {
+            $errors[$documentTypeField] = $moduleKey === 'documente'
+                ? 'Nu exista tipuri de document configurate pentru tipul vehiculului selectat.'
+                : 'Vehiculul selectat nu are documente adaugate in modulul Documente.';
+            return;
+        }
+
+        if ($documentType === '') {
+            return;
+        }
+
+        if (!array_key_exists($documentType, $allowedOptions)) {
+            $errors[$documentTypeField] = $moduleKey === 'documente'
+                ? 'Tipul de document selectat nu este permis pentru acest tip de vehicul.'
+                : 'Tipul de document selectat nu exista in documentele deja adaugate pentru acest vehicul.';
+        }
+    }
+
+    private function validateDriverDocumentTypeSelection(array $data, array &$errors, ?int $recordId): void
+    {
+        if (isset($errors['driver_id']) || isset($errors['tip_document'])) {
+            return;
+        }
+
+        $driverId = (int) ($data['driver_id'] ?? 0);
+        $documentType = trim((string) ($data['tip_document'] ?? ''));
+        if ($driverId <= 0 || $documentType === '') {
+            return;
+        }
+
+        try {
+            $allowedOptions = $this->documentModel->getRequiredDriverDocumentTypeOptions();
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][driver-doc-config][validate-type] ' . $exception->getMessage());
+            $errors['tip_document'] = 'Configurarea costurilor documente soferi nu este disponibila. Ruleaza scriptul database/update_configurare_costuri_documente_soferi.sql.';
+            return;
+        }
+
+        if ($allowedOptions === []) {
+            $errors['tip_document'] = 'Nu exista tipuri de document configurate pentru soferi.';
+            return;
+        }
+
+        if (!array_key_exists($documentType, $allowedOptions)) {
+            $errors['tip_document'] = 'Tipul de document selectat nu este permis pentru documentele soferilor.';
+            return;
+        }
+
+        try {
+            if ($this->documentModel->driverDocumentTypeExists($driverId, $documentType, $recordId)) {
+                $errors['tip_document'] = 'Acest tip de document este deja adaugat pentru soferul selectat. Foloseste Editare pentru actualizare.';
+            }
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][driver-doc-config][duplicate-check] ' . $exception->getMessage());
+            $errors['tip_document'] = 'Nu s-a putut verifica daca documentul exista deja pentru acest sofer.';
+        }
+    }
+
+    private function validateDriverDocumentCostTypeSelection(array $data, array &$errors): void
+    {
+        if (isset($errors['driver_id']) || isset($errors['document_type'])) {
+            return;
+        }
+
+        $driverId = (int) ($data['driver_id'] ?? 0);
+        $documentType = trim((string) ($data['document_type'] ?? ''));
+        if ($driverId <= 0 || $documentType === '') {
+            return;
+        }
+
+        try {
+            $allowedOptions = $this->documentModel->getExistingDriverDocumentTypeOptionsForDriver($driverId);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][driver-doc-config][validate-cost-type] ' . $exception->getMessage());
+            $errors['document_type'] = 'Nu s-au putut incarca documentele deja adaugate pentru soferul selectat.';
+            return;
+        }
+
+        if ($allowedOptions === []) {
+            $errors['document_type'] = 'Soferul selectat nu are documente adaugate in modulul Documente soferi.';
+            return;
+        }
+
+        if (!array_key_exists($documentType, $allowedOptions)) {
+            $errors['document_type'] = 'Tipul de document selectat nu exista in documentele deja adaugate pentru acest sofer.';
+        }
+    }
+
     private function defaultFormData(array $module): array
     {
         $data = [];
@@ -1930,6 +3561,25 @@ class ModuleController
             $removeField = $meta['remove_field'] ?? 'sterge_fisier';
             if (isset($input[$removeField])) {
                 $old[$removeField] = (string) $input[$removeField];
+            }
+        }
+
+        if (in_array(($module['table'] ?? ''), ['documente', 'documente_soferi'], true)) {
+            $customFieldValues = $input['custom_field_values'] ?? [];
+            if (is_array($customFieldValues)) {
+                $sanitizedCustomFieldValues = [];
+                foreach ($customFieldValues as $fieldKey => $value) {
+                    $normalizedKey = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) $fieldKey);
+                    if (!is_string($normalizedKey) || $normalizedKey === '') {
+                        continue;
+                    }
+
+                    if (is_scalar($value)) {
+                        $sanitizedCustomFieldValues[$normalizedKey] = trim((string) $value);
+                    }
+                }
+
+                $old['custom_field_values'] = $sanitizedCustomFieldValues;
             }
         }
 
@@ -2020,9 +3670,14 @@ class ModuleController
                 continue;
             }
 
-            if ($type === 'date' && !$this->isValidDate((string) $value)) {
-                $errors[$field] = 'Data nu este valida. Format acceptat: YYYY-MM-DD.';
-                continue;
+            if ($type === 'date') {
+                $normalizedDate = $this->normalizeDateInput((string) $value);
+                if ($normalizedDate === null) {
+                    $errors[$field] = 'Data nu este valida. Formate acceptate: DD/MM/YYYY sau YYYY-MM-DD.';
+                    continue;
+                }
+
+                $value = $normalizedDate;
             }
 
             if ($type === 'number') {
@@ -2146,6 +3801,27 @@ class ModuleController
         return $dateTime !== false && $dateTime->format('Y-m-d') === $date;
     }
 
+    private function normalizeDateInput(string $date): ?string
+    {
+        $raw = trim($date);
+        if ($raw === '') {
+            return '';
+        }
+
+        if ($this->isValidDate($raw)) {
+            return $raw;
+        }
+
+        foreach (['d/m/Y', 'd.m.Y', 'd-m-Y'] as $format) {
+            $dateTime = DateTime::createFromFormat($format, $raw);
+            if ($dateTime instanceof DateTime && $dateTime->format($format) === $raw) {
+                return $dateTime->format('Y-m-d');
+            }
+        }
+
+        return null;
+    }
+
     private function validateUserSafetyOnUpdate(int $id, array $existing, array $data, array &$errors): void
     {
         $currentUserId = (int) (current_user()['id'] ?? 0);
@@ -2203,7 +3879,7 @@ class ModuleController
                 || (str_contains($exceptionMessage, 'tip_vehicul') && str_contains($exceptionMessage, 'incorrect'))
             )
         ) {
-            return 'Structura bazei de date pentru tipul CAMION si campul Km bord nu este actualizata. Ruleaza scriptul database/update_vehicle_camion_km.sql, apoi incearca din nou.';
+            return 'Structura bazei de date pentru campurile Tip vehicul/Km bord nu este actualizata. Ruleaza scriptul database/update_vehicle_camion_km.sql, apoi incearca din nou.';
         }
 
         if ($moduleKey === 'vehicule'
@@ -2261,6 +3937,35 @@ class ModuleController
                 || str_contains($exceptionMessage, 'vehicule_cuplaje'))
         ) {
             return 'Structura bazei de date pentru cuplaje vehicule nu este actualizata. Ruleaza scriptul database/update_vehicle_tractor_trailer_links.sql, apoi incearca din nou.';
+        }
+
+        if ($moduleKey === 'configurare_costuri_documente_vehicule_override'
+            && ($sqlState === '42S22'
+                || $sqlState === '42S02'
+                || str_contains($exceptionMessage, 'unknown column')
+                || str_contains($exceptionMessage, 'configurare_costuri_documente_vehicule_override'))
+        ) {
+            return 'Structura bazei de date pentru configurarea costurilor individuale pe vehicul nu este actualizata. Ruleaza scriptul database/update_configurare_costuri_documente_vehicule_override.sql, apoi incearca din nou.';
+        }
+
+        if ($moduleKey === 'documente'
+            && (
+                str_contains($exceptionMessage, 'custom_fields_json')
+                || str_contains($exceptionMessage, 'documente')
+            )
+            && ($sqlState === '42S22' || str_contains($exceptionMessage, 'unknown column'))
+        ) {
+            return 'Structura bazei de date pentru campurile personalizate ale documentelor vehiculelor nu este actualizata. Ruleaza scriptul database/update_vehicle_document_custom_fields.sql, apoi incearca din nou.';
+        }
+
+        if ($moduleKey === 'documente_soferi'
+            && (
+                str_contains($exceptionMessage, 'custom_fields_json')
+                || str_contains($exceptionMessage, 'documente_soferi')
+            )
+            && ($sqlState === '42S22' || str_contains($exceptionMessage, 'unknown column'))
+        ) {
+            return 'Structura bazei de date pentru campurile personalizate ale documentelor soferilor nu este actualizata. Ruleaza scriptul database/update_driver_document_custom_fields.sql, apoi incearca din nou.';
         }
 
         $generic = $operation === 'actualizare'
@@ -2410,6 +4115,11 @@ class ModuleController
         return $this->storeUploadedAssetFile($file, 'vehicule', 'vehicul', 'poza_original', 'poza_stocata');
     }
 
+    private function storeUploadedDriverPhoto(?array $file): array
+    {
+        return $this->storeUploadedAssetFile($file, 'soferi', 'sofer', 'poza_original', 'poza_stocata');
+    }
+
     private function sanitizeUploadedFileName(string $fileName): string
     {
         $fileName = preg_replace('/\s+/', '_', trim($fileName)) ?? 'document';
@@ -2444,6 +4154,27 @@ class ModuleController
         $this->deleteVehiclePhotoPhysicalFile($storedFile);
     }
 
+    private function cleanupUploadedDriverPhoto(array $uploadedFileData): void
+    {
+        $storedFile = $uploadedFileData['poza_stocata'] ?? null;
+
+        if (!is_string($storedFile) || trim($storedFile) === '') {
+            return;
+        }
+
+        $this->deleteDriverPhotoPhysicalFile($storedFile);
+    }
+
+    private function cleanupUploadedPhotoForModule(string $moduleKey, array $uploadedFileData): void
+    {
+        if ($moduleKey === 'soferi') {
+            $this->cleanupUploadedDriverPhoto($uploadedFileData);
+            return;
+        }
+
+        $this->cleanupUploadedVehiclePhoto($uploadedFileData);
+    }
+
     private function deleteDocumentPhysicalFile(string $storedFile): void
     {
         if (trim($storedFile) === '') {
@@ -2466,6 +4197,28 @@ class ModuleController
         if (is_file($path)) {
             @unlink($path);
         }
+    }
+
+    private function deleteDriverPhotoPhysicalFile(string $storedFile): void
+    {
+        if (trim($storedFile) === '') {
+            return;
+        }
+
+        $path = BASE_PATH . '/uploads/soferi/' . $storedFile;
+        if (is_file($path)) {
+            @unlink($path);
+        }
+    }
+
+    private function deletePhotoPhysicalFileForModule(string $moduleKey, string $storedFile): void
+    {
+        if ($moduleKey === 'soferi') {
+            $this->deleteDriverPhotoPhysicalFile($storedFile);
+            return;
+        }
+
+        $this->deleteVehiclePhotoPhysicalFile($storedFile);
     }
 
     private function storeUploadedAssetFile(?array $file, string $directory, string $prefix, string $originalColumn, string $storedColumn): array
@@ -2591,6 +4344,10 @@ class ModuleController
 
     private function buildModuleBackUrl(string $moduleKey, array $module, ?array $record = null, ?array $formData = null): string
     {
+        if ($moduleKey === 'configurare_costuri_documente_soferi') {
+            return build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']);
+        }
+
         if ($moduleKey === 'documente_soferi') {
             $driverId = (int) ($record['driver_id'] ?? $formData['driver_id'] ?? $_GET['driver_id'] ?? 0);
 
@@ -2608,6 +4365,411 @@ class ModuleController
         }
 
         return build_query_url(['page' => $moduleKey]);
+    }
+
+    private function driverDocumentTypeConfigRedirectUrl(): string
+    {
+        if ((string) ($_POST['return_to'] ?? '') === 'manage') {
+            return build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'manage_driver_document_type_config']);
+        }
+
+        return build_query_url(['page' => 'configurare_costuri_documente_soferi']);
+    }
+
+    private function documentCustomFieldTypeOptions(): array
+    {
+        return $this->driverDocumentCustomFieldTypeOptions();
+    }
+
+    private function generateDocumentCustomFieldKey(): string
+    {
+        try {
+            return 'vcf_' . bin2hex(random_bytes(6));
+        } catch (Throwable) {
+            return 'vcf_' . str_replace('.', '', uniqid('', true));
+        }
+    }
+
+    private function driverDocumentCustomFieldTypeOptions(): array
+    {
+        return [
+            'text' => 'Text',
+            'number' => 'Numeric',
+            'date' => 'Data',
+            'checkbox' => 'Checkbox',
+        ];
+    }
+
+    private function generateDriverDocumentCustomFieldKey(): string
+    {
+        try {
+            return 'dcf_' . bin2hex(random_bytes(6));
+        } catch (Throwable) {
+            return 'dcf_' . str_replace('.', '', uniqid('', true));
+        }
+    }
+
+    private function decodeDriverDocumentTypeCustomFields(mixed $rawValue): array
+    {
+        if (!is_string($rawValue) || trim($rawValue) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($rawValue, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        $allowedTypes = array_keys($this->driverDocumentCustomFieldTypeOptions());
+        $rows = [];
+
+        foreach ($decoded as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $key = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($item['key'] ?? ''));
+            $label = trim((string) ($item['label'] ?? ''));
+            $type = strtolower(trim((string) ($item['type'] ?? 'text')));
+            $showWhenChecked = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($item['show_when_checked'] ?? ''));
+
+            if (!is_string($key) || $key === '' || $label === '' || !in_array($type, $allowedTypes, true)) {
+                continue;
+            }
+
+            $rows[$key] = [
+                'key' => $key,
+                'label' => $label,
+                'type' => $type,
+                'show_when_checked' => is_string($showWhenChecked) ? $showWhenChecked : '',
+            ];
+        }
+
+        $checkboxKeys = [];
+        foreach ($rows as $fieldKey => $row) {
+            if (($row['type'] ?? 'text') === 'checkbox') {
+                $checkboxKeys[$fieldKey] = true;
+            }
+        }
+
+        foreach ($rows as $fieldKey => &$row) {
+            $showWhenChecked = (string) ($row['show_when_checked'] ?? '');
+            if (
+                $showWhenChecked === ''
+                || $showWhenChecked === $fieldKey
+                || !isset($checkboxKeys[$showWhenChecked])
+            ) {
+                unset($row['show_when_checked']);
+            }
+        }
+        unset($row);
+
+        return array_values($rows);
+    }
+
+    private function decodeDriverDocumentCustomFieldValueSnapshot(mixed $rawValue): array
+    {
+        if (!is_string($rawValue) || trim($rawValue) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($rawValue, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        $allowedTypes = array_keys($this->driverDocumentCustomFieldTypeOptions());
+        $rows = [];
+
+        foreach ($decoded as $fieldKey => $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $key = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($item['key'] ?? $fieldKey));
+            $label = trim((string) ($item['label'] ?? ''));
+            $type = strtolower(trim((string) ($item['type'] ?? 'text')));
+            $value = $item['value'] ?? '';
+
+            if (!is_scalar($value)) {
+                continue;
+            }
+
+            if (!is_string($key) || $key === '' || $label === '' || !in_array($type, $allowedTypes, true)) {
+                continue;
+            }
+
+            $rows[$key] = [
+                'key' => $key,
+                'label' => $label,
+                'type' => $type,
+                'value' => trim((string) $value),
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function extractDriverDocumentCustomFieldValuesForForm(array $formData): array
+    {
+        $postedValues = $formData['custom_field_values'] ?? null;
+        if (is_array($postedValues)) {
+            $values = [];
+            foreach ($postedValues as $fieldKey => $value) {
+                $normalizedKey = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) $fieldKey);
+                if (!is_string($normalizedKey) || $normalizedKey === '' || !is_scalar($value)) {
+                    continue;
+                }
+
+                $values[$normalizedKey] = trim((string) $value);
+            }
+
+            return $values;
+        }
+
+        $snapshotRows = $this->decodeDriverDocumentCustomFieldValueSnapshot($formData['custom_fields_json'] ?? null);
+        $values = [];
+        foreach ($snapshotRows as $fieldKey => $row) {
+            $values[$fieldKey] = (string) ($row['value'] ?? '');
+        }
+
+        return $values;
+    }
+
+    private function extractDocumentCustomFieldValuesForForm(array $formData): array
+    {
+        return $this->extractDriverDocumentCustomFieldValuesForForm($formData);
+    }
+
+    private function validateDocumentCustomFieldValues(array $data, array $input): array
+    {
+        $vehicleId = (int) ($data['vehicle_id'] ?? 0);
+        $documentType = trim((string) ($data['tip_document'] ?? ''));
+        if ($vehicleId <= 0 || $documentType === '') {
+            return [null, [], false];
+        }
+
+        $postedValues = $input['custom_field_values'] ?? null;
+        if (!is_array($postedValues)) {
+            return [null, [], false];
+        }
+
+        $configs = $this->documentModel->getVehicleDocumentCustomFieldConfigsForVehicle($vehicleId, $documentType);
+        if ($configs === []) {
+            return [null, [], false];
+        }
+
+        return $this->validateCustomFieldValuesFromConfigs($configs, $postedValues);
+    }
+
+    private function validateDriverDocumentCustomFieldValues(array $data, array $input): array
+    {
+        $documentType = trim((string) ($data['tip_document'] ?? ''));
+        if ($documentType === '') {
+            return [null, [], false];
+        }
+
+        $postedValues = $input['custom_field_values'] ?? null;
+        if (!is_array($postedValues)) {
+            return [null, [], false];
+        }
+
+        $configs = $this->documentModel->getDriverDocumentCustomFieldConfigsForDocumentType($documentType);
+        if ($configs === []) {
+            return [null, [], false];
+        }
+
+        return $this->validateCustomFieldValuesFromConfigs($configs, $postedValues);
+    }
+
+    private function validateCustomFieldValuesFromConfigs(array $configs, array $postedValues): array
+    {
+        $errors = [];
+        $payload = [];
+        $checkboxStates = [];
+
+        foreach ($configs as $config) {
+            $fieldKey = (string) ($config['key'] ?? '');
+            $fieldType = strtolower(trim((string) ($config['type'] ?? 'text')));
+
+            if ($fieldKey === '' || $fieldType !== 'checkbox') {
+                continue;
+            }
+
+            $rawValue = $postedValues[$fieldKey] ?? '';
+            if (!is_scalar($rawValue)) {
+                $rawValue = '';
+            }
+
+            $checkboxStates[$fieldKey] = $this->isDriverDocumentCustomCheckboxChecked($rawValue);
+        }
+
+        foreach ($configs as $config) {
+            $fieldKey = (string) ($config['key'] ?? '');
+            $fieldLabel = trim((string) ($config['label'] ?? ''));
+            $fieldType = strtolower(trim((string) ($config['type'] ?? 'text')));
+            $showWhenChecked = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($config['show_when_checked'] ?? ''));
+
+            if ($fieldKey === '' || $fieldLabel === '') {
+                continue;
+            }
+
+            if (
+                is_string($showWhenChecked)
+                && $showWhenChecked !== ''
+                && !($checkboxStates[$showWhenChecked] ?? false)
+            ) {
+                continue;
+            }
+
+            $rawValue = $postedValues[$fieldKey] ?? '';
+            if (!is_scalar($rawValue)) {
+                $rawValue = '';
+            }
+
+            $rawValue = trim((string) $rawValue);
+            $normalizedValue = $rawValue;
+
+            if ($fieldType === 'checkbox') {
+                if (!($checkboxStates[$fieldKey] ?? false)) {
+                    continue;
+                }
+
+                $normalizedValue = '1';
+            } elseif ($rawValue === '') {
+                if ($fieldType === 'date' && is_string($showWhenChecked) && $showWhenChecked !== '') {
+                    $errors[$fieldKey] = 'Introdu data de expirare pentru campul afisat.';
+                }
+                continue;
+            } elseif ($fieldType === 'date') {
+                $normalizedDate = $this->normalizeDateInput($rawValue);
+                if ($normalizedDate === null) {
+                    $errors[$fieldKey] = 'Introdu o data valida pentru acest camp.';
+                    continue;
+                }
+
+                $normalizedValue = $normalizedDate;
+            } elseif ($fieldType === 'number') {
+                $normalizedNumber = str_replace(',', '.', $rawValue);
+                if (!preg_match('/^-?\d+(?:\.\d+)?$/', $normalizedNumber)) {
+                    $errors[$fieldKey] = 'Introdu o valoare numerica valida.';
+                    continue;
+                }
+
+                $normalizedValue = $normalizedNumber;
+            } elseif (mb_strlen($rawValue) > 255) {
+                $errors[$fieldKey] = 'Textul este prea lung (maxim 255 de caractere).';
+                continue;
+            }
+
+            $payload[$fieldKey] = [
+                'key' => $fieldKey,
+                'label' => $fieldLabel,
+                'type' => $fieldType,
+                'value' => $normalizedValue,
+            ];
+        }
+
+        if ($payload === []) {
+            return [null, $errors, true];
+        }
+
+        return [
+            json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $errors,
+            true,
+        ];
+    }
+
+    private function buildDocumentCustomFieldDisplayRows(array $record): array
+    {
+        $savedRows = $this->decodeDriverDocumentCustomFieldValueSnapshot($record['custom_fields_json'] ?? null);
+        if ($savedRows === []) {
+            return [];
+        }
+
+        $vehicleId = (int) ($record['vehicle_id'] ?? 0);
+        $documentType = trim((string) ($record['tip_document'] ?? ''));
+        if ($vehicleId <= 0 || $documentType === '') {
+            return array_values($savedRows);
+        }
+
+        try {
+            $configuredRows = $this->documentModel->getVehicleDocumentCustomFieldConfigsForVehicle($vehicleId, $documentType);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][doc-config][display-custom-fields] ' . $exception->getMessage());
+            return array_values($savedRows);
+        }
+
+        return $this->orderCustomFieldDisplayRows($savedRows, $configuredRows);
+    }
+
+    private function buildDriverDocumentCustomFieldDisplayRows(array $record): array
+    {
+        $savedRows = $this->decodeDriverDocumentCustomFieldValueSnapshot($record['custom_fields_json'] ?? null);
+        if ($savedRows === []) {
+            return [];
+        }
+
+        $documentType = trim((string) ($record['tip_document'] ?? ''));
+        if ($documentType === '') {
+            return array_values($savedRows);
+        }
+
+        try {
+            $configuredRows = $this->documentModel->getDriverDocumentCustomFieldConfigsForDocumentType($documentType);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][driver-doc-config][display-custom-fields] ' . $exception->getMessage());
+            return array_values($savedRows);
+        }
+
+        return $this->orderCustomFieldDisplayRows($savedRows, $configuredRows);
+    }
+
+    private function orderCustomFieldDisplayRows(array $savedRows, array $configuredRows): array
+    {
+        $orderedRows = [];
+        $usedKeys = [];
+
+        foreach ($configuredRows as $configuredRow) {
+            $fieldKey = (string) ($configuredRow['key'] ?? '');
+            if ($fieldKey === '' || !isset($savedRows[$fieldKey])) {
+                continue;
+            }
+
+            $orderedRows[] = [
+                'key' => $fieldKey,
+                'label' => trim((string) ($configuredRow['label'] ?? $savedRows[$fieldKey]['label'] ?? '')),
+                'type' => strtolower(trim((string) ($configuredRow['type'] ?? $savedRows[$fieldKey]['type'] ?? 'text'))),
+                'value' => (string) ($savedRows[$fieldKey]['value'] ?? ''),
+            ];
+            $usedKeys[$fieldKey] = true;
+        }
+
+        foreach ($savedRows as $fieldKey => $savedRow) {
+            if (isset($usedKeys[$fieldKey])) {
+                continue;
+            }
+
+            $orderedRows[] = $savedRow;
+        }
+
+        return $orderedRows;
+    }
+
+    private function isDriverDocumentCustomCheckboxChecked(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (!is_scalar($value)) {
+            return false;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+
+        return in_array($normalized, ['1', 'true', 'on', 'yes', 'da'], true);
     }
 
     private function syncStatusesAfterMutation(string $moduleKey, ?array $currentRecord, ?array $previousRecord): void
@@ -2650,6 +4812,114 @@ class ModuleController
             foreach ($driverIds as $driverId) {
                 $this->entityStatusService->syncDriverStatus((int) $driverId);
             }
+            return;
         }
+
+        if ($moduleKey === 'configurare_costuri_documente_soferi') {
+            $driverIds = array_unique(array_filter([
+                (int) ($previousRecord['driver_id'] ?? 0),
+                (int) ($currentRecord['driver_id'] ?? 0),
+            ]));
+
+            foreach ($driverIds as $driverId) {
+                $this->entityStatusService->syncDriverStatus((int) $driverId);
+            }
+        }
+    }
+
+    private function syncVehicleStatusesForDocumentTypeConfig(?array $configRow, ?string $fallbackVehicleType = null): void
+    {
+        $vehicleType = trim((string) ($configRow['vehicle_type'] ?? $fallbackVehicleType ?? ''));
+        if ($vehicleType === '') {
+            return;
+        }
+
+        try {
+            $this->entityStatusService->syncVehicleStatusesByConfiguredType($vehicleType);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][doc-type-config][status-sync] ' . $exception->getMessage());
+        }
+    }
+
+    private function getVehicleMountedTireCountSafe(int $vehicleId): int
+    {
+        if ($vehicleId <= 0) {
+            return 0;
+        }
+
+        try {
+            return $this->tireModel->countMountedTiresForVehicle($vehicleId);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][vehicule][mounted-tires-count] ' . $exception->getMessage());
+            return 0;
+        }
+    }
+
+    private function getDocumentTypeVehicleOptions(): array
+    {
+        return [
+            'cap_tractor' => 'Cap tractor',
+            'semiremorca_primar' => 'Semi-remorca primar',
+            'semiremorca_distributie' => 'Semi-remorca distributie',
+            'camion' => 'Camion',
+            'autovehicul' => 'Autoturism',
+        ];
+    }
+
+    private function resolveRemainingValidityDaysForVehicleDocument(int $vehicleId, string $documentType): ?int
+    {
+        $documentType = trim($documentType);
+        if ($vehicleId <= 0 || $documentType === '') {
+            return null;
+        }
+
+        try {
+            $map = $this->documentModel->getRemainingValidityDaysByVehicleIds([$vehicleId]);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][doc-config][resolve-remaining-validity-days] ' . $exception->getMessage());
+            return null;
+        }
+
+        $validityDays = (int) ($map[(string) $vehicleId][$documentType] ?? 0);
+        if ($validityDays > 0) {
+            return $validityDays;
+        }
+
+        return null;
+    }
+
+    private function resolveRemainingValidityDaysForDriverDocument(int $driverId, string $documentType): ?int
+    {
+        $documentType = trim($documentType);
+        if ($driverId <= 0 || $documentType === '') {
+            return null;
+        }
+
+        try {
+            $map = $this->documentModel->getRemainingValidityDaysByDriverIds([$driverId]);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][driver-doc-config][resolve-remaining-validity-days] ' . $exception->getMessage());
+            return null;
+        }
+
+        $validityDays = (int) ($map[(string) $driverId][$documentType] ?? 0);
+        if ($validityDays > 0) {
+            return $validityDays;
+        }
+
+        return null;
+    }
+
+    private function buildVehicleLayoutOptionsByType(): array
+    {
+        return [
+            'autovehicul' => $this->tireModel->getLayoutOptionsByVehicleType('autovehicul'),
+            'autoutilitara' => $this->tireModel->getLayoutOptionsByVehicleType('autovehicul'),
+            'camion' => $this->tireModel->getLayoutOptionsByVehicleType('camion'),
+            'cap_tractor' => $this->tireModel->getLayoutOptionsByVehicleType('cap_tractor'),
+            'semiremorca' => $this->tireModel->getLayoutOptionsByVehicleType('semiremorca'),
+            'semiremorca_primar' => $this->tireModel->getLayoutOptionsByVehicleType('semiremorca'),
+            'semiremorca_distributie' => $this->tireModel->getLayoutOptionsByVehicleType('semiremorca'),
+        ];
     }
 }

@@ -13,7 +13,7 @@ SET @has_tip_vehicul := (
 
 SET @sql_add_tip_vehicul := IF(
     @has_tip_vehicul = 0,
-    "ALTER TABLE vehicule ADD COLUMN tip_vehicul ENUM('autovehicul', 'camion', 'cap_tractor', 'semiremorca') NOT NULL DEFAULT 'autovehicul' AFTER model",
+    "ALTER TABLE vehicule ADD COLUMN tip_vehicul ENUM('autovehicul', 'autoutilitara', 'camion', 'cap_tractor', 'semiremorca', 'semiremorca_primar', 'semiremorca_distributie') NOT NULL DEFAULT 'autovehicul' AFTER model",
     'SELECT 1'
 );
 
@@ -26,7 +26,7 @@ SET tip_vehicul = 'autovehicul'
 WHERE tip_vehicul IS NULL OR tip_vehicul = '';
 
 ALTER TABLE vehicule
-    MODIFY COLUMN tip_vehicul ENUM('autovehicul', 'camion', 'cap_tractor', 'semiremorca') NOT NULL DEFAULT 'autovehicul';
+    MODIFY COLUMN tip_vehicul ENUM('autovehicul', 'autoutilitara', 'camion', 'cap_tractor', 'semiremorca', 'semiremorca_primar', 'semiremorca_distributie') NOT NULL DEFAULT 'autovehicul';
 
 CREATE TABLE IF NOT EXISTS vehicule_cuplaje (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

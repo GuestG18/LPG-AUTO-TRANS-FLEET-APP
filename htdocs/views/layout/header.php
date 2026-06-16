@@ -2,6 +2,7 @@
 $user = function_exists('current_user') ? current_user() : null;
 $alerts = flash_messages();
 $styleVersion = (string) @filemtime(BASE_PATH . '/assets/css/style.css');
+$currentAction = (string) ($_GET['action'] ?? 'index');
 ?>
 <!DOCTYPE html>
 <html lang="ro">
@@ -33,21 +34,29 @@ try {
             </div>
 
             <nav class="nav flex-column gap-1">
-                <a class="nav-link <?= $currentPage === 'dashboard' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard'])) ?>">Tablou de bord</a>
-                <a class="nav-link <?= $currentPage === 'dashboard_analitic' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard_analitic'])) ?>">Dashboard Analitic</a>
-                <a class="nav-link <?= $currentPage === 'dispecer_curse' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Dispecer curse</a>
-                <a class="nav-link <?= $currentPage === 'centralizator_facturare' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'centralizator_facturare'])) ?>">Centralizator Facturare</a>
-                <a class="nav-link <?= $currentPage === 'programare_concedii' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'programare_concedii'])) ?>">Programare concedii</a>
-                <a class="nav-link <?= $currentPage === 'vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'vehicule'])) ?>">Vehicule</a>
-                <a class="nav-link <?= $currentPage === 'soferi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'soferi'])) ?>">&#536;oferi</a>
-                <a class="nav-link <?= $currentPage === 'alimentari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'alimentari'])) ?>">Aliment&#259;ri</a>
-                <a class="nav-link <?= $currentPage === 'mentenanta' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta'])) ?>">Mentenan&#539;&#259;</a>
-                <a class="nav-link <?= $currentPage === 'documente' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'documente'])) ?>">Documente</a>
+                <a class="nav-link <?= $currentPage === 'dashboard' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard'])) ?>"><i class="bi bi-house-door" aria-hidden="true"></i><span>Tablou de bord</span></a>
+                <a class="nav-link <?= $currentPage === 'dashboard_analitic' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard_analitic'])) ?>"><i class="bi bi-bar-chart-line" aria-hidden="true"></i><span>Dashboard Analitic</span></a>
+                <a class="nav-link <?= $currentPage === 'dispecer_curse' && $currentAction !== 'refacturari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>"><i class="bi bi-truck" aria-hidden="true"></i><span>Dispecer curse</span></a>
+                <a class="nav-link <?= $currentPage === 'dispecer_curse' && $currentAction === 'refacturari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'refacturari'])) ?>"><i class="bi bi-receipt" aria-hidden="true"></i><span>Refacturari curse</span></a>
+                <a class="nav-link <?= $currentPage === 'centralizator_facturare' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'centralizator_facturare'])) ?>"><i class="bi bi-calendar-range" aria-hidden="true"></i><span>Centralizator Facturare</span></a>
+                <a class="nav-link <?= $currentPage === 'programare_concedii' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'programare_concedii'])) ?>"><i class="bi bi-calendar2-week" aria-hidden="true"></i><span>Programare concedii</span></a>
+                <a class="nav-link <?= $currentPage === 'vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'vehicule'])) ?>"><i class="bi bi-car-front" aria-hidden="true"></i><span>Vehicule</span></a>
+                <a class="nav-link <?= $currentPage === 'soferi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'soferi'])) ?>"><i class="bi bi-fuel-pump" aria-hidden="true"></i><span>&#536;oferi</span></a>
+                <?php if (function_exists('is_accountancy_user') && is_accountancy_user()): ?>
+                    <a class="nav-link <?= $currentPage === 'contabilitate_personal' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'contabilitate_personal'])) ?>"><i class="bi bi-person-badge" aria-hidden="true"></i><span>Contabilitate Personal</span></a>
+                    <a class="nav-link <?= $currentPage === 'cheltuieli_birou' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cheltuieli_birou'])) ?>"><i class="bi bi-wallet2" aria-hidden="true"></i><span>Cheltuieli Birou</span></a>
+                <?php endif; ?>
+                <a class="nav-link <?= $currentPage === 'alimentari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'alimentari'])) ?>"><i class="bi bi-fuel-pump-diesel" aria-hidden="true"></i><span>Aliment&#259;ri</span></a>
+                <a class="nav-link <?= $currentPage === 'mentenanta' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta'])) ?>"><i class="bi bi-calculator" aria-hidden="true"></i><span>Mentenan&#539;&#259;</span></a>
+                <a class="nav-link <?= $currentPage === 'documente' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'documente'])) ?>"><i class="bi bi-file-earmark-text" aria-hidden="true"></i><span>Documente</span></a>
+                <a class="nav-link <?= $currentPage === 'inventar_dotari_vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'inventar_dotari_vehicule'])) ?>"><i class="bi bi-book" aria-hidden="true"></i><span>Inventar Dot&#259;ri</span></a>
                 <?php if (is_admin()): ?>
-                    <a class="nav-link <?= $currentPage === 'utilizatori' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'utilizatori'])) ?>">Utilizatori</a>
+                    <a class="nav-link <?= $currentPage === 'configurare_costuri_documente_vehicule_override' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override'])) ?>"><i class="bi bi-gear" aria-hidden="true"></i><span>Configurare Costuri</span></a>
+                    <a class="nav-link <?= $currentPage === 'notificari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'notificari'])) ?>"><i class="bi bi-bell" aria-hidden="true"></i><span>Notific&#259;ri</span></a>
+                    <a class="nav-link <?= $currentPage === 'utilizatori' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'utilizatori'])) ?>"><i class="bi bi-gear-wide-connected" aria-hidden="true"></i><span>Set&#259;ri sistem</span></a>
                 <?php endif; ?>
                 <hr class="my-3">
-                <a class="nav-link text-danger" href="<?= e(build_query_url(['page' => 'logout'])) ?>">Deconectare</a>
+                <a class="nav-link text-danger" href="<?= e(build_query_url(['page' => 'logout'])) ?>"><i class="bi bi-box-arrow-right" aria-hidden="true"></i><span>Deconectare</span></a>
             </nav>
         </aside>
 
@@ -62,16 +71,22 @@ try {
                         aria-expanded="true"
                         title="Ascunde sau afiseaza meniul"
                     >
-                        <i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i>
+                        <i class="bi bi-list" aria-hidden="true"></i>
                     </button>
-                    <h1 class="h5 mb-0"><?= e($pageTitle) ?></h1>
                 </div>
-                <div class="d-flex align-items-center gap-3">
-                    <span class="small text-muted">
-                        <?= e($user['nume'] ?? '') ?>
-                        (<?= e(function_exists('role_display_name') ? role_display_name((string) ($user['rol'] ?? '')) : (string) ($user['rol'] ?? '')) ?>)
-                    </span>
-                    <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'profil'])) ?>">Profilul meu</a>
+                <div class="topbar-user-area">
+                    <a class="topbar-icon-button" href="<?= e(build_query_url(['page' => 'notificari'])) ?>" aria-label="Notificari">
+                        <i class="bi bi-bell" aria-hidden="true"></i>
+                    </a>
+                    <span class="topbar-divider"></span>
+                    <a class="topbar-profile" href="<?= e(build_query_url(['page' => 'profil'])) ?>">
+                        <span class="topbar-avatar"><i class="bi bi-person-fill" aria-hidden="true"></i></span>
+                        <span class="topbar-profile-text">
+                            <strong><?= e($user['nume'] ?? '') ?></strong>
+                            <small><?= e(function_exists('role_display_name') ? role_display_name((string) ($user['rol'] ?? '')) : (string) ($user['rol'] ?? '')) ?></small>
+                        </span>
+                        <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                    </a>
                 </div>
             </header>
 

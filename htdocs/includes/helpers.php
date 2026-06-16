@@ -223,6 +223,10 @@ function format_datetime_ro(?string $value): string
 
 function format_number_ro(mixed $value, int $decimals = 2): string
 {
+    if (($value === null || $value === '') && $type === 'expiry') {
+        return expiry_badge_html(null);
+    }
+
     if ($value === null || $value === '') {
         return '-';
     }
@@ -308,6 +312,10 @@ function role_badge_html(string $rol): string
         return '<span class="badge text-bg-primary">Admin</span>';
     }
 
+    if ($normalized === 'contabilitate') {
+        return '<span class="badge text-bg-success">Contabilitate</span>';
+    }
+
     return '<span class="badge text-bg-info text-dark">Operator</span>';
 }
 
@@ -315,7 +323,45 @@ function role_display_name(string $rol): string
 {
     $normalized = strtolower(trim($rol));
 
-    return $normalized === 'admin' ? 'admin' : 'operator';
+    return match ($normalized) {
+        'admin' => 'admin',
+        'contabilitate' => 'contabilitate',
+        default => 'operator',
+    };
+}
+
+function normalize_vehicle_type(string $type): string
+{
+    $normalized = strtolower(trim($type));
+
+    return match ($normalized) {
+        'autoturism', 'autovehicul', 'autoutilitara' => 'autovehicul',
+        'camion' => 'camion',
+        'cap_tractor' => 'cap_tractor',
+        'semiremorca', 'semiremorca_primar', 'semiremorca_distributie' => 'semiremorca',
+        default => $normalized !== '' ? $normalized : 'autovehicul',
+    };
+}
+
+function normalize_vehicle_type_for_form_select(string $type): string
+{
+    $normalized = strtolower(trim($type));
+
+    return match ($normalized) {
+        'autoturism', 'autovehicul' => 'autovehicul',
+        'autoutilitara' => 'autoutilitara',
+        'camion' => 'camion',
+        'cap_tractor' => 'cap_tractor',
+        'semiremorca' => 'semiremorca_primar',
+        'semiremorca_primar' => 'semiremorca_primar',
+        'semiremorca_distributie' => 'semiremorca_distributie',
+        default => 'autovehicul',
+    };
+}
+
+function is_trailer_vehicle_type(string $type): bool
+{
+    return normalize_vehicle_type($type) === 'semiremorca';
 }
 
 function vehicle_type_label(string $type): string
@@ -323,11 +369,86 @@ function vehicle_type_label(string $type): string
     return match (strtolower(trim($type))) {
         'universal' => 'Universal',
         'cap_tractor' => 'Cap tractor',
-        'semiremorca' => 'Semi-remorca',
+        'semiremorca', 'semiremorca_primar' => 'Semi-remorca primar',
+        'semiremorca_distributie' => 'Semi-remorca distributie',
         'camion' => 'Camion',
-        'autovehicul' => 'Autoturism',
+        'autovehicul', 'autoturism' => 'Autoturism',
+        'autoutilitara' => 'Autoutilitara',
         default => '-',
     };
+}
+
+function getVehicleDocumentDailyCost(int $vehicleId): float
+{
+    if ($vehicleId <= 0 || !function_exists('get_pdo')) {
+        return 0.0;
+    }
+
+    try {
+        $db = get_pdo();
+        $sqlWithOverride = '
+            SELECT COALESCE(SUM(
+                CASE
+                    WHEN COALESCE(o.validity_days, c.validity_days) > 0
+                        THEN COALESCE(o.document_cost, c.document_cost) / COALESCE(o.validity_days, c.validity_days)
+                    ELSE 0
+                END
+            ), 0) AS daily_cost
+            FROM vehicule v
+            LEFT JOIN configurare_costuri_documente_vehicule c
+              ON c.vehicle_type = (
+                    CASE
+                        WHEN v.tip_vehicul = "autoturism" THEN "autovehicul"
+                        WHEN v.tip_vehicul = "semiremorca" THEN "semiremorca_primar"
+                        ELSE v.tip_vehicul
+                    END
+                )
+            LEFT JOIN configurare_costuri_documente_vehicule_override o
+              ON o.vehicle_id = v.id
+             AND o.document_type = c.document_type
+            WHERE v.id = :vehicle_id
+        ';
+
+        $sqlByVehicleTypeOnly = '
+            SELECT COALESCE(SUM(
+                CASE
+                    WHEN c.validity_days > 0
+                        THEN c.document_cost / c.validity_days
+                    ELSE 0
+                END
+            ), 0) AS daily_cost
+            FROM vehicule v
+            LEFT JOIN configurare_costuri_documente_vehicule c
+              ON c.vehicle_type = (
+                    CASE
+                        WHEN v.tip_vehicul = "autoturism" THEN "autovehicul"
+                        WHEN v.tip_vehicul = "semiremorca" THEN "semiremorca_primar"
+                        ELSE v.tip_vehicul
+                    END
+                )
+            WHERE v.id = :vehicle_id
+        ';
+
+        try {
+            $stmt = $db->prepare($sqlWithOverride);
+            $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+            $stmt->execute();
+            $value = $stmt->fetchColumn();
+        } catch (Throwable) {
+            $stmt = $db->prepare($sqlByVehicleTypeOnly);
+            $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+            $stmt->execute();
+            $value = $stmt->fetchColumn();
+        }
+
+        if (!is_numeric((string) $value)) {
+            return 0.0;
+        }
+
+        return (float) $value;
+    } catch (Throwable) {
+        return 0.0;
+    }
 }
 
 function tire_status_label(string $status): string
@@ -372,7 +493,7 @@ function tire_status_badge_html(string $status): string
 function expiry_badge_html(?string $date): string
 {
     if (empty($date)) {
-        return '-';
+        return '<span class="badge text-bg-secondary">Fara expirare</span>';
     }
 
     try {
@@ -464,6 +585,37 @@ function vehicle_image_url(?string $storedFile): ?string
     return url('uploads/vehicule/' . rawurlencode($storedFile));
 }
 
+function driver_image_url(?string $storedFile): ?string
+{
+    if ($storedFile === null || trim($storedFile) === '') {
+        return null;
+    }
+
+    return url('uploads/soferi/' . rawurlencode($storedFile));
+}
+
+function inventory_equipment_image_url(?string $storedFile): ?string
+{
+    if ($storedFile === null || trim($storedFile) === '') {
+        return null;
+    }
+
+    return url('uploads/inventar_dotari/' . rawurlencode($storedFile));
+}
+
+function inventory_equipment_status_badge_html(string $status): string
+{
+    $normalized = strtolower(trim($status));
+
+    return match ($normalized) {
+        'valid' => '<span class="badge text-bg-success">Valid</span>',
+        'expira_curand' => '<span class="badge text-bg-warning text-dark">Expiră Curând</span>',
+        'expirat' => '<span class="badge text-bg-danger">Expirat</span>',
+        'lipsa_date' => '<span class="badge text-bg-secondary">Lipsă Date</span>',
+        default => '<span class="badge text-bg-light border">' . e($status) . '</span>',
+    };
+}
+
 function vehicle_image_thumb_html(?string $originalFile, ?string $storedFile): string
 {
     $imageUrl = vehicle_image_url($storedFile);
@@ -480,6 +632,22 @@ function vehicle_image_thumb_html(?string $originalFile, ?string $storedFile): s
         . '</a>';
 }
 
+function driver_image_thumb_html(?string $originalFile, ?string $storedFile): string
+{
+    $imageUrl = driver_image_url($storedFile);
+
+    if ($imageUrl === null) {
+        return '<div class="vehicle-thumb vehicle-thumb-placeholder">Fara poza</div>';
+    }
+
+    $safeUrl = e($imageUrl);
+    $safeAlt = e($originalFile !== null && trim($originalFile) !== '' ? $originalFile : 'Poza sofer');
+
+    return '<a class="vehicle-thumb" href="' . $safeUrl . '" target="_blank" rel="noopener">'
+        . '<img src="' . $safeUrl . '" alt="' . $safeAlt . '" loading="lazy">'
+        . '</a>';
+}
+
 function vehicle_image_preview_html(?string $originalFile, ?string $storedFile): string
 {
     $imageUrl = vehicle_image_url($storedFile);
@@ -490,6 +658,24 @@ function vehicle_image_preview_html(?string $originalFile, ?string $storedFile):
 
     $safeUrl = e($imageUrl);
     $safeAlt = e($originalFile !== null && trim($originalFile) !== '' ? $originalFile : 'Poza vehicul');
+    $downloadLabel = $safeAlt !== '' ? $safeAlt : 'Deschide imaginea';
+
+    return '<div class="vehicle-photo-card">'
+        . '<img src="' . $safeUrl . '" alt="' . $safeAlt . '" class="img-fluid rounded" loading="lazy">'
+        . '<div class="mt-3"><a class="btn btn-sm btn-outline-secondary" href="' . $safeUrl . '" target="_blank" rel="noopener">' . $downloadLabel . '</a></div>'
+        . '</div>';
+}
+
+function driver_image_preview_html(?string $originalFile, ?string $storedFile): string
+{
+    $imageUrl = driver_image_url($storedFile);
+
+    if ($imageUrl === null) {
+        return '<div class="vehicle-photo-card vehicle-photo-empty">Nu exista poza incarcata pentru acest sofer.</div>';
+    }
+
+    $safeUrl = e($imageUrl);
+    $safeAlt = e($originalFile !== null && trim($originalFile) !== '' ? $originalFile : 'Poza sofer');
     $downloadLabel = $safeAlt !== '' ? $safeAlt : 'Deschide imaginea';
 
     return '<div class="vehicle-photo-card">'
@@ -608,6 +794,20 @@ function format_value_html(mixed $value, array $meta = [], array $row = []): str
 
     if ($type === 'vehicle_photo_detail') {
         return vehicle_image_preview_html(
+            $value !== null ? (string) $value : null,
+            isset($row['poza_stocata']) ? (string) $row['poza_stocata'] : null
+        );
+    }
+
+    if ($type === 'driver_photo') {
+        return driver_image_thumb_html(
+            $value !== null ? (string) $value : null,
+            isset($row['poza_stocata']) ? (string) $row['poza_stocata'] : null
+        );
+    }
+
+    if ($type === 'driver_photo_detail') {
+        return driver_image_preview_html(
             $value !== null ? (string) $value : null,
             isset($row['poza_stocata']) ? (string) $row['poza_stocata'] : null
         );

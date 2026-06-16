@@ -1,4 +1,4 @@
-﻿-- Fleet Management MVP local reset SQL
+-- Fleet Management MVP local reset SQL
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
@@ -14,8 +14,18 @@ DROP TABLE IF EXISTS configurare_beneficiari_transport;
 DROP TABLE IF EXISTS configurare_locuri_incarcare_vehicule;
 DROP TABLE IF EXISTS configurare_locuri_incarcare;
 DROP TABLE IF EXISTS audit_log;
+DROP TABLE IF EXISTS salary_history;
+DROP TABLE IF EXISTS staff_documents;
+DROP TABLE IF EXISTS staff_document_requirements;
+DROP TABLE IF EXISTS staff_members;
+DROP TABLE IF EXISTS staff_types;
 DROP TABLE IF EXISTS documente_soferi;
 DROP TABLE IF EXISTS documente;
+DROP TABLE IF EXISTS configurare_costuri_documente_soferi;
+DROP TABLE IF EXISTS configurare_documente_obligatorii_soferi;
+DROP TABLE IF EXISTS inventar_dotari_vehicule;
+DROP TABLE IF EXISTS inventar_dotari_reguli;
+DROP TABLE IF EXISTS inventar_dotari_catalog;
 DROP TABLE IF EXISTS mentenanta;
 DROP TABLE IF EXISTS alimentari;
 DROP TABLE IF EXISTS anvelope_alocari;
@@ -35,7 +45,7 @@ CREATE TABLE utilizatori (
     email VARCHAR(190) NOT NULL UNIQUE,
     telefon VARCHAR(20) NULL,
     parola VARCHAR(255) NOT NULL,
-    rol ENUM('admin', 'utilizator') NOT NULL DEFAULT 'utilizator',
+    rol ENUM('admin', 'contabilitate', 'utilizator') NOT NULL DEFAULT 'utilizator',
     status ENUM('activ', 'inactiv') NOT NULL DEFAULT 'activ',
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
@@ -64,7 +74,7 @@ CREATE TABLE vehicule (
     nr_inmatriculare VARCHAR(20) NOT NULL UNIQUE,
     marca VARCHAR(50) NOT NULL,
     model VARCHAR(50) NOT NULL,
-    tip_vehicul ENUM('autovehicul', 'camion', 'cap_tractor', 'semiremorca') NOT NULL DEFAULT 'autovehicul',
+    tip_vehicul ENUM('autovehicul', 'autoutilitara', 'camion', 'cap_tractor', 'semiremorca', 'semiremorca_primar', 'semiremorca_distributie') NOT NULL DEFAULT 'autovehicul',
     an_fabricatie SMALLINT UNSIGNED NOT NULL,
     km_bord INT UNSIGNED NOT NULL DEFAULT 0,
     km_revizie INT UNSIGNED NOT NULL DEFAULT 0,
@@ -174,6 +184,9 @@ CREATE TABLE soferi (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     nume VARCHAR(100) NOT NULL,
     data_nasterii DATE NULL,
+    data_angajare DATE NULL,
+    poza_original VARCHAR(255) NULL,
+    poza_stocata VARCHAR(255) NULL,
     telefon VARCHAR(20) NOT NULL,
     salariu DECIMAL(10,2) NULL,
     vehicle_id INT UNSIGNED NULL,
@@ -238,6 +251,7 @@ CREATE TABLE mentenanta (
     fisier_original VARCHAR(255) NULL,
     fisier_stocat VARCHAR(255) NULL,
     observatii TEXT NULL,
+    custom_fields_json LONGTEXT NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_mentenanta_vehicle (vehicle_id),
@@ -250,7 +264,7 @@ CREATE TABLE documente (
     vehicle_id INT UNSIGNED NOT NULL,
     tip_document VARCHAR(100) NOT NULL,
     numar_document VARCHAR(100) NOT NULL,
-    data_expirare DATE NOT NULL,
+    data_expirare DATE NULL,
     fisier_original VARCHAR(255) NULL,
     fisier_stocat VARCHAR(255) NULL,
     observatii TEXT NULL,
@@ -261,20 +275,237 @@ CREATE TABLE documente (
     CONSTRAINT fk_documente_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE configurare_costuri_documente_vehicule (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    vehicle_type ENUM('cap_tractor', 'semiremorca_distributie', 'semiremorca_primar', 'camion', 'autovehicul') NOT NULL,
+    document_type VARCHAR(120) NOT NULL,
+    document_cost DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    validity_days INT UNSIGNED NOT NULL,
+    requires_expiry TINYINT(1) NOT NULL DEFAULT 1,
+    custom_fields_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_config_doc_vehicle_type_document (vehicle_type, document_type),
+    INDEX idx_config_doc_vehicle_type (vehicle_type),
+    INDEX idx_config_doc_document_type (document_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE configurare_costuri_documente_vehicule_override (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    vehicle_id INT UNSIGNED NOT NULL,
+    document_type VARCHAR(120) NOT NULL,
+    document_cost DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    validity_days INT UNSIGNED NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_config_doc_vehicle_override (vehicle_id, document_type),
+    INDEX idx_config_doc_override_vehicle (vehicle_id),
+    INDEX idx_config_doc_override_type (document_type),
+    CONSTRAINT fk_config_doc_override_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE configurare_costuri_documente_soferi (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    driver_id INT UNSIGNED NOT NULL,
+    document_type VARCHAR(100) NOT NULL,
+    document_cost DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    validity_days INT UNSIGNED NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_config_doc_driver_document (driver_id, document_type),
+    INDEX idx_config_doc_driver_driver (driver_id),
+    INDEX idx_config_doc_driver_type (document_type),
+    CONSTRAINT fk_config_doc_driver FOREIGN KEY (driver_id) REFERENCES soferi(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE configurare_documente_obligatorii_soferi (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    document_type VARCHAR(100) NOT NULL,
+    requires_expiry TINYINT(1) NOT NULL DEFAULT 1,
+    custom_fields_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_required_driver_document_type (document_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS inventar_dotari_catalog (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    nume VARCHAR(150) NOT NULL,
+    categorie VARCHAR(120) NOT NULL,
+    equipment_type ENUM('mandatory', 'optional') NOT NULL DEFAULT 'mandatory',
+    poza_original VARCHAR(255) NULL,
+    poza_stocata VARCHAR(255) NULL,
+    cost_implicit DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    necesita_data_fabricatie TINYINT(1) NOT NULL DEFAULT 0,
+    necesita_inspectie TINYINT(1) NOT NULL DEFAULT 0,
+    interval_implicit_inspectie_luni INT UNSIGNED NULL,
+    necesita_data_expirarii TINYINT(1) NOT NULL DEFAULT 0,
+    activ TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_inventar_catalog_nume (nume),
+    INDEX idx_inventar_catalog_activ (activ),
+    INDEX idx_inventar_catalog_categorie (categorie),
+    INDEX idx_inventar_catalog_equipment_type (equipment_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS inventar_dotari_reguli (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    vehicle_type ENUM('autovehicul', 'autoutilitara', 'camion', 'cap_tractor', 'semiremorca', 'semiremorca_primar', 'semiremorca_distributie') NOT NULL,
+    catalog_id INT UNSIGNED NOT NULL,
+    activ TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_inventar_reguli_type_catalog (vehicle_type, catalog_id),
+    INDEX idx_inventar_reguli_type_active (vehicle_type, activ),
+    INDEX idx_inventar_reguli_catalog (catalog_id),
+    CONSTRAINT fk_inventar_reguli_catalog FOREIGN KEY (catalog_id) REFERENCES inventar_dotari_catalog(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS inventar_dotari_vehicule (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    vehicle_id INT UNSIGNED NOT NULL,
+    catalog_id INT UNSIGNED NOT NULL,
+    poza_original VARCHAR(255) NULL,
+    poza_stocata VARCHAR(255) NULL,
+    cost DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    data_achizitiei DATE NULL,
+    data_fabricatiei DATE NULL,
+    data_ultimei_inspectii DATE NULL,
+    interval_inspectie_luni INT UNSIGNED NULL,
+    data_urmatoarei_inspectii DATE NULL,
+    data_expirarii DATE NULL,
+    serie_cod_produs VARCHAR(120) NULL,
+    observatii TEXT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_inventar_dotari_vehicle (vehicle_id),
+    INDEX idx_inventar_dotari_catalog (catalog_id),
+    INDEX idx_inventar_dotari_expirare (data_expirarii),
+    INDEX idx_inventar_dotari_inspectie (data_urmatoarei_inspectii),
+    CONSTRAINT fk_inventar_dotari_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE,
+    CONSTRAINT fk_inventar_dotari_catalog FOREIGN KEY (catalog_id) REFERENCES inventar_dotari_catalog(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE documente_soferi (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     driver_id INT UNSIGNED NOT NULL,
     tip_document VARCHAR(100) NOT NULL,
     numar_document VARCHAR(100) NULL,
-    data_expirare DATE NOT NULL,
+    data_emitere DATE NULL,
+    data_expirare DATE NULL,
     fisier_original VARCHAR(255) NULL,
     fisier_stocat VARCHAR(255) NULL,
     observatii TEXT NULL,
+    custom_fields_json LONGTEXT NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_documente_soferi_driver (driver_id),
     INDEX idx_documente_soferi_expirare (data_expirare),
+    UNIQUE KEY uk_documente_soferi_driver_type (driver_id, tip_document),
     CONSTRAINT fk_documente_soferi_driver FOREIGN KEY (driver_id) REFERENCES soferi(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE staff_types (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(120) NOT NULL,
+    slug VARCHAR(140) NOT NULL,
+    category ENUM('operational', 'office') NOT NULL DEFAULT 'operational',
+    description TEXT NULL,
+    status ENUM('activ', 'inactiv') NOT NULL DEFAULT 'activ',
+    is_system TINYINT(1) NOT NULL DEFAULT 0,
+    is_driver_linked TINYINT(1) NOT NULL DEFAULT 0,
+    salary_required TINYINT(1) NOT NULL DEFAULT 0,
+    vehicle_required TINYINT(1) NOT NULL DEFAULT 0,
+    mandatory_documents_enabled TINYINT(1) NOT NULL DEFAULT 1,
+    can_create_employees TINYINT(1) NOT NULL DEFAULT 1,
+    can_delete_employees TINYINT(1) NOT NULL DEFAULT 1,
+    document_warning_days SMALLINT UNSIGNED NOT NULL DEFAULT 30,
+    created_by INT UNSIGNED NULL,
+    updated_by INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_staff_types_slug (slug),
+    INDEX idx_staff_types_category_status (category, status),
+    INDEX idx_staff_types_driver_linked (is_driver_linked),
+    CONSTRAINT fk_staff_types_created_by FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL,
+    CONSTRAINT fk_staff_types_updated_by FOREIGN KEY (updated_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE staff_members (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    staff_type_id INT UNSIGNED NOT NULL,
+    nume_complet VARCHAR(160) NOT NULL,
+    telefon VARCHAR(20) NULL,
+    email VARCHAR(190) NULL,
+    functie VARCHAR(120) NOT NULL,
+    salariu DECIMAL(10,2) NULL,
+    data_angajare DATE NULL,
+    status ENUM('activ', 'inactiv') NOT NULL DEFAULT 'activ',
+    observatii TEXT NULL,
+    created_by INT UNSIGNED NULL,
+    updated_by INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_staff_members_type_status (staff_type_id, status),
+    INDEX idx_staff_members_name (nume_complet),
+    CONSTRAINT fk_staff_members_type FOREIGN KEY (staff_type_id) REFERENCES staff_types(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_staff_members_created_by FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL,
+    CONSTRAINT fk_staff_members_updated_by FOREIGN KEY (updated_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE staff_documents (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    staff_member_id INT UNSIGNED NOT NULL,
+    tip_document VARCHAR(120) NOT NULL,
+    numar_document VARCHAR(120) NULL,
+    data_emitere DATE NULL,
+    data_expirare DATE NULL,
+    fisier_original VARCHAR(255) NULL,
+    fisier_stocat VARCHAR(255) NULL,
+    observatii TEXT NULL,
+    created_by INT UNSIGNED NULL,
+    updated_by INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_staff_documents_member (staff_member_id),
+    INDEX idx_staff_documents_expirare (data_expirare),
+    INDEX idx_staff_documents_type (tip_document),
+    CONSTRAINT fk_staff_documents_member FOREIGN KEY (staff_member_id) REFERENCES staff_members(id) ON DELETE CASCADE,
+    CONSTRAINT fk_staff_documents_created_by FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL,
+    CONSTRAINT fk_staff_documents_updated_by FOREIGN KEY (updated_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE staff_document_requirements (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    staff_type_id INT UNSIGNED NOT NULL,
+    document_type VARCHAR(120) NOT NULL,
+    requires_expiry TINYINT(1) NOT NULL DEFAULT 1,
+    warning_days SMALLINT UNSIGNED NOT NULL DEFAULT 30,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_staff_doc_req_type_document (staff_type_id, document_type),
+    INDEX idx_staff_doc_req_type (staff_type_id),
+    CONSTRAINT fk_staff_doc_req_type FOREIGN KEY (staff_type_id) REFERENCES staff_types(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE salary_history (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    subject_type ENUM('driver', 'staff') NOT NULL,
+    driver_id INT UNSIGNED NULL,
+    staff_member_id INT UNSIGNED NULL,
+    previous_salary DECIMAL(10,2) NULL,
+    current_salary DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    effective_date DATE NOT NULL,
+    updated_by INT UNSIGNED NULL,
+    notes TEXT NULL,
+    created_at DATETIME NOT NULL,
+    INDEX idx_salary_history_driver (driver_id, effective_date),
+    INDEX idx_salary_history_staff (staff_member_id, effective_date),
+    INDEX idx_salary_history_subject (subject_type, effective_date),
+    CONSTRAINT fk_salary_history_driver FOREIGN KEY (driver_id) REFERENCES soferi(id) ON DELETE CASCADE,
+    CONSTRAINT fk_salary_history_staff FOREIGN KEY (staff_member_id) REFERENCES staff_members(id) ON DELETE CASCADE,
+    CONSTRAINT fk_salary_history_user FOREIGN KEY (updated_by) REFERENCES utilizatori(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE configurare_locuri_incarcare (
@@ -341,6 +572,7 @@ CREATE TABLE configurare_beneficiari_transport (
     pret_tarifare DECIMAL(12,2) NOT NULL DEFAULT 0.00,
     suporta_primar TINYINT(1) NOT NULL DEFAULT 1,
     suporta_distributie TINYINT(1) NOT NULL DEFAULT 1,
+    suporta_primar_distributie TINYINT(1) NOT NULL DEFAULT 0,
     suporta_compresor TINYINT(1) NOT NULL DEFAULT 0,
     pret_km DECIMAL(12,2) NOT NULL DEFAULT 0.00,
     pret_tona DECIMAL(12,2) NOT NULL DEFAULT 0.00,
@@ -375,6 +607,7 @@ CREATE TABLE configurare_rute_distributie (
     beneficiar_id INT UNSIGNED NOT NULL,
     loc_incarcare_id INT UNSIGNED NOT NULL,
     zona_distributie_id INT UNSIGNED NOT NULL,
+    tarif_mod ENUM('tona_km', 'tona', 'km') NOT NULL DEFAULT 'tona_km',
     tarif_tona DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     cost_extra_km DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     km_tarifare INT UNSIGNED NOT NULL DEFAULT 0,
@@ -450,6 +683,7 @@ CREATE TABLE curse_dispecer (
     cost_km_distributie DECIMAL(12,2) NOT NULL DEFAULT 0.00,
     cost_km_mixt DECIMAL(12,2) NOT NULL DEFAULT 0.00,
     observatii TEXT NULL,
+    cheltuieli_status ENUM('pending', 'not_applicable') NOT NULL DEFAULT 'pending',
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_curse_vehicle (vehicle_id),
@@ -570,6 +804,101 @@ INSERT INTO documente_soferi (driver_id, tip_document, numar_document, data_expi
 (1, 'Carte identitate', 'CI-ION-2026', DATE_ADD(CURDATE(), INTERVAL 420 DAY), 'Document personal incarcat pentru evidenta interna', NOW(), NOW()),
 (1, 'Atestat profesional', 'ATP-101', DATE_ADD(CURDATE(), INTERVAL 18 DAY), 'Necesita verificare pentru reinnoire', NOW(), NOW()),
 (2, 'Aviz medical', 'MED-2026-02', DATE_ADD(CURDATE(), INTERVAL 65 DAY), 'Valabil pentru cursele curente', NOW(), NOW());
+
+INSERT INTO configurare_costuri_documente_soferi (driver_id, document_type, document_cost, validity_days, created_at, updated_at)
+SELECT
+    driver_id,
+    tip_document,
+    0.00,
+    GREATEST(1, DATEDIFF(MAX(data_expirare), CURDATE())),
+    NOW(),
+    NOW()
+FROM documente_soferi
+GROUP BY driver_id, tip_document;
+
+INSERT INTO configurare_documente_obligatorii_soferi
+    (document_type, created_at, updated_at)
+VALUES
+    ('Carte identitate', NOW(), NOW()),
+    ('Atestat profesional', NOW(), NOW()),
+    ('Aviz medical', NOW(), NOW());
+
+INSERT INTO staff_types
+    (name, slug, category, description, status, is_system, is_driver_linked, salary_required, vehicle_required, mandatory_documents_enabled, can_create_employees, can_delete_employees, document_warning_days, created_at, updated_at)
+VALUES
+    ('Șofer', 'sofer', 'operational', 'Conectat la modulul Șoferi. Importă automat șoferii existenți.', 'activ', 1, 1, 1, 1, 1, 0, 0, 30, NOW(), NOW()),
+    ('Ajutor Șofer', 'ajutor-sofer', 'operational', 'Personal operațional auxiliar.', 'activ', 0, 0, 0, 0, 1, 1, 1, 30, NOW(), NOW()),
+    ('Mecanic', 'mecanic', 'operational', 'Personal operațional pentru mentenanță.', 'activ', 0, 0, 0, 0, 1, 1, 1, 30, NOW(), NOW()),
+    ('Dispecer', 'dispecer', 'operational', 'Personal operațional de coordonare curse.', 'activ', 0, 0, 0, 0, 1, 1, 1, 30, NOW(), NOW()),
+    ('Spălător', 'spalator', 'operational', 'Personal operațional de curățenie vehicule.', 'activ', 0, 0, 0, 0, 1, 1, 1, 30, NOW(), NOW()),
+    ('Contabil', 'contabil', 'office', 'Personal birou pentru contabilitate.', 'activ', 0, 0, 0, 0, 1, 1, 1, 30, NOW(), NOW()),
+    ('Administrator', 'administrator', 'office', 'Personal birou administrativ.', 'activ', 0, 0, 0, 0, 1, 1, 1, 30, NOW(), NOW()),
+    ('Manager', 'manager', 'office', 'Personal birou management.', 'activ', 0, 0, 0, 0, 1, 1, 1, 30, NOW(), NOW()),
+    ('HR', 'hr', 'office', 'Personal birou resurse umane.', 'activ', 0, 0, 0, 0, 1, 1, 1, 30, NOW(), NOW()),
+    ('Operator', 'operator', 'office', 'Personal birou operațional.', 'activ', 0, 0, 0, 0, 1, 1, 1, 30, NOW(), NOW()),
+    ('Personal Curățenie', 'personal-curatenie', 'office', 'Personal birou curățenie.', 'activ', 0, 0, 0, 0, 1, 1, 1, 30, NOW(), NOW());
+
+INSERT INTO staff_document_requirements
+    (staff_type_id, document_type, requires_expiry, warning_days, created_at, updated_at)
+SELECT st.id, req.document_type, req.requires_expiry, 30, NOW(), NOW()
+FROM staff_types st
+INNER JOIN (
+    SELECT 'sofer' AS slug, 'CI / Buletin' AS document_type, 1 AS requires_expiry UNION ALL
+    SELECT 'sofer', 'Permis conducere', 1 UNION ALL
+    SELECT 'sofer', 'Medicina muncii', 1 UNION ALL
+    SELECT 'sofer', 'Aviz medical', 1 UNION ALL
+    SELECT 'sofer', 'Contract de muncă', 0 UNION ALL
+    SELECT 'contabil', 'CI / Buletin', 1 UNION ALL
+    SELECT 'contabil', 'Contract de muncă', 0 UNION ALL
+    SELECT 'contabil', 'Act adițional', 0 UNION ALL
+    SELECT 'hr', 'CI / Buletin', 1 UNION ALL
+    SELECT 'hr', 'Contract de muncă', 0 UNION ALL
+    SELECT 'mecanic', 'CI / Buletin', 1 UNION ALL
+    SELECT 'mecanic', 'Medicina muncii', 1
+) req ON req.slug = st.slug;
+
+INSERT INTO inventar_dotari_catalog
+    (nume, categorie, equipment_type, cost_implicit, necesita_data_fabricatie, necesita_inspectie, interval_implicit_inspectie_luni, necesita_data_expirarii, activ, created_at, updated_at)
+VALUES
+    ('Extinctor', 'Siguranță', 'mandatory', 120.00, 1, 1, 12, 1, 1, NOW(), NOW()),
+    ('Trusă ADR', 'ADR', 'mandatory', 250.00, 0, 1, 12, 1, 1, NOW(), NOW()),
+    ('Trusă Medicală', 'Siguranță', 'mandatory', 90.00, 0, 0, NULL, 1, 1, NOW(), NOW()),
+    ('Apă Ochi', 'ADR', 'mandatory', 45.00, 0, 0, NULL, 1, 1, NOW(), NOW()),
+    ('Mască', 'Protecție', 'mandatory', 80.00, 0, 0, NULL, 0, 1, NOW(), NOW()),
+    ('Filtru Mască', 'Protecție', 'mandatory', 35.00, 0, 0, NULL, 1, 1, NOW(), NOW()),
+    ('Baterii', 'Consumabile', 'mandatory', 20.00, 0, 0, NULL, 1, 1, NOW(), NOW()),
+    ('Lanternă', 'Siguranță', 'mandatory', 65.00, 0, 1, 12, 0, 1, NOW(), NOW()),
+    ('Vestă reflectorizantă', 'Siguranță', 'mandatory', 30.00, 0, 0, NULL, 0, 1, NOW(), NOW())
+ON DUPLICATE KEY UPDATE
+    categorie = VALUES(categorie),
+    cost_implicit = VALUES(cost_implicit),
+    necesita_data_fabricatie = VALUES(necesita_data_fabricatie),
+    necesita_inspectie = VALUES(necesita_inspectie),
+    interval_implicit_inspectie_luni = VALUES(interval_implicit_inspectie_luni),
+    necesita_data_expirarii = VALUES(necesita_data_expirarii),
+    activ = VALUES(activ),
+    updated_at = NOW();
+
+INSERT INTO inventar_dotari_reguli
+    (vehicle_type, catalog_id, activ, created_at, updated_at)
+SELECT required.vehicle_type, c.id, 1, NOW(), NOW()
+FROM (
+    SELECT 'cap_tractor' AS vehicle_type, 'Extinctor' AS nume UNION ALL
+    SELECT 'cap_tractor', 'Trusă Medicală' UNION ALL
+    SELECT 'cap_tractor', 'Trusă ADR' UNION ALL
+    SELECT 'semiremorca_primar', 'Extinctor' UNION ALL
+    SELECT 'semiremorca_primar', 'Trusă ADR' UNION ALL
+    SELECT 'semiremorca_distributie', 'Extinctor' UNION ALL
+    SELECT 'semiremorca_distributie', 'Trusă ADR' UNION ALL
+    SELECT 'camion', 'Extinctor' UNION ALL
+    SELECT 'camion', 'Trusă Medicală' UNION ALL
+    SELECT 'camion', 'Trusă ADR' UNION ALL
+    SELECT 'camion', 'Apă Ochi'
+) required
+INNER JOIN inventar_dotari_catalog c ON c.nume = required.nume
+ON DUPLICATE KEY UPDATE
+    activ = VALUES(activ),
+    updated_at = NOW();
 
 INSERT INTO configurare_beneficiari_transport (
     nume,

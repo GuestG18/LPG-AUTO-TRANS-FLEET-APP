@@ -6,6 +6,7 @@ class AuthController
     private UserModel $userModel;
     private LoginEmailCodeModel $loginEmailCodeModel;
     private EmailService $emailService;
+    private ?array $lastLoginDeliveryResult = null;
 
     private const VERIFY_SESSION_KEY = '_auth_login_verification';
     private const VERIFY_CODE_TTL_SECONDS = 600;
@@ -16,7 +17,7 @@ class AuthController
     {
         $this->userModel = new UserModel($db);
         $this->loginEmailCodeModel = new LoginEmailCodeModel($db);
-        $this->emailService = new EmailService();
+        $this->emailService = new EmailService($db);
     }
 
     public function index(): void
@@ -68,12 +69,12 @@ class AuthController
 
         $pending = $this->createVerificationCodeForUser($user);
         if ($pending === null) {
-            flash_set('danger', 'Nu am putut trimite codul de verificare pe email. Verifica setarile de email si incearca din nou.');
+            flash_set('danger', $this->formatDeliveryFailureMessage($this->lastLoginDeliveryResult));
             redirect($this->loginPageUrl());
         }
 
         $this->savePendingVerification($pending);
-        flash_set('info', 'Codul de verificare a fost trimis pe adresa ta de email.');
+        $this->flashDeliveryStatus($pending);
         redirect($this->verifyPageUrl());
     }
 
@@ -115,6 +116,12 @@ class AuthController
             'emailMasked' => $this->maskEmail((string) ($pending['email'] ?? '')),
             'expiresInSeconds' => max(0, strtotime((string) $codeRow['expires_at']) - time()),
             'resendWaitSeconds' => $this->secondsUntilResend($codeRow),
+            'deliverySent' => (bool) ($pending['delivery_sent'] ?? true),
+            'deliveryProvider' => (string) ($pending['delivery_provider'] ?? 'smtp'),
+            'deliveryError' => (string) ($pending['delivery_error'] ?? ''),
+            'deliveryWarnings' => (array) ($pending['delivery_warnings'] ?? []),
+            'localFallbackCode' => (string) ($pending['local_fallback_code'] ?? ''),
+            'deliveryLogId' => (int) ($pending['delivery_log_id'] ?? 0),
         ]);
     }
 
@@ -215,7 +222,7 @@ class AuthController
 
         $newPending = $this->createVerificationCodeForUser($user);
         if ($newPending === null) {
-            flash_set('danger', 'Nu am putut retrimite codul pe email. Verifica setarile de email si incearca din nou.');
+            flash_set('danger', $this->formatDeliveryFailureMessage($this->lastLoginDeliveryResult));
             redirect($this->verifyPageUrl());
         }
 
@@ -224,7 +231,7 @@ class AuthController
         }
 
         $this->savePendingVerification($newPending);
-        flash_set('info', 'Codul de verificare a fost trimis pe adresa ta de email.');
+        $this->flashDeliveryStatus($newPending, true);
         redirect($this->verifyPageUrl());
     }
 
@@ -272,6 +279,14 @@ class AuthController
             'email' => $email,
             'nume' => $name,
             'code_id' => $codeId,
+            'delivery_sent' => (bool) ($raw['delivery_sent'] ?? true),
+            'delivery_provider' => trim((string) ($raw['delivery_provider'] ?? 'smtp')),
+            'delivery_error' => trim((string) ($raw['delivery_error'] ?? '')),
+            'delivery_warnings' => array_values(array_filter(array_map('strval', (array) ($raw['delivery_warnings'] ?? [])))),
+            'delivery_log_id' => (int) ($raw['delivery_log_id'] ?? 0),
+            'local_fallback_code' => $this->canExposeEmailFailureCode()
+                ? trim((string) ($raw['local_fallback_code'] ?? ''))
+                : '',
         ];
     }
 
@@ -308,8 +323,15 @@ class AuthController
             self::VERIFY_MAX_ATTEMPTS
         );
 
-        $sent = $this->sendLoginVerificationCodeEmail($email, $name, $code);
-        if (!$sent) {
+        $delivery = $this->sendLoginVerificationCodeEmail($email, $name, $code, $userId);
+        $this->lastLoginDeliveryResult = $delivery;
+        $sent = (bool) ($delivery['sent'] ?? false);
+        $localFallbackCode = '';
+        if (!$sent && $this->canExposeEmailFailureCode()) {
+            $localFallbackCode = $code;
+        }
+
+        if (!$sent && $localFallbackCode === '') {
             $this->loginEmailCodeModel->markCodeUsed($codeId);
             return null;
         }
@@ -321,6 +343,15 @@ class AuthController
             'email' => $email,
             'nume' => $name,
             'code_id' => $codeId,
+            'delivery_sent' => $sent,
+            'delivery_provider' => (string) ($delivery['provider'] ?? 'smtp'),
+            'delivery_error' => (string) ($delivery['error'] ?? ''),
+            'delivery_warnings' => array_values(array_filter(array_map(
+                'strval',
+                (array) ($delivery['diagnostics']['warnings'] ?? [])
+            ))),
+            'delivery_log_id' => (int) ($delivery['log_id'] ?? 0),
+            'local_fallback_code' => $localFallbackCode,
         ];
     }
 
@@ -382,13 +413,14 @@ class AuthController
         return $maskedLocal . '@' . $domainPart;
     }
 
-    private function sendLoginVerificationCodeEmail(string $toEmail, string $toName, string $code): bool
+    private function sendLoginVerificationCodeEmail(string $toEmail, string $toName, string $code, int $userId): array
     {
         return $this->emailService->sendLoginVerificationCode(
             $toEmail,
             $toName,
             $code,
-            self::VERIFY_CODE_TTL_SECONDS
+            self::VERIFY_CODE_TTL_SECONDS,
+            $userId
         );
     }
 
@@ -399,5 +431,49 @@ class AuthController
         }
 
         return self::VERIFY_CODE_RESEND_COOLDOWN_SECONDS;
+    }
+
+    private function canExposeEmailFailureCode(): bool
+    {
+        if (!defined('AUTH_SHOW_LOGIN_CODE_ON_EMAIL_FAILURE') || !(bool) AUTH_SHOW_LOGIN_CODE_ON_EMAIL_FAILURE) {
+            return false;
+        }
+
+        $env = strtolower(trim((string) (defined('APP_ENV') ? APP_ENV : 'development')));
+        return !in_array($env, ['production', 'prod'], true);
+    }
+
+    private function flashDeliveryStatus(array $pending, bool $resent = false): void
+    {
+        if ((bool) ($pending['delivery_sent'] ?? true)) {
+            flash_set('info', $resent
+                ? 'Codul de verificare a fost retrimis pe adresa ta de email.'
+                : 'Codul de verificare a fost trimis pe adresa ta de email.'
+            );
+            return;
+        }
+
+        if ((string) ($pending['local_fallback_code'] ?? '') !== '') {
+            flash_set('warning', 'Emailul nu a putut fi trimis. Pentru modul local, codul este afisat pe pagina de verificare.');
+            return;
+        }
+
+        flash_set('danger', $this->formatDeliveryFailureMessage($pending));
+    }
+
+    private function formatDeliveryFailureMessage(?array $delivery): string
+    {
+        $message = 'Nu am putut trimite codul de verificare pe email. Verifica setarile SMTP si incearca din nou.';
+        $provider = trim((string) ($delivery['provider'] ?? $delivery['delivery_provider'] ?? ''));
+        $error = trim((string) ($delivery['error'] ?? $delivery['delivery_error'] ?? ''));
+
+        if ($provider !== '' || $error !== '') {
+            $details = trim(($provider !== '' ? 'Furnizor: ' . $provider . '. ' : '') . ($error !== '' ? 'Eroare: ' . $error : ''));
+            if ($details !== '') {
+                $message .= ' ' . $details;
+            }
+        }
+
+        return $message;
     }
 }

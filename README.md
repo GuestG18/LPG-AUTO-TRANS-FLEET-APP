@@ -33,7 +33,7 @@ Aplicatie web MVP pentru management de flota, construita in PHP 8+, MySQL si Boo
     /views
   /database
     database.sql
-    remove_notifications_legacy.sql
+    rebuild_notifications_from_zero.sql
     update_documente_improvements.sql
     update_driver_documents.sql
     update_mentenanta_invoice_and_suppliers.sql
@@ -42,6 +42,14 @@ Aplicatie web MVP pentru management de flota, construita in PHP 8+, MySQL si Boo
     update_vehicle_additional_details.sql
     update_vehicle_chassis_photo.sql
     update_vehicle_tractor_trailer_links.sql
+    update_inventar_dotari_vehicule.sql
+  /notification_service
+    worker.py
+    requirements.txt
+    setup_windows_notification_worker.ps1
+    remove_windows_notification_worker.ps1
+    setup_linux_notification_worker.sh
+    remove_linux_notification_worker.sh
   /reset_database.sql
   /README.md
   /STARE_PROIECT.md
@@ -59,6 +67,7 @@ Aplicatie web MVP pentru management de flota, construita in PHP 8+, MySQL si Boo
   - Soferi
   - Documente vehicule
   - Documente soferi
+  - Inventar Dotari Vehicule
   - Alimentari
   - Mentenanta
   - Utilizatori
@@ -78,9 +87,11 @@ Aplicatie web MVP pentru management de flota, construita in PHP 8+, MySQL si Boo
 
 ## Notificari
 
-- Sistemul vechi de notificari a fost eliminat complet din backend, UI si schema SQL.
-- Modulul va fi reconstruit de la zero intr-o etapa separata.
-- Daca ai o baza existenta, ruleaza `database/remove_notifications_legacy.sql` pentru curatare fara reset total.
+- Sistem refacut separat de aplicatie: PHP administreaza reguli si afiseaza istoric, iar Python scaneaza regulile, pune joburi in `notification_queue` si trimite emailurile in fundal.
+- Regulile urmaresc documente vehicul / sofer care expira; declansarea nu se face din incarcarile paginilor.
+- Istoricul este in `notification_deliveries`; codurile de autentificare sunt redactate in log.
+- Workerul nou este in `notification_service/`; vezi `notification_service/README.md`.
+- Daca ai o baza existenta, ruleaza `database/rebuild_notifications_from_zero.sql`.
 
 ## Rulare locala
 
@@ -103,10 +114,16 @@ http://127.0.0.1:8000/
 ## Configurare email verificare
 
 - Configureaza SMTP in `.env` folosind `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_ENCRYPTION`.
+- Seteaza `APP_URL` in `.env` pe VPS (ex: `https://flota.domeniul-tau.ro`) pentru linkurile din email.
+- Pentru Migadu, foloseste o casuta/alias permis pentru `MAIL_USERNAME`, `MAIL_FROM_ADDRESS` si `MAIL_RETURN_PATH`. Daca autentifici SMTP cu un furnizor dar setezi `MAIL_FROM_ADDRESS` pe alt domeniu neautorizat, emailul poate fi respins sau filtrat.
 - `MAIL_CONNECT_TIMEOUT` controleaza timeout-ul de conectare SMTP (secunde).
 - Recomandat pentru stabilitate: `MAIL_CONNECT_TIMEOUT=15`, `MAIL_TIMEOUT=45`.
 - `MAIL_RETRY_ATTEMPTS` si `MAIL_RETRY_DELAY_MS` permit retry automat la erori temporare de conectare SMTP.
 - `AUTH_VERIFY_RESEND_COOLDOWN_SECONDS` controleaza dupa cate secunde utilizatorul poate cere retrimiterea codului.
+- `AUTH_SHOW_LOGIN_CODE_ON_EMAIL_FAILURE=true` poate fi folosit doar local: daca SMTP esueaza si `APP_ENV` nu este `production`, codul ramane valid si este afisat pe pagina de verificare.
+- Codurile de autentificare se trimit direct, pentru ca utilizatorul are nevoie de cod imediat.
+- Notificarile automate din reguli se scaneaza si se trimit in fundal cu `notification_service/worker.py`, ca aplicatia sa ramana rapida pe VPS.
+- Ruleaza `database/rebuild_notifications_from_zero.sql` pentru schema noua de notificari.
 
 ## Migrare baza existenta (CAMION + Km bord)
 
@@ -128,6 +145,14 @@ Pentru coloanele noi de cost per km (`cost_km_primar`, `cost_km_distributie`, `c
 
 ```text
 database/update_dispecer_curse_cost_km.sql
+```
+
+## Migrare baza existenta (Inventar Dotari Vehicule)
+
+Pentru activarea modulului `Inventar Dotari Vehicule` pe o baza existenta, ruleaza:
+
+```text
+database/update_inventar_dotari_vehicule.sql
 ```
 
 ## Seed demo pentru Dispecer curse (20 curse)

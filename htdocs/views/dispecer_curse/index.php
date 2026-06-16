@@ -147,6 +147,7 @@ $openRacesRows = is_array($openRacesOverview['rows'] ?? null) ? $openRacesOvervi
 $openRacesMissingEndTimeCount = (int) ($openRacesOverview['missing_end_time_count'] ?? 0);
 $openRacesMissingExpensesCount = (int) ($openRacesOverview['missing_expenses_count'] ?? 0);
 $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 0));
+$dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dispecer_curse']));
 ?>
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
@@ -524,7 +525,7 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
                             <label class="form-label" for="race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
                             <input type="number" class="form-control <?= isset($formErrors['km_totali']) ? 'is-invalid' : '' ?>" id="race_km_totali" name="km_totali" min="0" step="1" value="<?= e((string) ($formData['km_totali'] ?? '')) ?>" data-role="km-totali">
                             <?php if (isset($formErrors['km_totali'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['km_totali']) ?></div><?php endif; ?>
-                            <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Cost/km Distributie (calcul): (Cantitate × Tarif tona) / Km agreati</div>
+                            <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Cost/km Distributie (calcul): Km distributie = Km efectuati - Km agreati; Cost/km Distributie = Cost distributie (Pret tona x tone) / Km distributie.</div>
                         </div>
 
                         <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-ore-aspirare">
@@ -895,17 +896,20 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
                         $costKmDistributieValue = (float) ($row['cost_km_distributie'] ?? 0);
                         $costKmMixtValue = (float) ($row['cost_km_mixt'] ?? 0);
                         $costKmCompresorValue = (float) ($row['cost_km_compresor'] ?? 0);
-                        if ($transportType === 'primar_distributie' && $kmCursaValue !== null && $kmCursaValue > 0) {
-                            $qtyForDistribution = $loadedQtyValue !== null ? max(0.0, (float) $loadedQtyValue) : 0.0;
-                            $tonRateForDistribution = max(0.0, (float) ($row['pret_tarifare'] ?? 0));
-                            $distributionComponent = $qtyForDistribution * $tonRateForDistribution;
-                            $costKmDistributieValue = round($distributionComponent / $kmCursaValue, 2);
-                            $costKmMixtValue = round(((float) ($row['total_facturare'] ?? 0)) / $kmCursaValue, 2);
+                        $refacturareFacturataValue = (float) ($row['total_refacturare_facturata'] ?? 0);
+                        $displayTotalFacturare = (float) ($row['total_facturare'] ?? 0) + $refacturareFacturataValue;
+                        if (($transportType === 'primar_distributie' || $transportType === 'mixt') && $kmTotaliValue !== null && $displayTotalFacturare > 0) {
+                            $kmDistributieValue = $kmCursaValue !== null ? max(0.0, $kmTotaliValue - $kmCursaValue) : null;
+                            $distributionQuantityValue = isset($row['cantitate_incarcata']) && is_numeric((string) $row['cantitate_incarcata']) ? max(0.0, (float) $row['cantitate_incarcata']) : 0.0;
+                            $distributionRateValue = isset($row['pret_tarifare']) && is_numeric((string) $row['pret_tarifare']) ? max(0.0, (float) $row['pret_tarifare']) : 0.0;
+                            $distributionBillingValue = $distributionQuantityValue * $distributionRateValue;
+                            $costKmDistributieValue = $kmDistributieValue !== null && $kmDistributieValue > 0 ? round($distributionBillingValue / $kmDistributieValue, 2) : $costKmDistributieValue;
+                            $costKmMixtValue = $kmTotaliValue > 0 ? round($displayTotalFacturare / $kmTotaliValue, 2) : $costKmMixtValue;
                         }
                         if ($transportType === 'compresor' && $costKmCompresorValue <= 0) {
                             $kmCompresor = isset($row['km_dislocare']) ? (float) $row['km_dislocare'] : 0.0;
                             if ($kmCompresor > 0) {
-                                $costKmCompresorValue = round(((float) ($row['total_facturare'] ?? 0)) / $kmCompresor, 2);
+                                $costKmCompresorValue = round($displayTotalFacturare / $kmCompresor, 2);
                             }
                         }
                         $toPositiveFloat = static function (mixed $value): ?float {
@@ -994,30 +998,34 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
                             }
                             $activityTitle = implode(' | ', $activityTitleParts);
                         }
-                        $relevantCostKmValue = null;
-                        if ($transportType === 'compresor') {
-                            $relevantCostKmValue = $costKmCompresorValue;
-                        } elseif ($transportType === 'distributie') {
-                            $relevantCostKmValue = $costKmDistributieValue;
-                        } elseif ($transportType === 'primar' || $transportType === 'primar_tona' || $transportType === 'primar_km') {
-                            $relevantCostKmValue = $costKmPrimarValue;
-                        } elseif ($transportType === 'primar_distributie' || $transportType === 'mixt') {
-                            $relevantCostKmValue = $costKmMixtValue;
-                        }
                         $financialParts = [
-                            ['label' => 'Total:', 'value' => format_number_ro((float) ($row['total_facturare'] ?? 0), 2) . ' lei', 'is_total' => true],
+                            ['label' => 'Total:', 'value' => format_number_ro($displayTotalFacturare, 2) . ' lei', 'is_total' => true],
                             ['label' => 'Tarif:', 'value' => format_number_ro((float) ($row['pret_tarifare'] ?? 0), 2) . ' lei'],
                         ];
-                        if ($relevantCostKmValue !== null && $relevantCostKmValue > 0) {
-                            $financialParts[] = [
-                                'label' => 'Cost/km:',
-                                'value' => format_number_ro($relevantCostKmValue, 2) . ' lei/km',
+                        $addFinancialCostKmPart = static function (array &$parts, string $label, ?float $value, bool $alwaysShow = false): void {
+                            if ($value === null || (!$alwaysShow && $value <= 0)) {
+                                return;
+                            }
+
+                            $parts[] = [
+                                'label' => $label,
+                                'value' => format_number_ro(max(0.0, $value), 2) . ' lei/km',
                             ];
+                        };
+                        if ($transportType === 'compresor') {
+                            $addFinancialCostKmPart($financialParts, 'Cost/km Compresor:', $costKmCompresorValue);
+                        } elseif ($transportType === 'distributie') {
+                            $addFinancialCostKmPart($financialParts, 'Cost/km Distributie:', $costKmDistributieValue);
+                        } elseif ($transportType === 'primar' || $transportType === 'primar_tona' || $transportType === 'primar_km') {
+                            $addFinancialCostKmPart($financialParts, 'Cost/km Primar:', $costKmPrimarValue);
+                        } elseif ($transportType === 'primar_distributie' || $transportType === 'mixt') {
+                            $addFinancialCostKmPart($financialParts, 'Cost/km Mixt:', $costKmMixtValue, true);
+                            $addFinancialCostKmPart($financialParts, 'Cost/km Distributie:', $costKmDistributieValue, true);
                         }
                         $financialParts[] = ['label' => 'Chelt.:', 'value' => format_number_ro((float) ($row['total_cheltuieli'] ?? 0), 2) . ' lei'];
                         $financialTitleParts = [];
                         foreach ($financialParts as $financialPart) {
-                            $financialTitleParts[] = (string) ($financialPart['label'] ?? '') . ': ' . (string) ($financialPart['value'] ?? '');
+                            $financialTitleParts[] = rtrim((string) ($financialPart['label'] ?? ''), ':') . ': ' . (string) ($financialPart['value'] ?? '');
                         }
                         $financialTitle = implode(' | ', $financialTitleParts);
                         $billingStatusRowClass = 'race-status-' . preg_replace('/[^a-z0-9_]/', '', strtolower($billingStatus));
@@ -1201,9 +1209,39 @@ $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 
                 <div class="modal-body">
                     Vrei sa adaugi cheltuieli pe cursa acum?
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Nu</button>
+                <div class="modal-footer justify-content-center gap-2">
                     <a class="btn btn-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $postCreateExpensePromptRaceId]) . '#expense-section') ?>">Da</a>
+                    <button type="button" class="btn btn-outline-secondary" data-role="post-create-expense-no">Nu</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="postCreateExpenseChoiceModal" tabindex="-1" aria-labelledby="postCreateExpenseChoiceTitle" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="postCreateExpenseChoiceTitle">Cheltuieli cursa</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+                </div>
+                <div class="modal-body">
+                    Alege de ce nu adaugi cheltuieli acum pentru aceasta cursa.
+                </div>
+                <div class="modal-footer justify-content-center gap-2">
+                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'update_expense_status'])) ?>" class="m-0">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="id" value="<?= e((string) $postCreateExpensePromptRaceId) ?>">
+                        <input type="hidden" name="cheltuieli_choice" value="not_applicable">
+                        <input type="hidden" name="return_url" value="<?= e($dispecerReturnUrl) ?>">
+                        <button type="submit" class="btn btn-outline-secondary">Nu e cazul</button>
+                    </form>
+                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'update_expense_status'])) ?>" class="m-0">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="id" value="<?= e((string) $postCreateExpensePromptRaceId) ?>">
+                        <input type="hidden" name="cheltuieli_choice" value="pending">
+                        <input type="hidden" name="return_url" value="<?= e($dispecerReturnUrl) ?>">
+                        <button type="submit" class="btn btn-primary">Nu acum</button>
+                    </form>
                 </div>
             </div>
         </div>
@@ -1317,8 +1355,31 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     var postCreateExpensePromptModalEl = document.getElementById('postCreateExpensePromptModal');
+    var postCreateExpenseChoiceModalEl = document.getElementById('postCreateExpenseChoiceModal');
+    var postCreateExpenseNoButtonEl = document.querySelector('[data-role="post-create-expense-no"]');
     if (postCreateExpensePromptModalEl instanceof HTMLElement && typeof bootstrap !== 'undefined' && bootstrap.Modal) {
         var postCreateExpensePromptModal = new bootstrap.Modal(postCreateExpensePromptModalEl);
+        var postCreateExpenseChoiceModal = postCreateExpenseChoiceModalEl instanceof HTMLElement
+            ? new bootstrap.Modal(postCreateExpenseChoiceModalEl)
+            : null;
+        var shouldShowExpenseChoice = false;
+
+        if (postCreateExpenseNoButtonEl instanceof HTMLButtonElement && postCreateExpenseChoiceModal !== null) {
+            postCreateExpenseNoButtonEl.addEventListener('click', function () {
+                shouldShowExpenseChoice = true;
+                postCreateExpensePromptModal.hide();
+            });
+
+            postCreateExpensePromptModalEl.addEventListener('hidden.bs.modal', function () {
+                if (!shouldShowExpenseChoice) {
+                    return;
+                }
+
+                shouldShowExpenseChoice = false;
+                postCreateExpenseChoiceModal.show();
+            });
+        }
+
         postCreateExpensePromptModal.show();
     }
 });
@@ -1365,4 +1426,3 @@ document.addEventListener('DOMContentLoaded', function () {
 <?php endif; ?>
 
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
-

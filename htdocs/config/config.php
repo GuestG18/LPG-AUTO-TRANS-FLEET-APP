@@ -31,6 +31,7 @@ define('APP_ENV', $appEnvRaw);
 define('ITEMS_PER_PAGE', 10);
 define('AUTH_REQUIRE_EMAIL_VERIFICATION', filter_var((string) (getenv('AUTH_REQUIRE_EMAIL_VERIFICATION') ?: 'true'), FILTER_VALIDATE_BOOLEAN));
 define('AUTH_VERIFY_RESEND_COOLDOWN_SECONDS', max(15, (int) (getenv('AUTH_VERIFY_RESEND_COOLDOWN_SECONDS') ?: 30)));
+define('AUTH_SHOW_LOGIN_CODE_ON_EMAIL_FAILURE', filter_var((string) (getenv('AUTH_SHOW_LOGIN_CODE_ON_EMAIL_FAILURE') ?: 'false'), FILTER_VALIDATE_BOOLEAN));
 
 // SMTP settings used by PHPMailer for authentication emails.
 // MAIL_USERNAME is the sender account used by the app to authenticate to SMTP.
@@ -43,6 +44,7 @@ define('MAIL_PASSWORD', (string) (getenv('MAIL_PASSWORD') ?: getenv('SMTP_PASSWO
 define('MAIL_ENCRYPTION', strtolower((string) (getenv('MAIL_ENCRYPTION') ?: getenv('SMTP_ENCRYPTION') ?: 'tls'))); // tls | ssl | none
 define('MAIL_FROM_ADDRESS', (string) (getenv('MAIL_FROM_ADDRESS') ?: 'gigel.trandafir@lpg-auto.ro'));
 define('MAIL_FROM_NAME', (string) (getenv('MAIL_FROM_NAME') ?: 'LPG AUTO TRANS'));
+define('MAIL_RETURN_PATH', (string) (getenv('MAIL_RETURN_PATH') ?: MAIL_FROM_ADDRESS));
 define('MAIL_TIMEOUT', (int) (getenv('MAIL_TIMEOUT') ?: 45));
 define('MAIL_CONNECT_TIMEOUT', (int) (getenv('MAIL_CONNECT_TIMEOUT') ?: 15));
 define('MAIL_RETRY_ATTEMPTS', max(1, (int) (getenv('MAIL_RETRY_ATTEMPTS') ?: 2)));
@@ -63,7 +65,8 @@ $defaultAppUrl = $httpHost !== ''
     ? (($isHttps ? 'https://' : 'http://') . $httpHost . BASE_URL)
     : 'http://127.0.0.1:8000';
 
-define('APP_URL', rtrim($defaultAppUrl, '/'));
+$configuredAppUrl = trim((string) (getenv('APP_URL') ?: ''));
+define('APP_URL', rtrim($configuredAppUrl !== '' ? $configuredAppUrl : $defaultAppUrl, '/'));
 
 if (PHP_SAPI !== 'cli' && session_status() === PHP_SESSION_NONE) {
     session_name('fleet_mvp_session');

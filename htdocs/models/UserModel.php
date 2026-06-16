@@ -125,6 +125,71 @@ class UserModel extends BaseModel
         return $stmt->execute($params);
     }
 
+    public function ensureLocalAdminUser(): array
+    {
+        if (!$this->tableExists('utilizatori')) {
+            throw new RuntimeException('Tabela utilizatori nu exista pentru autentificarea locala.');
+        }
+
+        $email = 'admin@example.com';
+        $passwordHash = password_hash('Admin123!', PASSWORD_DEFAULT);
+        if ($passwordHash === false) {
+            throw new RuntimeException('Nu s-a putut genera parola pentru utilizatorul local.');
+        }
+
+        $existing = $this->findByEmail($email);
+        if ($existing !== null) {
+            $stmt = $this->db->prepare("
+                UPDATE utilizatori
+                SET
+                    nume = COALESCE(NULLIF(nume, ''), 'Administrator Local'),
+                    parola = :parola,
+                    rol = 'admin',
+                    status = 'activ',
+                    updated_at = NOW()
+                WHERE LOWER(email) = LOWER(:email)
+                LIMIT 1
+            ");
+            $stmt->execute([
+                ':parola' => $passwordHash,
+                ':email' => $email,
+            ]);
+        } else {
+            $stmt = $this->db->prepare("
+                INSERT INTO utilizatori (
+                    nume,
+                    email,
+                    telefon,
+                    parola,
+                    rol,
+                    status,
+                    created_at,
+                    updated_at
+                ) VALUES (
+                    'Administrator Local',
+                    :email,
+                    '0700000000',
+                    :parola,
+                    'admin',
+                    'activ',
+                    NOW(),
+                    NOW()
+                )
+            ");
+            $stmt->execute([
+                ':email' => $email,
+                ':parola' => $passwordHash,
+            ]);
+        }
+
+        $user = $this->findAuthUserByEmail($email);
+        if ($user === null) {
+            throw new RuntimeException('Utilizatorul local nu a putut fi incarcat dupa seed.');
+        }
+
+        return $user;
+    }
+
     private function resolveAuthTableConfig(): array
     {
         if ($this->authTableConfig !== null) {
