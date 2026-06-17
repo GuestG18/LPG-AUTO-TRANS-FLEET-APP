@@ -85,9 +85,38 @@ foreach ($documentTypeOptionsByStaffType as $typeOptions) {
 foreach (['Contract de muncă', 'Act adițional', 'CI / Buletin', 'Permis conducere', 'Medicina muncii', 'Aviz medical', 'Certificat profesional', 'Alte documente'] as $documentType) {
     $allDocumentTypes[$documentType] = $documentType;
 }
-$staffTypeOptionsJson = json_encode($staffTypeOptions, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-if (!is_string($staffTypeOptionsJson)) {
-    $staffTypeOptionsJson = '[]';
+$staffTypeMeta = [];
+foreach ($staffTypes as $type) {
+    $typeId = (int) ($type['id'] ?? 0);
+    if ($typeId <= 0) {
+        continue;
+    }
+
+    $requirements = [];
+    foreach ((array) ($type['requirements'] ?? []) as $requirement) {
+        $documentType = trim((string) ($requirement['document_type'] ?? ''));
+        if ($documentType === '') {
+            continue;
+        }
+
+        $requirements[] = [
+            'document_type' => $documentType,
+            'requires_expiry' => (int) ($requirement['requires_expiry'] ?? 0) === 1,
+            'warning_days' => (int) ($requirement['warning_days'] ?? 30),
+        ];
+    }
+
+    $staffTypeMeta[$typeId] = [
+        'id' => $typeId,
+        'name' => (string) ($type['name'] ?? ''),
+        'is_driver_linked' => (int) ($type['is_driver_linked'] ?? 0) === 1,
+        'mandatory_documents_enabled' => (int) ($type['mandatory_documents_enabled'] ?? 0) === 1,
+        'requirements' => $requirements,
+    ];
+}
+$staffTypeMetaJson = json_encode($staffTypeMeta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+if (!is_string($staffTypeMetaJson)) {
+    $staffTypeMetaJson = '{}';
 }
 ?>
 
@@ -722,7 +751,7 @@ if (!is_string($staffTypeOptionsJson)) {
 </div>
 
 <div class="modal fade" id="addStaffTypeModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
             <form method="post" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'store_type'])) ?>">
                 <?= csrf_field() ?>
@@ -752,6 +781,47 @@ if (!is_string($staffTypeOptionsJson)) {
                             <option value="activ">Activ</option>
                             <option value="inactiv">Inactiv</option>
                         </select>
+                    </div>
+                    <div class="border rounded-3 bg-light p-3">
+                        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+                            <div>
+                                <div class="fw-semibold">Documente obligatorii</div>
+                                <div class="small text-muted">Le poti configura acum pentru noul tip de personal. Liniile goale sunt ignorate.</div>
+                            </div>
+                            <button type="button" class="btn btn-outline-primary btn-sm" data-action="add-staff-type-requirement">
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Adauga document
+                            </button>
+                        </div>
+                        <div class="vstack gap-3" data-role="staff-type-requirements-list" data-next-index="1">
+                            <div class="border rounded-3 bg-white p-3" data-role="staff-type-requirement-row">
+                                <div class="row g-3 align-items-end">
+                                    <div class="col-md-5">
+                                        <label class="form-label">Tip document</label>
+                                        <input type="text" class="form-control" name="requirements[0][document_type]" list="documentTypeDatalist" placeholder="Ex: Contract de munca">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Data expirarii</label>
+                                        <select class="form-select" name="requirements[0][requires_expiry]">
+                                            <option value="1">Obligatorie</option>
+                                            <option value="0">Optionala</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label">Avertizare</label>
+                                        <select class="form-select" name="requirements[0][warning_days]">
+                                            <option value="30">30 zile</option>
+                                            <option value="60">60 zile</option>
+                                            <option value="90">90 zile</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-1 d-flex justify-content-md-end">
+                                        <button type="button" class="btn btn-outline-danger btn-sm" data-action="remove-staff-type-requirement" aria-label="Elimina document">
+                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <input type="hidden" name="mandatory_documents_enabled" value="1">
                     <input type="hidden" name="can_create_employees" value="1">
@@ -947,9 +1017,9 @@ if (!is_string($staffTypeOptionsJson)) {
 <?php endforeach; ?>
 
 <div class="modal fade" id="addStaffModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
-            <form method="post" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'store_staff'])) ?>">
+            <form method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'store_staff'])) ?>">
                 <?= csrf_field() ?>
                 <div class="modal-header">
                     <h3 class="modal-title fs-5">Adaugă angajat</h3>
@@ -1035,6 +1105,23 @@ if (!is_string($staffTypeOptionsJson)) {
                             </div>
                         </div>
                     </div>
+
+                    <div class="border rounded-3 bg-light p-3 mt-4" data-role="accountancy-required-docs-panel">
+                        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+                            <div>
+                                <h4 class="h6 mb-1">Documente initiale pentru tipul selectat</h4>
+                                <div class="small text-muted">Poti incarca direct aici documentele cerute. Liniile lasate goale nu se salveaza.</div>
+                            </div>
+                            <span class="badge text-bg-light border" data-role="accountancy-required-docs-count">0 documente</span>
+                        </div>
+                        <div class="alert alert-info py-2 px-3 mb-3 d-none" data-role="accountancy-required-docs-driver-note">
+                            Pentru tipul Sofer, documentele se administreaza din modulul Soferi.
+                        </div>
+                        <div class="small text-muted mb-3 d-none" data-role="accountancy-required-docs-empty">
+                            Tipul selectat nu are documente obligatorii configurate inca.
+                        </div>
+                        <div class="vstack gap-3" data-role="accountancy-required-docs-list"></div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
@@ -1112,6 +1199,116 @@ if (!is_string($staffTypeOptionsJson)) {
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+    var staffTypeMeta = <?= $staffTypeMetaJson ?>;
+
+    function escapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function buildRequirementRow(index) {
+        return '' +
+            '<div class="border rounded-3 bg-white p-3" data-role="staff-type-requirement-row">' +
+                '<div class="row g-3 align-items-end">' +
+                    '<div class="col-md-5">' +
+                        '<label class="form-label">Tip document</label>' +
+                        '<input type="text" class="form-control" name="requirements[' + index + '][document_type]" list="documentTypeDatalist" placeholder="Ex: Contract de munca">' +
+                    '</div>' +
+                    '<div class="col-md-3">' +
+                        '<label class="form-label">Data expirarii</label>' +
+                        '<select class="form-select" name="requirements[' + index + '][requires_expiry]">' +
+                            '<option value="1">Obligatorie</option>' +
+                            '<option value="0">Optionala</option>' +
+                        '</select>' +
+                    '</div>' +
+                    '<div class="col-md-3">' +
+                        '<label class="form-label">Avertizare</label>' +
+                        '<select class="form-select" name="requirements[' + index + '][warning_days]">' +
+                            '<option value="30">30 zile</option>' +
+                            '<option value="60">60 zile</option>' +
+                            '<option value="90">90 zile</option>' +
+                        '</select>' +
+                    '</div>' +
+                    '<div class="col-md-1 d-flex justify-content-md-end">' +
+                        '<button type="button" class="btn btn-outline-danger btn-sm" data-action="remove-staff-type-requirement" aria-label="Elimina document">' +
+                            '<i class="bi bi-trash" aria-hidden="true"></i>' +
+                        '</button>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+    }
+
+    function buildStaffDocumentRow(requirement, index) {
+        var documentType = escapeHtml(requirement.document_type || '');
+        var warningDays = escapeHtml(requirement.warning_days || 30);
+        var expiryBadge = requirement.requires_expiry ? 'Expirare obligatorie' : 'Expirare optionala';
+        var expiryNote = requirement.requires_expiry
+            ? 'Completeaza si data expirarii cand documentul o are.'
+            : 'Poti lasa data expirarii goala pentru acest document.';
+
+        return '' +
+            '<div class="border rounded-3 bg-white p-3">' +
+                '<input type="hidden" name="staff_documents[' + index + '][tip_document]" value="' + documentType + '">' +
+                '<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">' +
+                    '<div>' +
+                        '<div class="fw-semibold">' + documentType + '</div>' +
+                        '<div class="small text-muted">' + escapeHtml(expiryNote) + ' Avertizare: ' + warningDays + ' zile.</div>' +
+                    '</div>' +
+                    '<span class="badge text-bg-light border">' + expiryBadge + '</span>' +
+                '</div>' +
+                '<div class="row g-3">' +
+                    '<div class="col-md-4">' +
+                        '<label class="form-label">Numar document</label>' +
+                        '<input type="text" class="form-control" name="staff_documents[' + index + '][numar_document]">' +
+                    '</div>' +
+                    '<div class="col-md-4">' +
+                        '<label class="form-label">Data emiterii</label>' +
+                        '<input type="date" class="form-control" name="staff_documents[' + index + '][data_emitere]">' +
+                    '</div>' +
+                    '<div class="col-md-4">' +
+                        '<label class="form-label">Data expirarii</label>' +
+                        '<input type="date" class="form-control" name="staff_documents[' + index + '][data_expirare]">' +
+                    '</div>' +
+                    '<div class="col-12">' +
+                        '<label class="form-label">Fisier document</label>' +
+                        '<input type="file" class="form-control" name="staff_document_files[' + index + ']" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">' +
+                    '</div>' +
+                    '<div class="col-12">' +
+                        '<label class="form-label">Observatii</label>' +
+                        '<textarea class="form-control" name="staff_documents[' + index + '][observatii]" rows="2"></textarea>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+    }
+
+    document.addEventListener('click', function (event) {
+        var addButton = event.target.closest('[data-action="add-staff-type-requirement"]');
+        if (addButton) {
+            var modalBody = addButton.closest('.modal-body');
+            var listEl = modalBody ? modalBody.querySelector('[data-role="staff-type-requirements-list"]') : null;
+            if (!listEl) {
+                return;
+            }
+
+            var nextIndex = parseInt(listEl.getAttribute('data-next-index') || '1', 10);
+            listEl.insertAdjacentHTML('beforeend', buildRequirementRow(nextIndex));
+            listEl.setAttribute('data-next-index', String(nextIndex + 1));
+            return;
+        }
+
+        var removeButton = event.target.closest('[data-action="remove-staff-type-requirement"]');
+        if (removeButton) {
+            var row = removeButton.closest('[data-role="staff-type-requirement-row"]');
+            if (row) {
+                row.remove();
+            }
+        }
+    });
+
     document.querySelectorAll('[data-role="accountancy-staff-type-select"]').forEach(function (selectEl) {
         var form = selectEl.closest('form');
         if (!form) {
@@ -1120,10 +1317,20 @@ document.addEventListener('DOMContentLoaded', function () {
 
         var driverFields = form.querySelector('[data-role="accountancy-driver-fields"]');
         var directFields = form.querySelector('[data-role="accountancy-direct-fields"]');
+        var docsList = form.querySelector('[data-role="accountancy-required-docs-list"]');
+        var docsEmpty = form.querySelector('[data-role="accountancy-required-docs-empty"]');
+        var docsDriverNote = form.querySelector('[data-role="accountancy-required-docs-driver-note"]');
+        var docsCount = form.querySelector('[data-role="accountancy-required-docs-count"]');
 
         function syncFields() {
             var option = selectEl.options[selectEl.selectedIndex];
             var isDriver = option && option.getAttribute('data-driver-linked') === '1';
+            var selectedTypeId = option ? String(option.value || '') : '';
+            var selectedMeta = staffTypeMeta[selectedTypeId] || null;
+            var requirements = selectedMeta && selectedMeta.mandatory_documents_enabled && Array.isArray(selectedMeta.requirements)
+                ? selectedMeta.requirements
+                : [];
+
             if (driverFields) {
                 driverFields.classList.toggle('d-none', !isDriver);
                 driverFields.querySelectorAll('select, input, textarea').forEach(function (input) {
@@ -1135,6 +1342,24 @@ document.addEventListener('DOMContentLoaded', function () {
                 directFields.querySelectorAll('select, input, textarea').forEach(function (input) {
                     input.disabled = isDriver;
                 });
+            }
+
+            if (docsList) {
+                docsList.innerHTML = '';
+                if (!isDriver && requirements.length > 0) {
+                    requirements.forEach(function (requirement, index) {
+                        docsList.insertAdjacentHTML('beforeend', buildStaffDocumentRow(requirement, index));
+                    });
+                }
+            }
+            if (docsDriverNote) {
+                docsDriverNote.classList.toggle('d-none', !isDriver);
+            }
+            if (docsEmpty) {
+                docsEmpty.classList.toggle('d-none', isDriver || requirements.length > 0);
+            }
+            if (docsCount) {
+                docsCount.textContent = (isDriver ? 0 : requirements.length) + ' documente';
             }
         }
 

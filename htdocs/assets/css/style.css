@@ -11,6 +11,37 @@ body {
     background-color: var(--body-bg);
 }
 
+/* Shared modal layout */
+.modal .modal-dialog {
+    margin: clamp(0.5rem, 2vh, 1rem) auto;
+}
+
+.modal .modal-content {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 1rem);
+    max-height: calc(100dvh - 1rem);
+}
+
+.modal .modal-content > form {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.modal .modal-header,
+.modal .modal-footer {
+    flex-shrink: 0;
+}
+
+.modal .modal-body {
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
 .app-shell {
     min-height: 100vh;
     display: flex;

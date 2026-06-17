@@ -188,6 +188,46 @@ class StaffAccountancyModel extends BaseModel
         return (int) $this->db->lastInsertId();
     }
 
+    public function createStaffTypeWithRequirements(array $data, array $requirements, ?int $userId): int
+    {
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $typeId = $this->createStaffType($data, $userId);
+            foreach ($requirements as $requirement) {
+                $documentType = trim((string) ($requirement['document_type'] ?? ''));
+                if ($documentType === '') {
+                    continue;
+                }
+
+                $saved = $this->addRequirement(
+                    $typeId,
+                    $documentType,
+                    (bool) ($requirement['requires_expiry'] ?? false),
+                    (int) ($requirement['warning_days'] ?? 30)
+                );
+                if (!$saved) {
+                    throw new RuntimeException('Nu am putut salva documentele obligatorii pentru tipul de personal.');
+                }
+            }
+
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->commit();
+            }
+
+            return $typeId;
+        } catch (Throwable $exception) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
     public function updateStaffType(int $id, array $data, ?int $userId): bool
     {
         $type = $this->findStaffType($id);
@@ -350,6 +390,41 @@ class StaffAccountancyModel extends BaseModel
         }
 
         return $id;
+    }
+
+    public function createDirectStaffWithDocuments(array $data, array $documents, ?int $userId): int
+    {
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $staffId = $this->createDirectStaff($data, $userId);
+            foreach ($documents as $document) {
+                $payload = is_array($document['data'] ?? null) ? $document['data'] : [];
+                $fileData = is_array($document['fileData'] ?? null) ? $document['fileData'] : null;
+                if ($payload === []) {
+                    continue;
+                }
+
+                if (!$this->saveStaffDocument($staffId, $payload, $fileData, $userId)) {
+                    throw new RuntimeException('Nu am putut salva documentele initiale pentru angajat.');
+                }
+            }
+
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->commit();
+            }
+
+            return $staffId;
+        } catch (Throwable $exception) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
     }
 
     public function updateDirectStaff(int $id, array $data, ?int $userId): bool

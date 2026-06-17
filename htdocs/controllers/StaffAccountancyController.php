@@ -177,6 +177,7 @@ class StaffAccountancyController
         ensure_csrf_or_redirect($this->indexUrl());
 
         $data = $this->collectStaffTypeInput($_POST);
+        $requirements = $this->collectRequirementInput($_POST);
         $errors = $this->validateStaffTypeInput($data);
         if ($this->isReservedDriverTypeName((string) ($data['name'] ?? ''))) {
             $errors[] = 'Tipul Șofer este deja conectat la pagina Șoferi și nu poate fi duplicat.';
@@ -187,8 +188,11 @@ class StaffAccountancyController
         }
 
         try {
-            $this->model->createStaffType($data, $this->currentUserId());
-            flash_set('success', 'Tipul de personal a fost adaugat.');
+            $this->model->createStaffTypeWithRequirements($data, $requirements, $this->currentUserId());
+            flash_set('success', $requirements === []
+                ? 'Tipul de personal a fost adaugat.'
+                : 'Tipul de personal si documentele obligatorii au fost adaugate.'
+            );
         } catch (Throwable $exception) {
             error_log('[StaffAccountancyController][store_type] ' . $exception->getMessage());
             flash_set('danger', 'Nu am putut salva tipul de personal.');
@@ -288,6 +292,7 @@ class StaffAccountancyController
             redirect($this->indexUrl());
         }
 
+        $preparedDocuments = [];
         try {
             if ((int) ($type['is_driver_linked'] ?? 0) === 1) {
                 $this->storeDriverAccountingFromStaffForm();
@@ -299,10 +304,15 @@ class StaffAccountancyController
                     redirect($this->indexUrl());
                 }
 
-                $this->model->createDirectStaff($data, $this->currentUserId());
-                flash_set('success', 'Personalul a fost adaugat.');
+                $preparedDocuments = $this->collectStaffDocumentInput($_POST, $_FILES);
+                $this->model->createDirectStaffWithDocuments($data, $preparedDocuments, $this->currentUserId());
+                flash_set('success', $preparedDocuments === []
+                    ? 'Personalul a fost adaugat.'
+                    : 'Personalul si documentele initiale au fost adaugate.'
+                );
             }
         } catch (Throwable $exception) {
+            $this->cleanupPreparedDocuments($preparedDocuments);
             error_log('[StaffAccountancyController][store_staff] ' . $exception->getMessage());
             flash_set('danger', 'Nu am putut salva personalul.');
         }
@@ -527,6 +537,34 @@ class StaffAccountancyController
         ];
     }
 
+    private function collectRequirementInput(array $input): array
+    {
+        $rows = $input['requirements'] ?? [];
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        $requirements = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $documentType = trim((string) ($row['document_type'] ?? ''));
+            if ($documentType === '') {
+                continue;
+            }
+
+            $requirements[] = [
+                'document_type' => $documentType,
+                'requires_expiry' => (string) ($row['requires_expiry'] ?? '1') === '1',
+                'warning_days' => (int) ($row['warning_days'] ?? 30),
+            ];
+        }
+
+        return $requirements;
+    }
+
     private function validateStaffTypeInput(array $data): array
     {
         $errors = [];
@@ -566,6 +604,95 @@ class StaffAccountancyController
             'status' => trim((string) ($input['status'] ?? 'activ')),
             'observatii' => trim((string) ($input['observatii'] ?? '')),
         ];
+    }
+
+    private function collectStaffDocumentInput(array $input, array $files): array
+    {
+        $rows = $input['staff_documents'] ?? [];
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        $documents = [];
+        $storedFiles = [];
+
+        try {
+            foreach ($rows as $index => $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+
+                $documentType = trim((string) ($row['tip_document'] ?? ''));
+                $number = trim((string) ($row['numar_document'] ?? ''));
+                $issueDateRaw = trim((string) ($row['data_emitere'] ?? ''));
+                $expiryDateRaw = trim((string) ($row['data_expirare'] ?? ''));
+                $notes = trim((string) ($row['observatii'] ?? ''));
+                $uploadedFile = $this->extractGroupedUpload($files['staff_document_files'] ?? null, $index);
+                $hasFile = is_array($uploadedFile) && (int) ($uploadedFile['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
+                $hasContent = $number !== '' || $issueDateRaw !== '' || $expiryDateRaw !== '' || $notes !== '' || $hasFile;
+
+                if (!$hasContent) {
+                    continue;
+                }
+
+                if ($documentType === '') {
+                    throw new RuntimeException('Un document initial nu are tipul completat.');
+                }
+
+                [$fileData, $uploadError] = $this->storeUploadedDocumentFile($uploadedFile);
+                if ($uploadError !== null) {
+                    throw new RuntimeException($uploadError);
+                }
+
+                if ($fileData !== null && !empty($fileData['fisier_stocat'])) {
+                    $storedFiles[] = (string) $fileData['fisier_stocat'];
+                }
+
+                $documents[] = [
+                    'data' => [
+                        'tip_document' => $documentType,
+                        'numar_document' => $number !== '' ? $number : null,
+                        'data_emitere' => $this->normalizeDate($issueDateRaw),
+                        'data_expirare' => $this->normalizeDate($expiryDateRaw),
+                        'observatii' => $notes !== '' ? $notes : null,
+                    ],
+                    'fileData' => $fileData,
+                ];
+            }
+        } catch (Throwable $exception) {
+            foreach ($storedFiles as $storedFile) {
+                $this->deleteDocumentPhysicalFile($storedFile);
+            }
+
+            throw $exception;
+        }
+
+        return $documents;
+    }
+
+    private function extractGroupedUpload(mixed $groupedFiles, int|string $index): ?array
+    {
+        if (!is_array($groupedFiles) || !isset($groupedFiles['name'][$index])) {
+            return null;
+        }
+
+        return [
+            'name' => $groupedFiles['name'][$index] ?? '',
+            'type' => $groupedFiles['type'][$index] ?? '',
+            'tmp_name' => $groupedFiles['tmp_name'][$index] ?? '',
+            'error' => $groupedFiles['error'][$index] ?? UPLOAD_ERR_NO_FILE,
+            'size' => $groupedFiles['size'][$index] ?? 0,
+        ];
+    }
+
+    private function cleanupPreparedDocuments(array $documents): void
+    {
+        foreach ($documents as $document) {
+            $storedFile = trim((string) ($document['fileData']['fisier_stocat'] ?? ''));
+            if ($storedFile !== '') {
+                $this->deleteDocumentPhysicalFile($storedFile);
+            }
+        }
     }
 
     private function validateStaffMemberInput(array $data, bool $validateSalary = true): array
