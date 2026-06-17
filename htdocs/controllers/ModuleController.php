@@ -77,6 +77,12 @@ class ModuleController
             case 'unmount_tire':
                 $this->unmountVehicleTireAction($moduleKey, $module);
                 return;
+            case 'move_tire':
+                $this->moveMaintenanceTireAction($moduleKey, $module);
+                return;
+            case 'change_tire_status':
+                $this->changeTireStatusAction($moduleKey, $module);
+                return;
             case 'add_tire_stock':
                 $this->addMaintenanceTireStockAction($moduleKey, $module);
                 return;
@@ -286,7 +292,7 @@ class ModuleController
 
         $stockContext = null;
         try {
-            $stockContext = $this->tireModel->buildMaintenanceStockContext();
+            $stockContext = $this->tireModel->buildMaintenanceStockContext($this->collectTireStockFilters());
         } catch (Throwable $exception) {
             error_log('[ModuleController][mentenanta][tire-stock-context] ' . $exception->getMessage());
             flash_set('warning', 'Modulul de stoc anvelope necesita actualizare baza de date. Ruleaza scripturile database/update_tire_stock_target_type.sql si database/update_tire_maintenance_link.sql.');
@@ -1461,6 +1467,7 @@ class ModuleController
         $tireId = (int) ($_POST['tire_id'] ?? 0);
         $positionId = (int) ($_POST['position_id'] ?? 0);
         $mountDate = trim((string) ($_POST['mount_date'] ?? date('Y-m-d')));
+        $allowSwap = isset($_POST['allow_swap']);
 
         if ($tireId <= 0 || $positionId <= 0) {
             flash_set('danger', 'Selecteaza anvelopa si pozitia pentru montaj.');
@@ -1491,7 +1498,10 @@ class ModuleController
                 max(0, (int) ($vehicle['km_bord'] ?? 0)),
                 $mountDate,
                 date('Y-m-d H:i:s'),
-                $this->currentUserId()
+                $this->currentUserId(),
+                $allowSwap,
+                'Montaj din pagina vehicul',
+                trim((string) ($_POST['observation'] ?? '')) ?: null
             );
 
             flash_set('success', 'Anvelopa a fost montata cu succes.');
@@ -1536,7 +1546,7 @@ class ModuleController
             redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
         }
 
-        if (!in_array($statusEnd, [TireModel::STATUS_SPARE, TireModel::STATUS_REMOVED, TireModel::STATUS_DAMAGED, TireModel::STATUS_RETREADED], true)) {
+        if (!in_array($statusEnd, [TireModel::STATUS_IN_STOCK, TireModel::STATUS_SPARE, TireModel::STATUS_REMOVED, TireModel::STATUS_DAMAGED, TireModel::STATUS_MISSING, TireModel::STATUS_SCRAPPED], true)) {
             $statusEnd = TireModel::STATUS_SPARE;
         }
 
@@ -1547,7 +1557,10 @@ class ModuleController
                 max(0, (int) ($vehicle['km_bord'] ?? 0)),
                 $unmountDate,
                 $statusEnd,
-                date('Y-m-d H:i:s')
+                date('Y-m-d H:i:s'),
+                $this->currentUserId(),
+                'Demontare din pagina vehicul',
+                trim((string) ($_POST['observation'] ?? '')) ?: null
             );
 
             if ($updated) {
@@ -1562,9 +1575,146 @@ class ModuleController
         redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
     }
 
+    private function moveMaintenanceTireAction(string $moduleKey, array $module): void
+    {
+        $fallbackUrl = $moduleKey === 'vehicule'
+            ? build_query_url(['page' => 'vehicule'])
+            : $this->maintenanceTireStockUrl();
+
+        if (!in_array($moduleKey, ['mentenanta', 'vehicule'], true) || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($fallbackUrl);
+        }
+
+        $sourceVehicleId = (int) ($_POST['source_vehicle_id'] ?? $_POST['vehicle_id'] ?? 0);
+        $redirectUrl = $sourceVehicleId > 0 && $moduleKey === 'vehicule'
+            ? build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $sourceVehicleId])
+            : $this->maintenanceTireStockUrl();
+
+        ensure_csrf_or_redirect($redirectUrl);
+
+        $tireId = (int) ($_POST['tire_id'] ?? 0);
+        $targetVehicleId = (int) ($_POST['target_vehicle_id'] ?? 0);
+        $targetPositionId = (int) ($_POST['target_position_id'] ?? 0);
+        $moveDate = trim((string) ($_POST['move_date'] ?? date('Y-m-d')));
+        $reason = trim((string) ($_POST['move_reason'] ?? 'Mutare anvelopa'));
+        $observation = trim((string) ($_POST['move_observation'] ?? ''));
+        $allowSwap = isset($_POST['allow_swap']);
+
+        if ($tireId <= 0 || $targetPositionId <= 0) {
+            flash_set('danger', 'Selecteaza anvelopa si pozitia tinta pentru mutare.');
+            redirect($redirectUrl);
+        }
+
+        if (!$this->isValidDate($moveDate)) {
+            flash_set('danger', 'Data mutarii nu este valida (format YYYY-MM-DD).');
+            redirect($redirectUrl);
+        }
+
+        $position = $this->tireModel->getVehiclePositionById($targetPositionId);
+        if ($position === null) {
+            flash_set('danger', 'Pozitia tinta nu exista.');
+            redirect($redirectUrl);
+        }
+        $targetVehicleId = $targetVehicleId > 0 ? $targetVehicleId : (int) ($position['vehicle_id'] ?? 0);
+
+        $vehicleModule = $this->modules['vehicule'] ?? null;
+        $vehicle = is_array($vehicleModule) ? $this->moduleModel->findById($vehicleModule, $targetVehicleId) : null;
+        if ($vehicle === null) {
+            flash_set('danger', 'Vehiculul tinta nu exista.');
+            redirect($redirectUrl);
+        }
+
+        try {
+            $this->tireModel->mountTire(
+                $tireId,
+                $targetVehicleId,
+                $targetPositionId,
+                max(0, (int) ($vehicle['km_bord'] ?? 0)),
+                $moveDate,
+                date('Y-m-d H:i:s'),
+                $this->currentUserId(),
+                $allowSwap,
+                $reason !== '' ? $reason : 'Mutare anvelopa',
+                $observation !== '' ? $observation : null
+            );
+
+            flash_set('success', 'Anvelopa a fost mutata cu succes.');
+        } catch (Throwable $exception) {
+            flash_set('danger', $exception->getMessage());
+        }
+
+        redirect($redirectUrl);
+    }
+
+    private function changeTireStatusAction(string $moduleKey, array $module): void
+    {
+        if (!in_array($moduleKey, ['mentenanta', 'vehicule'], true) || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($moduleKey === 'vehicule' ? build_query_url(['page' => 'vehicule']) : $this->maintenanceTireStockUrl());
+        }
+
+        $vehicleId = (int) ($_POST['vehicle_id'] ?? 0);
+        $redirectUrl = $moduleKey === 'vehicule' && $vehicleId > 0
+            ? build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId])
+            : $this->maintenanceTireStockUrl();
+
+        ensure_csrf_or_redirect($redirectUrl);
+
+        $tireId = (int) ($_POST['tire_id'] ?? 0);
+        $status = trim((string) ($_POST['status'] ?? ''));
+        $reason = trim((string) ($_POST['reason'] ?? 'Schimbare status'));
+        $observation = trim((string) ($_POST['observation'] ?? ''));
+
+        if ($tireId <= 0 || $status === '') {
+            flash_set('danger', 'Selecteaza anvelopa si statusul nou.');
+            redirect($redirectUrl);
+        }
+
+        try {
+            $this->tireModel->changeTireStatus(
+                $tireId,
+                $status,
+                $reason !== '' ? $reason : 'Schimbare status',
+                $observation !== '' ? $observation : null,
+                $this->currentUserId()
+            );
+            flash_set('success', 'Statusul anvelopei a fost actualizat.');
+        } catch (Throwable $exception) {
+            flash_set('danger', $exception->getMessage());
+        }
+
+        redirect($redirectUrl);
+    }
+
     private function maintenanceTireStockUrl(): string
     {
         return build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock']);
+    }
+
+    private function collectTireStockFilters(): array
+    {
+        $keys = [
+            'q',
+            'vehicle_type',
+            'axle_config',
+            'tire_type',
+            'status',
+            'condition',
+            'location',
+            'mounted',
+        ];
+
+        $filters = [];
+        foreach ($keys as $key) {
+            $value = trim((string) ($_GET[$key] ?? ''));
+            if ($value !== '') {
+                $filters[$key] = $value;
+            }
+        }
+
+        $filters['page'] = max(1, (int) ($_GET['p'] ?? $_GET['page_no'] ?? 1));
+        $filters['per_page'] = max(5, min(50, (int) ($_GET['per_page'] ?? 10)));
+
+        return $filters;
     }
 
     private function addMaintenanceTireStockAction(string $moduleKey, array $module): void
@@ -1587,7 +1737,22 @@ class ModuleController
         $quantityRaw = trim((string) ($_POST['stock_quantity'] ?? '1'));
         $kmInitialRaw = trim((string) ($_POST['stock_km_initial'] ?? '0'));
         $estimatedLifeRaw = trim((string) ($_POST['stock_estimated_life_km'] ?? ''));
-        $statusRaw = strtolower(trim((string) ($_POST['stock_status'] ?? TireModel::STATUS_SPARE)));
+        $estimatedRemainingRaw = trim((string) ($_POST['stock_estimated_remaining_km'] ?? $estimatedLifeRaw));
+        $statusRaw = strtolower(trim((string) ($_POST['stock_status'] ?? TireModel::STATUS_IN_STOCK)));
+        $tireTypeRaw = trim((string) ($_POST['stock_tire_type'] ?? TireModel::TIRE_TYPE_TRAILER));
+        $usageCompatibility = trim((string) ($_POST['stock_usage_compatibility'] ?? ''));
+        $locationLabel = trim((string) ($_POST['stock_location_label'] ?? 'Depozit'));
+        $manufacturingYearRaw = trim((string) ($_POST['stock_manufacturing_year'] ?? ''));
+        $purchaseDate = trim((string) ($_POST['stock_purchase_date'] ?? ''));
+        $purchasePriceRaw = trim((string) ($_POST['stock_purchase_price'] ?? ''));
+        $supplier = trim((string) ($_POST['stock_supplier'] ?? ''));
+        $invoiceNumber = trim((string) ($_POST['stock_invoice_number'] ?? ''));
+        $currentMileageRaw = trim((string) ($_POST['stock_current_mileage'] ?? $kmInitialRaw));
+        $initialConditionRaw = trim((string) ($_POST['stock_initial_condition'] ?? 'good'));
+        $conditionStatusRaw = trim((string) ($_POST['stock_condition_status'] ?? $initialConditionRaw));
+        $seasonRaw = trim((string) ($_POST['stock_season'] ?? 'all_season'));
+        $directional = isset($_POST['stock_directional']) ? 1 : 0;
+        $rotationDirection = trim((string) ($_POST['stock_rotation_direction'] ?? ''));
         $notes = trim((string) ($_POST['stock_notes'] ?? ''));
 
         if ($brand === '') {
@@ -1621,8 +1786,53 @@ class ModuleController
             $estimatedLifeKm = max(0, (int) $estimatedLifeRaw);
         }
 
-        $allowedStatuses = [TireModel::STATUS_SPARE, TireModel::STATUS_RETREADED, TireModel::STATUS_DAMAGED, TireModel::STATUS_REMOVED];
-        $status = in_array($statusRaw, $allowedStatuses, true) ? $statusRaw : TireModel::STATUS_SPARE;
+        $estimatedRemainingKm = null;
+        if ($estimatedRemainingRaw !== '') {
+            if (!preg_match('/^\d+$/', $estimatedRemainingRaw)) {
+                flash_set('danger', 'Km ramasi estimati trebuie sa fie numerici.');
+                redirect($stockRedirectUrl);
+            }
+            $estimatedRemainingKm = max(0, (int) $estimatedRemainingRaw);
+        }
+
+        if ($currentMileageRaw === '' || !preg_match('/^\d+$/', $currentMileageRaw)) {
+            flash_set('danger', 'Kilometrajul curent trebuie sa fie numeric.');
+            redirect($stockRedirectUrl);
+        }
+
+        $manufacturingYear = null;
+        if ($manufacturingYearRaw !== '') {
+            if (!preg_match('/^\d{4}$/', $manufacturingYearRaw)) {
+                flash_set('danger', 'Anul fabricatiei trebuie sa aiba format YYYY.');
+                redirect($stockRedirectUrl);
+            }
+            $manufacturingYear = (int) $manufacturingYearRaw;
+        }
+
+        if ($purchaseDate !== '' && !$this->isValidDate($purchaseDate)) {
+            flash_set('danger', 'Data achizitiei este invalida (format YYYY-MM-DD).');
+            redirect($stockRedirectUrl);
+        }
+
+        $purchasePrice = null;
+        if ($purchasePriceRaw !== '') {
+            $normalizedPrice = str_replace(',', '.', $purchasePriceRaw);
+            if (!is_numeric($normalizedPrice)) {
+                flash_set('danger', 'Pretul de achizitie trebuie sa fie numeric.');
+                redirect($stockRedirectUrl);
+            }
+            $purchasePrice = round((float) $normalizedPrice, 2);
+        }
+
+        $allowedStatuses = [
+            TireModel::STATUS_IN_STOCK,
+            TireModel::STATUS_SPARE,
+            TireModel::STATUS_DAMAGED,
+            TireModel::STATUS_MISSING,
+            TireModel::STATUS_REMOVED,
+            TireModel::STATUS_SCRAPPED,
+        ];
+        $status = in_array($statusRaw, $allowedStatuses, true) ? $statusRaw : TireModel::STATUS_IN_STOCK;
         $targetVehicleType = $this->tireModel->normalizeTargetVehicleType($targetVehicleTypeRaw);
 
         try {
@@ -1633,13 +1843,28 @@ class ModuleController
                 'dot_code' => $dotCode !== '' ? $dotCode : null,
                 'serial_prefix' => $serialPrefix,
                 'target_vehicle_type' => $targetVehicleType,
+                'tire_type' => $tireTypeRaw,
+                'usage_compatibility' => $usageCompatibility !== '' ? $usageCompatibility : null,
+                'location_label' => $locationLabel !== '' ? $locationLabel : null,
+                'manufacturing_year' => $manufacturingYear,
+                'purchase_date' => $purchaseDate !== '' ? $purchaseDate : null,
+                'purchase_price' => $purchasePrice,
+                'supplier' => $supplier !== '' ? $supplier : null,
+                'invoice_number' => $invoiceNumber !== '' ? $invoiceNumber : null,
                 'mount_date' => $mountDate,
                 'quantity' => $quantity,
                 'km_initial' => $kmInitial,
+                'current_mileage' => max(0, (int) $currentMileageRaw),
                 'estimated_life_km' => $estimatedLifeKm,
+                'estimated_remaining_km' => $estimatedRemainingKm,
                 'status' => $status,
                 'tread_depth_mm' => null,
                 'min_tread_depth_mm' => 2.0,
+                'initial_condition' => $initialConditionRaw,
+                'condition_status' => $conditionStatusRaw,
+                'season' => in_array($seasonRaw, ['summer', 'winter', 'all_season'], true) ? $seasonRaw : 'all_season',
+                'directional' => $directional,
+                'rotation_direction' => $rotationDirection !== '' ? $rotationDirection : null,
                 'notes' => $notes !== '' ? $notes : null,
                 'now' => date('Y-m-d H:i:s'),
             ]);
@@ -1836,19 +2061,29 @@ class ModuleController
             redirect($stockRedirectUrl);
         }
 
-        if ((int) ($tire['active_allocation_id'] ?? 0) > 0) {
-            flash_set('danger', 'Anvelopa este montata pe vehicul. Editeaza din Detalii Vehicul.');
-            redirect($stockRedirectUrl);
-        }
-
         $brand = trim((string) ($_POST['stock_edit_brand'] ?? ''));
         $modelName = trim((string) ($_POST['stock_edit_model'] ?? ''));
         $tireSize = trim((string) ($_POST['stock_edit_tire_size'] ?? ''));
         $dotCode = strtoupper(trim((string) ($_POST['stock_edit_dot_code'] ?? '')));
         $targetTypeRaw = (string) ($_POST['stock_edit_target_vehicle_type'] ?? 'universal');
-        $statusRaw = strtolower(trim((string) ($_POST['stock_edit_status'] ?? TireModel::STATUS_SPARE)));
+        $statusRaw = strtolower(trim((string) ($_POST['stock_edit_status'] ?? ($tire['status'] ?? TireModel::STATUS_IN_STOCK))));
+        $tireTypeRaw = trim((string) ($_POST['stock_edit_tire_type'] ?? ($tire['tire_type'] ?? TireModel::TIRE_TYPE_TRAILER)));
+        $usageCompatibility = trim((string) ($_POST['stock_edit_usage_compatibility'] ?? ''));
+        $locationLabel = trim((string) ($_POST['stock_edit_location_label'] ?? ''));
+        $manufacturingYearRaw = trim((string) ($_POST['stock_edit_manufacturing_year'] ?? ''));
+        $purchaseDate = trim((string) ($_POST['stock_edit_purchase_date'] ?? ''));
+        $purchasePriceRaw = trim((string) ($_POST['stock_edit_purchase_price'] ?? ''));
+        $supplier = trim((string) ($_POST['stock_edit_supplier'] ?? ''));
+        $invoiceNumber = trim((string) ($_POST['stock_edit_invoice_number'] ?? ''));
         $mountDate = trim((string) ($_POST['stock_edit_mount_date'] ?? date('Y-m-d')));
+        $currentMileageRaw = trim((string) ($_POST['stock_edit_current_mileage'] ?? '0'));
         $estimatedLifeRaw = trim((string) ($_POST['stock_edit_estimated_life_km'] ?? ''));
+        $estimatedRemainingRaw = trim((string) ($_POST['stock_edit_estimated_remaining_km'] ?? ''));
+        $initialConditionRaw = trim((string) ($_POST['stock_edit_initial_condition'] ?? ($tire['initial_condition'] ?? 'good')));
+        $conditionStatusRaw = trim((string) ($_POST['stock_edit_condition_status'] ?? ($tire['condition_status'] ?? $initialConditionRaw)));
+        $seasonRaw = trim((string) ($_POST['stock_edit_season'] ?? ($tire['season'] ?? 'all_season')));
+        $directional = isset($_POST['stock_edit_directional']) ? 1 : 0;
+        $rotationDirection = trim((string) ($_POST['stock_edit_rotation_direction'] ?? ''));
         $notes = trim((string) ($_POST['stock_edit_notes'] ?? ''));
 
         if ($brand === '') {
@@ -1870,14 +2105,54 @@ class ModuleController
             $estimatedLifeKm = max(0, (int) $estimatedLifeRaw);
         }
 
+        $estimatedRemainingKm = null;
+        if ($estimatedRemainingRaw !== '') {
+            if (!preg_match('/^\d+$/', $estimatedRemainingRaw)) {
+                flash_set('danger', 'Km ramasi estimati trebuie sa fie numerici.');
+                redirect($stockRedirectUrl);
+            }
+            $estimatedRemainingKm = max(0, (int) $estimatedRemainingRaw);
+        }
+
+        if ($currentMileageRaw === '' || !preg_match('/^\d+$/', $currentMileageRaw)) {
+            flash_set('danger', 'Kilometrajul curent trebuie sa fie numeric.');
+            redirect($stockRedirectUrl);
+        }
+
+        $manufacturingYear = null;
+        if ($manufacturingYearRaw !== '') {
+            if (!preg_match('/^\d{4}$/', $manufacturingYearRaw)) {
+                flash_set('danger', 'Anul fabricatiei trebuie sa aiba format YYYY.');
+                redirect($stockRedirectUrl);
+            }
+            $manufacturingYear = (int) $manufacturingYearRaw;
+        }
+
+        if ($purchaseDate !== '' && !$this->isValidDate($purchaseDate)) {
+            flash_set('danger', 'Data achizitiei este invalida (format YYYY-MM-DD).');
+            redirect($stockRedirectUrl);
+        }
+
+        $purchasePrice = null;
+        if ($purchasePriceRaw !== '') {
+            $normalizedPrice = str_replace(',', '.', $purchasePriceRaw);
+            if (!is_numeric($normalizedPrice)) {
+                flash_set('danger', 'Pretul de achizitie trebuie sa fie numeric.');
+                redirect($stockRedirectUrl);
+            }
+            $purchasePrice = round((float) $normalizedPrice, 2);
+        }
+
         $allowedStatuses = [
+            TireModel::STATUS_IN_STOCK,
             TireModel::STATUS_SPARE,
-            TireModel::STATUS_RETREADED,
             TireModel::STATUS_DAMAGED,
+            TireModel::STATUS_MISSING,
             TireModel::STATUS_REMOVED,
+            TireModel::STATUS_SCRAPPED,
             TireModel::STATUS_ACTIVE,
         ];
-        $status = in_array($statusRaw, $allowedStatuses, true) ? $statusRaw : TireModel::STATUS_SPARE;
+        $status = in_array($statusRaw, $allowedStatuses, true) ? $statusRaw : $this->tireModel->normalizeTireStatus((string) ($tire['status'] ?? TireModel::STATUS_IN_STOCK));
         $targetVehicleType = $this->tireModel->normalizeTargetVehicleType($targetTypeRaw);
 
         try {
@@ -1887,9 +2162,24 @@ class ModuleController
                 'tire_size' => $tireSize !== '' ? $tireSize : null,
                 'dot_code' => $dotCode !== '' ? $dotCode : null,
                 'target_vehicle_type' => $targetVehicleType,
+                'tire_type' => $tireTypeRaw,
+                'usage_compatibility' => $usageCompatibility !== '' ? $usageCompatibility : null,
+                'location_label' => $locationLabel !== '' ? $locationLabel : null,
+                'manufacturing_year' => $manufacturingYear,
+                'purchase_date' => $purchaseDate !== '' ? $purchaseDate : null,
+                'purchase_price' => $purchasePrice,
+                'supplier' => $supplier !== '' ? $supplier : null,
+                'invoice_number' => $invoiceNumber !== '' ? $invoiceNumber : null,
                 'mount_date' => $mountDate,
+                'current_mileage' => max(0, (int) $currentMileageRaw),
                 'estimated_life_km' => $estimatedLifeKm,
+                'estimated_remaining_km' => $estimatedRemainingKm,
                 'status' => $status,
+                'initial_condition' => $initialConditionRaw,
+                'condition_status' => $conditionStatusRaw,
+                'season' => in_array($seasonRaw, ['summer', 'winter', 'all_season'], true) ? $seasonRaw : 'all_season',
+                'directional' => $directional,
+                'rotation_direction' => $rotationDirection !== '' ? $rotationDirection : null,
                 'notes' => $notes !== '' ? $notes : null,
                 'updated_at' => date('Y-m-d H:i:s'),
             ]);

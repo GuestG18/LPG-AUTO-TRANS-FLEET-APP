@@ -454,10 +454,13 @@ function getVehicleDocumentDailyCost(int $vehicleId): float
 function tire_status_label(string $status): string
 {
     return match (strtolower(trim($status))) {
+        'in_stock' => 'In stoc',
         'active' => 'Montata',
         'spare' => 'Rezerva',
         'removed' => 'Scoasa din uz',
         'damaged' => 'Deteriorata',
+        'missing' => 'Lipsa',
+        'scrapped' => 'Casata',
         'retreaded' => 'Resapata',
         default => '-',
     };
@@ -466,6 +469,10 @@ function tire_status_label(string $status): string
 function tire_status_badge_html(string $status): string
 {
     $normalized = strtolower(trim($status));
+
+    if ($normalized === 'in_stock') {
+        return '<span class="badge text-bg-light border">In stoc</span>';
+    }
 
     if ($normalized === 'active') {
         return '<span class="badge text-bg-success">Montata</span>';
@@ -481,6 +488,14 @@ function tire_status_badge_html(string $status): string
 
     if ($normalized === 'damaged') {
         return '<span class="badge text-bg-danger">Deteriorata</span>';
+    }
+
+    if ($normalized === 'missing') {
+        return '<span class="badge text-bg-danger">Lipsa</span>';
+    }
+
+    if ($normalized === 'scrapped') {
+        return '<span class="badge text-bg-dark">Casata</span>';
     }
 
     if ($normalized === 'retreaded') {

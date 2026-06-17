@@ -2248,6 +2248,221 @@ class TireModel extends BaseModel
         ];
     }
 
+    public function isTireCompatibleWithPosition(array $tire, array $vehicle, array $position): bool
+    {
+        $this->ensureLifecycleSchema();
+
+        if (!$this->isTireCompatibleWithVehicleType($tire, (string) ($vehicle['tip_vehicul'] ?? ''))) {
+            return false;
+        }
+
+        $tireType = $this->normalizeTireType((string) ($tire['tire_type'] ?? self::TIRE_TYPE_TRAILER));
+        $vehicleType = $this->normalizeVehicleType((string) ($vehicle['tip_vehicul'] ?? 'autovehicul'));
+        $axleType = (string) ($position['axle_type'] ?? '');
+        if (!array_key_exists($axleType, $this->getAxleTypeOptions())) {
+            $axleType = $this->resolveAxleTypeForPosition(
+                $vehicleType,
+                (string) ($vehicle['formula_axelor'] ?? ''),
+                (int) ($position['axle_no'] ?? 0)
+            );
+        }
+
+        if ($tireType === self::TIRE_TYPE_BALLOON_DIRECTIONAL && trim((string) ($tire['rotation_direction'] ?? '')) === '') {
+            return false;
+        }
+
+        $stmt = $this->db->prepare(
+            'SELECT COUNT(*)
+             FROM anvelope_tip_compatibilitate
+             WHERE tire_type = :tire_type
+               AND axle_type = :axle_type
+               AND is_allowed = 1
+               AND (vehicle_type = "universal" OR vehicle_type = :vehicle_type)'
+        );
+        $stmt->execute([
+            ':tire_type' => $tireType,
+            ':axle_type' => $axleType,
+            ':vehicle_type' => $vehicleType,
+        ]);
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    private function getVehicleForTireOperation(int $vehicleId): ?array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM vehicule WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $vehicleId]);
+        $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    private function getActiveAllocationForTire(int $tireId): ?array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM anvelope_alocari WHERE tire_id = :tire_id AND data_end IS NULL LIMIT 1');
+        $stmt->execute([':tire_id' => $tireId]);
+        $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    private function getActiveAllocationForPosition(int $positionId): ?array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM anvelope_alocari WHERE position_id = :position_id AND data_end IS NULL LIMIT 1');
+        $stmt->execute([':position_id' => $positionId]);
+        $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    private function closeAllocation(array $allocation, int $kmEnd, string $dateEnd, string $statusEnd, string $updatedAt): void
+    {
+        $stmt = $this->db->prepare(
+            'UPDATE anvelope_alocari
+             SET data_end = :data_end,
+                 km_end = :km_end,
+                 status_end = :status_end,
+                 updated_at = :updated_at
+             WHERE id = :id'
+        );
+        $stmt->execute([
+            ':data_end' => $dateEnd,
+            ':km_end' => $kmEnd,
+            ':status_end' => $statusEnd,
+            ':updated_at' => $updatedAt,
+            ':id' => (int) ($allocation['id'] ?? 0),
+        ]);
+    }
+
+    private function insertAllocation(int $tireId, int $vehicleId, int $positionId, int $kmStart, string $dateStart, string $createdAt, ?int $userId): void
+    {
+        $stmt = $this->db->prepare(
+            'INSERT INTO anvelope_alocari
+                (tire_id, vehicle_id, position_id, data_start, km_start, created_by, created_at, updated_at)
+             VALUES
+                (:tire_id, :vehicle_id, :position_id, :data_start, :km_start, :created_by, :created_at, :updated_at)'
+        );
+        $stmt->execute([
+            ':tire_id' => $tireId,
+            ':vehicle_id' => $vehicleId,
+            ':position_id' => $positionId,
+            ':data_start' => $dateStart,
+            ':km_start' => $kmStart,
+            ':created_by' => $userId,
+            ':created_at' => $createdAt,
+            ':updated_at' => $createdAt,
+        ]);
+    }
+
+    private function getPositionContext(?int $positionId): ?array
+    {
+        if ($positionId === null || $positionId <= 0) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare(
+            'SELECT
+                p.*,
+                v.nr_inmatriculare,
+                v.marca,
+                v.model,
+                v.tip_vehicul,
+                v.formula_axelor,
+                v.km_bord
+             FROM vehicule_anvelope_pozitii p
+             INNER JOIN vehicule v ON v.id = p.vehicle_id
+             WHERE p.id = :id
+             LIMIT 1'
+        );
+        $stmt->execute([':id' => $positionId]);
+        $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    private function recordTireHistory(
+        int $tireId,
+        ?array $oldPosition,
+        ?array $newPosition,
+        ?string $oldStatus,
+        string $newStatus,
+        ?string $reason,
+        ?string $observation,
+        ?int $userId,
+        string $createdAt
+    ): void {
+        $stmt = $this->db->prepare(
+            'INSERT INTO anvelope_istoric
+                (tire_id, old_vehicle_id, new_vehicle_id, old_position_id, new_position_id, old_axle_no, new_axle_no, old_position_label, new_position_label, old_status, new_status, reason, observation, created_by, created_at)
+             VALUES
+                (:tire_id, :old_vehicle_id, :new_vehicle_id, :old_position_id, :new_position_id, :old_axle_no, :new_axle_no, :old_position_label, :new_position_label, :old_status, :new_status, :reason, :observation, :created_by, :created_at)'
+        );
+        $stmt->execute([
+            ':tire_id' => $tireId,
+            ':old_vehicle_id' => $oldPosition !== null ? (int) ($oldPosition['vehicle_id'] ?? 0) : null,
+            ':new_vehicle_id' => $newPosition !== null ? (int) ($newPosition['vehicle_id'] ?? 0) : null,
+            ':old_position_id' => $oldPosition !== null ? (int) ($oldPosition['id'] ?? $oldPosition['position_id'] ?? 0) : null,
+            ':new_position_id' => $newPosition !== null ? (int) ($newPosition['id'] ?? $newPosition['position_id'] ?? 0) : null,
+            ':old_axle_no' => $oldPosition !== null ? (int) ($oldPosition['axle_no'] ?? 0) : null,
+            ':new_axle_no' => $newPosition !== null ? (int) ($newPosition['axle_no'] ?? 0) : null,
+            ':old_position_label' => $oldPosition !== null ? (string) ($oldPosition['position_label'] ?? null) : null,
+            ':new_position_label' => $newPosition !== null ? (string) ($newPosition['position_label'] ?? null) : null,
+            ':old_status' => $oldStatus,
+            ':new_status' => $newStatus,
+            ':reason' => $reason,
+            ':observation' => $observation,
+            ':created_by' => $userId,
+            ':created_at' => $createdAt,
+        ]);
+    }
+
+    public function changeTireStatus(int $tireId, string $newStatus, ?string $reason, ?string $observation, ?int $userId): void
+    {
+        $this->ensureLifecycleSchema();
+
+        $newStatus = $this->normalizeTireStatus($newStatus);
+        $now = date('Y-m-d H:i:s');
+        $today = date('Y-m-d');
+
+        $this->db->beginTransaction();
+
+        try {
+            $tire = $this->getTireById($tireId);
+            if ($tire === null) {
+                throw new RuntimeException('Anvelopa selectata nu exista.');
+            }
+
+            $oldStatus = (string) ($tire['status'] ?? self::STATUS_IN_STOCK);
+            $activeAllocation = $this->getActiveAllocationForTire($tireId);
+            $oldPosition = null;
+            if ($activeAllocation !== null) {
+                $oldPosition = $this->getPositionContext((int) ($activeAllocation['position_id'] ?? 0));
+                if ($newStatus !== self::STATUS_ACTIVE) {
+                    $kmEnd = $oldPosition !== null ? max(0, (int) ($oldPosition['km_bord'] ?? 0)) : 0;
+                    $this->closeAllocation($activeAllocation, $kmEnd, $today, $newStatus, $now);
+                }
+            }
+
+            $stmt = $this->db->prepare('UPDATE anvelope SET status = :status, updated_at = :updated_at WHERE id = :id');
+            $stmt->execute([
+                ':status' => $newStatus,
+                ':updated_at' => $now,
+                ':id' => $tireId,
+            ]);
+
+            $newPosition = $newStatus === self::STATUS_ACTIVE && $oldPosition !== null ? $oldPosition : null;
+            $this->recordTireHistory($tireId, $oldPosition, $newPosition, $oldStatus, $newStatus, $reason, $observation, $userId, $now);
+
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
     public function mountTire(
         int $tireId,
         int $vehicleId,
@@ -2255,8 +2470,13 @@ class TireModel extends BaseModel
         int $vehicleKmBord,
         string $mountDate,
         string $mountDateTime,
-        ?int $userId = null
+        ?int $userId = null,
+        bool $allowSwap = false,
+        ?string $reason = null,
+        ?string $observation = null
     ): void {
+        $this->ensureLifecycleSchema();
+
         $this->db->beginTransaction();
 
         try {
@@ -2265,93 +2485,87 @@ class TireModel extends BaseModel
                 throw new RuntimeException('Pozitia selectata nu este valida pentru acest vehicul.');
             }
 
-            $activeTireAllocationStmt = $this->db->prepare(
-                'SELECT * FROM anvelope_alocari WHERE tire_id = :tire_id AND data_end IS NULL LIMIT 1'
-            );
-            $activeTireAllocationStmt->execute([':tire_id' => $tireId]);
-            $existingTireAllocation = $activeTireAllocationStmt->fetch() ?: null;
+            $vehicle = $this->getVehicleForTireOperation($vehicleId);
+            if ($vehicle === null) {
+                throw new RuntimeException('Vehiculul selectat nu exista.');
+            }
+
+            $tire = $this->getTireById($tireId);
+            if ($tire === null) {
+                throw new RuntimeException('Anvelopa selectata nu exista.');
+            }
+
+            if (!$this->isTireCompatibleWithPosition($tire, $vehicle, $position)) {
+                throw new RuntimeException('Anvelopa selectata nu este compatibila cu axa aleasa.');
+            }
+
+            $existingTireAllocation = $this->getActiveAllocationForTire($tireId);
+            $existingPositionAllocation = $this->getActiveAllocationForPosition($positionId);
 
             if (is_array($existingTireAllocation)) {
                 $allocationVehicleId = (int) ($existingTireAllocation['vehicle_id'] ?? 0);
-                if ($allocationVehicleId !== $vehicleId || (int) ($existingTireAllocation['position_id'] ?? 0) !== $positionId) {
-                    $kmEnd = $vehicleKmBord;
-                    if ($allocationVehicleId > 0) {
-                        $vehicleKmStmt = $this->db->prepare('SELECT km_bord FROM vehicule WHERE id = :id LIMIT 1');
-                        $vehicleKmStmt->execute([':id' => $allocationVehicleId]);
-                        $vehicleKmRaw = $vehicleKmStmt->fetchColumn();
-                        if (is_numeric((string) $vehicleKmRaw)) {
-                            $kmEnd = (int) $vehicleKmRaw;
-                        }
-                    }
-
-                    $closeAllocation = $this->db->prepare(
-                        'UPDATE anvelope_alocari
-                         SET data_end = :data_end,
-                             km_end = :km_end,
-                             status_end = :status_end,
-                             updated_at = :updated_at
-                         WHERE id = :id'
-                    );
-                    $closeAllocation->execute([
-                        ':data_end' => $mountDate,
-                        ':km_end' => $kmEnd,
-                        ':status_end' => 'moved',
-                        ':updated_at' => $mountDateTime,
-                        ':id' => (int) ($existingTireAllocation['id'] ?? 0),
-                    ]);
-                } else {
+                if ($allocationVehicleId === $vehicleId && (int) ($existingTireAllocation['position_id'] ?? 0) === $positionId) {
                     $this->db->commit();
                     return;
                 }
             }
 
-            $existingPositionAllocationStmt = $this->db->prepare(
-                'SELECT * FROM anvelope_alocari WHERE position_id = :position_id AND data_end IS NULL LIMIT 1'
-            );
-            $existingPositionAllocationStmt->execute([':position_id' => $positionId]);
-            $existingPositionAllocation = $existingPositionAllocationStmt->fetch() ?: null;
-
             if (is_array($existingPositionAllocation) && (int) ($existingPositionAllocation['tire_id'] ?? 0) !== $tireId) {
-                $closePositionAllocation = $this->db->prepare(
-                    'UPDATE anvelope_alocari
-                     SET data_end = :data_end,
-                         km_end = :km_end,
-                         status_end = :status_end,
-                         updated_at = :updated_at
-                     WHERE id = :id'
-                );
-                $closePositionAllocation->execute([
-                    ':data_end' => $mountDate,
-                    ':km_end' => $vehicleKmBord,
-                    ':status_end' => 'spare',
-                    ':updated_at' => $mountDateTime,
-                    ':id' => (int) ($existingPositionAllocation['id'] ?? 0),
-                ]);
+                if (!$allowSwap) {
+                    throw new RuntimeException('Pozitia aleasa este ocupata. Bifeaza optiunea Schimba pozitiile pentru a face schimbul.');
+                }
 
-                $setSpare = $this->db->prepare('UPDATE anvelope SET status = :status, updated_at = :updated_at WHERE id = :id');
-                $setSpare->execute([
-                    ':status' => self::STATUS_SPARE,
-                    ':updated_at' => $mountDateTime,
-                    ':id' => (int) ($existingPositionAllocation['tire_id'] ?? 0),
-                ]);
+                if (!is_array($existingTireAllocation)) {
+                    throw new RuntimeException('Pozitia aleasa este ocupata si anvelopa curenta nu are o pozitie de schimb.');
+                }
+
+                $sourcePosition = $this->getPositionContext((int) ($existingTireAllocation['position_id'] ?? 0));
+                if ($sourcePosition === null) {
+                    throw new RuntimeException('Pozitia curenta a anvelopei nu mai exista.');
+                }
+
+                $targetTireId = (int) ($existingPositionAllocation['tire_id'] ?? 0);
+                $targetTire = $this->getTireById($targetTireId);
+                $sourceVehicle = $this->getVehicleForTireOperation((int) ($sourcePosition['vehicle_id'] ?? 0));
+                if ($targetTire === null || $sourceVehicle === null || !$this->isTireCompatibleWithPosition($targetTire, $sourceVehicle, $sourcePosition)) {
+                    throw new RuntimeException('Schimbul nu se poate face: anvelopa de pe pozitia tinta nu este compatibila cu pozitia curenta.');
+                }
+
+                $sourceKmEnd = max(0, (int) ($sourcePosition['km_bord'] ?? $vehicleKmBord));
+                $this->closeAllocation($existingTireAllocation, $sourceKmEnd, $mountDate, 'moved', $mountDateTime);
+                $this->closeAllocation($existingPositionAllocation, $vehicleKmBord, $mountDate, 'moved', $mountDateTime);
+
+                $this->insertAllocation($tireId, $vehicleId, $positionId, $vehicleKmBord, $mountDate, $mountDateTime, $userId);
+                $this->insertAllocation($targetTireId, (int) ($sourcePosition['vehicle_id'] ?? 0), (int) ($sourcePosition['id'] ?? 0), $sourceKmEnd, $mountDate, $mountDateTime, $userId);
+
+                $updateTire = $this->db->prepare('UPDATE anvelope SET status = :status, mount_date = :mount_date, updated_at = :updated_at WHERE id = :id');
+                foreach ([$tireId, $targetTireId] as $swapTireId) {
+                    $updateTire->execute([
+                        ':status' => self::STATUS_ACTIVE,
+                        ':mount_date' => $mountDate,
+                        ':updated_at' => $mountDateTime,
+                        ':id' => $swapTireId,
+                    ]);
+                }
+
+                $this->recordTireHistory($tireId, $sourcePosition, $position, (string) ($tire['status'] ?? self::STATUS_IN_STOCK), self::STATUS_ACTIVE, $reason ?? 'Schimb pozitii', $observation, $userId, $mountDateTime);
+                $this->recordTireHistory($targetTireId, $position, $sourcePosition, (string) ($targetTire['status'] ?? self::STATUS_ACTIVE), self::STATUS_ACTIVE, $reason ?? 'Schimb pozitii', $observation, $userId, $mountDateTime);
+
+                $this->db->commit();
+                return;
             }
 
-            $insert = $this->db->prepare(
-                'INSERT INTO anvelope_alocari
-                (tire_id, vehicle_id, position_id, data_start, km_start, created_by, created_at, updated_at)
-                VALUES
-                (:tire_id, :vehicle_id, :position_id, :data_start, :km_start, :created_by, :created_at, :updated_at)'
-            );
-            $insert->execute([
-                ':tire_id' => $tireId,
-                ':vehicle_id' => $vehicleId,
-                ':position_id' => $positionId,
-                ':data_start' => $mountDate,
-                ':km_start' => $vehicleKmBord,
-                ':created_by' => $userId,
-                ':created_at' => $mountDateTime,
-                ':updated_at' => $mountDateTime,
-            ]);
+            $oldPosition = null;
+            if (is_array($existingTireAllocation)) {
+                $oldPosition = $this->getPositionContext((int) ($existingTireAllocation['position_id'] ?? 0));
+                $kmEnd = $vehicleKmBord;
+                if ($oldPosition !== null) {
+                    $kmEnd = max(0, (int) ($oldPosition['km_bord'] ?? $vehicleKmBord));
+                }
+                $this->closeAllocation($existingTireAllocation, $kmEnd, $mountDate, 'moved', $mountDateTime);
+            }
+
+            $this->insertAllocation($tireId, $vehicleId, $positionId, $vehicleKmBord, $mountDate, $mountDateTime, $userId);
 
             $updateTire = $this->db->prepare(
                 'UPDATE anvelope
@@ -2366,6 +2580,8 @@ class TireModel extends BaseModel
                 ':updated_at' => $mountDateTime,
                 ':id' => $tireId,
             ]);
+
+            $this->recordTireHistory($tireId, $oldPosition, $position, (string) ($tire['status'] ?? self::STATUS_IN_STOCK), self::STATUS_ACTIVE, $reason ?? 'Montaj / mutare anvelopa', $observation, $userId, $mountDateTime);
 
             $this->db->commit();
         } catch (Throwable $exception) {
@@ -2383,10 +2599,15 @@ class TireModel extends BaseModel
         int $vehicleKmBord,
         string $unmountDate,
         string $statusEnd,
-        string $updatedAt
+        string $updatedAt,
+        ?int $userId = null,
+        ?string $reason = null,
+        ?string $observation = null
     ): bool {
-        $statusEnd = strtolower(trim($statusEnd));
-        if (!in_array($statusEnd, [self::STATUS_SPARE, self::STATUS_REMOVED, self::STATUS_DAMAGED, self::STATUS_RETREADED], true)) {
+        $this->ensureLifecycleSchema();
+
+        $statusEnd = $this->normalizeTireStatus($statusEnd);
+        if (!in_array($statusEnd, [self::STATUS_IN_STOCK, self::STATUS_SPARE, self::STATUS_REMOVED, self::STATUS_DAMAGED, self::STATUS_MISSING, self::STATUS_SCRAPPED], true)) {
             $statusEnd = self::STATUS_SPARE;
         }
 
@@ -2406,6 +2627,10 @@ class TireModel extends BaseModel
         $this->db->beginTransaction();
 
         try {
+            $tireId = (int) ($allocation['tire_id'] ?? 0);
+            $tire = $this->getTireById($tireId);
+            $oldPosition = $this->getPositionContext((int) ($allocation['position_id'] ?? 0));
+
             $close = $this->db->prepare(
                 'UPDATE anvelope_alocari
                  SET data_end = :data_end,
@@ -2426,8 +2651,20 @@ class TireModel extends BaseModel
             $updateTire->execute([
                 ':status' => $statusEnd,
                 ':updated_at' => $updatedAt,
-                ':id' => (int) ($allocation['tire_id'] ?? 0),
+                ':id' => $tireId,
             ]);
+
+            $this->recordTireHistory(
+                $tireId,
+                $oldPosition,
+                null,
+                $tire !== null ? (string) ($tire['status'] ?? self::STATUS_ACTIVE) : self::STATUS_ACTIVE,
+                $statusEnd,
+                $reason ?? 'Demontare anvelopa',
+                $observation,
+                $userId,
+                $updatedAt
+            );
 
             $this->db->commit();
             return true;
@@ -2543,6 +2780,8 @@ class TireModel extends BaseModel
 
     public function buildVehicleTireContext(int $vehicleId, int $vehicleKmBord, string $vehicleType, ?string $layout): array
     {
+        $this->ensureLifecycleSchema();
+
         $descriptor = $this->describeVehicleLayout($vehicleType, $layout);
 
         $stmt = $this->db->prepare(
@@ -2551,6 +2790,7 @@ class TireModel extends BaseModel
                 p.position_code,
                 p.position_label,
                 p.axle_no,
+                p.axle_type,
                 p.side_code,
                 p.wheel_kind,
                 p.position_order,
@@ -2565,9 +2805,15 @@ class TireModel extends BaseModel
                 t.serial_number,
                 t.mount_date,
                 t.km_initial,
+                t.current_mileage,
                 t.estimated_life_km,
+                t.estimated_remaining_km,
                 t.tread_depth_mm,
                 t.min_tread_depth_mm,
+                t.tire_type,
+                t.condition_status,
+                t.season,
+                t.rotation_direction,
                 t.status AS tire_status
             FROM vehicule_anvelope_pozitii p
             LEFT JOIN anvelope_alocari a ON a.position_id = p.id AND a.data_end IS NULL
@@ -2600,6 +2846,7 @@ class TireModel extends BaseModel
                 'position_code' => (string) ($row['position_code'] ?? '-'),
                 'position_label' => (string) ($row['position_label'] ?? '-'),
                 'axle_no' => (int) ($row['axle_no'] ?? 0),
+                'axle_type' => (string) ($row['axle_type'] ?? ''),
                 'side_code' => (string) ($row['side_code'] ?? ''),
                 'wheel_kind' => (string) ($row['wheel_kind'] ?? 'single'),
                 'position_order' => (int) ($row['position_order'] ?? 0),
@@ -2647,11 +2894,18 @@ class TireModel extends BaseModel
                     'mount_date' => (string) ($row['mount_date'] ?? ''),
                     'allocation_start_date' => (string) ($row['allocation_start_date'] ?? ''),
                     'tire_status' => (string) ($row['tire_status'] ?? self::STATUS_ACTIVE),
+                    'tire_type' => (string) ($row['tire_type'] ?? self::TIRE_TYPE_TRAILER),
+                    'tire_type_label' => $this->tireTypeLabel((string) ($row['tire_type'] ?? self::TIRE_TYPE_TRAILER)),
+                    'condition_status' => (string) ($row['condition_status'] ?? 'good'),
+                    'season' => (string) ($row['season'] ?? 'all_season'),
+                    'rotation_direction' => (string) ($row['rotation_direction'] ?? ''),
                     'km_initial' => $kmInitial,
+                    'current_mileage' => (int) ($row['current_mileage'] ?? 0),
                     'km_past' => $kmPast,
                     'km_current_segment' => $kmCurrentSegment,
                     'km_total_used' => $kmTotalUsed,
                     'estimated_life_km' => $estimatedLifeKm,
+                    'estimated_remaining_km' => is_numeric((string) ($row['estimated_remaining_km'] ?? null)) ? (int) $row['estimated_remaining_km'] : null,
                     'km_remaining' => $kmRemaining,
                     'km_over' => $kmOver,
                     'tread_depth_mm' => $treadDepth,
