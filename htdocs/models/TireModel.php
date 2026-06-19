@@ -24,6 +24,7 @@ class TireModel extends BaseModel
     public const AXLE_STEERING = 'steering';
     public const AXLE_TRACTION = 'traction';
     public const AXLE_TRAILER = 'trailer';
+    public const AXLE_UNIVERSAL_BALLOON = 'universal_balloon';
 
     private bool $lifecycleSchemaEnsured = false;
 
@@ -35,18 +36,42 @@ class TireModel extends BaseModel
 
         $this->lifecycleSchemaEnsured = true;
 
-        $this->db->exec(
-            "ALTER TABLE anvelope MODIFY COLUMN status ENUM('in_stock','active','spare','damaged','missing','removed','scrapped','retreaded') NOT NULL DEFAULT 'in_stock'"
-        );
+        $statusType = $this->columnType('anvelope', 'status');
+        if ($statusType === null || !str_contains($statusType, "'in_stock'") || !str_contains($statusType, "'scrapped'")) {
+            $this->db->exec(
+                "ALTER TABLE anvelope MODIFY COLUMN status ENUM('in_stock','active','spare','damaged','missing','removed','scrapped','retreaded') NOT NULL DEFAULT 'in_stock'"
+            );
+        }
 
-        $this->addColumnIfMissing('anvelope', 'tire_type', "ENUM('direction','traction','trailer','balloon','balloon_directional') NOT NULL DEFAULT 'trailer' AFTER target_vehicle_type");
+        $this->ensureTargetVehicleTypeSchema();
+        $this->addColumnIfMissing('anvelope', 'target_vehicle_types', 'TEXT NULL AFTER target_vehicle_type');
+        $this->addColumnIfMissing('anvelope', 'target_axle_config', 'VARCHAR(20) NULL AFTER target_vehicle_type');
+        $this->addColumnIfMissing('anvelope', 'axle_type', 'VARCHAR(40) NULL AFTER target_axle_config');
+        $this->addColumnIfMissing('anvelope', 'tire_type', "ENUM('direction','traction','trailer','balloon','balloon_directional') NOT NULL DEFAULT 'trailer' AFTER axle_type");
+        $this->db->exec(
+            "UPDATE anvelope
+             SET axle_type = CASE COALESCE(tire_type, '" . self::TIRE_TYPE_TRAILER . "')
+                WHEN '" . self::TIRE_TYPE_DIRECTION . "' THEN '" . self::AXLE_STEERING . "'
+                WHEN '" . self::TIRE_TYPE_BALLOON_DIRECTIONAL . "' THEN '" . self::AXLE_STEERING . "'
+                WHEN '" . self::TIRE_TYPE_TRACTION . "' THEN '" . self::AXLE_TRACTION . "'
+                WHEN '" . self::TIRE_TYPE_BALLOON . "' THEN '" . self::AXLE_UNIVERSAL_BALLOON . "'
+                ELSE '" . self::AXLE_TRAILER . "'
+             END
+             WHERE axle_type IS NULL OR TRIM(axle_type) = ''"
+        );
         $this->addColumnIfMissing('anvelope', 'usage_compatibility', 'VARCHAR(190) NULL AFTER tire_type');
         $this->addColumnIfMissing('anvelope', 'location_label', 'VARCHAR(120) NULL AFTER usage_compatibility');
+        $this->addColumnIfMissing('anvelope', 'profile_photo_original_name', 'VARCHAR(190) NULL AFTER location_label');
+        $this->addColumnIfMissing('anvelope', 'profile_photo_path', 'VARCHAR(190) NULL AFTER profile_photo_original_name');
+        $this->addColumnIfMissing('anvelope', 'location_photo_original_name', 'VARCHAR(190) NULL AFTER profile_photo_path');
+        $this->addColumnIfMissing('anvelope', 'location_photo_path', 'VARCHAR(190) NULL AFTER location_photo_original_name');
         $this->addColumnIfMissing('anvelope', 'manufacturing_year', 'SMALLINT UNSIGNED NULL AFTER dot_code');
         $this->addColumnIfMissing('anvelope', 'purchase_date', 'DATE NULL AFTER manufacturing_year');
         $this->addColumnIfMissing('anvelope', 'purchase_price', 'DECIMAL(12,2) NULL AFTER purchase_date');
         $this->addColumnIfMissing('anvelope', 'supplier', 'VARCHAR(190) NULL AFTER purchase_price');
         $this->addColumnIfMissing('anvelope', 'invoice_number', 'VARCHAR(120) NULL AFTER supplier');
+        $this->addColumnIfMissing('anvelope', 'invoice_document_original_name', 'VARCHAR(190) NULL AFTER invoice_number');
+        $this->addColumnIfMissing('anvelope', 'invoice_document_path', 'VARCHAR(190) NULL AFTER invoice_document_original_name');
         $this->addColumnIfMissing('anvelope', 'current_mileage', 'INT UNSIGNED NOT NULL DEFAULT 0 AFTER km_initial');
         $this->addColumnIfMissing('anvelope', 'estimated_remaining_km', 'INT UNSIGNED NULL AFTER estimated_life_km');
         $this->addColumnIfMissing('anvelope', 'initial_condition', "ENUM('good','acceptable','high_wear','critical','missing') NOT NULL DEFAULT 'good' AFTER min_tread_depth_mm");
@@ -105,6 +130,29 @@ class TireModel extends BaseModel
         $this->db->exec('ALTER TABLE `' . $table . '` ADD COLUMN `' . $column . '` ' . $definition);
     }
 
+    private function targetVehicleTypeColumnDefinition(): string
+    {
+        return "ENUM('autovehicul','autoutilitara','camion','cap_tractor','semiremorca','semiremorca_primar','semiremorca_distributie','universal') NOT NULL DEFAULT 'universal'";
+    }
+
+    private function ensureTargetVehicleTypeSchema(): void
+    {
+        $definition = $this->targetVehicleTypeColumnDefinition();
+        $columnType = $this->columnType('anvelope', 'target_vehicle_type');
+
+        if ($columnType === null) {
+            $this->addColumnIfMissing('anvelope', 'target_vehicle_type', $definition . ' AFTER serial_number');
+            return;
+        }
+
+        foreach (["'autoutilitara'", "'semiremorca_primar'", "'semiremorca_distributie'"] as $requiredValue) {
+            if (!str_contains($columnType, $requiredValue)) {
+                $this->db->exec('ALTER TABLE anvelope MODIFY COLUMN target_vehicle_type ' . $definition);
+                return;
+            }
+        }
+    }
+
     private function columnExists(string $table, string $column): bool
     {
         $stmt = $this->db->prepare(
@@ -122,6 +170,25 @@ class TireModel extends BaseModel
         return (int) $stmt->fetchColumn() > 0;
     }
 
+    private function columnType(string $table, string $column): ?string
+    {
+        $stmt = $this->db->prepare(
+            'SELECT COLUMN_TYPE
+             FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = :table_name
+               AND COLUMN_NAME = :column_name
+             LIMIT 1'
+        );
+        $stmt->execute([
+            ':table_name' => $table,
+            ':column_name' => $column,
+        ]);
+        $value = $stmt->fetchColumn();
+
+        return is_string($value) ? $value : null;
+    }
+
     private function seedDefaultCompatibilityRules(): void
     {
         $now = date('Y-m-d H:i:s');
@@ -129,19 +196,19 @@ class TireModel extends BaseModel
             [self::TIRE_TYPE_DIRECTION, 'universal', self::AXLE_STEERING],
             [self::TIRE_TYPE_TRACTION, 'universal', self::AXLE_TRACTION],
             [self::TIRE_TYPE_TRAILER, 'universal', self::AXLE_TRAILER],
-            [self::TIRE_TYPE_BALLOON, 'cap_tractor', self::AXLE_STEERING],
-            [self::TIRE_TYPE_BALLOON, 'cap_tractor', self::AXLE_TRACTION],
-            [self::TIRE_TYPE_BALLOON, 'semiremorca', self::AXLE_TRAILER],
-            [self::TIRE_TYPE_BALLOON_DIRECTIONAL, 'cap_tractor', self::AXLE_STEERING],
-            [self::TIRE_TYPE_BALLOON_DIRECTIONAL, 'cap_tractor', self::AXLE_TRACTION],
-            [self::TIRE_TYPE_BALLOON_DIRECTIONAL, 'semiremorca', self::AXLE_TRAILER],
+            [self::TIRE_TYPE_BALLOON, 'universal', self::AXLE_TRAILER],
+            [self::TIRE_TYPE_BALLOON, 'universal', self::AXLE_UNIVERSAL_BALLOON],
+            [self::TIRE_TYPE_BALLOON_DIRECTIONAL, 'universal', self::AXLE_STEERING],
         ];
 
         $stmt = $this->db->prepare(
-            'INSERT IGNORE INTO anvelope_tip_compatibilitate
+            'INSERT INTO anvelope_tip_compatibilitate
                 (tire_type, vehicle_type, axle_type, is_allowed, created_at, updated_at)
              VALUES
-                (:tire_type, :vehicle_type, :axle_type, 1, :created_at, :updated_at)'
+                (:tire_type, :vehicle_type, :axle_type, 1, :created_at, :updated_at)
+             ON DUPLICATE KEY UPDATE
+                is_allowed = 1,
+                updated_at = VALUES(updated_at)'
         );
 
         foreach ($rules as $rule) {
@@ -153,6 +220,18 @@ class TireModel extends BaseModel
                 ':updated_at' => $now,
             ]);
         }
+
+        $this->db->exec(
+            "UPDATE anvelope_tip_compatibilitate
+             SET is_allowed = 0, updated_at = '" . $now . "'
+             WHERE NOT (
+                (tire_type = '" . self::TIRE_TYPE_DIRECTION . "' AND axle_type = '" . self::AXLE_STEERING . "')
+                OR (tire_type = '" . self::TIRE_TYPE_BALLOON_DIRECTIONAL . "' AND axle_type = '" . self::AXLE_STEERING . "')
+                OR (tire_type = '" . self::TIRE_TYPE_TRACTION . "' AND axle_type = '" . self::AXLE_TRACTION . "')
+                OR (tire_type = '" . self::TIRE_TYPE_TRAILER . "' AND axle_type = '" . self::AXLE_TRAILER . "')
+                OR (tire_type = '" . self::TIRE_TYPE_BALLOON . "' AND axle_type IN ('" . self::AXLE_TRAILER . "', '" . self::AXLE_UNIVERSAL_BALLOON . "'))
+             )"
+        );
     }
 
     public function getTireStatusOptions(bool $includeLegacy = false): array
@@ -185,6 +264,28 @@ class TireModel extends BaseModel
         ];
     }
 
+    public function getTireTypeOptionsByAxleType(): array
+    {
+        $tireTypes = $this->getTireTypeOptions();
+
+        return [
+            self::AXLE_STEERING => [
+                self::TIRE_TYPE_DIRECTION => $tireTypes[self::TIRE_TYPE_DIRECTION],
+                self::TIRE_TYPE_BALLOON_DIRECTIONAL => $tireTypes[self::TIRE_TYPE_BALLOON_DIRECTIONAL],
+            ],
+            self::AXLE_TRACTION => [
+                self::TIRE_TYPE_TRACTION => $tireTypes[self::TIRE_TYPE_TRACTION],
+            ],
+            self::AXLE_TRAILER => [
+                self::TIRE_TYPE_TRAILER => $tireTypes[self::TIRE_TYPE_TRAILER],
+                self::TIRE_TYPE_BALLOON => $tireTypes[self::TIRE_TYPE_BALLOON],
+            ],
+            self::AXLE_UNIVERSAL_BALLOON => [
+                self::TIRE_TYPE_BALLOON => $tireTypes[self::TIRE_TYPE_BALLOON],
+            ],
+        ];
+    }
+
     public function getConditionOptions(): array
     {
         return [
@@ -208,10 +309,55 @@ class TireModel extends BaseModel
     public function getAxleTypeOptions(): array
     {
         return [
-            self::AXLE_STEERING => 'Directie',
-            self::AXLE_TRACTION => 'Tractiune',
-            self::AXLE_TRAILER => 'Remorca',
+            self::AXLE_STEERING => 'Axa directie',
+            self::AXLE_TRACTION => 'Axa tractiune',
+            self::AXLE_TRAILER => 'Axa remorca',
+            self::AXLE_UNIVERSAL_BALLOON => 'Axa universala / balon',
         ];
+    }
+
+    public function normalizeAxleType(?string $type): string
+    {
+        $value = strtolower(trim((string) $type));
+
+        return match ($value) {
+            'steering', 'steering_axle', 'steering axle', 'directie', 'directie_ax' => self::AXLE_STEERING,
+            'drive', 'drive_axle', 'drive axle', 'traction', 'tractiune' => self::AXLE_TRACTION,
+            'trailer', 'trailer_axle', 'trailer axle', 'remorca' => self::AXLE_TRAILER,
+            'universal_balloon', 'universal / balloon axle', 'universal_balloon_axle', 'balloon_axle', 'balon' => self::AXLE_UNIVERSAL_BALLOON,
+            default => '',
+        };
+    }
+
+    public function isKnownAxleType(?string $type): bool
+    {
+        return array_key_exists($this->normalizeAxleType($type), $this->getAxleTypeOptions());
+    }
+
+    public function isTireTypeAllowedForAxleType(string $axleType, string $tireType): bool
+    {
+        $normalizedAxleType = $this->normalizeAxleType($axleType);
+        $normalizedTireType = $this->normalizeTireType($tireType);
+        $allowedTypes = $this->getTireTypeOptionsByAxleType()[$normalizedAxleType] ?? [];
+
+        return array_key_exists($normalizedTireType, $allowedTypes);
+    }
+
+    public function defaultAxleTypeForTireType(string $tireType): string
+    {
+        return match ($this->normalizeTireType($tireType)) {
+            self::TIRE_TYPE_DIRECTION,
+            self::TIRE_TYPE_BALLOON_DIRECTIONAL => self::AXLE_STEERING,
+            self::TIRE_TYPE_TRACTION => self::AXLE_TRACTION,
+            self::TIRE_TYPE_BALLOON => self::AXLE_UNIVERSAL_BALLOON,
+            default => self::AXLE_TRAILER,
+        };
+    }
+
+    public function axleTypeLabel(?string $axleType): string
+    {
+        $normalized = $this->normalizeAxleType($axleType);
+        return $this->getAxleTypeOptions()[$normalized] ?? '-';
     }
 
     public function normalizeTireStatus(?string $status): string
@@ -235,11 +381,11 @@ class TireModel extends BaseModel
         $value = strtolower(trim((string) $type));
 
         return match ($value) {
-            'direction', 'directie', 'directie_ax' => self::TIRE_TYPE_DIRECTION,
-            'traction', 'tractiune' => self::TIRE_TYPE_TRACTION,
+            'direction', 'steering', 'directie', 'directie_ax' => self::TIRE_TYPE_DIRECTION,
+            'traction', 'drive', 'tractiune' => self::TIRE_TYPE_TRACTION,
             'trailer', 'remorca' => self::TIRE_TYPE_TRAILER,
             'balloon', 'balon' => self::TIRE_TYPE_BALLOON,
-            'balloon_directional', 'balon_directional', 'balon directie', 'balon directional' => self::TIRE_TYPE_BALLOON_DIRECTIONAL,
+            'balloon_directional', 'directional_balloon', 'directional balloon', 'balon_directional', 'balon directie', 'balon directional' => self::TIRE_TYPE_BALLOON_DIRECTIONAL,
             default => self::TIRE_TYPE_TRAILER,
         };
     }
@@ -347,10 +493,16 @@ class TireModel extends BaseModel
 
     private function vehicleTypeLabel(string $vehicleType): string
     {
-        return match ($this->normalizeVehicleType($vehicleType)) {
+        $value = strtolower(trim($vehicleType));
+
+        return match ($value) {
+            'universal' => 'Universal',
             'cap_tractor' => 'Cap tractor',
             'semiremorca' => 'Semi-remorca',
+            'semiremorca_primar' => 'Semi-remorca primar',
+            'semiremorca_distributie' => 'Semi-remorca distributie',
             'camion' => 'Camion',
+            'autoutilitara' => 'Autoutilitara',
             default => 'Autoturism',
         };
     }
@@ -362,12 +514,93 @@ class TireModel extends BaseModel
             return 'universal';
         }
 
-        $normalized = $this->normalizeVehicleType($value);
-        if (!in_array($normalized, ['autovehicul', 'camion', 'cap_tractor', 'semiremorca'], true)) {
-            return 'universal';
+        return match ($value) {
+            'autoturism', 'autovehicul' => 'autovehicul',
+            'autoutilitara' => 'autoutilitara',
+            'camion' => 'camion',
+            'cap_tractor' => 'cap_tractor',
+            'semiremorca' => 'semiremorca',
+            'semiremorca_primar' => 'semiremorca_primar',
+            'semiremorca_distributie' => 'semiremorca_distributie',
+            default => 'universal',
+        };
+    }
+
+    public function normalizeTargetVehicleTypes(mixed $vehicleTypes, ?string $fallback = 'universal'): array
+    {
+        $rawValues = [];
+
+        if (is_array($vehicleTypes)) {
+            $rawValues = $vehicleTypes;
+        } else {
+            $value = trim((string) $vehicleTypes);
+            if ($value !== '') {
+                $decoded = null;
+                if (str_starts_with($value, '[')) {
+                    $decoded = json_decode($value, true);
+                }
+
+                if (is_array($decoded)) {
+                    $rawValues = $decoded;
+                } else {
+                    $rawValues = preg_split('/\s*,\s*/', $value) ?: [];
+                }
+            }
         }
 
-        return $normalized;
+        $normalized = [];
+        foreach ($rawValues as $rawValue) {
+            $rawString = trim((string) $rawValue);
+            if ($rawString === '') {
+                continue;
+            }
+            $targetType = $this->normalizeTargetVehicleType($rawString);
+            if ($targetType === 'universal') {
+                $normalized = ['universal'];
+                break;
+            }
+            $normalized[$targetType] = $targetType;
+        }
+
+        if ($normalized === [] && $fallback !== null) {
+            $fallbackType = $this->normalizeTargetVehicleType($fallback);
+            $normalized[$fallbackType] = $fallbackType;
+        }
+
+        return array_values($normalized !== [] ? $normalized : ['universal']);
+    }
+
+    private function encodeTargetVehicleTypes(array $vehicleTypes): string
+    {
+        $normalizedTypes = $this->normalizeTargetVehicleTypes($vehicleTypes);
+        $encoded = json_encode($normalizedTypes, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return is_string($encoded) && $encoded !== '' ? $encoded : '["universal"]';
+    }
+
+    private function targetVehicleTypesForRow(array $row): array
+    {
+        return $this->normalizeTargetVehicleTypes(
+            $row['target_vehicle_types'] ?? null,
+            (string) ($row['target_vehicle_type'] ?? 'universal')
+        );
+    }
+
+    private function targetVehicleTypesLabelForRow(array $row): string
+    {
+        $labels = [];
+        foreach ($this->targetVehicleTypesForRow($row) as $targetType) {
+            $labels[] = $this->vehicleTypeLabel($targetType);
+        }
+
+        return implode(', ', array_values(array_unique($labels)));
+    }
+
+    private function firstTargetVehicleType(array $vehicleTypes): string
+    {
+        $normalizedTypes = $this->normalizeTargetVehicleTypes($vehicleTypes);
+
+        return (string) ($normalizedTypes[0] ?? 'universal');
     }
 
     public function getTargetVehicleTypeOptions(): array
@@ -375,18 +608,90 @@ class TireModel extends BaseModel
         return [
             'universal' => 'Universal (orice tip)',
             'autovehicul' => 'Autoturism',
+            'autoutilitara' => 'Autoutilitara',
             'camion' => 'Camion',
             'cap_tractor' => 'Cap tractor',
-            'semiremorca' => 'Semi-remorca',
+            'semiremorca_primar' => 'Semi-remorca primar',
+            'semiremorca_distributie' => 'Semi-remorca distributie',
         ];
+    }
+
+    public function normalizeTargetAxleConfig(string $vehicleType, ?string $layout): ?string
+    {
+        $targetType = $this->normalizeTargetVehicleType($vehicleType);
+        if ($targetType === 'universal') {
+            return null;
+        }
+
+        return $this->normalizeLayoutForType($targetType, $layout);
+    }
+
+    public function getTargetLayoutOptionsByType(): array
+    {
+        return [
+            'autovehicul' => $this->getLayoutOptionsByVehicleType('autovehicul'),
+            'autoutilitara' => $this->getLayoutOptionsByVehicleType('autovehicul'),
+            'camion' => $this->getLayoutOptionsByVehicleType('camion'),
+            'cap_tractor' => $this->getLayoutOptionsByVehicleType('cap_tractor'),
+            'semiremorca' => $this->getLayoutOptionsByVehicleType('semiremorca'),
+            'semiremorca_primar' => $this->getLayoutOptionsByVehicleType('semiremorca'),
+            'semiremorca_distributie' => $this->getLayoutOptionsByVehicleType('semiremorca'),
+        ];
+    }
+
+    private function compatibleTargetVehicleTypes(string $vehicleType): array
+    {
+        $rawType = $this->normalizeTargetVehicleType($vehicleType);
+        $normalizedType = $this->normalizeVehicleType($vehicleType);
+        $types = ['universal'];
+
+        if ($rawType !== 'universal') {
+            $types[] = $rawType;
+        }
+
+        if ($normalizedType !== $rawType) {
+            $types[] = $normalizedType;
+        }
+
+        if ($rawType === 'semiremorca') {
+            $types[] = 'semiremorca_primar';
+            $types[] = 'semiremorca_distributie';
+        }
+
+        return array_values(array_unique($types));
+    }
+
+    private function targetVehicleCompatibilitySql(array $compatibleTypes, string $prefix, array &$params): string
+    {
+        $legacyPlaceholders = [];
+        $multiConditions = [];
+
+        foreach (array_values(array_unique($compatibleTypes)) as $index => $compatibleType) {
+            $legacyPlaceholder = ':' . $prefix . '_target_vehicle_type_' . $index;
+            $multiPlaceholder = ':' . $prefix . '_target_vehicle_types_' . $index;
+            $legacyPlaceholders[] = $legacyPlaceholder;
+            $multiConditions[] = 'COALESCE(t.target_vehicle_types, "") LIKE ' . $multiPlaceholder;
+            $params[$legacyPlaceholder] = $compatibleType;
+            $params[$multiPlaceholder] = '%"' . $compatibleType . '"%';
+        }
+
+        return '(
+            COALESCE(t.target_vehicle_type, "universal") IN (' . implode(', ', $legacyPlaceholders) . ')
+            OR ' . implode(' OR ', $multiConditions) . '
+        )';
     }
 
     public function isTireCompatibleWithVehicleType(array $tire, string $vehicleType): bool
     {
-        $targetType = $this->normalizeTargetVehicleType((string) ($tire['target_vehicle_type'] ?? 'universal'));
-        $normalizedVehicleType = $this->normalizeVehicleType($vehicleType);
+        $compatibleTypes = $this->compatibleTargetVehicleTypes($vehicleType);
 
-        return $targetType === 'universal' || $targetType === $normalizedVehicleType;
+        foreach ($this->targetVehicleTypesForRow($tire) as $targetType) {
+            if (in_array($targetType, $compatibleTypes, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function sanitizeSerialPrefix(string $prefix): string
@@ -999,7 +1304,7 @@ class TireModel extends BaseModel
         return (int) $stmt->fetchColumn();
     }
 
-    public function getAvailableTires(?string $vehicleType = null): array
+    public function getAvailableTires(?string $vehicleType = null, ?string $layout = null): array
     {
         $this->ensureLifecycleSchema();
 
@@ -1011,9 +1316,14 @@ class TireModel extends BaseModel
 
         $params = [];
         if ($vehicleType !== null && trim($vehicleType) !== '') {
-            $normalizedVehicleType = $this->normalizeVehicleType($vehicleType);
-            $sql .= ' AND (COALESCE(t.target_vehicle_type, "universal") = "universal" OR COALESCE(t.target_vehicle_type, "universal") = :vehicle_type)';
-            $params[':vehicle_type'] = $normalizedVehicleType;
+            $compatibleTypes = $this->compatibleTargetVehicleTypes($vehicleType);
+            $sql .= ' AND ' . $this->targetVehicleCompatibilitySql($compatibleTypes, 'available', $params);
+
+            $targetLayout = $layout !== null ? $this->normalizeTargetAxleConfig($vehicleType, $layout) : null;
+            if ($targetLayout !== null && $targetLayout !== '') {
+                $sql .= ' AND (COALESCE(t.target_axle_config, "") = "" OR COALESCE(t.target_axle_config, "") = :target_axle_config)';
+                $params[':target_axle_config'] = $targetLayout;
+            }
         }
 
         $sql .= ' ORDER BY t.updated_at DESC, t.id DESC';
@@ -1052,10 +1362,28 @@ class TireModel extends BaseModel
     {
         $this->ensureLifecycleSchema();
 
+        $targetVehicleTypes = $this->normalizeTargetVehicleTypes(
+            $data['target_vehicle_types'] ?? null,
+            (string) ($data['target_vehicle_type'] ?? 'universal')
+        );
+        $targetVehicleType = $this->firstTargetVehicleType($targetVehicleTypes);
+        $targetAxleConfigRaw = $data['target_axle_config'] ?? null;
+        $targetAxleConfig = $targetAxleConfigRaw !== null && trim((string) $targetAxleConfigRaw) !== ''
+            ? $this->normalizeTargetAxleConfig($targetVehicleType, $targetAxleConfigRaw)
+            : null;
+        $tireType = $this->normalizeTireType((string) ($data['tire_type'] ?? self::TIRE_TYPE_TRAILER));
+        $axleType = $this->normalizeAxleType($data['axle_type'] ?? null);
+        if ($axleType === '') {
+            $axleType = $this->defaultAxleTypeForTireType($tireType);
+        }
+        if (!$this->isTireTypeAllowedForAxleType($axleType, $tireType)) {
+            throw new RuntimeException('Combinatia Tip axa / Tip anvelopa nu este valida.');
+        }
+
         $sql = 'INSERT INTO anvelope
-            (brand, model, tire_size, dot_code, serial_number, target_vehicle_type, tire_type, usage_compatibility, location_label, manufacturing_year, purchase_date, purchase_price, supplier, invoice_number, mount_date, km_initial, current_mileage, estimated_life_km, estimated_remaining_km, tread_depth_mm, min_tread_depth_mm, initial_condition, condition_status, season, directional, rotation_direction, status, notes, created_at, updated_at)
+            (brand, model, tire_size, dot_code, serial_number, target_vehicle_type, target_vehicle_types, target_axle_config, axle_type, tire_type, usage_compatibility, location_label, profile_photo_original_name, profile_photo_path, location_photo_original_name, location_photo_path, manufacturing_year, purchase_date, purchase_price, supplier, invoice_number, invoice_document_original_name, invoice_document_path, mount_date, km_initial, current_mileage, estimated_life_km, estimated_remaining_km, tread_depth_mm, min_tread_depth_mm, initial_condition, condition_status, season, directional, rotation_direction, status, notes, created_at, updated_at)
             VALUES
-            (:brand, :model, :tire_size, :dot_code, :serial_number, :target_vehicle_type, :tire_type, :usage_compatibility, :location_label, :manufacturing_year, :purchase_date, :purchase_price, :supplier, :invoice_number, :mount_date, :km_initial, :current_mileage, :estimated_life_km, :estimated_remaining_km, :tread_depth_mm, :min_tread_depth_mm, :initial_condition, :condition_status, :season, :directional, :rotation_direction, :status, :notes, :created_at, :updated_at)';
+            (:brand, :model, :tire_size, :dot_code, :serial_number, :target_vehicle_type, :target_vehicle_types, :target_axle_config, :axle_type, :tire_type, :usage_compatibility, :location_label, :profile_photo_original_name, :profile_photo_path, :location_photo_original_name, :location_photo_path, :manufacturing_year, :purchase_date, :purchase_price, :supplier, :invoice_number, :invoice_document_original_name, :invoice_document_path, :mount_date, :km_initial, :current_mileage, :estimated_life_km, :estimated_remaining_km, :tread_depth_mm, :min_tread_depth_mm, :initial_condition, :condition_status, :season, :directional, :rotation_direction, :status, :notes, :created_at, :updated_at)';
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
@@ -1064,15 +1392,24 @@ class TireModel extends BaseModel
             ':tire_size' => $data['tire_size'],
             ':dot_code' => $data['dot_code'],
             ':serial_number' => $data['serial_number'],
-            ':target_vehicle_type' => $this->normalizeTargetVehicleType((string) ($data['target_vehicle_type'] ?? 'universal')),
-            ':tire_type' => $this->normalizeTireType((string) ($data['tire_type'] ?? self::TIRE_TYPE_TRAILER)),
+            ':target_vehicle_type' => $targetVehicleType,
+            ':target_vehicle_types' => $this->encodeTargetVehicleTypes($targetVehicleTypes),
+            ':target_axle_config' => $targetAxleConfig,
+            ':axle_type' => $axleType,
+            ':tire_type' => $tireType,
             ':usage_compatibility' => $data['usage_compatibility'] ?? null,
             ':location_label' => $data['location_label'] ?? null,
+            ':profile_photo_original_name' => $data['profile_photo_original_name'] ?? null,
+            ':profile_photo_path' => $data['profile_photo_path'] ?? null,
+            ':location_photo_original_name' => $data['location_photo_original_name'] ?? null,
+            ':location_photo_path' => $data['location_photo_path'] ?? null,
             ':manufacturing_year' => $data['manufacturing_year'] ?? null,
             ':purchase_date' => $data['purchase_date'] ?? null,
             ':purchase_price' => $data['purchase_price'] ?? null,
             ':supplier' => $data['supplier'] ?? null,
             ':invoice_number' => $data['invoice_number'] ?? null,
+            ':invoice_document_original_name' => $data['invoice_document_original_name'] ?? null,
+            ':invoice_document_path' => $data['invoice_document_path'] ?? null,
             ':mount_date' => $data['mount_date'],
             ':km_initial' => $data['km_initial'],
             ':current_mileage' => max(0, (int) ($data['current_mileage'] ?? 0)),
@@ -1123,7 +1460,23 @@ class TireModel extends BaseModel
         $estimatedLifeKm = isset($data['estimated_life_km']) && $data['estimated_life_km'] !== null
             ? max(0, (int) $data['estimated_life_km'])
             : null;
-        $targetVehicleType = $this->normalizeTargetVehicleType((string) ($data['target_vehicle_type'] ?? 'universal'));
+        $targetVehicleTypes = $this->normalizeTargetVehicleTypes(
+            $data['target_vehicle_types'] ?? null,
+            (string) ($data['target_vehicle_type'] ?? 'universal')
+        );
+        $targetVehicleType = $this->firstTargetVehicleType($targetVehicleTypes);
+        $targetAxleConfigRaw = $data['target_axle_config'] ?? null;
+        $targetAxleConfig = $targetAxleConfigRaw !== null && trim((string) $targetAxleConfigRaw) !== ''
+            ? $this->normalizeTargetAxleConfig($targetVehicleType, $targetAxleConfigRaw)
+            : null;
+        $tireType = $this->normalizeTireType((string) ($data['tire_type'] ?? self::TIRE_TYPE_TRAILER));
+        $axleType = $this->normalizeAxleType($data['axle_type'] ?? null);
+        if ($axleType === '') {
+            $axleType = $this->defaultAxleTypeForTireType($tireType);
+        }
+        if (!$this->isTireTypeAllowedForAxleType($axleType, $tireType)) {
+            throw new RuntimeException('Combinatia Tip axa / Tip anvelopa nu este valida.');
+        }
 
         $createdIds = [];
         for ($index = 1; $index <= $quantity; $index++) {
@@ -1135,14 +1488,23 @@ class TireModel extends BaseModel
                 'dot_code' => ($data['dot_code'] ?? null) !== null && trim((string) $data['dot_code']) !== '' ? strtoupper(trim((string) $data['dot_code'])) : null,
                 'serial_number' => $serial,
                 'target_vehicle_type' => $targetVehicleType,
-                'tire_type' => $data['tire_type'] ?? self::TIRE_TYPE_TRAILER,
+                'target_vehicle_types' => $targetVehicleTypes,
+                'target_axle_config' => $targetAxleConfig,
+                'axle_type' => $axleType,
+                'tire_type' => $tireType,
                 'usage_compatibility' => ($data['usage_compatibility'] ?? null) !== null && trim((string) $data['usage_compatibility']) !== '' ? trim((string) $data['usage_compatibility']) : null,
                 'location_label' => ($data['location_label'] ?? null) !== null && trim((string) $data['location_label']) !== '' ? trim((string) $data['location_label']) : null,
+                'profile_photo_original_name' => ($data['profile_photo_original_name'] ?? null) !== null && trim((string) $data['profile_photo_original_name']) !== '' ? trim((string) $data['profile_photo_original_name']) : null,
+                'profile_photo_path' => ($data['profile_photo_path'] ?? null) !== null && trim((string) $data['profile_photo_path']) !== '' ? trim((string) $data['profile_photo_path']) : null,
+                'location_photo_original_name' => ($data['location_photo_original_name'] ?? null) !== null && trim((string) $data['location_photo_original_name']) !== '' ? trim((string) $data['location_photo_original_name']) : null,
+                'location_photo_path' => ($data['location_photo_path'] ?? null) !== null && trim((string) $data['location_photo_path']) !== '' ? trim((string) $data['location_photo_path']) : null,
                 'manufacturing_year' => $data['manufacturing_year'] ?? null,
                 'purchase_date' => $data['purchase_date'] ?? null,
                 'purchase_price' => $data['purchase_price'] ?? null,
                 'supplier' => ($data['supplier'] ?? null) !== null && trim((string) $data['supplier']) !== '' ? trim((string) $data['supplier']) : null,
                 'invoice_number' => ($data['invoice_number'] ?? null) !== null && trim((string) $data['invoice_number']) !== '' ? trim((string) $data['invoice_number']) : null,
+                'invoice_document_original_name' => ($data['invoice_document_original_name'] ?? null) !== null && trim((string) $data['invoice_document_original_name']) !== '' ? trim((string) $data['invoice_document_original_name']) : null,
+                'invoice_document_path' => ($data['invoice_document_path'] ?? null) !== null && trim((string) $data['invoice_document_path']) !== '' ? trim((string) $data['invoice_document_path']) : null,
                 'mount_date' => $mountDate,
                 'km_initial' => $kmInitial,
                 'current_mileage' => $data['current_mileage'] ?? $kmInitial,
@@ -1355,8 +1717,18 @@ class TireModel extends BaseModel
             $lines[] = 'DOT: ' . $dotCode;
         }
 
-        $targetType = $this->normalizeTargetVehicleType((string) ($row['target_vehicle_type'] ?? 'universal'));
-        $lines[] = 'Compatibil: ' . $this->vehicleTypeLabel($targetType);
+        $targetLabel = $this->targetVehicleTypesLabelForRow($row);
+        $lines[] = 'Compatibil: ' . ($targetLabel !== '' ? $targetLabel : 'Universal');
+
+        $targetLayout = trim((string) ($row['target_axle_config'] ?? ''));
+        if ($targetLayout !== '') {
+            $lines[] = 'Formula axelor: ' . $targetLayout;
+        }
+
+        $axleType = $this->normalizeAxleType((string) ($row['axle_type'] ?? ''));
+        if ($axleType !== '') {
+            $lines[] = 'Tip axa: ' . $this->axleTypeLabel($axleType);
+        }
 
         $notes = trim((string) ($row['notes'] ?? ''));
         if ($notes !== '') {
@@ -1597,6 +1969,43 @@ class TireModel extends BaseModel
 
         $setParts = [];
         $params = [':id' => $tireId];
+        $targetVehicleTypesForUpdate = array_key_exists('target_vehicle_types', $data)
+            ? $this->normalizeTargetVehicleTypes(
+                $data['target_vehicle_types'],
+                array_key_exists('target_vehicle_type', $data) ? (string) $data['target_vehicle_type'] : null
+            )
+            : null;
+        $targetVehicleTypeForAxle = array_key_exists('target_vehicle_type', $data)
+            ? $this->normalizeTargetVehicleType((string) $data['target_vehicle_type'])
+            : ($targetVehicleTypesForUpdate !== null ? $this->firstTargetVehicleType($targetVehicleTypesForUpdate) : null);
+        $tireTypeForValidation = array_key_exists('tire_type', $data)
+            ? $this->normalizeTireType((string) $data['tire_type'])
+            : null;
+        $axleTypeForValidation = array_key_exists('axle_type', $data)
+            ? $this->normalizeAxleType($data['axle_type'] ?? null)
+            : null;
+
+        if (($tireTypeForValidation === null && $axleTypeForValidation !== null) || ($tireTypeForValidation !== null && $axleTypeForValidation === null)) {
+            $currentTire = $this->getTireById($tireId);
+            if (is_array($currentTire)) {
+                if ($tireTypeForValidation === null) {
+                    $tireTypeForValidation = $this->normalizeTireType((string) ($currentTire['tire_type'] ?? self::TIRE_TYPE_TRAILER));
+                }
+                if ($axleTypeForValidation === null) {
+                    $axleTypeForValidation = $this->normalizeAxleType($currentTire['axle_type'] ?? null);
+                }
+            }
+        }
+
+        if ($tireTypeForValidation !== null) {
+            if ($axleTypeForValidation === null || $axleTypeForValidation === '') {
+                $axleTypeForValidation = $this->defaultAxleTypeForTireType($tireTypeForValidation);
+            }
+
+            if (!$this->isTireTypeAllowedForAxleType($axleTypeForValidation, $tireTypeForValidation)) {
+                throw new RuntimeException('Combinatia Tip axa / Tip anvelopa nu este valida.');
+            }
+        }
 
         $allowedColumns = [
             'brand',
@@ -1604,14 +2013,23 @@ class TireModel extends BaseModel
             'tire_size',
             'dot_code',
             'target_vehicle_type',
+            'target_vehicle_types',
+            'target_axle_config',
+            'axle_type',
             'tire_type',
             'usage_compatibility',
             'location_label',
+            'profile_photo_original_name',
+            'profile_photo_path',
+            'location_photo_original_name',
+            'location_photo_path',
             'manufacturing_year',
             'purchase_date',
             'purchase_price',
             'supplier',
             'invoice_number',
+            'invoice_document_original_name',
+            'invoice_document_path',
             'mount_date',
             'km_initial',
             'current_mileage',
@@ -1636,7 +2054,16 @@ class TireModel extends BaseModel
             $setParts[] = $column . ' = :' . $column;
             $params[':' . $column] = match ($column) {
                 'target_vehicle_type' => $this->normalizeTargetVehicleType((string) $data[$column]),
-                'tire_type' => $this->normalizeTireType((string) $data[$column]),
+                'target_vehicle_types' => $this->encodeTargetVehicleTypes($targetVehicleTypesForUpdate ?? $this->normalizeTargetVehicleTypes($data[$column])),
+                'target_axle_config' => $targetVehicleTypeForAxle !== null
+                    ? (($data[$column] ?? null) !== null && trim((string) $data[$column]) !== ''
+                        ? $this->normalizeTargetAxleConfig($targetVehicleTypeForAxle, $data[$column] ?? null)
+                        : null)
+                    : ($data[$column] !== null && trim((string) $data[$column]) !== '' ? trim((string) $data[$column]) : null),
+                'axle_type' => $axleTypeForValidation !== null && $axleTypeForValidation !== ''
+                    ? $axleTypeForValidation
+                    : $this->normalizeAxleType($data[$column] ?? null),
+                'tire_type' => $tireTypeForValidation ?? $this->normalizeTireType((string) $data[$column]),
                 'status' => $this->normalizeTireStatus((string) $data[$column]),
                 'initial_condition', 'condition_status' => $this->normalizeCondition((string) $data[$column]),
                 'directional' => !empty($data[$column]) ? 1 : 0,
@@ -1728,18 +2155,23 @@ class TireModel extends BaseModel
     {
         $this->ensureLifecycleSchema();
 
-        $sql = 'SELECT COALESCE(target_vehicle_type, "universal") AS target_vehicle_type, COUNT(*) AS total_count
+        $sql = 'SELECT COALESCE(target_vehicle_type, "universal") AS target_vehicle_type, target_vehicle_types
                 FROM anvelope t
                 LEFT JOIN anvelope_alocari a ON a.tire_id = t.id AND a.data_end IS NULL
                 WHERE a.id IS NULL
-                  AND t.status IN ("in_stock", "spare", "retreaded")
-                GROUP BY COALESCE(target_vehicle_type, "universal")';
+                  AND t.status IN ("in_stock", "spare", "retreaded")';
         $stmt = $this->db->query($sql);
 
         $result = [];
         foreach ($stmt->fetchAll() as $row) {
-            $type = $this->normalizeTargetVehicleType((string) ($row['target_vehicle_type'] ?? 'universal'));
-            $result[$type] = (int) ($row['total_count'] ?? 0);
+            foreach ($this->targetVehicleTypesForRow($row) as $type) {
+                $result[$type] = (int) ($result[$type] ?? 0) + 1;
+
+                $normalizedType = $type === 'universal' ? 'universal' : $this->normalizeVehicleType($type);
+                if ($normalizedType !== $type) {
+                    $result[$normalizedType] = (int) ($result[$normalizedType] ?? 0) + 1;
+                }
+            }
         }
 
         return $result;
@@ -1784,25 +2216,51 @@ class TireModel extends BaseModel
 
         $query = trim((string) ($filters['q'] ?? ''));
         if ($query !== '') {
-            $conditions[] = '(t.brand LIKE :q OR t.model LIKE :q OR t.tire_size LIKE :q OR t.serial_number LIKE :q OR t.status LIKE :q OR v.nr_inmatriculare LIKE :q OR v.marca LIKE :q OR v.model LIKE :q OR p.position_label LIKE :q)';
-            $params[':q'] = '%' . $query . '%';
+            $searchColumns = [
+                't.brand',
+                't.model',
+                't.tire_size',
+                't.serial_number',
+                't.status',
+                'v.nr_inmatriculare',
+                'v.marca',
+                'v.model',
+                'p.position_label',
+            ];
+            $searchParts = [];
+            foreach ($searchColumns as $index => $column) {
+                $placeholder = ':q_' . $index;
+                $searchParts[] = $column . ' LIKE ' . $placeholder;
+                $params[$placeholder] = '%' . $query . '%';
+            }
+            $conditions[] = '(' . implode(' OR ', $searchParts) . ')';
         }
 
         $vehicleType = trim((string) ($filters['vehicle_type'] ?? ''));
         if ($vehicleType !== '' && $vehicleType !== 'all') {
             $normalizedVehicleType = $this->normalizeTargetVehicleType($vehicleType);
-            if ($normalizedVehicleType === 'semiremorca') {
-                $conditions[] = 'v.tip_vehicul IN ("semiremorca", "semiremorca_primar", "semiremorca_distributie")';
+            $compatibleTargetTypes = $this->compatibleTargetVehicleTypes($normalizedVehicleType);
+            $targetCompatibilitySql = $this->targetVehicleCompatibilitySql($compatibleTargetTypes, 'filter', $params);
+
+            if ($this->normalizeVehicleType($normalizedVehicleType) === 'semiremorca') {
+                $conditions[] = '(
+                    v.tip_vehicul IN ("semiremorca", "semiremorca_primar", "semiremorca_distributie")
+                    OR (a.id IS NULL AND ' . $targetCompatibilitySql . ')
+                )';
             } else {
-                $conditions[] = 'v.tip_vehicul = :vehicle_type';
+                $conditions[] = '(
+                    v.tip_vehicul = :vehicle_type
+                    OR (a.id IS NULL AND ' . $targetCompatibilitySql . ')
+                )';
                 $params[':vehicle_type'] = $normalizedVehicleType;
             }
         }
 
         $axleConfig = trim((string) ($filters['axle_config'] ?? ''));
         if ($axleConfig !== '' && $axleConfig !== 'all') {
-            $conditions[] = 'COALESCE(v.formula_axelor, "") = :axle_config';
-            $params[':axle_config'] = $axleConfig;
+            $conditions[] = '(COALESCE(v.formula_axelor, "") = :axle_config_vehicle OR (a.id IS NULL AND COALESCE(t.target_axle_config, "") = :axle_config_tire))';
+            $params[':axle_config_vehicle'] = $axleConfig;
+            $params[':axle_config_tire'] = $axleConfig;
         }
 
         $tireType = trim((string) ($filters['tire_type'] ?? ''));
@@ -1853,16 +2311,20 @@ class TireModel extends BaseModel
         }
 
         $type = $this->normalizeTireType((string) ($row['tire_type'] ?? self::TIRE_TYPE_TRAILER));
-        $targetType = $this->normalizeTargetVehicleType((string) ($row['target_vehicle_type'] ?? 'universal'));
-        $targetLabel = $targetType === 'universal' ? 'Universal' : $this->vehicleTypeLabel($targetType);
+        $targetLabel = $this->targetVehicleTypesLabelForRow($row);
+        if ($targetLabel === '') {
+            $targetLabel = 'Universal';
+        }
+        $targetLayout = trim((string) ($row['target_axle_config'] ?? ''));
+        $targetLabelWithLayout = $targetLayout !== '' ? $targetLabel . ' / ' . $targetLayout : $targetLabel;
 
         return match ($type) {
-            self::TIRE_TYPE_DIRECTION => $targetLabel . ' / Directie',
-            self::TIRE_TYPE_TRACTION => $targetLabel . ' / Tractiune',
-            self::TIRE_TYPE_TRAILER => 'Semi-remorca / Axa remorca',
-            self::TIRE_TYPE_BALLOON => 'Cap tractor / Semi-remorca',
-            self::TIRE_TYPE_BALLOON_DIRECTIONAL => 'Cap tractor / Semi-remorca / sens controlat',
-            default => $targetLabel,
+            self::TIRE_TYPE_DIRECTION => $targetLabelWithLayout . ' / Directie',
+            self::TIRE_TYPE_TRACTION => $targetLabelWithLayout . ' / Tractiune',
+            self::TIRE_TYPE_TRAILER => $targetLabelWithLayout . ' / Remorca',
+            self::TIRE_TYPE_BALLOON => $targetLabelWithLayout . ' / Balon',
+            self::TIRE_TYPE_BALLOON_DIRECTIONAL => $targetLabelWithLayout . ' / Balon directional',
+            default => $targetLabelWithLayout,
         };
     }
 
@@ -1909,17 +2371,27 @@ class TireModel extends BaseModel
         $vehicleName = trim((string) (($row['vehicle_marca'] ?? '') . ' ' . ($row['vehicle_model'] ?? '')));
         $positionLabel = trim((string) ($row['position_label'] ?? ''));
         $axleNo = (int) ($row['axle_no'] ?? 0);
-        $axleType = (string) ($row['axle_type'] ?? '');
+        $positionAxleType = (string) ($row['position_axle_type'] ?? '');
         $axleLabel = $axleNo > 0 ? 'Axa ' . $axleNo : '';
-        if ($axleType !== '') {
-            $axleLabel .= $axleLabel !== '' ? ' (' . ($this->getAxleTypeOptions()[$axleType] ?? $axleType) . ')' : ($this->getAxleTypeOptions()[$axleType] ?? $axleType);
+        if ($positionAxleType !== '') {
+            $axleLabel .= $axleLabel !== '' ? ' (' . ($this->getAxleTypeOptions()[$positionAxleType] ?? $positionAxleType) . ')' : ($this->getAxleTypeOptions()[$positionAxleType] ?? $positionAxleType);
+        }
+        $tireType = $this->normalizeTireType((string) ($row['tire_type'] ?? self::TIRE_TYPE_TRAILER));
+        $tireAxleType = $this->normalizeAxleType($row['tire_axle_type'] ?? ($row['axle_type'] ?? null));
+        if ($tireAxleType === '') {
+            $tireAxleType = $this->defaultAxleTypeForTireType($tireType);
         }
 
         return array_merge($row, [
             'status' => $status,
             'status_meta' => $statusMeta,
-            'tire_type' => $this->normalizeTireType((string) ($row['tire_type'] ?? self::TIRE_TYPE_TRAILER)),
-            'tire_type_label' => $this->tireTypeLabel((string) ($row['tire_type'] ?? self::TIRE_TYPE_TRAILER)),
+            'tire_type' => $tireType,
+            'tire_type_label' => $this->tireTypeLabel($tireType),
+            'tire_axle_type' => $tireAxleType,
+            'tire_axle_type_label' => $this->axleTypeLabel($tireAxleType),
+            'target_vehicle_types_values' => $this->targetVehicleTypesForRow($row),
+            'target_vehicle_type_label' => $this->targetVehicleTypesLabelForRow($row),
+            'target_axle_config_label' => trim((string) ($row['target_axle_config'] ?? '')),
             'condition_meta' => $conditionMeta,
             'condition_value' => $conditionMeta['value'],
             'compatibility_label' => $this->compatibilityLabelForTire($row),
@@ -1956,6 +2428,7 @@ class TireModel extends BaseModel
         $offset = max(0, ($page - 1) * $perPage);
         $sql = 'SELECT
                     t.*,
+                    t.axle_type AS tire_axle_type,
                     a.id AS active_allocation_id,
                     a.vehicle_id AS active_vehicle_id,
                     a.position_id AS active_position_id,
@@ -1970,7 +2443,7 @@ class TireModel extends BaseModel
                     p.position_code,
                     p.position_label,
                     p.axle_no,
-                    p.axle_type
+                    p.axle_type AS position_axle_type
                 FROM anvelope t
                 LEFT JOIN anvelope_alocari a ON a.tire_id = t.id AND a.data_end IS NULL
                 LEFT JOIN vehicule v ON v.id = a.vehicle_id
@@ -2213,10 +2686,17 @@ class TireModel extends BaseModel
         }
 
         $layoutStmt = $this->db->query(
-            'SELECT DISTINCT formula_axelor
-             FROM vehicule
-             WHERE formula_axelor IS NOT NULL AND TRIM(formula_axelor) <> ""
-             ORDER BY formula_axelor ASC'
+            'SELECT DISTINCT layout_value
+             FROM (
+                SELECT formula_axelor AS layout_value
+                FROM vehicule
+                WHERE formula_axelor IS NOT NULL AND TRIM(formula_axelor) <> ""
+                UNION
+                SELECT target_axle_config AS layout_value
+                FROM anvelope
+                WHERE target_axle_config IS NOT NULL AND TRIM(target_axle_config) <> ""
+             ) layouts
+             ORDER BY layout_value ASC'
         );
         $axleConfigOptions = [];
         foreach ($layoutStmt->fetchAll(PDO::FETCH_COLUMN) as $layoutValue) {
@@ -2239,10 +2719,12 @@ class TireModel extends BaseModel
             'move_targets' => $this->getMoveTargetOptions($vehicles),
             'target_type_options' => $this->getTargetVehicleTypeOptions(),
             'tire_type_options' => $this->getTireTypeOptions(),
+            'tire_type_options_by_axle_type' => $this->getTireTypeOptionsByAxleType(),
             'status_options' => $this->getTireStatusOptions(),
             'condition_options' => $this->getConditionOptions(),
             'season_options' => $this->getSeasonOptions(),
             'axle_type_options' => $this->getAxleTypeOptions(),
+            'target_layout_options_by_type' => $this->getTargetLayoutOptionsByType(),
             'location_options' => $locationOptions,
             'axle_config_options' => $axleConfigOptions,
         ];
@@ -2258,6 +2740,14 @@ class TireModel extends BaseModel
 
         $tireType = $this->normalizeTireType((string) ($tire['tire_type'] ?? self::TIRE_TYPE_TRAILER));
         $vehicleType = $this->normalizeVehicleType((string) ($vehicle['tip_vehicul'] ?? 'autovehicul'));
+        $targetLayout = trim((string) ($tire['target_axle_config'] ?? ''));
+        if ($targetLayout !== '') {
+            $vehicleLayout = $this->normalizeLayoutForType($vehicleType, (string) ($vehicle['formula_axelor'] ?? ''));
+            if ($targetLayout !== $vehicleLayout) {
+                return false;
+            }
+        }
+
         $axleType = (string) ($position['axle_type'] ?? '');
         if (!array_key_exists($axleType, $this->getAxleTypeOptions())) {
             $axleType = $this->resolveAxleTypeForPosition(
@@ -2265,6 +2755,19 @@ class TireModel extends BaseModel
                 (string) ($vehicle['formula_axelor'] ?? ''),
                 (int) ($position['axle_no'] ?? 0)
             );
+        }
+
+        $storedAxleType = $this->normalizeAxleType((string) ($tire['axle_type'] ?? ''));
+        if ($storedAxleType === '') {
+            $storedAxleType = $this->defaultAxleTypeForTireType($tireType);
+        }
+
+        if (!$this->isTireTypeAllowedForAxleType($storedAxleType, $tireType)) {
+            return false;
+        }
+
+        if ($storedAxleType !== self::AXLE_UNIVERSAL_BALLOON && $storedAxleType !== $axleType) {
+            return false;
         }
 
         if ($tireType === self::TIRE_TYPE_BALLOON_DIRECTIONAL && trim((string) ($tire['rotation_direction'] ?? '')) === '') {
@@ -2810,6 +3313,7 @@ class TireModel extends BaseModel
                 t.estimated_remaining_km,
                 t.tread_depth_mm,
                 t.min_tread_depth_mm,
+                t.axle_type AS tire_axle_type,
                 t.tire_type,
                 t.condition_status,
                 t.season,
@@ -2894,6 +3398,8 @@ class TireModel extends BaseModel
                     'mount_date' => (string) ($row['mount_date'] ?? ''),
                     'allocation_start_date' => (string) ($row['allocation_start_date'] ?? ''),
                     'tire_status' => (string) ($row['tire_status'] ?? self::STATUS_ACTIVE),
+                    'axle_type' => (string) ($row['tire_axle_type'] ?? ''),
+                    'axle_type_label' => $this->axleTypeLabel((string) ($row['tire_axle_type'] ?? '')),
                     'tire_type' => (string) ($row['tire_type'] ?? self::TIRE_TYPE_TRAILER),
                     'tire_type_label' => $this->tireTypeLabel((string) ($row['tire_type'] ?? self::TIRE_TYPE_TRAILER)),
                     'condition_status' => (string) ($row['condition_status'] ?? 'good'),
@@ -2984,7 +3490,7 @@ class TireModel extends BaseModel
             ],
             'positions' => $positions,
             'alerts' => $alerts,
-            'available_tires' => $this->getAvailableTires($vehicleType),
+            'available_tires' => $this->getAvailableTires($vehicleType, (string) ($descriptor['layout_value'] ?? '')),
             'history' => $historyRows,
         ];
     }

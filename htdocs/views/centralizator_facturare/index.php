@@ -150,6 +150,202 @@ $costKmLabel = static function (array $row) use ($formatMetric): string {
     return $field !== '' && (float) ($row[$field] ?? 0) > 0 ? $formatMetric($row[$field], 'lei/km') : '-';
 };
 
+$normalizeTons = static function (mixed $value, mixed $capacity = null): ?float {
+    if ($value === null || $value === '' || !is_numeric((string) $value)) {
+        return null;
+    }
+
+    $amount = (float) $value;
+    if ($amount <= 0) {
+        return null;
+    }
+
+    $capacityValue = is_numeric((string) $capacity) ? (float) $capacity : 0.0;
+    if ($capacityValue > 0 && $amount > ($capacityValue * 3)) {
+        return $amount / 1000;
+    }
+
+    return $amount >= 1000 ? $amount / 1000 : $amount;
+};
+
+$almostEqual = static fn (float $left, float $right, float $tolerance = 0.05): bool => abs($left - $right) <= $tolerance;
+
+$buildSimpleBillingFacts = static function (array $row) use (
+    $money,
+    $formatKm,
+    $formatTons,
+    $formatHours,
+    $formatMetric,
+    $costKmLabel,
+    $normalizeTons,
+    $almostEqual
+): array {
+    $transportType = (string) ($row['tip_transport'] ?? '');
+    $transportLabel = trim((string) ($row['_transport_label'] ?? ''));
+    $goodsLabelValue = trim((string) ($row['_goods_label'] ?? ''));
+    $rate = max(0.0, (float) ($row['pret_tarifare'] ?? 0));
+    $total = max(0.0, (float) ($row['total_facturare'] ?? 0));
+    $km = max(0.0, (float) ($row['km_cursa'] ?? 0));
+    $kmTotal = max(0.0, (float) ($row['km_totali'] ?? 0));
+    $kmDislocare = max(0.0, (float) ($row['km_dislocare'] ?? 0));
+    $hours = max(0.0, (float) ($row['ore_aspirare'] ?? 0));
+    $clients = max(0, (int) ($row['nr_clienti'] ?? 0));
+    $loadedTons = $normalizeTons($row['cantitate_incarcata'] ?? null, $row['capacitate_transport'] ?? null);
+    $prelevataTons = $normalizeTons($row['cantitate_prelevata'] ?? null, $row['capacitate_transport'] ?? null);
+    $deliveredTons = is_numeric((string) ($row['tona_livrata'] ?? null)) && (float) ($row['tona_livrata'] ?? 0) > 0
+        ? (float) $row['tona_livrata']
+        : $loadedTons;
+    $liquidTons = is_numeric((string) ($row['tona_aspirata_lichida'] ?? null)) && (float) ($row['tona_aspirata_lichida'] ?? 0) > 0
+        ? (float) $row['tona_aspirata_lichida']
+        : null;
+    $gasTons = is_numeric((string) ($row['tona_aspirata_gazoasa'] ?? null)) && (float) ($row['tona_aspirata_gazoasa'] ?? 0) > 0
+        ? (float) $row['tona_aspirata_gazoasa']
+        : null;
+
+    $carriedMain = '-';
+    $carriedLines = [];
+    $calculationLines = [];
+    $invoiceFor = $transportLabel !== '' ? $transportLabel : 'Transport';
+
+    if ($goodsLabelValue !== '' && $goodsLabelValue !== '-') {
+        $carriedLines[] = 'Marfa: ' . $goodsLabelValue;
+    }
+
+    switch ($transportType) {
+        case 'primar':
+            $invoiceFor = 'Primar pe km';
+            $carriedMain = $km > 0 ? $formatKm($km) . ' facturati' : 'Km facturati necompletati';
+            if ($loadedTons !== null) {
+                $carriedLines[] = 'Cantitate incarcata: ' . $formatTons($loadedTons);
+            }
+            if ($km > 0 && $rate > 0) {
+                $calculationLines[] = $formatKm($km) . ' x ' . $money($rate) . '/km = ' . $money($km * $rate);
+            }
+            break;
+
+        case 'primar_tona':
+            $invoiceFor = 'Primar pe tone';
+            $carriedMain = $loadedTons !== null ? $formatTons($loadedTons) . ' transportate' : 'Cantitate necompletata';
+            if ($km > 0) {
+                $carriedLines[] = 'Km facturati: ' . $formatKm($km);
+            }
+            if ($loadedTons !== null && $rate > 0) {
+                $calculationLines[] = $formatTons($loadedTons) . ' x ' . $money($rate) . '/t = ' . $money($loadedTons * $rate);
+            }
+            break;
+
+        case 'distributie':
+            $invoiceFor = 'Distributie';
+            $carriedMain = $loadedTons !== null ? $formatTons($loadedTons) . ' incarcate' : 'Cantitate necompletata';
+            if ($km > 0) {
+                $carriedLines[] = 'Km facturati: ' . $formatKm($km);
+            }
+            if ($clients > 0) {
+                $carriedLines[] = 'Clienti: ' . (string) $clients;
+            }
+            if ($loadedTons !== null && $rate > 0 && $almostEqual($total, $loadedTons * $rate)) {
+                $calculationLines[] = $formatTons($loadedTons) . ' x ' . $money($rate) . '/t = ' . $money($loadedTons * $rate);
+            } elseif ($km > 0 && $rate > 0 && $almostEqual($total, $km * $rate)) {
+                $calculationLines[] = $formatKm($km) . ' x ' . $money($rate) . '/km = ' . $money($km * $rate);
+            } elseif ($rate > 0 && $almostEqual($total, $rate)) {
+                $calculationLines[] = 'Cost fix ruta: ' . $money($rate);
+            } else {
+                if ($rate > 0) {
+                    $calculationLines[] = 'Tarif baza salvat: ' . $money($rate);
+                }
+                if ($loadedTons !== null) {
+                    $calculationLines[] = 'Cantitate folosita: ' . $formatTons($loadedTons);
+                }
+                if ($km > 0) {
+                    $calculationLines[] = 'Km folositi: ' . $formatKm($km);
+                }
+            }
+            break;
+
+        case 'primar_distributie':
+            $invoiceFor = 'Primar + distributie';
+            $carriedMain = $loadedTons !== null ? $formatTons($loadedTons) . ' incarcate' : ($kmTotal > 0 ? $formatKm($kmTotal) . ' rulati' : 'Cantitate necompletata');
+            if ($km > 0) {
+                $carriedLines[] = 'Km primar: ' . $formatKm($km);
+            }
+            if ($kmTotal > 0) {
+                $carriedLines[] = 'Km total: ' . $formatKm($kmTotal);
+            }
+            if ($clients > 0) {
+                $carriedLines[] = 'Clienti: ' . (string) $clients;
+            }
+            if ($rate > 0) {
+                $calculationLines[] = 'Tarif baza salvat: ' . $money($rate);
+            }
+            if ($loadedTons !== null) {
+                $calculationLines[] = 'Tone folosite: ' . $formatTons($loadedTons);
+            }
+            if ($kmTotal > 0) {
+                $calculationLines[] = 'Cost/km mixt: ' . $costKmLabel($row);
+            }
+            break;
+
+        case 'compresor':
+            $invoiceFor = 'Compresor';
+            if ($prelevataTons !== null) {
+                $carriedMain = $formatTons($prelevataTons) . ' prelevate';
+            } elseif ($deliveredTons !== null) {
+                $carriedMain = $formatTons($deliveredTons) . ' livrate';
+            } elseif ($hours > 0) {
+                $carriedMain = $formatHours($hours) . ' aspirare';
+            } else {
+                $carriedMain = 'Valori compresor necompletate';
+            }
+            if ($deliveredTons !== null) {
+                $carriedLines[] = 'Tone livrate: ' . $formatTons($deliveredTons);
+            }
+            if ($liquidTons !== null) {
+                $carriedLines[] = 'Aspirat lichid: ' . $formatTons($liquidTons);
+            }
+            if ($gasTons !== null) {
+                $carriedLines[] = 'Aspirat gazos: ' . $formatTons($gasTons);
+            }
+            if ($hours > 0) {
+                $calculationLines[] = 'Ore aspirare: ' . $formatHours($hours);
+            }
+            if ($kmDislocare > 0) {
+                $calculationLines[] = 'Km dislocare: ' . $formatKm($kmDislocare);
+            }
+            if ($rate > 0) {
+                $calculationLines[] = 'Tarif baza salvat: ' . $money($rate);
+            }
+            break;
+
+        default:
+            if ($loadedTons !== null) {
+                $carriedMain = $formatTons($loadedTons) . ' incarcate';
+            } elseif ($km > 0) {
+                $carriedMain = $formatKm($km) . ' facturati';
+            }
+            if ($rate > 0) {
+                $calculationLines[] = 'Tarif salvat: ' . $money($rate);
+            }
+            break;
+    }
+
+    if ($calculationLines === []) {
+        $calculationLines[] = 'Calcul salvat in Dispecer curse.';
+    }
+
+    $calculationLines[] = 'Total transport: ' . $money($total);
+
+    if ((float) ($row['_invoiced_refacturare_total'] ?? 0) > 0) {
+        $calculationLines[] = 'Refacturare emisa separat: ' . $money($row['_invoiced_refacturare_total']);
+    }
+
+    return [
+        'carried_main' => $carriedMain,
+        'carried_lines' => array_values(array_unique($carriedLines)),
+        'invoice_for' => $invoiceFor,
+        'calculation_lines' => array_values(array_unique($calculationLines)),
+    ];
+};
+
 $regularExpensesForRow = static function (array $row): array {
     $expenses = is_array($row['expenses_breakdown'] ?? null) ? $row['expenses_breakdown'] : [];
     return array_values(array_filter($expenses, static fn (array $expense): bool => (float) ($expense['suma'] ?? 0) > 0));
@@ -616,6 +812,10 @@ $topRefacturareItems = array_slice($refacturareItems, 0, 8);
     min-width: 980px;
 }
 
+.billing-v2-table.is-simple {
+    min-width: 1180px;
+}
+
 .billing-v2-table thead th {
     border-bottom-width: 1px;
     color: var(--billing-v2-muted);
@@ -668,6 +868,35 @@ $topRefacturareItems = array_slice($refacturareItems, 0, 8);
 
 .billing-v2-value.is-refacturare {
     color: #0f4da8;
+}
+
+.billing-v2-answer-main {
+    display: block;
+    color: #10293e;
+    font-weight: 700;
+}
+
+.billing-v2-answer-lines,
+.billing-v2-calc-lines {
+    display: grid;
+    gap: 0.18rem;
+    margin-top: 0.35rem;
+}
+
+.billing-v2-answer-lines small,
+.billing-v2-calc-lines small {
+    color: var(--billing-v2-muted);
+    line-height: 1.35;
+}
+
+.billing-v2-calc-lines small:last-child {
+    color: #10293e;
+    font-weight: 700;
+}
+
+.billing-v2-route-text {
+    color: #10293e;
+    font-weight: 700;
 }
 
 .billing-v2-pill {
@@ -948,8 +1177,8 @@ $topRefacturareItems = array_slice($refacturareItems, 0, 8);
             <div class="billing-v2-hero-top">
                 <div class="billing-v2-hero-copy">
                     <span class="billing-v2-eyebrow">Centralizare facturare</span>
-                    <h2>O singura vedere pentru facturat, deschis si refacturabil</h2>
-                    <p>Lista principala ramane in centru, iar rezumatele stau pe margine. Filtrezi repede, schimbi statusul direct din tabel si deschizi cursa doar cand ai nevoie de contextul complet.</p>
+                    <h2>Vezi clar fiecare cursa facturata</h2>
+                    <p>Pentru fiecare cursa vezi ruta, cat s-a transportat, pentru ce se factureaza si calculul folosit din datele introduse in Dispecer curse.</p>
                 </div>
                 <div class="billing-v2-hero-actions">
                     <div class="billing-v2-count-badge">
@@ -961,25 +1190,25 @@ $topRefacturareItems = array_slice($refacturareItems, 0, 8);
             </div>
 
             <div class="billing-v2-kpi-grid">
-                <div class="billing-v2-kpi is-success">
-                    <span>Facturat</span>
-                    <strong><?= e($money($summaryInvoiceTotal($facturatSummary))) ?></strong>
-                    <small>Transport <?= e($money($facturatSummary['total_facturare'] ?? 0)) ?> | Refacturare emisa <?= e($money($facturatSummary['total_refacturare_facturata'] ?? 0)) ?></small>
+                <div class="billing-v2-kpi is-balance">
+                    <span>Curse in filtru</span>
+                    <strong><?= e((string) ((int) ($summaryTotals['total_curse'] ?? 0))) ?></strong>
+                    <small><?= e((string) $currentPageCount) ?> afisate pe pagina din <?= e((string) $totalFilteredRows) ?> rezultate</small>
                 </div>
-                <div class="billing-v2-kpi is-pending">
-                    <span>De facturat</span>
-                    <strong><?= e($money($summaryInvoiceTotal($openSummary))) ?></strong>
-                    <small>Transport <?= e($money($openSummary['total_facturare'] ?? 0)) ?> | Refacturare emisa <?= e($money($openSummary['total_refacturare_facturata'] ?? 0)) ?></small>
+                <div class="billing-v2-kpi is-success">
+                    <span>Transportat</span>
+                    <strong><?= e($formatTons($summaryTotals['total_tone_incarcate'] ?? 0)) ?></strong>
+                    <small>Livrat <?= e($formatTons($summaryTotals['total_tone_livrate'] ?? 0)) ?> | Prelevat <?= e($formatTons($summaryTotals['total_tone_prelevate'] ?? 0)) ?></small>
                 </div>
                 <div class="billing-v2-kpi is-refacturare">
-                    <span>De refacturat</span>
-                    <strong><?= e($money($summaryTotals['total_refacturare'] ?? 0)) ?></strong>
-                    <small><?= e((string) ((int) ($summaryTotals['refacturare_count'] ?? 0))) ?> linii din cheltuieli</small>
+                    <span>Kilometri</span>
+                    <strong><?= e($formatKm($summaryTotals['total_km_facturati'] ?? 0)) ?></strong>
+                    <small>Rulati <?= e($formatKm($summaryTotals['total_km'] ?? 0)) ?> | Dislocare <?= e($formatKm($summaryTotals['total_km_dislocare'] ?? 0)) ?></small>
                 </div>
-                <div class="billing-v2-kpi is-balance">
-                    <span>Sold estimativ</span>
-                    <strong><?= e($money($summaryTotals['sold_estimativ'] ?? 0)) ?></strong>
-                    <small><?= e($formatKm($summaryTotals['total_km_facturati'] ?? 0)) ?> facturati in filtru</small>
+                <div class="billing-v2-kpi is-pending">
+                    <span>Facturare</span>
+                    <strong><?= e($money($summaryInvoiceTotal($summaryTotals))) ?></strong>
+                    <small>Transport <?= e($money($summaryTotals['total_facturare'] ?? 0)) ?> | Cheltuieli <?= e($money($summaryTotals['total_cheltuieli'] ?? 0)) ?> | De refacturat <?= e($money($summaryTotals['total_refacturare'] ?? 0)) ?></small>
                 </div>
             </div>
         </div>
@@ -1086,8 +1315,8 @@ $topRefacturareItems = array_slice($refacturareItems, 0, 8);
                 <div class="card-header bg-white border-0 pb-0">
                     <div class="billing-v2-section-title mb-0">
                         <div>
-                            <h3>Curse filtrate</h3>
-                            <p>Lista de lucru principala. Schimbi statusul direct din tabel si intri in cursa doar cand vrei mai mult context.</p>
+                            <h3>Curse si calcul facturare</h3>
+                            <p>Randurile sunt organizate dupa intrebarile importante: ruta, cantitate, suma facturata si formula.</p>
                         </div>
                         <div class="billing-v2-results-box">
                             <span>Pe pagina</span>
@@ -1102,15 +1331,14 @@ $topRefacturareItems = array_slice($refacturareItems, 0, 8);
                         <div class="billing-v2-empty-state">Nu exista curse pentru filtrul curent.</div>
                     <?php else: ?>
                         <div class="table-responsive">
-                            <table class="table billing-v2-table align-middle mb-0">
+                            <table class="table billing-v2-table is-simple align-middle mb-0">
                                 <thead>
                                     <tr>
                                         <th>Cursa</th>
-                                        <th>Beneficiar</th>
                                         <th>Ruta</th>
-                                        <th class="text-end">Total</th>
-                                        <th class="text-end">Cheltuieli</th>
-                                        <th class="text-end">Refacturare</th>
+                                        <th>Transportat</th>
+                                        <th>Facturat pentru</th>
+                                        <th>Calcul</th>
                                         <th>Status</th>
                                         <th>Actiuni</th>
                                     </tr>
@@ -1121,7 +1349,9 @@ $topRefacturareItems = array_slice($refacturareItems, 0, 8);
                                         $raceId = (int) ($row['id'] ?? 0);
                                         $regularExpenses = (array) ($row['_regular_expenses'] ?? []);
                                         $refacturareExpenses = (array) ($row['_refacturare_expenses'] ?? []);
+                                        $billingFacts = $buildSimpleBillingFacts($row);
                                         $details = [
+                                            ['Data incarcare', $formatDate($row['data_incarcare'] ?? '')],
                                             ['Perioada', $formatDateRange($row)],
                                             ['Ore', $formatTimeRange($row)],
                                             ['Durata', $formatDuration($row['durata_cursa_minute'] ?? null)],
@@ -1149,38 +1379,52 @@ $topRefacturareItems = array_slice($refacturareItems, 0, 8);
                                                     <a class="billing-v2-main-link" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">#<?= e((string) $raceId) ?></a>
                                                     <strong><?= e((string) ($row['nr_inmatriculare'] ?? '-')) ?></strong>
                                                     <span><?= e((string) ($row['sofer_nume'] ?? '-')) ?></span>
-                                                    <small><?= e($formatDateRange($row)) ?></small>
-                                                </div>
-                                            </td>
-                                            <td>
-                                                <div class="billing-v2-main-stack">
-                                                    <strong><?= e($show($row['beneficiar_nume'] ?? '')) ?></strong>
-                                                    <span><?= e((string) ($row['_transport_label'] ?? '-')) ?></span>
-                                                    <small><?= e((string) ($row['_goods_label'] ?? '-')) ?></small>
+                                                    <?php if ($show($row['data_incarcare'] ?? '') !== '-'): ?>
+                                                        <small>Incarcare: <?= e($formatDate($row['data_incarcare'] ?? '')) ?></small>
+                                                    <?php endif; ?>
+                                                    <small>Interval: <?= e($formatDateRange($row)) ?></small>
+                                                    <small><?= e($show($row['beneficiar_nume'] ?? '')) ?></small>
                                                 </div>
                                             </td>
                                             <td>
                                                 <div class="billing-v2-meta-stack">
-                                                    <strong><?= e((string) ($row['_route_start'] ?? '-')) ?> -> <?= e((string) ($row['_route_end'] ?? '-')) ?></strong>
-                                                    <span><?= e($show($row['loc_livrare_cursa'] ?? '')) ?></span>
+                                                    <span class="billing-v2-route-text"><?= e((string) ($row['_route_start'] ?? '-')) ?> -> <?= e((string) ($row['_route_end'] ?? '-')) ?></span>
+                                                    <?php if ($show($row['loc_livrare_cursa'] ?? '') !== '-'): ?>
+                                                        <span>Livrare: <?= e($show($row['loc_livrare_cursa'] ?? '')) ?></span>
+                                                    <?php endif; ?>
+                                                    <span><?= e((string) ($row['_transport_label'] ?? '-')) ?></span>
                                                 </div>
                                             </td>
-                                            <td class="text-end">
-                                                <span class="billing-v2-value"><?= e($money($row['_display_total'] ?? 0)) ?></span>
-                                                <div class="small text-muted">Transport <?= e($money($row['total_facturare'] ?? 0)) ?></div>
-                                                <?php if ((float) ($row['_invoiced_refacturare_total'] ?? 0) > 0): ?>
-                                                    <div class="small text-muted">Refacturare emisa <?= e($money($row['_invoiced_refacturare_total'] ?? 0)) ?></div>
-                                                <?php endif; ?>
-                                                <div class="small text-muted"><?= e($formatKm($row['km_cursa'] ?? 0)) ?></div>
-                                                <div class="small text-muted"><?= e($costKmLabel($row)) ?></div>
+                                            <td>
+                                                <span class="billing-v2-answer-main"><?= e((string) ($billingFacts['carried_main'] ?? '-')) ?></span>
+                                                <div class="billing-v2-answer-lines">
+                                                    <?php foreach ((array) ($billingFacts['carried_lines'] ?? []) as $line): ?>
+                                                        <small><?= e((string) $line) ?></small>
+                                                    <?php endforeach; ?>
+                                                </div>
                                             </td>
-                                            <td class="text-end">
-                                                <span class="billing-v2-value"><?= e($money($row['_regular_expense_total'] ?? 0)) ?></span>
-                                                <div class="small text-muted"><?= e((string) count($regularExpenses)) ?> linii</div>
+                                            <td>
+                                                <div class="billing-v2-main-stack">
+                                                    <strong><?= e((string) ($billingFacts['invoice_for'] ?? '-')) ?></strong>
+                                                    <span><?= e((string) ($row['_goods_label'] ?? '-')) ?></span>
+                                                    <span class="billing-v2-value"><?= e($money($row['total_facturare'] ?? 0)) ?></span>
+                                                    <?php if ((float) ($row['_invoiced_refacturare_total'] ?? 0) > 0): ?>
+                                                        <small>Refacturare emisa: <?= e($money($row['_invoiced_refacturare_total'] ?? 0)) ?></small>
+                                                    <?php endif; ?>
+                                                    <?php if ((float) ($row['_regular_expense_total'] ?? 0) > 0): ?>
+                                                        <small>Cheltuieli cursa: <?= e($money($row['_regular_expense_total'] ?? 0)) ?></small>
+                                                    <?php endif; ?>
+                                                    <?php if ((float) ($row['_refacturare_total'] ?? 0) > 0): ?>
+                                                        <small>De refacturat: <?= e($money($row['_refacturare_total'] ?? 0)) ?></small>
+                                                    <?php endif; ?>
+                                                </div>
                                             </td>
-                                            <td class="text-end">
-                                                <span class="billing-v2-value<?= (float) ($row['_refacturare_total'] ?? 0) > 0 ? ' is-refacturare' : '' ?>"><?= e($money($row['_refacturare_total'] ?? 0)) ?></span>
-                                                <div class="small text-muted"><?= e((string) count($refacturareExpenses)) ?> linii</div>
+                                            <td>
+                                                <div class="billing-v2-calc-lines">
+                                                    <?php foreach ((array) ($billingFacts['calculation_lines'] ?? []) as $line): ?>
+                                                        <small><?= e((string) $line) ?></small>
+                                                    <?php endforeach; ?>
+                                                </div>
                                             </td>
                                             <td class="billing-v2-status-cell">
                                                 <span class="billing-v2-pill <?= e((string) ($row['_status_tone'] ?? 'is-neutral')) ?>"><?= e((string) ($row['_status_label'] ?? '-')) ?></span>
@@ -1191,7 +1435,7 @@ $topRefacturareItems = array_slice($refacturareItems, 0, 8);
                                             </td>
                                         </tr>
                                         <tr class="billing-v2-detail-row">
-                                            <td colspan="8">
+                                            <td colspan="7">
                                                 <details class="billing-v2-details">
                                                     <summary>Vezi detalii si linii</summary>
                                                     <div class="billing-v2-detail-layout">

@@ -1732,13 +1732,16 @@ class ModuleController
         $tireSize = trim((string) ($_POST['stock_tire_size'] ?? ''));
         $dotCode = strtoupper(trim((string) ($_POST['stock_dot_code'] ?? '')));
         $serialPrefix = trim((string) ($_POST['stock_serial_prefix'] ?? 'STOC'));
-        $targetVehicleTypeRaw = (string) ($_POST['stock_target_vehicle_type'] ?? 'universal');
+        $targetVehicleTypesRaw = $_POST['stock_target_vehicle_types'] ?? ($_POST['stock_target_vehicle_type'] ?? []);
+        $targetAxleConfigRaw = trim((string) ($_POST['stock_target_axle_config'] ?? ''));
+        $requiresVehicleCompatibility = (string) ($_POST['stock_require_vehicle_compatibility'] ?? '') === '1';
         $mountDate = trim((string) ($_POST['stock_mount_date'] ?? date('Y-m-d')));
         $quantityRaw = trim((string) ($_POST['stock_quantity'] ?? '1'));
         $kmInitialRaw = trim((string) ($_POST['stock_km_initial'] ?? '0'));
         $estimatedLifeRaw = trim((string) ($_POST['stock_estimated_life_km'] ?? ''));
         $estimatedRemainingRaw = trim((string) ($_POST['stock_estimated_remaining_km'] ?? $estimatedLifeRaw));
         $statusRaw = strtolower(trim((string) ($_POST['stock_status'] ?? TireModel::STATUS_IN_STOCK)));
+        $axleTypeRaw = trim((string) ($_POST['stock_axle_type'] ?? ''));
         $tireTypeRaw = trim((string) ($_POST['stock_tire_type'] ?? TireModel::TIRE_TYPE_TRAILER));
         $usageCompatibility = trim((string) ($_POST['stock_usage_compatibility'] ?? ''));
         $locationLabel = trim((string) ($_POST['stock_location_label'] ?? 'Depozit'));
@@ -1833,7 +1836,48 @@ class ModuleController
             TireModel::STATUS_SCRAPPED,
         ];
         $status = in_array($statusRaw, $allowedStatuses, true) ? $statusRaw : TireModel::STATUS_IN_STOCK;
-        $targetVehicleType = $this->tireModel->normalizeTargetVehicleType($targetVehicleTypeRaw);
+        $targetVehicleTypes = $this->tireModel->normalizeTargetVehicleTypes($targetVehicleTypesRaw, null);
+        $targetVehicleType = (string) ($targetVehicleTypes[0] ?? 'universal');
+        $axleType = $this->tireModel->normalizeAxleType($axleTypeRaw);
+        if ($tireTypeRaw === '' || !array_key_exists($tireTypeRaw, $this->tireModel->getTireTypeOptions())) {
+            flash_set('danger', 'Tipul anvelopei este obligatoriu.');
+            redirect($stockRedirectUrl);
+        }
+        $tireType = $this->tireModel->normalizeTireType($tireTypeRaw);
+        if ($axleType === '') {
+            flash_set('danger', 'Tipul axei este obligatoriu pentru anvelopa.');
+            redirect($stockRedirectUrl);
+        }
+
+        if (!$this->tireModel->isTireTypeAllowedForAxleType($axleType, $tireType)) {
+            flash_set('danger', 'Combinatia Tip axa / Tip anvelopa nu este valida.');
+            redirect($stockRedirectUrl);
+        }
+
+        $hasSpecificTargetType = array_values(array_filter($targetVehicleTypes, static fn (string $targetType): bool => $targetType !== 'universal')) !== [];
+        if ($requiresVehicleCompatibility && !$hasSpecificTargetType) {
+            flash_set('danger', 'Tipul vehiculului este obligatoriu pentru anvelopa.');
+            redirect($stockRedirectUrl);
+        }
+
+        $targetAxleConfig = $targetAxleConfigRaw !== ''
+            ? $this->tireModel->normalizeTargetAxleConfig($targetVehicleType, $targetAxleConfigRaw)
+            : null;
+        [$invoiceUpload, $invoiceUploadError] = $this->storeUploadedTireInvoice($_FILES['stock_invoice_upload'] ?? null);
+        if ($invoiceUploadError !== null) {
+            flash_set('danger', $invoiceUploadError);
+            redirect($stockRedirectUrl);
+        }
+        [$profilePhotoUpload, $profilePhotoUploadError] = $this->storeUploadedTirePhoto($_FILES['stock_profile_photo_upload'] ?? null, 'anvelope_profil', 'anvelopa_profil', 'profile_photo_original_name', 'profile_photo_path');
+        if ($profilePhotoUploadError !== null) {
+            flash_set('danger', $profilePhotoUploadError);
+            redirect($stockRedirectUrl);
+        }
+        [$locationPhotoUpload, $locationPhotoUploadError] = $this->storeUploadedTirePhoto($_FILES['stock_location_photo_upload'] ?? null, 'anvelope_locatii', 'anvelopa_locatie', 'location_photo_original_name', 'location_photo_path');
+        if ($locationPhotoUploadError !== null) {
+            flash_set('danger', $locationPhotoUploadError);
+            redirect($stockRedirectUrl);
+        }
 
         try {
             $createdTireIds = $this->tireModel->createStockTireBatchWithIds([
@@ -1843,14 +1887,23 @@ class ModuleController
                 'dot_code' => $dotCode !== '' ? $dotCode : null,
                 'serial_prefix' => $serialPrefix,
                 'target_vehicle_type' => $targetVehicleType,
-                'tire_type' => $tireTypeRaw,
+                'target_vehicle_types' => $targetVehicleTypes,
+                'target_axle_config' => $targetAxleConfig,
+                'axle_type' => $axleType,
+                'tire_type' => $tireType,
                 'usage_compatibility' => $usageCompatibility !== '' ? $usageCompatibility : null,
                 'location_label' => $locationLabel !== '' ? $locationLabel : null,
+                'profile_photo_original_name' => $profilePhotoUpload['profile_photo_original_name'] ?? null,
+                'profile_photo_path' => $profilePhotoUpload['profile_photo_path'] ?? null,
+                'location_photo_original_name' => $locationPhotoUpload['location_photo_original_name'] ?? null,
+                'location_photo_path' => $locationPhotoUpload['location_photo_path'] ?? null,
                 'manufacturing_year' => $manufacturingYear,
                 'purchase_date' => $purchaseDate !== '' ? $purchaseDate : null,
                 'purchase_price' => $purchasePrice,
                 'supplier' => $supplier !== '' ? $supplier : null,
                 'invoice_number' => $invoiceNumber !== '' ? $invoiceNumber : null,
+                'invoice_document_original_name' => $invoiceUpload['invoice_document_original_name'] ?? null,
+                'invoice_document_path' => $invoiceUpload['invoice_document_path'] ?? null,
                 'mount_date' => $mountDate,
                 'quantity' => $quantity,
                 'km_initial' => $kmInitial,
@@ -2065,25 +2118,27 @@ class ModuleController
         $modelName = trim((string) ($_POST['stock_edit_model'] ?? ''));
         $tireSize = trim((string) ($_POST['stock_edit_tire_size'] ?? ''));
         $dotCode = strtoupper(trim((string) ($_POST['stock_edit_dot_code'] ?? '')));
-        $targetTypeRaw = (string) ($_POST['stock_edit_target_vehicle_type'] ?? 'universal');
+        $targetTypesRaw = $_POST['stock_edit_target_vehicle_types'] ?? ($_POST['stock_edit_target_vehicle_type'] ?? ($tire['target_vehicle_types'] ?? ($tire['target_vehicle_type'] ?? 'universal')));
+        $targetAxleConfigRaw = trim((string) ($_POST['stock_edit_target_axle_config'] ?? ($tire['target_axle_config'] ?? '')));
         $statusRaw = strtolower(trim((string) ($_POST['stock_edit_status'] ?? ($tire['status'] ?? TireModel::STATUS_IN_STOCK))));
+        $axleTypeRaw = trim((string) ($_POST['stock_edit_axle_type'] ?? ($tire['axle_type'] ?? '')));
         $tireTypeRaw = trim((string) ($_POST['stock_edit_tire_type'] ?? ($tire['tire_type'] ?? TireModel::TIRE_TYPE_TRAILER)));
-        $usageCompatibility = trim((string) ($_POST['stock_edit_usage_compatibility'] ?? ''));
-        $locationLabel = trim((string) ($_POST['stock_edit_location_label'] ?? ''));
-        $manufacturingYearRaw = trim((string) ($_POST['stock_edit_manufacturing_year'] ?? ''));
-        $purchaseDate = trim((string) ($_POST['stock_edit_purchase_date'] ?? ''));
-        $purchasePriceRaw = trim((string) ($_POST['stock_edit_purchase_price'] ?? ''));
-        $supplier = trim((string) ($_POST['stock_edit_supplier'] ?? ''));
-        $invoiceNumber = trim((string) ($_POST['stock_edit_invoice_number'] ?? ''));
-        $mountDate = trim((string) ($_POST['stock_edit_mount_date'] ?? date('Y-m-d')));
-        $currentMileageRaw = trim((string) ($_POST['stock_edit_current_mileage'] ?? '0'));
-        $estimatedLifeRaw = trim((string) ($_POST['stock_edit_estimated_life_km'] ?? ''));
-        $estimatedRemainingRaw = trim((string) ($_POST['stock_edit_estimated_remaining_km'] ?? ''));
+        $usageCompatibility = trim((string) ($_POST['stock_edit_usage_compatibility'] ?? ($tire['usage_compatibility'] ?? '')));
+        $locationLabel = trim((string) ($_POST['stock_edit_location_label'] ?? ($tire['location_label'] ?? '')));
+        $manufacturingYearRaw = trim((string) ($_POST['stock_edit_manufacturing_year'] ?? ($tire['manufacturing_year'] ?? '')));
+        $purchaseDate = trim((string) ($_POST['stock_edit_purchase_date'] ?? ($tire['purchase_date'] ?? '')));
+        $purchasePriceRaw = trim((string) ($_POST['stock_edit_purchase_price'] ?? ($tire['purchase_price'] ?? '')));
+        $supplier = trim((string) ($_POST['stock_edit_supplier'] ?? ($tire['supplier'] ?? '')));
+        $invoiceNumber = trim((string) ($_POST['stock_edit_invoice_number'] ?? ($tire['invoice_number'] ?? '')));
+        $mountDate = trim((string) ($_POST['stock_edit_mount_date'] ?? ($tire['mount_date'] ?? date('Y-m-d'))));
+        $currentMileageRaw = trim((string) ($_POST['stock_edit_current_mileage'] ?? ($tire['current_mileage'] ?? '0')));
+        $estimatedLifeRaw = trim((string) ($_POST['stock_edit_estimated_life_km'] ?? ($tire['estimated_life_km'] ?? '')));
+        $estimatedRemainingRaw = trim((string) ($_POST['stock_edit_estimated_remaining_km'] ?? ($tire['estimated_remaining_km'] ?? '')));
         $initialConditionRaw = trim((string) ($_POST['stock_edit_initial_condition'] ?? ($tire['initial_condition'] ?? 'good')));
         $conditionStatusRaw = trim((string) ($_POST['stock_edit_condition_status'] ?? ($tire['condition_status'] ?? $initialConditionRaw)));
         $seasonRaw = trim((string) ($_POST['stock_edit_season'] ?? ($tire['season'] ?? 'all_season')));
-        $directional = isset($_POST['stock_edit_directional']) ? 1 : 0;
-        $rotationDirection = trim((string) ($_POST['stock_edit_rotation_direction'] ?? ''));
+        $directional = array_key_exists('stock_edit_directional', $_POST) ? (isset($_POST['stock_edit_directional']) ? 1 : 0) : (int) ($tire['directional'] ?? 0);
+        $rotationDirection = trim((string) ($_POST['stock_edit_rotation_direction'] ?? ($tire['rotation_direction'] ?? '')));
         $notes = trim((string) ($_POST['stock_edit_notes'] ?? ''));
 
         if ($brand === '') {
@@ -2153,36 +2208,87 @@ class ModuleController
             TireModel::STATUS_ACTIVE,
         ];
         $status = in_array($statusRaw, $allowedStatuses, true) ? $statusRaw : $this->tireModel->normalizeTireStatus((string) ($tire['status'] ?? TireModel::STATUS_IN_STOCK));
-        $targetVehicleType = $this->tireModel->normalizeTargetVehicleType($targetTypeRaw);
+        $targetVehicleTypes = $this->tireModel->normalizeTargetVehicleTypes($targetTypesRaw, (string) ($tire['target_vehicle_type'] ?? 'universal'));
+        $targetVehicleType = (string) ($targetVehicleTypes[0] ?? 'universal');
+        $targetAxleConfig = $targetAxleConfigRaw !== ''
+            ? $this->tireModel->normalizeTargetAxleConfig($targetVehicleType, $targetAxleConfigRaw)
+            : null;
+        if ($tireTypeRaw === '' || !array_key_exists($tireTypeRaw, $this->tireModel->getTireTypeOptions())) {
+            flash_set('danger', 'Tipul anvelopei este obligatoriu.');
+            redirect($stockRedirectUrl);
+        }
+        $tireType = $this->tireModel->normalizeTireType($tireTypeRaw);
+        $axleType = $this->tireModel->normalizeAxleType($axleTypeRaw);
+        if ($axleType === '') {
+            $axleType = $this->tireModel->defaultAxleTypeForTireType($tireType);
+        }
+
+        if (!$this->tireModel->isTireTypeAllowedForAxleType($axleType, $tireType)) {
+            flash_set('danger', 'Combinatia Tip axa / Tip anvelopa nu este valida.');
+            redirect($stockRedirectUrl);
+        }
+
+        [$invoiceUpload, $invoiceUploadError] = $this->storeUploadedTireInvoice($_FILES['stock_edit_invoice_upload'] ?? null);
+        if ($invoiceUploadError !== null) {
+            flash_set('danger', $invoiceUploadError);
+            redirect($stockRedirectUrl);
+        }
+        [$profilePhotoUpload, $profilePhotoUploadError] = $this->storeUploadedTirePhoto($_FILES['stock_edit_profile_photo_upload'] ?? null, 'anvelope_profil', 'anvelopa_profil', 'profile_photo_original_name', 'profile_photo_path');
+        if ($profilePhotoUploadError !== null) {
+            flash_set('danger', $profilePhotoUploadError);
+            redirect($stockRedirectUrl);
+        }
+        [$locationPhotoUpload, $locationPhotoUploadError] = $this->storeUploadedTirePhoto($_FILES['stock_edit_location_photo_upload'] ?? null, 'anvelope_locatii', 'anvelopa_locatie', 'location_photo_original_name', 'location_photo_path');
+        if ($locationPhotoUploadError !== null) {
+            flash_set('danger', $locationPhotoUploadError);
+            redirect($stockRedirectUrl);
+        }
+
+        $updateData = [
+            'brand' => $brand,
+            'model' => $modelName !== '' ? $modelName : null,
+            'tire_size' => $tireSize !== '' ? $tireSize : null,
+            'dot_code' => $dotCode !== '' ? $dotCode : null,
+            'target_vehicle_type' => $targetVehicleType,
+            'target_vehicle_types' => $targetVehicleTypes,
+            'target_axle_config' => $targetAxleConfig,
+            'axle_type' => $axleType,
+            'tire_type' => $tireType,
+            'usage_compatibility' => $usageCompatibility !== '' ? $usageCompatibility : null,
+            'location_label' => $locationLabel !== '' ? $locationLabel : null,
+            'manufacturing_year' => $manufacturingYear,
+            'purchase_date' => $purchaseDate !== '' ? $purchaseDate : null,
+            'purchase_price' => $purchasePrice,
+            'supplier' => $supplier !== '' ? $supplier : null,
+            'invoice_number' => $invoiceNumber !== '' ? $invoiceNumber : null,
+            'mount_date' => $mountDate,
+            'current_mileage' => max(0, (int) $currentMileageRaw),
+            'estimated_life_km' => $estimatedLifeKm,
+            'estimated_remaining_km' => $estimatedRemainingKm,
+            'status' => $status,
+            'initial_condition' => $initialConditionRaw,
+            'condition_status' => $conditionStatusRaw,
+            'season' => in_array($seasonRaw, ['summer', 'winter', 'all_season'], true) ? $seasonRaw : 'all_season',
+            'directional' => $directional,
+            'rotation_direction' => $rotationDirection !== '' ? $rotationDirection : null,
+            'notes' => $notes !== '' ? $notes : null,
+            'updated_at' => date('Y-m-d H:i:s'),
+        ];
+        if (is_array($invoiceUpload)) {
+            $updateData['invoice_document_original_name'] = $invoiceUpload['invoice_document_original_name'] ?? null;
+            $updateData['invoice_document_path'] = $invoiceUpload['invoice_document_path'] ?? null;
+        }
+        if (is_array($profilePhotoUpload)) {
+            $updateData['profile_photo_original_name'] = $profilePhotoUpload['profile_photo_original_name'] ?? null;
+            $updateData['profile_photo_path'] = $profilePhotoUpload['profile_photo_path'] ?? null;
+        }
+        if (is_array($locationPhotoUpload)) {
+            $updateData['location_photo_original_name'] = $locationPhotoUpload['location_photo_original_name'] ?? null;
+            $updateData['location_photo_path'] = $locationPhotoUpload['location_photo_path'] ?? null;
+        }
 
         try {
-            $this->tireModel->updateStockTire($tireId, [
-                'brand' => $brand,
-                'model' => $modelName !== '' ? $modelName : null,
-                'tire_size' => $tireSize !== '' ? $tireSize : null,
-                'dot_code' => $dotCode !== '' ? $dotCode : null,
-                'target_vehicle_type' => $targetVehicleType,
-                'tire_type' => $tireTypeRaw,
-                'usage_compatibility' => $usageCompatibility !== '' ? $usageCompatibility : null,
-                'location_label' => $locationLabel !== '' ? $locationLabel : null,
-                'manufacturing_year' => $manufacturingYear,
-                'purchase_date' => $purchaseDate !== '' ? $purchaseDate : null,
-                'purchase_price' => $purchasePrice,
-                'supplier' => $supplier !== '' ? $supplier : null,
-                'invoice_number' => $invoiceNumber !== '' ? $invoiceNumber : null,
-                'mount_date' => $mountDate,
-                'current_mileage' => max(0, (int) $currentMileageRaw),
-                'estimated_life_km' => $estimatedLifeKm,
-                'estimated_remaining_km' => $estimatedRemainingKm,
-                'status' => $status,
-                'initial_condition' => $initialConditionRaw,
-                'condition_status' => $conditionStatusRaw,
-                'season' => in_array($seasonRaw, ['summer', 'winter', 'all_season'], true) ? $seasonRaw : 'all_season',
-                'directional' => $directional,
-                'rotation_direction' => $rotationDirection !== '' ? $rotationDirection : null,
-                'notes' => $notes !== '' ? $notes : null,
-                'updated_at' => date('Y-m-d H:i:s'),
-            ]);
+            $this->tireModel->updateStockTire($tireId, $updateData);
             $this->tireModel->syncTireMaintenanceEntries([$tireId]);
 
             flash_set('success', 'Datele anvelopei din stoc au fost actualizate.');
@@ -4408,6 +4514,50 @@ class ModuleController
     private function storeUploadedDriverPhoto(?array $file): array
     {
         return $this->storeUploadedAssetFile($file, 'soferi', 'sofer', 'poza_original', 'poza_stocata');
+    }
+
+    private function storeUploadedTirePhoto(?array $file, string $directory, string $prefix, string $originalColumn, string $storedColumn): array
+    {
+        if ($file === null || !is_array($file) || (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+            return [null, null];
+        }
+
+        if ((int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
+            $originalName = $this->sanitizeUploadedFileName((string) ($file['name'] ?? $prefix));
+            $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+            if (!in_array($extension, ['jpg', 'jpeg', 'png', 'webp'], true)) {
+                return [null, 'Tipul fisierului pentru poza anvelopei nu este permis.'];
+            }
+
+            $size = (int) ($file['size'] ?? 0);
+            if ($size > 5 * 1024 * 1024) {
+                return [null, 'Poza anvelopei trebuie sa fie mai mica de 5 MB.'];
+            }
+        }
+
+        return $this->storeUploadedAssetFile($file, $directory, $prefix, $originalColumn, $storedColumn);
+    }
+
+    private function storeUploadedTireInvoice(?array $file): array
+    {
+        if ($file === null || !is_array($file) || (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+            return [null, null];
+        }
+
+        if ((int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
+            $originalName = $this->sanitizeUploadedFileName((string) ($file['name'] ?? 'factura'));
+            $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+            if (!in_array($extension, ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'doc', 'docx'], true)) {
+                return [null, 'Tipul fisierului pentru factura nu este permis.'];
+            }
+
+            $size = (int) ($file['size'] ?? 0);
+            if ($size > 5 * 1024 * 1024) {
+                return [null, 'Factura incarcata trebuie sa fie mai mica de 5 MB.'];
+            }
+        }
+
+        return $this->storeUploadedAssetFile($file, 'anvelope_facturi', 'anvelopa_factura', 'invoice_document_original_name', 'invoice_document_path');
     }
 
     private function sanitizeUploadedFileName(string $fileName): string

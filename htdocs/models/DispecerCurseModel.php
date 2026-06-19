@@ -14,6 +14,7 @@ class DispecerCurseModel extends BaseModel
     private bool $compressorVehicleAssignmentTableEnsured = false;
     private bool $raceCompressorLocationColumnsEnsured = false;
     private bool $raceCostPerKmColumnsEnsured = false;
+    private bool $raceLoadingDateColumnEnsured = false;
     private bool $raceCreatedByColumnEnsured = false;
     private bool $raceExpenseStatusColumnEnsured = false;
     private bool $expenseRefacturareColumnEnsured = false;
@@ -1705,6 +1706,29 @@ class DispecerCurseModel extends BaseModel
         $this->raceCostPerKmColumnsEnsured = true;
     }
 
+    private function ensureRaceLoadingDateColumn(): void
+    {
+        if ($this->raceLoadingDateColumnEnsured) {
+            return;
+        }
+
+        $columnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_dispecer'
+              AND COLUMN_NAME = 'data_incarcare'
+        ");
+        $columnCheckStmt->execute();
+        $hasColumn = (int) $columnCheckStmt->fetchColumn() > 0;
+
+        if (!$hasColumn) {
+            $this->db->exec("ALTER TABLE curse_dispecer ADD COLUMN data_incarcare DATE NULL AFTER data_cursa");
+        }
+
+        $this->raceLoadingDateColumnEnsured = true;
+    }
+
     private function ensureRaceCompressorLocationColumns(): void
     {
         if ($this->raceCompressorLocationColumnsEnsured) {
@@ -2059,6 +2083,8 @@ class DispecerCurseModel extends BaseModel
 
     public function getBillingCentralizer(array $filters, string $search, int $page, int $perPage): array
     {
+        $this->ensureRaceLoadingDateColumn();
+
         $page = max(1, $page);
         $perPage = max(1, $perPage);
 
@@ -2289,6 +2315,7 @@ class DispecerCurseModel extends BaseModel
                 c.id,
                 c.tip_transport,
                 c.data_cursa,
+                c.data_incarcare,
                 c.data_inceput,
                 c.data_sfarsit,
                 c.ora_inceput,
@@ -2692,6 +2719,7 @@ class DispecerCurseModel extends BaseModel
     {
         $this->ensureRaceCompressorLocationColumns();
         $this->ensureRaceCostPerKmColumns();
+        $this->ensureRaceLoadingDateColumn();
         $this->ensureRaceCreatedByColumn();
         $this->ensureRaceExpenseStatusColumn();
 
@@ -2701,6 +2729,7 @@ class DispecerCurseModel extends BaseModel
                 driver_id,
                 tip_transport,
                 data_cursa,
+                data_incarcare,
                 data_inceput,
                 data_sfarsit,
                 ora_inceput,
@@ -2742,6 +2771,7 @@ class DispecerCurseModel extends BaseModel
                 :driver_id,
                 :tip_transport,
                 :data_cursa,
+                :data_incarcare,
                 :data_inceput,
                 :data_sfarsit,
                 :ora_inceput,
@@ -2815,6 +2845,7 @@ class DispecerCurseModel extends BaseModel
     {
         $this->ensureRaceCompressorLocationColumns();
         $this->ensureRaceCostPerKmColumns();
+        $this->ensureRaceLoadingDateColumn();
 
         $sql = "
             UPDATE curse_dispecer
@@ -2823,6 +2854,7 @@ class DispecerCurseModel extends BaseModel
                 driver_id = :driver_id,
                 tip_transport = :tip_transport,
                 data_cursa = :data_cursa,
+                data_incarcare = :data_incarcare,
                 data_inceput = :data_inceput,
                 data_sfarsit = :data_sfarsit,
                 ora_inceput = :ora_inceput,
@@ -4832,6 +4864,7 @@ class DispecerCurseModel extends BaseModel
         $this->bindNullableInt($stmt, ':driver_id', $data['driver_id'] ?? null);
         $stmt->bindValue(':tip_transport', (string) $data['tip_transport']);
         $stmt->bindValue(':data_cursa', (string) $data['data_cursa']);
+        $this->bindNullableString($stmt, ':data_incarcare', $data['data_incarcare'] ?? null);
         $stmt->bindValue(':data_inceput', (string) $data['data_inceput']);
         $stmt->bindValue(':data_sfarsit', (string) $data['data_sfarsit']);
         $this->bindNullableString($stmt, ':ora_inceput', $data['ora_inceput'] ?? null);

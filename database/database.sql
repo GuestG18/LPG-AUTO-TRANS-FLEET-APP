@@ -26,6 +26,8 @@ DROP TABLE IF EXISTS configurare_documente_obligatorii_soferi;
 DROP TABLE IF EXISTS inventar_dotari_vehicule;
 DROP TABLE IF EXISTS inventar_dotari_reguli;
 DROP TABLE IF EXISTS inventar_dotari_catalog;
+DROP TABLE IF EXISTS vehicle_authorizations;
+DROP TABLE IF EXISTS authorization_zones;
 DROP TABLE IF EXISTS mentenanta;
 DROP TABLE IF EXISTS alimentari;
 DROP TABLE IF EXISTS anvelope_alocari;
@@ -99,6 +101,38 @@ CREATE TABLE vehicule (
     INDEX idx_vehicule_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE authorization_zones (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(120) NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_authorization_zones_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE vehicle_authorizations (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    vehicle_id INT UNSIGNED NOT NULL,
+    authorization_type VARCHAR(120) NOT NULL,
+    zone_id INT UNSIGNED NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    cost DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_vehicle_authorizations_vehicle (vehicle_id),
+    INDEX idx_vehicle_authorizations_zone (zone_id),
+    INDEX idx_vehicle_authorizations_dates (start_date, end_date),
+    CONSTRAINT fk_vehicle_authorizations_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE,
+    CONSTRAINT fk_vehicle_authorizations_zone FOREIGN KEY (zone_id) REFERENCES authorization_zones(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO authorization_zones (name, created_at, updated_at) VALUES
+('România', NOW(), NOW()),
+('Bulgaria', NOW(), NOW()),
+('Ungaria', NOW(), NOW()),
+('Polonia', NOW(), NOW()),
+('Cehia', NOW(), NOW());
+
 CREATE TABLE anvelope (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     brand VARCHAR(100) NOT NULL,
@@ -106,7 +140,17 @@ CREATE TABLE anvelope (
     tire_size VARCHAR(50) NULL,
     dot_code VARCHAR(20) NULL,
     serial_number VARCHAR(120) NOT NULL UNIQUE,
-    target_vehicle_type ENUM('autovehicul', 'camion', 'cap_tractor', 'semiremorca', 'universal') NOT NULL DEFAULT 'universal',
+    target_vehicle_type ENUM('autovehicul', 'autoutilitara', 'camion', 'cap_tractor', 'semiremorca', 'semiremorca_primar', 'semiremorca_distributie', 'universal') NOT NULL DEFAULT 'universal',
+    target_vehicle_types TEXT NULL,
+    target_axle_config VARCHAR(20) NULL,
+    axle_type VARCHAR(40) NULL,
+    tire_type ENUM('direction','traction','trailer','balloon','balloon_directional') NOT NULL DEFAULT 'trailer',
+    usage_compatibility VARCHAR(190) NULL,
+    location_label VARCHAR(120) NULL,
+    profile_photo_original_name VARCHAR(190) NULL,
+    profile_photo_path VARCHAR(190) NULL,
+    location_photo_original_name VARCHAR(190) NULL,
+    location_photo_path VARCHAR(190) NULL,
     mount_date DATE NULL,
     km_initial INT UNSIGNED NOT NULL DEFAULT 0,
     estimated_life_km INT UNSIGNED NULL,
@@ -651,6 +695,7 @@ CREATE TABLE curse_dispecer (
     driver_id INT UNSIGNED NULL,
     tip_transport ENUM('primar', 'primar_tona', 'distributie', 'primar_distributie', 'compresor') NOT NULL,
     data_cursa DATE NOT NULL,
+    data_incarcare DATE NULL,
     data_inceput DATE NOT NULL,
     data_sfarsit DATE NOT NULL,
     ora_inceput TIME NULL,
@@ -938,6 +983,7 @@ INSERT INTO curse_dispecer (
     vehicle_id,
     tip_transport,
     data_cursa,
+    data_incarcare,
     data_inceput,
     data_sfarsit,
     ora_inceput,
@@ -958,9 +1004,9 @@ INSERT INTO curse_dispecer (
     created_at,
     updated_at
 ) VALUES
-(1, 'primar', DATE_SUB(CURDATE(), INTERVAL 2 DAY), DATE_SUB(CURDATE(), INTERVAL 2 DAY), DATE_SUB(CURDATE(), INTERVAL 2 DAY), '07:30:00', '14:10:00', 400, 1, 1, 'gpl_vrac', NULL, NULL, 1, 320, NULL, 'in_curs_facturare', 5.10, 1632.00, 'Cursa primara catre depozit regional.', NOW(), NOW()),
-(2, 'distributie', DATE_SUB(CURDATE(), INTERVAL 1 DAY), DATE_SUB(CURDATE(), INTERVAL 1 DAY), DATE_SUB(CURDATE(), INTERVAL 1 DAY), '09:00:00', '12:15:00', 195, 2, 2, 'butelii', NULL, 12.50, 6, NULL, 1, 'nefacturat', 2.60, 32.50, 'Distributie urbana pentru clienti retail.', NOW(), NOW()),
-(1, 'distributie', CURDATE(), CURDATE(), CURDATE(), '10:45:00', '16:00:00', 315, 1, 1, 'gpl_vrac', NULL, 18.20, 9, NULL, 2, 'facturat', 2.85, 51.87, 'Runda zilnica zona Ilfov.', NOW(), NOW());
+(1, 'primar', DATE_SUB(CURDATE(), INTERVAL 2 DAY), DATE_SUB(CURDATE(), INTERVAL 2 DAY), DATE_SUB(CURDATE(), INTERVAL 2 DAY), DATE_SUB(CURDATE(), INTERVAL 2 DAY), '07:30:00', '14:10:00', 400, 1, 1, 'gpl_vrac', NULL, NULL, 1, 320, NULL, 'in_curs_facturare', 5.10, 1632.00, 'Cursa primara catre depozit regional.', NOW(), NOW()),
+(2, 'distributie', DATE_SUB(CURDATE(), INTERVAL 1 DAY), DATE_SUB(CURDATE(), INTERVAL 1 DAY), DATE_SUB(CURDATE(), INTERVAL 1 DAY), DATE_SUB(CURDATE(), INTERVAL 1 DAY), '09:00:00', '12:15:00', 195, 2, 2, 'butelii', NULL, 12.50, 6, NULL, 1, 'nefacturat', 2.60, 32.50, 'Distributie urbana pentru clienti retail.', NOW(), NOW()),
+(1, 'distributie', CURDATE(), CURDATE(), CURDATE(), CURDATE(), '10:45:00', '16:00:00', 315, 1, 1, 'gpl_vrac', NULL, 18.20, 9, NULL, 2, 'facturat', 2.85, 51.87, 'Runda zilnica zona Ilfov.', NOW(), NOW());
 
 INSERT INTO curse_cheltuieli (cursa_id, tip_cheltuiala, suma, data_cheltuiala, observatii, created_at, updated_at) VALUES
 (1, 'motorina', 520.00, DATE_SUB(CURDATE(), INTERVAL 2 DAY), 'Alimentare pentru cursa primara.', NOW(), NOW()),

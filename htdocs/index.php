@@ -207,6 +207,7 @@ require_once __DIR__ . '/models/TireModel.php';
 require_once __DIR__ . '/models/DashboardModel.php';
 require_once __DIR__ . '/models/DocumentModel.php';
 require_once __DIR__ . '/models/VehicleEquipmentInventoryModel.php';
+require_once __DIR__ . '/models/VehicleAuthorizationModel.php';
 require_once __DIR__ . '/models/DispecerCurseModel.php';
 require_once __DIR__ . '/models/ProgramareConcediiModel.php';
 require_once __DIR__ . '/models/NotificationRuleModel.php';
@@ -221,6 +222,7 @@ require_once __DIR__ . '/controllers/DashboardController.php';
 require_once __DIR__ . '/controllers/DashboardAnaliticController.php';
 require_once __DIR__ . '/controllers/ModuleController.php';
 require_once __DIR__ . '/controllers/VehicleEquipmentInventoryController.php';
+require_once __DIR__ . '/controllers/VehicleAuthorizationController.php';
 require_once __DIR__ . '/controllers/ProfileController.php';
 require_once __DIR__ . '/controllers/DispecerCurseController.php';
 require_once __DIR__ . '/controllers/CentralizatorFacturareController.php';
@@ -312,6 +314,11 @@ try {
         case 'inventar_dotari_vehicule':
             require_auth();
             (new VehicleEquipmentInventoryController($db))->handle($action);
+            break;
+
+        case 'autorizatii_vehicule':
+            require_auth();
+            (new VehicleAuthorizationController($db))->handle($action);
             break;
 
         case 'dispecer_curse':

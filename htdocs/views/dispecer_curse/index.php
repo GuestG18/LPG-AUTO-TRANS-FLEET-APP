@@ -357,6 +357,11 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                         </div>
 
                         <div class="col-12 col-md-6 dispatcher-schedule-field">
+                            <label class="form-label" for="race_data_incarcare">Data incarcare</label>
+                            <input type="date" class="form-control <?= isset($formErrors['data_incarcare']) ? 'is-invalid' : '' ?>" id="race_data_incarcare" name="data_incarcare" value="<?= e((string) ($formData['data_incarcare'] ?? '')) ?>">
+                            <?php if (isset($formErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_incarcare']) ?></div><?php endif; ?>
+                        </div>
+                        <div class="col-12 col-md-6 dispatcher-schedule-field">
                             <label class="form-label" for="race_data_inceput">Data inceput <span class="text-danger">*</span></label>
                             <input type="date" class="form-control <?= isset($formErrors['data_inceput']) ? 'is-invalid' : '' ?>" id="race_data_inceput" name="data_inceput" value="<?= e((string) ($formData['data_inceput'] ?? ($formData['data_cursa'] ?? ''))) ?>" required>
                             <?php if (isset($formErrors['data_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_inceput']) ?></div><?php endif; ?>
@@ -733,6 +738,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                     <col class="col-plate">
                     <col class="col-driver">
                     <col class="col-type">
+                    <col class="col-loading-date">
                     <col class="col-interval">
                     <col class="col-duration">
                     <col class="col-diurna">
@@ -754,6 +760,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                     </th>
                     <th class="col-driver">Sofer</th>
                     <th class="col-type">Tip Transport</th>
+                    <th class="col-loading-date text-center">Data incarcare</th>
                     <th class="col-interval">Interval</th>
                     <th class="col-duration text-end">Durata cursa</th>
                     <th class="col-diurna text-end">Diurna</th>
@@ -769,7 +776,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                 <tbody>
                 <?php if ($rows === []): ?>
                     <tr>
-                        <td colspan="13" class="text-center text-muted py-4">Nu există curse înregistrate.</td>
+                        <td colspan="14" class="text-center text-muted py-4">Nu există curse înregistrate.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($rows as $row): ?>
@@ -838,6 +845,8 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             }
                             $routeTitle = implode(' | ', $routeTitleParts);
                         }
+                        $dataIncarcare = trim((string) ($row['data_incarcare'] ?? ''));
+                        $dataIncarcareLabel = $dataIncarcare !== '' ? format_date_ro($dataIncarcare) : '-';
                         $dataInceput = (string) (($row['data_inceput'] ?? '') !== '' ? $row['data_inceput'] : ($row['data_cursa'] ?? ''));
                         $dataSfarsit = (string) (($row['data_sfarsit'] ?? '') !== '' ? $row['data_sfarsit'] : $dataInceput);
                         $oraInceputRaw = trim((string) ($row['ora_inceput'] ?? ''));
@@ -1072,6 +1081,11 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             <td class="col-type">
                                 <div class="cell-content">
                                     <span class="badge rounded-pill dispatcher-transport-badge transport-badge transport-cell <?= e($transportBadgeClass) ?>"><?= e((string) $transportLabel) ?></span>
+                                </div>
+                            </td>
+                            <td class="col-loading-date text-center-cell">
+                                <div class="cell-content center">
+                                    <span class="dispatcher-cell-text dispatcher-cell-nowrap"><?= e($dataIncarcareLabel) ?></span>
                                 </div>
                             </td>
                             <td class="col-interval">

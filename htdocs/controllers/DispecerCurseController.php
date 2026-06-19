@@ -2965,6 +2965,7 @@ class DispecerCurseController
             'vehicle_id' => '',
             'driver_id' => '',
             'tip_transport' => '',
+            'data_incarcare' => '',
             'data_inceput' => date('Y-m-d'),
             'data_sfarsit' => date('Y-m-d'),
             'ora_inceput' => '',
@@ -3328,6 +3329,11 @@ class DispecerCurseController
         $isDistributionTransport = $this->isDistributionTransportType($transportType);
         $isDistributionWithKmTransport = $this->isDistributionWithKmTransportType($transportType);
         $isCompressorTransport = $transportType === 'compresor';
+
+        $loadingDate = trim((string) ($input['data_incarcare'] ?? ''));
+        if ($loadingDate !== '' && !$this->isValidDate($loadingDate)) {
+            $errors['data_incarcare'] = 'Data de incarcare este invalida.';
+        }
 
         $startDate = trim((string) ($input['data_inceput'] ?? ($input['data_cursa'] ?? '')));
         if (!$this->isValidDate($startDate)) {
@@ -4008,6 +4014,7 @@ class DispecerCurseController
             'vehicle_id' => $vehicleId > 0 ? (string) $vehicleId : '',
             'driver_id' => $driverId !== null && $driverId > 0 ? (string) $driverId : '',
             'tip_transport' => $transportType,
+            'data_incarcare' => $loadingDate,
             'data_inceput' => $startDate,
             'data_sfarsit' => $endDate,
             'ora_inceput' => $startTimeRaw,
@@ -4046,6 +4053,7 @@ class DispecerCurseController
             'driver_id' => $driverId,
             'tip_transport' => $transportType,
             'data_cursa' => $startDate,
+            'data_incarcare' => $loadingDate !== '' ? $loadingDate : null,
             'data_inceput' => $startDate,
             'data_sfarsit' => $endDate,
             'ora_inceput' => $startTime,
@@ -5854,6 +5862,7 @@ class DispecerCurseController
             || str_contains($message, 'pret_tona_aspirata_lichida')
             || str_contains($message, 'pret_tona_aspirata_gazoasa')
             || str_contains($message, 'beneficiar_id')
+            || str_contains($message, 'data_incarcare')
             || str_contains($message, 'loc_incarcare_id')
             || str_contains($message, 'loc_plecare')
             || str_contains($message, 'loc_aspirare')
@@ -5884,7 +5893,7 @@ class DispecerCurseController
             || str_contains($message, 'cost_km_mixt')
             || str_contains($message, 'cost_km_compresor')
             || str_contains($message, 'tarif')) {
-            return 'Structura bazei de date pentru Dispecer curse nu este actualizata. Ruleaza scripturile database/update_dispecer_curse_module.sql, database/update_dispecer_locuri_tarif.sql, database/update_dispecer_beneficiar_compresor.sql, database/update_dispecer_vehicle_default_assignments.sql, database/update_dispecer_curse_capacitate_transport.sql, database/update_dispecer_primar_routes.sql, database/update_dispecer_curse_cantitate_prelevata.sql, database/update_dispecer_curse_driver_id.sql, database/update_dispecer_curse_schedule.sql, database/update_dispecer_curse_ore_functionare.sql, database/update_dispecer_compresor_aspirare_split.sql, database/update_dispecer_compresor_locatii_text.sql, database/update_dispecer_distribution_route_km.sql si database/update_dispecer_curse_cost_km.sql, apoi incearca din nou.';
+            return 'Structura bazei de date pentru Dispecer curse nu este actualizata. Ruleaza scripturile database/update_dispecer_curse_module.sql, database/update_dispecer_locuri_tarif.sql, database/update_dispecer_beneficiar_compresor.sql, database/update_dispecer_vehicle_default_assignments.sql, database/update_dispecer_curse_capacitate_transport.sql, database/update_dispecer_primar_routes.sql, database/update_dispecer_curse_cantitate_prelevata.sql, database/update_dispecer_curse_driver_id.sql, database/update_dispecer_curse_schedule.sql, database/update_dispecer_curse_data_incarcare.sql, database/update_dispecer_curse_ore_functionare.sql, database/update_dispecer_compresor_aspirare_split.sql, database/update_dispecer_compresor_locatii_text.sql, database/update_dispecer_distribution_route_km.sql si database/update_dispecer_curse_cost_km.sql, apoi incearca din nou.';
         }
 
         return 'A aparut o eroare la salvare. Te rugam sa reincerci.';

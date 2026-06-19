@@ -257,6 +257,11 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                 </div>
 
                 <div class="col-12 col-md-6 dispatcher-schedule-field">
+                    <label class="form-label" for="edit_race_data_incarcare">Data incarcare</label>
+                    <input type="date" class="form-control <?= isset($raceFormErrors['data_incarcare']) ? 'is-invalid' : '' ?>" id="edit_race_data_incarcare" name="data_incarcare" value="<?= e((string) ($raceFormData['data_incarcare'] ?? '')) ?>">
+                    <?php if (isset($raceFormErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_incarcare']) ?></div><?php endif; ?>
+                </div>
+                <div class="col-12 col-md-6 dispatcher-schedule-field">
                     <label class="form-label" for="edit_race_data_inceput">Data inceput <span class="text-danger">*</span></label>
                     <input type="date" class="form-control <?= isset($raceFormErrors['data_inceput']) ? 'is-invalid' : '' ?>" id="edit_race_data_inceput" name="data_inceput" value="<?= e((string) ($raceFormData['data_inceput'] ?? ($raceFormData['data_cursa'] ?? ''))) ?>" required>
                     <?php if (isset($raceFormErrors['data_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_inceput']) ?></div><?php endif; ?>

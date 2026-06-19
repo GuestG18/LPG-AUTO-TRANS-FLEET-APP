@@ -2551,7 +2551,7 @@ body {
     }
 
     .dispatcher-race-form .row.g-3 > [class*='col-md-6'].dispatcher-schedule-field {
-        width: 25%;
+        width: 20%;
     }
 
     .dispatcher-race-form.dispatcher-primary-layout .row.g-3 > [class*='col-md-6'].dispatcher-primary-grid-field {
@@ -2857,6 +2857,12 @@ body {
     max-width: 175px;
 }
 
+.dispatcher-races-table .col-loading-date {
+    width: 130px;
+    min-width: 130px;
+    max-width: 130px;
+}
+
 .dispatcher-races-table th,
 .dispatcher-races-table td {
     vertical-align: middle;
@@ -2885,6 +2891,7 @@ body {
 }
 
 .table-dispecer .text-center-cell,
+.table-dispecer .col-loading-date,
 .table-dispecer .col-duration,
 .table-dispecer .col-diurna,
 .table-dispecer .col-actions,
@@ -2908,6 +2915,7 @@ body {
 }
 
 .table-dispecer thead th.col-duration,
+.table-dispecer thead th.col-loading-date,
 .table-dispecer thead th.col-diurna,
 .table-dispecer thead th.col-route,
 .table-dispecer thead th.col-actions,

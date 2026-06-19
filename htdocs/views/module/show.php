@@ -1000,19 +1000,51 @@ $vehicleTireContext = $vehicleTireContext ?? null;
                                 </td>
                                 <td class="text-end pe-3">
                                     <?php if ($tire !== null && isset($position['allocation_id']) && $position['allocation_id'] !== null): ?>
-                                        <form method="post" action="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'unmount_tire'])) ?>" class="d-inline-flex align-items-center gap-2">
-                                            <?= csrf_field() ?>
-                                            <input type="hidden" name="vehicle_id" value="<?= e((string) ((int) $record['id'])) ?>">
-                                            <input type="hidden" name="allocation_id" value="<?= e((string) ((int) $position['allocation_id'])) ?>">
-                                            <input type="hidden" name="unmount_date" value="<?= e($todayDate) ?>">
-                                            <select class="form-select form-select-sm" name="status_end">
-                                                <option value="spare">Rezerva</option>
-                                                <option value="removed">Scoasa din uz</option>
-                                                <option value="damaged">Deteriorata</option>
-                                                <option value="retreaded">Resapata</option>
-                                            </select>
-                                            <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur doresti demontarea anvelopei de pe aceasta pozitie?">Demonteaza</button>
-                                        </form>
+                                        <?php $vehicleTireId = (int) ($tire['id'] ?? 0); ?>
+                                        <div class="dropdown d-inline-block">
+                                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                                <i class="bi bi-three-dots"></i>
+                                            </button>
+                                            <ul class="dropdown-menu dropdown-menu-end text-start">
+                                                <li>
+                                                    <a class="dropdown-item" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock', 'q' => (string) ($tire['serial_number'] ?? '')])) ?>">
+                                                        <i class="bi bi-eye me-2"></i>Vezi anvelopa
+                                                    </a>
+                                                </li>
+                                                <li>
+                                                    <a class="dropdown-item" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock', 'q' => (string) ($tire['serial_number'] ?? '')])) ?>">
+                                                        <i class="bi bi-arrow-left-right me-2"></i>Muta anvelopa
+                                                    </a>
+                                                </li>
+                                                <?php foreach (['spare' => 'Muta in rezerva', 'damaged' => 'Marcheaza deteriorata', 'missing' => 'Marcheaza lipsa', 'removed' => 'Scoate din uz'] as $statusValue => $statusLabel): ?>
+                                                    <li>
+                                                        <form method="post" action="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'change_tire_status'])) ?>">
+                                                            <?= csrf_field() ?>
+                                                            <input type="hidden" name="vehicle_id" value="<?= e((string) ((int) $record['id'])) ?>">
+                                                            <input type="hidden" name="tire_id" value="<?= e((string) $vehicleTireId) ?>">
+                                                            <input type="hidden" name="status" value="<?= e($statusValue) ?>">
+                                                            <input type="hidden" name="reason" value="<?= e($statusLabel) ?>">
+                                                            <button type="submit" class="dropdown-item<?= $statusValue === 'missing' ? ' text-danger' : '' ?>">
+                                                                <?= e($statusLabel) ?>
+                                                            </button>
+                                                        </form>
+                                                    </li>
+                                                <?php endforeach; ?>
+                                                <li><hr class="dropdown-divider"></li>
+                                                <li>
+                                                    <form method="post" action="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'unmount_tire'])) ?>">
+                                                        <?= csrf_field() ?>
+                                                        <input type="hidden" name="vehicle_id" value="<?= e((string) ((int) $record['id'])) ?>">
+                                                        <input type="hidden" name="allocation_id" value="<?= e((string) ((int) $position['allocation_id'])) ?>">
+                                                        <input type="hidden" name="unmount_date" value="<?= e($todayDate) ?>">
+                                                        <input type="hidden" name="status_end" value="spare">
+                                                        <button type="submit" class="dropdown-item text-danger" data-confirm="Sigur doresti demontarea anvelopei de pe aceasta pozitie?">
+                                                            <i class="bi bi-box-arrow-down me-2"></i>Demonteaza
+                                                        </button>
+                                                    </form>
+                                                </li>
+                                            </ul>
+                                        </div>
                                     <?php else: ?>
                                         <span class="text-muted">-</span>
                                     <?php endif; ?>
