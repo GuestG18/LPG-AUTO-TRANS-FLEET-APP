@@ -5,6 +5,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS curse_cheltuieli_documente;
 DROP TABLE IF EXISTS curse_cheltuieli;
 DROP TABLE IF EXISTS curse_dispecer;
+DROP TABLE IF EXISTS concedii_reguli_disponibilitate;
 DROP TABLE IF EXISTS concedii;
 DROP TABLE IF EXISTS configurare_rute_primar;
 DROP TABLE IF EXISTS configurare_rute_distributie;
@@ -28,12 +29,17 @@ DROP TABLE IF EXISTS inventar_dotari_reguli;
 DROP TABLE IF EXISTS inventar_dotari_catalog;
 DROP TABLE IF EXISTS vehicle_authorizations;
 DROP TABLE IF EXISTS authorization_zones;
+DROP TABLE IF EXISTS mentenanta_grupe_componente;
+DROP TABLE IF EXISTS mentenanta_piese_utilizari;
+DROP TABLE IF EXISTS mentenanta_interventii_programate;
+DROP TABLE IF EXISTS mentenanta_piese;
 DROP TABLE IF EXISTS mentenanta;
 DROP TABLE IF EXISTS alimentari;
 DROP TABLE IF EXISTS anvelope_alocari;
 DROP TABLE IF EXISTS vehicule_anvelope_pozitii;
 DROP TABLE IF EXISTS anvelope;
 DROP TABLE IF EXISTS vehicule_cuplaje;
+DROP TABLE IF EXISTS soferi_vehicule;
 DROP TABLE IF EXISTS soferi;
 DROP TABLE IF EXISTS vehicule;
 DROP TABLE IF EXISTS login_email_codes;
@@ -244,6 +250,19 @@ CREATE TABLE soferi (
     CONSTRAINT fk_soferi_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE soferi_vehicule (
+    driver_id INT UNSIGNED NOT NULL,
+    vehicle_id INT UNSIGNED NOT NULL,
+    is_primary TINYINT(1) NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    PRIMARY KEY (driver_id, vehicle_id),
+    INDEX idx_soferi_vehicule_vehicle (vehicle_id),
+    INDEX idx_soferi_vehicule_driver_primary (driver_id, is_primary),
+    CONSTRAINT fk_soferi_vehicule_driver FOREIGN KEY (driver_id) REFERENCES soferi(id) ON DELETE CASCADE,
+    CONSTRAINT fk_soferi_vehicule_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE concedii (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     driver_id INT UNSIGNED NOT NULL,
@@ -265,21 +284,48 @@ CREATE TABLE concedii (
     CONSTRAINT fk_concedii_created_by FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE concedii_reguli_disponibilitate (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    garaj VARCHAR(120) NOT NULL,
+    categorie_vehicul ENUM('camion', 'ansamblu') NOT NULL,
+    capacitate_transport DECIMAL(10,2) NULL,
+    min_soferi_disponibili SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+    activ TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_concedii_reguli_lookup (activ, garaj, categorie_vehicul, capacitate_transport),
+    INDEX idx_concedii_reguli_scope (garaj, categorie_vehicul)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE alimentari (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    tip_inregistrare ENUM('alimentare','t0') NOT NULL DEFAULT 'alimentare',
     vehicle_id INT UNSIGNED NOT NULL,
     driver_id INT UNSIGNED NULL,
+    cursa_id INT UNSIGNED NULL,
     data_alimentare DATE NOT NULL,
     litri DECIMAL(8,2) NOT NULL,
+    pret_litru DECIMAL(10,2) NULL,
     cost_total DECIMAL(10,2) NOT NULL,
+    furnizor VARCHAR(190) NULL,
     km_bord INT UNSIGNED NOT NULL,
     km_alimentare INT UNSIGNED NOT NULL,
+    fuel_state DECIMAL(10,2) NULL,
+    full_flag TINYINT(1) NOT NULL DEFAULT 0,
+    t0_manual TINYINT(1) NOT NULL DEFAULT 0,
     observatii TEXT NULL,
+    factura_original VARCHAR(255) NULL,
+    factura_stocata VARCHAR(255) NULL,
+    factura_mime_type VARCHAR(150) NULL,
+    factura_file_size INT UNSIGNED NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_alimentari_vehicle (vehicle_id),
     INDEX idx_alimentari_driver (driver_id),
     INDEX idx_alimentari_data (data_alimentare),
+    INDEX idx_alimentari_tip_data (tip_inregistrare, data_alimentare),
+    INDEX idx_alimentari_cursa (cursa_id),
+    INDEX idx_alimentari_furnizor (furnizor),
     CONSTRAINT fk_alimentari_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE,
     CONSTRAINT fk_alimentari_driver FOREIGN KEY (driver_id) REFERENCES soferi(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -288,10 +334,20 @@ CREATE TABLE mentenanta (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     vehicle_id INT UNSIGNED NOT NULL,
     tip_interventie VARCHAR(150) NOT NULL,
+    record_type ENUM('intretinere','reparatie') NOT NULL DEFAULT 'intretinere',
+    centru_cost VARCHAR(80) NULL,
+    descriere TEXT NULL,
+    status_interventie ENUM('in_asteptare','in_lucru','finalizata','anulata') NOT NULL DEFAULT 'finalizata',
     data_interventie DATE NOT NULL,
+    km_interventie INT UNSIGNED NULL,
     cost DECIMAL(10,2) NOT NULL,
+    cost_manopera DECIMAL(12,2) NOT NULL DEFAULT 0,
+    cost_piese DECIMAL(12,2) NOT NULL DEFAULT 0,
+    zile_imobilizare DECIMAL(6,2) NOT NULL DEFAULT 0,
+    source_intervention_id INT UNSIGNED NULL,
     atelier VARCHAR(120) NULL,
     furnizor_piesa VARCHAR(120) NULL,
+    piese_utilizate TEXT NULL,
     fisier_original VARCHAR(255) NULL,
     fisier_stocat VARCHAR(255) NULL,
     observatii TEXT NULL,
@@ -392,6 +448,115 @@ CREATE TABLE IF NOT EXISTS inventar_dotari_catalog (
     INDEX idx_inventar_catalog_categorie (categorie),
     INDEX idx_inventar_catalog_equipment_type (equipment_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE mentenanta_interventii_programate (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    vehicle_id INT UNSIGNED NOT NULL,
+    tip_interventie ENUM('intretinere','reparatie') NOT NULL,
+    data_programata DATE NOT NULL,
+    cost_estimat DECIMAL(12,2) NOT NULL DEFAULT 0,
+    furnizor VARCHAR(190) NULL,
+    driver_id INT UNSIGNED NULL,
+    client VARCHAR(190) NULL,
+    centru_cost VARCHAR(80) NULL,
+    descriere TEXT NOT NULL,
+    status_interventie ENUM('programata','confirmata','in_lucru','finalizata','anulata') NOT NULL DEFAULT 'programata',
+    converted_maintenance_id INT UNSIGNED NULL,
+    created_by INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_ment_prog_vehicle (vehicle_id),
+    INDEX idx_ment_prog_date (data_programata),
+    INDEX idx_ment_prog_status (status_interventie),
+    CONSTRAINT fk_ment_prog_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ment_prog_driver FOREIGN KEY (driver_id) REFERENCES soferi(id) ON DELETE SET NULL,
+    CONSTRAINT fk_ment_prog_record FOREIGN KEY (converted_maintenance_id) REFERENCES mentenanta(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE mentenanta_piese (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    cod_piesa VARCHAR(80) NOT NULL,
+    denumire VARCHAR(190) NOT NULL,
+    categorie VARCHAR(100) NOT NULL,
+    producator VARCHAR(120) NULL,
+    cod_oem VARCHAR(120) NULL,
+    unitate_masura VARCHAR(30) NOT NULL DEFAULT 'buc',
+    descriere TEXT NULL,
+    mod_utilizare ENUM('stoc','direct') NOT NULL DEFAULT 'stoc',
+    stoc_curent DECIMAL(12,2) NOT NULL DEFAULT 0,
+    stoc_minim DECIMAL(12,2) NOT NULL DEFAULT 0,
+    pret_achizitie DECIMAL(12,2) NOT NULL DEFAULT 0,
+    furnizor VARCHAR(190) NULL,
+    locatie_depozit VARCHAR(190) NULL,
+    tipuri_vehicul TEXT NULL,
+    modele_vehicul TEXT NULL,
+    sisteme_componente TEXT NULL,
+    pentru_mentenanta TINYINT(1) NOT NULL DEFAULT 0,
+    interval_km INT UNSIGNED NULL,
+    interval_luni SMALLINT UNSIGNED NULL,
+    avertizare_km INT UNSIGNED NULL,
+    avertizare_zile SMALLINT UNSIGNED NULL,
+    factura_original VARCHAR(255) NULL,
+    factura_stocata VARCHAR(255) NULL,
+    fisa_original VARCHAR(255) NULL,
+    fisa_stocata VARCHAR(255) NULL,
+    imagine_original VARCHAR(255) NULL,
+    imagine_stocata VARCHAR(255) NULL,
+    status_piesa ENUM('activa','inactiva') NOT NULL DEFAULT 'activa',
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_ment_piese_cod (cod_piesa),
+    INDEX idx_ment_piese_categorie (categorie),
+    INDEX idx_ment_piese_status (status_piesa)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE mentenanta_piese_utilizari (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    part_id INT UNSIGNED NOT NULL,
+    maintenance_id INT UNSIGNED NULL,
+    scheduled_intervention_id INT UNSIGNED NULL,
+    vehicle_id INT UNSIGNED NOT NULL,
+    cantitate DECIMAL(12,2) NOT NULL DEFAULT 1,
+    cost_unitar DECIMAL(12,2) NOT NULL DEFAULT 0,
+    data_montare DATE NOT NULL,
+    km_montare INT UNSIGNED NULL,
+    montata_de VARCHAR(190) NULL,
+    observatii TEXT NULL,
+    direct_mount TINYINT(1) NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL,
+    INDEX idx_ment_usage_part (part_id),
+    INDEX idx_ment_usage_vehicle (vehicle_id),
+    INDEX idx_ment_usage_maintenance (maintenance_id),
+    CONSTRAINT fk_ment_usage_part FOREIGN KEY (part_id) REFERENCES mentenanta_piese(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ment_usage_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE,
+    CONSTRAINT fk_ment_usage_maintenance FOREIGN KEY (maintenance_id) REFERENCES mentenanta(id) ON DELETE SET NULL,
+    CONSTRAINT fk_ment_usage_schedule FOREIGN KEY (scheduled_intervention_id) REFERENCES mentenanta_interventii_programate(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE mentenanta_grupe_componente (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    vehicle_type VARCHAR(40) NOT NULL DEFAULT 'universal',
+    nume VARCHAR(120) NOT NULL,
+    componente TEXT NULL,
+    activ TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_ment_grupe_vehicle_name (vehicle_type, nume),
+    INDEX idx_ment_grupe_vehicle_active (vehicle_type, activ)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO mentenanta_grupe_componente (vehicle_type, nume, componente, activ, created_at, updated_at) VALUES
+('universal', 'Motor', NULL, 1, NOW(), NOW()),
+('universal', 'Transmisie', NULL, 1, NOW(), NOW()),
+('universal', 'Sistem franare', NULL, 1, NOW(), NOW()),
+('universal', 'Sistem electric', NULL, 1, NOW(), NOW()),
+('universal', 'Suspensie', NULL, 1, NOW(), NOW()),
+('universal', 'Sistem pneumatic', NULL, 1, NOW(), NOW()),
+('universal', 'Sistem hidraulic', NULL, 1, NOW(), NOW()),
+('universal', 'Sistem racire', NULL, 1, NOW(), NOW()),
+('universal', 'Caroserie', NULL, 1, NOW(), NOW()),
+('universal', 'Consumabile', NULL, 1, NOW(), NOW()),
+('universal', 'Altele', NULL, 1, NOW(), NOW());
 
 CREATE TABLE IF NOT EXISTS inventar_dotari_reguli (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -676,6 +841,10 @@ CREATE TABLE configurare_rute_primar (
     loc_incarcare_id INT UNSIGNED NOT NULL,
     zona_distributie_id INT UNSIGNED NOT NULL,
     km_tarifare INT UNSIGNED NOT NULL DEFAULT 0,
+    cost_cursa DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    aplica_cost_cursa TINYINT(1) NOT NULL DEFAULT 0,
+    vehicle_ids TEXT NULL,
+    km_agreati_manual TINYINT(1) NOT NULL DEFAULT 0,
     activ TINYINT(1) NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
@@ -810,6 +979,11 @@ INSERT INTO soferi (nume, telefon, salariu, vehicle_id, permis_expira_la, status
 ('Ionescu Mihai', '0722000001', 5200.00, 1, DATE_ADD(CURDATE(), INTERVAL 300 DAY), 'activ', 'Disponibil full-time', NOW(), NOW()),
 ('Popescu Andrei', '0722000002', 5000.00, 2, DATE_ADD(CURDATE(), INTERVAL 120 DAY), 'activ', 'Route urban', NOW(), NOW()),
 ('Marin Elena', '0722000003', 4700.00, NULL, DATE_ADD(CURDATE(), INTERVAL 45 DAY), 'inactiv', 'Concediu medical', NOW(), NOW());
+
+INSERT INTO soferi_vehicule (driver_id, vehicle_id, is_primary, created_at, updated_at)
+SELECT id, vehicle_id, 1, COALESCE(created_at, NOW()), COALESCE(updated_at, NOW())
+FROM soferi
+WHERE vehicle_id IS NOT NULL;
 
 INSERT INTO concedii (
     driver_id,

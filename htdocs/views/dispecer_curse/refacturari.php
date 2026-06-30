@@ -2,14 +2,16 @@
 $selectedRaceIdValue = (int) ($selectedRaceId ?? 0);
 $selectedRaceData = is_array($selectedRace ?? null) ? $selectedRace : null;
 $historyRows = is_array($refacturareRows ?? null) ? $refacturareRows : [];
+$expenseEntryTypes = is_array($expenseEntryTypes ?? null) ? $expenseEntryTypes : (array) ($expenseTypes ?? []);
+unset($expenseEntryTypes['motorina']);
 $historyCount = count($historyRows);
 $historyTotal = 0.0;
 foreach ($historyRows as $historyRow) {
     $historyTotal += (float) ($historyRow['refacturare_suma'] ?? 0);
 }
-$selectedRefacturareType = (string) ($formData['refacturare_tip_cheltuiala'] ?? 'motorina');
-if (!isset($expenseTypes[$selectedRefacturareType])) {
-    $selectedRefacturareType = 'motorina';
+$selectedRefacturareType = (string) ($formData['refacturare_tip_cheltuiala'] ?? '');
+if (!isset($expenseEntryTypes[$selectedRefacturareType])) {
+    $selectedRefacturareType = '';
 }
 $showRefacturareRoadTaxDetails = $selectedRefacturareType === 'taxe_drum';
 
@@ -137,12 +139,14 @@ $buildRaceLabel = static function (array $raceRow, array $transportTypes): strin
                 <div class="col-12 col-md-4">
                     <label class="form-label" for="refacturare_tip_cheltuiala">Tip refacturare <span class="text-danger">*</span></label>
                     <select class="form-select <?= isset($formErrors['refacturare_tip_cheltuiala']) ? 'is-invalid' : '' ?>" id="refacturare_tip_cheltuiala" name="refacturare_tip_cheltuiala" required>
-                        <?php foreach ($expenseTypes as $typeValue => $typeLabel): ?>
+                        <option value="" <?= $selectedRefacturareType === '' ? 'selected' : '' ?>>-- Selecteaza tipul --</option>
+                        <?php foreach ($expenseEntryTypes as $typeValue => $typeLabel): ?>
                             <option value="<?= e((string) $typeValue) ?>" <?= $selectedRefacturareType === (string) $typeValue ? 'selected' : '' ?>>
                                 <?= e((string) $typeLabel) ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
+                    <div class="form-text">Motorina se introduce separat in modulul Alimentari.</div>
                     <?php if (isset($formErrors['refacturare_tip_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_tip_cheltuiala']) ?></div><?php endif; ?>
                 </div>
 

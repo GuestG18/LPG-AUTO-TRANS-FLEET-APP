@@ -737,6 +737,60 @@
         });
     }
 
+    function initializeAvailabilityRuleForm() {
+        var categorySelect = document.getElementById('availability_rule_category');
+        var capacitySelect = document.getElementById('availability_rule_capacity');
+
+        if (!(categorySelect instanceof HTMLSelectElement) || !(capacitySelect instanceof HTMLSelectElement)) {
+            return;
+        }
+
+        var initialOptions = Array.prototype.map.call(capacitySelect.options, function (option) {
+            return {
+                value: option.value,
+                text: option.textContent || '',
+                category: option.getAttribute('data-category') || '',
+                selected: option.selected
+            };
+        });
+
+        function renderCapacityOptions() {
+            var selectedCategory = categorySelect.value || '';
+            var currentValue = capacitySelect.value;
+            var fragment = document.createDocumentFragment();
+            var currentStillAvailable = currentValue === '';
+
+            initialOptions.forEach(function (item) {
+                var isPlaceholder = item.value === '';
+                var belongsToCategory = item.category === '' || item.category === selectedCategory;
+                if (!isPlaceholder && !belongsToCategory) {
+                    return;
+                }
+
+                var option = document.createElement('option');
+                option.value = item.value;
+                option.textContent = item.text;
+                if (item.category !== '') {
+                    option.setAttribute('data-category', item.category);
+                }
+                option.selected = item.value === currentValue || (currentValue === '' && isPlaceholder);
+                if (option.selected) {
+                    currentStillAvailable = true;
+                }
+                fragment.appendChild(option);
+            });
+
+            capacitySelect.innerHTML = '';
+            capacitySelect.appendChild(fragment);
+            if (!currentStillAvailable) {
+                capacitySelect.value = '';
+            }
+        }
+
+        categorySelect.addEventListener('change', renderCapacityOptions);
+        renderCapacityOptions();
+    }
+
     function initializeCalendar() {
         var root = document.getElementById('leave-calendar-root');
         var skeleton = document.querySelector('[data-role="calendar-skeleton"]');
@@ -832,6 +886,7 @@
         initializeSelectSearch();
         initializeCalendarControls();
         initializeFormValidation();
+        initializeAvailabilityRuleForm();
         initializeCalendar();
         initializeTableViewButtons();
         initializeDeleteModal();

@@ -142,6 +142,15 @@ if ($formDurationMinutesRaw !== null && $formDurationMinutesRaw !== '' && is_num
 $formDurationPreviewText = $formDurationMinutes !== null
     ? 'Durata cursa calculata: ' . $formatDurationLabel($formDurationMinutes) . ' (' . $formDurationMinutes . ' min)'
     : 'Durata cursa se calculeaza automat dupa ora inceput/sfarsit.';
+$formatRaceDateForDisplay = static function (string $value): string {
+    $value = trim($value);
+    $date = DateTime::createFromFormat('!Y-m-d', $value);
+    if ($date === false || $date->format('Y-m-d') !== $value) {
+        return $value;
+    }
+
+    return $date->format('d/m/Y');
+};
 $openRacesCount = (int) ($openRacesOverview['count'] ?? 0);
 $openRacesRows = is_array($openRacesOverview['rows'] ?? null) ? $openRacesOverview['rows'] : [];
 $openRacesMissingEndTimeCount = (int) ($openRacesOverview['missing_end_time_count'] ?? 0);
@@ -358,12 +367,22 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
 
                         <div class="col-12 col-md-6 dispatcher-schedule-field">
                             <label class="form-label" for="race_data_incarcare">Data incarcare</label>
-                            <input type="date" class="form-control <?= isset($formErrors['data_incarcare']) ? 'is-invalid' : '' ?>" id="race_data_incarcare" name="data_incarcare" value="<?= e((string) ($formData['data_incarcare'] ?? '')) ?>">
+                            <?php $loadingDateValue = (string) ($formData['data_incarcare'] ?? ''); ?>
+                            <div class="input-group fleet-date-field">
+                                <input type="text" class="form-control js-date-display-input <?= isset($formErrors['data_incarcare']) ? 'is-invalid' : '' ?>" id="race_data_incarcare" name="data_incarcare" value="<?= e($formatRaceDateForDisplay($loadingDateValue)) ?>" placeholder="dd/mm/yyyy" inputmode="numeric" maxlength="10" autocomplete="off" data-date-picker-id="race_data_incarcare_picker">
+                                <button type="button" class="btn btn-outline-secondary js-date-picker-button" data-date-picker-target="race_data_incarcare_picker" aria-label="Deschide calendarul pentru data incarcarii"><i class="bi bi-calendar3" aria-hidden="true"></i></button>
+                                <input type="date" id="race_data_incarcare_picker" class="fleet-date-picker-native" value="<?= e($loadingDateValue) ?>" tabindex="-1" aria-hidden="true">
+                            </div>
                             <?php if (isset($formErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_incarcare']) ?></div><?php endif; ?>
                         </div>
                         <div class="col-12 col-md-6 dispatcher-schedule-field">
                             <label class="form-label" for="race_data_inceput">Data inceput <span class="text-danger">*</span></label>
-                            <input type="date" class="form-control <?= isset($formErrors['data_inceput']) ? 'is-invalid' : '' ?>" id="race_data_inceput" name="data_inceput" value="<?= e((string) ($formData['data_inceput'] ?? ($formData['data_cursa'] ?? ''))) ?>" required>
+                            <?php $startDateValue = (string) ($formData['data_inceput'] ?? ($formData['data_cursa'] ?? '')); ?>
+                            <div class="input-group fleet-date-field">
+                                <input type="text" class="form-control js-date-display-input <?= isset($formErrors['data_inceput']) ? 'is-invalid' : '' ?>" id="race_data_inceput" name="data_inceput" value="<?= e($formatRaceDateForDisplay($startDateValue)) ?>" placeholder="dd/mm/yyyy" inputmode="numeric" maxlength="10" autocomplete="off" data-date-picker-id="race_data_inceput_picker" required>
+                                <button type="button" class="btn btn-outline-secondary js-date-picker-button" data-date-picker-target="race_data_inceput_picker" aria-label="Deschide calendarul pentru data de inceput"><i class="bi bi-calendar3" aria-hidden="true"></i></button>
+                                <input type="date" id="race_data_inceput_picker" class="fleet-date-picker-native" value="<?= e($startDateValue) ?>" tabindex="-1" aria-hidden="true">
+                            </div>
                             <?php if (isset($formErrors['data_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_inceput']) ?></div><?php endif; ?>
                         </div>
 
@@ -391,7 +410,12 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
 
                         <div class="col-12 col-md-6 dispatcher-schedule-field">
                             <label class="form-label" for="race_data_sfarsit">Data sfarsit <span class="text-danger">*</span></label>
-                            <input type="date" class="form-control <?= isset($formErrors['data_sfarsit']) ? 'is-invalid' : '' ?>" id="race_data_sfarsit" name="data_sfarsit" value="<?= e((string) ($formData['data_sfarsit'] ?? ($formData['data_cursa'] ?? ''))) ?>" required>
+                            <?php $endDateValue = (string) ($formData['data_sfarsit'] ?? ($formData['data_cursa'] ?? '')); ?>
+                            <div class="input-group fleet-date-field">
+                                <input type="text" class="form-control js-date-display-input <?= isset($formErrors['data_sfarsit']) ? 'is-invalid' : '' ?>" id="race_data_sfarsit" name="data_sfarsit" value="<?= e($formatRaceDateForDisplay($endDateValue)) ?>" placeholder="dd/mm/yyyy" inputmode="numeric" maxlength="10" autocomplete="off" data-date-picker-id="race_data_sfarsit_picker" required>
+                                <button type="button" class="btn btn-outline-secondary js-date-picker-button" data-date-picker-target="race_data_sfarsit_picker" aria-label="Deschide calendarul pentru data de sfarsit"><i class="bi bi-calendar3" aria-hidden="true"></i></button>
+                                <input type="date" id="race_data_sfarsit_picker" class="fleet-date-picker-native" value="<?= e($endDateValue) ?>" tabindex="-1" aria-hidden="true">
+                            </div>
                             <?php if (isset($formErrors['data_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_sfarsit']) ?></div><?php endif; ?>
                         </div>
 
@@ -519,7 +543,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             </select>
                             <?php if (isset($formErrors['zona_distributie_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['zona_distributie_id']) ?></div><?php endif; ?>
                             <div class="form-text text-muted d-none dispatcher-hover-note" data-role="distributie-note-zone">
-                                Prioritate calcul: regula de ruta (Loc ? Zona), apoi regulile loc/zona, apoi fallback beneficiar. Distributie = Cantitate × Tariful activ; Primar+Distributie = Cantitate × Tariful activ + Km × Cost extra/km activ.
+                                Prioritate calcul: regula de ruta (Loc ? Zona), apoi regulile loc/zona, apoi fallback beneficiar. Distributie = Cantitate Ã— Tariful activ; Primar+Distributie = Cantitate Ã— Tariful activ + Km Ã— Cost extra/km activ.
                             </div>
                             <div class="form-text text-muted d-none dispatcher-hover-note" data-role="primar-note-zone">
                                 Pentru Primar km / Primar tone, selectia Loc ? Zona este filtrata din Setari Primar si se aplica bidirectional.

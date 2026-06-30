@@ -25,6 +25,11 @@ class ProgramareConcediiController
         'zi' => 'Zi',
     ];
 
+    private const CATEGORII_REGULI_DISPONIBILITATE = [
+        'camion' => 'Camion',
+        'ansamblu' => 'Ansamblu',
+    ];
+
     private const DEFAULT_STATUS = 'in_asteptare';
     private const AUTO_RECHECK_STATUS = 'in_asteptare_aprobare';
     private const ENFORCE_FUTURE_START_DATE = false;
@@ -51,6 +56,12 @@ class ProgramareConcediiController
                 return;
             case 'delete':
                 $this->deleteAction();
+                return;
+            case 'store_rule':
+                $this->storeAvailabilityRuleAction();
+                return;
+            case 'delete_rule':
+                $this->deleteAvailabilityRuleAction();
                 return;
             case 'update_status':
                 $this->updateStatusAction();
@@ -117,6 +128,7 @@ class ProgramareConcediiController
         }
 
         $formFlash = $this->consumeFormFlash();
+        $ruleFlash = $this->consumeRuleFlash();
         $formData = $this->defaultFormData();
         if (is_array($editingRecord)) {
             $formData = $this->mapRequestToFormData($editingRecord);
@@ -135,6 +147,8 @@ class ProgramareConcediiController
             $drivers = $this->model->getActiveDrivers();
             $stats = $this->model->getStatsSnapshot();
             $calendarEvents = $this->model->getCalendarEvents($eventsRangeStart, $eventsRangeEnd, $driverSearch);
+            $availabilityRules = $this->model->getAvailabilityRules();
+            $availabilityRuleOptions = $this->model->getAvailabilityRuleOptions();
         } catch (Throwable $exception) {
             error_log('[ProgramareConcediiController][index] ' . $exception->getMessage());
             flash_set(
@@ -157,6 +171,11 @@ class ProgramareConcediiController
                 'conflicts' => 0,
             ];
             $calendarEvents = [];
+            $availabilityRules = [];
+            $availabilityRuleOptions = [
+                'garages' => [],
+                'capacities' => [],
+            ];
         }
         $toastFlash = $this->consumeToastFlash();
 
@@ -190,6 +209,11 @@ class ProgramareConcediiController
             'drivers' => $drivers,
             'formData' => $formData,
             'formErrors' => $formFlash['errors'],
+            'availabilityRuleFormData' => $ruleFlash['old'] !== [] ? $ruleFlash['old'] : $this->defaultRuleFormData(),
+            'availabilityRuleFormErrors' => $ruleFlash['errors'],
+            'availabilityRules' => $availabilityRules,
+            'availabilityRuleOptions' => $availabilityRuleOptions,
+            'availabilityRuleCategories' => self::CATEGORII_REGULI_DISPONIBILITATE,
             'isEditing' => $editingRecord !== null,
             'editingId' => $editingRecord !== null ? (int) ($editingRecord['id'] ?? 0) : 0,
             'stats' => $stats,
@@ -345,6 +369,69 @@ class ProgramareConcediiController
         redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'cereri']));
     }
 
+    private function storeAvailabilityRuleAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'reguli']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'reguli']));
+
+        if (!is_admin()) {
+            flash_set('warning', 'Doar administratorii pot modifica regulile de disponibilitate.');
+            redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'reguli']));
+        }
+
+        [$data, $errors, $old] = $this->validateAvailabilityRuleInput($_POST);
+        if ($errors !== []) {
+            $this->setRuleFlash($old, $errors);
+            redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'reguli']));
+        }
+
+        try {
+            $this->model->saveAvailabilityRule($data);
+            $this->setToastFlash('success', 'Regula de disponibilitate a fost salvata.');
+            flash_set('success', 'Regula de disponibilitate a fost salvata.');
+        } catch (Throwable $exception) {
+            error_log('[ProgramareConcediiController][store_rule] ' . $exception->getMessage());
+            $this->setRuleFlash($old, []);
+            flash_set('danger', $this->buildPersistenceErrorMessage($exception));
+        }
+
+        redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'reguli']));
+    }
+
+    private function deleteAvailabilityRuleAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'reguli']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'reguli']));
+
+        if (!is_admin()) {
+            flash_set('warning', 'Doar administratorii pot sterge regulile de disponibilitate.');
+            redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'reguli']));
+        }
+
+        $id = (int) ($_POST['id'] ?? 0);
+        if ($id <= 0) {
+            flash_set('warning', 'ID regula invalid.');
+            redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'reguli']));
+        }
+
+        try {
+            $this->model->deleteAvailabilityRule($id);
+            $this->setToastFlash('success', 'Regula de disponibilitate a fost stearsa.');
+            flash_set('success', 'Regula de disponibilitate a fost stearsa.');
+        } catch (Throwable $exception) {
+            error_log('[ProgramareConcediiController][delete_rule] ' . $exception->getMessage());
+            flash_set('danger', $this->buildPersistenceErrorMessage($exception));
+        }
+
+        redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'reguli']));
+    }
+
     private function updateStatusAction(): void
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -376,6 +463,17 @@ class ProgramareConcediiController
             );
             if ($overlaps !== []) {
                 flash_set('danger', 'Nu poți aproba cererea: șoferul are deja un concediu aprobat pe aceeași perioadă.');
+                redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'aprobari']));
+            }
+
+            $violations = $this->model->getAvailabilityRuleViolations(
+                (int) ($existing['driver_id'] ?? 0),
+                (string) ($existing['data_inceput'] ?? ''),
+                (string) ($existing['data_sfarsit'] ?? ''),
+                $id
+            );
+            if ($violations !== []) {
+                flash_set('danger', $this->buildAvailabilityRuleMessage($violations));
                 redirect(build_query_url(['page' => 'programare_concedii', 'tab' => 'aprobari']));
             }
         }
@@ -612,6 +710,32 @@ class ProgramareConcediiController
             }
         }
 
+        $statusForAvailability = self::DEFAULT_STATUS;
+        if ($isUpdate) {
+            $requestedStatus = trim((string) ($input['status'] ?? ''));
+            $statusForAvailability = array_key_exists($requestedStatus, self::STATUSURI)
+                ? $requestedStatus
+                : self::DEFAULT_STATUS;
+        }
+
+        if (
+            $statusForAvailability !== 'respins'
+            && !isset($errors['driver_id'])
+            && !isset($errors['data_inceput'])
+            && !isset($errors['data_sfarsit'])
+        ) {
+            $violations = $this->model->getAvailabilityRuleViolations(
+                $driverId,
+                $dataInceput,
+                $dataSfarsit,
+                $excludeId
+            );
+            if ($violations !== []) {
+                $errors['data_inceput'] = $this->buildAvailabilityRuleMessage($violations);
+                $errors['data_sfarsit'] = 'Alege alta perioada sau ajusteaza regulile de disponibilitate.';
+            }
+        }
+
         if (mb_strlen($note) > 2000) {
             $errors['note'] = 'Notele nu pot depăși 2000 de caractere.';
         }
@@ -758,10 +882,131 @@ class ProgramareConcediiController
         ];
     }
 
+    private function defaultRuleFormData(): array
+    {
+        return [
+            'garaj' => '',
+            'categorie_vehicul' => 'camion',
+            'capacitate_transport' => '',
+            'min_soferi_disponibili' => '1',
+            'activ' => '1',
+        ];
+    }
+
+    private function validateAvailabilityRuleInput(array $input): array
+    {
+        $garage = trim((string) ($input['garaj'] ?? ''));
+        $category = trim((string) ($input['categorie_vehicul'] ?? ''));
+        $capacityRaw = trim((string) ($input['capacitate_transport'] ?? ''));
+        $minimum = (int) ($input['min_soferi_disponibili'] ?? 0);
+        $active = isset($input['activ']) ? '1' : '0';
+        $vehicleRuleOptions = $this->model->getAvailabilityRuleOptions();
+        $garageOptions = [];
+        foreach ((array) ($vehicleRuleOptions['garages'] ?? []) as $garageOption) {
+            $garageOptions[strtoupper(trim((string) $garageOption))] = (string) $garageOption;
+        }
+
+        $capacityOptionsByCategory = [];
+        foreach ((array) ($vehicleRuleOptions['capacities'] ?? []) as $capacityOption) {
+            $optionCategory = (string) ($capacityOption['categorie_vehicul'] ?? '');
+            $optionCapacity = $this->normalizeRuleCapacityInput((string) ($capacityOption['capacitate_transport'] ?? ''));
+            if ($optionCategory !== '' && $optionCapacity !== null) {
+                $capacityOptionsByCategory[$optionCategory][$optionCapacity] = true;
+            }
+        }
+
+        $errors = [];
+        if ($garage === '') {
+            $errors['garaj'] = 'Alege garajul sau locatia pentru regula.';
+        } elseif (mb_strlen($garage) > 120) {
+            $errors['garaj'] = 'Garajul sau locatia nu poate depasi 120 de caractere.';
+        } elseif (!isset($garageOptions[strtoupper($garage)])) {
+            $errors['garaj'] = 'Alege o locatie incarcata din Vehicule.';
+        } else {
+            $garage = $garageOptions[strtoupper($garage)];
+        }
+
+        if (!array_key_exists($category, self::CATEGORII_REGULI_DISPONIBILITATE)) {
+            $errors['categorie_vehicul'] = 'Selecteaza un tip de activitate valid.';
+        }
+
+        $capacity = null;
+        if ($capacityRaw !== '') {
+            $capacity = $this->normalizeRuleCapacityInput($capacityRaw);
+            if ($capacity === null) {
+                $errors['capacitate_transport'] = 'Capacitatea trebuie sa fie un numar pozitiv.';
+            } elseif (!isset($capacityOptionsByCategory[$category][$capacity])) {
+                $errors['capacitate_transport'] = 'Alege o capacitate incarcata din Vehicule pentru activitatea selectata.';
+            }
+        }
+
+        if ($minimum < 1) {
+            $errors['min_soferi_disponibili'] = 'Minimul de soferi disponibili trebuie sa fie cel putin 1.';
+        }
+
+        $old = [
+            'garaj' => $garage,
+            'categorie_vehicul' => $category,
+            'capacitate_transport' => $capacityRaw,
+            'min_soferi_disponibili' => (string) max(1, $minimum),
+            'activ' => $active,
+        ];
+
+        $data = [
+            'garaj' => $garage,
+            'categorie_vehicul' => $category,
+            'capacitate_transport' => $capacity,
+            'min_soferi_disponibili' => max(1, $minimum),
+            'activ' => $active === '1',
+        ];
+
+        return [$data, $errors, $old];
+    }
+
+    private function normalizeRuleCapacityInput(string $value): ?string
+    {
+        $normalized = str_replace(',', '.', trim($value));
+        if ($normalized === '' || !is_numeric($normalized)) {
+            return null;
+        }
+
+        $number = (float) $normalized;
+        if ($number <= 0) {
+            return null;
+        }
+
+        return number_format($number, 2, '.', '');
+    }
+
+    private function buildAvailabilityRuleMessage(array $violations): string
+    {
+        $first = $violations[0] ?? [];
+        $category = (string) ($first['categorie_vehicul'] ?? '');
+        $categoryLabel = self::CATEGORII_REGULI_DISPONIBILITATE[$category] ?? $category;
+        $capacity = (string) ($first['capacitate_transport'] ?? '');
+        $capacityLabel = $capacity !== '' ? ' / ' . rtrim(rtrim($capacity, '0'), '.') . ' t' : '';
+        $date = (string) ($first['date'] ?? '');
+        $garage = (string) ($first['garaj'] ?? '');
+        $available = (int) ($first['soferi_disponibili'] ?? 0);
+        $minimum = (int) ($first['min_soferi_disponibili'] ?? 1);
+
+        $message = 'Regula de disponibilitate blocheaza cererea: '
+            . $garage . ' / ' . $categoryLabel . $capacityLabel
+            . ' ramane cu ' . $available . ' soferi disponibili la data ' . $date
+            . ', sub minimul setat de ' . $minimum . '.';
+
+        $extra = count($violations) - 1;
+        if ($extra > 0) {
+            $message .= ' Mai exista ' . $extra . ' zi(le) cu aceeasi problema.';
+        }
+
+        return $message;
+    }
+
     private function normalizeTab(string $tab): string
     {
         $tab = strtolower(trim($tab));
-        if (in_array($tab, ['calendar', 'cereri', 'aprobari'], true)) {
+        if (in_array($tab, ['calendar', 'cereri', 'aprobari', 'reguli'], true)) {
             return $tab;
         }
 
@@ -887,6 +1132,32 @@ class ProgramareConcediiController
     {
         $flash = $_SESSION['_concedii_form_flash'] ?? null;
         unset($_SESSION['_concedii_form_flash']);
+
+        if (!is_array($flash)) {
+            return [
+                'old' => [],
+                'errors' => [],
+            ];
+        }
+
+        return [
+            'old' => is_array($flash['old'] ?? null) ? $flash['old'] : [],
+            'errors' => is_array($flash['errors'] ?? null) ? $flash['errors'] : [],
+        ];
+    }
+
+    private function setRuleFlash(array $old, array $errors): void
+    {
+        $_SESSION['_concedii_rule_flash'] = [
+            'old' => $old,
+            'errors' => $errors,
+        ];
+    }
+
+    private function consumeRuleFlash(): array
+    {
+        $flash = $_SESSION['_concedii_rule_flash'] ?? null;
+        unset($_SESSION['_concedii_rule_flash']);
 
         if (!is_array($flash)) {
             return [

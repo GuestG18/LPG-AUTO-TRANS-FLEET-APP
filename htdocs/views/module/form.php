@@ -259,8 +259,15 @@ document.addEventListener('DOMContentLoaded', function () {
         let hasVisibleSelectedDriver = false;
 
         driverOptions.forEach(function (option) {
-            const assignedVehicleId = (option.getAttribute('data-assigned-vehicle-id') || '').trim();
-            const visible = vehicleId !== '' && assignedVehicleId !== '' && assignedVehicleId === vehicleId;
+            const assignedVehicleIds = (option.getAttribute('data-assigned-vehicle-ids') || '')
+                .split(',')
+                .map(function (assignedVehicleId) {
+                    return assignedVehicleId.trim();
+                })
+                .filter(function (assignedVehicleId) {
+                    return assignedVehicleId !== '';
+                });
+            const visible = vehicleId !== '' && assignedVehicleIds.includes(vehicleId);
 
             option.hidden = !visible;
             option.disabled = !visible;
@@ -1097,6 +1104,56 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 <?php endif; ?>
 
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-role="module-form-multiselect"]').forEach(function (dropdownEl) {
+        const labelEl = dropdownEl.querySelector('.module-form-multiselect-label');
+        const checkboxEls = dropdownEl.querySelectorAll('.module-form-multiselect-input');
+
+        if (!(labelEl instanceof HTMLElement)) {
+            return;
+        }
+
+        const defaultLabel = labelEl.dataset.defaultLabel || '-- Selecteaza --';
+        const summarySingular = labelEl.dataset.summarySingular || 'optiune selectata';
+        const summaryPlural = labelEl.dataset.summaryPlural || 'optiuni selectate';
+
+        const refreshLabel = function () {
+            const selectedLabels = [];
+
+            checkboxEls.forEach(function (checkboxEl) {
+                if (!(checkboxEl instanceof HTMLInputElement) || !checkboxEl.checked) {
+                    return;
+                }
+
+                const optionLabel = checkboxEl.closest('label')?.querySelector('span')?.textContent?.trim();
+                if (optionLabel) {
+                    selectedLabels.push(optionLabel);
+                }
+            });
+
+            if (selectedLabels.length === 0) {
+                labelEl.textContent = defaultLabel;
+                labelEl.removeAttribute('title');
+                return;
+            }
+
+            const joinedLabels = selectedLabels.join(', ');
+            labelEl.textContent = selectedLabels.length === 1
+                ? selectedLabels[0]
+                : selectedLabels.length + ' ' + summaryPlural;
+            labelEl.setAttribute('title', joinedLabels);
+        };
+
+        checkboxEls.forEach(function (checkboxEl) {
+            checkboxEl.addEventListener('change', refreshLabel);
+        });
+
+        refreshLabel();
+    });
+});
+</script>
+
 <div class="card border-0 shadow-sm">
     <div class="card-body">
         <form method="post" action="<?= e($formAction) ?>" <?= $hasFileField ? 'enctype="multipart/form-data"' : '' ?> novalidate>
@@ -1162,6 +1219,67 @@ document.addEventListener('DOMContentLoaded', function () {
                                 <?= $placeholder ? 'placeholder="' . e((string) $placeholder) . '"' : '' ?>
                             ><?= e((string) $value) ?></textarea>
 
+                        <?php elseif ($type === 'multiselect'): ?>
+                            <?php
+                            $selectedValues = is_array($value) ? $value : (trim((string) $value) === '' ? [] : [(string) $value]);
+                            $selectedMap = [];
+                            foreach ($selectedValues as $selectedValue) {
+                                if (is_scalar($selectedValue)) {
+                                    $selectedMap[(string) $selectedValue] = true;
+                                }
+                            }
+                            $multiselectOptions = $selectOptions[$field] ?? [];
+                            $selectedLabels = [];
+                            foreach ($multiselectOptions as $optionValue => $optionLabel) {
+                                if (isset($selectedMap[(string) $optionValue])) {
+                                    $selectedLabels[] = (string) $optionLabel;
+                                }
+                            }
+                            $summarySingular = (string) ($meta['summary_singular'] ?? 'optiune selectata');
+                            $summaryPlural = (string) ($meta['summary_plural'] ?? 'optiuni selectate');
+                            $defaultMultiselectLabel = (string) ($placeholder ?? '-- Selecteaza --');
+                            if (count($selectedLabels) === 1) {
+                                $buttonLabel = $selectedLabels[0];
+                            } elseif (count($selectedLabels) > 1) {
+                                $buttonLabel = count($selectedLabels) . ' ' . $summaryPlural;
+                            } else {
+                                $buttonLabel = $defaultMultiselectLabel;
+                            }
+                            ?>
+                            <div class="dropdown vehicle-multiselect-dropdown" data-role="module-form-multiselect">
+                                <button
+                                    class="btn btn-outline-secondary dropdown-toggle w-100 text-start vehicle-multiselect-toggle <?= $error ? 'is-invalid' : '' ?>"
+                                    type="button"
+                                    id="<?= e($id) ?>_toggle"
+                                    data-bs-toggle="dropdown"
+                                    data-bs-auto-close="outside"
+                                    aria-expanded="false"
+                                >
+                                    <span
+                                        class="vehicle-multiselect-label module-form-multiselect-label"
+                                        data-default-label="<?= e($defaultMultiselectLabel) ?>"
+                                        data-summary-singular="<?= e($summarySingular) ?>"
+                                        data-summary-plural="<?= e($summaryPlural) ?>"
+                                    ><?= e($buttonLabel) ?></span>
+                                </button>
+                                <div class="dropdown-menu w-100 p-2 vehicle-multiselect-menu" aria-labelledby="<?= e($id) ?>_toggle">
+                                    <?php foreach ($multiselectOptions as $optionValue => $optionLabel): ?>
+                                        <?php $checkboxId = $id . '_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', (string) $optionValue); ?>
+                                        <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option" for="<?= e($checkboxId) ?>">
+                                            <input
+                                                class="form-check-input m-0 module-form-multiselect-input"
+                                                type="checkbox"
+                                                id="<?= e($checkboxId) ?>"
+                                                name="<?= e($field) ?>[]"
+                                                value="<?= e((string) $optionValue) ?>"
+                                                <?= isset($selectedMap[(string) $optionValue]) ? 'checked' : '' ?>
+                                            >
+                                            <span><?= e((string) $optionLabel) ?></span>
+                                        </label>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+
                         <?php elseif ($type === 'select'): ?>
                             <select
                                 id="<?= e($id) ?>"
@@ -1179,9 +1297,14 @@ document.addEventListener('DOMContentLoaded', function () {
                                         }
                                     }
                                     if ($moduleKey === 'alimentari' && $field === 'driver_id') {
-                                        $assignedVehicleId = $driverVehicleById[(string) $optionValue] ?? null;
-                                        if ($assignedVehicleId !== null && is_numeric((string) $assignedVehicleId)) {
-                                            $optionExtraAttributes = ' data-assigned-vehicle-id="' . e((string) max(0, (int) $assignedVehicleId)) . '"';
+                                        $assignedVehicleIds = $driverVehicleById[(string) $optionValue] ?? [];
+                                        if (!is_array($assignedVehicleIds)) {
+                                            $assignedVehicleIds = [$assignedVehicleIds];
+                                        }
+
+                                        $assignedVehicleIds = array_values(array_filter(array_map('intval', $assignedVehicleIds), static fn(int $vehicleId): bool => $vehicleId > 0));
+                                        if ($assignedVehicleIds !== []) {
+                                            $optionExtraAttributes = ' data-assigned-vehicle-ids="' . e(implode(',', $assignedVehicleIds)) . '"';
                                         }
                                     }
                                     ?>

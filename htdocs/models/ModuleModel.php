@@ -3,6 +3,12 @@ declare(strict_types=1);
 
 class ModuleModel extends BaseModel
 {
+    public function __construct(PDO $db)
+    {
+        parent::__construct($db);
+        $this->ensureDriverVehicleAssignmentsSchema();
+    }
+
     private function normalizeVehiclePlateToken(string $value): string
     {
         $value = strtoupper(trim($value));
@@ -386,9 +392,19 @@ class ModuleModel extends BaseModel
             return false;
         }
 
-        $sql = 'SELECT COUNT(*) FROM soferi WHERE id = :driver_id AND vehicle_id = :vehicle_id';
+        $this->ensureDriverVehicleAssignmentsSchema();
+
+        $sql = '
+            SELECT COUNT(*)
+            FROM soferi s
+            LEFT JOIN soferi_vehicule sv
+                ON sv.driver_id = s.id
+               AND sv.vehicle_id = :vehicle_id
+            WHERE s.id = :driver_id
+              AND (s.vehicle_id = :vehicle_id OR sv.vehicle_id IS NOT NULL)
+        ';
         if ($onlyActive) {
-            $sql .= " AND status = 'activ'";
+            $sql .= " AND s.status = 'activ'";
         }
 
         $stmt = $this->db->prepare($sql);
@@ -397,6 +413,194 @@ class ModuleModel extends BaseModel
         $stmt->execute();
 
         return (int) $stmt->fetchColumn() > 0;
+    }
+
+    public function getDriverVehicleIds(int $driverId): array
+    {
+        if ($driverId <= 0) {
+            return [];
+        }
+
+        $this->ensureDriverVehicleAssignmentsSchema();
+
+        $stmt = $this->db->prepare('
+            SELECT vehicle_id
+            FROM soferi_vehicule
+            WHERE driver_id = :driver_id
+            ORDER BY is_primary DESC, vehicle_id ASC
+        ');
+        $stmt->bindValue(':driver_id', $driverId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $ids = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $vehicleId = (int) ($row['vehicle_id'] ?? 0);
+            if ($vehicleId > 0) {
+                $ids[$vehicleId] = $vehicleId;
+            }
+        }
+
+        if ($ids !== []) {
+            return array_values($ids);
+        }
+
+        $legacyStmt = $this->db->prepare('SELECT vehicle_id FROM soferi WHERE id = :driver_id LIMIT 1');
+        $legacyStmt->bindValue(':driver_id', $driverId, PDO::PARAM_INT);
+        $legacyStmt->execute();
+        $legacyVehicleId = (int) ($legacyStmt->fetchColumn() ?: 0);
+
+        return $legacyVehicleId > 0 ? [$legacyVehicleId] : [];
+    }
+
+    public function getDriverVehicleIdsMap(array $driverIds): array
+    {
+        $normalizedDriverIds = [];
+        foreach ($driverIds as $driverId) {
+            $driverId = (int) $driverId;
+            if ($driverId > 0) {
+                $normalizedDriverIds[$driverId] = $driverId;
+            }
+        }
+
+        if ($normalizedDriverIds === []) {
+            return [];
+        }
+
+        $this->ensureDriverVehicleAssignmentsSchema();
+
+        $driverIds = array_values($normalizedDriverIds);
+        $placeholders = [];
+        $params = [];
+        foreach ($driverIds as $index => $driverId) {
+            $placeholder = ':driver_id_' . $index;
+            $placeholders[] = $placeholder;
+            $params[$placeholder] = $driverId;
+        }
+
+        $stmt = $this->db->prepare('
+            SELECT driver_id, vehicle_id
+            FROM soferi_vehicule
+            WHERE driver_id IN (' . implode(', ', $placeholders) . ')
+            ORDER BY driver_id ASC, is_primary DESC, vehicle_id ASC
+        ');
+        foreach ($params as $placeholder => $driverId) {
+            $stmt->bindValue($placeholder, $driverId, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        $map = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $driverId = (int) ($row['driver_id'] ?? 0);
+            $vehicleId = (int) ($row['vehicle_id'] ?? 0);
+            if ($driverId <= 0 || $vehicleId <= 0) {
+                continue;
+            }
+
+            if (!isset($map[$driverId])) {
+                $map[$driverId] = [];
+            }
+
+            $map[$driverId][$vehicleId] = $vehicleId;
+        }
+
+        foreach ($driverIds as $driverId) {
+            if (isset($map[$driverId])) {
+                $map[$driverId] = array_values($map[$driverId]);
+                continue;
+            }
+
+            $legacyIds = $this->getDriverVehicleIds($driverId);
+            if ($legacyIds !== []) {
+                $map[$driverId] = $legacyIds;
+            }
+        }
+
+        return $map;
+    }
+
+    public function findInvalidDriverAssignmentVehicleIds(array $vehicleIds): array
+    {
+        $normalizedVehicleIds = [];
+        foreach ($vehicleIds as $vehicleId) {
+            $vehicleId = (int) $vehicleId;
+            if ($vehicleId > 0) {
+                $normalizedVehicleIds[$vehicleId] = $vehicleId;
+            }
+        }
+
+        if ($normalizedVehicleIds === []) {
+            return [];
+        }
+
+        $vehicleIds = array_values($normalizedVehicleIds);
+        $placeholders = [];
+        foreach ($vehicleIds as $index => $vehicleId) {
+            $placeholders[] = ':vehicle_id_' . $index;
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT id
+            FROM vehicule
+            WHERE id IN (" . implode(', ', $placeholders) . ")
+              AND status = 'activ'
+              AND tip_vehicul NOT IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')
+        ");
+
+        foreach ($vehicleIds as $index => $vehicleId) {
+            $stmt->bindValue(':vehicle_id_' . $index, $vehicleId, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        $validIds = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $validId = (int) ($row['id'] ?? 0);
+            if ($validId > 0) {
+                $validIds[$validId] = $validId;
+            }
+        }
+
+        return array_values(array_diff($vehicleIds, array_values($validIds)));
+    }
+
+    public function syncDriverVehicleAssignments(int $driverId, array $vehicleIds): void
+    {
+        if ($driverId <= 0) {
+            return;
+        }
+
+        $this->ensureDriverVehicleAssignmentsSchema();
+
+        $normalizedVehicleIds = [];
+        foreach ($vehicleIds as $vehicleId) {
+            $vehicleId = (int) $vehicleId;
+            if ($vehicleId > 0) {
+                $normalizedVehicleIds[$vehicleId] = $vehicleId;
+            }
+        }
+        $vehicleIds = array_values($normalizedVehicleIds);
+
+        $deleteStmt = $this->db->prepare('DELETE FROM soferi_vehicule WHERE driver_id = :driver_id');
+        $deleteStmt->bindValue(':driver_id', $driverId, PDO::PARAM_INT);
+        $deleteStmt->execute();
+
+        if ($vehicleIds === []) {
+            return;
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $insertStmt = $this->db->prepare('
+            INSERT INTO soferi_vehicule (driver_id, vehicle_id, is_primary, created_at, updated_at)
+            VALUES (:driver_id, :vehicle_id, :is_primary, :created_at, :updated_at)
+        ');
+
+        foreach ($vehicleIds as $index => $vehicleId) {
+            $insertStmt->bindValue(':driver_id', $driverId, PDO::PARAM_INT);
+            $insertStmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+            $insertStmt->bindValue(':is_primary', $index === 0 ? 1 : 0, PDO::PARAM_INT);
+            $insertStmt->bindValue(':created_at', $now);
+            $insertStmt->bindValue(':updated_at', $now);
+            $insertStmt->execute();
+        }
     }
 
     public function isVehicleActive(int $vehicleId): bool

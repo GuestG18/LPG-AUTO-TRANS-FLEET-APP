@@ -9,7 +9,7 @@ class DashboardAnaliticController
         'primar' => 'Primar km',
         'primar_tona' => 'Primar tone',
         'distributie' => 'Distributie',
-        'primar_distributie' => 'Primar + Distributie',
+        'primar_distributie' => 'Primar+Distributie',
         'compresor' => 'Compresor',
     ];
 
@@ -52,6 +52,7 @@ class DashboardAnaliticController
                 'driver_ids' => $filters['driver_ids'],
                 'beneficiary_ids' => $filters['beneficiary_ids'],
                 'transport_types' => $filters['transport_types'],
+                'transport_capacities' => $filters['transport_capacities'],
                 'statuses' => $filters['statuses'],
             ];
             $payload['meta'] = [
@@ -79,6 +80,8 @@ class DashboardAnaliticController
                     'total_km' => 0,
                     'km_primar' => 0,
                     'km_distributie' => 0,
+                    'km_salvati' => 0,
+                    'km_exces' => 0,
                     'tone_livrate' => 0,
                     'tone_primar' => 0,
                     'tone_distributie' => 0,
@@ -95,6 +98,7 @@ class DashboardAnaliticController
                     'numar_vehicule_active' => 0,
                     'luna_selectata' => (int) $fallbackDate->format('n'),
                     'an_selectat' => (int) $fallbackDate->format('Y'),
+                    'transport_breakdown' => $this->emptyTransportBreakdown(),
                 ],
                 'vehicles' => [],
                 'drivers' => [],
@@ -137,6 +141,7 @@ class DashboardAnaliticController
             'driver_ids' => $this->parseIntList($input['driver_ids'] ?? ($input['driver_id'] ?? '')),
             'beneficiary_ids' => $this->parseIntList($input['beneficiary_ids'] ?? ($input['beneficiary_id'] ?? '')),
             'transport_types' => $this->parseStringList($input['transport_types'] ?? ($input['tip_transport'] ?? '')),
+            'transport_capacities' => $this->parseDecimalList($input['transport_capacities'] ?? ($input['capacitate_transport'] ?? '')),
             'statuses' => $this->parseStringList($input['statuses'] ?? ($input['status'] ?? '')),
         ];
     }
@@ -210,6 +215,48 @@ class DashboardAnaliticController
         }
 
         return array_values($result);
+    }
+
+    private function parseDecimalList(mixed $value): array
+    {
+        $items = [];
+
+        if (is_array($value)) {
+            $items = $value;
+        } else {
+            $raw = trim((string) $value);
+            if ($raw !== '') {
+                $items = preg_split('/[,\s]+/', $raw) ?: [];
+            }
+        }
+
+        $result = [];
+        foreach ($items as $item) {
+            $normalized = str_replace(',', '.', trim((string) $item));
+            if ($normalized === '' || !is_numeric($normalized)) {
+                continue;
+            }
+
+            $number = (float) $normalized;
+            if ($number <= 0) {
+                continue;
+            }
+
+            $key = number_format($number, 2, '.', '');
+            $result[$key] = $key;
+        }
+
+        return array_values($result);
+    }
+
+    private function emptyTransportBreakdown(): array
+    {
+        return [
+            ['key' => 'distributie', 'label' => 'Distributie', 'curse' => 0, 'km' => 0, 'tone' => 0],
+            ['key' => 'primar', 'label' => 'Primar', 'curse' => 0, 'km' => 0, 'tone' => 0],
+            ['key' => 'primar_distributie', 'label' => 'Primar+Distributie', 'curse' => 0, 'km' => 0, 'tone' => 0],
+            ['key' => 'compresor', 'label' => 'Compresor', 'curse' => 0, 'km' => 0, 'tone' => 0],
+        ];
     }
 
     private function sendJson(array $payload): void

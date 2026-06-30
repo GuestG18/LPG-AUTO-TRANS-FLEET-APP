@@ -3,6 +3,7 @@ $vehicleSelected = (string) ((int) (($filters['vehicle_ids'][0] ?? 0)));
 $driverSelected = (string) ((int) (($filters['driver_ids'][0] ?? 0)));
 $beneficiarySelected = (string) ((int) (($filters['beneficiary_ids'][0] ?? 0)));
 $transportSelected = (string) ($filters['transport_types'][0] ?? '');
+$capacitySelected = (string) ($filters['transport_capacities'][0] ?? '');
 $statusSelected = (string) ($filters['statuses'][0] ?? '');
 $formatDateRo = static function (string $isoDate): string {
     $isoDate = trim($isoDate);
@@ -188,6 +189,25 @@ $formatDateRo = static function (string $isoDate): string {
                         <?php endforeach; ?>
                     </select>
                 </div>
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label class="form-label" for="da_transport_capacity">Capacitate transport</label>
+                    <select class="form-select" id="da_transport_capacity" name="capacitate_transport">
+                        <option value="">Toate</option>
+                        <?php foreach ((array) ($filterOptions['transport_capacities'] ?? []) as $capacityRow): ?>
+                            <?php
+                            $rawCapacity = $capacityRow['capacitate_transport'] ?? null;
+                            if ($rawCapacity === null || $rawCapacity === '' || !is_numeric((string) $rawCapacity)) {
+                                continue;
+                            }
+                            $capacityValue = number_format((float) $rawCapacity, 2, '.', '');
+                            $capacityLabel = format_number_ro((float) $rawCapacity, 2) . ' t';
+                            ?>
+                            <option value="<?= e($capacityValue) ?>" <?= $capacitySelected === $capacityValue ? 'selected' : '' ?>>
+                                <?= e($capacityLabel) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
                 <div class="col-12 d-flex flex-wrap gap-2">
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-funnel me-1"></i> Aplica filtre
@@ -217,6 +237,7 @@ $formatDateRo = static function (string $isoDate): string {
             <article class="dashboard-analytic-kpi">
                 <div class="kpi-name">Total Curse</div>
                 <div class="kpi-value" id="kpi_total_curse">0</div>
+                <div class="kpi-breakdown" id="kpi_total_curse_breakdown"></div>
             </article>
             <article class="dashboard-analytic-kpi">
                 <div class="kpi-name">Servicii</div>
@@ -238,21 +259,21 @@ $formatDateRo = static function (string $isoDate): string {
                 <div class="kpi-name">Venit</div>
                 <div class="kpi-value" id="kpi_profit_total">0 lei</div>
             </article>
-            <article class="dashboard-analytic-kpi">
-                <div class="kpi-name">Total Km</div>
-                <div class="kpi-value" id="kpi_total_km">0 km</div>
-            </article>
-            <article class="dashboard-analytic-kpi">
-                <div class="kpi-name">Km primar</div>
-                <div class="kpi-value" id="kpi_km_primar">0 km</div>
-            </article>
-            <article class="dashboard-analytic-kpi">
-                <div class="kpi-name">Km distributie</div>
-                <div class="kpi-value" id="kpi_km_distributie">0 km</div>
+            <article class="dashboard-analytic-kpi dashboard-analytic-kpi--km">
+                <div class="kpi-card-header">
+                    <div class="kpi-name">Total Km</div>
+                    <div class="kpi-km-delta" id="kpi_total_km_delta"></div>
+                </div>
+                <div class="kpi-value-line">
+                    <div class="kpi-value" id="kpi_total_km">0 km</div>
+                    <span class="kpi-value-note">parcursi</span>
+                </div>
+                <div class="kpi-breakdown" id="kpi_total_km_breakdown"></div>
             </article>
             <article class="dashboard-analytic-kpi">
                 <div class="kpi-name">Total tone transportare</div>
                 <div class="kpi-value" id="kpi_tone_livrate">0 t</div>
+                <div class="kpi-breakdown" id="kpi_tone_livrate_breakdown"></div>
             </article>
             <article class="dashboard-analytic-kpi">
                 <div class="kpi-name">Tone primar</div>

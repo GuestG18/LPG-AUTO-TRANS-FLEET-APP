@@ -41,14 +41,44 @@ try {
                 <a class="nav-link <?= $currentPage === 'centralizator_facturare' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'centralizator_facturare'])) ?>"><i class="bi bi-calendar-range" aria-hidden="true"></i><span>Centralizator Facturare</span></a>
                 <a class="nav-link <?= $currentPage === 'programare_concedii' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'programare_concedii'])) ?>"><i class="bi bi-calendar2-week" aria-hidden="true"></i><span>Programare concedii</span></a>
                 <a class="nav-link <?= $currentPage === 'vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'vehicule'])) ?>"><i class="bi bi-car-front" aria-hidden="true"></i><span>Vehicule</span></a>
+                <a class="nav-link <?= $currentPage === 'stare_tehnica' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'stare_tehnica'])) ?>"><i class="bi bi-activity" aria-hidden="true"></i><span>Stare tehnic&#259;</span></a>
                 <a class="nav-link <?= $currentPage === 'autorizatii_vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'autorizatii_vehicule'])) ?>"><i class="bi bi-shield-check" aria-hidden="true"></i><span>Autorizații</span></a>
                 <a class="nav-link <?= $currentPage === 'soferi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'soferi'])) ?>"><i class="bi bi-fuel-pump" aria-hidden="true"></i><span>&#536;oferi</span></a>
+                <a class="nav-link <?= $currentPage === 'istoric_activitati_sofer' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'istoric_activitati_sofer'])) ?>"><i class="bi bi-clock-history" aria-hidden="true"></i><span>Istoric Activit&#259;&#539;i &#536;ofer</span></a>
                 <?php if (function_exists('is_accountancy_user') && is_accountancy_user()): ?>
                     <a class="nav-link <?= $currentPage === 'contabilitate_personal' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'contabilitate_personal'])) ?>"><i class="bi bi-person-badge" aria-hidden="true"></i><span>Contabilitate Personal</span></a>
                     <a class="nav-link <?= $currentPage === 'cheltuieli_birou' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cheltuieli_birou'])) ?>"><i class="bi bi-wallet2" aria-hidden="true"></i><span>Cheltuieli Birou</span></a>
                 <?php endif; ?>
                 <a class="nav-link <?= $currentPage === 'alimentari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'alimentari'])) ?>"><i class="bi bi-fuel-pump-diesel" aria-hidden="true"></i><span>Aliment&#259;ri</span></a>
-                <a class="nav-link <?= $currentPage === 'mentenanta' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta'])) ?>"><i class="bi bi-calculator" aria-hidden="true"></i><span>Mentenan&#539;&#259;</span></a>
+                <?php
+                $isMaintenanceModule = $currentPage === 'mentenanta' && $currentAction !== 'tire_stock';
+                $maintenanceAction = $currentAction === 'index' ? 'overview' : $currentAction;
+                ?>
+                <div class="sidebar-nav-group">
+                    <button
+                        class="nav-link sidebar-parent-link <?= $isMaintenanceModule ? 'active' : '' ?>"
+                        type="button"
+                        data-bs-toggle="collapse"
+                        data-bs-target="#maintenanceSidebarMenu"
+                        aria-expanded="<?= $isMaintenanceModule ? 'true' : 'false' ?>"
+                        aria-controls="maintenanceSidebarMenu"
+                    >
+                        <i class="bi bi-wrench-adjustable" aria-hidden="true"></i>
+                        <span>Mentenan&#539;&#259;</span>
+                        <i class="bi bi-chevron-down sidebar-chevron" aria-hidden="true"></i>
+                    </button>
+                    <div class="collapse <?= $isMaintenanceModule ? 'show' : '' ?>" id="maintenanceSidebarMenu">
+                        <div class="sidebar-submenu">
+                            <a class="nav-link <?= $isMaintenanceModule && $maintenanceAction === 'overview' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'overview'])) ?>">Prezentare general&#259;</a>
+                            <a class="nav-link <?= $isMaintenanceModule && $maintenanceAction === 'interventions' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'interventions'])) ?>">Interven&#539;ii</a>
+                            <a class="nav-link <?= $isMaintenanceModule && $maintenanceAction === 'maintenance' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'maintenance'])) ?>">&Icirc;ntre&#539;inere</a>
+                            <a class="nav-link <?= $isMaintenanceModule && $maintenanceAction === 'repairs' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'repairs'])) ?>">Repara&#539;ii</a>
+                            <a class="nav-link <?= $isMaintenanceModule && $maintenanceAction === 'auto' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'auto'])) ?>">Auto</a>
+                            <a class="nav-link <?= $isMaintenanceModule && $maintenanceAction === 'stock' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'stock'])) ?>">Stoc</a>
+                        </div>
+                    </div>
+                </div>
+                <a class="nav-link <?= $currentPage === 'mentenanta' && $currentAction === 'tire_stock' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock'])) ?>"><i class="bi bi-life-preserver" aria-hidden="true"></i><span>Anvelope</span></a>
                 <a class="nav-link <?= $currentPage === 'documente' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'documente'])) ?>"><i class="bi bi-file-earmark-text" aria-hidden="true"></i><span>Documente</span></a>
                 <a class="nav-link <?= $currentPage === 'inventar_dotari_vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'inventar_dotari_vehicule'])) ?>"><i class="bi bi-book" aria-hidden="true"></i><span>Inventar Dot&#259;ri</span></a>
                 <?php if (is_admin()): ?>

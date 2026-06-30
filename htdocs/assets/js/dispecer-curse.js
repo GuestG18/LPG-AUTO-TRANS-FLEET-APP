@@ -634,6 +634,17 @@
             var value = String(rawDate || '').trim();
             var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
             if (!match) {
+                var displayMatch = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/.exec(value);
+                if (displayMatch) {
+                    match = [
+                        displayMatch[0],
+                        displayMatch[3],
+                        displayMatch[2].padStart(2, '0'),
+                        displayMatch[1].padStart(2, '0')
+                    ];
+                }
+            }
+            if (!match) {
                 return null;
             }
 
@@ -1060,6 +1071,10 @@
                     locationId: locationId,
                     zoneId: zoneId,
                     kmTariff: Math.max(0, Math.round(parseNumber(routeRule.km_tarifare))),
+                    rideCost: Math.max(0, parseNumber(routeRule.cost_cursa)),
+                    applyRideCost: !!routeRule.aplica_cost_cursa,
+                    vehicleIds: Array.isArray(routeRule.vehicle_ids) ? routeRule.vehicle_ids : [],
+                    manualAgreedKm: !!routeRule.km_agreati_manual,
                     active: !!routeRule.activ,
                     locationName: locationName,
                     zoneName: zoneName
@@ -1089,7 +1104,7 @@
                 var locationAllowSet = {};
                 var zoneAllowSet = {};
 
-                var addPair = function (locationIdRaw, zoneIdRaw, kmTariff, routeId, matchDirection) {
+                var addPair = function (locationIdRaw, zoneIdRaw, kmTariff, manualAgreedKm, rideCost, applyRideCost, routeId, matchDirection) {
                     var locationId = String(locationIdRaw || '').trim();
                     var zoneId = String(zoneIdRaw || '').trim();
                     if (locationId === '' || zoneId === '') {
@@ -1111,8 +1126,12 @@
                         locationId: locationId,
                         zoneId: zoneId,
                         kmTariff: Math.max(0, Math.round(parseNumber(kmTariff))),
+                        manualAgreedKm: !!manualAgreedKm,
+                        rideCost: Math.max(0, parseNumber(rideCost)),
+                        applyRideCost: !!applyRideCost,
                         ruleId: normalizedRouteId,
-                        matchDirection: String(matchDirection || 'direct')
+                        matchDirection: String(matchDirection || 'direct'),
+                        active: true
                     };
 
                     locationAllowSet[locationId] = true;
@@ -1128,6 +1147,9 @@
                         routeRule.locationId,
                         routeRule.zoneId,
                         routeRule.kmTariff,
+                        routeRule.manualAgreedKm,
+                        routeRule.rideCost,
+                        routeRule.applyRideCost,
                         routeRule.ruleId,
                         'direct'
                     );
@@ -1155,6 +1177,9 @@
                                 reverseLocationId,
                                 reverseZoneId,
                                 routeRule.kmTariff,
+                                routeRule.manualAgreedKm,
+                                routeRule.rideCost,
+                                routeRule.applyRideCost,
                                 routeRule.ruleId,
                                 'reverse'
                             );
@@ -1298,6 +1323,28 @@
             return assigned;
         }
 
+        function getPrimaryAssignedVehicleSetForBeneficiary(beneficiaryId) {
+            var beneficiaryKey = String(beneficiaryId || '').trim();
+            var assigned = {};
+            var rules = beneficiaryKey !== '' && Array.isArray(primaryRouteRulesByBeneficiary[beneficiaryKey])
+                ? primaryRouteRulesByBeneficiary[beneficiaryKey]
+                : [];
+
+            rules.forEach(function (rule) {
+                if (!rule || typeof rule !== 'object' || !rule.active || !Array.isArray(rule.vehicleIds)) {
+                    return;
+                }
+                rule.vehicleIds.forEach(function (vehicleIdRaw) {
+                    var vehicleId = String(vehicleIdRaw || '').trim();
+                    if (vehicleId !== '') {
+                        assigned[vehicleId] = true;
+                    }
+                });
+            });
+
+            return assigned;
+        }
+
         function getDistributionScopedVehicleSetForBeneficiary(beneficiaryId, transportType) {
             var beneficiaryKey = String(beneficiaryId || '').trim();
             var vehicleSet = {};
@@ -1334,31 +1381,15 @@
                 return [];
             }
 
-            var baseAssignedVehicleSet = getAssignedVehicleSetForBeneficiary(beneficiaryKey);
             var allowedVehicleSet = {};
 
             if (isPrimaryTransport(transportType)) {
-                allowedVehicleSet = activeDriverVehicleSet;
+                allowedVehicleSet = getPrimaryAssignedVehicleSetForBeneficiary(beneficiaryKey);
             } else if (isDistributionTransport(transportType)) {
                 var scopedDistributionVehicles = getDistributionScopedVehicleSetForBeneficiary(beneficiaryKey, transportType);
-                if (scopedDistributionVehicles.hasScopedRules) {
-                    allowedVehicleSet = scopedDistributionVehicles.vehicleSet;
-                } else {
-                    allowedVehicleSet = baseAssignedVehicleSet;
-                }
+                allowedVehicleSet = scopedDistributionVehicles.vehicleSet;
             } else {
-                // Compresor: preferam alocarea dedicata; fallback pe Distributie si apoi pe configurari existente.
-                var compressorAssignedVehicleSet = getCompressorAssignedVehicleSetForBeneficiary(beneficiaryKey);
-                if (Object.keys(compressorAssignedVehicleSet).length > 0) {
-                    allowedVehicleSet = compressorAssignedVehicleSet;
-                } else {
-                    var distributionScopedFallback = getDistributionScopedVehicleSetForBeneficiary(beneficiaryKey, 'distributie');
-                    if (distributionScopedFallback.hasScopedRules && Object.keys(distributionScopedFallback.vehicleSet).length > 0) {
-                        allowedVehicleSet = distributionScopedFallback.vehicleSet;
-                    } else {
-                        allowedVehicleSet = baseAssignedVehicleSet;
-                    }
-                }
+                allowedVehicleSet = getCompressorAssignedVehicleSetForBeneficiary(beneficiaryKey);
             }
 
             if (Object.keys(allowedVehicleSet).length === 0) {
@@ -1518,11 +1549,11 @@
                 placeholderLabel = '-- Tip transport indisponibil pentru beneficiar --';
             } else if (allowedVehicleOptions.length === 0) {
                 if (isPrimaryTransport(transportType)) {
-                    placeholderLabel = '-- Niciun vehicul activ cu sofer asociat --';
+                    placeholderLabel = '-- Configureaza vehiculele Primar in Configurare transport --';
                 } else if (transportType === 'compresor') {
-                    placeholderLabel = '-- Configureaza Vehicule Compresor in Configurare Transport --';
+                    placeholderLabel = '-- Configureaza vehiculele Compresor in Configurare transport --';
                 } else {
-                    placeholderLabel = '-- Niciun vehicul configurat --';
+                    placeholderLabel = '-- Configureaza vehiculele pentru acest tip de transport --';
                 }
             }
 
@@ -1928,10 +1959,22 @@
             var isActive = Object.prototype.hasOwnProperty.call(rawRule, 'active')
                 ? !!rawRule.active
                 : !!rawRule.activ;
+            var usesManualAgreedKm = Object.prototype.hasOwnProperty.call(rawRule, 'manualAgreedKm')
+                ? !!rawRule.manualAgreedKm
+                : !!rawRule.km_agreati_manual;
+            var rideCost = Object.prototype.hasOwnProperty.call(rawRule, 'rideCost')
+                ? parseNumber(rawRule.rideCost)
+                : parseNumber(rawRule.cost_cursa);
+            var applyRideCost = Object.prototype.hasOwnProperty.call(rawRule, 'applyRideCost')
+                ? !!rawRule.applyRideCost
+                : !!rawRule.aplica_cost_cursa;
 
             return {
                 ruleId: routeId,
                 kmTariff: Math.max(0, Math.round(kmTariff)),
+                manualAgreedKm: usesManualAgreedKm,
+                rideCost: Math.max(0, rideCost),
+                applyRideCost: applyRideCost,
                 active: isActive,
                 matchDirection: String(matchDirection || rawRule.matchDirection || 'direct')
             };
@@ -2084,7 +2127,15 @@
             }
 
             if (hasSelectedPair) {
-                var selectedPairText = 'Combinatia selectata Loc ↔ Zona este valida in Setari Primar, iar Km efectuati se completeaza automat.';
+                var selectedRule = getPrimaryRouteRule(
+                    primaryScope,
+                    beneficiaryField ? beneficiaryField.value : '',
+                    loadLocationField ? loadLocationField.value : '',
+                    zoneField ? zoneField.value : ''
+                );
+                var selectedPairText = selectedRule && selectedRule.manualAgreedKm
+                    ? 'Combinatia selectata Loc ↔ Zona este valida. Completeaza manual Km agreati pentru aceasta cursa.'
+                    : 'Combinatia selectata Loc ↔ Zona este valida in Setari Primar, iar Km agreati se completeaza automat.';
                 if (primaryLocationNote) {
                     primaryLocationNote.textContent = selectedPairText;
                 }
@@ -2115,6 +2166,8 @@
                 if (kmField.hasAttribute('data-primary-km-autofilled')) {
                     kmField.removeAttribute('data-primary-km-autofilled');
                 }
+                kmField.removeAttribute('data-primary-km-manual');
+                kmField.removeAttribute('data-primary-route-id');
                 return;
             }
 
@@ -2123,16 +2176,42 @@
             var zoneId = String(zoneField ? (zoneField.value || '') : '').trim();
             var primaryRule = getPrimaryRouteRule(primaryScope, beneficiaryId, locationId, zoneId);
             if (!primaryRule) {
-                if (kmField.hasAttribute('data-primary-km-autofilled')) {
+                if (kmField.hasAttribute('data-primary-km-autofilled') || kmField.hasAttribute('data-primary-km-manual')) {
                     kmField.value = '';
                     kmField.removeAttribute('data-primary-km-autofilled');
+                    kmField.removeAttribute('data-primary-km-manual');
+                    kmField.removeAttribute('data-primary-route-id');
                 }
+                kmField.readOnly = true;
+                if (!isPrimaryKmTransport(transportType)) {
+                    kmField.removeAttribute('required');
+                }
+                return;
+            }
+
+            var routeId = String(primaryRule.ruleId || '');
+            var previousRouteId = String(kmField.getAttribute('data-primary-route-id') || '');
+            if (primaryRule.manualAgreedKm) {
+                if (kmField.hasAttribute('data-primary-km-autofilled') || (previousRouteId !== '' && previousRouteId !== routeId)) {
+                    kmField.value = '';
+                }
+                kmField.removeAttribute('data-primary-km-autofilled');
+                kmField.setAttribute('data-primary-km-manual', '1');
+                kmField.setAttribute('data-primary-route-id', routeId);
+                kmField.readOnly = false;
+                kmField.setAttribute('required', 'required');
                 return;
             }
 
             var kmTariffValue = Math.max(0, Math.round(parseNumber(primaryRule.kmTariff)));
             kmField.value = String(kmTariffValue);
             kmField.setAttribute('data-primary-km-autofilled', '1');
+            kmField.removeAttribute('data-primary-km-manual');
+            kmField.setAttribute('data-primary-route-id', routeId);
+            kmField.readOnly = true;
+            if (!isPrimaryKmTransport(transportType)) {
+                kmField.removeAttribute('required');
+            }
         }
 
         function applyDistributionRouteKmTariff() {
@@ -3090,6 +3169,10 @@
 
             if (kmField) {
                 kmField.readOnly = isPrimary || isDistributionWithKmTransport(transportType);
+                if (!isPrimary) {
+                    kmField.removeAttribute('data-primary-km-manual');
+                    kmField.removeAttribute('data-primary-route-id');
+                }
             }
 
             if (kmField && (isPrimaryKm || isDistributionWithKmTransport(transportType)) && !isCompressor) {
@@ -3175,6 +3258,25 @@
             var selectedVehicleId = vehicleField ? vehicleField.value : '';
             var selectedLocationId = loadLocationField ? loadLocationField.value : '';
             var selectedZoneId = zoneField ? zoneField.value : '';
+            var selectedPrimaryRouteRule = null;
+            if (isPrimaryTransport(transportType)) {
+                var selectedPrimaryScope = String(selectedBeneficiaryId || '').trim() !== ''
+                    && Object.prototype.hasOwnProperty.call(primaryRouteScopeByBeneficiary, String(selectedBeneficiaryId))
+                    ? primaryRouteScopeByBeneficiary[String(selectedBeneficiaryId)]
+                    : { hasActiveRules: false, pairMap: {}, locationOptions: [], zoneOptions: [] };
+                selectedPrimaryRouteRule = getPrimaryRouteRule(
+                    selectedPrimaryScope,
+                    selectedBeneficiaryId,
+                    selectedLocationId,
+                    selectedZoneId
+                );
+            }
+            var primaryFixedRideCost = selectedPrimaryRouteRule
+                && selectedPrimaryRouteRule.active
+                && selectedPrimaryRouteRule.applyRideCost
+                && selectedPrimaryRouteRule.rideCost > 0
+                ? selectedPrimaryRouteRule.rideCost
+                : 0;
             var hasDistributionLocationSelection = String(selectedLocationId || '').trim() !== '';
             var hasDistributionZoneSelection = String(selectedZoneId || '').trim() !== '';
             var hasCompleteDistributionSelection = hasDistributionLocationSelection && hasDistributionZoneSelection;
@@ -3192,9 +3294,9 @@
             var effectiveDistributionKmRate = 0;
 
             if (isPrimaryKmTransport(transportType)) {
-                total = kmValue * rates.perKm;
+                total = primaryFixedRideCost > 0 ? primaryFixedRideCost : (kmValue * rates.perKm);
             } else if (isPrimaryTonTransport(transportType)) {
-                total = quantityValue * rates.perTon;
+                total = primaryFixedRideCost > 0 ? primaryFixedRideCost : (quantityValue * rates.perTon);
             } else if (isDistributionTransport(transportType)) {
                 if (!hasCompleteDistributionSelection) {
                     total = 0;
@@ -3289,7 +3391,13 @@
                 kmPrimar = Math.max(0, kmValue);
             }
 
-            var totalPrimar = includesPrimarySegment ? (kmPrimar * primaryPerKmRate) : 0;
+            var totalPrimar = includesPrimarySegment
+                ? (
+                    isPrimaryTransport(transportType) && primaryFixedRideCost > 0
+                        ? primaryFixedRideCost
+                        : (kmPrimar * primaryPerKmRate)
+                )
+                : 0;
             var totalDistributie = 0;
             if (includesDistributionSegment) {
                 if (transportType === 'distributie') {
@@ -3343,15 +3451,19 @@
 
             if (priceDisplayField) {
                 if (isPrimaryKmTransport(transportType)) {
-                    priceDisplayField.value = (
-                        'mod calcul: km' +
-                        ' | km: ' + rates.perKm.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                    );
+                    priceDisplayField.value = primaryFixedRideCost > 0
+                        ? ('mod calcul: cost cursa fix | cost cursa: ' + primaryFixedRideCost.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+                        : (
+                            'mod calcul: km' +
+                            ' | km: ' + rates.perKm.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                        );
                 } else if (isPrimaryTonTransport(transportType)) {
-                    priceDisplayField.value = (
-                        'mod calcul: tona' +
-                        ' | tona: ' + rates.perTon.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                    );
+                    priceDisplayField.value = primaryFixedRideCost > 0
+                        ? ('mod calcul: cost cursa fix | cost cursa: ' + primaryFixedRideCost.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+                        : (
+                            'mod calcul: tona' +
+                            ' | tona: ' + rates.perTon.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                        );
                 } else if (isDistributionTransport(transportType)) {
                     if (!hasCompleteDistributionSelection) {
                         priceDisplayField.value = 'Selecteaza locul de incarcare si zona de distributie pentru calcul.';

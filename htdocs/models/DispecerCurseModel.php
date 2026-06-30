@@ -56,10 +56,13 @@ class DispecerCurseModel extends BaseModel
 
     public function getActiveVehicleIdsWithAssignedDriver(bool $onlyActiveDrivers = false): array
     {
+        $this->ensureDriverVehicleAssignmentsSchema();
+
         $sql = "
             SELECT DISTINCT v.id
             FROM vehicule v
-            INNER JOIN soferi s ON s.vehicle_id = v.id
+            INNER JOIN soferi_vehicule sv ON sv.vehicle_id = v.id
+            INNER JOIN soferi s ON s.id = sv.driver_id
             WHERE v.tip_vehicul NOT IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')
               AND v.status = 'activ'
               " . ($onlyActiveDrivers ? "AND s.status = 'activ'" : "") . "
@@ -82,15 +85,20 @@ class DispecerCurseModel extends BaseModel
 
     public function getDriversGroupedByVehicle(bool $onlyActiveDrivers = false): array
     {
+        $this->ensureDriverVehicleAssignmentsSchema();
+
         $sql = "
-            SELECT id, vehicle_id, nume, status
-            FROM soferi
-            WHERE vehicle_id IS NOT NULL
-              " . ($onlyActiveDrivers ? "AND status = 'activ'" : "") . "
+            SELECT s.id, sv.vehicle_id, s.nume, s.status, sv.is_primary
+            FROM soferi_vehicule sv
+            INNER JOIN soferi s ON s.id = sv.driver_id
+            WHERE sv.vehicle_id IS NOT NULL
+              " . ($onlyActiveDrivers ? "AND s.status = 'activ'" : "") . "
             ORDER BY
-                CASE WHEN status = 'activ' THEN 0 ELSE 1 END,
-                nume ASC,
-                id ASC
+                sv.vehicle_id ASC,
+                sv.is_primary DESC,
+                CASE WHEN s.status = 'activ' THEN 0 ELSE 1 END,
+                s.nume ASC,
+                s.id ASC
         ";
         $stmt = $this->db->query($sql);
         $rows = $stmt->fetchAll();
@@ -1174,13 +1182,19 @@ class DispecerCurseModel extends BaseModel
         int $locationId,
         int $zoneId,
         int $kmTariff,
-        bool $active
+        array $vehicleIds,
+        bool $manualAgreedKm,
+        bool $active,
+        float $rideCost = 0.0,
+        bool $applyRideCost = false
     ): bool {
         if ($beneficiaryId <= 0 || $locationId <= 0 || $zoneId <= 0 || $kmTariff < 0) {
             return false;
         }
 
         $this->ensurePrimaryRouteTable();
+        $normalizedVehicleIds = $this->normalizeRouteVehicleIds($vehicleIds);
+        $vehicleIdsCsv = $normalizedVehicleIds === [] ? null : implode(',', $normalizedVehicleIds);
 
         $sql = "
             INSERT INTO configurare_rute_primar (
@@ -1188,6 +1202,10 @@ class DispecerCurseModel extends BaseModel
                 loc_incarcare_id,
                 zona_distributie_id,
                 km_tarifare,
+                cost_cursa,
+                aplica_cost_cursa,
+                vehicle_ids,
+                km_agreati_manual,
                 activ,
                 created_at,
                 updated_at
@@ -1196,6 +1214,10 @@ class DispecerCurseModel extends BaseModel
                 :loc_incarcare_id,
                 :zona_distributie_id,
                 :km_tarifare,
+                :cost_cursa,
+                :aplica_cost_cursa,
+                :vehicle_ids,
+                :km_agreati_manual,
                 :activ,
                 :created_at,
                 :updated_at
@@ -1208,6 +1230,14 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':loc_incarcare_id', $locationId, PDO::PARAM_INT);
         $stmt->bindValue(':zona_distributie_id', $zoneId, PDO::PARAM_INT);
         $stmt->bindValue(':km_tarifare', max(0, $kmTariff), PDO::PARAM_INT);
+        $stmt->bindValue(':cost_cursa', max(0, $rideCost));
+        $stmt->bindValue(':aplica_cost_cursa', $applyRideCost ? 1 : 0, PDO::PARAM_INT);
+        if ($vehicleIdsCsv === null) {
+            $stmt->bindValue(':vehicle_ids', null, PDO::PARAM_NULL);
+        } else {
+            $stmt->bindValue(':vehicle_ids', $vehicleIdsCsv);
+        }
+        $stmt->bindValue(':km_agreati_manual', $manualAgreedKm ? 1 : 0, PDO::PARAM_INT);
         $stmt->bindValue(':activ', $active ? 1 : 0, PDO::PARAM_INT);
         $stmt->bindValue(':created_at', $now);
         $stmt->bindValue(':updated_at', $now);
@@ -1229,6 +1259,10 @@ class DispecerCurseModel extends BaseModel
                 loc_incarcare_id,
                 zona_distributie_id,
                 km_tarifare,
+                cost_cursa,
+                aplica_cost_cursa,
+                vehicle_ids,
+                km_agreati_manual,
                 activ
             FROM configurare_rute_primar
             WHERE id = :id
@@ -1253,13 +1287,19 @@ class DispecerCurseModel extends BaseModel
         int $locationId,
         int $zoneId,
         int $kmTariff,
-        bool $active
+        array $vehicleIds,
+        bool $manualAgreedKm,
+        bool $active,
+        float $rideCost = 0.0,
+        bool $applyRideCost = false
     ): bool {
         if ($id <= 0 || $beneficiaryId <= 0 || $locationId <= 0 || $zoneId <= 0 || $kmTariff < 0) {
             return false;
         }
 
         $this->ensurePrimaryRouteTable();
+        $normalizedVehicleIds = $this->normalizeRouteVehicleIds($vehicleIds);
+        $vehicleIdsCsv = $normalizedVehicleIds === [] ? null : implode(',', $normalizedVehicleIds);
 
         $sql = "
             UPDATE configurare_rute_primar
@@ -1267,6 +1307,10 @@ class DispecerCurseModel extends BaseModel
                 loc_incarcare_id = :loc_incarcare_id,
                 zona_distributie_id = :zona_distributie_id,
                 km_tarifare = :km_tarifare,
+                cost_cursa = :cost_cursa,
+                aplica_cost_cursa = :aplica_cost_cursa,
+                vehicle_ids = :vehicle_ids,
+                km_agreati_manual = :km_agreati_manual,
                 activ = :activ,
                 updated_at = :updated_at
             WHERE id = :id
@@ -1280,6 +1324,14 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':loc_incarcare_id', $locationId, PDO::PARAM_INT);
         $stmt->bindValue(':zona_distributie_id', $zoneId, PDO::PARAM_INT);
         $stmt->bindValue(':km_tarifare', max(0, $kmTariff), PDO::PARAM_INT);
+        $stmt->bindValue(':cost_cursa', max(0, $rideCost));
+        $stmt->bindValue(':aplica_cost_cursa', $applyRideCost ? 1 : 0, PDO::PARAM_INT);
+        if ($vehicleIdsCsv === null) {
+            $stmt->bindValue(':vehicle_ids', null, PDO::PARAM_NULL);
+        } else {
+            $stmt->bindValue(':vehicle_ids', $vehicleIdsCsv);
+        }
+        $stmt->bindValue(':km_agreati_manual', $manualAgreedKm ? 1 : 0, PDO::PARAM_INT);
         $stmt->bindValue(':activ', $active ? 1 : 0, PDO::PARAM_INT);
         $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'));
 
@@ -1304,6 +1356,10 @@ class DispecerCurseModel extends BaseModel
                 loc_incarcare_id,
                 zona_distributie_id,
                 km_tarifare,
+                cost_cursa,
+                aplica_cost_cursa,
+                vehicle_ids,
+                km_agreati_manual,
                 activ
             FROM configurare_rute_primar
             WHERE beneficiar_id = :beneficiar_id
@@ -1357,6 +1413,10 @@ class DispecerCurseModel extends BaseModel
                 r.loc_incarcare_id,
                 r.zona_distributie_id,
                 r.km_tarifare,
+                r.cost_cursa,
+                r.aplica_cost_cursa,
+                r.vehicle_ids,
+                r.km_agreati_manual,
                 r.activ,
                 l.nume AS loc_nume,
                 z.nume AS zona_nume
@@ -1393,6 +1453,12 @@ class DispecerCurseModel extends BaseModel
             $map[$key] = [
                 'id' => (int) ($rule['id'] ?? 0),
                 'km_tarifare' => (int) max(0, (int) ($rule['km_tarifare'] ?? 0)),
+                'cost_cursa' => (float) max(0, (float) ($rule['cost_cursa'] ?? 0)),
+                'aplica_cost_cursa' => !empty($rule['aplica_cost_cursa']),
+                'vehicle_ids' => $this->normalizeRouteVehicleIds(
+                    explode(',', (string) ($rule['vehicle_ids'] ?? ''))
+                ),
+                'km_agreati_manual' => !empty($rule['km_agreati_manual']),
                 'activ' => !empty($rule['activ']),
             ];
         }
@@ -1620,6 +1686,10 @@ class DispecerCurseModel extends BaseModel
                 loc_incarcare_id INT UNSIGNED NOT NULL,
                 zona_distributie_id INT UNSIGNED NOT NULL,
                 km_tarifare INT UNSIGNED NOT NULL DEFAULT 0,
+                cost_cursa DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                aplica_cost_cursa TINYINT(1) NOT NULL DEFAULT 0,
+                vehicle_ids TEXT NULL,
+                km_agreati_manual TINYINT(1) NOT NULL DEFAULT 0,
                 activ TINYINT(1) NOT NULL DEFAULT 1,
                 created_at DATETIME NOT NULL,
                 updated_at DATETIME NOT NULL,
@@ -1635,6 +1705,50 @@ class DispecerCurseModel extends BaseModel
         ";
 
         $this->db->exec($sql);
+        $columnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'configurare_rute_primar'
+              AND COLUMN_NAME = 'vehicle_ids'
+        ");
+        $columnCheckStmt->execute();
+        if ((int) $columnCheckStmt->fetchColumn() === 0) {
+            $this->db->exec("ALTER TABLE configurare_rute_primar ADD COLUMN vehicle_ids TEXT NULL AFTER km_tarifare");
+        }
+        $manualKmColumnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'configurare_rute_primar'
+              AND COLUMN_NAME = 'km_agreati_manual'
+        ");
+        $manualKmColumnCheckStmt->execute();
+        if ((int) $manualKmColumnCheckStmt->fetchColumn() === 0) {
+            $this->db->exec("ALTER TABLE configurare_rute_primar ADD COLUMN km_agreati_manual TINYINT(1) NOT NULL DEFAULT 0 AFTER vehicle_ids");
+        }
+        $rideCostColumnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'configurare_rute_primar'
+              AND COLUMN_NAME = 'cost_cursa'
+        ");
+        $rideCostColumnCheckStmt->execute();
+        if ((int) $rideCostColumnCheckStmt->fetchColumn() === 0) {
+            $this->db->exec("ALTER TABLE configurare_rute_primar ADD COLUMN cost_cursa DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER km_tarifare");
+        }
+        $applyRideCostColumnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'configurare_rute_primar'
+              AND COLUMN_NAME = 'aplica_cost_cursa'
+        ");
+        $applyRideCostColumnCheckStmt->execute();
+        if ((int) $applyRideCostColumnCheckStmt->fetchColumn() === 0) {
+            $this->db->exec("ALTER TABLE configurare_rute_primar ADD COLUMN aplica_cost_cursa TINYINT(1) NOT NULL DEFAULT 0 AFTER cost_cursa");
+        }
         $this->primaryRouteTableEnsured = true;
     }
 
@@ -3913,13 +4027,61 @@ class DispecerCurseModel extends BaseModel
             ORDER BY c.status_facturare ASC
         ");
 
+        $capacitiesStmt = $this->db->query("
+            SELECT DISTINCT c.capacitate_transport
+            FROM curse_dispecer c
+            WHERE c.capacitate_transport IS NOT NULL
+              AND c.capacitate_transport > 0
+            ORDER BY c.capacitate_transport ASC
+        ");
+
         return [
             'vehicles' => $vehiclesStmt->fetchAll(),
             'drivers' => $driversStmt->fetchAll(),
             'beneficiaries' => $beneficiariesStmt->fetchAll(),
             'transport_types' => $transportTypesStmt->fetchAll(),
+            'transport_capacities' => $capacitiesStmt->fetchAll(),
             'statuses' => $statusesStmt->fetchAll(),
         ];
+    }
+
+    private function dashboardTransportBuckets(): array
+    {
+        return [
+            'distributie' => 'Distributie',
+            'primar' => 'Primar',
+            'primar_distributie' => 'Primar+Distributie',
+            'compresor' => 'Compresor',
+        ];
+    }
+
+    private function dashboardTransportBucketSql(): string
+    {
+        return "
+            CASE
+                WHEN c.tip_transport IN ('primar', 'primar_tona', 'primar_km') THEN 'primar'
+                WHEN c.tip_transport IN ('primar_distributie', 'mixt') THEN 'primar_distributie'
+                WHEN c.tip_transport = 'distributie' THEN 'distributie'
+                WHEN c.tip_transport = 'compresor' THEN 'compresor'
+                ELSE COALESCE(NULLIF(TRIM(c.tip_transport), ''), 'necunoscut')
+            END
+        ";
+    }
+
+    private function emptyDashboardTransportBreakdown(): array
+    {
+        $breakdown = [];
+        foreach ($this->dashboardTransportBuckets() as $key => $label) {
+            $breakdown[$key] = [
+                'key' => $key,
+                'label' => $label,
+                'curse' => 0,
+                'km' => 0.0,
+                'tone' => 0.0,
+            ];
+        }
+
+        return $breakdown;
     }
 
     public function getDashboardAnalyticData(array $filters): array
@@ -3965,6 +4127,47 @@ class DispecerCurseModel extends BaseModel
                 ELSE 0
             END
         ";
+        $kmDistributieMixedPositiveExpr = "GREATEST(0, (" . $kmDistributieMixedExpr . "))";
+        $kmPrimarDashboardExpr = "
+            CASE
+                WHEN c.tip_transport IN ('primar', 'primar_tona', 'primar_km', 'primar_distributie', 'mixt')
+                THEN (" . $kmBilledExpr . ")
+                ELSE 0
+            END
+        ";
+        $kmDistributieDashboardExpr = "
+            CASE
+                WHEN c.tip_transport = 'distributie'
+                THEN (" . $kmBilledExpr . ")
+                WHEN c.tip_transport IN ('primar_distributie', 'mixt')
+                THEN (" . $kmDistributieMixedPositiveExpr . ")
+                ELSE 0
+            END
+        ";
+        $kmSavedExpr = "
+            CASE
+                WHEN c.tip_transport IN ('primar', 'primar_tona', 'primar_km')
+                     AND c.km_cursa IS NOT NULL
+                     AND c.km_cursa > 0
+                     AND c.km_totali IS NOT NULL
+                     AND c.km_totali > 0
+                     AND c.km_cursa > c.km_totali
+                THEN c.km_cursa - c.km_totali
+                ELSE 0
+            END
+        ";
+        $kmExcessExpr = "
+            CASE
+                WHEN c.tip_transport IN ('primar', 'primar_tona', 'primar_km')
+                     AND c.km_cursa IS NOT NULL
+                     AND c.km_cursa > 0
+                     AND c.km_totali IS NOT NULL
+                     AND c.km_totali > 0
+                     AND c.km_totali > c.km_cursa
+                THEN c.km_totali - c.km_cursa
+                ELSE 0
+            END
+        ";
         $loadedTonsExpr = "
             CASE
                 WHEN c.cantitate_incarcata IS NULL OR c.cantitate_incarcata <= 0 THEN 0
@@ -3992,6 +4195,7 @@ class DispecerCurseModel extends BaseModel
         ";
         $facturareWithInvoicedExpr = "(COALESCE(c.total_facturare, 0) + COALESCE(exp.total_refacturare_facturata, 0))";
         $refacturarePendingExpr = "COALESCE(exp.total_refacturare_pending, 0)";
+        $transportBucketExpr = $this->dashboardTransportBucketSql();
 
         $fleetSql = "
             SELECT
@@ -4000,23 +4204,11 @@ class DispecerCurseModel extends BaseModel
                 COALESCE(SUM(" . $refacturarePendingExpr . "), 0) AS total_refacturare,
                 COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS total_cheltuieli,
                 COALESCE(SUM(" . $kmEffectiveExpr . "), 0) AS total_km,
-                COALESCE(SUM(
-                    CASE
-                        WHEN c.tip_transport IN ('primar', 'primar_tona', 'primar_km', 'primar_distributie', 'mixt')
-                        THEN (" . $kmBilledExpr . ")
-                        ELSE 0
-                    END
-                ), 0) AS km_primar,
-                COALESCE(SUM(
-                    CASE
-                        WHEN c.tip_transport = 'distributie'
-                        THEN (" . $kmBilledExpr . ")
-                        WHEN c.tip_transport IN ('primar_distributie', 'mixt')
-                        THEN (" . $kmDistributieMixedExpr . ")
-                        ELSE 0
-                    END
-                ), 0) AS km_distributie,
+                COALESCE(SUM(" . $kmPrimarDashboardExpr . "), 0) AS km_primar,
+                COALESCE(SUM(" . $kmDistributieDashboardExpr . "), 0) AS km_distributie,
                 COALESCE(SUM(" . $kmBilledExpr . "), 0) AS km_facturati,
+                COALESCE(SUM(" . $kmSavedExpr . "), 0) AS km_salvati,
+                COALESCE(SUM(" . $kmExcessExpr . "), 0) AS km_exces,
                 COALESCE(SUM(" . $deliveredTonsExpr . "), 0) AS tone_livrate,
                 COALESCE(SUM(
                     CASE
@@ -4041,6 +4233,57 @@ class DispecerCurseModel extends BaseModel
         $this->bindParams($fleetStmt, $whereData['params']);
         $fleetStmt->execute();
         $fleetRow = $fleetStmt->fetch() ?: [];
+
+        $transportBreakdownSql = "
+            SELECT
+                " . $transportBucketExpr . " AS transport_bucket,
+                COUNT(*) AS total_curse,
+                COALESCE(SUM(" . $kmEffectiveExpr . "), 0) AS total_km,
+                COALESCE(SUM(" . $deliveredTonsExpr . "), 0) AS total_tone
+            {$from}
+            {$whereData['where']}
+            GROUP BY transport_bucket
+        ";
+        $transportBreakdownStmt = $this->db->prepare($transportBreakdownSql);
+        $this->bindParams($transportBreakdownStmt, $whereData['params']);
+        $transportBreakdownStmt->execute();
+        $transportBreakdownRows = $transportBreakdownStmt->fetchAll();
+
+        $transportBreakdownMap = $this->emptyDashboardTransportBreakdown();
+        foreach ($transportBreakdownRows as $row) {
+            $bucket = (string) ($row['transport_bucket'] ?? '');
+            if (!array_key_exists($bucket, $transportBreakdownMap)) {
+                continue;
+            }
+
+            $transportBreakdownMap[$bucket]['curse'] = (int) ($row['total_curse'] ?? 0);
+            $transportBreakdownMap[$bucket]['km'] = round(max(0.0, (float) ($row['total_km'] ?? 0)), 2);
+            $transportBreakdownMap[$bucket]['tone'] = round(max(0.0, (float) ($row['total_tone'] ?? 0)), 2);
+        }
+
+        $transportKmBreakdownSql = "
+            SELECT
+                COALESCE(SUM(" . $kmDistributieDashboardExpr . "), 0) AS distributie,
+                COALESCE(SUM(" . $kmPrimarDashboardExpr . "), 0) AS primar,
+                0 AS primar_distributie,
+                COALESCE(SUM(
+                    CASE
+                        WHEN c.tip_transport = 'compresor'
+                        THEN (" . $kmEffectiveExpr . ")
+                        ELSE 0
+                    END
+                ), 0) AS compresor
+            {$from}
+            {$whereData['where']}
+        ";
+        $transportKmBreakdownStmt = $this->db->prepare($transportKmBreakdownSql);
+        $this->bindParams($transportKmBreakdownStmt, $whereData['params']);
+        $transportKmBreakdownStmt->execute();
+        $transportKmBreakdownRow = $transportKmBreakdownStmt->fetch() ?: [];
+        foreach (array_keys($transportBreakdownMap) as $bucketKey) {
+            $transportBreakdownMap[$bucketKey]['km'] = round(max(0.0, (float) ($transportKmBreakdownRow[$bucketKey] ?? 0)), 2);
+        }
+        $transportBreakdown = array_values($transportBreakdownMap);
 
         $totalCurse = (int) ($fleetRow['total_curse'] ?? 0);
         $totalFacturare = (float) ($fleetRow['total_facturare'] ?? 0);
@@ -4326,6 +4569,8 @@ class DispecerCurseModel extends BaseModel
                 'total_km' => round($totalKm, 2),
                 'km_primar' => round((float) ($fleetRow['km_primar'] ?? 0), 2),
                 'km_distributie' => round((float) ($fleetRow['km_distributie'] ?? 0), 2),
+                'km_salvati' => round((float) ($fleetRow['km_salvati'] ?? 0), 2),
+                'km_exces' => round((float) ($fleetRow['km_exces'] ?? 0), 2),
                 'tone_livrate' => round($totalToneTransportate, 2),
                 'tone_primar' => round((float) ($fleetRow['tone_primar'] ?? 0), 2),
                 'tone_distributie' => round((float) ($fleetRow['tone_distributie'] ?? 0), 2),
@@ -4342,6 +4587,7 @@ class DispecerCurseModel extends BaseModel
                 'numar_vehicule_active' => (int) ($fleetUtilizare['numar_vehicule_active'] ?? 0),
                 'luna_selectata' => (int) ($fleetUtilizare['luna_selectata'] ?? 0),
                 'an_selectat' => (int) ($fleetUtilizare['an_selectat'] ?? 0),
+                'transport_breakdown' => $transportBreakdown,
             ],
             'vehicles' => $vehicles,
             'drivers' => $drivers,
@@ -4495,6 +4741,7 @@ class DispecerCurseModel extends BaseModel
         $this->appendDashboardIntFilter($where, $params, 'c.driver_id', (array) ($filters['driver_ids'] ?? []), 'util_driver_id');
         $this->appendDashboardIntFilter($where, $params, 'c.beneficiar_id', (array) ($filters['beneficiary_ids'] ?? []), 'util_beneficiary_id');
         $this->appendDashboardStringFilter($where, $params, 'c.tip_transport', (array) ($filters['transport_types'] ?? []), 'util_transport_type');
+        $this->appendDashboardDecimalFilter($where, $params, 'c.capacitate_transport', (array) ($filters['transport_capacities'] ?? []), 'util_transport_capacity');
         $this->appendDashboardStringFilter($where, $params, 'c.status_facturare', (array) ($filters['statuses'] ?? []), 'util_status');
 
         return [
@@ -4591,6 +4838,7 @@ class DispecerCurseModel extends BaseModel
         $this->appendDashboardIntFilter($where, $params, 'c.driver_id', (array) ($filters['driver_ids'] ?? []), 'dash_driver_id');
         $this->appendDashboardIntFilter($where, $params, 'c.beneficiar_id', (array) ($filters['beneficiary_ids'] ?? []), 'dash_beneficiary_id');
         $this->appendDashboardStringFilter($where, $params, 'c.tip_transport', (array) ($filters['transport_types'] ?? []), 'dash_transport_type');
+        $this->appendDashboardDecimalFilter($where, $params, 'c.capacitate_transport', (array) ($filters['transport_capacities'] ?? []), 'dash_transport_capacity');
         $this->appendDashboardStringFilter($where, $params, 'c.status_facturare', (array) ($filters['statuses'] ?? []), 'dash_status');
 
         return [
@@ -4616,6 +4864,45 @@ class DispecerCurseModel extends BaseModel
                 continue;
             }
             $normalized[$number] = $number;
+        }
+
+        if ($normalized === []) {
+            return;
+        }
+
+        $placeholders = [];
+        $index = 0;
+        foreach (array_values($normalized) as $value) {
+            $placeholder = ':' . $prefix . '_' . $index;
+            $placeholders[] = $placeholder;
+            $params[$placeholder] = $value;
+            $index++;
+        }
+
+        $where[] = $column . ' IN (' . implode(', ', $placeholders) . ')';
+    }
+
+    private function appendDashboardDecimalFilter(
+        array &$where,
+        array &$params,
+        string $column,
+        array $values,
+        string $prefix
+    ): void {
+        $normalized = [];
+        foreach ($values as $value) {
+            $item = str_replace(',', '.', trim((string) $value));
+            if ($item === '' || !is_numeric($item)) {
+                continue;
+            }
+
+            $number = (float) $item;
+            if ($number <= 0) {
+                continue;
+            }
+
+            $key = number_format($number, 2, '.', '');
+            $normalized[$key] = $key;
         }
 
         if ($normalized === []) {

@@ -214,26 +214,39 @@ return [
         'singular' => 'Ãˆâ„¢ofer',
         'table' => 'soferi',
         'select' => "t.*,
-            CASE
-                WHEN v.id IS NULL THEN '-'
-                WHEN vs.id IS NULL THEN v.nr_inmatriculare
-                ELSE CONCAT(v.nr_inmatriculare, ' + ', vs.nr_inmatriculare)
-            END AS vehicul_label,
-            CONCAT(v.marca, ' ', v.model) AS vehicul_model",
+            COALESCE(NULLIF(driver_vehicle_labels.vehicul_label, ''), '-') AS vehicul_label,
+            COALESCE(driver_vehicle_labels.vehicul_model, '') AS vehicul_model",
         'joins' => [
-            ['type' => 'LEFT', 'table' => 'vehicule v', 'on' => 'v.id = t.vehicle_id'],
-            ['type' => 'LEFT', 'table' => '(SELECT tractor_id, MAX(id) AS last_id FROM vehicule_cuplaje WHERE activ = 1 GROUP BY tractor_id) vc_latest', 'on' => 'vc_latest.tractor_id = v.id'],
-            ['type' => 'LEFT', 'table' => 'vehicule_cuplaje vc', 'on' => 'vc.id = vc_latest.last_id'],
-            ['type' => 'LEFT', 'table' => 'vehicule vs', 'on' => 'vs.id = vc.semiremorca_id'],
+            ['type' => 'LEFT', 'table' => "(SELECT
+                    sv.driver_id,
+                    GROUP_CONCAT(
+                        CASE
+                            WHEN vs.id IS NULL THEN v.nr_inmatriculare
+                            ELSE CONCAT(v.nr_inmatriculare, ' + ', vs.nr_inmatriculare)
+                        END
+                        ORDER BY sv.is_primary DESC, v.nr_inmatriculare ASC
+                        SEPARATOR ', '
+                    ) AS vehicul_label,
+                    GROUP_CONCAT(
+                        TRIM(CONCAT(COALESCE(v.marca, ''), ' ', COALESCE(v.model, '')))
+                        ORDER BY sv.is_primary DESC, v.nr_inmatriculare ASC
+                        SEPARATOR ', '
+                    ) AS vehicul_model
+                FROM soferi_vehicule sv
+                INNER JOIN vehicule v ON v.id = sv.vehicle_id
+                LEFT JOIN (SELECT tractor_id, MAX(id) AS last_id FROM vehicule_cuplaje WHERE activ = 1 GROUP BY tractor_id) vc_latest ON vc_latest.tractor_id = v.id
+                LEFT JOIN vehicule_cuplaje vc ON vc.id = vc_latest.last_id
+                LEFT JOIN vehicule vs ON vs.id = vc.semiremorca_id
+                GROUP BY sv.driver_id) driver_vehicle_labels", 'on' => 'driver_vehicle_labels.driver_id = t.id'],
         ],
         'default_order' => 't.created_at DESC',
-        'search_fields' => ['t.nume', 't.telefon', 't.observatii', 'v.nr_inmatriculare', 'vs.nr_inmatriculare', 'v.marca', 'v.model'],
+        'search_fields' => ['t.nume', 't.telefon', 't.observatii', 'driver_vehicle_labels.vehicul_label', 'driver_vehicle_labels.vehicul_model'],
         'list_columns' => [
             'poza_original' => ['label' => 'Foto', 'type' => 'driver_photo'],
             'nume' => ['label' => 'Nume'],
             'data_nasterii' => ['label' => 'Data nasterii', 'type' => 'date'],
             'telefon' => ['label' => 'Telefon'],
-            'vehicul_label' => ['label' => 'Vehicul alocat'],
+            'vehicul_label' => ['label' => 'Vehicule alocate'],
             'status' => ['label' => 'Status', 'type' => 'status'],
             'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
         ],
@@ -242,7 +255,7 @@ return [
             'nume' => ['label' => 'Nume'],
             'data_nasterii' => ['label' => 'Data nasterii', 'type' => 'date'],
             'telefon' => ['label' => 'Telefon'],
-            'vehicul_label' => ['label' => 'Vehicul alocat'],
+            'vehicul_label' => ['label' => 'Vehicule alocate'],
             'status' => ['label' => 'Status', 'type' => 'status'],
             'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea'],
             'created_at' => ['label' => 'Creat la', 'type' => 'datetime'],
@@ -252,11 +265,13 @@ return [
             'nume' => ['label' => 'Nume', 'type' => 'text', 'required' => true, 'maxlength' => 100],
             'data_nasterii' => ['label' => 'Data nasterii', 'type' => 'date', 'required' => false, 'nullable' => true],
             'telefon' => ['label' => 'Telefon', 'type' => 'text', 'required' => true, 'maxlength' => 20],
-            'vehicle_id' => [
-                'label' => 'Vehicul alocat',
-                'type' => 'select',
+            'vehicle_ids' => [
+                'label' => 'Vehicule alocate',
+                'type' => 'multiselect',
                 'required' => false,
                 'nullable' => true,
+                'store' => false,
+                'default' => [],
                 'source' => [
                     'table' => 'vehicule',
                     'value' => 'id',
@@ -289,7 +304,10 @@ return [
                     'where' => "status = 'activ' AND tip_vehicul NOT IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')",
                     'order' => 'nr_inmatriculare ASC',
                 ],
-                'placeholder' => 'FÃ„Æ’rÃ„Æ’ vehicul alocat',
+                'help' => 'Deschide lista si bifeaza toate vehiculele pe care vrei sa le aloci soferului.',
+                'placeholder' => '-- Selecteaza vehiculele --',
+                'summary_singular' => 'vehicul selectat',
+                'summary_plural' => 'vehicule selectate',
             ],
             'poza_upload' => [
                 'label' => 'Poza sofer',
@@ -379,7 +397,7 @@ return [
                     'table' => 'soferi',
                     'value' => 'id',
                     'label' => 'nume',
-                    'where' => "status = 'activ' AND vehicle_id IS NOT NULL",
+                    'where' => "status = 'activ' AND (vehicle_id IS NOT NULL OR EXISTS (SELECT 1 FROM soferi_vehicule sv WHERE sv.driver_id = soferi.id))",
                     'order' => 'nume ASC',
                 ],
             ],

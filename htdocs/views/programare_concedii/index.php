@@ -90,8 +90,15 @@ if ($calendarTitleRo === '') {
                     >
                         Aprobările mele
                     </a>
+                    <a
+                        class="leave-tab-link <?= $activeTab === 'reguli' ? 'active' : '' ?>"
+                        href="<?= e(build_query_url(array_merge($tabBaseQuery, ['tab' => 'reguli', 'p' => 1]))) ?>"
+                    >
+                        Reguli disponibilitate
+                    </a>
                 </nav>
 
+                <?php if ($activeTab !== 'reguli'): ?>
                 <form method="get" id="leave-calendar-controls" class="leave-inline-form leave-calendar-controls">
                     <input type="hidden" name="page" value="programare_concedii">
                     <input type="hidden" name="tab" value="<?= e($activeTab) ?>">
@@ -117,10 +124,189 @@ if ($calendarTitleRo === '') {
                         <?php endforeach; ?>
                     </select>
                 </form>
+                <?php endif; ?>
             </div>
         </div>
 
         <div class="leave-page-body">
+            <?php if ($activeTab === 'reguli'): ?>
+                <section class="leave-panel leave-availability-rules-panel">
+                    <div class="leave-panel-header">
+                        <h3 class="leave-panel-title mb-0">Reguli disponibilitate soferi</h3>
+                    </div>
+                    <div class="leave-rules-config">
+                        <form
+                            method="post"
+                            action="<?= e(build_query_url(['page' => 'programare_concedii', 'action' => 'store_rule'])) ?>"
+                            class="leave-rule-form"
+                            novalidate
+                        >
+                            <?= csrf_field() ?>
+                            <div class="row g-3 align-items-end">
+                                <div class="col-12 col-lg-3">
+                                    <label class="form-label" for="availability_rule_garaj">Garaj / locatie</label>
+                                    <select
+                                        class="form-select <?= isset($availabilityRuleFormErrors['garaj']) ? 'is-invalid' : '' ?>"
+                                        id="availability_rule_garaj"
+                                        name="garaj"
+                                        required
+                                    >
+                                        <option value="">Selecteaza locatia</option>
+                                        <?php foreach ((array) ($availabilityRuleOptions['garages'] ?? []) as $garageOption): ?>
+                                            <?php $garageValue = (string) $garageOption; ?>
+                                            <option value="<?= e($garageValue) ?>" <?= (string) ($availabilityRuleFormData['garaj'] ?? '') === $garageValue ? 'selected' : '' ?>>
+                                                <?= e($garageValue) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <?php if (isset($availabilityRuleFormErrors['garaj'])): ?><div class="invalid-feedback d-block"><?= e((string) $availabilityRuleFormErrors['garaj']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-md-6 col-lg-2">
+                                    <label class="form-label" for="availability_rule_category">Activitate</label>
+                                    <select
+                                        class="form-select <?= isset($availabilityRuleFormErrors['categorie_vehicul']) ? 'is-invalid' : '' ?>"
+                                        id="availability_rule_category"
+                                        name="categorie_vehicul"
+                                        required
+                                    >
+                                        <?php foreach ($availabilityRuleCategories as $categoryKey => $categoryLabel): ?>
+                                            <option value="<?= e((string) $categoryKey) ?>" <?= (string) ($availabilityRuleFormData['categorie_vehicul'] ?? '') === (string) $categoryKey ? 'selected' : '' ?>>
+                                                <?= e((string) $categoryLabel) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <?php if (isset($availabilityRuleFormErrors['categorie_vehicul'])): ?><div class="invalid-feedback d-block"><?= e((string) $availabilityRuleFormErrors['categorie_vehicul']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-md-6 col-lg-2">
+                                    <label class="form-label" for="availability_rule_capacity">Capacitate (tone)</label>
+                                    <select
+                                        class="form-select <?= isset($availabilityRuleFormErrors['capacitate_transport']) ? 'is-invalid' : '' ?>"
+                                        id="availability_rule_capacity"
+                                        name="capacitate_transport"
+                                    >
+                                        <option value="">Toate capacitatile</option>
+                                        <?php foreach ((array) ($availabilityRuleOptions['capacities'] ?? []) as $capacityOption): ?>
+                                            <?php
+                                            $capacityCategory = (string) ($capacityOption['categorie_vehicul'] ?? '');
+                                            $capacityValue = (string) ($capacityOption['capacitate_transport'] ?? '');
+                                            if ($capacityValue === '') {
+                                                continue;
+                                            }
+                                            $capacityLabel = rtrim(rtrim($capacityValue, '0'), '.') . ' t';
+                                            $capacitySelected = (string) ($availabilityRuleFormData['capacitate_transport'] ?? '') === $capacityValue
+                                                && (string) ($availabilityRuleFormData['categorie_vehicul'] ?? '') === $capacityCategory;
+                                            ?>
+                                            <option
+                                                value="<?= e($capacityValue) ?>"
+                                                data-category="<?= e($capacityCategory) ?>"
+                                                <?= $capacitySelected ? 'selected' : '' ?>
+                                            >
+                                                <?= e($capacityLabel) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <?php if (isset($availabilityRuleFormErrors['capacitate_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $availabilityRuleFormErrors['capacitate_transport']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-md-6 col-lg-2">
+                                    <label class="form-label" for="availability_rule_min">Minim disponibili</label>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        step="1"
+                                        class="form-control <?= isset($availabilityRuleFormErrors['min_soferi_disponibili']) ? 'is-invalid' : '' ?>"
+                                        id="availability_rule_min"
+                                        name="min_soferi_disponibili"
+                                        value="<?= e((string) ($availabilityRuleFormData['min_soferi_disponibili'] ?? '1')) ?>"
+                                        required
+                                    >
+                                    <?php if (isset($availabilityRuleFormErrors['min_soferi_disponibili'])): ?><div class="invalid-feedback d-block"><?= e((string) $availabilityRuleFormErrors['min_soferi_disponibili']) ?></div><?php endif; ?>
+                                </div>
+
+                                <div class="col-12 col-md-6 col-lg-1">
+                                    <div class="form-check leave-rule-active-check">
+                                        <input
+                                            class="form-check-input"
+                                            type="checkbox"
+                                            value="1"
+                                            id="availability_rule_active"
+                                            name="activ"
+                                            <?= (string) ($availabilityRuleFormData['activ'] ?? '1') === '1' ? 'checked' : '' ?>
+                                        >
+                                        <label class="form-check-label" for="availability_rule_active">Activ</label>
+                                    </div>
+                                </div>
+
+                                <div class="col-12 col-lg-2">
+                                    <button type="submit" class="btn btn-primary w-100">
+                                        <i class="bi bi-plus-lg"></i>
+                                        Adauga regula
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+
+                        <div class="leave-rule-note">
+                            Locatiile si capacitatile sunt incarcate din Vehicule. Regula se aplica la soferii activi alocati pe vehicule active din aceeasi locatie, acelasi tip de activitate si aceeasi capacitate daca ai selectat capacitatea.
+                        </div>
+
+                        <div class="leave-table-wrap table-responsive">
+                            <table class="table leave-requests-table leave-rules-table mb-0">
+                                <thead>
+                                <tr>
+                                    <th>Garaj / locatie</th>
+                                    <th>Activitate</th>
+                                    <th>Capacitate</th>
+                                    <th>Minim disponibili</th>
+                                    <th>Status</th>
+                                    <th>Actiuni</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <?php if (($availabilityRules ?? []) === []): ?>
+                                    <tr>
+                                        <td colspan="6" class="text-center py-4 text-muted">Nu exista reguli configurate.</td>
+                                    </tr>
+                                <?php else: ?>
+                                    <?php foreach ($availabilityRules as $rule): ?>
+                                        <?php
+                                        $ruleId = (int) ($rule['id'] ?? 0);
+                                        $ruleCategory = (string) ($rule['categorie_vehicul'] ?? '');
+                                        $ruleCategoryLabel = $availabilityRuleCategories[$ruleCategory] ?? $ruleCategory;
+                                        $ruleCapacity = $rule['capacitate_transport'] ?? null;
+                                        $ruleCapacityLabel = $ruleCapacity === null || (string) $ruleCapacity === ''
+                                            ? 'Toate'
+                                            : rtrim(rtrim((string) $ruleCapacity, '0'), '.') . ' t';
+                                        $ruleActive = (int) ($rule['activ'] ?? 0) === 1;
+                                        ?>
+                                        <tr>
+                                            <td><?= e((string) ($rule['garaj'] ?? '-')) ?></td>
+                                            <td><?= e($ruleCategoryLabel) ?></td>
+                                            <td><?= e($ruleCapacityLabel) ?></td>
+                                            <td><?= e((string) ($rule['min_soferi_disponibili'] ?? 1)) ?></td>
+                                            <td>
+                                                <span class="leave-status-badge <?= $ruleActive ? 'leave-status-aprobat' : 'leave-status-respins' ?>">
+                                                    <?= $ruleActive ? 'Activ' : 'Inactiv' ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <form method="post" action="<?= e(build_query_url(['page' => 'programare_concedii', 'action' => 'delete_rule'])) ?>" onsubmit="return confirm('Stergi regula de disponibilitate?');">
+                                                    <?= csrf_field() ?>
+                                                    <input type="hidden" name="id" value="<?= e((string) $ruleId) ?>">
+                                                    <button type="submit" class="btn btn-sm btn-outline-danger">Sterge</button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+            <?php else: ?>
             <div class="leave-main-grid">
                 <section class="leave-panel leave-calendar-panel">
                     <div class="leave-panel-header">
@@ -558,6 +744,7 @@ if ($calendarTitleRo === '') {
                     <?php endif; ?>
                 </div>
             </section>
+            <?php endif; ?>
         </div>
     </div>
 

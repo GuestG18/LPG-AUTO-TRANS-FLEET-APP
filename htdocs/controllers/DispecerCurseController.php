@@ -19,6 +19,7 @@ class DispecerCurseController
         'service' => 'Reparatii',
         'alte' => 'Alte cheltuieli',
     ];
+    private const FUEL_EXPENSE_TYPE = 'motorina';
 
     private const GOODS_TYPES = [
         'butan' => 'Butan',
@@ -49,6 +50,14 @@ class DispecerCurseController
     public function __construct(PDO $db)
     {
         $this->model = new DispecerCurseModel($db);
+    }
+
+    private function expenseEntryTypes(): array
+    {
+        $types = self::EXPENSE_TYPES;
+        unset($types[self::FUEL_EXPENSE_TYPE]);
+
+        return $types;
     }
 
     public function handle(string $action): void
@@ -233,6 +242,7 @@ class DispecerCurseController
             ],
             'transportTypes' => self::TRANSPORT_TYPES,
             'expenseTypes' => self::EXPENSE_TYPES,
+            'expenseEntryTypes' => $this->expenseEntryTypes(),
             'raceVehicles' => $raceVehicles,
             'filterVehicles' => $filterVehicles,
             'vehicleGarageMap' => $vehicleGarageMap,
@@ -338,7 +348,7 @@ class DispecerCurseController
                     'expense_id' => (int) $expense['id'],
                     'tip_cheltuiala' => (string) ($expense['tip_cheltuiala'] ?? ''),
                     'refacturare_enabled' => trim((string) ($expense['refacturare_tip_cheltuiala'] ?? '')) !== '' ? '1' : '0',
-                    'refacturare_tip_cheltuiala' => (string) ($expense['refacturare_tip_cheltuiala'] ?? 'motorina'),
+                    'refacturare_tip_cheltuiala' => (string) ($expense['refacturare_tip_cheltuiala'] ?? ''),
                     'refacturare_suma' => (string) ($expense['refacturare_suma'] ?? ''),
                     'refacturare_data' => (string) ($expense['refacturare_data'] ?? date('Y-m-d')),
                     'refacturare_observatii' => (string) ($expense['refacturare_observatii'] ?? ''),
@@ -390,6 +400,7 @@ class DispecerCurseController
             'expenseBeingEdited' => $expenseBeingEdited,
             'transportTypes' => self::TRANSPORT_TYPES,
             'expenseTypes' => self::EXPENSE_TYPES,
+            'expenseEntryTypes' => $this->expenseEntryTypes(),
             'vehicles' => $this->model->getVehicleOptions(),
             'vehicleGarageMap' => $vehicleGarageMap,
             'loadLocations' => $this->model->getLoadLocations(true),
@@ -761,6 +772,7 @@ class DispecerCurseController
             'refacturareRows' => $refacturareRows,
             'transportTypes' => self::TRANSPORT_TYPES,
             'expenseTypes' => self::EXPENSE_TYPES,
+            'expenseEntryTypes' => $this->expenseEntryTypes(),
             'formData' => $formData,
             'formErrors' => $formFlash['errors'],
         ]);
@@ -784,9 +796,9 @@ class DispecerCurseController
             $old = array_merge($old, [
                 'race_id' => $raceId > 0 ? (string) $raceId : '',
                 'expense_id' => trim((string) ($_POST['expense_id'] ?? '')),
-                'tip_cheltuiala' => trim((string) ($_POST['tip_cheltuiala'] ?? 'motorina')),
+                'tip_cheltuiala' => trim((string) ($_POST['tip_cheltuiala'] ?? '')),
                 'refacturare_enabled' => '1',
-                'refacturare_tip_cheltuiala' => trim((string) ($_POST['refacturare_tip_cheltuiala'] ?? 'motorina')),
+                'refacturare_tip_cheltuiala' => trim((string) ($_POST['refacturare_tip_cheltuiala'] ?? '')),
                 'refacturare_suma' => trim((string) ($_POST['refacturare_suma'] ?? '')),
                 'refacturare_data' => trim((string) ($_POST['refacturare_data'] ?? date('Y-m-d'))),
                 'refacturare_observatii' => trim((string) ($_POST['refacturare_observatii'] ?? '')),
@@ -800,10 +812,7 @@ class DispecerCurseController
             redirect($redirectUrl);
         }
 
-        $refacturareType = trim((string) ($_POST['refacturare_tip_cheltuiala'] ?? 'motorina'));
-        if ($refacturareType === '') {
-            $refacturareType = 'motorina';
-        }
+        $refacturareType = trim((string) ($_POST['refacturare_tip_cheltuiala'] ?? ''));
 
         $mappedInput = [
             'expense_id' => '',
@@ -907,7 +916,7 @@ class DispecerCurseController
     {
         return array_merge($old, [
             'expense_id' => trim((string) ($input['expense_id'] ?? '')),
-            'tip_cheltuiala' => trim((string) ($input['tip_cheltuiala'] ?? ($old['tip_cheltuiala'] ?? 'motorina'))),
+            'tip_cheltuiala' => trim((string) ($input['tip_cheltuiala'] ?? ($old['tip_cheltuiala'] ?? ''))),
             'suma' => trim((string) ($input['suma'] ?? '')),
             'data_cheltuiala' => trim((string) ($input['data_cheltuiala'] ?? date('Y-m-d'))),
             'observatii' => trim((string) ($input['observatii'] ?? '')),
@@ -1423,6 +1432,10 @@ class DispecerCurseController
             'loc_id' => '',
             'zona_id' => '',
             'km_tarifare' => '',
+            'cost_cursa' => '',
+            'aplica_cost_cursa' => '0',
+            'vehicle_ids' => [],
+            'km_agreati_manual' => '0',
             'activ' => '1',
         ];
         $primaryRouteEditId = (int) ($_GET['route_primar_edit_id'] ?? 0);
@@ -1433,12 +1446,24 @@ class DispecerCurseController
                     'route_id' => (string) ((int) ($primaryRouteEditRule['id'] ?? 0)),
                     'loc_id' => (string) ((int) ($primaryRouteEditRule['loc_incarcare_id'] ?? 0)),
                     'zona_id' => (string) ((int) ($primaryRouteEditRule['zona_distributie_id'] ?? 0)),
-                    'km_tarifare' => (string) ((int) ($primaryRouteEditRule['km_tarifare'] ?? 0)),
+                    'km_tarifare' => !empty($primaryRouteEditRule['km_agreati_manual'])
+                        ? ''
+                        : (string) ((int) ($primaryRouteEditRule['km_tarifare'] ?? 0)),
+                    'cost_cursa' => number_format((float) ($primaryRouteEditRule['cost_cursa'] ?? 0), 2, '.', ''),
+                    'aplica_cost_cursa' => !empty($primaryRouteEditRule['aplica_cost_cursa']) ? '1' : '0',
+                    'vehicle_ids' => array_map(
+                        'strval',
+                        $this->parseDistributionRouteVehicleIds((string) ($primaryRouteEditRule['vehicle_ids'] ?? ''))
+                    ),
+                    'km_agreati_manual' => !empty($primaryRouteEditRule['km_agreati_manual']) ? '1' : '0',
                     'activ' => !empty($primaryRouteEditRule['activ']) ? '1' : '0',
                 ];
             }
         }
         $primaryRouteFormData = array_merge($defaultPrimaryRouteForm, $primaryRouteFlash['old']);
+        $primaryRouteFormData['vehicle_ids'] = is_array($primaryRouteFormData['vehicle_ids'] ?? null)
+            ? array_values(array_unique(array_map('strval', $primaryRouteFormData['vehicle_ids'])))
+            : [];
         $primaryRouteFormMode = trim((string) ($primaryRouteFormData['route_id'] ?? '')) !== '' ? 'edit' : 'create';
 
         render('dispecer_curse/config.php', [
@@ -1769,6 +1794,14 @@ class DispecerCurseController
         $locationId = (int) ($_POST['route_primar_loc_id'] ?? 0);
         $zoneId = (int) ($_POST['route_primar_zona_id'] ?? 0);
         $kmTariffRaw = trim((string) ($_POST['route_primar_km_tarifare'] ?? ''));
+        $routeRideCostRaw = trim((string) ($_POST['route_primar_cost_cursa'] ?? ''));
+        $routeApplyRideCost = isset($_POST['route_primar_aplica_cost_cursa'])
+            && (string) $_POST['route_primar_aplica_cost_cursa'] === '1';
+        $routeVehicleIdsInput = isset($_POST['route_primar_vehicle_ids']) && is_array($_POST['route_primar_vehicle_ids'])
+            ? $_POST['route_primar_vehicle_ids']
+            : [];
+        $manualAgreedKm = isset($_POST['route_primar_km_agreati_manual'])
+            && (string) $_POST['route_primar_km_agreati_manual'] === '1';
         $routeActive = isset($_POST['route_primar_activ']) ? (string) $_POST['route_primar_activ'] === '1' : true;
 
         $errors = [];
@@ -1784,11 +1817,55 @@ class DispecerCurseController
             $errors['zona_id'] = 'Zona de descarcare selectata nu apartine beneficiarului curent.';
         }
 
-        $kmTariffFloat = $this->normalizeDecimal($kmTariffRaw);
-        if ($kmTariffRaw === '' || $kmTariffFloat === null || $kmTariffFloat <= 0) {
+        $kmTariffFloat = $manualAgreedKm ? 0.0 : $this->normalizeDecimal($kmTariffRaw);
+        if (!$manualAgreedKm && ($kmTariffRaw === '' || $kmTariffFloat === null || $kmTariffFloat <= 0)) {
             $errors['km_tarifare'] = 'Km tarifare este invalid.';
         }
         $kmTariff = $kmTariffFloat !== null ? (int) round($kmTariffFloat) : 0;
+        if ($manualAgreedKm) {
+            $kmTariffRaw = '';
+            $kmTariff = 0;
+        }
+
+        $routeRideCost = 0.0;
+        if ($routeRideCostRaw !== '') {
+            $parsedRideCost = $this->normalizeDecimal($routeRideCostRaw);
+            if ($parsedRideCost === null || $parsedRideCost < 0) {
+                $errors['cost_cursa'] = 'Costul de cursa este invalid.';
+            } else {
+                $routeRideCost = (float) $parsedRideCost;
+            }
+        }
+        if ($routeApplyRideCost && $routeRideCost <= 0) {
+            $errors['cost_cursa'] = 'Completeaza Cost cursa cu o valoare mai mare ca 0 pentru a activa regula pe ruta.';
+        }
+
+        $routeVehicleIds = [];
+        $invalidVehicleSelection = false;
+        foreach ($routeVehicleIdsInput as $vehicleIdRaw) {
+            $vehicleIdRaw = trim((string) $vehicleIdRaw);
+            if ($vehicleIdRaw === '') {
+                continue;
+            }
+            if (!ctype_digit($vehicleIdRaw)) {
+                $invalidVehicleSelection = true;
+                continue;
+            }
+
+            $vehicleId = (int) $vehicleIdRaw;
+            if ($vehicleId <= 0 || !$this->model->existsActiveVehicle($vehicleId)) {
+                $invalidVehicleSelection = true;
+                continue;
+            }
+
+            $routeVehicleIds[] = $vehicleId;
+        }
+        $routeVehicleIds = array_values(array_unique($routeVehicleIds));
+        if ($routeVehicleIds === []) {
+            $errors['vehicle_ids'] = 'Selecteaza cel putin un vehicul.';
+        } elseif ($invalidVehicleSelection) {
+            $errors['vehicle_ids'] = 'Selecteaza doar vehicule active valide.';
+        }
 
         if ($routeEditId > 0) {
             $existingRoute = $this->model->getPrimaryRouteRuleById($routeEditId, $beneficiaryId);
@@ -1802,6 +1879,10 @@ class DispecerCurseController
             'loc_id' => $locationId > 0 ? (string) $locationId : '',
             'zona_id' => $zoneId > 0 ? (string) $zoneId : '',
             'km_tarifare' => $kmTariffRaw,
+            'cost_cursa' => $routeRideCostRaw,
+            'aplica_cost_cursa' => $routeApplyRideCost ? '1' : '0',
+            'vehicle_ids' => array_map('strval', $routeVehicleIds),
+            'km_agreati_manual' => $manualAgreedKm ? '1' : '0',
             'activ' => $routeActive ? '1' : '0',
         ];
 
@@ -1818,7 +1899,11 @@ class DispecerCurseController
                     $locationId,
                     $zoneId,
                     $kmTariff,
-                    $routeActive
+                    $routeVehicleIds,
+                    $manualAgreedKm,
+                    $routeActive,
+                    $routeRideCost,
+                    $routeApplyRideCost
                 );
                 if (!$updated) {
                     throw new RuntimeException('Nu s-a putut actualiza configuratia Primar.');
@@ -1835,7 +1920,11 @@ class DispecerCurseController
                     $locationId,
                     $zoneId,
                     $kmTariff,
-                    $routeActive
+                    $routeVehicleIds,
+                    $manualAgreedKm,
+                    $routeActive,
+                    $routeRideCost,
+                    $routeApplyRideCost
                 );
                 try {
                     $this->ensurePrimaryRouteBidirectionalCatalogForPair($beneficiaryId, $locationId, $zoneId);
@@ -3004,9 +3093,9 @@ class DispecerCurseController
     {
         return [
             'expense_id' => '',
-            'tip_cheltuiala' => 'motorina',
+            'tip_cheltuiala' => '',
             'refacturare_enabled' => '0',
-            'refacturare_tip_cheltuiala' => 'motorina',
+            'refacturare_tip_cheltuiala' => '',
             'refacturare_suma' => '',
             'refacturare_data' => date('Y-m-d'),
             'refacturare_observatii' => '',
@@ -3033,8 +3122,8 @@ class DispecerCurseController
         $base = $this->defaultExpenseFormData();
         $base['race_id'] = '';
         $base['refacturare_enabled'] = '1';
-        $base['tip_cheltuiala'] = 'motorina';
-        $base['refacturare_tip_cheltuiala'] = 'motorina';
+        $base['tip_cheltuiala'] = '';
+        $base['refacturare_tip_cheltuiala'] = '';
         $base['suma'] = '0.00';
         $base['observatii'] = '';
 
@@ -3045,9 +3134,9 @@ class DispecerCurseController
     {
         $base = $this->defaultExpenseFormData();
         $defaultItem = [
-            'tip_cheltuiala' => (string) ($base['tip_cheltuiala'] ?? 'motorina'),
+            'tip_cheltuiala' => (string) ($base['tip_cheltuiala'] ?? ''),
             'refacturare_enabled' => (string) ($base['refacturare_enabled'] ?? '0'),
-            'refacturare_tip_cheltuiala' => (string) ($base['refacturare_tip_cheltuiala'] ?? 'motorina'),
+            'refacturare_tip_cheltuiala' => (string) ($base['refacturare_tip_cheltuiala'] ?? ''),
             'refacturare_suma' => (string) ($base['refacturare_suma'] ?? ''),
             'refacturare_data' => (string) ($base['refacturare_data'] ?? date('Y-m-d')),
             'refacturare_observatii' => (string) ($base['refacturare_observatii'] ?? ''),
@@ -3092,9 +3181,9 @@ class DispecerCurseController
                 }
 
                 $values['items'][] = [
-                    'tip_cheltuiala' => trim((string) ($rawItem['tip_cheltuiala'] ?? 'motorina')),
+                    'tip_cheltuiala' => trim((string) ($rawItem['tip_cheltuiala'] ?? '')),
                     'refacturare_enabled' => isset($rawItem['refacturare_enabled']) && (string) $rawItem['refacturare_enabled'] === '1' ? '1' : '0',
-                    'refacturare_tip_cheltuiala' => trim((string) ($rawItem['refacturare_tip_cheltuiala'] ?? 'motorina')),
+                    'refacturare_tip_cheltuiala' => trim((string) ($rawItem['refacturare_tip_cheltuiala'] ?? '')),
                     'refacturare_suma' => trim((string) ($rawItem['refacturare_suma'] ?? '')),
                     'refacturare_data' => trim((string) ($rawItem['refacturare_data'] ?? date('Y-m-d'))),
                     'refacturare_observatii' => trim((string) ($rawItem['refacturare_observatii'] ?? '')),
@@ -3174,9 +3263,9 @@ class DispecerCurseController
 
             $mappedInput = [
                 'expense_id' => '',
-                'tip_cheltuiala' => trim((string) ($rawItem['tip_cheltuiala'] ?? 'motorina')),
+                'tip_cheltuiala' => trim((string) ($rawItem['tip_cheltuiala'] ?? '')),
                 'refacturare_enabled' => isset($rawItem['refacturare_enabled']) && (string) $rawItem['refacturare_enabled'] === '1' ? '1' : '0',
-                'refacturare_tip_cheltuiala' => trim((string) ($rawItem['refacturare_tip_cheltuiala'] ?? 'motorina')),
+                'refacturare_tip_cheltuiala' => trim((string) ($rawItem['refacturare_tip_cheltuiala'] ?? '')),
                 'refacturare_suma' => trim((string) ($rawItem['refacturare_suma'] ?? '')),
                 'refacturare_data' => trim((string) ($rawItem['refacturare_data'] ?? date('Y-m-d'))),
                 'refacturare_observatii' => trim((string) ($rawItem['refacturare_observatii'] ?? '')),
@@ -3214,7 +3303,7 @@ class DispecerCurseController
                 || $mappedInput['refacturare_port_pret'] !== ''
                 || $mappedInput['refacturare_trece_bucati'] !== ''
                 || $mappedInput['refacturare_trece_pret'] !== ''
-                || $mappedInput['tip_cheltuiala'] !== 'motorina';
+                || $mappedInput['tip_cheltuiala'] !== '';
 
             if (!$hasMeaningfulInput) {
                 continue;
@@ -3259,9 +3348,9 @@ class DispecerCurseController
 
         if ($oldItems === []) {
             $oldItems[] = array_merge([
-                'tip_cheltuiala' => 'motorina',
+                'tip_cheltuiala' => '',
                 'refacturare_enabled' => '0',
-                'refacturare_tip_cheltuiala' => 'motorina',
+                'refacturare_tip_cheltuiala' => '',
                 'refacturare_suma' => '',
                 'refacturare_data' => date('Y-m-d'),
                 'refacturare_observatii' => '',
@@ -3330,22 +3419,28 @@ class DispecerCurseController
         $isDistributionWithKmTransport = $this->isDistributionWithKmTransportType($transportType);
         $isCompressorTransport = $transportType === 'compresor';
 
-        $loadingDate = trim((string) ($input['data_incarcare'] ?? ''));
-        if ($loadingDate !== '' && !$this->isValidDate($loadingDate)) {
+        $loadingDateRaw = trim((string) ($input['data_incarcare'] ?? ''));
+        $loadingDateNormalized = $loadingDateRaw !== '' ? $this->normalizeRaceDate($loadingDateRaw) : '';
+        $loadingDate = $loadingDateNormalized ?? $loadingDateRaw;
+        if ($loadingDateRaw !== '' && $loadingDateNormalized === null) {
             $errors['data_incarcare'] = 'Data de incarcare este invalida.';
         }
 
-        $startDate = trim((string) ($input['data_inceput'] ?? ($input['data_cursa'] ?? '')));
-        if (!$this->isValidDate($startDate)) {
+        $startDateRaw = trim((string) ($input['data_inceput'] ?? ($input['data_cursa'] ?? '')));
+        $startDateNormalized = $this->normalizeRaceDate($startDateRaw);
+        $startDate = $startDateNormalized ?? $startDateRaw;
+        if ($startDateNormalized === null) {
             $errors['data_inceput'] = 'Data de inceput este invalida.';
         }
 
-        $endDate = trim((string) ($input['data_sfarsit'] ?? $startDate));
-        if (!$this->isValidDate($endDate)) {
+        $endDateRaw = trim((string) ($input['data_sfarsit'] ?? $startDateRaw));
+        $endDateNormalized = $this->normalizeRaceDate($endDateRaw);
+        $endDate = $endDateNormalized ?? $endDateRaw;
+        if ($endDateNormalized === null) {
             $errors['data_sfarsit'] = 'Data de sfarsit este invalida.';
         }
 
-        if ($this->isValidDate($startDate) && $this->isValidDate($endDate) && $endDate < $startDate) {
+        if ($startDateNormalized !== null && $endDateNormalized !== null && $endDate < $startDate) {
             $errors['data_sfarsit'] = 'Data de sfarsit trebuie sa fie dupa sau egala cu data de inceput.';
         }
 
@@ -3567,6 +3662,9 @@ class DispecerCurseController
         $distributionRouteKmTariff = null;
         $hasMatchedDistributionRouteRule = false;
         $primaryRouteKmTariff = null;
+        $primaryRouteUsesManualAgreedKm = false;
+        $primaryRouteRideCost = 0.0;
+        $primaryRouteApplyRideCost = false;
         $hasMatchedPrimaryRouteRule = false;
         $distributionRouteScope = [
             'has_active_rules' => false,
@@ -3617,6 +3715,9 @@ class DispecerCurseController
                     );
                     if ($primaryRouteRule !== null) {
                         $primaryRouteKmTariff = max(0, (int) ($primaryRouteRule['km_tarifare'] ?? 0));
+                        $primaryRouteUsesManualAgreedKm = !empty($primaryRouteRule['km_agreati_manual']);
+                        $primaryRouteRideCost = max(0, (float) ($primaryRouteRule['cost_cursa'] ?? 0));
+                        $primaryRouteApplyRideCost = !empty($primaryRouteRule['aplica_cost_cursa']) && $primaryRouteRideCost > 0;
                         $hasMatchedPrimaryRouteRule = true;
                     }
                 } catch (Throwable $exception) {
@@ -3626,6 +3727,10 @@ class DispecerCurseController
 
             if (!$hasMatchedPrimaryRouteRule) {
                 $errors['zona_distributie_id'] = 'Combinatia selectata Loc ↔ Zona nu este configurata in Setari Primar pentru beneficiarul ales.';
+            } elseif ($primaryRouteUsesManualAgreedKm) {
+                if ($km === null || $km <= 0) {
+                    $errors['km_cursa'] = 'Completeaza Km agreati pentru ruta Primar selectata.';
+                }
             } elseif ($primaryRouteKmTariff === null || $primaryRouteKmTariff <= 0) {
                 $errors['km_cursa'] = 'Configureaza un Km efectuat valid in Setari Primar pentru combinatia selectata.';
             } else {
@@ -3663,7 +3768,7 @@ class DispecerCurseController
             $billingStatus = self::DEFAULT_BILLING_STATUS;
         }
 
-        if ($isPrimaryKmTransport && ($km === null || $km <= 0)) {
+        if ($isPrimaryKmTransport && ($km === null || $km <= 0) && !isset($errors['km_cursa'])) {
             $errors['km_cursa'] = 'Pentru Primar km, completeaza un Km efectuat valid din setarile Primar.';
         }
 
@@ -3778,12 +3883,16 @@ class DispecerCurseController
                 $pricePerKm = $this->resolveBeneficiaryRate($beneficiary, 'primar', false);
                 $pricePerTon = $this->resolveBeneficiaryRate($beneficiary, 'primar', true);
 
-                if ($pricePerKm <= 0 && $pricePerTon <= 0) {
+                if ($pricePerKm <= 0 && $pricePerTon <= 0 && !$primaryRouteApplyRideCost) {
                     $errors['beneficiar_id'] = 'Beneficiarul selectat nu are tarife valide pentru transport primar.';
                 } else {
-                    $price = $isPrimaryTonTransport
-                        ? ($pricePerTon > 0 ? $pricePerTon : $pricePerKm)
-                        : ($pricePerKm > 0 ? $pricePerKm : $pricePerTon);
+                    $price = $primaryRouteApplyRideCost
+                        ? $primaryRouteRideCost
+                        : (
+                            $isPrimaryTonTransport
+                                ? ($pricePerTon > 0 ? $pricePerTon : $pricePerKm)
+                                : ($pricePerKm > 0 ? $pricePerKm : $pricePerTon)
+                        );
                 }
             } elseif ($isDistributionTransport) {
                 if (!$this->beneficiarySupportsDistributionTransport($beneficiary, $transportType)) {
@@ -3867,7 +3976,9 @@ class DispecerCurseController
             if ($isPrimaryTransport) {
                 $pricePerKm = $this->resolveBeneficiaryRate($beneficiary ?? [], 'primar', false);
                 $pricePerTon = $this->resolveBeneficiaryRate($beneficiary ?? [], 'primar', true);
-                if ($isPrimaryTonTransport) {
+                if ($primaryRouteApplyRideCost) {
+                    $total = $primaryRouteRideCost;
+                } elseif ($isPrimaryTonTransport) {
                     $tonComponent = ($qtyForTonPricing !== null && $qtyForTonPricing > 0)
                         ? ((float) $qtyForTonPricing * $pricePerTon)
                         : 0.0;
@@ -3952,7 +4063,13 @@ class DispecerCurseController
                     : max(0.0, (float) $this->resolveBeneficiaryRate($beneficiary ?? [], 'primar', false));
             }
             $distributionPerTonRate = $includesDistributionSegment ? $effectiveDistributionTonRate : 0.0;
-            $totalPrimar = $includesPrimarySegment ? ($kmPrimar * $primaryPerKmRate) : 0.0;
+            $totalPrimar = $includesPrimarySegment
+                ? (
+                    $isPrimaryTransport && $primaryRouteApplyRideCost
+                        ? $primaryRouteRideCost
+                        : ($kmPrimar * $primaryPerKmRate)
+                )
+                : 0.0;
             $distributionFixedRideCost = ($includesDistributionSegment && $routeApplyRideCost)
                 ? max(0.0, (float) $routeRideCost)
                 : 0.0;
@@ -4263,13 +4380,21 @@ class DispecerCurseController
         $isRefacturareOnlySubmit = $submitIntent === 'refacturare' && (int) ($input['expense_id'] ?? 0) <= 0;
 
         $type = trim((string) ($input['tip_cheltuiala'] ?? ''));
-        if (!array_key_exists($type, self::EXPENSE_TYPES)) {
+        if ($type === '') {
+            $errors['tip_cheltuiala'] = 'Selecteaza tipul cheltuielii.';
+        } elseif ($type === self::FUEL_EXPENSE_TYPE) {
+            $errors['tip_cheltuiala'] = 'Motorina se adauga separat din modulul Alimentari.';
+        } elseif (!array_key_exists($type, self::EXPENSE_TYPES)) {
             $errors['tip_cheltuiala'] = 'Tipul cheltuielii este invalid.';
         }
 
         $refacturareEnabled = isset($input['refacturare_enabled']) && (string) $input['refacturare_enabled'] === '1';
         $refacturareType = trim((string) ($input['refacturare_tip_cheltuiala'] ?? ''));
-        if ($refacturareEnabled && !array_key_exists($refacturareType, self::EXPENSE_TYPES)) {
+        if ($refacturareEnabled && $refacturareType === '') {
+            $errors['refacturare_tip_cheltuiala'] = 'Selecteaza tipul pentru refacturare.';
+        } elseif ($refacturareEnabled && $refacturareType === self::FUEL_EXPENSE_TYPE) {
+            $errors['refacturare_tip_cheltuiala'] = 'Motorina se adauga separat din modulul Alimentari.';
+        } elseif ($refacturareEnabled && !array_key_exists($refacturareType, self::EXPENSE_TYPES)) {
             $errors['refacturare_tip_cheltuiala'] = 'Tipul pentru refacturare este invalid.';
         }
         if (!$refacturareEnabled) {
@@ -4465,7 +4590,7 @@ class DispecerCurseController
             'expense_id' => trim((string) ($input['expense_id'] ?? '')),
             'tip_cheltuiala' => $type,
             'refacturare_enabled' => $refacturareEnabled ? '1' : '0',
-            'refacturare_tip_cheltuiala' => $refacturareType !== '' ? $refacturareType : 'motorina',
+            'refacturare_tip_cheltuiala' => $refacturareType,
             'refacturare_suma' => $refacturareAmountRaw,
             'refacturare_data' => $refacturareDate !== '' ? $refacturareDate : date('Y-m-d'),
             'refacturare_observatii' => $refacturareObservations,
@@ -4948,44 +5073,22 @@ class DispecerCurseController
         }
 
         if ($this->isPrimaryKmTransportType($transportType) || $this->isPrimaryTonTransportType($transportType)) {
-            $allowedVehicleIds = [];
-            foreach ($this->model->getActiveVehicleIdsWithAssignedDriver() as $primaryVehicleId) {
-                $primaryVehicleId = (int) $primaryVehicleId;
-                if ($primaryVehicleId > 0) {
-                    $allowedVehicleIds[$primaryVehicleId] = $primaryVehicleId;
-                }
-            }
+            $allowedVehicleIds = $this->collectPrimaryVehicleIdsForBeneficiary($beneficiaryId);
         } elseif ($this->isDistributionTransportType($transportType)) {
             $distributionRouteScope = $this->resolveDistributionRouteScopeFromTransportType($transportType);
-            $allowedVehicleIds = $this->collectConfiguredVehicleIdsForBeneficiary($beneficiaryId);
             $distributionVehicleScope = $this->collectDistributionVehicleScopeForBeneficiary(
                 $beneficiaryId,
                 $distributionRouteScope
             );
-            if (!empty($distributionVehicleScope['has_scoped_rules'])) {
-                $scopedIds = [];
-                foreach ($distributionVehicleScope['vehicle_ids'] as $distributionVehicleId) {
-                    $distributionVehicleId = (int) $distributionVehicleId;
-                    if ($distributionVehicleId > 0) {
-                        $scopedIds[$distributionVehicleId] = $distributionVehicleId;
-                    }
+            $allowedVehicleIds = [];
+            foreach ($distributionVehicleScope['vehicle_ids'] as $distributionVehicleId) {
+                $distributionVehicleId = (int) $distributionVehicleId;
+                if ($distributionVehicleId > 0) {
+                    $allowedVehicleIds[$distributionVehicleId] = $distributionVehicleId;
                 }
-                $allowedVehicleIds = $scopedIds;
             }
         } else {
             $allowedVehicleIds = $this->collectCompressorVehicleIdsForBeneficiary($beneficiaryId);
-            if ($allowedVehicleIds === []) {
-                $distributionVehicleScope = $this->collectDistributionVehicleScopeForBeneficiary($beneficiaryId);
-                foreach ($distributionVehicleScope['vehicle_ids'] as $distributionVehicleId) {
-                    $distributionVehicleId = (int) $distributionVehicleId;
-                    if ($distributionVehicleId > 0) {
-                        $allowedVehicleIds[$distributionVehicleId] = $distributionVehicleId;
-                    }
-                }
-            }
-            if ($allowedVehicleIds === []) {
-                $allowedVehicleIds = $this->collectConfiguredVehicleIdsForBeneficiary($beneficiaryId);
-            }
         }
 
         if ($allowedVehicleIds === []) {
@@ -4993,6 +5096,24 @@ class DispecerCurseController
         }
 
         return array_key_exists($vehicleId, $allowedVehicleIds);
+    }
+
+    private function collectPrimaryVehicleIdsForBeneficiary(int $beneficiaryId): array
+    {
+        if ($beneficiaryId <= 0) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ($this->model->getPrimaryRouteRules(true, $beneficiaryId) as $rule) {
+            foreach ($this->parseDistributionRouteVehicleIds((string) ($rule['vehicle_ids'] ?? '')) as $vehicleId) {
+                if ($vehicleId > 0) {
+                    $ids[$vehicleId] = $vehicleId;
+                }
+            }
+        }
+
+        return $ids;
     }
 
     private function collectConfiguredVehicleIdsForBeneficiary(int $beneficiaryId): array
@@ -5559,6 +5680,28 @@ class DispecerCurseController
         $dateTime = DateTime::createFromFormat('Y-m-d', $date);
 
         return $dateTime !== false && $dateTime->format('Y-m-d') === $date;
+    }
+
+    private function normalizeRaceDate(string $date): ?string
+    {
+        $date = trim($date);
+        if ($date === '') {
+            return null;
+        }
+
+        foreach (['!Y-m-d', '!d/m/Y', '!d.m.Y', '!d-m-Y'] as $format) {
+            $dateTime = DateTime::createFromFormat($format, $date);
+            if ($dateTime === false) {
+                continue;
+            }
+
+            $expectedFormat = substr($format, 1);
+            if ($dateTime->format($expectedFormat) === $date) {
+                return $dateTime->format('Y-m-d');
+            }
+        }
+
+        return null;
     }
 
     private function normalizeTime(string $time): ?string

@@ -299,10 +299,10 @@ class ModuleController
         }
 
         $stockModule = $module;
-        $stockModule['title'] = 'Stoc anvelope in Mentenanta';
+        $stockModule['title'] = 'Anvelope';
 
         render('module/list.php', [
-            'pageTitle' => 'Stoc anvelope in Mentenanta',
+            'pageTitle' => 'Anvelope',
             'currentPage' => $this->resolveCurrentPage($moduleKey, $module),
             'moduleKey' => $moduleKey,
             'module' => $stockModule,
@@ -355,6 +355,10 @@ class ModuleController
         if ($moduleKey === 'vehicule' && $old === []) {
             $vehicleType = (string) ($formData['tip_vehicul'] ?? 'autovehicul');
             $formData['formula_axelor'] = $this->tireModel->normalizeLayoutForType($vehicleType, (string) ($formData['formula_axelor'] ?? ''));
+        }
+
+        if ($moduleKey === 'soferi' && $old === []) {
+            $formData['vehicle_ids'] = [];
         }
 
         if ($moduleKey === 'documente' && $old === []) {
@@ -548,6 +552,10 @@ class ModuleController
         $module = $this->applyDynamicDocumentTypeOptions($moduleKey, $module, $_POST, null);
         $module = $this->applyDynamicDocumentExpiryRequirement($moduleKey, $module, $_POST, null);
         [$data, $errors] = $this->validateAndPrepareData($module, $_POST, $_FILES, 'create', null);
+        $driverVehicleIds = [];
+        if ($moduleKey === 'soferi') {
+            $driverVehicleIds = $this->prepareDriverVehicleAssignmentsData($data, $errors, $_POST);
+        }
         if ($moduleKey === 'alimentari') {
             $this->validateAlimentareDriverSelection($data, $errors);
         }
@@ -639,6 +647,9 @@ class ModuleController
 
         try {
             $recordId = $this->moduleModel->insertRecord($module['table'], $data);
+            if ($moduleKey === 'soferi') {
+                $this->moduleModel->syncDriverVehicleAssignments($recordId, $driverVehicleIds);
+            }
             $currentRecordForStatus = $data + ['id' => $recordId];
 
             if (in_array($moduleKey, ['documente', 'documente_soferi'], true)) {
@@ -781,6 +792,10 @@ class ModuleController
         if ($old === [] && $moduleKey === 'vehicule') {
             $vehicleType = (string) ($formData['tip_vehicul'] ?? 'autovehicul');
             $formData['formula_axelor'] = $this->tireModel->normalizeLayoutForType($vehicleType, (string) ($formData['formula_axelor'] ?? ''));
+        }
+
+        if ($moduleKey === 'soferi' && $old === []) {
+            $formData['vehicle_ids'] = $this->moduleModel->getDriverVehicleIds($id);
         }
 
         $vehicleKmBordById = $moduleKey === 'alimentari'
@@ -962,6 +977,10 @@ class ModuleController
         $module = $this->applyDynamicDocumentTypeOptions($moduleKey, $module, $_POST, $id);
         $module = $this->applyDynamicDocumentExpiryRequirement($moduleKey, $module, $_POST, $id);
         [$data, $errors] = $this->validateAndPrepareData($module, $_POST, $_FILES, 'edit', $id);
+        $driverVehicleIds = [];
+        if ($moduleKey === 'soferi') {
+            $driverVehicleIds = $this->prepareDriverVehicleAssignmentsData($data, $errors, $_POST);
+        }
         if ($moduleKey === 'alimentari') {
             $this->validateAlimentareDriverSelection($data, $errors);
         }
@@ -1072,6 +1091,9 @@ class ModuleController
 
         try {
             $this->moduleModel->updateRecord($module['table'], $id, $data);
+            if ($moduleKey === 'soferi') {
+                $this->moduleModel->syncDriverVehicleAssignments($id, $driverVehicleIds);
+            }
             $currentRecordForStatus = $data + $existing + ['id' => $id];
 
             if (in_array($moduleKey, ['documente', 'documente_soferi', 'mentenanta'], true)) {
@@ -3542,7 +3564,7 @@ class ModuleController
         $options = [];
 
         foreach ($module['form_fields'] as $field => $meta) {
-            if (($meta['type'] ?? '') !== 'select') {
+            if (!in_array((string) ($meta['type'] ?? ''), ['select', 'multiselect'], true)) {
                 continue;
             }
 
@@ -3619,7 +3641,7 @@ class ModuleController
         }
 
         $driverSource = $source;
-        $driverSource['label'] = 'COALESCE(vehicle_id, 0)';
+        $driverSource['label'] = 'id';
 
         try {
             $rows = $this->moduleModel->getSelectOptions($driverSource);
@@ -3628,17 +3650,65 @@ class ModuleController
             return [];
         }
 
-        $map = [];
+        $driverIds = [];
         foreach ($rows as $row) {
             $driverId = isset($row['value']) ? (int) $row['value'] : 0;
             if ($driverId <= 0) {
                 continue;
             }
 
-            $map[(string) $driverId] = max(0, (int) ($row['label'] ?? 0));
+            $driverIds[$driverId] = $driverId;
+        }
+
+        $assignmentMap = $this->moduleModel->getDriverVehicleIdsMap(array_values($driverIds));
+        $map = [];
+        foreach ($assignmentMap as $driverId => $vehicleIds) {
+            $map[(string) $driverId] = array_values(array_filter(array_map('intval', (array) $vehicleIds)));
         }
 
         return $map;
+    }
+
+    private function prepareDriverVehicleAssignmentsData(array &$data, array &$errors, array $input): array
+    {
+        $vehicleIds = $this->normalizeDriverVehicleIdsFromInput($input['vehicle_ids'] ?? []);
+
+        if ($vehicleIds !== [] && !isset($errors['vehicle_ids'])) {
+            $invalidVehicleIds = $this->moduleModel->findInvalidDriverAssignmentVehicleIds($vehicleIds);
+            if ($invalidVehicleIds !== []) {
+                $errors['vehicle_ids'] = 'Selectia contine vehicule inactive sau neeligibile pentru alocare la sofer.';
+            }
+        }
+
+        $data['vehicle_id'] = $vehicleIds[0] ?? null;
+
+        return $vehicleIds;
+    }
+
+    private function normalizeDriverVehicleIdsFromInput(mixed $rawValue): array
+    {
+        if (!is_array($rawValue)) {
+            $rawValue = [$rawValue];
+        }
+
+        $vehicleIds = [];
+        foreach ($rawValue as $value) {
+            if (is_array($value) || !is_scalar($value)) {
+                continue;
+            }
+
+            $normalized = trim((string) $value);
+            if ($normalized === '' || !ctype_digit($normalized)) {
+                continue;
+            }
+
+            $vehicleId = (int) $normalized;
+            if ($vehicleId > 0) {
+                $vehicleIds[$vehicleId] = $vehicleId;
+            }
+        }
+
+        return array_values($vehicleIds);
     }
 
     private function validateAlimentareDriverSelection(array $data, array &$errors): void
@@ -3942,7 +4012,20 @@ class ModuleController
             }
 
             $value = $input[$field] ?? '';
-            if (is_string($value)) {
+            if (is_array($value)) {
+                $sanitizedValues = [];
+                foreach ($value as $item) {
+                    if (!is_scalar($item)) {
+                        continue;
+                    }
+
+                    $itemValue = trim((string) $item);
+                    if ($itemValue !== '') {
+                        $sanitizedValues[] = $itemValue;
+                    }
+                }
+                $value = $sanitizedValues;
+            } elseif (is_string($value)) {
                 $value = trim($value);
             }
 
@@ -4029,6 +4112,70 @@ class ModuleController
 
                 if ($maxSize > 0 && $fileSize > $maxSize) {
                     $errors[$field] = 'Fisierul depaseste dimensiunea maxima permisa.';
+                }
+
+                continue;
+            }
+
+            if ($type === 'multiselect') {
+                $rawItems = is_array($input[$field] ?? null) ? (array) $input[$field] : [];
+                $values = [];
+                foreach ($rawItems as $rawItem) {
+                    if (!is_scalar($rawItem)) {
+                        continue;
+                    }
+
+                    $itemValue = trim((string) $rawItem);
+                    if ($itemValue !== '') {
+                        $values[$itemValue] = $itemValue;
+                    }
+                }
+                $values = array_values($values);
+                $rawValues[$field] = $values;
+
+                if ($values === []) {
+                    if ($required) {
+                        $errors[$field] = 'Camp obligatoriu.';
+                    }
+
+                    if ($store) {
+                        $data[$column] = ($meta['nullable'] ?? false) ? null : '';
+                    }
+
+                    continue;
+                }
+
+                if (isset($meta['options'])) {
+                    foreach ($values as $itemValue) {
+                        if (!array_key_exists((string) $itemValue, $meta['options'])) {
+                            $errors[$field] = 'Selectia contine valori invalide.';
+                            continue 2;
+                        }
+                    }
+                }
+
+                if (isset($meta['source'])) {
+                    $idValues = [];
+                    foreach ($values as $itemValue) {
+                        if (!ctype_digit((string) $itemValue)) {
+                            $errors[$field] = 'Selectia contine valori invalide.';
+                            continue 2;
+                        }
+
+                        $idValue = (int) $itemValue;
+                        if (!$this->moduleModel->existsId($meta['source']['table'], $idValue)) {
+                            $errors[$field] = 'Selectia contine inregistrari inexistente.';
+                            continue 2;
+                        }
+
+                        $idValues[] = $idValue;
+                    }
+
+                    $values = $idValues;
+                }
+
+                if ($store) {
+                    $data[$column] = implode(',', array_map('strval', $values));
                 }
 
                 continue;

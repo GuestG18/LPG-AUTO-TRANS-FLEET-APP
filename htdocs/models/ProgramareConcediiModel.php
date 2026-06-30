@@ -3,6 +3,13 @@ declare(strict_types=1);
 
 class ProgramareConcediiModel extends BaseModel
 {
+    public function __construct(PDO $db)
+    {
+        parent::__construct($db);
+        $this->ensureDriverVehicleAssignmentsSchema();
+        $this->ensureAvailabilityRulesSchema();
+    }
+
     public function getActiveDrivers(): array
     {
         $sql = "
@@ -11,7 +18,11 @@ class ProgramareConcediiModel extends BaseModel
                 s.nume,
                 s.telefon,
                 s.vehicle_id,
-                v.nr_inmatriculare,
+                GROUP_CONCAT(
+                    DISTINCT v.nr_inmatriculare
+                    ORDER BY sv.is_primary DESC, v.nr_inmatriculare ASC
+                    SEPARATOR ', '
+                ) AS nr_inmatriculare,
                 CASE
                     WHEN EXISTS (
                         SELECT 1
@@ -23,8 +34,10 @@ class ProgramareConcediiModel extends BaseModel
                     ELSE 0
                 END AS indisponibil_astazi
             FROM soferi s
-            LEFT JOIN vehicule v ON v.id = s.vehicle_id
+            LEFT JOIN soferi_vehicule sv ON sv.driver_id = s.id
+            LEFT JOIN vehicule v ON v.id = sv.vehicle_id
             WHERE s.status = 'activ'
+            GROUP BY s.id, s.nume, s.telefon, s.vehicle_id
             ORDER BY s.nume ASC
         ";
 
@@ -419,6 +432,209 @@ class ProgramareConcediiModel extends BaseModel
         return $maxUnavailable;
     }
 
+    public function getAvailabilityRules(): array
+    {
+        $this->ensureAvailabilityRulesSchema();
+
+        $stmt = $this->db->query("
+            SELECT *
+            FROM concedii_reguli_disponibilitate
+            ORDER BY garaj ASC, categorie_vehicul ASC, capacitate_transport IS NULL ASC, capacitate_transport ASC, id DESC
+        ");
+
+        return $stmt->fetchAll();
+    }
+
+    public function getAvailabilityRuleOptions(): array
+    {
+        $capacityExpr = $this->transportCapacityExpression();
+        $sql = "
+            SELECT DISTINCT
+                NULLIF(TRIM(v.garaj), '') AS garaj,
+                CASE
+                    WHEN v.tip_vehicul = 'camion' THEN 'camion'
+                    WHEN v.tip_vehicul = 'cap_tractor' THEN 'ansamblu'
+                    ELSE NULL
+                END AS categorie_vehicul,
+                {$capacityExpr} AS capacitate_transport
+            FROM vehicule v
+            " . $this->latestActiveCouplingJoin() . "
+            LEFT JOIN vehicule tr ON tr.id = vc.semiremorca_id
+            WHERE v.status = 'activ'
+              AND v.tip_vehicul IN ('camion', 'cap_tractor')
+              AND NULLIF(TRIM(v.garaj), '') IS NOT NULL
+            ORDER BY garaj ASC, categorie_vehicul ASC, capacitate_transport ASC
+        ";
+
+        $stmt = $this->db->query($sql);
+        $rows = $stmt->fetchAll();
+
+        $garageMap = [];
+        $capacityMap = [];
+        foreach ($rows as $row) {
+            $garage = trim((string) ($row['garaj'] ?? ''));
+            if ($garage !== '') {
+                $garageMap[$this->normalizeGarageKey($garage)] = $garage;
+            }
+
+            $category = (string) ($row['categorie_vehicul'] ?? '');
+            $capacity = $this->normalizeCapacityValue($row['capacitate_transport'] ?? null);
+            if ($category !== '' && $capacity !== null) {
+                $capacityMap[$category . ':' . $capacity] = [
+                    'categorie_vehicul' => $category,
+                    'capacitate_transport' => $capacity,
+                ];
+            }
+        }
+
+        return [
+            'garages' => array_values($garageMap),
+            'capacities' => array_values($capacityMap),
+        ];
+    }
+
+    public function saveAvailabilityRule(array $data): int
+    {
+        $this->ensureAvailabilityRulesSchema();
+
+        $garage = trim((string) ($data['garaj'] ?? ''));
+        $category = (string) ($data['categorie_vehicul'] ?? '');
+        $capacity = $this->normalizeCapacityValue($data['capacitate_transport'] ?? null);
+        $minimum = max(1, (int) ($data['min_soferi_disponibili'] ?? 1));
+        $active = !empty($data['activ']) ? 1 : 0;
+        $now = date('Y-m-d H:i:s');
+
+        $stmt = $this->db->prepare("
+            INSERT INTO concedii_reguli_disponibilitate (
+                garaj,
+                categorie_vehicul,
+                capacitate_transport,
+                min_soferi_disponibili,
+                activ,
+                created_at,
+                updated_at
+            ) VALUES (
+                :garaj,
+                :categorie_vehicul,
+                :capacitate_transport,
+                :min_soferi_disponibili,
+                :activ,
+                :created_at,
+                :updated_at
+            )
+        ");
+        $stmt->bindValue(':garaj', $garage, PDO::PARAM_STR);
+        $stmt->bindValue(':categorie_vehicul', $category, PDO::PARAM_STR);
+        if ($capacity === null) {
+            $stmt->bindValue(':capacitate_transport', null, PDO::PARAM_NULL);
+        } else {
+            $stmt->bindValue(':capacitate_transport', $capacity, PDO::PARAM_STR);
+        }
+        $stmt->bindValue(':min_soferi_disponibili', $minimum, PDO::PARAM_INT);
+        $stmt->bindValue(':activ', $active, PDO::PARAM_INT);
+        $stmt->bindValue(':created_at', $now, PDO::PARAM_STR);
+        $stmt->bindValue(':updated_at', $now, PDO::PARAM_STR);
+        $stmt->execute();
+
+        return (int) $this->db->lastInsertId();
+    }
+
+    public function deleteAvailabilityRule(int $id): bool
+    {
+        $this->ensureAvailabilityRulesSchema();
+
+        $stmt = $this->db->prepare("
+            DELETE FROM concedii_reguli_disponibilitate
+            WHERE id = :id
+        ");
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+
+        return $stmt->execute();
+    }
+
+    public function getAvailabilityRuleViolations(int $driverId, string $startDate, string $endDate, ?int $excludeRequestId = null): array
+    {
+        $this->ensureAvailabilityRulesSchema();
+        $this->ensureDriverVehicleAssignmentsSchema();
+
+        $contexts = $this->getDriverTransportContexts($driverId);
+        if ($contexts === []) {
+            return [];
+        }
+
+        $rules = $this->getActiveAvailabilityRules();
+        if ($rules === []) {
+            return [];
+        }
+
+        $matchedRules = [];
+        foreach ($contexts as $context) {
+            foreach ($rules as $rule) {
+                if ($this->ruleMatchesContext($rule, $context)) {
+                    $matchedRules[(int) $rule['id']] = $rule;
+                }
+            }
+        }
+
+        if ($matchedRules === []) {
+            return [];
+        }
+
+        $rangeStart = new DateTimeImmutable($startDate);
+        $rangeEnd = new DateTimeImmutable($endDate);
+        $violations = [];
+
+        foreach ($matchedRules as $rule) {
+            $eligibleDriverIds = $this->getEligibleDriverIdsForRule($rule);
+            if (!in_array($driverId, $eligibleDriverIds, true)) {
+                continue;
+            }
+
+            $eligibleDriverMap = array_fill_keys($eligibleDriverIds, true);
+            $approvedIntervals = $this->getApprovedIntervalsForDriverIds(
+                $eligibleDriverIds,
+                $startDate,
+                $endDate,
+                $excludeRequestId
+            );
+            $minimum = max(1, (int) ($rule['min_soferi_disponibili'] ?? 1));
+
+            for ($cursor = $rangeStart; $cursor <= $rangeEnd; $cursor = $cursor->modify('+1 day')) {
+                $day = $cursor->format('Y-m-d');
+                $unavailableDriverMap = [$driverId => true];
+
+                foreach ($approvedIntervals as $interval) {
+                    $intervalDriverId = (int) ($interval['driver_id'] ?? 0);
+                    if ($intervalDriverId <= 0 || !isset($eligibleDriverMap[$intervalDriverId])) {
+                        continue;
+                    }
+
+                    $from = (string) ($interval['data_inceput'] ?? '');
+                    $to = (string) ($interval['data_sfarsit'] ?? '');
+                    if ($from !== '' && $to !== '' && $day >= $from && $day <= $to) {
+                        $unavailableDriverMap[$intervalDriverId] = true;
+                    }
+                }
+
+                $available = count($eligibleDriverMap) - count($unavailableDriverMap);
+                if ($available < $minimum) {
+                    $violations[] = [
+                        'rule_id' => (int) ($rule['id'] ?? 0),
+                        'date' => $day,
+                        'garaj' => (string) ($rule['garaj'] ?? ''),
+                        'categorie_vehicul' => (string) ($rule['categorie_vehicul'] ?? ''),
+                        'capacitate_transport' => $this->normalizeCapacityValue($rule['capacitate_transport'] ?? null),
+                        'min_soferi_disponibili' => $minimum,
+                        'soferi_disponibili' => max(0, $available),
+                        'soferi_eligibili' => count($eligibleDriverMap),
+                    ];
+                }
+            }
+        }
+
+        return $violations;
+    }
+
     public function logAudit(string $action, int $recordId, string $description, ?int $userId, ?array $beforeData, ?array $afterData): void
     {
         $stmt = $this->db->prepare("
@@ -466,6 +682,224 @@ class ProgramareConcediiModel extends BaseModel
 
         $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
         $stmt->execute();
+    }
+
+    private function ensureAvailabilityRulesSchema(): void
+    {
+        static $ensured = false;
+
+        if ($ensured) {
+            return;
+        }
+
+        $this->db->exec("
+            CREATE TABLE IF NOT EXISTS concedii_reguli_disponibilitate (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                garaj VARCHAR(120) NOT NULL,
+                categorie_vehicul ENUM('camion', 'ansamblu') NOT NULL,
+                capacitate_transport DECIMAL(10,2) NULL,
+                min_soferi_disponibili SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+                activ TINYINT(1) NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                INDEX idx_concedii_reguli_lookup (activ, garaj, categorie_vehicul, capacitate_transport),
+                INDEX idx_concedii_reguli_scope (garaj, categorie_vehicul)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        $ensured = true;
+    }
+
+    private function getActiveAvailabilityRules(): array
+    {
+        $stmt = $this->db->query("
+            SELECT *
+            FROM concedii_reguli_disponibilitate
+            WHERE activ = 1
+            ORDER BY id ASC
+        ");
+
+        return $stmt->fetchAll();
+    }
+
+    private function getDriverTransportContexts(int $driverId): array
+    {
+        $capacityExpr = $this->transportCapacityExpression();
+        $sql = "
+            SELECT DISTINCT
+                sv.driver_id,
+                v.id AS vehicle_id,
+                NULLIF(TRIM(v.garaj), '') AS garaj,
+                CASE
+                    WHEN v.tip_vehicul = 'camion' THEN 'camion'
+                    WHEN v.tip_vehicul = 'cap_tractor' THEN 'ansamblu'
+                    ELSE NULL
+                END AS categorie_vehicul,
+                {$capacityExpr} AS capacitate_transport
+            FROM soferi_vehicule sv
+            INNER JOIN soferi d ON d.id = sv.driver_id AND d.status = 'activ'
+            INNER JOIN vehicule v ON v.id = sv.vehicle_id AND v.status = 'activ'
+            " . $this->latestActiveCouplingJoin() . "
+            LEFT JOIN vehicule tr ON tr.id = vc.semiremorca_id
+            WHERE sv.driver_id = :driver_id
+              AND v.tip_vehicul IN ('camion', 'cap_tractor')
+              AND NULLIF(TRIM(v.garaj), '') IS NOT NULL
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':driver_id', $driverId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    private function getEligibleDriverIdsForRule(array $rule): array
+    {
+        $capacityExpr = $this->transportCapacityExpression();
+        $vehicleType = (string) ($rule['categorie_vehicul'] ?? '') === 'ansamblu' ? 'cap_tractor' : 'camion';
+        $garageKey = $this->normalizeGarageKey((string) ($rule['garaj'] ?? ''));
+        $capacity = $this->normalizeCapacityValue($rule['capacitate_transport'] ?? null);
+
+        $sql = "
+            SELECT DISTINCT sv.driver_id
+            FROM soferi_vehicule sv
+            INNER JOIN soferi d ON d.id = sv.driver_id AND d.status = 'activ'
+            INNER JOIN vehicule v ON v.id = sv.vehicle_id AND v.status = 'activ'
+            " . $this->latestActiveCouplingJoin() . "
+            LEFT JOIN vehicule tr ON tr.id = vc.semiremorca_id
+            WHERE v.tip_vehicul = :vehicle_type
+              AND UPPER(TRIM(COALESCE(v.garaj, ''))) = :garaj
+        ";
+
+        if ($capacity !== null) {
+            $sql .= "
+              AND {$capacityExpr} IS NOT NULL
+              AND ABS(({$capacityExpr}) - :capacitate_transport) < 0.01
+            ";
+        }
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':vehicle_type', $vehicleType, PDO::PARAM_STR);
+        $stmt->bindValue(':garaj', $garageKey, PDO::PARAM_STR);
+        if ($capacity !== null) {
+            $stmt->bindValue(':capacitate_transport', $capacity, PDO::PARAM_STR);
+        }
+        $stmt->execute();
+
+        $ids = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $id = (int) ($row['driver_id'] ?? 0);
+            if ($id > 0) {
+                $ids[$id] = $id;
+            }
+        }
+
+        return array_values($ids);
+    }
+
+    private function getApprovedIntervalsForDriverIds(array $driverIds, string $startDate, string $endDate, ?int $excludeRequestId): array
+    {
+        $driverIds = array_values(array_unique(array_filter(array_map('intval', $driverIds))));
+        if ($driverIds === []) {
+            return [];
+        }
+
+        $placeholders = [];
+        $params = [
+            ':start_date' => $startDate,
+            ':end_date' => $endDate,
+        ];
+        foreach ($driverIds as $index => $driverId) {
+            $placeholder = ':driver_id_' . $index;
+            $placeholders[] = $placeholder;
+            $params[$placeholder] = $driverId;
+        }
+
+        $sql = "
+            SELECT driver_id, data_inceput, data_sfarsit
+            FROM concedii
+            WHERE status = 'aprobat'
+              AND data_inceput <= :end_date
+              AND data_sfarsit >= :start_date
+              AND driver_id IN (" . implode(', ', $placeholders) . ")
+        ";
+
+        if ($excludeRequestId !== null && $excludeRequestId > 0) {
+            $sql .= " AND id <> :exclude_id";
+            $params[':exclude_id'] = $excludeRequestId;
+        }
+
+        $stmt = $this->db->prepare($sql);
+        $this->bindParams($stmt, $params);
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    private function ruleMatchesContext(array $rule, array $context): bool
+    {
+        if ((string) ($rule['categorie_vehicul'] ?? '') !== (string) ($context['categorie_vehicul'] ?? '')) {
+            return false;
+        }
+
+        if ($this->normalizeGarageKey((string) ($rule['garaj'] ?? '')) !== $this->normalizeGarageKey((string) ($context['garaj'] ?? ''))) {
+            return false;
+        }
+
+        $ruleCapacity = $this->normalizeCapacityValue($rule['capacitate_transport'] ?? null);
+        if ($ruleCapacity === null) {
+            return true;
+        }
+
+        return $ruleCapacity === $this->normalizeCapacityValue($context['capacitate_transport'] ?? null);
+    }
+
+    private function normalizeGarageKey(string $garage): string
+    {
+        return strtoupper(trim($garage));
+    }
+
+    private function normalizeCapacityValue(mixed $capacity): ?string
+    {
+        if ($capacity === null) {
+            return null;
+        }
+
+        $raw = str_replace(',', '.', trim((string) $capacity));
+        if ($raw === '' || !is_numeric($raw)) {
+            return null;
+        }
+
+        $value = (float) $raw;
+        if ($value <= 0) {
+            return null;
+        }
+
+        return number_format($value, 2, '.', '');
+    }
+
+    private function transportCapacityExpression(): string
+    {
+        return "CASE
+                    WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(tr.capacitate_transport, v.capacitate_transport)
+                    ELSE v.capacitate_transport
+                END";
+    }
+
+    private function latestActiveCouplingJoin(): string
+    {
+        return "
+            LEFT JOIN (
+                SELECT vc1.tractor_id, vc1.semiremorca_id
+                FROM vehicule_cuplaje vc1
+                INNER JOIN (
+                    SELECT tractor_id, MAX(id) AS max_id
+                    FROM vehicule_cuplaje
+                    WHERE activ = 1
+                    GROUP BY tractor_id
+                ) latest ON latest.max_id = vc1.id
+            ) vc ON vc.tractor_id = v.id
+        ";
     }
 
     private function buildRequestWhere(array $filters, string $search): array

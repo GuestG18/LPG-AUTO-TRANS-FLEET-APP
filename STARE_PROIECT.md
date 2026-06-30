@@ -14,8 +14,8 @@ La fiecare cerere noua care schimba aplicatia, acest fisier trebuie actualizat.
 
 ## Ultimul update
 
-- Data: `2026-05-07`
-- Tip interventie: `Dispecer curse` - interval cursa (`Data inceput`/`Data sfarsit`) + extindere selectie `Zona descarcare` pentru `Primar km` si `Primar tone`
+- Data: `2026-06-22`
+- Tip interventie: `Dispecer curse` - filtrare stricta `Nr. Inmatriculare` dupa beneficiar + tip transport configurat
 - Status general: `functional local`
 
 ## Stare curenta a aplicatiei
@@ -49,6 +49,21 @@ La fiecare cerere noua care schimba aplicatia, acest fisier trebuie actualizat.
 - Notificari: dezactivat complet (urmeaza redesign de la zero)
 
 ## Ce a fost facut pana acum
+
+### 2026-06-22
+
+- `Dispecer curse -> Adauga/Editare cursa`: dropdown-ul `Nr. Inmatriculare` foloseste strict vehiculele configurate pentru beneficiarul si tipul de transport selectat; au fost eliminate fallback-urile intre tipuri.
+- Mapare aplicata:
+  - `Primar km` / `Primar tone` -> vehiculele rutelor Primar active
+  - `Distributie` -> vehiculele rutelor Distributie active
+  - `Primar+Distributie` -> vehiculele rutelor Primar+Distributie active
+  - `Compresor` -> alocarea dedicata `Vehicule Compresor`
+- `Configurare transport -> Setari primare`: adaugata selectie multipla obligatorie `Vehicule`, persistata in `configurare_rute_primar.vehicle_ids`.
+- Validarea backend respinge vehiculele care nu apartin configurarii beneficiar + tip transport, inclusiv daca sunt trimise manual.
+- Schema si migrarile au fost sincronizate in `database/database.sql`, `database/update_dispecer_curse_module.sql` si `database/update_dispecer_primar_routes.sql`; migrarea punctuala a fost rulata pe baza locala.
+- `Dispecer curse -> Adauga cursa`: `Data incarcare`, `Data inceput` si `Data sfarsit` sunt afisate si introduse fortat in format `dd/mm/yyyy`, cu calendar nativ pastrat si conversie backend sigura la `yyyy-mm-dd` pentru persistenta.
+- `Configurare transport -> Setari primare`: adaugat switch-ul `Km agreati - Introducere manuala in cursa` pe fiecare ruta Primar. Cand este activ, `Km tarifare` se goleste si se dezactiveaza, iar ruta salveaza `km_agreati_manual = 1`.
+- `Dispecer curse -> Adauga/Editare cursa`: pentru o ruta Primar cu switch-ul activ, campul `Km agreati` devine editabil si obligatoriu; pentru o ruta cu switch-ul oprit ramane read-only si se completeaza automat din `Km tarifare`.
 
 ### 1. Structura pentru deploy
 

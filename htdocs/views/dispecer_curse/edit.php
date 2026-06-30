@@ -128,9 +128,11 @@ $existingRefacturareDoc = is_array($expenseBeingEdited) ? (string) ($expenseBein
 $existingRefacturareDocName = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['refacturare_document_original_name'] ?? '') : '';
 $existingRefacturareDocUrl = $existingRefacturareDoc !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($existingRefacturareDoc)) : null;
 $expenseRefacturareEnabled = (string) ($expenseFormData['refacturare_enabled'] ?? '0') === '1';
-$selectedRefacturareExpenseType = (string) ($expenseFormData['refacturare_tip_cheltuiala'] ?? 'motorina');
-if (!isset($expenseTypes[$selectedRefacturareExpenseType])) {
-    $selectedRefacturareExpenseType = 'motorina';
+$expenseEntryTypes = is_array($expenseEntryTypes ?? null) ? $expenseEntryTypes : (array) ($expenseTypes ?? []);
+unset($expenseEntryTypes['motorina']);
+$selectedRefacturareExpenseType = (string) ($expenseFormData['refacturare_tip_cheltuiala'] ?? '');
+if (!isset($expenseEntryTypes[$selectedRefacturareExpenseType])) {
+    $selectedRefacturareExpenseType = '';
 }
 $showRefacturareRoadTaxDetails = $expenseRefacturareEnabled && $selectedRefacturareExpenseType === 'taxe_drum';
 
@@ -537,12 +539,14 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                         <div class="col-12 col-md-6">
                             <label class="form-label" for="expense_tip_cheltuiala">Tip cheltuiala <span class="text-danger">*</span></label>
                             <select class="form-select <?= isset($expenseFormErrors['tip_cheltuiala']) ? 'is-invalid' : '' ?>" id="expense_tip_cheltuiala" name="tip_cheltuiala" required>
-                                <?php foreach ($expenseTypes as $value => $label): ?>
-                                    <option value="<?= e((string) $value) ?>" <?= (string) ($expenseFormData['tip_cheltuiala'] ?? 'motorina') === (string) $value ? 'selected' : '' ?>>
+                                <option value="" <?= (string) ($expenseFormData['tip_cheltuiala'] ?? '') === '' ? 'selected' : '' ?>>-- Selecteaza tipul --</option>
+                                <?php foreach ($expenseEntryTypes as $value => $label): ?>
+                                    <option value="<?= e((string) $value) ?>" <?= (string) ($expenseFormData['tip_cheltuiala'] ?? '') === (string) $value ? 'selected' : '' ?>>
                                         <?= e((string) $label) ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
+                            <div class="form-text">Motorina se introduce separat in modulul Alimentari.</div>
                             <?php if (isset($expenseFormErrors['tip_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['tip_cheltuiala']) ?></div><?php endif; ?>
                         </div>
 
@@ -567,7 +571,8 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                                     name="refacturare_tip_cheltuiala"
                                     <?= $expenseRefacturareEnabled ? '' : 'disabled' ?>
                                 >
-                                    <?php foreach ($expenseTypes as $value => $label): ?>
+                                    <option value="" <?= $selectedRefacturareExpenseType === '' ? 'selected' : '' ?>>-- Selecteaza tipul --</option>
+                                    <?php foreach ($expenseEntryTypes as $value => $label): ?>
                                         <option value="<?= e((string) $value) ?>" <?= $selectedRefacturareExpenseType === (string) $value ? 'selected' : '' ?>>
                                             <?= e((string) $label) ?>
                                         </option>

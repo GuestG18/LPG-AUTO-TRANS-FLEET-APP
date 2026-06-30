@@ -86,11 +86,69 @@
         }).format(safeNumber(value));
     }
 
+    function formatInteger(value) {
+        return new Intl.NumberFormat('ro-RO', {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0
+        }).format(Math.round(safeNumber(value)));
+    }
+
     function setText(id, value) {
         var el = document.getElementById(id);
         if (el) {
             el.textContent = value;
         }
+    }
+
+    function renderKpiBreakdown(id, rows, valueKey, formatter) {
+        var el = document.getElementById(id);
+        if (!el) {
+            return;
+        }
+
+        if (!Array.isArray(rows) || rows.length === 0) {
+            el.innerHTML = '';
+            return;
+        }
+
+        el.innerHTML = rows.map(function (row) {
+            var label = row && row.label ? String(row.label) : '-';
+            var rawValue = row && Object.prototype.hasOwnProperty.call(row, valueKey) ? row[valueKey] : 0;
+            var contextNote = id === 'kpi_total_km_breakdown' && row && row.key === 'primar' ? 'agreati' : '';
+            var valueClass = contextNote !== '' ? ' kpi-breakdown-value-with-note' : '';
+            var formattedValue = escapeHtml(formatter(rawValue));
+            var valueHtml = contextNote !== ''
+                ? '<span class="kpi-breakdown-main-value">' + formattedValue + '</span><span class="kpi-breakdown-note">' + escapeHtml(contextNote) + '</span>'
+                : formattedValue;
+            return '' +
+                '<div class="kpi-breakdown-row">' +
+                '<span class="kpi-breakdown-label">' + escapeHtml(label) + ':</span>' +
+                '<strong class="kpi-breakdown-value' + valueClass + '">' + valueHtml + '</strong>' +
+                '</div>';
+        }).join('');
+    }
+
+    function renderKmDelta(fleet) {
+        var el = document.getElementById('kpi_total_km_delta');
+        if (!el) {
+            return;
+        }
+
+        var savedKm = safeNumber(fleet.km_salvati);
+        var excessKm = safeNumber(fleet.km_exces);
+        var netKm = savedKm - excessKm;
+
+        if (Math.abs(netKm) < 0.005) {
+            el.innerHTML = '<span class="kpi-km-delta-item kpi-km-delta-neutral">Km echilibrati: 0 km</span>';
+            return;
+        }
+
+        if (netKm > 0) {
+            el.innerHTML = '<span class="kpi-km-delta-item kpi-km-delta-saved">Km salvati: ' + escapeHtml(formatKm(netKm)) + '</span>';
+            return;
+        }
+
+        el.innerHTML = '<span class="kpi-km-delta-item kpi-km-delta-excess">Km exces: ' + escapeHtml(formatKm(Math.abs(netKm))) + '</span>';
     }
 
     function setLoadingState(isLoading) {
@@ -358,6 +416,7 @@
         var driverId = (formData.get('driver_id') || '').toString().trim();
         var beneficiaryId = (formData.get('beneficiary_id') || '').toString().trim();
         var transportType = (formData.get('tip_transport') || '').toString().trim();
+        var transportCapacity = (formData.get('capacitate_transport') || '').toString().trim();
         var status = (formData.get('status') || '').toString().trim();
 
         if (dateStart !== '') {
@@ -378,6 +437,9 @@
         if (transportType !== '') {
             params.set('tip_transport', transportType);
         }
+        if (transportCapacity !== '') {
+            params.set('capacitate_transport', transportCapacity);
+        }
         if (status !== '') {
             params.set('status', status);
         }
@@ -393,7 +455,7 @@
         url.searchParams.set('page', 'dashboard_analitic');
 
         var formData = new FormData(filtersForm);
-        var keys = ['date_start', 'date_end', 'vehicle_id', 'driver_id', 'beneficiary_id', 'tip_transport', 'status'];
+        var keys = ['date_start', 'date_end', 'vehicle_id', 'driver_id', 'beneficiary_id', 'tip_transport', 'capacitate_transport', 'status'];
 
         keys.forEach(function (key) {
             var value = (formData.get(key) || '').toString().trim();
@@ -444,11 +506,13 @@
         setText('kpi_total_cheltuieli', formatMoney(fleet.total_cheltuieli));
         setText('kpi_profit_total', formatMoney(fleet.profit_total));
         setText('kpi_total_km', formatKm(fleet.total_km));
-        setText('kpi_km_primar', formatKm(fleet.km_primar));
-        setText('kpi_km_distributie', formatKm(fleet.km_distributie));
+        renderKmDelta(fleet);
         setText('kpi_tone_livrate', formatTons(fleet.tone_livrate));
         setText('kpi_tone_primar', formatTons(fleet.tone_primar));
         setText('kpi_tone_distributie', formatTons(fleet.tone_distributie));
+        renderKpiBreakdown('kpi_total_curse_breakdown', fleet.transport_breakdown, 'curse', formatInteger);
+        renderKpiBreakdown('kpi_total_km_breakdown', fleet.transport_breakdown, 'km', formatKm);
+        renderKpiBreakdown('kpi_tone_livrate_breakdown', fleet.transport_breakdown, 'tone', formatTons);
         setText('kpi_profit_km', formatRatio(fleet.profit_km) + ' lei');
         setText('kpi_venit_to', formatRatio(fleet.venit_tona) + ' lei');
         setText('kpi_km_tona', formatRatio(fleet.km_tona));

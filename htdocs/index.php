@@ -213,6 +213,10 @@ require_once __DIR__ . '/models/ProgramareConcediiModel.php';
 require_once __DIR__ . '/models/NotificationRuleModel.php';
 require_once __DIR__ . '/models/StaffAccountancyModel.php';
 require_once __DIR__ . '/models/OfficeExpenseModel.php';
+require_once __DIR__ . '/models/MaintenanceModel.php';
+require_once __DIR__ . '/models/TechnicalHealthModel.php';
+require_once __DIR__ . '/models/FuelModel.php';
+require_once __DIR__ . '/models/DriverActivityHistoryModel.php';
 
 require_once __DIR__ . '/services/EntityStatusService.php';
 require_once __DIR__ . '/services/EmailService.php';
@@ -230,6 +234,10 @@ require_once __DIR__ . '/controllers/ProgramareConcediiController.php';
 require_once __DIR__ . '/controllers/NotificationRuleController.php';
 require_once __DIR__ . '/controllers/StaffAccountancyController.php';
 require_once __DIR__ . '/controllers/OfficeExpenseController.php';
+require_once __DIR__ . '/controllers/MaintenanceController.php';
+require_once __DIR__ . '/controllers/TechnicalHealthController.php';
+require_once __DIR__ . '/controllers/FuelController.php';
+require_once __DIR__ . '/controllers/DriverActivityHistoryController.php';
 
 $db = get_pdo();
 
@@ -300,8 +308,6 @@ try {
 
         case 'vehicule':
         case 'soferi':
-        case 'alimentari':
-        case 'mentenanta':
         case 'documente':
         case 'documente_soferi':
         case 'configurare_costuri_documente_vehicule_override':
@@ -309,6 +315,26 @@ try {
         case 'utilizatori':
             require_auth();
             (new ModuleController($db, $modules))->handle($page, $action);
+            break;
+
+        case 'alimentari':
+            require_auth();
+            (new FuelController($db))->handle($action);
+            break;
+
+        case 'istoric_activitati_sofer':
+            require_auth();
+            (new DriverActivityHistoryController($db))->handle($action);
+            break;
+
+        case 'stare_tehnica':
+            require_auth();
+            (new TechnicalHealthController($db))->handle($action);
+            break;
+
+        case 'mentenanta':
+            require_auth();
+            (new MaintenanceController($db, $modules))->handle($action);
             break;
 
         case 'inventar_dotari_vehicule':

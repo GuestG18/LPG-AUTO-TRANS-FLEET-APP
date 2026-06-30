@@ -13,6 +13,9 @@ $vehicleTireContext = $vehicleTireContext ?? null;
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="h4 mb-0">Detalii <?= e($module['singular']) ?></h2>
     <div class="d-flex gap-2">
+        <?php if ($moduleKey === 'vehicule'): ?>
+            <a class="btn btn-primary" href="<?= e(build_query_url(['page' => 'stare_tehnica', 'vehicle_id' => (int) $record['id']])) ?>">Stare tehnic&#259;</a>
+        <?php endif; ?>
         <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'edit', 'id' => (int) $record['id']])) ?>">Editează</a>
         <a class="btn btn-outline-secondary" href="<?= e($backUrl) ?>">Înapoi</a>
     </div>

@@ -147,6 +147,16 @@ Pentru coloanele noi de cost per km (`cost_km_primar`, `cost_km_distributie`, `c
 database/update_dispecer_curse_cost_km.sql
 ```
 
+## Migrare baza existenta (Mentenanta v2)
+
+Pentru structura noua cu planificari, intretinere, reparatii si stoc de piese ruleaza:
+
+```text
+database/update_maintenance_module_v2.sql
+```
+
+Migrarea pastreaza inregistrarile existente si le clasifica in Intretinere sau Reparatii.
+
 ## Migrare baza existenta (Inventar Dotari Vehicule)
 
 Pentru activarea modulului `Inventar Dotari Vehicule` pe o baza existenta, ruleaza:

@@ -54,7 +54,7 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
             </button>
         <?php endif; ?>
         <?php if ($isMaintenanceList && !$isMaintenanceTireStockPage): ?>
-            <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock'])) ?>">Stoc anvelope</a>
+            <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock'])) ?>">Anvelope</a>
         <?php endif; ?>
         <?php if ($isMaintenanceTireStockPage): ?>
             <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'mentenanta'])) ?>">Inapoi la Mentenanta</a>
@@ -967,7 +967,7 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
 
     <div class="card border-0 shadow-sm mb-3">
         <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <h3 class="h6 mb-0">Stoc anvelope in Mentenanta</h3>
+            <h3 class="h6 mb-0">Anvelope</h3>
             <small class="text-muted">Flux recomandat: adaugi in stoc aici, apoi montezi din Detalii Vehicul.</small>
         </div>
         <div class="card-body">
@@ -1549,6 +1549,9 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
                                         <a class="btn btn-sm btn-outline-dark" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'preview', 'id' => (int) $row['id']])) ?>">
                                             <?= $moduleKey === 'mentenanta' ? 'Vezi factura' : 'Vezi in aplicatie' ?>
                                         </a>
+                                    <?php endif; ?>
+                                    <?php if ($moduleKey === 'vehicule'): ?>
+                                        <a class="btn btn-sm btn-outline-success" href="<?= e(build_query_url(['page' => 'stare_tehnica', 'vehicle_id' => (int) $row['id']])) ?>">Stare tehnic&#259;</a>
                                     <?php endif; ?>
                                     <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'show', 'id' => (int) $row['id']])) ?>">Detalii</a>
                                     <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'edit', 'id' => (int) $row['id']])) ?>">Editează</a>

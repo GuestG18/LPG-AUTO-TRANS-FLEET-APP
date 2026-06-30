@@ -273,33 +273,36 @@ document.addEventListener('submit', function (event) {
     form.querySelectorAll('button[type="submit"], input[type="submit"]').forEach(disableSubmitControl);
 });
 
-document.addEventListener('DOMContentLoaded', function () {
-    document.querySelectorAll('.js-date-display-input').forEach(initCustomDateField);
+var fleetSidebarStorageKey = 'fleet.sidebarCollapsed';
 
-    var toggleButton = document.querySelector('[data-sidebar-toggle]');
-    var storageKey = 'fleet.sidebarCollapsed';
+function fleetSidebarIsCollapsed() {
+    return document.body.classList.contains('sidebar-collapsed');
+}
+
+function syncFleetSidebarToggleState() {
+    document.querySelectorAll('[data-sidebar-toggle]').forEach(function (toggleButton) {
+        toggleButton.setAttribute('aria-expanded', fleetSidebarIsCollapsed() ? 'false' : 'true');
+        toggleButton.classList.toggle('is-collapsed', fleetSidebarIsCollapsed());
+    });
+}
+
+document.addEventListener('click', function (event) {
+    var toggleButton = event.target.closest('[data-sidebar-toggle]');
 
     if (!toggleButton) {
         return;
     }
 
-    function isCollapsed() {
-        return document.body.classList.contains('sidebar-collapsed');
+    event.preventDefault();
+    document.body.classList.toggle('sidebar-collapsed');
+    try {
+        window.localStorage.setItem(fleetSidebarStorageKey, fleetSidebarIsCollapsed() ? '1' : '0');
+    } catch (error) {
     }
+    syncFleetSidebarToggleState();
+});
 
-    function syncToggleState() {
-        toggleButton.setAttribute('aria-expanded', isCollapsed() ? 'false' : 'true');
-        toggleButton.classList.toggle('is-collapsed', isCollapsed());
-    }
-
-    syncToggleState();
-
-    toggleButton.addEventListener('click', function () {
-        document.body.classList.toggle('sidebar-collapsed');
-        try {
-            window.localStorage.setItem(storageKey, isCollapsed() ? '1' : '0');
-        } catch (error) {
-        }
-        syncToggleState();
-    });
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.js-date-display-input').forEach(initCustomDateField);
+    syncFleetSidebarToggleState();
 });

@@ -1547,6 +1547,8 @@ CREATE TABLE `configurare_rute_primar` (
   `loc_incarcare_id` int UNSIGNED NOT NULL,
   `zona_distributie_id` int UNSIGNED NOT NULL,
   `km_tarifare` int UNSIGNED NOT NULL DEFAULT '0',
+  `cost_cursa` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `aplica_cost_cursa` tinyint(1) NOT NULL DEFAULT '0',
   `activ` tinyint(1) NOT NULL DEFAULT '1',
   `created_at` datetime NOT NULL,
   `updated_at` datetime NOT NULL
