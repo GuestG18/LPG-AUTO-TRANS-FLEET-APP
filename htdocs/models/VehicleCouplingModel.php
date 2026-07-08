@@ -72,6 +72,62 @@ class VehicleCouplingModel extends BaseModel
         return $row ?: null;
     }
 
+    public function getActiveAssemblySelectOptions(array $filters = []): array
+    {
+        $where = [
+            'vc.activ = 1',
+            "t.tip_vehicul = 'cap_tractor'",
+            "s.tip_vehicul IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')",
+        ];
+        $params = [];
+
+        foreach (['capacitate_transport', 'mma'] as $field) {
+            $value = trim((string) ($filters[$field] ?? ''));
+            if ($value !== '' && is_numeric($value)) {
+                $where[] = 's.' . $field . ' = :' . $field;
+                $params[':' . $field] = $value;
+            }
+        }
+
+        $sql = "
+            SELECT
+                vc.tractor_id,
+                vc.semiremorca_id,
+                t.nr_inmatriculare AS tractor_nr,
+                t.marca AS tractor_marca,
+                t.model AS tractor_model,
+                s.nr_inmatriculare AS semiremorca_nr,
+                s.marca AS semiremorca_marca,
+                s.model AS semiremorca_model
+            FROM vehicule_cuplaje vc
+            INNER JOIN vehicule t ON t.id = vc.tractor_id
+            INNER JOIN vehicule s ON s.id = vc.semiremorca_id
+            WHERE " . implode(' AND ', $where) . "
+            ORDER BY t.nr_inmatriculare ASC, s.nr_inmatriculare ASC, vc.id DESC
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        foreach ($params as $name => $value) {
+            $stmt->bindValue($name, $value);
+        }
+        $stmt->execute();
+        $options = [];
+
+        foreach ($stmt->fetchAll() as $row) {
+            $tractorId = (int) ($row['tractor_id'] ?? 0);
+            if ($tractorId <= 0 || isset($options[$tractorId])) {
+                continue;
+            }
+
+            $tractorLabel = trim((string) ($row['tractor_nr'] ?? '') . ' - ' . trim((string) ($row['tractor_marca'] ?? '') . ' ' . (string) ($row['tractor_model'] ?? '')));
+            $trailerLabel = trim((string) ($row['semiremorca_nr'] ?? '') . ' - ' . trim((string) ($row['semiremorca_marca'] ?? '') . ' ' . (string) ($row['semiremorca_model'] ?? '')));
+
+            $options[$tractorId] = trim($tractorLabel, ' -') . ' + ' . trim($trailerLabel, ' -');
+        }
+
+        return $options;
+    }
+
     public function getActiveCouplingLabelsForVehicleIds(array $vehicleIds): array
     {
         $vehicleIds = array_values(array_unique(array_filter(array_map(static fn(mixed $id): int => (int) $id, $vehicleIds))));

@@ -152,6 +152,52 @@
             }
         });
 
+        var repairInvoiceToggles = document.querySelectorAll('[data-repair-invoice-toggle]');
+        var repairInvoiceDetails = document.querySelectorAll('[data-repair-invoice-detail]');
+        var repairInvoiceRows = document.querySelectorAll('[data-repair-invoice-row]');
+
+        function setActiveRepairInvoice(invoiceId) {
+            repairInvoiceDetails.forEach(function (detail) {
+                detail.classList.toggle('active', detail.dataset.repairInvoiceDetail === invoiceId);
+            });
+            repairInvoiceRows.forEach(function (row) {
+                row.classList.toggle('is-expanded', row.dataset.repairInvoiceRow === invoiceId);
+            });
+            repairInvoiceToggles.forEach(function (toggle) {
+                var isActive = toggle.dataset.repairInvoiceToggle === invoiceId;
+                toggle.classList.toggle('active', isActive);
+                toggle.setAttribute('aria-expanded', isActive ? 'true' : 'false');
+            });
+        }
+
+        repairInvoiceToggles.forEach(function (toggle) {
+            toggle.addEventListener('click', function () {
+                setActiveRepairInvoice(toggle.dataset.repairInvoiceToggle || '');
+            });
+        });
+
+        document.querySelectorAll('[data-repair-invoice-close]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                var invoiceId = button.dataset.repairInvoiceClose || '';
+                repairInvoiceDetails.forEach(function (detail) {
+                    if (detail.dataset.repairInvoiceDetail === invoiceId) {
+                        detail.classList.remove('active');
+                    }
+                });
+                repairInvoiceRows.forEach(function (row) {
+                    if (row.dataset.repairInvoiceRow === invoiceId) {
+                        row.classList.remove('is-expanded');
+                    }
+                });
+                repairInvoiceToggles.forEach(function (toggle) {
+                    if (toggle.dataset.repairInvoiceToggle === invoiceId) {
+                        toggle.classList.remove('active');
+                        toggle.setAttribute('aria-expanded', 'false');
+                    }
+                });
+            });
+        });
+
         document.querySelectorAll('.modal[data-auto-open="1"]').forEach(function (modalElement) {
             if (window.bootstrap && window.bootstrap.Modal) {
                 window.bootstrap.Modal.getOrCreateInstance(modalElement).show();

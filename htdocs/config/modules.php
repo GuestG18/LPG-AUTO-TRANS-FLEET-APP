@@ -343,89 +343,6 @@ return [
         ],
     ],
 
-    'alimentari' => [
-        'title' => 'AlimentÃ„Æ’ri',
-        'singular' => 'alimentare',
-        'table' => 'alimentari',
-        'select' => 't.*, v.nr_inmatriculare AS vehicul_label, CONCAT(v.marca, " ", v.model) AS vehicul_model, s.nume AS sofer_label',
-        'joins' => [
-            ['type' => 'INNER', 'table' => 'vehicule v', 'on' => 'v.id = t.vehicle_id'],
-            ['type' => 'LEFT', 'table' => 'soferi s', 'on' => 's.id = t.driver_id'],
-        ],
-        'default_order' => 't.data_alimentare DESC, t.id DESC',
-        'search_fields' => ['v.nr_inmatriculare', 's.nume', 't.observatii'],
-        'list_columns' => [
-            'data_alimentare' => ['label' => 'Data alimentare', 'type' => 'date'],
-            'vehicul_label' => ['label' => 'Vehicul'],
-            'sofer_label' => ['label' => 'ÃˆËœofer'],
-            'litri' => ['label' => 'Litri', 'type' => 'number', 'decimals' => 2],
-            'cost_total' => ['label' => 'Cost total', 'type' => 'currency'],
-            'km_bord' => ['label' => 'Km bord', 'type' => 'integer'],
-            'km_alimentare' => ['label' => 'Km alimentare', 'type' => 'integer'],
-        ],
-        'detail_fields' => [
-            'vehicul_label' => ['label' => 'Vehicul'],
-            'sofer_label' => ['label' => 'ÃˆËœofer'],
-            'data_alimentare' => ['label' => 'Data alimentare', 'type' => 'date'],
-            'litri' => ['label' => 'Litri', 'type' => 'number', 'decimals' => 2],
-            'cost_total' => ['label' => 'Cost total', 'type' => 'currency'],
-            'km_bord' => ['label' => 'Km bord', 'type' => 'integer'],
-            'km_alimentare' => ['label' => 'Km alimentare', 'type' => 'integer'],
-            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea'],
-            'created_at' => ['label' => 'Creat la', 'type' => 'datetime'],
-            'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
-        ],
-        'form_fields' => [
-            'vehicle_id' => [
-                'label' => 'Vehicul',
-                'type' => 'select',
-                'required' => true,
-                'source' => [
-                    'table' => 'vehicule',
-                    'value' => 'id',
-                    'label' => "CONCAT(nr_inmatriculare, ' - ', marca, ' ', model)",
-                    'where' => "status = 'activ' AND tip_vehicul NOT IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')",
-                    'order' => 'nr_inmatriculare ASC',
-                ],
-            ],
-            'driver_id' => [
-                'label' => 'ÃˆËœofer (opÃˆâ€ºional)',
-                'type' => 'select',
-                'required' => false,
-                'nullable' => true,
-                'source' => [
-                    'table' => 'soferi',
-                    'value' => 'id',
-                    'label' => 'nume',
-                    'where' => "status = 'activ' AND (vehicle_id IS NOT NULL OR EXISTS (SELECT 1 FROM soferi_vehicule sv WHERE sv.driver_id = soferi.id))",
-                    'order' => 'nume ASC',
-                ],
-            ],
-            'data_alimentare' => ['label' => 'Data alimentare', 'type' => 'date', 'required' => true],
-            'litri' => ['label' => 'Litri', 'type' => 'number', 'required' => true, 'min' => 0, 'step' => '0.01'],
-            'cost_total' => ['label' => 'Cost total (lei)', 'type' => 'number', 'required' => true, 'min' => 0, 'step' => '0.01'],
-            'km_bord' => ['label' => 'Km bord', 'type' => 'number', 'required' => true, 'min' => 0, 'integer' => true],
-            'km_alimentare' => ['label' => 'Km alimentare', 'type' => 'number', 'required' => true, 'min' => 0, 'integer' => true],
-            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
-        ],
-        'filters' => [
-            'vehicle_id' => [
-                'label' => 'Vehicul',
-                'type' => 'select',
-                'column' => 't.vehicle_id',
-                'operator' => '=',
-                'source' => [
-                    'table' => 'vehicule',
-                    'value' => 'id',
-                    'label' => "CONCAT(nr_inmatriculare, ' - ', marca, ' ', model)",
-                    'order' => 'nr_inmatriculare ASC',
-                ],
-            ],
-            'data_start' => ['label' => 'Data de la', 'type' => 'date', 'column' => 't.data_alimentare', 'operator' => '>='],
-            'data_end' => ['label' => 'Data pÃƒÂ¢nÃ„Æ’ la', 'type' => 'date', 'column' => 't.data_alimentare', 'operator' => '<='],
-        ],
-    ],
-
     'mentenanta' => [
         'title' => 'MentenanÃˆâ€ºÃ„Æ’',
         'singular' => 'intervenÃˆâ€ºie',
@@ -493,8 +410,8 @@ return [
     ],
 
     'documente' => [
-        'title' => 'Documente',
-        'singular' => 'document',
+        'title' => 'Documente Vehicule',
+        'singular' => 'document vehicul',
         'table' => 'documente',
         'select' => 't.*, DATEDIFF(t.data_expirare, CURDATE()) AS zile_expirare, v.nr_inmatriculare AS vehicul_label, CONCAT(v.marca, " ", v.model) AS vehicul_model',
         'joins' => [
@@ -553,6 +470,7 @@ return [
             'data_start' => ['label' => 'ExpirÃ„Æ’ de la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '>='],
             'data_end' => ['label' => 'ExpirÃ„Æ’ pÃƒÂ¢nÃ„Æ’ la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '<='],
         ],
+        'nav_parent' => 'vehicule',
     ],
 
     'configurare_costuri_documente_vehicule_override' => [

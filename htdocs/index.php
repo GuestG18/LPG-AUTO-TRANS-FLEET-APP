@@ -62,6 +62,104 @@ $modules['documente_soferi']['form_fields']['fisier_upload'] = [
     'preview_type' => 'document',
 ];
 
+$modules['documente']['title'] = 'Documente Vehicule';
+$modules['documente']['singular'] = 'document vehicul';
+$modules['documente']['nav_parent'] = 'vehicule';
+
+$modules['documente_soferi']['title'] = 'Documente Soferi';
+$modules['documente_soferi']['singular'] = 'document sofer';
+$modules['documente_soferi']['select'] = 't.*, DATEDIFF(t.data_expirare, CURDATE()) AS zile_expirare, s.nume AS sofer_label, s.telefon AS sofer_telefon, v.nr_inmatriculare AS vehicul_label';
+$modules['documente_soferi']['search_fields'] = ['s.nume', 's.telefon', 'v.nr_inmatriculare', 't.tip_document', 't.numar_document', 't.observatii', 't.fisier_original'];
+$modules['documente_soferi']['list_columns'] = [
+    'sofer_label' => ['label' => 'Sofer'],
+    'vehicul_label' => ['label' => 'Vehicul alocat'],
+    'tip_document' => ['label' => 'Tip document'],
+    'numar_document' => ['label' => 'Serie / numar'],
+    'fisier_original' => ['label' => 'Fisier', 'type' => 'document_file'],
+    'data_expirare' => ['label' => 'Data expirare', 'type' => 'expiry'],
+    'zile_expirare' => ['label' => 'Zile expirare', 'type' => 'integer'],
+    'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
+];
+$modules['documente_soferi']['detail_fields']['sofer_label']['label'] = 'Sofer';
+$modules['documente_soferi']['detail_fields']['sofer_telefon']['label'] = 'Telefon sofer';
+$modules['documente_soferi']['detail_fields']['numar_document']['label'] = 'Serie / numar document';
+$modules['documente_soferi']['detail_fields']['fisier_original']['label'] = 'Fisier atasat';
+$modules['documente_soferi']['form_fields']['driver_id']['label'] = 'Sofer';
+$modules['documente_soferi']['form_fields']['numar_document']['label'] = 'Serie / numar document (optional)';
+$modules['documente_soferi']['form_fields']['numar_document']['placeholder'] = 'Ex: serie permis, serie atestat, numar aviz';
+$modules['documente_soferi']['form_fields']['numar_document']['help'] = 'Completeaza doar daca documentul soferului are serie sau numar util pentru identificare.';
+$modules['documente_soferi']['form_fields']['fisier_upload']['label'] = 'Fisier document sofer';
+$modules['documente_soferi']['filters'] = [
+    'driver_id' => [
+        'label' => 'Sofer',
+        'type' => 'select',
+        'column' => 't.driver_id',
+        'operator' => '=',
+        'source' => [
+            'table' => 'soferi',
+            'value' => 'id',
+            'label' => "CONCAT(nume, ' - ', telefon)",
+            'order' => 'nume ASC',
+        ],
+    ],
+    'vehicle_id' => [
+        'label' => 'Vehicul alocat',
+        'type' => 'select',
+        'column' => 'v.id',
+        'operator' => '=',
+        'source' => [
+            'table' => 'vehicule',
+            'value' => 'id',
+            'label' => "CONCAT(nr_inmatriculare, ' - ', marca, ' ', model)",
+            'order' => 'nr_inmatriculare ASC',
+        ],
+    ],
+    'tip_document' => [
+        'label' => 'Tip document',
+        'type' => 'select',
+        'column' => 't.tip_document',
+        'operator' => '=',
+        'source' => [
+            'table' => "(SELECT DISTINCT tip_document FROM documente_soferi WHERE COALESCE(TRIM(tip_document), '') <> '') doc_tipuri",
+            'value' => 'tip_document',
+            'label' => 'tip_document',
+            'order' => 'tip_document ASC',
+        ],
+    ],
+    'data_start' => ['label' => 'Expira de la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '>='],
+    'data_end' => ['label' => 'Expira pana la', 'type' => 'date', 'column' => 't.data_expirare', 'operator' => '<='],
+    'stare_expirare' => [
+        'label' => 'Stare expirare',
+        'type' => 'select',
+        'options' => [
+            'expirate' => 'Expirate',
+            'expira_7_zile' => 'Expira in 7 zile',
+            'expira_30_zile' => 'Expira in 30 zile',
+            'valabile' => 'Valabile peste 30 zile',
+            'fara_expirare' => 'Fara expirare',
+        ],
+        'custom_conditions' => [
+            'expirate' => ['sql' => 't.data_expirare < CURDATE()'],
+            'expira_7_zile' => ['sql' => 't.data_expirare BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)'],
+            'expira_30_zile' => ['sql' => 't.data_expirare BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)'],
+            'valabile' => ['sql' => 't.data_expirare > DATE_ADD(CURDATE(), INTERVAL 30 DAY)'],
+            'fara_expirare' => ['sql' => 't.data_expirare IS NULL'],
+        ],
+    ],
+    'are_fisier' => [
+        'label' => 'Fisier atasat',
+        'type' => 'select',
+        'options' => [
+            'da' => 'Da',
+            'nu' => 'Nu',
+        ],
+        'custom_conditions' => [
+            'da' => ['sql' => "COALESCE(t.fisier_stocat, '') <> ''"],
+            'nu' => ['sql' => "COALESCE(t.fisier_stocat, '') = ''"],
+        ],
+    ],
+];
+
 $modules['mentenanta']['search_fields'] = [
     'v.nr_inmatriculare',
     't.tip_interventie',
@@ -215,7 +313,6 @@ require_once __DIR__ . '/models/StaffAccountancyModel.php';
 require_once __DIR__ . '/models/OfficeExpenseModel.php';
 require_once __DIR__ . '/models/MaintenanceModel.php';
 require_once __DIR__ . '/models/TechnicalHealthModel.php';
-require_once __DIR__ . '/models/FuelModel.php';
 require_once __DIR__ . '/models/DriverActivityHistoryModel.php';
 
 require_once __DIR__ . '/services/EntityStatusService.php';
@@ -229,6 +326,7 @@ require_once __DIR__ . '/controllers/VehicleEquipmentInventoryController.php';
 require_once __DIR__ . '/controllers/VehicleAuthorizationController.php';
 require_once __DIR__ . '/controllers/ProfileController.php';
 require_once __DIR__ . '/controllers/DispecerCurseController.php';
+require_once __DIR__ . '/controllers/CourseExpenseHistoryController.php';
 require_once __DIR__ . '/controllers/CentralizatorFacturareController.php';
 require_once __DIR__ . '/controllers/ProgramareConcediiController.php';
 require_once __DIR__ . '/controllers/NotificationRuleController.php';
@@ -236,7 +334,6 @@ require_once __DIR__ . '/controllers/StaffAccountancyController.php';
 require_once __DIR__ . '/controllers/OfficeExpenseController.php';
 require_once __DIR__ . '/controllers/MaintenanceController.php';
 require_once __DIR__ . '/controllers/TechnicalHealthController.php';
-require_once __DIR__ . '/controllers/FuelController.php';
 require_once __DIR__ . '/controllers/DriverActivityHistoryController.php';
 
 $db = get_pdo();
@@ -317,11 +414,6 @@ try {
             (new ModuleController($db, $modules))->handle($page, $action);
             break;
 
-        case 'alimentari':
-            require_auth();
-            (new FuelController($db))->handle($action);
-            break;
-
         case 'istoric_activitati_sofer':
             require_auth();
             (new DriverActivityHistoryController($db))->handle($action);
@@ -350,6 +442,11 @@ try {
         case 'dispecer_curse':
             require_auth();
             (new DispecerCurseController($db))->handle($action);
+            break;
+
+        case 'istoric_cheltuieli_curse':
+            require_auth();
+            (new CourseExpenseHistoryController($db))->handle($action);
             break;
 
         case 'centralizator_facturare':

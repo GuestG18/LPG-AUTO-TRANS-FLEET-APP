@@ -10,6 +10,8 @@ $costCenterOptions = is_array($costCenterOptions ?? null) ? $costCenterOptions :
 $passedVehicleTypeLabels = is_array($vehicleTypeLabels ?? null) ? $vehicleTypeLabels : [];
 $overview = is_array($overview ?? null) ? $overview : [];
 $records = is_array($records ?? null) ? $records : [];
+$repairInvoices = is_array($repairInvoices ?? null) ? $repairInvoices : [];
+$repairInvoiceDetails = is_array($repairInvoiceDetails ?? null) ? $repairInvoiceDetails : [];
 $scheduledInterventions = is_array($scheduledInterventions ?? null) ? $scheduledInterventions : [];
 $parts = is_array($parts ?? null) ? $parts : [];
 $availableTireCount = count(array_filter($parts, static fn (array $item): bool => ($item['inventory_type'] ?? '') === 'tire'));
@@ -76,6 +78,27 @@ $statusClass = static function (string $status): string {
         default => 'maintenance-badge-muted',
     };
 };
+$invoiceStatusLabels = [
+    'draft' => 'Ciornă',
+    'in_progress' => 'În lucru',
+    'finalizata' => 'Finalizată',
+    'anulata' => 'Anulată',
+];
+$invoiceStatusClass = static function (string $status): string {
+    return match ($status) {
+        'finalizata' => 'maintenance-badge-success',
+        'in_progress', 'draft' => 'maintenance-badge-warning',
+        'anulata' => 'maintenance-badge-muted',
+        default => 'maintenance-badge-muted',
+    };
+};
+$invoicePdfUrl = static function (?string $stored): string {
+    $stored = basename(str_replace('\\', '/', trim((string) $stored)));
+    if ($stored === '') {
+        return '';
+    }
+    return url('uploads/mentenanta_piese/' . rawurlencode($stored));
+};
 $warrantyBadgeClass = static function (string $status): string {
     return match ($status) {
         'green' => 'maintenance-badge-success',
@@ -129,20 +152,36 @@ $defaultSchedule = [
     'descriere' => '', 'status_interventie' => 'programata',
 ];
 $scheduleForm = array_merge($defaultSchedule, $editIntervention ?? []);
+$pageHeading = match ($section) {
+    'stock' => 'Stoc Piese',
+    'repairs' => 'Reparații corective',
+    default => 'Mentenanță',
+};
+$pageSubtitle = match ($section) {
+    'repairs' => 'Defecțiuni, diagnoze și reparații neplanificate.',
+    'interventions' => 'Planifică și urmărește intervențiile înainte de înregistrarea finală.',
+    default => '',
+};
 ?>
 
 <div class="maintenance-page" data-maintenance-section="<?= e($section) ?>">
     <div class="maintenance-page-header d-flex flex-wrap justify-content-between align-items-center gap-3">
         <div>
-            <h1 class="maintenance-title mb-0"><?= $section === 'stock' ? 'Stoc Piese' : 'Mentenanță' ?></h1>
-            <?php if ($section === 'interventions'): ?>
-                <div class="text-muted mt-1">Planifică și urmărește intervențiile înainte de înregistrarea finală.</div>
+            <h1 class="maintenance-title mb-0"><?= e($pageHeading) ?></h1>
+            <?php if ($pageSubtitle !== ''): ?>
+                <div class="text-muted mt-1"><?= e($pageSubtitle) ?></div>
             <?php endif; ?>
         </div>
         <div class="d-flex gap-2 align-items-center">
-            <a class="btn btn-outline-secondary maintenance-secondary-button" href="<?= e(build_query_url(array_merge($_GET, ['page' => 'mentenanta', 'action' => 'export_v2', 'section' => $section]))) ?>">
-                <i class="bi bi-download me-1"></i><?= $section === 'stock' ? 'Exportă' : 'Export CSV' ?>
-            </a>
+            <?php if ($section === 'repairs'): ?>
+                <button class="btn btn-primary maintenance-primary-button" type="button" data-bs-toggle="modal" data-bs-target="#maintenanceRecordModal">
+                    <i class="bi bi-plus-lg me-1"></i>Adaugă reparație / factură
+                </button>
+            <?php else: ?>
+                <a class="btn btn-outline-secondary maintenance-secondary-button" href="<?= e(build_query_url(array_merge($_GET, ['page' => 'mentenanta', 'action' => 'export_v2', 'section' => $section]))) ?>">
+                    <i class="bi bi-download me-1"></i><?= $section === 'stock' ? 'Exportă' : 'Export CSV' ?>
+                </a>
+            <?php endif; ?>
             <?php if ($section === 'stock'): ?>
                 <button class="btn btn-primary maintenance-primary-button" type="button" data-bs-toggle="modal" data-bs-target="#maintenancePartModal">
                     <i class="bi bi-plus-lg me-1"></i>Adaugă piesă
@@ -151,7 +190,7 @@ $scheduleForm = array_merge($defaultSchedule, $editIntervention ?? []);
                 <button class="btn btn-primary maintenance-primary-button" type="button" data-bs-toggle="modal" data-bs-target="#maintenanceScheduleModal">
                     <i class="bi bi-plus-lg me-1"></i>Adaugă intervenție
                 </button>
-            <?php else: ?>
+            <?php elseif ($section !== 'repairs'): ?>
                 <div class="btn-group">
                     <button class="btn btn-primary maintenance-primary-button" type="button" data-bs-toggle="modal" data-bs-target="#maintenanceScheduleModal">
                         <i class="bi bi-plus-lg me-1"></i>Adaugă intervenție
@@ -381,7 +420,148 @@ $scheduleForm = array_merge($defaultSchedule, $editIntervention ?? []);
         </article>
     <?php endif; ?>
 
-    <?php if (in_array($section, ['maintenance', 'repairs'], true)): ?>
+    <?php if ($section === 'repairs'): ?>
+        <?php
+        $firstRepairInvoiceId = (int) ($repairInvoices[0]['id'] ?? 0);
+        $repairInvoiceCount = count($repairInvoices);
+        ?>
+        <article class="repair-invoice-shell">
+            <div class="table-responsive repair-invoice-table-wrap">
+                <table class="table maintenance-table repair-invoice-table align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>Data factură</th>
+                            <th>Număr factură</th>
+                            <th>Furnizor</th>
+                            <th>Data scadență</th>
+                            <th>Vehicule</th>
+                            <th>Reparații</th>
+                            <th>Piese utilizate</th>
+                            <th>Cost manoperă</th>
+                            <th>Cost piese</th>
+                            <th>Cost total</th>
+                            <th>Status</th>
+                            <th>Acțiuni</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($repairInvoices as $invoice): ?>
+                        <?php
+                        $invoiceId = (int) ($invoice['id'] ?? 0);
+                        $isOpen = $invoiceId === $firstRepairInvoiceId;
+                        $pdfUrl = $invoicePdfUrl((string) ($invoice['pdf_path'] ?? ''));
+                        $vehicleCount = (int) ($invoice['vehicle_count'] ?? 0);
+                        $repairCount = (int) ($invoice['repair_count'] ?? 0);
+                        $partCount = (int) ($invoice['part_count'] ?? 0);
+                        $dueDate = trim((string) ($invoice['due_date'] ?? ''));
+                        $dueDays = $dueDate !== '' ? (int) ($invoice['due_days'] ?? 0) : 0;
+                        $dueNote = $dueDate === '' ? '' : ($dueDays >= 0 ? '(' . $dueDays . ' zile)' : '(scadentă)');
+                        ?>
+                        <tr class="<?= $isOpen ? 'is-expanded' : '' ?>" data-repair-invoice-row="<?= e((string) $invoiceId) ?>">
+                            <td><button class="repair-invoice-toggle <?= $isOpen ? 'active' : '' ?>" type="button" data-repair-invoice-toggle="<?= e((string) $invoiceId) ?>" aria-label="Detalii factură"><i class="bi bi-chevron-right"></i></button></td>
+                            <td><?= e(format_date_ro((string) $invoice['invoice_date'])) ?></td>
+                            <td><strong class="repair-invoice-number"><?= e((string) $invoice['invoice_number']) ?></strong></td>
+                            <td><?= e((string) ($invoice['supplier_label'] ?? '-')) ?></td>
+                            <td><?= $dueDate !== '' ? e(format_date_ro($dueDate)) : '-' ?><?php if ($dueNote !== ''): ?><small class="<?= $dueDays < 0 ? 'text-danger' : 'text-success' ?>"><?= e($dueNote) ?></small><?php endif; ?></td>
+                            <td><span class="repair-invoice-vehicle-pill"><i class="bi bi-truck-front-fill"></i><?= e((string) $vehicleCount) ?> <?= $vehicleCount === 1 ? 'vehicul' : 'vehicule' ?></span><small><?= e((string) ($invoice['vehicle_labels'] ?? '-')) ?></small></td>
+                            <td><?= e((string) $repairCount) ?> <?= $repairCount === 1 ? 'reparație' : 'reparații' ?></td>
+                            <td><?= e((string) $partCount) ?> <?= $partCount === 1 ? 'piesă' : 'piese' ?></td>
+                            <td><?= e($currency((float) ($invoice['labour_total'] ?? 0))) ?></td>
+                            <td><?= e($currency((float) ($invoice['parts_total'] ?? 0))) ?></td>
+                            <td><strong><?= e($currency((float) ($invoice['grand_total'] ?? 0))) ?></strong></td>
+                            <td><span class="maintenance-badge <?= e($invoiceStatusClass((string) ($invoice['status'] ?? ''))) ?>"><?= e($invoiceStatusLabels[(string) ($invoice['status'] ?? '')] ?? (string) ($invoice['status'] ?? '-')) ?></span></td>
+                            <td>
+                                <div class="maintenance-actions">
+                                    <button class="btn" type="button" data-repair-invoice-toggle="<?= e((string) $invoiceId) ?>" title="Vezi detalii"><i class="bi bi-eye"></i></button>
+                                    <?php if ($pdfUrl !== ''): ?><a class="btn" href="<?= e($pdfUrl) ?>" download title="Descarcă PDF"><i class="bi bi-download"></i></a><?php else: ?><button class="btn" type="button" disabled title="Nu există PDF"><i class="bi bi-download"></i></button><?php endif; ?>
+                                    <?php if (!empty($invoice['source_maintenance_id'])): ?><a class="btn" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'repairs', 'edit_id' => (int) $invoice['source_maintenance_id']])) ?>" title="Editează"><i class="bi bi-pencil"></i></a><?php else: ?><button class="btn" type="button" disabled title="Editare indisponibilă"><i class="bi bi-pencil"></i></button><?php endif; ?>
+                                    <form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'delete_repair_invoice'])) ?>"><?= csrf_field() ?><input type="hidden" name="id" value="<?= e((string) $invoiceId) ?>"><button class="btn danger" type="submit" data-confirm="Ștergi această factură de reparații?" title="Șterge"><i class="bi bi-trash"></i></button></form>
+                                </div>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    <?php if ($repairInvoices === []): ?><tr><td colspan="13" class="text-center text-muted py-5">Nu există facturi de reparații pentru filtrele selectate.</td></tr><?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+            <div class="repair-invoice-table-footer">
+                <span>Afișez <?= $repairInvoiceCount > 0 ? '1 până la ' . e((string) $repairInvoiceCount) : '0' ?> din <?= e((string) $repairInvoiceCount) ?> rezultate</span>
+                <div class="repair-invoice-pager"><button type="button" disabled><i class="bi bi-chevron-left"></i></button><strong>1</strong><button type="button" disabled><i class="bi bi-chevron-right"></i></button></div>
+            </div>
+        </article>
+
+        <div class="repair-invoice-detail-stack">
+            <?php foreach ($repairInvoices as $invoice): ?>
+                <?php
+                $invoiceId = (int) ($invoice['id'] ?? 0);
+                $isOpen = $invoiceId === $firstRepairInvoiceId;
+                $pdfUrl = $invoicePdfUrl((string) ($invoice['pdf_path'] ?? ''));
+                $detail = is_array($repairInvoiceDetails[$invoiceId] ?? null) ? $repairInvoiceDetails[$invoiceId] : ['repairs' => []];
+                $invoiceRepairs = is_array($detail['repairs'] ?? null) ? $detail['repairs'] : [];
+                $repairVehicleCount = count($invoiceRepairs);
+                $repairVehicleGridClass = $repairVehicleCount <= 1 ? 'is-single' : ($repairVehicleCount === 2 ? 'is-duo' : 'is-multi');
+                $vehicleCount = (int) ($invoice['vehicle_count'] ?? 0);
+                $repairCount = (int) ($invoice['repair_count'] ?? 0);
+                $partCount = (int) ($invoice['part_count'] ?? 0);
+                $dueDate = trim((string) ($invoice['due_date'] ?? ''));
+                $dueDays = $dueDate !== '' ? (int) ($invoice['due_days'] ?? 0) : 0;
+                ?>
+                <section class="repair-invoice-detail <?= $isOpen ? 'active' : '' ?>" data-repair-invoice-detail="<?= e((string) $invoiceId) ?>">
+                    <div class="repair-invoice-detail-header">
+                        <div class="repair-invoice-title-row">
+                            <span class="repair-invoice-title-icon"><i class="bi bi-file-earmark-text-fill"></i></span>
+                            <div>
+                                <h2>Factură: <strong><?= e((string) $invoice['invoice_number']) ?></strong> <span><?= e((string) ($invoice['supplier_label'] ?? '-')) ?></span></h2>
+                                <p>Dată factură: <?= e(format_date_ro((string) $invoice['invoice_date'])) ?> <b>|</b> Scadență: <?= $dueDate !== '' ? e(format_date_ro($dueDate) . ' (' . max(0, $dueDays) . ' zile)') : '-' ?> <b>|</b> Total: <strong><?= e($currency((float) ($invoice['grand_total'] ?? 0))) ?></strong></p>
+                            </div>
+                        </div>
+                        <div class="repair-invoice-detail-actions">
+                            <?php if ($pdfUrl !== ''): ?><a class="btn btn-outline-primary" href="<?= e($pdfUrl) ?>" download><i class="bi bi-download me-1"></i>Descarcă PDF</a><?php endif; ?>
+                            <button class="btn btn-outline-secondary" type="button" data-repair-invoice-close="<?= e((string) $invoiceId) ?>"><i class="bi bi-chevron-up me-1"></i>Închide detalii</button>
+                        </div>
+                    </div>
+                    <div class="repair-vehicle-card-grid <?= e($repairVehicleGridClass) ?>">
+                        <?php foreach ($invoiceRepairs as $repair): ?>
+                            <?php
+                            $partsForRepair = is_array($repair['parts'] ?? null) ? $repair['parts'] : [];
+                            $repairPartsTotal = (float) ($repair['parts_total'] ?? 0);
+                            $repairLabour = (float) ($repair['labour_cost'] ?? 0);
+                            $repairTotal = $repairLabour + $repairPartsTotal;
+                            $vehicleType = (string) ($repair['tip_vehicul'] ?? '');
+                            ?>
+                            <article class="repair-vehicle-card">
+                                <div class="repair-vehicle-heading"><div><h3><i class="bi bi-truck-front-fill"></i>Vehicul: <?= e((string) ($repair['nr_inmatriculare'] ?? '-')) ?></h3><span class="maintenance-badge maintenance-badge-blue"><?= e($vehicleTypeLabels[$vehicleType] ?? $vehicleType ?: 'Vehicul') ?></span></div></div>
+                                <div class="repair-vehicle-meta"><div><i class="bi bi-wrench"></i><span>Defecțiune: <?= e((string) ($repair['defect'] ?? '-')) ?></span></div><div><i class="bi bi-tools"></i><span>Reparație: <?= e((string) ($repair['repair_description'] ?? '-')) ?></span></div></div>
+                                <div class="repair-cost-strip"><div><span>Manoperă</span><strong><?= e($currency($repairLabour)) ?></strong></div><div><span>Piese</span><strong><?= e($currency($repairPartsTotal)) ?></strong></div><div><span>Total</span><strong><?= e($currency($repairTotal)) ?></strong></div></div>
+                                <div class="repair-parts-heading">Piese utilizate (<?= e((string) count($partsForRepair)) ?>)</div>
+                                <div class="table-responsive repair-parts-table-wrap">
+                                    <table class="table repair-parts-table mb-0">
+                                        <thead><tr><th>Denumire piesă</th><th>Cod piesă</th><th>Cant.</th><th>Preț unitar fără TVA</th><th>Reducere %</th><th>Valoare fără TVA</th><th>TVA %</th><th>Valoare TVA</th><th>Valoare totală cu TVA</th><th>Furnizor piesă</th></tr></thead>
+                                        <tbody>
+                                        <?php foreach ($partsForRepair as $part): ?>
+                                            <tr><td><?= e((string) ($part['part_name'] ?? '-')) ?></td><td><?= trim((string) ($part['part_code'] ?? '')) !== '' ? e((string) $part['part_code']) : '-' ?></td><td><?= e(format_number_ro((float) ($part['quantity'] ?? 0), 2)) ?></td><td><?= e($currency((float) ($part['unit_price_without_vat'] ?? 0))) ?></td><td><?= e(format_number_ro((float) ($part['discount_percent'] ?? 0), 2)) ?>%</td><td><?= e($currency((float) ($part['value_without_vat'] ?? 0))) ?></td><td><?= e(format_number_ro((float) ($part['vat_percent'] ?? 0), 2)) ?>%</td><td><?= e($currency((float) ($part['vat_value'] ?? 0))) ?></td><td><strong><?= e($currency((float) ($part['total_with_vat'] ?? 0))) ?></strong></td><td><?= trim((string) ($part['part_supplier_name'] ?? '')) !== '' ? e((string) $part['part_supplier_name']) : '-' ?></td></tr>
+                                        <?php endforeach; ?>
+                                        <?php if ($partsForRepair === []): ?><tr><td colspan="10" class="text-center text-muted py-3">Nu există piese salvate pentru acest vehicul.</td></tr><?php endif; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="repair-card-total">Total piese: <strong><?= e($currency($repairPartsTotal)) ?></strong></div>
+                            </article>
+                        <?php endforeach; ?>
+                    </div>
+                    <div class="repair-invoice-summary">
+                        <div class="repair-summary-counts"><span><i class="bi bi-truck-front-fill"></i><?= e((string) $vehicleCount) ?> <?= $vehicleCount === 1 ? 'vehicul' : 'vehicule' ?></span><span><i class="bi bi-wrench-adjustable"></i><?= e((string) $repairCount) ?> <?= $repairCount === 1 ? 'reparație' : 'reparații' ?></span><span><i class="bi bi-box-seam-fill"></i><?= e((string) $partCount) ?> <?= $partCount === 1 ? 'piesă' : 'piese' ?></span></div>
+                        <div class="repair-summary-total"><span>Total manoperă</span><strong><?= e($currency((float) ($invoice['labour_total'] ?? 0))) ?></strong></div>
+                        <div class="repair-summary-total"><span>Total piese</span><strong><?= e($currency((float) ($invoice['parts_total'] ?? 0))) ?></strong></div>
+                        <div class="repair-summary-total is-grand"><span>Total factură</span><strong><?= e($currency((float) ($invoice['grand_total'] ?? 0))) ?></strong></div>
+                    </div>
+                </section>
+            <?php endforeach; ?>
+        </div>
+    <?php endif; ?>
+
+    <?php if ($section === 'maintenance'): ?>
         <div class="maintenance-section-toolbar" id="maintenance-records">
             <div><h2><?= $section === 'maintenance' ? 'Întreținere preventivă' : 'Reparații corective' ?></h2><p><?= $section === 'maintenance' ? 'Revizii și lucrări preventive, separate de reparațiile după defect.' : 'Defecțiuni și reparații corective, separate de întreținerea periodică.' ?></p></div>
             <button class="btn btn-primary maintenance-primary-button" type="button" data-bs-toggle="modal" data-bs-target="#maintenanceRecordModal"><i class="bi bi-plus-lg me-1"></i><?= $section === 'maintenance' ? 'Adaugă întreținere' : 'Adaugă reparație' ?></button>

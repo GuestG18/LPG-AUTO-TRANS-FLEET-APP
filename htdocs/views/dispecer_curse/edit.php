@@ -128,8 +128,18 @@ $existingRefacturareDoc = is_array($expenseBeingEdited) ? (string) ($expenseBein
 $existingRefacturareDocName = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['refacturare_document_original_name'] ?? '') : '';
 $existingRefacturareDocUrl = $existingRefacturareDoc !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($existingRefacturareDoc)) : null;
 $expenseRefacturareEnabled = (string) ($expenseFormData['refacturare_enabled'] ?? '0') === '1';
+$expenseCategories = is_array($expenseCategories ?? null) ? $expenseCategories : [];
 $expenseEntryTypes = is_array($expenseEntryTypes ?? null) ? $expenseEntryTypes : (array) ($expenseTypes ?? []);
 unset($expenseEntryTypes['motorina']);
+$selectedExpenseCategoryId = (string) ($expenseFormData['categorie_id'] ?? '');
+if ($selectedExpenseCategoryId === '' && (string) ($expenseFormData['tip_cheltuiala'] ?? '') !== '') {
+    foreach ($expenseCategories as $expenseCategory) {
+        if ((string) ($expenseCategory['legacy_key'] ?? '') === (string) ($expenseFormData['tip_cheltuiala'] ?? '')) {
+            $selectedExpenseCategoryId = (string) ($expenseCategory['id'] ?? '');
+            break;
+        }
+    }
+}
 $selectedRefacturareExpenseType = (string) ($expenseFormData['refacturare_tip_cheltuiala'] ?? '');
 if (!isset($expenseEntryTypes[$selectedRefacturareExpenseType])) {
     $selectedRefacturareExpenseType = '';
@@ -538,16 +548,22 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <div class="row g-2 mb-3 align-items-start expense-type-row">
                         <div class="col-12 col-md-6">
                             <label class="form-label" for="expense_tip_cheltuiala">Tip cheltuiala <span class="text-danger">*</span></label>
-                            <select class="form-select <?= isset($expenseFormErrors['tip_cheltuiala']) ? 'is-invalid' : '' ?>" id="expense_tip_cheltuiala" name="tip_cheltuiala" required>
-                                <option value="" <?= (string) ($expenseFormData['tip_cheltuiala'] ?? '') === '' ? 'selected' : '' ?>>-- Selecteaza tipul --</option>
-                                <?php foreach ($expenseEntryTypes as $value => $label): ?>
-                                    <option value="<?= e((string) $value) ?>" <?= (string) ($expenseFormData['tip_cheltuiala'] ?? '') === (string) $value ? 'selected' : '' ?>>
-                                        <?= e((string) $label) ?>
+                            <select class="form-select <?= (isset($expenseFormErrors['categorie_id']) || isset($expenseFormErrors['tip_cheltuiala'])) ? 'is-invalid' : '' ?>" id="expense_tip_cheltuiala" name="categorie_id" required>
+                                <option value="" <?= $selectedExpenseCategoryId === '' ? 'selected' : '' ?>>-- Selecteaza tipul --</option>
+                                <?php foreach ($expenseCategories as $category): ?>
+                                    <?php $categoryId = (int) ($category['id'] ?? 0); ?>
+                                    <?php if ($categoryId <= 0): continue; endif; ?>
+                                    <option
+                                        value="<?= e((string) $categoryId) ?>"
+                                        data-legacy-key="<?= e((string) ($category['legacy_key'] ?? '')) ?>"
+                                        <?= $selectedExpenseCategoryId === (string) $categoryId ? 'selected' : '' ?>
+                                    >
+                                        <?= e((string) ($category['nume'] ?? '-')) ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                             <div class="form-text">Motorina se introduce separat in modulul Alimentari.</div>
-                            <?php if (isset($expenseFormErrors['tip_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['tip_cheltuiala']) ?></div><?php endif; ?>
+                            <?php if (isset($expenseFormErrors['categorie_id']) || isset($expenseFormErrors['tip_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) ($expenseFormErrors['categorie_id'] ?? $expenseFormErrors['tip_cheltuiala'])) ?></div><?php endif; ?>
                         </div>
 
                         <div class="col-12 col-md-6">
@@ -909,7 +925,10 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                                 $refacturareDocName = (string) ($expense['refacturare_document_original_name'] ?? '');
                                 $refacturareDocUrl = $refacturareDocPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($refacturareDocPath)) : null;
                                 $refacturareIsInvoiced = (int) ($expense['refacturare_facturata'] ?? 0) === 1;
-                                $expenseTypeLabel = (string) ($expenseTypes[(string) ($expense['tip_cheltuiala'] ?? '')] ?? '-');
+                                $expenseTypeLabel = trim((string) ($expense['categorie_nume'] ?? ''));
+                                if ($expenseTypeLabel === '') {
+                                    $expenseTypeLabel = (string) ($expenseTypes[(string) ($expense['tip_cheltuiala'] ?? '')] ?? '-');
+                                }
                                 $refacturareTypeKey = (string) ($expense['refacturare_tip_cheltuiala'] ?? '');
                                 $refacturareTypeLabel = (!$refacturareIsInvoiced && $refacturareTypeKey !== '') ? (string) ($expenseTypes[$refacturareTypeKey] ?? '') : '';
                                 $refacturareAmountValue = !$refacturareIsInvoiced ? (float) ($expense['refacturare_suma'] ?? 0) : 0.0;
@@ -1055,6 +1074,20 @@ document.addEventListener('DOMContentLoaded', function () {
     var refacturareAmountEl = document.getElementById('expense_refacturare_suma');
     var refacturareDateEl = document.getElementById('expense_refacturare_data');
 
+    var getSelectedLegacyKey = function (selectEl) {
+        if (!(selectEl instanceof HTMLSelectElement)) {
+            return '';
+        }
+        var option = selectEl.options[selectEl.selectedIndex] || null;
+        if (option instanceof HTMLOptionElement) {
+            var legacyKey = option.getAttribute('data-legacy-key') || '';
+            if (legacyKey !== '') {
+                return legacyKey;
+            }
+        }
+        return selectEl.value;
+    };
+
     var syncRefacturareMenu = function () {
         if (!(refacturareToggleEl instanceof HTMLInputElement) || !(refacturareMenuEl instanceof HTMLElement) || !(refacturareSelectEl instanceof HTMLSelectElement)) {
             return;
@@ -1198,7 +1231,7 @@ document.addEventListener('DOMContentLoaded', function () {
     };
 
     var syncExpenseTaxMode = function () {
-        var isRoadTax = expenseTypeEl.value === 'taxe_drum';
+        var isRoadTax = getSelectedLegacyKey(expenseTypeEl) === 'taxe_drum';
         var isRefacturareRoadTax = refacturareToggleEl instanceof HTMLInputElement
             && refacturareSelectEl instanceof HTMLSelectElement
             && refacturareToggleEl.checked

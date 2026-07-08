@@ -72,6 +72,18 @@ class EmailService
         return (bool) ($result['sent'] ?? false);
     }
 
+    public function deliverTextEmailWithAttachments(
+        string $toEmail,
+        string $toName,
+        string $subject,
+        string $body,
+        array $attachments,
+        array $options = []
+    ): array {
+        $options['attachments'] = $attachments;
+        return $this->deliverTextEmail($toEmail, $toName, $subject, $body, $options);
+    }
+
     public function deliverTextEmail(
         string $toEmail,
         string $toName,
@@ -111,6 +123,13 @@ class EmailService
             return $this->finishDeliveryResult($result, $toEmail, $toName, $subject, $body, $options);
         }
 
+        [$attachments, $attachmentError] = $this->normalizeAttachments((array) ($options['attachments'] ?? []));
+        if ($attachmentError !== null) {
+            $result['error'] = $attachmentError;
+            return $this->finishDeliveryResult($result, $toEmail, $toName, $subject, $body, $options);
+        }
+        $result['diagnostics']['attachment_count'] = count($attachments);
+
         $lastError = 'Unknown SMTP error';
         $lastErrorInfo = '';
         $retryAttempts = (int) $config['retry_attempts'];
@@ -125,6 +144,9 @@ class EmailService
                 $mailer->Body = $body;
                 $mailer->isHTML(false);
                 $mailer->addCustomHeader('X-Fleet-Notification-Context', (string) ($options['context'] ?? 'general'));
+                foreach ($attachments as $attachment) {
+                    $mailer->addAttachment((string) $attachment['path'], (string) $attachment['name']);
+                }
 
                 $mailer->send();
 
@@ -253,6 +275,34 @@ class EmailService
         }
 
         return null;
+    }
+
+    private function normalizeAttachments(array $attachments): array
+    {
+        $normalized = [];
+
+        foreach ($attachments as $attachment) {
+            if (!is_array($attachment)) {
+                return [[], 'Atasamentul emailului are format invalid.'];
+            }
+
+            $path = trim((string) ($attachment['path'] ?? ''));
+            $name = trim((string) ($attachment['name'] ?? ''));
+            if ($path === '' || !is_file($path) || !is_readable($path)) {
+                return [[], 'Atasamentul emailului nu poate fi citit.'];
+            }
+
+            if ($name === '') {
+                $name = basename($path);
+            }
+
+            $normalized[] = [
+                'path' => $path,
+                'name' => str_replace('"', '', $name),
+            ];
+        }
+
+        return [$normalized, null];
     }
 
     private function baseDeliveryResult(array $config, string $toEmail, array $options): array

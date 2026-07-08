@@ -45,7 +45,19 @@ class DocumentModel extends BaseModel
             'Ţ' => 't',
         ]);
 
-        return (string) preg_replace('/[^a-z0-9]+/', '', $normalized);
+        $ascii = function_exists('iconv') ? @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $normalized) : false;
+        $base = is_string($ascii) && trim($ascii) !== '' ? $ascii : $normalized;
+
+        return (string) preg_replace('/[^a-z0-9]+/', '', strtolower($base));
+    }
+
+    public function isDriverEmploymentContractDocumentType(string $documentType): bool
+    {
+        return in_array(
+            $this->normalizeDriverDocumentTypeKey($documentType),
+            ['contractdemunca', 'contractdeangajare'],
+            true
+        );
     }
 
     private function driverDocumentTypeCanonicalKey(string $documentType): string
@@ -284,7 +296,7 @@ class DocumentModel extends BaseModel
         $options = [];
         foreach ($stmt->fetchAll() as $row) {
             $documentType = trim((string) ($row['document_type'] ?? ''));
-            if ($documentType === '') {
+            if ($documentType === '' || $this->isDriverEmploymentContractDocumentType($documentType)) {
                 continue;
             }
 
@@ -326,7 +338,10 @@ class DocumentModel extends BaseModel
             $stmt = $this->db->query($sqlFallback);
         }
 
-        return $stmt->fetchAll();
+        return array_values(array_filter(
+            $stmt->fetchAll(),
+            fn(array $row): bool => !$this->isDriverEmploymentContractDocumentType((string) ($row['document_type'] ?? ''))
+        ));
     }
 
     public function getConfiguredDriverDocumentTypeById(int $id): ?array

@@ -191,6 +191,179 @@ class MaintenanceModel extends BaseModel
         return $row ?: null;
     }
 
+    public function getCorrectiveInvoices(array $filters, int $limit = 100): array
+    {
+        $this->backfillCorrectiveInvoicesFromRecords();
+        [$where, $params] = $this->buildCorrectiveInvoiceWhere($filters);
+        $whereSql = $where !== [] ? ' WHERE ' . implode(' AND ', $where) : '';
+        $limit = max(1, min(500, $limit));
+
+        $stmt = $this->db->prepare(
+            "SELECT
+                si.*,
+                COALESCE(NULLIF(si.supplier_name, ''), CONCAT('Furnizor #', si.supplier_id), '-') AS supplier_label,
+                DATEDIFF(si.due_date, CURDATE()) AS due_days,
+                (
+                    SELECT COUNT(DISTINCT ivr.vehicle_id)
+                    FROM invoice_vehicle_repairs ivr
+                    WHERE ivr.invoice_id = si.id
+                ) AS vehicle_count,
+                (
+                    SELECT GROUP_CONCAT(DISTINCT v.nr_inmatriculare ORDER BY v.nr_inmatriculare SEPARATOR ', ')
+                    FROM invoice_vehicle_repairs ivr
+                    INNER JOIN vehicule v ON v.id = ivr.vehicle_id
+                    WHERE ivr.invoice_id = si.id
+                ) AS vehicle_labels,
+                (
+                    SELECT COUNT(*)
+                    FROM invoice_vehicle_repairs ivr
+                    WHERE ivr.invoice_id = si.id
+                ) AS repair_count,
+                (
+                    SELECT COUNT(*)
+                    FROM invoice_repair_parts irp
+                    INNER JOIN invoice_vehicle_repairs ivr ON ivr.id = irp.repair_id
+                    WHERE ivr.invoice_id = si.id
+                ) AS part_count
+             FROM supplier_invoices si" . $whereSql . "
+             ORDER BY si.invoice_date DESC, si.id DESC
+             LIMIT " . $limit
+        );
+        $stmt->execute($params);
+
+        return $stmt->fetchAll();
+    }
+
+    public function getCorrectiveInvoiceDetails(array $invoiceIds): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $invoiceIds))));
+        if ($ids === []) {
+            return [];
+        }
+
+        $placeholders = [];
+        $params = [];
+        foreach ($ids as $index => $id) {
+            $key = ':invoice_id_' . $index;
+            $placeholders[] = $key;
+            $params[$key] = $id;
+        }
+        $inSql = implode(', ', $placeholders);
+
+        $details = [];
+        foreach ($ids as $id) {
+            $details[$id] = ['repairs' => []];
+        }
+
+        $repairStmt = $this->db->prepare(
+            "SELECT
+                r.*,
+                v.nr_inmatriculare,
+                v.tip_vehicul,
+                v.marca,
+                v.model,
+                COALESCE((
+                    SELECT SUM(p.total_with_vat)
+                    FROM invoice_repair_parts p
+                    WHERE p.repair_id = r.id
+                ), 0) AS parts_total,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM invoice_repair_parts p
+                    WHERE p.repair_id = r.id
+                ), 0) AS part_count
+             FROM invoice_vehicle_repairs r
+             INNER JOIN vehicule v ON v.id = r.vehicle_id
+             WHERE r.invoice_id IN (" . $inSql . ")
+             ORDER BY r.invoice_id ASC, v.nr_inmatriculare ASC, r.id ASC"
+        );
+        $repairStmt->execute($params);
+        $repairIndex = [];
+        foreach ($repairStmt->fetchAll() as $repair) {
+            $invoiceId = (int) ($repair['invoice_id'] ?? 0);
+            $repair['parts'] = [];
+            $details[$invoiceId]['repairs'][] = $repair;
+            $repairIndex[(int) $repair['id']] = [$invoiceId, count($details[$invoiceId]['repairs']) - 1];
+        }
+
+        if ($repairIndex === []) {
+            return $details;
+        }
+
+        $partStmt = $this->db->prepare(
+            "SELECT p.*
+             FROM invoice_repair_parts p
+             INNER JOIN invoice_vehicle_repairs r ON r.id = p.repair_id
+             WHERE r.invoice_id IN (" . $inSql . ")
+             ORDER BY p.repair_id ASC, p.id ASC"
+        );
+        $partStmt->execute($params);
+        foreach ($partStmt->fetchAll() as $part) {
+            $repairId = (int) ($part['repair_id'] ?? 0);
+            if (!isset($repairIndex[$repairId])) {
+                continue;
+            }
+            [$invoiceId, $repairOffset] = $repairIndex[$repairId];
+            $details[$invoiceId]['repairs'][$repairOffset]['parts'][] = $part;
+        }
+
+        return $details;
+    }
+
+    public function deleteCorrectiveInvoice(int $invoiceId): bool
+    {
+        if ($invoiceId <= 0) {
+            return false;
+        }
+
+        $this->db->beginTransaction();
+        try {
+            $sourceStmt = $this->db->prepare(
+                "SELECT DISTINCT source_maintenance_id
+                 FROM invoice_vehicle_repairs
+                 WHERE invoice_id = :invoice_id AND source_maintenance_id IS NOT NULL"
+            );
+            $sourceStmt->execute([':invoice_id' => $invoiceId]);
+            $sourceIds = array_map('intval', $sourceStmt->fetchAll(PDO::FETCH_COLUMN));
+
+            foreach ($sourceIds as $sourceId) {
+                $usageStmt = $this->db->prepare(
+                    "SELECT part_id, cantitate, direct_mount
+                     FROM mentenanta_piese_utilizari WHERE maintenance_id = :id FOR UPDATE"
+                );
+                $usageStmt->execute([':id' => $sourceId]);
+                foreach ($usageStmt->fetchAll() as $usage) {
+                    if (empty($usage['direct_mount'])) {
+                        $restore = $this->db->prepare(
+                            "UPDATE mentenanta_piese
+                             SET stoc_curent = stoc_curent + :qty, updated_at = :updated_at
+                             WHERE id = :id"
+                        );
+                        $restore->execute([
+                            ':qty' => (float) $usage['cantitate'],
+                            ':updated_at' => date('Y-m-d H:i:s'),
+                            ':id' => (int) $usage['part_id'],
+                        ]);
+                    }
+                }
+
+                $this->db->prepare("DELETE FROM mentenanta_piese_utilizari WHERE maintenance_id = :id")->execute([':id' => $sourceId]);
+                $this->db->prepare("DELETE FROM mentenanta WHERE id = :id AND record_type = 'reparatie'")->execute([':id' => $sourceId]);
+            }
+
+            $deleted = $this->db->prepare("DELETE FROM supplier_invoices WHERE id = :id");
+            $deleted->execute([':id' => $invoiceId]);
+            $this->db->commit();
+
+            return $deleted->rowCount() > 0;
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+    }
+
     public function saveRecord(array $data, int $id = 0): int
     {
         $this->db->beginTransaction();
@@ -1113,6 +1286,50 @@ class MaintenanceModel extends BaseModel
         ]);
     }
 
+    private function buildCorrectiveInvoiceWhere(array $filters): array
+    {
+        $where = [];
+        $params = [];
+
+        if (!empty($filters['date_from'])) {
+            $where[] = 'si.invoice_date >= :invoice_date_from';
+            $params[':invoice_date_from'] = (string) $filters['date_from'];
+        }
+        if (!empty($filters['date_to'])) {
+            $where[] = 'si.invoice_date <= :invoice_date_to';
+            $params[':invoice_date_to'] = (string) $filters['date_to'];
+        }
+        if (!empty($filters['vehicle_id'])) {
+            $where[] = "EXISTS (
+                SELECT 1 FROM invoice_vehicle_repairs ivr_filter
+                WHERE ivr_filter.invoice_id = si.id AND ivr_filter.vehicle_id = :invoice_vehicle_id
+            )";
+            $params[':invoice_vehicle_id'] = (int) $filters['vehicle_id'];
+        }
+        if (!empty($filters['status']) && in_array($filters['status'], ['draft', 'in_progress', 'finalizata', 'anulata'], true)) {
+            $where[] = 'si.status = :invoice_status';
+            $params[':invoice_status'] = (string) $filters['status'];
+        }
+
+        $search = trim((string) ($filters['search'] ?? ''));
+        if ($search !== '') {
+            $where[] = "(
+                si.invoice_number LIKE :invoice_search
+                OR si.supplier_name LIKE :invoice_search
+                OR EXISTS (
+                    SELECT 1
+                    FROM invoice_vehicle_repairs ivr_search
+                    INNER JOIN vehicule v_search ON v_search.id = ivr_search.vehicle_id
+                    WHERE ivr_search.invoice_id = si.id
+                      AND v_search.nr_inmatriculare LIKE :invoice_search
+                )
+            )";
+            $params[':invoice_search'] = '%' . $search . '%';
+        }
+
+        return [$where, $params];
+    }
+
     private function buildRecordWhere(array $filters, ?string $recordType = null): array
     {
         // Tire lifecycle records remain available in the dedicated Anvelope page.
@@ -1469,6 +1686,7 @@ class MaintenanceModel extends BaseModel
                 INDEX idx_auto_config_part (stock_part_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
+        $this->ensureCorrectiveInvoiceSchema();
         $technicalRecordColumns = [
             'technical_category_id' => "INT UNSIGNED NULL AFTER centru_cost",
             'technical_component_id' => "INT UNSIGNED NULL AFTER technical_category_id",
@@ -1479,6 +1697,399 @@ class MaintenanceModel extends BaseModel
                 $this->db->exec("ALTER TABLE mentenanta ADD COLUMN `" . $column . "` " . $definition);
             }
         }
+        $this->backfillCorrectiveInvoicesFromRecords();
+    }
+
+    private function ensureCorrectiveInvoiceSchema(): void
+    {
+        $this->db->exec(
+            "CREATE TABLE IF NOT EXISTS supplier_invoices (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                supplier_id INT UNSIGNED NULL,
+                supplier_name VARCHAR(190) NULL,
+                invoice_number VARCHAR(120) NOT NULL,
+                invoice_date DATE NOT NULL,
+                due_date DATE NULL,
+                pdf_path VARCHAR(255) NULL,
+                status ENUM('draft','in_progress','finalizata','anulata') NOT NULL DEFAULT 'finalizata',
+                notes TEXT NULL,
+                labour_total DECIMAL(12,2) NOT NULL DEFAULT 0,
+                parts_subtotal DECIMAL(12,2) NOT NULL DEFAULT 0,
+                vat_total DECIMAL(12,2) NOT NULL DEFAULT 0,
+                parts_total DECIMAL(12,2) NOT NULL DEFAULT 0,
+                grand_total DECIMAL(12,2) NOT NULL DEFAULT 0,
+                source_maintenance_id INT UNSIGNED NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                UNIQUE KEY uk_supplier_invoices_number (invoice_number),
+                UNIQUE KEY uk_supplier_invoices_source (source_maintenance_id),
+                INDEX idx_supplier_invoices_supplier (supplier_id),
+                INDEX idx_supplier_invoices_date (invoice_date),
+                INDEX idx_supplier_invoices_status (status),
+                CONSTRAINT fk_supplier_invoices_source_maintenance FOREIGN KEY (source_maintenance_id) REFERENCES mentenanta(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+
+        $invoiceColumns = [
+            'supplier_name' => "VARCHAR(190) NULL AFTER supplier_id",
+            'source_maintenance_id' => "INT UNSIGNED NULL AFTER grand_total",
+        ];
+        foreach ($invoiceColumns as $column => $definition) {
+            if (!$this->columnExists('supplier_invoices', $column)) {
+                $this->db->exec("ALTER TABLE supplier_invoices ADD COLUMN `" . $column . "` " . $definition);
+            }
+        }
+
+        $this->db->exec(
+            "CREATE TABLE IF NOT EXISTS invoice_vehicle_repairs (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                invoice_id INT UNSIGNED NOT NULL,
+                vehicle_id INT UNSIGNED NOT NULL,
+                km_at_repair INT UNSIGNED NULL,
+                defect TEXT NULL,
+                component_group_id INT UNSIGNED NULL,
+                technical_category_id INT UNSIGNED NULL,
+                technical_component_id INT UNSIGNED NULL,
+                repair_description TEXT NULL,
+                repair_status ENUM('in_asteptare','in_lucru','finalizata','anulata') NOT NULL DEFAULT 'finalizata',
+                immobilization_days DECIMAL(6,2) NOT NULL DEFAULT 0,
+                condition_after_percent TINYINT UNSIGNED NULL,
+                labour_supplier_id INT UNSIGNED NULL,
+                labour_supplier_name VARCHAR(190) NULL,
+                labour_cost DECIMAL(12,2) NOT NULL DEFAULT 0,
+                source_maintenance_id INT UNSIGNED NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                INDEX idx_invoice_repairs_invoice (invoice_id),
+                INDEX idx_invoice_repairs_vehicle (vehicle_id),
+                INDEX idx_invoice_repairs_source (source_maintenance_id),
+                CONSTRAINT fk_invoice_repairs_invoice FOREIGN KEY (invoice_id) REFERENCES supplier_invoices(id) ON DELETE CASCADE,
+                CONSTRAINT fk_invoice_repairs_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE,
+                CONSTRAINT fk_invoice_repairs_source_maintenance FOREIGN KEY (source_maintenance_id) REFERENCES mentenanta(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+
+        $repairColumns = [
+            'labour_supplier_name' => "VARCHAR(190) NULL AFTER labour_supplier_id",
+            'source_maintenance_id' => "INT UNSIGNED NULL AFTER labour_cost",
+        ];
+        foreach ($repairColumns as $column => $definition) {
+            if (!$this->columnExists('invoice_vehicle_repairs', $column)) {
+                $this->db->exec("ALTER TABLE invoice_vehicle_repairs ADD COLUMN `" . $column . "` " . $definition);
+            }
+        }
+
+        $this->db->exec(
+            "CREATE TABLE IF NOT EXISTS invoice_repair_parts (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                repair_id INT UNSIGNED NOT NULL,
+                part_name VARCHAR(190) NOT NULL,
+                part_code VARCHAR(100) NULL,
+                stock_part_id INT UNSIGNED NULL,
+                quantity DECIMAL(12,2) NOT NULL DEFAULT 1,
+                unit_price_without_vat DECIMAL(12,2) NOT NULL DEFAULT 0,
+                discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+                value_without_vat DECIMAL(12,2) NOT NULL DEFAULT 0,
+                vat_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+                vat_value DECIMAL(12,2) NOT NULL DEFAULT 0,
+                total_with_vat DECIMAL(12,2) NOT NULL DEFAULT 0,
+                part_supplier_id INT UNSIGNED NULL,
+                part_supplier_name VARCHAR(190) NULL,
+                notes TEXT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                INDEX idx_invoice_parts_repair (repair_id),
+                INDEX idx_invoice_parts_stock (stock_part_id),
+                INDEX idx_invoice_parts_supplier (part_supplier_id),
+                CONSTRAINT fk_invoice_parts_repair FOREIGN KEY (repair_id) REFERENCES invoice_vehicle_repairs(id) ON DELETE CASCADE,
+                CONSTRAINT fk_invoice_parts_stock FOREIGN KEY (stock_part_id) REFERENCES mentenanta_piese(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
+
+        if (!$this->columnExists('invoice_repair_parts', 'part_supplier_name')) {
+            $this->db->exec("ALTER TABLE invoice_repair_parts ADD COLUMN part_supplier_name VARCHAR(190) NULL AFTER part_supplier_id");
+        }
+    }
+
+    private function backfillCorrectiveInvoicesFromRecords(): void
+    {
+        static $backfilled = false;
+        if ($backfilled) {
+            return;
+        }
+        $backfilled = true;
+
+        $records = $this->db->query(
+            "SELECT *
+             FROM mentenanta
+             WHERE record_type = 'reparatie'
+               AND tip_interventie NOT LIKE 'Anvelopa - %'
+             ORDER BY id ASC"
+        )->fetchAll();
+
+        if ($records === []) {
+            return;
+        }
+
+        $existingStmt = $this->db->prepare(
+            "SELECT id FROM supplier_invoices WHERE source_maintenance_id = :source_id LIMIT 1"
+        );
+        $insertInvoice = $this->db->prepare(
+            "INSERT INTO supplier_invoices
+                (supplier_id, supplier_name, invoice_number, invoice_date, due_date, pdf_path, status, notes,
+                 labour_total, parts_subtotal, vat_total, parts_total, grand_total, source_maintenance_id,
+                 created_at, updated_at)
+             VALUES
+                (NULL, :supplier_name, :invoice_number, :invoice_date, :due_date, :pdf_path, :status, :notes,
+                 :labour_total, :parts_subtotal, :vat_total, :parts_total, :grand_total, :source_maintenance_id,
+                 :created_at, :updated_at)"
+        );
+        $updateInvoice = $this->db->prepare(
+            "UPDATE supplier_invoices SET
+                supplier_name = :supplier_name,
+                invoice_number = :invoice_number,
+                invoice_date = :invoice_date,
+                due_date = :due_date,
+                pdf_path = :pdf_path,
+                status = :status,
+                notes = :notes,
+                labour_total = :labour_total,
+                parts_subtotal = :parts_subtotal,
+                vat_total = :vat_total,
+                parts_total = :parts_total,
+                grand_total = :grand_total,
+                updated_at = :updated_at
+             WHERE id = :id"
+        );
+        $insertRepair = $this->db->prepare(
+            "INSERT INTO invoice_vehicle_repairs
+                (invoice_id, vehicle_id, km_at_repair, defect, component_group_id, technical_category_id,
+                 technical_component_id, repair_description, repair_status, immobilization_days,
+                 condition_after_percent, labour_supplier_id, labour_supplier_name, labour_cost,
+                 source_maintenance_id, created_at, updated_at)
+             VALUES
+                (:invoice_id, :vehicle_id, :km_at_repair, :defect, NULL, :technical_category_id,
+                 :technical_component_id, :repair_description, :repair_status, :immobilization_days,
+                 :condition_after_percent, NULL, :labour_supplier_name, :labour_cost,
+                 :source_maintenance_id, :created_at, :updated_at)"
+        );
+        $usageStmt = $this->db->prepare(
+            "SELECT u.*, p.cod_piesa, p.denumire, p.furnizor
+             FROM mentenanta_piese_utilizari u
+             LEFT JOIN mentenanta_piese p ON p.id = u.part_id
+             WHERE u.maintenance_id = :maintenance_id
+             ORDER BY u.id ASC"
+        );
+        $insertPart = $this->db->prepare(
+            "INSERT INTO invoice_repair_parts
+                (repair_id, part_name, part_code, stock_part_id, quantity, unit_price_without_vat,
+                 discount_percent, value_without_vat, vat_percent, vat_value, total_with_vat,
+                 part_supplier_id, part_supplier_name, notes, created_at, updated_at)
+             VALUES
+                (:repair_id, :part_name, :part_code, :stock_part_id, :quantity, :unit_price_without_vat,
+                 :discount_percent, :value_without_vat, :vat_percent, :vat_value, :total_with_vat,
+                 NULL, :part_supplier_name, :notes, :created_at, :updated_at)"
+        );
+
+        foreach ($records as $record) {
+            $recordId = (int) ($record['id'] ?? 0);
+            if ($recordId <= 0) {
+                continue;
+            }
+
+            $total = max(0.0, (float) ($record['cost'] ?? 0));
+            $labourTotal = max(0.0, (float) ($record['cost_manopera'] ?? 0));
+            $partsTotal = max(0.0, (float) ($record['cost_piese'] ?? 0));
+            if ($labourTotal <= 0 && $partsTotal <= 0) {
+                $labourTotal = $total;
+            }
+            if ($total <= 0 || abs($total - ($labourTotal + $partsTotal)) > 0.01) {
+                $total = $labourTotal + $partsTotal;
+            }
+
+            $supplierName = trim((string) ($record['atelier'] ?? ''));
+            if ($supplierName === '') {
+                $supplierName = trim((string) ($record['furnizor_piesa'] ?? ''));
+            }
+            if ($supplierName === '') {
+                $supplierName = 'Furnizor nespecificat';
+            }
+
+            $invoiceDate = (string) ($record['data_interventie'] ?? date('Y-m-d'));
+            $dueDate = $invoiceDate;
+            try {
+                $dueDate = (new DateTimeImmutable($invoiceDate))->modify('+30 days')->format('Y-m-d');
+            } catch (Throwable) {
+                $dueDate = date('Y-m-d', strtotime('+30 days'));
+            }
+
+            $status = match ((string) ($record['status_interventie'] ?? 'finalizata')) {
+                'in_lucru', 'in_asteptare' => 'in_progress',
+                'anulata' => 'anulata',
+                default => 'finalizata',
+            };
+            $now = date('Y-m-d H:i:s');
+            $invoiceNumber = 'FAV-BU-' . str_pad((string) $recordId, 9, '0', STR_PAD_LEFT);
+
+            $existingStmt->execute([':source_id' => $recordId]);
+            $invoiceId = (int) ($existingStmt->fetchColumn() ?: 0);
+            $invoiceValues = [
+                ':supplier_name' => $supplierName,
+                ':invoice_number' => $invoiceNumber,
+                ':invoice_date' => $invoiceDate,
+                ':due_date' => $dueDate,
+                ':pdf_path' => $this->nullIfEmpty((string) ($record['fisier_stocat'] ?? '')),
+                ':status' => $status,
+                ':notes' => $this->nullIfEmpty((string) ($record['observatii'] ?? '')),
+                ':labour_total' => $labourTotal,
+                ':parts_subtotal' => $partsTotal,
+                ':vat_total' => 0,
+                ':parts_total' => $partsTotal,
+                ':grand_total' => $total,
+                ':updated_at' => $now,
+            ];
+
+            if ($invoiceId > 0) {
+                $this->db->prepare(
+                    "DELETE p FROM invoice_repair_parts p
+                     INNER JOIN invoice_vehicle_repairs r ON r.id = p.repair_id
+                     WHERE r.invoice_id = :invoice_id"
+                )->execute([':invoice_id' => $invoiceId]);
+                $this->db->prepare("DELETE FROM invoice_vehicle_repairs WHERE invoice_id = :invoice_id")
+                    ->execute([':invoice_id' => $invoiceId]);
+                $updateInvoice->execute($invoiceValues + [':id' => $invoiceId]);
+            } else {
+                $insertInvoice->execute($invoiceValues + [
+                    ':source_maintenance_id' => $recordId,
+                    ':created_at' => (string) ($record['created_at'] ?? $now),
+                ]);
+                $invoiceId = (int) $this->db->lastInsertId();
+            }
+
+            $defect = trim((string) ($record['descriere'] ?? ''));
+            if ($defect === '') {
+                $defect = trim((string) ($record['observatii'] ?? ''));
+            }
+            if ($defect === '') {
+                $defect = trim((string) ($record['tip_interventie'] ?? 'Reparație'));
+            }
+
+            $insertRepair->execute([
+                ':invoice_id' => $invoiceId,
+                ':vehicle_id' => (int) $record['vehicle_id'],
+                ':km_at_repair' => !empty($record['km_interventie']) ? (int) $record['km_interventie'] : null,
+                ':defect' => $defect,
+                ':technical_category_id' => !empty($record['technical_category_id']) ? (int) $record['technical_category_id'] : null,
+                ':technical_component_id' => !empty($record['technical_component_id']) ? (int) $record['technical_component_id'] : null,
+                ':repair_description' => trim((string) ($record['tip_interventie'] ?? '')),
+                ':repair_status' => $this->normalizeRecordStatus((string) ($record['status_interventie'] ?? 'finalizata')),
+                ':immobilization_days' => max(0, (float) ($record['zile_imobilizare'] ?? 0)),
+                ':condition_after_percent' => ($record['technical_health_percent'] ?? '') !== '' ? (int) $record['technical_health_percent'] : null,
+                ':labour_supplier_name' => $this->nullIfEmpty((string) ($record['atelier'] ?? '')),
+                ':labour_cost' => $labourTotal,
+                ':source_maintenance_id' => $recordId,
+                ':created_at' => (string) ($record['created_at'] ?? $now),
+                ':updated_at' => $now,
+            ]);
+            $repairId = (int) $this->db->lastInsertId();
+
+            $usageStmt->execute([':maintenance_id' => $recordId]);
+            $usedParts = $usageStmt->fetchAll();
+            foreach ($usedParts as $partRow) {
+                $quantity = max(0.01, (float) ($partRow['cantitate'] ?? 1));
+                $unitPrice = max(0.0, (float) ($partRow['cost_unitar'] ?? 0));
+                $lineValue = round($quantity * $unitPrice, 2);
+                $insertPart->execute([
+                    ':repair_id' => $repairId,
+                    ':part_name' => trim((string) ($partRow['denumire'] ?? '')) ?: 'Piesă reparație',
+                    ':part_code' => $this->nullIfEmpty((string) ($partRow['cod_piesa'] ?? '')),
+                    ':stock_part_id' => !empty($partRow['part_id']) ? (int) $partRow['part_id'] : null,
+                    ':quantity' => $quantity,
+                    ':unit_price_without_vat' => $unitPrice,
+                    ':discount_percent' => 0,
+                    ':value_without_vat' => $lineValue,
+                    ':vat_percent' => 0,
+                    ':vat_value' => 0,
+                    ':total_with_vat' => $lineValue,
+                    ':part_supplier_name' => $this->nullIfEmpty((string) ($partRow['furnizor'] ?? ($record['furnizor_piesa'] ?? ''))),
+                    ':notes' => $this->nullIfEmpty((string) ($partRow['observatii'] ?? '')),
+                    ':created_at' => (string) ($partRow['created_at'] ?? $now),
+                    ':updated_at' => $now,
+                ]);
+            }
+
+            if ($usedParts === [] && $partsTotal > 0) {
+                $partName = trim((string) ($record['piese_utilizate'] ?? ''));
+                $insertPart->execute([
+                    ':repair_id' => $repairId,
+                    ':part_name' => $partName !== '' ? $partName : 'Piese reparație',
+                    ':part_code' => null,
+                    ':stock_part_id' => null,
+                    ':quantity' => 1,
+                    ':unit_price_without_vat' => $partsTotal,
+                    ':discount_percent' => 0,
+                    ':value_without_vat' => $partsTotal,
+                    ':vat_percent' => 0,
+                    ':vat_value' => 0,
+                    ':total_with_vat' => $partsTotal,
+                    ':part_supplier_name' => $this->nullIfEmpty((string) ($record['furnizor_piesa'] ?? '')),
+                    ':notes' => null,
+                    ':created_at' => (string) ($record['created_at'] ?? $now),
+                    ':updated_at' => $now,
+                ]);
+            }
+
+            $this->recalculateCorrectiveInvoiceTotals($invoiceId);
+        }
+    }
+
+    private function recalculateCorrectiveInvoiceTotals(int $invoiceId): void
+    {
+        if ($invoiceId <= 0) {
+            return;
+        }
+
+        $labourStmt = $this->db->prepare(
+            "SELECT COALESCE(SUM(labour_cost), 0)
+             FROM invoice_vehicle_repairs
+             WHERE invoice_id = :invoice_id"
+        );
+        $labourStmt->execute([':invoice_id' => $invoiceId]);
+        $labourTotal = (float) $labourStmt->fetchColumn();
+
+        $partsStmt = $this->db->prepare(
+            "SELECT
+                COALESCE(SUM(p.value_without_vat), 0) AS parts_subtotal,
+                COALESCE(SUM(p.vat_value), 0) AS vat_total,
+                COALESCE(SUM(p.total_with_vat), 0) AS parts_total
+             FROM invoice_repair_parts p
+             INNER JOIN invoice_vehicle_repairs r ON r.id = p.repair_id
+             WHERE r.invoice_id = :invoice_id"
+        );
+        $partsStmt->execute([':invoice_id' => $invoiceId]);
+        $parts = $partsStmt->fetch() ?: [];
+        $partsSubtotal = (float) ($parts['parts_subtotal'] ?? 0);
+        $vatTotal = (float) ($parts['vat_total'] ?? 0);
+        $partsTotal = (float) ($parts['parts_total'] ?? 0);
+
+        $this->db->prepare(
+            "UPDATE supplier_invoices
+             SET labour_total = :labour_total,
+                 parts_subtotal = :parts_subtotal,
+                 vat_total = :vat_total,
+                 parts_total = :parts_total,
+                 grand_total = :grand_total,
+                 updated_at = :updated_at
+             WHERE id = :invoice_id"
+        )->execute([
+            ':labour_total' => $labourTotal,
+            ':parts_subtotal' => $partsSubtotal,
+            ':vat_total' => $vatTotal,
+            ':parts_total' => $partsTotal,
+            ':grand_total' => $labourTotal + $partsTotal,
+            ':updated_at' => date('Y-m-d H:i:s'),
+            ':invoice_id' => $invoiceId,
+        ]);
     }
 
     private function runMigrationScript(string $sql): void

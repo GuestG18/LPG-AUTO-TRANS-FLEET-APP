@@ -1045,8 +1045,8 @@ class TireModel extends BaseModel
             } elseif ($layout === '6x2') {
                 $axleCount = 3;
                 $this->appendSingleAxlePositions($positions, 1, $positionOrder);
-                $this->appendSingleAxlePositions($positions, 2, $positionOrder);
-                $this->appendDualAxlePositions($positions, 3, $positionOrder);
+                $this->appendDualAxlePositions($positions, 2, $positionOrder);
+                $this->appendSingleAxlePositions($positions, 3, $positionOrder);
             } elseif ($layout === '8x2') {
                 $axleCount = 4;
                 $this->appendSingleAxlePositions($positions, 1, $positionOrder);
@@ -1274,7 +1274,7 @@ class TireModel extends BaseModel
             }
 
             if ($layout === '6x2') {
-                return $axleNo < 3 ? self::AXLE_STEERING : self::AXLE_TRACTION;
+                return $axleNo === 1 ? self::AXLE_STEERING : ($axleNo === 2 ? self::AXLE_TRACTION : self::AXLE_STEERING);
             }
 
             if ($layout === '8x2') {

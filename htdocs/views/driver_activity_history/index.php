@@ -28,6 +28,14 @@ $fmtDuration = static function (mixed $minutes): string {
     return $hours . 'h ' . str_pad((string) $remaining, 2, '0', STR_PAD_LEFT) . 'm';
 };
 $fmtDate = static fn (mixed $value): string => format_date_ro((string) ($value ?? ''));
+$activeDaysLabel = static function (mixed $value): string {
+    if ($value === null || $value === '') {
+        return '-';
+    }
+
+    $days = max(0, (int) $value);
+    return $days === 1 ? '1 zi' : $days . ' zile';
+};
 
 $fuelInvoiceUrl = static function (?string $stored): string {
     $stored = basename(trim((string) $stored));
@@ -179,7 +187,9 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                         <div><dt>Telefon:</dt><dd title="<?= e((string) ($driver['telefon'] ?? '-')) ?>"><?= e((string) ($driver['telefon'] ?? '-')) ?></dd></div>
                         <div><dt>Categorie permis:</dt><dd title="<?= e((string) ($driver['license_category'] ?? '-')) ?>"><?= e((string) ($driver['license_category'] ?? '-')) ?></dd></div>
                         <div><dt>Nr. permis:</dt><dd title="<?= e((string) ($driver['license_number'] ?? '-')) ?>"><?= e((string) ($driver['license_number'] ?? '-')) ?></dd></div>
-                        <div><dt>Data angajarii:</dt><dd><?= e($fmtDate($driver['data_angajare'] ?? null)) ?></dd></div>
+                        <div><dt>Data angajarii:</dt><dd><?= e($fmtDate($driver['data_angajare_calculata'] ?? ($driver['data_angajare'] ?? null))) ?></dd></div>
+                        <div><dt>Data incetarii:</dt><dd><?= e(!empty($driver['data_incetare']) ? $fmtDate($driver['data_incetare']) : '-') ?></dd></div>
+                        <div><dt>Zile active:</dt><dd><?= e($activeDaysLabel($driver['active_days'] ?? null)) ?></dd></div>
                     </dl>
                 </div>
             </article>
@@ -300,7 +310,6 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                                     <td><?= e((string) ($row['observatii'] ?? '-')) ?></td>
                                     <td>
                                         <div class="driver-history-row-actions">
-                                            <a href="<?= e(build_query_url(['page' => 'alimentari', 'edit_id' => (int) $row['id']])) ?>" title="Alimentare"><i class="bi bi-fuel-pump" aria-hidden="true"></i></a>
                                             <?php if ((int) ($row['linked_trip_id'] ?? 0) > 0): ?><a href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => (int) $row['linked_trip_id']])) ?>" title="Cursa"><i class="bi bi-signpost-2" aria-hidden="true"></i></a><?php endif; ?>
                                             <?php if ($invoiceUrl !== ''): ?><a href="<?= e($invoiceUrl) ?>" target="_blank" rel="noopener" title="Factura"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></a><?php endif; ?>
                                         </div>

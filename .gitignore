@@ -15,11 +15,15 @@ __pycache__/
 vendor/
 node_modules/
 notification_service/.venv/
+fleet_sync_service/.venv/
 
 # Local environment
 .env
 .env.*
 !.env.example
+fleet_sync_service/config.ini
+fleet_sync_service/state/*.json
+!fleet_sync_service/state/.gitkeep
 
 # Runtime uploads
 htdocs/uploads/

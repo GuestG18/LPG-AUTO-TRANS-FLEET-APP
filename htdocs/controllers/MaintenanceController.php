@@ -53,6 +53,9 @@ class MaintenanceController
             case 'delete_record':
                 $this->deleteRecord();
                 return;
+            case 'delete_repair_invoice':
+                $this->deleteRepairInvoice();
+                return;
             case 'save_part':
                 $this->savePart();
                 return;
@@ -664,6 +667,8 @@ class MaintenanceController
         $drivers = $this->model->getDrivers();
         $overview = [];
         $records = [];
+        $repairInvoices = [];
+        $repairInvoiceDetails = [];
         $scheduledInterventions = [];
         $parts = [];
         $stockKpis = [];
@@ -683,7 +688,8 @@ class MaintenanceController
         } elseif ($section === 'maintenance') {
             $records = $this->model->getRecords($filters, 'intretinere');
         } elseif ($section === 'repairs') {
-            $records = $this->model->getRecords($filters, 'reparatie');
+            $repairInvoices = $this->model->getCorrectiveInvoices($filters);
+            $repairInvoiceDetails = $this->model->getCorrectiveInvoiceDetails(array_column($repairInvoices, 'id'));
         } elseif ($section === 'stock') {
             $parts = $this->model->getStockParts($filters);
             $stockKpis = $this->model->getStockKpis();
@@ -708,7 +714,11 @@ class MaintenanceController
         }
 
         render('maintenance/index.php', [
-            'pageTitle' => $section === 'stock' ? 'Stoc Piese' : 'Mentenanță',
+            'pageTitle' => match ($section) {
+                'stock' => 'Stoc Piese',
+                'repairs' => 'Reparații corective',
+                default => 'Mentenanță',
+            },
             'currentPage' => 'mentenanta',
             'section' => $section,
             'filters' => $filters,
@@ -719,6 +729,8 @@ class MaintenanceController
             'vehicleTypeLabels' => MaintenanceModel::VEHICLE_TYPE_LABELS,
             'overview' => $overview,
             'records' => $records,
+            'repairInvoices' => $repairInvoices,
+            'repairInvoiceDetails' => $repairInvoiceDetails,
             'scheduledInterventions' => $scheduledInterventions,
             'parts' => $parts,
             'availableStockParts' => $this->model->getStockParts(['stock_status' => 'in_stock', 'include_tires' => false]),
@@ -857,6 +869,19 @@ class MaintenanceController
         $this->redirectSection($section);
     }
 
+    private function deleteRepairInvoice(): void
+    {
+        $this->requirePostAndCsrf('repairs');
+        try {
+            $deleted = $this->model->deleteCorrectiveInvoice((int) ($_POST['id'] ?? 0));
+            flash_set($deleted ? 'success' : 'warning', $deleted ? 'Factura de reparații a fost ștearsă.' : 'Factura nu mai există.');
+        } catch (Throwable $exception) {
+            error_log('[MaintenanceController][delete_repair_invoice] ' . $exception->getMessage());
+            flash_set('danger', 'Factura nu a putut fi ștearsă.');
+        }
+        $this->redirectSection('repairs');
+    }
+
     private function savePart(): void
     {
         $this->requirePostAndCsrf('stock');
@@ -936,8 +961,25 @@ class MaintenanceController
             foreach ($this->model->getScheduledInterventions($filters) as $row) {
                 fputcsv($output, [$row['data_programata'], $row['nr_inmatriculare'], $row['tip_interventie'], $row['centru_cost'], $row['descriere'], $row['furnizor'], $row['cost_estimat'], $row['status_interventie']], ';');
             }
+        } elseif ($section === 'repairs') {
+            fputcsv($output, ['Data factura', 'Numar factura', 'Furnizor', 'Data scadenta', 'Vehicule', 'Reparatii', 'Piese', 'Cost manopera', 'Cost piese', 'Cost total', 'Status'], ';');
+            foreach ($this->model->getCorrectiveInvoices($filters, 500) as $row) {
+                fputcsv($output, [
+                    $row['invoice_date'],
+                    $row['invoice_number'],
+                    $row['supplier_label'],
+                    $row['due_date'],
+                    $row['vehicle_labels'],
+                    $row['repair_count'],
+                    $row['part_count'],
+                    $row['labour_total'],
+                    $row['parts_total'],
+                    $row['grand_total'],
+                    $row['status'],
+                ], ';');
+            }
         } else {
-            $type = $section === 'maintenance' ? 'intretinere' : ($section === 'repairs' ? 'reparatie' : null);
+            $type = $section === 'maintenance' ? 'intretinere' : null;
             fputcsv($output, ['Data', 'Vehicul', 'Tip vehicul', 'Tip intervenție', 'Centru cost', 'Descriere', 'Furnizor', 'Cost', 'Status'], ';');
             foreach ($this->model->getRecords($filters, $type, 500) as $row) {
                 fputcsv($output, [$row['data_interventie'], $row['nr_inmatriculare'], $row['tip_vehicul'], $row['tip_interventie'], $row['centru_cost'], $row['descriere'], $row['atelier'], $row['cost'], $row['status_interventie']], ';');
@@ -949,7 +991,7 @@ class MaintenanceController
 
     private function collectFilters(): array
     {
-        $allowedStatuses = ['programata', 'confirmata', 'in_lucru', 'finalizata', 'anulata'];
+        $allowedStatuses = ['programata', 'confirmata', 'in_lucru', 'draft', 'in_progress', 'finalizata', 'anulata'];
         $status = trim((string) ($_GET['status'] ?? ''));
         return [
             'date_from' => $this->isDate((string) ($_GET['date_from'] ?? '')) ? (string) $_GET['date_from'] : '',
@@ -1029,6 +1071,7 @@ class MaintenanceController
     {
         return in_array($action, [
             'tire_stock', 'add_tire_stock', 'bulk_tire_stock', 'update_tire_stock', 'delete_tire_stock',
+            'axis_config', 'update_tire_layout', 'mount_tire', 'unmount_tire', 'move_tire', 'change_tire_status',
             'create', 'store', 'edit', 'update', 'delete', 'show', 'preview',
         ], true);
     }

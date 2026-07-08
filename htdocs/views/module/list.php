@@ -13,11 +13,11 @@ $documentSummary = $documentSummary ?? null;
 $urgentDocuments = $urgentDocuments ?? [];
 $isVehicleList = $moduleKey === 'vehicule';
 $isDocumentList = $moduleKey === 'documente';
+$isDriverDocumentList = $moduleKey === 'documente_soferi';
+$isAnyDocumentList = $isDocumentList || $isDriverDocumentList;
 $isMaintenanceList = $moduleKey === 'mentenanta';
 $isMaintenanceTireStockPage = (bool) ($isMaintenanceTireStockPage ?? false);
-$isFuelList = $moduleKey === 'alimentari';
 $isDocumentCostOverrideList = $moduleKey === 'configurare_costuri_documente_vehicule_override';
-$fuelConsumptionSummary = is_array($fuelConsumptionSummary ?? null) ? $fuelConsumptionSummary : null;
 $maintenanceTireStockContext = $maintenanceTireStockContext ?? null;
 $documentTypeVehicleOptions = is_array($documentTypeVehicleOptions ?? null) ? $documentTypeVehicleOptions : [];
 $driverDocumentCostModule = is_array($driverDocumentCostModule ?? null) ? $driverDocumentCostModule : null;
@@ -37,6 +37,49 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
         break;
     }
 }
+
+$buildPaginationWindow = static function (int $currentPage, int $totalPages): array {
+    $totalPages = max(1, $totalPages);
+    $currentPage = max(1, min($currentPage, $totalPages));
+
+    if ($totalPages <= 7) {
+        return range(1, $totalPages);
+    }
+
+    $pages = [
+        1,
+        $totalPages,
+        $currentPage - 1,
+        $currentPage,
+        $currentPage + 1,
+    ];
+
+    if ($currentPage <= 4) {
+        $pages = array_merge($pages, range(2, 5));
+    }
+
+    if ($currentPage >= $totalPages - 3) {
+        $pages = array_merge($pages, range($totalPages - 4, $totalPages - 1));
+    }
+
+    $pages = array_values(array_unique(array_filter($pages, static function (int $page) use ($totalPages): bool {
+        return $page >= 1 && $page <= $totalPages;
+    })));
+    sort($pages);
+
+    $items = [];
+    $previousPage = null;
+    foreach ($pages as $page) {
+        if ($previousPage !== null && $page > $previousPage + 1) {
+            $items[] = '...';
+        }
+
+        $items[] = $page;
+        $previousPage = $page;
+    }
+
+    return $items;
+};
 ?>
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3<?= $isDocumentCostOverrideList ? ' document-cost-header' : '' ?>">
@@ -57,6 +100,7 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
             <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock'])) ?>">Anvelope</a>
         <?php endif; ?>
         <?php if ($isMaintenanceTireStockPage): ?>
+            <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'axis_config'])) ?>">Configura&#539;ie Axe</a>
             <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'mentenanta'])) ?>">Inapoi la Mentenanta</a>
         <?php else: ?>
             <a class="btn btn-outline-secondary<?= $isDocumentCostOverrideList ? ' document-cost-export-btn' : '' ?>" href="<?= e(build_query_url(array_merge($baseQuery, ['action' => 'export']))) ?>">Export CSV</a>
@@ -1410,31 +1454,6 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
     <?php return; ?>
 <?php endif; ?>
 
-<?php if ($isFuelList): ?>
-    <div class="card border-0 shadow-sm mb-3">
-        <div class="card-body">
-            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
-                <div>
-                    <h3 class="h6 mb-1">Consum mediu combustibil (filtre curente)</h3>
-                    <?php if ($fuelConsumptionSummary === null): ?>
-                        <div class="text-muted">Nu sunt suficiente date pentru calcul (ai nevoie de cel putin 2 alimentari pe vehicul, cu Km alimentare crescator).</div>
-                    <?php else: ?>
-                        <div class="display-6 fw-semibold mb-1">
-                            <?= e(format_number_ro((float) ($fuelConsumptionSummary['average_l_per_100km'] ?? 0), 2)) ?> L/100km
-                        </div>
-                        <div class="text-muted small">
-                            Distanta: <?= e(format_number_ro((float) ($fuelConsumptionSummary['total_distance_km'] ?? 0), 0)) ?> km |
-                            Combustibil: <?= e(format_number_ro((float) ($fuelConsumptionSummary['total_fuel_liters'] ?? 0), 2)) ?> L |
-                            Intervale: <?= e((string) ((int) ($fuelConsumptionSummary['interval_count'] ?? 0))) ?> |
-                            Vehicule: <?= e((string) ((int) ($fuelConsumptionSummary['vehicle_count'] ?? 0))) ?>
-                        </div>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </div>
-    </div>
-<?php endif; ?>
-
 <div class="card border-0 shadow-sm mb-3">
     <div class="card-body">
         <form method="get" class="row g-3 align-items-end">
@@ -1516,14 +1535,14 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
     </div>
 </div>
 
-<?php if ($isDocumentList || $isDocumentCostOverrideList): ?>
+<?php if ($isDocumentCostOverrideList): ?>
     <h3 class="h5 mt-4 mb-2">Documente mașini</h3>
 <?php endif; ?>
 
 <div class="card border-0 shadow-sm">
     <div class="card-body p-0">
-        <div class="table-responsive module-list-table-wrap<?= $isVehicleList ? ' module-list-table-wrap-vehicule' : '' ?><?= $isDocumentList ? ' module-list-table-wrap-documente' : '' ?>">
-            <table class="table table-hover align-middle mb-0 module-list-table<?= $isVehicleList ? ' module-list-table-vehicule' : '' ?><?= $isDocumentList ? ' module-list-table-documente' : '' ?>">
+        <div class="table-responsive module-list-table-wrap<?= $isVehicleList ? ' module-list-table-wrap-vehicule' : '' ?><?= $isAnyDocumentList ? ' module-list-table-wrap-documente' : '' ?>">
+            <table class="table table-hover align-middle mb-0 module-list-table<?= $isVehicleList ? ' module-list-table-vehicule' : '' ?><?= $isAnyDocumentList ? ' module-list-table-documente' : '' ?>">
                 <thead>
                 <tr>
                     <?php foreach ($module['list_columns'] as $column => $meta): ?>
@@ -1541,7 +1560,15 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
                     <?php foreach ($rows as $row): ?>
                         <tr>
                             <?php foreach ($module['list_columns'] as $column => $meta): ?>
-                                <td><?= format_value_html($row[$column] ?? null, $meta, $row) ?></td>
+                                <td>
+                                    <?php if ($moduleKey === 'vehicule' && $column === 'nr_inmatriculare' && !empty($row['id'])): ?>
+                                        <a class="fw-semibold text-decoration-none" href="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => (int) $row['id']])) ?>">
+                                            <?= format_value_html($row[$column] ?? null, $meta, $row) ?>
+                                        </a>
+                                    <?php else: ?>
+                                        <?= format_value_html($row[$column] ?? null, $meta, $row) ?>
+                                    <?php endif; ?>
+                                </td>
                             <?php endforeach; ?>
                             <td class="text-end pe-3">
                                 <div class="d-inline-flex gap-1">
@@ -1584,20 +1611,26 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <small class="text-muted">Pagina <?= e((string) $pagination['page']) ?> din <?= e((string) $pagination['total_pages']) ?></small>
                     <nav aria-label="Paginare documente mașini">
-                        <ul class="pagination pagination-sm mb-0">
+                        <ul class="pagination pagination-sm mb-0 flex-wrap">
                             <?php
                             $prevPage = max(1, (int) $pagination['page'] - 1);
                             $nextPage = min((int) $pagination['total_pages'], (int) $pagination['page'] + 1);
+                            $paginationItems = $buildPaginationWindow((int) $pagination['page'], (int) $pagination['total_pages']);
                             ?>
                             <li class="page-item <?= (int) $pagination['page'] <= 1 ? 'disabled' : '' ?>">
                                 <a class="page-link" href="<?= e(build_query_url(array_merge($mainPaginationBaseQuery, ['p' => $prevPage]))) ?>" <?= (int) $pagination['page'] <= 1 ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Anterior</a>
                             </li>
 
-                            <?php for ($i = 1; $i <= (int) $pagination['total_pages']; $i++): ?>
-                                <li class="page-item <?= (int) $pagination['page'] === $i ? 'active' : '' ?>">
-                                    <a class="page-link" href="<?= e(build_query_url(array_merge($mainPaginationBaseQuery, ['p' => $i]))) ?>"><?= e((string) $i) ?></a>
-                                </li>
-                            <?php endfor; ?>
+                            <?php foreach ($paginationItems as $paginationItem): ?>
+                                <?php if ($paginationItem === '...'): ?>
+                                    <li class="page-item disabled" aria-hidden="true"><span class="page-link">...</span></li>
+                                <?php else: ?>
+                                    <?php $i = (int) $paginationItem; ?>
+                                    <li class="page-item <?= (int) $pagination['page'] === $i ? 'active' : '' ?>">
+                                        <a class="page-link" href="<?= e(build_query_url(array_merge($mainPaginationBaseQuery, ['p' => $i]))) ?>"><?= e((string) $i) ?></a>
+                                    </li>
+                                <?php endif; ?>
+                            <?php endforeach; ?>
 
                             <li class="page-item <?= (int) $pagination['page'] >= (int) $pagination['total_pages'] ? 'disabled' : '' ?>">
                                 <a class="page-link" href="<?= e(build_query_url(array_merge($mainPaginationBaseQuery, ['p' => $nextPage]))) ?>" <?= (int) $pagination['page'] >= (int) $pagination['total_pages'] ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Următor</a>
@@ -1673,20 +1706,26 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
 
                 <?php if ((int) $driverDocumentPagination['total_pages'] > 1): ?>
                     <nav aria-label="Paginare documente soferi">
-                        <ul class="pagination pagination-sm mb-0">
+                        <ul class="pagination pagination-sm mb-0 flex-wrap">
                             <?php
                             $driverPrevPage = max(1, (int) $driverDocumentPagination['page'] - 1);
                             $driverNextPage = min((int) $driverDocumentPagination['total_pages'], (int) $driverDocumentPagination['page'] + 1);
+                            $driverPaginationItems = $buildPaginationWindow((int) $driverDocumentPagination['page'], (int) $driverDocumentPagination['total_pages']);
                             ?>
                             <li class="page-item <?= (int) $driverDocumentPagination['page'] <= 1 ? 'disabled' : '' ?>">
                                 <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentBaseQuery, ['driver_p' => $driverPrevPage]))) ?>">Anterior</a>
                             </li>
 
-                            <?php for ($i = 1; $i <= (int) $driverDocumentPagination['total_pages']; $i++): ?>
-                                <li class="page-item <?= (int) $driverDocumentPagination['page'] === $i ? 'active' : '' ?>">
-                                    <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentBaseQuery, ['driver_p' => $i]))) ?>"><?= e((string) $i) ?></a>
-                                </li>
-                            <?php endfor; ?>
+                            <?php foreach ($driverPaginationItems as $driverPaginationItem): ?>
+                                <?php if ($driverPaginationItem === '...'): ?>
+                                    <li class="page-item disabled" aria-hidden="true"><span class="page-link">...</span></li>
+                                <?php else: ?>
+                                    <?php $i = (int) $driverPaginationItem; ?>
+                                    <li class="page-item <?= (int) $driverDocumentPagination['page'] === $i ? 'active' : '' ?>">
+                                        <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentBaseQuery, ['driver_p' => $i]))) ?>"><?= e((string) $i) ?></a>
+                                    </li>
+                                <?php endif; ?>
+                            <?php endforeach; ?>
 
                             <li class="page-item <?= (int) $driverDocumentPagination['page'] >= (int) $driverDocumentPagination['total_pages'] ? 'disabled' : '' ?>">
                                 <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentBaseQuery, ['driver_p' => $driverNextPage]))) ?>">Urmator</a>
@@ -1757,20 +1796,26 @@ foreach ($module['filters'] ?? [] as $filterMeta) {
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <small class="text-muted">Pagina <?= e((string) $driverDocumentCostPagination['page']) ?> din <?= e((string) $driverDocumentCostPagination['total_pages']) ?></small>
                     <nav aria-label="Paginare documente șoferi">
-                        <ul class="pagination pagination-sm mb-0">
+                        <ul class="pagination pagination-sm mb-0 flex-wrap">
                             <?php
                             $driverCostPrevPage = max(1, (int) $driverDocumentCostPagination['page'] - 1);
                             $driverCostNextPage = min((int) $driverDocumentCostPagination['total_pages'], (int) $driverDocumentCostPagination['page'] + 1);
+                            $driverCostPaginationItems = $buildPaginationWindow((int) $driverDocumentCostPagination['page'], (int) $driverDocumentCostPagination['total_pages']);
                             ?>
                             <li class="page-item <?= (int) $driverDocumentCostPagination['page'] <= 1 ? 'disabled' : '' ?>">
                                 <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentCostBaseQuery, ['driver_cost_p' => $driverCostPrevPage]))) ?>" <?= (int) $driverDocumentCostPagination['page'] <= 1 ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Anterior</a>
                             </li>
 
-                            <?php for ($i = 1; $i <= (int) $driverDocumentCostPagination['total_pages']; $i++): ?>
-                                <li class="page-item <?= (int) $driverDocumentCostPagination['page'] === $i ? 'active' : '' ?>">
-                                    <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentCostBaseQuery, ['driver_cost_p' => $i]))) ?>"><?= e((string) $i) ?></a>
-                                </li>
-                            <?php endfor; ?>
+                            <?php foreach ($driverCostPaginationItems as $driverCostPaginationItem): ?>
+                                <?php if ($driverCostPaginationItem === '...'): ?>
+                                    <li class="page-item disabled" aria-hidden="true"><span class="page-link">...</span></li>
+                                <?php else: ?>
+                                    <?php $i = (int) $driverCostPaginationItem; ?>
+                                    <li class="page-item <?= (int) $driverDocumentCostPagination['page'] === $i ? 'active' : '' ?>">
+                                        <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentCostBaseQuery, ['driver_cost_p' => $i]))) ?>"><?= e((string) $i) ?></a>
+                                    </li>
+                                <?php endif; ?>
+                            <?php endforeach; ?>
 
                             <li class="page-item <?= (int) $driverDocumentCostPagination['page'] >= (int) $driverDocumentCostPagination['total_pages'] ? 'disabled' : '' ?>">
                                 <a class="page-link" href="<?= e(build_query_url(array_merge($driverDocumentCostBaseQuery, ['driver_cost_p' => $driverCostNextPage]))) ?>" <?= (int) $driverDocumentCostPagination['page'] >= (int) $driverDocumentCostPagination['total_pages'] ? 'aria-disabled="true" tabindex="-1"' : '' ?>>Următor</a>

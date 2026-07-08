@@ -300,9 +300,310 @@ document.addEventListener('click', function (event) {
     } catch (error) {
     }
     syncFleetSidebarToggleState();
+    scheduleFleetStickyDocumentTables();
+    window.setTimeout(scheduleFleetStickyDocumentTables, 250);
 });
+
+var fleetStickyDocumentTables = [];
+var fleetStickyDocumentTableFrame = null;
+
+function getFleetStickyDocumentTableTop() {
+    var topbar = document.querySelector('.topbar');
+
+    if (!(topbar instanceof HTMLElement)) {
+        return 0;
+    }
+
+    return Math.ceil(topbar.getBoundingClientRect().height);
+}
+
+function createFleetStickyDocumentTable(wrapper) {
+    var table = wrapper.querySelector('table.module-list-table-documente');
+
+    if (!(table instanceof HTMLTableElement) || !table.tHead || table.tHead.rows.length === 0) {
+        return null;
+    }
+
+    var stickyHeader = document.createElement('div');
+    stickyHeader.className = 'document-sticky-table-header';
+    stickyHeader.setAttribute('aria-hidden', 'true');
+
+    var clonedTable = table.cloneNode(false);
+    clonedTable.className = table.className + ' document-sticky-table-clone-table';
+    clonedTable.appendChild(table.tHead.cloneNode(true));
+    stickyHeader.appendChild(clonedTable);
+    document.body.appendChild(stickyHeader);
+
+    wrapper.addEventListener('scroll', scheduleFleetStickyDocumentTables, { passive: true });
+
+    return {
+        wrapper: wrapper,
+        table: table,
+        stickyHeader: stickyHeader,
+        clonedTable: clonedTable
+    };
+}
+
+function syncFleetStickyDocumentTableWidths(state) {
+    var sourceCells = state.table.tHead.rows[0].cells;
+    var cloneCells = state.clonedTable.tHead.rows[0].cells;
+
+    state.clonedTable.style.width = state.table.getBoundingClientRect().width + 'px';
+
+    Array.prototype.forEach.call(sourceCells, function (sourceCell, index) {
+        if (!cloneCells[index]) {
+            return;
+        }
+
+        var width = sourceCell.getBoundingClientRect().width;
+        cloneCells[index].style.width = width + 'px';
+        cloneCells[index].style.minWidth = width + 'px';
+        cloneCells[index].style.maxWidth = width + 'px';
+    });
+}
+
+function syncFleetStickyDocumentTable(state, topOffset) {
+    var wrapperRect = state.wrapper.getBoundingClientRect();
+    var tableRect = state.table.getBoundingClientRect();
+    var headRect = state.table.tHead.getBoundingClientRect();
+    var shouldShow = tableRect.top < topOffset
+        && tableRect.bottom > topOffset + headRect.height
+        && wrapperRect.bottom > topOffset + headRect.height
+        && wrapperRect.width > 0;
+
+    if (!shouldShow) {
+        state.stickyHeader.classList.remove('is-visible');
+        return;
+    }
+
+    var left = Math.max(wrapperRect.left, 0);
+    var right = Math.min(wrapperRect.right, window.innerWidth);
+    var width = Math.max(0, right - left);
+    var scrollLeft = state.wrapper.scrollLeft;
+    var cloneCells = state.clonedTable.tHead.rows[0].cells;
+
+    syncFleetStickyDocumentTableWidths(state);
+
+    state.stickyHeader.style.top = topOffset + 'px';
+    state.stickyHeader.style.left = left + 'px';
+    state.stickyHeader.style.width = width + 'px';
+    state.stickyHeader.style.height = headRect.height + 'px';
+    state.clonedTable.style.transform = 'translateX(' + (-scrollLeft) + 'px)';
+
+    Array.prototype.forEach.call(cloneCells, function (cell, index) {
+        cell.style.transform = index < 2 ? 'translateX(' + scrollLeft + 'px)' : '';
+    });
+
+    state.stickyHeader.classList.add('is-visible');
+}
+
+function syncFleetStickyDocumentTables() {
+    var topOffset = getFleetStickyDocumentTableTop();
+
+    fleetStickyDocumentTables.forEach(function (state) {
+        syncFleetStickyDocumentTable(state, topOffset);
+    });
+}
+
+function scheduleFleetStickyDocumentTables() {
+    if (fleetStickyDocumentTableFrame !== null || fleetStickyDocumentTables.length === 0) {
+        return;
+    }
+
+    fleetStickyDocumentTableFrame = window.requestAnimationFrame(function () {
+        fleetStickyDocumentTableFrame = null;
+        syncFleetStickyDocumentTables();
+    });
+}
+
+function initFleetStickyDocumentTables() {
+    document.querySelectorAll('.module-list-table-wrap-documente').forEach(function (wrapper) {
+        var state = createFleetStickyDocumentTable(wrapper);
+
+        if (state !== null) {
+            fleetStickyDocumentTables.push(state);
+        }
+    });
+
+    if (fleetStickyDocumentTables.length === 0) {
+        return;
+    }
+
+    window.addEventListener('scroll', scheduleFleetStickyDocumentTables, { passive: true });
+    window.addEventListener('resize', scheduleFleetStickyDocumentTables);
+    window.addEventListener('orientationchange', scheduleFleetStickyDocumentTables);
+    scheduleFleetStickyDocumentTables();
+}
+
+var fleetIdleRefreshStorageKey = 'fleet.idleRefreshAt';
+var fleetIdleRefreshState = {
+    hiddenAt: null,
+    lastActivityAt: Date.now(),
+    refreshing: false
+};
+
+function getFleetIdleRefreshSetting(value, fallback) {
+    var numericValue = Number(value);
+
+    if (Number.isFinite(numericValue) && numericValue > 0) {
+        return numericValue;
+    }
+
+    return fallback;
+}
+
+function getFleetIdleRefreshConfig() {
+    var config = window.FLEET_IDLE_REFRESH_CONFIG || {};
+
+    return {
+        hiddenThresholdMs: getFleetIdleRefreshSetting(config.hiddenThresholdMs, 2 * 60 * 1000),
+        inactiveThresholdMs: getFleetIdleRefreshSetting(config.inactiveThresholdMs, 20 * 60 * 1000),
+        refreshDelayMs: getFleetIdleRefreshSetting(config.refreshDelayMs, 1800)
+    };
+}
+
+function fleetIdleRefreshWasJustHandled() {
+    try {
+        var handledAt = Number(window.sessionStorage.getItem(fleetIdleRefreshStorageKey) || 0);
+
+        return handledAt > 0 && (Date.now() - handledAt) < 5000;
+    } catch (error) {
+        return false;
+    }
+}
+
+function markFleetIdleRefreshHandled() {
+    try {
+        window.sessionStorage.setItem(fleetIdleRefreshStorageKey, String(Date.now()));
+    } catch (error) {
+    }
+}
+
+function createFleetIdleRefreshOverlay() {
+    var existingOverlay = document.querySelector('[data-fleet-idle-refresh]');
+
+    if (existingOverlay instanceof HTMLElement) {
+        return existingOverlay;
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'fleet-idle-refresh-overlay';
+    overlay.setAttribute('data-fleet-idle-refresh', '1');
+    overlay.setAttribute('role', 'status');
+    overlay.setAttribute('aria-live', 'assertive');
+    overlay.innerHTML = [
+        '<div class="fleet-idle-refresh-copy">',
+        '<div class="fleet-idle-refresh-title">Reimprospatam aplicatia</div>',
+        '<div class="fleet-idle-refresh-text">Ai revenit dupa inactivitate.</div>',
+        '</div>',
+        '<div class="fleet-idle-refresh-road" aria-hidden="true">',
+        '<span class="fleet-idle-refresh-lane"></span>',
+        '<i class="bi bi-truck fleet-idle-refresh-truck"></i>',
+        '</div>'
+    ].join('');
+
+    document.body.appendChild(overlay);
+
+    return overlay;
+}
+
+function startFleetIdleRefresh(event) {
+    if (fleetIdleRefreshState.refreshing || fleetIdleRefreshWasJustHandled()) {
+        return false;
+    }
+
+    fleetIdleRefreshState.refreshing = true;
+    markFleetIdleRefreshHandled();
+
+    if (event && typeof event.preventDefault === 'function' && event.cancelable) {
+        event.preventDefault();
+    }
+
+    if (event && typeof event.stopPropagation === 'function') {
+        event.stopPropagation();
+    }
+
+    var overlay = createFleetIdleRefreshOverlay();
+    var config = getFleetIdleRefreshConfig();
+
+    window.requestAnimationFrame(function () {
+        overlay.classList.add('is-visible');
+    });
+
+    window.setTimeout(function () {
+        window.location.reload();
+    }, config.refreshDelayMs);
+
+    return true;
+}
+
+function initFleetIdleRefreshLoader() {
+    if (!(document.querySelector('.app-shell') instanceof HTMLElement)) {
+        return;
+    }
+
+    fleetIdleRefreshState.lastActivityAt = Date.now();
+
+    function checkFleetIdleReturn(event) {
+        var config = getFleetIdleRefreshConfig();
+        var now = Date.now();
+        var hiddenFor = fleetIdleRefreshState.hiddenAt === null ? 0 : now - fleetIdleRefreshState.hiddenAt;
+        var inactiveFor = now - fleetIdleRefreshState.lastActivityAt;
+
+        if (
+            hiddenFor >= config.hiddenThresholdMs
+            || inactiveFor >= config.inactiveThresholdMs
+        ) {
+            startFleetIdleRefresh(event);
+            return;
+        }
+
+        fleetIdleRefreshState.hiddenAt = null;
+        fleetIdleRefreshState.lastActivityAt = now;
+    }
+
+    function noteFleetIdleActivity(event) {
+        if (document.hidden || fleetIdleRefreshState.refreshing) {
+            return;
+        }
+
+        checkFleetIdleReturn(event);
+    }
+
+    function noteFleetIdlePassiveActivity() {
+        if (document.hidden || fleetIdleRefreshState.refreshing) {
+            return;
+        }
+
+        checkFleetIdleReturn();
+    }
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) {
+            fleetIdleRefreshState.hiddenAt = Date.now();
+            return;
+        }
+
+        checkFleetIdleReturn();
+    });
+
+    window.addEventListener('focus', checkFleetIdleReturn);
+    window.addEventListener('pageshow', function (event) {
+        if (event.persisted) {
+            checkFleetIdleReturn();
+        }
+    });
+
+    document.addEventListener('pointerdown', noteFleetIdleActivity, true);
+    document.addEventListener('keydown', noteFleetIdleActivity, true);
+    document.addEventListener('mousemove', noteFleetIdlePassiveActivity, { passive: true });
+    document.addEventListener('touchstart', noteFleetIdlePassiveActivity, { passive: true });
+    document.addEventListener('scroll', noteFleetIdlePassiveActivity, true);
+}
 
 document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.js-date-display-input').forEach(initCustomDateField);
     syncFleetSidebarToggleState();
+    initFleetStickyDocumentTables();
+    initFleetIdleRefreshLoader();
 });

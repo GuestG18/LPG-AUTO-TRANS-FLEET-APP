@@ -136,7 +136,7 @@ class EntityStatusService
         $documentTypes = [];
         foreach ($stmt->fetchAll() as $row) {
             $documentType = trim((string) ($row['document_type'] ?? ''));
-            if ($documentType === '') {
+            if ($documentType === '' || $this->isEmploymentContractDocumentType($documentType)) {
                 continue;
             }
 
@@ -173,6 +173,39 @@ class EntityStatusService
         }
 
         return array_values($documentTypes);
+    }
+
+    private function isEmploymentContractDocumentType(string $documentType): bool
+    {
+        $key = $this->normalizeStatusDocumentTypeKey($documentType);
+
+        return in_array($key, ['contractdemunca', 'contractdeangajare'], true);
+    }
+
+    private function normalizeStatusDocumentTypeKey(string $documentType): string
+    {
+        $normalized = strtolower(trim($documentType));
+        $normalized = strtr($normalized, [
+            'Äƒ' => 'a',
+            'Ã¢' => 'a',
+            'Ã®' => 'i',
+            'È™' => 's',
+            'ÅŸ' => 's',
+            'È›' => 't',
+            'Å£' => 't',
+            'Ä‚' => 'a',
+            'Ã‚' => 'a',
+            'ÃŽ' => 'i',
+            'È˜' => 's',
+            'Åž' => 's',
+            'Èš' => 't',
+            'Å¢' => 't',
+        ]);
+
+        $ascii = function_exists('iconv') ? @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $normalized) : false;
+        $base = is_string($ascii) && trim($ascii) !== '' ? $ascii : $normalized;
+
+        return (string) preg_replace('/[^a-z0-9]+/', '', strtolower($base));
     }
 
     private function normalizeVehicleTypeForDocumentConfig(string $vehicleType): string

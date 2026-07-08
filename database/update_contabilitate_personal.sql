@@ -20,6 +20,22 @@ PREPARE staff_col_stmt FROM @staff_col_sql;
 EXECUTE staff_col_stmt;
 DEALLOCATE PREPARE staff_col_stmt;
 
+SET @driver_end_col_exists := (
+    SELECT COUNT(*)
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'soferi'
+      AND COLUMN_NAME = 'data_incetare'
+);
+SET @driver_end_col_sql := IF(
+    @driver_end_col_exists = 0,
+    'ALTER TABLE soferi ADD COLUMN data_incetare DATE NULL AFTER data_angajare',
+    'SELECT 1'
+);
+PREPARE driver_end_col_stmt FROM @driver_end_col_sql;
+EXECUTE driver_end_col_stmt;
+DEALLOCATE PREPARE driver_end_col_stmt;
+
 SET @driver_doc_col_exists := (
     SELECT COUNT(*)
     FROM INFORMATION_SCHEMA.COLUMNS
@@ -71,6 +87,7 @@ CREATE TABLE IF NOT EXISTS staff_members (
     functie VARCHAR(120) NOT NULL,
     salariu DECIMAL(10,2) NULL,
     data_angajare DATE NULL,
+    data_incetare DATE NULL,
     status ENUM('activ', 'inactiv') NOT NULL DEFAULT 'activ',
     observatii TEXT NULL,
     created_by INT UNSIGNED NULL,
@@ -83,6 +100,22 @@ CREATE TABLE IF NOT EXISTS staff_members (
     CONSTRAINT fk_staff_members_created_by FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL,
     CONSTRAINT fk_staff_members_updated_by FOREIGN KEY (updated_by) REFERENCES utilizatori(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+SET @staff_member_end_col_exists := (
+    SELECT COUNT(*)
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'staff_members'
+      AND COLUMN_NAME = 'data_incetare'
+);
+SET @staff_member_end_col_sql := IF(
+    @staff_member_end_col_exists = 0,
+    'ALTER TABLE staff_members ADD COLUMN data_incetare DATE NULL AFTER data_angajare',
+    'SELECT 1'
+);
+PREPARE staff_member_end_col_stmt FROM @staff_member_end_col_sql;
+EXECUTE staff_member_end_col_stmt;
+DEALLOCATE PREPARE staff_member_end_col_stmt;
 
 CREATE TABLE IF NOT EXISTS staff_documents (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -185,6 +218,13 @@ WHERE NOT EXISTS (
       AND existing.document_type = req.document_type
 );
 
+INSERT INTO staff_document_requirements
+    (staff_type_id, document_type, requires_expiry, warning_days, created_at, updated_at)
+SELECT st.id, 'Contract de muncă', 0, 30, NOW(), NOW()
+FROM staff_types st
+ON DUPLICATE KEY UPDATE
+    requires_expiry = 0;
+
 INSERT INTO configurare_documente_obligatorii_soferi
     (document_type, requires_expiry, created_at, updated_at)
 SELECT req.document_type, req.requires_expiry, NOW(), NOW()
@@ -192,11 +232,13 @@ FROM (
     SELECT 'CI / Buletin' AS document_type, 1 AS requires_expiry UNION ALL
     SELECT 'Permis conducere', 1 UNION ALL
     SELECT 'Medicina muncii', 1 UNION ALL
-    SELECT 'Aviz medical', 1 UNION ALL
-    SELECT 'Contract de muncă', 0
+    SELECT 'Aviz medical', 1
 ) AS req
 WHERE NOT EXISTS (
     SELECT 1
     FROM configurare_documente_obligatorii_soferi existing
     WHERE existing.document_type = req.document_type
 );
+
+DELETE FROM configurare_documente_obligatorii_soferi
+WHERE document_type IN ('Contract de muncă', 'Contract de munca', 'Contract de angajare');

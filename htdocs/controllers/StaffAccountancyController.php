@@ -40,6 +40,9 @@ class StaffAccountancyController
             case 'update_staff':
                 $this->updateStaffAction();
                 return;
+            case 'end_activity':
+                $this->endActivityAction();
+                return;
             case 'delete_staff':
                 $this->deleteStaffAction();
                 return;
@@ -145,6 +148,8 @@ class StaffAccountancyController
             'Telefon',
             'Salariu lunar',
             'Data angajarii',
+            'Data incetarii',
+            'Zile active',
             'Documente',
             'Status documente',
             'Status',
@@ -160,6 +165,8 @@ class StaffAccountancyController
                 (string) ($row['telefon'] ?? ''),
                 $row['salariu'] !== null ? format_number_ro($row['salariu'], 2) : '',
                 !empty($row['data_angajare']) ? format_date_ro((string) $row['data_angajare']) : '',
+                !empty($row['data_incetare']) ? format_date_ro((string) $row['data_incetare']) : '',
+                (string) ($row['active_days'] ?? ''),
                 (string) ($row['document_count'] ?? 0),
                 $this->documentStatusLabel((string) ($row['document_status'] ?? '')),
                 (string) ($row['status'] ?? ''),
@@ -272,6 +279,8 @@ class StaffAccountancyController
         try {
             $deleted = $this->model->deleteRequirement($id);
             flash_set($deleted !== null ? 'success' : 'warning', $deleted !== null ? 'Documentul obligatoriu a fost eliminat.' : 'Documentul obligatoriu nu a fost gasit.');
+        } catch (InvalidArgumentException $exception) {
+            flash_set('danger', $exception->getMessage());
         } catch (Throwable $exception) {
             error_log('[StaffAccountancyController][delete_requirement] ' . $exception->getMessage());
             flash_set('danger', 'Nu am putut elimina documentul obligatoriu.');
@@ -297,7 +306,7 @@ class StaffAccountancyController
             if ((int) ($type['is_driver_linked'] ?? 0) === 1) {
                 $this->storeDriverAccountingFromStaffForm();
             } else {
-                $data = $this->collectStaffMemberInput($_POST, $staffTypeId);
+                $data = $this->collectStaffMemberInput($_POST, $staffTypeId, $type);
                 $errors = $this->validateStaffMemberInput($data);
                 if ($errors !== []) {
                     flash_set('danger', implode(' ', $errors));
@@ -333,7 +342,7 @@ class StaffAccountancyController
             redirect($this->indexUrl());
         }
 
-        $data = $this->collectStaffMemberInput($_POST, $staffTypeId);
+        $data = $this->collectStaffMemberInput($_POST, $staffTypeId, $type);
         $errors = $this->validateStaffMemberInput($data, false);
         if ($errors !== []) {
             flash_set('danger', implode(' ', $errors));
@@ -349,6 +358,42 @@ class StaffAccountancyController
         } catch (Throwable $exception) {
             error_log('[StaffAccountancyController][update_staff] ' . $exception->getMessage());
             flash_set('danger', 'Nu am putut actualiza personalul.');
+        }
+
+        redirect($this->indexUrl());
+    }
+
+    private function endActivityAction(): void
+    {
+        $this->requirePost('contabilitate_personal');
+        ensure_csrf_or_redirect($this->indexUrl());
+
+        $sourceType = $this->normalizeSourceType((string) ($_POST['source_type'] ?? ''));
+        $sourceId = (int) ($_POST['source_id'] ?? 0);
+        $endDate = $this->normalizeDate((string) ($_POST['data_incetare'] ?? '')) ?: date('Y-m-d');
+        $notes = trim((string) ($_POST['notes'] ?? ''));
+
+        if ($sourceType === '' || $sourceId <= 0) {
+            flash_set('danger', 'Selecteaza persoana pentru care vrei sa incetezi activitatea.');
+            redirect($this->indexUrl());
+        }
+
+        if ($endDate > date('Y-m-d')) {
+            flash_set('danger', 'Data incetarii nu poate fi in viitor.');
+            redirect($this->indexUrl());
+        }
+
+        try {
+            if (!$this->model->endEmployment($sourceType, $sourceId, $endDate, $notes !== '' ? $notes : null, $this->currentUserId())) {
+                flash_set('warning', 'Persoana selectata nu a fost gasita.');
+            } else {
+                flash_set('success', 'Activitatea a fost incetata si persoana a fost marcata ca inactiva.');
+            }
+        } catch (InvalidArgumentException $exception) {
+            flash_set('danger', $exception->getMessage());
+        } catch (Throwable $exception) {
+            error_log('[StaffAccountancyController][end_activity] ' . $exception->getMessage());
+            flash_set('danger', 'Nu am putut inceta activitatea persoanei selectate.');
         }
 
         redirect($this->indexUrl());
@@ -591,14 +636,19 @@ class StaffAccountancyController
         return $normalized === 'sofer';
     }
 
-    private function collectStaffMemberInput(array $input, int $staffTypeId): array
+    private function collectStaffMemberInput(array $input, int $staffTypeId, ?array $staffType = null): array
     {
+        $function = trim((string) ($staffType['name'] ?? ''));
+        if ($function === '') {
+            $function = trim((string) ($input['functie'] ?? ''));
+        }
+
         return [
             'staff_type_id' => $staffTypeId,
             'nume_complet' => trim((string) ($input['nume_complet'] ?? '')),
             'telefon' => trim((string) ($input['telefon'] ?? '')),
             'email' => trim((string) ($input['email'] ?? '')),
-            'functie' => trim((string) ($input['functie'] ?? '')),
+            'functie' => $function,
             'salariu' => $this->parseMoney($input['salariu'] ?? null),
             'data_angajare' => $this->normalizeDate((string) ($input['data_angajare'] ?? '')),
             'status' => trim((string) ($input['status'] ?? 'activ')),

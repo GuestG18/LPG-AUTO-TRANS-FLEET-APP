@@ -4,6 +4,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS curse_cheltuieli_documente;
 DROP TABLE IF EXISTS curse_cheltuieli;
+DROP TABLE IF EXISTS categorii_cheltuieli_curse;
 DROP TABLE IF EXISTS curse_dispecer;
 DROP TABLE IF EXISTS concedii_reguli_disponibilitate;
 DROP TABLE IF EXISTS concedii;
@@ -30,6 +31,9 @@ DROP TABLE IF EXISTS inventar_dotari_catalog;
 DROP TABLE IF EXISTS vehicle_authorizations;
 DROP TABLE IF EXISTS authorization_zones;
 DROP TABLE IF EXISTS mentenanta_grupe_componente;
+DROP TABLE IF EXISTS invoice_repair_parts;
+DROP TABLE IF EXISTS invoice_vehicle_repairs;
+DROP TABLE IF EXISTS supplier_invoices;
 DROP TABLE IF EXISTS mentenanta_piese_utilizari;
 DROP TABLE IF EXISTS mentenanta_interventii_programate;
 DROP TABLE IF EXISTS mentenanta_piese;
@@ -235,6 +239,7 @@ CREATE TABLE soferi (
     nume VARCHAR(100) NOT NULL,
     data_nasterii DATE NULL,
     data_angajare DATE NULL,
+    data_incetare DATE NULL,
     poza_original VARCHAR(255) NULL,
     poza_stocata VARCHAR(255) NULL,
     telefon VARCHAR(20) NOT NULL,
@@ -533,6 +538,84 @@ CREATE TABLE mentenanta_piese_utilizari (
     CONSTRAINT fk_ment_usage_schedule FOREIGN KEY (scheduled_intervention_id) REFERENCES mentenanta_interventii_programate(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE supplier_invoices (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    supplier_id INT UNSIGNED NULL,
+    supplier_name VARCHAR(190) NULL,
+    invoice_number VARCHAR(120) NOT NULL,
+    invoice_date DATE NOT NULL,
+    due_date DATE NULL,
+    pdf_path VARCHAR(255) NULL,
+    status ENUM('draft','in_progress','finalizata','anulata') NOT NULL DEFAULT 'finalizata',
+    notes TEXT NULL,
+    labour_total DECIMAL(12,2) NOT NULL DEFAULT 0,
+    parts_subtotal DECIMAL(12,2) NOT NULL DEFAULT 0,
+    vat_total DECIMAL(12,2) NOT NULL DEFAULT 0,
+    parts_total DECIMAL(12,2) NOT NULL DEFAULT 0,
+    grand_total DECIMAL(12,2) NOT NULL DEFAULT 0,
+    source_maintenance_id INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_supplier_invoices_number (invoice_number),
+    UNIQUE KEY uk_supplier_invoices_source (source_maintenance_id),
+    INDEX idx_supplier_invoices_supplier (supplier_id),
+    INDEX idx_supplier_invoices_date (invoice_date),
+    INDEX idx_supplier_invoices_status (status),
+    CONSTRAINT fk_supplier_invoices_source_maintenance FOREIGN KEY (source_maintenance_id) REFERENCES mentenanta(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE invoice_vehicle_repairs (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    invoice_id INT UNSIGNED NOT NULL,
+    vehicle_id INT UNSIGNED NOT NULL,
+    km_at_repair INT UNSIGNED NULL,
+    defect TEXT NULL,
+    component_group_id INT UNSIGNED NULL,
+    technical_category_id INT UNSIGNED NULL,
+    technical_component_id INT UNSIGNED NULL,
+    repair_description TEXT NULL,
+    repair_status ENUM('in_asteptare','in_lucru','finalizata','anulata') NOT NULL DEFAULT 'finalizata',
+    immobilization_days DECIMAL(6,2) NOT NULL DEFAULT 0,
+    condition_after_percent TINYINT UNSIGNED NULL,
+    labour_supplier_id INT UNSIGNED NULL,
+    labour_supplier_name VARCHAR(190) NULL,
+    labour_cost DECIMAL(12,2) NOT NULL DEFAULT 0,
+    source_maintenance_id INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_invoice_repairs_invoice (invoice_id),
+    INDEX idx_invoice_repairs_vehicle (vehicle_id),
+    INDEX idx_invoice_repairs_source (source_maintenance_id),
+    CONSTRAINT fk_invoice_repairs_invoice FOREIGN KEY (invoice_id) REFERENCES supplier_invoices(id) ON DELETE CASCADE,
+    CONSTRAINT fk_invoice_repairs_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE,
+    CONSTRAINT fk_invoice_repairs_source_maintenance FOREIGN KEY (source_maintenance_id) REFERENCES mentenanta(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE invoice_repair_parts (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    repair_id INT UNSIGNED NOT NULL,
+    part_name VARCHAR(190) NOT NULL,
+    part_code VARCHAR(100) NULL,
+    stock_part_id INT UNSIGNED NULL,
+    quantity DECIMAL(12,2) NOT NULL DEFAULT 1,
+    unit_price_without_vat DECIMAL(12,2) NOT NULL DEFAULT 0,
+    discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+    value_without_vat DECIMAL(12,2) NOT NULL DEFAULT 0,
+    vat_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+    vat_value DECIMAL(12,2) NOT NULL DEFAULT 0,
+    total_with_vat DECIMAL(12,2) NOT NULL DEFAULT 0,
+    part_supplier_id INT UNSIGNED NULL,
+    part_supplier_name VARCHAR(190) NULL,
+    notes TEXT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_invoice_parts_repair (repair_id),
+    INDEX idx_invoice_parts_stock (stock_part_id),
+    INDEX idx_invoice_parts_supplier (part_supplier_id),
+    CONSTRAINT fk_invoice_parts_repair FOREIGN KEY (repair_id) REFERENCES invoice_vehicle_repairs(id) ON DELETE CASCADE,
+    CONSTRAINT fk_invoice_parts_stock FOREIGN KEY (stock_part_id) REFERENCES mentenanta_piese(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE mentenanta_grupe_componente (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     vehicle_type VARCHAR(40) NOT NULL DEFAULT 'universal',
@@ -650,6 +733,7 @@ CREATE TABLE staff_members (
     functie VARCHAR(120) NOT NULL,
     salariu DECIMAL(10,2) NULL,
     data_angajare DATE NULL,
+    data_incetare DATE NULL,
     status ENUM('activ', 'inactiv') NOT NULL DEFAULT 'activ',
     observatii TEXT NULL,
     created_by INT UNSIGNED NULL,
@@ -916,10 +1000,30 @@ CREATE TABLE curse_dispecer (
     CONSTRAINT fk_curse_zona FOREIGN KEY (zona_distributie_id) REFERENCES configurare_zone_distributie(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE categorii_cheltuieli_curse (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    nume VARCHAR(150) NOT NULL,
+    descriere TEXT NULL,
+    activ TINYINT(1) NOT NULL DEFAULT 1,
+    legacy_key VARCHAR(50) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NULL,
+    UNIQUE KEY uk_categorii_cheltuieli_curse_nume (nume),
+    UNIQUE KEY uk_categorii_cheltuieli_curse_legacy (legacy_key),
+    INDEX idx_categorii_cheltuieli_curse_activ (activ)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO categorii_cheltuieli_curse (nume, descriere, activ, legacy_key, created_at, updated_at) VALUES
+('Taxe drum', 'Categorie implicita pentru cheltuieli curse.', 1, 'taxe_drum', NOW(), NOW()),
+('Diurna', 'Categorie implicita pentru cheltuieli curse.', 1, 'diurna', NOW(), NOW()),
+('Reparatii', 'Categorie implicita pentru cheltuieli curse.', 1, 'service', NOW(), NOW()),
+('Alte cheltuieli', 'Categorie implicita pentru cheltuieli curse.', 1, 'alte', NOW(), NOW());
+
 CREATE TABLE curse_cheltuieli (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     cursa_id INT UNSIGNED NOT NULL,
     tip_cheltuiala ENUM('motorina', 'taxe_drum', 'diurna', 'service', 'alte') NOT NULL,
+    categorie_id INT UNSIGNED NULL,
     refacturare_tip_cheltuiala ENUM('motorina', 'taxe_drum', 'diurna', 'service', 'alte') NULL,
     refacturare_detalii TEXT NULL,
     refacturare_suma DECIMAL(12,2) NULL,
@@ -932,11 +1036,16 @@ CREATE TABLE curse_cheltuieli (
     suma DECIMAL(12,2) NOT NULL,
     data_cheltuiala DATE NOT NULL,
     observatii TEXT NULL,
+    added_by INT UNSIGNED NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_curse_cheltuieli_cursa (cursa_id),
+    INDEX idx_curse_cheltuieli_categorie (categorie_id),
+    INDEX idx_curse_cheltuieli_added_by (added_by),
     INDEX idx_curse_cheltuieli_data (data_cheltuiala),
-    CONSTRAINT fk_curse_cheltuieli_cursa FOREIGN KEY (cursa_id) REFERENCES curse_dispecer(id) ON DELETE CASCADE
+    CONSTRAINT fk_curse_cheltuieli_cursa FOREIGN KEY (cursa_id) REFERENCES curse_dispecer(id) ON DELETE CASCADE,
+    CONSTRAINT fk_curse_cheltuieli_categorie FOREIGN KEY (categorie_id) REFERENCES categorii_cheltuieli_curse(id) ON DELETE SET NULL,
+    CONSTRAINT fk_curse_cheltuieli_added_by FOREIGN KEY (added_by) REFERENCES utilizatori(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE curse_cheltuieli_documente (
@@ -1076,6 +1185,13 @@ INNER JOIN (
     SELECT 'mecanic', 'Medicina muncii', 1
 ) req ON req.slug = st.slug;
 
+INSERT INTO staff_document_requirements
+    (staff_type_id, document_type, requires_expiry, warning_days, created_at, updated_at)
+SELECT st.id, 'Contract de muncă', 0, 30, NOW(), NOW()
+FROM staff_types st
+ON DUPLICATE KEY UPDATE
+    requires_expiry = 0;
+
 INSERT INTO inventar_dotari_catalog
     (nume, categorie, equipment_type, cost_implicit, necesita_data_fabricatie, necesita_inspectie, interval_implicit_inspectie_luni, necesita_data_expirarii, activ, created_at, updated_at)
 VALUES
@@ -1182,8 +1298,8 @@ INSERT INTO curse_dispecer (
 (2, 'distributie', DATE_SUB(CURDATE(), INTERVAL 1 DAY), DATE_SUB(CURDATE(), INTERVAL 1 DAY), DATE_SUB(CURDATE(), INTERVAL 1 DAY), DATE_SUB(CURDATE(), INTERVAL 1 DAY), '09:00:00', '12:15:00', 195, 2, 2, 'butelii', NULL, 12.50, 6, NULL, 1, 'nefacturat', 2.60, 32.50, 'Distributie urbana pentru clienti retail.', NOW(), NOW()),
 (1, 'distributie', CURDATE(), CURDATE(), CURDATE(), CURDATE(), '10:45:00', '16:00:00', 315, 1, 1, 'gpl_vrac', NULL, 18.20, 9, NULL, 2, 'facturat', 2.85, 51.87, 'Runda zilnica zona Ilfov.', NOW(), NOW());
 
-INSERT INTO curse_cheltuieli (cursa_id, tip_cheltuiala, suma, data_cheltuiala, observatii, created_at, updated_at) VALUES
-(1, 'motorina', 520.00, DATE_SUB(CURDATE(), INTERVAL 2 DAY), 'Alimentare pentru cursa primara.', NOW(), NOW()),
-(1, 'taxe_drum', 130.00, DATE_SUB(CURDATE(), INTERVAL 2 DAY), 'Taxe pod si autostrada.', NOW(), NOW()),
-(2, 'diurna', 90.00, DATE_SUB(CURDATE(), INTERVAL 1 DAY), 'Diurna sofer distributie.', NOW(), NOW());
+INSERT INTO curse_cheltuieli (cursa_id, tip_cheltuiala, categorie_id, suma, data_cheltuiala, observatii, created_at, updated_at) VALUES
+(1, 'motorina', NULL, 520.00, DATE_SUB(CURDATE(), INTERVAL 2 DAY), 'Alimentare pentru cursa primara.', NOW(), NOW()),
+(1, 'taxe_drum', 1, 130.00, DATE_SUB(CURDATE(), INTERVAL 2 DAY), 'Taxe pod si autostrada.', NOW(), NOW()),
+(2, 'diurna', 2, 90.00, DATE_SUB(CURDATE(), INTERVAL 1 DAY), 'Diurna sofer distributie.', NOW(), NOW());
 

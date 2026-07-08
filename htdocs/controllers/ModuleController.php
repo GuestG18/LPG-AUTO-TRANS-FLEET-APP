@@ -10,9 +10,11 @@ class ModuleController
     private VehicleCouplingModel $vehicleCouplingModel;
     private TireModel $tireModel;
     private EntityStatusService $entityStatusService;
+    private PDO $db;
 
     public function __construct(PDO $db, array $modules)
     {
+        $this->db = $db;
         $this->modules = $modules;
         $this->moduleModel = new ModuleModel($db);
         $this->userModel = new UserModel($db);
@@ -46,6 +48,9 @@ class ModuleController
                 return;
             case 'tire_stock':
                 $this->maintenanceTireStockAction($moduleKey, $module);
+                return;
+            case 'axis_config':
+                $this->maintenanceTireAxisConfigAction($moduleKey, $module);
                 return;
             case 'create':
                 $this->createAction($moduleKey, $module);
@@ -214,28 +219,6 @@ class ModuleController
             $vehicleId = $this->extractVehicleIdFromFilters($filters);
             $viewData['documentSummary'] = $this->documentModel->getNotificationSummary($vehicleId);
             $viewData['urgentDocuments'] = $this->documentModel->getUrgentDocuments($vehicleId, 5);
-
-            $driverDocumentModule = $this->modules['documente_soferi'] ?? null;
-            if (is_array($driverDocumentModule)) {
-                $driverDocumentModule = $this->buildDocumentPageDriverModule($driverDocumentModule);
-                $driverDocumentFilters = $this->collectFilters($driverDocumentModule);
-                $driverDocumentPage = max(1, (int) ($_GET['driver_p'] ?? 1));
-                $driverDocumentResult = $this->moduleModel->getPaginated($driverDocumentModule, $search, $driverDocumentFilters, $driverDocumentPage, ITEMS_PER_PAGE);
-
-                $viewData['driverDocumentModule'] = $driverDocumentModule;
-                $viewData['driverDocumentRows'] = $driverDocumentResult['rows'];
-                $viewData['driverDocumentPagination'] = [
-                    'page' => $driverDocumentResult['page'],
-                    'total_pages' => $driverDocumentResult['total_pages'],
-                    'total_rows' => $driverDocumentResult['total_rows'],
-                    'per_page' => ITEMS_PER_PAGE,
-                ];
-            }
-        }
-
-        if ($moduleKey === 'alimentari') {
-            $allRows = $this->moduleModel->getAll($module, $search, $filters);
-            $viewData['fuelConsumptionSummary'] = $this->buildFuelConsumptionSummary($allRows);
         }
 
         if ($moduleKey === 'configurare_costuri_documente_vehicule_override') {
@@ -321,6 +304,336 @@ class ModuleController
         ]);
     }
 
+    private function maintenanceTireAxisConfigAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'mentenanta') {
+            redirect(build_query_url(['page' => 'mentenanta', 'action' => 'axis_config']));
+        }
+
+        $vehicleModule = $this->modules['vehicule'] ?? null;
+        if (!is_array($vehicleModule)) {
+            http_response_code(404);
+            render('errors/404.php', [
+                'pageTitle' => 'Modul vehicule indisponibil',
+                'currentPage' => 'mentenanta',
+            ]);
+            return;
+        }
+
+        $requestedVehicleView = trim((string) ($_GET['vehicle_view'] ?? ''));
+        $axisVehicleFilters = $this->readAxisVehicleFiltersFromInput($_GET);
+        $selectedVehicleId = (int) ($_GET['vehicle_id'] ?? $_GET['id'] ?? 0);
+        $selectedVehicle = null;
+        $vehicleTireContext = null;
+        $axisAssemblyContext = null;
+
+        if ($selectedVehicleId > 0) {
+            $selectedVehicle = $this->moduleModel->findById($vehicleModule, $selectedVehicleId);
+            if ($selectedVehicle === null) {
+                flash_set('warning', 'Vehiculul selectat nu a fost gasit.');
+                $fallbackView = $requestedVehicleView !== '' ? $this->normalizeAxisVehicleView($requestedVehicleView) : 'camion';
+                redirect(build_query_url($this->axisConfigRouteParams($fallbackView, $axisVehicleFilters)));
+            }
+        }
+
+        $axisVehicleView = $requestedVehicleView !== ''
+            ? $this->normalizeAxisVehicleView($requestedVehicleView)
+            : $this->inferAxisVehicleView($selectedVehicle);
+        $axisVehicleFilterOptions = $this->buildAxisVehicleFilterOptions($axisVehicleView);
+        $vehicleOptions = $this->buildAxisVehicleOptions($axisVehicleView, $axisVehicleFilters);
+
+        if ($selectedVehicle !== null) {
+            $selectedType = (string) ($selectedVehicle['tip_vehicul'] ?? '');
+
+            if ($axisVehicleView === 'camion') {
+                if ($selectedType === 'camion') {
+                    $vehicleTireContext = $this->buildVehicleTireManagementContext($selectedVehicle);
+                } else {
+                    flash_set('warning', 'Vehiculul selectat nu este disponibil in filtrul Camion.');
+                    redirect(build_query_url($this->axisConfigRouteParams('camion', $axisVehicleFilters)));
+                }
+            } else {
+                $axisAssemblyContext = $this->buildAxisAssemblyContext($vehicleModule, $selectedVehicle);
+                if ($axisAssemblyContext === null) {
+                    flash_set('warning', 'Ansamblul selectat nu are un cuplaj activ cap tractor - semi-remorca.');
+                    redirect(build_query_url($this->axisConfigRouteParams('ansamblu', $axisVehicleFilters)));
+                }
+
+                $tractorMember = is_array($axisAssemblyContext['tractor'] ?? null) ? $axisAssemblyContext['tractor'] : [];
+                $selectedVehicle = is_array($tractorMember['record'] ?? null) ? $tractorMember['record'] : $selectedVehicle;
+                $selectedVehicleId = (int) ($selectedVehicle['id'] ?? $selectedVehicleId);
+                $vehicleTireContext = is_array($tractorMember['context'] ?? null) ? $tractorMember['context'] : null;
+            }
+
+            if (!isset($vehicleOptions[(string) $selectedVehicleId])) {
+                flash_set('warning', 'Vehiculul selectat nu corespunde filtrelor aplicate.');
+                redirect(build_query_url($this->axisConfigRouteParams($axisVehicleView, $axisVehicleFilters)));
+            }
+        }
+
+        render('module/axis_config.php', [
+            'pageTitle' => 'Configuratie Axe',
+            'currentPage' => $this->resolveCurrentPage($moduleKey, $module),
+            'moduleKey' => $moduleKey,
+            'module' => $module,
+            'vehicleOptions' => $vehicleOptions,
+            'selectedVehicleId' => $selectedVehicleId,
+            'selectedVehicle' => $selectedVehicle,
+            'vehicleTireContext' => $vehicleTireContext,
+            'axisVehicleView' => $axisVehicleView,
+            'axisVehicleViewOptions' => [
+                'camion' => 'Camion',
+                'ansamblu' => 'Ansamblu',
+            ],
+            'axisVehicleFilters' => $axisVehicleFilters,
+            'axisVehicleFilterOptions' => $axisVehicleFilterOptions,
+            'axisAssemblyContext' => $axisAssemblyContext,
+        ]);
+    }
+
+    private function normalizeAxisVehicleView(string $view): string
+    {
+        return strtolower(trim($view)) === 'ansamblu' ? 'ansamblu' : 'camion';
+    }
+
+    private function inferAxisVehicleView(?array $vehicle): string
+    {
+        if ($vehicle === null) {
+            return 'camion';
+        }
+
+        $vehicleType = (string) ($vehicle['tip_vehicul'] ?? '');
+
+        return $vehicleType === 'cap_tractor' || is_trailer_vehicle_type($vehicleType)
+            ? 'ansamblu'
+            : 'camion';
+    }
+
+    private function readAxisVehicleFiltersFromInput(array $input, string $prefix = ''): array
+    {
+        return [
+            'capacitate_transport' => $this->normalizeAxisVehicleNumericFilter($input[$prefix . 'capacitate_transport'] ?? ''),
+            'mma' => $this->normalizeAxisVehicleNumericFilter($input[$prefix . 'mma'] ?? ''),
+        ];
+    }
+
+    private function normalizeAxisVehicleNumericFilter(mixed $value): string
+    {
+        $value = str_replace(',', '.', trim((string) $value));
+        if ($value === '' || !is_numeric($value)) {
+            return '';
+        }
+
+        $number = (float) $value;
+        if ($number <= 0) {
+            return '';
+        }
+
+        return number_format($number, 2, '.', '');
+    }
+
+    private function axisConfigRouteParams(string $axisVehicleView, array $filters = [], int $vehicleId = 0): array
+    {
+        $params = [
+            'page' => 'mentenanta',
+            'action' => 'axis_config',
+            'vehicle_view' => $this->normalizeAxisVehicleView($axisVehicleView),
+        ];
+
+        if ($vehicleId > 0) {
+            $params['vehicle_id'] = $vehicleId;
+        }
+
+        foreach (['capacitate_transport', 'mma'] as $filterKey) {
+            $filterValue = (string) ($filters[$filterKey] ?? '');
+            if ($filterValue !== '') {
+                $params[$filterKey] = $filterValue;
+            }
+        }
+
+        return $params;
+    }
+
+    private function buildAxisVehicleFilterOptions(string $axisVehicleView): array
+    {
+        return [
+            'capacitate_transport' => $this->buildAxisVehicleNumericFilterOptions($axisVehicleView, 'capacitate_transport', 'tone'),
+            'mma' => $this->buildAxisVehicleNumericFilterOptions($axisVehicleView, 'mma', 'kg'),
+        ];
+    }
+
+    private function buildAxisVehicleNumericFilterOptions(string $axisVehicleView, string $field, string $unit): array
+    {
+        $field = $field === 'mma' ? 'mma' : 'capacitate_transport';
+        $column = $axisVehicleView === 'ansamblu' ? 's.' . $field : 'v.' . $field;
+
+        if ($axisVehicleView === 'ansamblu') {
+            $sql = "
+                SELECT DISTINCT {$column} AS value
+                FROM vehicule_cuplaje vc
+                INNER JOIN vehicule t ON t.id = vc.tractor_id
+                INNER JOIN vehicule s ON s.id = vc.semiremorca_id
+                WHERE vc.activ = 1
+                  AND t.tip_vehicul = 'cap_tractor'
+                  AND s.tip_vehicul IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')
+                  AND {$column} IS NOT NULL
+                  AND {$column} > 0
+                ORDER BY {$column} ASC
+            ";
+        } else {
+            $sql = "
+                SELECT DISTINCT {$column} AS value
+                FROM vehicule v
+                WHERE v.tip_vehicul = 'camion'
+                  AND v.nr_inmatriculare <> 'STOC-ANVELOPE'
+                  AND v.serie_sasiu <> 'STOCANVELOPE00001'
+                  AND {$column} IS NOT NULL
+                  AND {$column} > 0
+                ORDER BY {$column} ASC
+            ";
+        }
+
+        $stmt = $this->db->query($sql);
+        $options = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $value = $this->normalizeAxisVehicleNumericFilter($row['value'] ?? '');
+            if ($value === '') {
+                continue;
+            }
+
+            $options[$value] = $this->formatAxisVehicleFilterLabel($value, $unit);
+        }
+
+        return $options;
+    }
+
+    private function formatAxisVehicleFilterLabel(string $value, string $unit): string
+    {
+        $number = (float) $value;
+        $decimals = abs($number - round($number)) < 0.005 ? 0 : 2;
+
+        return number_format($number, $decimals, ',', '.') . ' ' . $unit;
+    }
+
+    private function appendAxisVehicleNumericFilterCondition(array &$where, array &$params, string $column, string $value, string $paramName): void
+    {
+        if ($value === '') {
+            return;
+        }
+
+        $where[] = $column . ' = :' . $paramName;
+        $params[':' . $paramName] = $value;
+    }
+
+    private function buildAxisVehicleOptions(string $axisVehicleView, array $filters = []): array
+    {
+        if ($axisVehicleView === 'ansamblu') {
+            return $this->vehicleCouplingModel->getActiveAssemblySelectOptions($filters);
+        }
+
+        $where = [
+            "v.tip_vehicul = 'camion'",
+            "v.nr_inmatriculare <> 'STOC-ANVELOPE'",
+            "v.serie_sasiu <> 'STOCANVELOPE00001'",
+        ];
+        $params = [];
+
+        $this->appendAxisVehicleNumericFilterCondition(
+            $where,
+            $params,
+            'v.capacitate_transport',
+            (string) ($filters['capacitate_transport'] ?? ''),
+            'capacitate_transport'
+        );
+        $this->appendAxisVehicleNumericFilterCondition(
+            $where,
+            $params,
+            'v.mma',
+            (string) ($filters['mma'] ?? ''),
+            'mma'
+        );
+
+        $sql = "
+            SELECT
+                v.id,
+                CONCAT(v.nr_inmatriculare, ' - ', v.marca, ' ', v.model) AS label
+            FROM vehicule v
+            WHERE " . implode(' AND ', $where) . "
+            ORDER BY v.nr_inmatriculare ASC
+        ";
+        $stmt = $this->db->prepare($sql);
+        foreach ($params as $name => $value) {
+            $stmt->bindValue($name, $value);
+        }
+        $stmt->execute();
+
+        $options = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $options[(string) ($row['id'] ?? '')] = (string) ($row['label'] ?? '');
+        }
+
+        return $options;
+    }
+
+    private function buildAxisAssemblyContext(array $vehicleModule, array $selectedVehicle): ?array
+    {
+        $selectedVehicleId = (int) ($selectedVehicle['id'] ?? 0);
+        $selectedVehicleType = (string) ($selectedVehicle['tip_vehicul'] ?? '');
+        if ($selectedVehicleId <= 0) {
+            return null;
+        }
+
+        if ($selectedVehicleType === 'cap_tractor') {
+            $activeCoupling = $this->vehicleCouplingModel->getActiveCouplingByTractor($selectedVehicleId);
+        } elseif (is_trailer_vehicle_type($selectedVehicleType)) {
+            $activeCoupling = $this->vehicleCouplingModel->getActiveCouplingByTrailer($selectedVehicleId);
+        } else {
+            return null;
+        }
+
+        if ($activeCoupling === null) {
+            return null;
+        }
+
+        $tractorId = (int) ($activeCoupling['tractor_id'] ?? 0);
+        $trailerId = (int) ($activeCoupling['semiremorca_id'] ?? 0);
+        if ($tractorId <= 0 || $trailerId <= 0) {
+            return null;
+        }
+
+        $tractor = $this->moduleModel->findById($vehicleModule, $tractorId);
+        $trailer = $this->moduleModel->findById($vehicleModule, $trailerId);
+        if ($tractor === null || $trailer === null) {
+            return null;
+        }
+
+        $tractorContext = $this->buildVehicleTireManagementContext($tractor);
+        $trailerContext = $this->buildVehicleTireManagementContext($trailer);
+        $tractorLabel = trim((string) ($activeCoupling['tractor_nr'] ?? '') . ' - ' . trim((string) ($activeCoupling['tractor_marca'] ?? '') . ' ' . (string) ($activeCoupling['tractor_model'] ?? '')));
+        $trailerLabel = trim((string) ($activeCoupling['semiremorca_nr'] ?? '') . ' - ' . trim((string) ($activeCoupling['semiremorca_marca'] ?? '') . ' ' . (string) ($activeCoupling['semiremorca_model'] ?? '')));
+
+        $tractorMember = [
+            'role_label' => 'Cap tractor',
+            'label' => trim($tractorLabel, ' -'),
+            'record' => $tractor,
+            'context' => $tractorContext,
+        ];
+        $trailerMember = [
+            'role_label' => 'Semi-remorca',
+            'label' => trim($trailerLabel, ' -'),
+            'record' => $trailer,
+            'context' => $trailerContext,
+        ];
+
+        return [
+            'label' => $tractorMember['label'] . ' + ' . $trailerMember['label'],
+            'active_coupling' => $activeCoupling,
+            'tractor' => $tractorMember,
+            'trailer' => $trailerMember,
+            'members' => [$tractorMember, $trailerMember],
+        ];
+    }
+
     private function createAction(string $moduleKey, array $module): void
     {
         $formFlash = consume_form_flash();
@@ -385,15 +698,6 @@ class ModuleController
             }
         }
 
-        $vehicleKmBordById = $moduleKey === 'alimentari'
-            ? $this->buildVehicleKmBordMapForAlimentari($module)
-            : [];
-        $driverVehicleById = $moduleKey === 'alimentari'
-            ? $this->buildDriverVehicleMapForAlimentari($module)
-            : [];
-        $fuelConsumptionSummary = $moduleKey === 'alimentari'
-            ? $this->buildFuelConsumptionSummary($this->moduleModel->getAll($module, '', []))
-            : null;
         $selectOptions = $this->buildFormSelectOptions($module);
         $documentTypeOptionsByVehicleType = [];
         $documentVehicleTypeByVehicleId = [];
@@ -493,9 +797,6 @@ class ModuleController
             'formData' => $formData,
             'errors' => $errors,
             'selectOptions' => $selectOptions,
-            'vehicleKmBordById' => $vehicleKmBordById,
-            'driverVehicleById' => $driverVehicleById,
-            'fuelConsumptionSummary' => $fuelConsumptionSummary,
             'backUrl' => $backUrl,
             'keepDocumentVehicleContext' => $keepDocumentVehicleContext,
             'documentTypeOptionsByVehicleType' => $documentTypeOptionsByVehicleType,
@@ -555,9 +856,6 @@ class ModuleController
         $driverVehicleIds = [];
         if ($moduleKey === 'soferi') {
             $driverVehicleIds = $this->prepareDriverVehicleAssignmentsData($data, $errors, $_POST);
-        }
-        if ($moduleKey === 'alimentari') {
-            $this->validateAlimentareDriverSelection($data, $errors);
         }
         if (in_array($moduleKey, ['documente', 'configurare_costuri_documente_vehicule_override'], true)) {
             $this->validateVehicleDocumentTypeSelection($moduleKey, $data, $errors);
@@ -798,15 +1096,6 @@ class ModuleController
             $formData['vehicle_ids'] = $this->moduleModel->getDriverVehicleIds($id);
         }
 
-        $vehicleKmBordById = $moduleKey === 'alimentari'
-            ? $this->buildVehicleKmBordMapForAlimentari($module)
-            : [];
-        $driverVehicleById = $moduleKey === 'alimentari'
-            ? $this->buildDriverVehicleMapForAlimentari($module)
-            : [];
-        $fuelConsumptionSummary = $moduleKey === 'alimentari'
-            ? $this->buildFuelConsumptionSummary($this->moduleModel->getAll($module, '', []))
-            : null;
         $selectOptions = $this->buildFormSelectOptions($module);
         $documentTypeOptionsByVehicleType = [];
         $documentVehicleTypeByVehicleId = [];
@@ -906,9 +1195,6 @@ class ModuleController
             'formData' => $formData,
             'errors' => $errors,
             'selectOptions' => $selectOptions,
-            'vehicleKmBordById' => $vehicleKmBordById,
-            'driverVehicleById' => $driverVehicleById,
-            'fuelConsumptionSummary' => $fuelConsumptionSummary,
             'backUrl' => $this->buildModuleBackUrl($moduleKey, $module, $record, $formData),
             'documentTypeOptionsByVehicleType' => $documentTypeOptionsByVehicleType,
             'documentVehicleTypeByVehicleId' => $documentVehicleTypeByVehicleId,
@@ -980,9 +1266,6 @@ class ModuleController
         $driverVehicleIds = [];
         if ($moduleKey === 'soferi') {
             $driverVehicleIds = $this->prepareDriverVehicleAssignmentsData($data, $errors, $_POST);
-        }
-        if ($moduleKey === 'alimentari') {
-            $this->validateAlimentareDriverSelection($data, $errors);
         }
         if (in_array($moduleKey, ['documente', 'configurare_costuri_documente_vehicule_override'], true)) {
             $this->validateVehicleDocumentTypeSelection($moduleKey, $data, $errors);
@@ -1301,24 +1584,73 @@ class ModuleController
         redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $targetId]));
     }
 
+    private function vehicleTireActionFallbackUrl(string $moduleKey): string
+    {
+        return $moduleKey === 'mentenanta'
+            ? build_query_url(['page' => 'mentenanta', 'action' => 'axis_config'])
+            : build_query_url(['page' => 'vehicule']);
+    }
+
+    private function vehicleTireActionRedirectUrl(string $moduleKey, int $vehicleId): string
+    {
+        $returnTo = trim((string) ($_POST['return_to'] ?? ''));
+
+        if (($moduleKey === 'mentenanta' || $returnTo === 'axis_config') && $vehicleId > 0) {
+            $redirectParams = [
+                'page' => 'mentenanta',
+                'action' => 'axis_config',
+                'vehicle_id' => $vehicleId,
+            ];
+            $returnVehicleView = trim((string) ($_POST['return_vehicle_view'] ?? ''));
+            if (in_array($returnVehicleView, ['camion', 'ansamblu'], true)) {
+                $redirectParams['vehicle_view'] = $returnVehicleView;
+            }
+
+            $returnFilters = $this->readAxisVehicleFiltersFromInput($_POST, 'return_');
+            foreach (['capacitate_transport', 'mma'] as $filterKey) {
+                $filterValue = (string) ($returnFilters[$filterKey] ?? '');
+                if ($filterValue !== '') {
+                    $redirectParams[$filterKey] = $filterValue;
+                }
+            }
+
+            return build_query_url($redirectParams);
+        }
+
+        return $vehicleId > 0
+            ? build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId])
+            : build_query_url(['page' => 'vehicule']);
+    }
+
+    private function findVehicleForTireAction(int $vehicleId): ?array
+    {
+        $vehicleModule = $this->modules['vehicule'] ?? null;
+
+        return is_array($vehicleModule) && $vehicleId > 0
+            ? $this->moduleModel->findById($vehicleModule, $vehicleId)
+            : null;
+    }
+
     private function updateVehicleTireLayoutAction(string $moduleKey, array $module): void
     {
-        if ($moduleKey !== 'vehicule' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
-            redirect(build_query_url(['page' => 'vehicule']));
+        $fallbackUrl = $this->vehicleTireActionFallbackUrl($moduleKey);
+        if (!in_array($moduleKey, ['vehicule', 'mentenanta'], true) || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($fallbackUrl);
         }
 
         $vehicleId = (int) ($_POST['vehicle_id'] ?? 0);
+        $redirectUrl = $this->vehicleTireActionRedirectUrl($moduleKey, $vehicleId);
         if ($vehicleId <= 0) {
             flash_set('warning', 'Vehicul invalid.');
-            redirect(build_query_url(['page' => 'vehicule']));
+            redirect($fallbackUrl);
         }
 
-        ensure_csrf_or_redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
+        ensure_csrf_or_redirect($redirectUrl);
 
-        $vehicle = $this->moduleModel->findById($module, $vehicleId);
+        $vehicle = $this->findVehicleForTireAction($vehicleId);
         if ($vehicle === null) {
             flash_set('warning', 'Vehiculul nu a fost gasit.');
-            redirect(build_query_url(['page' => 'vehicule']));
+            redirect($fallbackUrl);
         }
 
         $vehicleType = (string) ($vehicle['tip_vehicul'] ?? 'autovehicul');
@@ -1468,22 +1800,24 @@ class ModuleController
 
     private function mountVehicleTireAction(string $moduleKey, array $module): void
     {
-        if ($moduleKey !== 'vehicule' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
-            redirect(build_query_url(['page' => 'vehicule']));
+        $fallbackUrl = $this->vehicleTireActionFallbackUrl($moduleKey);
+        if (!in_array($moduleKey, ['vehicule', 'mentenanta'], true) || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($fallbackUrl);
         }
 
         $vehicleId = (int) ($_POST['vehicle_id'] ?? 0);
-        ensure_csrf_or_redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
+        $redirectUrl = $this->vehicleTireActionRedirectUrl($moduleKey, $vehicleId);
+        ensure_csrf_or_redirect($redirectUrl);
 
         if ($vehicleId <= 0) {
             flash_set('warning', 'Vehicul invalid.');
-            redirect(build_query_url(['page' => 'vehicule']));
+            redirect($fallbackUrl);
         }
 
-        $vehicle = $this->moduleModel->findById($module, $vehicleId);
+        $vehicle = $this->findVehicleForTireAction($vehicleId);
         if ($vehicle === null) {
             flash_set('warning', 'Vehiculul nu a fost gasit.');
-            redirect(build_query_url(['page' => 'vehicule']));
+            redirect($fallbackUrl);
         }
 
         $tireId = (int) ($_POST['tire_id'] ?? 0);
@@ -1493,23 +1827,23 @@ class ModuleController
 
         if ($tireId <= 0 || $positionId <= 0) {
             flash_set('danger', 'Selecteaza anvelopa si pozitia pentru montaj.');
-            redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
+            redirect($redirectUrl);
         }
 
         if (!$this->isValidDate($mountDate)) {
             flash_set('danger', 'Data montaj nu este valida (format YYYY-MM-DD).');
-            redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
+            redirect($redirectUrl);
         }
 
         $tire = $this->tireModel->getTireById($tireId);
         if ($tire === null) {
             flash_set('danger', 'Anvelopa selectata nu exista.');
-            redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
+            redirect($redirectUrl);
         }
 
         if (!$this->tireModel->isTireCompatibleWithVehicleType($tire, (string) ($vehicle['tip_vehicul'] ?? ''))) {
             flash_set('danger', 'Anvelopa selectata nu este compatibila cu tipul acestui vehicul.');
-            redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
+            redirect($redirectUrl);
         }
 
         try {
@@ -1531,27 +1865,29 @@ class ModuleController
             flash_set('danger', $exception->getMessage());
         }
 
-        redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
+        redirect($redirectUrl);
     }
 
     private function unmountVehicleTireAction(string $moduleKey, array $module): void
     {
-        if ($moduleKey !== 'vehicule' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
-            redirect(build_query_url(['page' => 'vehicule']));
+        $fallbackUrl = $this->vehicleTireActionFallbackUrl($moduleKey);
+        if (!in_array($moduleKey, ['vehicule', 'mentenanta'], true) || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($fallbackUrl);
         }
 
         $vehicleId = (int) ($_POST['vehicle_id'] ?? 0);
-        ensure_csrf_or_redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
+        $redirectUrl = $this->vehicleTireActionRedirectUrl($moduleKey, $vehicleId);
+        ensure_csrf_or_redirect($redirectUrl);
 
         if ($vehicleId <= 0) {
             flash_set('warning', 'Vehicul invalid.');
-            redirect(build_query_url(['page' => 'vehicule']));
+            redirect($fallbackUrl);
         }
 
-        $vehicle = $this->moduleModel->findById($module, $vehicleId);
+        $vehicle = $this->findVehicleForTireAction($vehicleId);
         if ($vehicle === null) {
             flash_set('warning', 'Vehiculul nu a fost gasit.');
-            redirect(build_query_url(['page' => 'vehicule']));
+            redirect($fallbackUrl);
         }
 
         $allocationId = (int) ($_POST['allocation_id'] ?? 0);
@@ -1560,12 +1896,12 @@ class ModuleController
 
         if ($allocationId <= 0) {
             flash_set('danger', 'Selectia pentru demontare este invalida.');
-            redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
+            redirect($redirectUrl);
         }
 
         if (!$this->isValidDate($unmountDate)) {
             flash_set('danger', 'Data demontaj nu este valida (format YYYY-MM-DD).');
-            redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
+            redirect($redirectUrl);
         }
 
         if (!in_array($statusEnd, [TireModel::STATUS_IN_STOCK, TireModel::STATUS_SPARE, TireModel::STATUS_REMOVED, TireModel::STATUS_DAMAGED, TireModel::STATUS_MISSING, TireModel::STATUS_SCRAPPED], true)) {
@@ -1594,7 +1930,7 @@ class ModuleController
             flash_set('danger', $exception->getMessage());
         }
 
-        redirect(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId]));
+        redirect($redirectUrl);
     }
 
     private function moveMaintenanceTireAction(string $moduleKey, array $module): void
@@ -1608,9 +1944,34 @@ class ModuleController
         }
 
         $sourceVehicleId = (int) ($_POST['source_vehicle_id'] ?? $_POST['vehicle_id'] ?? 0);
-        $redirectUrl = $sourceVehicleId > 0 && $moduleKey === 'vehicule'
-            ? build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $sourceVehicleId])
-            : $this->maintenanceTireStockUrl();
+        $returnTo = trim((string) ($_POST['return_to'] ?? ''));
+        $returnVehicleId = (int) ($_POST['return_vehicle_id'] ?? 0);
+        $returnVehicleView = trim((string) ($_POST['return_vehicle_view'] ?? ''));
+        $returnFilters = $this->readAxisVehicleFiltersFromInput($_POST, 'return_');
+        if ($returnTo === 'axis_config') {
+            $redirectParams = [
+                'page' => 'mentenanta',
+                'action' => 'axis_config',
+            ];
+            if (in_array($returnVehicleView, ['camion', 'ansamblu'], true)) {
+                $redirectParams['vehicle_view'] = $returnVehicleView;
+            }
+            $axisVehicleId = $returnVehicleId > 0 ? $returnVehicleId : $sourceVehicleId;
+            if ($axisVehicleId > 0) {
+                $redirectParams['vehicle_id'] = $axisVehicleId;
+            }
+            foreach (['capacitate_transport', 'mma'] as $filterKey) {
+                $filterValue = (string) ($returnFilters[$filterKey] ?? '');
+                if ($filterValue !== '') {
+                    $redirectParams[$filterKey] = $filterValue;
+                }
+            }
+            $redirectUrl = build_query_url($redirectParams);
+        } else {
+            $redirectUrl = $sourceVehicleId > 0 && $moduleKey === 'vehicule'
+                ? build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $sourceVehicleId])
+                : $this->maintenanceTireStockUrl();
+        }
 
         ensure_csrf_or_redirect($redirectUrl);
 
@@ -1675,8 +2036,9 @@ class ModuleController
         }
 
         $vehicleId = (int) ($_POST['vehicle_id'] ?? 0);
-        $redirectUrl = $moduleKey === 'vehicule' && $vehicleId > 0
-            ? build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId])
+        $returnTo = trim((string) ($_POST['return_to'] ?? ''));
+        $redirectUrl = $vehicleId > 0 && ($moduleKey === 'vehicule' || $returnTo === 'axis_config')
+            ? $this->vehicleTireActionRedirectUrl($moduleKey, $vehicleId)
             : $this->maintenanceTireStockUrl();
 
         ensure_csrf_or_redirect($redirectUrl);
@@ -2717,6 +3079,11 @@ class ModuleController
             redirect($this->driverDocumentTypeConfigRedirectUrl());
         }
 
+        if ($this->documentModel->isDriverEmploymentContractDocumentType($documentType)) {
+            flash_set('danger', 'Contractul de munca se gestioneaza doar in Contabilitate personal.');
+            redirect($this->driverDocumentTypeConfigRedirectUrl());
+        }
+
         $now = date('Y-m-d H:i:s');
         try {
             $this->moduleModel->insertRecord('configurare_documente_obligatorii_soferi', [
@@ -3219,7 +3586,6 @@ class ModuleController
             }
             $viewData['vehicleCouplingContext'] = $this->buildVehicleCouplingContext($record);
             $viewData['record']['cuplaj_curent'] = (string) ($viewData['vehicleCouplingContext']['current_label'] ?? '-');
-            $viewData['vehicleTireContext'] = $this->buildVehicleTireManagementContext($viewData['record']);
 
             $activeCoupling = $viewData['vehicleCouplingContext']['active_coupling'] ?? null;
             if (is_array($activeCoupling)) {
@@ -3593,82 +3959,6 @@ class ModuleController
         return $options;
     }
 
-    private function buildVehicleKmBordMapForAlimentari(array $module): array
-    {
-        $vehicleField = $module['form_fields']['vehicle_id'] ?? null;
-        if (!is_array($vehicleField)) {
-            return [];
-        }
-
-        $source = $vehicleField['source'] ?? null;
-        if (!is_array($source)) {
-            return [];
-        }
-
-        $kmSource = $source;
-        $kmSource['label'] = 'COALESCE(km_bord, 0)';
-
-        try {
-            $rows = $this->moduleModel->getSelectOptions($kmSource);
-        } catch (Throwable $exception) {
-            error_log('[ModuleController][alimentari][km-bord] ' . $exception->getMessage());
-            return [];
-        }
-
-        $map = [];
-        foreach ($rows as $row) {
-            $vehicleId = isset($row['value']) ? (int) $row['value'] : 0;
-            if ($vehicleId <= 0) {
-                continue;
-            }
-
-            $map[(string) $vehicleId] = max(0, (int) ($row['label'] ?? 0));
-        }
-
-        return $map;
-    }
-
-    private function buildDriverVehicleMapForAlimentari(array $module): array
-    {
-        $driverField = $module['form_fields']['driver_id'] ?? null;
-        if (!is_array($driverField)) {
-            return [];
-        }
-
-        $source = $driverField['source'] ?? null;
-        if (!is_array($source)) {
-            return [];
-        }
-
-        $driverSource = $source;
-        $driverSource['label'] = 'id';
-
-        try {
-            $rows = $this->moduleModel->getSelectOptions($driverSource);
-        } catch (Throwable $exception) {
-            error_log('[ModuleController][alimentari][driver-vehicle-map] ' . $exception->getMessage());
-            return [];
-        }
-
-        $driverIds = [];
-        foreach ($rows as $row) {
-            $driverId = isset($row['value']) ? (int) $row['value'] : 0;
-            if ($driverId <= 0) {
-                continue;
-            }
-
-            $driverIds[$driverId] = $driverId;
-        }
-
-        $assignmentMap = $this->moduleModel->getDriverVehicleIdsMap(array_values($driverIds));
-        $map = [];
-        foreach ($assignmentMap as $driverId => $vehicleIds) {
-            $map[(string) $driverId] = array_values(array_filter(array_map('intval', (array) $vehicleIds)));
-        }
-
-        return $map;
-    }
-
     private function prepareDriverVehicleAssignmentsData(array &$data, array &$errors, array $input): array
     {
         $vehicleIds = $this->normalizeDriverVehicleIdsFromInput($input['vehicle_ids'] ?? []);
@@ -3709,33 +3999,6 @@ class ModuleController
         }
 
         return array_values($vehicleIds);
-    }
-
-    private function validateAlimentareDriverSelection(array $data, array &$errors): void
-    {
-        if (!isset($errors['vehicle_id'])) {
-            $vehicleId = (int) ($data['vehicle_id'] ?? 0);
-            if ($vehicleId > 0 && !$this->moduleModel->isVehicleEligibleForRefuel($vehicleId)) {
-                $errors['vehicle_id'] = 'Vehiculul selectat nu este eligibil pentru alimentare (inactiv sau semiremorca).';
-            }
-        }
-
-        if (isset($errors['vehicle_id']) || isset($errors['driver_id'])) {
-            return;
-        }
-
-        $vehicleId = (int) ($data['vehicle_id'] ?? 0);
-        $driverId = isset($data['driver_id']) && $data['driver_id'] !== null && $data['driver_id'] !== ''
-            ? (int) $data['driver_id']
-            : 0;
-
-        if ($vehicleId <= 0 || $driverId <= 0) {
-            return;
-        }
-
-        if (!$this->moduleModel->isDriverAssignedToVehicle($driverId, $vehicleId, true)) {
-            $errors['driver_id'] = 'Soferul selectat nu este alocat vehiculului ales.';
-        }
     }
 
     private function applyDynamicDocumentTypeOptions(string $moduleKey, array $module, array $input, ?int $recordId): array
@@ -4398,15 +4661,6 @@ class ModuleController
             return 'Structura bazei de date pentru Mentenanta nu este actualizata. Ruleaza scriptul database/update_mentenanta_invoice_and_suppliers.sql, apoi incearca din nou.';
         }
 
-        if ($moduleKey === 'alimentari'
-            && (
-                str_contains($exceptionMessage, 'km_alimentare')
-                || (($sqlState === '42S22' || str_contains($exceptionMessage, 'unknown column')) && str_contains($exceptionMessage, 'alimentari'))
-            )
-        ) {
-            return 'Structura bazei de date pentru campul Km alimentare nu este actualizata. Ruleaza scriptul database/update_alimentari_km_alimentare.sql, apoi incearca din nou.';
-        }
-
         if ($moduleKey === 'vehicule'
             && (
                 str_contains($exceptionMessage, 'km_revizie')
@@ -4555,97 +4809,6 @@ class ModuleController
         $vehicleId = (int) $vehicleId;
 
         return $vehicleId > 0 ? $vehicleId : null;
-    }
-
-    private function buildFuelConsumptionSummary(array $rows): ?array
-    {
-        if ($rows === []) {
-            return null;
-        }
-
-        $grouped = [];
-        foreach ($rows as $row) {
-            $vehicleId = (int) ($row['vehicle_id'] ?? 0);
-            if ($vehicleId <= 0) {
-                continue;
-            }
-
-            $grouped[$vehicleId][] = $row;
-        }
-
-        if ($grouped === []) {
-            return null;
-        }
-
-        $totalDistanceKm = 0.0;
-        $totalFuelLiters = 0.0;
-        $intervalCount = 0;
-        $vehicleCount = 0;
-
-        foreach ($grouped as $vehicleRows) {
-            usort($vehicleRows, static function (array $a, array $b): int {
-                $dateA = (string) ($a['data_alimentare'] ?? '');
-                $dateB = (string) ($b['data_alimentare'] ?? '');
-                if ($dateA !== $dateB) {
-                    return strcmp($dateA, $dateB);
-                }
-
-                return ((int) ($a['id'] ?? 0)) <=> ((int) ($b['id'] ?? 0));
-            });
-
-            $prevKm = null;
-            $hasValidIntervalForVehicle = false;
-
-            foreach ($vehicleRows as $row) {
-                $currentKmRaw = $row['km_alimentare'] ?? null;
-                if ($currentKmRaw === null || $currentKmRaw === '' || !is_numeric((string) $currentKmRaw)) {
-                    continue;
-                }
-
-                $currentKm = (float) $currentKmRaw;
-                if ($prevKm === null) {
-                    $prevKm = $currentKm;
-                    continue;
-                }
-
-                $distanceKm = $currentKm - $prevKm;
-                $prevKm = $currentKm;
-                if ($distanceKm <= 0) {
-                    continue;
-                }
-
-                $litersRaw = $row['litri'] ?? null;
-                if ($litersRaw === null || $litersRaw === '' || !is_numeric((string) $litersRaw)) {
-                    continue;
-                }
-
-                $liters = (float) $litersRaw;
-                if ($liters < 0) {
-                    continue;
-                }
-
-                $totalDistanceKm += $distanceKm;
-                $totalFuelLiters += $liters;
-                $intervalCount++;
-                $hasValidIntervalForVehicle = true;
-            }
-
-            if ($hasValidIntervalForVehicle) {
-                $vehicleCount++;
-            }
-        }
-
-        if ($totalDistanceKm <= 0 || $intervalCount === 0) {
-            return null;
-        }
-
-        return [
-            'average_l_per_100km' => round(($totalFuelLiters / $totalDistanceKm) * 100, 2),
-            'total_distance_km' => round($totalDistanceKm, 2),
-            'total_fuel_liters' => round($totalFuelLiters, 2),
-            'interval_count' => $intervalCount,
-            'vehicle_count' => $vehicleCount,
-        ];
     }
 
     private function storeUploadedDocumentFile(?array $file): array

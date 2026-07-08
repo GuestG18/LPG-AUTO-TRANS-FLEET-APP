@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 class StaffAccountancyModel extends BaseModel
 {
+    private const EMPLOYMENT_CONTRACT_DOCUMENT = 'Contract de muncă';
+
     private const DEFAULT_DOCUMENT_TYPES = [
         'Contract de muncă',
         'Act adițional',
@@ -13,6 +15,13 @@ class StaffAccountancyModel extends BaseModel
         'Certificat profesional',
         'Alte documente',
     ];
+
+    public function __construct(PDO $db)
+    {
+        parent::__construct($db);
+        $this->ensureEmploymentEndSchema();
+        $this->ensureEmploymentContractRequirements();
+    }
 
     public function getSummary(): array
     {
@@ -197,6 +206,7 @@ class StaffAccountancyModel extends BaseModel
 
         try {
             $typeId = $this->createStaffType($data, $userId);
+            $this->addRequirement($typeId, self::EMPLOYMENT_CONTRACT_DOCUMENT, false, 30);
             foreach ($requirements as $requirement) {
                 $documentType = trim((string) ($requirement['document_type'] ?? ''));
                 if ($documentType === '') {
@@ -307,6 +317,11 @@ class StaffAccountancyModel extends BaseModel
         if ($documentType === '') {
             return false;
         }
+        if ($this->isEmploymentContractDocument($documentType)) {
+            $documentType = self::EMPLOYMENT_CONTRACT_DOCUMENT;
+            $requiresExpiry = false;
+            $warningDays = 30;
+        }
 
         $now = date('Y-m-d H:i:s');
         $stmt = $this->db->prepare('
@@ -354,6 +369,9 @@ class StaffAccountancyModel extends BaseModel
 
         if (!$row) {
             return null;
+        }
+        if ($this->isEmploymentContractDocument((string) ($row['document_type'] ?? ''))) {
+            throw new InvalidArgumentException('Contractul de angajare este obligatoriu pentru fiecare tip de personal si nu poate fi eliminat.');
         }
 
         $deleteStmt = $this->db->prepare('DELETE FROM staff_document_requirements WHERE id = :id');
@@ -524,6 +542,59 @@ class StaffAccountancyModel extends BaseModel
         }
 
         return $ok;
+    }
+
+    public function endEmployment(string $subjectType, int $subjectId, string $endDate, ?string $notes, ?int $userId): bool
+    {
+        if ($subjectType === 'driver') {
+            $existing = $this->findDriver($subjectId);
+            if ($existing === null) {
+                return false;
+            }
+
+            $this->assertEndDateAfterHireDate($existing, $endDate);
+            $stmt = $this->db->prepare('
+                UPDATE soferi
+                SET status = "inactiv",
+                    data_incetare = :data_incetare,
+                    observatii = :observatii,
+                    updated_at = :updated_at
+                WHERE id = :id
+            ');
+            $this->bindParams($stmt, [
+                ':data_incetare' => $endDate,
+                ':observatii' => $this->appendEmploymentEndNote($existing['observatii'] ?? null, $endDate, $notes),
+                ':updated_at' => date('Y-m-d H:i:s'),
+                ':id' => $subjectId,
+            ]);
+
+            return $stmt->execute();
+        }
+
+        $existing = $this->findDirectStaff($subjectId);
+        if ($existing === null) {
+            return false;
+        }
+
+        $this->assertEndDateAfterHireDate($existing, $endDate);
+        $stmt = $this->db->prepare('
+            UPDATE staff_members
+            SET status = "inactiv",
+                data_incetare = :data_incetare,
+                observatii = :observatii,
+                updated_by = :updated_by,
+                updated_at = :updated_at
+            WHERE id = :id
+        ');
+        $this->bindParams($stmt, [
+            ':data_incetare' => $endDate,
+            ':observatii' => $this->appendEmploymentEndNote($existing['observatii'] ?? null, $endDate, $notes),
+            ':updated_by' => $userId,
+            ':updated_at' => date('Y-m-d H:i:s'),
+            ':id' => $subjectId,
+        ]);
+
+        return $stmt->execute();
     }
 
     public function updateSalary(string $subjectType, int $subjectId, float $salary, string $effectiveDate, ?string $notes, ?int $userId): bool
@@ -786,6 +857,11 @@ class StaffAccountancyModel extends BaseModel
                 "Șofer" AS functie,
                 s.salariu AS salariu,
                 COALESCE(s.data_angajare, DATE(s.created_at)) AS data_angajare,
+                s.data_incetare AS data_incetare,
+                GREATEST(0, DATEDIFF(
+                    COALESCE(s.data_incetare, CASE WHEN s.status = "inactiv" THEN DATE(s.updated_at) ELSE CURDATE() END),
+                    COALESCE(s.data_angajare, DATE(s.created_at))
+                ) + 1) AS active_days,
                 s.status AS status,
                 CASE
                     WHEN v.id IS NULL THEN "-"
@@ -816,7 +892,12 @@ class StaffAccountancyModel extends BaseModel
                 sm.email AS email,
                 sm.functie AS functie,
                 sm.salariu AS salariu,
-                sm.data_angajare AS data_angajare,
+                COALESCE(sm.data_angajare, DATE(sm.created_at)) AS data_angajare,
+                sm.data_incetare AS data_incetare,
+                GREATEST(0, DATEDIFF(
+                    COALESCE(sm.data_incetare, CASE WHEN sm.status = "inactiv" THEN DATE(sm.updated_at) ELSE CURDATE() END),
+                    COALESCE(sm.data_angajare, DATE(sm.created_at))
+                ) + 1) AS active_days,
                 sm.status AS status,
                 "-" AS vehicle_label,
                 sm.observatii AS observatii,
@@ -908,6 +989,8 @@ class StaffAccountancyModel extends BaseModel
             'telefon' => 'staff.telefon',
             'salariu' => 'staff.salariu',
             'data_angajare' => 'staff.data_angajare',
+            'data_incetare' => 'staff.data_incetare',
+            'active_days' => 'staff.active_days',
             'documente' => 'staff.document_count',
             'status' => 'staff.status',
             'updated_at' => 'staff.updated_at',
@@ -1174,6 +1257,10 @@ class StaffAccountancyModel extends BaseModel
 
     private function upsertDriverRequiredDocument(string $documentType, bool $requiresExpiry): void
     {
+        if ($this->isEmploymentContractDocument($documentType)) {
+            return;
+        }
+
         $stmt = $this->db->prepare('
             INSERT INTO configurare_documente_obligatorii_soferi (
                 document_type, requires_expiry, created_at, updated_at
@@ -1189,6 +1276,142 @@ class StaffAccountancyModel extends BaseModel
         $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
         $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
         $stmt->execute();
+    }
+
+    private function deleteDriverEmploymentContractRequirement(): void
+    {
+        $stmt = $this->db->prepare('
+            DELETE FROM configurare_documente_obligatorii_soferi
+            WHERE document_type IN (:document_type, :document_type_ascii, :document_type_legacy)
+        ');
+        $stmt->execute([
+            ':document_type' => self::EMPLOYMENT_CONTRACT_DOCUMENT,
+            ':document_type_ascii' => 'Contract de munca',
+            ':document_type_legacy' => 'Contract de angajare',
+        ]);
+    }
+
+    private function ensureEmploymentEndSchema(): void
+    {
+        static $ensured = false;
+        if ($ensured) {
+            return;
+        }
+
+        if ($this->tableExists('soferi') && !$this->columnExists('soferi', 'data_incetare')) {
+            $this->execSchemaChangeIgnoringDuplicateColumn('ALTER TABLE soferi ADD COLUMN data_incetare DATE NULL AFTER data_angajare');
+        }
+
+        if ($this->tableExists('staff_members') && !$this->columnExists('staff_members', 'data_incetare')) {
+            $this->execSchemaChangeIgnoringDuplicateColumn('ALTER TABLE staff_members ADD COLUMN data_incetare DATE NULL AFTER data_angajare');
+        }
+
+        $ensured = true;
+    }
+
+    private function ensureEmploymentContractRequirements(): void
+    {
+        static $ensured = false;
+        if ($ensured) {
+            return;
+        }
+        if (!$this->tableExists('staff_types') || !$this->tableExists('staff_document_requirements')) {
+            return;
+        }
+
+        $stmt = $this->db->prepare('
+            INSERT INTO staff_document_requirements (
+                staff_type_id, document_type, requires_expiry, warning_days, created_at, updated_at
+            )
+            SELECT st.id, :document_type_insert, 0, 30, NOW(), NOW()
+            FROM staff_types st
+            ON DUPLICATE KEY UPDATE
+                requires_expiry = 0
+        ');
+        $stmt->execute([
+            ':document_type_insert' => self::EMPLOYMENT_CONTRACT_DOCUMENT,
+        ]);
+
+        if ($this->tableExists('configurare_documente_obligatorii_soferi')) {
+            $this->deleteDriverEmploymentContractRequirement();
+        }
+        $ensured = true;
+    }
+
+    private function assertEndDateAfterHireDate(array $row, string $endDate): void
+    {
+        $hireDate = $this->effectiveHireDate($row);
+        if ($hireDate !== '' && $endDate < $hireDate) {
+            throw new InvalidArgumentException('Data incetarii nu poate fi inainte de data angajarii.');
+        }
+    }
+
+    private function effectiveHireDate(array $row): string
+    {
+        return trim((string) ($row['data_angajare'] ?? ''));
+    }
+
+    private function appendEmploymentEndNote(mixed $existingNotes, string $endDate, ?string $notes): string
+    {
+        $existing = trim((string) ($existingNotes ?? ''));
+        $line = 'Incetare activitate: ' . $endDate . '.';
+        if ($notes !== null && trim($notes) !== '') {
+            $line .= ' ' . trim($notes);
+        }
+
+        return $existing !== '' ? $existing . "\n" . $line : $line;
+    }
+
+    private function isEmploymentContractDocument(string $documentType): bool
+    {
+        $normalized = $this->normalizeDocumentTypeKey($documentType);
+
+        return in_array($normalized, ['contractdemunca', 'contractdeangajare'], true);
+    }
+
+    private function normalizeDocumentTypeKey(string $documentType): string
+    {
+        $ascii = function_exists('iconv') ? @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $documentType) : false;
+        $base = is_string($ascii) && trim($ascii) !== '' ? $ascii : $documentType;
+        return (string) preg_replace('/[^a-z0-9]+/', '', strtolower($base));
+    }
+
+    private function tableExists(string $table): bool
+    {
+        $stmt = $this->db->prepare('
+            SELECT COUNT(*)
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+        ');
+        $stmt->execute([':table_name' => $table]);
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    private function columnExists(string $table, string $column): bool
+    {
+        $stmt = $this->db->prepare('
+            SELECT COUNT(*)
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+              AND COLUMN_NAME = :column_name
+        ');
+        $stmt->execute([':table_name' => $table, ':column_name' => $column]);
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    private function execSchemaChangeIgnoringDuplicateColumn(string $sql): void
+    {
+        try {
+            $this->db->exec($sql);
+        } catch (PDOException $exception) {
+            if ((int) ($exception->errorInfo[1] ?? 0) !== 1060) {
+                throw $exception;
+            }
+        }
     }
 
     private function normalizeCategory(string $category): string

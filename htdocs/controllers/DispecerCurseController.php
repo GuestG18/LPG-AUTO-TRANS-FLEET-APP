@@ -60,6 +60,11 @@ class DispecerCurseController
         return $types;
     }
 
+    private function expenseCategories(): array
+    {
+        return $this->model->getExpenseCategories(true);
+    }
+
     public function handle(string $action): void
     {
         switch ($action) {
@@ -243,6 +248,7 @@ class DispecerCurseController
             'transportTypes' => self::TRANSPORT_TYPES,
             'expenseTypes' => self::EXPENSE_TYPES,
             'expenseEntryTypes' => $this->expenseEntryTypes(),
+            'expenseCategories' => $this->expenseCategories(),
             'raceVehicles' => $raceVehicles,
             'filterVehicles' => $filterVehicles,
             'vehicleGarageMap' => $vehicleGarageMap,
@@ -347,6 +353,7 @@ class DispecerCurseController
                 $expenseFormData = array_merge($expenseFormData, [
                     'expense_id' => (int) $expense['id'],
                     'tip_cheltuiala' => (string) ($expense['tip_cheltuiala'] ?? ''),
+                    'categorie_id' => (string) ($expense['categorie_id'] ?? ''),
                     'refacturare_enabled' => trim((string) ($expense['refacturare_tip_cheltuiala'] ?? '')) !== '' ? '1' : '0',
                     'refacturare_tip_cheltuiala' => (string) ($expense['refacturare_tip_cheltuiala'] ?? ''),
                     'refacturare_suma' => (string) ($expense['refacturare_suma'] ?? ''),
@@ -401,6 +408,7 @@ class DispecerCurseController
             'transportTypes' => self::TRANSPORT_TYPES,
             'expenseTypes' => self::EXPENSE_TYPES,
             'expenseEntryTypes' => $this->expenseEntryTypes(),
+            'expenseCategories' => $this->expenseCategories(),
             'vehicles' => $this->model->getVehicleOptions(),
             'vehicleGarageMap' => $vehicleGarageMap,
             'loadLocations' => $this->model->getLoadLocations(true),
@@ -629,6 +637,7 @@ class DispecerCurseController
                 $this->model->updateExpense($expenseId, $data);
             } else {
                 $data['cursa_id'] = $raceId;
+                $data['added_by'] = $this->currentUserId();
                 $data['created_at'] = $now;
                 $data['updated_at'] = $now;
                 $expenseId = $this->model->createExpense($data);
@@ -3094,6 +3103,7 @@ class DispecerCurseController
         return [
             'expense_id' => '',
             'tip_cheltuiala' => '',
+            'categorie_id' => '',
             'refacturare_enabled' => '0',
             'refacturare_tip_cheltuiala' => '',
             'refacturare_suma' => '',
@@ -3135,6 +3145,7 @@ class DispecerCurseController
         $base = $this->defaultExpenseFormData();
         $defaultItem = [
             'tip_cheltuiala' => (string) ($base['tip_cheltuiala'] ?? ''),
+            'categorie_id' => (string) ($base['categorie_id'] ?? ''),
             'refacturare_enabled' => (string) ($base['refacturare_enabled'] ?? '0'),
             'refacturare_tip_cheltuiala' => (string) ($base['refacturare_tip_cheltuiala'] ?? ''),
             'refacturare_suma' => (string) ($base['refacturare_suma'] ?? ''),
@@ -3182,6 +3193,7 @@ class DispecerCurseController
 
                 $values['items'][] = [
                     'tip_cheltuiala' => trim((string) ($rawItem['tip_cheltuiala'] ?? '')),
+                    'categorie_id' => trim((string) ($rawItem['categorie_id'] ?? '')),
                     'refacturare_enabled' => isset($rawItem['refacturare_enabled']) && (string) $rawItem['refacturare_enabled'] === '1' ? '1' : '0',
                     'refacturare_tip_cheltuiala' => trim((string) ($rawItem['refacturare_tip_cheltuiala'] ?? '')),
                     'refacturare_suma' => trim((string) ($rawItem['refacturare_suma'] ?? '')),
@@ -3264,6 +3276,7 @@ class DispecerCurseController
             $mappedInput = [
                 'expense_id' => '',
                 'tip_cheltuiala' => trim((string) ($rawItem['tip_cheltuiala'] ?? '')),
+                'categorie_id' => trim((string) ($rawItem['categorie_id'] ?? '')),
                 'refacturare_enabled' => isset($rawItem['refacturare_enabled']) && (string) $rawItem['refacturare_enabled'] === '1' ? '1' : '0',
                 'refacturare_tip_cheltuiala' => trim((string) ($rawItem['refacturare_tip_cheltuiala'] ?? '')),
                 'refacturare_suma' => trim((string) ($rawItem['refacturare_suma'] ?? '')),
@@ -3303,7 +3316,8 @@ class DispecerCurseController
                 || $mappedInput['refacturare_port_pret'] !== ''
                 || $mappedInput['refacturare_trece_bucati'] !== ''
                 || $mappedInput['refacturare_trece_pret'] !== ''
-                || $mappedInput['tip_cheltuiala'] !== '';
+                || $mappedInput['tip_cheltuiala'] !== ''
+                || $mappedInput['categorie_id'] !== '';
 
             if (!$hasMeaningfulInput) {
                 continue;
@@ -3312,6 +3326,7 @@ class DispecerCurseController
             [$expenseData, $expenseErrors, $expenseOld] = $this->validateExpenseInput($mappedInput);
             $normalizedOldItem = [
                 'tip_cheltuiala' => (string) ($expenseOld['tip_cheltuiala'] ?? $mappedInput['tip_cheltuiala']),
+                'categorie_id' => (string) ($expenseOld['categorie_id'] ?? $mappedInput['categorie_id']),
                 'refacturare_enabled' => (string) ($expenseOld['refacturare_enabled'] ?? $mappedInput['refacturare_enabled']),
                 'refacturare_tip_cheltuiala' => (string) ($expenseOld['refacturare_tip_cheltuiala'] ?? $mappedInput['refacturare_tip_cheltuiala']),
                 'suma' => (string) ($expenseOld['suma'] ?? $mappedInput['suma']),
@@ -3559,10 +3574,13 @@ class DispecerCurseController
             $driver = $this->model->getDriverById($driverId);
             if ($driver === null) {
                 $errors['driver_id'] = 'Soferul selectat nu exista.';
-            } elseif ((int) ($driver['vehicle_id'] ?? 0) <= 0) {
-                $errors['driver_id'] = 'Soferul selectat nu este alocat unui vehicul.';
-            } elseif ($vehicleId > 0 && (int) ($driver['vehicle_id'] ?? 0) !== $vehicleId) {
-                $errors['driver_id'] = 'Soferul selectat nu este asignat vehiculului ales.';
+            } else {
+                $driverAssignment = $this->model->getDriverVehicleAssignmentStatus($driverId, $vehicleId);
+                if ((int) ($driverAssignment['assignment_count'] ?? 0) <= 0) {
+                    $errors['driver_id'] = 'Soferul selectat nu este alocat unui vehicul.';
+                } elseif ($vehicleId > 0 && empty($driverAssignment['assigned_to_vehicle'])) {
+                    $errors['driver_id'] = 'Soferul selectat nu este asignat vehiculului ales.';
+                }
             }
         }
 
@@ -4379,13 +4397,41 @@ class DispecerCurseController
         $submitIntent = trim((string) ($input['submit_intent'] ?? 'expense'));
         $isRefacturareOnlySubmit = $submitIntent === 'refacturare' && (int) ($input['expense_id'] ?? 0) <= 0;
 
-        $type = trim((string) ($input['tip_cheltuiala'] ?? ''));
-        if ($type === '') {
+        $categorySelection = trim((string) ($input['categorie_id'] ?? ''));
+        $typeInput = trim((string) ($input['tip_cheltuiala'] ?? ''));
+        if ($categorySelection === '') {
+            $categorySelection = $typeInput;
+        }
+
+        $expenseCategory = null;
+        $categoryId = null;
+        $type = $typeInput;
+        if ($categorySelection === '') {
             $errors['tip_cheltuiala'] = 'Selecteaza tipul cheltuielii.';
-        } elseif ($type === self::FUEL_EXPENSE_TYPE) {
+            $errors['categorie_id'] = 'Selecteaza tipul cheltuielii.';
+        } else {
+            $expenseCategory = $this->model->resolveExpenseCategorySelection($categorySelection, true);
+            if ($expenseCategory !== null) {
+                $categoryId = (int) ($expenseCategory['id'] ?? 0);
+                $type = $this->model->legacyExpenseTypeForCategory($expenseCategory);
+            }
+        }
+
+        if ($type === self::FUEL_EXPENSE_TYPE) {
             $errors['tip_cheltuiala'] = 'Motorina se adauga separat din modulul Alimentari.';
+            $errors['categorie_id'] = 'Motorina se adauga separat din modulul Alimentari.';
         } elseif (!array_key_exists($type, self::EXPENSE_TYPES)) {
             $errors['tip_cheltuiala'] = 'Tipul cheltuielii este invalid.';
+            $errors['categorie_id'] = 'Tipul cheltuielii este invalid.';
+        } elseif ($expenseCategory === null && $type !== '') {
+            $expenseCategory = $this->model->resolveExpenseCategorySelection($type, true);
+            if ($expenseCategory === null) {
+                $errors['tip_cheltuiala'] = 'Tipul cheltuielii este invalid sau inactiv.';
+                $errors['categorie_id'] = 'Tipul cheltuielii este invalid sau inactiv.';
+            } else {
+                $categoryId = (int) ($expenseCategory['id'] ?? 0);
+                $type = $this->model->legacyExpenseTypeForCategory($expenseCategory);
+            }
         }
 
         $refacturareEnabled = isset($input['refacturare_enabled']) && (string) $input['refacturare_enabled'] === '1';
@@ -4589,6 +4635,7 @@ class DispecerCurseController
         $old = [
             'expense_id' => trim((string) ($input['expense_id'] ?? '')),
             'tip_cheltuiala' => $type,
+            'categorie_id' => $categoryId !== null ? (string) $categoryId : $categorySelection,
             'refacturare_enabled' => $refacturareEnabled ? '1' : '0',
             'refacturare_tip_cheltuiala' => $refacturareType,
             'refacturare_suma' => $refacturareAmountRaw,
@@ -4617,6 +4664,7 @@ class DispecerCurseController
 
         return [[
             'tip_cheltuiala' => $type,
+            'categorie_id' => $categoryId,
             'refacturare_tip_cheltuiala' => $refacturareType !== '' ? $refacturareType : null,
             'refacturare_detalii' => $refacturareDetailsJson,
             'refacturare_suma' => $refacturareAmount !== null ? round((float) $refacturareAmount, 2) : null,

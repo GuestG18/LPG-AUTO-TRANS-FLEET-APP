@@ -36,6 +36,7 @@ class DriverActivityHistoryModel extends BaseModel
     {
         parent::__construct($db);
         $this->ensureDriverVehicleAssignmentsSchema();
+        $this->ensureEmploymentEndSchema();
     }
 
     public function getDefaultDriverId(): int
@@ -137,7 +138,13 @@ class DriverActivityHistoryModel extends BaseModel
     private function getDriver(int $driverId): ?array
     {
         $stmt = $this->db->prepare("
-            SELECT s.*
+            SELECT
+                s.*,
+                COALESCE(s.data_angajare, DATE(s.created_at)) AS data_angajare_calculata,
+                GREATEST(0, DATEDIFF(
+                    COALESCE(s.data_incetare, CASE WHEN s.status = 'inactiv' THEN DATE(s.updated_at) ELSE CURDATE() END),
+                    COALESCE(s.data_angajare, DATE(s.created_at))
+                ) + 1) AS active_days
             FROM soferi s
             WHERE s.id = :id
             LIMIT 1
@@ -1287,6 +1294,35 @@ class DriverActivityHistoryModel extends BaseModel
         }
 
         return '';
+    }
+
+    private function ensureEmploymentEndSchema(): void
+    {
+        static $ensured = false;
+        if ($ensured) {
+            return;
+        }
+
+        if (!$this->columnExists('soferi', 'data_incetare')) {
+            $this->execSchemaChangeIgnoringDuplicateColumn('ALTER TABLE soferi ADD COLUMN data_incetare DATE NULL AFTER data_angajare');
+        }
+
+        if ($this->tableExists('staff_members') && !$this->columnExists('staff_members', 'data_incetare')) {
+            $this->execSchemaChangeIgnoringDuplicateColumn('ALTER TABLE staff_members ADD COLUMN data_incetare DATE NULL AFTER data_angajare');
+        }
+
+        $ensured = true;
+    }
+
+    private function execSchemaChangeIgnoringDuplicateColumn(string $sql): void
+    {
+        try {
+            $this->db->exec($sql);
+        } catch (PDOException $exception) {
+            if ((int) ($exception->errorInfo[1] ?? 0) !== 1060) {
+                throw $exception;
+            }
+        }
     }
 
     private function tableExists(string $table): bool

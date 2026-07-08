@@ -15,6 +15,7 @@ $vehicleTireContext = $vehicleTireContext ?? null;
     <div class="d-flex gap-2">
         <?php if ($moduleKey === 'vehicule'): ?>
             <a class="btn btn-primary" href="<?= e(build_query_url(['page' => 'stare_tehnica', 'vehicle_id' => (int) $record['id']])) ?>">Stare tehnic&#259;</a>
+            <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'axis_config', 'vehicle_id' => (int) $record['id']])) ?>">Configura&#539;ie Axe</a>
         <?php endif; ?>
         <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'edit', 'id' => (int) $record['id']])) ?>">Editează</a>
         <a class="btn btn-outline-secondary" href="<?= e($backUrl) ?>">Înapoi</a>
@@ -217,7 +218,7 @@ $vehicleTireContext = $vehicleTireContext ?? null;
                 return 'Directie';
             }
 
-            if ($layoutValue === '6x2' && $axleNo === 2) {
+            if ($layoutValue === '6x2' && $axleNo === 3) {
                 return 'Stanga / Dreapta';
             }
 
@@ -227,7 +228,7 @@ $vehicleTireContext = $vehicleTireContext ?? null;
 
             if (
                 ($layoutValue === '4x2' && $axleNo === 2)
-                || ($layoutValue === '6x2' && $axleNo === 3)
+                || ($layoutValue === '6x2' && $axleNo === 2)
                 || ($layoutValue === '8x2' && $axleNo === 4)
             ) {
                 return 'Tractiune';
@@ -370,8 +371,10 @@ $vehicleTireContext = $vehicleTireContext ?? null;
     $layoutSummary = trim((string) $layoutCurrentValue) !== ''
         ? (string) $layoutCurrentValue . ' (' . (string) $expectedTires . ' anvelope)'
         : '-';
+    $showVehicleTireAxisConfig = (bool) ($showVehicleTireAxisConfig ?? false);
     ?>
 
+    <?php if ($showVehicleTireAxisConfig): ?>
     <style>
     .vehicle-tire-summary-grid {
         display: grid;
@@ -1256,6 +1259,7 @@ $vehicleTireContext = $vehicleTireContext ?? null;
             <?php endif; ?>
         </div>
     </div>
+    <?php endif; ?>
 
     <div class="card border-0 shadow-sm mt-4">
         <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">

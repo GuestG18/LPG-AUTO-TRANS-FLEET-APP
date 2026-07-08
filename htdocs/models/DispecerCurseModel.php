@@ -18,7 +18,15 @@ class DispecerCurseModel extends BaseModel
     private bool $raceCreatedByColumnEnsured = false;
     private bool $raceExpenseStatusColumnEnsured = false;
     private bool $expenseRefacturareColumnEnsured = false;
+    private bool $expenseCategorySchemaEnsured = false;
     private bool $transportBeneficiaryColumnsEnsured = false;
+
+    private const DEFAULT_EXPENSE_CATEGORIES = [
+        'taxe_drum' => 'Taxe drum',
+        'diurna' => 'Diurna',
+        'service' => 'Reparatii',
+        'alte' => 'Alte cheltuieli',
+    ];
 
     public function getVehicleOptions(bool $onlyActive = false): array
     {
@@ -2020,6 +2028,131 @@ class DispecerCurseModel extends BaseModel
         $this->expenseRefacturareColumnEnsured = true;
     }
 
+    public function ensureExpenseCategorySchema(): void
+    {
+        if ($this->expenseCategorySchemaEnsured) {
+            return;
+        }
+
+        $this->ensureExpenseRefacturareColumn();
+
+        $this->db->exec("
+            CREATE TABLE IF NOT EXISTS categorii_cheltuieli_curse (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                nume VARCHAR(150) NOT NULL,
+                descriere TEXT NULL,
+                activ TINYINT(1) NOT NULL DEFAULT 1,
+                legacy_key VARCHAR(50) NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NULL,
+                UNIQUE KEY uk_categorii_cheltuieli_curse_nume (nume),
+                UNIQUE KEY uk_categorii_cheltuieli_curse_legacy (legacy_key),
+                INDEX idx_categorii_cheltuieli_curse_activ (activ)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        $categoryColumnCheck = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'categorii_cheltuieli_curse'
+              AND COLUMN_NAME = :column_name
+        ");
+
+        $categoryColumnCheck->bindValue(':column_name', 'legacy_key', PDO::PARAM_STR);
+        $categoryColumnCheck->execute();
+        if ((int) $categoryColumnCheck->fetchColumn() === 0) {
+            $this->db->exec("ALTER TABLE categorii_cheltuieli_curse ADD COLUMN legacy_key VARCHAR(50) NULL AFTER activ");
+        }
+
+        $categoryColumnCheck->bindValue(':column_name', 'created_at', PDO::PARAM_STR);
+        $categoryColumnCheck->execute();
+        if ((int) $categoryColumnCheck->fetchColumn() === 0) {
+            $this->db->exec("ALTER TABLE categorii_cheltuieli_curse ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER legacy_key");
+        }
+
+        $categoryColumnCheck->bindValue(':column_name', 'updated_at', PDO::PARAM_STR);
+        $categoryColumnCheck->execute();
+        if ((int) $categoryColumnCheck->fetchColumn() === 0) {
+            $this->db->exec("ALTER TABLE categorii_cheltuieli_curse ADD COLUMN updated_at DATETIME NULL AFTER created_at");
+        }
+
+        $this->ensureIndexExists('categorii_cheltuieli_curse', 'idx_categorii_cheltuieli_curse_activ', 'ALTER TABLE categorii_cheltuieli_curse ADD INDEX idx_categorii_cheltuieli_curse_activ (activ)');
+        $this->ensureIndexExists('categorii_cheltuieli_curse', 'uk_categorii_cheltuieli_curse_nume', 'ALTER TABLE categorii_cheltuieli_curse ADD UNIQUE KEY uk_categorii_cheltuieli_curse_nume (nume)');
+        $this->ensureIndexExists('categorii_cheltuieli_curse', 'uk_categorii_cheltuieli_curse_legacy', 'ALTER TABLE categorii_cheltuieli_curse ADD UNIQUE KEY uk_categorii_cheltuieli_curse_legacy (legacy_key)');
+
+        $expenseColumnCheck = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_cheltuieli'
+              AND COLUMN_NAME = :column_name
+        ");
+
+        $expenseColumnCheck->bindValue(':column_name', 'categorie_id', PDO::PARAM_STR);
+        $expenseColumnCheck->execute();
+        if ((int) $expenseColumnCheck->fetchColumn() === 0) {
+            $this->db->exec("ALTER TABLE curse_cheltuieli ADD COLUMN categorie_id INT UNSIGNED NULL AFTER tip_cheltuiala");
+        }
+
+        $expenseColumnCheck->bindValue(':column_name', 'added_by', PDO::PARAM_STR);
+        $expenseColumnCheck->execute();
+        if ((int) $expenseColumnCheck->fetchColumn() === 0) {
+            $this->db->exec("ALTER TABLE curse_cheltuieli ADD COLUMN added_by INT UNSIGNED NULL AFTER observatii");
+        }
+
+        $this->ensureIndexExists('curse_cheltuieli', 'idx_curse_cheltuieli_categorie', 'ALTER TABLE curse_cheltuieli ADD INDEX idx_curse_cheltuieli_categorie (categorie_id)');
+        $this->ensureIndexExists('curse_cheltuieli', 'idx_curse_cheltuieli_added_by', 'ALTER TABLE curse_cheltuieli ADD INDEX idx_curse_cheltuieli_added_by (added_by)');
+
+        $now = date('Y-m-d H:i:s');
+        $defaultStmt = $this->db->prepare("
+            INSERT INTO categorii_cheltuieli_curse (nume, descriere, activ, legacy_key, created_at, updated_at)
+            VALUES (:nume, :descriere, 1, :legacy_key, :created_at, :updated_at)
+            ON DUPLICATE KEY UPDATE
+                nume = VALUES(nume),
+                activ = 1,
+                legacy_key = VALUES(legacy_key),
+                updated_at = VALUES(updated_at)
+        ");
+
+        foreach (self::DEFAULT_EXPENSE_CATEGORIES as $legacyKey => $label) {
+            $defaultStmt->bindValue(':nume', $label, PDO::PARAM_STR);
+            $defaultStmt->bindValue(':descriere', 'Categorie implicita pentru cheltuieli curse.', PDO::PARAM_STR);
+            $defaultStmt->bindValue(':legacy_key', $legacyKey, PDO::PARAM_STR);
+            $defaultStmt->bindValue(':created_at', $now, PDO::PARAM_STR);
+            $defaultStmt->bindValue(':updated_at', $now, PDO::PARAM_STR);
+            $defaultStmt->execute();
+        }
+
+        $this->db->exec("
+            UPDATE curse_cheltuieli e
+            INNER JOIN categorii_cheltuieli_curse c ON c.legacy_key = e.tip_cheltuiala
+            SET e.categorie_id = c.id
+            WHERE e.categorie_id IS NULL
+              AND e.tip_cheltuiala <> 'motorina'
+        ");
+
+        $this->expenseCategorySchemaEnsured = true;
+    }
+
+    private function ensureIndexExists(string $tableName, string $indexName, string $alterSql): void
+    {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+              AND INDEX_NAME = :index_name
+        ");
+        $stmt->bindValue(':table_name', $tableName, PDO::PARAM_STR);
+        $stmt->bindValue(':index_name', $indexName, PDO::PARAM_STR);
+        $stmt->execute();
+
+        if ((int) $stmt->fetchColumn() === 0) {
+            $this->db->exec($alterSql);
+        }
+    }
+
     private function normalizeRouteVehicleIds(array $vehicleIds): array
     {
         $normalized = [];
@@ -2803,6 +2936,371 @@ class DispecerCurseModel extends BaseModel
         return $stmt->fetchAll();
     }
 
+    public function getExpenseCategories(bool $onlyActive = false): array
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $sql = "
+            SELECT
+                c.id,
+                c.nume,
+                c.descriere,
+                c.activ,
+                c.legacy_key,
+                c.created_at,
+                c.updated_at,
+                COALESCE(u.usage_count, 0) AS usage_count
+            FROM categorii_cheltuieli_curse c
+            LEFT JOIN (
+                SELECT categorie_id, COUNT(*) AS usage_count
+                FROM curse_cheltuieli
+                WHERE categorie_id IS NOT NULL
+                GROUP BY categorie_id
+            ) u ON u.categorie_id = c.id
+            " . ($onlyActive ? "WHERE c.activ = 1" : "") . "
+            ORDER BY c.activ DESC, c.nume ASC
+        ";
+
+        $stmt = $this->db->query($sql);
+
+        return $stmt->fetchAll();
+    }
+
+    public function getExpenseCategoryById(int $id): ?array
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $stmt = $this->db->prepare("
+            SELECT id, nume, descriere, activ, legacy_key, created_at, updated_at
+            FROM categorii_cheltuieli_curse
+            WHERE id = :id
+            LIMIT 1
+        ");
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+        $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    public function resolveExpenseCategorySelection(string $selection, bool $onlyActive = true): ?array
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $selection = trim($selection);
+        if ($selection === '') {
+            return null;
+        }
+
+        if (is_numeric($selection)) {
+            $sql = "
+                SELECT id, nume, descriere, activ, legacy_key
+                FROM categorii_cheltuieli_curse
+                WHERE id = :id
+                " . ($onlyActive ? "AND activ = 1" : "") . "
+                LIMIT 1
+            ";
+            $stmt = $this->db->prepare($sql);
+            $stmt->bindValue(':id', (int) $selection, PDO::PARAM_INT);
+            $stmt->execute();
+            $row = $stmt->fetch();
+
+            return $row ?: null;
+        }
+
+        $sql = "
+            SELECT id, nume, descriere, activ, legacy_key
+            FROM categorii_cheltuieli_curse
+            WHERE legacy_key = :legacy_key
+            " . ($onlyActive ? "AND activ = 1" : "") . "
+            LIMIT 1
+        ";
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':legacy_key', $selection, PDO::PARAM_STR);
+        $stmt->execute();
+        $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    public function legacyExpenseTypeForCategory(?array $category): string
+    {
+        $legacyKey = trim((string) ($category['legacy_key'] ?? ''));
+        if (array_key_exists($legacyKey, self::DEFAULT_EXPENSE_CATEGORIES)) {
+            return $legacyKey;
+        }
+
+        return 'alte';
+    }
+
+    public function createExpenseCategory(string $name, ?string $description, bool $active): int
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $now = date('Y-m-d H:i:s');
+        $stmt = $this->db->prepare("
+            INSERT INTO categorii_cheltuieli_curse (nume, descriere, activ, legacy_key, created_at, updated_at)
+            VALUES (:nume, :descriere, :activ, NULL, :created_at, :updated_at)
+        ");
+        $stmt->bindValue(':nume', $name, PDO::PARAM_STR);
+        $this->bindNullableString($stmt, ':descriere', $description);
+        $stmt->bindValue(':activ', $active ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(':created_at', $now, PDO::PARAM_STR);
+        $stmt->bindValue(':updated_at', $now, PDO::PARAM_STR);
+        $stmt->execute();
+
+        return (int) $this->db->lastInsertId();
+    }
+
+    public function updateExpenseCategory(int $id, string $name, ?string $description, bool $active): bool
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $stmt = $this->db->prepare("
+            UPDATE categorii_cheltuieli_curse
+            SET nume = :nume,
+                descriere = :descriere,
+                activ = :activ,
+                updated_at = :updated_at
+            WHERE id = :id
+        ");
+        $stmt->bindValue(':nume', $name, PDO::PARAM_STR);
+        $this->bindNullableString($stmt, ':descriere', $description);
+        $stmt->bindValue(':activ', $active ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+
+        return $stmt->execute();
+    }
+
+    public function archiveExpenseCategory(int $id): bool
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $stmt = $this->db->prepare("
+            UPDATE categorii_cheltuieli_curse
+            SET activ = 0, updated_at = :updated_at
+            WHERE id = :id
+        ");
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+
+        return $stmt->execute();
+    }
+
+    public function getExpenseCategoryUsageCount(int $id): int
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $stmt = $this->db->prepare("SELECT COUNT(*) FROM curse_cheltuieli WHERE categorie_id = :id");
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    public function deleteExpenseCategoryIfUnused(int $id): bool
+    {
+        $this->ensureExpenseCategorySchema();
+
+        if ($this->getExpenseCategoryUsageCount($id) > 0) {
+            return false;
+        }
+
+        $stmt = $this->db->prepare("DELETE FROM categorii_cheltuieli_curse WHERE id = :id");
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+
+        return $stmt->execute();
+    }
+
+    public function getCourseExpenseHistoryOptions(): array
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $vehicles = $this->getVehicleOptions();
+
+        $driverStmt = $this->db->query("
+            SELECT id, nume
+            FROM soferi
+            ORDER BY nume ASC
+        ");
+
+        $raceStmt = $this->db->query("
+            SELECT
+                c.id,
+                c.data_inceput,
+                c.total_facturare,
+                v.nr_inmatriculare,
+                COALESCE(s.nume, '') AS sofer_nume
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            WHERE EXISTS (
+                SELECT 1
+                FROM curse_cheltuieli e
+                WHERE e.cursa_id = c.id
+                  AND e.tip_cheltuiala <> 'motorina'
+                  AND COALESCE(e.suma, 0) > 0
+            )
+            ORDER BY c.data_inceput DESC, c.id DESC
+            LIMIT 700
+        ");
+
+        $addExpenseRaceStmt = $this->db->query("
+            SELECT
+                c.id,
+                c.vehicle_id,
+                c.driver_id,
+                c.data_inceput,
+                c.total_facturare,
+                v.nr_inmatriculare,
+                COALESCE(s.nume, '') AS sofer_nume
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            ORDER BY c.data_inceput DESC, c.id DESC
+            LIMIT 700
+        ");
+
+        return [
+            'categories' => $this->getExpenseCategories(false),
+            'active_categories' => $this->getExpenseCategories(true),
+            'vehicles' => $vehicles,
+            'drivers' => $driverStmt->fetchAll(),
+            'races' => $raceStmt->fetchAll(),
+            'add_expense_races' => $addExpenseRaceStmt->fetchAll(),
+        ];
+    }
+
+    public function getCourseExpenseHistoryData(array $filters, int $page = 1, int $perPage = 10): array
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $page = max(1, $page);
+        $perPage = max(5, min(100, $perPage));
+        $offset = ($page - 1) * $perPage;
+
+        $mainSql = $this->buildCourseExpenseHistoryMainSql($filters, 'hist');
+
+        $countStmt = $this->db->prepare("SELECT COUNT(*) " . $mainSql['from'] . $mainSql['where']);
+        $this->bindParams($countStmt, $mainSql['params']);
+        $countStmt->execute();
+        $totalRows = (int) $countStmt->fetchColumn();
+
+        $summaryStmt = $this->db->prepare("
+            SELECT
+                COUNT(*) AS numar_curse,
+                COALESCE(SUM(COALESCE(c.total_facturare, 0)), 0) AS venit_total,
+                COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS cheltuieli_totale
+            " . $mainSql['from'] . $mainSql['where'] . "
+        ");
+        $this->bindParams($summaryStmt, $mainSql['params']);
+        $summaryStmt->execute();
+        $summary = $summaryStmt->fetch() ?: [];
+
+        $dataSql = "
+            SELECT
+                c.id,
+                c.data_inceput AS data_cursa,
+                c.total_facturare AS venit_cursa,
+                v.nr_inmatriculare,
+                COALESCE(s.nume, '') AS sofer_nume,
+                exp.total_cheltuieli,
+                exp.expense_count
+            " . $mainSql['from'] . $mainSql['where'] . "
+            ORDER BY c.data_inceput DESC, c.id DESC
+            LIMIT :limit_rows OFFSET :offset_rows
+        ";
+        $dataStmt = $this->db->prepare($dataSql);
+        $this->bindParams($dataStmt, $mainSql['params']);
+        $dataStmt->bindValue(':limit_rows', $perPage, PDO::PARAM_INT);
+        $dataStmt->bindValue(':offset_rows', $offset, PDO::PARAM_INT);
+        $dataStmt->execute();
+        $rows = $dataStmt->fetchAll();
+
+        $raceIds = [];
+        foreach ($rows as $row) {
+            $raceId = (int) ($row['id'] ?? 0);
+            if ($raceId > 0) {
+                $raceIds[] = $raceId;
+            }
+        }
+
+        $topCategoriesByRace = $this->getCourseExpenseTopCategoriesForRaceIds($raceIds, $filters);
+        $detailsByRace = $this->getCourseExpenseDetailsForRaceIds($raceIds);
+
+        foreach ($rows as &$row) {
+            $raceId = (int) ($row['id'] ?? 0);
+            $revenue = (float) ($row['venit_cursa'] ?? 0);
+            $expenses = (float) ($row['total_cheltuieli'] ?? 0);
+            $profit = $revenue - $expenses;
+            $row['profit'] = round($profit, 2);
+            $row['marja_profit'] = $revenue > 0 ? round(($profit / $revenue) * 100, 2) : 0.0;
+            $row['top_categorie'] = $topCategoriesByRace[$raceId] ?? null;
+            $row['expenses'] = $detailsByRace[$raceId] ?? [];
+        }
+        unset($row);
+
+        $venitTotal = (float) ($summary['venit_total'] ?? 0);
+        $cheltuieliTotale = (float) ($summary['cheltuieli_totale'] ?? 0);
+        $profitTotal = $venitTotal - $cheltuieliTotale;
+
+        return [
+            'rows' => $rows,
+            'summary' => [
+                'venit_total' => round($venitTotal, 2),
+                'cheltuieli_totale' => round($cheltuieliTotale, 2),
+                'profit_total' => round($profitTotal, 2),
+                'marja_profit' => $venitTotal > 0 ? round(($profitTotal / $venitTotal) * 100, 2) : 0.0,
+                'numar_curse' => (int) ($summary['numar_curse'] ?? 0),
+            ],
+            'charts' => $this->getCourseExpenseHistoryCharts($filters),
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total_rows' => $totalRows,
+                'total_pages' => max(1, (int) ceil($totalRows / $perPage)),
+            ],
+        ];
+    }
+
+    public function getCourseExpenseHistoryExportRows(array $filters): array
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $mainSql = $this->buildCourseExpenseHistoryMainSql($filters, 'export');
+        $stmt = $this->db->prepare("
+            SELECT
+                c.id,
+                c.data_inceput AS data_cursa,
+                c.total_facturare AS venit_cursa,
+                v.nr_inmatriculare,
+                COALESCE(s.nume, '') AS sofer_nume,
+                exp.total_cheltuieli
+            " . $mainSql['from'] . $mainSql['where'] . "
+            ORDER BY c.data_inceput DESC, c.id DESC
+        ");
+        $this->bindParams($stmt, $mainSql['params']);
+        $stmt->execute();
+        $rows = $stmt->fetchAll();
+
+        $raceIds = array_map(static fn (array $row): int => (int) ($row['id'] ?? 0), $rows);
+        $topCategoriesByRace = $this->getCourseExpenseTopCategoriesForRaceIds($raceIds, $filters);
+
+        foreach ($rows as &$row) {
+            $raceId = (int) ($row['id'] ?? 0);
+            $revenue = (float) ($row['venit_cursa'] ?? 0);
+            $expenses = (float) ($row['total_cheltuieli'] ?? 0);
+            $profit = $revenue - $expenses;
+            $row['profit'] = round($profit, 2);
+            $row['marja_profit'] = $revenue > 0 ? round(($profit / $revenue) * 100, 2) : 0.0;
+            $row['top_categorie'] = $topCategoriesByRace[$raceId] ?? null;
+        }
+        unset($row);
+
+        return $rows;
+    }
+
     public function updateRefacturareInvoicedStatus(int $expenseId, bool $isInvoiced, ?string $invoicedAt = null): bool
     {
         $this->ensureExpenseRefacturareColumn();
@@ -3116,16 +3614,19 @@ class DispecerCurseModel extends BaseModel
 
     public function getRaceExpenses(int $raceId): array
     {
-        $this->ensureExpenseRefacturareColumn();
+        $this->ensureExpenseCategorySchema();
 
         $sql = "
             SELECT
                 e.*,
+                cc.nume AS categorie_nume,
+                cc.legacy_key AS categorie_legacy_key,
                 d.file_path,
                 d.original_name,
                 d.mime_type,
                 d.file_size
             FROM curse_cheltuieli e
+            LEFT JOIN categorii_cheltuieli_curse cc ON cc.id = e.categorie_id
             LEFT JOIN (
                 SELECT d1.*
                 FROM curse_cheltuieli_documente d1
@@ -3153,16 +3654,19 @@ class DispecerCurseModel extends BaseModel
 
     public function getExpenseById(int $expenseId): ?array
     {
-        $this->ensureExpenseRefacturareColumn();
+        $this->ensureExpenseCategorySchema();
 
         $sql = "
             SELECT
                 e.*,
+                cc.nume AS categorie_nume,
+                cc.legacy_key AS categorie_legacy_key,
                 d.file_path,
                 d.original_name,
                 d.mime_type,
                 d.file_size
             FROM curse_cheltuieli e
+            LEFT JOIN categorii_cheltuieli_curse cc ON cc.id = e.categorie_id
             LEFT JOIN (
                 SELECT d1.*
                 FROM curse_cheltuieli_documente d1
@@ -3186,12 +3690,13 @@ class DispecerCurseModel extends BaseModel
 
     public function createExpense(array $data): int
     {
-        $this->ensureExpenseRefacturareColumn();
+        $this->ensureExpenseCategorySchema();
 
         $sql = "
             INSERT INTO curse_cheltuieli (
                 cursa_id,
                 tip_cheltuiala,
+                categorie_id,
                 refacturare_tip_cheltuiala,
                 refacturare_detalii,
                 refacturare_suma,
@@ -3200,11 +3705,13 @@ class DispecerCurseModel extends BaseModel
                 suma,
                 data_cheltuiala,
                 observatii,
+                added_by,
                 created_at,
                 updated_at
             ) VALUES (
                 :cursa_id,
                 :tip_cheltuiala,
+                :categorie_id,
                 :refacturare_tip_cheltuiala,
                 :refacturare_detalii,
                 :refacturare_suma,
@@ -3213,6 +3720,7 @@ class DispecerCurseModel extends BaseModel
                 :suma,
                 :data_cheltuiala,
                 :observatii,
+                :added_by,
                 :created_at,
                 :updated_at
             )
@@ -3221,6 +3729,7 @@ class DispecerCurseModel extends BaseModel
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':cursa_id', (int) $data['cursa_id'], PDO::PARAM_INT);
         $stmt->bindValue(':tip_cheltuiala', (string) $data['tip_cheltuiala']);
+        $this->bindNullableInt($stmt, ':categorie_id', $data['categorie_id'] ?? null);
         $this->bindNullableString($stmt, ':refacturare_tip_cheltuiala', $data['refacturare_tip_cheltuiala'] ?? null);
         $this->bindNullableString($stmt, ':refacturare_detalii', $data['refacturare_detalii'] ?? null);
         $this->bindNullableDecimal($stmt, ':refacturare_suma', $data['refacturare_suma'] ?? null);
@@ -3229,6 +3738,7 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':suma', (float) $data['suma']);
         $stmt->bindValue(':data_cheltuiala', (string) $data['data_cheltuiala']);
         $this->bindNullableString($stmt, ':observatii', $data['observatii'] ?? null);
+        $this->bindNullableInt($stmt, ':added_by', $data['added_by'] ?? null);
         $stmt->bindValue(':created_at', (string) $data['created_at']);
         $stmt->bindValue(':updated_at', (string) $data['updated_at']);
         $stmt->execute();
@@ -3238,12 +3748,13 @@ class DispecerCurseModel extends BaseModel
 
     public function updateExpense(int $id, array $data): bool
     {
-        $this->ensureExpenseRefacturareColumn();
+        $this->ensureExpenseCategorySchema();
 
         $sql = "
             UPDATE curse_cheltuieli
             SET
                 tip_cheltuiala = :tip_cheltuiala,
+                categorie_id = :categorie_id,
                 refacturare_tip_cheltuiala = :refacturare_tip_cheltuiala,
                 refacturare_detalii = :refacturare_detalii,
                 refacturare_suma = :refacturare_suma,
@@ -3258,6 +3769,7 @@ class DispecerCurseModel extends BaseModel
 
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':tip_cheltuiala', (string) $data['tip_cheltuiala']);
+        $this->bindNullableInt($stmt, ':categorie_id', $data['categorie_id'] ?? null);
         $this->bindNullableString($stmt, ':refacturare_tip_cheltuiala', $data['refacturare_tip_cheltuiala'] ?? null);
         $this->bindNullableString($stmt, ':refacturare_detalii', $data['refacturare_detalii'] ?? null);
         $this->bindNullableDecimal($stmt, ':refacturare_suma', $data['refacturare_suma'] ?? null);
@@ -3868,7 +4380,7 @@ class DispecerCurseModel extends BaseModel
     public function getDriverById(int $id): ?array
     {
         $stmt = $this->db->prepare("
-            SELECT id, vehicle_id, status, nume
+            SELECT id, status, nume
             FROM soferi
             WHERE id = :id
             LIMIT 1
@@ -3878,6 +4390,38 @@ class DispecerCurseModel extends BaseModel
         $row = $stmt->fetch();
 
         return $row ?: null;
+    }
+
+    public function getDriverVehicleAssignmentStatus(int $driverId, int $vehicleId): array
+    {
+        $this->ensureDriverVehicleAssignmentsSchema();
+
+        if ($driverId <= 0) {
+            return [
+                'assignment_count' => 0,
+                'assigned_to_vehicle' => false,
+            ];
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT
+                COUNT(*) AS assignment_count,
+                SUM(CASE WHEN vehicle_id = :vehicle_id THEN 1 ELSE 0 END) AS selected_assignment_count
+            FROM soferi_vehicule
+            WHERE driver_id = :driver_id
+        ");
+        $stmt->bindValue(':driver_id', $driverId, PDO::PARAM_INT);
+        $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $row = $stmt->fetch() ?: [];
+        $assignmentCount = (int) ($row['assignment_count'] ?? 0);
+        $selectedAssignmentCount = (int) ($row['selected_assignment_count'] ?? 0);
+
+        return [
+            'assignment_count' => $assignmentCount,
+            'assigned_to_vehicle' => $vehicleId > 0 && $selectedAssignmentCount > 0,
+        ];
     }
 
     public function getVehicleTransportCapacity(int $vehicleId): ?float
@@ -4723,6 +5267,451 @@ class DispecerCurseModel extends BaseModel
             'luna_selectata' => (int) $selectedMonth['month'],
             'an_selectat' => (int) $selectedMonth['year'],
         ];
+    }
+
+    private function buildCourseExpenseHistoryMainSql(array $filters, string $prefix): array
+    {
+        $aggregate = $this->buildCourseExpenseHistoryAggregateSql($filters, $prefix . '_agg');
+        $raceWhere = $this->buildCourseExpenseHistoryRaceWhere($filters, $prefix);
+
+        return [
+            'from' => "
+                FROM curse_dispecer c
+                INNER JOIN vehicule v ON v.id = c.vehicle_id
+                LEFT JOIN soferi s ON s.id = c.driver_id
+                INNER JOIN (" . $aggregate['sql'] . ") exp ON exp.cursa_id = c.id
+            ",
+            'where' => $raceWhere['where'],
+            'params' => array_merge($aggregate['params'], $raceWhere['params']),
+        ];
+    }
+
+    private function buildCourseExpenseHistoryAggregateSql(array $filters, string $prefix): array
+    {
+        $expenseWhere = $this->buildCourseExpenseHistoryExpenseWhere($filters, $prefix, false, false);
+        $categoryLabelExpr = $this->courseExpenseCategoryLabelSql('cc', 'e');
+
+        return [
+            'sql' => "
+                SELECT
+                    e.cursa_id,
+                    COUNT(*) AS expense_count,
+                    COALESCE(SUM(COALESCE(e.suma, 0)), 0) AS total_cheltuieli,
+                    GROUP_CONCAT(DISTINCT CONCAT_WS(' ', " . $categoryLabelExpr . ", e.observatii, d.original_name) SEPARATOR ' ') AS expense_search
+                FROM curse_cheltuieli e
+                LEFT JOIN categorii_cheltuieli_curse cc ON cc.id = e.categorie_id
+                " . $this->courseExpenseLatestDocumentJoinSql('d') . "
+                " . $expenseWhere['where'] . "
+                GROUP BY e.cursa_id
+            ",
+            'params' => $expenseWhere['params'],
+        ];
+    }
+
+    private function buildCourseExpenseHistoryRaceWhere(array $filters, string $prefix): array
+    {
+        $where = [];
+        $params = [];
+
+        $dateFrom = trim((string) ($filters['date_from'] ?? ''));
+        if ($dateFrom !== '') {
+            $where[] = 'COALESCE(c.data_inceput, c.data_cursa) >= :' . $prefix . '_date_from';
+            $params[':' . $prefix . '_date_from'] = $dateFrom;
+        }
+
+        $dateTo = trim((string) ($filters['date_to'] ?? ''));
+        if ($dateTo !== '') {
+            $where[] = 'COALESCE(c.data_inceput, c.data_cursa) <= :' . $prefix . '_date_to';
+            $params[':' . $prefix . '_date_to'] = $dateTo;
+        }
+
+        $vehicleId = (int) ($filters['vehicle_id'] ?? 0);
+        if ($vehicleId > 0) {
+            $where[] = 'c.vehicle_id = :' . $prefix . '_vehicle_id';
+            $params[':' . $prefix . '_vehicle_id'] = $vehicleId;
+        }
+
+        $driverId = (int) ($filters['driver_id'] ?? 0);
+        if ($driverId > 0) {
+            $where[] = 'c.driver_id = :' . $prefix . '_driver_id';
+            $params[':' . $prefix . '_driver_id'] = $driverId;
+        }
+
+        $raceId = (int) ($filters['race_id'] ?? 0);
+        if ($raceId > 0) {
+            $where[] = 'c.id = :' . $prefix . '_race_id';
+            $params[':' . $prefix . '_race_id'] = $raceId;
+        }
+
+        $keyword = trim((string) ($filters['q'] ?? ''));
+        if ($keyword !== '') {
+            $keywordExpressions = [
+                'CAST(c.id AS CHAR)',
+                "CONCAT('CURS-', YEAR(COALESCE(c.data_inceput, c.data_cursa)), '-', LPAD(c.id, 4, '0'))",
+                "COALESCE(v.nr_inmatriculare, '')",
+                "COALESCE(v.marca, '')",
+                "COALESCE(v.model, '')",
+                "COALESCE(s.nume, '')",
+                "COALESCE(c.observatii, '')",
+                "COALESCE(exp.expense_search, '')",
+            ];
+            $keywordClauses = [];
+            $keywordValue = '%' . $keyword . '%';
+            foreach ($keywordExpressions as $index => $expression) {
+                $paramName = ':' . $prefix . '_keyword_' . $index;
+                $keywordClauses[] = $expression . ' LIKE ' . $paramName;
+                $params[$paramName] = $keywordValue;
+            }
+            $where[] = '(' . implode(' OR ', $keywordClauses) . ')';
+        }
+
+        return [
+            'where' => $where === [] ? '' : ' WHERE ' . implode(' AND ', $where),
+            'params' => $params,
+        ];
+    }
+
+    private function buildCourseExpenseHistoryExpenseWhere(
+        array $filters,
+        string $prefix,
+        bool $includeRaceFilters,
+        bool $includeKeyword
+    ): array {
+        $where = [
+            "e.tip_cheltuiala <> 'motorina'",
+            'COALESCE(e.suma, 0) > 0',
+        ];
+        $params = [];
+
+        $categoryId = (int) ($filters['category_id'] ?? 0);
+        if ($categoryId > 0) {
+            $where[] = 'e.categorie_id = :' . $prefix . '_category_id';
+            $params[':' . $prefix . '_category_id'] = $categoryId;
+        }
+
+        $documentState = trim((string) ($filters['document_state'] ?? ''));
+        if ($documentState === 'cu') {
+            $where[] = "EXISTS (
+                SELECT 1
+                FROM curse_cheltuieli_documente edoc
+                WHERE edoc.cheltuiala_id = e.id
+            )";
+        } elseif ($documentState === 'fara') {
+            $where[] = "NOT EXISTS (
+                SELECT 1
+                FROM curse_cheltuieli_documente edoc
+                WHERE edoc.cheltuiala_id = e.id
+            )";
+        }
+
+        if ($includeRaceFilters) {
+            $dateFrom = trim((string) ($filters['date_from'] ?? ''));
+            if ($dateFrom !== '') {
+                $where[] = 'COALESCE(c.data_inceput, c.data_cursa) >= :' . $prefix . '_date_from';
+                $params[':' . $prefix . '_date_from'] = $dateFrom;
+            }
+
+            $dateTo = trim((string) ($filters['date_to'] ?? ''));
+            if ($dateTo !== '') {
+                $where[] = 'COALESCE(c.data_inceput, c.data_cursa) <= :' . $prefix . '_date_to';
+                $params[':' . $prefix . '_date_to'] = $dateTo;
+            }
+
+            $vehicleId = (int) ($filters['vehicle_id'] ?? 0);
+            if ($vehicleId > 0) {
+                $where[] = 'c.vehicle_id = :' . $prefix . '_vehicle_id';
+                $params[':' . $prefix . '_vehicle_id'] = $vehicleId;
+            }
+
+            $driverId = (int) ($filters['driver_id'] ?? 0);
+            if ($driverId > 0) {
+                $where[] = 'c.driver_id = :' . $prefix . '_driver_id';
+                $params[':' . $prefix . '_driver_id'] = $driverId;
+            }
+
+            $raceId = (int) ($filters['race_id'] ?? 0);
+            if ($raceId > 0) {
+                $where[] = 'c.id = :' . $prefix . '_race_id';
+                $params[':' . $prefix . '_race_id'] = $raceId;
+            }
+        }
+
+        if ($includeKeyword) {
+            $keyword = trim((string) ($filters['q'] ?? ''));
+            if ($keyword !== '') {
+                $categoryLabelExpr = $this->courseExpenseCategoryLabelSql('cc', 'e');
+                $keywordExpressions = [
+                    'CAST(c.id AS CHAR)',
+                    "CONCAT('CURS-', YEAR(COALESCE(c.data_inceput, c.data_cursa)), '-', LPAD(c.id, 4, '0'))",
+                    "COALESCE(v.nr_inmatriculare, '')",
+                    "COALESCE(v.marca, '')",
+                    "COALESCE(v.model, '')",
+                    "COALESCE(s.nume, '')",
+                    $categoryLabelExpr,
+                    "COALESCE(e.observatii, '')",
+                    "COALESCE(d.original_name, '')",
+                ];
+                $keywordClauses = [];
+                $keywordValue = '%' . $keyword . '%';
+                foreach ($keywordExpressions as $index => $expression) {
+                    $paramName = ':' . $prefix . '_keyword_' . $index;
+                    $keywordClauses[] = $expression . ' LIKE ' . $paramName;
+                    $params[$paramName] = $keywordValue;
+                }
+                $where[] = '(' . implode(' OR ', $keywordClauses) . ')';
+            }
+        }
+
+        return [
+            'where' => ' WHERE ' . implode(' AND ', $where),
+            'params' => $params,
+        ];
+    }
+
+    private function getCourseExpenseTopCategoriesForRaceIds(array $raceIds, array $filters): array
+    {
+        $raceIds = array_values(array_unique(array_filter(array_map('intval', $raceIds), static fn (int $id): bool => $id > 0)));
+        if ($raceIds === []) {
+            return [];
+        }
+
+        $expenseWhere = $this->buildCourseExpenseHistoryExpenseWhere($filters, 'topcat', false, false);
+        $whereSql = $expenseWhere['where'];
+        $params = $expenseWhere['params'];
+        $racePlaceholders = [];
+        foreach ($raceIds as $index => $raceId) {
+            $placeholder = ':topcat_race_' . $index;
+            $racePlaceholders[] = $placeholder;
+            $params[$placeholder] = $raceId;
+        }
+        $whereSql .= ' AND e.cursa_id IN (' . implode(', ', $racePlaceholders) . ')';
+
+        $categoryLabelExpr = $this->courseExpenseCategoryLabelSql('cc', 'e');
+        $stmt = $this->db->prepare("
+            SELECT
+                e.cursa_id,
+                " . $categoryLabelExpr . " AS categorie_nume,
+                COALESCE(SUM(e.suma), 0) AS total_suma
+            FROM curse_cheltuieli e
+            LEFT JOIN categorii_cheltuieli_curse cc ON cc.id = e.categorie_id
+            " . $whereSql . "
+            GROUP BY e.cursa_id, categorie_nume
+            ORDER BY e.cursa_id ASC, total_suma DESC, categorie_nume ASC
+        ");
+        $this->bindParams($stmt, $params);
+        $stmt->execute();
+
+        $top = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $raceId = (int) ($row['cursa_id'] ?? 0);
+            if ($raceId <= 0 || isset($top[$raceId])) {
+                continue;
+            }
+
+            $top[$raceId] = [
+                'nume' => (string) ($row['categorie_nume'] ?? '-'),
+                'suma' => round((float) ($row['total_suma'] ?? 0), 2),
+            ];
+        }
+
+        return $top;
+    }
+
+    private function getCourseExpenseDetailsForRaceIds(array $raceIds): array
+    {
+        $raceIds = array_values(array_unique(array_filter(array_map('intval', $raceIds), static fn (int $id): bool => $id > 0)));
+        if ($raceIds === []) {
+            return [];
+        }
+
+        $params = [];
+        $placeholders = [];
+        foreach ($raceIds as $index => $raceId) {
+            $placeholder = ':detail_race_' . $index;
+            $placeholders[] = $placeholder;
+            $params[$placeholder] = $raceId;
+        }
+
+        $categoryLabelExpr = $this->courseExpenseCategoryLabelSql('cc', 'e');
+        $stmt = $this->db->prepare("
+            SELECT
+                e.id,
+                e.cursa_id,
+                e.suma,
+                e.data_cheltuiala,
+                e.observatii,
+                e.created_at,
+                " . $categoryLabelExpr . " AS categorie_nume,
+                d.file_path,
+                d.original_name,
+                d.mime_type,
+                d.file_size,
+                COALESCE(u.nume, '') AS added_by_nume
+            FROM curse_cheltuieli e
+            LEFT JOIN categorii_cheltuieli_curse cc ON cc.id = e.categorie_id
+            " . $this->courseExpenseLatestDocumentJoinSql('d') . "
+            LEFT JOIN utilizatori u ON u.id = e.added_by
+            WHERE e.cursa_id IN (" . implode(', ', $placeholders) . ")
+              AND e.tip_cheltuiala <> 'motorina'
+              AND COALESCE(e.suma, 0) > 0
+            ORDER BY e.cursa_id ASC, e.data_cheltuiala DESC, e.id DESC
+        ");
+        $this->bindParams($stmt, $params);
+        $stmt->execute();
+
+        $grouped = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $raceId = (int) ($row['cursa_id'] ?? 0);
+            if ($raceId <= 0) {
+                continue;
+            }
+
+            if (!isset($grouped[$raceId])) {
+                $grouped[$raceId] = [];
+            }
+
+            $grouped[$raceId][] = $row;
+        }
+
+        return $grouped;
+    }
+
+    private function getCourseExpenseHistoryCharts(array $filters): array
+    {
+        $categoryWhere = $this->buildCourseExpenseHistoryExpenseWhere($filters, 'chartcat', true, true);
+        $categoryLabelExpr = $this->courseExpenseCategoryLabelSql('cc', 'e');
+        $categoryStmt = $this->db->prepare("
+            SELECT
+                " . $categoryLabelExpr . " AS label,
+                COALESCE(SUM(e.suma), 0) AS total
+            FROM curse_cheltuieli e
+            INNER JOIN curse_dispecer c ON c.id = e.cursa_id
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            LEFT JOIN categorii_cheltuieli_curse cc ON cc.id = e.categorie_id
+            " . $this->courseExpenseLatestDocumentJoinSql('d') . "
+            " . $categoryWhere['where'] . "
+            GROUP BY label
+            ORDER BY total DESC, label ASC
+        ");
+        $this->bindParams($categoryStmt, $categoryWhere['params']);
+        $categoryStmt->execute();
+        $categoryRows = $categoryStmt->fetchAll();
+
+        $mainSql = $this->buildCourseExpenseHistoryMainSql($filters, 'chartmain');
+
+        $topStmt = $this->db->prepare("
+            SELECT
+                c.id,
+                c.data_inceput AS data_cursa,
+                COALESCE(c.total_facturare, 0) - COALESCE(exp.total_cheltuieli, 0) AS profit
+            " . $mainSql['from'] . $mainSql['where'] . "
+            ORDER BY profit DESC, c.data_inceput DESC, c.id DESC
+            LIMIT 5
+        ");
+        $this->bindParams($topStmt, $mainSql['params']);
+        $topStmt->execute();
+        $topRows = $topStmt->fetchAll();
+
+        $dailyStmt = $this->db->prepare("
+            SELECT
+                COALESCE(c.data_inceput, c.data_cursa) AS data_zi,
+                COALESCE(SUM(COALESCE(c.total_facturare, 0)), 0) AS venit,
+                COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS cheltuieli
+            " . $mainSql['from'] . $mainSql['where'] . "
+            GROUP BY COALESCE(c.data_inceput, c.data_cursa)
+            ORDER BY data_zi ASC
+        ");
+        $this->bindParams($dailyStmt, $mainSql['params']);
+        $dailyStmt->execute();
+        $dailyRows = $dailyStmt->fetchAll();
+
+        $categoryLabels = [];
+        $categoryValues = [];
+        $categoryTotal = 0.0;
+        foreach ($categoryRows as $row) {
+            $categoryLabels[] = (string) ($row['label'] ?? '-');
+            $value = round((float) ($row['total'] ?? 0), 2);
+            $categoryValues[] = $value;
+            $categoryTotal += $value;
+        }
+
+        $categoryPercentages = [];
+        foreach ($categoryValues as $value) {
+            $categoryPercentages[] = $categoryTotal > 0 ? round(($value / $categoryTotal) * 100, 2) : 0.0;
+        }
+
+        $topLabels = [];
+        $topValues = [];
+        foreach ($topRows as $row) {
+            $topLabels[] = $this->formatRaceCode((int) ($row['id'] ?? 0), (string) ($row['data_cursa'] ?? ''));
+            $topValues[] = round((float) ($row['profit'] ?? 0), 2);
+        }
+
+        $dailyLabels = [];
+        $dailyProfit = [];
+        foreach ($dailyRows as $row) {
+            $date = trim((string) ($row['data_zi'] ?? ''));
+            $dailyLabels[] = $date !== '' ? date('d/m', strtotime($date)) : '-';
+            $dailyProfit[] = round((float) ($row['venit'] ?? 0) - (float) ($row['cheltuieli'] ?? 0), 2);
+        }
+
+        return [
+            'categories' => [
+                'labels' => $categoryLabels,
+                'values' => $categoryValues,
+                'percentages' => $categoryPercentages,
+                'total' => round($categoryTotal, 2),
+            ],
+            'top_profit' => [
+                'labels' => $topLabels,
+                'values' => $topValues,
+            ],
+            'daily_profit' => [
+                'labels' => $dailyLabels,
+                'values' => $dailyProfit,
+            ],
+        ];
+    }
+
+    private function courseExpenseCategoryLabelSql(string $categoryAlias, string $expenseAlias): string
+    {
+        return "COALESCE(
+            NULLIF(TRIM(" . $categoryAlias . ".nume), ''),
+            CASE " . $expenseAlias . ".tip_cheltuiala
+                WHEN 'taxe_drum' THEN 'Taxe drum'
+                WHEN 'diurna' THEN 'Diurna'
+                WHEN 'service' THEN 'Reparatii'
+                WHEN 'alte' THEN 'Alte cheltuieli'
+                ELSE " . $expenseAlias . ".tip_cheltuiala
+            END
+        )";
+    }
+
+    private function courseExpenseLatestDocumentJoinSql(string $alias): string
+    {
+        return "
+            LEFT JOIN (
+                SELECT d1.*
+                FROM curse_cheltuieli_documente d1
+                INNER JOIN (
+                    SELECT cheltuiala_id, MAX(id) AS max_id
+                    FROM curse_cheltuieli_documente
+                    GROUP BY cheltuiala_id
+                ) latest_doc ON latest_doc.max_id = d1.id
+            ) " . $alias . " ON " . $alias . ".cheltuiala_id = e.id
+        ";
+    }
+
+    public function formatRaceCode(int $raceId, string $raceDate = ''): string
+    {
+        $year = date('Y');
+        $date = trim($raceDate);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}/', $date)) {
+            $year = substr($date, 0, 4);
+        }
+
+        return 'CURS-' . $year . '-' . str_pad((string) $raceId, 4, '0', STR_PAD_LEFT);
     }
 
     private function buildDashboardUtilizationWhere(array $filters, string $monthStart, string $monthEnd): array

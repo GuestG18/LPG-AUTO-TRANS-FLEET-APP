@@ -16,6 +16,21 @@ $direction = (string) ($direction ?? 'desc');
 $pagination = is_array($pagination ?? null) ? $pagination : ['page' => 1, 'total_pages' => 1, 'total_rows' => 0, 'per_page' => 10];
 
 $money = static fn(mixed $value): string => $value === null || $value === '' ? '-' : format_number_ro($value, 0) . ' RON';
+$activeDaysLabel = static function (mixed $value): string {
+    if ($value === null || $value === '') {
+        return '-';
+    }
+
+    $days = max(0, (int) $value);
+    return $days === 1 ? '1 zi' : $days . ' zile';
+};
+$isEmploymentContractDocument = static function (string $documentType): bool {
+    $ascii = function_exists('iconv') ? @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $documentType) : false;
+    $base = is_string($ascii) && trim($ascii) !== '' ? $ascii : $documentType;
+    $normalized = (string) preg_replace('/[^a-z0-9]+/', '', strtolower($base));
+
+    return in_array($normalized, ['contractdemunca', 'contractdeangajare'], true);
+};
 $categoryLabel = static fn(string $category): string => $category === 'office' ? 'Personal de birou' : 'Personal operațional';
 $documentBadge = static function (string $status): string {
     return match ($status) {
@@ -308,6 +323,8 @@ if (!is_string($staffTypeMetaJson)) {
                         <th><a href="<?= e($sortUrl('functie')) ?>">Funcție<?= e($sortMark('functie')) ?></a></th>
                         <th><a href="<?= e($sortUrl('salariu')) ?>">Salariu lunar<?= e($sortMark('salariu')) ?></a></th>
                         <th><a href="<?= e($sortUrl('data_angajare')) ?>">Data angajării<?= e($sortMark('data_angajare')) ?></a></th>
+                        <th><a href="<?= e($sortUrl('active_days')) ?>">Zile active<?= e($sortMark('active_days')) ?></a></th>
+                        <th>Status</th>
                         <th><a href="<?= e($sortUrl('documente')) ?>">Documente<?= e($sortMark('documente')) ?></a></th>
                         <th>Acțiuni</th>
                     </tr>
@@ -315,7 +332,7 @@ if (!is_string($staffTypeMetaJson)) {
                 <tbody>
                     <?php if ($rows === []): ?>
                         <tr>
-                            <td colspan="8" class="text-center text-muted py-4">Nu există înregistrări.</td>
+                            <td colspan="10" class="text-center text-muted py-4">Nu există înregistrări.</td>
                         </tr>
                     <?php endif; ?>
                     <?php foreach ($rows as $index => $row): ?>
@@ -328,6 +345,7 @@ if (!is_string($staffTypeMetaJson)) {
                         $sourceId = (int) ($row['source_id'] ?? 0);
                         $staffTypeId = (int) ($row['staff_type_id'] ?? 0);
                         $canDelete = $sourceType === 'staff' && (int) ($row['can_delete'] ?? 0) === 1;
+                        $isActive = (string) ($row['status'] ?? 'activ') === 'activ';
                         $category = (string) ($row['category'] ?? 'operational');
                         $rowNumber = ((int) ($pagination['page'] ?? 1) - 1) * (int) ($pagination['per_page'] ?? 10) + $index + 1;
                         ?>
@@ -346,6 +364,13 @@ if (!is_string($staffTypeMetaJson)) {
                             <td><?= e((string) ($row['functie'] ?? '-')) ?></td>
                             <td><?= e($money($row['salariu'] ?? null)) ?></td>
                             <td><?= e(!empty($row['data_angajare']) ? format_date_ro((string) $row['data_angajare']) : '-') ?></td>
+                            <td><?= e($activeDaysLabel($row['active_days'] ?? null)) ?></td>
+                            <td>
+                                <?= status_badge_html((string) ($row['status'] ?? 'activ')) ?>
+                                <?php if (!empty($row['data_incetare'])): ?>
+                                    <div class="small text-muted mt-1"><?= e(format_date_ro((string) $row['data_incetare'])) ?></div>
+                                <?php endif; ?>
+                            </td>
                             <td>
                                 <button type="button" class="accountancy-doc-button" data-bs-toggle="modal" data-bs-target="#documentsModal<?= e($rowId) ?>" title="Documente">
                                     <i class="bi bi-folder2-open" aria-hidden="true"></i>
@@ -364,6 +389,15 @@ if (!is_string($staffTypeMetaJson)) {
                                     <?php else: ?>
                                         <button type="button" class="accountancy-icon-action is-primary" data-bs-toggle="modal" data-bs-target="#salaryModal<?= e($rowId) ?>" title="Editare" aria-label="Editare">
                                             <i class="bi bi-pencil" aria-hidden="true"></i>
+                                        </button>
+                                    <?php endif; ?>
+                                    <?php if ($isActive): ?>
+                                        <button type="button" class="accountancy-icon-action" data-bs-toggle="modal" data-bs-target="#endActivityModal<?= e($rowId) ?>" title="Inceteaza activitatea" aria-label="Inceteaza activitatea">
+                                            <i class="bi bi-person-dash" aria-hidden="true"></i>
+                                        </button>
+                                    <?php else: ?>
+                                        <button type="button" class="accountancy-icon-action" disabled title="Activitate incetata" aria-label="Activitate incetata">
+                                            <i class="bi bi-person-dash" aria-hidden="true"></i>
                                         </button>
                                     <?php endif; ?>
                                     <?php if ($canDelete): ?>
@@ -402,6 +436,8 @@ if (!is_string($staffTypeMetaJson)) {
                                             <dt class="col-sm-4">Vehicul alocat</dt><dd class="col-sm-8"><?= e((string) ($row['vehicle_label'] ?? '-')) ?></dd>
                                             <dt class="col-sm-4">Salariu lunar</dt><dd class="col-sm-8"><?= e($money($row['salariu'] ?? null)) ?></dd>
                                             <dt class="col-sm-4">Data angajării</dt><dd class="col-sm-8"><?= e(!empty($row['data_angajare']) ? format_date_ro((string) $row['data_angajare']) : '-') ?></dd>
+                                            <dt class="col-sm-4">Data incetarii</dt><dd class="col-sm-8"><?= e(!empty($row['data_incetare']) ? format_date_ro((string) $row['data_incetare']) : '-') ?></dd>
+                                            <dt class="col-sm-4">Zile active</dt><dd class="col-sm-8"><?= e($activeDaysLabel($row['active_days'] ?? null)) ?></dd>
                                             <dt class="col-sm-4">Observații</dt><dd class="col-sm-8"><?= nl2br(e((string) ($row['observatii'] ?? '-'))) ?></dd>
                                         </dl>
                                     </div>
@@ -437,10 +473,6 @@ if (!is_string($staffTypeMetaJson)) {
                                                         </select>
                                                     </div>
                                                     <div class="col-md-6">
-                                                        <label class="form-label">Funcție</label>
-                                                        <input type="text" class="form-control" name="functie" value="<?= e((string) ($row['functie'] ?? '')) ?>" required>
-                                                    </div>
-                                                    <div class="col-md-6">
                                                         <label class="form-label">Telefon</label>
                                                         <input type="text" class="form-control" name="telefon" value="<?= e((string) ($row['telefon'] ?? '')) ?>">
                                                     </div>
@@ -474,6 +506,40 @@ if (!is_string($staffTypeMetaJson)) {
                                 </div>
                             </div>
                         <?php endif; ?>
+
+                        <div class="modal fade" id="endActivityModal<?= e($rowId) ?>" tabindex="-1" aria-hidden="true">
+                            <div class="modal-dialog">
+                                <div class="modal-content">
+                                    <form method="post" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'end_activity'])) ?>">
+                                        <?= csrf_field() ?>
+                                        <input type="hidden" name="source_type" value="<?= e($sourceType) ?>">
+                                        <input type="hidden" name="source_id" value="<?= e((string) $sourceId) ?>">
+                                        <div class="modal-header">
+                                            <h3 class="modal-title fs-5">Inceteaza activitatea</h3>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+                                        </div>
+                                        <div class="modal-body">
+                                            <div class="mb-3">
+                                                <label class="form-label">Angajat</label>
+                                                <input type="text" class="form-control" value="<?= e((string) ($row['nume'] ?? '-')) ?>" readonly>
+                                            </div>
+                                            <div class="mb-3">
+                                                <label class="form-label">Data incetarii</label>
+                                                <input type="date" class="form-control" name="data_incetare" value="<?= e(date('Y-m-d')) ?>" max="<?= e(date('Y-m-d')) ?>" required>
+                                            </div>
+                                            <div class="mb-0">
+                                                <label class="form-label">Observatii</label>
+                                                <textarea class="form-control" name="notes" rows="3"></textarea>
+                                            </div>
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuleaza</button>
+                                            <button type="submit" class="btn btn-danger" data-confirm="Incetezi activitatea pentru aceasta persoana?">Inceteaza activitatea</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
 
                         <div class="modal fade" id="salaryModal<?= e($rowId) ?>" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-lg">
@@ -797,17 +863,18 @@ if (!is_string($staffTypeMetaJson)) {
                                 <div class="row g-3 align-items-end">
                                     <div class="col-md-5">
                                         <label class="form-label">Tip document</label>
-                                        <input type="text" class="form-control" name="requirements[0][document_type]" list="documentTypeDatalist" placeholder="Ex: Contract de munca">
+                                        <input type="text" class="form-control" name="requirements[0][document_type]" value="Contract de muncă" readonly>
                                     </div>
                                     <div class="col-md-3">
                                         <label class="form-label">Data expirarii</label>
-                                        <select class="form-select" name="requirements[0][requires_expiry]">
-                                            <option value="1">Obligatorie</option>
-                                            <option value="0">Optionala</option>
+                                        <input type="hidden" name="requirements[0][requires_expiry]" value="0">
+                                        <select class="form-select" disabled>
+                                            <option value="0" selected>Optionala</option>
                                         </select>
                                     </div>
                                     <div class="col-md-3">
                                         <label class="form-label">Avertizare</label>
+                                        <input type="hidden" name="requirements[0][warning_days]" value="30">
                                         <select class="form-select" name="requirements[0][warning_days]">
                                             <option value="30">30 zile</option>
                                             <option value="60">60 zile</option>
@@ -815,7 +882,7 @@ if (!is_string($staffTypeMetaJson)) {
                                         </select>
                                     </div>
                                     <div class="col-md-1 d-flex justify-content-md-end">
-                                        <button type="button" class="btn btn-outline-danger btn-sm" data-action="remove-staff-type-requirement" aria-label="Elimina document">
+                                        <button type="button" class="btn btn-outline-secondary btn-sm" aria-label="Document obligatoriu" disabled>
                                             <i class="bi bi-trash" aria-hidden="true"></i>
                                         </button>
                                     </div>
@@ -963,16 +1030,21 @@ if (!is_string($staffTypeMetaJson)) {
                                             <tr><td colspan="4" class="text-muted">Nu există documente obligatorii configurate.</td></tr>
                                         <?php endif; ?>
                                         <?php foreach ($typeRequirements as $requirement): ?>
+                                            <?php $isContractRequirement = $isEmploymentContractDocument((string) ($requirement['document_type'] ?? '')); ?>
                                             <tr>
                                                 <td><?= e((string) ($requirement['document_type'] ?? '-')) ?></td>
-                                                <td><?= ((int) ($requirement['requires_expiry'] ?? 1) === 1) ? 'Da' : 'Nu' ?></td>
+                                                <td><?= !$isContractRequirement && (int) ($requirement['requires_expiry'] ?? 1) === 1 ? 'Da' : 'Nu' ?></td>
                                                 <td><?= e((string) ($requirement['warning_days'] ?? 30)) ?> zile</td>
                                                 <td>
-                                                    <form method="post" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'delete_requirement'])) ?>">
-                                                        <?= csrf_field() ?>
-                                                        <input type="hidden" name="id" value="<?= e((string) ((int) ($requirement['id'] ?? 0))) ?>">
-                                                        <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Elimini acest document obligatoriu?">Elimină</button>
-                                                    </form>
+                                                    <?php if ($isContractRequirement): ?>
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled>Fix</button>
+                                                    <?php else: ?>
+                                                        <form method="post" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'delete_requirement'])) ?>">
+                                                            <?= csrf_field() ?>
+                                                            <input type="hidden" name="id" value="<?= e((string) ((int) ($requirement['id'] ?? 0))) ?>">
+                                                            <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Elimini acest document obligatoriu?">Elimină</button>
+                                                        </form>
+                                                    <?php endif; ?>
                                                 </td>
                                             </tr>
                                         <?php endforeach; ?>
@@ -1071,10 +1143,6 @@ if (!is_string($staffTypeMetaJson)) {
                             <div class="col-md-6">
                                 <label class="form-label">Nume complet</label>
                                 <input type="text" class="form-control" name="nume_complet">
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label">Funcție</label>
-                                <input type="text" class="form-control" name="functie">
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Telefon</label>
