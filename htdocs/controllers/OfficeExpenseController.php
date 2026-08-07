@@ -12,7 +12,7 @@ class OfficeExpenseController
 
     public function handle(string $action): void
     {
-        require_accountancy_or_403();
+        require_page_or_403('cheltuieli_birou');
 
         switch ($action) {
             case 'index':

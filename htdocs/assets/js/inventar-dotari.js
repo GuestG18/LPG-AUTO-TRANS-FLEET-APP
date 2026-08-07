@@ -119,7 +119,166 @@
         });
     }
 
+    function initInventoryRowActions() {
+        var activeMenu = null;
+        var activeTrigger = null;
+        var pendingFrame = 0;
+
+        function closeMenu(restoreFocus) {
+            if (pendingFrame !== 0) {
+                window.cancelAnimationFrame(pendingFrame);
+                pendingFrame = 0;
+            }
+
+            if (!(activeMenu instanceof HTMLElement)) {
+                activeMenu = null;
+                activeTrigger = null;
+                return;
+            }
+
+            activeMenu.hidden = true;
+            activeMenu.classList.remove('is-open');
+            activeMenu.style.left = '';
+            activeMenu.style.top = '';
+
+            if (activeTrigger instanceof HTMLButtonElement) {
+                activeTrigger.setAttribute('aria-expanded', 'false');
+                if (restoreFocus) {
+                    activeTrigger.focus();
+                }
+            }
+
+            activeMenu = null;
+            activeTrigger = null;
+        }
+
+        function positionMenu() {
+            if (!(activeMenu instanceof HTMLElement) || !(activeTrigger instanceof HTMLButtonElement)) {
+                return;
+            }
+
+            var viewportPadding = 8;
+            var gap = 8;
+            var triggerRect = activeTrigger.getBoundingClientRect();
+
+            activeMenu.hidden = false;
+            activeMenu.classList.add('is-open');
+
+            var menuRect = activeMenu.getBoundingClientRect();
+            var menuWidth = menuRect.width || 232;
+            var menuHeight = menuRect.height || 0;
+            var left = triggerRect.left + (triggerRect.width / 2) - (menuWidth / 2);
+            var top = triggerRect.bottom + gap;
+
+            if (left + menuWidth > window.innerWidth - viewportPadding) {
+                left = window.innerWidth - viewportPadding - menuWidth;
+            }
+
+            if (left < viewportPadding) {
+                left = viewportPadding;
+            }
+
+            if (top + menuHeight > window.innerHeight - viewportPadding) {
+                top = triggerRect.top - gap - menuHeight;
+            }
+
+            if (top < viewportPadding) {
+                top = Math.max(viewportPadding, window.innerHeight - viewportPadding - menuHeight);
+            }
+
+            activeMenu.style.left = Math.round(left) + 'px';
+            activeMenu.style.top = Math.round(top) + 'px';
+        }
+
+        function schedulePosition() {
+            if (!(activeMenu instanceof HTMLElement) || pendingFrame !== 0) {
+                return;
+            }
+
+            pendingFrame = window.requestAnimationFrame(function () {
+                pendingFrame = 0;
+                positionMenu();
+            });
+        }
+
+        document.querySelectorAll('[data-inventory-row-actions]').forEach(function (actionsEl) {
+            if (!(actionsEl instanceof HTMLElement)) {
+                return;
+            }
+
+            var trigger = actionsEl.querySelector('.inventory-actions-trigger');
+            var menu = actionsEl.querySelector('.inventory-actions-menu');
+
+            if (!(trigger instanceof HTMLButtonElement) || !(menu instanceof HTMLElement)) {
+                return;
+            }
+
+            trigger.addEventListener('click', function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+
+                var shouldClose = activeMenu === menu && !menu.hidden;
+                closeMenu(false);
+
+                if (shouldClose) {
+                    return;
+                }
+
+                activeMenu = menu;
+                activeTrigger = trigger;
+                trigger.setAttribute('aria-expanded', 'true');
+                positionMenu();
+            });
+
+            menu.addEventListener('click', function (event) {
+                var target = event.target;
+                if (!(target instanceof Element) || target.closest('.inventory-actions-item') === null) {
+                    return;
+                }
+
+                window.setTimeout(function () {
+                    closeMenu(false);
+                }, 0);
+            });
+        });
+
+        document.addEventListener('click', function (event) {
+            if (!(activeMenu instanceof HTMLElement)) {
+                return;
+            }
+
+            var target = event.target;
+            if (!(target instanceof Node)) {
+                closeMenu(false);
+                return;
+            }
+
+            if (activeMenu.contains(target) || (activeTrigger instanceof HTMLElement && activeTrigger.contains(target))) {
+                return;
+            }
+
+            closeMenu(false);
+        });
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && activeMenu instanceof HTMLElement) {
+                event.preventDefault();
+                closeMenu(true);
+            }
+        });
+
+        window.addEventListener('resize', function () {
+            closeMenu(false);
+        });
+        window.addEventListener('orientationchange', function () {
+            closeMenu(false);
+        });
+        document.addEventListener('scroll', schedulePosition, true);
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
+        initInventoryRowActions();
+
         document.querySelectorAll('[data-inventory-assignment-form]').forEach(function (form) {
             var select = form.querySelector('[data-inventory-catalog-select]');
             var lastInspection = form.querySelector('[data-inventory-last-inspection]');

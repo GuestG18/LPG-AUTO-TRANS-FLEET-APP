@@ -249,6 +249,7 @@
         var transportCapacityField = form.querySelector('[data-role="capacitate-transport"]');
         var startDateField = form.querySelector('[name="data_inceput"]');
         var endDateField = form.querySelector('[name="data_sfarsit"]');
+        var raceDateFields = form.querySelectorAll('[data-role="race-date-ro"]');
         var startTimeField = form.querySelector('[data-role="ora-inceput"]');
         var endTimeField = form.querySelector('[data-role="ora-sfarsit"]');
         var timeNowButtonEls = form.querySelectorAll('[data-role="time-now"]');
@@ -665,6 +666,40 @@
             }
 
             return { year: year, month: month, day: day };
+        }
+
+        function padDateComponent(value) {
+            var number = parseInt(value, 10);
+            if (!Number.isFinite(number) || number < 0) {
+                return '00';
+            }
+
+            return (number < 10 ? '0' : '') + String(number);
+        }
+
+        function formatDateForDisplay(dateParts) {
+            if (!dateParts) {
+                return '';
+            }
+
+            return padDateComponent(dateParts.day) + '/' + padDateComponent(dateParts.month) + '/' + String(dateParts.year);
+        }
+
+        function normalizeRaceDateFieldValue(field) {
+            if (!(field instanceof HTMLInputElement)) {
+                return;
+            }
+
+            var value = String(field.value || '').trim();
+            if (value === '') {
+                field.value = '';
+                return;
+            }
+
+            var dateParts = parseDateForDuration(value);
+            if (dateParts !== null) {
+                field.value = formatDateForDisplay(dateParts);
+            }
         }
 
         function parseTimeForDuration(rawTime) {
@@ -1558,6 +1593,364 @@
             }
 
             rebuildVehicleSelectOptions(allowedVehicleOptions, selectedVehicleId, placeholderLabel);
+        }
+
+        var inactiveDecisionField = form.querySelector('[data-inactive-approval-decision]');
+        var inactiveSignatureField = form.querySelector('[data-inactive-approval-signature]');
+        var inactiveStatusUrl = String(form.getAttribute('data-inactive-resource-status-url') || '').trim();
+        var inactiveTripId = String(form.getAttribute('data-inactive-trip-id') || '').trim();
+        var inactiveModalEl = document.querySelector('[data-inactive-resource-modal]');
+        var inactiveModal = inactiveModalEl instanceof HTMLElement && typeof bootstrap !== 'undefined' && bootstrap.Modal
+            ? bootstrap.Modal.getOrCreateInstance(inactiveModalEl)
+            : null;
+        var inactiveModalTitle = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-modal-title]') : null;
+        var inactiveModalBody = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-modal-body]') : null;
+        var inactiveSessionCheckbox = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-session-dismiss]') : null;
+        var inactiveApproveNowButton = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-approve-now]') : null;
+        var inactiveApproveLaterButton = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-approve-later]') : null;
+        var pendingInactiveResources = [];
+        var pendingInactiveSubmit = false;
+        var inactiveStatusSequence = 0;
+
+        function getInactiveSelectionSignature() {
+            var vehicleId = vehicleField instanceof HTMLSelectElement ? String(vehicleField.value || '').trim() : '';
+            var driverId = driverField instanceof HTMLSelectElement ? String(driverField.value || '').trim() : '';
+
+            return [vehicleId, driverId, inactiveTripId].join(':');
+        }
+
+        function clearInactiveApprovalDecision() {
+            if (inactiveDecisionField instanceof HTMLInputElement) {
+                inactiveDecisionField.value = '';
+            }
+            if (inactiveSignatureField instanceof HTMLInputElement) {
+                inactiveSignatureField.value = '';
+            }
+        }
+
+        function setInactiveApprovalDecision(decision) {
+            if (inactiveDecisionField instanceof HTMLInputElement) {
+                inactiveDecisionField.value = decision;
+            }
+            if (inactiveSignatureField instanceof HTMLInputElement) {
+                inactiveSignatureField.value = getInactiveSelectionSignature();
+            }
+        }
+
+        function inactiveApprovalDecisionIsCurrent() {
+            if (!(inactiveDecisionField instanceof HTMLInputElement) || !(inactiveSignatureField instanceof HTMLInputElement)) {
+                return true;
+            }
+
+            var decision = String(inactiveDecisionField.value || '').trim();
+            if (decision !== 'approved' && decision !== 'pending') {
+                return false;
+            }
+
+            return String(inactiveSignatureField.value || '').trim() === getInactiveSelectionSignature();
+        }
+
+        function inactiveResourceKey(resource) {
+            if (!resource || typeof resource !== 'object') {
+                return '';
+            }
+
+            return [
+                'inactive-resource-warning',
+                String(resource.resource_type || '').trim(),
+                String(resource.resource_id || '').trim(),
+                inactiveTripId || 'new'
+            ].join(':');
+        }
+
+        function isInactiveResourceSuppressed(resource) {
+            var key = inactiveResourceKey(resource);
+            if (key === '') {
+                return false;
+            }
+
+            try {
+                return window.sessionStorage.getItem(key) === '1';
+            } catch (error) {
+                return false;
+            }
+        }
+
+        function suppressInactiveResource(resource) {
+            var key = inactiveResourceKey(resource);
+            if (key === '') {
+                return;
+            }
+
+            try {
+                window.sessionStorage.setItem(key, '1');
+            } catch (error) {
+            }
+        }
+
+        function shouldAskForInactiveResource(resource) {
+            if (!resource || typeof resource !== 'object' || !resource.is_inactive) {
+                return false;
+            }
+
+            var existingStatus = String(resource.existing_approval_status || '').trim();
+            return existingStatus !== 'pending' && existingStatus !== 'approved';
+        }
+
+        function getPromptableInactiveResources(resources) {
+            if (!Array.isArray(resources)) {
+                return [];
+            }
+
+            return resources.filter(function (resource) {
+                return shouldAskForInactiveResource(resource) && !isInactiveResourceSuppressed(resource);
+            });
+        }
+
+        function getDecisionRequiredInactiveResources(resources) {
+            if (!Array.isArray(resources)) {
+                return [];
+            }
+
+            return resources.filter(shouldAskForInactiveResource);
+        }
+
+        function formatInactiveDate(value) {
+            var raw = String(value || '').trim();
+            var match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+            if (!match) {
+                return '-';
+            }
+
+            return match[3] + '.' + match[2] + '.' + match[1];
+        }
+
+        function inactiveDocumentsLabel(resource) {
+            var names = [];
+            if (Array.isArray(resource.affected_document_names)) {
+                resource.affected_document_names.forEach(function (name) {
+                    var normalized = String(name || '').trim();
+                    if (normalized !== '') {
+                        names.push(normalized);
+                    }
+                });
+            }
+
+            if (names.length === 0 && Array.isArray(resource.documents)) {
+                resource.documents.forEach(function (documentRow) {
+                    if (!documentRow || typeof documentRow !== 'object') {
+                        return;
+                    }
+                    var normalized = String(documentRow.document_name || documentRow.document_type || '').trim();
+                    if (normalized !== '') {
+                        names.push(normalized);
+                    }
+                });
+            }
+
+            return names.filter(function (name, index, array) {
+                return array.indexOf(name) === index;
+            }).join(', ');
+        }
+
+        function appendInactiveInfoLine(list, label, value) {
+            var normalizedValue = String(value || '').trim();
+            if (normalizedValue === '') {
+                return;
+            }
+
+            var dt = document.createElement('dt');
+            dt.textContent = label;
+            var dd = document.createElement('dd');
+            dd.textContent = normalizedValue;
+            list.appendChild(dt);
+            list.appendChild(dd);
+        }
+
+        function renderInactiveModal(resources) {
+            if (!(inactiveModalBody instanceof HTMLElement)) {
+                return;
+            }
+
+            inactiveModalBody.innerHTML = '';
+            var intro = document.createElement('p');
+            intro.className = 'inactive-resource-warning-intro';
+            intro.textContent = resources.length === 1
+                ? 'Continuarea utilizarii acestei resurse in Dispecer curse se face pe propria raspundere.'
+                : 'Continuarea utilizarii acestor resurse in Dispecer curse se face pe propria raspundere.';
+            inactiveModalBody.appendChild(intro);
+
+            resources.forEach(function (resource) {
+                var card = document.createElement('article');
+                card.className = 'inactive-resource-warning-card';
+
+                var badge = document.createElement('span');
+                badge.className = 'inactive-resource-warning-badge tone-' + String(resource.reason_tone || 'muted').trim();
+                var badgeIcon = document.createElement('i');
+                badgeIcon.className = 'bi ' + String(resource.reason_icon || 'bi-exclamation-circle').trim();
+                badgeIcon.setAttribute('aria-hidden', 'true');
+                badge.appendChild(badgeIcon);
+                badge.appendChild(document.createTextNode(String(resource.reason_label || 'Alt motiv')));
+                card.appendChild(badge);
+
+                var title = document.createElement('h6');
+                title.textContent = String(resource.resource_label || 'Resursa inactiva');
+                card.appendChild(title);
+
+                var list = document.createElement('dl');
+                list.className = 'inactive-resource-warning-list';
+                appendInactiveInfoLine(list, 'Motiv:', String(resource.reason_label || 'Alt motiv'));
+                appendInactiveInfoLine(list, 'Documente afectate:', inactiveDocumentsLabel(resource));
+                appendInactiveInfoLine(list, 'Detaliu:', String(resource.detail || '').trim());
+                appendInactiveInfoLine(list, 'Inactiv din:', formatInactiveDate(resource.inactive_since));
+                appendInactiveInfoLine(list, 'Utilizat in:', String(resource.usage_context || 'Dispecer curse').replace(/_/g, ' '));
+                card.appendChild(list);
+                inactiveModalBody.appendChild(card);
+            });
+        }
+
+        function titleForInactiveResources(resources) {
+            if (resources.length !== 1) {
+                return 'Resurse inactive selectate';
+            }
+
+            return String(resources[0].resource_type || '') === 'driver'
+                ? 'Sofer inactiv utilizat'
+                : 'Vehicul inactiv utilizat';
+        }
+
+        function showInactiveModal(resources, shouldSubmitAfterDecision) {
+            if (!(inactiveModalTitle instanceof HTMLElement) || inactiveModal === null) {
+                return false;
+            }
+
+            pendingInactiveResources = resources.slice();
+            pendingInactiveSubmit = shouldSubmitAfterDecision === true;
+            inactiveModalTitle.textContent = titleForInactiveResources(resources);
+            if (inactiveSessionCheckbox instanceof HTMLInputElement) {
+                inactiveSessionCheckbox.checked = false;
+            }
+            renderInactiveModal(resources);
+            inactiveModal.show();
+
+            return true;
+        }
+
+        function submitRaceFormAfterInactiveDecision() {
+            form.dataset.inactiveApprovalBypass = '1';
+            if (typeof form.requestSubmit === 'function') {
+                form.requestSubmit();
+                return;
+            }
+
+            form.submit();
+        }
+
+        function completeInactiveDecision(decision) {
+            setInactiveApprovalDecision(decision);
+            if (inactiveSessionCheckbox instanceof HTMLInputElement && inactiveSessionCheckbox.checked) {
+                pendingInactiveResources.forEach(suppressInactiveResource);
+            }
+            if (inactiveModal !== null) {
+                inactiveModal.hide();
+            }
+
+            if (pendingInactiveSubmit) {
+                pendingInactiveSubmit = false;
+                submitRaceFormAfterInactiveDecision();
+            }
+        }
+
+        function fetchInactiveResourceStatus() {
+            if (inactiveStatusUrl === '') {
+                return Promise.resolve({ inactive_resources: [] });
+            }
+
+            var vehicleId = vehicleField instanceof HTMLSelectElement ? String(vehicleField.value || '').trim() : '';
+            var driverId = driverField instanceof HTMLSelectElement ? String(driverField.value || '').trim() : '';
+            if (vehicleId === '' && driverId === '') {
+                return Promise.resolve({ inactive_resources: [] });
+            }
+
+            var url = new URL(inactiveStatusUrl, window.location.origin);
+            if (vehicleId !== '') {
+                url.searchParams.set('vehicle_id', vehicleId);
+            }
+            if (driverId !== '') {
+                url.searchParams.set('driver_id', driverId);
+            }
+            if (inactiveTripId !== '') {
+                url.searchParams.set('trip_id', inactiveTripId);
+            }
+
+            return fetch(url.toString(), {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error('Inactive resource status request failed.');
+                }
+
+                return response.json();
+            });
+        }
+
+        function checkInactiveResourcesForSelection(options) {
+            var config = options || {};
+            var sequence = ++inactiveStatusSequence;
+
+            return fetchInactiveResourceStatus().then(function (payload) {
+                if (sequence !== inactiveStatusSequence) {
+                    return { inactiveResources: [], decisionRequired: [], promptable: [] };
+                }
+
+                var inactiveResources = Array.isArray(payload.inactive_resources) ? payload.inactive_resources : [];
+                var decisionRequired = getDecisionRequiredInactiveResources(inactiveResources);
+                var promptable = getPromptableInactiveResources(inactiveResources);
+
+                if (config.showModal && promptable.length > 0) {
+                    showInactiveModal(promptable, config.submitAfterDecision === true);
+                }
+
+                return {
+                    inactiveResources: inactiveResources,
+                    decisionRequired: decisionRequired,
+                    promptable: promptable
+                };
+            });
+        }
+
+        function promptInactiveResourcesAfterSelectionChange() {
+            clearInactiveApprovalDecision();
+            if (inactiveStatusUrl === '') {
+                return;
+            }
+
+            window.setTimeout(function () {
+                checkInactiveResourcesForSelection({ showModal: true, submitAfterDecision: false }).catch(function () {
+                });
+            }, 0);
+        }
+
+        if (inactiveApproveNowButton instanceof HTMLButtonElement) {
+            inactiveApproveNowButton.addEventListener('click', function () {
+                completeInactiveDecision('approved');
+            });
+        }
+
+        if (inactiveApproveLaterButton instanceof HTMLButtonElement) {
+            inactiveApproveLaterButton.addEventListener('click', function () {
+                completeInactiveDecision('pending');
+            });
+        }
+
+        if (inactiveModalEl instanceof HTMLElement) {
+            inactiveModalEl.addEventListener('hidden.bs.modal', function () {
+                pendingInactiveSubmit = false;
+                pendingInactiveResources = [];
+            });
         }
 
         function setFieldState(wrapper, field, enabled, hideWhenDisabled) {
@@ -3538,6 +3931,7 @@
             syncScopedLocationZoneOptions();
             applyVehicleDefaultDistributionZone(true);
             recalculateTotal();
+            promptInactiveResourcesAfterSelectionChange();
         });
         if (vehicleField) {
             vehicleField.addEventListener('change', function () {
@@ -3548,6 +3942,12 @@
                 syncScopedLocationZoneOptions();
                 applyVehicleDefaultDistributionZone(false);
                 recalculateTotal();
+                promptInactiveResourcesAfterSelectionChange();
+            });
+        }
+        if (driverField) {
+            driverField.addEventListener('change', function () {
+                promptInactiveResourcesAfterSelectionChange();
             });
         }
         if (loadLocationField) {
@@ -3586,6 +3986,21 @@
             });
         });
 
+        raceDateFields.forEach(function (field) {
+            if (!(field instanceof HTMLInputElement)) {
+                return;
+            }
+
+            normalizeRaceDateFieldValue(field);
+            field.addEventListener('blur', function () {
+                normalizeRaceDateFieldValue(field);
+                syncRaceDurationHint();
+            });
+            field.addEventListener('change', function () {
+                normalizeRaceDateFieldValue(field);
+            });
+        });
+
         timeNowButtonEls.forEach(function (button) {
             if (!(button instanceof HTMLButtonElement)) {
                 return;
@@ -3618,10 +4033,49 @@
             field.addEventListener('change', syncRaceDurationHint);
         });
 
-        form.addEventListener('submit', function () {
+        form.addEventListener('submit', function (event) {
+            raceDateFields.forEach(function (field) {
+                normalizeRaceDateFieldValue(field);
+            });
             normalizeTimeFieldValue(startTimeField);
             normalizeTimeFieldValue(endTimeField);
-        });
+
+            if (form.dataset.inactiveApprovalBypass === '1') {
+                delete form.dataset.inactiveApprovalBypass;
+                return;
+            }
+
+            if (inactiveStatusUrl === '' || inactiveApprovalDecisionIsCurrent()) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof event.stopImmediatePropagation === 'function') {
+                event.stopImmediatePropagation();
+            }
+
+            checkInactiveResourcesForSelection({ showModal: false }).then(function (result) {
+                if (result.decisionRequired.length === 0) {
+                    clearInactiveApprovalDecision();
+                    submitRaceFormAfterInactiveDecision();
+                    return;
+                }
+
+                if (result.promptable.length === 0) {
+                    setInactiveApprovalDecision('pending');
+                    submitRaceFormAfterInactiveDecision();
+                    return;
+                }
+
+                if (!showInactiveModal(result.promptable, true)) {
+                    setInactiveApprovalDecision('pending');
+                    submitRaceFormAfterInactiveDecision();
+                }
+            }).catch(function () {
+                alert('Nu s-a putut verifica statusul resurselor inactive. Incearca din nou.');
+            });
+        }, true);
 
         initGoodsTypeDropdown();
         syncTransportMode();

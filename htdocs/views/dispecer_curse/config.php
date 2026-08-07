@@ -74,6 +74,7 @@ $primaryDistributionRouteFormMode = trim((string) ($primaryDistributionRouteForm
 $isPrimaryDistributionRouteEditMode = $primaryDistributionRouteFormMode === 'edit';
 $vehicleLabelById = [];
 $vehiclePlateById = [];
+$vehicleDetailsById = [];
 foreach (($vehicles ?? []) as $vehicle) {
     $vehicleId = (int) ($vehicle['id'] ?? 0);
     if ($vehicleId <= 0) {
@@ -84,9 +85,23 @@ foreach (($vehicles ?? []) as $vehicle) {
     if ($vehiclePlate === '') {
         $vehiclePlate = 'Vehicul #' . $vehicleId;
     }
-    $vehicleLabel = $vehiclePlate . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? ''));
+    $vehicleName = trim((string) ($vehicle['nume'] ?? ($vehicle['denumire'] ?? '')));
+    $vehicleBrand = trim((string) ($vehicle['marca'] ?? ''));
+    $vehicleModel = trim((string) ($vehicle['model'] ?? ''));
+    $vehicleDetail = trim($vehicleBrand . ' ' . $vehicleModel);
+    $vehicleLabel = trim($vehiclePlate . ' - ' . $vehicleDetail);
     $vehicleLabelById[$vehicleId] = trim($vehicleLabel);
     $vehiclePlateById[$vehicleId] = $vehiclePlate;
+    $vehicleDetailsById[$vehicleId] = [
+        'id' => $vehicleId,
+        'plate' => $vehiclePlate,
+        'name' => $vehicleName,
+        'brand' => $vehicleBrand,
+        'model' => $vehicleModel,
+        'detail' => $vehicleDetail,
+        'label' => trim($vehicleLabel),
+        'search' => trim(implode(' ', array_filter([$vehiclePlate, $vehicleName, $vehicleBrand, $vehicleModel, $vehicleLabel]))),
+    ];
 }
 $buildRouteVehicleButtonLabel = static function (array $selectedVehicleIds, array $labelsById): string {
     $selectedLabels = [];
@@ -100,6 +115,99 @@ $buildRouteVehicleButtonLabel = static function (array $selectedVehicleIds, arra
     }
 
     return $selectedLabels !== [] ? implode(', ', $selectedLabels) : '-- Selecteaza vehiculele --';
+};
+$buildRouteVehicleItems = static function (string $vehicleIdsRaw, array $detailsById): array {
+    $vehicleItems = [];
+    foreach (explode(',', $vehicleIdsRaw) as $vehicleIdRaw) {
+        $vehicleIdRaw = trim($vehicleIdRaw);
+        if ($vehicleIdRaw === '' || !ctype_digit($vehicleIdRaw)) {
+            continue;
+        }
+
+        $vehicleId = (int) $vehicleIdRaw;
+        if ($vehicleId <= 0 || isset($vehicleItems[$vehicleId])) {
+            continue;
+        }
+
+        if (isset($detailsById[$vehicleId])) {
+            $vehicleItems[$vehicleId] = $detailsById[$vehicleId];
+            continue;
+        }
+
+        $fallbackLabel = 'Vehicul #' . $vehicleId;
+        $vehicleItems[$vehicleId] = [
+            'id' => $vehicleId,
+            'plate' => $fallbackLabel,
+            'name' => $fallbackLabel,
+            'brand' => '',
+            'model' => '',
+            'detail' => '',
+            'label' => $fallbackLabel,
+            'search' => $fallbackLabel,
+        ];
+    }
+
+    return array_values($vehicleItems);
+};
+$renderRouteVehicleButton = static function (array $vehicleItems, string $rowKey): string {
+    $vehicleCount = count($vehicleItems);
+    $countLabel = $vehicleCount === 1 ? '1 vehicul' : $vehicleCount . ' vehicule';
+
+    if ($vehicleCount === 0) {
+        return '<button type="button" class="dispatcher-vehicle-count-btn is-empty" disabled aria-label="0 vehicule alocate">0 vehicule</button>';
+    }
+
+    $safeRowKey = preg_replace('/[^a-zA-Z0-9_-]+/', '-', $rowKey) ?: uniqid('vehicles_', false);
+    $popoverId = 'dispatcher_vehicle_popover_' . $safeRowKey;
+    $vehicleTitle = implode(', ', array_map(static fn(array $item): string => (string) ($item['label'] ?? $item['plate'] ?? ''), $vehicleItems));
+    $totalLabel = $vehicleCount === 1 ? 'Total 1 vehicul' : 'Total ' . $vehicleCount . ' vehicule';
+
+    $html = '<div class="dispatcher-vehicle-list" data-dispatcher-vehicle-list>';
+    $html .= '<button type="button" class="dispatcher-vehicle-count-btn" data-dispatcher-vehicle-toggle data-popover-id="' . e($popoverId) . '" aria-expanded="false" aria-controls="' . e($popoverId) . '" aria-label="' . e('Afiseaza ' . $countLabel) . '" title="' . e($vehicleTitle) . '">';
+    $html .= '<span>' . e($countLabel) . '</span><i class="bi bi-chevron-down" aria-hidden="true"></i>';
+    $html .= '</button>';
+    $html .= '<div class="dispatcher-vehicle-popover" id="' . e($popoverId) . '" data-dispatcher-vehicle-popover role="dialog" aria-label="Lista vehicule alocate" hidden>';
+    $html .= '<div class="dispatcher-vehicle-search"><i class="bi bi-search" aria-hidden="true"></i><input type="search" class="dispatcher-vehicle-search-input" data-dispatcher-vehicle-search placeholder="Caut&#259; vehicul..." aria-label="Cauta vehicul"></div>';
+    $html .= '<ul class="dispatcher-vehicle-popover-list" role="list">';
+
+    foreach ($vehicleItems as $vehicleItem) {
+        $plate = trim((string) ($vehicleItem['plate'] ?? ''));
+        $detail = trim((string) ($vehicleItem['detail'] ?? ''));
+        $search = trim((string) ($vehicleItem['search'] ?? (($vehicleItem['label'] ?? '') . ' ' . $detail)));
+
+        $html .= '<li class="dispatcher-vehicle-popover-item" data-dispatcher-vehicle-item data-vehicle-search="' . e($search) . '">';
+        $html .= '<strong>' . e($plate !== '' ? $plate : '-') . '</strong>';
+        if ($detail !== '') {
+            $html .= '<span class="dispatcher-vehicle-separator" aria-hidden="true">&mdash;</span><span class="dispatcher-vehicle-detail">' . e($detail) . '</span>';
+        }
+        $html .= '</li>';
+    }
+
+    $html .= '</ul>';
+    $html .= '<div class="dispatcher-vehicle-popover-empty" data-dispatcher-vehicle-empty hidden>Niciun vehicul gasit.</div>';
+    $html .= '<div class="dispatcher-vehicle-popover-total">' . e($totalLabel) . '</div>';
+    $html .= '</div></div>';
+
+    return $html;
+};
+$renderTransportRowActions = static function (string $menuKey, string $editHref, string $deleteAction, array $deleteFields, string $confirmMessage): string {
+    $safeMenuKey = preg_replace('/[^a-zA-Z0-9_-]+/', '-', $menuKey) ?: uniqid('actions_', false);
+    $menuId = 'transport_row_actions_' . $safeMenuKey;
+    $html = '<div class="transport-row-actions" data-transport-actions>';
+    $html .= '<button type="button" class="transport-row-actions-toggle" data-transport-actions-toggle data-menu-id="' . e($menuId) . '" aria-haspopup="menu" aria-expanded="false" aria-controls="' . e($menuId) . '" aria-label="Actiuni rand" title="Actiuni">';
+    $html .= '<i class="bi bi-three-dots-vertical" aria-hidden="true"></i>';
+    $html .= '</button>';
+    $html .= '<div class="transport-row-actions-menu" id="' . e($menuId) . '" data-transport-actions-menu role="menu" hidden>';
+    $html .= '<a class="transport-row-actions-item" role="menuitem" href="' . e($editHref) . '">Editeaza</a>';
+    $html .= '<form method="post" action="' . e($deleteAction) . '" class="transport-row-actions-form" role="none">';
+    $html .= csrf_field();
+    foreach ($deleteFields as $fieldName => $fieldValue) {
+        $html .= '<input type="hidden" name="' . e((string) $fieldName) . '" value="' . e((string) $fieldValue) . '">';
+    }
+    $html .= '<button type="submit" class="transport-row-actions-item transport-row-actions-danger" role="menuitem" data-confirm="' . e($confirmMessage) . '">Sterge</button>';
+    $html .= '</form></div></div>';
+
+    return $html;
 };
 $distributionOnlyRouteSelectedVehicleIds = array_map('strval', (array) ($distributionOnlyRouteFormData['vehicle_ids'] ?? []));
 $distributionOnlyRouteVehicleButtonLabel = $buildRouteVehicleButtonLabel($distributionOnlyRouteSelectedVehicleIds, $vehicleLabelById);
@@ -495,24 +603,7 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                                             }
                                             $routeUsesTonTariff = in_array($routeTariffMode, ['tona_km', 'tona'], true);
                                             $routeUsesKmTariff = in_array($routeTariffMode, ['tona_km', 'km'], true);
-                                            $routeVehicleLabels = [];
-                                            $routeVehicleIdsRaw = trim((string) ($routeRule['vehicle_ids'] ?? ''));
-                                            if ($routeVehicleIdsRaw !== '') {
-                                                foreach (explode(',', $routeVehicleIdsRaw) as $routeVehicleIdRaw) {
-                                                    $routeVehicleIdRaw = trim($routeVehicleIdRaw);
-                                                    if ($routeVehicleIdRaw === '' || !ctype_digit($routeVehicleIdRaw)) {
-                                                        continue;
-                                                    }
-
-                                                    $routeVehicleId = (int) $routeVehicleIdRaw;
-                                                    if ($routeVehicleId > 0 && isset($vehicleLabelById[$routeVehicleId])) {
-                                                        $routeVehicleLabels[] = $vehicleLabelById[$routeVehicleId];
-                                                    } elseif ($routeVehicleId > 0) {
-                                                        $routeVehicleLabels[] = 'Vehicul #' . $routeVehicleId;
-                                                    }
-                                                }
-                                            }
-                                            $routeVehicleText = $routeVehicleLabels !== [] ? implode(', ', array_values(array_unique($routeVehicleLabels))) : '-';
+                                            $routeVehicleItems = $buildRouteVehicleItems((string) ($routeRule['vehicle_ids'] ?? ''), $vehicleDetailsById);
                                             ?>
                                             <tr>
                                                 <td><?= e((string) ($routeRule['loc_nume'] ?? '-')) ?></td>
@@ -520,16 +611,19 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                                                 <td><?= e((string) $distributionRouteTariffModeOptions[$routeTariffMode]) ?></td>
                                                 <td><?= $routeUsesTonTariff ? e(format_number_ro((float) ($routeRule['tarif_tona'] ?? 0), 2)) : '-' ?></td>
                                                 <td><?= $routeUsesKmTariff ? e(format_number_ro((float) ($routeRule['cost_extra_km'] ?? 0), 2)) : '-' ?></td>
-                                                <td><span class="dispatcher-cell-text" title="<?= e($routeVehicleText) ?>"><?= e($routeVehicleText) ?></span></td>
-                                                <td class="text-end">
-                                                    <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_distributie_edit_id' => $routeId])) ?>">Editeaza</a>
-                                                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_ruta'])) ?>" class="d-inline ms-1">
-                                                        <?= csrf_field() ?>
-                                                        <input type="hidden" name="id" value="<?= e((string) $routeId) ?>">
-                                                        <input type="hidden" name="beneficiar_id" value="<?= e((string) $distributionBeneficiaryId) ?>">
-                                                        <input type="hidden" name="route_scope" value="distributie">
-                                                        <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur doresti sa stergi aceasta configuratie Distributie?">Sterge</button>
-                                                    </form>
+                                                <td class="dispatcher-vehicle-cell"><?= $renderRouteVehicleButton($routeVehicleItems, 'distributie-' . $routeId) ?></td>
+                                                <td class="text-end transport-route-actions-cell">
+                                                    <?= $renderTransportRowActions(
+                                                        'distributie-' . $routeId,
+                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_distributie_edit_id' => $routeId]),
+                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_ruta']),
+                                                        [
+                                                            'id' => $routeId,
+                                                            'beneficiar_id' => $distributionBeneficiaryId,
+                                                            'route_scope' => 'distributie',
+                                                        ],
+                                                        'Sigur doresti sa stergi aceasta configuratie Distributie?'
+                                                    ) ?>
                                                 </td>
                                             </tr>
                                         <?php endforeach; ?>
@@ -675,24 +769,7 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                                         <?php foreach ($primaryDistributionRouteRules as $routeRule): ?>
                                             <?php
                                             $routeId = (int) ($routeRule['id'] ?? 0);
-                                            $routeVehicleLabels = [];
-                                            $routeVehicleIdsRaw = trim((string) ($routeRule['vehicle_ids'] ?? ''));
-                                            if ($routeVehicleIdsRaw !== '') {
-                                                foreach (explode(',', $routeVehicleIdsRaw) as $routeVehicleIdRaw) {
-                                                    $routeVehicleIdRaw = trim($routeVehicleIdRaw);
-                                                    if ($routeVehicleIdRaw === '' || !ctype_digit($routeVehicleIdRaw)) {
-                                                        continue;
-                                                    }
-
-                                                    $routeVehicleId = (int) $routeVehicleIdRaw;
-                                                    if ($routeVehicleId > 0 && isset($vehicleLabelById[$routeVehicleId])) {
-                                                        $routeVehicleLabels[] = $vehicleLabelById[$routeVehicleId];
-                                                    } elseif ($routeVehicleId > 0) {
-                                                        $routeVehicleLabels[] = 'Vehicul #' . $routeVehicleId;
-                                                    }
-                                                }
-                                            }
-                                            $routeVehicleText = $routeVehicleLabels !== [] ? implode(', ', array_values(array_unique($routeVehicleLabels))) : '-';
+                                            $routeVehicleItems = $buildRouteVehicleItems((string) ($routeRule['vehicle_ids'] ?? ''), $vehicleDetailsById);
                                             ?>
                                             <tr>
                                                 <td><?= e((string) ($routeRule['loc_nume'] ?? '-')) ?></td>
@@ -702,16 +779,19 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                                                 <td><?= e((string) ((int) max(0, (int) ($routeRule['km_tarifare'] ?? 0)))) ?></td>
                                                 <td><?= e(format_number_ro((float) ($routeRule['cost_cursa'] ?? 0), 2)) ?></td>
                                                 <td><?= !empty($routeRule['aplica_cost_cursa']) ? 'Da' : 'Nu' ?></td>
-                                                <td><span class="dispatcher-cell-text" title="<?= e($routeVehicleText) ?>"><?= e($routeVehicleText) ?></span></td>
-                                                <td class="text-end">
-                                                    <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_primar_distributie_edit_id' => $routeId])) ?>">Editeaza</a>
-                                                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_ruta'])) ?>" class="d-inline ms-1">
-                                                        <?= csrf_field() ?>
-                                                        <input type="hidden" name="id" value="<?= e((string) $routeId) ?>">
-                                                        <input type="hidden" name="beneficiar_id" value="<?= e((string) $distributionBeneficiaryId) ?>">
-                                                        <input type="hidden" name="route_scope" value="primar_distributie">
-                                                        <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur doresti sa stergi aceasta configuratie Primar+Distributie?">Sterge</button>
-                                                    </form>
+                                                <td class="dispatcher-vehicle-cell"><?= $renderRouteVehicleButton($routeVehicleItems, 'primar-distributie-' . $routeId) ?></td>
+                                                <td class="text-end transport-route-actions-cell">
+                                                    <?= $renderTransportRowActions(
+                                                        'primar-distributie-' . $routeId,
+                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_primar_distributie_edit_id' => $routeId]),
+                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_ruta']),
+                                                        [
+                                                            'id' => $routeId,
+                                                            'beneficiar_id' => $distributionBeneficiaryId,
+                                                            'route_scope' => 'primar_distributie',
+                                                        ],
+                                                        'Sigur doresti sa stergi aceasta configuratie Primar+Distributie?'
+                                                    ) ?>
                                                 </td>
                                             </tr>
                                         <?php endforeach; ?>
@@ -872,18 +952,7 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                                         <?php foreach (($primaryRouteRules ?? []) as $primaryRouteRule): ?>
                                             <?php
                                             $primaryRouteId = (int) ($primaryRouteRule['id'] ?? 0);
-                                            $primaryRouteVehicleLabels = [];
-                                            foreach (explode(',', (string) ($primaryRouteRule['vehicle_ids'] ?? '')) as $routeVehicleIdRaw) {
-                                                $routeVehicleId = (int) trim($routeVehicleIdRaw);
-                                                if ($routeVehicleId > 0 && isset($vehicleLabelById[$routeVehicleId])) {
-                                                    $primaryRouteVehicleLabels[] = $vehicleLabelById[$routeVehicleId];
-                                                } elseif ($routeVehicleId > 0) {
-                                                    $primaryRouteVehicleLabels[] = 'Vehicul #' . $routeVehicleId;
-                                                }
-                                            }
-                                            $primaryRouteVehicleText = $primaryRouteVehicleLabels !== []
-                                                ? implode(', ', array_values(array_unique($primaryRouteVehicleLabels)))
-                                                : '-';
+                                            $primaryRouteVehicleItems = $buildRouteVehicleItems((string) ($primaryRouteRule['vehicle_ids'] ?? ''), $vehicleDetailsById);
                                             ?>
                                             <tr>
                                                 <td><?= e((string) ($primaryRouteRule['loc_nume'] ?? '-')) ?></td>
@@ -892,21 +961,19 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
                                                 <td><?= !empty($primaryRouteRule['km_agreati_manual']) ? 'Da' : 'Nu' ?></td>
                                                 <td><?= e(format_number_ro((float) ($primaryRouteRule['cost_cursa'] ?? 0), 2)) ?></td>
                                                 <td><?= !empty($primaryRouteRule['aplica_cost_cursa']) ? 'Da' : 'Nu' ?></td>
-                                                <td><span class="dispatcher-cell-text" title="<?= e($primaryRouteVehicleText) ?>"><?= e($primaryRouteVehicleText) ?></span></td>
+                                                <td class="dispatcher-vehicle-cell"><?= $renderRouteVehicleButton($primaryRouteVehicleItems, 'primar-' . $primaryRouteId) ?></td>
                                                 <td><?= !empty($primaryRouteRule['activ']) ? '<span class="badge transport-status-badge transport-status-active">Activ</span>' : '<span class="badge transport-status-badge transport-status-inactive">Inactiv</span>' ?></td>
-                                                <td class="text-end">
-                                                    <a
-                                                        class="btn btn-sm btn-outline-primary"
-                                                        href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_primar_edit_id' => $primaryRouteId])) ?>"
-                                                    >
-                                                        Editeaza
-                                                    </a>
-                                                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_ruta_primar'])) ?>" class="d-inline ms-1">
-                                                        <?= csrf_field() ?>
-                                                        <input type="hidden" name="id" value="<?= e((string) $primaryRouteId) ?>">
-                                                        <input type="hidden" name="beneficiar_id" value="<?= e((string) $distributionBeneficiaryId) ?>">
-                                                        <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur doresti sa stergi aceasta ruta Primar?">Sterge</button>
-                                                    </form>
+                                                <td class="text-end transport-route-actions-cell">
+                                                    <?= $renderTransportRowActions(
+                                                        'primar-' . $primaryRouteId,
+                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_primar_edit_id' => $primaryRouteId]),
+                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_ruta_primar']),
+                                                        [
+                                                            'id' => $primaryRouteId,
+                                                            'beneficiar_id' => $distributionBeneficiaryId,
+                                                        ],
+                                                        'Sigur doresti sa stergi aceasta ruta Primar?'
+                                                    ) ?>
                                                 </td>
                                             </tr>
                                         <?php endforeach; ?>
@@ -1019,6 +1086,238 @@ $canAddPrimaryRoute = ($locations ?? []) !== [] && ($zones ?? []) !== [];
     </div>
 </div>
 </div>
+
+<style>
+.dispatcher-vehicle-cell,
+.transport-route-actions-cell {
+    white-space: nowrap;
+}
+
+.dispatcher-vehicle-cell {
+    min-width: 7.9rem;
+}
+
+.dispatcher-vehicle-list,
+.transport-row-actions {
+    display: inline-flex;
+    align-items: center;
+}
+
+.dispatcher-vehicle-count-btn,
+.transport-row-actions-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #ffffff;
+    border-radius: 6px;
+    line-height: 1;
+}
+
+.dispatcher-vehicle-count-btn {
+    min-width: 7.2rem;
+    height: 2.15rem;
+    gap: 0.42rem;
+    padding: 0 0.72rem;
+    border: 1px solid #0d6efd;
+    color: #0d6efd;
+    font-size: 0.86rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.dispatcher-vehicle-count-btn:hover,
+.dispatcher-vehicle-count-btn:focus-visible {
+    background: #f8fbff;
+    border-color: #0b5ed7;
+    color: #0b5ed7;
+}
+
+.dispatcher-vehicle-count-btn:focus-visible,
+.transport-row-actions-toggle:focus-visible,
+.transport-row-actions-item:focus-visible {
+    outline: 3px solid rgba(13, 110, 253, 0.18);
+    outline-offset: 2px;
+}
+
+.dispatcher-vehicle-count-btn.is-empty,
+.dispatcher-vehicle-count-btn:disabled {
+    min-width: 6.4rem;
+    border-color: #d8e0eb;
+    background: #f8fafc;
+    color: #7b8798;
+    cursor: not-allowed;
+    opacity: 1;
+}
+
+.dispatcher-vehicle-popover,
+.transport-row-actions-menu {
+    position: fixed;
+    z-index: 3060;
+    background: #ffffff;
+    border: 1px solid #dfe6f0;
+    border-radius: 8px;
+    box-shadow: 0 18px 44px rgba(15, 23, 42, 0.16);
+}
+
+.dispatcher-vehicle-popover[hidden],
+.transport-row-actions-menu[hidden] {
+    display: none !important;
+}
+
+.dispatcher-vehicle-popover {
+    width: min(304px, calc(100vw - 24px));
+    max-height: min(460px, calc(100vh - 24px));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.dispatcher-vehicle-search {
+    position: relative;
+    padding: 0.72rem 0.78rem 0.52rem;
+}
+
+.dispatcher-vehicle-search i {
+    position: absolute;
+    left: 1.08rem;
+    top: 50%;
+    transform: translateY(-45%);
+    color: #475569;
+    font-size: 0.95rem;
+    pointer-events: none;
+}
+
+.dispatcher-vehicle-search-input {
+    width: 100%;
+    height: 2.25rem;
+    padding: 0 0.75rem 0 2.05rem;
+    border: 1px solid #d8e0eb;
+    border-radius: 6px;
+    color: #0f172a;
+    font-size: 0.84rem;
+    outline: none;
+}
+
+.dispatcher-vehicle-search-input:focus {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.14);
+}
+
+.dispatcher-vehicle-popover-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0;
+    padding: 0.28rem 0.9rem 0.62rem;
+    list-style: none;
+    overflow-y: auto;
+}
+
+.dispatcher-vehicle-popover-item {
+    display: flex;
+    align-items: baseline;
+    gap: 0.32rem;
+    padding: 0.26rem 0;
+    color: #334155;
+    font-size: 0.83rem;
+    line-height: 1.32;
+    white-space: nowrap;
+}
+
+.dispatcher-vehicle-popover-item strong {
+    color: #0f172a;
+    font-weight: 800;
+}
+
+.dispatcher-vehicle-separator {
+    color: #64748b;
+}
+
+.dispatcher-vehicle-detail {
+    color: #334155;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dispatcher-vehicle-popover-empty {
+    padding: 1rem 0.9rem 1.15rem;
+    color: #64748b;
+    font-size: 0.84rem;
+}
+
+.dispatcher-vehicle-popover-total {
+    flex: 0 0 auto;
+    border-top: 1px solid #e5ebf4;
+    padding: 0.62rem 0.9rem;
+    color: #0d6efd;
+    font-size: 0.84rem;
+    font-weight: 800;
+}
+
+.transport-route-actions-cell {
+    width: 3.8rem;
+    min-width: 3.8rem;
+}
+
+.transport-row-actions-toggle {
+    width: 2.35rem;
+    height: 2.35rem;
+    padding: 0;
+    border: 1px solid #dbe3ee;
+    color: #172033;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.transport-row-actions-toggle:hover,
+.transport-row-actions-toggle:focus-visible,
+.transport-row-actions-toggle.is-open {
+    background: #f8fafc;
+    border-color: #b7c5d8;
+    color: #0d6efd;
+}
+
+.transport-row-actions-menu {
+    min-width: 9.6rem;
+    padding: 0.35rem;
+}
+
+.transport-row-actions-form {
+    margin: 0;
+}
+
+.transport-row-actions-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 2.15rem;
+    padding: 0.46rem 0.62rem;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #172033;
+    font-size: 0.86rem;
+    font-weight: 650;
+    line-height: 1.2;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.transport-row-actions-item:hover,
+.transport-row-actions-item:focus-visible {
+    background: #f1f5f9;
+    color: #0d6efd;
+}
+
+.transport-row-actions-danger {
+    color: #dc3545;
+}
+
+.transport-row-actions-danger:hover,
+.transport-row-actions-danger:focus-visible {
+    background: #fff5f5;
+    color: #b02a37;
+}
+</style>
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
@@ -1226,6 +1525,343 @@ document.addEventListener('DOMContentLoaded', function () {
         checkboxEl.addEventListener('change', refreshBulkDeleteState);
     });
     refreshBulkDeleteState();
+
+    const closestElement = function (target, selector) {
+        return target instanceof Element ? target.closest(selector) : null;
+    };
+
+    let activeVehicleState = null;
+    let activeActionsState = null;
+
+    const positionFloatingLayer = function (triggerEl, layerEl, options) {
+        if (!(triggerEl instanceof HTMLElement) || !(layerEl instanceof HTMLElement)) {
+            return;
+        }
+
+        const config = options || {};
+        const margin = 12;
+        const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+        const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+        const preferredWidth = Number(config.width || 304);
+        const preferredMaxHeight = Number(config.maxHeight || 460);
+        const width = Math.min(Math.max(220, preferredWidth), Math.max(220, viewportWidth - margin * 2));
+        const maxHeight = Math.min(preferredMaxHeight, Math.max(180, viewportHeight - margin * 2));
+
+        layerEl.style.width = width + 'px';
+        layerEl.style.maxHeight = maxHeight + 'px';
+
+        const triggerRect = triggerEl.getBoundingClientRect();
+        const layerRect = layerEl.getBoundingClientRect();
+        const layerHeight = Math.min(layerRect.height || layerEl.scrollHeight || maxHeight, maxHeight);
+        let left = triggerRect.left;
+
+        if (left + width > viewportWidth - margin) {
+            left = triggerRect.right - width;
+        }
+        left = Math.max(margin, Math.min(left, viewportWidth - margin - width));
+
+        let top = triggerRect.bottom + 8;
+        const topIfAbove = triggerRect.top - layerHeight - 8;
+        if (top + layerHeight > viewportHeight - margin && topIfAbove >= margin) {
+            top = topIfAbove;
+        } else if (top + layerHeight > viewportHeight - margin) {
+            top = Math.max(margin, viewportHeight - margin - layerHeight);
+        }
+
+        layerEl.style.left = Math.round(left) + 'px';
+        layerEl.style.top = Math.round(top) + 'px';
+    };
+
+    const resetVehicleSearch = function (popoverEl) {
+        if (!(popoverEl instanceof HTMLElement)) {
+            return;
+        }
+
+        const searchInput = popoverEl.querySelector('[data-dispatcher-vehicle-search]');
+        if (searchInput instanceof HTMLInputElement) {
+            searchInput.value = '';
+        }
+
+        popoverEl.querySelectorAll('[data-dispatcher-vehicle-item]').forEach(function (itemEl) {
+            if (itemEl instanceof HTMLElement) {
+                itemEl.hidden = false;
+            }
+        });
+
+        const emptyEl = popoverEl.querySelector('[data-dispatcher-vehicle-empty]');
+        if (emptyEl instanceof HTMLElement) {
+            emptyEl.hidden = true;
+        }
+    };
+
+    const filterVehiclePopover = function (popoverEl) {
+        if (!(popoverEl instanceof HTMLElement)) {
+            return;
+        }
+
+        const searchInput = popoverEl.querySelector('[data-dispatcher-vehicle-search]');
+        const query = searchInput instanceof HTMLInputElement
+            ? searchInput.value.trim().toLocaleLowerCase('ro-RO')
+            : '';
+        let visibleCount = 0;
+
+        popoverEl.querySelectorAll('[data-dispatcher-vehicle-item]').forEach(function (itemEl) {
+            if (!(itemEl instanceof HTMLElement)) {
+                return;
+            }
+
+            const searchText = String(itemEl.dataset.vehicleSearch || itemEl.textContent || '').toLocaleLowerCase('ro-RO');
+            const isVisible = query === '' || searchText.includes(query);
+            itemEl.hidden = !isVisible;
+            if (isVisible) {
+                visibleCount += 1;
+            }
+        });
+
+        const emptyEl = popoverEl.querySelector('[data-dispatcher-vehicle-empty]');
+        if (emptyEl instanceof HTMLElement) {
+            emptyEl.hidden = visibleCount > 0;
+        }
+    };
+
+    const closeVehiclePopover = function (restoreFocus) {
+        if (activeVehicleState === null) {
+            return;
+        }
+
+        const previousState = activeVehicleState;
+        activeVehicleState = null;
+        previousState.button.setAttribute('aria-expanded', 'false');
+        previousState.button.classList.remove('is-open');
+        const iconEl = previousState.button.querySelector('i');
+        if (iconEl instanceof HTMLElement) {
+            iconEl.classList.remove('bi-chevron-up');
+            iconEl.classList.add('bi-chevron-down');
+        }
+        resetVehicleSearch(previousState.popover);
+        previousState.popover.hidden = true;
+        previousState.popover.style.left = '';
+        previousState.popover.style.top = '';
+        previousState.popover.style.visibility = '';
+
+        if (restoreFocus) {
+            previousState.button.focus({ preventScroll: true });
+        }
+    };
+
+    const closeActionsMenu = function (restoreFocus) {
+        if (activeActionsState === null) {
+            return;
+        }
+
+        const previousState = activeActionsState;
+        activeActionsState = null;
+        previousState.button.setAttribute('aria-expanded', 'false');
+        previousState.button.classList.remove('is-open');
+        previousState.menu.hidden = true;
+        previousState.menu.style.left = '';
+        previousState.menu.style.top = '';
+        previousState.menu.style.visibility = '';
+
+        if (restoreFocus) {
+            previousState.button.focus({ preventScroll: true });
+        }
+    };
+
+    const openVehiclePopover = function (buttonEl) {
+        if (!(buttonEl instanceof HTMLButtonElement) || buttonEl.disabled) {
+            return;
+        }
+
+        const popoverId = String(buttonEl.dataset.popoverId || '');
+        const popoverEl = popoverId !== '' ? document.getElementById(popoverId) : null;
+        if (!(popoverEl instanceof HTMLElement)) {
+            return;
+        }
+
+        closeActionsMenu(false);
+        closeVehiclePopover(false);
+
+        activeVehicleState = {
+            button: buttonEl,
+            popover: popoverEl
+        };
+
+        buttonEl.setAttribute('aria-expanded', 'true');
+        buttonEl.classList.add('is-open');
+        const iconEl = buttonEl.querySelector('i');
+        if (iconEl instanceof HTMLElement) {
+            iconEl.classList.remove('bi-chevron-down');
+            iconEl.classList.add('bi-chevron-up');
+        }
+
+        resetVehicleSearch(popoverEl);
+        popoverEl.style.visibility = 'hidden';
+        popoverEl.hidden = false;
+        positionFloatingLayer(buttonEl, popoverEl, { width: 304, maxHeight: 460 });
+        popoverEl.style.visibility = '';
+
+        const searchInput = popoverEl.querySelector('[data-dispatcher-vehicle-search]');
+        if (searchInput instanceof HTMLInputElement) {
+            searchInput.focus({ preventScroll: true });
+        }
+    };
+
+    const openActionsMenu = function (buttonEl, focusFirstItem) {
+        if (!(buttonEl instanceof HTMLButtonElement) || buttonEl.disabled) {
+            return;
+        }
+
+        const menuId = String(buttonEl.dataset.menuId || '');
+        const menuEl = menuId !== '' ? document.getElementById(menuId) : null;
+        if (!(menuEl instanceof HTMLElement)) {
+            return;
+        }
+
+        closeVehiclePopover(false);
+        closeActionsMenu(false);
+
+        activeActionsState = {
+            button: buttonEl,
+            menu: menuEl
+        };
+
+        buttonEl.setAttribute('aria-expanded', 'true');
+        buttonEl.classList.add('is-open');
+        menuEl.style.visibility = 'hidden';
+        menuEl.hidden = false;
+        positionFloatingLayer(buttonEl, menuEl, { width: 156, maxHeight: 220 });
+        menuEl.style.visibility = '';
+
+        if (focusFirstItem) {
+            const firstItem = menuEl.querySelector('[role="menuitem"]');
+            if (firstItem instanceof HTMLElement) {
+                firstItem.focus({ preventScroll: true });
+            }
+        }
+    };
+
+    const repositionOpenFloatingLayers = function () {
+        if (activeVehicleState !== null) {
+            positionFloatingLayer(activeVehicleState.button, activeVehicleState.popover, { width: 304, maxHeight: 460 });
+        }
+        if (activeActionsState !== null) {
+            positionFloatingLayer(activeActionsState.button, activeActionsState.menu, { width: 156, maxHeight: 220 });
+        }
+    };
+
+    document.addEventListener('click', function (event) {
+        const vehicleButton = closestElement(event.target, '[data-dispatcher-vehicle-toggle]');
+        if (vehicleButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            if (activeVehicleState !== null && activeVehicleState.button === vehicleButton) {
+                closeVehiclePopover(false);
+                return;
+            }
+            openVehiclePopover(vehicleButton);
+            return;
+        }
+
+        const actionsButton = closestElement(event.target, '[data-transport-actions-toggle]');
+        if (actionsButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            if (activeActionsState !== null && activeActionsState.button === actionsButton) {
+                closeActionsMenu(false);
+                return;
+            }
+            openActionsMenu(actionsButton, event.detail === 0);
+            return;
+        }
+
+        if (closestElement(event.target, '[data-dispatcher-vehicle-popover]') === null) {
+            closeVehiclePopover(false);
+        }
+
+        if (closestElement(event.target, '[data-transport-actions-menu]') === null) {
+            closeActionsMenu(false);
+        }
+    });
+
+    document.addEventListener('input', function (event) {
+        const searchInput = closestElement(event.target, '[data-dispatcher-vehicle-search]');
+        if (!(searchInput instanceof HTMLInputElement)) {
+            return;
+        }
+
+        const popoverEl = searchInput.closest('[data-dispatcher-vehicle-popover]');
+        filterVehiclePopover(popoverEl);
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') {
+            if (activeVehicleState !== null || activeActionsState !== null) {
+                event.preventDefault();
+                const hadVehiclePopover = activeVehicleState !== null;
+                closeVehiclePopover(hadVehiclePopover);
+                closeActionsMenu(!hadVehiclePopover);
+            }
+            return;
+        }
+
+        const vehicleButton = closestElement(event.target, '[data-dispatcher-vehicle-toggle]');
+        if (vehicleButton instanceof HTMLButtonElement && event.key === 'ArrowDown') {
+            event.preventDefault();
+            openVehiclePopover(vehicleButton);
+            return;
+        }
+
+        const actionsButton = closestElement(event.target, '[data-transport-actions-toggle]');
+        if (actionsButton instanceof HTMLButtonElement && event.key === 'ArrowDown') {
+            event.preventDefault();
+            openActionsMenu(actionsButton, true);
+            return;
+        }
+
+        if (activeActionsState === null || !activeActionsState.menu.contains(event.target)) {
+            return;
+        }
+
+        const menuItems = Array.from(activeActionsState.menu.querySelectorAll('[role="menuitem"]'))
+            .filter(function (itemEl) {
+                return itemEl instanceof HTMLElement && !itemEl.hasAttribute('disabled');
+            });
+        if (menuItems.length === 0) {
+            return;
+        }
+
+        const currentIndex = Math.max(0, menuItems.indexOf(document.activeElement));
+        let nextIndex = currentIndex;
+        if (event.key === 'ArrowDown') {
+            nextIndex = (currentIndex + 1) % menuItems.length;
+        } else if (event.key === 'ArrowUp') {
+            nextIndex = (currentIndex - 1 + menuItems.length) % menuItems.length;
+        } else if (event.key === 'Home') {
+            nextIndex = 0;
+        } else if (event.key === 'End') {
+            nextIndex = menuItems.length - 1;
+        } else if (event.key === 'Tab') {
+            closeActionsMenu(false);
+            return;
+        } else {
+            return;
+        }
+
+        event.preventDefault();
+        menuItems[nextIndex].focus({ preventScroll: true });
+    });
+
+    document.addEventListener('scroll', repositionOpenFloatingLayers, true);
+    window.addEventListener('resize', repositionOpenFloatingLayers);
+
+    if (transportTypeDropdown) {
+        transportTypeDropdown.addEventListener('change', function (event) {
+            const transportCheckbox = closestElement(event.target, 'input[type="checkbox"][name="tip_transporturi[]"]');
+            if (transportCheckbox instanceof HTMLInputElement) {
+                closeVehiclePopover(false);
+                closeActionsMenu(false);
+            }
+        });
+    }
 
     const initVehicleMultiselectDropdown = function (dropdownEl) {
         if (!dropdownEl) {

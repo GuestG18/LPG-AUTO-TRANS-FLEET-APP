@@ -1,6 +1,7 @@
 <?php
 $detailFields = $module['detail_fields'] ?? $module['form_fields'];
-$backUrl = $backUrl ?? build_query_url(['page' => $moduleKey]);
+$routePage = (string) ($routePage ?? ($module['route_page'] ?? $moduleKey));
+$backUrl = $backUrl ?? build_query_url(['page' => $routePage]);
 $driverDocuments = $driverDocuments ?? [];
 $vehicleDocuments = $vehicleDocuments ?? [];
 $documentCustomFieldRows = is_array($documentCustomFieldRows ?? null) ? $documentCustomFieldRows : [];
@@ -17,31 +18,584 @@ $vehicleTireContext = $vehicleTireContext ?? null;
             <a class="btn btn-primary" href="<?= e(build_query_url(['page' => 'stare_tehnica', 'vehicle_id' => (int) $record['id']])) ?>">Stare tehnic&#259;</a>
             <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'axis_config', 'vehicle_id' => (int) $record['id']])) ?>">Configura&#539;ie Axe</a>
         <?php endif; ?>
-        <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'edit', 'id' => (int) $record['id']])) ?>">Editează</a>
+        <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => (int) $record['id']])) ?>">Editează</a>
         <a class="btn btn-outline-secondary" href="<?= e($backUrl) ?>">Înapoi</a>
     </div>
 </div>
 
 <?php if (in_array($moduleKey, ['vehicule', 'soferi'], true) && is_array($statusContext)): ?>
-    <div class="alert <?= ($statusContext['status'] ?? 'inactiv') === 'activ' ? 'alert-success' : 'alert-warning' ?> mb-3">
-        <div class="fw-semibold mb-2">
-            Status calculat automat:
-            <?= ($statusContext['status'] ?? 'inactiv') === 'activ' ? 'Activ' : 'Inactiv' ?>
+    <?php
+    $statusValue = (string) ($statusContext['status'] ?? 'inactiv');
+    $isStatusActive = $statusValue === 'activ';
+    $statusChecks = is_array($statusContext['checks'] ?? null) ? $statusContext['checks'] : [];
+    $statusEntityLabel = $moduleKey === 'soferi' ? 'soferul' : 'vehiculul';
+    $statusIssueChecks = array_values(array_filter($statusChecks, static function (array $check): bool {
+        return (string) ($check['state'] ?? 'valid') !== 'valid';
+    }));
+    $statusValidChecks = array_values(array_filter($statusChecks, static function (array $check): bool {
+        return (string) ($check['state'] ?? 'valid') === 'valid';
+    }));
+    $orderedStatusChecks = array_merge($statusIssueChecks, $statusValidChecks);
+    $statusCheckMeta = static function (array $check): array {
+        $state = (string) ($check['state'] ?? 'valid');
+
+        return match ($state) {
+            'missing' => [
+                'class' => 'is-missing',
+                'label' => 'Lipseste',
+                'icon' => 'bi-file-earmark-x',
+            ],
+            'expired' => [
+                'class' => 'is-expired',
+                'label' => 'Expirat',
+                'icon' => 'bi-calendar-x',
+            ],
+            'valid' => [
+                'class' => 'is-valid',
+                'label' => 'OK',
+                'icon' => 'bi-check-circle',
+            ],
+            default => [
+                'class' => 'is-warning',
+                'label' => 'Atentie',
+                'icon' => 'bi-exclamation-triangle',
+            ],
+        };
+    };
+    ?>
+    <?php if ($moduleKey === 'soferi'): ?>
+        <?php
+        $statusNormalizeType = static function (string $value): string {
+            $normalized = mb_strtolower(trim($value), 'UTF-8');
+
+            return $normalized;
+        };
+        $driverStatusDocumentsByType = [];
+        foreach ($driverDocuments as $driverStatusDocument) {
+            $documentType = trim((string) ($driverStatusDocument['tip_document'] ?? ''));
+            if ($documentType === '') {
+                continue;
+            }
+
+            $documentTypeKey = $statusNormalizeType($documentType);
+            if ($documentTypeKey !== '' && !isset($driverStatusDocumentsByType[$documentTypeKey])) {
+                $driverStatusDocumentsByType[$documentTypeKey] = $driverStatusDocument;
+            }
+        }
+
+        $statusCheckUiState = static function (array $check): string {
+            $state = (string) ($check['state'] ?? 'valid');
+            if ($state !== 'valid') {
+                return in_array($state, ['missing', 'expired'], true) ? $state : 'warning';
+            }
+
+            $rawDate = trim((string) ($check['date'] ?? ''));
+            if ($rawDate === '') {
+                return 'valid';
+            }
+
+            try {
+                $today = new DateTimeImmutable('today');
+                $expiryDate = new DateTimeImmutable($rawDate);
+                $daysUntilExpiry = (int) $today->diff($expiryDate)->format('%r%a');
+
+                if ($daysUntilExpiry >= 0 && $daysUntilExpiry <= 30) {
+                    return 'soon';
+                }
+            } catch (Exception) {
+                return 'warning';
+            }
+
+            return 'valid';
+        };
+        $statusCheckDateLabel = static function (array $check) use ($statusCheckUiState): string {
+            $rawDate = trim((string) ($check['date'] ?? ''));
+            if ($rawDate !== '') {
+                return format_date_ro($rawDate);
+            }
+
+            return match ($statusCheckUiState($check)) {
+                'missing' => 'Lipsa',
+                'warning' => 'Atentie',
+                default => 'Fara expirare',
+            };
+        };
+        $driverStatusCheckMeta = static function (array $check) use ($statusCheckUiState): array {
+            return match ($statusCheckUiState($check)) {
+                'missing' => [
+                    'class' => 'is-missing',
+                    'label' => 'LIPSA',
+                    'icon' => 'bi-file-earmark-x',
+                ],
+                'expired' => [
+                    'class' => 'is-expired',
+                    'label' => 'EXPIRAT',
+                    'icon' => 'bi-calendar-x',
+                ],
+                'soon' => [
+                    'class' => 'is-warning',
+                    'label' => 'EXPIRA CURAND',
+                    'icon' => 'bi-exclamation-triangle',
+                ],
+                'valid' => [
+                    'class' => 'is-valid',
+                    'label' => 'OK',
+                    'icon' => 'bi-check-circle',
+                ],
+                default => [
+                    'class' => 'is-warning',
+                    'label' => 'ATENTIE',
+                    'icon' => 'bi-exclamation-triangle',
+                ],
+            };
+        };
+        $statusCustomFieldDisplayValue = static function (array $customFieldRow): string {
+            $fieldType = strtolower(trim((string) ($customFieldRow['type'] ?? 'text')));
+            $fieldValue = trim((string) ($customFieldRow['value'] ?? ''));
+
+            if ($fieldType === 'checkbox') {
+                return $fieldValue === '1' ? 'Da' : 'Nu';
+            }
+
+            if ($fieldType === 'date') {
+                return $fieldValue !== '' ? format_date_ro($fieldValue) : '';
+            }
+
+            return $fieldValue;
+        };
+        $driverStatusRows = [];
+        foreach ($statusChecks as $statusCheckIndex => $statusCheck) {
+            $documentLabel = trim((string) ($statusCheck['label'] ?? '-'));
+            $documentTypeKey = $statusNormalizeType($documentLabel);
+            $document = $documentTypeKey !== '' && isset($driverStatusDocumentsByType[$documentTypeKey])
+                ? $driverStatusDocumentsByType[$documentTypeKey]
+                : null;
+            $uiState = $statusCheckUiState($statusCheck);
+            $meta = $driverStatusCheckMeta($statusCheck);
+
+            $driverStatusRows[] = [
+                'id' => 'driver-status-doc-' . (int) $statusCheckIndex,
+                'check' => $statusCheck,
+                'document' => $document,
+                'label' => $documentLabel !== '' ? $documentLabel : '-',
+                'state' => $uiState,
+                'is_problem' => $uiState !== 'valid',
+                'is_inactive_reason' => (string) ($statusCheck['state'] ?? 'valid') !== 'valid',
+                'date_label' => $statusCheckDateLabel($statusCheck),
+                'meta' => $meta,
+            ];
+        }
+        $driverProblemStatusRows = array_values(array_filter($driverStatusRows, static function (array $row): bool {
+            return !empty($row['is_problem']);
+        }));
+        $driverValidStatusRows = array_values(array_filter($driverStatusRows, static function (array $row): bool {
+            return empty($row['is_problem']);
+        }));
+        $driverInactiveReasonRows = array_values(array_filter($driverStatusRows, static function (array $row): bool {
+            return !empty($row['is_inactive_reason']);
+        }));
+        $driverStatusSummary = static function (array $rows): string {
+            $count = count($rows);
+            if ($count === 0) {
+                return 'Nicio problema';
+            }
+
+            $stateCounts = [];
+            foreach ($rows as $row) {
+                $state = (string) ($row['state'] ?? 'warning');
+                $stateCounts[$state] = (int) ($stateCounts[$state] ?? 0) + 1;
+            }
+
+            if (count($stateCounts) === 1) {
+                $state = (string) array_key_first($stateCounts);
+
+                return match ($state) {
+                    'expired' => $count . ' ' . ($count === 1 ? 'document expirat' : 'documente expirate'),
+                    'missing' => $count . ' ' . ($count === 1 ? 'document lipsa' : 'documente lipsa'),
+                    'soon' => $count . ' ' . ($count === 1 ? 'document expira curand' : 'documente expira curand'),
+                    default => $count . ' ' . ($count === 1 ? 'document cu atentie' : 'documente cu atentie'),
+                };
+            }
+
+            return $count . ' ' . ($count === 1 ? 'document cu probleme' : 'documente cu probleme');
+        };
+        $renderDriverStatusGroup = static function (string $groupKey, string $title, array $rows, bool $isOpen) use (
+            $record,
+            $statusCustomFieldDisplayValue
+        ): void {
+            ?>
+            <section class="entity-status-doc-group <?= $isOpen ? 'is-open' : '' ?>" data-status-doc-group="<?= e($groupKey) ?>">
+                <button
+                    type="button"
+                    class="entity-status-doc-group-toggle"
+                    data-status-doc-group-toggle
+                    aria-expanded="<?= $isOpen ? 'true' : 'false' ?>"
+                >
+                    <span class="entity-status-doc-group-title">
+                        <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                        <?= e($title) ?> &middot; <?= e((string) count($rows)) ?>
+                    </span>
+                </button>
+                <div class="entity-status-doc-group-body" data-status-doc-group-body>
+                    <?php if ($rows === []): ?>
+                        <div class="entity-status-doc-empty">Nu exista documente in aceasta categorie.</div>
+                    <?php else: ?>
+                        <?php foreach ($rows as $row): ?>
+                            <?php
+                            $check = is_array($row['check'] ?? null) ? $row['check'] : [];
+                            $document = is_array($row['document'] ?? null) ? $row['document'] : null;
+                            $meta = is_array($row['meta'] ?? null) ? $row['meta'] : [];
+                            $customFieldRows = $document !== null && is_array($document['custom_field_display_rows'] ?? null)
+                                ? $document['custom_field_display_rows']
+                                : [];
+                            $hasStoredFile = $document !== null && !empty($document['fisier_stocat']);
+                            $documentId = $document !== null ? (int) ($document['id'] ?? 0) : 0;
+                            $rowId = (string) ($row['id'] ?? '');
+                            ?>
+                            <div class="entity-status-doc-item <?= e((string) ($meta['class'] ?? 'is-warning')) ?>" data-status-doc-item>
+                                <button
+                                    type="button"
+                                    class="entity-status-doc-row"
+                                    data-status-doc-row
+                                    aria-expanded="false"
+                                    aria-controls="<?= e($rowId) ?>-detail"
+                                >
+                                    <span class="entity-status-doc-icon" aria-hidden="true">
+                                        <i class="bi <?= e((string) ($meta['icon'] ?? 'bi-exclamation-triangle')) ?>"></i>
+                                    </span>
+                                    <span class="entity-status-doc-name" title="<?= e((string) ($row['label'] ?? '-')) ?>">
+                                        <?= e((string) ($row['label'] ?? '-')) ?>
+                                    </span>
+                                    <span class="entity-status-doc-state"><?= e((string) ($meta['label'] ?? 'ATENTIE')) ?></span>
+                                    <span class="entity-status-doc-date"><?= e((string) ($row['date_label'] ?? '-')) ?></span>
+                                    <span class="entity-status-doc-chevron" aria-hidden="true">
+                                        <i class="bi bi-chevron-right"></i>
+                                    </span>
+                                </button>
+                                <div class="entity-status-doc-detail" id="<?= e($rowId) ?>-detail" data-status-doc-detail hidden>
+                                    <div class="entity-status-doc-detail-grid">
+                                        <div>
+                                            <span>Stare</span>
+                                            <strong><?= e((string) ($meta['label'] ?? 'ATENTIE')) ?></strong>
+                                        </div>
+                                        <div>
+                                            <span>Data</span>
+                                            <strong><?= e((string) ($row['date_label'] ?? '-')) ?></strong>
+                                        </div>
+                                        <?php if ($document !== null): ?>
+                                            <div>
+                                                <span>Serie / numar</span>
+                                                <strong><?= e((string) (($document['numar_document'] ?? '') !== '' ? $document['numar_document'] : '-')) ?></strong>
+                                            </div>
+                                            <div>
+                                                <span>Fisier</span>
+                                                <?= document_file_link_html((string) ($document['fisier_original'] ?? ''), (string) ($document['fisier_stocat'] ?? '')) ?>
+                                            </div>
+                                            <div>
+                                                <span>Actualizat la</span>
+                                                <strong><?= e(format_datetime_ro((string) ($document['updated_at'] ?? ''))) ?></strong>
+                                            </div>
+                                        <?php else: ?>
+                                            <div>
+                                                <span>Document</span>
+                                                <strong>Necesita incarcare</strong>
+                                            </div>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <?php if ($customFieldRows !== []): ?>
+                                        <div class="entity-status-doc-custom">
+                                            <?php foreach ($customFieldRows as $customFieldRow): ?>
+                                                <?php
+                                                $fieldType = strtolower(trim((string) ($customFieldRow['type'] ?? 'text')));
+                                                $fieldLabel = trim((string) ($customFieldRow['label'] ?? ''));
+                                                $displayValue = $statusCustomFieldDisplayValue($customFieldRow);
+                                                ?>
+                                                <?php if ($fieldType === 'checkbox' && trim((string) ($customFieldRow['value'] ?? '')) === '1'): ?>
+                                                    <span class="entity-status-doc-custom-chip"><?= e($fieldLabel) ?></span>
+                                                <?php elseif ($displayValue !== ''): ?>
+                                                    <span class="entity-status-doc-custom-pair">
+                                                        <span><?= e($fieldLabel) ?>:</span>
+                                                        <strong><?= e($displayValue) ?></strong>
+                                                    </span>
+                                                <?php endif; ?>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
+
+                                    <div class="entity-status-doc-actions">
+                                        <?php if ($documentId > 0): ?>
+                                            <?php if ($hasStoredFile): ?>
+                                                <a class="btn btn-sm btn-outline-dark" href="<?= e(build_query_url(['page' => 'documente_soferi', 'action' => 'preview', 'id' => $documentId])) ?>">Vezi in aplicatie</a>
+                                            <?php endif; ?>
+                                            <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'documente_soferi', 'action' => 'show', 'id' => $documentId])) ?>">Detalii</a>
+                                            <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'documente_soferi', 'action' => 'edit', 'id' => $documentId])) ?>">Editeaza / inlocuieste</a>
+                                        <?php else: ?>
+                                            <a class="btn btn-sm btn-primary" href="<?= e(build_query_url(['page' => 'documente_soferi', 'action' => 'create', 'driver_id' => (int) $record['id']])) ?>">Adauga document</a>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+            </section>
+            <?php
+        };
+        ?>
+        <div class="entity-status-panel entity-status-panel-driver <?= $isStatusActive ? 'is-active' : 'is-inactive' ?> mb-3" data-status-document-board>
+            <div class="entity-status-header">
+                <div>
+                    <div class="entity-status-kicker">Status calculat automat</div>
+                    <div class="entity-status-title">
+                        <?= $isStatusActive ? 'Activ' : 'Inactiv' ?>
+                        <?php if (!$isStatusActive && $driverInactiveReasonRows !== []): ?>
+                            <span><?= e((string) count($driverInactiveReasonRows)) ?> <?= count($driverInactiveReasonRows) === 1 ? 'problema' : 'probleme' ?></span>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <span class="entity-status-badge <?= $isStatusActive ? 'is-active' : 'is-inactive' ?>">
+                    <?= $isStatusActive ? 'ACTIV' : 'INACTIV' ?>
+                </span>
+            </div>
+
+            <p class="entity-status-copy">
+                Statusul nu mai este setat manual. El se actualizeaza automat in functie de documentele obligatorii si de valabilitatea lor.
+            </p>
+
+            <?php if (!$isStatusActive && $driverInactiveReasonRows !== []): ?>
+                <div class="entity-status-problem-callout">
+                    <div class="entity-status-problem-head">
+                        <div class="entity-status-problem-title">
+                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                            <span>De ce este <?= e($statusEntityLabel) ?> inactiv</span>
+                        </div>
+                        <div class="entity-status-problem-summary"><?= e($driverStatusSummary($driverInactiveReasonRows)) ?></div>
+                    </div>
+                    <div class="entity-status-problem-pills">
+                        <?php foreach ($driverInactiveReasonRows as $issueRow): ?>
+                            <?php $issueMeta = is_array($issueRow['meta'] ?? null) ? $issueRow['meta'] : []; ?>
+                            <span class="<?= e((string) ($issueMeta['class'] ?? 'is-warning')) ?>">
+                                <i class="bi <?= e((string) ($issueMeta['icon'] ?? 'bi-exclamation-triangle')) ?>" aria-hidden="true"></i>
+                                <?= e((string) ($issueRow['label'] ?? '-')) ?>
+                            </span>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($driverStatusRows !== []): ?>
+                <div class="entity-status-doc-toolbar" role="group" aria-label="Filtru documente sofer">
+                    <button type="button" class="is-active" data-status-doc-filter="problems" aria-pressed="true">Doar problemele</button>
+                    <button type="button" data-status-doc-filter="all" aria-pressed="false">Toate documentele</button>
+                </div>
+
+                <div class="entity-status-doc-groups" data-status-doc-groups data-filter="problems">
+                    <?php $renderDriverStatusGroup('problems', 'Documente cu probleme', $driverProblemStatusRows, true); ?>
+                    <?php $renderDriverStatusGroup('valid', 'Documente valabile', $driverValidStatusRows, false); ?>
+                </div>
+            <?php endif; ?>
         </div>
-        <p class="mb-2">
-            Statusul nu mai este setat manual. El se actualizeaza automat in functie de documentele obligatorii si de valabilitatea lor.
-        </p>
-        <?php if (($statusContext['checks'] ?? []) !== []): ?>
-            <ul class="mb-0 ps-3">
-                <?php foreach ($statusContext['checks'] as $check): ?>
-                    <li>
-                        <strong><?= e((string) ($check['label'] ?? '-')) ?>:</strong>
-                        <?= e((string) ($check['message'] ?? '')) ?>
-                    </li>
-                <?php endforeach; ?>
-            </ul>
-        <?php endif; ?>
-    </div>
+    <?php else: ?>
+        <div class="entity-status-panel <?= $isStatusActive ? 'is-active' : 'is-inactive' ?> mb-3">
+            <div class="entity-status-header">
+                <div>
+                    <div class="entity-status-kicker">Status calculat automat</div>
+                    <div class="entity-status-title">
+                        <?= $isStatusActive ? 'Activ' : 'Inactiv' ?>
+                        <?php if (!$isStatusActive && $statusIssueChecks !== []): ?>
+                            <span><?= e((string) count($statusIssueChecks)) ?> <?= count($statusIssueChecks) === 1 ? 'problema' : 'probleme' ?></span>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <span class="entity-status-badge <?= $isStatusActive ? 'is-active' : 'is-inactive' ?>">
+                    <?= $isStatusActive ? 'ACTIV' : 'INACTIV' ?>
+                </span>
+            </div>
+
+            <p class="entity-status-copy">
+                Statusul nu mai este setat manual. El se actualizeaza automat in functie de documentele obligatorii si de valabilitatea lor.
+            </p>
+
+            <?php if (!$isStatusActive && $statusIssueChecks !== []): ?>
+                <div class="entity-status-problem-callout">
+                    <div class="entity-status-problem-title">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        <span>De ce este <?= e($statusEntityLabel) ?> inactiv</span>
+                    </div>
+                    <div class="entity-status-problem-pills">
+                        <?php foreach ($statusIssueChecks as $issueCheck): ?>
+                            <?php $issueMeta = $statusCheckMeta($issueCheck); ?>
+                            <span class="<?= e((string) $issueMeta['class']) ?>">
+                                <i class="bi <?= e((string) $issueMeta['icon']) ?>" aria-hidden="true"></i>
+                                <?= e((string) ($issueCheck['label'] ?? '-')) ?>
+                            </span>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <?php if ($orderedStatusChecks !== []): ?>
+                <div class="entity-status-check-list">
+                    <?php foreach ($orderedStatusChecks as $check): ?>
+                        <?php $checkMeta = $statusCheckMeta($check); ?>
+                        <div class="entity-status-check <?= e((string) $checkMeta['class']) ?>">
+                            <div class="entity-status-check-icon" aria-hidden="true">
+                                <i class="bi <?= e((string) $checkMeta['icon']) ?>"></i>
+                            </div>
+                            <div class="entity-status-check-body">
+                                <div class="entity-status-check-heading">
+                                    <strong><?= e((string) ($check['label'] ?? '-')) ?></strong>
+                                    <span><?= e((string) $checkMeta['label']) ?></span>
+                                </div>
+                                <p><?= e((string) ($check['message'] ?? '')) ?></p>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+    <?php endif; ?>
+<?php endif; ?>
+
+<?php if ($moduleKey === 'soferi' && is_array($statusContext)): ?>
+    <script>
+    (function () {
+        var boards = document.querySelectorAll('[data-status-document-board]');
+        if (!boards.length) {
+            return;
+        }
+
+        function isStatusDocElement(value) {
+            return !!value && value.nodeType === 1;
+        }
+
+        function syncGroupHeight(groupEl) {
+            var bodyEl = groupEl.querySelector('[data-status-doc-group-body]');
+            if (!isStatusDocElement(bodyEl)) {
+                return;
+            }
+
+            bodyEl.style.setProperty('--status-group-body-height', groupEl.classList.contains('is-open') ? bodyEl.scrollHeight + 'px' : '0px');
+        }
+
+        function syncBoardHeights(boardEl) {
+            boardEl.querySelectorAll('[data-status-doc-group]').forEach(syncGroupHeight);
+        }
+
+        function closeItem(itemEl) {
+            var rowEl = itemEl.querySelector('[data-status-doc-row]');
+            var detailEl = itemEl.querySelector('[data-status-doc-detail]');
+            if (!isStatusDocElement(detailEl)) {
+                return;
+            }
+
+            itemEl.classList.remove('is-expanded');
+            detailEl.style.setProperty('--status-doc-detail-height', '0px');
+            if (isStatusDocElement(rowEl)) {
+                rowEl.setAttribute('aria-expanded', 'false');
+            }
+
+            window.setTimeout(function () {
+                if (!itemEl.classList.contains('is-expanded')) {
+                    detailEl.hidden = true;
+                }
+            }, 190);
+        }
+
+        function openItem(itemEl) {
+            var boardEl = itemEl.closest('[data-status-document-board]');
+            var rowEl = itemEl.querySelector('[data-status-doc-row]');
+            var detailEl = itemEl.querySelector('[data-status-doc-detail]');
+            if (!isStatusDocElement(detailEl)) {
+                return;
+            }
+
+            if (isStatusDocElement(boardEl)) {
+                boardEl.querySelectorAll('[data-status-doc-item].is-expanded').forEach(function (otherItemEl) {
+                    if (otherItemEl !== itemEl) {
+                        closeItem(otherItemEl);
+                    }
+                });
+            }
+
+            detailEl.hidden = false;
+            window.requestAnimationFrame(function () {
+                itemEl.classList.add('is-expanded');
+                detailEl.style.setProperty('--status-doc-detail-height', detailEl.scrollHeight + 'px');
+                if (isStatusDocElement(rowEl)) {
+                    rowEl.setAttribute('aria-expanded', 'true');
+                }
+                if (isStatusDocElement(boardEl)) {
+                    window.requestAnimationFrame(function () {
+                        syncBoardHeights(boardEl);
+                    });
+                }
+            });
+        }
+
+        boards.forEach(function (boardEl) {
+            var groupsEl = boardEl.querySelector('[data-status-doc-groups]');
+            if (!isStatusDocElement(groupsEl)) {
+                return;
+            }
+
+            boardEl.querySelectorAll('[data-status-doc-filter]').forEach(function (buttonEl) {
+                buttonEl.addEventListener('click', function () {
+                    var filterValue = buttonEl.getAttribute('data-status-doc-filter') === 'all' ? 'all' : 'problems';
+                    groupsEl.setAttribute('data-filter', filterValue);
+
+                    boardEl.querySelectorAll('[data-status-doc-filter]').forEach(function (filterButtonEl) {
+                        var isActive = filterButtonEl === buttonEl;
+                        filterButtonEl.classList.toggle('is-active', isActive);
+                        filterButtonEl.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+                    });
+
+                    window.requestAnimationFrame(function () {
+                        syncBoardHeights(boardEl);
+                    });
+                });
+            });
+
+            boardEl.querySelectorAll('[data-status-doc-group-toggle]').forEach(function (toggleEl) {
+                toggleEl.addEventListener('click', function () {
+                    var groupEl = toggleEl.closest('[data-status-doc-group]');
+                    if (!isStatusDocElement(groupEl)) {
+                        return;
+                    }
+
+                    groupEl.classList.toggle('is-open');
+                    toggleEl.setAttribute('aria-expanded', groupEl.classList.contains('is-open') ? 'true' : 'false');
+                    syncGroupHeight(groupEl);
+                });
+            });
+
+            boardEl.querySelectorAll('[data-status-doc-row]').forEach(function (rowEl) {
+                rowEl.addEventListener('click', function () {
+                    var itemEl = rowEl.closest('[data-status-doc-item]');
+                    if (!isStatusDocElement(itemEl)) {
+                        return;
+                    }
+
+                    if (itemEl.classList.contains('is-expanded')) {
+                        closeItem(itemEl);
+                        window.requestAnimationFrame(function () {
+                            syncBoardHeights(boardEl);
+                        });
+                        return;
+                    }
+
+                    openItem(itemEl);
+                });
+            });
+
+            syncBoardHeights(boardEl);
+            window.addEventListener('resize', function () {
+                syncBoardHeights(boardEl);
+            });
+        });
+    })();
+    </script>
 <?php endif; ?>
 
 <div class="card border-0 shadow-sm">

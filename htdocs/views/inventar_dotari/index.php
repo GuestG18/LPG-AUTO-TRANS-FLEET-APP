@@ -307,14 +307,13 @@ $assignmentForm = function (array $vehicle, ?array $assignment = null) use ($cat
                     <th><?= $sortLabel('total_cost', 'Cost Total Dotări') ?></th>
                     <th><?= $sortLabel('expiring_soon_count', 'Expiră Curând') ?></th>
                     <th><?= $sortLabel('expired_count', 'Expirate') ?></th>
-                    <th><?= $sortLabel('status', 'Status General') ?></th>
-                    <th class="text-end pe-3">Acțiuni</th>
+                    <th class="inventory-actions-column text-center">Acțiuni</th>
                 </tr>
                 </thead>
                 <tbody>
                 <?php if ($rows === []): ?>
                     <tr>
-                        <td colspan="9" class="text-center text-muted py-4">Nu există vehicule pentru filtrele selectate.</td>
+                        <td colspan="8" class="text-center text-muted py-4">Nu există vehicule pentru filtrele selectate.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($rows as $row): ?>
@@ -323,8 +322,15 @@ $assignmentForm = function (array $vehicle, ?array $assignment = null) use ($cat
                         $isAssembly = !empty($row['is_assembly']);
                         $unitVehicles = is_array($row['unit_vehicles'] ?? null) ? $row['unit_vehicles'] : [$row];
                         $unitVehicleIds = is_array($row['unit_vehicle_ids'] ?? null) ? $row['unit_vehicle_ids'] : [$vehicleId];
+                        $inventoryStatus = strtolower(trim((string) ($row['status'] ?? 'lipsa_date')));
+                        $inventoryRowClass = match ($inventoryStatus) {
+                            'valid' => 'inventory-row-valid',
+                            'expira_curand' => 'inventory-row-soon',
+                            'expirat' => 'inventory-row-expired',
+                            default => 'inventory-row-missing',
+                        };
                         ?>
-                        <tr>
+                        <tr class="inventory-row <?= e($inventoryRowClass) ?>">
                             <td class="fw-semibold"><?= e((string) ($row['nr_inmatriculare'] ?? '-')) ?></td>
                             <td><?= e((string) ($row['tip_vehicul_label'] ?? '-')) ?></td>
                             <td><?= e((string) ((int) ($row['assigned_count'] ?? 0))) ?></td>
@@ -338,30 +344,54 @@ $assignmentForm = function (array $vehicle, ?array $assignment = null) use ($cat
                             <td><?= e(format_number_ro((float) ($row['total_cost'] ?? 0), 2)) ?> lei</td>
                             <td><?= e((string) ((int) ($row['expiring_soon_count'] ?? 0))) ?></td>
                             <td><?= e((string) ((int) ($row['expired_count'] ?? 0))) ?></td>
-                            <td><?= inventory_equipment_status_badge_html((string) ($row['status'] ?? 'lipsa_date')) ?></td>
-                            <td class="text-end pe-3">
-                                <div class="d-inline-flex flex-wrap justify-content-end gap-1">
-                                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#inventory-view-<?= e((string) $vehicleId) ?>">Vezi Dotări</button>
+                            <td class="inventory-actions-column text-center">
+                                <div class="inventory-actions" data-inventory-row-actions>
+                                    <button
+                                        type="button"
+                                        class="inventory-actions-trigger"
+                                        aria-label="Deschide acțiunile pentru dotări"
+                                        aria-haspopup="menu"
+                                        aria-expanded="false"
+                                    >
+                                        <span aria-hidden="true">...</span>
+                                    </button>
+                                    <div class="inventory-actions-menu" role="menu" hidden>
+                                        <button type="button" class="inventory-actions-item" role="menuitem" data-bs-toggle="modal" data-bs-target="#inventory-view-<?= e((string) $vehicleId) ?>">
+                                            <i class="bi bi-list-check" aria-hidden="true"></i>
+                                            <span>Vezi Dotări</span>
+                                        </button>
                                     <?php if ($isAssembly): ?>
                                         <?php foreach ($unitVehicles as $unitVehicle): ?>
                                             <?php $unitVehicleId = (int) ($unitVehicle['vehicle_id'] ?? $unitVehicle['id'] ?? 0); ?>
-                                            <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#inventory-add-<?= e((string) $unitVehicleId) ?>">
-                                                Adaugă <?= e((string) ($unitVehicle['unit_role'] ?? 'Dotare')) ?>
+                                            <button type="button" class="inventory-actions-item" role="menuitem" data-bs-toggle="modal" data-bs-target="#inventory-add-<?= e((string) $unitVehicleId) ?>">
+                                                <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                                <span>Adaugă <?= e((string) ($unitVehicle['unit_role'] ?? 'Dotare')) ?></span>
                                             </button>
                                         <?php endforeach; ?>
                                     <?php else: ?>
-                                        <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#inventory-add-<?= e((string) $vehicleId) ?>">Adaugă Dotare</button>
+                                        <button type="button" class="inventory-actions-item" role="menuitem" data-bs-toggle="modal" data-bs-target="#inventory-add-<?= e((string) $vehicleId) ?>">
+                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                            <span>Adaugă Dotare</span>
+                                        </button>
                                     <?php endif; ?>
-                                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#inventory-view-<?= e((string) $vehicleId) ?>">Editează</button>
-                                    <form method="post" action="<?= e(build_query_url(['page' => 'inventar_dotari_vehicule', 'action' => 'delete_vehicle_assignments'])) ?>" class="d-inline">
+                                        <button type="button" class="inventory-actions-item" role="menuitem" data-bs-toggle="modal" data-bs-target="#inventory-view-<?= e((string) $vehicleId) ?>">
+                                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                                            <span>Editează</span>
+                                        </button>
+                                        <div class="inventory-actions-divider" role="separator"></div>
+                                    <form method="post" action="<?= e(build_query_url(['page' => 'inventar_dotari_vehicule', 'action' => 'delete_vehicle_assignments'])) ?>" class="inventory-actions-form" role="none">
                                         <?= csrf_field() ?>
                                         <?php $hiddenQueryFields(); ?>
                                         <?php foreach ($unitVehicleIds as $unitVehicleId): ?>
                                             <input type="hidden" name="vehicle_ids[]" value="<?= e((string) ((int) $unitVehicleId)) ?>">
                                         <?php endforeach; ?>
                                         <input type="hidden" name="vehicle_id" value="<?= e((string) $vehicleId) ?>">
-                                        <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Ștergi toate dotările asignate <?= $isAssembly ? 'acestui ansamblu' : 'acestui vehicul' ?>?">Șterge</button>
+                                        <button type="submit" class="inventory-actions-item inventory-actions-item-danger" role="menuitem" data-confirm="Ștergi toate dotările asignate <?= $isAssembly ? 'acestui ansamblu' : 'acestui vehicul' ?>?">
+                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                            <span>Șterge</span>
+                                        </button>
                                     </form>
+                                </div>
                                 </div>
                             </td>
                         </tr>

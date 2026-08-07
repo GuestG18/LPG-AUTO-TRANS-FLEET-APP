@@ -210,8 +210,8 @@ return [
         ],
     ],
     'soferi' => [
-        'title' => 'ÃˆËœoferi',
-        'singular' => 'Ãˆâ„¢ofer',
+        'title' => 'Șoferi',
+        'singular' => 'șofer',
         'table' => 'soferi',
         'select' => "t.*,
             COALESCE(NULLIF(driver_vehicle_labels.vehicul_label, ''), '-') AS vehicul_label,
@@ -240,6 +240,9 @@ return [
                 GROUP BY sv.driver_id) driver_vehicle_labels", 'on' => 'driver_vehicle_labels.driver_id = t.id'],
         ],
         'default_order' => 't.created_at DESC',
+        'base_conditions' => [
+            "(COALESCE(t.employment_status, 'active') <> 'terminated' AND t.data_incetare IS NULL AND t.termination_date IS NULL)",
+        ],
         'search_fields' => ['t.nume', 't.telefon', 't.observatii', 'driver_vehicle_labels.vehicul_label', 'driver_vehicle_labels.vehicul_model'],
         'list_columns' => [
             'poza_original' => ['label' => 'Foto', 'type' => 'driver_photo'],
@@ -257,7 +260,7 @@ return [
             'telefon' => ['label' => 'Telefon'],
             'vehicul_label' => ['label' => 'Vehicule alocate'],
             'status' => ['label' => 'Status', 'type' => 'status'],
-            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea'],
+            'observatii' => ['label' => 'Observații', 'type' => 'textarea'],
             'created_at' => ['label' => 'Creat la', 'type' => 'datetime'],
             'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
         ],
@@ -330,7 +333,7 @@ return [
                 'options' => ['activ' => 'Activ', 'inactiv' => 'Inactiv'],
                 'default' => 'activ',
             ],
-            'observatii' => ['label' => 'ObservaÃˆâ€ºii', 'type' => 'textarea', 'required' => false, 'nullable' => true],
+            'observatii' => ['label' => 'Observații', 'type' => 'textarea', 'required' => false, 'nullable' => true],
         ],
         'filters' => [
             'status' => [

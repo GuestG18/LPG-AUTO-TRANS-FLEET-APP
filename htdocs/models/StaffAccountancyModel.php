@@ -16,10 +16,21 @@ class StaffAccountancyModel extends BaseModel
         'Alte documente',
     ];
 
+    public const TERMINATION_REASONS = [
+        'Demisie',
+        'Incetare contract',
+        'Concediere',
+        'Pensionare',
+        'Reorganizare',
+        'Abandon / Neprezentare',
+        'Acordul partilor',
+        'Alte motive',
+    ];
+
     public function __construct(PDO $db)
     {
         parent::__construct($db);
-        $this->ensureEmploymentEndSchema();
+        $this->ensureEmploymentLifecycleSchema();
         $this->ensureEmploymentContractRequirements();
     }
 
@@ -30,7 +41,8 @@ class StaffAccountancyModel extends BaseModel
                     COALESCE(SUM(COALESCE(salariu, 0)), 0) AS total_salarii,
                     SUM(CASE WHEN category = "operational" THEN 1 ELSE 0 END) AS personal_operational,
                     SUM(CASE WHEN category = "office" THEN 1 ELSE 0 END) AS personal_birou
-                FROM (' . $this->baseStaffUnionSql() . ') staff';
+                FROM (' . $this->baseStaffUnionSql() . ') staff
+                WHERE staff.employment_status <> "terminated"';
 
         $row = $this->db->query($sql)->fetch() ?: [];
 
@@ -97,8 +109,8 @@ class StaffAccountancyModel extends BaseModel
             SELECT
                 st.*,
                 CASE
-                    WHEN st.is_driver_linked = 1 THEN (SELECT COUNT(*) FROM soferi)
-                    ELSE (SELECT COUNT(*) FROM staff_members sm WHERE sm.staff_type_id = st.id)
+                    WHEN st.is_driver_linked = 1 THEN (SELECT COUNT(*) FROM soferi WHERE employment_status <> "terminated")
+                    ELSE (SELECT COUNT(*) FROM staff_members sm WHERE sm.staff_type_id = st.id AND sm.employment_status <> "terminated")
                 END AS employee_count
             FROM staff_types st
             ORDER BY st.is_driver_linked DESC, st.category ASC, st.name ASC
@@ -139,6 +151,7 @@ class StaffAccountancyModel extends BaseModel
                 v.nr_inmatriculare AS vehicle_label
             FROM soferi s
             LEFT JOIN vehicule v ON v.id = s.vehicle_id
+            WHERE s.employment_status <> "terminated"
             ORDER BY s.nume ASC
         ';
 
@@ -544,8 +557,12 @@ class StaffAccountancyModel extends BaseModel
         return $ok;
     }
 
-    public function endEmployment(string $subjectType, int $subjectId, string $endDate, ?string $notes, ?int $userId): bool
+    public function endEmployment(string $subjectType, int $subjectId, array $termination, ?int $userId): bool
     {
+        $endDate = (string) ($termination['termination_date'] ?? '');
+        $lastWorkingDay = $termination['last_working_day'] ?? null;
+        $notes = isset($termination['termination_notes']) ? (string) $termination['termination_notes'] : null;
+
         if ($subjectType === 'driver') {
             $existing = $this->findDriver($subjectId);
             if ($existing === null) {
@@ -553,22 +570,8 @@ class StaffAccountancyModel extends BaseModel
             }
 
             $this->assertEndDateAfterHireDate($existing, $endDate);
-            $stmt = $this->db->prepare('
-                UPDATE soferi
-                SET status = "inactiv",
-                    data_incetare = :data_incetare,
-                    observatii = :observatii,
-                    updated_at = :updated_at
-                WHERE id = :id
-            ');
-            $this->bindParams($stmt, [
-                ':data_incetare' => $endDate,
-                ':observatii' => $this->appendEmploymentEndNote($existing['observatii'] ?? null, $endDate, $notes),
-                ':updated_at' => date('Y-m-d H:i:s'),
-                ':id' => $subjectId,
-            ]);
-
-            return $stmt->execute();
+            $this->assertLastWorkingDayIsValid($existing, $endDate, is_string($lastWorkingDay) ? $lastWorkingDay : null);
+            return $this->terminateSubject($subjectType, $subjectId, $existing, $termination, $userId);
         }
 
         $existing = $this->findDirectStaff($subjectId);
@@ -577,24 +580,8 @@ class StaffAccountancyModel extends BaseModel
         }
 
         $this->assertEndDateAfterHireDate($existing, $endDate);
-        $stmt = $this->db->prepare('
-            UPDATE staff_members
-            SET status = "inactiv",
-                data_incetare = :data_incetare,
-                observatii = :observatii,
-                updated_by = :updated_by,
-                updated_at = :updated_at
-            WHERE id = :id
-        ');
-        $this->bindParams($stmt, [
-            ':data_incetare' => $endDate,
-            ':observatii' => $this->appendEmploymentEndNote($existing['observatii'] ?? null, $endDate, $notes),
-            ':updated_by' => $userId,
-            ':updated_at' => date('Y-m-d H:i:s'),
-            ':id' => $subjectId,
-        ]);
-
-        return $stmt->execute();
+        $this->assertLastWorkingDayIsValid($existing, $endDate, is_string($lastWorkingDay) ? $lastWorkingDay : null);
+        return $this->terminateSubject($subjectType, $subjectId, $existing, $termination, $userId);
     }
 
     public function updateSalary(string $subjectType, int $subjectId, float $salary, string $effectiveDate, ?string $notes, ?int $userId): bool
@@ -628,6 +615,272 @@ class StaffAccountancyModel extends BaseModel
         }
 
         return $ok;
+    }
+
+    public function getFormerSummary(): array
+    {
+        $sql = 'SELECT
+                    COUNT(*) AS total_former,
+                    SUM(CASE WHEN category = "operational" THEN 1 ELSE 0 END) AS former_operational,
+                    SUM(CASE WHEN category = "office" THEN 1 ELSE 0 END) AS former_office,
+                    SUM(CASE
+                        WHEN termination_effective_date >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH) THEN 1
+                        ELSE 0
+                    END) AS former_last_12_months
+                FROM (' . $this->baseStaffUnionSql() . ') staff
+                WHERE ' . $this->formerConditionSql();
+
+        $row = $this->db->query($sql)->fetch() ?: [];
+
+        return [
+            'total_former' => (int) ($row['total_former'] ?? 0),
+            'former_operational' => (int) ($row['former_operational'] ?? 0),
+            'former_office' => (int) ($row['former_office'] ?? 0),
+            'former_last_12_months' => (int) ($row['former_last_12_months'] ?? 0),
+        ];
+    }
+
+    public function getPaginatedFormerEmployees(array $filters, string $sort, string $direction, int $page, int $perPage): array
+    {
+        [$whereSql, $params] = $this->buildFormerWhere($filters);
+        $orderBy = $this->resolveFormerOrderBy($sort, $direction);
+
+        $countSql = 'SELECT COUNT(*) FROM (' . $this->baseStaffUnionSql() . ') staff ' . $whereSql;
+        $countStmt = $this->db->prepare($countSql);
+        $this->bindParams($countStmt, $params);
+        $countStmt->execute();
+
+        $totalRows = (int) $countStmt->fetchColumn();
+        $totalPages = max(1, (int) ceil($totalRows / max(1, $perPage)));
+        $page = min(max(1, $page), $totalPages);
+        $offset = ($page - 1) * $perPage;
+
+        $sql = 'SELECT *
+                FROM (' . $this->baseStaffUnionSql() . ') staff
+                ' . $whereSql . '
+                ORDER BY ' . $orderBy . '
+                LIMIT :limit_rows OFFSET :offset_rows';
+        $stmt = $this->db->prepare($sql);
+        $this->bindParams($stmt, $params);
+        $stmt->bindValue(':limit_rows', $perPage, PDO::PARAM_INT);
+        $stmt->bindValue(':offset_rows', $offset, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return [
+            'rows' => $stmt->fetchAll(),
+            'total_rows' => $totalRows,
+            'total_pages' => $totalPages,
+            'page' => $page,
+        ];
+    }
+
+    public function getAllFormerEmployeesForExport(array $filters, string $sort, string $direction): array
+    {
+        [$whereSql, $params] = $this->buildFormerWhere($filters);
+        $sql = 'SELECT *
+                FROM (' . $this->baseStaffUnionSql() . ') staff
+                ' . $whereSql . '
+                ORDER BY ' . $this->resolveFormerOrderBy($sort, $direction);
+
+        $stmt = $this->db->prepare($sql);
+        $this->bindParams($stmt, $params);
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    public function getTerminationReasons(): array
+    {
+        $reasons = [];
+        foreach (self::TERMINATION_REASONS as $reason) {
+            $reasons[$reason] = $reason;
+        }
+
+        $stmt = $this->db->query('
+            SELECT DISTINCT termination_reason
+            FROM (' . $this->baseStaffUnionSql() . ') staff
+            WHERE ' . $this->formerConditionSql() . '
+              AND COALESCE(TRIM(termination_reason), "") <> ""
+            ORDER BY termination_reason ASC
+        ');
+
+        foreach ($stmt->fetchAll() as $row) {
+            $reason = trim((string) ($row['termination_reason'] ?? ''));
+            if ($reason !== '') {
+                $reasons[$reason] = $reason;
+            }
+        }
+
+        return $reasons;
+    }
+
+    public function getFormerProfile(string $sourceType, int $sourceId): ?array
+    {
+        $row = $this->findSubjectInUnion($sourceType, $sourceId, true);
+        if ($row === null) {
+            return null;
+        }
+
+        $documents = $this->getDocumentsForRows([$row]);
+        $salaryHistory = $this->getSalaryHistoryForRows([$row]);
+        $key = (string) ($row['source_type'] ?? '') . '-' . (int) ($row['source_id'] ?? 0);
+
+        return [
+            'row' => $row,
+            'documents' => $documents[$key] ?? [],
+            'salary_history' => $salaryHistory[$key] ?? [],
+            'employment_periods' => $this->getEmploymentPeriodsForSubject($sourceType, $sourceId),
+            'driver_history' => $sourceType === 'driver' ? $this->getDriverOperationalHistory($sourceId) : $this->emptyDriverOperationalHistory(),
+        ];
+    }
+
+    public function updateTermination(string $subjectType, int $subjectId, array $data, ?array $fileData, ?int $userId): bool
+    {
+        $existing = $subjectType === 'driver' ? $this->findDriver($subjectId) : $this->findDirectStaff($subjectId);
+        if ($existing === null) {
+            return false;
+        }
+
+        $terminationDate = (string) ($data['termination_date'] ?? '');
+        $lastWorkingDay = $data['last_working_day'] ?? null;
+        $this->assertEndDateAfterHireDate($existing, $terminationDate);
+        $this->assertLastWorkingDayIsValid($existing, $terminationDate, is_string($lastWorkingDay) ? $lastWorkingDay : null);
+
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $data['append_observatii'] = false;
+            $this->updateSubjectTerminationColumns($subjectType, $subjectId, $data, $fileData, $userId);
+            $this->syncLatestTerminatedEmploymentPeriod($subjectType, $subjectId, $data, $userId);
+
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->commit();
+            }
+
+            return true;
+        } catch (Throwable $exception) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
+    public function rehireEmployee(string $subjectType, int $subjectId, array $data, ?int $userId): bool
+    {
+        $existing = $subjectType === 'driver' ? $this->findDriver($subjectId) : $this->findDirectStaff($subjectId);
+        if ($existing === null) {
+            return false;
+        }
+
+        $hireDate = (string) ($data['hire_date'] ?? '');
+        $salary = $data['salary'] ?? null;
+        $now = date('Y-m-d H:i:s');
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            if ($subjectType === 'driver') {
+                $stmt = $this->db->prepare('
+                    UPDATE soferi
+                    SET status = "activ",
+                        employment_status = "active",
+                        data_angajare = :data_angajare,
+                        data_incetare = NULL,
+                        termination_date = NULL,
+                        termination_reason = NULL,
+                        termination_notes = NULL,
+                        last_working_day = NULL,
+                        termination_document_original = NULL,
+                        termination_document_path = NULL,
+                        termination_assets_returned = 0,
+                        terminated_by = NULL,
+                        terminated_at = NULL,
+                        salariu = :salariu,
+                        observatii = :observatii,
+                        updated_at = :updated_at
+                    WHERE id = :id
+                ');
+                $this->bindParams($stmt, [
+                    ':data_angajare' => $hireDate,
+                    ':salariu' => $salary,
+                    ':observatii' => $this->appendRehireNote($existing['observatii'] ?? null, $hireDate, $data['rehire_notes'] ?? null),
+                    ':updated_at' => $now,
+                    ':id' => $subjectId,
+                ]);
+                $stmt->execute();
+            } else {
+                $stmt = $this->db->prepare('
+                    UPDATE staff_members
+                    SET staff_type_id = :staff_type_id,
+                        functie = :functie,
+                        status = "activ",
+                        employment_status = "active",
+                        data_angajare = :data_angajare,
+                        data_incetare = NULL,
+                        termination_date = NULL,
+                        termination_reason = NULL,
+                        termination_notes = NULL,
+                        last_working_day = NULL,
+                        termination_document_original = NULL,
+                        termination_document_path = NULL,
+                        termination_assets_returned = 0,
+                        terminated_by = NULL,
+                        terminated_at = NULL,
+                        salariu = :salariu,
+                        observatii = :observatii,
+                        updated_by = :updated_by,
+                        updated_at = :updated_at
+                    WHERE id = :id
+                ');
+                $this->bindParams($stmt, [
+                    ':staff_type_id' => (int) ($data['staff_type_id'] ?? 0),
+                    ':functie' => trim((string) ($data['function_name'] ?? '')),
+                    ':data_angajare' => $hireDate,
+                    ':salariu' => $salary,
+                    ':observatii' => $this->appendRehireNote($existing['observatii'] ?? null, $hireDate, $data['rehire_notes'] ?? null),
+                    ':updated_by' => $userId,
+                    ':updated_at' => $now,
+                    ':id' => $subjectId,
+                ]);
+                $stmt->execute();
+            }
+
+            $previousSalary = $existing['salariu'] !== null ? (float) $existing['salariu'] : null;
+            if ($salary !== null && $previousSalary !== (float) $salary) {
+                $this->createSalaryHistory($subjectType, $subjectId, $previousSalary, (float) $salary, $hireDate, $userId, 'Reangajare.');
+            }
+
+            $driverStaffType = $subjectType === 'driver' ? $this->findDriverStaffType() : null;
+            $this->createEmploymentPeriod($subjectType, $subjectId, [
+                'source_module' => $subjectType === 'driver' ? 'soferi' : 'contabilitate_personal',
+                'personnel_type' => $subjectType === 'driver' ? 'operational' : $this->categoryForStaffType((int) ($data['staff_type_id'] ?? 0)),
+                'staff_type_id' => $subjectType === 'driver' ? (int) ($driverStaffType['id'] ?? 0) : (int) ($data['staff_type_id'] ?? 0),
+                'function_name' => $subjectType === 'driver' ? 'Șofer' : trim((string) ($data['function_name'] ?? '')),
+                'salary' => $salary,
+                'hire_date' => $hireDate,
+                'status' => 'active',
+                'rehire_eligible' => 1,
+            ], $userId);
+
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->commit();
+            }
+
+            return true;
+        } catch (Throwable $exception) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
     }
 
     public function getSalaryHistoryForRows(array $rows): array
@@ -751,14 +1004,83 @@ class StaffAccountancyModel extends BaseModel
             $map[$typeId][$documentType] = $documentType;
         }
 
-        foreach ($this->getStaffTypeOptions(false) as $type) {
-            $typeId = (int) ($type['id'] ?? 0);
-            if ($typeId > 0 && !isset($map[$typeId])) {
-                $map[$typeId] = array_combine(self::DEFAULT_DOCUMENT_TYPES, self::DEFAULT_DOCUMENT_TYPES);
+        return $map;
+    }
+
+    public function getDocumentTypeOptionsForSubject(string $sourceType, int $sourceId): array
+    {
+        $staffTypeId = $this->resolveSubjectStaffTypeId($sourceType, $sourceId);
+        if ($staffTypeId <= 0) {
+            return [];
+        }
+
+        $stmt = $this->db->prepare('
+            SELECT document_type
+            FROM staff_document_requirements
+            WHERE staff_type_id = :staff_type_id
+            ORDER BY document_type ASC
+        ');
+        $stmt->bindValue(':staff_type_id', $staffTypeId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $options = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $documentType = trim((string) ($row['document_type'] ?? ''));
+            if ($documentType !== '') {
+                $options[$documentType] = $documentType;
             }
         }
 
-        return $map;
+        return $options;
+    }
+
+    public function isDocumentTypeAllowedForSubject(string $sourceType, int $sourceId, string $documentType): bool
+    {
+        $requestedKey = $this->normalizeDocumentTypeKey($documentType);
+        if ($requestedKey === '') {
+            return false;
+        }
+
+        foreach ($this->getDocumentTypeOptionsForSubject($sourceType, $sourceId) as $allowedType) {
+            if ($this->normalizeDocumentTypeKey((string) $allowedType) === $requestedKey) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function resolveSubjectStaffTypeId(string $sourceType, int $sourceId): int
+    {
+        if ($sourceId <= 0) {
+            return 0;
+        }
+
+        if ($sourceType === 'driver') {
+            $stmt = $this->db->query('
+                SELECT id
+                FROM staff_types
+                WHERE slug = "sofer"
+                LIMIT 1
+            ');
+
+            return max(0, (int) ($stmt->fetchColumn() ?: 0));
+        }
+
+        if ($sourceType === 'staff') {
+            $stmt = $this->db->prepare('
+                SELECT staff_type_id
+                FROM staff_members
+                WHERE id = :id
+                LIMIT 1
+            ');
+            $stmt->bindValue(':id', $sourceId, PDO::PARAM_INT);
+            $stmt->execute();
+
+            return max(0, (int) ($stmt->fetchColumn() ?: 0));
+        }
+
+        return 0;
     }
 
     public function saveDocument(string $sourceType, int $sourceId, array $data, ?array $fileData, ?int $userId): bool
@@ -846,6 +1168,8 @@ class StaffAccountancyModel extends BaseModel
         return '
             SELECT
                 "driver" AS source_type,
+                "soferi" AS source_module,
+                "Șoferi" AS source_label,
                 s.id AS source_id,
                 CONCAT("driver-", s.id) AS row_key,
                 st.id AS staff_type_id,
@@ -853,13 +1177,26 @@ class StaffAccountancyModel extends BaseModel
                 st.category AS category,
                 s.nume AS nume,
                 s.telefon AS telefon,
+                s.poza_original AS poza_original,
+                s.poza_stocata AS poza_stocata,
                 NULL AS email,
                 "Șofer" AS functie,
                 s.salariu AS salariu,
                 COALESCE(s.data_angajare, DATE(s.created_at)) AS data_angajare,
                 s.data_incetare AS data_incetare,
+                s.employment_status AS employment_status,
+                COALESCE(s.termination_date, s.data_incetare) AS termination_effective_date,
+                s.termination_reason AS termination_reason,
+                s.termination_notes AS termination_notes,
+                s.last_working_day AS last_working_day,
+                s.termination_document_original AS termination_document_original,
+                s.termination_document_path AS termination_document_path,
+                s.rehire_eligible AS rehire_eligible,
+                s.termination_assets_returned AS termination_assets_returned,
+                s.terminated_by AS terminated_by,
+                s.terminated_at AS terminated_at,
                 GREATEST(0, DATEDIFF(
-                    COALESCE(s.data_incetare, CASE WHEN s.status = "inactiv" THEN DATE(s.updated_at) ELSE CURDATE() END),
+                    COALESCE(s.termination_date, s.data_incetare, CASE WHEN s.status = "inactiv" THEN DATE(s.updated_at) ELSE CURDATE() END),
                     COALESCE(s.data_angajare, DATE(s.created_at))
                 ) + 1) AS active_days,
                 s.status AS status,
@@ -869,7 +1206,10 @@ class StaffAccountancyModel extends BaseModel
                     ELSE CONCAT(v.nr_inmatriculare, " + ", vs.nr_inmatriculare)
                 END AS vehicle_label,
                 s.observatii AS observatii,
-                (SELECT COUNT(*) FROM documente_soferi dd WHERE dd.driver_id = s.id) AS document_count,
+                (
+                    (SELECT COUNT(*) FROM documente_soferi dd WHERE dd.driver_id = s.id)
+                    + CASE WHEN COALESCE(s.termination_document_path, "") <> "" THEN 1 ELSE 0 END
+                ) AS document_count,
                 ' . $driverDocumentStatus . ' AS document_status,
                 0 AS can_delete,
                 s.updated_at AS updated_at
@@ -882,6 +1222,8 @@ class StaffAccountancyModel extends BaseModel
             UNION ALL
             SELECT
                 "staff" AS source_type,
+                "contabilitate_personal" AS source_module,
+                "Contabilitate Personal" AS source_label,
                 sm.id AS source_id,
                 CONCAT("staff-", sm.id) AS row_key,
                 st.id AS staff_type_id,
@@ -889,19 +1231,35 @@ class StaffAccountancyModel extends BaseModel
                 st.category AS category,
                 sm.nume_complet AS nume,
                 sm.telefon AS telefon,
+                NULL AS poza_original,
+                NULL AS poza_stocata,
                 sm.email AS email,
                 sm.functie AS functie,
                 sm.salariu AS salariu,
                 COALESCE(sm.data_angajare, DATE(sm.created_at)) AS data_angajare,
                 sm.data_incetare AS data_incetare,
+                sm.employment_status AS employment_status,
+                COALESCE(sm.termination_date, sm.data_incetare) AS termination_effective_date,
+                sm.termination_reason AS termination_reason,
+                sm.termination_notes AS termination_notes,
+                sm.last_working_day AS last_working_day,
+                sm.termination_document_original AS termination_document_original,
+                sm.termination_document_path AS termination_document_path,
+                sm.rehire_eligible AS rehire_eligible,
+                sm.termination_assets_returned AS termination_assets_returned,
+                sm.terminated_by AS terminated_by,
+                sm.terminated_at AS terminated_at,
                 GREATEST(0, DATEDIFF(
-                    COALESCE(sm.data_incetare, CASE WHEN sm.status = "inactiv" THEN DATE(sm.updated_at) ELSE CURDATE() END),
+                    COALESCE(sm.termination_date, sm.data_incetare, CASE WHEN sm.status = "inactiv" THEN DATE(sm.updated_at) ELSE CURDATE() END),
                     COALESCE(sm.data_angajare, DATE(sm.created_at))
                 ) + 1) AS active_days,
                 sm.status AS status,
                 "-" AS vehicle_label,
                 sm.observatii AS observatii,
-                (SELECT COUNT(*) FROM staff_documents sd WHERE sd.staff_member_id = sm.id) AS document_count,
+                (
+                    (SELECT COUNT(*) FROM staff_documents sd WHERE sd.staff_member_id = sm.id)
+                    + CASE WHEN COALESCE(sm.termination_document_path, "") <> "" THEN 1 ELSE 0 END
+                ) AS document_count,
                 ' . $staffDocumentStatus . ' AS document_status,
                 st.can_delete_employees AS can_delete,
                 sm.updated_at AS updated_at
@@ -913,7 +1271,7 @@ class StaffAccountancyModel extends BaseModel
 
     private function buildStaffWhere(array $filters): array
     {
-        $conditions = [];
+        $conditions = ['staff.employment_status <> "terminated"'];
         $params = [];
 
         $search = trim((string) ($filters['q'] ?? ''));
@@ -977,6 +1335,118 @@ class StaffAccountancyModel extends BaseModel
             $conditions === [] ? '' : 'WHERE ' . implode(' AND ', $conditions),
             $params,
         ];
+    }
+
+    private function formerConditionSql(): string
+    {
+        return '(staff.employment_status = "terminated" OR staff.termination_effective_date IS NOT NULL)';
+    }
+
+    private function buildFormerWhere(array $filters): array
+    {
+        $conditions = [$this->formerConditionSql()];
+        $params = [];
+
+        $search = trim((string) ($filters['q'] ?? ''));
+        if ($search !== '') {
+            $conditions[] = '(
+                staff.nume LIKE :former_search_0
+                OR staff.functie LIKE :former_search_1
+                OR staff.staff_type_name LIKE :former_search_2
+                OR COALESCE(staff.termination_reason, "") LIKE :former_search_3
+                OR staff.source_label LIKE :former_search_4
+            )';
+            for ($i = 0; $i <= 4; $i++) {
+                $params[':former_search_' . $i] = '%' . $search . '%';
+            }
+        }
+
+        $tab = trim((string) ($filters['tab'] ?? 'all'));
+        $personnelType = $this->normalizeCategory((string) ($filters['personnel_type'] ?? ''));
+        if ($tab === 'operational') {
+            $personnelType = 'operational';
+        } elseif ($tab === 'office') {
+            $personnelType = 'office';
+        }
+
+        if ($personnelType !== '') {
+            $conditions[] = 'staff.category = :former_category';
+            $params[':former_category'] = $personnelType;
+        }
+
+        $reason = trim((string) ($filters['reason'] ?? ''));
+        if ($reason !== '') {
+            $conditions[] = 'staff.termination_reason = :former_reason';
+            $params[':former_reason'] = $reason;
+        }
+
+        [$periodStart, $periodEnd] = $this->resolveFormerPeriodRange((string) ($filters['period'] ?? ''), $filters);
+        if ($periodStart !== null) {
+            $conditions[] = 'staff.termination_effective_date >= :former_date_start';
+            $params[':former_date_start'] = $periodStart;
+        }
+        if ($periodEnd !== null) {
+            $conditions[] = 'staff.termination_effective_date <= :former_date_end';
+            $params[':former_date_end'] = $periodEnd;
+        }
+
+        return [
+            'WHERE ' . implode(' AND ', $conditions),
+            $params,
+        ];
+    }
+
+    private function resolveFormerPeriodRange(string $period, array $filters): array
+    {
+        $period = trim($period);
+        $today = new DateTimeImmutable('today');
+
+        if ($period === 'last_30_days') {
+            return [$today->modify('-30 days')->format('Y-m-d'), $today->format('Y-m-d')];
+        }
+        if ($period === 'last_3_months') {
+            return [$today->modify('-3 months')->format('Y-m-d'), $today->format('Y-m-d')];
+        }
+        if ($period === 'last_6_months') {
+            return [$today->modify('-6 months')->format('Y-m-d'), $today->format('Y-m-d')];
+        }
+        if ($period === 'last_12_months') {
+            return [$today->modify('-12 months')->format('Y-m-d'), $today->format('Y-m-d')];
+        }
+        if ($period === 'current_year') {
+            return [$today->format('Y') . '-01-01', $today->format('Y-m-d')];
+        }
+        if ($period === 'previous_year') {
+            $year = ((int) $today->format('Y')) - 1;
+            return [$year . '-01-01', $year . '-12-31'];
+        }
+        if ($period === 'custom') {
+            $start = $this->normalizeDate((string) ($filters['date_start'] ?? ''));
+            $end = $this->normalizeDate((string) ($filters['date_end'] ?? ''));
+            return [$start, $end];
+        }
+
+        return [null, null];
+    }
+
+    private function resolveFormerOrderBy(string $sort, string $direction): string
+    {
+        $columns = [
+            'nume' => 'staff.nume',
+            'tip' => 'staff.staff_type_name',
+            'functie' => 'staff.functie',
+            'data_angajare' => 'staff.data_angajare',
+            'data_plecare' => 'staff.termination_effective_date',
+            'vechime' => 'staff.active_days',
+            'motiv' => 'staff.termination_reason',
+            'sursa' => 'staff.source_label',
+            'documente' => 'staff.document_count',
+        ];
+
+        $column = $columns[$sort] ?? 'staff.termination_effective_date';
+        $dir = strtolower($direction) === 'asc' ? 'ASC' : 'DESC';
+
+        return $column . ' ' . $dir . ', staff.nume ASC';
     }
 
     private function resolveStaffOrderBy(string $sort, string $direction): string
@@ -1291,7 +1761,7 @@ class StaffAccountancyModel extends BaseModel
         ]);
     }
 
-    private function ensureEmploymentEndSchema(): void
+    private function ensureEmploymentLifecycleSchema(): void
     {
         static $ensured = false;
         if ($ensured) {
@@ -1306,7 +1776,158 @@ class StaffAccountancyModel extends BaseModel
             $this->execSchemaChangeIgnoringDuplicateColumn('ALTER TABLE staff_members ADD COLUMN data_incetare DATE NULL AFTER data_angajare');
         }
 
+        foreach (['soferi', 'staff_members'] as $table) {
+            if (!$this->tableExists($table)) {
+                continue;
+            }
+
+            $this->ensureLifecycleColumn($table, 'employment_status', "ENUM('active','temporarily_inactive','suspended','leave','terminated') NOT NULL DEFAULT 'active'", 'data_incetare');
+            $this->ensureLifecycleColumn($table, 'termination_date', 'DATE NULL', 'employment_status');
+            $this->ensureLifecycleColumn($table, 'termination_reason', 'VARCHAR(120) NULL', 'termination_date');
+            $this->ensureLifecycleColumn($table, 'termination_notes', 'TEXT NULL', 'termination_reason');
+            $this->ensureLifecycleColumn($table, 'last_working_day', 'DATE NULL', 'termination_notes');
+            $this->ensureLifecycleColumn($table, 'termination_document_original', 'VARCHAR(255) NULL', 'last_working_day');
+            $this->ensureLifecycleColumn($table, 'termination_document_path', 'VARCHAR(255) NULL', 'termination_document_original');
+            $this->ensureLifecycleColumn($table, 'rehire_eligible', 'TINYINT(1) NOT NULL DEFAULT 1', 'termination_document_path');
+            $this->ensureLifecycleColumn($table, 'termination_assets_returned', 'TINYINT(1) NOT NULL DEFAULT 0', 'rehire_eligible');
+            $this->ensureLifecycleColumn($table, 'terminated_by', 'INT UNSIGNED NULL', 'termination_assets_returned');
+            $this->ensureLifecycleColumn($table, 'terminated_at', 'DATETIME NULL', 'terminated_by');
+
+            $this->db->exec("
+                UPDATE {$table}
+                SET employment_status = 'terminated',
+                    termination_date = COALESCE(termination_date, data_incetare)
+                WHERE data_incetare IS NOT NULL
+            ");
+            $this->db->exec("
+                UPDATE {$table}
+                SET employment_status = 'active'
+                WHERE data_incetare IS NULL
+                  AND employment_status = 'terminated'
+            ");
+        }
+
+        $this->db->exec("
+            CREATE TABLE IF NOT EXISTS employee_employment_periods (
+                id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                subject_type ENUM('driver', 'staff') NOT NULL,
+                driver_id INT UNSIGNED NULL,
+                staff_member_id INT UNSIGNED NULL,
+                source_module ENUM('soferi', 'contabilitate_personal') NOT NULL,
+                personnel_type ENUM('operational', 'office') NOT NULL DEFAULT 'operational',
+                staff_type_id INT UNSIGNED NULL,
+                function_name VARCHAR(120) NULL,
+                salary DECIMAL(10,2) NULL,
+                hire_date DATE NULL,
+                last_working_day DATE NULL,
+                termination_date DATE NULL,
+                termination_reason VARCHAR(120) NULL,
+                termination_notes TEXT NULL,
+                status ENUM('active', 'terminated') NOT NULL DEFAULT 'active',
+                rehire_eligible TINYINT(1) NOT NULL DEFAULT 1,
+                created_by INT UNSIGNED NULL,
+                updated_by INT UNSIGNED NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                INDEX idx_employee_period_driver (driver_id, status, hire_date),
+                INDEX idx_employee_period_staff (staff_member_id, status, hire_date),
+                INDEX idx_employee_period_subject (subject_type, status),
+                CONSTRAINT fk_employee_period_driver FOREIGN KEY (driver_id) REFERENCES soferi(id) ON DELETE CASCADE,
+                CONSTRAINT fk_employee_period_staff FOREIGN KEY (staff_member_id) REFERENCES staff_members(id) ON DELETE CASCADE,
+                CONSTRAINT fk_employee_period_staff_type FOREIGN KEY (staff_type_id) REFERENCES staff_types(id) ON DELETE SET NULL,
+                CONSTRAINT fk_employee_period_created_by FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL,
+                CONSTRAINT fk_employee_period_updated_by FOREIGN KEY (updated_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        $this->backfillEmploymentPeriods();
         $ensured = true;
+    }
+
+    private function ensureLifecycleColumn(string $table, string $column, string $definition, string $afterColumn): void
+    {
+        if ($this->columnExists($table, $column)) {
+            return;
+        }
+
+        $afterSql = $this->columnExists($table, $afterColumn) ? ' AFTER ' . $afterColumn : '';
+        $this->execSchemaChangeIgnoringDuplicateColumn('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $definition . $afterSql);
+    }
+
+    private function backfillEmploymentPeriods(): void
+    {
+        if (!$this->tableExists('employee_employment_periods') || !$this->tableExists('staff_types')) {
+            return;
+        }
+
+        $this->db->exec("
+            INSERT INTO employee_employment_periods (
+                subject_type, driver_id, staff_member_id, source_module, personnel_type, staff_type_id,
+                function_name, salary, hire_date, last_working_day, termination_date, termination_reason,
+                termination_notes, status, rehire_eligible, created_at, updated_at
+            )
+            SELECT
+                'driver',
+                s.id,
+                NULL,
+                'soferi',
+                'operational',
+                st.id,
+                'Șofer',
+                s.salariu,
+                COALESCE(s.data_angajare, DATE(s.created_at)),
+                s.last_working_day,
+                COALESCE(s.termination_date, s.data_incetare),
+                s.termination_reason,
+                s.termination_notes,
+                CASE WHEN s.employment_status = 'terminated' OR s.data_incetare IS NOT NULL THEN 'terminated' ELSE 'active' END,
+                s.rehire_eligible,
+                COALESCE(s.created_at, NOW()),
+                COALESCE(s.updated_at, NOW())
+            FROM soferi s
+            INNER JOIN staff_types st ON st.slug = 'sofer'
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM employee_employment_periods ep
+                WHERE ep.subject_type = 'driver'
+                  AND ep.driver_id = s.id
+            )
+        ");
+
+        $this->db->exec("
+            INSERT INTO employee_employment_periods (
+                subject_type, driver_id, staff_member_id, source_module, personnel_type, staff_type_id,
+                function_name, salary, hire_date, last_working_day, termination_date, termination_reason,
+                termination_notes, status, rehire_eligible, created_at, updated_at
+            )
+            SELECT
+                'staff',
+                NULL,
+                sm.id,
+                'contabilitate_personal',
+                st.category,
+                sm.staff_type_id,
+                sm.functie,
+                sm.salariu,
+                COALESCE(sm.data_angajare, DATE(sm.created_at)),
+                sm.last_working_day,
+                COALESCE(sm.termination_date, sm.data_incetare),
+                sm.termination_reason,
+                sm.termination_notes,
+                CASE WHEN sm.employment_status = 'terminated' OR sm.data_incetare IS NOT NULL THEN 'terminated' ELSE 'active' END,
+                sm.rehire_eligible,
+                COALESCE(sm.created_at, NOW()),
+                COALESCE(sm.updated_at, NOW())
+            FROM staff_members sm
+            INNER JOIN staff_types st ON st.id = sm.staff_type_id
+            WHERE st.is_driver_linked = 0
+              AND NOT EXISTS (
+                SELECT 1
+                FROM employee_employment_periods ep
+                WHERE ep.subject_type = 'staff'
+                  AND ep.staff_member_id = sm.id
+            )
+        ");
     }
 
     private function ensureEmploymentContractRequirements(): void
@@ -1340,9 +1961,13 @@ class StaffAccountancyModel extends BaseModel
 
     private function assertEndDateAfterHireDate(array $row, string $endDate): void
     {
+        if (trim($endDate) === '') {
+            throw new InvalidArgumentException('Data plecării este obligatorie.');
+        }
+
         $hireDate = $this->effectiveHireDate($row);
         if ($hireDate !== '' && $endDate < $hireDate) {
-            throw new InvalidArgumentException('Data incetarii nu poate fi inainte de data angajarii.');
+            throw new InvalidArgumentException('Data încetării nu poate fi înainte de data angajării.');
         }
     }
 
@@ -1360,6 +1985,440 @@ class StaffAccountancyModel extends BaseModel
         }
 
         return $existing !== '' ? $existing . "\n" . $line : $line;
+    }
+
+    private function appendRehireNote(mixed $existingNotes, string $hireDate, mixed $notes): string
+    {
+        $existing = trim((string) ($existingNotes ?? ''));
+        $line = 'Reangajare: ' . $hireDate . '.';
+        if (is_scalar($notes) && trim((string) $notes) !== '') {
+            $line .= ' ' . trim((string) $notes);
+        }
+
+        return $existing !== '' ? $existing . "\n" . $line : $line;
+    }
+
+    private function terminateSubject(string $subjectType, int $subjectId, array $existing, array $termination, ?int $userId): bool
+    {
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $this->closeCurrentEmploymentPeriod($subjectType, $subjectId, $existing, $termination, $userId);
+            $this->updateSubjectTerminationColumns($subjectType, $subjectId, $termination, $termination['fileData'] ?? null, $userId);
+
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->commit();
+            }
+
+            return true;
+        } catch (Throwable $exception) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
+    private function updateSubjectTerminationColumns(string $subjectType, int $subjectId, array $data, ?array $fileData, ?int $userId): void
+    {
+        $terminationDate = (string) ($data['termination_date'] ?? '');
+        $terminationNotes = isset($data['termination_notes']) ? trim((string) $data['termination_notes']) : '';
+        $params = [
+            ':employment_status' => 'terminated',
+            ':data_incetare' => $terminationDate,
+            ':termination_date' => $terminationDate,
+            ':termination_reason' => trim((string) ($data['termination_reason'] ?? '')),
+            ':termination_notes' => $terminationNotes !== '' ? $terminationNotes : null,
+            ':last_working_day' => trim((string) ($data['last_working_day'] ?? '')) !== '' ? trim((string) ($data['last_working_day'] ?? '')) : null,
+            ':rehire_eligible' => !empty($data['rehire_eligible']) ? 1 : 0,
+            ':termination_assets_returned' => !empty($data['termination_assets_returned']) ? 1 : 0,
+            ':terminated_by' => $userId,
+            ':terminated_at' => date('Y-m-d H:i:s'),
+            ':updated_at' => date('Y-m-d H:i:s'),
+            ':id' => $subjectId,
+        ];
+
+        $documentSql = '';
+        if (is_array($fileData)) {
+            $documentSql = ',
+                termination_document_original = :termination_document_original,
+                termination_document_path = :termination_document_path';
+            $params[':termination_document_original'] = $fileData['fisier_original'] ?? null;
+            $params[':termination_document_path'] = $fileData['fisier_stocat'] ?? null;
+        }
+
+        if ($subjectType === 'driver') {
+            $existing = $this->findDriver($subjectId) ?? [];
+            $sql = '
+                UPDATE soferi
+                SET status = "inactiv",
+                    employment_status = :employment_status,
+                    data_incetare = :data_incetare,
+                    termination_date = :termination_date,
+                    termination_reason = :termination_reason,
+                    termination_notes = :termination_notes,
+                    last_working_day = :last_working_day,
+                    rehire_eligible = :rehire_eligible,
+                    termination_assets_returned = :termination_assets_returned,
+                    terminated_by = :terminated_by,
+                    terminated_at = :terminated_at,
+                    observatii = :observatii,
+                    updated_at = :updated_at' . $documentSql . '
+                WHERE id = :id
+            ';
+            $params[':observatii'] = ($data['append_observatii'] ?? true)
+                ? $this->appendEmploymentEndNote($existing['observatii'] ?? null, $terminationDate, $terminationNotes)
+                : ($existing['observatii'] ?? null);
+        } else {
+            $existing = $this->findDirectStaff($subjectId) ?? [];
+            $sql = '
+                UPDATE staff_members
+                SET status = "inactiv",
+                    employment_status = :employment_status,
+                    data_incetare = :data_incetare,
+                    termination_date = :termination_date,
+                    termination_reason = :termination_reason,
+                    termination_notes = :termination_notes,
+                    last_working_day = :last_working_day,
+                    rehire_eligible = :rehire_eligible,
+                    termination_assets_returned = :termination_assets_returned,
+                    terminated_by = :terminated_by,
+                    terminated_at = :terminated_at,
+                    observatii = :observatii,
+                    updated_by = :updated_by,
+                    updated_at = :updated_at' . $documentSql . '
+                WHERE id = :id
+            ';
+            $params[':observatii'] = ($data['append_observatii'] ?? true)
+                ? $this->appendEmploymentEndNote($existing['observatii'] ?? null, $terminationDate, $terminationNotes)
+                : ($existing['observatii'] ?? null);
+            $params[':updated_by'] = $userId;
+        }
+
+        $stmt = $this->db->prepare($sql);
+        $this->bindParams($stmt, $params);
+        $stmt->execute();
+    }
+
+    private function closeCurrentEmploymentPeriod(string $subjectType, int $subjectId, array $existing, array $termination, ?int $userId): void
+    {
+        $column = $subjectType === 'driver' ? 'driver_id' : 'staff_member_id';
+        $stmt = $this->db->prepare('
+            SELECT id
+            FROM employee_employment_periods
+            WHERE subject_type = :subject_type
+              AND ' . $column . ' = :subject_id
+              AND status = "active"
+            ORDER BY COALESCE(hire_date, "1000-01-01") DESC, id DESC
+            LIMIT 1
+        ');
+        $this->bindParams($stmt, [
+            ':subject_type' => $subjectType,
+            ':subject_id' => $subjectId,
+        ]);
+        $stmt->execute();
+        $periodId = (int) ($stmt->fetchColumn() ?: 0);
+
+        if ($periodId <= 0) {
+            $periodId = $this->createEmploymentPeriod($subjectType, $subjectId, $this->periodPayloadFromSubject($subjectType, $existing, $termination), $userId);
+        }
+
+        $updateStmt = $this->db->prepare('
+            UPDATE employee_employment_periods
+            SET last_working_day = :last_working_day,
+                termination_date = :termination_date,
+                termination_reason = :termination_reason,
+                termination_notes = :termination_notes,
+                status = "terminated",
+                rehire_eligible = :rehire_eligible,
+                updated_by = :updated_by,
+                updated_at = :updated_at
+            WHERE id = :id
+        ');
+        $this->bindParams($updateStmt, [
+            ':last_working_day' => trim((string) ($termination['last_working_day'] ?? '')) !== '' ? trim((string) ($termination['last_working_day'] ?? '')) : null,
+            ':termination_date' => (string) ($termination['termination_date'] ?? ''),
+            ':termination_reason' => trim((string) ($termination['termination_reason'] ?? '')),
+            ':termination_notes' => trim((string) ($termination['termination_notes'] ?? '')) !== '' ? trim((string) ($termination['termination_notes'] ?? '')) : null,
+            ':rehire_eligible' => !empty($termination['rehire_eligible']) ? 1 : 0,
+            ':updated_by' => $userId,
+            ':updated_at' => date('Y-m-d H:i:s'),
+            ':id' => $periodId,
+        ]);
+        $updateStmt->execute();
+    }
+
+    private function syncLatestTerminatedEmploymentPeriod(string $subjectType, int $subjectId, array $data, ?int $userId): void
+    {
+        $column = $subjectType === 'driver' ? 'driver_id' : 'staff_member_id';
+        $stmt = $this->db->prepare('
+            SELECT id
+            FROM employee_employment_periods
+            WHERE subject_type = :subject_type
+              AND ' . $column . ' = :subject_id
+              AND status = "terminated"
+            ORDER BY COALESCE(termination_date, "1000-01-01") DESC, id DESC
+            LIMIT 1
+        ');
+        $this->bindParams($stmt, [
+            ':subject_type' => $subjectType,
+            ':subject_id' => $subjectId,
+        ]);
+        $stmt->execute();
+        $periodId = (int) ($stmt->fetchColumn() ?: 0);
+        if ($periodId <= 0) {
+            return;
+        }
+
+        $updateStmt = $this->db->prepare('
+            UPDATE employee_employment_periods
+            SET last_working_day = :last_working_day,
+                termination_date = :termination_date,
+                termination_reason = :termination_reason,
+                termination_notes = :termination_notes,
+                rehire_eligible = :rehire_eligible,
+                updated_by = :updated_by,
+                updated_at = :updated_at
+            WHERE id = :id
+        ');
+        $this->bindParams($updateStmt, [
+            ':last_working_day' => trim((string) ($data['last_working_day'] ?? '')) !== '' ? trim((string) ($data['last_working_day'] ?? '')) : null,
+            ':termination_date' => (string) ($data['termination_date'] ?? ''),
+            ':termination_reason' => trim((string) ($data['termination_reason'] ?? '')),
+            ':termination_notes' => trim((string) ($data['termination_notes'] ?? '')) !== '' ? trim((string) ($data['termination_notes'] ?? '')) : null,
+            ':rehire_eligible' => !empty($data['rehire_eligible']) ? 1 : 0,
+            ':updated_by' => $userId,
+            ':updated_at' => date('Y-m-d H:i:s'),
+            ':id' => $periodId,
+        ]);
+        $updateStmt->execute();
+    }
+
+    private function createEmploymentPeriod(string $subjectType, int $subjectId, array $payload, ?int $userId): int
+    {
+        $stmt = $this->db->prepare('
+            INSERT INTO employee_employment_periods (
+                subject_type, driver_id, staff_member_id, source_module, personnel_type, staff_type_id,
+                function_name, salary, hire_date, last_working_day, termination_date, termination_reason,
+                termination_notes, status, rehire_eligible, created_by, updated_by, created_at, updated_at
+            ) VALUES (
+                :subject_type, :driver_id, :staff_member_id, :source_module, :personnel_type, :staff_type_id,
+                :function_name, :salary, :hire_date, :last_working_day, :termination_date, :termination_reason,
+                :termination_notes, :status, :rehire_eligible, :created_by, :updated_by, :created_at, :updated_at
+            )
+        ');
+        $staffTypeId = (int) ($payload['staff_type_id'] ?? 0);
+        $this->bindParams($stmt, [
+            ':subject_type' => $subjectType,
+            ':driver_id' => $subjectType === 'driver' ? $subjectId : null,
+            ':staff_member_id' => $subjectType === 'staff' ? $subjectId : null,
+            ':source_module' => (string) ($payload['source_module'] ?? ($subjectType === 'driver' ? 'soferi' : 'contabilitate_personal')),
+            ':personnel_type' => $this->normalizeCategory((string) ($payload['personnel_type'] ?? 'operational')) ?: 'operational',
+            ':staff_type_id' => $staffTypeId > 0 ? $staffTypeId : null,
+            ':function_name' => trim((string) ($payload['function_name'] ?? '')) !== '' ? trim((string) ($payload['function_name'] ?? '')) : null,
+            ':salary' => $payload['salary'] ?? null,
+            ':hire_date' => trim((string) ($payload['hire_date'] ?? '')) !== '' ? trim((string) ($payload['hire_date'] ?? '')) : null,
+            ':last_working_day' => trim((string) ($payload['last_working_day'] ?? '')) !== '' ? trim((string) ($payload['last_working_day'] ?? '')) : null,
+            ':termination_date' => trim((string) ($payload['termination_date'] ?? '')) !== '' ? trim((string) ($payload['termination_date'] ?? '')) : null,
+            ':termination_reason' => trim((string) ($payload['termination_reason'] ?? '')) !== '' ? trim((string) ($payload['termination_reason'] ?? '')) : null,
+            ':termination_notes' => trim((string) ($payload['termination_notes'] ?? '')) !== '' ? trim((string) ($payload['termination_notes'] ?? '')) : null,
+            ':status' => (string) ($payload['status'] ?? 'active') === 'terminated' ? 'terminated' : 'active',
+            ':rehire_eligible' => !empty($payload['rehire_eligible']) ? 1 : 0,
+            ':created_by' => $userId,
+            ':updated_by' => $userId,
+            ':created_at' => date('Y-m-d H:i:s'),
+            ':updated_at' => date('Y-m-d H:i:s'),
+        ]);
+        $stmt->execute();
+
+        return (int) $this->db->lastInsertId();
+    }
+
+    private function periodPayloadFromSubject(string $subjectType, array $existing, array $termination = []): array
+    {
+        $staffTypeId = null;
+        $category = 'operational';
+        $functionName = 'Șofer';
+        if ($subjectType === 'driver') {
+            $driverType = $this->findDriverStaffType();
+            $staffTypeId = $driverType !== null ? (int) ($driverType['id'] ?? 0) : null;
+        } else {
+            $staffTypeId = (int) ($existing['staff_type_id'] ?? 0);
+            $category = $this->categoryForStaffType($staffTypeId);
+            $functionName = trim((string) ($existing['functie'] ?? ''));
+        }
+
+        return [
+            'source_module' => $subjectType === 'driver' ? 'soferi' : 'contabilitate_personal',
+            'personnel_type' => $category,
+            'staff_type_id' => $staffTypeId,
+            'function_name' => $functionName,
+            'salary' => $existing['salariu'] ?? null,
+            'hire_date' => $this->effectiveHireDate($existing),
+            'last_working_day' => $termination['last_working_day'] ?? null,
+            'termination_date' => $termination['termination_date'] ?? null,
+            'termination_reason' => $termination['termination_reason'] ?? null,
+            'termination_notes' => $termination['termination_notes'] ?? null,
+            'status' => !empty($termination['termination_date']) ? 'terminated' : 'active',
+            'rehire_eligible' => !array_key_exists('rehire_eligible', $termination) || !empty($termination['rehire_eligible']) ? 1 : 0,
+        ];
+    }
+
+    private function findSubjectInUnion(string $sourceType, int $sourceId, bool $formerOnly = false): ?array
+    {
+        if (!in_array($sourceType, ['driver', 'staff'], true) || $sourceId <= 0) {
+            return null;
+        }
+
+        $conditions = [
+            'staff.source_type = :source_type',
+            'staff.source_id = :source_id',
+        ];
+        if ($formerOnly) {
+            $conditions[] = $this->formerConditionSql();
+        }
+
+        $stmt = $this->db->prepare('
+            SELECT *
+            FROM (' . $this->baseStaffUnionSql() . ') staff
+            WHERE ' . implode(' AND ', $conditions) . '
+            LIMIT 1
+        ');
+        $this->bindParams($stmt, [
+            ':source_type' => $sourceType,
+            ':source_id' => $sourceId,
+        ]);
+        $stmt->execute();
+        $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    private function getEmploymentPeriodsForSubject(string $sourceType, int $sourceId): array
+    {
+        $column = $sourceType === 'driver' ? 'driver_id' : 'staff_member_id';
+        if (!in_array($sourceType, ['driver', 'staff'], true) || $sourceId <= 0) {
+            return [];
+        }
+
+        $stmt = $this->db->prepare('
+            SELECT ep.*, st.name AS staff_type_name, u.nume AS updated_by_name
+            FROM employee_employment_periods ep
+            LEFT JOIN staff_types st ON st.id = ep.staff_type_id
+            LEFT JOIN utilizatori u ON u.id = ep.updated_by
+            WHERE ep.subject_type = :subject_type
+              AND ep.' . $column . ' = :subject_id
+            ORDER BY COALESCE(ep.hire_date, "1000-01-01") DESC, ep.id DESC
+        ');
+        $this->bindParams($stmt, [
+            ':subject_type' => $sourceType,
+            ':subject_id' => $sourceId,
+        ]);
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    private function getDriverOperationalHistory(int $driverId): array
+    {
+        $history = $this->emptyDriverOperationalHistory();
+        if ($driverId <= 0) {
+            return $history;
+        }
+
+        if ($this->tableExists('curse_dispecer')) {
+            try {
+                $stmt = $this->db->prepare('
+                    SELECT c.id, COALESCE(c.data_inceput, c.data_cursa) AS data_start,
+                           COALESCE(c.data_sfarsit, c.data_inceput, c.data_cursa) AS data_end,
+                           c.tip_transport, c.status_facturare, v.nr_inmatriculare AS vehicle_label
+                    FROM curse_dispecer c
+                    LEFT JOIN vehicule v ON v.id = c.vehicle_id
+                    WHERE c.driver_id = :driver_id
+                      AND ' . $this->activeRaceCondition('c') . '
+                    ORDER BY COALESCE(c.data_inceput, c.data_cursa) DESC, c.id DESC
+                    LIMIT 8
+                ');
+                $stmt->bindValue(':driver_id', $driverId, PDO::PARAM_INT);
+                $stmt->execute();
+                $history['trips'] = $stmt->fetchAll();
+            } catch (Throwable $exception) {
+                error_log('[StaffAccountancyModel][driver_trips_history] ' . $exception->getMessage());
+            }
+        }
+
+        if ($this->tableExists('concedii')) {
+            try {
+                $stmt = $this->db->prepare('
+                    SELECT id, tip_concediu, data_inceput, data_sfarsit, status
+                    FROM concedii
+                    WHERE driver_id = :driver_id
+                    ORDER BY data_inceput DESC, id DESC
+                    LIMIT 8
+                ');
+                $stmt->bindValue(':driver_id', $driverId, PDO::PARAM_INT);
+                $stmt->execute();
+                $history['leaves'] = $stmt->fetchAll();
+            } catch (Throwable $exception) {
+                error_log('[StaffAccountancyModel][driver_leave_history] ' . $exception->getMessage());
+            }
+        }
+
+        if ($this->tableExists('soferi_vehicule')) {
+            try {
+                $stmt = $this->db->prepare('
+                    SELECT sv.vehicle_id, sv.is_primary, sv.created_at, sv.updated_at,
+                           v.nr_inmatriculare, v.marca, v.model
+                    FROM soferi_vehicule sv
+                    LEFT JOIN vehicule v ON v.id = sv.vehicle_id
+                    WHERE sv.driver_id = :driver_id
+                    ORDER BY sv.is_primary DESC, sv.updated_at DESC, sv.vehicle_id ASC
+                ');
+                $stmt->bindValue(':driver_id', $driverId, PDO::PARAM_INT);
+                $stmt->execute();
+                $history['vehicle_assignments'] = $stmt->fetchAll();
+            } catch (Throwable $exception) {
+                error_log('[StaffAccountancyModel][driver_vehicle_history] ' . $exception->getMessage());
+            }
+        }
+
+        return $history;
+    }
+
+    private function emptyDriverOperationalHistory(): array
+    {
+        return [
+            'trips' => [],
+            'leaves' => [],
+            'vehicle_assignments' => [],
+        ];
+    }
+
+    private function categoryForStaffType(int $staffTypeId): string
+    {
+        $type = $this->findStaffType($staffTypeId);
+        $category = is_array($type) ? $this->normalizeCategory((string) ($type['category'] ?? '')) : '';
+
+        return $category !== '' ? $category : 'office';
+    }
+
+    private function assertLastWorkingDayIsValid(array $row, string $endDate, ?string $lastWorkingDay): void
+    {
+        if ($lastWorkingDay === null || trim($lastWorkingDay) === '') {
+            return;
+        }
+
+        $hireDate = $this->effectiveHireDate($row);
+        if ($hireDate !== '' && $lastWorkingDay < $hireDate) {
+            throw new InvalidArgumentException('Ultima zi lucrată nu poate fi înainte de data angajării.');
+        }
+        if ($lastWorkingDay > $endDate) {
+            throw new InvalidArgumentException('Ultima zi lucrată nu poate fi după data plecării.');
+        }
     }
 
     private function isEmploymentContractDocument(string $documentType): bool
@@ -1387,6 +2446,17 @@ class StaffAccountancyModel extends BaseModel
         $stmt->execute([':table_name' => $table]);
 
         return (int) $stmt->fetchColumn() > 0;
+    }
+
+    private function activeRaceCondition(string $alias = 'c'): string
+    {
+        static $hasDeletedAt = null;
+
+        if ($hasDeletedAt === null) {
+            $hasDeletedAt = $this->columnExists('curse_dispecer', 'deleted_at');
+        }
+
+        return $hasDeletedAt ? $alias . '.deleted_at IS NULL' : '1=1';
     }
 
     private function columnExists(string $table, string $column): bool

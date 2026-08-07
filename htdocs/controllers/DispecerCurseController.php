@@ -3,6 +3,8 @@ declare(strict_types=1);
 class DispecerCurseController
 {
     private DispecerCurseModel $model;
+    private InactiveResourceStatusService $inactiveStatusService;
+    private InactiveResourceApprovalModel $inactiveApprovalModel;
 
     private const TRANSPORT_TYPES = [
         'primar' => 'Primar km',
@@ -50,6 +52,19 @@ class DispecerCurseController
     public function __construct(PDO $db)
     {
         $this->model = new DispecerCurseModel($db);
+        $this->inactiveStatusService = new InactiveResourceStatusService($db);
+        $this->inactiveApprovalModel = new InactiveResourceApprovalModel($db);
+    }
+
+    private function deletedRaceTransportTypes(): array
+    {
+        return [
+            'primar' => 'Primar',
+            'primar_tona' => 'Primar tone',
+            'distributie' => 'Distribuție',
+            'primar_distributie' => 'Primar+Distribuție',
+            'compresor' => 'Compresor',
+        ];
     }
 
     private function expenseEntryTypes(): array
@@ -71,6 +86,9 @@ class DispecerCurseController
             case 'index':
             case 'list':
                 $this->indexAction();
+                return;
+            case 'inactive_resource_status':
+                $this->inactiveResourceStatusAction();
                 return;
             case 'store':
                 $this->storeAction();
@@ -104,6 +122,22 @@ class DispecerCurseController
                 return;
             case 'refacturari':
                 $this->refacturariAction();
+                return;
+            case 'curse_sterse':
+                $this->requireDeletedRacesAdminAccess();
+                $this->deletedRacesAction();
+                return;
+            case 'curse_sterse_details':
+                $this->requireDeletedRacesAdminAccess();
+                $this->deletedRaceDetailsAction();
+                return;
+            case 'restore_cursa':
+                $this->requireDeletedRacesAdminAccess();
+                $this->restoreDeletedRaceAction();
+                return;
+            case 'delete_cursa_stearsa':
+                $this->requireDeletedRacesAdminAccess();
+                $this->permanentlyDeleteDeletedRaceAction();
                 return;
             case 'store_refacturare':
                 $this->storeRefacturareAction();
@@ -157,6 +191,68 @@ class DispecerCurseController
         }
     }
 
+    private function requireDeletedRacesAdminAccess(): void
+    {
+        if (function_exists('is_admin') && is_admin()) {
+            return;
+        }
+
+        if ($this->wantsJson()) {
+            $this->sendJson([
+                'success' => false,
+                'message' => 'Acces permis doar administratorilor.',
+            ], 403);
+        }
+
+        http_response_code(403);
+        render('errors/403.php', [
+            'pageTitle' => 'Acces interzis',
+            'currentPage' => '',
+        ]);
+        exit;
+    }
+
+    private function inactiveResourceStatusAction(): void
+    {
+        $vehicleId = $this->positiveIntFromInput($_GET['vehicle_id'] ?? null);
+        $driverId = $this->positiveIntFromInput($_GET['driver_id'] ?? null);
+        $tripId = $this->positiveIntFromInput($_GET['trip_id'] ?? null);
+
+        try {
+            $status = $this->inactiveStatusService->getResourcesStatus($vehicleId, $driverId);
+            foreach ($status['resources'] as &$resource) {
+                $resourceType = (string) ($resource['resource_type'] ?? '');
+                $resourceId = (int) ($resource['resource_id'] ?? 0);
+                $resource['existing_approval_status'] = null;
+
+                if (!empty($resource['is_inactive']) && $tripId !== null && $resourceId > 0) {
+                    $resource['existing_approval_status'] = $this->inactiveApprovalModel
+                        ->getExistingOpenStatusForResourceTrip($resourceType, $resourceId, $tripId);
+                }
+            }
+            unset($resource);
+
+            $status['inactive_resources'] = array_values(array_filter(
+                $status['resources'],
+                static fn(array $resource): bool => !empty($resource['is_inactive'])
+            ));
+            $status['has_inactive_resources'] = $status['inactive_resources'] !== [];
+
+            $this->sendJson([
+                'success' => true,
+                'resources' => $status['resources'],
+                'inactive_resources' => $status['inactive_resources'],
+                'has_inactive_resources' => $status['has_inactive_resources'],
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][inactive_resource_status] ' . $exception->getMessage());
+            $this->sendJson([
+                'success' => false,
+                'message' => 'Nu s-a putut verifica statusul resurselor inactive.',
+            ], 500);
+        }
+    }
+
     private function indexAction(): void
     {
         $search = trim((string) ($_GET['q'] ?? ''));
@@ -172,7 +268,7 @@ class DispecerCurseController
 
         try {
             $result = $this->model->getPaginatedRaces($filters, $search, $page, ITEMS_PER_PAGE);
-            $raceVehicles = $this->model->getVehicleOptions(true);
+            $raceVehicles = $this->model->getVehicleOptions(false);
             $filterVehicles = $this->model->getVehicleOptions();
             $vehicleGarageMap = $this->model->getVehicleGarageMap(true);
             $loadLocations = $this->model->getLoadLocations(true);
@@ -230,6 +326,7 @@ class DispecerCurseController
                 'rows' => [],
                 'missing_end_time_count' => 0,
                 'missing_expenses_count' => 0,
+                'multiple_missing_count' => 0,
             ];
         }
 
@@ -288,8 +385,18 @@ class DispecerCurseController
 
         ensure_csrf_or_redirect(build_query_url(['page' => 'dispecer_curse']));
 
-        [$data, $errors, $old] = $this->validateRaceInput($_POST, true);
+        [$data, $errors, $old] = $this->validateRaceInput($_POST, false);
         if ($errors !== []) {
+            $this->setFormFlash('race_create', $old, $errors);
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        $approvalDecision = $this->normalizeInactiveApprovalDecision($_POST['inactive_approval_decision'] ?? '');
+        $inactiveResources = $this->getInactiveResourcesForRaceData($data);
+        $resourcesNeedingDecision = $this->resourcesNeedingInactiveApprovalDecision($inactiveResources, null);
+        if ($resourcesNeedingDecision !== [] && $approvalDecision === '') {
+            $old['inactive_approval_decision'] = '';
+            $errors['inactive_resources'] = $this->buildInactiveApprovalRequiredMessage($resourcesNeedingDecision);
             $this->setFormFlash('race_create', $old, $errors);
             redirect(build_query_url(['page' => 'dispecer_curse']));
         }
@@ -300,14 +407,43 @@ class DispecerCurseController
         $data['updated_at'] = $now;
 
         try {
+            $duplicateRaceId = $this->model->findDuplicateRaceId($data);
+            if ($duplicateRaceId !== null) {
+                flash_set('warning', $this->buildDuplicateRaceMessage($duplicateRaceId));
+                $this->setPostCreateExpensePrompt(0);
+                $this->setFormFlash('race_create', $old, []);
+                redirect(build_query_url(['page' => 'dispecer_curse']));
+            }
+
             $result = $this->model->createRaceAndSyncVehicleKm($data);
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
             $raceId = (int) ($result['race_id'] ?? 0);
+            if ($raceId > 0 && $inactiveResources !== []) {
+                $createdApprovalIds = $this->inactiveApprovalModel->createForInactiveResources(
+                    $inactiveResources,
+                    $raceId,
+                    $approvalDecision !== '' ? $approvalDecision : 'pending',
+                    $this->currentUserId()
+                );
+                if ($createdApprovalIds !== []) {
+                    flash_set(
+                        $approvalDecision === 'approved' ? 'info' : 'warning',
+                        $approvalDecision === 'approved'
+                            ? 'Utilizarea resurselor inactive a fost aprobata imediat.'
+                            : 'Utilizarea resurselor inactive a fost trimisa spre aprobare.'
+                    );
+                }
+            }
             $this->setPostCreateExpensePrompt($raceId);
             flash_set('success', 'Cursa a fost adaugata cu succes.');
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][store] ' . $exception->getMessage());
-            flash_set('danger', $this->buildPersistenceErrorMessage($exception));
+            flash_set(
+                $this->isDuplicateRacePersistenceError($exception) ? 'warning' : 'danger',
+                $this->isDuplicateRacePersistenceError($exception)
+                    ? $this->buildDuplicateRaceMessage()
+                    : $this->buildPersistenceErrorMessage($exception)
+            );
             $this->setPostCreateExpensePrompt(0);
             $this->setFormFlash('race_create', $old, []);
         }
@@ -455,15 +591,61 @@ class DispecerCurseController
             redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
         }
 
+        $approvalDecision = $this->normalizeInactiveApprovalDecision($_POST['inactive_approval_decision'] ?? '');
+        $inactiveResources = $this->getInactiveResourcesForRaceData($data);
+        $resourcesNeedingDecision = $this->resourcesNeedingInactiveApprovalDecision($inactiveResources, $raceId);
+        if ($resourcesNeedingDecision !== [] && $approvalDecision === '') {
+            $old['inactive_approval_decision'] = '';
+            $errors['inactive_resources'] = $this->buildInactiveApprovalRequiredMessage($resourcesNeedingDecision);
+            $this->setFormFlash('race_edit_' . $raceId, $old, $errors);
+            redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
+        }
+
+        // Statusul de facturare nu se editeaza din acest formular: se pastreaza
+        // valoarea existenta (se schimba doar din Centralizator Facturare).
+        $existingRace = $this->model->getRaceById($raceId);
+        if (is_array($existingRace)) {
+            $data['status_facturare'] = (string) ($existingRace['status_facturare'] ?? self::DEFAULT_BILLING_STATUS);
+        }
+
         $data['updated_at'] = date('Y-m-d H:i:s');
 
         try {
-            $result = $this->model->updateRaceAndSyncVehicleKm($raceId, $data);
+            $duplicateRaceId = $this->model->findDuplicateRaceId($data, $raceId);
+            if ($duplicateRaceId !== null) {
+                flash_set('warning', $this->buildDuplicateRaceMessage($duplicateRaceId));
+                $this->setFormFlash('race_edit_' . $raceId, $old, []);
+                redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
+            }
+
+            $result = $this->model->updateRaceAndSyncVehicleKm($raceId, $data, $this->currentUserId());
+            if ($inactiveResources !== []) {
+                $createdApprovalIds = $this->inactiveApprovalModel->createForInactiveResources(
+                    $inactiveResources,
+                    $raceId,
+                    $approvalDecision !== '' ? $approvalDecision : 'pending',
+                    $this->currentUserId()
+                );
+                if ($createdApprovalIds !== [] && $approvalDecision !== '') {
+                    flash_set(
+                        $approvalDecision === 'approved' ? 'info' : 'warning',
+                        $approvalDecision === 'approved'
+                            ? 'Utilizarea resurselor inactive a fost aprobata imediat.'
+                            : 'Utilizarea resurselor inactive a fost trimisa spre aprobare.'
+                    );
+                }
+            }
+            $this->inactiveApprovalModel->rejectPendingNoLongerUsed($raceId, $inactiveResources, $this->currentUserId());
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
             flash_set('success', 'Cursa a fost actualizatÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢.');
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][update] ' . $exception->getMessage());
-            flash_set('danger', $this->buildPersistenceErrorMessage($exception));
+            flash_set(
+                $this->isDuplicateRacePersistenceError($exception) ? 'warning' : 'danger',
+                $this->isDuplicateRacePersistenceError($exception)
+                    ? $this->buildDuplicateRaceMessage()
+                    : $this->buildPersistenceErrorMessage($exception)
+            );
             $this->setFormFlash('race_edit_' . $raceId, $old, []);
         }
 
@@ -486,8 +668,7 @@ class DispecerCurseController
         }
 
         try {
-            $this->deleteRaceFiles($raceId);
-            $this->model->deleteRaceAndSyncVehicleKm($raceId);
+            $this->model->deleteRaceAndSyncVehicleKm($raceId, $this->currentUserId());
             flash_set('success', 'Cursa a fost ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â¹ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢tearsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢.');
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][delete] ' . $exception->getMessage());
@@ -540,8 +721,7 @@ class DispecerCurseController
             }
 
             try {
-                $this->deleteRaceFiles($raceId);
-                $this->model->deleteRaceAndSyncVehicleKm($raceId);
+                $this->model->deleteRaceAndSyncVehicleKm($raceId, $this->currentUserId());
                 $deletedCount++;
             } catch (Throwable $exception) {
                 error_log('[DispecerCurseController][delete_bulk][' . $raceId . '] ' . $exception->getMessage());
@@ -574,6 +754,340 @@ class DispecerCurseController
         }
 
         $this->redirectToSafeDispecerUrl($returnUrl);
+    }
+
+    private function deletedRacesAction(): void
+    {
+        $filters = $this->collectDeletedRaceFilters();
+        $page = max(1, (int) ($_GET['p'] ?? 1));
+        $perPage = $this->collectDeletedRacePerPage();
+
+        $options = [
+            'vehicles' => [],
+            'drivers' => [],
+            'beneficiaries' => [],
+            'deleted_by_users' => [],
+        ];
+        $result = [
+            'rows' => [],
+            'summary' => [
+                'total_deleted' => 0,
+                'deleted_this_month' => 0,
+                'users_involved' => 0,
+                'month_start' => (new DateTimeImmutable('first day of this month'))->format('Y-m-d'),
+                'month_end' => (new DateTimeImmutable('last day of this month'))->format('Y-m-d'),
+            ],
+            'pagination' => [
+                'page' => 1,
+                'per_page' => $perPage,
+                'total_rows' => 0,
+                'total_pages' => 1,
+            ],
+        ];
+
+        try {
+            $this->model->ensureDeletedRacesSupport();
+            $options = $this->model->getDeletedRaceFilterOptions();
+            $result = $this->model->getDeletedRacesPage($filters, $page, $perPage);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][curse_sterse] ' . $exception->getMessage());
+            flash_set('danger', $this->buildPersistenceErrorMessage($exception));
+        }
+
+        render('dispecer_curse/curse_sterse.php', [
+            'pageTitle' => 'Curse șterse',
+            'currentPage' => 'dispecer_curse',
+            'filters' => $filters,
+            'filterOptions' => $options,
+            'rows' => $result['rows'],
+            'summary' => $result['summary'],
+            'pagination' => $result['pagination'],
+            'transportTypes' => $this->deletedRaceTransportTypes(),
+        ]);
+    }
+
+    private function deletedRaceDetailsAction(): void
+    {
+        $raceId = (int) ($_GET['id'] ?? 0);
+        if ($raceId <= 0) {
+            $this->sendJson([
+                'success' => false,
+                'message' => 'Cursa selectată este invalidă.',
+            ], 422);
+        }
+
+        try {
+            $details = $this->model->getDeletedRaceDetails($raceId);
+            if ($details === null) {
+                $this->sendJson([
+                    'success' => false,
+                    'message' => 'Cursa ștearsă nu a fost găsită.',
+                ], 404);
+            }
+
+            $this->sendJson([
+                'success' => true,
+                'details' => $this->buildDeletedRaceDetailsPayload($details),
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][curse_sterse_details] ' . $exception->getMessage());
+            $this->sendJson([
+                'success' => false,
+                'message' => 'Detaliile cursei nu au putut fi încărcate.',
+            ], 500);
+        }
+    }
+
+    private function restoreDeletedRaceAction(): void
+    {
+        $returnUrl = trim((string) ($_POST['return_url'] ?? ''));
+        $fallbackUrl = $returnUrl !== '' ? $returnUrl : build_query_url(['page' => 'dispecer_curse', 'action' => 'curse_sterse']);
+
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'curse_sterse']));
+        }
+
+        if (!verify_csrf_token($_POST['_token'] ?? null)) {
+            if ($this->wantsJson()) {
+                $this->sendJson([
+                    'success' => false,
+                    'message' => 'Sesiunea a expirat. Reîncarcă pagina și încearcă din nou.',
+                ], 419);
+            }
+
+            flash_set('danger', 'Sesiunea a expirat. Reîncarcă pagina și încearcă din nou.');
+            redirect($fallbackUrl);
+        }
+
+        $raceId = (int) ($_POST['id'] ?? 0);
+        if ($raceId <= 0 || !$this->model->existsDeletedRace($raceId)) {
+            if ($this->wantsJson()) {
+                $this->sendJson([
+                    'success' => false,
+                    'message' => 'Cursa ștearsă nu a fost găsită.',
+                ], 404);
+            }
+
+            flash_set('warning', 'Cursa ștearsă nu a fost găsită.');
+            redirect($fallbackUrl);
+        }
+
+        try {
+            $this->model->restoreDeletedRaceAndSyncVehicleKm($raceId, $this->currentUserId());
+            if ($this->wantsJson()) {
+                $this->sendJson([
+                    'success' => true,
+                    'message' => 'Cursa a fost restaurată.',
+                ]);
+            }
+
+            flash_set('success', 'Cursa a fost restaurată.');
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][restore_cursa] ' . $exception->getMessage());
+            if ($this->wantsJson()) {
+                $this->sendJson([
+                    'success' => false,
+                    'message' => $this->buildPersistenceErrorMessage($exception),
+                ], 500);
+            }
+
+            flash_set('danger', $this->buildPersistenceErrorMessage($exception));
+        }
+
+        redirect($fallbackUrl);
+    }
+
+    private function permanentlyDeleteDeletedRaceAction(): void
+    {
+        $returnUrl = trim((string) ($_POST['return_url'] ?? ''));
+        $fallbackUrl = $returnUrl !== '' ? $returnUrl : build_query_url(['page' => 'dispecer_curse', 'action' => 'curse_sterse']);
+
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'curse_sterse']));
+        }
+
+        if (!verify_csrf_token($_POST['_token'] ?? null)) {
+            if ($this->wantsJson()) {
+                $this->sendJson([
+                    'success' => false,
+                    'message' => 'Sesiunea a expirat. Reîncarcă pagina și încearcă din nou.',
+                ], 419);
+            }
+
+            flash_set('danger', 'Sesiunea a expirat. Reîncarcă pagina și încearcă din nou.');
+            redirect($fallbackUrl);
+        }
+
+        $raceId = (int) ($_POST['id'] ?? 0);
+        if ($raceId <= 0 || !$this->model->existsDeletedRace($raceId)) {
+            if ($this->wantsJson()) {
+                $this->sendJson([
+                    'success' => false,
+                    'message' => 'Cursa ștearsă nu a fost găsită.',
+                ], 404);
+            }
+
+            flash_set('warning', 'Cursa ștearsă nu a fost găsită.');
+            redirect($fallbackUrl);
+        }
+
+        try {
+            $documents = $this->model->getExpenseDocumentsByRaceId($raceId);
+            $this->model->permanentlyDeleteDeletedRace($raceId);
+            $this->deleteExpensePhysicalFiles($documents);
+            if ($this->wantsJson()) {
+                $this->sendJson([
+                    'success' => true,
+                    'message' => 'Cursa a fost ștearsă definitiv.',
+                ]);
+            }
+
+            flash_set('success', 'Cursa a fost ștearsă definitiv.');
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][delete_cursa_stearsa] ' . $exception->getMessage());
+            if ($this->wantsJson()) {
+                $this->sendJson([
+                    'success' => false,
+                    'message' => $this->buildPersistenceErrorMessage($exception),
+                ], 500);
+            }
+
+            flash_set('danger', $this->buildPersistenceErrorMessage($exception));
+        }
+
+        redirect($fallbackUrl);
+    }
+
+    private function buildDeletedRaceDetailsPayload(array $details): array
+    {
+        $race = is_array($details['race'] ?? null) ? $details['race'] : [];
+        $transportType = (string) ($race['tip_transport'] ?? '');
+        $transportLabel = $this->deletedRaceTransportTypes()[$transportType] ?? ($transportType !== '' ? $transportType : '-');
+        $raceDate = (string) (($race['data_inceput'] ?? '') !== '' ? $race['data_inceput'] : ($race['data_cursa'] ?? ''));
+        $driverName = trim((string) ($race['sofer_nume'] ?? ''));
+        $deletedByName = trim((string) ($race['deleted_by_nume'] ?? ''));
+        $deletedByRole = trim((string) ($race['deleted_by_rol'] ?? ''));
+
+        $fields = [
+            ['label' => 'Cursă', 'value' => '#' . (int) ($race['id'] ?? 0)],
+            ['label' => 'Nr. înmatriculare', 'value' => trim((string) ($race['nr_inmatriculare'] ?? '')) ?: '-'],
+            ['label' => 'Șofer', 'value' => $driverName !== '' ? $driverName : '-'],
+            ['label' => 'Tip transport', 'value' => $transportLabel, 'badge' => $transportType],
+            ['label' => 'Beneficiar', 'value' => trim((string) ($race['beneficiar_nume'] ?? '')) ?: '-'],
+            ['label' => 'Marfă', 'value' => $this->formatDeletedRaceGoods($race)],
+            ['label' => 'Cantitate', 'value' => $this->formatDeletedRaceTons($race['cantitate_incarcata'] ?? null)],
+            ['label' => 'Km facturați', 'value' => $this->formatDeletedRaceKm($race['km_cursa'] ?? null)],
+            ['label' => 'Km rulaj', 'value' => $this->formatDeletedRaceKm(($race['km_totali'] ?? '') !== '' ? $race['km_totali'] : ($race['km_dislocare'] ?? null))],
+            ['label' => 'Data cursei', 'value' => format_date_ro($raceDate)],
+            ['label' => 'Rută', 'value' => $this->buildDeletedRaceRouteLabel($race)],
+        ];
+
+        $timeline = [];
+        foreach ((array) ($details['timeline'] ?? []) as $event) {
+            if (!is_array($event)) {
+                continue;
+            }
+
+            $action = (string) ($event['action'] ?? 'updated');
+            $timeline[] = [
+                'action' => $action,
+                'label' => $this->deletedRaceAuditLabel($action),
+                'performed_at' => format_datetime_ro((string) ($event['performed_at'] ?? '')),
+                'user' => trim((string) ($event['user_nume'] ?? '')) ?: 'Sistem',
+                'role' => trim((string) ($event['user_rol'] ?? '')),
+            ];
+        }
+
+        return [
+            'id' => (int) ($race['id'] ?? 0),
+            'title' => '#' . (int) ($race['id'] ?? 0) . ' - ' . (trim((string) ($race['nr_inmatriculare'] ?? '')) ?: '-'),
+            'fields' => $fields,
+            'deletion' => [
+                'deleted_by' => $deletedByName !== '' ? $deletedByName : 'Necunoscut',
+                'role' => $deletedByRole !== '' ? $deletedByRole : '-',
+                'deleted_at' => format_datetime_ro((string) ($race['deleted_at'] ?? '')),
+            ],
+            'timeline' => $timeline,
+        ];
+    }
+
+    private function buildDeletedRaceRouteLabel(array $race): string
+    {
+        $start = trim((string) ($race['loc_plecare'] ?? ''));
+        if ($start === '') {
+            $start = trim((string) ($race['loc_incarcare_nume'] ?? ''));
+        }
+        if ($start === '') {
+            $start = trim((string) ($race['loc_aspirare'] ?? ''));
+        }
+
+        $end = trim((string) ($race['loc_livrare'] ?? ''));
+        if ($end === '') {
+            $end = trim((string) ($race['loc_livrare_cursa'] ?? ''));
+        }
+        if ($end === '') {
+            $end = trim((string) ($race['zona_distributie_nume'] ?? ''));
+        }
+
+        if ($start !== '' && $end !== '' && mb_strtolower($start) !== mb_strtolower($end)) {
+            return $start . ' → ' . $end;
+        }
+
+        if ($start !== '') {
+            return $start;
+        }
+
+        return $end !== '' ? $end : '-';
+    }
+
+    private function formatDeletedRaceGoods(array $race): string
+    {
+        $rawGoods = trim((string) ($race['tip_marfa'] ?? ''));
+        if ($rawGoods === '') {
+            return '-';
+        }
+
+        $labels = [];
+        foreach (explode(',', $rawGoods) as $item) {
+            $key = trim(strtolower($item));
+            if ($key === '') {
+                continue;
+            }
+
+            $labels[] = self::GOODS_TYPES[$key] ?? $item;
+        }
+
+        return $labels !== [] ? implode(', ', $labels) : '-';
+    }
+
+    private function formatDeletedRaceKm(mixed $value): string
+    {
+        if ($value === null || $value === '' || !is_numeric((string) $value)) {
+            return '-';
+        }
+
+        return number_format((float) $value, 0, ',', '.') . ' km';
+    }
+
+    private function formatDeletedRaceTons(mixed $value): string
+    {
+        if ($value === null || $value === '' || !is_numeric((string) $value)) {
+            return '-';
+        }
+
+        return format_number_ro((float) $value, 2) . ' t';
+    }
+
+    private function deletedRaceAuditLabel(string $action): string
+    {
+        return match ($action) {
+            'created' => 'Creată',
+            'updated' => 'Actualizată',
+            'deleted' => 'Ștearsă',
+            'restored' => 'Restaurată',
+            'status_changed' => 'Status modificat',
+            default => 'Actualizată',
+        };
     }
 
     private function saveExpenseAction(): void
@@ -673,7 +1187,7 @@ class DispecerCurseController
             }
 
             // La modificari de cheltuieli, cursa reintra automat in etapa de facturare.
-            $this->model->updateRaceBillingStatus($raceId, self::DEFAULT_BILLING_STATUS, $now);
+            $this->model->updateRaceBillingStatus($raceId, self::DEFAULT_BILLING_STATUS, $now, $this->currentUserId());
             if ($isRefacturareSubmit) {
                 flash_set('success', $existingExpense !== null ? 'Refacturarea a fost actualizata.' : 'Refacturarea a fost adaugata.');
             } else {
@@ -744,47 +1258,146 @@ class DispecerCurseController
             $formData = array_merge($formData, $formFlash['old']);
         }
 
-        $selectedRaceId = (int) ($_GET['race_id'] ?? 0);
-        if ($selectedRaceId <= 0) {
-            $selectedRaceId = (int) ($formData['race_id'] ?? 0);
-        }
-        $formData['race_id'] = $selectedRaceId > 0 ? (string) $selectedRaceId : '';
+        $expenseEntryTypes = $this->expenseEntryTypes();
+        $filters = $this->collectRefacturareFilters($expenseEntryTypes);
+        $page = max(1, (int) ($_GET['p'] ?? 1));
+        $perPage = $this->collectRefacturarePerPage();
+        $sort = $this->normalizeRefacturareSort((string) ($_GET['sort'] ?? 'date'));
+        $direction = $this->normalizeSortDirection((string) ($_GET['dir'] ?? 'desc'));
 
-        $raceOptions = [];
-        $refacturareRows = [];
+        $plateOptions = [];
+        $refacturareResult = [
+            'rows' => [],
+            'summary' => [
+                'total_count' => 0,
+                'total_amount' => 0.0,
+                'pending_count' => 0,
+                'pending_amount' => 0.0,
+                'invoiced_count' => 0,
+                'invoiced_amount' => 0.0,
+            ],
+            'pagination' => [
+                'page' => 1,
+                'per_page' => $perPage,
+                'total_rows' => 0,
+                'total_pages' => 1,
+            ],
+        ];
         try {
-            $raceOptions = $this->model->getRefacturareRaceOptions(500);
-            $refacturareRows = $this->model->getRefacturareEntries($selectedRaceId > 0 ? $selectedRaceId : null, 250);
+            $plateOptions = $this->model->getRefacturarePlateOptions();
+            $refacturareResult = $this->model->getRefacturareHistory($filters, $sort, $direction, $page, $perPage);
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][refacturari] ' . $exception->getMessage());
             flash_set('danger', $this->buildPersistenceErrorMessage($exception));
         }
 
-        $selectedRace = null;
-        if ($selectedRaceId > 0) {
-            foreach ($raceOptions as $raceOption) {
-                if ((int) ($raceOption['id'] ?? 0) !== $selectedRaceId) {
-                    continue;
-                }
-
-                $selectedRace = $raceOption;
-                break;
-            }
-        }
-
         render('dispecer_curse/refacturari.php', [
-            'pageTitle' => 'Refacturari curse',
+            'pageTitle' => 'Refacturări curse',
             'currentPage' => 'dispecer_curse',
-            'raceOptions' => $raceOptions,
-            'selectedRaceId' => $selectedRaceId,
-            'selectedRace' => $selectedRace,
-            'refacturareRows' => $refacturareRows,
+            'plateOptions' => $plateOptions,
+            'filters' => $filters,
+            'defaultFilters' => $this->defaultRefacturareFilters(),
+            'refacturareRows' => $refacturareResult['rows'],
+            'refacturareSummary' => $refacturareResult['summary'],
+            'pagination' => $refacturareResult['pagination'],
+            'sort' => $sort,
+            'direction' => $direction,
             'transportTypes' => self::TRANSPORT_TYPES,
             'expenseTypes' => self::EXPENSE_TYPES,
-            'expenseEntryTypes' => $this->expenseEntryTypes(),
+            'expenseEntryTypes' => $expenseEntryTypes,
             'formData' => $formData,
             'formErrors' => $formFlash['errors'],
         ]);
+    }
+
+    private function defaultRefacturareFilters(): array
+    {
+        $currentMonthStart = new DateTimeImmutable('first day of this month');
+
+        return [
+            'data_start' => $currentMonthStart->modify('-1 month')->format('Y-m-01'),
+            'data_end' => $currentMonthStart->modify('-1 day')->format('Y-m-d'),
+            'nr_inmatriculare' => '',
+            'tip_refacturare' => '',
+            'status_factura' => '',
+            'document' => '',
+            'q' => '',
+        ];
+    }
+
+    private function collectRefacturareFilters(array $allowedTypes): array
+    {
+        $defaults = $this->defaultRefacturareFilters();
+
+        $startDate = trim((string) ($_GET['data_start'] ?? $defaults['data_start']));
+        if (!$this->isValidDate($startDate)) {
+            $startDate = $defaults['data_start'];
+        }
+
+        $endDate = trim((string) ($_GET['data_end'] ?? $defaults['data_end']));
+        if (!$this->isValidDate($endDate)) {
+            $endDate = $defaults['data_end'];
+        }
+
+        if ($endDate < $startDate) {
+            [$startDate, $endDate] = [$endDate, $startDate];
+        }
+
+        $plate = trim((string) ($_GET['nr_inmatriculare'] ?? ''));
+        if (mb_strlen($plate) > 40) {
+            $plate = mb_substr($plate, 0, 40);
+        }
+
+        $type = trim((string) ($_GET['tip_refacturare'] ?? ''));
+        if ($type !== '' && !array_key_exists($type, $allowedTypes)) {
+            $type = '';
+        }
+
+        $status = trim((string) ($_GET['status_factura'] ?? ''));
+        if (!in_array($status, ['', 'in_asteptare', 'factura_emisa'], true)) {
+            $status = '';
+        }
+
+        $document = trim((string) ($_GET['document'] ?? ''));
+        if (!in_array($document, ['', 'cu_document', 'fara_document'], true)) {
+            $document = '';
+        }
+
+        $query = trim((string) ($_GET['q'] ?? ''));
+        if (mb_strlen($query) > 160) {
+            $query = mb_substr($query, 0, 160);
+        }
+
+        return [
+            'data_start' => $startDate,
+            'data_end' => $endDate,
+            'nr_inmatriculare' => $plate,
+            'tip_refacturare' => $type,
+            'status_factura' => $status,
+            'document' => $document,
+            'q' => $query,
+        ];
+    }
+
+    private function collectRefacturarePerPage(): int
+    {
+        $perPage = (int) ($_GET['per_page'] ?? 10);
+
+        return in_array($perPage, [10, 25, 50, 100], true) ? $perPage : 10;
+    }
+
+    private function normalizeRefacturareSort(string $sort): string
+    {
+        $sort = trim(strtolower($sort));
+
+        return in_array($sort, ['date', 'race', 'type', 'amount', 'status'], true) ? $sort : 'date';
+    }
+
+    private function normalizeSortDirection(string $direction): string
+    {
+        $direction = trim(strtolower($direction));
+
+        return $direction === 'asc' ? 'asc' : 'desc';
     }
 
     private function storeRefacturareAction(): void
@@ -879,7 +1492,7 @@ class DispecerCurseController
                 $this->model->updateExpenseRefacturareDocument($expenseId, $uploadedRefacturareDocument);
             }
 
-            $this->model->updateRaceBillingStatus($raceId, self::DEFAULT_BILLING_STATUS, $now);
+            $this->model->updateRaceBillingStatus($raceId, self::DEFAULT_BILLING_STATUS, $now, $this->currentUserId());
             flash_set('success', 'Refacturarea a fost adaugata.');
         } catch (PDOException $exception) {
             if ($uploadedRefacturareDocument !== null) {
@@ -951,6 +1564,7 @@ class DispecerCurseController
         }
 
         $raceId = (int) ($_POST['race_id'] ?? 0);
+        $returnUrl = trim((string) ($_POST['return_url'] ?? ''));
         $redirectQuery = [
             'page' => 'dispecer_curse',
             'action' => 'refacturari',
@@ -964,25 +1578,25 @@ class DispecerCurseController
         $expenseId = (int) ($_POST['expense_id'] ?? 0);
         if ($expenseId <= 0) {
             flash_set('warning', 'Refacturarea selectata este invalida.');
-            redirect($redirectUrl);
+            $this->redirectToSafeDispecerUrl($returnUrl !== '' ? $returnUrl : $redirectUrl);
         }
 
         $expense = $this->model->getExpenseById($expenseId);
         if ($expense === null) {
             flash_set('warning', 'Refacturarea selectata nu exista.');
-            redirect($redirectUrl);
+            $this->redirectToSafeDispecerUrl($returnUrl !== '' ? $returnUrl : $redirectUrl);
         }
 
         $expenseRaceId = (int) ($expense['cursa_id'] ?? 0);
         if ($raceId > 0 && $expenseRaceId > 0 && $raceId !== $expenseRaceId) {
             flash_set('warning', 'Refacturarea selectata nu apartine cursei curente.');
-            redirect($redirectUrl);
+            $this->redirectToSafeDispecerUrl($returnUrl !== '' ? $returnUrl : $redirectUrl);
         }
 
         $refacturareAmount = (float) ($expense['refacturare_suma'] ?? 0);
         if ($refacturareAmount <= 0) {
             flash_set('warning', 'Doar intrarile cu suma de refacturare pot fi marcate ca facturate.');
-            redirect($redirectUrl);
+            $this->redirectToSafeDispecerUrl($returnUrl !== '' ? $returnUrl : $redirectUrl);
         }
 
         $isInvoiced = (string) ($_POST['is_invoiced'] ?? '0') === '1';
@@ -1005,7 +1619,7 @@ class DispecerCurseController
             $redirectUrl = build_query_url($redirectQuery);
         }
 
-        redirect($redirectUrl);
+        $this->redirectToSafeDispecerUrl($returnUrl !== '' ? $returnUrl : $redirectUrl);
     }
 
     private function configAction(): void
@@ -3057,6 +3671,62 @@ class DispecerCurseController
         ];
     }
 
+    private function collectDeletedRaceFilters(): array
+    {
+        $transportTypes = $this->deletedRaceTransportTypes();
+
+        $filters = [
+            'vehicle_id' => $this->normalizePositiveIntFilter((string) ($_GET['vehicle_id'] ?? '')),
+            'tip_transport' => trim((string) ($_GET['tip_transport'] ?? '')),
+            'driver_id' => $this->normalizePositiveIntFilter((string) ($_GET['driver_id'] ?? '')),
+            'beneficiar_id' => $this->normalizePositiveIntFilter((string) ($_GET['beneficiar_id'] ?? '')),
+            'deleted_by' => $this->normalizePositiveIntFilter((string) ($_GET['deleted_by'] ?? '')),
+            'data_cursa_start' => trim((string) ($_GET['data_cursa_start'] ?? '')),
+            'data_cursa_end' => trim((string) ($_GET['data_cursa_end'] ?? '')),
+            'deleted_start' => trim((string) ($_GET['deleted_start'] ?? '')),
+            'deleted_end' => trim((string) ($_GET['deleted_end'] ?? '')),
+        ];
+
+        if ($filters['tip_transport'] !== '' && !array_key_exists($filters['tip_transport'], $transportTypes)) {
+            $filters['tip_transport'] = '';
+        }
+
+        foreach (['data_cursa_start', 'data_cursa_end', 'deleted_start', 'deleted_end'] as $dateKey) {
+            if ($filters[$dateKey] !== '' && !$this->isValidDate($filters[$dateKey])) {
+                $filters[$dateKey] = '';
+            }
+        }
+
+        if ($filters['data_cursa_start'] !== '' && $filters['data_cursa_end'] !== '' && $filters['data_cursa_end'] < $filters['data_cursa_start']) {
+            [$filters['data_cursa_start'], $filters['data_cursa_end']] = [$filters['data_cursa_end'], $filters['data_cursa_start']];
+        }
+
+        if ($filters['deleted_start'] !== '' && $filters['deleted_end'] !== '' && $filters['deleted_end'] < $filters['deleted_start']) {
+            [$filters['deleted_start'], $filters['deleted_end']] = [$filters['deleted_end'], $filters['deleted_start']];
+        }
+
+        return $filters;
+    }
+
+    private function collectDeletedRacePerPage(): int
+    {
+        $perPage = (int) ($_GET['per_page'] ?? 10);
+
+        return in_array($perPage, [10, 25, 50, 100], true) ? $perPage : 10;
+    }
+
+    private function normalizePositiveIntFilter(string $value): string
+    {
+        $value = trim($value);
+        if ($value === '' || !ctype_digit($value)) {
+            return '';
+        }
+
+        $number = (int) $value;
+
+        return $number > 0 ? (string) $number : '';
+    }
+
     private function defaultRaceFormData(): array
     {
         return [
@@ -3780,9 +4450,10 @@ class DispecerCurseController
             $errors['tip_marfa'] = 'Selecteaza doar tipuri de marfa valide.';
         }
 
+        // Statusul de facturare nu se mai alege din formular. Cursele noi intra
+        // automat "in curs de facturare"; se schimba doar din Centralizator Facturare.
         $billingStatus = $this->normalizeBillingStatus(trim((string) ($input['status_facturare'] ?? '')));
         if ($billingStatus === '') {
-            $errors['status_facturare'] = 'Selecteaza un status de facturare valid.';
             $billingStatus = self::DEFAULT_BILLING_STATUS;
         }
 
@@ -4845,7 +5516,7 @@ class DispecerCurseController
         }
 
         try {
-            $updated = $this->model->updateRaceBillingStatus($raceId, $billingStatus, date('Y-m-d H:i:s'));
+            $updated = $this->model->updateRaceBillingStatus($raceId, $billingStatus, date('Y-m-d H:i:s'), $this->currentUserId());
             if ($updated) {
                 flash_set('success', 'Statusul cursei a fost actualizat.');
             } else {
@@ -4878,7 +5549,7 @@ class DispecerCurseController
         }
 
         try {
-            $updated = $this->model->updateRaceExpenseStatus($raceId, $expenseStatus, date('Y-m-d H:i:s'));
+            $updated = $this->model->updateRaceExpenseStatus($raceId, $expenseStatus, date('Y-m-d H:i:s'), $this->currentUserId());
             if ($updated) {
                 if ($expenseStatus === 'not_applicable') {
                     flash_set('success', 'Cursa nu va mai aparea la lipsa cheltuieli.');
@@ -4911,6 +5582,108 @@ class DispecerCurseController
         }
 
         redirect(build_query_url(['page' => 'dispecer_curse']));
+    }
+
+    private function wantsJson(): bool
+    {
+        $requestedWith = strtolower((string) ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? ''));
+        if ($requestedWith === 'xmlhttprequest') {
+            return true;
+        }
+
+        return str_contains(strtolower((string) ($_SERVER['HTTP_ACCEPT'] ?? '')), 'application/json');
+    }
+
+    private function sendJson(array $payload, int $statusCode = 200): void
+    {
+        http_response_code($statusCode);
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+
+    private function positiveIntFromInput(mixed $value): ?int
+    {
+        if (!is_scalar($value)) {
+            return null;
+        }
+
+        $raw = trim((string) $value);
+        if ($raw === '' || !ctype_digit($raw)) {
+            return null;
+        }
+
+        $intValue = (int) $raw;
+        return $intValue > 0 ? $intValue : null;
+    }
+
+    private function normalizeInactiveApprovalDecision(mixed $value): string
+    {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        $decision = strtolower(trim((string) $value));
+        return in_array($decision, ['approved', 'pending'], true) ? $decision : '';
+    }
+
+    private function getInactiveResourcesForRaceData(array $data): array
+    {
+        $vehicleId = isset($data['vehicle_id']) ? (int) $data['vehicle_id'] : 0;
+        $driverId = isset($data['driver_id']) ? (int) $data['driver_id'] : 0;
+        $status = $this->inactiveStatusService->getResourcesStatus(
+            $vehicleId > 0 ? $vehicleId : null,
+            $driverId > 0 ? $driverId : null
+        );
+
+        return is_array($status['inactive_resources'] ?? null) ? $status['inactive_resources'] : [];
+    }
+
+    private function resourcesNeedingInactiveApprovalDecision(array $resources, ?int $tripId): array
+    {
+        $needsDecision = [];
+
+        foreach ($resources as $resource) {
+            if (empty($resource['is_inactive'])) {
+                continue;
+            }
+
+            $resourceType = (string) ($resource['resource_type'] ?? '');
+            $resourceId = (int) ($resource['resource_id'] ?? 0);
+            if ($resourceType === '' || $resourceId <= 0) {
+                continue;
+            }
+
+            $existingStatus = null;
+            if ($tripId !== null && $tripId > 0) {
+                $existingStatus = $this->inactiveApprovalModel
+                    ->getExistingOpenStatusForResourceTrip($resourceType, $resourceId, $tripId);
+            }
+
+            if (!in_array($existingStatus, ['pending', 'approved'], true)) {
+                $needsDecision[] = $resource;
+            }
+        }
+
+        return $needsDecision;
+    }
+
+    private function buildInactiveApprovalRequiredMessage(array $resources): string
+    {
+        $labels = [];
+        foreach ($resources as $resource) {
+            $resourceLabel = trim((string) ($resource['resource_label'] ?? ''));
+            $reasonLabel = trim((string) ($resource['reason_label'] ?? ''));
+            if ($resourceLabel === '') {
+                continue;
+            }
+
+            $labels[] = $reasonLabel !== '' ? ($resourceLabel . ' - ' . $reasonLabel) : $resourceLabel;
+        }
+
+        $suffix = $labels !== [] ? (': ' . implode('; ', $labels)) : '.';
+
+        return 'Utilizarea resurselor inactive necesita alegerea unei aprobari' . $suffix;
     }
 
     private function buildBeneficiaryPricingMap(array $beneficiaries): array
@@ -5658,7 +6431,11 @@ class DispecerCurseController
 
     private function deleteRaceFiles(int $raceId): void
     {
-        $documents = $this->model->getExpenseDocumentsByRaceId($raceId);
+        $this->deleteExpensePhysicalFiles($this->model->getExpenseDocumentsByRaceId($raceId));
+    }
+
+    private function deleteExpensePhysicalFiles(array $documents): void
+    {
         foreach ($documents as $document) {
             $filePath = (string) ($document['file_path'] ?? '');
             if ($filePath === '') {
@@ -5737,16 +6514,20 @@ class DispecerCurseController
             return null;
         }
 
-        foreach (['!Y-m-d', '!d/m/Y', '!d.m.Y', '!d-m-Y'] as $format) {
-            $dateTime = DateTime::createFromFormat($format, $date);
-            if ($dateTime === false) {
-                continue;
-            }
+        if (preg_match('/^(\d{4})-(\d{1,2})-(\d{1,2})$/', $date, $matches) === 1) {
+            $year = (int) $matches[1];
+            $month = (int) $matches[2];
+            $day = (int) $matches[3];
 
-            $expectedFormat = substr($format, 1);
-            if ($dateTime->format($expectedFormat) === $date) {
-                return $dateTime->format('Y-m-d');
-            }
+            return checkdate($month, $day, $year) ? sprintf('%04d-%02d-%02d', $year, $month, $day) : null;
+        }
+
+        if (preg_match('/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/', $date, $matches) === 1) {
+            $day = (int) $matches[1];
+            $month = (int) $matches[2];
+            $year = (int) $matches[3];
+
+            return checkdate($month, $day, $year) ? sprintf('%04d-%02d-%02d', $year, $month, $day) : null;
         }
 
         return null;
@@ -6026,10 +6807,35 @@ class DispecerCurseController
         return $userId > 0 ? $userId : null;
     }
 
+    private function buildDuplicateRaceMessage(?int $duplicateRaceId = null): string
+    {
+        $suffix = $duplicateRaceId !== null && $duplicateRaceId > 0
+            ? ' (ID ' . $duplicateRaceId . ')'
+            : '';
+
+        return 'Exista deja o cursa salvata cu aceleasi detalii' . $suffix . '. Verifica lista inainte sa o adaugi din nou.';
+    }
+
+    private function isDuplicateRacePersistenceError(Throwable $exception): bool
+    {
+        $sqlState = strtoupper((string) $exception->getCode());
+        $message = strtolower($exception->getMessage());
+
+        return $sqlState === '23000'
+            && (
+                str_contains($message, 'uk_curse_dispecer_duplicate_key')
+                || str_contains($message, 'duplicate_key')
+            );
+    }
+
     private function buildPersistenceErrorMessage(Throwable $exception): string
     {
         $sqlState = strtoupper((string) $exception->getCode());
         $message = strtolower($exception->getMessage());
+
+        if ($this->isDuplicateRacePersistenceError($exception)) {
+            return $this->buildDuplicateRaceMessage();
+        }
 
         if ($sqlState === '42S22' && (str_contains($message, 'km_bord') || str_contains($message, 'km_revizie'))) {
             return 'Structura bazei de date pentru campurile Km bord / Km revizie nu este actualizata. Ruleaza scripturile database/update_vehicle_camion_km.sql si database/update_vehicle_km_revizie.sql, apoi incearca din nou.';
@@ -6083,8 +6889,9 @@ class DispecerCurseController
             || str_contains($message, 'cost_km_distributie')
             || str_contains($message, 'cost_km_mixt')
             || str_contains($message, 'cost_km_compresor')
+            || str_contains($message, 'duplicate_key')
             || str_contains($message, 'tarif')) {
-            return 'Structura bazei de date pentru Dispecer curse nu este actualizata. Ruleaza scripturile database/update_dispecer_curse_module.sql, database/update_dispecer_locuri_tarif.sql, database/update_dispecer_beneficiar_compresor.sql, database/update_dispecer_vehicle_default_assignments.sql, database/update_dispecer_curse_capacitate_transport.sql, database/update_dispecer_primar_routes.sql, database/update_dispecer_curse_cantitate_prelevata.sql, database/update_dispecer_curse_driver_id.sql, database/update_dispecer_curse_schedule.sql, database/update_dispecer_curse_data_incarcare.sql, database/update_dispecer_curse_ore_functionare.sql, database/update_dispecer_compresor_aspirare_split.sql, database/update_dispecer_compresor_locatii_text.sql, database/update_dispecer_distribution_route_km.sql si database/update_dispecer_curse_cost_km.sql, apoi incearca din nou.';
+            return 'Structura bazei de date pentru Dispecer curse nu este actualizata. Ruleaza scripturile database/update_dispecer_curse_module.sql, database/update_dispecer_locuri_tarif.sql, database/update_dispecer_beneficiar_compresor.sql, database/update_dispecer_vehicle_default_assignments.sql, database/update_dispecer_curse_capacitate_transport.sql, database/update_dispecer_primar_routes.sql, database/update_dispecer_curse_cantitate_prelevata.sql, database/update_dispecer_curse_driver_id.sql, database/update_dispecer_curse_schedule.sql, database/update_dispecer_curse_data_incarcare.sql, database/update_dispecer_curse_ore_functionare.sql, database/update_dispecer_compresor_aspirare_split.sql, database/update_dispecer_compresor_locatii_text.sql, database/update_dispecer_distribution_route_km.sql, database/update_dispecer_curse_cost_km.sql si database/update_dispecer_curse_duplicate_guard.sql, apoi incearca din nou.';
         }
 
         return 'A aparut o eroare la salvare. Te rugam sa reincerci.';

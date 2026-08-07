@@ -1,8 +1,9 @@
 <?php
 $isEdit = $mode === 'edit';
+$routePage = (string) ($routePage ?? ($module['route_page'] ?? $moduleKey));
 $formAction = $isEdit
-    ? build_query_url(['page' => $moduleKey, 'action' => 'update', 'id' => $recordId])
-    : build_query_url(['page' => $moduleKey, 'action' => 'store']);
+    ? build_query_url(['page' => $routePage, 'action' => 'update', 'id' => $recordId])
+    : build_query_url(['page' => $routePage, 'action' => 'store']);
 $hasFileField = false;
 $vehicleLayoutOptionsByType = is_array($vehicleLayoutOptionsByType ?? null) ? $vehicleLayoutOptionsByType : [];
 $documentTypeOptionsByVehicleType = is_array($documentTypeOptionsByVehicleType ?? null) ? $documentTypeOptionsByVehicleType : [];
@@ -77,7 +78,7 @@ foreach ($module['form_fields'] as $fieldMeta) {
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="h4 mb-0"><?= e($isEdit ? 'Editeaza ' . $module['singular'] : 'Adauga ' . $module['singular']) ?></h2>
     <div class="d-flex align-items-center gap-2">
-        <a class="btn btn-outline-secondary" href="<?= e($backUrl ?? build_query_url(['page' => $moduleKey])) ?>">Inapoi la lista</a>
+        <a class="btn btn-outline-secondary" href="<?= e($backUrl ?? build_query_url(['page' => $routePage])) ?>">Inapoi la lista</a>
     </div>
 </div>
 

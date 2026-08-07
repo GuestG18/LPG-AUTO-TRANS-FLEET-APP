@@ -1,262 +1,293 @@
 <?php
-$selectedRaceIdValue = (int) ($selectedRaceId ?? 0);
-$selectedRaceData = is_array($selectedRace ?? null) ? $selectedRace : null;
 $historyRows = is_array($refacturareRows ?? null) ? $refacturareRows : [];
+$filters = is_array($filters ?? null) ? $filters : [];
+$defaultFilters = is_array($defaultFilters ?? null) ? $defaultFilters : [];
+$summary = is_array($refacturareSummary ?? null) ? $refacturareSummary : [];
+$pagination = is_array($pagination ?? null) ? $pagination : [];
+$plateOptions = is_array($plateOptions ?? null) ? $plateOptions : [];
 $expenseEntryTypes = is_array($expenseEntryTypes ?? null) ? $expenseEntryTypes : (array) ($expenseTypes ?? []);
 unset($expenseEntryTypes['motorina']);
-$historyCount = count($historyRows);
-$historyTotal = 0.0;
-foreach ($historyRows as $historyRow) {
-    $historyTotal += (float) ($historyRow['refacturare_suma'] ?? 0);
+$refacturareTypeLabels = [
+    'taxe_drum' => 'Taxe drum',
+    'diurna' => 'Diurnă',
+    'service' => 'Reparații',
+    'alte' => 'Alte cheltuieli',
+];
+$refacturareFilterTypes = [];
+foreach ($expenseEntryTypes as $typeKey => $typeLabel) {
+    $typeKey = (string) $typeKey;
+    $refacturareFilterTypes[$typeKey] = $refacturareTypeLabels[$typeKey] ?? (string) $typeLabel;
 }
-$selectedRefacturareType = (string) ($formData['refacturare_tip_cheltuiala'] ?? '');
-if (!isset($expenseEntryTypes[$selectedRefacturareType])) {
-    $selectedRefacturareType = '';
-}
-$showRefacturareRoadTaxDetails = $selectedRefacturareType === 'taxe_drum';
+$expenseEntryTypes = $refacturareFilterTypes;
 
-$buildRaceLabel = static function (array $raceRow, array $transportTypes): string {
-    $parts = [];
-    $plate = trim((string) ($raceRow['nr_inmatriculare'] ?? ''));
-    if ($plate !== '') {
-        $parts[] = $plate;
-    }
+$currentSort = (string) ($sort ?? 'date');
+$currentDirection = (string) ($direction ?? 'desc');
+$currentPageIndex = max(1, (int) ($pagination['page'] ?? 1));
+$totalPages = max(1, (int) ($pagination['total_pages'] ?? 1));
+$perPage = max(5, (int) ($pagination['per_page'] ?? 10));
+$totalRows = max(0, (int) ($pagination['total_rows'] ?? 0));
+$returnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dispecer_curse', 'action' => 'refacturari']));
 
-    $driver = trim((string) ($raceRow['sofer_nume'] ?? ''));
-    if ($driver !== '') {
-        $parts[] = $driver;
-    }
+$filterBase = array_merge(
+    ['page' => 'dispecer_curse', 'action' => 'refacturari'],
+    $filters,
+    ['per_page' => $perPage, 'sort' => $currentSort, 'dir' => $currentDirection]
+);
 
-    $beneficiary = trim((string) ($raceRow['beneficiar_nume'] ?? ''));
-    if ($beneficiary !== '') {
-        $parts[] = $beneficiary;
-    }
-
-    $transportType = trim((string) ($raceRow['tip_transport'] ?? ''));
-    if ($transportType !== '') {
-        $parts[] = (string) ($transportTypes[$transportType] ?? $transportType);
-    }
-
-    $startDate = trim((string) ($raceRow['data_inceput'] ?? ''));
-    if ($startDate !== '') {
-        $startTime = trim((string) ($raceRow['ora_inceput'] ?? ''));
-        $parts[] = format_date_ro($startDate) . ($startTime !== '' ? ' ' . substr($startTime, 0, 5) : '');
-    }
-
-    if ($parts === []) {
-        return 'Cursa';
-    }
-
-    return implode(' | ', $parts);
+$formatMoney = static function (mixed $value): string {
+    return format_number_ro((float) $value, 2) . ' lei';
 };
+
+$formatDateTimeInline = static function (?string $date, ?string $time): string {
+    $date = trim((string) $date);
+    if ($date === '') {
+        return '-';
+    }
+
+    $time = trim((string) $time);
+    $timeLabel = $time !== '' ? substr($time, 0, 5) : '';
+
+    return format_date_ro($date) . ($timeLabel !== '' ? ' ' . $timeLabel : '');
+};
+
+$buildRouteLabel = static function (array $row): string {
+    $start = trim((string) ($row['loc_plecare'] ?? ''));
+    if ($start === '') {
+        $start = trim((string) ($row['loc_incarcare_nume'] ?? ''));
+    }
+    if ($start === '') {
+        $start = trim((string) ($row['loc_aspirare'] ?? ''));
+    }
+
+    $end = trim((string) ($row['loc_livrare'] ?? ''));
+    if ($end === '') {
+        $end = trim((string) ($row['zona_distributie_nume'] ?? ''));
+    }
+    if ($end === '') {
+        $end = trim((string) ($row['loc_livrare_cursa'] ?? ''));
+    }
+
+    if ($start !== '' && $end !== '' && mb_strtolower($start) !== mb_strtolower($end)) {
+        return $start . ' - ' . $end;
+    }
+
+    if ($start !== '') {
+        return $start;
+    }
+
+    return $end !== '' ? $end : '-';
+};
+
+$sortUrl = static function (string $sortKey) use ($filterBase, $currentSort, $currentDirection): string {
+    $nextDirection = ($currentSort === $sortKey && $currentDirection === 'asc') ? 'desc' : 'asc';
+
+    return build_query_url(array_merge($filterBase, [
+        'sort' => $sortKey,
+        'dir' => $nextDirection,
+        'p' => 1,
+    ]));
+};
+
+$sortIcon = static function (string $sortKey) use ($currentSort, $currentDirection): string {
+    if ($currentSort !== $sortKey) {
+        return 'bi-arrow-down-up';
+    }
+
+    return $currentDirection === 'asc' ? 'bi-arrow-up' : 'bi-arrow-down';
+};
+
+$rangeStart = $totalRows === 0 ? 0 : (($currentPageIndex - 1) * $perPage) + 1;
+$rangeEnd = min($totalRows, $currentPageIndex * $perPage);
 ?>
 
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-    <h2 class="h4 mb-0">Refacturari curse</h2>
-    <div class="d-flex gap-2">
-        <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Inapoi la Dispecer curse</a>
+<div class="refacturare-dashboard" data-refacturare-dashboard>
+    <div class="refacturare-page-header">
+        <div class="refacturare-title-block">
+            <h1>Refacturări curse</h1>
+            <p>Monitorizează și gestionează refacturările curselor</p>
+        </div>
+        <a class="btn refacturare-back-btn" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i>
+            <span>Înapoi la Dispecer curse</span>
+        </a>
     </div>
-</div>
 
-<div class="card border-0 shadow-sm mb-3">
-    <div class="card-header bg-white">
-        <h3 class="h6 mb-0">Selecteaza cursa</h3>
-    </div>
-    <div class="card-body">
-        <form method="get" class="row g-3 align-items-end">
+    <section class="refacturare-kpi-grid" aria-label="Indicatori refacturări">
+        <article class="refacturare-kpi-card is-blue">
+            <div class="refacturare-kpi-icon"><i class="bi bi-wallet2" aria-hidden="true"></i></div>
+            <div>
+                <p>Total refacturat</p>
+                <strong><?= e($formatMoney($summary['total_amount'] ?? 0)) ?></strong>
+                <span>conform filtrelor aplicate</span>
+            </div>
+        </article>
+
+        <article class="refacturare-kpi-card is-orange">
+            <div class="refacturare-kpi-icon"><i class="bi bi-clock" aria-hidden="true"></i></div>
+            <div>
+                <p>În așteptare</p>
+                <strong><?= e($formatMoney($summary['pending_amount'] ?? 0)) ?></strong>
+                <span><?= e((string) ((int) ($summary['pending_count'] ?? 0))) ?> <?= (int) ($summary['pending_count'] ?? 0) === 1 ? 'refacturare' : 'refacturări' ?></span>
+            </div>
+        </article>
+
+        <article class="refacturare-kpi-card is-green">
+            <div class="refacturare-kpi-icon"><i class="bi bi-file-earmark-check" aria-hidden="true"></i></div>
+            <div>
+                <p>Facturate</p>
+                <strong><?= e($formatMoney($summary['invoiced_amount'] ?? 0)) ?></strong>
+                <span><?= e((string) ((int) ($summary['invoiced_count'] ?? 0))) ?> <?= (int) ($summary['invoiced_count'] ?? 0) === 1 ? 'refacturare' : 'refacturări' ?></span>
+            </div>
+        </article>
+
+        <article class="refacturare-kpi-card is-purple">
+            <div class="refacturare-kpi-icon"><i class="bi bi-bar-chart" aria-hidden="true"></i></div>
+            <div>
+                <p>Nr. refacturări</p>
+                <strong><?= e((string) ((int) ($summary['total_count'] ?? 0))) ?></strong>
+                <span>conform filtrelor aplicate</span>
+            </div>
+        </article>
+    </section>
+
+    <section class="refacturare-panel refacturare-filter-panel">
+        <header class="refacturare-panel-header">
+            <h2><i class="bi bi-funnel" aria-hidden="true"></i> Filtre refacturări</h2>
+        </header>
+
+        <form method="get" class="refacturare-filter-form" data-refacturare-filter-form>
             <input type="hidden" name="page" value="dispecer_curse">
             <input type="hidden" name="action" value="refacturari">
-            <div class="col-12 col-xl-9">
-                <label class="form-label" for="refacturare_race_id">Cursa</label>
-                <select class="form-select <?= isset($formErrors['race_id']) ? 'is-invalid' : '' ?>" id="refacturare_race_id" name="race_id">
-                    <option value="">-- Selecteaza cursa --</option>
-                    <?php foreach ((array) ($raceOptions ?? []) as $raceOption): ?>
-                        <?php $raceOptionId = (int) ($raceOption['id'] ?? 0); ?>
-                        <?php if ($raceOptionId <= 0) { continue; } ?>
-                        <option value="<?= e((string) $raceOptionId) ?>" <?= $selectedRaceIdValue === $raceOptionId ? 'selected' : '' ?>>
-                            #<?= e((string) $raceOptionId) ?> - <?= e($buildRaceLabel($raceOption, $transportTypes)) ?>
+            <input type="hidden" name="p" value="<?= e((string) $currentPageIndex) ?>" data-refacturare-page-input>
+            <input type="hidden" name="per_page" value="<?= e((string) $perPage) ?>">
+            <input type="hidden" name="sort" value="<?= e($currentSort) ?>">
+            <input type="hidden" name="dir" value="<?= e($currentDirection) ?>">
+
+            <div class="refacturare-filter-field">
+                <label class="form-label" for="ref_filter_data_start">Data de la</label>
+                <input class="form-control" type="date" id="ref_filter_data_start" name="data_start" value="<?= e((string) ($filters['data_start'] ?? ($defaultFilters['data_start'] ?? ''))) ?>">
+            </div>
+
+            <div class="refacturare-filter-field">
+                <label class="form-label" for="ref_filter_data_end">Data până la</label>
+                <input class="form-control" type="date" id="ref_filter_data_end" name="data_end" value="<?= e((string) ($filters['data_end'] ?? ($defaultFilters['data_end'] ?? ''))) ?>">
+            </div>
+
+            <div class="refacturare-filter-field">
+                <label class="form-label" for="ref_filter_plate">Nr. înmatriculare</label>
+                <select class="form-select" id="ref_filter_plate" name="nr_inmatriculare">
+                    <option value="">Toate numerele</option>
+                    <?php foreach ($plateOptions as $plateOption): ?>
+                        <?php
+                            $plate = trim((string) ($plateOption['nr_inmatriculare'] ?? ''));
+                            if ($plate === '') {
+                                continue;
+                            }
+                            $vehicleName = trim((string) (($plateOption['marca'] ?? '') . ' ' . ($plateOption['model'] ?? '')));
+                        ?>
+                        <option value="<?= e($plate) ?>" <?= (string) ($filters['nr_inmatriculare'] ?? '') === $plate ? 'selected' : '' ?>>
+                            <?= e($plate . ($vehicleName !== '' ? ' - ' . $vehicleName : '')) ?>
                         </option>
                     <?php endforeach; ?>
                 </select>
-                <?php if (isset($formErrors['race_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['race_id']) ?></div><?php endif; ?>
+                <div class="refacturare-field-help">Lista se actualizează automat din cursele disponibile</div>
             </div>
-            <div class="col-12 col-xl-3 d-grid">
-                <button type="submit" class="btn btn-outline-primary">Incarca detalii cursa</button>
+
+            <div class="refacturare-filter-field">
+                <label class="form-label" for="ref_filter_type">Tip refacturare</label>
+                <select class="form-select" id="ref_filter_type" name="tip_refacturare">
+                    <option value="">Toate tipurile</option>
+                    <?php foreach ($expenseEntryTypes as $typeValue => $typeLabel): ?>
+                        <option value="<?= e((string) $typeValue) ?>" <?= (string) ($filters['tip_refacturare'] ?? '') === (string) $typeValue ? 'selected' : '' ?>>
+                            <?= e((string) $typeLabel) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <div class="refacturare-filter-field">
+                <label class="form-label" for="ref_filter_status">Status factură</label>
+                <select class="form-select" id="ref_filter_status" name="status_factura">
+                    <option value="">Toate statusurile</option>
+                    <option value="in_asteptare" <?= (string) ($filters['status_factura'] ?? '') === 'in_asteptare' ? 'selected' : '' ?>>În așteptare</option>
+                    <option value="factura_emisa" <?= (string) ($filters['status_factura'] ?? '') === 'factura_emisa' ? 'selected' : '' ?>>Factura emisă</option>
+                </select>
+            </div>
+
+            <div class="refacturare-filter-field">
+                <label class="form-label" for="ref_filter_document">Document</label>
+                <select class="form-select" id="ref_filter_document" name="document">
+                    <option value="">Toate documentele</option>
+                    <option value="cu_document" <?= (string) ($filters['document'] ?? '') === 'cu_document' ? 'selected' : '' ?>>Cu document</option>
+                    <option value="fara_document" <?= (string) ($filters['document'] ?? '') === 'fara_document' ? 'selected' : '' ?>>Fără document</option>
+                </select>
+            </div>
+
+            <div class="refacturare-filter-field refacturare-filter-search">
+                <label class="form-label" for="ref_filter_q">Motiv / detalii</label>
+                <div class="refacturare-search-control">
+                    <input class="form-control" type="search" id="ref_filter_q" name="q" value="<?= e((string) ($filters['q'] ?? '')) ?>" placeholder="Caută după motiv sau detalii...">
+                    <i class="bi bi-search" aria-hidden="true"></i>
+                </div>
+            </div>
+
+            <div class="refacturare-filter-actions">
+                <a class="btn refacturare-reset-btn" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'refacturari'])) ?>">
+                    <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+                    <span>Resetează</span>
+                </a>
             </div>
         </form>
+    </section>
 
-        <?php if ($selectedRaceData !== null): ?>
-            <?php
-                $selectedRaceFacturare = (float) ($selectedRaceData['total_facturare'] ?? 0);
-                $selectedRaceRefacturare = (float) ($selectedRaceData['total_refacturare'] ?? 0);
-                $selectedRaceRefacturareFacturata = (float) ($selectedRaceData['total_refacturare_facturata'] ?? 0);
-                $selectedRaceRefacturareNefacturata = (float) ($selectedRaceData['total_refacturare_nefacturata'] ?? $selectedRaceRefacturare);
-                $selectedRaceTransport = trim((string) ($selectedRaceData['tip_transport'] ?? ''));
-                $selectedRaceTransportLabel = (string) ($transportTypes[$selectedRaceTransport] ?? ($selectedRaceTransport !== '' ? $selectedRaceTransport : '-'));
-            ?>
-            <div class="refacturare-race-summary mt-3">
-                <div class="refacturare-race-summary-row">
-                    <span class="refacturare-race-summary-label">Cursa selectata</span>
-                    <span class="refacturare-race-summary-value">#<?= e((string) $selectedRaceIdValue) ?> - <?= e($buildRaceLabel($selectedRaceData, $transportTypes)) ?></span>
-                </div>
-                <div class="refacturare-race-summary-row">
-                    <span class="refacturare-race-summary-label">Tip transport</span>
-                    <span class="refacturare-race-summary-value"><?= e($selectedRaceTransportLabel) ?></span>
-                </div>
-                <div class="refacturare-race-summary-row">
-                    <span class="refacturare-race-summary-label">Total facturare cursa</span>
-                    <span class="refacturare-race-summary-value"><?= e(format_number_ro($selectedRaceFacturare, 2)) ?> lei</span>
-                </div>
-                <div class="refacturare-race-summary-row">
-                    <span class="refacturare-race-summary-label">Total refacturare cursa</span>
-                    <span class="refacturare-race-summary-value"><?= e(format_number_ro($selectedRaceRefacturare, 2)) ?> lei</span>
-                </div>
-                <div class="refacturare-race-summary-row">
-                    <span class="refacturare-race-summary-label">Refacturare deja facturata</span>
-                    <span class="refacturare-race-summary-value"><?= e(format_number_ro($selectedRaceRefacturareFacturata, 2)) ?> lei</span>
-                </div>
-                <div class="refacturare-race-summary-row">
-                    <span class="refacturare-race-summary-label">Refacturare in asteptare factura</span>
-                    <span class="refacturare-race-summary-value"><?= e(format_number_ro($selectedRaceRefacturareNefacturata, 2)) ?> lei</span>
-                </div>
+    <section class="refacturare-panel refacturare-history-panel">
+        <header class="refacturare-panel-header refacturare-history-header">
+            <h2><i class="bi bi-list-ul" aria-hidden="true"></i> Istoric refacturări</h2>
+            <div class="refacturare-listed-total">
+                Întrări: <strong><?= e((string) ((int) ($summary['total_count'] ?? 0))) ?></strong>
+                <span aria-hidden="true">|</span>
+                Total listat: <strong><?= e($formatMoney($summary['total_amount'] ?? 0)) ?></strong>
             </div>
-        <?php endif; ?>
-    </div>
-</div>
+        </header>
 
-<div class="card border-0 shadow-sm mb-3">
-    <div class="card-header bg-white">
-        <h3 class="h6 mb-0">Adauga refacturare</h3>
-    </div>
-    <div class="card-body">
-        <?php if ($selectedRaceData === null): ?>
-            <div class="alert alert-warning mb-0">Selecteaza mai intai o cursa pentru a adauga refacturarea.</div>
-        <?php else: ?>
-            <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store_refacturare'])) ?>" enctype="multipart/form-data" class="row g-3" novalidate>
-                <?= csrf_field() ?>
-                <input type="hidden" name="race_id" value="<?= e((string) $selectedRaceIdValue) ?>">
-
-                <div class="col-12 col-md-4">
-                    <label class="form-label" for="refacturare_tip_cheltuiala">Tip refacturare <span class="text-danger">*</span></label>
-                    <select class="form-select <?= isset($formErrors['refacturare_tip_cheltuiala']) ? 'is-invalid' : '' ?>" id="refacturare_tip_cheltuiala" name="refacturare_tip_cheltuiala" required>
-                        <option value="" <?= $selectedRefacturareType === '' ? 'selected' : '' ?>>-- Selecteaza tipul --</option>
-                        <?php foreach ($expenseEntryTypes as $typeValue => $typeLabel): ?>
-                            <option value="<?= e((string) $typeValue) ?>" <?= $selectedRefacturareType === (string) $typeValue ? 'selected' : '' ?>>
-                                <?= e((string) $typeLabel) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <div class="form-text">Motorina se introduce separat in modulul Alimentari.</div>
-                    <?php if (isset($formErrors['refacturare_tip_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_tip_cheltuiala']) ?></div><?php endif; ?>
-                </div>
-
-                <div class="col-12 col-md-4">
-                    <label class="form-label" for="refacturare_suma">Suma refacturare <span class="text-danger">*</span></label>
-                    <input type="number" class="form-control <?= isset($formErrors['refacturare_suma']) ? 'is-invalid' : '' ?>" id="refacturare_suma" name="refacturare_suma" min="0.01" step="0.01" value="<?= e((string) ($formData['refacturare_suma'] ?? '')) ?>" required>
-                    <?php if (isset($formErrors['refacturare_suma'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_suma']) ?></div><?php endif; ?>
-                </div>
-
-                <div class="col-12 col-md-4">
-                    <label class="form-label" for="refacturare_data">Data refacturare <span class="text-danger">*</span></label>
-                    <input type="date" class="form-control <?= isset($formErrors['refacturare_data']) ? 'is-invalid' : '' ?>" id="refacturare_data" name="refacturare_data" value="<?= e((string) ($formData['refacturare_data'] ?? date('Y-m-d'))) ?>" required>
-                    <?php if (isset($formErrors['refacturare_data'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_data']) ?></div><?php endif; ?>
-                </div>
-
-                <div class="col-12 col-md-4">
-                    <label class="form-label" for="data_cheltuiala">Data cheltuiala (contabila) <span class="text-danger">*</span></label>
-                    <input type="date" class="form-control <?= isset($formErrors['data_cheltuiala']) ? 'is-invalid' : '' ?>" id="data_cheltuiala" name="data_cheltuiala" value="<?= e((string) ($formData['data_cheltuiala'] ?? date('Y-m-d'))) ?>" required>
-                    <?php if (isset($formErrors['data_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_cheltuiala']) ?></div><?php endif; ?>
-                </div>
-
-                <div class="col-12">
-                    <label class="form-label" for="refacturare_observatii">Motiv / detalii refacturare</label>
-                    <textarea class="form-control <?= isset($formErrors['refacturare_observatii']) ? 'is-invalid' : '' ?>" id="refacturare_observatii" name="refacturare_observatii" rows="3"><?= e((string) ($formData['refacturare_observatii'] ?? '')) ?></textarea>
-                    <?php if (isset($formErrors['refacturare_observatii'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_observatii']) ?></div><?php endif; ?>
-                    <div class="form-text">Descrie clar pentru ce este refacturarea (ex: taxa acces, interventie client, alte costuri transferate).</div>
-                </div>
-
-                <div class="col-12 d-none" data-role="refacturare-road-tax-breakdown">
-                    <div class="border rounded p-3">
-                        <label class="form-label mb-2">Detalii refacturare taxe drum</label>
-                        <div class="row g-2 mb-2">
-                            <div class="col-12 col-md-4"><strong>Taxa acces</strong></div>
-                            <div class="col-6 col-md-4">
-                                <input type="number" class="form-control form-control-sm <?= isset($formErrors['refacturare_taxa_acces_bucati']) ? 'is-invalid' : '' ?>" id="refacturare_taxa_acces_bucati" name="refacturare_taxa_acces_bucati" min="0" step="1" placeholder="Bucati" value="<?= e((string) ($formData['refacturare_taxa_acces_bucati'] ?? '')) ?>">
-                                <?php if (isset($formErrors['refacturare_taxa_acces_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_taxa_acces_bucati']) ?></div><?php endif; ?>
-                            </div>
-                            <div class="col-6 col-md-4">
-                                <input type="number" class="form-control form-control-sm <?= isset($formErrors['refacturare_taxa_acces_pret']) ? 'is-invalid' : '' ?>" id="refacturare_taxa_acces_pret" name="refacturare_taxa_acces_pret" min="0" step="0.01" placeholder="Pret / buc" value="<?= e((string) ($formData['refacturare_taxa_acces_pret'] ?? '')) ?>">
-                                <?php if (isset($formErrors['refacturare_taxa_acces_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_taxa_acces_pret']) ?></div><?php endif; ?>
-                            </div>
-                        </div>
-                        <div class="row g-2 mb-2">
-                            <div class="col-12 col-md-4"><strong>Port</strong></div>
-                            <div class="col-6 col-md-4">
-                                <input type="number" class="form-control form-control-sm <?= isset($formErrors['refacturare_port_bucati']) ? 'is-invalid' : '' ?>" id="refacturare_port_bucati" name="refacturare_port_bucati" min="0" step="1" placeholder="Bucati" value="<?= e((string) ($formData['refacturare_port_bucati'] ?? '')) ?>">
-                                <?php if (isset($formErrors['refacturare_port_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_port_bucati']) ?></div><?php endif; ?>
-                            </div>
-                            <div class="col-6 col-md-4">
-                                <input type="number" class="form-control form-control-sm <?= isset($formErrors['refacturare_port_pret']) ? 'is-invalid' : '' ?>" id="refacturare_port_pret" name="refacturare_port_pret" min="0" step="0.01" placeholder="Pret / buc" value="<?= e((string) ($formData['refacturare_port_pret'] ?? '')) ?>">
-                                <?php if (isset($formErrors['refacturare_port_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_port_pret']) ?></div><?php endif; ?>
-                            </div>
-                        </div>
-                        <div class="row g-2">
-                            <div class="col-12 col-md-4"><strong>Trece</strong></div>
-                            <div class="col-6 col-md-4">
-                                <input type="number" class="form-control form-control-sm <?= isset($formErrors['refacturare_trece_bucati']) ? 'is-invalid' : '' ?>" id="refacturare_trece_bucati" name="refacturare_trece_bucati" min="0" step="1" placeholder="Bucati" value="<?= e((string) ($formData['refacturare_trece_bucati'] ?? '')) ?>">
-                                <?php if (isset($formErrors['refacturare_trece_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_trece_bucati']) ?></div><?php endif; ?>
-                            </div>
-                            <div class="col-6 col-md-4">
-                                <input type="number" class="form-control form-control-sm <?= isset($formErrors['refacturare_trece_pret']) ? 'is-invalid' : '' ?>" id="refacturare_trece_pret" name="refacturare_trece_pret" min="0" step="0.01" placeholder="Pret / buc" value="<?= e((string) ($formData['refacturare_trece_pret'] ?? '')) ?>">
-                                <?php if (isset($formErrors['refacturare_trece_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_trece_pret']) ?></div><?php endif; ?>
-                            </div>
-                        </div>
-                        <div class="form-text mt-2">Suma se calculeaza automat din: bucati x pret pentru fiecare linie.</div>
-                    </div>
-                </div>
-
-                <div class="col-12 col-lg-6">
-                    <label class="form-label" for="refacturare_document_upload">Document refacturare (upload)</label>
-                    <input type="file" class="form-control <?= isset($formErrors['refacturare_document_upload']) ? 'is-invalid' : '' ?>" id="refacturare_document_upload" name="refacturare_document_upload" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
-                    <?php if (isset($formErrors['refacturare_document_upload'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['refacturare_document_upload']) ?></div><?php endif; ?>
-                    <div class="form-text">Formate acceptate: PDF, JPG, PNG, WEBP, DOC, DOCX. Maxim 5 MB.</div>
-                </div>
-
-                <div class="col-12">
-                    <button type="submit" class="btn btn-primary">Adauga refacturare</button>
-                </div>
-            </form>
-        <?php endif; ?>
-    </div>
-</div>
-
-<div class="card border-0 shadow-sm">
-    <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
-        <h3 class="h6 mb-0">Istoric refacturari</h3>
-        <div class="small text-muted">
-            Intrari: <strong><?= e((string) $historyCount) ?></strong> |
-            Total listat: <strong><?= e(format_number_ro($historyTotal, 2)) ?> lei</strong>
-        </div>
-    </div>
-    <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
+        <div class="refacturare-table-wrap">
+            <table class="table refacturare-table mb-0">
+                <colgroup>
+                    <col class="ref-col-date">
+                    <col class="ref-col-race">
+                    <col class="ref-col-type">
+                    <col class="ref-col-amount">
+                    <col class="ref-col-details">
+                    <col class="ref-col-status">
+                    <col class="ref-col-actions">
+                </colgroup>
                 <thead>
                     <tr>
-                        <th style="min-width: 120px;">Data</th>
-                        <th style="min-width: 300px;">Cursa</th>
-                        <th style="min-width: 170px;">Tip</th>
-                        <th class="text-end" style="min-width: 140px;">Suma</th>
-                        <th style="min-width: 280px;">Motiv / detalii</th>
-                        <th style="min-width: 180px;">Document</th>
-                        <th style="min-width: 180px;">Status factura</th>
-                        <th class="text-end" style="min-width: 220px;">Actiuni</th>
+                        <th>
+                            <a class="refacturare-sort-link" href="<?= e($sortUrl('date')) ?>">
+                                Data <i class="bi <?= e($sortIcon('date')) ?>" aria-hidden="true"></i>
+                            </a>
+                        </th>
+                        <th>Cursa / Vehicul</th>
+                        <th>
+                            <a class="refacturare-sort-link" href="<?= e($sortUrl('type')) ?>">
+                                Tip <i class="bi <?= e($sortIcon('type')) ?>" aria-hidden="true"></i>
+                            </a>
+                        </th>
+                        <th>
+                            <a class="refacturare-sort-link" href="<?= e($sortUrl('amount')) ?>">
+                                Suma <i class="bi <?= e($sortIcon('amount')) ?>" aria-hidden="true"></i>
+                            </a>
+                        </th>
+                        <th>Motiv / detalii</th>
+                        <th class="refacturare-status-column">Status factură</th>
+                        <th class="refacturare-actions-column text-end">Acțiuni</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if ($historyRows === []): ?>
                         <tr>
-                            <td colspan="8" class="text-center text-muted py-4">Nu exista refacturari inregistrate.</td>
+                            <td colspan="7" class="refacturare-empty-row">Nu există refacturări înregistrate pentru filtrele aplicate.</td>
                         </tr>
                     <?php else: ?>
                         <?php foreach ($historyRows as $historyRow): ?>
@@ -267,14 +298,15 @@ $buildRaceLabel = static function (array $raceRow, array $transportTypes): strin
                                 if ($historyTypeKey === '') {
                                     $historyTypeKey = trim((string) ($historyRow['tip_cheltuiala'] ?? ''));
                                 }
-                                $historyTypeLabel = (string) ($expenseTypes[$historyTypeKey] ?? ($historyTypeKey !== '' ? $historyTypeKey : '-'));
+                                $historyTypeLabel = (string) ($refacturareTypeLabels[$historyTypeKey] ?? ($expenseTypes[$historyTypeKey] ?? ($historyTypeKey !== '' ? $historyTypeKey : '-')));
                                 $historyAmount = (float) ($historyRow['refacturare_suma'] ?? 0);
-                                $historyDocPath = trim((string) ($historyRow['refacturare_document_path'] ?? ''));
-                                $historyDocName = trim((string) ($historyRow['refacturare_document_original_name'] ?? ''));
-                                $historyDocUrl = $historyDocPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($historyDocPath)) : null;
                                 $historyObs = trim((string) ($historyRow['refacturare_observatii'] ?? ''));
+                                if ($historyObs === '') {
+                                    $historyObs = trim((string) ($historyRow['observatii'] ?? ''));
+                                }
+                                $historyObsLines = preg_split('/\R/u', $historyObs) ?: [];
+                                $historyPrimaryDetail = trim((string) ($historyObsLines[0] ?? ''));
                                 $historyIsInvoiced = (int) ($historyRow['refacturare_facturata'] ?? 0) === 1;
-                                $historyInvoicedAt = trim((string) ($historyRow['refacturare_facturata_at'] ?? ''));
                                 $historyTaxDetails = json_decode((string) ($historyRow['refacturare_detalii'] ?? ''), true);
                                 $historyTaxNotes = [];
                                 if (is_array($historyTaxDetails)) {
@@ -283,76 +315,85 @@ $buildRaceLabel = static function (array $raceRow, array $transportTypes): strin
                                         if (!is_array($taxRow)) {
                                             continue;
                                         }
-                                        $qty = is_numeric((string) ($taxRow['bucati'] ?? null)) ? (float) $taxRow['bucati'] : 0;
-                                        $price = is_numeric((string) ($taxRow['pret'] ?? null)) ? (float) $taxRow['pret'] : 0;
+                                        $qty = is_numeric((string) ($taxRow['bucati'] ?? null)) ? (float) $taxRow['bucati'] : 0.0;
+                                        $price = is_numeric((string) ($taxRow['pret'] ?? null)) ? (float) $taxRow['pret'] : 0.0;
                                         if ($qty <= 0 || $price <= 0) {
                                             continue;
                                         }
-                                        $historyTaxNotes[] = $taxLabel . ': ' . format_number_ro($qty, 2) . ' x ' . format_number_ro($price, 2);
+                                        $historyTaxNotes[] = $taxLabel . ': ' . format_number_ro($qty, 2) . ' × ' . format_number_ro($price, 2);
                                     }
                                 }
+                                $historySecondaryDetail = $historyTaxNotes !== []
+                                    ? implode(' | ', $historyTaxNotes)
+                                    : trim(implode(' ', array_slice($historyObsLines, 1)));
+                                $historyDate = trim((string) (($historyRow['refacturare_data'] ?? '') !== '' ? $historyRow['refacturare_data'] : ($historyRow['data_cheltuiala'] ?? '')));
+                                $historyCreatedAt = trim((string) ($historyRow['created_at'] ?? ''));
+                                $plate = trim((string) ($historyRow['nr_inmatriculare'] ?? '-'));
+                                $vehicleName = trim((string) (($historyRow['marca'] ?? '') . ' ' . ($historyRow['model'] ?? '')));
+                                $driverName = trim((string) ($historyRow['sofer_nume'] ?? ''));
+                                $beneficiaryName = trim((string) ($historyRow['beneficiar_nume'] ?? ''));
+                                $routeLabel = $buildRouteLabel($historyRow);
+                                $departureLabel = $formatDateTimeInline(
+                                    (string) (($historyRow['data_inceput'] ?? '') !== '' ? $historyRow['data_inceput'] : ($historyRow['data_cursa'] ?? '')),
+                                    (string) ($historyRow['ora_inceput'] ?? '')
+                                );
+                                $metadataParts = [];
+                                foreach ([$vehicleName, $driverName, $beneficiaryName, $routeLabel !== '-' ? $routeLabel : '', 'Plecare: ' . $departureLabel] as $metadataPart) {
+                                    $metadataPart = trim($metadataPart);
+                                    if ($metadataPart !== '' && $metadataPart !== '-') {
+                                        $metadataParts[] = $metadataPart;
+                                    }
+                                }
+                                $metadataLine = implode(' • ', $metadataParts);
                             ?>
                             <tr>
                                 <td>
-                                    <?= e(format_date_ro((string) ($historyRow['refacturare_data'] ?? ''))) ?>
-                                    <?php if (!empty($historyRow['created_at'])): ?>
-                                        <div class="small text-muted"><?= e(format_datetime_ro((string) $historyRow['created_at'])) ?></div>
+                                    <div class="refacturare-date-main"><?= e(format_date_ro($historyDate)) ?></div>
+                                    <?php if ($historyCreatedAt !== ''): ?>
+                                        <div class="refacturare-date-sub"><?= e(format_datetime_ro($historyCreatedAt)) ?></div>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <div class="fw-semibold">#<?= e((string) $historyRaceId) ?> - <?= e(trim((string) ($historyRow['nr_inmatriculare'] ?? '-'))) ?></div>
-                                    <div class="small text-muted"><?= e($buildRaceLabel($historyRow, $transportTypes)) ?></div>
+                                    <div class="refacturare-race-cell">
+                                        <div class="refacturare-race-main">#<?= e((string) $historyRaceId) ?> - <?= e($plate) ?></div>
+                                        <div class="refacturare-race-meta" title="<?= e($metadataLine) ?>"><?= e($metadataLine !== '' ? $metadataLine : '-') ?></div>
+                                    </div>
                                 </td>
-                                <td><?= e($historyTypeLabel) ?></td>
-                                <td class="text-end fw-semibold"><?= e(format_number_ro($historyAmount, 2)) ?> lei</td>
+                                <td class="refacturare-type-cell"><?= e($historyTypeLabel) ?></td>
+                                <td class="refacturare-amount-cell"><?= e($formatMoney($historyAmount)) ?></td>
                                 <td>
-                                    <?php if ($historyObs !== ''): ?>
-                                        <div><?= nl2br(e($historyObs)) ?></div>
-                                    <?php else: ?>
-                                        <span class="text-muted">-</span>
-                                    <?php endif; ?>
-                                    <?php if ($historyTaxNotes !== []): ?>
-                                        <div class="small text-muted mt-1"><?= e(implode(' | ', $historyTaxNotes)) ?></div>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <?php if ($historyDocUrl !== null): ?>
-                                        <a class="btn btn-sm btn-outline-secondary" href="<?= e($historyDocUrl) ?>" target="_blank" rel="noopener">
-                                            <?= e($historyDocName !== '' ? $historyDocName : basename($historyDocPath)) ?>
-                                        </a>
-                                    <?php else: ?>
-                                        <span class="text-muted">-</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <?php if ($historyIsInvoiced): ?>
-                                        <span class="badge text-bg-success">Factura emisa</span>
-                                        <?php if ($historyInvoicedAt !== ''): ?>
-                                            <div class="small text-muted mt-1"><?= e(format_datetime_ro($historyInvoicedAt)) ?></div>
+                                    <div class="refacturare-detail-cell">
+                                        <div class="refacturare-detail-main" title="<?= e($historyPrimaryDetail) ?>"><?= e($historyPrimaryDetail !== '' ? $historyPrimaryDetail : '-') ?></div>
+                                        <?php if ($historySecondaryDetail !== ''): ?>
+                                            <div class="refacturare-detail-sub" title="<?= e($historySecondaryDetail) ?>"><?= e($historySecondaryDetail) ?></div>
                                         <?php endif; ?>
+                                    </div>
+                                </td>
+                                <td class="refacturare-status-cell">
+                                    <?php if ($historyIsInvoiced): ?>
+                                        <span class="refacturare-status-badge is-invoiced">Factura emisă</span>
                                     <?php else: ?>
-                                        <span class="badge text-bg-warning text-dark">In asteptare</span>
+                                        <span class="refacturare-status-badge is-pending">În așteptare</span>
                                     <?php endif; ?>
                                 </td>
-                                <td class="text-end">
-                                    <div class="d-inline-flex flex-wrap justify-content-end gap-1">
-                                        <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $historyRaceId, 'expense_id' => $historyExpenseId])) ?>">
-                                            Editeaza
+                                <td class="refacturare-actions-cell text-end">
+                                    <div class="refacturare-actions">
+                                        <a class="btn refacturare-action-edit" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $historyRaceId, 'expense_id' => $historyExpenseId])) ?>">
+                                            Editează
                                         </a>
-                                        <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'toggle_refacturare_facturata'])) ?>" class="d-inline">
+                                        <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'toggle_refacturare_facturata'])) ?>" class="refacturare-invoice-form">
                                             <?= csrf_field() ?>
                                             <input type="hidden" name="race_id" value="<?= e((string) $historyRaceId) ?>">
                                             <input type="hidden" name="expense_id" value="<?= e((string) $historyExpenseId) ?>">
                                             <input type="hidden" name="is_invoiced" value="<?= $historyIsInvoiced ? '0' : '1' ?>">
-                                            <?php if ($historyIsInvoiced): ?>
-                                                <button type="submit" class="btn btn-sm btn-outline-secondary" data-confirm="Anulezi marcarea facturii pentru aceasta refacturare?">
-                                                    Anuleaza factura
-                                                </button>
-                                            <?php else: ?>
-                                                <button type="submit" class="btn btn-sm btn-outline-success" data-confirm="Confirmi ca factura de refacturare a fost emisa?">
-                                                    Factura emisa
-                                                </button>
-                                            <?php endif; ?>
+                                            <input type="hidden" name="return_url" value="<?= e($returnUrl) ?>">
+                                            <button
+                                                type="submit"
+                                                class="btn refacturare-action-invoice"
+                                                data-confirm="<?= $historyIsInvoiced ? 'Anulezi marcarea facturii pentru această refacturare?' : 'Confirmi că factura de refacturare a fost emisă?' ?>"
+                                            >
+                                                Factura emisă
+                                            </button>
                                         </form>
                                     </div>
                                 </td>
@@ -362,96 +403,81 @@ $buildRaceLabel = static function (array $raceRow, array $transportTypes): strin
                 </tbody>
             </table>
         </div>
-    </div>
+
+        <footer class="refacturare-table-footer">
+            <form method="get" class="refacturare-page-size-form">
+                <?php foreach (array_merge($filterBase, ['p' => 1]) as $key => $value): ?>
+                    <?php if ($key === 'per_page'): continue; endif; ?>
+                    <input type="hidden" name="<?= e((string) $key) ?>" value="<?= e((string) $value) ?>">
+                <?php endforeach; ?>
+                <label for="ref_per_page">Afișează</label>
+                <select class="form-select form-select-sm" id="ref_per_page" name="per_page" onchange="this.form.submit()">
+                    <?php foreach ([10, 25, 50, 100] as $perPageOption): ?>
+                        <option value="<?= e((string) $perPageOption) ?>" <?= $perPage === $perPageOption ? 'selected' : '' ?>><?= e((string) $perPageOption) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <span>din <?= e((string) $totalRows) ?> rezultate</span>
+            </form>
+
+            <nav aria-label="Paginare refacturări">
+                <ul class="pagination pagination-sm refacturare-pagination mb-0">
+                    <li class="page-item <?= $currentPageIndex <= 1 ? 'disabled' : '' ?>">
+                        <a class="page-link" href="<?= e(build_query_url(array_merge($filterBase, ['p' => max(1, $currentPageIndex - 1)]))) ?>" aria-label="Pagina anterioară">
+                            <i class="bi bi-chevron-left" aria-hidden="true"></i>
+                        </a>
+                    </li>
+                    <?php for ($p = max(1, $currentPageIndex - 2); $p <= min($totalPages, $currentPageIndex + 2); $p++): ?>
+                        <li class="page-item <?= $p === $currentPageIndex ? 'active' : '' ?>">
+                            <a class="page-link" href="<?= e(build_query_url(array_merge($filterBase, ['p' => $p]))) ?>"><?= e((string) $p) ?></a>
+                        </li>
+                    <?php endfor; ?>
+                    <li class="page-item <?= $currentPageIndex >= $totalPages ? 'disabled' : '' ?>">
+                        <a class="page-link" href="<?= e(build_query_url(array_merge($filterBase, ['p' => min($totalPages, $currentPageIndex + 1)]))) ?>" aria-label="Pagina următoare">
+                            <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                        </a>
+                    </li>
+                </ul>
+            </nav>
+        </footer>
+    </section>
 </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-    var refacturareTypeEl = document.getElementById('refacturare_tip_cheltuiala');
-    var refacturareAmountEl = document.getElementById('refacturare_suma');
-    var roadTaxBoxEl = document.querySelector('[data-role="refacturare-road-tax-breakdown"]');
-    if (!(refacturareTypeEl instanceof HTMLSelectElement) || !(refacturareAmountEl instanceof HTMLInputElement) || !(roadTaxBoxEl instanceof HTMLElement)) {
+    var formEl = document.querySelector('[data-refacturare-filter-form]');
+    if (!(formEl instanceof HTMLFormElement)) {
         return;
     }
 
-    var roadTaxFields = [
-        { qty: document.getElementById('refacturare_taxa_acces_bucati'), price: document.getElementById('refacturare_taxa_acces_pret') },
-        { qty: document.getElementById('refacturare_port_bucati'), price: document.getElementById('refacturare_port_pret') },
-        { qty: document.getElementById('refacturare_trece_bucati'), price: document.getElementById('refacturare_trece_pret') }
-    ];
+    var pageInputEl = formEl.querySelector('[data-refacturare-page-input]');
+    var searchInputEl = formEl.querySelector('input[name="q"]');
+    var debounceTimer = null;
 
-    var parseNumber = function (value) {
-        var normalized = String(value || '').trim().replace(',', '.');
-        if (normalized === '') {
-            return null;
+    var submitFilters = function () {
+        if (pageInputEl instanceof HTMLInputElement) {
+            pageInputEl.value = '1';
         }
-        var parsed = Number(normalized);
-        return Number.isFinite(parsed) ? parsed : null;
+        formEl.classList.add('is-refreshing');
+        formEl.submit();
     };
 
-    var formatAmount = function (value) {
-        return (Math.round(value * 100) / 100).toFixed(2);
-    };
-
-    var calculateRoadTaxTotal = function () {
-        var total = 0;
-        roadTaxFields.forEach(function (field) {
-            if (!(field.qty instanceof HTMLInputElement) || !(field.price instanceof HTMLInputElement)) {
-                return;
-            }
-            var qty = parseNumber(field.qty.value);
-            var price = parseNumber(field.price.value);
-            if (qty !== null && qty > 0 && price !== null && price > 0) {
-                total += qty * price;
-            }
-        });
-        return Math.round(total * 100) / 100;
-    };
-
-    var hasAnyRoadTaxInput = function () {
-        for (var i = 0; i < roadTaxFields.length; i++) {
-            var field = roadTaxFields[i];
-            if (!(field.qty instanceof HTMLInputElement) || !(field.price instanceof HTMLInputElement)) {
-                continue;
-            }
-            if (String(field.qty.value || '').trim() !== '' || String(field.price.value || '').trim() !== '') {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    var syncRoadTaxMode = function () {
-        var isRoadTax = refacturareTypeEl.value === 'taxe_drum';
-        roadTaxBoxEl.classList.toggle('d-none', !isRoadTax);
-
-        if (!isRoadTax) {
-            refacturareAmountEl.readOnly = false;
-            return;
-        }
-
-        var total = calculateRoadTaxTotal();
-        refacturareAmountEl.readOnly = true;
-        if (total > 0) {
-            refacturareAmountEl.value = formatAmount(total);
-            return;
-        }
-
-        if (hasAnyRoadTaxInput()) {
-            refacturareAmountEl.value = '';
-        }
-    };
-
-    refacturareTypeEl.addEventListener('change', syncRoadTaxMode);
-    roadTaxFields.forEach(function (field) {
-        if (field.qty instanceof HTMLInputElement) {
-            field.qty.addEventListener('input', syncRoadTaxMode);
-        }
-        if (field.price instanceof HTMLInputElement) {
-            field.price.addEventListener('input', syncRoadTaxMode);
-        }
+    formEl.querySelectorAll('select, input[type="date"]').forEach(function (controlEl) {
+        controlEl.addEventListener('change', submitFilters);
     });
 
-    syncRoadTaxMode();
+    if (searchInputEl instanceof HTMLInputElement) {
+        searchInputEl.addEventListener('input', function () {
+            window.clearTimeout(debounceTimer);
+            debounceTimer = window.setTimeout(submitFilters, 400);
+        });
+
+        searchInputEl.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                window.clearTimeout(debounceTimer);
+                submitFilters();
+            }
+        });
+    }
 });
 </script>

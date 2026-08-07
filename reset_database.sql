@@ -14,6 +14,7 @@ DROP TABLE IF EXISTS configurare_locuri_incarcare_vehicule;
 DROP TABLE IF EXISTS configurare_locuri_incarcare;
 DROP TABLE IF EXISTS audit_log;
 DROP TABLE IF EXISTS salary_history;
+DROP TABLE IF EXISTS employee_employment_periods;
 DROP TABLE IF EXISTS staff_documents;
 DROP TABLE IF EXISTS staff_document_requirements;
 DROP TABLE IF EXISTS staff_members;
@@ -117,6 +118,18 @@ CREATE TABLE soferi (
     nume VARCHAR(100) NOT NULL,
     data_nasterii DATE NULL,
     data_angajare DATE NULL,
+    data_incetare DATE NULL,
+    employment_status ENUM('active','temporarily_inactive','suspended','leave','terminated') NOT NULL DEFAULT 'active',
+    termination_date DATE NULL,
+    termination_reason VARCHAR(120) NULL,
+    termination_notes TEXT NULL,
+    last_working_day DATE NULL,
+    termination_document_original VARCHAR(255) NULL,
+    termination_document_path VARCHAR(255) NULL,
+    rehire_eligible TINYINT(1) NOT NULL DEFAULT 1,
+    termination_assets_returned TINYINT(1) NOT NULL DEFAULT 0,
+    terminated_by INT UNSIGNED NULL,
+    terminated_at DATETIME NULL,
     poza_original VARCHAR(255) NULL,
     poza_stocata VARCHAR(255) NULL,
     telefon VARCHAR(20) NOT NULL,
@@ -128,6 +141,7 @@ CREATE TABLE soferi (
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_soferi_status (status),
+    INDEX idx_soferi_employment_status (employment_status, termination_date),
     INDEX idx_soferi_vehicle (vehicle_id),
     CONSTRAINT fk_soferi_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -395,6 +409,18 @@ CREATE TABLE staff_members (
     functie VARCHAR(120) NOT NULL,
     salariu DECIMAL(10,2) NULL,
     data_angajare DATE NULL,
+    data_incetare DATE NULL,
+    employment_status ENUM('active','temporarily_inactive','suspended','leave','terminated') NOT NULL DEFAULT 'active',
+    termination_date DATE NULL,
+    termination_reason VARCHAR(120) NULL,
+    termination_notes TEXT NULL,
+    last_working_day DATE NULL,
+    termination_document_original VARCHAR(255) NULL,
+    termination_document_path VARCHAR(255) NULL,
+    rehire_eligible TINYINT(1) NOT NULL DEFAULT 1,
+    termination_assets_returned TINYINT(1) NOT NULL DEFAULT 0,
+    terminated_by INT UNSIGNED NULL,
+    terminated_at DATETIME NULL,
     status ENUM('activ', 'inactiv') NOT NULL DEFAULT 'activ',
     observatii TEXT NULL,
     created_by INT UNSIGNED NULL,
@@ -402,6 +428,7 @@ CREATE TABLE staff_members (
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_staff_members_type_status (staff_type_id, status),
+    INDEX idx_staff_members_employment_status (employment_status, termination_date),
     INDEX idx_staff_members_name (nume_complet),
     CONSTRAINT fk_staff_members_type FOREIGN KEY (staff_type_id) REFERENCES staff_types(id) ON DELETE RESTRICT,
     CONSTRAINT fk_staff_members_created_by FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL,
@@ -460,6 +487,37 @@ CREATE TABLE salary_history (
     CONSTRAINT fk_salary_history_driver FOREIGN KEY (driver_id) REFERENCES soferi(id) ON DELETE CASCADE,
     CONSTRAINT fk_salary_history_staff FOREIGN KEY (staff_member_id) REFERENCES staff_members(id) ON DELETE CASCADE,
     CONSTRAINT fk_salary_history_user FOREIGN KEY (updated_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE employee_employment_periods (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    subject_type ENUM('driver', 'staff') NOT NULL,
+    driver_id INT UNSIGNED NULL,
+    staff_member_id INT UNSIGNED NULL,
+    source_module ENUM('soferi', 'contabilitate_personal') NOT NULL,
+    personnel_type ENUM('operational', 'office') NOT NULL DEFAULT 'operational',
+    staff_type_id INT UNSIGNED NULL,
+    function_name VARCHAR(120) NULL,
+    salary DECIMAL(10,2) NULL,
+    hire_date DATE NULL,
+    last_working_day DATE NULL,
+    termination_date DATE NULL,
+    termination_reason VARCHAR(120) NULL,
+    termination_notes TEXT NULL,
+    status ENUM('active', 'terminated') NOT NULL DEFAULT 'active',
+    rehire_eligible TINYINT(1) NOT NULL DEFAULT 1,
+    created_by INT UNSIGNED NULL,
+    updated_by INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_employee_period_driver (driver_id, status, hire_date),
+    INDEX idx_employee_period_staff (staff_member_id, status, hire_date),
+    INDEX idx_employee_period_subject (subject_type, status),
+    CONSTRAINT fk_employee_period_driver FOREIGN KEY (driver_id) REFERENCES soferi(id) ON DELETE CASCADE,
+    CONSTRAINT fk_employee_period_staff FOREIGN KEY (staff_member_id) REFERENCES staff_members(id) ON DELETE CASCADE,
+    CONSTRAINT fk_employee_period_staff_type FOREIGN KEY (staff_type_id) REFERENCES staff_types(id) ON DELETE SET NULL,
+    CONSTRAINT fk_employee_period_created_by FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL,
+    CONSTRAINT fk_employee_period_updated_by FOREIGN KEY (updated_by) REFERENCES utilizatori(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE configurare_locuri_incarcare (
@@ -584,12 +642,14 @@ CREATE TABLE curse_dispecer (
     observatii TEXT NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
+    duplicate_key CHAR(64) NULL,
     INDEX idx_curse_vehicle (vehicle_id),
     INDEX idx_curse_tip_transport (tip_transport),
     INDEX idx_curse_data (data_cursa),
     INDEX idx_curse_loc (loc_incarcare_id),
     INDEX idx_curse_beneficiar (beneficiar_id),
     INDEX idx_curse_zona (zona_distributie_id),
+    UNIQUE KEY uk_curse_dispecer_duplicate_key (duplicate_key),
     CONSTRAINT fk_curse_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE RESTRICT,
     CONSTRAINT fk_curse_loc FOREIGN KEY (loc_incarcare_id) REFERENCES configurare_locuri_incarcare(id) ON DELETE RESTRICT,
     CONSTRAINT fk_curse_beneficiar FOREIGN KEY (beneficiar_id) REFERENCES configurare_beneficiari_transport(id) ON DELETE RESTRICT,

@@ -1,10 +1,38 @@
 <?php
 $user = function_exists('current_user') ? current_user() : null;
 $alerts = flash_messages();
+$showSidebar = !empty($showSidebar);
 $currentAction = (string) ($_GET['action'] ?? 'index');
 $currentRoutePage = (string) ($_GET['page'] ?? ($currentPage ?? ''));
 $styleVersion = (string) @filemtime(BASE_PATH . '/assets/css/style.css');
-$bodyClasses = [];
+// Meniul lateral porneste ascuns (off-canvas) si apare cand mouse-ul ajunge la
+// marginea din stanga. Butonul din bara de sus il poate fixa deschis.
+$bodyClasses = ['sidebar-collapsed'];
+$showGlobalApprovalDrawer = false;
+$globalApprovalSummary = [
+    'counts' => ['vehicle' => 0, 'driver' => 0],
+    'total' => 0,
+    'vehicles' => [],
+    'drivers' => [],
+];
+if (
+    $showSidebar
+    && function_exists('is_logged_in')
+    && is_logged_in()
+    && (
+        (function_exists('can') && can('inactive_approvals', 'review'))
+        || (!function_exists('can') && function_exists('is_admin') && is_admin())
+    )
+    && class_exists('InactiveResourceApprovalModel')
+    && function_exists('get_pdo')
+) {
+    $showGlobalApprovalDrawer = true;
+    try {
+        $globalApprovalSummary = (new InactiveResourceApprovalModel(get_pdo()))->getPendingSummary(5);
+    } catch (Throwable $exception) {
+        error_log('[layout][inactive_approvals] ' . $exception->getMessage());
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="ro">
@@ -18,17 +46,8 @@ $bodyClasses = [];
 </head>
 <body class="<?= e(implode(' ', $bodyClasses)) ?>">
 <?php if ($showSidebar && is_logged_in()): ?>
-<script>
-try {
-    if (window.localStorage.getItem('fleet.sidebarCollapsed') === '1') {
-        document.body.classList.add('sidebar-collapsed');
-    }
-} catch (error) {
-}
-</script>
-<?php endif; ?>
-<?php if ($showSidebar && is_logged_in()): ?>
     <div class="app-shell">
+        <div class="fleet-sidebar-edge" data-sidebar-edge aria-hidden="true"></div>
         <aside class="sidebar p-3">
             <div class="sidebar-brand mb-4">
                 <div class="fw-bold fs-5">Fleet Management</div>
@@ -36,18 +55,26 @@ try {
             </div>
 
             <nav class="nav flex-column gap-1">
-                <a class="nav-link <?= $currentPage === 'dashboard' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard'])) ?>"><i class="bi bi-house-door" aria-hidden="true"></i><span>Tablou de bord</span></a>
-                <a class="nav-link <?= $currentPage === 'dashboard_analitic' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard_analitic'])) ?>"><i class="bi bi-bar-chart-line" aria-hidden="true"></i><span>Dashboard Analitic</span></a>
-                <a class="nav-link <?= $currentPage === 'dispecer_curse' && $currentAction !== 'refacturari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>"><i class="bi bi-truck" aria-hidden="true"></i><span>Dispecer curse</span></a>
-                <a class="nav-link <?= $currentPage === 'istoric_cheltuieli_curse' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'istoric_cheltuieli_curse'])) ?>"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span>Istoric cheltuieli curse</span></a>
-                <?php if ($currentPage !== 'istoric_cheltuieli_curse'): ?>
+<?php $can = static fn(string $k, string $a = 'view'): bool => !function_exists('can') || can($k, $a); ?>
+                <?php if ($can('dashboard')): ?><a class="nav-link <?= $currentPage === 'dashboard' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard'])) ?>"><i class="bi bi-house-door" aria-hidden="true"></i><span>Tablou de bord</span></a><?php endif; ?>
+                <?php if ($can('dashboard_analitic')): ?><a class="nav-link <?= $currentPage === 'dashboard_analitic' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard_analitic'])) ?>"><i class="bi bi-bar-chart-line" aria-hidden="true"></i><span>Dashboard Analitic</span></a><?php endif; ?>
+                <?php if ($can('dispecer_curse')): ?><a class="nav-link <?= $currentPage === 'dispecer_curse' && !in_array($currentAction, ['refacturari', 'curse_sterse'], true) ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>"><i class="bi bi-truck" aria-hidden="true"></i><span>Dispecer curse</span></a><?php endif; ?>
+                <?php if ($can('dispecer_curse', 'deleted_view')): ?>
+                    <a class="nav-link <?= $currentPage === 'dispecer_curse' && $currentAction === 'curse_sterse' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'curse_sterse'])) ?>"><i class="bi bi-trash3" aria-hidden="true"></i><span>Curse șterse</span></a>
+                <?php endif; ?>
+                <?php if ($can('carburanti')): ?><a class="nav-link <?= $currentPage === 'carburanti' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'carburanti'])) ?>"><i class="bi bi-fuel-pump" aria-hidden="true"></i><span>Carburan&#539;i</span></a><?php endif; ?>
+                <?php if ($can('istoric_cheltuieli_curse')): ?><a class="nav-link <?= $currentPage === 'istoric_cheltuieli_curse' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'istoric_cheltuieli_curse'])) ?>"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span>Istoric cheltuieli curse</span></a><?php endif; ?>
+                <?php if ($currentPage !== 'istoric_cheltuieli_curse' && $can('dispecer_curse', 'refacturari_view')): ?>
                     <a class="nav-link <?= $currentPage === 'dispecer_curse' && $currentAction === 'refacturari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'refacturari'])) ?>"><i class="bi bi-receipt" aria-hidden="true"></i><span>Refacturari curse</span></a>
                 <?php endif; ?>
-                <a class="nav-link <?= $currentPage === 'centralizator_facturare' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'centralizator_facturare'])) ?>"><i class="bi bi-calendar-range" aria-hidden="true"></i><span>Centralizator Facturare</span></a>
-                <a class="nav-link <?= $currentPage === 'programare_concedii' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'programare_concedii'])) ?>"><i class="bi bi-calendar2-week" aria-hidden="true"></i><span>Programare concedii</span></a>
+                <?php if ($can('centralizator_facturare')): ?><a class="nav-link <?= $currentPage === 'centralizator_facturare' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'centralizator_facturare'])) ?>"><i class="bi bi-calendar-range" aria-hidden="true"></i><span>Centralizator Facturare</span></a><?php endif; ?>
+                <?php if ($can('programare_concedii')): ?><a class="nav-link <?= $currentPage === 'programare_concedii' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'programare_concedii'])) ?>"><i class="bi bi-calendar2-week" aria-hidden="true"></i><span>Programare concedii</span></a><?php endif; ?>
                 <?php
-                $isVehicleNavGroup = in_array($currentRoutePage, ['vehicule', 'documente', 'inventar_dotari_vehicule', 'stare_tehnica'], true) || $currentPage === 'vehicule';
+                $isVehicleNavGroup = in_array($currentRoutePage, ['vehicule', 'vehicule_usoare', 'vehicule_grele', 'documente', 'inventar_dotari_vehicule', 'stare_tehnica'], true)
+                    || in_array($currentPage, ['vehicule', 'vehicule_usoare', 'vehicule_grele'], true);
+                $vehShow = $can('vehicule_usoare') || $can('vehicule_grele') || $can('documente') || $can('inventar_dotari_vehicule') || $can('stare_tehnica');
                 ?>
+                <?php if ($vehShow): ?>
                 <div class="sidebar-nav-group">
                     <button
                         class="nav-link sidebar-parent-link <?= $isVehicleNavGroup ? 'active' : '' ?>"
@@ -63,17 +90,21 @@ try {
                     </button>
                     <div class="collapse <?= $isVehicleNavGroup ? 'show' : '' ?>" id="vehiclesSidebarMenu">
                         <div class="sidebar-submenu">
-                            <a class="nav-link <?= $currentRoutePage === 'vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'vehicule'])) ?>">Lista vehicule</a>
-                            <a class="nav-link <?= $currentRoutePage === 'documente' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'documente'])) ?>">Documente Vehicule</a>
-                            <a class="nav-link <?= $currentRoutePage === 'inventar_dotari_vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'inventar_dotari_vehicule'])) ?>">Inventar Dotari</a>
-                            <a class="nav-link <?= $currentPage === 'stare_tehnica' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'stare_tehnica'])) ?>">Stare tehnic&#259;</a>
+                            <?php if ($can('vehicule_usoare')): ?><a class="nav-link <?= $currentRoutePage === 'vehicule_usoare' || $currentPage === 'vehicule_usoare' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'vehicule_usoare'])) ?>">Vehicule Usoare</a><?php endif; ?>
+                            <?php if ($can('vehicule_grele')): ?><a class="nav-link <?= $currentRoutePage === 'vehicule_grele' || $currentPage === 'vehicule_grele' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'vehicule_grele'])) ?>">Vehicule Grele</a><?php endif; ?>
+                            <?php if ($can('documente')): ?><a class="nav-link <?= $currentRoutePage === 'documente' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'documente'])) ?>">Documente Vehicule</a><?php endif; ?>
+                            <?php if ($can('inventar_dotari_vehicule')): ?><a class="nav-link <?= $currentRoutePage === 'inventar_dotari_vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'inventar_dotari_vehicule'])) ?>">Inventar Dotari</a><?php endif; ?>
+                            <?php if ($can('stare_tehnica')): ?><a class="nav-link <?= $currentPage === 'stare_tehnica' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'stare_tehnica'])) ?>">Stare tehnic&#259;</a><?php endif; ?>
                         </div>
                     </div>
                 </div>
-                <a class="nav-link <?= $currentPage === 'autorizatii_vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'autorizatii_vehicule'])) ?>"><i class="bi bi-shield-check" aria-hidden="true"></i><span>Autorizații</span></a>
+                <?php endif; ?>
+                <?php if ($can('autorizatii_vehicule')): ?><a class="nav-link <?= $currentPage === 'autorizatii_vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'autorizatii_vehicule'])) ?>"><i class="bi bi-shield-check" aria-hidden="true"></i><span>Autorizații</span></a><?php endif; ?>
                 <?php
                 $isDriverNavGroup = in_array($currentRoutePage, ['soferi', 'documente_soferi', 'istoric_activitati_sofer'], true) || $currentPage === 'soferi';
+                $drvShow = $can('soferi') || $can('documente_soferi') || $can('istoric_activitati_sofer');
                 ?>
+                <?php if ($drvShow): ?>
                 <div class="sidebar-nav-group">
                     <button
                         class="nav-link sidebar-parent-link <?= $isDriverNavGroup ? 'active' : '' ?>"
@@ -89,21 +120,22 @@ try {
                     </button>
                     <div class="collapse <?= $isDriverNavGroup ? 'show' : '' ?>" id="driversSidebarMenu">
                         <div class="sidebar-submenu">
-                            <a class="nav-link <?= $currentRoutePage === 'soferi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'soferi'])) ?>">Lista soferi</a>
-                            <a class="nav-link <?= $currentRoutePage === 'documente_soferi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'documente_soferi'])) ?>">Documente Soferi</a>
-                            <a class="nav-link <?= $currentRoutePage === 'istoric_activitati_sofer' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'istoric_activitati_sofer'])) ?>">Istoric Activitati Soferi</a>
+                            <?php if ($can('soferi')): ?><a class="nav-link <?= $currentRoutePage === 'soferi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'soferi'])) ?>">Lista soferi</a><?php endif; ?>
+                            <?php if ($can('documente_soferi')): ?><a class="nav-link <?= $currentRoutePage === 'documente_soferi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'documente_soferi'])) ?>">Documente Soferi</a><?php endif; ?>
+                            <?php if ($can('istoric_activitati_sofer')): ?><a class="nav-link <?= $currentRoutePage === 'istoric_activitati_sofer' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'istoric_activitati_sofer'])) ?>">Istoric Activitati Soferi</a><?php endif; ?>
                         </div>
                     </div>
                 </div>
-                <?php if (function_exists('is_accountancy_user') && is_accountancy_user()): ?>
-                    <a class="nav-link <?= $currentPage === 'contabilitate_personal' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'contabilitate_personal'])) ?>"><i class="bi bi-person-badge" aria-hidden="true"></i><span>Contabilitate Personal</span></a>
-                    <a class="nav-link <?= $currentPage === 'cheltuieli_birou' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cheltuieli_birou'])) ?>"><i class="bi bi-wallet2" aria-hidden="true"></i><span>Cheltuieli Birou</span></a>
                 <?php endif; ?>
+                <?php if ($can('contabilitate_personal')): ?><a class="nav-link <?= $currentPage === 'contabilitate_personal' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'contabilitate_personal'])) ?>"><i class="bi bi-person-badge" aria-hidden="true"></i><span>Contabilitate Personal</span></a><?php endif; ?>
+                <?php if ($can('cheltuieli_birou')): ?><a class="nav-link <?= $currentPage === 'cheltuieli_birou' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cheltuieli_birou'])) ?>"><i class="bi bi-wallet2" aria-hidden="true"></i><span>Cheltuieli Birou</span></a><?php endif; ?>
+                <?php if ($can('cheltuieli_administrative')): ?><a class="nav-link <?= $currentPage === 'cheltuieli_administrative' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cheltuieli_administrative'])) ?>"><i class="bi bi-file-earmark-text" aria-hidden="true"></i><span>Cheltuieli Administrative</span></a><?php endif; ?>
                 <?php
                 $isTireModule = $currentPage === 'mentenanta' && in_array($currentAction, ['tire_stock', 'axis_config'], true);
                 $isMaintenanceModule = $currentPage === 'mentenanta';
                 $maintenanceAction = $currentAction === 'index' ? 'overview' : $currentAction;
                 ?>
+                <?php if ($can('mentenanta')): ?>
                 <div class="sidebar-nav-group">
                     <button
                         class="nav-link sidebar-parent-link <?= $isMaintenanceModule ? 'active' : '' ?>"
@@ -130,11 +162,12 @@ try {
                         </div>
                     </div>
                 </div>
-                <?php if (is_admin()): ?>
-                    <a class="nav-link <?= $currentPage === 'configurare_costuri_documente_vehicule_override' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override'])) ?>"><i class="bi bi-gear" aria-hidden="true"></i><span>Configurare Costuri</span></a>
-                    <a class="nav-link <?= $currentPage === 'notificari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'notificari'])) ?>"><i class="bi bi-bell" aria-hidden="true"></i><span>Notific&#259;ri</span></a>
-                    <a class="nav-link <?= $currentPage === 'utilizatori' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'utilizatori'])) ?>"><i class="bi bi-gear-wide-connected" aria-hidden="true"></i><span>Set&#259;ri sistem</span></a>
                 <?php endif; ?>
+                <?php if ($can('configurare_costuri_documente_vehicule_override')): ?><a class="nav-link <?= $currentPage === 'configurare_costuri_documente_vehicule_override' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override'])) ?>"><i class="bi bi-gear" aria-hidden="true"></i><span>Configurare Costuri</span></a><?php endif; ?>
+                <?php if ($can('notificari')): ?><a class="nav-link <?= $currentPage === 'notificari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'notificari'])) ?>"><i class="bi bi-bell" aria-hidden="true"></i><span>Notific&#259;ri</span></a><?php endif; ?>
+                <?php if ($can('utilizatori')): ?><a class="nav-link <?= $currentPage === 'utilizatori' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'utilizatori'])) ?>"><i class="bi bi-gear-wide-connected" aria-hidden="true"></i><span>Set&#259;ri sistem</span></a><?php endif; ?>
+                <?php if ($can('drepturi_acces')): ?><a class="nav-link <?= $currentPage === 'drepturi_acces' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'drepturi_acces'])) ?>"><i class="bi bi-shield-lock" aria-hidden="true"></i><span>Drepturi de acces</span></a><?php endif; ?>
+                <?php if ($can('activitate_utilizatori')): ?><a class="nav-link <?= $currentPage === 'activitate_utilizatori' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'activitate_utilizatori'])) ?>"><i class="bi bi-person-lines-fill" aria-hidden="true"></i><span>Activitate utilizatori</span></a><?php endif; ?>
                 <hr class="my-3">
                 <a class="nav-link text-danger" href="<?= e(build_query_url(['page' => 'logout'])) ?>"><i class="bi bi-box-arrow-right" aria-hidden="true"></i><span>Deconectare</span></a>
             </nav>
@@ -142,18 +175,7 @@ try {
 
         <div class="app-content">
             <header class="topbar d-flex justify-content-between align-items-center px-4 py-3 border-bottom bg-white">
-                <div class="d-flex align-items-center gap-2">
-                    <button
-                        type="button"
-                        class="btn btn-sm btn-outline-secondary sidebar-toggle-btn"
-                        data-sidebar-toggle
-                        aria-label="Ascunde sau afiseaza meniul"
-                        aria-expanded="true"
-                        title="Ascunde sau afiseaza meniul"
-                    >
-                        <i class="bi bi-list" aria-hidden="true"></i>
-                    </button>
-                </div>
+                <div class="d-flex align-items-center gap-2"></div>
                 <div class="topbar-user-area">
                     <a class="topbar-icon-button" href="<?= e(build_query_url(['page' => 'notificari'])) ?>" aria-label="Notificari">
                         <i class="bi bi-bell" aria-hidden="true"></i>
@@ -169,6 +191,13 @@ try {
                     </a>
                 </div>
             </header>
+
+            <?php if ($showGlobalApprovalDrawer): ?>
+                <?php
+                $approvalSummary = $globalApprovalSummary;
+                include BASE_PATH . '/views/partials/inactive_approval_drawer.php';
+                ?>
+            <?php endif; ?>
 
             <main class="p-4">
                 <?php foreach ($alerts as $type => $messages): ?>

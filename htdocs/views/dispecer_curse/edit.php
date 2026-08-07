@@ -105,6 +105,30 @@ $formatDurationLabel = static function (?int $minutes): string {
 
     return $mins . 'm';
 };
+$formatRaceDateInput = static function ($value): string {
+    $raw = trim((string) $value);
+    if ($raw === '') {
+        return '';
+    }
+
+    if (preg_match('/^(\d{4})-(\d{1,2})-(\d{1,2})$/', $raw, $matches) === 1) {
+        $year = (int) $matches[1];
+        $month = (int) $matches[2];
+        $day = (int) $matches[3];
+
+        return checkdate($month, $day, $year) ? sprintf('%02d/%02d/%04d', $day, $month, $year) : $raw;
+    }
+
+    if (preg_match('/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/', $raw, $matches) === 1) {
+        $day = (int) $matches[1];
+        $month = (int) $matches[2];
+        $year = (int) $matches[3];
+
+        return checkdate($month, $day, $year) ? sprintf('%02d/%02d/%04d', $day, $month, $year) : $raw;
+    }
+
+    return $raw;
+};
 $formStartTimeValueRaw = trim((string) ($raceFormData['ora_inceput'] ?? ''));
 $formStartTimeValue = $formStartTimeValueRaw !== '' ? substr($formStartTimeValueRaw, 0, 5) : '';
 $formEndTimeValueRaw = trim((string) ($raceFormData['ora_sfarsit'] ?? ''));
@@ -186,8 +210,12 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
               data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>'
               data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>'
               data-invoiced-refacturare-total='<?= e((string) $invoicedRefacturareTotal) ?>'
+              data-inactive-resource-status-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'inactive_resource_status'])) ?>"
+              data-inactive-trip-id="<?= e((string) $raceId) ?>"
               novalidate>
             <?= csrf_field() ?>
+            <input type="hidden" name="inactive_approval_decision" value="<?= e((string) ($raceFormData['inactive_approval_decision'] ?? '')) ?>" data-inactive-approval-decision>
+            <input type="hidden" name="inactive_approval_signature" value="" data-inactive-approval-signature>
             <datalist id="edit_race_time_options">
                 <?php for ($hour = 0; $hour < 24; $hour++): ?>
                     <?php foreach (['00', '15', '30', '45'] as $minute): ?>
@@ -197,6 +225,15 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
             </datalist>
 
             <div class="row g-3">
+                <?php if (isset($raceFormErrors['inactive_resources'])): ?>
+                    <div class="col-12">
+                        <div class="alert alert-warning d-flex align-items-center gap-2 mb-0" role="alert">
+                            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                            <span><?= e((string) $raceFormErrors['inactive_resources']) ?></span>
+                        </div>
+                    </div>
+                <?php endif; ?>
+
                 <div class="col-12 col-md-6 dispatcher-top-field">
                     <label class="form-label" for="edit_race_vehicle_id">Nr. Inmatriculare <span class="text-danger">*</span></label>
                     <select class="form-select <?= isset($raceFormErrors['vehicle_id']) ? 'is-invalid' : '' ?>" id="edit_race_vehicle_id" name="vehicle_id" required>
@@ -270,12 +307,12 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
 
                 <div class="col-12 col-md-6 dispatcher-schedule-field">
                     <label class="form-label" for="edit_race_data_incarcare">Data incarcare</label>
-                    <input type="date" class="form-control <?= isset($raceFormErrors['data_incarcare']) ? 'is-invalid' : '' ?>" id="edit_race_data_incarcare" name="data_incarcare" value="<?= e((string) ($raceFormData['data_incarcare'] ?? '')) ?>">
+                    <input type="text" class="form-control <?= isset($raceFormErrors['data_incarcare']) ? 'is-invalid' : '' ?>" id="edit_race_data_incarcare" name="data_incarcare" value="<?= e($formatRaceDateInput($raceFormData['data_incarcare'] ?? '')) ?>" placeholder="zz/ll/aaaa" inputmode="numeric" autocomplete="off" maxlength="10" pattern="(?:0?[1-9]|[12][0-9]|3[01])[\/.-](?:0?[1-9]|1[0-2])[\/.-][0-9]{4}" title="Format zi/luna/an, de exemplu 07/01/2026" data-role="race-date-ro">
                     <?php if (isset($raceFormErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_incarcare']) ?></div><?php endif; ?>
                 </div>
                 <div class="col-12 col-md-6 dispatcher-schedule-field">
                     <label class="form-label" for="edit_race_data_inceput">Data inceput <span class="text-danger">*</span></label>
-                    <input type="date" class="form-control <?= isset($raceFormErrors['data_inceput']) ? 'is-invalid' : '' ?>" id="edit_race_data_inceput" name="data_inceput" value="<?= e((string) ($raceFormData['data_inceput'] ?? ($raceFormData['data_cursa'] ?? ''))) ?>" required>
+                    <input type="text" class="form-control <?= isset($raceFormErrors['data_inceput']) ? 'is-invalid' : '' ?>" id="edit_race_data_inceput" name="data_inceput" value="<?= e($formatRaceDateInput($raceFormData['data_inceput'] ?? ($raceFormData['data_cursa'] ?? ''))) ?>" placeholder="zz/ll/aaaa" inputmode="numeric" autocomplete="off" maxlength="10" pattern="(?:0?[1-9]|[12][0-9]|3[01])[\/.-](?:0?[1-9]|1[0-2])[\/.-][0-9]{4}" title="Format zi/luna/an, de exemplu 07/01/2026" data-role="race-date-ro" required>
                     <?php if (isset($raceFormErrors['data_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_inceput']) ?></div><?php endif; ?>
                 </div>
 
@@ -303,7 +340,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
 
                 <div class="col-12 col-md-6 dispatcher-schedule-field">
                     <label class="form-label" for="edit_race_data_sfarsit">Data sfarsit <span class="text-danger">*</span></label>
-                    <input type="date" class="form-control <?= isset($raceFormErrors['data_sfarsit']) ? 'is-invalid' : '' ?>" id="edit_race_data_sfarsit" name="data_sfarsit" value="<?= e((string) ($raceFormData['data_sfarsit'] ?? ($raceFormData['data_cursa'] ?? ''))) ?>" required>
+                    <input type="text" class="form-control <?= isset($raceFormErrors['data_sfarsit']) ? 'is-invalid' : '' ?>" id="edit_race_data_sfarsit" name="data_sfarsit" value="<?= e($formatRaceDateInput($raceFormData['data_sfarsit'] ?? ($raceFormData['data_cursa'] ?? ''))) ?>" placeholder="zz/ll/aaaa" inputmode="numeric" autocomplete="off" maxlength="10" pattern="(?:0?[1-9]|[12][0-9]|3[01])[\/.-](?:0?[1-9]|1[0-2])[\/.-][0-9]{4}" title="Format zi/luna/an, de exemplu 07/01/2026" data-role="race-date-ro" required>
                     <?php if (isset($raceFormErrors['data_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_sfarsit']) ?></div><?php endif; ?>
                 </div>
 
@@ -497,17 +534,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <div class="dispatcher-total-preview" data-role="cost-km-mixt-preview"><?= e(format_number_ro((float) ($raceFormData['cost_km_mixt'] ?? 0), 2)) ?> lei/km</div>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-compressor-metric-field">
-                    <label class="form-label" for="edit_race_status_facturare">Status</label>
-                    <select class="form-select <?= isset($raceFormErrors['status_facturare']) ? 'is-invalid' : '' ?>" id="edit_race_status_facturare" name="status_facturare">
-                        <?php foreach (($billingStatuses ?? []) as $statusKey => $statusLabel): ?>
-                            <option value="<?= e((string) $statusKey) ?>" <?= (string) ($raceFormData['status_facturare'] ?? 'in_curs_facturare') === (string) $statusKey ? 'selected' : '' ?>>
-                                <?= e((string) $statusLabel) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <?php if (isset($raceFormErrors['status_facturare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['status_facturare']) ?></div><?php endif; ?>
-                </div>
+                <?php /* Statusul de facturare nu se mai editeaza aici: se schimba doar din Centralizator Facturare. */ ?>
 
                 <div class="col-12">
                     <label class="form-label" for="edit_race_observatii">Observatii</label>
@@ -1331,6 +1358,8 @@ document.addEventListener('DOMContentLoaded', function () {
     </script>
 <?php endif; ?>
 
+<?php include __DIR__ . '/_inactive_resource_modal.php'; ?>
+
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
 
 <?php if ($focusEndTime): ?>
@@ -1373,4 +1402,3 @@ document.addEventListener('DOMContentLoaded', function () {
 })();
 </script>
 <?php endif; ?>
-

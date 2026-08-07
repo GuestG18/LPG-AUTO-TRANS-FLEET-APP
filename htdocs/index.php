@@ -294,16 +294,20 @@ unset($modules['vehicule']['form_fields']['status'], $modules['soferi']['form_fi
 require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/csrf.php';
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/access.php';
 
 require_once __DIR__ . '/models/BaseModel.php';
+require_once __DIR__ . '/models/AccessRightsModel.php';
 require_once __DIR__ . '/models/UserModel.php';
 require_once __DIR__ . '/models/LoginEmailCodeModel.php';
+require_once __DIR__ . '/models/PasskeyModel.php';
 require_once __DIR__ . '/models/NotificationDeliveryModel.php';
 require_once __DIR__ . '/models/ModuleModel.php';
 require_once __DIR__ . '/models/VehicleCouplingModel.php';
 require_once __DIR__ . '/models/TireModel.php';
 require_once __DIR__ . '/models/DashboardModel.php';
 require_once __DIR__ . '/models/DocumentModel.php';
+require_once __DIR__ . '/models/InactiveResourceApprovalModel.php';
 require_once __DIR__ . '/models/VehicleEquipmentInventoryModel.php';
 require_once __DIR__ . '/models/VehicleAuthorizationModel.php';
 require_once __DIR__ . '/models/DispecerCurseModel.php';
@@ -311,16 +315,23 @@ require_once __DIR__ . '/models/ProgramareConcediiModel.php';
 require_once __DIR__ . '/models/NotificationRuleModel.php';
 require_once __DIR__ . '/models/StaffAccountancyModel.php';
 require_once __DIR__ . '/models/OfficeExpenseModel.php';
+require_once __DIR__ . '/models/AdministrativeExpenseModel.php';
 require_once __DIR__ . '/models/MaintenanceModel.php';
 require_once __DIR__ . '/models/TechnicalHealthModel.php';
 require_once __DIR__ . '/models/DriverActivityHistoryModel.php';
+require_once __DIR__ . '/models/FuelModel.php';
+require_once __DIR__ . '/models/UserActivityModel.php';
 
 require_once __DIR__ . '/services/EntityStatusService.php';
+require_once __DIR__ . '/services/InactiveResourceStatusService.php';
 require_once __DIR__ . '/services/EmailService.php';
+require_once __DIR__ . '/services/CardOilApiClient.php';
+require_once __DIR__ . '/services/WebAuthnService.php';
 
 require_once __DIR__ . '/controllers/AuthController.php';
 require_once __DIR__ . '/controllers/DashboardController.php';
 require_once __DIR__ . '/controllers/DashboardAnaliticController.php';
+require_once __DIR__ . '/controllers/InactiveResourceApprovalController.php';
 require_once __DIR__ . '/controllers/ModuleController.php';
 require_once __DIR__ . '/controllers/VehicleEquipmentInventoryController.php';
 require_once __DIR__ . '/controllers/VehicleAuthorizationController.php';
@@ -332,9 +343,13 @@ require_once __DIR__ . '/controllers/ProgramareConcediiController.php';
 require_once __DIR__ . '/controllers/NotificationRuleController.php';
 require_once __DIR__ . '/controllers/StaffAccountancyController.php';
 require_once __DIR__ . '/controllers/OfficeExpenseController.php';
+require_once __DIR__ . '/controllers/AdministrativeExpenseController.php';
 require_once __DIR__ . '/controllers/MaintenanceController.php';
 require_once __DIR__ . '/controllers/TechnicalHealthController.php';
 require_once __DIR__ . '/controllers/DriverActivityHistoryController.php';
+require_once __DIR__ . '/controllers/FuelController.php';
+require_once __DIR__ . '/controllers/AccessRightsController.php';
+require_once __DIR__ . '/controllers/UserActivityController.php';
 
 $db = get_pdo();
 
@@ -342,6 +357,47 @@ header('Content-Type: text/html; charset=UTF-8');
 
 $page = $_GET['page'] ?? (is_logged_in() ? 'dashboard' : 'login');
 $action = $_GET['action'] ?? 'index';
+$modulePage = $page;
+
+if (in_array($page, ['vehicule_usoare', 'vehicule_grele'], true) && isset($modules['vehicule'])) {
+    $vehicleBaseConditions = $modules['vehicule']['base_conditions'] ?? [];
+    if (is_string($vehicleBaseConditions)) {
+        $vehicleBaseConditions = [$vehicleBaseConditions];
+    }
+    if (!is_array($vehicleBaseConditions)) {
+        $vehicleBaseConditions = [];
+    }
+
+    $lightVehicleTypes = ['autovehicul' => 'Autoturism', 'autoutilitara' => 'Autoutilitara'];
+    $heavyVehicleTypes = [
+        'cap_tractor' => 'Cap tractor',
+        'semiremorca_primar' => 'Semi-remorca primar',
+        'semiremorca_distributie' => 'Semi-remorca distributie',
+        'camion' => 'Camion',
+    ];
+
+    if ($page === 'vehicule_usoare') {
+        $modules['vehicule']['title'] = 'Vehicule Usoare';
+        $modules['vehicule']['base_conditions'] = array_merge($vehicleBaseConditions, [
+            "t.tip_vehicul IN ('autovehicul', 'autoutilitara')",
+        ]);
+        $modules['vehicule']['filters']['tip_vehicul']['options'] = $lightVehicleTypes;
+        $modules['vehicule']['form_fields']['tip_vehicul']['options'] = $lightVehicleTypes;
+        $modules['vehicule']['form_fields']['tip_vehicul']['default'] = 'autovehicul';
+    } else {
+        $modules['vehicule']['title'] = 'Vehicule Grele';
+        $modules['vehicule']['base_conditions'] = array_merge($vehicleBaseConditions, [
+            "t.tip_vehicul NOT IN ('autovehicul', 'autoutilitara')",
+        ]);
+        $modules['vehicule']['filters']['tip_vehicul']['options'] = $heavyVehicleTypes;
+        $modules['vehicule']['form_fields']['tip_vehicul']['options'] = $heavyVehicleTypes;
+        $modules['vehicule']['form_fields']['tip_vehicul']['default'] = 'cap_tractor';
+    }
+
+    $modules['vehicule']['route_page'] = $page;
+    $modules['vehicule']['nav_parent'] = $page;
+    $modulePage = 'vehicule';
+}
 
 try {
     if (!is_logged_in() && $page !== 'login') {
@@ -353,9 +409,23 @@ try {
         redirect(url('index.php?page=dashboard'));
     }
 
+    // Garda centrala de acces per-pagina (drepturi de acces).
+    // Adminul trece mereu; utilizatorii neconfigurati pastreaza accesul implicit al rolului.
+    if (is_logged_in() && function_exists('require_route_access')) {
+        require_route_access($page);
+    }
+
     switch ($page) {
         case 'login':
             $authController = new AuthController($db);
+            if ($action === 'passkey_options') {
+                $authController->passkeyLoginOptions();
+                break;
+            }
+            if ($action === 'passkey_verify') {
+                $authController->passkeyLoginVerify();
+                break;
+            }
             if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($action === 'verify_code') {
                     $authController->verificaCod();
@@ -383,6 +453,11 @@ try {
             (new DashboardController($db))->index();
             break;
 
+        case 'inactive_approvals':
+            require_auth();
+            (new InactiveResourceApprovalController($db))->handle($action);
+            break;
+
         case 'dashboard_analitic':
             require_auth();
             (new DashboardAnaliticController($db))->index();
@@ -396,7 +471,13 @@ try {
         case 'profil':
             require_auth();
             $profileController = new ProfileController($db);
-            if ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'actualizeaza') {
+            if ($action === 'passkey_options') {
+                $profileController->passkeyRegisterOptions();
+            } elseif ($action === 'passkey_register') {
+                $profileController->passkeyRegisterVerify();
+            } elseif ($action === 'passkey_delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                $profileController->passkeyDelete();
+            } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'actualizeaza') {
                 $profileController->actualizeaza();
             } else {
                 $profileController->index();
@@ -404,6 +485,8 @@ try {
             break;
 
         case 'vehicule':
+        case 'vehicule_usoare':
+        case 'vehicule_grele':
         case 'soferi':
         case 'documente':
         case 'documente_soferi':
@@ -411,7 +494,7 @@ try {
         case 'configurare_costuri_documente_soferi':
         case 'utilizatori':
             require_auth();
-            (new ModuleController($db, $modules))->handle($page, $action);
+            (new ModuleController($db, $modules))->handle($modulePage, $action);
             break;
 
         case 'istoric_activitati_sofer':
@@ -444,6 +527,11 @@ try {
             (new DispecerCurseController($db))->handle($action);
             break;
 
+        case 'carburanti':
+            require_auth();
+            (new FuelController($db))->handle($action);
+            break;
+
         case 'istoric_cheltuieli_curse':
             require_auth();
             (new CourseExpenseHistoryController($db))->handle($action);
@@ -464,14 +552,34 @@ try {
             (new StaffAccountancyController($db))->handle($action);
             break;
 
+        case 'fosti_angajati':
+            require_auth();
+            (new StaffAccountancyController($db))->handleFormerEmployees($action);
+            break;
+
         case 'cheltuieli_birou':
             require_auth();
             (new OfficeExpenseController($db))->handle($action);
             break;
 
+        case 'cheltuieli_administrative':
+            require_auth();
+            (new AdministrativeExpenseController($db))->handle($action);
+            break;
+
         case 'notificari':
             require_auth();
             (new NotificationRuleController($db))->handle($action);
+            break;
+
+        case 'drepturi_acces':
+            require_auth();
+            (new AccessRightsController($db))->handle($action);
+            break;
+
+        case 'activitate_utilizatori':
+            require_auth();
+            (new UserActivityController($db))->handle($action);
             break;
 
         default:

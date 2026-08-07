@@ -130,6 +130,60 @@ $formatDurationLabel = static function (?int $minutes): string {
     return $mins . 'm';
 };
 
+$renderDispatcherSummaryDetails = static function (array $parts, string $rowKey, string $summaryLabel): string {
+    $items = [];
+    foreach ($parts as $part) {
+        $label = rtrim(trim((string) ($part['label'] ?? '')), ':');
+        $value = trim((string) ($part['value'] ?? ''));
+        if ($label === '' && $value === '') {
+            continue;
+        }
+
+        $items[] = [
+            'label' => $label,
+            'value' => $value,
+            'is_total' => !empty($part['is_total']),
+        ];
+    }
+
+    $count = count($items);
+    $countLabel = $count === 1 ? '1 detaliu' : $count . ' detalii';
+    $safeRowKey = preg_replace('/[^a-zA-Z0-9_-]+/', '-', $rowKey) ?: uniqid('summary_', false);
+
+    if ($count === 0) {
+        return '<button type="button" class="dispatcher-summary-count-btn is-empty" disabled aria-label="0 detalii ' . e($summaryLabel) . '">0 detalii</button>';
+    }
+
+    $popoverId = 'dispatcher_summary_popover_' . $safeRowKey;
+    $titleParts = [];
+    foreach ($items as $item) {
+        $titleParts[] = trim((string) $item['label'] . ': ' . (string) $item['value']);
+    }
+    $title = implode(' | ', $titleParts);
+    $totalLabel = 'Total ' . $countLabel;
+
+    $html = '<div class="dispatcher-summary-list" data-dispatcher-summary-list>';
+    $html .= '<button type="button" class="dispatcher-summary-count-btn" data-dispatcher-summary-toggle data-popover-id="' . e($popoverId) . '" aria-haspopup="dialog" aria-expanded="false" aria-controls="' . e($popoverId) . '" aria-label="' . e('Afiseaza ' . $countLabel . ' ' . $summaryLabel) . '" title="' . e($title) . '">';
+    $html .= '<span>' . e($countLabel) . '</span><i class="bi bi-chevron-down" aria-hidden="true"></i>';
+    $html .= '</button>';
+    $html .= '<div class="dispatcher-summary-popover" id="' . e($popoverId) . '" data-dispatcher-summary-popover role="dialog" aria-label="' . e('Detalii ' . $summaryLabel) . '" tabindex="-1" hidden>';
+    $html .= '<ul class="dispatcher-summary-popover-list" role="list">';
+
+    foreach ($items as $item) {
+        $valueClass = !empty($item['is_total']) ? ' dispatcher-summary-value-total' : '';
+        $html .= '<li class="dispatcher-summary-popover-item" role="listitem">';
+        $html .= '<strong>' . e((string) ($item['label'] !== '' ? $item['label'] : '-')) . '</strong>';
+        $html .= '<span class="' . trim('dispatcher-summary-value' . $valueClass) . '">' . e((string) ($item['value'] !== '' ? $item['value'] : '-')) . '</span>';
+        $html .= '</li>';
+    }
+
+    $html .= '</ul>';
+    $html .= '<div class="dispatcher-summary-popover-total">' . e($totalLabel) . '</div>';
+    $html .= '</div></div>';
+
+    return $html;
+};
+
 $formStartTimeValueRaw = trim((string) ($formData['ora_inceput'] ?? ''));
 $formStartTimeValue = $formStartTimeValueRaw !== '' ? substr($formStartTimeValueRaw, 0, 5) : '';
 $formEndTimeValueRaw = trim((string) ($formData['ora_sfarsit'] ?? ''));
@@ -155,6 +209,7 @@ $openRacesCount = (int) ($openRacesOverview['count'] ?? 0);
 $openRacesRows = is_array($openRacesOverview['rows'] ?? null) ? $openRacesOverview['rows'] : [];
 $openRacesMissingEndTimeCount = (int) ($openRacesOverview['missing_end_time_count'] ?? 0);
 $openRacesMissingExpensesCount = (int) ($openRacesOverview['missing_expenses_count'] ?? 0);
+$openRacesMultipleMissingCount = (int) ($openRacesOverview['multiple_missing_count'] ?? 0);
 $postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 0));
 $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dispecer_curse']));
 ?>
@@ -175,108 +230,227 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
 
 <?php if ($openRacesCount > 0): ?>
     <div class="dispatcher-open-races-alert-container">
-    <div class="dispatcher-open-races-tab" data-open-races-tab>
         <button
             type="button"
             class="dispatcher-open-races-toggle"
             data-open-races-toggle
             aria-expanded="false"
+            aria-haspopup="dialog"
             aria-controls="open-races-panel"
         >
-            Atentie: curse cu informatii lipsa (<?= e((string) $openRacesCount) ?>)
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>Atentie: curse cu informatii lipsa (<?= e((string) $openRacesCount) ?>)</span>
         </button>
-        <div class="dispatcher-open-races-panel d-none" id="open-races-panel" data-open-races-panel>
-            <div class="dispatcher-open-races-head">
-                <div class="dispatcher-open-races-head-main">
-                    <div>
-                        <strong>Clasificare lipsuri</strong>
-                        <small class="text-muted d-block">
-                            Fara ora sfarsit: <?= e((string) $openRacesMissingEndTimeCount) ?> |
-                            Fara cheltuieli: <?= e((string) $openRacesMissingExpensesCount) ?>
-                        </small>
+    </div>
+
+    <div class="dispatcher-open-races-modal-overlay d-none" id="open-races-panel" data-open-races-panel role="dialog" aria-modal="true" aria-labelledby="open-races-modal-title">
+        <section class="dispatcher-open-races-modal" role="document">
+            <header class="dispatcher-open-races-modal-header">
+                <div class="dispatcher-open-races-modal-title-group">
+                    <div class="dispatcher-open-races-alert-icon" aria-hidden="true">
+                        <i class="bi bi-exclamation-triangle"></i>
                     </div>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" data-open-races-close aria-label="Inchide meniul alerte">
-                        Inchide
+                    <div>
+                        <h3 id="open-races-modal-title">Atentie: curse cu informatii lipsa (<?= e((string) $openRacesCount) ?>)</h3>
+                        <p>Completeaza informatiile lipsa pentru a putea continua.</p>
+                    </div>
+                </div>
+                <button type="button" class="dispatcher-open-races-icon-close" data-open-races-close aria-label="Inchide">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </header>
+
+            <div class="dispatcher-open-races-modal-body">
+                <h4>Clasificare lipsuri</h4>
+
+                <div class="dispatcher-open-races-stats">
+                    <button
+                        type="button"
+                        class="dispatcher-open-races-stat dispatcher-open-races-stat-time"
+                        data-open-races-filter="missing_end_time"
+                        aria-pressed="false"
+                        <?= $openRacesMissingEndTimeCount > 0 ? '' : 'disabled' ?>
+                    >
+                        <span class="dispatcher-open-races-stat-icon"><i class="bi bi-clock" aria-hidden="true"></i></span>
+                        <span class="dispatcher-open-races-stat-label">Fara ora sfarsit</span>
+                        <strong><?= e((string) $openRacesMissingEndTimeCount) ?></strong>
+                    </button>
+                    <button
+                        type="button"
+                        class="dispatcher-open-races-stat dispatcher-open-races-stat-expenses"
+                        data-open-races-filter="missing_expenses"
+                        aria-pressed="false"
+                        <?= $openRacesMissingExpensesCount > 0 ? '' : 'disabled' ?>
+                    >
+                        <span class="dispatcher-open-races-stat-icon"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></span>
+                        <span class="dispatcher-open-races-stat-label">Fara cheltuieli</span>
+                        <strong><?= e((string) $openRacesMissingExpensesCount) ?></strong>
+                    </button>
+                    <button
+                        type="button"
+                        class="dispatcher-open-races-stat dispatcher-open-races-stat-multiple"
+                        data-open-races-filter="multiple_missing"
+                        aria-pressed="false"
+                        <?= $openRacesMultipleMissingCount > 0 ? '' : 'disabled' ?>
+                    >
+                        <span class="dispatcher-open-races-stat-icon"><i class="bi bi-exclamation-diamond" aria-hidden="true"></i></span>
+                        <span class="dispatcher-open-races-stat-label">Informatii multiple lipsa</span>
+                        <strong><?= e((string) $openRacesMultipleMissingCount) ?></strong>
                     </button>
                 </div>
-            </div>
-            <ul class="list-group list-group-flush">
-                <?php foreach ($openRacesRows as $openRace): ?>
-                    <?php
-                        $openRaceId = (int) ($openRace['id'] ?? 0);
-                        if ($openRaceId <= 0) {
-                            continue;
-                        }
-                        $openPlate = trim((string) ($openRace['nr_inmatriculare'] ?? ''));
-                        $openDriver = trim((string) ($openRace['sofer_nume'] ?? ''));
-                        $openBeneficiar = trim((string) ($openRace['beneficiar_nume'] ?? ''));
-                        $openStartDate = (string) ($openRace['data_inceput'] ?? '');
-                        $openStartTime = trim((string) ($openRace['ora_inceput'] ?? ''));
-                        $openTransportType = (string) ($openRace['tip_transport'] ?? '');
-                        $openTransportLabel = $transportTypes[$openTransportType] ?? '-';
-                        $openMissingEndTime = (int) ($openRace['missing_end_time'] ?? 0) === 1;
-                        $openMissingExpenses = (int) ($openRace['missing_expenses'] ?? 0) === 1;
-                        $openExpenseCount = max(0, (int) ($openRace['expense_count'] ?? 0));
-                        $openTitleParts = [];
-                        if ($openPlate !== '') {
-                            $openTitleParts[] = $openPlate;
-                        }
-                        if ($openDriver !== '') {
-                            $openTitleParts[] = $openDriver;
-                        }
-                        $openTitle = $openTitleParts !== [] ? implode(' - ', $openTitleParts) : ('Cursa #' . $openRaceId);
-                        $openMetaParts = [];
-                        $openMetaParts[] = $openTransportLabel;
-                        if ($openBeneficiar !== '') {
-                            $openMetaParts[] = $openBeneficiar;
-                        }
-                        if ($openStartDate !== '') {
-                            $openMetaParts[] = 'Start: ' . format_date_ro($openStartDate) . ($openStartTime !== '' ? (' ' . substr($openStartTime, 0, 5)) : '');
-                        }
-                        $openMissingParts = [];
-                        if ($openMissingEndTime) {
-                            $openMissingParts[] = 'fara ora sfarsit';
-                        }
-                        if ($openMissingExpenses) {
-                            $openMissingParts[] = 'fara cheltuieli';
-                        }
-                        if ($openMissingParts !== []) {
-                            $openMetaParts[] = 'Lipsuri: ' . implode(', ', $openMissingParts);
-                        }
-                        $openMetaParts[] = 'Cheltuieli: ' . $openExpenseCount;
-                        $openMeta = implode(' | ', $openMetaParts);
-                    ?>
-                    <?php
-                        $openEditQuery = ['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId];
-                        $openEditHash = '';
-                        if ($openMissingEndTime) {
-                            // Prioritate: daca lipseste ora de sfarsit, utilizatorul trebuie trimis direct acolo,
-                            // inclusiv in cazurile in care lipsesc si cheltuielile.
-                            $openEditQuery['focus'] = 'end_time';
-                        } elseif ($openMissingExpenses) {
-                            $openEditHash = '#expense-section';
-                        }
-                        $openEditUrl = build_query_url($openEditQuery) . $openEditHash;
-                        $openEditLabel = $openMissingEndTime ? 'Completeaza ora' : ($openMissingExpenses ? 'Adauga cheltuieli' : 'Editeaza');
-                    ?>
-                    <li class="list-group-item d-flex justify-content-between align-items-start gap-2">
-                        <div class="dispatcher-open-race-text">
-                            <div class="fw-semibold"><?= e($openTitle) ?></div>
-                            <div class="small text-muted"><?= e($openMeta) ?></div>
-                        </div>
-                        <a class="btn btn-sm btn-outline-primary" href="<?= e($openEditUrl) ?>">
-                            <?= e($openEditLabel) ?>
-                        </a>
-                    </li>
-                <?php endforeach; ?>
-            </ul>
-            <?php if ($openRacesCount > count($openRacesRows)): ?>
-                <div class="dispatcher-open-races-footer text-muted small">
-                    Mai exista inca <?= e((string) ($openRacesCount - count($openRacesRows))) ?> curse neafisate in lista.
+
+                <div class="dispatcher-open-races-card-list">
+                    <?php foreach ($openRacesRows as $openRaceIndex => $openRace): ?>
+                        <?php
+                            $openRaceId = (int) ($openRace['id'] ?? 0);
+                            if ($openRaceId <= 0) {
+                                continue;
+                            }
+
+                            $openPlate = trim((string) ($openRace['nr_inmatriculare'] ?? ''));
+                            $openDriver = trim((string) ($openRace['sofer_nume'] ?? ''));
+                            $openBeneficiar = trim((string) ($openRace['beneficiar_nume'] ?? ''));
+                            $openStartDate = trim((string) ($openRace['data_inceput'] ?? ''));
+                            $openStartTime = trim((string) ($openRace['ora_inceput'] ?? ''));
+                            $openTransportType = (string) ($openRace['tip_transport'] ?? '');
+                            $openTransportLabel = $transportTypes[$openTransportType] ?? '-';
+                            $openMissingEndTime = (int) ($openRace['missing_end_time'] ?? 0) === 1;
+                            $openMissingExpenses = (int) ($openRace['missing_expenses'] ?? 0) === 1;
+                            $openMultipleMissing = $openMissingEndTime && $openMissingExpenses;
+                            $openExpenseCount = max(0, (int) ($openRace['expense_count'] ?? 0));
+                            $openUpdatedAt = trim((string) ($openRace['updated_at'] ?? ''));
+                            $openVehiclePhotoUrl = vehicle_image_url((string) ($openRace['poza_stocata'] ?? ''));
+                            $openVehiclePhotoAlt = trim((string) ($openRace['poza_original'] ?? ''));
+                            if ($openVehiclePhotoAlt === '') {
+                                $openVehiclePhotoAlt = $openPlate !== '' ? ('Poza ' . $openPlate) : 'Poza vehicul';
+                            }
+                            $openTitleParts = [];
+                            if ($openPlate !== '') {
+                                $openTitleParts[] = $openPlate;
+                            }
+                            if ($openDriver !== '') {
+                                $openTitleParts[] = $openDriver;
+                            }
+                            $openTitle = $openTitleParts !== [] ? implode(' - ', $openTitleParts) : ('Cursa #' . $openRaceId);
+                            $openStartDateLabel = $openStartDate !== '' ? format_date_ro($openStartDate) : '-';
+                            $openStartTimeLabel = $openStartTime !== '' ? substr($openStartTime, 0, 5) : '-';
+                            $openUpdatedLabel = $openUpdatedAt !== '' ? format_datetime_ro($openUpdatedAt) : '-';
+                            $openDetailsUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId]);
+                            $openEndTimeUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId, 'focus' => 'end_time']) . '#edit_race_ora_sfarsit';
+                            $openExpenseUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId]) . '#expense-section';
+                            $openMissingRows = [];
+                            if ($openMissingEndTime) {
+                                $openMissingRows[] = [
+                                    'type' => 'time',
+                                    'icon' => 'bi-clock',
+                                    'text' => 'Lipseste ora de sfarsit',
+                                ];
+                            }
+                            if ($openMissingExpenses) {
+                                $openMissingRows[] = [
+                                    'type' => 'expense',
+                                    'icon' => 'bi-file-earmark-text',
+                                    'text' => 'Nu exista cheltuieli asociate',
+                                ];
+                            }
+                            $openRaceExpanded = false;
+                        ?>
+                        <article
+                            class="dispatcher-open-race-card <?= $openRaceExpanded ? 'is-expanded' : '' ?>"
+                            data-open-race-card
+                            data-missing-end-time="<?= $openMissingEndTime ? '1' : '0' ?>"
+                            data-missing-expenses="<?= $openMissingExpenses ? '1' : '0' ?>"
+                            data-multiple-missing="<?= $openMultipleMissing ? '1' : '0' ?>"
+                        >
+                            <div class="dispatcher-open-race-card-head">
+                                <div class="dispatcher-open-race-title-block">
+                                    <div class="dispatcher-open-race-avatar <?= $openVehiclePhotoUrl !== null ? 'has-photo' : '' ?>" aria-hidden="true">
+                                        <?php if ($openVehiclePhotoUrl !== null): ?>
+                                            <img src="<?= e($openVehiclePhotoUrl) ?>" alt="<?= e($openVehiclePhotoAlt) ?>" loading="lazy">
+                                        <?php else: ?>
+                                            <i class="bi bi-truck"></i>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="dispatcher-open-race-title-main">
+                                        <div class="dispatcher-open-race-title-row">
+                                            <strong><?= e($openTitle) ?></strong>
+                                            <span class="dispatcher-open-race-badge">
+                                                <i class="bi bi-circle-fill" aria-hidden="true"></i>
+                                                Lipsuri
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="dispatcher-open-race-actions">
+                                    <a class="dispatcher-open-race-action dispatcher-open-race-action-secondary" href="<?= e($openDetailsUrl) ?>">
+                                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                        <span>Detalii</span>
+                                    </a>
+                                    <?php if ($openMissingEndTime): ?>
+                                        <a class="dispatcher-open-race-action dispatcher-open-race-action-time" href="<?= e($openEndTimeUrl) ?>" data-open-race-action-type="missing_end_time">
+                                            <i class="bi bi-clock" aria-hidden="true"></i>
+                                            <span>Adaug&#259; ora final&#259;</span>
+                                        </a>
+                                    <?php endif; ?>
+                                    <?php if ($openMissingExpenses): ?>
+                                        <a class="dispatcher-open-race-action dispatcher-open-race-action-primary" href="<?= e($openExpenseUrl) ?>" data-open-race-action-type="missing_expenses">
+                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                            <span>Adauga cheltuieli</span>
+                                        </a>
+                                    <?php endif; ?>
+                                    <button
+                                        type="button"
+                                        class="dispatcher-open-race-chevron"
+                                        data-open-race-card-toggle
+                                        aria-label="<?= $openRaceExpanded ? 'Restrange lipsurile' : 'Extinde lipsurile' ?>"
+                                        aria-expanded="<?= $openRaceExpanded ? 'true' : 'false' ?>"
+                                    >
+                                        <i class="bi <?= $openRaceExpanded ? 'bi-chevron-up' : 'bi-chevron-down' ?>" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="dispatcher-open-race-meta">
+                                <span><i class="bi bi-signpost-2" aria-hidden="true"></i> <?= e((string) $openTransportLabel) ?></span>
+                                <?php if ($openBeneficiar !== ''): ?>
+                                    <span><i class="bi bi-fuel-pump" aria-hidden="true"></i> <?= e($openBeneficiar) ?></span>
+                                <?php endif; ?>
+                                <span><i class="bi bi-calendar3" aria-hidden="true"></i> Actualizat: <?= e($openUpdatedLabel) ?></span>
+                                <span><i class="bi bi-calendar3" aria-hidden="true"></i> Start: <?= e($openStartDateLabel) ?></span>
+                                <span><i class="bi bi-clock" aria-hidden="true"></i> Ora: <?= e($openStartTimeLabel) ?></span>
+                                <span><i class="bi bi-wallet2" aria-hidden="true"></i> Cheltuieli: <?= e((string) $openExpenseCount) ?></span>
+                            </div>
+
+                            <div class="dispatcher-open-race-details" data-open-race-card-details <?= $openRaceExpanded ? '' : 'hidden' ?>>
+                                <div class="dispatcher-open-race-divider"></div>
+                                <h5>Lipsuri</h5>
+                                <div class="dispatcher-open-race-missing-list">
+                                    <?php foreach ($openMissingRows as $openMissingRow): ?>
+                                        <div class="dispatcher-open-race-missing-row dispatcher-open-race-missing-<?= e((string) $openMissingRow['type']) ?>">
+                                            <span class="dispatcher-open-race-missing-icon">
+                                                <i class="bi <?= e((string) $openMissingRow['icon']) ?>" aria-hidden="true"></i>
+                                            </span>
+                                            <span><?= e((string) $openMissingRow['text']) ?></span>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                        </article>
+                    <?php endforeach; ?>
                 </div>
-            <?php endif; ?>
-        </div>
-    </div>
+
+                <?php if ($openRacesCount > count($openRacesRows)): ?>
+                    <div class="dispatcher-open-races-hidden-note">
+                        Mai exista inca <?= e((string) ($openRacesCount - count($openRacesRows))) ?> curse neafisate in lista rapida.
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <footer class="dispatcher-open-races-modal-footer">
+                <button type="button" class="dispatcher-open-races-footer-close" data-open-races-close>Inchide</button>
+            </footer>
+        </section>
     </div>
 <?php endif; ?>
 
@@ -287,8 +461,10 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                 <h3 class="h6 mb-0">Adaugă Cursă</h3>
             </div>
             <div class="card-body">
-                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store'])) ?>" class="dispatcher-race-form" data-zone-tariffs='<?= e($zoneTariffJson) ?>' data-zone-extra-km-costs='<?= e($zoneExtraKmJson) ?>' data-distribution-route-tariffs='<?= e($distributionRouteTariffMapJson) ?>' data-primary-route-km-map='<?= e($primaryRouteKmMapJson) ?>' data-beneficiary-pricing='<?= e($beneficiaryPricingJson) ?>' data-load-location-tariffs='<?= e($loadLocationTariffJson) ?>' data-vehicle-default-load-locations='<?= e($vehicleDefaultLoadLocationJson) ?>' data-vehicle-default-distribution-zones='<?= e($vehicleDefaultDistributionZoneJson) ?>' data-vehicle-garages='<?= e($vehicleGarageJson) ?>' data-load-locations-by-beneficiary='<?= e($loadLocationsByBeneficiaryJson) ?>' data-distribution-zones-by-beneficiary='<?= e($distributionZonesByBeneficiaryJson) ?>' data-vehicle-default-load-locations-by-beneficiary='<?= e($vehicleDefaultLoadLocationByBeneficiaryJson) ?>' data-vehicle-default-distribution-zones-by-beneficiary='<?= e($vehicleDefaultDistributionZoneByBeneficiaryJson) ?>' data-compresor-vehicles-by-beneficiary='<?= e($compressorVehicleByBeneficiaryJson) ?>' data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>' data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>' novalidate>
+                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store'])) ?>" class="dispatcher-race-form" data-zone-tariffs='<?= e($zoneTariffJson) ?>' data-zone-extra-km-costs='<?= e($zoneExtraKmJson) ?>' data-distribution-route-tariffs='<?= e($distributionRouteTariffMapJson) ?>' data-primary-route-km-map='<?= e($primaryRouteKmMapJson) ?>' data-beneficiary-pricing='<?= e($beneficiaryPricingJson) ?>' data-load-location-tariffs='<?= e($loadLocationTariffJson) ?>' data-vehicle-default-load-locations='<?= e($vehicleDefaultLoadLocationJson) ?>' data-vehicle-default-distribution-zones='<?= e($vehicleDefaultDistributionZoneJson) ?>' data-vehicle-garages='<?= e($vehicleGarageJson) ?>' data-load-locations-by-beneficiary='<?= e($loadLocationsByBeneficiaryJson) ?>' data-distribution-zones-by-beneficiary='<?= e($distributionZonesByBeneficiaryJson) ?>' data-vehicle-default-load-locations-by-beneficiary='<?= e($vehicleDefaultLoadLocationByBeneficiaryJson) ?>' data-vehicle-default-distribution-zones-by-beneficiary='<?= e($vehicleDefaultDistributionZoneByBeneficiaryJson) ?>' data-compresor-vehicles-by-beneficiary='<?= e($compressorVehicleByBeneficiaryJson) ?>' data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>' data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>' data-inactive-resource-status-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'inactive_resource_status'])) ?>" data-inactive-trip-id="" novalidate>
                     <?= csrf_field() ?>
+                    <input type="hidden" name="inactive_approval_decision" value="<?= e((string) ($formData['inactive_approval_decision'] ?? '')) ?>" data-inactive-approval-decision>
+                    <input type="hidden" name="inactive_approval_signature" value="" data-inactive-approval-signature>
                     <datalist id="race_time_options">
                         <?php for ($hour = 0; $hour < 24; $hour++): ?>
                             <?php foreach (['00', '15', '30', '45'] as $minute): ?>
@@ -298,6 +474,15 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                     </datalist>
 
                     <div class="row g-3">
+                        <?php if (isset($formErrors['inactive_resources'])): ?>
+                            <div class="col-12">
+                                <div class="alert alert-warning d-flex align-items-center gap-2 mb-0" role="alert">
+                                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                                    <span><?= e((string) $formErrors['inactive_resources']) ?></span>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+
                         <div class="col-12 col-md-6 dispatcher-top-field">
                             <label class="form-label" for="race_beneficiar_id">Beneficiar transport <span class="text-danger">*</span></label>
                             <select class="form-select <?= isset($formErrors['beneficiar_id']) ? 'is-invalid' : '' ?>" id="race_beneficiar_id" name="beneficiar_id" required>
@@ -607,17 +792,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             <div class="dispatcher-total-preview" data-role="cost-km-mixt-preview">0,00 lei/km</div>
                         </div>
 
-                        <div class="col-12 col-md-6 dispatcher-compressor-metric-field">
-                            <label class="form-label" for="race_status_facturare">Status</label>
-                            <select class="form-select <?= isset($formErrors['status_facturare']) ? 'is-invalid' : '' ?>" id="race_status_facturare" name="status_facturare">
-                                <?php foreach (($billingStatuses ?? []) as $statusKey => $statusLabel): ?>
-                                    <option value="<?= e((string) $statusKey) ?>" <?= (string) ($formData['status_facturare'] ?? 'in_curs_facturare') === (string) $statusKey ? 'selected' : '' ?>>
-                                        <?= e((string) $statusLabel) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <?php if (isset($formErrors['status_facturare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['status_facturare']) ?></div><?php endif; ?>
-                        </div>
+                        <?php /* Statusul de facturare nu se mai alege la creare: orice cursa noua intra automat "in curs de facturare". Se schimba doar din Centralizator Facturare. */ ?>
 
                         <div class="col-12">
                             <label class="form-label" for="race_observatii">Observații</label>
@@ -735,16 +910,50 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
 </div>
 
 <div class="card border-0 shadow-sm mt-3">
-    <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2 flex-wrap">
         <h3 class="h6 mb-0">Desfasurator curse</h3>
         <div class="d-flex align-items-center gap-2">
+            <div class="dispatcher-column-manager" data-dispatcher-column-manager>
+                <button
+                    type="button"
+                    class="btn btn-sm btn-outline-primary dispatcher-column-toggle"
+                    data-dispatcher-columns-toggle
+                    aria-haspopup="dialog"
+                    aria-expanded="false"
+                    aria-controls="dispatcher-columns-panel"
+                >
+                    <i class="bi bi-layout-three-columns" aria-hidden="true"></i>
+                    <span>Coloane</span>
+                    <i class="bi bi-chevron-down dispatcher-column-toggle-chevron" aria-hidden="true"></i>
+                </button>
+                <div
+                    class="dispatcher-column-panel"
+                    id="dispatcher-columns-panel"
+                    data-dispatcher-columns-panel
+                    role="dialog"
+                    aria-label="Alege coloanele afisate si ordinea lor"
+                    tabindex="-1"
+                    hidden
+                >
+                    <div class="dispatcher-column-panel-header">
+                        <div>
+                            <strong>Coloane tabel</strong>
+                            <span>Vizibilitate si ordine</span>
+                        </div>
+                    </div>
+                    <div class="dispatcher-column-list" data-dispatcher-columns-list></div>
+                    <div class="dispatcher-column-panel-footer">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-dispatcher-columns-reset>Reseteaza</button>
+                    </div>
+                </div>
+            </div>
             <button
                 type="submit"
                 class="btn btn-sm btn-outline-danger"
                 id="bulk-race-delete-btn"
                 form="bulk-race-delete-form"
                 disabled
-                data-confirm="Sigur doresti sa stergi cursele selectate?"
+                data-confirm="Ștergi cursele selectate? Cursele vor fi mutate în Curse șterse și vor putea fi restaurate ulterior."
             >
                 Sterge selectate
             </button>
@@ -757,9 +966,10 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
             <input type="hidden" name="return_url" value="<?= e($currentListUrl) ?>">
         </form>
         <div class="table-responsive dispatcher-races-table-wrap table-container">
-            <table class="table table-hover align-middle mb-0 dispatcher-races-table curse-table table-dispecer">
+            <table class="table table-hover align-middle mb-0 dispatcher-races-table curse-table table-dispecer" data-dispatcher-column-table>
                 <colgroup>
                     <col class="col-plate">
+                    <col class="col-registration-details">
                     <col class="col-driver">
                     <col class="col-type">
                     <col class="col-loading-date">
@@ -772,7 +982,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                     <col class="col-activity">
                     <col class="col-financial">
                     <col class="col-beneficiary">
-                    <col class="col-status">
+                    <col class="col-actions">
                 </colgroup>
                 <thead>
                 <tr>
@@ -782,6 +992,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             <span>Nr. Înmatriculare</span>
                         </label>
                     </th>
+                    <th class="col-registration-details">Detalii inregistrare</th>
                     <th class="col-driver">Sofer</th>
                     <th class="col-type">Tip Transport</th>
                     <th class="col-loading-date text-center">Data incarcare</th>
@@ -794,13 +1005,13 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                     <th class="col-activity">Activitate</th>
                     <th class="col-financial">Financiar</th>
                     <th class="col-beneficiary">Observatii</th>
-                    <th class="col-status">Status</th>
+                    <th class="col-actions text-center">Actiuni</th>
                 </tr>
                 </thead>
                 <tbody>
                 <?php if ($rows === []): ?>
                     <tr>
-                        <td colspan="14" class="text-center text-muted py-4">Nu există curse înregistrate.</td>
+                        <td colspan="15" class="text-center text-muted py-4">Nu există curse înregistrate.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($rows as $row): ?>
@@ -880,12 +1091,26 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                         $intervalStartLabel = format_date_ro($dataInceput) . ($oraInceput !== '-' ? (' ' . $oraInceput) : '');
                         $intervalEndLabel = format_date_ro($dataSfarsit) . ($oraSfarsit !== '-' ? (' ' . $oraSfarsit) : '');
                         $intervalLabel = $intervalStartLabel . ' - ' . $intervalEndLabel;
+                        $intervalParts = [
+                            ['label' => 'Start', 'value' => $intervalStartLabel],
+                            ['label' => 'Sfarsit', 'value' => $intervalEndLabel],
+                        ];
                         $observatii = trim((string) ($row['observatii'] ?? ''));
                         $createdAtDisplay = format_datetime_ro((string) ($row['created_at'] ?? ''));
                         $createdByName = trim((string) ($row['creat_de_nume'] ?? ''));
                         if ($createdByName === '') {
                             $createdByName = '-';
                         }
+                        $updatedAuditAtDisplay = format_datetime_ro((string) ($row['actualizat_la'] ?? ''));
+                        $updatedByName = trim((string) ($row['actualizat_de_nume'] ?? ''));
+                        if ($updatedByName === '') {
+                            $updatedByName = '-';
+                        }
+                        $registrationDetailsParts = ['Adaugat: ' . $createdAtDisplay . ' de ' . $createdByName];
+                        if ($updatedAuditAtDisplay !== '-') {
+                            $registrationDetailsParts[] = 'Editat: ' . $updatedAuditAtDisplay . ' de ' . $updatedByName;
+                        }
+                        $registrationDetailsLabel = implode(' | ', $registrationDetailsParts);
                         $durationMinutes = null;
                         $durationMinutesRaw = $row['durata_cursa_minute'] ?? null;
                         if ($durationMinutesRaw !== null && $durationMinutesRaw !== '' && is_numeric((string) $durationMinutesRaw)) {
@@ -894,11 +1119,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                         $durationLabel = $formatDurationLabel($durationMinutes);
                         $diurnaValue = '-';
                         if ($durationMinutes !== null) {
-                            if ($durationMinutes > 0) {
-                                $diurnaValue = $durationMinutes > (24 * 60) ? '2' : '1';
-                            } else {
-                                $diurnaValue = '0';
-                            }
+                            $diurnaValue = (string) intdiv($durationMinutes, 12 * 60);
                         }
                         $billingStatus = (string) ($row['status_facturare'] ?? 'in_curs_facturare');
                         if (!isset(($billingStatuses ?? [])[$billingStatus])) {
@@ -1079,22 +1300,12 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                             >
                                             <strong class="dispatcher-cell-text dispatcher-cell-nowrap dispatcher-plate-value vehicle-cell nr-auto-cell"><?= e((string) ($row['nr_inmatriculare'] ?? '-')) ?></strong>
                                         </label>
-                                        <div class="audit-muted vehicle-audit">
-                                            <div>Adaugat: <?= e($createdAtDisplay) ?></div>
-                                            <div class="audit-person">De: <?= e($createdByName) ?></div>
-                                        </div>
-                                        <div class="row-actions dispatcher-row-actions">
-                                            <a class="btn btn-sm btn-outline-primary dispatcher-action-btn" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">Editează</a>
-                                            <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'delete'])) ?>" class="d-inline">
-                                                <?= csrf_field() ?>
-                                                <input type="hidden" name="id" value="<?= e((string) $raceId) ?>">
-                                                <input type="hidden" name="return_url" value="<?= e($currentListUrl) ?>">
-                                                <button type="submit" class="btn btn-sm btn-outline-danger dispatcher-action-btn" data-confirm="Sigur dorești să ștergi această cursă?">
-                                                    Șterge
-                                                </button>
-                                            </form>
-                                        </div>
                                     </div>
+                                </div>
+                            </td>
+                            <td class="col-registration-details">
+                                <div class="cell-content">
+                                    <span class="dispatcher-registration-details-line" title="<?= e($registrationDetailsLabel) ?>"><?= e($registrationDetailsLabel) ?></span>
                                 </div>
                             </td>
                             <td class="col-driver">
@@ -1113,9 +1324,8 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                 </div>
                             </td>
                             <td class="col-interval">
-                                <div class="cell-content column summary-cell interval-cell interval-summary" title="<?= e($intervalLabel) ?>">
-                                    <div class="summary-value date-start"><?= e($intervalStartLabel) ?></div>
-                                    <div class="summary-value date-end"><?= e($intervalEndLabel) ?></div>
+                                <div class="cell-content center dispatcher-summary-cell-content" title="<?= e($intervalLabel) ?>">
+                                    <?= $renderDispatcherSummaryDetails($intervalParts, 'interval-' . (string) $raceId, 'interval cursa #' . (string) $raceId) ?>
                                 </div>
                             </td>
                             <td class="col-duration text-center-cell">
@@ -1129,20 +1339,9 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                 </div>
                             </td>
                             <td class="col-route">
-                                <?php if ($routeParts === []): ?>
-                                    <div class="cell-content">
-                                        <span class="dispatcher-cell-text dispatcher-cell-nowrap">-</span>
-                                    </div>
-                                <?php else: ?>
-                                    <div class="cell-content column summary-cell route-cell route-summary" title="<?= e($routeTitle) ?>">
-                                        <?php foreach ($routeParts as $routePart): ?>
-                                            <div class="summary-line">
-                                                <span class="summary-label"><?= e((string) ($routePart['label'] ?? '')) ?>:</span>
-                                                <span class="summary-value"><?= e((string) ($routePart['value'] ?? '')) ?></span>
-                                            </div>
-                                        <?php endforeach; ?>
-                                    </div>
-                                <?php endif; ?>
+                                <div class="cell-content center dispatcher-summary-cell-content" title="<?= e($routeTitle) ?>">
+                                    <?= $renderDispatcherSummaryDetails($routeParts, 'route-' . (string) $raceId, 'traseu cursa #' . (string) $raceId) ?>
+                                </div>
                             </td>
                             <td class="col-beneficiary">
                                 <div class="cell-content">
@@ -1155,29 +1354,13 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                 </div>
                             </td>
                             <td class="col-activity">
-                                <?php if ($activityParts === []): ?>
-                                    <div class="cell-content">
-                                        <span class="dispatcher-cell-text dispatcher-cell-nowrap">-</span>
-                                    </div>
-                                <?php else: ?>
-                                    <div class="cell-content column summary-cell activity-summary" title="<?= e($activityTitle) ?>">
-                                        <?php foreach ($activityParts as $activityPart): ?>
-                                            <div class="summary-line">
-                                                <span class="summary-label"><?= e((string) ($activityPart['label'] ?? '')) ?></span>
-                                                <span class="summary-value"><?= e((string) ($activityPart['value'] ?? '')) ?></span>
-                                            </div>
-                                        <?php endforeach; ?>
-                                    </div>
-                                <?php endif; ?>
+                                <div class="cell-content center dispatcher-summary-cell-content" title="<?= e($activityTitle) ?>">
+                                    <?= $renderDispatcherSummaryDetails($activityParts, 'activity-' . (string) $raceId, 'activitate cursa #' . (string) $raceId) ?>
+                                </div>
                             </td>
                             <td class="col-financial">
-                                <div class="cell-content column summary-cell financial-summary" title="<?= e($financialTitle) ?>">
-                                    <?php foreach ($financialParts as $financialPart): ?>
-                                        <div class="summary-line">
-                                            <span class="summary-label"><?= e((string) ($financialPart['label'] ?? '')) ?></span>
-                                            <span class="summary-value<?= !empty($financialPart['is_total']) ? ' value-total' : '' ?>"><?= e((string) ($financialPart['value'] ?? '-')) ?></span>
-                                        </div>
-                                    <?php endforeach; ?>
+                                <div class="cell-content center dispatcher-summary-cell-content" title="<?= e($financialTitle) ?>">
+                                    <?= $renderDispatcherSummaryDetails($financialParts, 'financial-' . (string) $raceId, 'financiar cursa #' . (string) $raceId) ?>
                                 </div>
                             </td>
                             <td class="col-beneficiary">
@@ -1185,20 +1368,34 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                     <span class="dispatcher-cell-text" title="<?= e($observatii !== '' ? $observatii : '-') ?>"><?= e($observatii !== '' ? $observatii : '-') ?></span>
                                 </div>
                             </td>
-                            <td class="col-status text-center-cell">
+                            <td class="col-actions text-center-cell">
                                 <div class="cell-content center">
-                                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'update_status'])) ?>" class="dispatcher-status-form m-0">
-                                        <?= csrf_field() ?>
-                                        <input type="hidden" name="id" value="<?= e((string) $raceId) ?>">
-                                        <input type="hidden" name="return_url" value="<?= e($currentListUrl) ?>">
-                                        <select class="form-select form-select-sm dispatcher-status-select" name="status_facturare" onchange="(function(el){var row=el.closest('tr');if(row){row.classList.remove('race-status-in_curs_facturare','race-status-facturat','race-status-nefacturat');row.classList.add('race-status-'+el.value);}el.form.submit();})(this)">
-                                            <?php foreach (($billingStatuses ?? []) as $statusKey => $statusLabel): ?>
-                                                <option value="<?= e((string) $statusKey) ?>" <?= $billingStatus === (string) $statusKey ? 'selected' : '' ?>>
-                                                    <?= e((string) $statusLabel) ?>
-                                                </option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                    </form>
+                                    <div class="dispatcher-race-actions" data-dispatcher-race-actions>
+                                        <button
+                                            type="button"
+                                            class="dispatcher-race-actions-toggle"
+                                            data-dispatcher-race-actions-toggle
+                                            data-menu-id="dispatcher_race_actions_<?= e((string) $raceId) ?>"
+                                            aria-haspopup="menu"
+                                            aria-expanded="false"
+                                            aria-controls="dispatcher_race_actions_<?= e((string) $raceId) ?>"
+                                            aria-label="Actiuni cursa #<?= e((string) $raceId) ?>"
+                                            title="Actiuni"
+                                        >
+                                            <i class="bi bi-three-dots" aria-hidden="true"></i>
+                                        </button>
+                                        <div class="dispatcher-race-actions-menu" id="dispatcher_race_actions_<?= e((string) $raceId) ?>" data-dispatcher-race-actions-menu role="menu" hidden>
+                                            <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">Editează</a>
+                                            <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'delete'])) ?>" class="dispatcher-race-actions-form" role="none">
+                                                <?= csrf_field() ?>
+                                                <input type="hidden" name="id" value="<?= e((string) $raceId) ?>">
+                                                <input type="hidden" name="return_url" value="<?= e($currentListUrl) ?>">
+                                                <button type="submit" class="dispatcher-race-actions-item dispatcher-race-actions-danger" role="menuitem" data-confirm="Ștergi cursa #<?= e((string) $raceId) ?>? Cursa va fi mutată în Curse șterse și va putea fi restaurată ulterior.">
+                                                    Șterge
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </div>
                                 </div>
                             </td>
                         </tr>
@@ -1338,40 +1535,820 @@ document.addEventListener('DOMContentLoaded', function () {
 
     refreshBulkDeleteState();
 
-    var openRacesTabEl = document.querySelector('[data-open-races-tab]');
-    var openRacesToggleEl = document.querySelector('[data-open-races-toggle]');
-    var openRacesPanelEl = document.querySelector('[data-open-races-panel]');
-    var openRacesCloseEl = document.querySelector('[data-open-races-close]');
-    if (
-        openRacesTabEl instanceof HTMLElement
-        && openRacesToggleEl instanceof HTMLButtonElement
-        && openRacesPanelEl instanceof HTMLElement
-    ) {
-        var isOpenRacesExpanded = function () {
-            return openRacesToggleEl.getAttribute('aria-expanded') === 'true';
+    var closestElement = function (target, selector) {
+        return target instanceof Element ? target.closest(selector) : null;
+    };
+
+    var activeSummaryState = null;
+
+    var positionSummaryPopover = function (triggerEl, popoverEl) {
+        if (!(triggerEl instanceof HTMLElement) || !(popoverEl instanceof HTMLElement)) {
+            return;
+        }
+
+        var margin = 12;
+        var viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+        var viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+        var width = Math.min(304, Math.max(220, viewportWidth - margin * 2));
+        var maxHeight = Math.min(360, Math.max(180, viewportHeight - margin * 2));
+
+        popoverEl.style.width = width + 'px';
+        popoverEl.style.maxHeight = maxHeight + 'px';
+
+        var triggerRect = triggerEl.getBoundingClientRect();
+        var popoverRect = popoverEl.getBoundingClientRect();
+        var layerHeight = Math.min(popoverRect.height || popoverEl.scrollHeight || maxHeight, maxHeight);
+        var left = triggerRect.left;
+
+        if (left + width > viewportWidth - margin) {
+            left = triggerRect.right - width;
+        }
+        left = Math.max(margin, Math.min(left, viewportWidth - margin - width));
+
+        var top = triggerRect.bottom + 8;
+        var topIfAbove = triggerRect.top - layerHeight - 8;
+        if (top + layerHeight > viewportHeight - margin && topIfAbove >= margin) {
+            top = topIfAbove;
+        } else if (top + layerHeight > viewportHeight - margin) {
+            top = Math.max(margin, viewportHeight - margin - layerHeight);
+        }
+        top = Math.max(margin, Math.min(top, viewportHeight - margin - layerHeight));
+
+        popoverEl.style.left = Math.round(left) + 'px';
+        popoverEl.style.top = Math.round(top) + 'px';
+    };
+
+    var closeSummaryPopover = function (restoreFocus) {
+        if (activeSummaryState === null) {
+            return;
+        }
+
+        var previousState = activeSummaryState;
+        activeSummaryState = null;
+        previousState.button.setAttribute('aria-expanded', 'false');
+        previousState.button.classList.remove('is-open');
+
+        var iconEl = previousState.button.querySelector('i');
+        if (iconEl instanceof HTMLElement) {
+            iconEl.classList.remove('bi-chevron-up');
+            iconEl.classList.add('bi-chevron-down');
+        }
+
+        previousState.popover.hidden = true;
+        previousState.popover.style.left = '';
+        previousState.popover.style.top = '';
+        previousState.popover.style.visibility = '';
+
+        if (restoreFocus) {
+            previousState.button.focus({ preventScroll: true });
+        }
+    };
+
+    var openSummaryPopover = function (buttonEl) {
+        if (!(buttonEl instanceof HTMLButtonElement) || buttonEl.disabled) {
+            return;
+        }
+
+        var popoverId = String(buttonEl.dataset.popoverId || '');
+        var popoverEl = popoverId !== '' ? document.getElementById(popoverId) : null;
+        if (!(popoverEl instanceof HTMLElement)) {
+            return;
+        }
+
+        closeSummaryPopover(false);
+
+        activeSummaryState = {
+            button: buttonEl,
+            popover: popoverEl
         };
 
-        var setOpenRacesExpanded = function (expanded) {
-            if (expanded === isOpenRacesExpanded()) {
+        buttonEl.setAttribute('aria-expanded', 'true');
+        buttonEl.classList.add('is-open');
+
+        var iconEl = buttonEl.querySelector('i');
+        if (iconEl instanceof HTMLElement) {
+            iconEl.classList.remove('bi-chevron-down');
+            iconEl.classList.add('bi-chevron-up');
+        }
+
+        popoverEl.style.visibility = 'hidden';
+        popoverEl.hidden = false;
+        positionSummaryPopover(buttonEl, popoverEl);
+        popoverEl.style.visibility = '';
+    };
+
+    var repositionSummaryPopover = function () {
+        if (activeSummaryState !== null) {
+            positionSummaryPopover(activeSummaryState.button, activeSummaryState.popover);
+        }
+    };
+
+    document.addEventListener('click', function (event) {
+        var summaryButtonEl = closestElement(event.target, '[data-dispatcher-summary-toggle]');
+        if (summaryButtonEl instanceof HTMLButtonElement) {
+            event.preventDefault();
+            if (activeSummaryState !== null && activeSummaryState.button === summaryButtonEl) {
+                closeSummaryPopover(false);
                 return;
             }
-            openRacesToggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-            openRacesPanelEl.classList.toggle('d-none', !expanded);
+            openSummaryPopover(summaryButtonEl);
+            return;
+        }
+
+        if (closestElement(event.target, '[data-dispatcher-summary-popover]') === null) {
+            closeSummaryPopover(false);
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && activeSummaryState !== null) {
+            event.preventDefault();
+            closeSummaryPopover(true);
+            return;
+        }
+
+        var summaryButtonEl = closestElement(event.target, '[data-dispatcher-summary-toggle]');
+        if (summaryButtonEl instanceof HTMLButtonElement && event.key === 'ArrowDown') {
+            event.preventDefault();
+            openSummaryPopover(summaryButtonEl);
+        }
+    });
+
+    document.addEventListener('scroll', repositionSummaryPopover, true);
+    window.addEventListener('resize', repositionSummaryPopover);
+
+    var activeRaceActionsState = null;
+
+    var positionRaceActionsMenu = function (triggerEl, menuEl) {
+        if (!(triggerEl instanceof HTMLElement) || !(menuEl instanceof HTMLElement)) {
+            return;
+        }
+
+        var margin = 12;
+        var viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+        var viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+        var width = Math.min(168, Math.max(144, viewportWidth - margin * 2));
+        var maxHeight = Math.min(220, Math.max(140, viewportHeight - margin * 2));
+
+        menuEl.style.width = width + 'px';
+        menuEl.style.maxHeight = maxHeight + 'px';
+
+        var triggerRect = triggerEl.getBoundingClientRect();
+        var menuRect = menuEl.getBoundingClientRect();
+        var layerHeight = Math.min(menuRect.height || menuEl.scrollHeight || maxHeight, maxHeight);
+        var left = triggerRect.right - width;
+
+        if (left < margin) {
+            left = triggerRect.left;
+        }
+        left = Math.max(margin, Math.min(left, viewportWidth - margin - width));
+
+        var top = triggerRect.bottom + 8;
+        var topIfAbove = triggerRect.top - layerHeight - 8;
+        if (top + layerHeight > viewportHeight - margin && topIfAbove >= margin) {
+            top = topIfAbove;
+        } else if (top + layerHeight > viewportHeight - margin) {
+            top = Math.max(margin, viewportHeight - margin - layerHeight);
+        }
+        top = Math.max(margin, Math.min(top, viewportHeight - margin - layerHeight));
+
+        menuEl.style.left = Math.round(left) + 'px';
+        menuEl.style.top = Math.round(top) + 'px';
+    };
+
+    var closeRaceActionsMenu = function (restoreFocus) {
+        if (activeRaceActionsState === null) {
+            return;
+        }
+
+        var previousState = activeRaceActionsState;
+        activeRaceActionsState = null;
+        previousState.button.setAttribute('aria-expanded', 'false');
+        previousState.button.classList.remove('is-open');
+        previousState.menu.hidden = true;
+        previousState.menu.style.left = '';
+        previousState.menu.style.top = '';
+        previousState.menu.style.visibility = '';
+
+        if (restoreFocus) {
+            previousState.button.focus({ preventScroll: true });
+        }
+    };
+
+    var openRaceActionsMenu = function (buttonEl, focusFirstItem) {
+        if (!(buttonEl instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        var menuId = String(buttonEl.dataset.menuId || '');
+        var menuEl = menuId !== '' ? document.getElementById(menuId) : null;
+        if (!(menuEl instanceof HTMLElement)) {
+            return;
+        }
+
+        closeRaceActionsMenu(false);
+        closeSummaryPopover(false);
+        if (typeof closeDispatcherColumnPanel === 'function') {
+            closeDispatcherColumnPanel(false);
+        }
+
+        activeRaceActionsState = {
+            button: buttonEl,
+            menu: menuEl
         };
 
-        openRacesToggleEl.addEventListener('click', function () {
-            setOpenRacesExpanded(!isOpenRacesExpanded());
+        buttonEl.setAttribute('aria-expanded', 'true');
+        buttonEl.classList.add('is-open');
+        menuEl.style.visibility = 'hidden';
+        menuEl.hidden = false;
+        positionRaceActionsMenu(buttonEl, menuEl);
+        menuEl.style.visibility = '';
+
+        if (focusFirstItem) {
+            var firstItemEl = menuEl.querySelector('[role="menuitem"]');
+            if (firstItemEl instanceof HTMLElement) {
+                firstItemEl.focus({ preventScroll: true });
+            }
+        }
+    };
+
+    var repositionRaceActionsMenu = function () {
+        if (activeRaceActionsState !== null) {
+            positionRaceActionsMenu(activeRaceActionsState.button, activeRaceActionsState.menu);
+        }
+    };
+
+    document.addEventListener('click', function (event) {
+        var actionsButtonEl = closestElement(event.target, '[data-dispatcher-race-actions-toggle]');
+        if (actionsButtonEl instanceof HTMLButtonElement) {
+            event.preventDefault();
+            if (activeRaceActionsState !== null && activeRaceActionsState.button === actionsButtonEl) {
+                closeRaceActionsMenu(false);
+                return;
+            }
+            openRaceActionsMenu(actionsButtonEl, false);
+            return;
+        }
+
+        if (closestElement(event.target, '[data-dispatcher-race-actions-menu]') === null) {
+            closeRaceActionsMenu(false);
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        var actionsButtonEl = closestElement(event.target, '[data-dispatcher-race-actions-toggle]');
+        if (actionsButtonEl instanceof HTMLButtonElement && event.key === 'ArrowDown') {
+            event.preventDefault();
+            openRaceActionsMenu(actionsButtonEl, true);
+            return;
+        }
+
+        if (event.key === 'Escape' && activeRaceActionsState !== null) {
+            event.preventDefault();
+            closeRaceActionsMenu(true);
+            return;
+        }
+
+        if (activeRaceActionsState === null || !activeRaceActionsState.menu.contains(event.target)) {
+            return;
+        }
+
+        var menuItems = Array.prototype.slice.call(activeRaceActionsState.menu.querySelectorAll('[role="menuitem"]'))
+            .filter(function (itemEl) {
+                return itemEl instanceof HTMLElement && !itemEl.hasAttribute('disabled');
+            });
+        if (menuItems.length === 0) {
+            return;
+        }
+
+        var currentIndex = menuItems.indexOf(document.activeElement);
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            menuItems[(currentIndex + 1 + menuItems.length) % menuItems.length].focus({ preventScroll: true });
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            menuItems[(currentIndex - 1 + menuItems.length) % menuItems.length].focus({ preventScroll: true });
+        } else if (event.key === 'Home') {
+            event.preventDefault();
+            menuItems[0].focus({ preventScroll: true });
+        } else if (event.key === 'End') {
+            event.preventDefault();
+            menuItems[menuItems.length - 1].focus({ preventScroll: true });
+        }
+    });
+
+    document.addEventListener('scroll', repositionRaceActionsMenu, true);
+    window.addEventListener('resize', repositionRaceActionsMenu);
+
+    var columnManagerEl = document.querySelector('[data-dispatcher-column-manager]');
+    var columnToggleEl = document.querySelector('[data-dispatcher-columns-toggle]');
+    var columnPanelEl = document.querySelector('[data-dispatcher-columns-panel]');
+    var columnListEl = document.querySelector('[data-dispatcher-columns-list]');
+    var columnResetEl = document.querySelector('[data-dispatcher-columns-reset]');
+    var columnTableEl = document.querySelector('[data-dispatcher-column-table]');
+    var columnStorageKey = 'fleet.dispecerCurse.columns.v1';
+    var defaultDispatcherColumns = [
+        { key: 'plate', label: 'Nr. Inmatriculare', required: true },
+        { key: 'registration_details', label: 'Detalii inregistrare' },
+        { key: 'driver', label: 'Sofer' },
+        { key: 'type', label: 'Tip Transport' },
+        { key: 'loading_date', label: 'Data incarcare' },
+        { key: 'interval', label: 'Interval' },
+        { key: 'duration', label: 'Durata cursa' },
+        { key: 'diurna', label: 'Diurna' },
+        { key: 'route', label: 'Traseu' },
+        { key: 'beneficiary', label: 'Beneficiar' },
+        { key: 'goods_type', label: 'Tip marfa' },
+        { key: 'activity', label: 'Activitate' },
+        { key: 'financial', label: 'Financiar' },
+        { key: 'observations', label: 'Observatii' },
+        { key: 'actions', label: 'Actiuni', required: true }
+    ];
+    var defaultDispatcherColumnOrder = defaultDispatcherColumns.map(function (column) {
+        return column.key;
+    });
+    var dispatcherColumnByKey = defaultDispatcherColumns.reduce(function (columns, column) {
+        columns[column.key] = column;
+        return columns;
+    }, {});
+    var dispatcherColumnState = null;
+
+    var normalizeDispatcherColumnState = function (rawState) {
+        var rawOrder = rawState && Array.isArray(rawState.order) ? rawState.order : [];
+        var order = [];
+        rawOrder.forEach(function (columnKey) {
+            if (dispatcherColumnByKey[columnKey] && order.indexOf(columnKey) === -1) {
+                order.push(columnKey);
+            }
+        });
+        defaultDispatcherColumnOrder.forEach(function (columnKey) {
+            if (order.indexOf(columnKey) === -1) {
+                var insertIndex = order.length;
+                for (var nextIndex = defaultDispatcherColumnOrder.indexOf(columnKey) + 1; nextIndex < defaultDispatcherColumnOrder.length; nextIndex++) {
+                    var nextColumnKey = defaultDispatcherColumnOrder[nextIndex];
+                    var existingIndex = order.indexOf(nextColumnKey);
+                    if (existingIndex !== -1) {
+                        insertIndex = existingIndex;
+                        break;
+                    }
+                }
+                order.splice(insertIndex, 0, columnKey);
+            }
         });
 
-        if (openRacesCloseEl instanceof HTMLButtonElement) {
-            openRacesCloseEl.addEventListener('click', function () {
-                setOpenRacesExpanded(false);
-                openRacesToggleEl.focus();
+        var rawVisible = rawState && rawState.visible && typeof rawState.visible === 'object' ? rawState.visible : {};
+        var visible = {};
+        defaultDispatcherColumns.forEach(function (column) {
+            visible[column.key] = column.required ? true : rawVisible[column.key] !== false;
+        });
+
+        return {
+            order: order,
+            visible: visible
+        };
+    };
+
+    var loadDispatcherColumnState = function () {
+        try {
+            return normalizeDispatcherColumnState(JSON.parse(window.localStorage.getItem(columnStorageKey) || 'null'));
+        } catch (error) {
+            return normalizeDispatcherColumnState(null);
+        }
+    };
+
+    var saveDispatcherColumnState = function () {
+        try {
+            window.localStorage.setItem(columnStorageKey, JSON.stringify(dispatcherColumnState));
+        } catch (error) {
+            // localStorage can be unavailable in restricted browser modes.
+        }
+    };
+
+    var resetDispatcherColumnState = function () {
+        dispatcherColumnState = normalizeDispatcherColumnState({
+            order: defaultDispatcherColumnOrder.slice(),
+            visible: {}
+        });
+        try {
+            window.localStorage.removeItem(columnStorageKey);
+        } catch (error) {
+            // Ignore storage failures and still reset the current view.
+        }
+        applyDispatcherColumnState();
+    };
+
+    var isDispatcherColumnStateCustomized = function () {
+        if (dispatcherColumnState === null) {
+            return false;
+        }
+
+        for (var orderIndex = 0; orderIndex < defaultDispatcherColumnOrder.length; orderIndex++) {
+            if (dispatcherColumnState.order[orderIndex] !== defaultDispatcherColumnOrder[orderIndex]) {
+                return true;
+            }
+        }
+
+        return defaultDispatcherColumns.some(function (column) {
+            return dispatcherColumnState.visible[column.key] === false;
+        });
+    };
+
+    var getDispatcherColumnElements = function (containerEl) {
+        var elementsByKey = {};
+        Array.prototype.slice.call(containerEl.children).forEach(function (childEl, childIndex) {
+            if (!(childEl instanceof HTMLElement) && !(childEl instanceof HTMLTableColElement)) {
+                return;
+            }
+
+            if (!childEl.dataset.dispatcherColumnKey && defaultDispatcherColumns[childIndex]) {
+                childEl.dataset.dispatcherColumnKey = defaultDispatcherColumns[childIndex].key;
+            }
+
+            var columnKey = childEl.dataset.dispatcherColumnKey || '';
+            if (dispatcherColumnByKey[columnKey]) {
+                elementsByKey[columnKey] = childEl;
+            }
+        });
+
+        return elementsByKey;
+    };
+
+    var reorderDispatcherColumnContainer = function (containerEl, order) {
+        var elementsByKey = getDispatcherColumnElements(containerEl);
+        order.forEach(function (columnKey) {
+            if (elementsByKey[columnKey]) {
+                containerEl.appendChild(elementsByKey[columnKey]);
+            }
+        });
+    };
+
+    var setDispatcherColumnVisibility = function (containerEl) {
+        var elementsByKey = getDispatcherColumnElements(containerEl);
+        defaultDispatcherColumnOrder.forEach(function (columnKey) {
+            if (!elementsByKey[columnKey]) {
+                return;
+            }
+
+            elementsByKey[columnKey].style.display = dispatcherColumnState.visible[columnKey] === false ? 'none' : '';
+        });
+    };
+
+    function applyDispatcherColumnState() {
+        if (!(columnTableEl instanceof HTMLTableElement) || dispatcherColumnState === null) {
+            return;
+        }
+
+        var colgroupEl = columnTableEl.querySelector('colgroup');
+        var headerRowEl = columnTableEl.querySelector('thead tr');
+        if (colgroupEl instanceof HTMLElement) {
+            reorderDispatcherColumnContainer(colgroupEl, dispatcherColumnState.order);
+            setDispatcherColumnVisibility(colgroupEl);
+        }
+        if (headerRowEl instanceof HTMLTableRowElement) {
+            reorderDispatcherColumnContainer(headerRowEl, dispatcherColumnState.order);
+            setDispatcherColumnVisibility(headerRowEl);
+        }
+
+        Array.prototype.slice.call(columnTableEl.querySelectorAll('tbody tr')).forEach(function (rowEl) {
+            if (!(rowEl instanceof HTMLTableRowElement) || rowEl.cells.length !== defaultDispatcherColumns.length) {
+                return;
+            }
+
+            reorderDispatcherColumnContainer(rowEl, dispatcherColumnState.order);
+            setDispatcherColumnVisibility(rowEl);
+        });
+
+        var visibleColumnCount = defaultDispatcherColumns.filter(function (column) {
+            return dispatcherColumnState.visible[column.key] !== false;
+        }).length;
+        columnTableEl.style.setProperty('--dispatcher-visible-columns', String(Math.max(1, visibleColumnCount)));
+        columnTableEl.classList.toggle('dispatcher-columns-customized', isDispatcherColumnStateCustomized());
+        renderDispatcherColumnList();
+    }
+
+    var moveDispatcherColumn = function (columnKey, direction) {
+        var currentIndex = dispatcherColumnState.order.indexOf(columnKey);
+        var targetIndex = currentIndex + direction;
+        if (currentIndex < 0 || targetIndex < 0 || targetIndex >= dispatcherColumnState.order.length) {
+            return;
+        }
+
+        dispatcherColumnState.order.splice(currentIndex, 1);
+        dispatcherColumnState.order.splice(targetIndex, 0, columnKey);
+        saveDispatcherColumnState();
+        applyDispatcherColumnState();
+    };
+
+    function renderDispatcherColumnList() {
+        if (!(columnListEl instanceof HTMLElement) || dispatcherColumnState === null) {
+            return;
+        }
+
+        columnListEl.innerHTML = '';
+        dispatcherColumnState.order.forEach(function (columnKey, orderIndex) {
+            var column = dispatcherColumnByKey[columnKey];
+            if (!column) {
+                return;
+            }
+
+            var itemEl = document.createElement('div');
+            itemEl.className = 'dispatcher-column-item';
+
+            var labelEl = document.createElement('label');
+            labelEl.className = 'dispatcher-column-check';
+
+            var checkboxEl = document.createElement('input');
+            checkboxEl.type = 'checkbox';
+            checkboxEl.checked = dispatcherColumnState.visible[columnKey] !== false;
+            checkboxEl.disabled = column.required === true;
+            checkboxEl.setAttribute('aria-label', 'Afiseaza coloana ' + column.label);
+            checkboxEl.addEventListener('change', function () {
+                dispatcherColumnState.visible[columnKey] = checkboxEl.checked;
+                saveDispatcherColumnState();
+                applyDispatcherColumnState();
+            });
+
+            var labelTextEl = document.createElement('span');
+            labelTextEl.textContent = column.label;
+
+            labelEl.appendChild(checkboxEl);
+            labelEl.appendChild(labelTextEl);
+
+            var upButtonEl = document.createElement('button');
+            upButtonEl.type = 'button';
+            upButtonEl.className = 'dispatcher-column-order-btn';
+            upButtonEl.disabled = orderIndex === 0;
+            upButtonEl.setAttribute('aria-label', 'Muta coloana ' + column.label + ' mai sus');
+            upButtonEl.innerHTML = '<i class="bi bi-chevron-up" aria-hidden="true"></i>';
+            upButtonEl.addEventListener('click', function () {
+                moveDispatcherColumn(columnKey, -1);
+            });
+
+            var downButtonEl = document.createElement('button');
+            downButtonEl.type = 'button';
+            downButtonEl.className = 'dispatcher-column-order-btn';
+            downButtonEl.disabled = orderIndex === dispatcherColumnState.order.length - 1;
+            downButtonEl.setAttribute('aria-label', 'Muta coloana ' + column.label + ' mai jos');
+            downButtonEl.innerHTML = '<i class="bi bi-chevron-down" aria-hidden="true"></i>';
+            downButtonEl.addEventListener('click', function () {
+                moveDispatcherColumn(columnKey, 1);
+            });
+
+            itemEl.appendChild(labelEl);
+            itemEl.appendChild(upButtonEl);
+            itemEl.appendChild(downButtonEl);
+            columnListEl.appendChild(itemEl);
+        });
+    }
+
+    var closeDispatcherColumnPanel = function (restoreFocus) {
+        if (!(columnPanelEl instanceof HTMLElement) || !(columnToggleEl instanceof HTMLButtonElement) || columnPanelEl.hidden) {
+            return;
+        }
+
+        columnPanelEl.hidden = true;
+        columnToggleEl.setAttribute('aria-expanded', 'false');
+        columnToggleEl.classList.remove('is-open');
+
+        var iconEl = columnToggleEl.querySelector('.dispatcher-column-toggle-chevron');
+        if (iconEl instanceof HTMLElement) {
+            iconEl.classList.remove('bi-chevron-up');
+            iconEl.classList.add('bi-chevron-down');
+        }
+
+        if (restoreFocus) {
+            columnToggleEl.focus({ preventScroll: true });
+        }
+    };
+
+    var openDispatcherColumnPanel = function () {
+        if (!(columnPanelEl instanceof HTMLElement) || !(columnToggleEl instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        closeSummaryPopover(false);
+        closeRaceActionsMenu(false);
+        columnPanelEl.hidden = false;
+        columnToggleEl.setAttribute('aria-expanded', 'true');
+        columnToggleEl.classList.add('is-open');
+
+        var iconEl = columnToggleEl.querySelector('.dispatcher-column-toggle-chevron');
+        if (iconEl instanceof HTMLElement) {
+            iconEl.classList.remove('bi-chevron-down');
+            iconEl.classList.add('bi-chevron-up');
+        }
+    };
+
+    if (
+        columnManagerEl instanceof HTMLElement
+        && columnToggleEl instanceof HTMLButtonElement
+        && columnPanelEl instanceof HTMLElement
+        && columnListEl instanceof HTMLElement
+        && columnTableEl instanceof HTMLTableElement
+    ) {
+        dispatcherColumnState = loadDispatcherColumnState();
+        applyDispatcherColumnState();
+
+        columnToggleEl.addEventListener('click', function (event) {
+            event.preventDefault();
+            if (columnPanelEl.hidden) {
+                openDispatcherColumnPanel();
+                return;
+            }
+            closeDispatcherColumnPanel(false);
+        });
+
+        if (columnResetEl instanceof HTMLButtonElement) {
+            columnResetEl.addEventListener('click', function () {
+                resetDispatcherColumnState();
             });
         }
 
         document.addEventListener('click', function (event) {
-            if (!isOpenRacesExpanded()) {
+            if (columnPanelEl.hidden || closestElement(event.target, '[data-dispatcher-column-manager]') !== null) {
+                return;
+            }
+            closeDispatcherColumnPanel(false);
+        });
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && !columnPanelEl.hidden) {
+                event.preventDefault();
+                closeDispatcherColumnPanel(true);
+            }
+        });
+    }
+
+    var openRacesToggleEl = document.querySelector('[data-open-races-toggle]');
+    var openRacesModalEl = document.querySelector('[data-open-races-panel]');
+    var openRacesCloseEls = document.querySelectorAll('[data-open-races-close]');
+    var openRacesFilterEls = document.querySelectorAll('[data-open-races-filter]');
+    var lastOpenRacesFocusEl = null;
+    if (
+        openRacesToggleEl instanceof HTMLButtonElement
+        && openRacesModalEl instanceof HTMLElement
+    ) {
+        var isOpenRacesOpen = function () {
+            return !openRacesModalEl.classList.contains('d-none');
+        };
+
+        var setOpenRaceCardExpanded = function (cardEl, expanded) {
+            if (!(cardEl instanceof HTMLElement)) {
+                return;
+            }
+
+            var detailsEl = cardEl.querySelector('[data-open-race-card-details]');
+            var toggleEl = cardEl.querySelector('[data-open-race-card-toggle]');
+            var iconEl = toggleEl instanceof HTMLElement ? toggleEl.querySelector('i') : null;
+
+            cardEl.classList.toggle('is-expanded', expanded);
+
+            if (detailsEl instanceof HTMLElement) {
+                detailsEl.hidden = !expanded;
+            }
+
+            if (toggleEl instanceof HTMLButtonElement) {
+                toggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+                toggleEl.setAttribute('aria-label', expanded ? 'Restrange lipsurile' : 'Extinde lipsurile');
+            }
+
+            if (iconEl instanceof HTMLElement) {
+                iconEl.classList.toggle('bi-chevron-up', expanded);
+                iconEl.classList.toggle('bi-chevron-down', !expanded);
+            }
+        };
+
+        var syncOpenRaceCardActions = function (cardEl, filterType) {
+            if (!(cardEl instanceof HTMLElement)) {
+                return;
+            }
+
+            cardEl.querySelectorAll('[data-open-race-action-type]').forEach(function (actionEl) {
+                if (!(actionEl instanceof HTMLElement)) {
+                    return;
+                }
+
+                var actionType = actionEl.getAttribute('data-open-race-action-type') || '';
+                var shouldShow = filterType === ''
+                    || filterType === 'multiple_missing'
+                    || actionType === filterType;
+
+                actionEl.hidden = !shouldShow;
+            });
+        };
+
+        var setOpenRacesFilter = function (filterType) {
+            var activeFilter = openRacesModalEl.getAttribute('data-active-filter') || '';
+            var nextFilter = activeFilter === filterType ? '' : filterType;
+
+            openRacesModalEl.setAttribute('data-active-filter', nextFilter);
+
+            openRacesFilterEls.forEach(function (filterEl) {
+                if (!(filterEl instanceof HTMLButtonElement)) {
+                    return;
+                }
+
+                var isActive = nextFilter !== '' && filterEl.getAttribute('data-open-races-filter') === nextFilter;
+                filterEl.classList.toggle('is-active', isActive);
+                filterEl.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+            });
+
+            openRacesModalEl.querySelectorAll('[data-open-race-card]').forEach(function (cardEl) {
+                if (!(cardEl instanceof HTMLElement)) {
+                    return;
+                }
+
+                var shouldShow = true;
+                if (nextFilter === 'missing_end_time') {
+                    shouldShow = cardEl.getAttribute('data-missing-end-time') === '1';
+                } else if (nextFilter === 'missing_expenses') {
+                    shouldShow = cardEl.getAttribute('data-missing-expenses') === '1';
+                } else if (nextFilter === 'multiple_missing') {
+                    shouldShow = cardEl.getAttribute('data-multiple-missing') === '1';
+                }
+
+                cardEl.hidden = !shouldShow;
+                syncOpenRaceCardActions(cardEl, nextFilter);
+                setOpenRaceCardExpanded(cardEl, false);
+            });
+        };
+
+        var setOpenRacesOpen = function (open) {
+            if (open === isOpenRacesOpen()) {
+                return;
+            }
+
+            openRacesToggleEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+            openRacesModalEl.classList.toggle('d-none', !open);
+            document.body.classList.toggle('dispatcher-open-races-modal-open', open);
+
+            if (open) {
+                lastOpenRacesFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+                setOpenRacesFilter('');
+                var closeEl = openRacesModalEl.querySelector('[data-open-races-close]');
+                if (closeEl instanceof HTMLElement) {
+                    closeEl.focus();
+                }
+                return;
+            }
+
+            if (lastOpenRacesFocusEl instanceof HTMLElement) {
+                lastOpenRacesFocusEl.focus();
+            }
+        };
+
+        openRacesToggleEl.addEventListener('click', function () {
+            setOpenRacesOpen(true);
+        });
+
+        openRacesCloseEls.forEach(function (closeEl) {
+            if (!(closeEl instanceof HTMLButtonElement)) {
+                return;
+            }
+
+            closeEl.addEventListener('click', function () {
+                setOpenRacesOpen(false);
+            });
+        });
+
+        openRacesFilterEls.forEach(function (filterEl) {
+            if (!(filterEl instanceof HTMLButtonElement)) {
+                return;
+            }
+
+            filterEl.addEventListener('click', function () {
+                if (filterEl.disabled) {
+                    return;
+                }
+
+                setOpenRacesFilter(filterEl.getAttribute('data-open-races-filter') || '');
+            });
+        });
+
+        openRacesModalEl.querySelectorAll('[data-open-race-card-toggle]').forEach(function (toggleEl) {
+            if (!(toggleEl instanceof HTMLButtonElement)) {
+                return;
+            }
+
+            toggleEl.addEventListener('click', function () {
+                var cardEl = toggleEl.closest('[data-open-race-card]');
+                if (!(cardEl instanceof HTMLElement)) {
+                    return;
+                }
+
+                var expanded = toggleEl.getAttribute('aria-expanded') !== 'true';
+                if (expanded) {
+                    openRacesModalEl.querySelectorAll('[data-open-race-card]').forEach(function (otherCardEl) {
+                        setOpenRaceCardExpanded(otherCardEl, false);
+                    });
+                }
+
+                setOpenRaceCardExpanded(cardEl, expanded);
+            });
+        });
+
+        document.addEventListener('click', function (event) {
+            if (!isOpenRacesOpen()) {
                 return;
             }
 
@@ -1380,14 +2357,14 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            if (!openRacesTabEl.contains(targetEl)) {
-                setOpenRacesExpanded(false);
+            if (targetEl === openRacesModalEl) {
+                setOpenRacesOpen(false);
             }
         });
 
         document.addEventListener('keydown', function (event) {
-            if (event.key === 'Escape' && isOpenRacesExpanded()) {
-                setOpenRacesExpanded(false);
+            if (event.key === 'Escape' && isOpenRacesOpen()) {
+                setOpenRacesOpen(false);
             }
         });
     }
@@ -1422,6 +2399,8 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 });
 </script>
+
+<?php include __DIR__ . '/_inactive_resource_modal.php'; ?>
 
 <?php if (!empty($maintenancePopupMessages)): ?>
     <div class="modal fade" id="kmRevizieAlertModal" tabindex="-1" aria-labelledby="kmRevizieAlertTitle" aria-hidden="true">

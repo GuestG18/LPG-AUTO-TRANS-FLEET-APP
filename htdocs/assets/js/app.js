@@ -273,10 +273,27 @@ document.addEventListener('submit', function (event) {
     form.querySelectorAll('button[type="submit"], input[type="submit"]').forEach(disableSubmitControl);
 });
 
-var fleetSidebarStorageKey = 'fleet.sidebarCollapsed';
+var fleetSidebarAutoHideClass = 'sidebar-auto-hide-open';
+var fleetSidebarPeekClass = 'sidebar-peek';
+var fleetSidebarPeekWidth = 250;
 
 function fleetSidebarIsCollapsed() {
     return document.body.classList.contains('sidebar-collapsed');
+}
+
+function fleetSidebarIsPeeking() {
+    return document.body.classList.contains(fleetSidebarPeekClass);
+}
+
+function openFleetSidebarPeek() {
+    if (!fleetSidebarIsCollapsed()) {
+        return;
+    }
+    document.body.classList.add(fleetSidebarPeekClass);
+}
+
+function closeFleetSidebarPeek() {
+    document.body.classList.remove(fleetSidebarPeekClass);
 }
 
 function syncFleetSidebarToggleState() {
@@ -284,6 +301,22 @@ function syncFleetSidebarToggleState() {
         toggleButton.setAttribute('aria-expanded', fleetSidebarIsCollapsed() ? 'false' : 'true');
         toggleButton.classList.toggle('is-collapsed', fleetSidebarIsCollapsed());
     });
+}
+
+function openFleetSidebarTemporarily() {
+    document.body.classList.remove('sidebar-collapsed');
+    document.body.classList.add(fleetSidebarAutoHideClass);
+}
+
+function closeFleetSidebar() {
+    document.body.classList.add('sidebar-collapsed');
+    document.body.classList.remove(fleetSidebarAutoHideClass);
+}
+
+function refreshFleetSidebarLayout() {
+    syncFleetSidebarToggleState();
+    scheduleFleetStickyDocumentTables();
+    window.setTimeout(scheduleFleetStickyDocumentTables, 250);
 }
 
 document.addEventListener('click', function (event) {
@@ -294,14 +327,16 @@ document.addEventListener('click', function (event) {
     }
 
     event.preventDefault();
-    document.body.classList.toggle('sidebar-collapsed');
-    try {
-        window.localStorage.setItem(fleetSidebarStorageKey, fleetSidebarIsCollapsed() ? '1' : '0');
-    } catch (error) {
+
+    closeFleetSidebarPeek();
+
+    if (fleetSidebarIsCollapsed()) {
+        openFleetSidebarTemporarily();
+    } else {
+        closeFleetSidebar();
     }
-    syncFleetSidebarToggleState();
-    scheduleFleetStickyDocumentTables();
-    window.setTimeout(scheduleFleetStickyDocumentTables, 250);
+
+    refreshFleetSidebarLayout();
 });
 
 var fleetStickyDocumentTables = [];
@@ -601,9 +636,453 @@ function initFleetIdleRefreshLoader() {
     document.addEventListener('scroll', noteFleetIdlePassiveActivity, true);
 }
 
+function dashboardOperationalCostPrefersReducedMotion() {
+    return window.matchMedia
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function syncDashboardOperationalStateInputs(expanded) {
+    document.querySelectorAll('[data-dashboard-operational-state-input]').forEach(function (input) {
+        if (input instanceof HTMLInputElement) {
+            input.value = expanded ? '1' : '0';
+        }
+    });
+}
+
+function getDashboardOperationalDetailCards() {
+    return Array.prototype.slice.call(document.querySelectorAll('[data-dashboard-operational-detail-card]')).filter(function (detailCard) {
+        return detailCard instanceof HTMLElement;
+    });
+}
+
+function getDashboardOperationalDetailRegion() {
+    var region = document.querySelector('[data-dashboard-operational-detail-region]');
+
+    return region instanceof HTMLElement ? region : null;
+}
+
+function clearDashboardOperationalTimer(element, key) {
+    if (!(element instanceof HTMLElement)) {
+        return;
+    }
+
+    var timer = element.dataset[key];
+    if (timer) {
+        window.clearTimeout(parseInt(timer, 10));
+        delete element.dataset[key];
+    }
+}
+
+function setDashboardOperationalDetailCardsVisible(expanded, animate) {
+    var region = getDashboardOperationalDetailRegion();
+    var reduceMotion = dashboardOperationalCostPrefersReducedMotion();
+    var detailCards = getDashboardOperationalDetailCards();
+
+    if (!(region instanceof HTMLElement)) {
+        return;
+    }
+
+    clearDashboardOperationalTimer(region, 'dashboardOperationalHideTimer');
+
+    detailCards.forEach(function (detailCard) {
+        detailCard.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+    });
+
+    if (expanded) {
+        region.hidden = false;
+        region.setAttribute('aria-hidden', 'false');
+        region.classList.remove('is-leaving');
+
+        if (animate && !reduceMotion) {
+            region.classList.remove('is-visible');
+            window.requestAnimationFrame(function () {
+                region.classList.add('is-visible');
+            });
+        } else {
+            region.classList.add('is-visible');
+        }
+
+        return;
+    }
+
+    region.setAttribute('aria-hidden', 'true');
+    region.classList.add('is-leaving');
+    region.classList.remove('is-visible');
+
+    if (!animate || reduceMotion) {
+        region.hidden = true;
+        region.classList.remove('is-leaving');
+        return;
+    }
+
+    var hideTimer = window.setTimeout(function () {
+        if (!region.classList.contains('is-visible')) {
+            region.hidden = true;
+        }
+
+        region.classList.remove('is-leaving');
+        delete region.dataset.dashboardOperationalHideTimer;
+    }, 300);
+
+    region.dataset.dashboardOperationalHideTimer = String(hideTimer);
+}
+
+function setDashboardOperationalSummaryVisible(card, visible, animate) {
+    if (!(card instanceof HTMLElement)) {
+        return;
+    }
+
+    var reduceMotion = dashboardOperationalCostPrefersReducedMotion();
+    clearDashboardOperationalTimer(card, 'dashboardOperationalSummaryTimer');
+    card.setAttribute('aria-hidden', visible ? 'false' : 'true');
+
+    if (visible) {
+        card.hidden = false;
+
+        if (animate && !reduceMotion) {
+            card.classList.add('is-leaving');
+            window.requestAnimationFrame(function () {
+                card.classList.remove('is-leaving');
+            });
+        } else {
+            card.classList.remove('is-leaving');
+        }
+
+        return;
+    }
+
+    card.classList.add('is-leaving');
+
+    if (!animate || reduceMotion) {
+        card.hidden = true;
+        card.classList.remove('is-leaving');
+        return;
+    }
+
+    var hideTimer = window.setTimeout(function () {
+        if (card.classList.contains('is-expanded')) {
+            card.hidden = true;
+        }
+
+        card.classList.remove('is-leaving');
+        delete card.dataset.dashboardOperationalSummaryTimer;
+    }, 180);
+
+    card.dataset.dashboardOperationalSummaryTimer = String(hideTimer);
+}
+
+function applyDashboardOperationalCostState(card, expanded, animateDetails) {
+    var toggle = card.querySelector('[data-dashboard-operational-toggle]');
+    var grid = card.closest('[data-dashboard-main-grid]');
+    var stateValue = expanded ? 'true' : 'false';
+
+    card.classList.toggle('is-expanded', expanded);
+    card.setAttribute('aria-expanded', stateValue);
+
+    if (grid instanceof HTMLElement) {
+        grid.classList.toggle('is-operational-expanded', expanded);
+    }
+
+    if (toggle instanceof HTMLButtonElement) {
+        toggle.setAttribute('aria-expanded', stateValue);
+        toggle.setAttribute('aria-label', expanded ? 'Restrange cost total operational' : 'Extinde cost total operational');
+    }
+
+    setDashboardOperationalSummaryVisible(card, !expanded, animateDetails === true);
+    setDashboardOperationalDetailCardsVisible(expanded, animateDetails === true);
+    syncDashboardOperationalStateInputs(expanded);
+}
+
+function animateDashboardOperationalCostResize(card, applyState) {
+    if (dashboardOperationalCostPrefersReducedMotion()) {
+        applyState();
+        return;
+    }
+
+    var firstRect = card.getBoundingClientRect();
+    applyState();
+    var lastRect = card.getBoundingClientRect();
+
+    if (
+        firstRect.width <= 0
+        || firstRect.height <= 0
+        || lastRect.width <= 0
+        || lastRect.height <= 0
+    ) {
+        return;
+    }
+
+    var deltaX = firstRect.left - lastRect.left;
+    var deltaY = firstRect.top - lastRect.top;
+    var scaleX = firstRect.width / lastRect.width;
+    var scaleY = firstRect.height / lastRect.height;
+    var nearlySame = Math.abs(deltaX) < 0.5
+        && Math.abs(deltaY) < 0.5
+        && Math.abs(scaleX - 1) < 0.01
+        && Math.abs(scaleY - 1) < 0.01;
+
+    if (nearlySame) {
+        return;
+    }
+
+    card.dataset.dashboardOperationalAnimating = '1';
+    card.classList.add('is-resizing');
+    card.style.transformOrigin = 'top left';
+    card.style.transition = 'none';
+    card.style.transform = 'translate(' + deltaX + 'px, ' + deltaY + 'px) scale(' + scaleX + ', ' + scaleY + ')';
+    card.getBoundingClientRect();
+
+    window.requestAnimationFrame(function () {
+        card.style.transition = 'transform 300ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.18s ease, border-color 0.18s ease';
+        card.style.transform = '';
+    });
+
+    var cleanedUp = false;
+    var cleanup = function (event) {
+        if (cleanedUp || (event && event.type === 'transitionend' && event.propertyName !== 'transform')) {
+            return;
+        }
+
+        cleanedUp = true;
+        card.classList.remove('is-resizing');
+        card.style.transformOrigin = '';
+        card.style.transition = '';
+        delete card.dataset.dashboardOperationalAnimating;
+        card.removeEventListener('transitionend', cleanup);
+    };
+
+    card.addEventListener('transitionend', cleanup);
+    window.setTimeout(cleanup, 360);
+}
+
+function setDashboardOperationalCostExpanded(card, expanded, animate) {
+    if (!(card instanceof HTMLElement)) {
+        return;
+    }
+
+    if (card.classList.contains('is-expanded') === expanded) {
+        syncDashboardOperationalStateInputs(expanded);
+        setDashboardOperationalSummaryVisible(card, !expanded, false);
+        setDashboardOperationalDetailCardsVisible(expanded, false);
+        return;
+    }
+
+    applyDashboardOperationalCostState(card, expanded, animate);
+}
+
+function initDashboardOperationalCostCard() {
+    var card = document.querySelector('[data-dashboard-operational-card]');
+    var collapseButton = document.querySelector('[data-dashboard-operational-collapse]');
+
+    if (!(card instanceof HTMLElement)) {
+        return;
+    }
+
+    applyDashboardOperationalCostState(card, card.classList.contains('is-expanded'), false);
+
+    card.addEventListener('click', function (event) {
+        if (card.dataset.dashboardOperationalAnimating === '1') {
+            event.preventDefault();
+            return;
+        }
+
+        var target = event.target instanceof Element ? event.target : null;
+        if (target === null) {
+            return;
+        }
+
+        var toggle = target.closest('[data-dashboard-operational-toggle]');
+        var interactive = target.closest('a, button, input, select, textarea, label, [data-bs-toggle]');
+        if (interactive && toggle === null) {
+            return;
+        }
+
+        event.preventDefault();
+        setDashboardOperationalCostExpanded(card, !card.classList.contains('is-expanded'), true);
+    });
+
+    card.addEventListener('keydown', function (event) {
+        if (event.target !== card || (event.key !== 'Enter' && event.key !== ' ')) {
+            return;
+        }
+
+        event.preventDefault();
+        setDashboardOperationalCostExpanded(card, !card.classList.contains('is-expanded'), true);
+    });
+
+    if (collapseButton instanceof HTMLButtonElement) {
+        collapseButton.addEventListener('click', function (event) {
+            event.preventDefault();
+            setDashboardOperationalCostExpanded(card, false, true);
+        });
+    }
+}
+
+function initDashboardApprovalTabs() {
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('[data-dashboard-approval-tab]'));
+    var panels = Array.prototype.slice.call(document.querySelectorAll('[data-dashboard-approval-panel]'));
+
+    if (tabs.length === 0 || panels.length === 0) {
+        return;
+    }
+
+    function activate(tabKey) {
+        tabs.forEach(function (tab) {
+            if (!(tab instanceof HTMLButtonElement)) {
+                return;
+            }
+
+            var isActive = tab.getAttribute('data-dashboard-approval-tab') === tabKey;
+            tab.classList.toggle('is-active', isActive);
+            tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+
+        panels.forEach(function (panel) {
+            if (!(panel instanceof HTMLElement)) {
+                return;
+            }
+
+            var isActive = panel.getAttribute('data-dashboard-approval-panel') === tabKey;
+            panel.classList.toggle('is-active', isActive);
+            panel.hidden = !isActive;
+        });
+    }
+
+    tabs.forEach(function (tab) {
+        if (!(tab instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        tab.addEventListener('click', function () {
+            activate(tab.getAttribute('data-dashboard-approval-tab') || '');
+        });
+    });
+
+    document.querySelectorAll('.dashboard-approval-close').forEach(function (button) {
+        if (!(button instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        if (button.closest('[data-global-approval-drawer]')) {
+            return;
+        }
+
+        button.addEventListener('click', function () {
+            var panel = button.closest('.dashboard-approval-panel');
+            if (panel instanceof HTMLElement) {
+                panel.hidden = true;
+            }
+        });
+    });
+}
+
+function initGlobalApprovalDrawer() {
+    var drawer = document.querySelector('[data-global-approval-drawer]');
+    if (!(drawer instanceof HTMLElement)) {
+        return;
+    }
+
+    var toggle = drawer.querySelector('[data-global-approval-toggle]');
+    var closeButton = drawer.querySelector('[data-global-approval-close]');
+
+    if (!(toggle instanceof HTMLButtonElement)) {
+        return;
+    }
+
+    function setOpen(open) {
+        drawer.classList.toggle('is-open', open);
+        document.body.classList.toggle('global-approval-drawer-open', open);
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        toggle.setAttribute(
+            'aria-label',
+            open ? 'Inchide solicitarile de aprobare' : 'Deschide solicitarile de aprobare'
+        );
+
+        var icon = toggle.querySelector('i');
+        if (icon instanceof HTMLElement) {
+            icon.classList.toggle('bi-chevron-left', !open);
+            icon.classList.toggle('bi-chevron-right', open);
+        }
+    }
+
+    toggle.addEventListener('click', function () {
+        setOpen(!drawer.classList.contains('is-open'));
+    });
+
+    if (closeButton instanceof HTMLButtonElement) {
+        closeButton.addEventListener('click', function () {
+            setOpen(false);
+        });
+    }
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && drawer.classList.contains('is-open')) {
+            setOpen(false);
+        }
+    });
+
+    document.addEventListener('click', function (event) {
+        if (!drawer.classList.contains('is-open')) {
+            return;
+        }
+
+        var target = event.target instanceof Element ? event.target : null;
+        if (target && !drawer.contains(target)) {
+            setOpen(false);
+        }
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.js-date-display-input').forEach(initCustomDateField);
+
+    try {
+        window.localStorage.removeItem('fleet.sidebarCollapsed');
+    } catch (error) {
+    }
+
+    var sidebar = document.querySelector('.sidebar');
+    if (sidebar instanceof HTMLElement) {
+        sidebar.addEventListener('mouseleave', function () {
+            if (fleetSidebarIsPeeking()) {
+                closeFleetSidebarPeek();
+            }
+
+            if (!document.body.classList.contains(fleetSidebarAutoHideClass)) {
+                return;
+            }
+
+            closeFleetSidebar();
+            refreshFleetSidebarLayout();
+        });
+    }
+
+    // Reveal on left-edge hover: cand meniul e ascuns, apropierea mouse-ului de
+    // marginea din stanga il face sa alunece la vedere; se ascunde cand pleci.
+    var sidebarEdge = document.querySelector('[data-sidebar-edge]');
+    if (sidebarEdge instanceof HTMLElement) {
+        sidebarEdge.addEventListener('mouseenter', function () {
+            openFleetSidebarPeek();
+        });
+    }
+
+    document.addEventListener('mousemove', function (event) {
+        if (!fleetSidebarIsPeeking()) {
+            if (fleetSidebarIsCollapsed() && event.clientX <= 4) {
+                openFleetSidebarPeek();
+            }
+            return;
+        }
+
+        if (event.clientX > fleetSidebarPeekWidth + 24) {
+            closeFleetSidebarPeek();
+        }
+    }, { passive: true });
+
     syncFleetSidebarToggleState();
+    initDashboardOperationalCostCard();
+    initDashboardApprovalTabs();
+    initGlobalApprovalDrawer();
     initFleetStickyDocumentTables();
     initFleetIdleRefreshLoader();
 });

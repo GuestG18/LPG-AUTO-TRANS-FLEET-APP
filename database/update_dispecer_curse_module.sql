@@ -249,6 +249,7 @@ CREATE TABLE IF NOT EXISTS curse_dispecer (
     observatii TEXT NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
+    duplicate_key CHAR(64) NULL,
     INDEX idx_curse_vehicle (vehicle_id),
     INDEX idx_curse_tip_transport (tip_transport),
     INDEX idx_curse_data (data_cursa),
@@ -257,6 +258,7 @@ CREATE TABLE IF NOT EXISTS curse_dispecer (
     INDEX idx_curse_loc (loc_incarcare_id),
     INDEX idx_curse_beneficiar (beneficiar_id),
     INDEX idx_curse_zona (zona_distributie_id),
+    UNIQUE KEY uk_curse_dispecer_duplicate_key (duplicate_key),
     CONSTRAINT fk_curse_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE RESTRICT,
     CONSTRAINT fk_curse_loc FOREIGN KEY (loc_incarcare_id) REFERENCES configurare_locuri_incarcare(id) ON DELETE RESTRICT,
     CONSTRAINT fk_curse_beneficiar FOREIGN KEY (beneficiar_id) REFERENCES configurare_beneficiari_transport(id) ON DELETE RESTRICT,
@@ -1674,3 +1676,37 @@ WHERE b.nume = 'LPG AUTO'
   AND NOT EXISTS (
       SELECT 1 FROM configurare_zone_distributie zd WHERE zd.beneficiar_id = b.id AND zd.nume = 'Regional'
   );
+
+-- Cheie de protectie pentru salvarea simultana a aceleiasi curse.
+-- Valorile sunt calculate in aplicatie pentru ca normalizarea sa fie identica la backfill si la salvare.
+SET @has_curse_duplicate_key := (
+    SELECT COUNT(*)
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'curse_dispecer'
+      AND COLUMN_NAME = 'duplicate_key'
+);
+SET @sql_add_curse_duplicate_key := IF(
+    @has_curse_duplicate_key = 0,
+    'ALTER TABLE curse_dispecer ADD COLUMN duplicate_key CHAR(64) NULL AFTER updated_at',
+    'SELECT 1'
+);
+PREPARE stmt_add_curse_duplicate_key FROM @sql_add_curse_duplicate_key;
+EXECUTE stmt_add_curse_duplicate_key;
+DEALLOCATE PREPARE stmt_add_curse_duplicate_key;
+
+SET @has_uk_curse_duplicate_key := (
+    SELECT COUNT(*)
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'curse_dispecer'
+      AND INDEX_NAME = 'uk_curse_dispecer_duplicate_key'
+);
+SET @sql_add_uk_curse_duplicate_key := IF(
+    @has_uk_curse_duplicate_key = 0,
+    'ALTER TABLE curse_dispecer ADD UNIQUE KEY uk_curse_dispecer_duplicate_key (duplicate_key)',
+    'SELECT 1'
+);
+PREPARE stmt_add_uk_curse_duplicate_key FROM @sql_add_uk_curse_duplicate_key;
+EXECUTE stmt_add_uk_curse_duplicate_key;
+DEALLOCATE PREPARE stmt_add_uk_curse_duplicate_key;

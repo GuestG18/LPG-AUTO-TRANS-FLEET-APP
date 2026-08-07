@@ -202,6 +202,7 @@ class ModuleController
             'pageTitle' => $module['title'],
             'currentPage' => $currentPage,
             'moduleKey' => $moduleKey,
+            'routePage' => $this->moduleRoutePage($moduleKey, $module),
             'module' => $module,
             'rows' => $result['rows'],
             'search' => $search,
@@ -219,6 +220,17 @@ class ModuleController
             $vehicleId = $this->extractVehicleIdFromFilters($filters);
             $viewData['documentSummary'] = $this->documentModel->getNotificationSummary($vehicleId);
             $viewData['urgentDocuments'] = $this->documentModel->getUrgentDocuments($vehicleId, 5);
+        }
+
+        if ($moduleKey === 'soferi') {
+            $viewData['inactiveDriverOverview'] = $this->buildInactiveDriverOverview();
+        }
+
+        if ($moduleKey === 'vehicule') {
+            $vehicleRoutePage = $this->moduleRoutePage($moduleKey, $module);
+            if (in_array($vehicleRoutePage, ['vehicule_usoare', 'vehicule_grele'], true)) {
+                $viewData['inactiveVehicleOverview'] = $this->buildInactiveVehicleOverview($vehicleRoutePage);
+            }
         }
 
         if ($moduleKey === 'configurare_costuri_documente_vehicule_override') {
@@ -257,6 +269,360 @@ class ModuleController
         }
 
         render('module/list.php', $viewData);
+    }
+
+    private function buildInactiveVehicleOverview(string $routePage, int $limit = 8): array
+    {
+        $overview = [
+            'count' => 0,
+            'missing_count' => 0,
+            'expired_count' => 0,
+            'missing_expired_count' => 0,
+            'other_count' => 0,
+            'rows' => [],
+        ];
+
+        try {
+            $rows = $this->fetchInactiveVehicleRows($routePage);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][inactive-vehicles-overview] route_page=' . $routePage . ' ' . $exception->getMessage());
+            return $overview;
+        }
+
+        $vehicleIds = array_map(static fn(array $row): int => (int) ($row['id'] ?? 0), $rows);
+        $couplingLabels = [];
+
+        try {
+            $couplingLabels = $this->vehicleCouplingModel->getActiveCouplingLabelsForVehicleIds($vehicleIds);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][inactive-vehicles-couplings] ' . $exception->getMessage());
+        }
+
+        foreach ($rows as $row) {
+            $vehicleId = (int) ($row['id'] ?? 0);
+            if ($vehicleId <= 0) {
+                continue;
+            }
+
+            $overview['count']++;
+            $issueMessages = [];
+            $issueRows = [];
+            $missingCount = 0;
+            $expiredCount = 0;
+            $otherCount = 0;
+
+            try {
+                $evaluation = $this->entityStatusService->evaluateVehicleStatus($vehicleId);
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][inactive-vehicle-evaluation] vehicle_id=' . $vehicleId . ' ' . $exception->getMessage());
+                $evaluation = null;
+            }
+
+            foreach (($evaluation['checks'] ?? []) as $check) {
+                if (!is_array($check) || (string) ($check['state'] ?? 'valid') === 'valid') {
+                    continue;
+                }
+
+                $state = (string) ($check['state'] ?? '');
+                $issueType = in_array($state, ['missing', 'expired'], true) ? $state : 'other';
+                $message = $this->buildInactiveVehicleIssueMessage($check);
+                if ($message !== '') {
+                    $issueMessages[$message] = $message;
+                    $issueRows[$issueType . '|' . $message] = [
+                        'message' => $message,
+                        'type' => $issueType,
+                    ];
+                }
+
+                if ($state === 'missing') {
+                    $missingCount++;
+                } elseif ($state === 'expired') {
+                    $expiredCount++;
+                } else {
+                    $otherCount++;
+                }
+            }
+
+            if ($issueMessages === []) {
+                $notes = trim((string) ($row['observatii'] ?? ''));
+                if ($notes !== '') {
+                    $issueMessages[$notes] = $notes;
+                    $issueRows['other|' . $notes] = [
+                        'message' => $notes,
+                        'type' => 'other',
+                    ];
+                    $otherCount++;
+                }
+            }
+
+            if ($issueMessages === []) {
+                $fallbackMessage = 'Verifica documentele obligatorii ale vehiculului.';
+                $issueMessages[$fallbackMessage] = $fallbackMessage;
+                $issueRows['other|' . $fallbackMessage] = [
+                    'message' => $fallbackMessage,
+                    'type' => 'other',
+                ];
+                $otherCount++;
+            }
+
+            $overview['missing_count'] += $missingCount;
+            $overview['expired_count'] += $expiredCount;
+            if ($missingCount > 0 && $expiredCount > 0) {
+                $overview['missing_expired_count']++;
+            }
+            $overview['other_count'] += $otherCount;
+
+            if (count($overview['rows']) >= $limit) {
+                continue;
+            }
+
+            $overview['rows'][] = [
+                'id' => $vehicleId,
+                'nr_inmatriculare' => (string) ($row['nr_inmatriculare'] ?? ''),
+                'marca' => (string) ($row['marca'] ?? ''),
+                'model' => (string) ($row['model'] ?? ''),
+                'tip_vehicul' => (string) ($row['tip_vehicul'] ?? ''),
+                'poza_original' => (string) ($row['poza_original'] ?? ''),
+                'poza_stocata' => (string) ($row['poza_stocata'] ?? ''),
+                'cuplaj_curent' => (string) ($couplingLabels[$vehicleId] ?? '-'),
+                'updated_at' => (string) ($row['updated_at'] ?? ''),
+                'issues' => array_values($issueMessages),
+                'issue_rows' => array_values($issueRows),
+                'missing_count' => $missingCount,
+                'expired_count' => $expiredCount,
+                'other_count' => $otherCount,
+            ];
+        }
+
+        return $overview;
+    }
+
+    private function fetchInactiveVehicleRows(string $routePage): array
+    {
+        $conditions = [
+            "t.status = 'inactiv'",
+            "t.nr_inmatriculare <> 'STOC-ANVELOPE'",
+            "t.serie_sasiu <> 'STOCANVELOPE00001'",
+        ];
+
+        if ($routePage === 'vehicule_usoare') {
+            $conditions[] = "t.tip_vehicul IN ('autovehicul', 'autoutilitara')";
+        } elseif ($routePage === 'vehicule_grele') {
+            $conditions[] = "t.tip_vehicul NOT IN ('autovehicul', 'autoutilitara')";
+        }
+
+        $stmt = $this->db->query("
+            SELECT
+                t.id,
+                t.nr_inmatriculare,
+                t.marca,
+                t.model,
+                t.tip_vehicul,
+                t.poza_original,
+                t.poza_stocata,
+                t.observatii,
+                t.updated_at
+            FROM vehicule t
+            WHERE " . implode(' AND ', $conditions) . "
+            ORDER BY t.updated_at DESC, t.nr_inmatriculare ASC, t.id ASC
+        ");
+
+        return $stmt->fetchAll();
+    }
+
+    private function buildInactiveVehicleIssueMessage(array $check): string
+    {
+        $label = trim((string) ($check['label'] ?? ''));
+        $state = (string) ($check['state'] ?? '');
+        $date = trim((string) ($check['date'] ?? ''));
+        $message = trim((string) ($check['message'] ?? ''));
+
+        if ($label !== '' && $state === 'missing') {
+            return $label . ' lipsă';
+        }
+
+        if ($label !== '' && $state === 'expired') {
+            if ($date !== '') {
+                return $label . ' expirat din ' . format_date_ro($date);
+            }
+
+            return $label . ' expirat';
+        }
+
+        return $message;
+    }
+
+    private function buildInactiveDriverOverview(int $limit = 8): array
+    {
+        $overview = [
+            'count' => 0,
+            'missing_count' => 0,
+            'expired_count' => 0,
+            'missing_expired_count' => 0,
+            'other_count' => 0,
+            'rows' => [],
+        ];
+
+        try {
+            $rows = $this->fetchInactiveDriverRows();
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][inactive-drivers-overview] ' . $exception->getMessage());
+            return $overview;
+        }
+
+        foreach ($rows as $row) {
+            $driverId = (int) ($row['id'] ?? 0);
+            if ($driverId <= 0) {
+                continue;
+            }
+
+            $overview['count']++;
+            $issueMessages = [];
+            $issueRows = [];
+            $missingCount = 0;
+            $expiredCount = 0;
+            $otherCount = 0;
+
+            try {
+                $evaluation = $this->entityStatusService->evaluateDriverStatus($driverId);
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][inactive-driver-evaluation] driver_id=' . $driverId . ' ' . $exception->getMessage());
+                $evaluation = null;
+            }
+
+            foreach (($evaluation['checks'] ?? []) as $check) {
+                if (!is_array($check) || (string) ($check['state'] ?? 'valid') === 'valid') {
+                    continue;
+                }
+
+                $message = trim((string) ($check['message'] ?? ''));
+                $state = (string) ($check['state'] ?? '');
+                $issueType = in_array($state, ['missing', 'expired'], true) ? $state : 'other';
+                if ($message !== '') {
+                    $issueMessages[$message] = $message;
+                    $issueRows[$issueType . '|' . $message] = [
+                        'message' => $message,
+                        'type' => $issueType,
+                    ];
+                }
+
+                if ($state === 'missing') {
+                    $missingCount++;
+                } elseif ($state === 'expired') {
+                    $expiredCount++;
+                } else {
+                    $otherCount++;
+                }
+            }
+
+            if ($issueMessages === []) {
+                $notes = trim((string) ($row['observatii'] ?? ''));
+                if ($notes !== '') {
+                    $issueMessages[$notes] = $notes;
+                    $issueRows['other|' . $notes] = [
+                        'message' => $notes,
+                        'type' => 'other',
+                    ];
+                    $otherCount++;
+                }
+            }
+
+            if ($issueMessages === []) {
+                $issueMessages['Verifica documentele obligatorii ale soferului.'] = 'Verifica documentele obligatorii ale soferului.';
+                $issueRows['other|Verifica documentele obligatorii ale soferului.'] = [
+                    'message' => 'Verifica documentele obligatorii ale soferului.',
+                    'type' => 'other',
+                ];
+                $otherCount++;
+            }
+
+            if ($expiredCount > 0) {
+                $driverIssueType = 'expired';
+                $driverIssueLabel = 'Expirat';
+            } elseif ($missingCount > 0) {
+                $driverIssueType = 'missing';
+                $driverIssueLabel = 'Lipsă';
+            } else {
+                $driverIssueType = 'attention';
+                $driverIssueLabel = 'Atenție';
+            }
+
+            $overview['missing_count'] += $missingCount;
+            $overview['expired_count'] += $expiredCount;
+            if ($missingCount > 0 && $expiredCount > 0) {
+                $overview['missing_expired_count']++;
+            }
+            $overview['other_count'] += $otherCount;
+
+            if (count($overview['rows']) >= $limit) {
+                continue;
+            }
+
+            $overview['rows'][] = [
+                'id' => $driverId,
+                'nume' => (string) ($row['nume'] ?? ''),
+                'telefon' => (string) ($row['telefon'] ?? ''),
+                'poza_original' => (string) ($row['poza_original'] ?? ''),
+                'poza_stocata' => (string) ($row['poza_stocata'] ?? ''),
+                'vehicul_label' => (string) ($row['vehicul_label'] ?? '-'),
+                'updated_at' => (string) ($row['updated_at'] ?? ''),
+                'issues' => array_values($issueMessages),
+                'issue_rows' => array_values($issueRows),
+                'issue_type' => $driverIssueType,
+                'issue_label' => $driverIssueLabel,
+                'missing_count' => $missingCount,
+                'expired_count' => $expiredCount,
+                'other_count' => $otherCount,
+            ];
+        }
+
+        return $overview;
+    }
+
+    private function fetchInactiveDriverRows(): array
+    {
+        $stmt = $this->db->query("
+            SELECT
+                t.id,
+                t.nume,
+                t.telefon,
+                t.poza_original,
+                t.poza_stocata,
+                t.observatii,
+                t.updated_at,
+                COALESCE(NULLIF(driver_vehicle_labels.vehicul_label, ''), '-') AS vehicul_label
+            FROM soferi t
+            LEFT JOIN (
+                SELECT
+                    sv.driver_id,
+                    GROUP_CONCAT(
+                        CASE
+                            WHEN vs.id IS NULL THEN v.nr_inmatriculare
+                            ELSE CONCAT(v.nr_inmatriculare, ' + ', vs.nr_inmatriculare)
+                        END
+                        ORDER BY sv.is_primary DESC, v.nr_inmatriculare ASC
+                        SEPARATOR ', '
+                    ) AS vehicul_label
+                FROM soferi_vehicule sv
+                INNER JOIN vehicule v ON v.id = sv.vehicle_id
+                LEFT JOIN (
+                    SELECT tractor_id, MAX(id) AS last_id
+                    FROM vehicule_cuplaje
+                    WHERE activ = 1
+                    GROUP BY tractor_id
+                ) vc_latest ON vc_latest.tractor_id = v.id
+                LEFT JOIN vehicule_cuplaje vc ON vc.id = vc_latest.last_id
+                LEFT JOIN vehicule vs ON vs.id = vc.semiremorca_id
+                GROUP BY sv.driver_id
+            ) driver_vehicle_labels ON driver_vehicle_labels.driver_id = t.id
+            WHERE t.status = 'inactiv'
+              AND COALESCE(t.employment_status, 'active') <> 'terminated'
+              AND t.data_incetare IS NULL
+              AND t.termination_date IS NULL
+            ORDER BY t.updated_at DESC, t.nume ASC, t.id ASC
+        ");
+
+        return $stmt->fetchAll();
     }
 
     private function maintenanceTireStockAction(string $moduleKey, array $module): void
@@ -791,6 +1157,7 @@ class ModuleController
             'pageTitle' => 'Adauga ' . ucfirst($module['singular']),
             'currentPage' => $currentPage,
             'moduleKey' => $moduleKey,
+            'routePage' => $this->moduleRoutePage($moduleKey, $module),
             'module' => $module,
             'mode' => 'create',
             'recordId' => null,
@@ -820,11 +1187,13 @@ class ModuleController
 
     private function storeAction(string $moduleKey, array $module): void
     {
+        $routePage = $this->moduleRoutePage($moduleKey, $module);
+
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            redirect(build_query_url(['page' => $moduleKey]));
+            redirect(build_query_url(['page' => $routePage]));
         }
 
-        ensure_csrf_or_redirect(build_query_url(['page' => $moduleKey, 'action' => 'create']));
+        ensure_csrf_or_redirect(build_query_url(['page' => $routePage, 'action' => 'create']));
 
         if ($moduleKey === 'configurare_costuri_documente_vehicule_override') {
             $postedValidity = trim((string) ($_POST['validity_days'] ?? ''));
@@ -920,7 +1289,7 @@ class ModuleController
 
         if ($errors !== []) {
             set_form_flash($this->sanitizeOldInput($module, $_POST), $errors);
-            $createRoute = ['page' => $moduleKey, 'action' => 'create'];
+            $createRoute = ['page' => $routePage, 'action' => 'create'];
             if ($moduleKey === 'documente' && $keepDocumentVehicleContext && $documentVehicleId > 0) {
                 $createRoute['vehicle_id'] = $documentVehicleId;
             }
@@ -1001,7 +1370,7 @@ class ModuleController
             flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'salvare'));
 
             set_form_flash($this->sanitizeOldInput($module, $_POST), []);
-            $createRoute = ['page' => $moduleKey, 'action' => 'create'];
+            $createRoute = ['page' => $routePage, 'action' => 'create'];
             if ($moduleKey === 'documente' && $keepDocumentVehicleContext && $documentVehicleId > 0) {
                 $createRoute['vehicle_id'] = $documentVehicleId;
             }
@@ -1024,7 +1393,7 @@ class ModuleController
 
         if ($moduleKey === 'vehicule') {
             redirect(build_query_url([
-                'page' => 'vehicule',
+                'page' => $routePage,
                 'action' => 'show',
                 'id' => $recordId,
             ]));
@@ -1035,11 +1404,12 @@ class ModuleController
 
     private function editAction(string $moduleKey, array $module): void
     {
+        $routePage = $this->moduleRoutePage($moduleKey, $module);
         $id = (int) ($_GET['id'] ?? 0);
 
         if ($id <= 0) {
             flash_set('warning', 'ID invalid.');
-            redirect(build_query_url(['page' => $moduleKey]));
+            redirect(build_query_url(['page' => $routePage]));
         }
 
         if ($moduleKey === 'vehicule') {
@@ -1054,7 +1424,11 @@ class ModuleController
 
         if ($record === null) {
             flash_set('warning', 'Inregistrarea nu a fost gasita.');
-            redirect(build_query_url(['page' => $moduleKey]));
+            redirect(build_query_url(['page' => $routePage]));
+        }
+
+        if ($moduleKey === 'soferi' && $this->isFormerDriverRecord($record)) {
+            $this->redirectFormerDriverToFormerEmployees($record);
         }
 
         $formFlash = consume_form_flash();
@@ -1189,6 +1563,7 @@ class ModuleController
             'pageTitle' => 'Editeaza ' . ucfirst($module['singular']),
             'currentPage' => $currentPage,
             'moduleKey' => $moduleKey,
+            'routePage' => $this->moduleRoutePage($moduleKey, $module),
             'module' => $module,
             'mode' => 'edit',
             'recordId' => $id,
@@ -1217,23 +1592,29 @@ class ModuleController
 
     private function updateAction(string $moduleKey, array $module): void
     {
+        $routePage = $this->moduleRoutePage($moduleKey, $module);
+
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            redirect(build_query_url(['page' => $moduleKey]));
+            redirect(build_query_url(['page' => $routePage]));
         }
 
         $id = (int) ($_GET['id'] ?? 0);
 
         if ($id <= 0) {
             flash_set('warning', 'ID invalid.');
-            redirect(build_query_url(['page' => $moduleKey]));
+            redirect(build_query_url(['page' => $routePage]));
         }
 
-        ensure_csrf_or_redirect(build_query_url(['page' => $moduleKey, 'action' => 'edit', 'id' => $id]));
+        ensure_csrf_or_redirect(build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => $id]));
 
         $existing = $this->moduleModel->findById($module, $id);
         if ($existing === null) {
             flash_set('warning', 'Inregistrarea nu exista.');
-            redirect(build_query_url(['page' => $moduleKey]));
+            redirect(build_query_url(['page' => $routePage]));
+        }
+
+        if ($moduleKey === 'soferi' && $this->isFormerDriverRecord($existing)) {
+            $this->redirectFormerDriverToFormerEmployees($existing, 'warning');
         }
 
         if ($moduleKey === 'configurare_costuri_documente_vehicule_override') {
@@ -1367,7 +1748,7 @@ class ModuleController
             }
 
             set_form_flash($this->sanitizeOldInput($module, $_POST), $errors);
-            redirect(build_query_url(['page' => $moduleKey, 'action' => 'edit', 'id' => $id]));
+            redirect(build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => $id]));
         }
 
         $data['updated_at'] = date('Y-m-d H:i:s');
@@ -1436,7 +1817,7 @@ class ModuleController
             flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'actualizare'));
 
             set_form_flash($this->sanitizeOldInput($module, $_POST), []);
-            redirect(build_query_url(['page' => $moduleKey, 'action' => 'edit', 'id' => $id]));
+            redirect(build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => $id]));
         }
 
         redirect($this->buildModuleBackUrl($moduleKey, $module, $data + ['id' => $id] + $existing));
@@ -3477,24 +3858,54 @@ class ModuleController
         ];
     }
 
-    private function deleteAction(string $moduleKey, array $module): void
+    private function isFormerDriverRecord(array $record): bool
     {
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            redirect(build_query_url(['page' => $moduleKey]));
+        return (string) ($record['employment_status'] ?? 'active') === 'terminated'
+            || !empty($record['data_incetare'])
+            || !empty($record['termination_date']);
+    }
+
+    private function formerDriverRedirectUrl(array $record): string
+    {
+        $query = ['page' => 'fosti_angajati'];
+        $driverName = trim((string) ($record['nume'] ?? ''));
+        if ($driverName !== '') {
+            $query['q'] = $driverName;
         }
 
-        ensure_csrf_or_redirect(build_query_url(['page' => $moduleKey]));
+        return build_query_url($query);
+    }
+
+    private function redirectFormerDriverToFormerEmployees(array $record, string $flashType = 'info'): void
+    {
+        flash_set($flashType, 'Soferul are colaborarea incheiata si este gestionat in Fosti angajati.');
+        redirect($this->formerDriverRedirectUrl($record));
+    }
+
+    private function deleteAction(string $moduleKey, array $module): void
+    {
+        $routePage = $this->moduleRoutePage($moduleKey, $module);
+
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => $routePage]));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => $routePage]));
 
         $id = (int) ($_POST['id'] ?? 0);
         if ($id <= 0) {
             flash_set('warning', 'ID invalid pentru stergere.');
-            redirect(build_query_url(['page' => $moduleKey]));
+            redirect(build_query_url(['page' => $routePage]));
         }
 
         $record = $this->moduleModel->findById($module, $id);
         if ($record === null) {
             flash_set('warning', 'Inregistrarea nu exista.');
-            redirect(build_query_url(['page' => $moduleKey]));
+            redirect(build_query_url(['page' => $routePage]));
+        }
+
+        if ($moduleKey === 'soferi' && $this->isFormerDriverRecord($record)) {
+            $this->redirectFormerDriverToFormerEmployees($record, 'warning');
         }
 
         if ($moduleKey === 'utilizatori' && !$this->validateUserSafetyOnDelete($id, $record)) {
@@ -3538,18 +3949,23 @@ class ModuleController
 
     private function showAction(string $moduleKey, array $module): void
     {
+        $routePage = $this->moduleRoutePage($moduleKey, $module);
         $id = (int) ($_GET['id'] ?? 0);
 
         if ($id <= 0) {
             flash_set('warning', 'ID invalid.');
-            redirect(build_query_url(['page' => $moduleKey]));
+            redirect(build_query_url(['page' => $routePage]));
         }
 
         $record = $this->moduleModel->findById($module, $id);
 
         if ($record === null) {
             flash_set('warning', 'Inregistrarea nu a fost gasita.');
-            redirect(build_query_url(['page' => $moduleKey]));
+            redirect(build_query_url(['page' => $routePage]));
+        }
+
+        if ($moduleKey === 'soferi' && $this->isFormerDriverRecord($record)) {
+            $this->redirectFormerDriverToFormerEmployees($record);
         }
 
         $currentPage = $this->resolveCurrentPage($moduleKey, $module);
@@ -3557,6 +3973,7 @@ class ModuleController
             'pageTitle' => 'Detalii ' . ucfirst($module['singular']),
             'currentPage' => $currentPage,
             'moduleKey' => $moduleKey,
+            'routePage' => $this->moduleRoutePage($moduleKey, $module),
             'module' => $module,
             'record' => $record,
             'backUrl' => $this->buildModuleBackUrl($moduleKey, $module, $record),
@@ -5092,8 +5509,17 @@ class ModuleController
         return (string) ($module['nav_parent'] ?? $moduleKey);
     }
 
+    private function moduleRoutePage(string $moduleKey, array $module): string
+    {
+        $routePage = trim((string) ($module['route_page'] ?? ''));
+
+        return $routePage !== '' ? $routePage : $moduleKey;
+    }
+
     private function buildModuleBackUrl(string $moduleKey, array $module, ?array $record = null, ?array $formData = null): string
     {
+        $routePage = $this->moduleRoutePage($moduleKey, $module);
+
         if ($moduleKey === 'configurare_costuri_documente_soferi') {
             return build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']);
         }
@@ -5114,7 +5540,7 @@ class ModuleController
             }
         }
 
-        return build_query_url(['page' => $moduleKey]);
+        return build_query_url(['page' => $routePage]);
     }
 
     private function driverDocumentTypeConfigRedirectUrl(): string

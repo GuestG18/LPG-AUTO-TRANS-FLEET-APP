@@ -42,9 +42,13 @@ function normalize_romanian_text(string $value): string
         "\u{00C3}\u{2026}\u{00C2}\u{00A3}" => "\u{021B}",
     ];
 
-    $normalized = repair_utf8_mojibake($value);
+    $normalized = strtr($value, $replacements);
 
-    return strtr($normalized, $replacements);
+    if (!has_mojibake_markers($normalized) || contains_romanian_diacritics($normalized)) {
+        return $normalized;
+    }
+
+    return strtr(repair_utf8_mojibake($normalized), $replacements);
 }
 
 function repair_utf8_mojibake(string $value): string
@@ -95,6 +99,11 @@ function has_mojibake_markers(string $value): bool
         || str_contains($value, 'â‚')
         || str_contains($value, 'â„')
         || str_contains($value, 'â€¦');
+}
+
+function contains_romanian_diacritics(string $value): bool
+{
+    return (bool) preg_match('/[ĂăÂâÎîȘșȚț]/u', $value);
 }
 
 function mojibake_marker_score(string $value): int
@@ -265,6 +274,10 @@ function status_badge_html(string $status): string
 
     if ($normalized === 'inactiv') {
         return '<span class="badge text-bg-secondary">Inactiv</span>';
+    }
+
+    if ($normalized === 'terminated') {
+        return '<span class="badge text-bg-danger">Fost angajat</span>';
     }
 
     return '<span class="badge text-bg-light border">' . e($status) . '</span>';
@@ -508,7 +521,7 @@ function tire_status_badge_html(string $status): string
 function expiry_badge_html(?string $date): string
 {
     if (empty($date)) {
-        return '<span class="badge text-bg-secondary">Fara expirare</span>';
+        return '<span class="badge text-bg-secondary">Fără expirare</span>';
     }
 
     try {
@@ -549,7 +562,7 @@ function document_file_link_html(?string $originalFile, ?string $storedFile): st
     $fileUrl = document_file_url($storedFile);
 
     if ($fileUrl === null) {
-        return '<span class="badge text-bg-light border">Fara fisier</span>';
+        return '<span class="badge text-bg-light border">Fără fișier</span>';
     }
 
     $label = $originalFile !== null && trim($originalFile) !== '' ? $originalFile : 'Descarca fisier';
@@ -573,7 +586,7 @@ function document_preview_html(?string $originalFile, ?string $storedFile): stri
     $fileUrl = document_file_url($storedFile);
 
     if ($fileUrl === null) {
-        return '<div class="alert alert-light border mb-0">Nu exista fisier incarcat pentru acest document.</div>';
+        return '<div class="alert alert-light border mb-0">Nu există fișier încărcat pentru acest document.</div>';
     }
 
     $safeUrl = e($fileUrl);
@@ -588,7 +601,7 @@ function document_preview_html(?string $originalFile, ?string $storedFile): stri
         return '<div class="text-center border rounded p-3 bg-light"><img src="' . $safeUrl . '" alt="' . $safeLabel . '" class="img-fluid rounded"></div>';
     }
 
-    return '<div class="alert alert-secondary mb-0">Previzualizarea directa este disponibila pentru PDF si imagini. Pentru acest fisier foloseste butonul de deschidere.</div>';
+    return '<div class="alert alert-secondary mb-0">Previzualizarea directă este disponibilă pentru PDF și imagini. Pentru acest fișier folosește butonul de deschidere.</div>';
 }
 
 function vehicle_image_url(?string $storedFile): ?string
@@ -636,7 +649,7 @@ function vehicle_image_thumb_html(?string $originalFile, ?string $storedFile): s
     $imageUrl = vehicle_image_url($storedFile);
 
     if ($imageUrl === null) {
-        return '<div class="vehicle-thumb vehicle-thumb-placeholder">Fara poza</div>';
+        return '<div class="vehicle-thumb vehicle-thumb-placeholder">Fără poză</div>';
     }
 
     $safeUrl = e($imageUrl);
@@ -652,11 +665,11 @@ function driver_image_thumb_html(?string $originalFile, ?string $storedFile): st
     $imageUrl = driver_image_url($storedFile);
 
     if ($imageUrl === null) {
-        return '<div class="vehicle-thumb vehicle-thumb-placeholder">Fara poza</div>';
+        return '<div class="vehicle-thumb vehicle-thumb-placeholder">Fără poză</div>';
     }
 
     $safeUrl = e($imageUrl);
-    $safeAlt = e($originalFile !== null && trim($originalFile) !== '' ? $originalFile : 'Poza sofer');
+    $safeAlt = e($originalFile !== null && trim($originalFile) !== '' ? $originalFile : 'Poză șofer');
 
     return '<a class="vehicle-thumb" href="' . $safeUrl . '" target="_blank" rel="noopener">'
         . '<img src="' . $safeUrl . '" alt="' . $safeAlt . '" loading="lazy">'
@@ -668,7 +681,7 @@ function vehicle_image_preview_html(?string $originalFile, ?string $storedFile):
     $imageUrl = vehicle_image_url($storedFile);
 
     if ($imageUrl === null) {
-        return '<div class="vehicle-photo-card vehicle-photo-empty">Nu exista poza incarcata pentru acest vehicul.</div>';
+        return '<div class="vehicle-photo-card vehicle-photo-empty">Nu există poză încărcată pentru acest vehicul.</div>';
     }
 
     $safeUrl = e($imageUrl);
@@ -686,11 +699,11 @@ function driver_image_preview_html(?string $originalFile, ?string $storedFile): 
     $imageUrl = driver_image_url($storedFile);
 
     if ($imageUrl === null) {
-        return '<div class="vehicle-photo-card vehicle-photo-empty">Nu exista poza incarcata pentru acest sofer.</div>';
+        return '<div class="vehicle-photo-card vehicle-photo-empty">Nu există poză încărcată pentru acest șofer.</div>';
     }
 
     $safeUrl = e($imageUrl);
-    $safeAlt = e($originalFile !== null && trim($originalFile) !== '' ? $originalFile : 'Poza sofer');
+    $safeAlt = e($originalFile !== null && trim($originalFile) !== '' ? $originalFile : 'Poză șofer');
     $downloadLabel = $safeAlt !== '' ? $safeAlt : 'Deschide imaginea';
 
     return '<div class="vehicle-photo-card">'

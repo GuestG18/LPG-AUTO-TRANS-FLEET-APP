@@ -6,7 +6,10 @@ class AuthController
     private UserModel $userModel;
     private LoginEmailCodeModel $loginEmailCodeModel;
     private EmailService $emailService;
+    private PasskeyModel $passkeyModel;
     private ?array $lastLoginDeliveryResult = null;
+
+    private const PASSKEY_LOGIN_CHALLENGE_KEY = '_passkey_login_challenge';
 
     private const VERIFY_SESSION_KEY = '_auth_login_verification';
     private const VERIFY_CODE_TTL_SECONDS = 600;
@@ -18,6 +21,80 @@ class AuthController
         $this->userModel = new UserModel($db);
         $this->loginEmailCodeModel = new LoginEmailCodeModel($db);
         $this->emailService = new EmailService($db);
+        $this->passkeyModel = new PasskeyModel($db);
+    }
+
+    /**
+     * Genereaza optiunile pentru autentificarea cu passkey (challenge) si le
+     * intoarce ca JSON. Login-ul este passwordless / discoverable, deci nu cere email.
+     */
+    public function passkeyLoginOptions(): void
+    {
+        try {
+            $webAuthn = WebAuthnService::create();
+            $args = $webAuthn->getGetArgs([], 120, true, true, true, true, true, 'preferred');
+            $_SESSION[self::PASSKEY_LOGIN_CHALLENGE_KEY] = $webAuthn->getChallenge()->getBinaryString();
+            $this->json(['publicKey' => $args->publicKey]);
+        } catch (Throwable $exception) {
+            error_log('[passkey][login_options] ' . $exception->getMessage());
+            $this->json(['error' => 'Nu am putut initia autentificarea cu passkey.'], 500);
+        }
+    }
+
+    /**
+     * Verifica raspunsul passkey-ului si autentifica utilizatorul.
+     */
+    public function passkeyLoginVerify(): void
+    {
+        $body = $this->jsonBody();
+        $challenge = (string) ($_SESSION[self::PASSKEY_LOGIN_CHALLENGE_KEY] ?? '');
+        unset($_SESSION[self::PASSKEY_LOGIN_CHALLENGE_KEY]);
+
+        if ($challenge === '') {
+            $this->json(['error' => 'Sesiunea de autentificare a expirat. Reincearca.'], 400);
+        }
+
+        $credentialId = (string) ($body['id'] ?? '');
+        $response = (array) ($body['response'] ?? []);
+        if ($credentialId === '' || $response === []) {
+            $this->json(['error' => 'Date passkey lipsa.'], 400);
+        }
+
+        $passkey = $this->passkeyModel->findByCredentialId($credentialId);
+        if ($passkey === null) {
+            $this->json(['error' => 'Passkey necunoscut pe acest cont. Foloseste parola.'], 400);
+        }
+        if ((string) ($passkey['user_status'] ?? 'inactiv') !== 'activ') {
+            $this->json(['error' => 'Contul este inactiv. Contacteaza administratorul.'], 403);
+        }
+
+        try {
+            $webAuthn = WebAuthnService::create();
+            $webAuthn->processGet(
+                WebAuthnService::b64urlDecode((string) ($response['clientDataJSON'] ?? '')),
+                WebAuthnService::b64urlDecode((string) ($response['authenticatorData'] ?? '')),
+                WebAuthnService::b64urlDecode((string) ($response['signature'] ?? '')),
+                (string) $passkey['public_key'],
+                $challenge,
+                (int) $passkey['sign_count'] > 0 ? (int) $passkey['sign_count'] : null,
+                false
+            );
+        } catch (Throwable $exception) {
+            error_log('[passkey][login_verify] ' . $exception->getMessage());
+            $this->json(['error' => 'Verificarea passkey a esuat.'], 400);
+        }
+
+        $this->passkeyModel->touch((int) $passkey['id'], (int) $webAuthn->getSignatureCounter());
+
+        $user = $this->userModel->findAuthUserById((int) $passkey['user_id']);
+        if ($user === null || (string) ($user['status'] ?? 'inactiv') !== 'activ') {
+            $this->json(['error' => 'Contul nu este disponibil.'], 403);
+        }
+
+        $this->clearPendingVerification();
+        login_user($user);
+        flash_set('success', 'Autentificat cu passkey. Bine ai venit, ' . (string) ($user['nume'] ?? 'utilizator') . '!');
+        $this->json(['ok' => true, 'redirect' => url('index.php?page=dashboard')]);
     }
 
     public function index(): void
@@ -475,5 +552,23 @@ class AuthController
         }
 
         return $message;
+    }
+
+    /** @return array<string,mixed> */
+    private function jsonBody(): array
+    {
+        $raw = (string) file_get_contents('php://input');
+        $data = json_decode($raw, true);
+
+        return is_array($data) ? $data : [];
+    }
+
+    /** @param array<string,mixed> $payload */
+    private function json(array $payload, int $status = 200): void
+    {
+        http_response_code($status);
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode($payload, JSON_UNESCAPED_UNICODE);
+        exit;
     }
 }

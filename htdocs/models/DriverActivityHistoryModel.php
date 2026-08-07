@@ -41,10 +41,12 @@ class DriverActivityHistoryModel extends BaseModel
 
     public function getDefaultDriverId(): int
     {
+        $activeRaceCondition = $this->activeRaceCondition('c');
         $stmt = $this->db->query("
             SELECT s.id
             FROM soferi s
             INNER JOIN curse_dispecer c ON c.driver_id = s.id
+            WHERE {$activeRaceCondition}
             GROUP BY s.id, s.status, s.nume
             ORDER BY
                 MAX(COALESCE(c.data_inceput, c.data_cursa)) DESC,
@@ -87,7 +89,7 @@ class DriverActivityHistoryModel extends BaseModel
             SELECT DISTINCT v.id, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul
             FROM vehicule v
             LEFT JOIN soferi_vehicule sv ON sv.vehicle_id = v.id AND sv.driver_id = :driver_assignment
-            LEFT JOIN curse_dispecer c ON c.vehicle_id = v.id AND c.driver_id = :driver_trip
+            LEFT JOIN curse_dispecer c ON c.vehicle_id = v.id AND c.driver_id = :driver_trip AND " . $this->activeRaceCondition('c') . "
             WHERE sv.driver_id IS NOT NULL OR c.driver_id IS NOT NULL
             ORDER BY v.nr_inmatriculare ASC
         ");
@@ -200,6 +202,7 @@ class DriverActivityHistoryModel extends BaseModel
         ];
 
         $where = [
+            $this->activeRaceCondition('c'),
             'COALESCE(c.data_inceput, c.data_cursa) <= :date_end',
             'COALESCE(c.data_sfarsit, c.data_inceput, c.data_cursa) >= :date_start',
             "(c.driver_id = :driver_id OR (
@@ -291,6 +294,7 @@ class DriverActivityHistoryModel extends BaseModel
         }
 
         $existsWhere = [
+            $this->activeRaceCondition('c2'),
             'c2.vehicle_id = a.vehicle_id',
             'COALESCE(c2.data_inceput, c2.data_cursa) <= a.data_alimentare',
             'COALESCE(c2.data_sfarsit, c2.data_inceput, c2.data_cursa) >= a.data_alimentare',
@@ -334,7 +338,7 @@ class DriverActivityHistoryModel extends BaseModel
             FROM alimentari a
             INNER JOIN vehicule v ON v.id = a.vehicle_id
             LEFT JOIN soferi sr ON sr.id = a.driver_id
-            LEFT JOIN curse_dispecer c ON c.id = a.cursa_id
+            LEFT JOIN curse_dispecer c ON c.id = a.cursa_id AND " . $this->activeRaceCondition('c') . "
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             WHERE " . implode(' AND ', $where) . "
             ORDER BY a.vehicle_id ASC, a.data_alimentare ASC, a.km_bord ASC, a.id ASC
@@ -1336,6 +1340,17 @@ class DriverActivityHistoryModel extends BaseModel
         $stmt->execute([':table_name' => $table]);
 
         return (int) $stmt->fetchColumn() > 0;
+    }
+
+    private function activeRaceCondition(string $alias = 'c'): string
+    {
+        static $hasDeletedAt = null;
+
+        if ($hasDeletedAt === null) {
+            $hasDeletedAt = $this->columnExists('curse_dispecer', 'deleted_at');
+        }
+
+        return $hasDeletedAt ? $alias . '.deleted_at IS NULL' : '1=1';
     }
 
     private function columnExists(string $table, string $column): bool

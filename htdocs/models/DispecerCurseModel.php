@@ -8,6 +8,7 @@ class DispecerCurseModel extends BaseModel
     private const DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH = 'tona_km';
     private const DISTRIBUTION_ROUTE_TARIFF_MODE_TON = 'tona';
     private const DISTRIBUTION_ROUTE_TARIFF_MODE_KM = 'km';
+    private const DEFAULT_BILLING_STATUS = 'in_curs_facturare';
 
     private bool $distributionRouteTableEnsured = false;
     private bool $primaryRouteTableEnsured = false;
@@ -17,9 +18,83 @@ class DispecerCurseModel extends BaseModel
     private bool $raceLoadingDateColumnEnsured = false;
     private bool $raceCreatedByColumnEnsured = false;
     private bool $raceExpenseStatusColumnEnsured = false;
+    private bool $raceDuplicateKeySchemaEnsured = false;
+    private bool $raceSoftDeleteSchemaEnsured = false;
+    private bool $raceAuditLogSchemaEnsured = false;
     private bool $expenseRefacturareColumnEnsured = false;
     private bool $expenseCategorySchemaEnsured = false;
     private bool $transportBeneficiaryColumnsEnsured = false;
+
+    private const RACE_DUPLICATE_KEY_FIELDS = [
+        'vehicle_id',
+        'driver_id',
+        'tip_transport',
+        'data_cursa',
+        'data_incarcare',
+        'data_inceput',
+        'data_sfarsit',
+        'ora_inceput',
+        'ora_sfarsit',
+        'durata_cursa_minute',
+        'loc_incarcare_id',
+        'loc_plecare',
+        'loc_aspirare',
+        'loc_livrare',
+        'loc_livrare_cursa',
+        'beneficiar_id',
+        'tip_marfa',
+        'capacitate_transport',
+        'cantitate_incarcata',
+        'cantitate_prelevata',
+        'nr_clienti',
+        'km_cursa',
+        'ore_functionare',
+        'km_totali',
+        'ore_aspirare',
+        'km_dislocare',
+        'tona_livrata',
+        'tona_aspirata_lichida',
+        'tona_aspirata_gazoasa',
+        'zona_distributie_id',
+        'status_facturare',
+        'pret_tarifare',
+        'total_facturare',
+        'cost_km_primar',
+        'cost_km_distributie',
+        'cost_km_mixt',
+        'cost_km_compresor',
+        'observatii',
+    ];
+
+    private const RACE_DUPLICATE_INT_FIELDS = [
+        'vehicle_id',
+        'driver_id',
+        'durata_cursa_minute',
+        'loc_incarcare_id',
+        'beneficiar_id',
+        'nr_clienti',
+        'km_cursa',
+        'km_totali',
+        'zona_distributie_id',
+    ];
+
+    private const RACE_DUPLICATE_DECIMAL_FIELDS = [
+        'capacitate_transport',
+        'cantitate_incarcata',
+        'cantitate_prelevata',
+        'ore_functionare',
+        'ore_aspirare',
+        'km_dislocare',
+        'tona_livrata',
+        'tona_aspirata_lichida',
+        'tona_aspirata_gazoasa',
+        'pret_tarifare',
+        'total_facturare',
+        'cost_km_primar',
+        'cost_km_distributie',
+        'cost_km_mixt',
+        'cost_km_compresor',
+    ];
 
     private const DEFAULT_EXPENSE_CATEGORIES = [
         'taxe_drum' => 'Taxe drum',
@@ -131,6 +206,22 @@ class DispecerCurseModel extends BaseModel
         }
 
         return $grouped;
+    }
+
+    public function getDriverOptions(bool $onlyActive = false): array
+    {
+        $sql = "
+            SELECT id, nume, status
+            FROM soferi
+            WHERE 1 = 1
+            " . ($onlyActive ? "AND status = 'activ'" : "") . "
+            ORDER BY
+                CASE WHEN status = 'activ' THEN 0 ELSE 1 END,
+                nume ASC
+        ";
+        $stmt = $this->db->query($sql);
+
+        return $stmt->fetchAll();
     }
 
     public function getVehicleGarageMap(bool $onlyActive = false): array
@@ -1941,6 +2032,111 @@ class DispecerCurseModel extends BaseModel
         $this->raceCreatedByColumnEnsured = true;
     }
 
+    private function ensureRaceSoftDeleteSchema(): void
+    {
+        if ($this->raceSoftDeleteSchemaEnsured) {
+            return;
+        }
+
+        $this->ensureRaceCreatedByColumn();
+
+        $columnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_dispecer'
+              AND COLUMN_NAME = :column_name
+        ");
+
+        $columnCheckStmt->bindValue(':column_name', 'duplicate_key', PDO::PARAM_STR);
+        $columnCheckStmt->execute();
+        $deletedAtPosition = (int) $columnCheckStmt->fetchColumn() > 0 ? 'AFTER duplicate_key' : 'AFTER updated_at';
+
+        $columnsToEnsure = [
+            'deleted_at' => "ALTER TABLE curse_dispecer ADD COLUMN deleted_at DATETIME NULL " . $deletedAtPosition,
+            'deleted_by' => "ALTER TABLE curse_dispecer ADD COLUMN deleted_by INT UNSIGNED NULL AFTER deleted_at",
+        ];
+
+        foreach ($columnsToEnsure as $columnName => $alterSql) {
+            $columnCheckStmt->bindValue(':column_name', $columnName, PDO::PARAM_STR);
+            $columnCheckStmt->execute();
+            if ((int) $columnCheckStmt->fetchColumn() === 0) {
+                $this->db->exec($alterSql);
+            }
+        }
+
+        $indexCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_dispecer'
+              AND INDEX_NAME = :index_name
+        ");
+
+        foreach ([
+            'idx_curse_deleted_at' => 'ALTER TABLE curse_dispecer ADD INDEX idx_curse_deleted_at (deleted_at)',
+            'idx_curse_deleted_by' => 'ALTER TABLE curse_dispecer ADD INDEX idx_curse_deleted_by (deleted_by)',
+        ] as $indexName => $alterSql) {
+            $indexCheckStmt->bindValue(':index_name', $indexName, PDO::PARAM_STR);
+            $indexCheckStmt->execute();
+            if ((int) $indexCheckStmt->fetchColumn() === 0) {
+                $this->db->exec($alterSql);
+            }
+        }
+
+        $fkCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_dispecer'
+              AND COLUMN_NAME = 'deleted_by'
+              AND REFERENCED_TABLE_NAME = 'utilizatori'
+              AND REFERENCED_COLUMN_NAME = 'id'
+        ");
+        $fkCheckStmt->execute();
+        if ((int) $fkCheckStmt->fetchColumn() === 0) {
+            $this->db->exec("
+                ALTER TABLE curse_dispecer
+                ADD CONSTRAINT fk_curse_deleted_by
+                FOREIGN KEY (deleted_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+            ");
+        }
+
+        $this->raceSoftDeleteSchemaEnsured = true;
+    }
+
+    private function ensureRaceAuditLogSchema(): void
+    {
+        if ($this->raceAuditLogSchemaEnsured) {
+            return;
+        }
+
+        $this->ensureRaceSoftDeleteSchema();
+
+        $this->db->exec("
+            CREATE TABLE IF NOT EXISTS cursa_audit_log (
+                id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                cursa_id INT UNSIGNED NOT NULL,
+                action ENUM('created', 'updated', 'deleted', 'restored', 'status_changed') NOT NULL,
+                performed_by INT UNSIGNED NULL,
+                performed_at DATETIME NOT NULL,
+                details_json LONGTEXT NULL,
+                INDEX idx_cursa_audit_cursa (cursa_id, performed_at),
+                INDEX idx_cursa_audit_action (action),
+                INDEX idx_cursa_audit_user (performed_by),
+                CONSTRAINT fk_cursa_audit_cursa FOREIGN KEY (cursa_id) REFERENCES curse_dispecer(id) ON DELETE CASCADE,
+                CONSTRAINT fk_cursa_audit_user FOREIGN KEY (performed_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        $this->raceAuditLogSchemaEnsured = true;
+    }
+
+    public function ensureDeletedRacesSupport(): void
+    {
+        $this->ensureRaceAuditLogSchema();
+    }
+
     private function ensureRaceExpenseStatusColumn(): void
     {
         if ($this->raceExpenseStatusColumnEnsured) {
@@ -1966,6 +2162,128 @@ class DispecerCurseModel extends BaseModel
         }
 
         $this->raceExpenseStatusColumnEnsured = true;
+    }
+
+    private function ensureRaceDuplicateKeySchema(): void
+    {
+        if ($this->raceDuplicateKeySchemaEnsured) {
+            return;
+        }
+
+        $this->ensureRaceCompressorLocationColumns();
+        $this->ensureRaceCostPerKmColumns();
+        $this->ensureRaceLoadingDateColumn();
+        $this->ensureRaceCreatedByColumn();
+        $this->ensureRaceExpenseStatusColumn();
+
+        $columnCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_dispecer'
+              AND COLUMN_NAME = 'duplicate_key'
+        ");
+        $columnCheckStmt->execute();
+        $hasColumn = (int) $columnCheckStmt->fetchColumn() > 0;
+
+        if (!$hasColumn) {
+            $this->db->exec("ALTER TABLE curse_dispecer ADD COLUMN duplicate_key CHAR(64) NULL AFTER updated_at");
+        }
+
+        $this->ensureRaceSoftDeleteSchema();
+
+        $hasIndex = $this->raceDuplicateKeyIndexExists();
+        $this->backfillRaceDuplicateKeys(!$hasIndex);
+
+        if (!$hasIndex) {
+            $this->db->exec("ALTER TABLE curse_dispecer ADD UNIQUE KEY uk_curse_dispecer_duplicate_key (duplicate_key)");
+        }
+
+        $this->raceDuplicateKeySchemaEnsured = true;
+    }
+
+    private function raceDuplicateKeyIndexExists(): bool
+    {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_dispecer'
+              AND INDEX_NAME = 'uk_curse_dispecer_duplicate_key'
+        ");
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    private function backfillRaceDuplicateKeys(bool $rebuildAll): void
+    {
+        $usedKeys = [];
+        if (!$rebuildAll) {
+            $existingStmt = $this->db->query("
+                SELECT id, duplicate_key
+                FROM curse_dispecer
+                WHERE duplicate_key IS NOT NULL
+                  AND duplicate_key <> ''
+                  AND deleted_at IS NULL
+                ORDER BY id ASC
+            ");
+            foreach ($existingStmt->fetchAll() as $row) {
+                $existingKey = trim((string) ($row['duplicate_key'] ?? ''));
+                if ($existingKey !== '') {
+                    $usedKeys[$existingKey] = (int) ($row['id'] ?? 0);
+                }
+            }
+        }
+
+        $selectFields = implode(', ', array_map(
+            static fn (string $field): string => '`' . $field . '`',
+            self::RACE_DUPLICATE_KEY_FIELDS
+        ));
+        $where = $rebuildAll
+            ? 'WHERE deleted_at IS NULL'
+            : "WHERE deleted_at IS NULL AND (duplicate_key IS NULL OR duplicate_key = '')";
+        $stmt = $this->db->query("
+            SELECT id, duplicate_key, {$selectFields}
+            FROM curse_dispecer
+            {$where}
+            ORDER BY id ASC
+        ");
+        $rows = $stmt->fetchAll();
+        if ($rows === []) {
+            return;
+        }
+
+        $updateStmt = $this->db->prepare("
+            UPDATE curse_dispecer
+            SET duplicate_key = :duplicate_key
+            WHERE id = :id
+        ");
+
+        foreach ($rows as $row) {
+            $raceId = (int) ($row['id'] ?? 0);
+            if ($raceId <= 0) {
+                continue;
+            }
+
+            $canonicalKey = $this->buildRaceDuplicateKey($row);
+            $duplicateKey = $canonicalKey;
+            if (isset($usedKeys[$duplicateKey])) {
+                $duplicateKey = hash('sha256', 'legacy-duplicate:' . $raceId . ':' . $canonicalKey);
+            }
+            while (isset($usedKeys[$duplicateKey])) {
+                $duplicateKey = hash('sha256', 'legacy-duplicate:' . $raceId . ':' . $duplicateKey);
+            }
+
+            $usedKeys[$duplicateKey] = $raceId;
+            if (trim((string) ($row['duplicate_key'] ?? '')) === $duplicateKey) {
+                continue;
+            }
+
+            $updateStmt->bindValue(':duplicate_key', $duplicateKey, PDO::PARAM_STR);
+            $updateStmt->bindValue(':id', $raceId, PDO::PARAM_INT);
+            $updateStmt->execute();
+        }
     }
 
     private function ensureExpenseRefacturareColumn(): void
@@ -2303,6 +2621,8 @@ class DispecerCurseModel extends BaseModel
                 v.model,
                 s.nume AS sofer_nume,
                 uc.nume AS creat_de_nume,
+                uu.nume AS actualizat_de_nume,
+                lua.performed_at AS actualizat_la,
                 li.nume AS loc_incarcare_nume,
                 bt.nume AS beneficiar_nume,
                 zd.nume AS zona_distributie_nume,
@@ -2332,8 +2652,9 @@ class DispecerCurseModel extends BaseModel
     {
         $this->ensureRaceLoadingDateColumn();
 
+        $fetchAllRows = $perPage <= 0;
         $page = max(1, $page);
-        $perPage = max(1, $perPage);
+        $perPage = $fetchAllRows ? 0 : max(1, $perPage);
 
         $whereData = $this->buildBillingCentralizerWhere($filters, $search, true);
         $from = $this->raceFromSql();
@@ -2384,9 +2705,9 @@ class DispecerCurseModel extends BaseModel
         $countStmt->execute();
         $totalRows = (int) $countStmt->fetchColumn();
 
-        $totalPages = max(1, (int) ceil($totalRows / $perPage));
-        $page = min($page, $totalPages);
-        $offset = ($page - 1) * $perPage;
+        $totalPages = $fetchAllRows ? 1 : max(1, (int) ceil($totalRows / $perPage));
+        $page = $fetchAllRows ? 1 : min($page, $totalPages);
+        $offset = $fetchAllRows ? 0 : (($page - 1) * $perPage);
 
         $summarySql = "
             SELECT
@@ -2560,6 +2881,10 @@ class DispecerCurseModel extends BaseModel
         $dataSql = "
             SELECT
                 c.id,
+                c.vehicle_id,
+                c.driver_id,
+                c.beneficiar_id,
+                c.loc_incarcare_id,
                 c.tip_transport,
                 c.data_cursa,
                 c.data_incarcare,
@@ -2610,14 +2935,16 @@ class DispecerCurseModel extends BaseModel
                 COALESCE(exp.total_refacturare_facturata, 0) AS total_refacturare_facturata,
                 COALESCE(exp.total_cheltuieli, 0) AS total_cheltuieli
             " . $from . $whereData['where'] . "
-            ORDER BY c.data_inceput DESC, c.data_sfarsit DESC, c.id DESC
-            LIMIT :limit_rows OFFSET :offset_rows
+            ORDER BY v.nr_inmatriculare ASC, c.data_inceput DESC, c.data_sfarsit DESC, c.id DESC
+            " . ($fetchAllRows ? "" : "LIMIT :limit_rows OFFSET :offset_rows") . "
         ";
 
         $dataStmt = $this->db->prepare($dataSql);
         $this->bindParams($dataStmt, $whereData['params']);
-        $dataStmt->bindValue(':limit_rows', $perPage, PDO::PARAM_INT);
-        $dataStmt->bindValue(':offset_rows', $offset, PDO::PARAM_INT);
+        if (!$fetchAllRows) {
+            $dataStmt->bindValue(':limit_rows', $perPage, PDO::PARAM_INT);
+            $dataStmt->bindValue(':offset_rows', $offset, PDO::PARAM_INT);
+        }
         $dataStmt->execute();
         $rows = $dataStmt->fetchAll();
         $raceIds = [];
@@ -2648,6 +2975,121 @@ class DispecerCurseModel extends BaseModel
             'total_pages' => $totalPages,
             'page' => $page,
         ];
+    }
+
+    public function getBillingOperationalLocationOptions(array $filters, string $search): array
+    {
+        $optionFilters = $filters;
+        $optionFilters['locatie_operationala'] = [];
+        $optionFilters['loc_incarcare'] = [];
+        $optionFilters['zona_distributie'] = [];
+
+        $whereData = $this->buildBillingCentralizerWhere($optionFilters, $search, true);
+        $from = $this->raceFromSql();
+
+        $sql = "
+            SELECT
+                c.tip_transport,
+                li.nume AS loc_incarcare_nume,
+                c.loc_plecare,
+                c.loc_aspirare,
+                c.loc_livrare,
+                c.loc_livrare_cursa,
+                zd.nume AS zona_distributie_nume
+            " . $from . $whereData['where'] . "
+            ORDER BY c.tip_transport ASC, li.nume ASC, c.loc_plecare ASC, c.loc_livrare ASC, zd.nume ASC
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        $this->bindParams($stmt, $whereData['params']);
+        $stmt->execute();
+
+        $options = [
+            'all' => [],
+            'primar' => [],
+            'distributie' => [],
+            'compresor' => [],
+            'loc_incarcare' => [],
+            'zona_distributie' => [],
+        ];
+
+        $addOption = static function (array &$bucket, mixed $value): void {
+            $label = trim((string) ($value ?? ''));
+            if ($label === '' || $label === '-') {
+                return;
+            }
+
+            $key = function_exists('mb_strtolower') ? mb_strtolower($label, 'UTF-8') : strtolower($label);
+            $bucket[$key] = $label;
+        };
+
+        foreach ($stmt->fetchAll() as $row) {
+            $transportType = (string) ($row['tip_transport'] ?? '');
+            $allValues = [
+                $row['loc_incarcare_nume'] ?? '',
+                $row['loc_plecare'] ?? '',
+                $row['loc_aspirare'] ?? '',
+                $row['loc_livrare'] ?? '',
+                $row['loc_livrare_cursa'] ?? '',
+                $row['zona_distributie_nume'] ?? '',
+            ];
+
+            foreach ($allValues as $value) {
+                $addOption($options['all'], $value);
+            }
+
+            if (in_array($transportType, ['primar', 'primar_tona'], true)) {
+                foreach ([$row['loc_incarcare_nume'] ?? '', $row['loc_plecare'] ?? ''] as $value) {
+                    $addOption($options['primar'], $value);
+                    $addOption($options['loc_incarcare'], $value);
+                }
+                continue;
+            }
+
+            if ($transportType === 'distributie') {
+                foreach ([$row['loc_plecare'] ?? '', $row['loc_livrare'] ?? '', $row['loc_livrare_cursa'] ?? '', $row['zona_distributie_nume'] ?? ''] as $value) {
+                    $addOption($options['distributie'], $value);
+                    $addOption($options['zona_distributie'], $value);
+                }
+                continue;
+            }
+
+            if ($transportType === 'primar_distributie') {
+                foreach ([$row['loc_incarcare_nume'] ?? '', $row['loc_plecare'] ?? ''] as $value) {
+                    $addOption($options['loc_incarcare'], $value);
+                }
+                foreach ([$row['loc_livrare'] ?? '', $row['loc_livrare_cursa'] ?? '', $row['zona_distributie_nume'] ?? ''] as $value) {
+                    $addOption($options['distributie'], $value);
+                    $addOption($options['zona_distributie'], $value);
+                }
+                continue;
+            }
+
+            if ($transportType === 'compresor') {
+                foreach ($allValues as $value) {
+                    $addOption($options['compresor'], $value);
+                }
+            }
+        }
+
+        $finalize = static function (array $bucket): array {
+            natcasesort($bucket);
+            $rows = [];
+            foreach ($bucket as $label) {
+                $rows[] = [
+                    'value' => $label,
+                    'label' => $label,
+                ];
+            }
+
+            return $rows;
+        };
+
+        foreach ($options as $key => $bucket) {
+            $options[$key] = $finalize($bucket);
+        }
+
+        return $options;
     }
 
     private function getBillingCentralizerExpenses(array $raceIds): array
@@ -2710,8 +3152,10 @@ class DispecerCurseModel extends BaseModel
     public function getOpenRacesOverview(int $limit = 25): array
     {
         $this->ensureRaceExpenseStatusColumn();
+        $this->ensureRaceSoftDeleteSchema();
 
         $limit = max(1, min(100, $limit));
+        $billingStatusExpr = $this->defaultBillingStatusExpression();
 
         $countSql = "
             SELECT
@@ -2723,6 +3167,14 @@ class DispecerCurseModel extends BaseModel
                         ELSE 0
                     END
                 ) AS missing_expenses_count,
+                SUM(
+                    CASE
+                        WHEN c.ora_sfarsit IS NULL
+                         AND COALESCE(exp.expense_count, 0) = 0
+                         AND COALESCE(c.cheltuieli_status, 'pending') <> 'not_applicable' THEN 1
+                        ELSE 0
+                    END
+                ) AS multiple_missing_count,
                 SUM(
                     CASE
                         WHEN c.ora_sfarsit IS NULL
@@ -2739,12 +3191,17 @@ class DispecerCurseModel extends BaseModel
                 FROM curse_cheltuieli
                 GROUP BY cursa_id
             ) exp ON exp.cursa_id = c.id
+            WHERE c.deleted_at IS NULL
+              AND " . $billingStatusExpr . " = :open_races_billing_status
         ";
-        $countStmt = $this->db->query($countSql);
+        $countStmt = $this->db->prepare($countSql);
+        $countStmt->bindValue(':open_races_billing_status', self::DEFAULT_BILLING_STATUS, PDO::PARAM_STR);
+        $countStmt->execute();
         $countRow = $countStmt->fetch() ?: [];
         $totalMissingCount = max(0, (int) ($countRow['total_missing_count'] ?? 0));
         $missingEndTimeCount = max(0, (int) ($countRow['missing_end_time_count'] ?? 0));
         $missingExpensesCount = max(0, (int) ($countRow['missing_expenses_count'] ?? 0));
+        $multipleMissingCount = max(0, (int) ($countRow['multiple_missing_count'] ?? 0));
 
         if ($totalMissingCount <= 0) {
             return [
@@ -2752,6 +3209,7 @@ class DispecerCurseModel extends BaseModel
                 'rows' => [],
                 'missing_end_time_count' => 0,
                 'missing_expenses_count' => 0,
+                'multiple_missing_count' => 0,
             ];
         }
 
@@ -2764,9 +3222,12 @@ class DispecerCurseModel extends BaseModel
                 c.ora_inceput,
                 c.ora_sfarsit,
                 c.status_facturare,
+                c.updated_at,
                 v.nr_inmatriculare,
                 v.marca,
                 v.model,
+                v.poza_original,
+                v.poza_stocata,
                 COALESCE(s.nume, '') AS sofer_nume,
                 COALESCE(bt.nume, '') AS beneficiar_nume,
                 CASE WHEN c.ora_sfarsit IS NULL THEN 1 ELSE 0 END AS missing_end_time,
@@ -2785,16 +3246,21 @@ class DispecerCurseModel extends BaseModel
                 FROM curse_cheltuieli
                 GROUP BY cursa_id
             ) exp ON exp.cursa_id = c.id
-            WHERE c.ora_sfarsit IS NULL
-               OR (
+            WHERE c.deleted_at IS NULL
+              AND " . $billingStatusExpr . " = :open_races_billing_status
+              AND (
+                c.ora_sfarsit IS NULL
+                OR (
                    COALESCE(exp.expense_count, 0) = 0
                    AND COALESCE(c.cheltuieli_status, 'pending') <> 'not_applicable'
-               )
+                )
+              )
             ORDER BY c.data_inceput ASC, c.id ASC
             LIMIT :limit_rows
         ";
 
         $listStmt = $this->db->prepare($listSql);
+        $listStmt->bindValue(':open_races_billing_status', self::DEFAULT_BILLING_STATUS, PDO::PARAM_STR);
         $listStmt->bindValue(':limit_rows', $limit, PDO::PARAM_INT);
         $listStmt->execute();
 
@@ -2803,11 +3269,14 @@ class DispecerCurseModel extends BaseModel
             'rows' => $listStmt->fetchAll(),
             'missing_end_time_count' => $missingEndTimeCount,
             'missing_expenses_count' => $missingExpensesCount,
+            'multiple_missing_count' => $multipleMissingCount,
         ];
     }
 
     public function getRaceById(int $id): ?array
     {
+        $this->ensureRaceSoftDeleteSchema();
+
         $sql = "
             SELECT
                 c.*,
@@ -2824,6 +3293,7 @@ class DispecerCurseModel extends BaseModel
                 COALESCE(exp.total_refacturare_pending, 0) AS total_refacturare_pending
             " . $this->raceFromSql() . "
             WHERE c.id = :id
+              AND c.deleted_at IS NULL
             LIMIT 1
         ";
 
@@ -2838,6 +3308,7 @@ class DispecerCurseModel extends BaseModel
     public function getRefacturareRaceOptions(int $limit = 500): array
     {
         $this->ensureExpenseRefacturareColumn();
+        $this->ensureRaceSoftDeleteSchema();
         $limit = max(1, min(1000, $limit));
 
         $sql = "
@@ -2870,6 +3341,7 @@ class DispecerCurseModel extends BaseModel
                 FROM curse_cheltuieli
                 GROUP BY cursa_id
             ) exp ON exp.cursa_id = c.id
+            WHERE c.deleted_at IS NULL
             ORDER BY c.data_inceput DESC, c.id DESC
             LIMIT :limit_rows
         ";
@@ -2884,6 +3356,7 @@ class DispecerCurseModel extends BaseModel
     public function getRefacturareEntries(?int $raceId = null, int $limit = 250): array
     {
         $this->ensureExpenseRefacturareColumn();
+        $this->ensureRaceSoftDeleteSchema();
         $limit = max(1, min(1000, $limit));
 
         $sql = "
@@ -2915,6 +3388,7 @@ class DispecerCurseModel extends BaseModel
             LEFT JOIN soferi s ON s.id = c.driver_id
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             WHERE COALESCE(e.refacturare_suma, 0) > 0
+              AND c.deleted_at IS NULL
         ";
 
         if ($raceId !== null && $raceId > 0) {
@@ -2934,6 +3408,211 @@ class DispecerCurseModel extends BaseModel
         $stmt->execute();
 
         return $stmt->fetchAll();
+    }
+
+    public function getRefacturarePlateOptions(): array
+    {
+        $this->ensureExpenseRefacturareColumn();
+        $this->ensureRaceSoftDeleteSchema();
+
+        $stmt = $this->db->prepare("
+            SELECT
+                v.nr_inmatriculare,
+                MIN(v.marca) AS marca,
+                MIN(v.model) AS model,
+                COUNT(DISTINCT c.id) AS race_count
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            WHERE COALESCE(TRIM(v.nr_inmatriculare), '') <> ''
+              AND c.deleted_at IS NULL
+            GROUP BY v.nr_inmatriculare
+            ORDER BY v.nr_inmatriculare ASC
+        ");
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    public function getRefacturareHistory(array $filters, string $sort, string $direction, int $page, int $perPage): array
+    {
+        $this->ensureRaceCompressorLocationColumns();
+        $this->ensureExpenseRefacturareColumn();
+
+        $page = max(1, $page);
+        $perPage = max(5, min(100, $perPage));
+        $direction = strtolower($direction) === 'asc' ? 'ASC' : 'DESC';
+
+        $mainSql = $this->buildRefacturareHistoryMainSql($filters, 'refhist');
+
+        $summaryStmt = $this->db->prepare("
+            SELECT
+                COUNT(*) AS total_count,
+                COALESCE(SUM(COALESCE(e.refacturare_suma, 0)), 0) AS total_amount,
+                SUM(CASE WHEN COALESCE(e.refacturare_facturata, 0) = 0 THEN 1 ELSE 0 END) AS pending_count,
+                COALESCE(SUM(CASE WHEN COALESCE(e.refacturare_facturata, 0) = 0 THEN COALESCE(e.refacturare_suma, 0) ELSE 0 END), 0) AS pending_amount,
+                SUM(CASE WHEN COALESCE(e.refacturare_facturata, 0) = 1 THEN 1 ELSE 0 END) AS invoiced_count,
+                COALESCE(SUM(CASE WHEN COALESCE(e.refacturare_facturata, 0) = 1 THEN COALESCE(e.refacturare_suma, 0) ELSE 0 END), 0) AS invoiced_amount
+            " . $mainSql['from'] . $mainSql['where'] . "
+        ");
+        $this->bindParams($summaryStmt, $mainSql['params']);
+        $summaryStmt->execute();
+        $summaryRow = $summaryStmt->fetch() ?: [];
+
+        $totalRows = (int) ($summaryRow['total_count'] ?? 0);
+        $totalPages = max(1, (int) ceil($totalRows / $perPage));
+        $page = min($page, $totalPages);
+        $offset = ($page - 1) * $perPage;
+
+        $sortMap = [
+            'date' => 'COALESCE(e.refacturare_data, e.data_cheltuiala)',
+            'race' => 'v.nr_inmatriculare',
+            'type' => 'COALESCE(e.refacturare_tip_cheltuiala, e.tip_cheltuiala)',
+            'amount' => 'COALESCE(e.refacturare_suma, 0)',
+            'status' => 'COALESCE(e.refacturare_facturata, 0)',
+        ];
+        $orderColumn = $sortMap[$sort] ?? $sortMap['date'];
+
+        $dataSql = "
+            SELECT
+                e.id,
+                e.cursa_id,
+                e.tip_cheltuiala,
+                e.refacturare_tip_cheltuiala,
+                e.refacturare_detalii,
+                e.refacturare_suma,
+                e.refacturare_data,
+                e.refacturare_observatii,
+                e.refacturare_document_path,
+                e.refacturare_document_original_name,
+                e.refacturare_facturata,
+                e.refacturare_facturata_at,
+                e.data_cheltuiala,
+                e.observatii,
+                e.created_at,
+                e.updated_at,
+                c.tip_transport,
+                c.data_cursa,
+                c.data_inceput,
+                c.ora_inceput,
+                c.data_sfarsit,
+                c.ora_sfarsit,
+                c.loc_plecare,
+                c.loc_aspirare,
+                c.loc_livrare,
+                c.loc_livrare_cursa,
+                v.nr_inmatriculare,
+                v.marca,
+                v.model,
+                s.nume AS sofer_nume,
+                bt.nume AS beneficiar_nume,
+                li.nume AS loc_incarcare_nume,
+                zd.nume AS zona_distributie_nume,
+                cc.nume AS categorie_nume
+            " . $mainSql['from'] . $mainSql['where'] . "
+            ORDER BY " . $orderColumn . " " . $direction . ", e.id " . $direction . "
+            LIMIT :limit_rows OFFSET :offset_rows
+        ";
+
+        $dataStmt = $this->db->prepare($dataSql);
+        $this->bindParams($dataStmt, $mainSql['params']);
+        $dataStmt->bindValue(':limit_rows', $perPage, PDO::PARAM_INT);
+        $dataStmt->bindValue(':offset_rows', $offset, PDO::PARAM_INT);
+        $dataStmt->execute();
+
+        return [
+            'rows' => $dataStmt->fetchAll(),
+            'summary' => [
+                'total_count' => $totalRows,
+                'total_amount' => round((float) ($summaryRow['total_amount'] ?? 0), 2),
+                'pending_count' => (int) ($summaryRow['pending_count'] ?? 0),
+                'pending_amount' => round((float) ($summaryRow['pending_amount'] ?? 0), 2),
+                'invoiced_count' => (int) ($summaryRow['invoiced_count'] ?? 0),
+                'invoiced_amount' => round((float) ($summaryRow['invoiced_amount'] ?? 0), 2),
+            ],
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total_rows' => $totalRows,
+                'total_pages' => $totalPages,
+            ],
+        ];
+    }
+
+    private function buildRefacturareHistoryMainSql(array $filters, string $prefix): array
+    {
+        $this->ensureRaceSoftDeleteSchema();
+
+        $where = [
+            'COALESCE(e.refacturare_suma, 0) > 0',
+            'c.deleted_at IS NULL',
+        ];
+        $params = [];
+        $dateExpr = 'COALESCE(e.refacturare_data, e.data_cheltuiala)';
+
+        if (($filters['data_start'] ?? '') !== '') {
+            $where[] = $dateExpr . ' >= :' . $prefix . '_data_start';
+            $params[':' . $prefix . '_data_start'] = (string) $filters['data_start'];
+        }
+
+        if (($filters['data_end'] ?? '') !== '') {
+            $where[] = $dateExpr . ' <= :' . $prefix . '_data_end';
+            $params[':' . $prefix . '_data_end'] = (string) $filters['data_end'];
+        }
+
+        if (($filters['nr_inmatriculare'] ?? '') !== '') {
+            $where[] = 'v.nr_inmatriculare = :' . $prefix . '_plate';
+            $params[':' . $prefix . '_plate'] = (string) $filters['nr_inmatriculare'];
+        }
+
+        if (($filters['tip_refacturare'] ?? '') !== '') {
+            $where[] = 'COALESCE(e.refacturare_tip_cheltuiala, e.tip_cheltuiala) = :' . $prefix . '_type';
+            $params[':' . $prefix . '_type'] = (string) $filters['tip_refacturare'];
+        }
+
+        if (($filters['status_factura'] ?? '') === 'in_asteptare') {
+            $where[] = 'COALESCE(e.refacturare_facturata, 0) = 0';
+        } elseif (($filters['status_factura'] ?? '') === 'factura_emisa') {
+            $where[] = 'COALESCE(e.refacturare_facturata, 0) = 1';
+        }
+
+        if (($filters['document'] ?? '') === 'cu_document') {
+            $where[] = "COALESCE(TRIM(e.refacturare_document_path), '') <> ''";
+        } elseif (($filters['document'] ?? '') === 'fara_document') {
+            $where[] = "COALESCE(TRIM(e.refacturare_document_path), '') = ''";
+        }
+
+        if (($filters['q'] ?? '') !== '') {
+            $where[] = "(
+                COALESCE(e.refacturare_observatii, '') LIKE :" . $prefix . "_search_ref_obs
+                OR COALESCE(e.refacturare_detalii, '') LIKE :" . $prefix . "_search_ref_details
+                OR REPLACE(COALESCE(e.refacturare_detalii, ''), '_', ' ') LIKE :" . $prefix . "_search_ref_details_readable
+                OR COALESCE(e.observatii, '') LIKE :" . $prefix . "_search_obs
+                OR COALESCE(cc.nume, '') LIKE :" . $prefix . "_search_category
+                OR COALESCE(e.refacturare_tip_cheltuiala, '') LIKE :" . $prefix . "_search_type
+            )";
+            $searchValue = '%' . (string) $filters['q'] . '%';
+            $params[':' . $prefix . '_search_ref_obs'] = $searchValue;
+            $params[':' . $prefix . '_search_ref_details'] = $searchValue;
+            $params[':' . $prefix . '_search_ref_details_readable'] = $searchValue;
+            $params[':' . $prefix . '_search_obs'] = $searchValue;
+            $params[':' . $prefix . '_search_category'] = $searchValue;
+            $params[':' . $prefix . '_search_type'] = $searchValue;
+        }
+
+        return [
+            'from' => "
+                FROM curse_cheltuieli e
+                INNER JOIN curse_dispecer c ON c.id = e.cursa_id
+                INNER JOIN vehicule v ON v.id = c.vehicle_id
+                LEFT JOIN soferi s ON s.id = c.driver_id
+                LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+                LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
+                LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
+                LEFT JOIN categorii_cheltuieli_curse cc ON cc.id = e.categorie_id
+            ",
+            'where' => ' WHERE ' . implode(' AND ', $where),
+            'params' => $params,
+        ];
     }
 
     public function getExpenseCategories(bool $onlyActive = false): array
@@ -3116,6 +3795,7 @@ class DispecerCurseModel extends BaseModel
     public function getCourseExpenseHistoryOptions(): array
     {
         $this->ensureExpenseCategorySchema();
+        $this->ensureRaceSoftDeleteSchema();
 
         $vehicles = $this->getVehicleOptions();
 
@@ -3135,7 +3815,8 @@ class DispecerCurseModel extends BaseModel
             FROM curse_dispecer c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             LEFT JOIN soferi s ON s.id = c.driver_id
-            WHERE EXISTS (
+            WHERE c.deleted_at IS NULL
+              AND EXISTS (
                 SELECT 1
                 FROM curse_cheltuieli e
                 WHERE e.cursa_id = c.id
@@ -3158,6 +3839,7 @@ class DispecerCurseModel extends BaseModel
             FROM curse_dispecer c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             LEFT JOIN soferi s ON s.id = c.driver_id
+            WHERE c.deleted_at IS NULL
             ORDER BY c.data_inceput DESC, c.id DESC
             LIMIT 700
         ");
@@ -3327,6 +4009,32 @@ class DispecerCurseModel extends BaseModel
         return $stmt->execute();
     }
 
+    public function findDuplicateRaceId(array $data, ?int $excludeRaceId = null): ?int
+    {
+        $this->ensureRaceDuplicateKeySchema();
+        $this->ensureRaceSoftDeleteSchema();
+
+        $sql = "
+            SELECT id
+            FROM curse_dispecer
+            WHERE duplicate_key = :duplicate_key
+              AND deleted_at IS NULL
+            " . ($excludeRaceId !== null && $excludeRaceId > 0 ? " AND id <> :exclude_id" : "") . "
+            ORDER BY id ASC
+            LIMIT 1
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':duplicate_key', $this->buildRaceDuplicateKey($data), PDO::PARAM_STR);
+        if ($excludeRaceId !== null && $excludeRaceId > 0) {
+            $stmt->bindValue(':exclude_id', $excludeRaceId, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        $duplicateId = (int) $stmt->fetchColumn();
+        return $duplicateId > 0 ? $duplicateId : null;
+    }
+
     public function createRace(array $data): int
     {
         $this->ensureRaceCompressorLocationColumns();
@@ -3334,6 +4042,8 @@ class DispecerCurseModel extends BaseModel
         $this->ensureRaceLoadingDateColumn();
         $this->ensureRaceCreatedByColumn();
         $this->ensureRaceExpenseStatusColumn();
+        $this->ensureRaceDuplicateKeySchema();
+        $data['duplicate_key'] = $this->buildRaceDuplicateKey($data);
 
         $sql = "
             INSERT INTO curse_dispecer (
@@ -3377,7 +4087,8 @@ class DispecerCurseModel extends BaseModel
                 observatii,
                 created_by,
                 created_at,
-                updated_at
+                updated_at,
+                duplicate_key
             ) VALUES (
                 :vehicle_id,
                 :driver_id,
@@ -3419,7 +4130,8 @@ class DispecerCurseModel extends BaseModel
                 :observatii,
                 :created_by,
                 :created_at,
-                :updated_at
+                :updated_at,
+                :duplicate_key
             )
         ";
 
@@ -3432,11 +4144,14 @@ class DispecerCurseModel extends BaseModel
 
     public function createRaceAndSyncVehicleKm(array $data): array
     {
+        $this->ensureRaceAuditLogSchema();
+        $this->ensureRaceDuplicateKeySchema();
         $this->db->beginTransaction();
 
         try {
             $raceId = $this->createRace($data);
             $alerts = $this->syncVehicleKmForRaceChange(null, $data);
+            $this->logRaceAudit($raceId, 'created', isset($data['created_by']) ? (int) $data['created_by'] : null);
 
             $this->db->commit();
 
@@ -3458,6 +4173,9 @@ class DispecerCurseModel extends BaseModel
         $this->ensureRaceCompressorLocationColumns();
         $this->ensureRaceCostPerKmColumns();
         $this->ensureRaceLoadingDateColumn();
+        $this->ensureRaceDuplicateKeySchema();
+        $this->ensureRaceSoftDeleteSchema();
+        $data['duplicate_key'] = $this->buildRaceDuplicateKey($data);
 
         $sql = "
             UPDATE curse_dispecer
@@ -3500,8 +4218,10 @@ class DispecerCurseModel extends BaseModel
                 cost_km_mixt = :cost_km_mixt,
                 cost_km_compresor = :cost_km_compresor,
                 observatii = :observatii,
+                duplicate_key = :duplicate_key,
                 updated_at = :updated_at
             WHERE id = :id
+              AND deleted_at IS NULL
         ";
 
         $stmt = $this->db->prepare($sql);
@@ -3511,8 +4231,10 @@ class DispecerCurseModel extends BaseModel
         return $stmt->execute();
     }
 
-    public function updateRaceAndSyncVehicleKm(int $id, array $data): array
+    public function updateRaceAndSyncVehicleKm(int $id, array $data, ?int $userId = null): array
     {
+        $this->ensureRaceAuditLogSchema();
+        $this->ensureRaceDuplicateKeySchema();
         $this->db->beginTransaction();
 
         try {
@@ -3525,6 +4247,7 @@ class DispecerCurseModel extends BaseModel
                 throw new RuntimeException('Actualizarea cursei a esuat.');
             }
             $alerts = $this->syncVehicleKmForRaceChange($previousRace, $data);
+            $this->logRaceAudit($id, 'updated', $userId);
 
             $this->db->commit();
 
@@ -3540,24 +4263,35 @@ class DispecerCurseModel extends BaseModel
         }
     }
 
-    public function updateRaceBillingStatus(int $id, string $billingStatus, string $updatedAt): bool
+    public function updateRaceBillingStatus(int $id, string $billingStatus, string $updatedAt, ?int $userId = null): bool
     {
+        $this->ensureRaceAuditLogSchema();
+
         $stmt = $this->db->prepare("
             UPDATE curse_dispecer
             SET status_facturare = :status_facturare,
                 updated_at = :updated_at
             WHERE id = :id
+              AND deleted_at IS NULL
         ");
         $stmt->bindValue(':status_facturare', $billingStatus, PDO::PARAM_STR);
         $stmt->bindValue(':updated_at', $updatedAt, PDO::PARAM_STR);
         $stmt->bindValue(':id', $id, PDO::PARAM_INT);
 
-        return $stmt->execute();
+        $updated = $stmt->execute();
+        if ($updated && $stmt->rowCount() > 0) {
+            $this->logRaceAudit($id, 'status_changed', $userId, [
+                'status_facturare' => $billingStatus,
+            ]);
+        }
+
+        return $updated;
     }
 
-    public function updateRaceExpenseStatus(int $id, string $expenseStatus, string $updatedAt): bool
+    public function updateRaceExpenseStatus(int $id, string $expenseStatus, string $updatedAt, ?int $userId = null): bool
     {
         $this->ensureRaceExpenseStatusColumn();
+        $this->ensureRaceAuditLogSchema();
 
         if (!in_array($expenseStatus, ['pending', 'not_applicable'], true)) {
             $expenseStatus = 'pending';
@@ -3568,24 +4302,52 @@ class DispecerCurseModel extends BaseModel
             SET cheltuieli_status = :cheltuieli_status,
                 updated_at = :updated_at
             WHERE id = :id
+              AND deleted_at IS NULL
         ");
         $stmt->bindValue(':cheltuieli_status', $expenseStatus, PDO::PARAM_STR);
         $stmt->bindValue(':updated_at', $updatedAt, PDO::PARAM_STR);
         $stmt->bindValue(':id', $id, PDO::PARAM_INT);
 
-        return $stmt->execute();
+        $updated = $stmt->execute();
+        if ($updated && $stmt->rowCount() > 0) {
+            $this->logRaceAudit($id, 'status_changed', $userId, [
+                'cheltuieli_status' => $expenseStatus,
+            ]);
+        }
+
+        return $updated;
     }
 
-    public function deleteRace(int $id): bool
+    public function deleteRace(int $id, ?int $userId = null): bool
     {
-        $stmt = $this->db->prepare("DELETE FROM curse_dispecer WHERE id = :id");
+        $this->ensureRaceSoftDeleteSchema();
+
+        $deletedAt = date('Y-m-d H:i:s');
+        $stmt = $this->db->prepare("
+            UPDATE curse_dispecer
+            SET deleted_at = :deleted_at,
+                deleted_by = :deleted_by,
+                duplicate_key = NULL,
+                updated_at = :updated_at
+            WHERE id = :id
+              AND deleted_at IS NULL
+        ");
+        $stmt->bindValue(':deleted_at', $deletedAt, PDO::PARAM_STR);
+        if ($userId !== null && $userId > 0) {
+            $stmt->bindValue(':deleted_by', $userId, PDO::PARAM_INT);
+        } else {
+            $stmt->bindValue(':deleted_by', null, PDO::PARAM_NULL);
+        }
+        $stmt->bindValue(':updated_at', $deletedAt, PDO::PARAM_STR);
         $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
 
-        return $stmt->execute();
+        return $stmt->rowCount() > 0;
     }
 
-    public function deleteRaceAndSyncVehicleKm(int $id): bool
+    public function deleteRaceAndSyncVehicleKm(int $id, ?int $userId = null): bool
     {
+        $this->ensureRaceAuditLogSchema();
         $this->db->beginTransaction();
 
         try {
@@ -3594,11 +4356,16 @@ class DispecerCurseModel extends BaseModel
                 throw new RuntimeException('Cursa nu exista pentru stergere.');
             }
 
-            $deleted = $this->deleteRace($id);
+            $deleted = $this->deleteRace($id, $userId);
             if (!$deleted) {
                 throw new RuntimeException('Stergerea cursei a esuat.');
             }
             $this->syncVehicleKmForRaceChange($previousRace, null);
+            $this->logRaceAudit((int) $previousRace['id'], 'deleted', $userId, [
+                'nr_inmatriculare' => $previousRace['nr_inmatriculare'] ?? null,
+                'data_cursa' => $previousRace['data_cursa'] ?? null,
+                'duplicate_key' => $previousRace['duplicate_key'] ?? null,
+            ]);
 
             $this->db->commit();
 
@@ -3610,6 +4377,495 @@ class DispecerCurseModel extends BaseModel
 
             throw $exception;
         }
+    }
+
+    public function restoreDeletedRaceAndSyncVehicleKm(int $id, ?int $userId = null): bool
+    {
+        $this->ensureRaceAuditLogSchema();
+        $this->ensureRaceDuplicateKeySchema();
+        $this->db->beginTransaction();
+
+        try {
+            $deletedRace = $this->getRaceSnapshotForUpdate($id, true);
+            if ($deletedRace === null || trim((string) ($deletedRace['deleted_at'] ?? '')) === '') {
+                throw new RuntimeException('Cursa nu exista in lista de curse sterse.');
+            }
+
+            $duplicateRaceId = $this->findDuplicateRaceId($deletedRace, $id);
+            if ($duplicateRaceId !== null) {
+                throw new RuntimeException('Exista deja o cursa activa cu aceleasi date. Restaurarea a fost oprita.');
+            }
+
+            $duplicateKey = $this->buildRaceDuplicateKey($deletedRace);
+            $updatedAt = date('Y-m-d H:i:s');
+            $stmt = $this->db->prepare("
+                UPDATE curse_dispecer
+                SET deleted_at = NULL,
+                    duplicate_key = :duplicate_key,
+                    updated_at = :updated_at
+                WHERE id = :id
+                  AND deleted_at IS NOT NULL
+            ");
+            $stmt->bindValue(':duplicate_key', $duplicateKey, PDO::PARAM_STR);
+            $stmt->bindValue(':updated_at', $updatedAt, PDO::PARAM_STR);
+            $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+            $stmt->execute();
+
+            if ($stmt->rowCount() === 0) {
+                throw new RuntimeException('Restaurarea cursei a esuat.');
+            }
+
+            $restoredRace = $deletedRace;
+            $restoredRace['deleted_at'] = null;
+            $restoredRace['duplicate_key'] = $duplicateKey;
+            $this->syncVehicleKmForRaceChange(null, $restoredRace);
+            $this->logRaceAudit($id, 'restored', $userId, [
+                'deleted_at' => $deletedRace['deleted_at'] ?? null,
+                'deleted_by' => $deletedRace['deleted_by'] ?? null,
+            ]);
+
+            $this->db->commit();
+
+            return true;
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
+    public function permanentlyDeleteDeletedRace(int $id): bool
+    {
+        $this->ensureRaceSoftDeleteSchema();
+        $this->ensureRaceAuditLogSchema();
+        $this->ensureExpenseRefacturareColumn();
+        $this->db->beginTransaction();
+
+        try {
+            $deletedRace = $this->getRaceSnapshotForUpdate($id, true);
+            if ($deletedRace === null || trim((string) ($deletedRace['deleted_at'] ?? '')) === '') {
+                throw new RuntimeException('Cursa nu exista in lista de curse sterse.');
+            }
+
+            $deleteExpenseDocumentsStmt = $this->db->prepare("
+                DELETE FROM curse_cheltuieli_documente
+                WHERE cheltuiala_id IN (
+                    SELECT id
+                    FROM curse_cheltuieli
+                    WHERE cursa_id = :id_docs
+                )
+            ");
+            $deleteExpenseDocumentsStmt->bindValue(':id_docs', $id, PDO::PARAM_INT);
+            $deleteExpenseDocumentsStmt->execute();
+
+            $deleteExpensesStmt = $this->db->prepare("
+                DELETE FROM curse_cheltuieli
+                WHERE cursa_id = :id_expenses
+            ");
+            $deleteExpensesStmt->bindValue(':id_expenses', $id, PDO::PARAM_INT);
+            $deleteExpensesStmt->execute();
+
+            $deleteAuditStmt = $this->db->prepare("
+                DELETE FROM cursa_audit_log
+                WHERE cursa_id = :id_audit
+            ");
+            $deleteAuditStmt->bindValue(':id_audit', $id, PDO::PARAM_INT);
+            $deleteAuditStmt->execute();
+
+            $deleteRaceStmt = $this->db->prepare("
+                DELETE FROM curse_dispecer
+                WHERE id = :id
+                  AND deleted_at IS NOT NULL
+            ");
+            $deleteRaceStmt->bindValue(':id', $id, PDO::PARAM_INT);
+            $deleteRaceStmt->execute();
+
+            if ($deleteRaceStmt->rowCount() === 0) {
+                throw new RuntimeException('Stergerea definitiva a cursei a esuat.');
+            }
+
+            $this->db->commit();
+
+            return true;
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
+    private function logRaceAudit(int $raceId, string $action, ?int $userId, array $details = []): void
+    {
+        $this->ensureRaceAuditLogSchema();
+
+        if ($raceId <= 0) {
+            return;
+        }
+
+        if (!in_array($action, ['created', 'updated', 'deleted', 'restored', 'status_changed'], true)) {
+            $action = 'updated';
+        }
+
+        $detailsJson = $details === []
+            ? null
+            : json_encode($details, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $stmt = $this->db->prepare("
+            INSERT INTO cursa_audit_log (
+                cursa_id,
+                action,
+                performed_by,
+                performed_at,
+                details_json
+            ) VALUES (
+                :cursa_id,
+                :action,
+                :performed_by,
+                :performed_at,
+                :details_json
+            )
+        ");
+        $stmt->bindValue(':cursa_id', $raceId, PDO::PARAM_INT);
+        $stmt->bindValue(':action', $action, PDO::PARAM_STR);
+        if ($userId !== null && $userId > 0) {
+            $stmt->bindValue(':performed_by', $userId, PDO::PARAM_INT);
+        } else {
+            $stmt->bindValue(':performed_by', null, PDO::PARAM_NULL);
+        }
+        $stmt->bindValue(':performed_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        if ($detailsJson !== null && $detailsJson !== false) {
+            $stmt->bindValue(':details_json', $detailsJson, PDO::PARAM_STR);
+        } else {
+            $stmt->bindValue(':details_json', null, PDO::PARAM_NULL);
+        }
+        $stmt->execute();
+    }
+
+    public function getDeletedRaceFilterOptions(): array
+    {
+        $this->ensureRaceSoftDeleteSchema();
+
+        $vehicleStmt = $this->db->query("
+            SELECT
+                v.id,
+                v.nr_inmatriculare,
+                v.marca,
+                v.model,
+                COUNT(*) AS total_curse
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            WHERE c.deleted_at IS NOT NULL
+            GROUP BY v.id, v.nr_inmatriculare, v.marca, v.model
+            ORDER BY v.nr_inmatriculare ASC
+        ");
+
+        $driverStmt = $this->db->query("
+            SELECT
+                s.id,
+                s.nume,
+                COUNT(*) AS total_curse
+            FROM curse_dispecer c
+            INNER JOIN soferi s ON s.id = c.driver_id
+            WHERE c.deleted_at IS NOT NULL
+            GROUP BY s.id, s.nume
+            ORDER BY s.nume ASC
+        ");
+
+        $beneficiaryStmt = $this->db->query("
+            SELECT
+                bt.id,
+                bt.nume,
+                COUNT(*) AS total_curse
+            FROM curse_dispecer c
+            INNER JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+            WHERE c.deleted_at IS NOT NULL
+            GROUP BY bt.id, bt.nume
+            ORDER BY bt.nume ASC
+        ");
+
+        $deletedByStmt = $this->db->query("
+            SELECT
+                u.id,
+                u.nume,
+                u.rol,
+                COUNT(*) AS total_curse
+            FROM curse_dispecer c
+            INNER JOIN utilizatori u ON u.id = c.deleted_by
+            WHERE c.deleted_at IS NOT NULL
+            GROUP BY u.id, u.nume, u.rol
+            ORDER BY u.nume ASC
+        ");
+
+        return [
+            'vehicles' => $vehicleStmt->fetchAll(),
+            'drivers' => $driverStmt->fetchAll(),
+            'beneficiaries' => $beneficiaryStmt->fetchAll(),
+            'deleted_by_users' => $deletedByStmt->fetchAll(),
+        ];
+    }
+
+    public function getDeletedRacesPage(array $filters, int $page, int $perPage): array
+    {
+        $this->ensureRaceAuditLogSchema();
+
+        $page = max(1, $page);
+        $perPage = in_array($perPage, [10, 25, 50, 100], true) ? $perPage : 10;
+        $whereData = $this->buildDeletedRaceWhere($filters, 'delrace');
+        $from = $this->deletedRaceFromSql();
+
+        $monthStart = (new DateTimeImmutable('first day of this month'))->format('Y-m-d');
+        $monthEnd = (new DateTimeImmutable('last day of this month'))->format('Y-m-d');
+        $summaryParams = array_merge($whereData['params'], [
+            ':deleted_month_start' => $monthStart,
+            ':deleted_month_end' => $monthEnd,
+        ]);
+
+        $summarySql = "
+            SELECT
+                COUNT(*) AS total_deleted,
+                SUM(CASE WHEN DATE(c.deleted_at) BETWEEN :deleted_month_start AND :deleted_month_end THEN 1 ELSE 0 END) AS deleted_this_month,
+                COUNT(DISTINCT c.deleted_by) AS users_involved
+            " . $from . $whereData['where'];
+        $summaryStmt = $this->db->prepare($summarySql);
+        $this->bindParams($summaryStmt, $summaryParams);
+        $summaryStmt->execute();
+        $summaryRow = $summaryStmt->fetch() ?: [];
+
+        $totalRows = max(0, (int) ($summaryRow['total_deleted'] ?? 0));
+        $totalPages = max(1, (int) ceil($totalRows / $perPage));
+        $page = min($page, $totalPages);
+        $offset = ($page - 1) * $perPage;
+
+        $dataSql = "
+            SELECT
+                c.*,
+                v.nr_inmatriculare,
+                v.marca,
+                v.model,
+                s.nume AS sofer_nume,
+                bt.nume AS beneficiar_nume,
+                li.nume AS loc_incarcare_nume,
+                zd.nume AS zona_distributie_nume,
+                ud.nume AS deleted_by_nume,
+                ud.rol AS deleted_by_rol,
+                uc.nume AS created_by_nume,
+                uc.rol AS created_by_rol
+            " . $from . $whereData['where'] . "
+            ORDER BY c.deleted_at DESC, c.id DESC
+            LIMIT :limit_rows OFFSET :offset_rows
+        ";
+        $dataStmt = $this->db->prepare($dataSql);
+        $this->bindParams($dataStmt, $whereData['params']);
+        $dataStmt->bindValue(':limit_rows', $perPage, PDO::PARAM_INT);
+        $dataStmt->bindValue(':offset_rows', $offset, PDO::PARAM_INT);
+        $dataStmt->execute();
+
+        return [
+            'rows' => $dataStmt->fetchAll(),
+            'summary' => [
+                'total_deleted' => $totalRows,
+                'deleted_this_month' => max(0, (int) ($summaryRow['deleted_this_month'] ?? 0)),
+                'users_involved' => max(0, (int) ($summaryRow['users_involved'] ?? 0)),
+                'month_start' => $monthStart,
+                'month_end' => $monthEnd,
+            ],
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total_rows' => $totalRows,
+                'total_pages' => $totalPages,
+            ],
+        ];
+    }
+
+    public function getDeletedRaceDetails(int $id): ?array
+    {
+        $this->ensureRaceAuditLogSchema();
+
+        $stmt = $this->db->prepare("
+            SELECT
+                c.*,
+                v.nr_inmatriculare,
+                v.marca,
+                v.model,
+                s.nume AS sofer_nume,
+                bt.nume AS beneficiar_nume,
+                li.nume AS loc_incarcare_nume,
+                zd.nume AS zona_distributie_nume,
+                ud.nume AS deleted_by_nume,
+                ud.rol AS deleted_by_rol,
+                uc.nume AS created_by_nume,
+                uc.rol AS created_by_rol
+            " . $this->deletedRaceFromSql() . "
+            WHERE c.id = :id
+              AND c.deleted_at IS NOT NULL
+            LIMIT 1
+        ");
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+        $race = $stmt->fetch();
+        if (!$race) {
+            return null;
+        }
+
+        return [
+            'race' => $race,
+            'timeline' => $this->buildDeletedRaceTimeline($race),
+        ];
+    }
+
+    private function deletedRaceFromSql(): string
+    {
+        $this->ensureRaceCompressorLocationColumns();
+        $this->ensureRaceSoftDeleteSchema();
+
+        return "
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
+            LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+            LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
+            LEFT JOIN utilizatori ud ON ud.id = c.deleted_by
+            LEFT JOIN utilizatori uc ON uc.id = c.created_by
+        ";
+    }
+
+    private function buildDeletedRaceWhere(array $filters, string $prefix): array
+    {
+        $where = [
+            'c.deleted_at IS NOT NULL',
+        ];
+        $params = [];
+        $raceDateExpr = 'COALESCE(c.data_inceput, c.data_cursa)';
+
+        if (($filters['vehicle_id'] ?? '') !== '') {
+            $where[] = 'c.vehicle_id = :' . $prefix . '_vehicle_id';
+            $params[':' . $prefix . '_vehicle_id'] = (int) $filters['vehicle_id'];
+        }
+
+        if (($filters['tip_transport'] ?? '') !== '') {
+            $where[] = 'c.tip_transport = :' . $prefix . '_tip_transport';
+            $params[':' . $prefix . '_tip_transport'] = (string) $filters['tip_transport'];
+        }
+
+        if (($filters['driver_id'] ?? '') !== '') {
+            $where[] = 'c.driver_id = :' . $prefix . '_driver_id';
+            $params[':' . $prefix . '_driver_id'] = (int) $filters['driver_id'];
+        }
+
+        if (($filters['beneficiar_id'] ?? '') !== '') {
+            $where[] = 'c.beneficiar_id = :' . $prefix . '_beneficiar_id';
+            $params[':' . $prefix . '_beneficiar_id'] = (int) $filters['beneficiar_id'];
+        }
+
+        if (($filters['deleted_by'] ?? '') !== '') {
+            $where[] = 'c.deleted_by = :' . $prefix . '_deleted_by';
+            $params[':' . $prefix . '_deleted_by'] = (int) $filters['deleted_by'];
+        }
+
+        if (($filters['data_cursa_start'] ?? '') !== '') {
+            $where[] = $raceDateExpr . ' >= :' . $prefix . '_data_cursa_start';
+            $params[':' . $prefix . '_data_cursa_start'] = (string) $filters['data_cursa_start'];
+        }
+
+        if (($filters['data_cursa_end'] ?? '') !== '') {
+            $where[] = $raceDateExpr . ' <= :' . $prefix . '_data_cursa_end';
+            $params[':' . $prefix . '_data_cursa_end'] = (string) $filters['data_cursa_end'];
+        }
+
+        if (($filters['deleted_start'] ?? '') !== '') {
+            $where[] = 'DATE(c.deleted_at) >= :' . $prefix . '_deleted_start';
+            $params[':' . $prefix . '_deleted_start'] = (string) $filters['deleted_start'];
+        }
+
+        if (($filters['deleted_end'] ?? '') !== '') {
+            $where[] = 'DATE(c.deleted_at) <= :' . $prefix . '_deleted_end';
+            $params[':' . $prefix . '_deleted_end'] = (string) $filters['deleted_end'];
+        }
+
+        return [
+            'where' => ' WHERE ' . implode(' AND ', $where),
+            'params' => $params,
+        ];
+    }
+
+    private function buildDeletedRaceTimeline(array $race): array
+    {
+        $raceId = (int) ($race['id'] ?? 0);
+        if ($raceId <= 0) {
+            return [];
+        }
+
+        $auditStmt = $this->db->prepare("
+            SELECT
+                a.action,
+                a.performed_at,
+                a.details_json,
+                u.nume AS user_nume,
+                u.rol AS user_rol
+            FROM cursa_audit_log a
+            LEFT JOIN utilizatori u ON u.id = a.performed_by
+            WHERE a.cursa_id = :cursa_id
+            ORDER BY a.performed_at ASC, a.id ASC
+        ");
+        $auditStmt->bindValue(':cursa_id', $raceId, PDO::PARAM_INT);
+        $auditStmt->execute();
+
+        $timeline = [];
+        $createdAt = trim((string) ($race['created_at'] ?? ''));
+        if ($createdAt !== '') {
+            $timeline[] = [
+                'action' => 'created',
+                'performed_at' => $createdAt,
+                'user_nume' => trim((string) ($race['created_by_nume'] ?? '')),
+                'user_rol' => trim((string) ($race['created_by_rol'] ?? '')),
+            ];
+        }
+
+        $updatedAt = trim((string) ($race['updated_at'] ?? ''));
+        $deletedAt = trim((string) ($race['deleted_at'] ?? ''));
+        if ($updatedAt !== '' && $updatedAt !== $createdAt && $updatedAt !== $deletedAt) {
+            $timeline[] = [
+                'action' => 'updated',
+                'performed_at' => $updatedAt,
+                'user_nume' => '',
+                'user_rol' => '',
+            ];
+        }
+
+        foreach ($auditStmt->fetchAll() as $row) {
+            $timeline[] = [
+                'action' => (string) ($row['action'] ?? 'updated'),
+                'performed_at' => (string) ($row['performed_at'] ?? ''),
+                'user_nume' => (string) ($row['user_nume'] ?? ''),
+                'user_rol' => (string) ($row['user_rol'] ?? ''),
+                'details_json' => (string) ($row['details_json'] ?? ''),
+            ];
+        }
+
+        usort($timeline, static function (array $a, array $b): int {
+            $dateCompare = strcmp((string) ($a['performed_at'] ?? ''), (string) ($b['performed_at'] ?? ''));
+            if ($dateCompare !== 0) {
+                return $dateCompare;
+            }
+
+            $order = [
+                'created' => 0,
+                'updated' => 1,
+                'status_changed' => 2,
+                'deleted' => 3,
+                'restored' => 4,
+            ];
+
+            return ($order[(string) ($a['action'] ?? '')] ?? 9) <=> ($order[(string) ($b['action'] ?? '')] ?? 9);
+        });
+
+        return $timeline;
     }
 
     public function getRaceExpenses(int $raceId): array
@@ -4480,7 +5736,34 @@ class DispecerCurseModel extends BaseModel
 
     public function existsRace(int $id): bool
     {
-        return $this->existsById('curse_dispecer', $id);
+        $this->ensureRaceSoftDeleteSchema();
+
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM curse_dispecer
+            WHERE id = :id
+              AND deleted_at IS NULL
+        ");
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    public function existsDeletedRace(int $id): bool
+    {
+        $this->ensureRaceSoftDeleteSchema();
+
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM curse_dispecer
+            WHERE id = :id
+              AND deleted_at IS NOT NULL
+        ");
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn() > 0;
     }
 
     public function existsLoadLocation(int $id): bool
@@ -4538,6 +5821,7 @@ class DispecerCurseModel extends BaseModel
                 v.nr_inmatriculare
             {$from}
             WHERE c.vehicle_id IS NOT NULL
+              AND c.deleted_at IS NULL
             ORDER BY v.nr_inmatriculare ASC
         ");
 
@@ -4546,6 +5830,7 @@ class DispecerCurseModel extends BaseModel
                 c.driver_id AS id,
                 COALESCE(NULLIF(TRIM(s.nume), ''), 'Fara sofer') AS nume
             {$from}
+            WHERE c.deleted_at IS NULL
             ORDER BY nume ASC
         ");
 
@@ -4554,6 +5839,7 @@ class DispecerCurseModel extends BaseModel
                 c.beneficiar_id AS id,
                 COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fara beneficiar') AS nume
             {$from}
+            WHERE c.deleted_at IS NULL
             ORDER BY nume ASC
         ");
 
@@ -4561,6 +5847,7 @@ class DispecerCurseModel extends BaseModel
             SELECT DISTINCT c.tip_transport
             FROM curse_dispecer c
             WHERE COALESCE(TRIM(c.tip_transport), '') <> ''
+              AND c.deleted_at IS NULL
             ORDER BY c.tip_transport ASC
         ");
 
@@ -4568,6 +5855,7 @@ class DispecerCurseModel extends BaseModel
             SELECT DISTINCT c.status_facturare
             FROM curse_dispecer c
             WHERE COALESCE(TRIM(c.status_facturare), '') <> ''
+              AND c.deleted_at IS NULL
             ORDER BY c.status_facturare ASC
         ");
 
@@ -4576,6 +5864,7 @@ class DispecerCurseModel extends BaseModel
             FROM curse_dispecer c
             WHERE c.capacitate_transport IS NOT NULL
               AND c.capacitate_transport > 0
+              AND c.deleted_at IS NULL
             ORDER BY c.capacitate_transport ASC
         ");
 
@@ -5310,7 +6599,11 @@ class DispecerCurseModel extends BaseModel
 
     private function buildCourseExpenseHistoryRaceWhere(array $filters, string $prefix): array
     {
-        $where = [];
+        $this->ensureRaceSoftDeleteSchema();
+
+        $where = [
+            'c.deleted_at IS NULL',
+        ];
         $params = [];
 
         $dateFrom = trim((string) ($filters['date_from'] ?? ''));
@@ -5382,6 +6675,11 @@ class DispecerCurseModel extends BaseModel
             'COALESCE(e.suma, 0) > 0',
         ];
         $params = [];
+
+        if ($includeRaceFilters || $includeKeyword) {
+            $this->ensureRaceSoftDeleteSchema();
+            $where[] = 'c.deleted_at IS NULL';
+        }
 
         $categoryId = (int) ($filters['category_id'] ?? 0);
         if ($categoryId > 0) {
@@ -5717,6 +7015,7 @@ class DispecerCurseModel extends BaseModel
     private function buildDashboardUtilizationWhere(array $filters, string $monthStart, string $monthEnd): array
     {
         $where = [
+            'c.deleted_at IS NULL',
             'c.vehicle_id IS NOT NULL',
             'COALESCE(c.data_inceput, c.data_cursa) <= :util_month_end',
             'COALESCE(c.data_sfarsit, c.data_inceput, c.data_cursa) >= :util_month_start',
@@ -5781,6 +7080,7 @@ class DispecerCurseModel extends BaseModel
     private function dashboardFromSql(): string
     {
         $this->ensureExpenseRefacturareColumn();
+        $this->ensureRaceSoftDeleteSchema();
 
         return "
             FROM curse_dispecer c
@@ -5810,7 +7110,9 @@ class DispecerCurseModel extends BaseModel
 
     private function buildDashboardWhere(array $filters): array
     {
-        $where = [];
+        $where = [
+            'c.deleted_at IS NULL',
+        ];
         $params = [];
 
         if (($filters['date_start'] ?? null) !== null) {
@@ -5946,6 +7248,8 @@ class DispecerCurseModel extends BaseModel
     {
         $this->ensureRaceCompressorLocationColumns();
         $this->ensureRaceCreatedByColumn();
+        $this->ensureRaceSoftDeleteSchema();
+        $this->ensureRaceAuditLogSchema();
         $this->ensureExpenseRefacturareColumn();
 
         return "
@@ -5956,6 +7260,20 @@ class DispecerCurseModel extends BaseModel
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
             LEFT JOIN utilizatori uc ON uc.id = c.created_by
+            LEFT JOIN (
+                SELECT
+                    a.cursa_id,
+                    a.performed_by,
+                    a.performed_at
+                FROM cursa_audit_log a
+                INNER JOIN (
+                    SELECT cursa_id, MAX(id) AS last_update_id
+                    FROM cursa_audit_log
+                    WHERE action = 'updated'
+                    GROUP BY cursa_id
+                ) latest_update ON latest_update.last_update_id = a.id
+            ) lua ON lua.cursa_id = c.id
+            LEFT JOIN utilizatori uu ON uu.id = lua.performed_by
             LEFT JOIN (
                 SELECT
                     cursa_id,
@@ -5988,8 +7306,13 @@ class DispecerCurseModel extends BaseModel
 
     private function buildRaceWhere(array $filters, string $search): array
     {
-        $where = [];
-        $params = [];
+        $where = [
+            'c.deleted_at IS NULL',
+            $this->defaultBillingStatusExpression() . ' = :dispatcher_billing_status',
+        ];
+        $params = [
+            ':dispatcher_billing_status' => self::DEFAULT_BILLING_STATUS,
+        ];
 
         if ($search !== '') {
             $where[] = "(
@@ -6049,9 +7372,16 @@ class DispecerCurseModel extends BaseModel
         ];
     }
 
+    private function defaultBillingStatusExpression(string $column = 'c.status_facturare'): string
+    {
+        return "COALESCE(NULLIF(TRIM(" . $column . "), ''), '" . self::DEFAULT_BILLING_STATUS . "')";
+    }
+
     private function buildBillingCentralizerWhere(array $filters, string $search, bool $includeStatusFilter): array
     {
-        $where = [];
+        $where = [
+            'c.deleted_at IS NULL',
+        ];
         $params = [];
 
         if ($search !== '') {
@@ -6081,9 +7411,20 @@ class DispecerCurseModel extends BaseModel
             $params[':billing_status'] = (string) $filters['status_facturare'];
         }
 
+        if (($filters['nr_inmatriculare'] ?? '') !== '') {
+            $where[] = "v.nr_inmatriculare LIKE :billing_plate";
+            $params[':billing_plate'] = '%' . (string) $filters['nr_inmatriculare'] . '%';
+        }
+
         if (($filters['tip_transport'] ?? '') !== '') {
-            $where[] = "c.tip_transport = :billing_tip_transport";
-            $params[':billing_tip_transport'] = (string) $filters['tip_transport'];
+            if ((string) $filters['tip_transport'] === 'primar') {
+                $where[] = "c.tip_transport IN (:billing_tip_transport_primar, :billing_tip_transport_primar_tona)";
+                $params[':billing_tip_transport_primar'] = 'primar';
+                $params[':billing_tip_transport_primar_tona'] = 'primar_tona';
+            } else {
+                $where[] = "c.tip_transport = :billing_tip_transport";
+                $params[':billing_tip_transport'] = (string) $filters['tip_transport'];
+            }
         }
 
         if (($filters['vehicle_id'] ?? '') !== '') {
@@ -6091,15 +7432,64 @@ class DispecerCurseModel extends BaseModel
             $params[':billing_vehicle_id'] = (int) $filters['vehicle_id'];
         }
 
+        if (($filters['driver_id'] ?? '') !== '') {
+            $where[] = "c.driver_id = :billing_driver_id";
+            $params[':billing_driver_id'] = (int) $filters['driver_id'];
+        }
+
         if (($filters['beneficiar_id'] ?? '') !== '') {
             $where[] = "c.beneficiar_id = :billing_beneficiar_id";
             $params[':billing_beneficiar_id'] = (int) $filters['beneficiar_id'];
+        }
+
+        if (($filters['tip_marfa'] ?? '') !== '') {
+            $where[] = "FIND_IN_SET(:billing_tip_marfa, REPLACE(COALESCE(c.tip_marfa, ''), ' ', '')) > 0";
+            $params[':billing_tip_marfa'] = (string) $filters['tip_marfa'];
         }
 
         if (($filters['zona_distributie_id'] ?? '') !== '') {
             $where[] = "c.zona_distributie_id = :billing_zona_distributie_id";
             $params[':billing_zona_distributie_id'] = (int) $filters['zona_distributie_id'];
         }
+
+        $this->appendBillingLocationFilter(
+            $where,
+            $params,
+            (array) ($filters['locatie_operationala'] ?? []),
+            [
+                'li.nume',
+                'c.loc_plecare',
+                'c.loc_aspirare',
+                'c.loc_livrare',
+                'c.loc_livrare_cursa',
+                'zd.nume',
+            ],
+            'billing_location'
+        );
+
+        $this->appendBillingLocationFilter(
+            $where,
+            $params,
+            (array) ($filters['loc_incarcare'] ?? []),
+            [
+                'li.nume',
+                'c.loc_plecare',
+            ],
+            'billing_load_location'
+        );
+
+        $this->appendBillingLocationFilter(
+            $where,
+            $params,
+            (array) ($filters['zona_distributie'] ?? []),
+            [
+                'c.loc_plecare',
+                'c.loc_livrare',
+                'c.loc_livrare_cursa',
+                'zd.nume',
+            ],
+            'billing_distribution_location'
+        );
 
         if (($filters['data_start'] ?? '') !== '') {
             $where[] = "COALESCE(c.data_inceput, c.data_cursa) >= :billing_data_start";
@@ -6115,6 +7505,45 @@ class DispecerCurseModel extends BaseModel
             'where' => $where === [] ? '' : ' WHERE ' . implode(' AND ', $where),
             'params' => $params,
         ];
+    }
+
+    private function appendBillingLocationFilter(
+        array &$where,
+        array &$params,
+        array $values,
+        array $columns,
+        string $prefix
+    ): void {
+        $normalized = [];
+        foreach ($values as $value) {
+            $value = trim((string) $value);
+            if ($value === '') {
+                continue;
+            }
+
+            $key = function_exists('mb_strtolower') ? mb_strtolower($value, 'UTF-8') : strtolower($value);
+            $normalized[$key] = $key;
+        }
+
+        if ($normalized === [] || $columns === []) {
+            return;
+        }
+
+        $clauses = [];
+        $index = 0;
+        foreach (array_values($normalized) as $value) {
+            $placeholder = ':' . $prefix . '_' . $index;
+            $params[$placeholder] = $value;
+
+            foreach ($columns as $column) {
+                $clauses[] = "LOWER(TRIM(COALESCE(" . $column . ", ''))) = " . $placeholder;
+            }
+            $index++;
+        }
+
+        if ($clauses !== []) {
+            $where[] = '(' . implode(' OR ', $clauses) . ')';
+        }
     }
 
     private function bindParams(PDOStatement $stmt, array $params): void
@@ -6174,6 +7603,9 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':cost_km_mixt', (float) ($data['cost_km_mixt'] ?? 0));
         $stmt->bindValue(':cost_km_compresor', (float) ($data['cost_km_compresor'] ?? 0));
         $this->bindNullableString($stmt, ':observatii', $data['observatii'] ?? null);
+        if (array_key_exists('duplicate_key', $data)) {
+            $stmt->bindValue(':duplicate_key', (string) $data['duplicate_key'], PDO::PARAM_STR);
+        }
         if (array_key_exists('created_by', $data)) {
             $this->bindNullableInt($stmt, ':created_by', $data['created_by']);
         }
@@ -6182,6 +7614,67 @@ class DispecerCurseModel extends BaseModel
             $stmt->bindValue(':created_at', (string) $data['created_at']);
         }
         $stmt->bindValue(':updated_at', (string) $data['updated_at']);
+    }
+
+    private function buildRaceDuplicateKey(array $data): string
+    {
+        $payload = [];
+        foreach (self::RACE_DUPLICATE_KEY_FIELDS as $field) {
+            $payload[$field] = $this->normalizeRaceDuplicateValue($field, $data[$field] ?? null);
+        }
+
+        $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($encoded)) {
+            $encoded = serialize($payload);
+        }
+
+        return hash('sha256', $encoded);
+    }
+
+    private function normalizeRaceDuplicateValue(string $field, mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_string($value)) {
+            $value = trim($value);
+            if ($value === '') {
+                return null;
+            }
+        }
+
+        if (in_array($field, self::RACE_DUPLICATE_INT_FIELDS, true)) {
+            if (!is_numeric((string) $value)) {
+                return null;
+            }
+
+            return (string) (int) $value;
+        }
+
+        if (in_array($field, self::RACE_DUPLICATE_DECIMAL_FIELDS, true)) {
+            if (!is_numeric((string) $value)) {
+                return null;
+            }
+
+            return number_format(round((float) $value, 2), 2, '.', '');
+        }
+
+        if ($field === 'tip_marfa') {
+            $items = [];
+            foreach (explode(',', (string) $value) as $item) {
+                $item = trim($item);
+                if ($item !== '') {
+                    $items[$item] = $item;
+                }
+            }
+            $items = array_values($items);
+            sort($items, SORT_STRING);
+
+            return $items === [] ? null : implode(',', $items);
+        }
+
+        return (string) $value;
     }
 
     private function bindNullableString(PDOStatement $stmt, string $placeholder, mixed $value): void
@@ -6223,12 +7716,15 @@ class DispecerCurseModel extends BaseModel
         return (int) $stmt->fetchColumn() > 0;
     }
 
-    private function getRaceSnapshotForUpdate(int $raceId): ?array
+    private function getRaceSnapshotForUpdate(int $raceId, bool $includeDeleted = false): ?array
     {
+        $this->ensureRaceSoftDeleteSchema();
+
         $sql = "
-            SELECT id, vehicle_id, km_cursa, ore_functionare, ore_aspirare, km_totali
+            SELECT *
             FROM curse_dispecer
             WHERE id = :id
+            " . ($includeDeleted ? "" : " AND deleted_at IS NULL") . "
             LIMIT 1
             FOR UPDATE
         ";

@@ -1,0 +1,43 @@
+CREATE TABLE IF NOT EXISTS inactive_resource_approvals (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    resource_type ENUM('vehicle', 'driver') NOT NULL,
+    resource_id INT UNSIGNED NOT NULL,
+    trip_id INT UNSIGNED NULL,
+    usage_context VARCHAR(120) NOT NULL DEFAULT 'dispecer_curse',
+    resource_label VARCHAR(190) NOT NULL,
+    inactive_reason VARCHAR(80) NOT NULL,
+    inactive_reason_label VARCHAR(160) NOT NULL,
+    inactive_since DATE NULL,
+    status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+    requested_by_user_id INT UNSIGNED NULL,
+    requested_at DATETIME NOT NULL,
+    reviewed_by_user_id INT UNSIGNED NULL,
+    reviewed_at DATETIME NULL,
+    review_note TEXT NULL,
+    snapshot_json LONGTEXT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_inactive_approvals_pending (status, resource_type, requested_at),
+    INDEX idx_inactive_approvals_resource_trip (resource_type, resource_id, trip_id),
+    INDEX idx_inactive_approvals_trip (trip_id),
+    INDEX idx_inactive_approvals_requested_by (requested_by_user_id),
+    INDEX idx_inactive_approvals_reviewed_by (reviewed_by_user_id),
+    CONSTRAINT fk_inactive_approvals_trip FOREIGN KEY (trip_id) REFERENCES curse_dispecer(id) ON DELETE SET NULL,
+    CONSTRAINT fk_inactive_approvals_requested_by FOREIGN KEY (requested_by_user_id) REFERENCES utilizatori(id) ON DELETE SET NULL,
+    CONSTRAINT fk_inactive_approvals_reviewed_by FOREIGN KEY (reviewed_by_user_id) REFERENCES utilizatori(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS inactive_resource_approval_documents (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    approval_id BIGINT UNSIGNED NOT NULL,
+    document_type VARCHAR(120) NOT NULL,
+    document_id INT UNSIGNED NULL,
+    document_name VARCHAR(160) NOT NULL,
+    document_status ENUM('missing', 'expired') NOT NULL,
+    expiry_date DATE NULL,
+    source_table VARCHAR(80) NULL,
+    created_at DATETIME NOT NULL,
+    INDEX idx_inactive_approval_documents_approval (approval_id),
+    INDEX idx_inactive_approval_documents_status (document_status),
+    CONSTRAINT fk_inactive_approval_documents_approval FOREIGN KEY (approval_id) REFERENCES inactive_resource_approvals(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

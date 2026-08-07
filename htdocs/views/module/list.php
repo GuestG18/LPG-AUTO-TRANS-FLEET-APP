@@ -1,6 +1,7 @@
 <?php
+$routePage = (string) ($routePage ?? ($module['route_page'] ?? $moduleKey));
 $baseQuery = [
-    'page' => $moduleKey,
+    'page' => $routePage,
     'action' => 'index',
     'q' => $search,
 ];
@@ -12,12 +13,15 @@ foreach ($filters as $filterKey => $filterValue) {
 $documentSummary = $documentSummary ?? null;
 $urgentDocuments = $urgentDocuments ?? [];
 $isVehicleList = $moduleKey === 'vehicule';
+$isDriverList = $moduleKey === 'soferi';
 $isDocumentList = $moduleKey === 'documente';
 $isDriverDocumentList = $moduleKey === 'documente_soferi';
 $isAnyDocumentList = $isDocumentList || $isDriverDocumentList;
 $isMaintenanceList = $moduleKey === 'mentenanta';
 $isMaintenanceTireStockPage = (bool) ($isMaintenanceTireStockPage ?? false);
 $isDocumentCostOverrideList = $moduleKey === 'configurare_costuri_documente_vehicule_override';
+$inactiveDriverOverview = is_array($inactiveDriverOverview ?? null) ? $inactiveDriverOverview : null;
+$inactiveVehicleOverview = is_array($inactiveVehicleOverview ?? null) ? $inactiveVehicleOverview : null;
 $maintenanceTireStockContext = $maintenanceTireStockContext ?? null;
 $documentTypeVehicleOptions = is_array($documentTypeVehicleOptions ?? null) ? $documentTypeVehicleOptions : [];
 $driverDocumentCostModule = is_array($driverDocumentCostModule ?? null) ? $driverDocumentCostModule : null;
@@ -26,6 +30,14 @@ $driverDocumentCostPagination = is_array($driverDocumentCostPagination ?? null) 
 $driverDocumentModule = is_array($driverDocumentModule ?? null) ? $driverDocumentModule : null;
 $driverDocumentRows = is_array($driverDocumentRows ?? null) ? $driverDocumentRows : [];
 $driverDocumentPagination = is_array($driverDocumentPagination ?? null) ? $driverDocumentPagination : null;
+$driverTerminationModals = [];
+$usesVehicleCompactRows = $isVehicleList && in_array($routePage, ['vehicule_usoare', 'vehicule_grele'], true);
+$usesDocumentCompactRows = $isDocumentList && $routePage === 'documente';
+$usesCompactStatusRows = $isDriverList || $usesVehicleCompactRows || $usesDocumentCompactRows;
+$visibleListColumns = $module['list_columns'] ?? [];
+if ($usesCompactStatusRows) {
+    unset($visibleListColumns['status']);
+}
 $mainPaginationBaseQuery = $baseQuery;
 if ($isDocumentCostOverrideList && $driverDocumentCostPagination !== null) {
     $mainPaginationBaseQuery['driver_cost_p'] = (int) ($driverDocumentCostPagination['page'] ?? 1);
@@ -82,6 +94,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
 };
 ?>
 
+<?php if ($isDocumentCostOverrideList): ?><div class="doc-cost-page"><?php endif; ?>
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3<?= $isDocumentCostOverrideList ? ' document-cost-header' : '' ?>">
     <h2 class="h4 mb-0"><?= e($module['title']) ?></h2>
     <div class="d-flex gap-2<?= $isDocumentCostOverrideList ? ' document-cost-actions' : '' ?>">
@@ -119,13 +132,487 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
             <a class="btn btn-primary" href="<?= e(build_query_url(['page' => 'configurare_costuri_documente_soferi', 'action' => 'create'])) ?>">Adauga configurare cost document sofer</a>
         <?php endif; ?>
         <?php if (!$isMaintenanceTireStockPage): ?>
-            <a class="btn btn-primary" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'create'])) ?>">Adaugă <?= e($module['singular']) ?></a>
+            <a class="btn btn-primary" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'create'])) ?>">Adaugă <?= e($module['singular']) ?></a>
         <?php endif; ?>
         <?php if ($isDocumentCostOverrideList): ?>
             </div>
         <?php endif; ?>
     </div>
 </div>
+<?php if ($isDocumentCostOverrideList): ?>
+    <p class="doc-cost-subtitle"><i class="bi bi-coin" aria-hidden="true"></i> Definește costurile și valabilitățile documentelor pe tip de vehicul și pentru șoferi. Tipurile adăugate aici apar automat în formularele de documente.</p>
+<?php endif; ?>
+
+<?php if ($isDriverList && $inactiveDriverOverview !== null && (int) ($inactiveDriverOverview['count'] ?? 0) > 0): ?>
+    <?php
+    $inactiveDriverCount = (int) ($inactiveDriverOverview['count'] ?? 0);
+    $inactiveDriverRows = is_array($inactiveDriverOverview['rows'] ?? null) ? $inactiveDriverOverview['rows'] : [];
+    $inactiveDriverHiddenCount = max(0, $inactiveDriverCount - count($inactiveDriverRows));
+    $inactiveDriverMissingCount = (int) ($inactiveDriverOverview['missing_count'] ?? 0);
+    $inactiveDriverExpiredCount = (int) ($inactiveDriverOverview['expired_count'] ?? 0);
+    $inactiveDriverMissingExpiredCount = (int) ($inactiveDriverOverview['missing_expired_count'] ?? 0);
+    $inactiveDriverReasonIcon = static function (string $issue): string {
+        $normalizedIssue = strtolower($issue);
+        if (str_contains($normalizedIssue, 'medical')) {
+            return 'bi-heart-pulse-fill';
+        }
+        if (str_contains($normalizedIssue, 'psihologic') || str_contains($normalizedIssue, 'psychologic')) {
+            return 'bi-activity';
+        }
+        if (str_contains($normalizedIssue, 'munca') || str_contains($normalizedIssue, 'contract')) {
+            return 'bi-briefcase-fill';
+        }
+        if (str_contains($normalizedIssue, 'lips')) {
+            return 'bi-file-earmark-x-fill';
+        }
+
+        return 'bi-exclamation-circle-fill';
+    };
+    ?>
+    <div class="driver-inactive-launcher-row">
+        <button
+            type="button"
+            class="driver-inactive-launcher"
+            data-inactive-drivers-open
+            aria-haspopup="dialog"
+            aria-controls="inactive-drivers-modal"
+        >
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>Șoferi inactivi (<?= e((string) $inactiveDriverCount) ?>)</span>
+        </button>
+    </div>
+
+    <div class="driver-inactive-modal-overlay d-none" id="inactive-drivers-modal" data-inactive-drivers-modal role="dialog" aria-modal="true" aria-labelledby="inactive-drivers-modal-title">
+        <section class="driver-inactive-modal" role="document">
+            <header class="driver-inactive-modal-header">
+                <div class="driver-inactive-modal-title-group">
+                    <div class="driver-inactive-alert-icon" aria-hidden="true">
+                        <i class="bi bi-exclamation-triangle-fill"></i>
+                    </div>
+                    <div>
+                        <h3 id="inactive-drivers-modal-title">Șoferi inactivi (<?= e((string) $inactiveDriverCount) ?>)</h3>
+                        <p>Necesită atenție</p>
+                    </div>
+                </div>
+                <button type="button" class="driver-inactive-icon-close" data-inactive-drivers-close aria-label="Inchide">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </header>
+
+            <div class="driver-inactive-modal-body">
+                <h4>Clasificare motive</h4>
+
+                <div class="driver-inactive-stats">
+                    <button
+                        type="button"
+                        class="driver-inactive-stat driver-inactive-stat-missing"
+                        data-inactive-driver-filter="missing"
+                        aria-pressed="false"
+                        <?= $inactiveDriverMissingCount <= 0 ? 'disabled' : '' ?>
+                    >
+                        <span class="driver-inactive-stat-icon"><i class="bi bi-file-earmark-excel" aria-hidden="true"></i></span>
+                        <span class="driver-inactive-stat-label">Documente lipsă</span>
+                        <strong><?= e((string) $inactiveDriverMissingCount) ?></strong>
+                    </button>
+                    <button
+                        type="button"
+                        class="driver-inactive-stat driver-inactive-stat-expired"
+                        data-inactive-driver-filter="expired"
+                        aria-pressed="false"
+                        <?= $inactiveDriverExpiredCount <= 0 ? 'disabled' : '' ?>
+                    >
+                        <span class="driver-inactive-stat-icon"><i class="bi bi-clock" aria-hidden="true"></i></span>
+                        <span class="driver-inactive-stat-label">Documente expirate</span>
+                        <strong><?= e((string) $inactiveDriverExpiredCount) ?></strong>
+                    </button>
+                    <button
+                        type="button"
+                        class="driver-inactive-stat driver-inactive-stat-mixed"
+                        data-inactive-driver-filter="mixed"
+                        aria-pressed="false"
+                        <?= $inactiveDriverMissingExpiredCount <= 0 ? 'disabled' : '' ?>
+                    >
+                        <span class="driver-inactive-stat-icon"><i class="bi bi-files" aria-hidden="true"></i></span>
+                        <span class="driver-inactive-stat-label">Documente lipsă și expirate</span>
+                        <strong><?= e((string) $inactiveDriverMissingExpiredCount) ?></strong>
+                    </button>
+                </div>
+
+                <div class="driver-inactive-card-list">
+                    <?php foreach ($inactiveDriverRows as $inactiveDriverIndex => $inactiveDriver): ?>
+                        <?php
+                        $inactiveDriverId = (int) ($inactiveDriver['id'] ?? 0);
+                        if ($inactiveDriverId <= 0) {
+                            continue;
+                        }
+
+                        $inactiveDriverName = trim((string) ($inactiveDriver['nume'] ?? ''));
+                        $inactiveDriverPhone = trim((string) ($inactiveDriver['telefon'] ?? ''));
+                        $inactiveDriverVehicles = trim((string) ($inactiveDriver['vehicul_label'] ?? '-'));
+                        $inactiveDriverUpdatedAt = trim((string) ($inactiveDriver['updated_at'] ?? ''));
+                        $inactiveDriverIssues = is_array($inactiveDriver['issues'] ?? null) ? $inactiveDriver['issues'] : [];
+                        $inactiveDriverIssueRows = is_array($inactiveDriver['issue_rows'] ?? null) ? $inactiveDriver['issue_rows'] : [];
+                        if ($inactiveDriverIssueRows === []) {
+                            $inactiveDriverIssueRows = array_map(static function ($issue): array {
+                                return [
+                                    'message' => (string) $issue,
+                                    'type' => 'other',
+                                ];
+                            }, $inactiveDriverIssues);
+                        }
+                        $inactiveDriverTitle = $inactiveDriverName !== '' ? $inactiveDriverName : ('Sofer #' . $inactiveDriverId);
+                        $inactiveDriverIssueType = (string) ($inactiveDriver['issue_type'] ?? 'attention');
+                        $inactiveDriverIssueLabel = (string) ($inactiveDriver['issue_label'] ?? 'Atentie');
+                        $inactiveDriverPhotoUrl = driver_image_url((string) ($inactiveDriver['poza_stocata'] ?? ''));
+                        $inactiveDriverPhotoAlt = trim((string) ($inactiveDriver['poza_original'] ?? ''));
+                        if ($inactiveDriverPhotoAlt === '') {
+                            $inactiveDriverPhotoAlt = $inactiveDriverTitle !== '' ? ('Poza ' . $inactiveDriverTitle) : 'Poza sofer';
+                        }
+                        $inactiveDriverExpanded = false;
+                        $inactiveDriverHasMissing = (int) ($inactiveDriver['missing_count'] ?? 0) > 0;
+                        $inactiveDriverHasExpired = (int) ($inactiveDriver['expired_count'] ?? 0) > 0;
+                        $inactiveDriverHasMixed = $inactiveDriverHasMissing && $inactiveDriverHasExpired;
+                        ?>
+                        <article
+                            class="driver-inactive-card <?= $inactiveDriverExpanded ? 'is-expanded' : '' ?>"
+                            data-inactive-driver-card
+                            data-driver-missing="<?= $inactiveDriverHasMissing ? '1' : '0' ?>"
+                            data-driver-expired="<?= $inactiveDriverHasExpired ? '1' : '0' ?>"
+                            data-driver-mixed="<?= $inactiveDriverHasMixed ? '1' : '0' ?>"
+                        >
+                            <div class="driver-inactive-card-head">
+                                <div class="driver-inactive-driver-main">
+                                    <div class="driver-inactive-avatar <?= $inactiveDriverExpanded ? 'is-danger' : 'is-info' ?> <?= $inactiveDriverPhotoUrl !== null ? 'has-photo' : '' ?>" aria-hidden="true">
+                                        <?php if ($inactiveDriverPhotoUrl !== null): ?>
+                                            <img src="<?= e($inactiveDriverPhotoUrl) ?>" alt="<?= e($inactiveDriverPhotoAlt) ?>" loading="lazy">
+                                        <?php else: ?>
+                                            <i class="bi bi-person-fill"></i>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="driver-inactive-name-row">
+                                        <strong><?= e($inactiveDriverTitle) ?></strong>
+                                        <span class="driver-inactive-badge driver-inactive-badge-<?= e($inactiveDriverIssueType) ?>">
+                                            <i class="bi bi-circle-fill" aria-hidden="true"></i>
+                                            <?= e($inactiveDriverIssueLabel) ?>
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div class="driver-inactive-card-actions">
+                                    <a class="driver-inactive-action-btn driver-inactive-action-secondary" href="<?= e(build_query_url(['page' => 'soferi', 'action' => 'show', 'id' => $inactiveDriverId])) ?>">
+                                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                        <span>Detalii</span>
+                                    </a>
+                                    <a class="driver-inactive-action-btn driver-inactive-action-primary" href="<?= e(build_query_url(['page' => 'documente_soferi', 'action' => 'index', 'driver_id' => $inactiveDriverId])) ?>">
+                                        <i class="bi bi-folder2-open" aria-hidden="true"></i>
+                                        <span>Documente</span>
+                                    </a>
+                                    <button
+                                        type="button"
+                                        class="driver-inactive-chevron"
+                                        data-inactive-driver-toggle
+                                        aria-label="<?= $inactiveDriverExpanded ? 'Restrange motivele' : 'Extinde motivele' ?>"
+                                        aria-expanded="<?= $inactiveDriverExpanded ? 'true' : 'false' ?>"
+                                    >
+                                        <i class="bi <?= $inactiveDriverExpanded ? 'bi-chevron-up' : 'bi-chevron-down' ?>" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="driver-inactive-meta">
+                                <span><i class="bi bi-person-vcard" aria-hidden="true"></i> ID: <?= e((string) $inactiveDriverId) ?></span>
+                                <?php if ($inactiveDriverPhone !== ''): ?>
+                                    <span><i class="bi bi-telephone" aria-hidden="true"></i> Telefon: <?= e($inactiveDriverPhone) ?></span>
+                                <?php endif; ?>
+                                <?php if ($inactiveDriverVehicles !== ''): ?>
+                                    <span><i class="bi bi-truck" aria-hidden="true"></i> Vehicule: <?= e($inactiveDriverVehicles) ?></span>
+                                <?php endif; ?>
+                                <?php if ($inactiveDriverUpdatedAt !== ''): ?>
+                                    <span><i class="bi bi-calendar3" aria-hidden="true"></i> Actualizat: <?= e(format_datetime_ro($inactiveDriverUpdatedAt)) ?></span>
+                                <?php endif; ?>
+                            </div>
+
+                            <div class="driver-inactive-card-details" data-inactive-driver-details <?= $inactiveDriverExpanded ? '' : 'hidden' ?>>
+                                <div class="driver-inactive-divider"></div>
+                                <h5>Motive</h5>
+                                <div class="driver-inactive-reason-list">
+                                    <?php foreach ($inactiveDriverIssueRows as $inactiveDriverIssueRow): ?>
+                                        <?php
+                                        $inactiveDriverIssueMessage = (string) ($inactiveDriverIssueRow['message'] ?? '');
+                                        $inactiveDriverReasonType = (string) ($inactiveDriverIssueRow['type'] ?? 'other');
+                                        if (!in_array($inactiveDriverReasonType, ['missing', 'expired', 'other'], true)) {
+                                            $inactiveDriverReasonType = 'other';
+                                        }
+                                        ?>
+                                        <div class="driver-inactive-reason-row" data-driver-reason-type="<?= e($inactiveDriverReasonType) ?>">
+                                            <span class="driver-inactive-reason-icon"><i class="bi <?= e($inactiveDriverReasonIcon($inactiveDriverIssueMessage)) ?>" aria-hidden="true"></i></span>
+                                            <span><?= e($inactiveDriverIssueMessage) ?></span>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                        </article>
+                    <?php endforeach; ?>
+                </div>
+
+                <div class="driver-inactive-filter-empty" data-inactive-driver-filter-empty hidden>
+                    Nu exista soferi inactivi pentru filtrul selectat in lista curenta.
+                </div>
+
+                <?php if ($inactiveDriverHiddenCount > 0): ?>
+                    <div class="driver-inactive-hidden-note">
+                        Mai există încă <?= e((string) $inactiveDriverHiddenCount) ?> șoferi inactivi neafișați în lista rapidă.
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <footer class="driver-inactive-modal-footer">
+                <button type="button" class="driver-inactive-footer-close" data-inactive-drivers-close>Închide</button>
+            </footer>
+        </section>
+    </div>
+<?php endif; ?>
+
+<?php if ($isVehicleList && $inactiveVehicleOverview !== null && in_array($routePage, ['vehicule_usoare', 'vehicule_grele'], true) && (int) ($inactiveVehicleOverview['count'] ?? 0) > 0): ?>
+    <?php
+    $inactiveVehicleCount = (int) ($inactiveVehicleOverview['count'] ?? 0);
+    $inactiveVehicleRows = is_array($inactiveVehicleOverview['rows'] ?? null) ? $inactiveVehicleOverview['rows'] : [];
+    $inactiveVehicleHiddenCount = max(0, $inactiveVehicleCount - count($inactiveVehicleRows));
+    $inactiveVehicleMissingCount = (int) ($inactiveVehicleOverview['missing_count'] ?? 0);
+    $inactiveVehicleExpiredCount = (int) ($inactiveVehicleOverview['expired_count'] ?? 0);
+    $inactiveVehicleMissingExpiredCount = (int) ($inactiveVehicleOverview['missing_expired_count'] ?? 0);
+    $inactiveVehicleIsLight = $routePage === 'vehicule_usoare';
+    $inactiveVehicleModalTitle = $inactiveVehicleIsLight ? 'Vehicule ușoare inactive' : 'Vehicule grele inactive';
+    $inactiveVehicleFallbackIcon = $inactiveVehicleIsLight ? 'bi-car-front-fill' : 'bi-truck-front-fill';
+    $inactiveVehicleReasonIcon = static function (string $issueType, string $issue): string {
+        $normalizedIssue = mb_strtolower($issue, 'UTF-8');
+        if ($issueType === 'missing') {
+            return 'bi-shield-x';
+        }
+        if (str_contains($normalizedIssue, 'itp')) {
+            return 'bi-calendar-x';
+        }
+        if (str_contains($normalizedIssue, 'roviniet')) {
+            return 'bi-signpost-split';
+        }
+        if (str_contains($normalizedIssue, 'rca')) {
+            return 'bi-shield-check';
+        }
+
+        return $issueType === 'expired' ? 'bi-calendar-x' : 'bi-exclamation-circle';
+    };
+    ?>
+    <div class="vehicle-inactive-launcher-row">
+        <button
+            type="button"
+            class="vehicle-inactive-launcher"
+            data-inactive-vehicles-open
+            aria-haspopup="dialog"
+            aria-controls="inactive-vehicles-modal"
+        >
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span><?= e($inactiveVehicleModalTitle) ?> (<?= e((string) $inactiveVehicleCount) ?>)</span>
+        </button>
+    </div>
+
+    <div class="vehicle-inactive-modal-overlay d-none" id="inactive-vehicles-modal" data-inactive-vehicles-modal role="dialog" aria-modal="true" aria-labelledby="inactive-vehicles-modal-title">
+        <section class="vehicle-inactive-modal" role="document">
+            <header class="vehicle-inactive-modal-header">
+                <div class="vehicle-inactive-modal-title-group">
+                    <div class="vehicle-inactive-alert-icon" aria-hidden="true">
+                        <i class="bi bi-exclamation-triangle"></i>
+                    </div>
+                    <div>
+                        <h3 id="inactive-vehicles-modal-title"><?= e($inactiveVehicleModalTitle) ?> (<?= e((string) $inactiveVehicleCount) ?>)</h3>
+                        <p>Necesită atenție pentru a putea fi repuse în exploatare</p>
+                    </div>
+                </div>
+                <button type="button" class="vehicle-inactive-icon-close" data-inactive-vehicles-close aria-label="Inchide">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </header>
+
+            <div class="vehicle-inactive-modal-body">
+                <h4>Clasificare motive</h4>
+
+                <div class="vehicle-inactive-stats">
+                    <button
+                        type="button"
+                        class="vehicle-inactive-stat vehicle-inactive-stat-expired"
+                        data-inactive-vehicle-filter="expired"
+                        aria-pressed="false"
+                        <?= $inactiveVehicleExpiredCount <= 0 ? 'disabled' : '' ?>
+                    >
+                        <span class="vehicle-inactive-stat-icon"><i class="bi bi-file-earmark-excel" aria-hidden="true"></i></span>
+                        <span class="vehicle-inactive-stat-copy">
+                            <span>Documente expirate</span>
+                            <strong><?= e((string) $inactiveVehicleExpiredCount) ?></strong>
+                        </span>
+                    </button>
+                    <button
+                        type="button"
+                        class="vehicle-inactive-stat vehicle-inactive-stat-missing"
+                        data-inactive-vehicle-filter="missing"
+                        aria-pressed="false"
+                        <?= $inactiveVehicleMissingCount <= 0 ? 'disabled' : '' ?>
+                    >
+                        <span class="vehicle-inactive-stat-icon"><i class="bi bi-file-earmark-question" aria-hidden="true"></i></span>
+                        <span class="vehicle-inactive-stat-copy">
+                            <span>Documente lipsă</span>
+                            <strong><?= e((string) $inactiveVehicleMissingCount) ?></strong>
+                        </span>
+                    </button>
+                    <button
+                        type="button"
+                        class="vehicle-inactive-stat vehicle-inactive-stat-mixed"
+                        data-inactive-vehicle-filter="mixed"
+                        aria-pressed="false"
+                        <?= $inactiveVehicleMissingExpiredCount <= 0 ? 'disabled' : '' ?>
+                    >
+                        <span class="vehicle-inactive-stat-icon"><i class="bi bi-file-earmark-diff" aria-hidden="true"></i></span>
+                        <span class="vehicle-inactive-stat-copy">
+                            <span>Documente lipsă &amp; expirate</span>
+                            <strong><?= e((string) $inactiveVehicleMissingExpiredCount) ?></strong>
+                        </span>
+                    </button>
+                </div>
+
+                <div class="vehicle-inactive-card-list">
+                    <?php foreach ($inactiveVehicleRows as $inactiveVehicleIndex => $inactiveVehicle): ?>
+                        <?php
+                        $inactiveVehicleId = (int) ($inactiveVehicle['id'] ?? 0);
+                        if ($inactiveVehicleId <= 0) {
+                            continue;
+                        }
+
+                        $inactiveVehiclePlate = trim((string) ($inactiveVehicle['nr_inmatriculare'] ?? ''));
+                        $inactiveVehicleType = trim((string) ($inactiveVehicle['tip_vehicul'] ?? ''));
+                        $inactiveVehicleTypeLabel = vehicle_type_label($inactiveVehicleType);
+                        $inactiveVehicleBrandModel = trim(trim((string) ($inactiveVehicle['marca'] ?? '')) . ' / ' . trim((string) ($inactiveVehicle['model'] ?? '')), ' /');
+                        $inactiveVehicleCoupledWith = trim((string) ($inactiveVehicle['cuplaj_curent'] ?? '-'));
+                        $inactiveVehicleUpdatedAt = trim((string) ($inactiveVehicle['updated_at'] ?? ''));
+                        $inactiveVehicleIssues = is_array($inactiveVehicle['issues'] ?? null) ? $inactiveVehicle['issues'] : [];
+                        $inactiveVehicleIssueRows = is_array($inactiveVehicle['issue_rows'] ?? null) ? $inactiveVehicle['issue_rows'] : [];
+                        if ($inactiveVehicleIssueRows === []) {
+                            $inactiveVehicleIssueRows = array_map(static function ($issue): array {
+                                return [
+                                    'message' => (string) $issue,
+                                    'type' => 'other',
+                                ];
+                            }, $inactiveVehicleIssues);
+                        }
+                        $inactiveVehicleTitle = $inactiveVehiclePlate !== '' ? $inactiveVehiclePlate : ('Vehicul #' . $inactiveVehicleId);
+                        $inactiveVehiclePhotoUrl = vehicle_image_url((string) ($inactiveVehicle['poza_stocata'] ?? ''));
+                        $inactiveVehiclePhotoAlt = trim((string) ($inactiveVehicle['poza_original'] ?? ''));
+                        if ($inactiveVehiclePhotoAlt === '') {
+                            $inactiveVehiclePhotoAlt = $inactiveVehicleTitle !== '' ? ('Poza ' . $inactiveVehicleTitle) : 'Poza vehicul';
+                        }
+                        $inactiveVehicleExpanded = $inactiveVehicleIndex === 0;
+                        $inactiveVehicleHasMissing = (int) ($inactiveVehicle['missing_count'] ?? 0) > 0;
+                        $inactiveVehicleHasExpired = (int) ($inactiveVehicle['expired_count'] ?? 0) > 0;
+                        $inactiveVehicleHasMixed = $inactiveVehicleHasMissing && $inactiveVehicleHasExpired;
+                        ?>
+                        <article
+                            class="vehicle-inactive-card <?= $inactiveVehicleExpanded ? 'is-expanded' : '' ?>"
+                            data-inactive-vehicle-card
+                            data-vehicle-missing="<?= $inactiveVehicleHasMissing ? '1' : '0' ?>"
+                            data-vehicle-expired="<?= $inactiveVehicleHasExpired ? '1' : '0' ?>"
+                            data-vehicle-mixed="<?= $inactiveVehicleHasMixed ? '1' : '0' ?>"
+                        >
+                            <div class="vehicle-inactive-card-head">
+                                <div class="vehicle-inactive-main">
+                                    <div class="vehicle-inactive-avatar <?= $inactiveVehiclePhotoUrl !== null ? 'has-photo' : '' ?>" aria-hidden="true">
+                                        <?php if ($inactiveVehiclePhotoUrl !== null): ?>
+                                            <img src="<?= e($inactiveVehiclePhotoUrl) ?>" alt="<?= e($inactiveVehiclePhotoAlt) ?>" loading="lazy">
+                                        <?php else: ?>
+                                            <i class="bi <?= e($inactiveVehicleFallbackIcon) ?>"></i>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="vehicle-inactive-title-row">
+                                        <strong><?= e($inactiveVehicleTitle) ?></strong>
+                                        <span class="vehicle-inactive-badge">Inactiv</span>
+                                    </div>
+                                </div>
+
+                                <div class="vehicle-inactive-actions">
+                                    <a class="vehicle-inactive-action vehicle-inactive-action-secondary" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'show', 'id' => $inactiveVehicleId])) ?>">
+                                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                        <span>Detalii</span>
+                                    </a>
+                                    <a class="vehicle-inactive-action vehicle-inactive-action-primary" href="<?= e(build_query_url(['page' => 'documente', 'action' => 'index', 'vehicle_id' => $inactiveVehicleId])) ?>">
+                                        <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
+                                        <span>Documente</span>
+                                    </a>
+                                    <button
+                                        type="button"
+                                        class="vehicle-inactive-chevron"
+                                        data-inactive-vehicle-toggle
+                                        aria-label="<?= $inactiveVehicleExpanded ? 'Restrange motivele' : 'Extinde motivele' ?>"
+                                        aria-expanded="<?= $inactiveVehicleExpanded ? 'true' : 'false' ?>"
+                                    >
+                                        <i class="bi <?= $inactiveVehicleExpanded ? 'bi-chevron-up' : 'bi-chevron-down' ?>" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="vehicle-inactive-meta-grid">
+                                <div>
+                                    <span>Tip vehicul</span>
+                                    <strong><?= e($inactiveVehicleTypeLabel) ?></strong>
+                                </div>
+                                <div>
+                                    <span>Marcă / Model</span>
+                                    <strong><?= e($inactiveVehicleBrandModel !== '' ? $inactiveVehicleBrandModel : '-') ?></strong>
+                                </div>
+                                <div>
+                                    <span>Cuplat cu</span>
+                                    <strong><?= e($inactiveVehicleCoupledWith !== '' ? $inactiveVehicleCoupledWith : '-') ?></strong>
+                                </div>
+                                <div>
+                                    <span>Ultima actualizare</span>
+                                    <strong><i class="bi bi-calendar3" aria-hidden="true"></i><?= $inactiveVehicleUpdatedAt !== '' ? e(format_date_ro($inactiveVehicleUpdatedAt)) : '-' ?></strong>
+                                </div>
+                            </div>
+
+                            <div class="vehicle-inactive-card-details" data-inactive-vehicle-details <?= $inactiveVehicleExpanded ? '' : 'hidden' ?>>
+                                <h5>Motive</h5>
+                                <div class="vehicle-inactive-reason-list">
+                                    <?php foreach ($inactiveVehicleIssueRows as $inactiveVehicleIssueRow): ?>
+                                        <?php
+                                        $inactiveVehicleIssueMessage = (string) ($inactiveVehicleIssueRow['message'] ?? '');
+                                        $inactiveVehicleReasonType = (string) ($inactiveVehicleIssueRow['type'] ?? 'other');
+                                        if (!in_array($inactiveVehicleReasonType, ['missing', 'expired', 'other'], true)) {
+                                            $inactiveVehicleReasonType = 'other';
+                                        }
+                                        ?>
+                                        <div class="vehicle-inactive-reason-row" data-vehicle-reason-type="<?= e($inactiveVehicleReasonType) ?>">
+                                            <span class="vehicle-inactive-reason-icon"><i class="bi <?= e($inactiveVehicleReasonIcon($inactiveVehicleReasonType, $inactiveVehicleIssueMessage)) ?>" aria-hidden="true"></i></span>
+                                            <span><?= e($inactiveVehicleIssueMessage) ?></span>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                        </article>
+                    <?php endforeach; ?>
+                </div>
+
+                <div class="vehicle-inactive-filter-empty" data-inactive-vehicle-filter-empty hidden>
+                    Nu exista vehicule inactive pentru filtrul selectat in lista curenta.
+                </div>
+
+                <?php if ($inactiveVehicleHiddenCount > 0): ?>
+                    <div class="vehicle-inactive-hidden-note">
+                        Mai există încă <?= e((string) $inactiveVehicleHiddenCount) ?> vehicule inactive neafișate în lista rapidă.
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <footer class="vehicle-inactive-modal-footer">
+                <button type="button" class="vehicle-inactive-footer-close" data-inactive-vehicles-close>Închide</button>
+            </footer>
+        </section>
+    </div>
+<?php endif; ?>
 
 <?php if ($isDocumentCostOverrideList && function_exists('is_admin') && is_admin()): ?>
     <div class="modal fade" id="addDocumentTypeConfigModal" tabindex="-1" aria-labelledby="addDocumentTypeConfigModalLabel" aria-hidden="true">
@@ -1457,7 +1944,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
 <div class="card border-0 shadow-sm mb-3">
     <div class="card-body">
         <form method="get" class="row g-3 align-items-end">
-            <input type="hidden" name="page" value="<?= e($moduleKey) ?>">
+            <input type="hidden" name="page" value="<?= e($routePage) ?>">
             <input type="hidden" name="action" value="index">
 
             <div class="col-12 col-md-4">
@@ -1529,7 +2016,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                 <button type="submit" class="btn btn-primary">Aplică filtre</button>
             </div>
             <div class="col-12 col-md-auto">
-                <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => $moduleKey])) ?>">Resetează</a>
+                <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => $routePage])) ?>">Resetează</a>
             </div>
         </form>
     </div>
@@ -1541,26 +2028,80 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
 
 <div class="card border-0 shadow-sm">
     <div class="card-body p-0">
-        <div class="table-responsive module-list-table-wrap<?= $isVehicleList ? ' module-list-table-wrap-vehicule' : '' ?><?= $isAnyDocumentList ? ' module-list-table-wrap-documente' : '' ?>">
-            <table class="table table-hover align-middle mb-0 module-list-table<?= $isVehicleList ? ' module-list-table-vehicule' : '' ?><?= $isAnyDocumentList ? ' module-list-table-documente' : '' ?>">
+        <div class="table-responsive module-list-table-wrap<?= $isVehicleList ? ' module-list-table-wrap-vehicule' : '' ?><?= $isDriverList ? ' module-list-table-wrap-soferi' : '' ?><?= $isAnyDocumentList ? ' module-list-table-wrap-documente' : '' ?>">
+            <table class="table table-hover align-middle mb-0 module-list-table<?= $isVehicleList ? ' module-list-table-vehicule' : '' ?><?= $isDriverList ? ' module-list-table-soferi' : '' ?><?= $isAnyDocumentList ? ' module-list-table-documente' : '' ?>">
                 <thead>
                 <tr>
-                    <?php foreach ($module['list_columns'] as $column => $meta): ?>
-                        <th><?= e($meta['label']) ?></th>
+                    <?php foreach ($visibleListColumns as $column => $meta): ?>
+                        <th<?= $isDriverList ? ' class="driver-table-column driver-table-column-' . e((string) $column) . '"' : ($usesVehicleCompactRows ? ' class="vehicle-table-column vehicle-table-column-' . e((string) $column) . '"' : '') ?>><?= e($meta['label']) ?></th>
                     <?php endforeach; ?>
-                    <th class="text-end pe-3">Acțiuni</th>
+                    <th class="<?= $isDriverList ? 'driver-actions-column actions-column text-center' : ($usesVehicleCompactRows ? 'vehicle-actions-column actions-column text-center' : ($usesDocumentCompactRows ? 'document-actions-column actions-column text-center' : 'text-end pe-3')) ?>">Acțiuni</th>
                 </tr>
                 </thead>
                 <tbody>
                 <?php if ($rows === []): ?>
                     <tr>
-                        <td colspan="<?= e((string) (count($module['list_columns']) + 1)) ?>" class="text-center text-muted py-4">Nu există înregistrări.</td>
+                        <td colspan="<?= e((string) (count($visibleListColumns) + 1)) ?>" class="text-center text-muted py-4">Nu există înregistrări.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($rows as $row): ?>
-                        <tr>
-                            <?php foreach ($module['list_columns'] as $column => $meta): ?>
-                                <td>
+                        <?php
+                        $canEndDriverEmployment = $isDriverList
+                            && function_exists('is_accountancy_user')
+                            && is_accountancy_user()
+                            && (string) ($row['employment_status'] ?? 'active') !== 'terminated'
+                            && empty($row['data_incetare']);
+                        $isCurrentUser = ($moduleKey === 'utilizatori' && (int) ($row['id'] ?? 0) === (int) (current_user()['id'] ?? 0));
+                        $rowClasses = [];
+                        if ($isDriverList) {
+                            $rowClasses[] = 'driver-row';
+                            $driverStatus = strtolower(trim((string) ($row['status'] ?? '')));
+                            if ($driverStatus === 'activ') {
+                                $rowClasses[] = 'driver-row-active';
+                            } elseif ($driverStatus === 'inactiv') {
+                                $rowClasses[] = 'driver-row-inactive';
+                            }
+                        } elseif ($usesVehicleCompactRows) {
+                            $rowClasses[] = 'vehicle-row';
+                            $vehicleStatus = strtolower(trim((string) ($row['status'] ?? '')));
+                            if ($vehicleStatus === 'activ') {
+                                $rowClasses[] = 'vehicle-row-active';
+                            } elseif ($vehicleStatus === 'inactiv') {
+                                $rowClasses[] = 'vehicle-row-inactive';
+                            }
+                        } elseif ($usesDocumentCompactRows) {
+                            $rowClasses[] = 'document-row';
+                            $documentExpiryDate = trim((string) ($row['data_expirare'] ?? ''));
+                            $documentDaysUntilExpiry = is_numeric($row['zile_expirare'] ?? null)
+                                ? (int) $row['zile_expirare']
+                                : null;
+
+                            if ($documentExpiryDate === '') {
+                                $rowClasses[] = 'document-row-no-expiry';
+                            } else {
+                                if ($documentDaysUntilExpiry === null) {
+                                    try {
+                                        $documentDaysUntilExpiry = (int) (new DateTime('today'))->diff(new DateTime($documentExpiryDate))->format('%r%a');
+                                    } catch (Exception) {
+                                        $documentDaysUntilExpiry = null;
+                                    }
+                                }
+
+                                if ($documentDaysUntilExpiry === null) {
+                                    $rowClasses[] = 'document-row-no-expiry';
+                                } elseif ($documentDaysUntilExpiry < 0) {
+                                    $rowClasses[] = 'document-row-expired';
+                                } elseif ($documentDaysUntilExpiry <= 30) {
+                                    $rowClasses[] = 'document-row-soon';
+                                } else {
+                                    $rowClasses[] = 'document-row-valid';
+                                }
+                            }
+                        }
+                        ?>
+                        <tr<?= $rowClasses !== [] ? ' class="' . e(implode(' ', $rowClasses)) . '"' : '' ?>>
+                            <?php foreach ($visibleListColumns as $column => $meta): ?>
+                                <td<?= $isDriverList ? ' class="driver-table-column driver-table-column-' . e((string) $column) . '"' : ($usesVehicleCompactRows ? ' class="vehicle-table-column vehicle-table-column-' . e((string) $column) . '"' : '') ?>>
                                     <?php if ($moduleKey === 'vehicule' && $column === 'nr_inmatriculare' && !empty($row['id'])): ?>
                                         <a class="fw-semibold text-decoration-none" href="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => (int) $row['id']])) ?>">
                                             <?= format_value_html($row[$column] ?? null, $meta, $row) ?>
@@ -1570,32 +2111,242 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                                     <?php endif; ?>
                                 </td>
                             <?php endforeach; ?>
-                            <td class="text-end pe-3">
-                                <div class="d-inline-flex gap-1">
-                                    <?php if (in_array($moduleKey, ['documente', 'documente_soferi', 'mentenanta'], true) && !empty($row['fisier_stocat'])): ?>
-                                        <a class="btn btn-sm btn-outline-dark" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'preview', 'id' => (int) $row['id']])) ?>">
-                                            <?= $moduleKey === 'mentenanta' ? 'Vezi factura' : 'Vezi in aplicatie' ?>
-                                        </a>
-                                    <?php endif; ?>
-                                    <?php if ($moduleKey === 'vehicule'): ?>
-                                        <a class="btn btn-sm btn-outline-success" href="<?= e(build_query_url(['page' => 'stare_tehnica', 'vehicle_id' => (int) $row['id']])) ?>">Stare tehnic&#259;</a>
-                                    <?php endif; ?>
-                                    <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'show', 'id' => (int) $row['id']])) ?>">Detalii</a>
-                                    <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'edit', 'id' => (int) $row['id']])) ?>">Editează</a>
+                            <?php if ($isDriverList): ?>
+                                <td class="driver-actions-column actions-column text-center">
+                                    <div class="driver-actions" data-driver-actions>
+                                        <button
+                                            type="button"
+                                            class="driver-actions-trigger"
+                                            aria-label="Deschide acțiunile pentru șofer"
+                                            aria-haspopup="menu"
+                                            aria-expanded="false"
+                                        >
+                                            <span aria-hidden="true">...</span>
+                                        </button>
+                                        <div class="driver-actions-menu" role="menu" hidden>
+                                            <a class="driver-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'show', 'id' => (int) $row['id']])) ?>">
+                                                <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                                <span>Detalii</span>
+                                            </a>
+                                            <a class="driver-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => (int) $row['id']])) ?>">
+                                                <i class="bi bi-pencil" aria-hidden="true"></i>
+                                                <span>Editează</span>
+                                            </a>
+                                            <?php if ($canEndDriverEmployment || !$isCurrentUser): ?>
+                                                <div class="driver-actions-divider" role="separator"></div>
+                                            <?php endif; ?>
+                                            <?php if ($canEndDriverEmployment): ?>
+                                                <?php $driverTerminationModalId = 'driverEndEmployment' . (int) ($row['id'] ?? 0); ?>
+                                                <button type="button" class="driver-actions-item driver-actions-item-danger" role="menuitem" data-bs-toggle="modal" data-bs-target="#<?= e($driverTerminationModalId) ?>">
+                                                    <i class="bi bi-person-x" aria-hidden="true"></i>
+                                                    <span>Încheie colaborarea</span>
+                                                </button>
+                                            <?php endif; ?>
+                                            <?php if (!$isCurrentUser): ?>
+                                                <form method="post" action="<?= e(build_query_url(['page' => $routePage, 'action' => 'delete'])) ?>" class="driver-actions-form" role="none">
+                                                    <?= csrf_field() ?>
+                                                    <input type="hidden" name="id" value="<?= e((string) $row['id']) ?>">
+                                                    <button type="submit" class="driver-actions-item driver-actions-item-danger" role="menuitem" data-confirm="Sigur dorești să ștergi această înregistrare?">
+                                                        <i class="bi bi-trash" aria-hidden="true"></i>
+                                                        <span>Șterge</span>
+                                                    </button>
+                                                </form>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                </td>
+                            <?php elseif ($usesVehicleCompactRows): ?>
+                                <td class="vehicle-actions-column actions-column text-center">
+                                    <div class="driver-actions vehicle-actions" data-driver-actions>
+                                        <button
+                                            type="button"
+                                            class="driver-actions-trigger vehicle-actions-trigger"
+                                            aria-label="Deschide acțiunile pentru vehicul"
+                                            aria-haspopup="menu"
+                                            aria-expanded="false"
+                                        >
+                                            <span aria-hidden="true">...</span>
+                                        </button>
+                                        <div class="driver-actions-menu vehicle-actions-menu" role="menu" hidden>
+                                            <a class="driver-actions-item vehicle-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'stare_tehnica', 'vehicle_id' => (int) $row['id']])) ?>">
+                                                <i class="bi bi-clipboard2-pulse" aria-hidden="true"></i>
+                                                <span>Stare tehnică</span>
+                                            </a>
+                                            <a class="driver-actions-item vehicle-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'show', 'id' => (int) $row['id']])) ?>">
+                                                <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                                <span>Detalii</span>
+                                            </a>
+                                            <a class="driver-actions-item vehicle-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => (int) $row['id']])) ?>">
+                                                <i class="bi bi-pencil" aria-hidden="true"></i>
+                                                <span>Editează</span>
+                                            </a>
+                                            <div class="driver-actions-divider vehicle-actions-divider" role="separator"></div>
+                                            <form method="post" action="<?= e(build_query_url(['page' => $routePage, 'action' => 'delete'])) ?>" class="driver-actions-form vehicle-actions-form" role="none">
+                                                <?= csrf_field() ?>
+                                                <input type="hidden" name="id" value="<?= e((string) $row['id']) ?>">
+                                                <button type="submit" class="driver-actions-item driver-actions-item-danger vehicle-actions-item vehicle-actions-item-danger" role="menuitem" data-confirm="Sigur dorești să ștergi această înregistrare?">
+                                                    <i class="bi bi-trash" aria-hidden="true"></i>
+                                                    <span>Șterge</span>
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </td>
+                            <?php elseif ($usesDocumentCompactRows): ?>
+                                <td class="document-actions-column actions-column text-center">
+                                    <div class="driver-actions document-actions" data-driver-actions>
+                                        <button
+                                            type="button"
+                                            class="driver-actions-trigger document-actions-trigger"
+                                            aria-label="Deschide acțiunile pentru document"
+                                            aria-haspopup="menu"
+                                            aria-expanded="false"
+                                        >
+                                            <span aria-hidden="true">...</span>
+                                        </button>
+                                        <div class="driver-actions-menu document-actions-menu" role="menu" hidden>
+                                            <?php if (!empty($row['fisier_stocat'])): ?>
+                                                <a class="driver-actions-item document-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'preview', 'id' => (int) $row['id']])) ?>">
+                                                    <i class="bi bi-eye" aria-hidden="true"></i>
+                                                    <span>Vezi in aplicatie</span>
+                                                </a>
+                                            <?php endif; ?>
+                                            <a class="driver-actions-item document-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'show', 'id' => (int) $row['id']])) ?>">
+                                                <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                                <span>Detalii</span>
+                                            </a>
+                                            <a class="driver-actions-item document-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => (int) $row['id']])) ?>">
+                                                <i class="bi bi-pencil" aria-hidden="true"></i>
+                                                <span>Editează</span>
+                                            </a>
+                                            <div class="driver-actions-divider document-actions-divider" role="separator"></div>
+                                            <form method="post" action="<?= e(build_query_url(['page' => $routePage, 'action' => 'delete'])) ?>" class="driver-actions-form document-actions-form" role="none">
+                                                <?= csrf_field() ?>
+                                                <input type="hidden" name="id" value="<?= e((string) $row['id']) ?>">
+                                                <button type="submit" class="driver-actions-item driver-actions-item-danger document-actions-item document-actions-item-danger" role="menuitem" data-confirm="Sigur dorești să ștergi această înregistrare?">
+                                                    <i class="bi bi-trash" aria-hidden="true"></i>
+                                                    <span>Șterge</span>
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </td>
+                            <?php else: ?>
+                                <td class="text-end pe-3">
+                                    <div class="d-inline-flex gap-1">
+                                        <?php if (in_array($moduleKey, ['documente', 'documente_soferi', 'mentenanta'], true) && !empty($row['fisier_stocat'])): ?>
+                                            <a class="btn btn-sm btn-outline-dark" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'preview', 'id' => (int) $row['id']])) ?>">
+                                                <?= $moduleKey === 'mentenanta' ? 'Vezi factura' : 'Vezi in aplicatie' ?>
+                                            </a>
+                                        <?php endif; ?>
+                                        <?php if ($moduleKey === 'vehicule'): ?>
+                                            <a class="btn btn-sm btn-outline-success" href="<?= e(build_query_url(['page' => 'stare_tehnica', 'vehicle_id' => (int) $row['id']])) ?>">Stare tehnic&#259;</a>
+                                        <?php endif; ?>
+                                        <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'show', 'id' => (int) $row['id']])) ?>">Detalii</a>
+                                        <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => (int) $row['id']])) ?>">Editează</a>
 
-                                    <?php $isCurrentUser = ($moduleKey === 'utilizatori' && (int) ($row['id'] ?? 0) === (int) (current_user()['id'] ?? 0)); ?>
-                                    <?php if (!$isCurrentUser): ?>
-                                        <form method="post" action="<?= e(build_query_url(['page' => $moduleKey, 'action' => 'delete'])) ?>" class="d-inline">
-                                            <?= csrf_field() ?>
-                                            <input type="hidden" name="id" value="<?= e((string) $row['id']) ?>">
-                                            <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur dorești să ștergi această înregistrare?">
-                                                Șterge
+                                        <?php if ($canEndDriverEmployment): ?>
+                                            <?php $driverTerminationModalId = 'driverEndEmployment' . (int) ($row['id'] ?? 0); ?>
+                                            <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#<?= e($driverTerminationModalId) ?>">
+                                                Încheie colaborarea
                                             </button>
-                                        </form>
-                                    <?php endif; ?>
-                                </div>
-                            </td>
+                                        <?php endif; ?>
+
+                                        <?php if (!$isCurrentUser): ?>
+                                            <form method="post" action="<?= e(build_query_url(['page' => $routePage, 'action' => 'delete'])) ?>" class="d-inline">
+                                                <?= csrf_field() ?>
+                                                <input type="hidden" name="id" value="<?= e((string) $row['id']) ?>">
+                                                <button type="submit" class="btn btn-sm btn-outline-danger" data-confirm="Sigur dorești să ștergi această înregistrare?">
+                                                    Șterge
+                                                </button>
+                                            </form>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+                            <?php endif; ?>
                         </tr>
+                        <?php if ($canEndDriverEmployment ?? false): ?>
+                            <?php
+                            ob_start();
+                            $driverTerminationModalId = 'driverEndEmployment' . (int) ($row['id'] ?? 0);
+                            ?>
+                            <div class="modal fade" id="<?= e($driverTerminationModalId) ?>" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog modal-lg">
+                                    <div class="modal-content">
+                                        <form method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'end_activity'])) ?>">
+                                            <?= csrf_field() ?>
+                                            <input type="hidden" name="source_type" value="driver">
+                                            <input type="hidden" name="source_id" value="<?= e((string) ((int) ($row['id'] ?? 0))) ?>">
+                                            <input type="hidden" name="return_to" value="soferi">
+                                            <div class="modal-header">
+                                                <h3 class="modal-title fs-5">Incheiere colaborare</h3>
+                                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+                                            </div>
+                                            <div class="modal-body">
+                                                <div class="mb-3">
+                                                    <label class="form-label">Sofer</label>
+                                                    <input type="text" class="form-control" value="<?= e((string) ($row['nume'] ?? '-')) ?>" readonly>
+                                                </div>
+                                                <div class="row g-3">
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Data plecarii <span class="text-danger">*</span></label>
+                                                        <input type="date" class="form-control" name="termination_date" value="<?= e(date('Y-m-d')) ?>" max="<?= e(date('Y-m-d')) ?>" required>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Ultima zi lucrata</label>
+                                                        <input type="date" class="form-control" name="last_working_day" max="<?= e(date('Y-m-d')) ?>">
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Motiv plecare <span class="text-danger">*</span></label>
+                                                        <select class="form-select" name="termination_reason" required>
+                                                            <option value="">Selecteaza motivul</option>
+                                                            <option value="Demisie">Demisie</option>
+                                                            <option value="Incetare contract">Incetare contract</option>
+                                                            <option value="Concediere">Concediere</option>
+                                                            <option value="Pensionare">Pensionare</option>
+                                                            <option value="Reorganizare">Reorganizare</option>
+                                                            <option value="Abandon / Neprezentare">Abandon / Neprezentare</option>
+                                                            <option value="Acordul partilor">Acordul partilor</option>
+                                                            <option value="Alte motive">Alte motive</option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Motiv personalizat</label>
+                                                        <input type="text" class="form-control" name="termination_reason_custom" placeholder="Completeaza pentru Alte motive">
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Document incetare</label>
+                                                        <input type="file" class="form-control" name="termination_document" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Eligibil pentru reangajare</label>
+                                                        <select class="form-select" name="rehire_eligible">
+                                                            <option value="1">Da</option>
+                                                            <option value="0">Nu</option>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label">Observatii</label>
+                                                        <textarea class="form-control" name="termination_notes" rows="3"></textarea>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-check">
+                                                            <input class="form-check-input" type="checkbox" name="termination_assets_returned" value="1">
+                                                            <span class="form-check-label">Confirmare ca bunurile si documentele companiei au fost predate</span>
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="modal-footer">
+                                                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuleaza</button>
+                                                <button type="submit" class="btn btn-danger" data-confirm="Inchei colaborarea pentru acest sofer?">Incheie colaborarea</button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                            <?php $driverTerminationModals[] = ob_get_clean(); ?>
+                        <?php endif; ?>
                     <?php endforeach; ?>
                 <?php endif; ?>
                 </tbody>
@@ -1642,6 +2393,10 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
         </div>
     </div>
 </div>
+
+<?php foreach ($driverTerminationModals as $driverTerminationModalHtml): ?>
+    <?= $driverTerminationModalHtml ?>
+<?php endforeach; ?>
 
 <?php if ($isDocumentList && $driverDocumentModule !== null && $driverDocumentPagination !== null): ?>
     <?php
@@ -1828,6 +2583,635 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
     </div>
 <?php endif; ?>
 
+<?php if ($usesCompactStatusRows): ?>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var activeDriverActionsMenu = null;
+    var activeDriverActionsTrigger = null;
+    var pendingDriverActionsFrame = 0;
+
+    var closeDriverActionsMenu = function (restoreFocus) {
+        if (pendingDriverActionsFrame !== 0) {
+            window.cancelAnimationFrame(pendingDriverActionsFrame);
+            pendingDriverActionsFrame = 0;
+        }
+
+        if (!(activeDriverActionsMenu instanceof HTMLElement)) {
+            activeDriverActionsMenu = null;
+            activeDriverActionsTrigger = null;
+            return;
+        }
+
+        activeDriverActionsMenu.hidden = true;
+        activeDriverActionsMenu.classList.remove('is-open');
+        activeDriverActionsMenu.style.left = '';
+        activeDriverActionsMenu.style.top = '';
+
+        if (activeDriverActionsTrigger instanceof HTMLButtonElement) {
+            activeDriverActionsTrigger.setAttribute('aria-expanded', 'false');
+            if (restoreFocus) {
+                activeDriverActionsTrigger.focus();
+            }
+        }
+
+        activeDriverActionsMenu = null;
+        activeDriverActionsTrigger = null;
+    };
+
+    var positionDriverActionsMenu = function () {
+        if (
+            !(activeDriverActionsMenu instanceof HTMLElement)
+            || !(activeDriverActionsTrigger instanceof HTMLButtonElement)
+        ) {
+            return;
+        }
+
+        var viewportPadding = 8;
+        var gap = 8;
+        var triggerRect = activeDriverActionsTrigger.getBoundingClientRect();
+
+        activeDriverActionsMenu.hidden = false;
+        activeDriverActionsMenu.classList.add('is-open');
+
+        var menuRect = activeDriverActionsMenu.getBoundingClientRect();
+        var menuWidth = menuRect.width || 212;
+        var menuHeight = menuRect.height || 0;
+        var left = triggerRect.left + (triggerRect.width / 2) - (menuWidth / 2);
+        var top = triggerRect.bottom + gap;
+
+        if (left + menuWidth > window.innerWidth - viewportPadding) {
+            left = window.innerWidth - viewportPadding - menuWidth;
+        }
+
+        if (left < viewportPadding) {
+            left = viewportPadding;
+        }
+
+        if (top + menuHeight > window.innerHeight - viewportPadding) {
+            top = triggerRect.top - gap - menuHeight;
+        }
+
+        if (top < viewportPadding) {
+            top = Math.max(viewportPadding, window.innerHeight - viewportPadding - menuHeight);
+        }
+
+        activeDriverActionsMenu.style.left = Math.round(left) + 'px';
+        activeDriverActionsMenu.style.top = Math.round(top) + 'px';
+    };
+
+    var scheduleDriverActionsPosition = function () {
+        if (!(activeDriverActionsMenu instanceof HTMLElement)) {
+            return;
+        }
+
+        if (pendingDriverActionsFrame !== 0) {
+            return;
+        }
+
+        pendingDriverActionsFrame = window.requestAnimationFrame(function () {
+            pendingDriverActionsFrame = 0;
+            positionDriverActionsMenu();
+        });
+    };
+
+    document.querySelectorAll('[data-driver-actions]').forEach(function (actionsEl) {
+        if (!(actionsEl instanceof HTMLElement)) {
+            return;
+        }
+
+        var triggerEl = actionsEl.querySelector('.driver-actions-trigger');
+        var menuEl = actionsEl.querySelector('.driver-actions-menu');
+
+        if (!(triggerEl instanceof HTMLButtonElement) || !(menuEl instanceof HTMLElement)) {
+            return;
+        }
+
+        triggerEl.addEventListener('click', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            var shouldClose = activeDriverActionsMenu === menuEl && !menuEl.hidden;
+            closeDriverActionsMenu(false);
+
+            if (shouldClose) {
+                return;
+            }
+
+            activeDriverActionsMenu = menuEl;
+            activeDriverActionsTrigger = triggerEl;
+            triggerEl.setAttribute('aria-expanded', 'true');
+            positionDriverActionsMenu();
+        });
+
+        menuEl.addEventListener('click', function (event) {
+            var targetEl = event.target;
+            if (!(targetEl instanceof Element) || targetEl.closest('.driver-actions-item') === null) {
+                return;
+            }
+
+            window.setTimeout(function () {
+                closeDriverActionsMenu(false);
+            }, 0);
+        });
+    });
+
+    document.addEventListener('click', function (event) {
+        if (!(activeDriverActionsMenu instanceof HTMLElement)) {
+            return;
+        }
+
+        var targetEl = event.target;
+        if (!(targetEl instanceof Node)) {
+            closeDriverActionsMenu(false);
+            return;
+        }
+
+        if (
+            activeDriverActionsMenu.contains(targetEl)
+            || (activeDriverActionsTrigger instanceof HTMLElement && activeDriverActionsTrigger.contains(targetEl))
+        ) {
+            return;
+        }
+
+        closeDriverActionsMenu(false);
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && activeDriverActionsMenu instanceof HTMLElement) {
+            event.preventDefault();
+            closeDriverActionsMenu(true);
+        }
+    });
+
+    window.addEventListener('resize', closeDriverActionsMenu.bind(null, false));
+    window.addEventListener('orientationchange', closeDriverActionsMenu.bind(null, false));
+    document.addEventListener('scroll', scheduleDriverActionsPosition, true);
+});
+</script>
+<?php endif; ?>
+
+<?php if ($isDriverList && $inactiveDriverOverview !== null && (int) ($inactiveDriverOverview['count'] ?? 0) > 0): ?>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var inactiveDriversOpenEl = document.querySelector('[data-inactive-drivers-open]');
+    var inactiveDriversModalEl = document.querySelector('[data-inactive-drivers-modal]');
+    var inactiveDriversCloseEls = document.querySelectorAll('[data-inactive-drivers-close]');
+    var inactiveDriversFilterEls = document.querySelectorAll('[data-inactive-driver-filter]');
+    var inactiveDriversFilterEmptyEl = document.querySelector('[data-inactive-driver-filter-empty]');
+    var lastInactiveDriversFocusEl = null;
+
+    if (
+        !(inactiveDriversOpenEl instanceof HTMLButtonElement)
+        || !(inactiveDriversModalEl instanceof HTMLElement)
+    ) {
+        return;
+    }
+
+    var isInactiveDriversOpen = function () {
+        return !inactiveDriversModalEl.classList.contains('d-none');
+    };
+
+    var collapseInactiveDriverCards = function () {
+        inactiveDriversModalEl.querySelectorAll('[data-inactive-driver-card]').forEach(function (cardEl) {
+            if (!(cardEl instanceof HTMLElement)) {
+                return;
+            }
+
+            var detailsEl = cardEl.querySelector('[data-inactive-driver-details]');
+            var toggleEl = cardEl.querySelector('[data-inactive-driver-toggle]');
+            var iconEl = toggleEl instanceof HTMLElement ? toggleEl.querySelector('i') : null;
+            var avatarEl = cardEl.querySelector('.driver-inactive-avatar');
+
+            cardEl.classList.remove('is-expanded');
+
+            if (detailsEl instanceof HTMLElement) {
+                detailsEl.hidden = true;
+            }
+
+            if (toggleEl instanceof HTMLButtonElement) {
+                toggleEl.setAttribute('aria-expanded', 'false');
+                toggleEl.setAttribute('aria-label', 'Extinde motivele');
+            }
+
+            if (iconEl instanceof HTMLElement) {
+                iconEl.classList.remove('bi-chevron-up');
+                iconEl.classList.add('bi-chevron-down');
+            }
+
+            if (avatarEl instanceof HTMLElement) {
+                avatarEl.classList.remove('is-danger');
+                avatarEl.classList.add('is-info');
+            }
+        });
+    };
+
+    var applyInactiveDriverReasonFilter = function (cardEl, filterType) {
+        if (!(cardEl instanceof HTMLElement)) {
+            return;
+        }
+
+        cardEl.querySelectorAll('[data-driver-reason-type]').forEach(function (reasonEl) {
+            if (!(reasonEl instanceof HTMLElement)) {
+                return;
+            }
+
+            var reasonType = reasonEl.getAttribute('data-driver-reason-type') || 'other';
+            if (filterType === 'mixed') {
+                reasonEl.hidden = reasonType !== 'missing' && reasonType !== 'expired';
+                return;
+            }
+
+            reasonEl.hidden = filterType !== '' && reasonType !== filterType;
+        });
+    };
+
+    var setInactiveDriversFilter = function (filterType) {
+        var activeFilter = inactiveDriversModalEl.getAttribute('data-active-filter') || '';
+        var nextFilter = filterType !== '' && activeFilter === filterType ? '' : filterType;
+
+        inactiveDriversModalEl.setAttribute('data-active-filter', nextFilter);
+
+        inactiveDriversFilterEls.forEach(function (filterEl) {
+            if (!(filterEl instanceof HTMLButtonElement)) {
+                return;
+            }
+
+            var isActive = nextFilter !== '' && filterEl.getAttribute('data-inactive-driver-filter') === nextFilter;
+            filterEl.classList.toggle('is-active', isActive);
+            filterEl.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+
+        var visibleCount = 0;
+        inactiveDriversModalEl.querySelectorAll('[data-inactive-driver-card]').forEach(function (cardEl) {
+            if (!(cardEl instanceof HTMLElement)) {
+                return;
+            }
+
+            var shouldShow = true;
+            if (nextFilter === 'missing') {
+                shouldShow = cardEl.getAttribute('data-driver-missing') === '1';
+            } else if (nextFilter === 'expired') {
+                shouldShow = cardEl.getAttribute('data-driver-expired') === '1';
+            } else if (nextFilter === 'mixed') {
+                shouldShow = cardEl.getAttribute('data-driver-mixed') === '1';
+            }
+
+            cardEl.hidden = !shouldShow;
+            applyInactiveDriverReasonFilter(cardEl, nextFilter);
+            if (shouldShow) {
+                visibleCount++;
+            }
+        });
+
+        collapseInactiveDriverCards();
+
+        if (inactiveDriversFilterEmptyEl instanceof HTMLElement) {
+            inactiveDriversFilterEmptyEl.hidden = nextFilter === '' || visibleCount > 0;
+        }
+    };
+
+    var setInactiveDriversOpen = function (open) {
+        if (open === isInactiveDriversOpen()) {
+            return;
+        }
+
+        if (open) {
+            setInactiveDriversFilter('');
+        }
+
+        inactiveDriversModalEl.classList.toggle('d-none', !open);
+        document.body.classList.toggle('driver-inactive-modal-open', open);
+
+        if (open) {
+            lastInactiveDriversFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            var closeEl = inactiveDriversModalEl.querySelector('[data-inactive-drivers-close]');
+            if (closeEl instanceof HTMLElement) {
+                closeEl.focus();
+            }
+            return;
+        }
+
+        if (lastInactiveDriversFocusEl instanceof HTMLElement) {
+            lastInactiveDriversFocusEl.focus();
+        }
+    };
+
+    inactiveDriversOpenEl.addEventListener('click', function () {
+        setInactiveDriversOpen(true);
+    });
+
+    inactiveDriversCloseEls.forEach(function (closeEl) {
+        if (!(closeEl instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        closeEl.addEventListener('click', function () {
+            setInactiveDriversOpen(false);
+        });
+    });
+
+    inactiveDriversFilterEls.forEach(function (filterEl) {
+        if (!(filterEl instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        filterEl.addEventListener('click', function () {
+            if (filterEl.disabled) {
+                return;
+            }
+
+            setInactiveDriversFilter(filterEl.getAttribute('data-inactive-driver-filter') || '');
+        });
+    });
+
+    inactiveDriversModalEl.querySelectorAll('[data-inactive-driver-toggle]').forEach(function (toggleEl) {
+        if (!(toggleEl instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        toggleEl.addEventListener('click', function () {
+            var cardEl = toggleEl.closest('[data-inactive-driver-card]');
+            if (!(cardEl instanceof HTMLElement)) {
+                return;
+            }
+
+            var detailsEl = cardEl.querySelector('[data-inactive-driver-details]');
+            var iconEl = toggleEl.querySelector('i');
+            var avatarEl = cardEl.querySelector('.driver-inactive-avatar');
+            var expanded = toggleEl.getAttribute('aria-expanded') !== 'true';
+
+            cardEl.classList.toggle('is-expanded', expanded);
+            toggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            toggleEl.setAttribute('aria-label', expanded ? 'Restrange motivele' : 'Extinde motivele');
+            applyInactiveDriverReasonFilter(cardEl, inactiveDriversModalEl.getAttribute('data-active-filter') || '');
+
+            if (detailsEl instanceof HTMLElement) {
+                detailsEl.hidden = !expanded;
+            }
+
+            if (iconEl instanceof HTMLElement) {
+                iconEl.classList.toggle('bi-chevron-up', expanded);
+                iconEl.classList.toggle('bi-chevron-down', !expanded);
+            }
+
+            if (avatarEl instanceof HTMLElement) {
+                avatarEl.classList.toggle('is-danger', expanded);
+                avatarEl.classList.toggle('is-info', !expanded);
+            }
+        });
+    });
+
+    document.addEventListener('click', function (event) {
+        if (!isInactiveDriversOpen()) {
+            return;
+        }
+
+        var targetEl = event.target;
+        if (!(targetEl instanceof Node)) {
+            return;
+        }
+
+        if (targetEl === inactiveDriversModalEl) {
+            setInactiveDriversOpen(false);
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && isInactiveDriversOpen()) {
+            setInactiveDriversOpen(false);
+        }
+    });
+});
+</script>
+<?php endif; ?>
+
+<?php if ($isVehicleList && $inactiveVehicleOverview !== null && in_array($routePage, ['vehicule_usoare', 'vehicule_grele'], true) && (int) ($inactiveVehicleOverview['count'] ?? 0) > 0): ?>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var inactiveVehiclesOpenEl = document.querySelector('[data-inactive-vehicles-open]');
+    var inactiveVehiclesModalEl = document.querySelector('[data-inactive-vehicles-modal]');
+    var inactiveVehiclesCloseEls = document.querySelectorAll('[data-inactive-vehicles-close]');
+    var inactiveVehiclesFilterEls = document.querySelectorAll('[data-inactive-vehicle-filter]');
+    var inactiveVehiclesFilterEmptyEl = document.querySelector('[data-inactive-vehicle-filter-empty]');
+    var lastInactiveVehiclesFocusEl = null;
+
+    if (
+        !(inactiveVehiclesOpenEl instanceof HTMLButtonElement)
+        || !(inactiveVehiclesModalEl instanceof HTMLElement)
+    ) {
+        return;
+    }
+
+    var isInactiveVehiclesOpen = function () {
+        return !inactiveVehiclesModalEl.classList.contains('d-none');
+    };
+
+    var applyInactiveVehicleReasonFilter = function (cardEl, filterType) {
+        if (!(cardEl instanceof HTMLElement)) {
+            return;
+        }
+
+        cardEl.querySelectorAll('[data-vehicle-reason-type]').forEach(function (reasonEl) {
+            if (!(reasonEl instanceof HTMLElement)) {
+                return;
+            }
+
+            var reasonType = reasonEl.getAttribute('data-vehicle-reason-type') || 'other';
+            if (filterType === 'mixed') {
+                reasonEl.hidden = reasonType !== 'missing' && reasonType !== 'expired';
+                return;
+            }
+
+            reasonEl.hidden = filterType !== '' && reasonType !== filterType;
+        });
+    };
+
+    var setInactiveVehicleCardExpanded = function (cardEl, expanded) {
+        if (!(cardEl instanceof HTMLElement)) {
+            return;
+        }
+
+        var detailsEl = cardEl.querySelector('[data-inactive-vehicle-details]');
+        var toggleEl = cardEl.querySelector('[data-inactive-vehicle-toggle]');
+        var iconEl = toggleEl instanceof HTMLElement ? toggleEl.querySelector('i') : null;
+
+        cardEl.classList.toggle('is-expanded', expanded);
+
+        if (detailsEl instanceof HTMLElement) {
+            detailsEl.hidden = !expanded;
+        }
+
+        if (toggleEl instanceof HTMLButtonElement) {
+            toggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            toggleEl.setAttribute('aria-label', expanded ? 'Restrange motivele' : 'Extinde motivele');
+        }
+
+        if (iconEl instanceof HTMLElement) {
+            iconEl.classList.toggle('bi-chevron-up', expanded);
+            iconEl.classList.toggle('bi-chevron-down', !expanded);
+        }
+    };
+
+    var expandFirstVisibleInactiveVehicleCard = function () {
+        var firstVisibleCardEl = null;
+
+        inactiveVehiclesModalEl.querySelectorAll('[data-inactive-vehicle-card]').forEach(function (cardEl) {
+            if (!(cardEl instanceof HTMLElement)) {
+                return;
+            }
+
+            if (!cardEl.hidden && firstVisibleCardEl === null) {
+                firstVisibleCardEl = cardEl;
+            }
+
+            setInactiveVehicleCardExpanded(cardEl, false);
+        });
+
+        if (firstVisibleCardEl instanceof HTMLElement) {
+            setInactiveVehicleCardExpanded(firstVisibleCardEl, true);
+        }
+    };
+
+    var setInactiveVehiclesFilter = function (filterType) {
+        var activeFilter = inactiveVehiclesModalEl.getAttribute('data-active-filter') || '';
+        var nextFilter = filterType !== '' && activeFilter === filterType ? '' : filterType;
+
+        inactiveVehiclesModalEl.setAttribute('data-active-filter', nextFilter);
+
+        inactiveVehiclesFilterEls.forEach(function (filterEl) {
+            if (!(filterEl instanceof HTMLButtonElement)) {
+                return;
+            }
+
+            var isActive = nextFilter !== '' && filterEl.getAttribute('data-inactive-vehicle-filter') === nextFilter;
+            filterEl.classList.toggle('is-active', isActive);
+            filterEl.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+
+        var visibleCount = 0;
+        inactiveVehiclesModalEl.querySelectorAll('[data-inactive-vehicle-card]').forEach(function (cardEl) {
+            if (!(cardEl instanceof HTMLElement)) {
+                return;
+            }
+
+            var shouldShow = true;
+            if (nextFilter === 'missing') {
+                shouldShow = cardEl.getAttribute('data-vehicle-missing') === '1';
+            } else if (nextFilter === 'expired') {
+                shouldShow = cardEl.getAttribute('data-vehicle-expired') === '1';
+            } else if (nextFilter === 'mixed') {
+                shouldShow = cardEl.getAttribute('data-vehicle-mixed') === '1';
+            }
+
+            cardEl.hidden = !shouldShow;
+            applyInactiveVehicleReasonFilter(cardEl, nextFilter);
+            if (shouldShow) {
+                visibleCount++;
+            }
+        });
+
+        expandFirstVisibleInactiveVehicleCard();
+
+        if (inactiveVehiclesFilterEmptyEl instanceof HTMLElement) {
+            inactiveVehiclesFilterEmptyEl.hidden = nextFilter === '' || visibleCount > 0;
+        }
+    };
+
+    var setInactiveVehiclesOpen = function (open) {
+        if (open === isInactiveVehiclesOpen()) {
+            return;
+        }
+
+        if (open) {
+            setInactiveVehiclesFilter('');
+        }
+
+        inactiveVehiclesModalEl.classList.toggle('d-none', !open);
+        document.body.classList.toggle('vehicle-inactive-modal-open', open);
+
+        if (open) {
+            lastInactiveVehiclesFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            var closeEl = inactiveVehiclesModalEl.querySelector('[data-inactive-vehicles-close]');
+            if (closeEl instanceof HTMLElement) {
+                closeEl.focus();
+            }
+            return;
+        }
+
+        if (lastInactiveVehiclesFocusEl instanceof HTMLElement) {
+            lastInactiveVehiclesFocusEl.focus();
+        }
+    };
+
+    inactiveVehiclesOpenEl.addEventListener('click', function () {
+        setInactiveVehiclesOpen(true);
+    });
+
+    inactiveVehiclesCloseEls.forEach(function (closeEl) {
+        if (!(closeEl instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        closeEl.addEventListener('click', function () {
+            setInactiveVehiclesOpen(false);
+        });
+    });
+
+    inactiveVehiclesFilterEls.forEach(function (filterEl) {
+        if (!(filterEl instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        filterEl.addEventListener('click', function () {
+            if (filterEl.disabled) {
+                return;
+            }
+
+            setInactiveVehiclesFilter(filterEl.getAttribute('data-inactive-vehicle-filter') || '');
+        });
+    });
+
+    inactiveVehiclesModalEl.querySelectorAll('[data-inactive-vehicle-toggle]').forEach(function (toggleEl) {
+        if (!(toggleEl instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        toggleEl.addEventListener('click', function () {
+            var cardEl = toggleEl.closest('[data-inactive-vehicle-card]');
+            if (!(cardEl instanceof HTMLElement)) {
+                return;
+            }
+
+            var expanded = toggleEl.getAttribute('aria-expanded') !== 'true';
+            setInactiveVehicleCardExpanded(cardEl, expanded);
+            applyInactiveVehicleReasonFilter(cardEl, inactiveVehiclesModalEl.getAttribute('data-active-filter') || '');
+        });
+    });
+
+    document.addEventListener('click', function (event) {
+        if (!isInactiveVehiclesOpen()) {
+            return;
+        }
+
+        var targetEl = event.target;
+        if (!(targetEl instanceof Node)) {
+            return;
+        }
+
+        if (targetEl === inactiveVehiclesModalEl) {
+            setInactiveVehiclesOpen(false);
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && isInactiveVehiclesOpen()) {
+            setInactiveVehiclesOpen(false);
+        }
+    });
+});
+</script>
+<?php endif; ?>
+
 <?php if ($hasMultiselectFilters): ?>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
@@ -1875,4 +3259,5 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 <?php endif; ?>
 
+<?php if ($isDocumentCostOverrideList): ?></div><?php endif; ?>
 

@@ -12,7 +12,7 @@ class StaffAccountancyController
 
     public function handle(string $action): void
     {
-        require_accountancy_or_403();
+        require_page_or_403('contabilitate_personal');
 
         switch ($action) {
             case 'index':
@@ -65,6 +65,37 @@ class StaffAccountancyController
         }
     }
 
+    public function handleFormerEmployees(string $action): void
+    {
+        require_page_or_403('fosti_angajati');
+
+        switch ($action) {
+            case 'index':
+            case 'list':
+                $this->formerEmployeesAction();
+                return;
+            case 'export':
+                $this->exportFormerEmployeesAction();
+                return;
+            case 'history_sheet':
+                $this->historySheetAction();
+                return;
+            case 'update_termination':
+                $this->updateTerminationAction();
+                return;
+            case 'rehire':
+                $this->rehireAction();
+                return;
+            default:
+                http_response_code(404);
+                render('errors/404.php', [
+                    'pageTitle' => 'Actiune inexistenta',
+                    'currentPage' => 'contabilitate_personal',
+                ]);
+                return;
+        }
+    }
+
     private function indexAction(): void
     {
         $filters = $this->collectFilters();
@@ -84,7 +115,6 @@ class StaffAccountancyController
                 'allStaffTypeOptions' => $this->model->getStaffTypeOptions(false),
                 'driverOptions' => $this->model->getDriverOptions(),
                 'documentTypeOptionsByStaffType' => $this->model->getDocumentTypeOptionsByStaffType(),
-                'uploadSubjectOptions' => $this->model->getAllStaffForExport([], 'nume', 'asc'),
                 'rows' => $rows,
                 'documentsBySubject' => $this->model->getDocumentsForRows($rows),
                 'salaryHistoryBySubject' => $this->model->getSalaryHistoryForRows($rows),
@@ -110,7 +140,6 @@ class StaffAccountancyController
                 'allStaffTypeOptions' => [],
                 'driverOptions' => [],
                 'documentTypeOptionsByStaffType' => [],
-                'uploadSubjectOptions' => [],
                 'rows' => [],
                 'documentsBySubject' => [],
                 'salaryHistoryBySubject' => [],
@@ -122,6 +151,129 @@ class StaffAccountancyController
         }
 
         render('contabilitate_personal/index.php', $viewData);
+    }
+
+    private function formerEmployeesAction(): void
+    {
+        $filters = $this->collectFormerFilters();
+        $sort = trim((string) ($_GET['sort'] ?? 'data_plecare'));
+        $direction = strtolower(trim((string) ($_GET['dir'] ?? 'desc'))) === 'asc' ? 'asc' : 'desc';
+        $page = max(1, (int) ($_GET['p'] ?? 1));
+
+        try {
+            $result = $this->model->getPaginatedFormerEmployees($filters, $sort, $direction, $page, ITEMS_PER_PAGE);
+            $rows = $result['rows'];
+            $viewData = [
+                'pageTitle' => 'Foști angajați',
+                'currentPage' => 'contabilitate_personal',
+                'summary' => $this->model->getFormerSummary(),
+                'rows' => $rows,
+                'documentsBySubject' => $this->model->getDocumentsForRows($rows),
+                'profilesBySubject' => $this->buildFormerProfilesForRows($rows),
+                'terminationReasons' => $this->model->getTerminationReasons(),
+                'staffTypeOptions' => $this->model->getStaffTypeOptions(true),
+                'filters' => $filters,
+                'sort' => $sort,
+                'direction' => $direction,
+                'pagination' => [
+                    'page' => $result['page'],
+                    'total_pages' => $result['total_pages'],
+                    'total_rows' => $result['total_rows'],
+                    'per_page' => ITEMS_PER_PAGE,
+                ],
+            ];
+        } catch (Throwable $exception) {
+            error_log('[StaffAccountancyController][former] ' . $exception->getMessage());
+            flash_set('danger', 'Pagina Foști angajați necesită actualizarea bazei de date. Rulează migrările pentru contabilitate personal.');
+            $viewData = [
+                'pageTitle' => 'Foști angajați',
+                'currentPage' => 'contabilitate_personal',
+                'summary' => ['total_former' => 0, 'former_operational' => 0, 'former_office' => 0, 'former_last_12_months' => 0],
+                'rows' => [],
+                'documentsBySubject' => [],
+                'profilesBySubject' => [],
+                'terminationReasons' => array_combine(StaffAccountancyModel::TERMINATION_REASONS, StaffAccountancyModel::TERMINATION_REASONS),
+                'staffTypeOptions' => [],
+                'filters' => $filters,
+                'sort' => $sort,
+                'direction' => $direction,
+                'pagination' => ['page' => 1, 'total_pages' => 1, 'total_rows' => 0, 'per_page' => ITEMS_PER_PAGE],
+            ];
+        }
+
+        render('fosti_angajati/index.php', $viewData);
+    }
+
+    private function exportFormerEmployeesAction(): void
+    {
+        $filters = $this->collectFormerFilters();
+        $sort = trim((string) ($_GET['sort'] ?? 'data_plecare'));
+        $direction = strtolower(trim((string) ($_GET['dir'] ?? 'desc'))) === 'asc' ? 'asc' : 'desc';
+        $rows = $this->model->getAllFormerEmployeesForExport($filters, $sort, $direction);
+
+        header('Content-Type: text/csv; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="fosti_angajati_' . date('Ymd_His') . '.csv"');
+        echo "\xEF\xBB\xBF";
+
+        $output = fopen('php://output', 'wb');
+        if ($output === false) {
+            exit;
+        }
+
+        fputcsv($output, [
+            'Nume',
+            'Tip personal',
+            'Funcție',
+            'Data angajării',
+            'Data plecării',
+            'Vechime',
+            'Motiv plecare',
+            'Sursa',
+            'Număr documente',
+            'Eligibil pentru reangajare',
+        ], ';');
+
+        foreach ($rows as $row) {
+            fputcsv($output, [
+                (string) ($row['nume'] ?? ''),
+                $this->categoryLabel((string) ($row['category'] ?? '')),
+                (string) ($row['functie'] ?? ''),
+                !empty($row['data_angajare']) ? format_date_ro((string) $row['data_angajare']) : '',
+                !empty($row['termination_effective_date']) ? format_date_ro((string) $row['termination_effective_date']) : '',
+                $this->seniorityLabel((int) ($row['active_days'] ?? 0)),
+                (string) ($row['termination_reason'] ?? ''),
+                (string) ($row['source_label'] ?? ''),
+                (string) ($row['document_count'] ?? 0),
+                (int) ($row['rehire_eligible'] ?? 0) === 1 ? 'Da' : 'Nu',
+            ], ';');
+        }
+
+        fclose($output);
+        exit;
+    }
+
+    private function historySheetAction(): void
+    {
+        $sourceType = $this->normalizeSourceType((string) ($_GET['source_type'] ?? ''));
+        $sourceId = (int) ($_GET['source_id'] ?? 0);
+        $profile = $this->model->getFormerProfile($sourceType, $sourceId);
+        if ($profile === null) {
+            http_response_code(404);
+            render('errors/404.php', [
+                'pageTitle' => 'Fost angajat negăsit',
+                'currentPage' => 'contabilitate_personal',
+            ]);
+            return;
+        }
+
+        header('Content-Type: text/html; charset=UTF-8');
+        $pageTitle = 'Fișă istoric angajat';
+        $generatedBy = (string) (current_user()['nume'] ?? '-');
+        ob_start();
+        require BASE_PATH . '/views/fosti_angajati/history_sheet.php';
+        $content = (string) ob_get_clean();
+        echo function_exists('normalize_romanian_text') ? normalize_romanian_text($content) : $content;
+        exit;
     }
 
     private function exportAction(): void
@@ -144,11 +296,11 @@ class StaffAccountancyController
             'Nume',
             'Tip personal',
             'Categorie',
-            'Functie',
+            'Funcție',
             'Telefon',
             'Salariu lunar',
-            'Data angajarii',
-            'Data incetarii',
+            'Data angajării',
+            'Data încetării',
             'Zile active',
             'Documente',
             'Status documente',
@@ -297,7 +449,7 @@ class StaffAccountancyController
         $staffTypeId = (int) ($_POST['staff_type_id'] ?? 0);
         $type = $this->model->findStaffType($staffTypeId);
         if ($type === null || (string) ($type['status'] ?? '') !== 'activ') {
-            flash_set('danger', 'Selecteaza un tip de personal activ.');
+            flash_set('danger', 'Selectează un tip de personal activ.');
             redirect($this->indexUrl());
         }
 
@@ -327,6 +479,104 @@ class StaffAccountancyController
         }
 
         redirect($this->indexUrl());
+    }
+
+    private function updateTerminationAction(): void
+    {
+        $this->requirePost('fosti_angajati');
+        ensure_csrf_or_redirect($this->formerUrl());
+
+        $sourceType = $this->normalizeSourceType((string) ($_POST['source_type'] ?? ''));
+        $sourceId = (int) ($_POST['source_id'] ?? 0);
+        [$data, $errors] = $this->collectTerminationInput($_POST);
+        if ($sourceType === '' || $sourceId <= 0) {
+            $errors[] = 'Persoana selectata este invalida.';
+        }
+
+        if ($errors !== []) {
+            flash_set('danger', implode(' ', $errors));
+            redirect($this->formerUrl());
+        }
+
+        [$fileData, $uploadError] = $this->storeUploadedDocumentFile($_FILES['termination_document'] ?? null);
+        if ($uploadError !== null) {
+            flash_set('danger', $uploadError);
+            redirect($this->formerUrl());
+        }
+
+        try {
+            if (!$this->model->updateTermination($sourceType, $sourceId, $data, $fileData, $this->currentUserId())) {
+                flash_set('warning', 'Fostul angajat nu a fost găsit.');
+            } else {
+                flash_set('success', 'Datele plecării au fost actualizate.');
+            }
+        } catch (InvalidArgumentException $exception) {
+            if (is_array($fileData)) {
+                $this->deleteDocumentPhysicalFile((string) ($fileData['fisier_stocat'] ?? ''));
+            }
+            flash_set('danger', $exception->getMessage());
+        } catch (Throwable $exception) {
+            if (is_array($fileData)) {
+                $this->deleteDocumentPhysicalFile((string) ($fileData['fisier_stocat'] ?? ''));
+            }
+            error_log('[StaffAccountancyController][update_termination] ' . $exception->getMessage());
+            flash_set('danger', 'Nu am putut actualiza datele plecării.');
+        }
+
+        redirect($this->formerUrl());
+    }
+
+    private function rehireAction(): void
+    {
+        $this->requirePost('fosti_angajati');
+        ensure_csrf_or_redirect($this->formerUrl());
+
+        $sourceType = $this->normalizeSourceType((string) ($_POST['source_type'] ?? ''));
+        $sourceId = (int) ($_POST['source_id'] ?? 0);
+        $staffTypeId = (int) ($_POST['staff_type_id'] ?? 0);
+        $functionName = trim((string) ($_POST['function_name'] ?? ''));
+        $hireDate = $this->normalizeDate((string) ($_POST['hire_date'] ?? ''));
+        $salary = $this->parseMoney($_POST['salary'] ?? null);
+        $notes = trim((string) ($_POST['rehire_notes'] ?? ''));
+
+        $errors = [];
+        if ($sourceType === '' || $sourceId <= 0) {
+            $errors[] = 'Persoana selectata este invalida.';
+        }
+        if ($hireDate === null) {
+            $errors[] = 'Noua data de angajare este obligatorie.';
+        }
+        if ($sourceType === 'staff' && $staffTypeId <= 0) {
+            $errors[] = 'Tipul de personal este obligatoriu.';
+        }
+        if ($sourceType === 'staff' && $functionName === '') {
+            $errors[] = 'Functia este obligatorie.';
+        }
+        if (isset($_POST['salary']) && trim((string) $_POST['salary']) !== '' && $salary === null) {
+            $errors[] = 'Salariul trebuie sa fie numeric.';
+        }
+
+        if ($errors !== []) {
+            flash_set('danger', implode(' ', $errors));
+            redirect($this->formerUrl());
+        }
+
+        try {
+            $ok = $this->model->rehireEmployee($sourceType, $sourceId, [
+                'hire_date' => (string) $hireDate,
+                'staff_type_id' => $staffTypeId,
+                'function_name' => $functionName,
+                'salary' => $salary,
+                'rehire_notes' => $notes !== '' ? $notes : null,
+            ], $this->currentUserId());
+
+            flash_set($ok ? 'success' : 'warning', $ok ? 'Angajatul a fost reactivat.' : 'Fostul angajat nu a fost găsit.');
+        } catch (Throwable $exception) {
+            error_log('[StaffAccountancyController][rehire] ' . $exception->getMessage());
+            flash_set('danger', 'Nu am putut reangaja persoana selectata.');
+        }
+
+        redirect($this->formerUrl());
     }
 
     private function updateStaffAction(): void
@@ -370,33 +620,44 @@ class StaffAccountancyController
 
         $sourceType = $this->normalizeSourceType((string) ($_POST['source_type'] ?? ''));
         $sourceId = (int) ($_POST['source_id'] ?? 0);
-        $endDate = $this->normalizeDate((string) ($_POST['data_incetare'] ?? '')) ?: date('Y-m-d');
-        $notes = trim((string) ($_POST['notes'] ?? ''));
+        [$termination, $errors] = $this->collectTerminationInput($_POST);
 
         if ($sourceType === '' || $sourceId <= 0) {
-            flash_set('danger', 'Selecteaza persoana pentru care vrei sa incetezi activitatea.');
-            redirect($this->indexUrl());
+            $errors[] = 'Selectează persoana pentru care vrei să închei colaborarea.';
         }
 
-        if ($endDate > date('Y-m-d')) {
-            flash_set('danger', 'Data incetarii nu poate fi in viitor.');
-            redirect($this->indexUrl());
+        if ($errors !== []) {
+            flash_set('danger', implode(' ', $errors));
+            redirect($this->terminationReturnUrl());
+        }
+
+        [$fileData, $uploadError] = $this->storeUploadedDocumentFile($_FILES['termination_document'] ?? null);
+        if ($uploadError !== null) {
+            flash_set('danger', $uploadError);
+            redirect($this->terminationReturnUrl());
         }
 
         try {
-            if (!$this->model->endEmployment($sourceType, $sourceId, $endDate, $notes !== '' ? $notes : null, $this->currentUserId())) {
+            $termination['fileData'] = $fileData;
+            if (!$this->model->endEmployment($sourceType, $sourceId, $termination, $this->currentUserId())) {
                 flash_set('warning', 'Persoana selectata nu a fost gasita.');
             } else {
-                flash_set('success', 'Activitatea a fost incetata si persoana a fost marcata ca inactiva.');
+                flash_set('success', 'Colaborarea a fost încheiată. Persoana apare acum în Foști angajați.');
             }
         } catch (InvalidArgumentException $exception) {
+            if (is_array($fileData)) {
+                $this->deleteDocumentPhysicalFile((string) ($fileData['fisier_stocat'] ?? ''));
+            }
             flash_set('danger', $exception->getMessage());
         } catch (Throwable $exception) {
+            if (is_array($fileData)) {
+                $this->deleteDocumentPhysicalFile((string) ($fileData['fisier_stocat'] ?? ''));
+            }
             error_log('[StaffAccountancyController][end_activity] ' . $exception->getMessage());
-            flash_set('danger', 'Nu am putut inceta activitatea persoanei selectate.');
+            flash_set('danger', 'Nu am putut incheia colaborarea persoanei selectate.');
         }
 
-        redirect($this->indexUrl());
+        redirect($this->terminationReturnUrl());
     }
 
     private function deleteStaffAction(): void
@@ -470,12 +731,17 @@ class StaffAccountancyController
         ];
 
         if ($sourceType === '' || $sourceId <= 0 || $data['tip_document'] === '') {
-            flash_set('danger', 'Selecteaza persoana si tipul documentului.');
+            flash_set('danger', 'Selectează persoana și tipul documentului.');
             redirect($this->indexUrl());
         }
 
         if (!$this->model->subjectExists($sourceType, $sourceId)) {
             flash_set('warning', 'Persoana selectata nu a fost gasita.');
+            redirect($this->indexUrl());
+        }
+
+        if (!$this->model->isDocumentTypeAllowedForSubject($sourceType, $sourceId, $data['tip_document'])) {
+            flash_set('danger', 'Tipul documentului trebuie configurat la tipul de personal înainte de încărcare.');
             redirect($this->indexUrl());
         }
 
@@ -532,7 +798,7 @@ class StaffAccountancyController
         $driverId = (int) ($_POST['driver_id'] ?? 0);
         $driver = $this->model->findDriver($driverId);
         if ($driver === null) {
-            flash_set('danger', 'Selecteaza un sofer existent.');
+            flash_set('danger', 'Selectează un șofer existent.');
             return;
         }
 
@@ -544,12 +810,12 @@ class StaffAccountancyController
         $notes = trim((string) ($_POST['driver_observatii'] ?? ''));
 
         if ($postedSalary !== '' && $salary === null) {
-            flash_set('danger', 'Introdu un salariu valid pentru sofer.');
+            flash_set('danger', 'Introdu un salariu valid pentru șofer.');
             return;
         }
 
         $this->model->updateDriverAccounting($driverId, $salary, $hireDate ?: null, $notes !== '' ? $notes : null, $this->currentUserId());
-        flash_set('success', 'Datele contabile ale soferului au fost actualizate fara a crea un sofer duplicat.');
+        flash_set('success', 'Datele contabile ale șoferului au fost actualizate fără a crea un șofer duplicat.');
     }
 
     private function collectFilters(): array
@@ -564,6 +830,94 @@ class StaffAccountancyController
             'salary_max' => trim((string) ($_GET['salary_max'] ?? '')),
             'document_status' => trim((string) ($_GET['document_status'] ?? '')),
         ];
+    }
+
+    private function collectFormerFilters(): array
+    {
+        $period = trim((string) ($_GET['period'] ?? ''));
+        if (!in_array($period, ['', 'last_30_days', 'last_3_months', 'last_6_months', 'last_12_months', 'current_year', 'previous_year', 'custom'], true)) {
+            $period = '';
+        }
+
+        $tab = trim((string) ($_GET['tab'] ?? 'all'));
+        if (!in_array($tab, ['all', 'operational', 'office'], true)) {
+            $tab = 'all';
+        }
+
+        $personnelType = trim((string) ($_GET['personnel_type'] ?? ''));
+        if (!in_array($personnelType, ['', 'operational', 'office'], true)) {
+            $personnelType = '';
+        }
+
+        return [
+            'q' => trim((string) ($_GET['q'] ?? '')),
+            'personnel_type' => $personnelType,
+            'reason' => trim((string) ($_GET['reason'] ?? '')),
+            'period' => $period,
+            'date_start' => $this->normalizeDate((string) ($_GET['date_start'] ?? '')) ?? '',
+            'date_end' => $this->normalizeDate((string) ($_GET['date_end'] ?? '')) ?? '',
+            'tab' => $tab,
+        ];
+    }
+
+    private function collectTerminationInput(array $input): array
+    {
+        $terminationDate = $this->normalizeDate((string) ($input['termination_date'] ?? $input['data_plecarii'] ?? $input['data_incetare'] ?? ''));
+        $lastWorkingDay = $this->normalizeDate((string) ($input['last_working_day'] ?? $input['ultima_zi_lucrata'] ?? ''));
+        $reason = trim((string) ($input['termination_reason'] ?? $input['motiv_plecare'] ?? ''));
+        $customReason = trim((string) ($input['termination_reason_custom'] ?? ''));
+        if ($reason === 'Alte motive' && $customReason !== '') {
+            $reason = $customReason;
+        }
+
+        $errors = [];
+        if ($terminationDate === null) {
+            $errors[] = 'Data plecării este obligatorie.';
+        } elseif ($terminationDate > date('Y-m-d')) {
+            $errors[] = 'Data plecării nu poate fi în viitor.';
+        }
+        if ($lastWorkingDay !== null && $terminationDate !== null && $lastWorkingDay > $terminationDate) {
+            $errors[] = 'Ultima zi lucrată nu poate fi după data plecării.';
+        }
+        if ($reason === '') {
+            $errors[] = 'Motivul plecării este obligatoriu.';
+        }
+
+        $notes = trim((string) ($input['termination_notes'] ?? $input['notes'] ?? ''));
+
+        return [[
+            'termination_date' => $terminationDate ?? '',
+            'last_working_day' => $lastWorkingDay,
+            'termination_reason' => $reason,
+            'termination_notes' => $notes !== '' ? $notes : null,
+            'rehire_eligible' => (string) ($input['rehire_eligible'] ?? '1') === '1',
+            'termination_assets_returned' => isset($input['termination_assets_returned']) && (string) $input['termination_assets_returned'] === '1',
+        ], $errors];
+    }
+
+    private function buildFormerProfilesForRows(array $rows): array
+    {
+        $profiles = [];
+        foreach ($rows as $row) {
+            $sourceType = $this->normalizeSourceType((string) ($row['source_type'] ?? ''));
+            $sourceId = (int) ($row['source_id'] ?? 0);
+            if ($sourceType === '' || $sourceId <= 0) {
+                continue;
+            }
+
+            try {
+                $profile = $this->model->getFormerProfile($sourceType, $sourceId);
+            } catch (Throwable $exception) {
+                error_log('[StaffAccountancyController][former_profile] ' . $exception->getMessage());
+                $profile = null;
+            }
+
+            if ($profile !== null) {
+                $profiles[$sourceType . '-' . $sourceId] = $profile;
+            }
+        }
+
+        return $profiles;
     }
 
     private function collectStaffTypeInput(array $input): array
@@ -774,12 +1128,12 @@ class StaffAccountancyController
         }
 
         if ((int) ($file['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) {
-            return [null, 'Fisierul nu a putut fi incarcat.'];
+            return [null, 'Fișierul nu a putut fi încărcat.'];
         }
 
         $maxSize = 5242880;
         if ((int) ($file['size'] ?? 0) > $maxSize) {
-            return [null, 'Fisierul depaseste limita de 5 MB.'];
+            return [null, 'Fișierul depășește limita de 5 MB.'];
         }
 
         $originalName = (string) ($file['name'] ?? '');
@@ -802,7 +1156,7 @@ class StaffAccountancyController
 
         $destination = $uploadDir . '/' . $storedName;
         if (!move_uploaded_file((string) ($file['tmp_name'] ?? ''), $destination)) {
-            return [null, 'Fisierul nu a putut fi salvat.'];
+            return [null, 'Fișierul nu a putut fi salvat.'];
         }
 
         return [[
@@ -865,17 +1219,42 @@ class StaffAccountancyController
 
     private function categoryLabel(string $category): string
     {
-        return $category === 'office' ? 'Personal birou' : 'Personal operational';
+        return $category === 'office' ? 'Personal de birou' : 'Personal operațional';
     }
 
     private function documentStatusLabel(string $status): string
     {
         return match ($status) {
             'expirat' => 'Expirat',
-            'expira_curand' => 'Expira curand',
+            'expira_curand' => 'Expiră curând',
             'valid' => 'Valid',
-            default => 'Fara documente',
+            default => 'Fără documente',
         };
+    }
+
+    private function seniorityLabel(int $activeDays): string
+    {
+        $days = max(0, $activeDays);
+        if ($days <= 0) {
+            return '-';
+        }
+
+        $monthsTotal = intdiv($days, 30);
+        $years = intdiv($monthsTotal, 12);
+        $months = $monthsTotal % 12;
+        if ($monthsTotal === 0) {
+            return $days === 1 ? '1 zi' : $days . ' zile';
+        }
+
+        $parts = [];
+        if ($years > 0) {
+            $parts[] = $years === 1 ? '1 an' : $years . ' ani';
+        }
+        if ($months > 0) {
+            $parts[] = $months === 1 ? '1 lună' : $months . ' luni';
+        }
+
+        return $parts !== [] ? implode(' ', $parts) : '0 luni';
     }
 
     private function requirePost(string $page): void
@@ -896,5 +1275,20 @@ class StaffAccountancyController
     private function indexUrl(): string
     {
         return build_query_url(['page' => 'contabilitate_personal']);
+    }
+
+    private function formerUrl(): string
+    {
+        return build_query_url(['page' => 'fosti_angajati']);
+    }
+
+    private function terminationReturnUrl(): string
+    {
+        $returnTo = trim((string) ($_POST['return_to'] ?? ''));
+        return match ($returnTo) {
+            'soferi' => build_query_url(['page' => 'soferi']),
+            'fosti_angajati' => $this->formerUrl(),
+            default => $this->indexUrl(),
+        };
     }
 }

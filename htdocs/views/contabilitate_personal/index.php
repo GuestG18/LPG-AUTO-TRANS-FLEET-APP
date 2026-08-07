@@ -5,7 +5,6 @@ $staffTypes = is_array($staffTypes ?? null) ? $staffTypes : [];
 $staffTypeOptions = is_array($staffTypeOptions ?? null) ? $staffTypeOptions : [];
 $allStaffTypeOptions = is_array($allStaffTypeOptions ?? null) ? $allStaffTypeOptions : [];
 $driverOptions = is_array($driverOptions ?? null) ? $driverOptions : [];
-$uploadSubjectOptions = is_array($uploadSubjectOptions ?? null) ? $uploadSubjectOptions : [];
 $rows = is_array($rows ?? null) ? $rows : [];
 $rowModals = [];
 $documentsBySubject = is_array($documentsBySubject ?? null) ? $documentsBySubject : [];
@@ -133,6 +132,24 @@ $staffTypeMetaJson = json_encode($staffTypeMeta, JSON_UNESCAPED_UNICODE | JSON_U
 if (!is_string($staffTypeMetaJson)) {
     $staffTypeMetaJson = '{}';
 }
+$currentAddCategory = in_array((string) ($filters['category'] ?? ''), ['operational', 'office'], true)
+    ? (string) ($filters['category'] ?? '')
+    : '';
+$currentAddStaffTypeId = max(0, (int) ($filters['staff_type_id'] ?? 0));
+$addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static function (array $type) use ($currentAddCategory, $currentAddStaffTypeId): bool {
+    $typeId = (int) ($type['id'] ?? 0);
+    if ($typeId <= 0) {
+        return false;
+    }
+    if ($currentAddStaffTypeId > 0 && $typeId !== $currentAddStaffTypeId) {
+        return false;
+    }
+    if ($currentAddCategory !== '' && (string) ($type['category'] ?? '') !== $currentAddCategory) {
+        return false;
+    }
+
+    return true;
+}));
 ?>
 
 <div class="accountancy-page">
@@ -205,25 +222,33 @@ if (!is_string($staffTypeMetaJson)) {
             </button>
         </div>
         <div class="row g-3">
-            <div class="col-12 col-lg-6">
+            <div class="col-12 col-lg-4">
                 <a class="accountancy-category-card is-operational" href="<?= e(build_query_url(array_merge($baseQuery, ['category' => 'operational', 'p' => 1]))) ?>">
                     <span class="accountancy-category-icon"><i class="bi bi-people" aria-hidden="true"></i></span>
                     <span class="accountancy-category-body">
                         <span class="accountancy-category-title">Personal operațional</span>
-                        <span class="accountancy-category-text">Șoferi, Ajutoare, Mecanici, Spălători, etc.</span>
                     </span>
-                    <span class="accountancy-category-badge"><?= e((string) $operationalCount) ?> angajați</span>
+                    <span class="accountancy-category-badge"><?= e((string) $operationalCount) ?> <?= $operationalCount === 1 ? 'angajat' : 'angajați' ?></span>
                     <i class="bi bi-chevron-right accountancy-category-arrow" aria-hidden="true"></i>
                 </a>
             </div>
-            <div class="col-12 col-lg-6">
+            <div class="col-12 col-lg-4">
                 <a class="accountancy-category-card is-office" href="<?= e(build_query_url(array_merge($baseQuery, ['category' => 'office', 'p' => 1]))) ?>">
                     <span class="accountancy-category-icon"><i class="bi bi-person" aria-hidden="true"></i></span>
                     <span class="accountancy-category-body">
                         <span class="accountancy-category-title">Personal de birou</span>
-                        <span class="accountancy-category-text">Contabili, Administratori, HR, Manageri, etc.</span>
                     </span>
-                    <span class="accountancy-category-badge"><?= e((string) $officeCount) ?> angajați</span>
+                    <span class="accountancy-category-badge"><?= e((string) $officeCount) ?> <?= $officeCount === 1 ? 'angajat' : 'angajați' ?></span>
+                    <i class="bi bi-chevron-right accountancy-category-arrow" aria-hidden="true"></i>
+                </a>
+            </div>
+            <div class="col-12 col-lg-4">
+                <a class="accountancy-category-card is-former" href="<?= e(build_query_url(['page' => 'fosti_angajati'])) ?>">
+                    <span class="accountancy-category-icon"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+                    <span class="accountancy-category-body">
+                        <span class="accountancy-category-title">Foști angajați</span>
+                    </span>
+                    <span class="accountancy-category-badge">Vezi listă</span>
                     <i class="bi bi-chevron-right accountancy-category-arrow" aria-hidden="true"></i>
                 </a>
             </div>
@@ -239,9 +264,6 @@ if (!is_string($staffTypeMetaJson)) {
             <div class="accountancy-toolbar-actions">
                 <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addStaffModal">
                     <i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă angajat
-                </button>
-                <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#uploadDocumentModal">
-                    <i class="bi bi-upload" aria-hidden="true"></i> Încarcă document
                 </button>
             </div>
             <div class="accountancy-toolbar-filters">
@@ -317,7 +339,6 @@ if (!is_string($staffTypeMetaJson)) {
             <table class="table table-hover align-middle mb-0 accountancy-table">
                 <thead>
                     <tr>
-                        <th>#</th>
                         <th><a href="<?= e($sortUrl('nume')) ?>">Nume<?= e($sortMark('nume')) ?></a></th>
                         <th><a href="<?= e($sortUrl('tip')) ?>">Tip personal<?= e($sortMark('tip')) ?></a></th>
                         <th><a href="<?= e($sortUrl('functie')) ?>">Funcție<?= e($sortMark('functie')) ?></a></th>
@@ -326,13 +347,13 @@ if (!is_string($staffTypeMetaJson)) {
                         <th><a href="<?= e($sortUrl('active_days')) ?>">Zile active<?= e($sortMark('active_days')) ?></a></th>
                         <th>Status</th>
                         <th><a href="<?= e($sortUrl('documente')) ?>">Documente<?= e($sortMark('documente')) ?></a></th>
-                        <th>Acțiuni</th>
+                        <th class="accountancy-actions-column">Acțiuni</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if ($rows === []): ?>
                         <tr>
-                            <td colspan="10" class="text-center text-muted py-4">Nu există înregistrări.</td>
+                            <td colspan="9" class="text-center text-muted py-4">Nu există înregistrări.</td>
                         </tr>
                     <?php endif; ?>
                     <?php foreach ($rows as $index => $row): ?>
@@ -345,15 +366,25 @@ if (!is_string($staffTypeMetaJson)) {
                         $sourceId = (int) ($row['source_id'] ?? 0);
                         $staffTypeId = (int) ($row['staff_type_id'] ?? 0);
                         $canDelete = $sourceType === 'staff' && (int) ($row['can_delete'] ?? 0) === 1;
-                        $isActive = (string) ($row['status'] ?? 'activ') === 'activ';
+                        $isTerminated = (string) ($row['employment_status'] ?? 'active') === 'terminated' || !empty($row['termination_effective_date']);
+                        $isActive = !$isTerminated;
                         $category = (string) ($row['category'] ?? 'operational');
-                        $rowNumber = ((int) ($pagination['page'] ?? 1) - 1) * (int) ($pagination['per_page'] ?? 10) + $index + 1;
+                        $rowPhotoUrl = $sourceType === 'driver' ? driver_image_url((string) ($row['poza_stocata'] ?? '')) : null;
+                        $rowPhotoAlt = trim((string) ($row['poza_original'] ?? ''));
+                        if ($rowPhotoAlt === '') {
+                            $rowPhotoAlt = 'Poza ' . (string) ($row['nume'] ?? 'angajat');
+                        }
                         ?>
                         <tr>
-                            <td class="accountancy-row-number"><?= e((string) $rowNumber) ?></td>
                             <td>
                                 <div class="d-flex align-items-center gap-2">
-                                    <div class="accountancy-avatar"><?= e($initials((string) ($row['nume'] ?? ''))) ?></div>
+                                    <div class="accountancy-avatar <?= $rowPhotoUrl !== null ? 'has-photo' : '' ?>">
+                                        <?php if ($rowPhotoUrl !== null): ?>
+                                            <img src="<?= e($rowPhotoUrl) ?>" alt="<?= e($rowPhotoAlt) ?>" loading="lazy">
+                                        <?php else: ?>
+                                            <?= e($initials((string) ($row['nume'] ?? ''))) ?>
+                                        <?php endif; ?>
+                                    </div>
                                     <div>
                                         <div class="fw-semibold"><?= e((string) ($row['nume'] ?? '-')) ?></div>
                                         <div class="small text-muted"><?= e($sourceType === 'driver' ? (string) ($row['vehicle_label'] ?? '-') : (string) ($row['email'] ?? '')) ?></div>
@@ -377,42 +408,73 @@ if (!is_string($staffTypeMetaJson)) {
                                     <?= e((string) ($row['document_count'] ?? 0)) ?>
                                 </button>
                             </td>
-                            <td>
-                                <div class="accountancy-action-group">
-                                    <button type="button" class="accountancy-icon-action" data-bs-toggle="modal" data-bs-target="#detailsModal<?= e($rowId) ?>" title="Vizualizează" aria-label="Vizualizează">
-                                        <i class="bi bi-eye" aria-hidden="true"></i>
+                            <td class="accountancy-actions-cell">
+                                <div class="dropdown accountancy-action-dropdown">
+                                    <button
+                                        type="button"
+                                        class="accountancy-actions-trigger"
+                                        id="accountancyActionsMenu<?= e($rowId) ?>"
+                                        data-bs-toggle="dropdown"
+                                        data-bs-boundary="viewport"
+                                        data-bs-offset="0,6"
+                                        aria-expanded="false"
+                                        title="Acțiuni"
+                                        aria-label="Deschide acțiuni"
+                                    >
+                                        <i class="bi bi-three-dots" aria-hidden="true"></i>
                                     </button>
-                                    <?php if ($sourceType === 'staff'): ?>
-                                        <button type="button" class="accountancy-icon-action is-primary" data-bs-toggle="modal" data-bs-target="#editStaffModal<?= e($rowId) ?>" title="Editare" aria-label="Editare">
-                                            <i class="bi bi-pencil" aria-hidden="true"></i>
-                                        </button>
-                                    <?php else: ?>
-                                        <button type="button" class="accountancy-icon-action is-primary" data-bs-toggle="modal" data-bs-target="#salaryModal<?= e($rowId) ?>" title="Editare" aria-label="Editare">
-                                            <i class="bi bi-pencil" aria-hidden="true"></i>
-                                        </button>
-                                    <?php endif; ?>
-                                    <?php if ($isActive): ?>
-                                        <button type="button" class="accountancy-icon-action" data-bs-toggle="modal" data-bs-target="#endActivityModal<?= e($rowId) ?>" title="Inceteaza activitatea" aria-label="Inceteaza activitatea">
-                                            <i class="bi bi-person-dash" aria-hidden="true"></i>
-                                        </button>
-                                    <?php else: ?>
-                                        <button type="button" class="accountancy-icon-action" disabled title="Activitate incetata" aria-label="Activitate incetata">
-                                            <i class="bi bi-person-dash" aria-hidden="true"></i>
-                                        </button>
-                                    <?php endif; ?>
-                                    <?php if ($canDelete): ?>
-                                        <form method="post" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'delete_staff'])) ?>">
-                                            <?= csrf_field() ?>
-                                            <input type="hidden" name="id" value="<?= e((string) $sourceId) ?>">
-                                            <button type="submit" class="accountancy-icon-action is-danger" data-confirm="Sigur stergi acest angajat?" title="Ștergere" aria-label="Ștergere">
-                                                <i class="bi bi-trash" aria-hidden="true"></i>
+                                    <ul class="dropdown-menu dropdown-menu-end accountancy-actions-menu" aria-labelledby="accountancyActionsMenu<?= e($rowId) ?>">
+                                        <li>
+                                            <button type="button" class="dropdown-item accountancy-action-menu-item" data-bs-toggle="modal" data-bs-target="#detailsModal<?= e($rowId) ?>">
+                                                <i class="bi bi-eye" aria-hidden="true"></i>
+                                                <span>Vizualizează</span>
                                             </button>
-                                        </form>
-                                    <?php else: ?>
-                                        <button type="button" class="accountancy-icon-action is-danger" disabled title="Ștergere indisponibilă" aria-label="Ștergere indisponibilă">
-                                            <i class="bi bi-trash" aria-hidden="true"></i>
-                                        </button>
-                                    <?php endif; ?>
+                                        </li>
+                                        <li>
+                                            <?php if ($sourceType === 'staff'): ?>
+                                                <button type="button" class="dropdown-item accountancy-action-menu-item is-primary" data-bs-toggle="modal" data-bs-target="#editStaffModal<?= e($rowId) ?>">
+                                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                                    <span>Editare</span>
+                                                </button>
+                                            <?php else: ?>
+                                                <button type="button" class="dropdown-item accountancy-action-menu-item is-primary" data-bs-toggle="modal" data-bs-target="#salaryModal<?= e($rowId) ?>">
+                                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                                    <span>Editare salariu</span>
+                                                </button>
+                                            <?php endif; ?>
+                                        </li>
+                                        <li>
+                                            <?php if ($isActive): ?>
+                                                <button type="button" class="dropdown-item accountancy-action-menu-item" data-bs-toggle="modal" data-bs-target="#endActivityModal<?= e($rowId) ?>">
+                                                    <i class="bi bi-person-dash" aria-hidden="true"></i>
+                                                    <span>Încetează activitatea</span>
+                                                </button>
+                                            <?php else: ?>
+                                                <button type="button" class="dropdown-item accountancy-action-menu-item" disabled>
+                                                    <i class="bi bi-person-dash" aria-hidden="true"></i>
+                                                    <span>Activitate încetată</span>
+                                                </button>
+                                            <?php endif; ?>
+                                        </li>
+                                        <li><hr class="dropdown-divider"></li>
+                                        <li>
+                                            <?php if ($canDelete): ?>
+                                                <form method="post" class="accountancy-action-menu-form" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'delete_staff'])) ?>">
+                                                    <?= csrf_field() ?>
+                                                    <input type="hidden" name="id" value="<?= e((string) $sourceId) ?>">
+                                                    <button type="submit" class="dropdown-item accountancy-action-menu-item is-danger" data-confirm="Sigur stergi acest angajat?">
+                                                        <i class="bi bi-trash" aria-hidden="true"></i>
+                                                        <span>Ștergere</span>
+                                                    </button>
+                                                </form>
+                                            <?php else: ?>
+                                                <button type="button" class="dropdown-item accountancy-action-menu-item is-danger" disabled>
+                                                    <i class="bi bi-trash" aria-hidden="true"></i>
+                                                    <span>Ștergere indisponibilă</span>
+                                                </button>
+                                            <?php endif; ?>
+                                        </li>
+                                    </ul>
                                 </div>
                             </td>
                         </tr>
@@ -436,7 +498,7 @@ if (!is_string($staffTypeMetaJson)) {
                                             <dt class="col-sm-4">Vehicul alocat</dt><dd class="col-sm-8"><?= e((string) ($row['vehicle_label'] ?? '-')) ?></dd>
                                             <dt class="col-sm-4">Salariu lunar</dt><dd class="col-sm-8"><?= e($money($row['salariu'] ?? null)) ?></dd>
                                             <dt class="col-sm-4">Data angajării</dt><dd class="col-sm-8"><?= e(!empty($row['data_angajare']) ? format_date_ro((string) $row['data_angajare']) : '-') ?></dd>
-                                            <dt class="col-sm-4">Data incetarii</dt><dd class="col-sm-8"><?= e(!empty($row['data_incetare']) ? format_date_ro((string) $row['data_incetare']) : '-') ?></dd>
+                                            <dt class="col-sm-4">Data încetării</dt><dd class="col-sm-8"><?= e(!empty($row['data_incetare']) ? format_date_ro((string) $row['data_incetare']) : '-') ?></dd>
                                             <dt class="col-sm-4">Zile active</dt><dd class="col-sm-8"><?= e($activeDaysLabel($row['active_days'] ?? null)) ?></dd>
                                             <dt class="col-sm-4">Observații</dt><dd class="col-sm-8"><?= nl2br(e((string) ($row['observatii'] ?? '-'))) ?></dd>
                                         </dl>
@@ -508,33 +570,75 @@ if (!is_string($staffTypeMetaJson)) {
                         <?php endif; ?>
 
                         <div class="modal fade" id="endActivityModal<?= e($rowId) ?>" tabindex="-1" aria-hidden="true">
-                            <div class="modal-dialog">
+                            <div class="modal-dialog modal-lg">
                                 <div class="modal-content">
-                                    <form method="post" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'end_activity'])) ?>">
+                                    <form method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'end_activity'])) ?>">
                                         <?= csrf_field() ?>
                                         <input type="hidden" name="source_type" value="<?= e($sourceType) ?>">
                                         <input type="hidden" name="source_id" value="<?= e((string) $sourceId) ?>">
+                                        <input type="hidden" name="return_to" value="contabilitate_personal">
                                         <div class="modal-header">
-                                            <h3 class="modal-title fs-5">Inceteaza activitatea</h3>
-                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+                                            <h3 class="modal-title fs-5">Încheiere colaborare</h3>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
                                         </div>
                                         <div class="modal-body">
                                             <div class="mb-3">
                                                 <label class="form-label">Angajat</label>
                                                 <input type="text" class="form-control" value="<?= e((string) ($row['nume'] ?? '-')) ?>" readonly>
                                             </div>
-                                            <div class="mb-3">
-                                                <label class="form-label">Data incetarii</label>
-                                                <input type="date" class="form-control" name="data_incetare" value="<?= e(date('Y-m-d')) ?>" max="<?= e(date('Y-m-d')) ?>" required>
-                                            </div>
-                                            <div class="mb-0">
-                                                <label class="form-label">Observatii</label>
-                                                <textarea class="form-control" name="notes" rows="3"></textarea>
+                                            <div class="row g-3">
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Data plecării <span class="text-danger">*</span></label>
+                                                    <input type="date" class="form-control" name="termination_date" value="<?= e(date('Y-m-d')) ?>" max="<?= e(date('Y-m-d')) ?>" required>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Ultima zi lucrată</label>
+                                                    <input type="date" class="form-control" name="last_working_day" max="<?= e(date('Y-m-d')) ?>">
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Motiv plecare <span class="text-danger">*</span></label>
+                                                    <select class="form-select" name="termination_reason" required>
+                                                        <option value="">Selectează motivul</option>
+                                                        <option value="Demisie">Demisie</option>
+                                                        <option value="Incetare contract">Incetare contract</option>
+                                                        <option value="Concediere">Concediere</option>
+                                                        <option value="Pensionare">Pensionare</option>
+                                                        <option value="Reorganizare">Reorganizare</option>
+                                                        <option value="Abandon / Neprezentare">Abandon / Neprezentare</option>
+                                                        <option value="Acordul partilor">Acordul partilor</option>
+                                                        <option value="Alte motive">Alte motive</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Motiv personalizat</label>
+                                                    <input type="text" class="form-control" name="termination_reason_custom" placeholder="Completează pentru Alte motive">
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Document incetare</label>
+                                                    <input type="file" class="form-control" name="termination_document" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Eligibil pentru reangajare</label>
+                                                    <select class="form-select" name="rehire_eligible">
+                                                        <option value="1">Da</option>
+                                                        <option value="0">Nu</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-12">
+                                                    <label class="form-label">Observații</label>
+                                                    <textarea class="form-control" name="termination_notes" rows="3"></textarea>
+                                                </div>
+                                                <div class="col-12">
+                                                    <label class="form-check">
+                                                        <input class="form-check-input" type="checkbox" name="termination_assets_returned" value="1">
+                                                        <span class="form-check-label">Confirmare ca bunurile si documentele companiei au fost predate</span>
+                                                    </label>
+                                                </div>
                                             </div>
                                         </div>
                                         <div class="modal-footer">
                                             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuleaza</button>
-                                            <button type="submit" class="btn btn-danger" data-confirm="Incetezi activitatea pentru aceasta persoana?">Inceteaza activitatea</button>
+                                            <button type="submit" class="btn btn-danger" data-confirm="Închei colaborarea pentru această persoană?">Încheie colaborarea</button>
                                         </div>
                                     </form>
                                 </div>
@@ -660,6 +764,12 @@ if (!is_string($staffTypeMetaJson)) {
                                             </table>
                                         </div>
 
+                                        <?php $allowedDocumentTypes = $documentTypeOptionsByStaffType[$staffTypeId] ?? []; ?>
+                                        <?php if ($allowedDocumentTypes === []): ?>
+                                            <div class="alert alert-warning mb-3">
+                                                Nu există tipuri de document configurate pentru acest tip de personal. Adaugă regula din configurarea tipului de personal.
+                                            </div>
+                                        <?php endif; ?>
                                         <form method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'store_document'])) ?>" class="accountancy-inline-form">
                                             <?= csrf_field() ?>
                                             <input type="hidden" name="source_type" value="<?= e($sourceType) ?>">
@@ -667,8 +777,8 @@ if (!is_string($staffTypeMetaJson)) {
                                             <div class="row g-2 align-items-end">
                                                 <div class="col-md-3">
                                                     <label class="form-label">Tip document</label>
-                                                    <select class="form-select" name="tip_document" required>
-                                                        <?php foreach (($documentTypeOptionsByStaffType[$staffTypeId] ?? $allDocumentTypes) as $documentType): ?>
+                                                    <select class="form-select" name="tip_document" required <?= $allowedDocumentTypes === [] ? 'disabled' : '' ?>>
+                                                        <?php foreach ($allowedDocumentTypes as $documentType): ?>
                                                             <option value="<?= e((string) $documentType) ?>"><?= e((string) $documentType) ?></option>
                                                         <?php endforeach; ?>
                                                     </select>
@@ -694,7 +804,7 @@ if (!is_string($staffTypeMetaJson)) {
                                                     <textarea class="form-control" name="observatii" rows="2"></textarea>
                                                 </div>
                                                 <div class="col-12">
-                                                    <button type="submit" class="btn btn-primary">Adaugă Document</button>
+                                                    <button type="submit" class="btn btn-primary" <?= $allowedDocumentTypes === [] ? 'disabled' : '' ?>>Adaugă Document</button>
                                                 </div>
                                             </div>
                                         </form>
@@ -855,7 +965,7 @@ if (!is_string($staffTypeMetaJson)) {
                                 <div class="small text-muted">Le poti configura acum pentru noul tip de personal. Liniile goale sunt ignorate.</div>
                             </div>
                             <button type="button" class="btn btn-outline-primary btn-sm" data-action="add-staff-type-requirement">
-                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Adauga document
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă document
                             </button>
                         </div>
                         <div class="vstack gap-3" data-role="staff-type-requirements-list" data-next-index="1">
@@ -866,7 +976,7 @@ if (!is_string($staffTypeMetaJson)) {
                                         <input type="text" class="form-control" name="requirements[0][document_type]" value="Contract de muncă" readonly>
                                     </div>
                                     <div class="col-md-3">
-                                        <label class="form-label">Data expirarii</label>
+                                        <label class="form-label">Data expirării</label>
                                         <input type="hidden" name="requirements[0][requires_expiry]" value="0">
                                         <select class="form-select" disabled>
                                             <option value="0" selected>Optionala</option>
@@ -1100,13 +1210,25 @@ if (!is_string($staffTypeMetaJson)) {
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">Tip personal</label>
-                        <select class="form-select" name="staff_type_id" data-role="accountancy-staff-type-select" required>
-                            <?php foreach ($staffTypeOptions as $type): ?>
-                                <option value="<?= e((string) ((int) ($type['id'] ?? 0))) ?>" data-driver-linked="<?= (int) ($type['is_driver_linked'] ?? 0) === 1 ? '1' : '0' ?>">
+                        <select class="form-select" name="staff_type_id" data-role="accountancy-staff-type-select" required <?= $addStaffTypeOptions === [] ? 'disabled' : '' ?>>
+                            <?php if ($addStaffTypeOptions === []): ?>
+                                <option value="">Nu există tipuri active pentru filtrul curent</option>
+                            <?php endif; ?>
+                            <?php foreach ($addStaffTypeOptions as $type): ?>
+                                <option
+                                    value="<?= e((string) ((int) ($type['id'] ?? 0))) ?>"
+                                    data-driver-linked="<?= (int) ($type['is_driver_linked'] ?? 0) === 1 ? '1' : '0' ?>"
+                                    data-category="<?= e((string) ($type['category'] ?? '')) ?>"
+                                >
                                     <?= e((string) ($type['name'] ?? '-')) ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
+                        <?php if ($addStaffTypeOptions === []): ?>
+                            <div class="alert alert-warning mt-3 mb-0">
+                                Schimba filtrul sau configureaza un tip de personal activ pentru categoria curenta.
+                            </div>
+                        <?php endif; ?>
                     </div>
 
                     <div data-role="accountancy-driver-fields">
@@ -1178,12 +1300,12 @@ if (!is_string($staffTypeMetaJson)) {
                         <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
                             <div>
                                 <h4 class="h6 mb-1">Documente initiale pentru tipul selectat</h4>
-                                <div class="small text-muted">Poti incarca direct aici documentele cerute. Liniile lasate goale nu se salveaza.</div>
+                                <div class="small text-muted">Poți încărca direct aici documentele cerute. Liniile lăsate goale nu se salvează.</div>
                             </div>
                             <span class="badge text-bg-light border" data-role="accountancy-required-docs-count">0 documente</span>
                         </div>
                         <div class="alert alert-info py-2 px-3 mb-3 d-none" data-role="accountancy-required-docs-driver-note">
-                            Pentru tipul Sofer, documentele se administreaza din modulul Soferi.
+                            Pentru tipul Șofer, documentele se administrează din modulul Șoferi.
                         </div>
                         <div class="small text-muted mb-3 d-none" data-role="accountancy-required-docs-empty">
                             Tipul selectat nu are documente obligatorii configurate inca.
@@ -1193,66 +1315,7 @@ if (!is_string($staffTypeMetaJson)) {
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
-                    <button type="submit" class="btn btn-primary">Salvează</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-
-<div class="modal fade" id="uploadDocumentModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <form method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'store_document'])) ?>">
-                <?= csrf_field() ?>
-                <input type="hidden" name="source_type" data-role="upload-source-type">
-                <input type="hidden" name="source_id" data-role="upload-source-id">
-                <div class="modal-header">
-                    <h3 class="modal-title fs-5">Încarcă Document</h3>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="row g-3">
-                        <div class="col-md-6">
-                            <label class="form-label">Persoană</label>
-                            <select class="form-select" data-role="upload-subject-select" required>
-                                <option value="">Selectează persoană</option>
-                                <?php foreach ($uploadSubjectOptions as $row): ?>
-                                    <option value="<?= e((string) ($row['source_type'] ?? '')) ?>:<?= e((string) ((int) ($row['source_id'] ?? 0))) ?>">
-                                        <?= e((string) ($row['nume'] ?? '-')) ?> / <?= e((string) ($row['staff_type_name'] ?? '-')) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Tip document</label>
-                            <input type="text" class="form-control" name="tip_document" list="documentTypeDatalist" required>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Număr document</label>
-                            <input type="text" class="form-control" name="numar_document">
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Data emiterii</label>
-                            <input type="date" class="form-control" name="data_emitere">
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Data expirării</label>
-                            <input type="date" class="form-control" name="data_expirare">
-                        </div>
-                        <div class="col-12">
-                            <label class="form-label">Fișier upload</label>
-                            <input type="file" class="form-control" name="fisier_upload" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
-                        </div>
-                        <div class="col-12">
-                            <label class="form-label">Observații</label>
-                            <textarea class="form-control" name="observatii" rows="3"></textarea>
-                        </div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
-                    <button type="submit" class="btn btn-primary">Salvează</button>
+                    <button type="submit" class="btn btn-primary" <?= $addStaffTypeOptions === [] ? 'disabled' : '' ?>>Salvează</button>
                 </div>
             </form>
         </div>
@@ -1287,7 +1350,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         '<input type="text" class="form-control" name="requirements[' + index + '][document_type]" list="documentTypeDatalist" placeholder="Ex: Contract de munca">' +
                     '</div>' +
                     '<div class="col-md-3">' +
-                        '<label class="form-label">Data expirarii</label>' +
+                        '<label class="form-label">Data expirării</label>' +
                         '<select class="form-select" name="requirements[' + index + '][requires_expiry]">' +
                             '<option value="1">Obligatorie</option>' +
                             '<option value="0">Optionala</option>' +
@@ -1315,8 +1378,8 @@ document.addEventListener('DOMContentLoaded', function () {
         var warningDays = escapeHtml(requirement.warning_days || 30);
         var expiryBadge = requirement.requires_expiry ? 'Expirare obligatorie' : 'Expirare optionala';
         var expiryNote = requirement.requires_expiry
-            ? 'Completeaza si data expirarii cand documentul o are.'
-            : 'Poti lasa data expirarii goala pentru acest document.';
+            ? 'Completează și data expirării când documentul o are.'
+            : 'Poți lăsa data expirării goală pentru acest document.';
 
         return '' +
             '<div class="border rounded-3 bg-white p-3">' +
@@ -1330,7 +1393,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 '</div>' +
                 '<div class="row g-3">' +
                     '<div class="col-md-4">' +
-                        '<label class="form-label">Numar document</label>' +
+                        '<label class="form-label">Număr document</label>' +
                         '<input type="text" class="form-control" name="staff_documents[' + index + '][numar_document]">' +
                     '</div>' +
                     '<div class="col-md-4">' +
@@ -1338,15 +1401,15 @@ document.addEventListener('DOMContentLoaded', function () {
                         '<input type="date" class="form-control" name="staff_documents[' + index + '][data_emitere]">' +
                     '</div>' +
                     '<div class="col-md-4">' +
-                        '<label class="form-label">Data expirarii</label>' +
+                        '<label class="form-label">Data expirării</label>' +
                         '<input type="date" class="form-control" name="staff_documents[' + index + '][data_expirare]">' +
                     '</div>' +
                     '<div class="col-12">' +
-                        '<label class="form-label">Fisier document</label>' +
+                        '<label class="form-label">Fișier document</label>' +
                         '<input type="file" class="form-control" name="staff_document_files[' + index + ']" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">' +
                     '</div>' +
                     '<div class="col-12">' +
-                        '<label class="form-label">Observatii</label>' +
+                        '<label class="form-label">Observații</label>' +
                         '<textarea class="form-control" name="staff_documents[' + index + '][observatii]" rows="2"></textarea>' +
                     '</div>' +
                 '</div>' +
@@ -1435,28 +1498,5 @@ document.addEventListener('DOMContentLoaded', function () {
         syncFields();
     });
 
-    document.querySelectorAll('[data-role="upload-subject-select"]').forEach(function (selectEl) {
-        var form = selectEl.closest('form');
-        if (!form) {
-            return;
-        }
-
-        var typeInput = form.querySelector('[data-role="upload-source-type"]');
-        var idInput = form.querySelector('[data-role="upload-source-id"]');
-
-        function syncSubject() {
-            var value = selectEl.value || '';
-            var parts = value.split(':');
-            if (typeInput) {
-                typeInput.value = parts[0] || '';
-            }
-            if (idInput) {
-                idInput.value = parts[1] || '';
-            }
-        }
-
-        selectEl.addEventListener('change', syncSubject);
-        syncSubject();
-    });
 });
 </script>

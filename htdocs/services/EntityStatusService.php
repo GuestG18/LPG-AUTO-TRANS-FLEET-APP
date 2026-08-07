@@ -88,6 +88,19 @@ class EntityStatusService
             return null;
         }
 
+        if ($this->isTerminatedDriver($driverId)) {
+            return [
+                'status' => 'inactiv',
+                'checks' => [[
+                    'label' => 'Colaborare incheiata',
+                    'state' => 'other',
+                    'message' => 'Soferul are colaborarea incheiata.',
+                    'date' => null,
+                ]],
+                'issues' => ['Soferul are colaborarea incheiata.'],
+            ];
+        }
+
         $checks = $this->buildDocumentChecks(
             'documente_soferi',
             'driver_id',
@@ -714,6 +727,41 @@ class EntityStatusService
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':id', $recordId, PDO::PARAM_INT);
         $stmt->execute();
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    private function isTerminatedDriver(int $driverId): bool
+    {
+        if (!$this->columnExists('soferi', 'employment_status')) {
+            return false;
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT employment_status
+            FROM soferi
+            WHERE id = :id
+            LIMIT 1
+        ");
+        $stmt->bindValue(':id', $driverId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return strtolower(trim((string) ($stmt->fetchColumn() ?: ''))) === 'terminated';
+    }
+
+    private function columnExists(string $table, string $column): bool
+    {
+        $stmt = $this->db->prepare('
+            SELECT COUNT(*)
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+              AND COLUMN_NAME = :column_name
+        ');
+        $stmt->execute([
+            ':table_name' => $table,
+            ':column_name' => $column,
+        ]);
 
         return (int) $stmt->fetchColumn() > 0;
     }
