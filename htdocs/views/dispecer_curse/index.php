@@ -270,7 +270,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                     <i class="bi bi-exclamation-triangle-fill"></i>
                 </div>
                 <div class="orx-header-titles">
-                    <h3 id="open-races-modal-title">Atenție: curse cu informații lipsă (<?= e((string) $openRacesCount) ?>)</h3>
+                    <h3 id="open-races-modal-title">Atenție: curse cu informații lipsă (<span data-orx-header-count data-orx-total="<?= e((string) $openRacesCount) ?>"><?= e((string) $openRacesCount) ?></span>)</h3>
                     <p>Completează informațiile lipsă pentru a putea continua.</p>
                 </div>
                 <button type="button" class="orx-close" data-open-races-close aria-label="Închide">
@@ -3037,6 +3037,19 @@ document.addEventListener('DOMContentLoaded', function () {
 
             if (orxEmptyEl instanceof HTMLElement) {
                 orxEmptyEl.hidden = visibleCount > 0;
+            }
+
+            // Numarul din titlu reflecta cursele care corespund filtrelor active:
+            // fara filtre -> totalul; cu filtre -> "N din total".
+            var orxHeaderCountEl = openRacesModalEl.querySelector('[data-orx-header-count]');
+            if (orxHeaderCountEl instanceof HTMLElement) {
+                var orxTotalCount = orxHeaderCountEl.getAttribute('data-orx-total') || '0';
+                var orxHasActiveFilters = orxActiveSeverity !== ''
+                    || transport !== ''
+                    || plates.length > 0;
+                orxHeaderCountEl.textContent = orxHasActiveFilters
+                    ? visibleCount + ' din ' + orxTotalCount
+                    : orxTotalCount;
             }
 
             orxSeverityTabEls.forEach(function (tabEl) {
