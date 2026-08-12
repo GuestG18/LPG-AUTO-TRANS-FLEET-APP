@@ -42,6 +42,23 @@ class InactiveResourceApprovalController
 
     private function indexAction(): void
     {
+        $canReviewApprovals = $this->canReview();
+        if (!$canReviewApprovals) {
+            $userId = $this->currentUserId();
+            $selectedStatus = strtolower(trim((string) ($_GET['status'] ?? 'pending')));
+            if (!in_array($selectedStatus, ['pending', 'approved', 'rejected'], true)) {
+                $selectedStatus = 'pending';
+            }
+
+            render('inactive_approvals/user_index.php', [
+                'pageTitle' => 'Solicitarile mele de aprobare',
+                'currentPage' => 'dashboard',
+                'summary' => $this->model->getRequesterSummary((int) ($userId ?? 0), 50),
+                'selectedStatus' => $selectedStatus,
+            ]);
+            return;
+        }
+
         $filters = $this->resolveFilters();
         $page = max(1, (int) ($_GET['p'] ?? 1));
         $result = $this->model->search($filters, $page, 20);
@@ -52,7 +69,7 @@ class InactiveResourceApprovalController
             'filters' => $filters,
             'result' => $result,
             'reasonOptions' => $this->model->getReasonOptions(),
-            'canReviewApprovals' => $this->canReview(),
+            'canReviewApprovals' => $canReviewApprovals,
         ]);
     }
 
@@ -65,11 +82,21 @@ class InactiveResourceApprovalController
             redirect(build_query_url(['page' => 'inactive_approvals']));
         }
 
+        $canReviewApprovals = $this->canReview();
+        if (!$canReviewApprovals && (int) ($approval['requested_by_user_id'] ?? 0) !== (int) ($this->currentUserId() ?? 0)) {
+            http_response_code(403);
+            render('errors/403.php', [
+                'pageTitle' => 'Acces interzis',
+                'currentPage' => '',
+            ]);
+            exit;
+        }
+
         render('inactive_approvals/show.php', [
             'pageTitle' => 'Detalii solicitare aprobare',
             'currentPage' => 'dashboard',
             'approval' => $approval,
-            'canReviewApprovals' => $this->canReview(),
+            'canReviewApprovals' => $canReviewApprovals,
         ]);
     }
 
@@ -111,7 +138,7 @@ class InactiveResourceApprovalController
         }
 
         $resourceType = strtolower(trim((string) ($_GET['resource_type'] ?? 'all')));
-        if (!in_array($resourceType, ['vehicle', 'driver', 'all'], true)) {
+        if (!in_array($resourceType, ['vehicle', 'driver', 'repair', 'all'], true)) {
             $resourceType = 'all';
         }
 

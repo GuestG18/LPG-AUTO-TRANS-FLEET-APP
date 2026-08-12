@@ -983,7 +983,7 @@ function initGlobalApprovalDrawer() {
     }
 
     var toggle = drawer.querySelector('[data-global-approval-toggle]');
-    var closeButton = drawer.querySelector('[data-global-approval-close]');
+    var closeButtons = Array.prototype.slice.call(drawer.querySelectorAll('[data-global-approval-close]'));
 
     if (!(toggle instanceof HTMLButtonElement)) {
         return;
@@ -1009,11 +1009,15 @@ function initGlobalApprovalDrawer() {
         setOpen(!drawer.classList.contains('is-open'));
     });
 
-    if (closeButton instanceof HTMLButtonElement) {
+    closeButtons.forEach(function (closeButton) {
+        if (!(closeButton instanceof HTMLButtonElement)) {
+            return;
+        }
+
         closeButton.addEventListener('click', function () {
             setOpen(false);
         });
-    }
+    });
 
     document.addEventListener('keydown', function (event) {
         if (event.key === 'Escape' && drawer.classList.contains('is-open')) {
@@ -1030,6 +1034,395 @@ function initGlobalApprovalDrawer() {
         if (target && !drawer.contains(target)) {
             setOpen(false);
         }
+    });
+}
+
+function parseApprovalCount(element) {
+    if (!(element instanceof HTMLElement)) {
+        return 0;
+    }
+
+    var raw = String(element.textContent || '').trim();
+    var parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function setApprovalCount(element, value) {
+    if (!(element instanceof HTMLElement)) {
+        return;
+    }
+
+    var nextValue = Math.max(0, value);
+    element.textContent = String(nextValue);
+    if (element.hasAttribute('data-approval-total-badge')) {
+        element.hidden = nextValue <= 0;
+    }
+}
+
+function decrementApprovalCounter(selector, root) {
+    var scope = root instanceof HTMLElement ? root : document;
+    scope.querySelectorAll(selector).forEach(function (element) {
+        if (!(element instanceof HTMLElement)) {
+            return;
+        }
+
+        setApprovalCount(element, parseApprovalCount(element) - 1);
+    });
+}
+
+function refreshApprovalEmptyState(panel) {
+    if (!(panel instanceof HTMLElement)) {
+        return;
+    }
+
+    var hasCards = panel.querySelector('[data-approval-card]') !== null;
+    var empty = panel.querySelector('[data-approval-empty]');
+    if (empty instanceof HTMLElement) {
+        empty.hidden = hasCards;
+    }
+}
+
+function removeCancelledApprovalFromUi(approvalId) {
+    var normalizedId = String(approvalId || '').trim();
+    if (normalizedId === '') {
+        return;
+    }
+
+    var selector = '[data-approval-card][data-approval-id="' + normalizedId.replace(/"/g, '\\"') + '"]';
+    var removedStatuses = {};
+    document.querySelectorAll(selector).forEach(function (card) {
+        if (!(card instanceof HTMLElement)) {
+            return;
+        }
+
+        var status = String(card.getAttribute('data-approval-status') || 'pending').trim() || 'pending';
+        removedStatuses[status] = true;
+        var panel = card.closest('[data-dashboard-approval-panel], .user-approval-card-stack');
+        card.remove();
+        if (panel instanceof HTMLElement) {
+            refreshApprovalEmptyState(panel);
+        }
+    });
+
+    Object.keys(removedStatuses).forEach(function (status) {
+        decrementApprovalCounter('[data-approval-tab-count="' + status.replace(/"/g, '\\"') + '"]');
+        decrementApprovalCounter('[data-user-approval-tab-count="' + status.replace(/"/g, '\\"') + '"]');
+    });
+
+    if (Object.prototype.hasOwnProperty.call(removedStatuses, 'pending')) {
+        decrementApprovalCounter('[data-approval-total-count]');
+        decrementApprovalCounter('[data-approval-total-badge]');
+    }
+}
+
+function userApprovalCancelMessageFromError(error) {
+    var fallback = 'Solicitarea nu mai poate fi anulata deoarece statusul ei s-a modificat.';
+    if (error && typeof error.message === 'string' && error.message.trim() !== '') {
+        return error.message.trim();
+    }
+
+    return fallback;
+}
+
+function findUserApprovalCancelHost(button) {
+    if (!(button instanceof HTMLElement)) {
+        return null;
+    }
+
+    var host = button.closest('[data-approval-card], [data-approval-detail]');
+    return host instanceof HTMLElement ? host : null;
+}
+
+function clearUserApprovalCancelFeedback(host) {
+    if (!(host instanceof HTMLElement)) {
+        return;
+    }
+
+    host.querySelectorAll('[data-user-approval-cancel-feedback]').forEach(function (feedback) {
+        feedback.remove();
+    });
+}
+
+function showUserApprovalCancelFeedback(host, message, tone) {
+    if (!(host instanceof HTMLElement)) {
+        return;
+    }
+
+    clearUserApprovalCancelFeedback(host);
+
+    var feedback = document.createElement('div');
+    feedback.className = 'user-approval-cancel-feedback is-' + (tone === 'success' ? 'success' : 'error');
+    feedback.setAttribute('data-user-approval-cancel-feedback', '');
+    feedback.setAttribute('role', tone === 'success' ? 'status' : 'alert');
+
+    var icon = document.createElement('i');
+    icon.className = tone === 'success' ? 'bi bi-check-circle' : 'bi bi-exclamation-triangle';
+    icon.setAttribute('aria-hidden', 'true');
+    feedback.appendChild(icon);
+    feedback.appendChild(document.createTextNode(String(message || 'Solicitarea nu a putut fi anulata.')));
+
+    var actions = host.querySelector('.fleet-approval-user-actions, .inactive-approval-detail-actions');
+    if (actions instanceof HTMLElement) {
+        actions.parentNode.insertBefore(feedback, actions);
+        return;
+    }
+
+    host.appendChild(feedback);
+}
+
+function markApprovalDetailAsCancelled(approvalId, message) {
+    var normalizedId = String(approvalId || '').trim();
+    if (normalizedId === '') {
+        return;
+    }
+
+    document.querySelectorAll('[data-approval-detail]').forEach(function (detail) {
+        if (!(detail instanceof HTMLElement) || String(detail.getAttribute('data-approval-id') || '') !== normalizedId) {
+            return;
+        }
+
+        detail.querySelectorAll('[data-user-approval-cancel]').forEach(function (button) {
+            button.remove();
+        });
+        detail.querySelectorAll('[data-approval-detail-status]').forEach(function (statusElement) {
+            if (!(statusElement instanceof HTMLElement)) {
+                return;
+            }
+
+            statusElement.className = 'inactive-approval-status is-cancelled';
+            statusElement.textContent = 'Anulata';
+        });
+
+        showUserApprovalCancelFeedback(detail, message || 'Solicitarea a fost anulata.', 'success');
+    });
+}
+
+function syncApprovalCountersFromSummary(summary) {
+    if (!summary || typeof summary !== 'object') {
+        return;
+    }
+
+    var counts = summary.counts && typeof summary.counts === 'object' ? summary.counts : {};
+    Object.keys(counts).forEach(function (status) {
+        var value = parseInt(counts[status], 10);
+        if (!Number.isFinite(value)) {
+            return;
+        }
+
+        document.querySelectorAll('[data-approval-tab-count="' + status.replace(/"/g, '\\"') + '"], [data-user-approval-tab-count="' + status.replace(/"/g, '\\"') + '"]').forEach(function (element) {
+            setApprovalCount(element, value);
+        });
+    });
+
+    var total = parseInt(summary.total, 10);
+    if (Number.isFinite(total)) {
+        document.querySelectorAll('[data-approval-total-count], [data-approval-total-badge]').forEach(function (element) {
+            setApprovalCount(element, total);
+        });
+    }
+}
+
+function applyUserApprovalStatusToHost(host, status) {
+    if (!(host instanceof HTMLElement)) {
+        return;
+    }
+
+    var normalizedStatus = String(status || '').trim();
+    var statusLabels = {
+        pending: 'In asteptare',
+        approved: 'Aprobata',
+        rejected: 'Respinsa',
+        cancelled: 'Anulata'
+    };
+    var statusIcons = {
+        pending: 'bi-hourglass-split',
+        approved: 'bi-check-circle',
+        rejected: 'bi-x-circle',
+        cancelled: 'bi-slash-circle'
+    };
+
+    if (!Object.prototype.hasOwnProperty.call(statusLabels, normalizedStatus)) {
+        return;
+    }
+
+    host.setAttribute('data-approval-status', normalizedStatus);
+    host.querySelectorAll('[data-user-approval-cancel]').forEach(function (button) {
+        button.remove();
+    });
+    host.querySelectorAll('.user-approval-status').forEach(function (statusElement) {
+        if (!(statusElement instanceof HTMLElement)) {
+            return;
+        }
+
+        statusElement.className = 'user-approval-status is-' + normalizedStatus;
+        statusElement.textContent = '';
+
+        var icon = document.createElement('i');
+        icon.className = 'bi ' + statusIcons[normalizedStatus];
+        icon.setAttribute('aria-hidden', 'true');
+        statusElement.appendChild(icon);
+        statusElement.appendChild(document.createTextNode(statusLabels[normalizedStatus]));
+    });
+    host.querySelectorAll('[data-approval-detail-status]').forEach(function (statusElement) {
+        if (!(statusElement instanceof HTMLElement)) {
+            return;
+        }
+
+        statusElement.className = 'inactive-approval-status is-' + normalizedStatus;
+        statusElement.textContent = statusLabels[normalizedStatus];
+    });
+}
+
+function syncApprovalRequestStatusFromPayload(approvalId, payload, message) {
+    if (!payload || typeof payload !== 'object') {
+        return;
+    }
+
+    var currentStatus = String(payload.current_status || '').trim();
+    if (currentStatus === '') {
+        return;
+    }
+
+    var normalizedId = String(approvalId || payload.approval_id || '').trim();
+    if (normalizedId === '') {
+        return;
+    }
+
+    document.querySelectorAll('[data-approval-card], [data-approval-detail]').forEach(function (host) {
+        if (!(host instanceof HTMLElement) || String(host.getAttribute('data-approval-id') || '') !== normalizedId) {
+            return;
+        }
+
+        applyUserApprovalStatusToHost(host, currentStatus);
+        showUserApprovalCancelFeedback(host, message, 'error');
+    });
+
+    syncApprovalCountersFromSummary(payload.summary || null);
+}
+
+function setUserApprovalCancelBusy(button, busy) {
+    if (!(button instanceof HTMLButtonElement)) {
+        return;
+    }
+
+    button.disabled = busy;
+    button.classList.toggle('is-loading', busy);
+}
+
+function cancelUserApprovalRequest(button) {
+    if (!(button instanceof HTMLButtonElement)) {
+        return;
+    }
+
+    var approvalId = String(button.getAttribute('data-approval-id') || '').trim();
+    var cancelUrl = String(button.getAttribute('data-cancel-url') || '').trim();
+    var csrfToken = String(button.getAttribute('data-csrf-token') || '').trim();
+    var host = findUserApprovalCancelHost(button);
+
+    if (approvalId === '' || cancelUrl === '' || csrfToken === '') {
+        showUserApprovalCancelFeedback(host, 'Solicitare invalida. Reincarca pagina si incearca din nou.', 'error');
+        return;
+    }
+
+    if (!window.confirm('Sigur dorești să anulezi această solicitare?')) {
+        return;
+    }
+
+    clearUserApprovalCancelFeedback(host);
+    setUserApprovalCancelBusy(button, true);
+
+    var formData = new FormData();
+    formData.append('_token', csrfToken);
+    formData.append('approval_id', approvalId);
+
+    fetch(cancelUrl, {
+        method: 'POST',
+        headers: {
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: formData
+    })
+        .then(function (response) {
+            return response.json().catch(function () {
+                return {};
+            }).then(function (payload) {
+                if (!response.ok || !payload.success) {
+                    var error = new Error(payload.message || 'Solicitarea nu a putut fi anulata.');
+                    error.payload = payload;
+                    error.status = response.status;
+                    throw error;
+                }
+
+                return payload;
+            });
+        })
+        .then(function (payload) {
+            var cancelledId = payload.approval_id || approvalId;
+            var message = payload.message || 'Solicitarea a fost anulata.';
+            window.dispatchEvent(new CustomEvent('inactiveApprovalRequestChanged', {
+                detail: {
+                    action: 'cancelled',
+                    approval_id: cancelledId,
+                    message: message,
+                    summary: payload.summary || null
+                }
+            }));
+            markApprovalDetailAsCancelled(cancelledId, message);
+        })
+        .catch(function (error) {
+            setUserApprovalCancelBusy(button, false);
+            var message = userApprovalCancelMessageFromError(error);
+            if (error && error.payload && error.status === 409) {
+                syncApprovalRequestStatusFromPayload(approvalId, error.payload, message);
+                return;
+            }
+
+            showUserApprovalCancelFeedback(host, message, 'error');
+        });
+}
+
+function initUserApprovalCancellation() {
+    document.addEventListener('click', function (event) {
+        var target = event.target instanceof Element ? event.target : null;
+        if (target === null) {
+            return;
+        }
+
+        var button = target.closest('[data-user-approval-cancel]');
+        if (!(button instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        event.preventDefault();
+        cancelUserApprovalRequest(button);
+    });
+}
+
+function initApprovalRequestStateSync() {
+    window.addEventListener('inactiveApprovalRequestChanged', function (event) {
+        var detail = event && event.detail && typeof event.detail === 'object' ? event.detail : {};
+        if (detail.action !== 'cancelled') {
+            return;
+        }
+
+        removeCancelledApprovalFromUi(detail.approval_id);
+        syncApprovalCountersFromSummary(detail.summary || null);
+    });
+}
+
+function initUserApprovalInfoPanel() {
+    document.querySelectorAll('.user-approval-info-close').forEach(function (button) {
+        if (!(button instanceof HTMLButtonElement)) {
+            return;
+        }
+
+        button.addEventListener('click', function () {
+            var panel = button.closest('.user-approval-info-panel');
+            if (panel instanceof HTMLElement) {
+                panel.hidden = true;
+            }
+        });
     });
 }
 
@@ -1083,6 +1476,9 @@ document.addEventListener('DOMContentLoaded', function () {
     initDashboardOperationalCostCard();
     initDashboardApprovalTabs();
     initGlobalApprovalDrawer();
+    initApprovalRequestStateSync();
+    initUserApprovalCancellation();
+    initUserApprovalInfoPanel();
     initFleetStickyDocumentTables();
     initFleetIdleRefreshLoader();
 });

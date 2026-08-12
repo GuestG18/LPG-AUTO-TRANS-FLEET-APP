@@ -9,26 +9,35 @@ $styleVersion = (string) @filemtime(BASE_PATH . '/assets/css/style.css');
 // marginea din stanga. Butonul din bara de sus il poate fixa deschis.
 $bodyClasses = ['sidebar-collapsed'];
 $showGlobalApprovalDrawer = false;
+$globalApprovalDrawerMode = 'user';
+$canReviewInactiveApprovals = false;
 $globalApprovalSummary = [
-    'counts' => ['vehicle' => 0, 'driver' => 0],
+    'counts' => ['vehicle' => 0, 'driver' => 0, 'repair' => 0],
     'total' => 0,
     'vehicles' => [],
     'drivers' => [],
+    'repairs' => [],
 ];
 if (
     $showSidebar
     && function_exists('is_logged_in')
     && is_logged_in()
-    && (
-        (function_exists('can') && can('inactive_approvals', 'review'))
-        || (!function_exists('can') && function_exists('is_admin') && is_admin())
-    )
     && class_exists('InactiveResourceApprovalModel')
     && function_exists('get_pdo')
 ) {
     $showGlobalApprovalDrawer = true;
+    $canReviewInactiveApprovals = (function_exists('can') && can('inactive_approvals', 'review'))
+        || (!function_exists('can') && function_exists('is_admin') && is_admin());
+    $globalApprovalDrawerMode = $canReviewInactiveApprovals ? 'admin' : 'user';
+
     try {
-        $globalApprovalSummary = (new InactiveResourceApprovalModel(get_pdo()))->getPendingSummary(5);
+        $approvalModel = new InactiveResourceApprovalModel(get_pdo());
+        if ($canReviewInactiveApprovals) {
+            $globalApprovalSummary = $approvalModel->getPendingSummary(5);
+        } else {
+            $currentUserId = (int) ($user['id'] ?? 0);
+            $globalApprovalSummary = $approvalModel->getRequesterSummary($currentUserId, 5);
+        }
     } catch (Throwable $exception) {
         error_log('[layout][inactive_approvals] ' . $exception->getMessage());
     }
@@ -68,6 +77,7 @@ if (
                     <a class="nav-link <?= $currentPage === 'dispecer_curse' && $currentAction === 'refacturari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'refacturari'])) ?>"><i class="bi bi-receipt" aria-hidden="true"></i><span>Refacturari curse</span></a>
                 <?php endif; ?>
                 <?php if ($can('centralizator_facturare')): ?><a class="nav-link <?= $currentPage === 'centralizator_facturare' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'centralizator_facturare'])) ?>"><i class="bi bi-calendar-range" aria-hidden="true"></i><span>Centralizator Facturare</span></a><?php endif; ?>
+                <?php if ($can('centralizator_facturare')): ?><a class="nav-link <?= $currentPage === 'istoric_activitate' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'istoric_activitate'])) ?>"><i class="bi bi-clock-history" aria-hidden="true"></i><span>Istoric activitate</span></a><?php endif; ?>
                 <?php if ($can('programare_concedii')): ?><a class="nav-link <?= $currentPage === 'programare_concedii' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'programare_concedii'])) ?>"><i class="bi bi-calendar2-week" aria-hidden="true"></i><span>Programare concedii</span></a><?php endif; ?>
                 <?php
                 $isVehicleNavGroup = in_array($currentRoutePage, ['vehicule', 'vehicule_usoare', 'vehicule_grele', 'documente', 'inventar_dotari_vehicule', 'stare_tehnica'], true)
@@ -100,6 +110,31 @@ if (
                 </div>
                 <?php endif; ?>
                 <?php if ($can('autorizatii_vehicule')): ?><a class="nav-link <?= $currentPage === 'autorizatii_vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'autorizatii_vehicule'])) ?>"><i class="bi bi-shield-check" aria-hidden="true"></i><span>Autorizații</span></a><?php endif; ?>
+                <?php
+                $isLeasingNavGroup = $currentPage === 'scadentar_leasing';
+                $leasingShow = $can('scadentar_leasing');
+                ?>
+                <?php if ($leasingShow): ?>
+                <div class="sidebar-nav-group">
+                    <button
+                        class="nav-link sidebar-parent-link <?= $isLeasingNavGroup ? 'active' : '' ?>"
+                        type="button"
+                        data-bs-toggle="collapse"
+                        data-bs-target="#leasingSidebarMenu"
+                        aria-expanded="<?= $isLeasingNavGroup ? 'true' : 'false' ?>"
+                        aria-controls="leasingSidebarMenu"
+                    >
+                        <i class="bi bi-calendar-check" aria-hidden="true"></i>
+                        <span>Leasing</span>
+                        <i class="bi bi-chevron-down sidebar-chevron" aria-hidden="true"></i>
+                    </button>
+                    <div class="collapse <?= $isLeasingNavGroup ? 'show' : '' ?>" id="leasingSidebarMenu">
+                        <div class="sidebar-submenu">
+                            <a class="nav-link <?= $currentPage === 'scadentar_leasing' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'scadentar_leasing'])) ?>">Scaden&#539;ar Leasing</a>
+                        </div>
+                    </div>
+                </div>
+                <?php endif; ?>
                 <?php
                 $isDriverNavGroup = in_array($currentRoutePage, ['soferi', 'documente_soferi', 'istoric_activitati_sofer'], true) || $currentPage === 'soferi';
                 $drvShow = $can('soferi') || $can('documente_soferi') || $can('istoric_activitati_sofer');
@@ -195,6 +230,7 @@ if (
             <?php if ($showGlobalApprovalDrawer): ?>
                 <?php
                 $approvalSummary = $globalApprovalSummary;
+                $approvalDrawerMode = $globalApprovalDrawerMode;
                 include BASE_PATH . '/views/partials/inactive_approval_drawer.php';
                 ?>
             <?php endif; ?>

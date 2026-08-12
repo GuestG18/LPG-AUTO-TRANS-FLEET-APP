@@ -1,4 +1,4 @@
-﻿(function () {
+(function () {
     function parseNumber(value) {
         if (value === null || value === undefined) {
             return 0;
@@ -253,6 +253,14 @@
         var startTimeField = form.querySelector('[data-role="ora-inceput"]');
         var endTimeField = form.querySelector('[data-role="ora-sfarsit"]');
         var timeNowButtonEls = form.querySelectorAll('[data-role="time-now"]');
+        var startDateTimeField = form.querySelector('[data-role="start-datetime-field"]');
+        var startDateTimeDisplayField = form.querySelector('[data-role="start-datetime-display"]');
+        var startDateTimeToggleButton = form.querySelector('[data-role="start-datetime-toggle"]');
+        var startDateTimePopover = form.querySelector('[data-role="start-datetime-popover"]');
+        var endDateTimeField = form.querySelector('[data-role="end-datetime-field"]');
+        var endDateTimeDisplayField = form.querySelector('[data-role="end-datetime-display"]');
+        var endDateTimeToggleButton = form.querySelector('[data-role="end-datetime-toggle"]');
+        var endDateTimePopover = form.querySelector('[data-role="end-datetime-popover"]');
         var durationHintField = form.querySelector('[data-role="durata-cursa-hint"]');
         var distributionLocationNote = form.querySelector('[data-role="distributie-note-loc"]');
         var distributionZoneNote = form.querySelector('[data-role="distributie-note-zone"]');
@@ -272,6 +280,24 @@
         var costKmMixtPreviewField = form.querySelector('[data-role="preview-cost-km-mixt-field"]');
         var kmDistributionCalculationNote = form.querySelector('[data-role="km-distributie-calculation"]');
         var costKmMixtCalculationNote = form.querySelector('[data-role="cost-km-mixt-calculation"]');
+        var startDateTimePickerState = {
+            view: 'date',
+            viewedYear: null,
+            viewedMonth: null,
+            selectedDateParts: null,
+            selectedHour: null,
+            selectedMinute: null
+        };
+        var endDateTimePickerState = {
+            view: 'date',
+            viewedYear: null,
+            viewedMonth: null,
+            selectedDateParts: null,
+            selectedHour: null,
+            selectedMinute: null
+        };
+        var activeDateTimePicker = null;
+        var dateTimePickers = [];
 
         if (!(costKmMixtCalculationNote instanceof HTMLElement) && costKmMixtPreviewField instanceof HTMLElement) {
             costKmMixtCalculationNote = document.createElement('div');
@@ -567,6 +593,23 @@
             driversByVehicle = {};
         }
 
+        // Sandbox: lista tuturor soferilor activi, pentru optiunea "Alt sofer" din formular.
+        var allDrivers = [];
+        try {
+            allDrivers = JSON.parse(form.getAttribute('data-all-drivers') || '[]') || [];
+        } catch (error) {
+            allDrivers = [];
+        }
+        var SHOW_ALL_DRIVERS_VALUE = '__show_all_drivers__';
+        var driverListExpanded = false;
+        var driverListVehicleId = '';
+
+        // Sandbox: optiunea "Alt vehicul" — vehicule neconfigurate pe ruta, cu decizie admin.
+        var SHOW_ALL_VEHICLES_VALUE = '__show_all_vehicles__';
+        var vehicleListExpanded = false;
+        var vehicleListContextKey = '';
+        var lastEligibleVehicleSet = {};
+
         var defaultDistributionLocationNoteText = distributionLocationNote
             ? String(distributionLocationNote.textContent || '').trim()
             : '';
@@ -788,6 +831,862 @@
             field.dispatchEvent(new Event('input', { bubbles: true }));
             field.dispatchEvent(new Event('change', { bubbles: true }));
             field.focus();
+        }
+
+        function dispatchFieldUpdate(field) {
+            if (!(field instanceof HTMLInputElement)) {
+                return;
+            }
+
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        function createDateTimePickerContext(field, displayField, toggleButton, popover, dateField, timeField, state) {
+            if (
+                !(field instanceof HTMLElement)
+                || !(displayField instanceof HTMLInputElement)
+                || !(toggleButton instanceof HTMLButtonElement)
+                || !(popover instanceof HTMLElement)
+                || !(dateField instanceof HTMLInputElement)
+                || !(timeField instanceof HTMLInputElement)
+            ) {
+                return null;
+            }
+
+            return {
+                field: field,
+                displayField: displayField,
+                toggleButton: toggleButton,
+                popover: popover,
+                dateField: dateField,
+                timeField: timeField,
+                state: state
+            };
+        }
+
+        function getActiveDateTimePicker() {
+            return activeDateTimePicker || dateTimePickers[0] || null;
+        }
+
+        function setActiveDateTimePicker(dateTimePicker) {
+            if (!dateTimePicker) {
+                return null;
+            }
+
+            activeDateTimePicker = dateTimePicker;
+            return activeDateTimePicker;
+        }
+
+        function getTodayDateParts() {
+            var now = new Date();
+
+            return {
+                year: now.getFullYear(),
+                month: now.getMonth() + 1,
+                day: now.getDate()
+            };
+        }
+
+        function datePartsMatch(firstDateParts, secondDateParts) {
+            return !!(
+                firstDateParts
+                && secondDateParts
+                && firstDateParts.year === secondDateParts.year
+                && firstDateParts.month === secondDateParts.month
+                && firstDateParts.day === secondDateParts.day
+            );
+        }
+
+        function formatDatePartsForDataset(dateParts) {
+            if (!dateParts) {
+                return '';
+            }
+
+            return String(dateParts.year) + '-' + padDateComponent(dateParts.month) + '-' + padDateComponent(dateParts.day);
+        }
+
+        function getPickerMonthLabels() {
+            return [
+                'Ianuarie',
+                'Februarie',
+                'Martie',
+                'Aprilie',
+                'Mai',
+                'Iunie',
+                'Iulie',
+                'August',
+                'Septembrie',
+                'Octombrie',
+                'Noiembrie',
+                'Decembrie'
+            ];
+        }
+
+        function getPickerShortMonthLabels() {
+            return ['Ian', 'Feb', 'Mar', 'Apr', 'Mai', 'Iun', 'Iul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        }
+
+        function formatStartDateTimeDisplayValue(dateRaw, timeRaw) {
+            var dateValue = String(dateRaw || '').trim();
+            var timeValue = String(timeRaw || '').trim();
+            var dateParts = parseDateForDuration(dateValue);
+            var normalizedTime = timeValue !== '' ? normalizeTimeInputValue(timeValue) : '';
+            var dateDisplay = dateParts !== null ? formatDateForDisplay(dateParts) : dateValue;
+            var timeDisplay = normalizedTime !== null ? normalizedTime : timeValue;
+
+            return (dateDisplay + (timeDisplay !== '' ? ' ' + timeDisplay : '')).trim();
+        }
+
+        function setStartDateTimeDisplayInvalid(isInvalid) {
+            if (!(getActiveDateTimePicker().displayField instanceof HTMLInputElement)) {
+                return;
+            }
+
+            getActiveDateTimePicker().displayField.classList.toggle('is-invalid', !!isInvalid);
+            if (isInvalid) {
+                getActiveDateTimePicker().displayField.setAttribute('aria-invalid', 'true');
+            } else {
+                getActiveDateTimePicker().displayField.removeAttribute('aria-invalid');
+            }
+        }
+
+        function parseStartDateTimeDisplayValue(rawValue) {
+            var value = String(rawValue || '').trim().replace(/T/g, ' ').replace(/[,\s]+/g, ' ');
+            if (value === '') {
+                return null;
+            }
+
+            var valueParts = value.split(' ');
+            if (valueParts.length > 2) {
+                return null;
+            }
+
+            var dateParts = parseDateForDuration(valueParts[0]);
+            if (dateParts === null) {
+                return null;
+            }
+
+            var timeValue = '';
+            if (valueParts.length === 2 && valueParts[1] !== '') {
+                timeValue = normalizeTimeInputValue(valueParts[1]);
+                if (timeValue === null) {
+                    return null;
+                }
+            }
+
+            return {
+                dateParts: dateParts,
+                timeValue: timeValue
+            };
+        }
+
+        function applyStartDateTimeFieldValues(dateParts, timeValue) {
+            if (dateParts && getActiveDateTimePicker().dateField instanceof HTMLInputElement) {
+                getActiveDateTimePicker().dateField.value = formatDateForDisplay(dateParts);
+                dispatchFieldUpdate(getActiveDateTimePicker().dateField);
+            }
+
+            if (getActiveDateTimePicker().timeField instanceof HTMLInputElement) {
+                getActiveDateTimePicker().timeField.value = String(timeValue || '');
+                dispatchFieldUpdate(getActiveDateTimePicker().timeField);
+            }
+
+            if (getActiveDateTimePicker().displayField instanceof HTMLInputElement) {
+                getActiveDateTimePicker().displayField.value = formatStartDateTimeDisplayValue(
+                    getActiveDateTimePicker().dateField instanceof HTMLInputElement ? getActiveDateTimePicker().dateField.value : '',
+                    getActiveDateTimePicker().timeField instanceof HTMLInputElement ? getActiveDateTimePicker().timeField.value : ''
+                );
+                setStartDateTimeDisplayInvalid(false);
+            }
+
+            syncRaceDurationHint();
+        }
+
+        function syncStartDateTimeDisplayFromFields() {
+            if (!(getActiveDateTimePicker().displayField instanceof HTMLInputElement)) {
+                return;
+            }
+
+            getActiveDateTimePicker().displayField.value = formatStartDateTimeDisplayValue(
+                getActiveDateTimePicker().dateField instanceof HTMLInputElement ? getActiveDateTimePicker().dateField.value : '',
+                getActiveDateTimePicker().timeField instanceof HTMLInputElement ? getActiveDateTimePicker().timeField.value : ''
+            );
+        }
+
+        function syncStartDateTimeFieldsFromDisplay(markInvalid) {
+            if (!(getActiveDateTimePicker().displayField instanceof HTMLInputElement)) {
+                return true;
+            }
+
+            var parsedValue = parseStartDateTimeDisplayValue(getActiveDateTimePicker().displayField.value);
+            if (parsedValue === null) {
+                if (markInvalid) {
+                    setStartDateTimeDisplayInvalid(true);
+                }
+                return false;
+            }
+
+            applyStartDateTimeFieldValues(parsedValue.dateParts, parsedValue.timeValue);
+            return true;
+        }
+
+        function syncStartDateTimePickerStateFromFields() {
+            var selectedDateParts = parseDateForDuration(getActiveDateTimePicker().dateField instanceof HTMLInputElement ? getActiveDateTimePicker().dateField.value : '');
+            var selectedTimeParts = parseTimeForDuration(getActiveDateTimePicker().timeField instanceof HTMLInputElement ? getActiveDateTimePicker().timeField.value : '');
+            var fallbackDateParts = selectedDateParts || getTodayDateParts();
+
+            getActiveDateTimePicker().state.selectedDateParts = selectedDateParts;
+            getActiveDateTimePicker().state.selectedHour = selectedTimeParts ? selectedTimeParts.hours : null;
+            getActiveDateTimePicker().state.selectedMinute = selectedTimeParts ? selectedTimeParts.minutes : null;
+            getActiveDateTimePicker().state.viewedYear = fallbackDateParts.year;
+            getActiveDateTimePicker().state.viewedMonth = fallbackDateParts.month;
+        }
+
+        function clearDateTimePickerElement(element) {
+            while (element.firstChild) {
+                element.removeChild(element.firstChild);
+            }
+        }
+
+        function createDateTimePickerIconButton(action, label, iconName) {
+            var button = document.createElement('button');
+            var icon = document.createElement('i');
+
+            button.type = 'button';
+            button.className = 'dispatcher-datetime-picker-icon-btn';
+            button.setAttribute('data-datetime-action', action);
+            button.setAttribute('aria-label', label);
+            button.title = label;
+            icon.className = 'bi ' + iconName;
+            icon.setAttribute('aria-hidden', 'true');
+            button.appendChild(icon);
+
+            return button;
+        }
+
+        function renderStartDateTimePickerHeader(titleText, leftButton, rightButton, titleAction) {
+            var header = document.createElement('div');
+            var title = titleAction ? document.createElement('button') : document.createElement('div');
+            var left = leftButton || document.createElement('span');
+            var right = rightButton || document.createElement('span');
+
+            header.className = 'dispatcher-datetime-picker-header';
+            title.className = 'dispatcher-datetime-picker-title';
+            title.textContent = titleText;
+            if (titleAction) {
+                title.type = 'button';
+                title.setAttribute('data-datetime-action', titleAction);
+                title.setAttribute('aria-label', titleText);
+            }
+            if (!leftButton) {
+                left.className = 'dispatcher-datetime-picker-header-spacer';
+            }
+            if (!rightButton) {
+                right.className = 'dispatcher-datetime-picker-header-spacer';
+            }
+
+            header.appendChild(left);
+            header.appendChild(title);
+            header.appendChild(right);
+
+            return header;
+        }
+
+        function renderStartDateTimeDateView() {
+            var monthLabels = getPickerMonthLabels();
+            var weekdayLabels = ['Lu', 'Ma', 'Mi', 'Jo', 'Vi', 'Sa', 'Du'];
+            var todayDateParts = getTodayDateParts();
+            var selectedDateParts = getActiveDateTimePicker().state.selectedDateParts;
+            var viewedYear = getActiveDateTimePicker().state.viewedYear || todayDateParts.year;
+            var viewedMonth = getActiveDateTimePicker().state.viewedMonth || todayDateParts.month;
+            var firstDay = new Date(viewedYear, viewedMonth - 1, 1);
+            var firstOffset = (firstDay.getDay() + 6) % 7;
+            var gridStart = new Date(viewedYear, viewedMonth - 1, 1 - firstOffset);
+            var header = renderStartDateTimePickerHeader(
+                monthLabels[viewedMonth - 1] + ' ' + String(viewedYear),
+                createDateTimePickerIconButton('prev-month', 'Luna precedenta', 'bi-chevron-left'),
+                createDateTimePickerIconButton('next-month', 'Luna urmatoare', 'bi-chevron-right'),
+                'show-month'
+            );
+            var weekdays = document.createElement('div');
+            var daysGrid = document.createElement('div');
+            var footer = document.createElement('div');
+
+            getActiveDateTimePicker().popover.appendChild(header);
+
+            weekdays.className = 'dispatcher-datetime-weekdays';
+            weekdayLabels.forEach(function (label) {
+                var weekday = document.createElement('span');
+                weekday.textContent = label;
+                weekdays.appendChild(weekday);
+            });
+            getActiveDateTimePicker().popover.appendChild(weekdays);
+
+            daysGrid.className = 'dispatcher-datetime-days';
+            for (var dayIndex = 0; dayIndex < 42; dayIndex += 1) {
+                var cellDate = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + dayIndex);
+                var cellDateParts = {
+                    year: cellDate.getFullYear(),
+                    month: cellDate.getMonth() + 1,
+                    day: cellDate.getDate()
+                };
+                var dayButton = document.createElement('button');
+
+                dayButton.type = 'button';
+                dayButton.className = 'dispatcher-datetime-day';
+                if (cellDateParts.month !== viewedMonth) {
+                    dayButton.classList.add('is-muted');
+                }
+                if (datePartsMatch(cellDateParts, todayDateParts)) {
+                    dayButton.classList.add('is-today');
+                }
+                if (datePartsMatch(cellDateParts, selectedDateParts)) {
+                    dayButton.classList.add('is-selected');
+                    dayButton.setAttribute('aria-pressed', 'true');
+                }
+                dayButton.textContent = String(cellDateParts.day);
+                dayButton.setAttribute('data-datetime-date', formatDatePartsForDataset(cellDateParts));
+                daysGrid.appendChild(dayButton);
+            }
+            getActiveDateTimePicker().popover.appendChild(daysGrid);
+
+            footer.className = 'dispatcher-datetime-picker-footer';
+            footer.appendChild(createDateTimePickerIconButton('show-time', 'Alege ora', 'bi-clock'));
+            getActiveDateTimePicker().popover.appendChild(footer);
+        }
+
+        function getPickerSelectedDateParts() {
+            return getActiveDateTimePicker().state.selectedDateParts
+                || parseDateForDuration(getActiveDateTimePicker().dateField instanceof HTMLInputElement ? getActiveDateTimePicker().dateField.value : '')
+                || getTodayDateParts();
+        }
+
+        function getPickerSelectedHour() {
+            return getActiveDateTimePicker().state.selectedHour === null ? 0 : getActiveDateTimePicker().state.selectedHour;
+        }
+
+        function getPickerSelectedMinute() {
+            return getActiveDateTimePicker().state.selectedMinute === null ? 0 : getActiveDateTimePicker().state.selectedMinute;
+        }
+
+        function applyPickerTime(hourValue, minuteValue) {
+            var selectedDateParts = getPickerSelectedDateParts();
+
+            getActiveDateTimePicker().state.selectedDateParts = selectedDateParts;
+            getActiveDateTimePicker().state.selectedHour = Math.max(0, Math.min(23, hourValue));
+            getActiveDateTimePicker().state.selectedMinute = Math.max(0, Math.min(59, minuteValue));
+            applyStartDateTimeFieldValues(
+                selectedDateParts,
+                padTimeComponent(getActiveDateTimePicker().state.selectedHour) + ':' + padTimeComponent(getActiveDateTimePicker().state.selectedMinute)
+            );
+        }
+
+        function renderStartDateTimeModeSwitch(action, label, iconName) {
+            var switcher = document.createElement('div');
+
+            switcher.className = 'dispatcher-datetime-mode-switch';
+            switcher.appendChild(createDateTimePickerIconButton(action, label, iconName));
+
+            return switcher;
+        }
+
+        function renderStartDateTimeSpinnerView() {
+            var hourValue = getPickerSelectedHour();
+            var minuteValue = getPickerSelectedMinute();
+            var spinner = document.createElement('div');
+            var hourUp = createDateTimePickerIconButton('hour-up', 'Creste ora', 'bi-chevron-up');
+            var minuteUp = createDateTimePickerIconButton('minute-up', 'Creste minutele', 'bi-chevron-up');
+            var hourDown = createDateTimePickerIconButton('hour-down', 'Scade ora', 'bi-chevron-down');
+            var minuteDown = createDateTimePickerIconButton('minute-down', 'Scade minutele', 'bi-chevron-down');
+            var hourDisplay = document.createElement('button');
+            var minuteDisplay = document.createElement('button');
+            var separator = document.createElement('span');
+
+            getActiveDateTimePicker().popover.appendChild(renderStartDateTimeModeSwitch('show-date', 'Alege data', 'bi-calendar3'));
+
+            spinner.className = 'dispatcher-datetime-spinner';
+            hourDisplay.type = 'button';
+            hourDisplay.className = 'dispatcher-datetime-spinner-value';
+            hourDisplay.textContent = padTimeComponent(hourValue);
+            hourDisplay.setAttribute('data-datetime-action', 'show-hour');
+            hourDisplay.setAttribute('aria-label', 'Alege ora');
+
+            minuteDisplay.type = 'button';
+            minuteDisplay.className = 'dispatcher-datetime-spinner-value';
+            minuteDisplay.textContent = padTimeComponent(minuteValue);
+            minuteDisplay.setAttribute('data-datetime-action', 'show-minute');
+            minuteDisplay.setAttribute('aria-label', 'Alege minutele');
+
+            separator.className = 'dispatcher-datetime-spinner-separator';
+            separator.textContent = ':';
+
+            spinner.appendChild(hourUp);
+            spinner.appendChild(document.createElement('span'));
+            spinner.appendChild(minuteUp);
+            spinner.appendChild(hourDisplay);
+            spinner.appendChild(separator);
+            spinner.appendChild(minuteDisplay);
+            spinner.appendChild(hourDown);
+            spinner.appendChild(document.createElement('span'));
+            spinner.appendChild(minuteDown);
+            getActiveDateTimePicker().popover.appendChild(spinner);
+        }
+
+        function renderStartDateTimeMonthView() {
+            var monthLabels = getPickerShortMonthLabels();
+            var todayDateParts = getTodayDateParts();
+            var viewedYear = getActiveDateTimePicker().state.viewedYear || todayDateParts.year;
+            var selectedDateParts = getActiveDateTimePicker().state.selectedDateParts;
+            var header = renderStartDateTimePickerHeader(
+                String(viewedYear),
+                createDateTimePickerIconButton('prev-year', 'Anul precedent', 'bi-chevron-left'),
+                createDateTimePickerIconButton('next-year', 'Anul urmator', 'bi-chevron-right'),
+                'show-year'
+            );
+            var monthGrid = document.createElement('div');
+
+            getActiveDateTimePicker().popover.appendChild(header);
+            monthGrid.className = 'dispatcher-datetime-month-grid';
+            monthLabels.forEach(function (monthLabel, monthIndex) {
+                var monthButton = document.createElement('button');
+                var monthValue = monthIndex + 1;
+
+                monthButton.type = 'button';
+                monthButton.className = 'dispatcher-datetime-time-option';
+                monthButton.textContent = monthLabel;
+                monthButton.setAttribute('data-datetime-month', String(monthValue));
+                if (selectedDateParts && selectedDateParts.year === viewedYear && selectedDateParts.month === monthValue) {
+                    monthButton.classList.add('is-selected');
+                    monthButton.setAttribute('aria-pressed', 'true');
+                }
+                monthGrid.appendChild(monthButton);
+            });
+
+            getActiveDateTimePicker().popover.appendChild(monthGrid);
+        }
+
+        function getYearGridStart(viewedYear) {
+            return Math.floor(viewedYear / 12) * 12;
+        }
+
+        function renderStartDateTimeYearView() {
+            var todayDateParts = getTodayDateParts();
+            var viewedYear = getActiveDateTimePicker().state.viewedYear || todayDateParts.year;
+            var yearStart = getYearGridStart(viewedYear);
+            var selectedDateParts = getActiveDateTimePicker().state.selectedDateParts;
+            var header = renderStartDateTimePickerHeader(
+                String(yearStart) + ' - ' + String(yearStart + 11),
+                createDateTimePickerIconButton('prev-year-range', 'Interval precedent', 'bi-chevron-left'),
+                createDateTimePickerIconButton('next-year-range', 'Interval urmator', 'bi-chevron-right')
+            );
+            var yearGrid = document.createElement('div');
+
+            getActiveDateTimePicker().popover.appendChild(header);
+            yearGrid.className = 'dispatcher-datetime-year-grid';
+            for (var yearOffset = 0; yearOffset < 12; yearOffset += 1) {
+                var yearValue = yearStart + yearOffset;
+                var yearButton = document.createElement('button');
+
+                yearButton.type = 'button';
+                yearButton.className = 'dispatcher-datetime-time-option';
+                yearButton.textContent = String(yearValue);
+                yearButton.setAttribute('data-datetime-year', String(yearValue));
+                if (selectedDateParts && selectedDateParts.year === yearValue) {
+                    yearButton.classList.add('is-selected');
+                    yearButton.setAttribute('aria-pressed', 'true');
+                }
+                yearGrid.appendChild(yearButton);
+            }
+
+            getActiveDateTimePicker().popover.appendChild(yearGrid);
+        }
+
+        function renderStartDateTimeHourView() {
+            var selectedHour = getActiveDateTimePicker().state.selectedHour;
+            var hourGrid = document.createElement('div');
+
+            getActiveDateTimePicker().popover.appendChild(renderStartDateTimeModeSwitch('show-date', 'Alege data', 'bi-calendar3'));
+            hourGrid.className = 'dispatcher-datetime-time-grid dispatcher-datetime-hour-grid';
+
+            for (var hour = 0; hour < 24; hour += 1) {
+                var hourButton = document.createElement('button');
+                hourButton.type = 'button';
+                hourButton.className = 'dispatcher-datetime-time-option';
+                if (selectedHour === hour) {
+                    hourButton.classList.add('is-selected');
+                    hourButton.setAttribute('aria-pressed', 'true');
+                }
+                hourButton.textContent = padTimeComponent(hour);
+                hourButton.setAttribute('data-datetime-hour', String(hour));
+                hourGrid.appendChild(hourButton);
+            }
+
+            getActiveDateTimePicker().popover.appendChild(hourGrid);
+        }
+
+        function renderStartDateTimeMinuteView() {
+            var selectedHour = getActiveDateTimePicker().state.selectedHour;
+            var selectedMinute = getActiveDateTimePicker().state.selectedMinute;
+            var minuteValues = [];
+            var header = renderStartDateTimePickerHeader(
+                padTimeComponent(selectedHour === null ? 0 : selectedHour) + ':mm',
+                createDateTimePickerIconButton('show-hour', 'Alege ora', 'bi-chevron-left'),
+                createDateTimePickerIconButton('show-date', 'Alege data', 'bi-calendar3')
+            );
+            var minuteGrid = document.createElement('div');
+
+            getActiveDateTimePicker().popover.appendChild(header);
+            minuteGrid.className = 'dispatcher-datetime-time-grid dispatcher-datetime-minute-grid';
+
+            for (var minute = 0; minute < 60; minute += 5) {
+                minuteValues.push(minute);
+            }
+            if (selectedMinute !== null && minuteValues.indexOf(selectedMinute) === -1) {
+                minuteValues.push(selectedMinute);
+                minuteValues.sort(function (first, second) {
+                    return first - second;
+                });
+            }
+
+            minuteValues.forEach(function (minuteValue) {
+                var minuteButton = document.createElement('button');
+                minuteButton.type = 'button';
+                minuteButton.className = 'dispatcher-datetime-time-option';
+                if (selectedMinute === minuteValue) {
+                    minuteButton.classList.add('is-selected');
+                    minuteButton.setAttribute('aria-pressed', 'true');
+                }
+                minuteButton.textContent = padTimeComponent(minuteValue);
+                minuteButton.setAttribute('data-datetime-minute', String(minuteValue));
+                minuteGrid.appendChild(minuteButton);
+            });
+
+            getActiveDateTimePicker().popover.appendChild(minuteGrid);
+        }
+
+        function renderStartDateTimePopover() {
+            if (!(getActiveDateTimePicker().popover instanceof HTMLElement)) {
+                return;
+            }
+
+            clearDateTimePickerElement(getActiveDateTimePicker().popover);
+
+            if (getActiveDateTimePicker().state.view === 'time') {
+                renderStartDateTimeSpinnerView();
+            } else if (getActiveDateTimePicker().state.view === 'hour') {
+                renderStartDateTimeHourView();
+            } else if (getActiveDateTimePicker().state.view === 'minute') {
+                renderStartDateTimeMinuteView();
+            } else if (getActiveDateTimePicker().state.view === 'month') {
+                renderStartDateTimeMonthView();
+            } else if (getActiveDateTimePicker().state.view === 'year') {
+                renderStartDateTimeYearView();
+            } else {
+                renderStartDateTimeDateView();
+            }
+        }
+
+        function closeStartDateTimePopover() {
+            if (!(getActiveDateTimePicker().popover instanceof HTMLElement)) {
+                return;
+            }
+
+            getActiveDateTimePicker().popover.hidden = true;
+            if (getActiveDateTimePicker().toggleButton instanceof HTMLButtonElement) {
+                getActiveDateTimePicker().toggleButton.setAttribute('aria-expanded', 'false');
+            }
+            document.removeEventListener('click', handleStartDateTimeDocumentClick);
+            document.removeEventListener('keydown', handleStartDateTimeKeydown);
+        }
+
+        function openStartDateTimePopover(view) {
+            if (!(getActiveDateTimePicker().popover instanceof HTMLElement)) {
+                return;
+            }
+
+            syncStartDateTimeFieldsFromDisplay(false);
+            syncStartDateTimePickerStateFromFields();
+            getActiveDateTimePicker().state.view = view || getActiveDateTimePicker().state.view || 'date';
+            renderStartDateTimePopover();
+            dateTimePickers.forEach(function (dateTimePicker) {
+                if (dateTimePicker === getActiveDateTimePicker()) {
+                    return;
+                }
+
+                dateTimePicker.popover.hidden = true;
+                dateTimePicker.toggleButton.setAttribute('aria-expanded', 'false');
+            });
+            getActiveDateTimePicker().popover.hidden = false;
+            if (getActiveDateTimePicker().toggleButton instanceof HTMLButtonElement) {
+                getActiveDateTimePicker().toggleButton.setAttribute('aria-expanded', 'true');
+            }
+
+            window.setTimeout(function () {
+                document.addEventListener('click', handleStartDateTimeDocumentClick);
+                document.addEventListener('keydown', handleStartDateTimeKeydown);
+            }, 0);
+        }
+
+        function handleStartDateTimeDocumentClick(event) {
+            var target = event.target;
+            if (!(target instanceof Node)) {
+                return;
+            }
+
+            if (getActiveDateTimePicker().field instanceof HTMLElement && getActiveDateTimePicker().field.contains(target)) {
+                return;
+            }
+
+            closeStartDateTimePopover();
+        }
+
+        function handleStartDateTimeKeydown(event) {
+            if (event.key !== 'Escape') {
+                return;
+            }
+
+            closeStartDateTimePopover();
+            if (getActiveDateTimePicker().toggleButton instanceof HTMLButtonElement) {
+                getActiveDateTimePicker().toggleButton.focus();
+            }
+        }
+
+        function handleStartDateTimePopoverClick(event) {
+            var target = event.target;
+            if (!(target instanceof Element)) {
+                return;
+            }
+            event.stopPropagation();
+
+            var actionButton = target.closest('[data-datetime-action]');
+            if (actionButton instanceof HTMLElement && getActiveDateTimePicker().popover.contains(actionButton)) {
+                var action = String(actionButton.getAttribute('data-datetime-action') || '');
+                var viewedDate = new Date(
+                    getActiveDateTimePicker().state.viewedYear || getTodayDateParts().year,
+                    (getActiveDateTimePicker().state.viewedMonth || getTodayDateParts().month) - 1,
+                    1
+                );
+
+                if (action === 'prev-month' || action === 'next-month') {
+                    viewedDate.setMonth(viewedDate.getMonth() + (action === 'prev-month' ? -1 : 1));
+                    getActiveDateTimePicker().state.viewedYear = viewedDate.getFullYear();
+                    getActiveDateTimePicker().state.viewedMonth = viewedDate.getMonth() + 1;
+                    renderStartDateTimePopover();
+                    return;
+                }
+
+                if (action === 'prev-year' || action === 'next-year') {
+                    getActiveDateTimePicker().state.viewedYear = (getActiveDateTimePicker().state.viewedYear || getTodayDateParts().year)
+                        + (action === 'prev-year' ? -1 : 1);
+                    renderStartDateTimePopover();
+                    return;
+                }
+
+                if (action === 'prev-year-range' || action === 'next-year-range') {
+                    getActiveDateTimePicker().state.viewedYear = (getActiveDateTimePicker().state.viewedYear || getTodayDateParts().year)
+                        + (action === 'prev-year-range' ? -12 : 12);
+                    renderStartDateTimePopover();
+                    return;
+                }
+
+                if (action === 'show-date') {
+                    if (getActiveDateTimePicker().state.selectedDateParts) {
+                        getActiveDateTimePicker().state.viewedYear = getActiveDateTimePicker().state.selectedDateParts.year;
+                        getActiveDateTimePicker().state.viewedMonth = getActiveDateTimePicker().state.selectedDateParts.month;
+                    }
+                    getActiveDateTimePicker().state.view = 'date';
+                    renderStartDateTimePopover();
+                    return;
+                }
+
+                if (action === 'show-month') {
+                    getActiveDateTimePicker().state.view = 'month';
+                    renderStartDateTimePopover();
+                    return;
+                }
+
+                if (action === 'show-year') {
+                    getActiveDateTimePicker().state.view = 'year';
+                    renderStartDateTimePopover();
+                    return;
+                }
+
+                if (action === 'show-time') {
+                    if (getActiveDateTimePicker().state.selectedHour === null) {
+                        getActiveDateTimePicker().state.selectedHour = 0;
+                    }
+                    if (getActiveDateTimePicker().state.selectedMinute === null) {
+                        getActiveDateTimePicker().state.selectedMinute = 0;
+                    }
+                    getActiveDateTimePicker().state.view = 'time';
+                    renderStartDateTimePopover();
+                    return;
+                }
+
+                if (action === 'show-hour') {
+                    getActiveDateTimePicker().state.view = 'hour';
+                    renderStartDateTimePopover();
+                    return;
+                }
+
+                if (action === 'show-minute') {
+                    if (getActiveDateTimePicker().state.selectedHour === null) {
+                        getActiveDateTimePicker().state.selectedHour = 0;
+                    }
+                    if (getActiveDateTimePicker().state.selectedMinute === null) {
+                        getActiveDateTimePicker().state.selectedMinute = 0;
+                    }
+                    getActiveDateTimePicker().state.view = 'minute';
+                    renderStartDateTimePopover();
+                    return;
+                }
+
+                if (action === 'hour-up' || action === 'hour-down' || action === 'minute-up' || action === 'minute-down') {
+                    var currentHour = getPickerSelectedHour();
+                    var currentMinute = getPickerSelectedMinute();
+                    if (action === 'hour-up') {
+                        currentHour = (currentHour + 1) % 24;
+                    } else if (action === 'hour-down') {
+                        currentHour = (currentHour + 23) % 24;
+                    } else if (action === 'minute-up') {
+                        currentMinute = (currentMinute + 1) % 60;
+                    } else {
+                        currentMinute = (currentMinute + 59) % 60;
+                    }
+                    applyPickerTime(currentHour, currentMinute);
+                    getActiveDateTimePicker().state.view = 'time';
+                    renderStartDateTimePopover();
+                    return;
+                }
+            }
+
+            var dateButton = target.closest('[data-datetime-date]');
+            if (dateButton instanceof HTMLElement && getActiveDateTimePicker().popover.contains(dateButton)) {
+                var selectedDateParts = parseDateForDuration(dateButton.getAttribute('data-datetime-date'));
+                if (selectedDateParts === null) {
+                    return;
+                }
+
+                getActiveDateTimePicker().state.selectedDateParts = selectedDateParts;
+                getActiveDateTimePicker().state.viewedYear = selectedDateParts.year;
+                getActiveDateTimePicker().state.viewedMonth = selectedDateParts.month;
+                applyStartDateTimeFieldValues(
+                    selectedDateParts,
+                    getActiveDateTimePicker().timeField instanceof HTMLInputElement ? (normalizeTimeInputValue(getActiveDateTimePicker().timeField.value) || '') : ''
+                );
+                renderStartDateTimePopover();
+                return;
+            }
+
+            var monthButton = target.closest('[data-datetime-month]');
+            if (monthButton instanceof HTMLElement && getActiveDateTimePicker().popover.contains(monthButton)) {
+                var selectedMonth = parseInt(monthButton.getAttribute('data-datetime-month') || '', 10);
+                if (!Number.isFinite(selectedMonth) || selectedMonth < 1 || selectedMonth > 12) {
+                    return;
+                }
+
+                getActiveDateTimePicker().state.viewedMonth = selectedMonth;
+                getActiveDateTimePicker().state.view = 'date';
+                renderStartDateTimePopover();
+                return;
+            }
+
+            var yearButton = target.closest('[data-datetime-year]');
+            if (yearButton instanceof HTMLElement && getActiveDateTimePicker().popover.contains(yearButton)) {
+                var selectedYear = parseInt(yearButton.getAttribute('data-datetime-year') || '', 10);
+                if (!Number.isFinite(selectedYear) || selectedYear < 1) {
+                    return;
+                }
+
+                getActiveDateTimePicker().state.viewedYear = selectedYear;
+                getActiveDateTimePicker().state.view = 'month';
+                renderStartDateTimePopover();
+                return;
+            }
+
+            var hourButton = target.closest('[data-datetime-hour]');
+            if (hourButton instanceof HTMLElement && getActiveDateTimePicker().popover.contains(hourButton)) {
+                var hourValue = parseInt(hourButton.getAttribute('data-datetime-hour') || '', 10);
+                if (!Number.isFinite(hourValue) || hourValue < 0 || hourValue > 23) {
+                    return;
+                }
+
+                applyPickerTime(hourValue, getPickerSelectedMinute());
+                getActiveDateTimePicker().state.view = 'time';
+                renderStartDateTimePopover();
+                return;
+            }
+
+            var minuteButton = target.closest('[data-datetime-minute]');
+            if (minuteButton instanceof HTMLElement && getActiveDateTimePicker().popover.contains(minuteButton)) {
+                var minuteValue = parseInt(minuteButton.getAttribute('data-datetime-minute') || '', 10);
+                var minuteDateParts = getActiveDateTimePicker().state.selectedDateParts
+                    || parseDateForDuration(getActiveDateTimePicker().dateField instanceof HTMLInputElement ? getActiveDateTimePicker().dateField.value : '')
+                    || getTodayDateParts();
+                if (!Number.isFinite(minuteValue) || minuteValue < 0 || minuteValue > 59) {
+                    return;
+                }
+
+                getActiveDateTimePicker().state.selectedDateParts = minuteDateParts;
+                applyPickerTime(getPickerSelectedHour(), minuteValue);
+                getActiveDateTimePicker().state.view = 'time';
+                renderStartDateTimePopover();
+            }
+        }
+
+        function initStartDateTimeField(dateTimePicker) {
+            if (!setActiveDateTimePicker(dateTimePicker)) {
+                return;
+            }
+
+            syncStartDateTimeDisplayFromFields();
+
+            dateTimePicker.displayField.addEventListener('input', function () {
+                setActiveDateTimePicker(dateTimePicker);
+                setStartDateTimeDisplayInvalid(false);
+            });
+            dateTimePicker.displayField.addEventListener('blur', function () {
+                setActiveDateTimePicker(dateTimePicker);
+                syncStartDateTimeFieldsFromDisplay(true);
+            });
+            dateTimePicker.displayField.addEventListener('change', function () {
+                setActiveDateTimePicker(dateTimePicker);
+                syncStartDateTimeFieldsFromDisplay(true);
+            });
+            dateTimePicker.displayField.addEventListener('keydown', function (event) {
+                if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setActiveDateTimePicker(dateTimePicker);
+                    openStartDateTimePopover('date');
+                }
+            });
+
+            dateTimePicker.toggleButton.addEventListener('click', function (event) {
+                event.preventDefault();
+                setActiveDateTimePicker(dateTimePicker);
+                if (dateTimePicker.popover.hidden) {
+                    openStartDateTimePopover('date');
+                } else {
+                    closeStartDateTimePopover();
+                }
+            });
+
+            dateTimePicker.popover.addEventListener('click', function (event) {
+                setActiveDateTimePicker(dateTimePicker);
+                handleStartDateTimePopoverClick(event);
+            });
+
+            [dateTimePicker.dateField, dateTimePicker.timeField].forEach(function (field) {
+                if (!(field instanceof HTMLInputElement)) {
+                    return;
+                }
+
+                field.addEventListener('change', function () {
+                    setActiveDateTimePicker(dateTimePicker);
+                    syncStartDateTimeDisplayFromFields();
+                });
+            });
         }
 
         function formatDurationLabel(minutes) {
@@ -1443,6 +2342,7 @@
             }
 
             var targetValue = String(selectedValue || '').trim();
+            var preservedStoredLabel = findOptionLabelForValue(vehicleField, targetValue);
             var hasSelectedValue = false;
             vehicleField.innerHTML = '';
 
@@ -1460,18 +2360,21 @@
                 var optionEl = document.createElement('option');
                 optionEl.value = optionValue;
                 optionEl.textContent = String(option.label || optionValue);
+                if (option.disabled) {
+                    optionEl.disabled = true;
+                }
                 var capacityValue = String(option.capacity || '').trim();
                 if (capacityValue !== '') {
                     optionEl.setAttribute('data-capacitate-transport', capacityValue);
                 }
-                if (optionValue === targetValue) {
+                if (!option.disabled && optionValue === targetValue) {
                     optionEl.selected = true;
                     hasSelectedValue = true;
                 }
                 vehicleField.appendChild(optionEl);
             });
 
-            if (!hasSelectedValue) {
+            if (!hasSelectedValue && !appendPreservedStoredOption(vehicleField, targetValue, preservedStoredLabel)) {
                 vehicleField.value = '';
             }
 
@@ -1519,6 +2422,7 @@
             }
 
             var targetValue = String(selectedValue || '').trim();
+            var preservedStoredLabel = findOptionLabelForValue(driverField, targetValue);
             var hasSelectedValue = false;
             driverField.innerHTML = '';
 
@@ -1536,14 +2440,17 @@
                 var optionEl = document.createElement('option');
                 optionEl.value = optionValue;
                 optionEl.textContent = String(option.label || optionValue);
-                if (optionValue === targetValue) {
+                if (option.disabled) {
+                    optionEl.disabled = true;
+                }
+                if (!option.disabled && optionValue === targetValue) {
                     optionEl.selected = true;
                     hasSelectedValue = true;
                 }
                 driverField.appendChild(optionEl);
             });
 
-            if (!hasSelectedValue) {
+            if (!hasSelectedValue && !appendPreservedStoredOption(driverField, targetValue, preservedStoredLabel)) {
                 driverField.value = '';
             }
         }
@@ -1562,6 +2469,33 @@
                 placeholderLabel = '-- Selecteaza mai intai vehiculul --';
             } else if (options.length === 0) {
                 placeholderLabel = '-- Niciun sofer asignat --';
+            }
+
+            // Sandbox: la schimbarea vehiculului, lista revine la soferii asignati.
+            if (vehicleId !== driverListVehicleId) {
+                driverListVehicleId = vehicleId;
+                driverListExpanded = false;
+            }
+
+            if (vehicleId !== '' && allDrivers.length > 0) {
+                var assignedIds = {};
+                options.forEach(function (option) {
+                    assignedIds[String(option.value)] = true;
+                });
+                var otherDrivers = allDrivers.filter(function (driver) {
+                    return driver && !Object.prototype.hasOwnProperty.call(assignedIds, String(driver.id || ''));
+                });
+
+                if (driverListExpanded && otherDrivers.length > 0) {
+                    if (options.length > 0) {
+                        options.push({ value: '__sep__', label: '── Alti soferi activi (doar pentru aceasta cursa) ──', disabled: true });
+                    }
+                    otherDrivers.forEach(function (driver) {
+                        options.push({ value: String(driver.id), label: String(driver.nume || driver.id) });
+                    });
+                } else if (!driverListExpanded && otherDrivers.length > 0) {
+                    options.push({ value: SHOW_ALL_DRIVERS_VALUE, label: '➕ Alt sofer (arata toti soferii activi)...' });
+                }
             }
 
             rebuildDriverSelectOptions(options, selectedDriverId, placeholderLabel);
@@ -1592,7 +2526,123 @@
                 }
             }
 
-            rebuildVehicleSelectOptions(allowedVehicleOptions, selectedVehicleId, placeholderLabel);
+            // Sandbox: la schimbarea contextului (beneficiar / tip transport) lista revine la vehiculele configurate.
+            var vehicleContextKey = beneficiaryId + '|' + transportType;
+            if (vehicleContextKey !== vehicleListContextKey) {
+                vehicleListContextKey = vehicleContextKey;
+                vehicleListExpanded = false;
+            }
+
+            lastEligibleVehicleSet = {};
+            allowedVehicleOptions.forEach(function (option) {
+                lastEligibleVehicleSet[String(option.value || '').trim()] = true;
+            });
+
+            // Extinderea listei este disponibila doar in formularul Adauga Cursa (care are
+            // campul de decizie); formularul de editare pastreaza comportamentul existent.
+            var vehicleExpansionAvailable = form.querySelector('[data-vehicle-config-decision]') !== null;
+
+            var displayVehicleOptions = allowedVehicleOptions.slice();
+            if (vehicleExpansionAvailable && beneficiaryId !== '' && transportType !== '' && isTransportSupportedForBeneficiary(beneficiaryId, transportType)) {
+                var otherVehicles = initialVehicleOptions.filter(function (option) {
+                    var optionValue = String(option.value || '').trim();
+                    return optionValue !== '' && !Object.prototype.hasOwnProperty.call(lastEligibleVehicleSet, optionValue);
+                });
+                if (vehicleListExpanded && otherVehicles.length > 0) {
+                    if (displayVehicleOptions.length > 0) {
+                        displayVehicleOptions.push({ value: '__sep_vehicles__', label: '── Alte vehicule (necesita decizie) ──', disabled: true });
+                    }
+                    displayVehicleOptions = displayVehicleOptions.concat(otherVehicles);
+                } else if (!vehicleListExpanded && otherVehicles.length > 0) {
+                    displayVehicleOptions.push({ value: SHOW_ALL_VEHICLES_VALUE, label: '➕ Alt vehicul (arata toate vehiculele)...' });
+                }
+            }
+
+            rebuildVehicleSelectOptions(displayVehicleOptions, selectedVehicleId, placeholderLabel);
+        }
+
+        // Sandbox: decizia adminului pentru un vehicul neconfigurat pe ruta curenta.
+        var vehicleDecisionField = form.querySelector('[data-vehicle-config-decision]');
+        var vehicleDecisionModalEl = document.querySelector('[data-vehicle-route-decision-modal]');
+        var vehicleDecisionModal = vehicleDecisionModalEl instanceof HTMLElement && typeof bootstrap !== 'undefined' && bootstrap.Modal
+            ? bootstrap.Modal.getOrCreateInstance(vehicleDecisionModalEl)
+            : null;
+        var vehicleDecisionNameEl = vehicleDecisionModalEl instanceof HTMLElement
+            ? vehicleDecisionModalEl.querySelector('[data-vehicle-route-decision-name]')
+            : null;
+        var vehicleDecisionResolved = false;
+
+        function setVehicleConfigDecision(value) {
+            if (vehicleDecisionField instanceof HTMLInputElement) {
+                vehicleDecisionField.value = String(value || '');
+            }
+        }
+
+        function maybePromptVehicleRouteDecision() {
+            if (!(vehicleDecisionField instanceof HTMLInputElement)) {
+                // Formular fara camp de decizie (ex. editare) -> comportament neschimbat.
+                return;
+            }
+            var vehicleId = String(vehicleField.value || '').trim();
+            if (vehicleId === '' || Object.prototype.hasOwnProperty.call(lastEligibleVehicleSet, vehicleId)) {
+                // Vehicul configurat pe ruta -> nu este nevoie de decizie.
+                setVehicleConfigDecision('');
+                return;
+            }
+
+            var selectedOption = vehicleField.options[vehicleField.selectedIndex];
+            var vehicleLabel = selectedOption ? String(selectedOption.textContent || vehicleId) : vehicleId;
+
+            if (vehicleDecisionModal && vehicleDecisionModalEl instanceof HTMLElement) {
+                if (vehicleDecisionNameEl instanceof HTMLElement) {
+                    vehicleDecisionNameEl.textContent = vehicleLabel;
+                }
+                vehicleDecisionResolved = false;
+                vehicleDecisionModal.show();
+                return;
+            }
+
+            // Fallback fara bootstrap: confirm() simplu.
+            var permanent = window.confirm(
+                'Vehiculul ' + vehicleLabel + ' nu este configurat pe aceasta ruta.\n\n'
+                + 'OK = adauga permanent pe ruta (Configurare Transport)\n'
+                + 'Cancel = foloseste doar pentru aceasta cursa'
+            );
+            setVehicleConfigDecision(permanent ? 'permanent' : 'trip');
+        }
+
+        if (vehicleDecisionModalEl instanceof HTMLElement) {
+            var vehicleDecisionTripBtn = vehicleDecisionModalEl.querySelector('[data-vehicle-route-decision-trip]');
+            var vehicleDecisionPermanentBtn = vehicleDecisionModalEl.querySelector('[data-vehicle-route-decision-permanent]');
+
+            if (vehicleDecisionTripBtn instanceof HTMLElement) {
+                vehicleDecisionTripBtn.addEventListener('click', function () {
+                    setVehicleConfigDecision('trip');
+                    vehicleDecisionResolved = true;
+                    if (vehicleDecisionModal) {
+                        vehicleDecisionModal.hide();
+                    }
+                });
+            }
+            if (vehicleDecisionPermanentBtn instanceof HTMLElement) {
+                vehicleDecisionPermanentBtn.addEventListener('click', function () {
+                    setVehicleConfigDecision('permanent');
+                    vehicleDecisionResolved = true;
+                    if (vehicleDecisionModal) {
+                        vehicleDecisionModal.hide();
+                    }
+                });
+            }
+            vehicleDecisionModalEl.addEventListener('hidden.bs.modal', function () {
+                if (!vehicleDecisionResolved) {
+                    // Renuntare: vehiculul neconfigurat este deselectat.
+                    setVehicleConfigDecision('');
+                    if (vehicleField instanceof HTMLSelectElement) {
+                        vehicleField.value = '';
+                        vehicleField.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }
+            });
         }
 
         var inactiveDecisionField = form.querySelector('[data-inactive-approval-decision]');
@@ -1605,10 +2655,23 @@
             : null;
         var inactiveModalTitle = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-modal-title]') : null;
         var inactiveModalBody = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-modal-body]') : null;
+        var inactiveModalIcon = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-modal-icon]') : null;
+        var inactiveSessionOption = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-session-option]') : null;
+        var inactiveSessionLabel = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-session-label]') : null;
         var inactiveSessionCheckbox = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-session-dismiss]') : null;
         var inactiveApproveNowButton = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-approve-now]') : null;
         var inactiveApproveLaterButton = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-approve-later]') : null;
+        var inactiveAdminCancelButton = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-admin-cancel]') : null;
+        var inactiveRequestApprovalButton = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-request-approval]') : null;
+        var inactivePostponeButton = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-postpone]') : null;
+        var inactiveCloseButton = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-close]') : null;
+        var inactiveCancelRequestButton = inactiveModalEl instanceof HTMLElement ? inactiveModalEl.querySelector('[data-inactive-resource-cancel-request]') : null;
+        var inactiveApprovalMode = String(form.getAttribute('data-inactive-approval-mode') || 'admin').trim();
+        var inactiveUserApprovalFlow = inactiveApprovalMode === 'user';
+        var inactiveApprovalRequestUrl = String(form.getAttribute('data-inactive-approval-request-url') || '').trim();
+        var inactiveApprovalCancelUrl = String(form.getAttribute('data-inactive-approval-cancel-url') || '').trim();
         var pendingInactiveResources = [];
+        var pendingInactiveApproval = null;
         var pendingInactiveSubmit = false;
         var inactiveStatusSequence = 0;
 
@@ -1648,6 +2711,108 @@
             }
 
             return String(inactiveSignatureField.value || '').trim() === getInactiveSelectionSignature();
+        }
+
+        function setInactiveElementVisible(element, visible) {
+            if (element instanceof HTMLElement) {
+                element.classList.toggle('d-none', !visible);
+            }
+        }
+
+        function setInactiveModalIcon(tone) {
+            if (!(inactiveModalIcon instanceof HTMLElement)) {
+                return;
+            }
+
+            inactiveModalIcon.classList.toggle('is-success', tone === 'success');
+            inactiveModalIcon.classList.toggle('is-warning', tone !== 'success');
+            inactiveModalIcon.innerHTML = '';
+            var icon = document.createElement('i');
+            icon.className = tone === 'success' ? 'bi bi-check-lg' : 'bi bi-exclamation-triangle-fill';
+            icon.setAttribute('aria-hidden', 'true');
+            inactiveModalIcon.appendChild(icon);
+        }
+
+        function setInactiveModalControls(mode) {
+            var isAdmin = mode === 'admin';
+            var isUserBefore = mode === 'user-before';
+            var isUserSent = mode === 'user-sent';
+            var isUserReadonly = mode === 'user-readonly';
+
+            setInactiveElementVisible(inactiveAdminCancelButton, isAdmin);
+            setInactiveElementVisible(inactiveApproveLaterButton, isAdmin);
+            setInactiveElementVisible(inactiveApproveNowButton, isAdmin);
+            setInactiveElementVisible(inactiveRequestApprovalButton, isUserBefore);
+            setInactiveElementVisible(inactivePostponeButton, isUserBefore);
+            setInactiveElementVisible(inactiveCloseButton, isUserBefore || isUserSent || isUserReadonly);
+            setInactiveElementVisible(inactiveCancelRequestButton, isUserSent && pendingInactiveApproval && pendingInactiveApproval.can_cancel !== false);
+
+            if (inactiveModalEl instanceof HTMLElement) {
+                inactiveModalEl.classList.toggle('is-user-approval-flow', !isAdmin);
+                inactiveModalEl.classList.toggle('is-user-before', isUserBefore);
+                inactiveModalEl.classList.toggle('is-user-sent', isUserSent);
+            }
+        }
+
+        function getInactiveCsrfToken() {
+            var tokenField = form.querySelector('input[name="_token"]');
+            return tokenField instanceof HTMLInputElement ? String(tokenField.value || '') : '';
+        }
+
+        function postInactiveApprovalJson(url, data) {
+            var formData = new FormData();
+            formData.append('_token', getInactiveCsrfToken());
+            Object.keys(data || {}).forEach(function (key) {
+                formData.append(key, String(data[key] || ''));
+            });
+
+            return fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: formData
+            }).then(function (response) {
+                return response.json().catch(function () {
+                    return {};
+                }).then(function (payload) {
+                    if (!response.ok || !payload.success) {
+                        throw new Error(String(payload.message || 'Solicitarea nu a putut fi procesata.'));
+                    }
+
+                    return payload;
+                });
+            });
+        }
+
+        function clearInactiveApprovalFeedback() {
+            if (!(inactiveModalBody instanceof HTMLElement)) {
+                return;
+            }
+
+            inactiveModalBody.querySelectorAll('[data-inactive-approval-feedback]').forEach(function (element) {
+                element.remove();
+            });
+        }
+
+        function showInactiveApprovalFeedback(message) {
+            if (!(inactiveModalBody instanceof HTMLElement)) {
+                return;
+            }
+
+            clearInactiveApprovalFeedback();
+            var feedback = document.createElement('div');
+            feedback.className = 'inactive-user-approval-alert is-error';
+            feedback.setAttribute('data-inactive-approval-feedback', 'error');
+            var icon = document.createElement('i');
+            icon.className = 'bi bi-exclamation-triangle';
+            icon.setAttribute('aria-hidden', 'true');
+            feedback.appendChild(icon);
+            var text = document.createElement('span');
+            text.textContent = String(message || 'Solicitarea nu a putut fi anulata. Reincearca.');
+            feedback.appendChild(text);
+            inactiveModalBody.insertBefore(feedback, inactiveModalBody.firstChild);
         }
 
         function inactiveResourceKey(resource) {
@@ -1693,17 +2858,21 @@
                 return false;
             }
 
+            if (normalUserVehicleResource(resource) && userPendingApprovalForResource(resource) !== null) {
+                return false;
+            }
+
             var existingStatus = String(resource.existing_approval_status || '').trim();
             return existingStatus !== 'pending' && existingStatus !== 'approved';
         }
 
-        function getPromptableInactiveResources(resources) {
+        function getPromptableInactiveResources(resources, ignoreSuppression) {
             if (!Array.isArray(resources)) {
                 return [];
             }
 
             return resources.filter(function (resource) {
-                return shouldAskForInactiveResource(resource) && !isInactiveResourceSuppressed(resource);
+                return shouldAskForInactiveResource(resource) && (ignoreSuppression === true || !isInactiveResourceSuppressed(resource));
             });
         }
 
@@ -1723,6 +2892,44 @@
             }
 
             return match[3] + '.' + match[2] + '.' + match[1];
+        }
+
+        function formatInactiveDateTime(value) {
+            var raw = String(value || '').trim();
+            var match = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+            if (!match) {
+                return raw !== '' ? raw : '-';
+            }
+
+            var date = match[3] + '.' + match[2] + '.' + match[1];
+            if (match[4] && match[5]) {
+                return date + ', ' + match[4] + ':' + match[5];
+            }
+
+            return date;
+        }
+
+        function inactiveContextLabel(value) {
+            var label = String(value || 'Dispecer curse').replace(/_/g, ' ').trim();
+            return label !== '' ? label : 'Dispecer curse';
+        }
+
+        function userPendingApprovalForResource(resource) {
+            if (!resource || typeof resource !== 'object') {
+                return null;
+            }
+
+            var approval = resource.user_pending_approval;
+            return approval && typeof approval === 'object' ? approval : null;
+        }
+
+        function normalUserVehicleResource(resource) {
+            return inactiveUserApprovalFlow
+                && inactiveApprovalRequestUrl !== ''
+                && inactiveApprovalCancelUrl !== ''
+                && resource
+                && typeof resource === 'object'
+                && String(resource.resource_type || '').trim() === 'vehicle';
         }
 
         function inactiveDocumentsLabel(resource) {
@@ -1809,6 +3016,135 @@
             });
         }
 
+        function appendUserApprovalLine(list, label, value) {
+            var dt = document.createElement('dt');
+            dt.textContent = label;
+            var dd = document.createElement('dd');
+            var normalizedValue = String(value || '').trim();
+            dd.textContent = normalizedValue !== '' ? normalizedValue : '-';
+            list.appendChild(dt);
+            list.appendChild(dd);
+        }
+
+        function renderUserInactiveVehicleRequestModal(resource) {
+            if (!(inactiveModalBody instanceof HTMLElement)) {
+                return;
+            }
+
+            inactiveModalBody.innerHTML = '';
+
+            var warning = document.createElement('div');
+            warning.className = 'inactive-user-approval-alert is-warning';
+            var warningIcon = document.createElement('i');
+            warningIcon.className = 'bi bi-exclamation-triangle';
+            warningIcon.setAttribute('aria-hidden', 'true');
+            warning.appendChild(warningIcon);
+            var warningText = document.createElement('span');
+            warningText.textContent = 'Acest vehicul este marcat ca inactiv. Solicita aprobarea unui administrator pentru utilizare.';
+            warning.appendChild(warningText);
+            inactiveModalBody.appendChild(warning);
+
+            var card = document.createElement('article');
+            card.className = 'inactive-user-approval-card';
+
+            var title = document.createElement('h6');
+            title.textContent = String(resource.resource_label || 'Vehicul inactiv');
+            card.appendChild(title);
+
+            var list = document.createElement('dl');
+            list.className = 'inactive-resource-warning-list inactive-user-approval-list';
+            appendUserApprovalLine(list, 'Motiv inactivitate:', String(resource.reason_label || 'Alt motiv'));
+            appendUserApprovalLine(list, 'Documente afectate:', inactiveDocumentsLabel(resource));
+            appendUserApprovalLine(list, 'Inactiv din:', formatInactiveDate(resource.inactive_since));
+            appendUserApprovalLine(list, 'Utilizat in:', inactiveContextLabel(resource.usage_context));
+            card.appendChild(list);
+            inactiveModalBody.appendChild(card);
+        }
+
+        function renderUserInactiveVehicleSentModal(resource, approval) {
+            if (!(inactiveModalBody instanceof HTMLElement)) {
+                return;
+            }
+
+            inactiveModalBody.innerHTML = '';
+
+            var success = document.createElement('div');
+            success.className = 'inactive-user-approval-alert is-success';
+            var successIcon = document.createElement('i');
+            successIcon.className = 'bi bi-check-circle';
+            successIcon.setAttribute('aria-hidden', 'true');
+            success.appendChild(successIcon);
+            var successCopy = document.createElement('div');
+            var successTitle = document.createElement('strong');
+            successTitle.textContent = 'Cererea ta a fost trimisa administratorului pentru aprobare.';
+            var successBody = document.createElement('span');
+            successBody.textContent = 'Vei fi notificat imediat ce cererea ta este aprobata sau respinsa.';
+            successCopy.appendChild(successTitle);
+            successCopy.appendChild(successBody);
+            success.appendChild(successCopy);
+            inactiveModalBody.appendChild(success);
+
+            var card = document.createElement('article');
+            card.className = 'inactive-user-approval-card';
+
+            var badge = document.createElement('span');
+            badge.className = 'inactive-user-approval-status-badge';
+            var badgeIcon = document.createElement('i');
+            badgeIcon.className = 'bi bi-clock';
+            badgeIcon.setAttribute('aria-hidden', 'true');
+            badge.appendChild(badgeIcon);
+            badge.appendChild(document.createTextNode(String(approval.status_label || 'In asteptare')));
+            card.appendChild(badge);
+
+            var title = document.createElement('h6');
+            title.textContent = String(approval.resource_label || resource.resource_label || 'Vehicul inactiv');
+            card.appendChild(title);
+
+            var list = document.createElement('dl');
+            list.className = 'inactive-resource-warning-list inactive-user-approval-list';
+            appendUserApprovalLine(list, 'Motiv inactivitate:', String(approval.inactive_reason_label || resource.reason_label || 'Alt motiv'));
+            appendUserApprovalLine(list, 'Documente afectate:', Array.isArray(approval.affected_document_names) && approval.affected_document_names.length > 0 ? approval.affected_document_names.join(', ') : inactiveDocumentsLabel(resource));
+            appendUserApprovalLine(list, 'Inactiv din:', formatInactiveDate(approval.inactive_since || resource.inactive_since));
+            appendUserApprovalLine(list, 'Utilizat in:', inactiveContextLabel(approval.usage_context || resource.usage_context));
+            appendUserApprovalLine(list, 'Solicitat la:', formatInactiveDateTime(approval.requested_at));
+            appendUserApprovalLine(list, 'Solicitat de:', String(approval.requested_by_name || '') + ' (Tu)');
+            appendUserApprovalLine(list, 'Tip solicitare:', String(approval.resource_type_label || 'Vehicul'));
+            card.appendChild(list);
+            inactiveModalBody.appendChild(card);
+
+            var info = document.createElement('div');
+            info.className = 'inactive-user-approval-alert is-info';
+            var infoIcon = document.createElement('i');
+            infoIcon.className = 'bi bi-info-lg';
+            infoIcon.setAttribute('aria-hidden', 'true');
+            info.appendChild(infoIcon);
+            var infoCopy = document.createElement('div');
+            var infoTitle = document.createElement('strong');
+            infoTitle.textContent = 'Ce urmeaza?';
+            var infoBody = document.createElement('span');
+            infoBody.textContent = 'Administratorul va verifica cererea si va decide daca o aproba sau o respinge. Userul va primi notificare cand exista un raspuns.';
+            infoCopy.appendChild(infoTitle);
+            infoCopy.appendChild(infoBody);
+            info.appendChild(infoCopy);
+            inactiveModalBody.appendChild(info);
+
+            var cancelHelp = document.createElement('div');
+            cancelHelp.className = 'inactive-user-approval-alert is-cancel-help';
+            var cancelHelpIcon = document.createElement('i');
+            cancelHelpIcon.className = 'bi bi-exclamation-triangle';
+            cancelHelpIcon.setAttribute('aria-hidden', 'true');
+            cancelHelp.appendChild(cancelHelpIcon);
+            var cancelHelpCopy = document.createElement('div');
+            var cancelHelpTitle = document.createElement('strong');
+            cancelHelpTitle.textContent = 'Poti anula solicitarea cat timp este in asteptare.';
+            var cancelHelpBody = document.createElement('span');
+            cancelHelpBody.textContent = 'Daca ai selectat din greseala acest vehicul, poti anula cererea si solicita din nou pentru alt vehicul.';
+            cancelHelpCopy.appendChild(cancelHelpTitle);
+            cancelHelpCopy.appendChild(cancelHelpBody);
+            cancelHelp.appendChild(cancelHelpCopy);
+            inactiveModalBody.appendChild(cancelHelp);
+        }
+
         function titleForInactiveResources(resources) {
             if (resources.length !== 1) {
                 return 'Resurse inactive selectate';
@@ -1824,13 +3160,65 @@
                 return false;
             }
 
+            clearInactiveApprovalFeedback();
+            pendingInactiveApproval = null;
             pendingInactiveResources = resources.slice();
             pendingInactiveSubmit = shouldSubmitAfterDecision === true;
-            inactiveModalTitle.textContent = titleForInactiveResources(resources);
             if (inactiveSessionCheckbox instanceof HTMLInputElement) {
                 inactiveSessionCheckbox.checked = false;
             }
+
+            if (resources.length === 1 && normalUserVehicleResource(resources[0])) {
+                inactiveModalTitle.textContent = 'Vehicul inactiv utilizat';
+                setInactiveModalIcon('warning');
+                setInactiveModalControls('user-before');
+                if (inactiveSessionOption instanceof HTMLElement) {
+                    inactiveSessionOption.classList.remove('d-none');
+                }
+                if (inactiveSessionLabel instanceof HTMLElement) {
+                    inactiveSessionLabel.textContent = 'Nu mai afisa acest mesaj pentru acest vehicul in aceasta sesiune';
+                }
+                renderUserInactiveVehicleRequestModal(resources[0]);
+                inactiveModal.show();
+
+                return true;
+            }
+
+            inactiveModalTitle.textContent = titleForInactiveResources(resources);
+            setInactiveModalIcon('warning');
+            setInactiveModalControls(inactiveUserApprovalFlow ? 'user-readonly' : 'admin');
+            if (inactiveSessionOption instanceof HTMLElement) {
+                inactiveSessionOption.classList.remove('d-none');
+            }
+            if (inactiveSessionLabel instanceof HTMLElement) {
+                inactiveSessionLabel.textContent = 'Nu mai afisa pentru aceasta selectie in aceasta sesiune';
+            }
             renderInactiveModal(resources);
+            inactiveModal.show();
+
+            return true;
+        }
+
+        function showInactiveApprovalSentModal(resource, shouldSubmitAfterDecision) {
+            var approval = userPendingApprovalForResource(resource);
+            if (!(inactiveModalTitle instanceof HTMLElement) || inactiveModal === null || approval === null) {
+                return false;
+            }
+
+            clearInactiveApprovalFeedback();
+            pendingInactiveResources = [resource];
+            pendingInactiveApproval = approval;
+            pendingInactiveSubmit = shouldSubmitAfterDecision === true;
+            inactiveModalTitle.textContent = 'Solicitare de aprobare trimisa';
+            setInactiveModalIcon('success');
+            setInactiveModalControls('user-sent');
+            if (inactiveSessionCheckbox instanceof HTMLInputElement) {
+                inactiveSessionCheckbox.checked = false;
+            }
+            if (inactiveSessionOption instanceof HTMLElement) {
+                inactiveSessionOption.classList.add('d-none');
+            }
+            renderUserInactiveVehicleSentModal(resource, approval);
             inactiveModal.show();
 
             return true;
@@ -1859,6 +3247,103 @@
                 pendingInactiveSubmit = false;
                 submitRaceFormAfterInactiveDecision();
             }
+        }
+
+        function requestInactiveVehicleApproval() {
+            var resource = pendingInactiveResources.find(normalUserVehicleResource);
+            if (!resource || inactiveApprovalRequestUrl === '') {
+                return;
+            }
+
+            clearInactiveApprovalFeedback();
+            if (inactiveRequestApprovalButton instanceof HTMLButtonElement) {
+                inactiveRequestApprovalButton.disabled = true;
+            }
+
+            postInactiveApprovalJson(inactiveApprovalRequestUrl, {
+                vehicle_id: resource.resource_id
+            }).then(function (payload) {
+                var updatedResource = Object.assign({}, resource, payload.resource || {});
+                if (payload.approval && typeof payload.approval === 'object') {
+                    updatedResource.user_pending_approval = payload.approval;
+                    updatedResource.existing_approval_status = 'pending';
+                }
+
+                pendingInactiveSubmit = false;
+                clearInactiveApprovalDecision();
+                showInactiveApprovalSentModal(updatedResource, false);
+                window.dispatchEvent(new CustomEvent('inactiveApprovalRequestChanged', {
+                    detail: {
+                        action: 'created',
+                        approval: payload.approval || null
+                    }
+                }));
+            }).catch(function (error) {
+                alert(error.message || 'Solicitarea nu a putut fi trimisa. Reincearca.');
+            }).finally(function () {
+                if (inactiveRequestApprovalButton instanceof HTMLButtonElement) {
+                    inactiveRequestApprovalButton.disabled = false;
+                }
+            });
+        }
+
+        function postponeInactiveVehicleApproval() {
+            if (inactiveSessionCheckbox instanceof HTMLInputElement && inactiveSessionCheckbox.checked) {
+                pendingInactiveResources.forEach(suppressInactiveResource);
+            }
+
+            pendingInactiveSubmit = false;
+            pendingInactiveApproval = null;
+            clearInactiveApprovalDecision();
+        }
+
+        function cancelInactiveVehicleApprovalRequest() {
+            if (!pendingInactiveApproval || inactiveApprovalCancelUrl === '') {
+                return;
+            }
+
+            if (!window.confirm('Sigur dorești să anulezi această solicitare?')) {
+                return;
+            }
+
+            clearInactiveApprovalFeedback();
+            if (inactiveCancelRequestButton instanceof HTMLButtonElement) {
+                inactiveCancelRequestButton.disabled = true;
+            }
+
+            var approvalId = pendingInactiveApproval.id;
+            postInactiveApprovalJson(inactiveApprovalCancelUrl, {
+                approval_id: approvalId
+            }).then(function (payload) {
+                var resource = pendingInactiveResources[0] || null;
+                if (resource && typeof resource === 'object') {
+                    resource = Object.assign({}, resource);
+                    resource.user_pending_approval = null;
+                    resource.existing_approval_status = null;
+                }
+
+                pendingInactiveApproval = null;
+                pendingInactiveResources = resource && typeof resource === 'object' ? [resource] : [];
+                clearInactiveApprovalDecision();
+                if (inactiveModal !== null) {
+                    inactiveModal.hide();
+                }
+
+                window.dispatchEvent(new CustomEvent('inactiveApprovalRequestChanged', {
+                    detail: {
+                        action: 'cancelled',
+                        approval_id: approvalId,
+                        message: payload.message || '',
+                        summary: payload.summary || null
+                    }
+                }));
+            }).catch(function (error) {
+                showInactiveApprovalFeedback(error.message || 'Solicitarea nu a putut fi anulata. Reincearca.');
+            }).finally(function () {
+                if (inactiveCancelRequestButton instanceof HTMLButtonElement) {
+                    inactiveCancelRequestButton.disabled = false;
+                }
+            });
         }
 
         function fetchInactiveResourceStatus() {
@@ -1908,10 +3393,21 @@
 
                 var inactiveResources = Array.isArray(payload.inactive_resources) ? payload.inactive_resources : [];
                 var decisionRequired = getDecisionRequiredInactiveResources(inactiveResources);
-                var promptable = getPromptableInactiveResources(inactiveResources);
+                var promptable = getPromptableInactiveResources(inactiveResources, config.ignoreSuppression === true);
 
-                if (config.showModal && promptable.length > 0) {
-                    showInactiveModal(promptable, config.submitAfterDecision === true);
+                if (config.showModal) {
+                    var pendingUserVehicle = inactiveResources.find(function (resource) {
+                        return normalUserVehicleResource(resource) && userPendingApprovalForResource(resource) !== null;
+                    }) || null;
+                    if (pendingUserVehicle !== null) {
+                        showInactiveApprovalSentModal(pendingUserVehicle, config.submitAfterDecision === true);
+                    } else if (promptable.length > 0) {
+                        var promptableUserVehicle = promptable.find(normalUserVehicleResource) || null;
+                        showInactiveModal(
+                            promptableUserVehicle !== null ? [promptableUserVehicle] : promptable,
+                            config.submitAfterDecision === true
+                        );
+                    }
                 }
 
                 return {
@@ -1946,10 +3442,23 @@
             });
         }
 
+        if (inactiveRequestApprovalButton instanceof HTMLButtonElement) {
+            inactiveRequestApprovalButton.addEventListener('click', requestInactiveVehicleApproval);
+        }
+
+        if (inactivePostponeButton instanceof HTMLButtonElement) {
+            inactivePostponeButton.addEventListener('click', postponeInactiveVehicleApproval);
+        }
+
+        if (inactiveCancelRequestButton instanceof HTMLButtonElement) {
+            inactiveCancelRequestButton.addEventListener('click', cancelInactiveVehicleApprovalRequest);
+        }
+
         if (inactiveModalEl instanceof HTMLElement) {
             inactiveModalEl.addEventListener('hidden.bs.modal', function () {
                 pendingInactiveSubmit = false;
                 pendingInactiveResources = [];
+                pendingInactiveApproval = null;
             });
         }
 
@@ -1971,12 +3480,42 @@
             }
         }
 
+        // Pe formularul de editare (are data-inactive-trip-id nenul), o valoare stocata care
+        // nu se mai regaseste in lista curenta de optiuni nu se pierde silentios: ramane
+        // selectabila, pastrand eticheta initiala. Pe formularul de adaugare comportamentul
+        // ramane cel existent (selectia este golita).
+        function findOptionLabelForValue(selectField, targetValue) {
+            if (!(selectField instanceof HTMLSelectElement) || targetValue === '') {
+                return '';
+            }
+            for (var optionIndex = 0; optionIndex < selectField.options.length; optionIndex++) {
+                if (String(selectField.options[optionIndex].value || '') === targetValue) {
+                    return String(selectField.options[optionIndex].textContent || '').trim();
+                }
+            }
+            return '';
+        }
+
+        function appendPreservedStoredOption(selectField, targetValue, label) {
+            if (inactiveTripId === '' || targetValue === '') {
+                return false;
+            }
+            var optionEl = document.createElement('option');
+            optionEl.value = targetValue;
+            optionEl.textContent = label !== '' ? label : ('#' + targetValue);
+            optionEl.setAttribute('data-stored-out-of-scope', '1');
+            optionEl.selected = true;
+            selectField.appendChild(optionEl);
+            return true;
+        }
+
         function rebuildSelectOptions(selectField, options, selectedValue, placeholderLabel) {
             if (!(selectField instanceof HTMLSelectElement)) {
                 return;
             }
 
             var targetValue = String(selectedValue || '');
+            var preservedStoredLabel = findOptionLabelForValue(selectField, targetValue);
             var hasSelectedValue = false;
             selectField.innerHTML = '';
 
@@ -2005,7 +3544,7 @@
                 selectField.appendChild(optionEl);
             });
 
-            if (!hasSelectedValue) {
+            if (!hasSelectedValue && !appendPreservedStoredOption(selectField, targetValue, preservedStoredLabel)) {
                 selectField.value = '';
             }
         }
@@ -2050,7 +3589,7 @@
                 var zoneTariffValue = parseNumber(zone.tarif_distributie);
                 var zoneExtraValue = parseNumber(zone.cost_extra_km);
                 if (zoneTariffValue > 0 || zoneExtraValue > 0) {
-                    zoneLabel += ' (tarif zonÄƒ: '
+                    zoneLabel += ' (tarif zonă: '
                         + zoneTariffValue.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                         + ' lei';
                     if (zoneExtraValue > 0) {
@@ -2132,7 +3671,7 @@
             }
 
             var scopedText = (routeScope.scopedRules || []).length > 0
-                ? 'Sunt afisate doar locurile si zonele care au perechi configurate pentru vehiculul selectat (Loc ↔ Zona).'
+                ? 'Sunt afisate doar locurile si zonele care au perechi configurate pentru vehiculul selectat (Loc ? Zona).'
                 : 'Nu exista perechi de ruta configurate pentru vehiculul selectat.';
             if (distributionLocationNote) {
                 distributionLocationNote.textContent = scopedText;
@@ -2527,8 +4066,8 @@
                     zoneField ? zoneField.value : ''
                 );
                 var selectedPairText = selectedRule && selectedRule.manualAgreedKm
-                    ? 'Combinatia selectata Loc ↔ Zona este valida. Completeaza manual Km agreati pentru aceasta cursa.'
-                    : 'Combinatia selectata Loc ↔ Zona este valida in Setari Primar, iar Km agreati se completeaza automat.';
+                    ? 'Combinatia selectata Loc ? Zona este valida. Completeaza manual Km agreati pentru aceasta cursa.'
+                    : 'Combinatia selectata Loc ? Zona este valida in Setari Primar, iar Km agreati se completeaza automat.';
                 if (primaryLocationNote) {
                     primaryLocationNote.textContent = selectedPairText;
                 }
@@ -2539,7 +4078,7 @@
                 return;
             }
 
-            var choosePairText = 'Selecteaza o combinatie Loc ↔ Zona disponibila in Setari Primar pentru acest beneficiar.';
+            var choosePairText = 'Selecteaza o combinatie Loc ? Zona disponibila in Setari Primar pentru acest beneficiar.';
             if (primaryLocationNote) {
                 primaryLocationNote.textContent = choosePairText;
             }
@@ -3568,6 +5107,20 @@
                 }
             }
 
+            // Doar pentru Distributie: "Data incarcare" se afiseaza inaintea "Data si ora inceput";
+            // pentru celelalte tipuri ramane ordinea implicita (start inaintea datei de incarcare).
+            var loadingDateWrapEl = form.querySelector('[data-role="field-data-incarcare"]');
+            var startDateTimeWrapEl = form.querySelector('[data-role="field-start-datetime"]');
+            if (loadingDateWrapEl instanceof HTMLElement && startDateTimeWrapEl instanceof HTMLElement && loadingDateWrapEl.parentNode === startDateTimeWrapEl.parentNode) {
+                if (transportType === 'distributie') {
+                    if (startDateTimeWrapEl.previousElementSibling !== loadingDateWrapEl) {
+                        startDateTimeWrapEl.parentNode.insertBefore(loadingDateWrapEl, startDateTimeWrapEl);
+                    }
+                } else if (loadingDateWrapEl.previousElementSibling !== startDateTimeWrapEl) {
+                    loadingDateWrapEl.parentNode.insertBefore(startDateTimeWrapEl, loadingDateWrapEl);
+                }
+            }
+
             if (kmField && (isPrimaryKm || isDistributionWithKmTransport(transportType)) && !isCompressor) {
                 kmField.setAttribute('required', 'required');
             } else if (kmField) {
@@ -3935,6 +5488,14 @@
         });
         if (vehicleField) {
             vehicleField.addEventListener('change', function () {
+                if (String(vehicleField.value || '') === SHOW_ALL_VEHICLES_VALUE) {
+                    // Extinde lista cu toate vehiculele active; alegerea unui vehicul neconfigurat cere decizia adminului.
+                    vehicleListExpanded = true;
+                    syncVehicleOptionsByContext();
+                    vehicleField.focus();
+                    return;
+                }
+                maybePromptVehicleRouteDecision();
                 syncDriverOptionsByVehicle(false);
                 syncVehicleTransportCapacity();
                 syncScopedLocationZoneOptions();
@@ -3947,6 +5508,13 @@
         }
         if (driverField) {
             driverField.addEventListener('change', function () {
+                if (String(driverField.value || '') === SHOW_ALL_DRIVERS_VALUE) {
+                    // Extinde lista cu toti soferii activi; soferul ales ramane valabil doar pentru aceasta cursa.
+                    driverListExpanded = true;
+                    syncDriverOptionsByVehicle(false);
+                    driverField.focus();
+                    return;
+                }
                 promptInactiveResourcesAfterSelectionChange();
             });
         }
@@ -4001,6 +5569,33 @@
             });
         });
 
+        dateTimePickers = [
+            createDateTimePickerContext(
+                startDateTimeField,
+                startDateTimeDisplayField,
+                startDateTimeToggleButton,
+                startDateTimePopover,
+                startDateField,
+                startTimeField,
+                startDateTimePickerState
+            ),
+            createDateTimePickerContext(
+                endDateTimeField,
+                endDateTimeDisplayField,
+                endDateTimeToggleButton,
+                endDateTimePopover,
+                endDateField,
+                endTimeField,
+                endDateTimePickerState
+            )
+        ].filter(function (dateTimePicker) {
+            return dateTimePicker !== null;
+        });
+
+        dateTimePickers.forEach(function (dateTimePicker) {
+            initStartDateTimeField(dateTimePicker);
+        });
+
         timeNowButtonEls.forEach(function (button) {
             if (!(button instanceof HTMLButtonElement)) {
                 return;
@@ -4034,6 +5629,24 @@
         });
 
         form.addEventListener('submit', function (event) {
+            var firstInvalidDateTimePicker = null;
+            dateTimePickers.forEach(function (dateTimePicker) {
+                setActiveDateTimePicker(dateTimePicker);
+                if (!syncStartDateTimeFieldsFromDisplay(true) && firstInvalidDateTimePicker === null) {
+                    firstInvalidDateTimePicker = dateTimePicker;
+                }
+            });
+
+            if (firstInvalidDateTimePicker !== null) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (typeof event.stopImmediatePropagation === 'function') {
+                    event.stopImmediatePropagation();
+                }
+                firstInvalidDateTimePicker.displayField.focus();
+                return;
+            }
+
             raceDateFields.forEach(function (field) {
                 normalizeRaceDateFieldValue(field);
             });
@@ -4055,7 +5668,7 @@
                 event.stopImmediatePropagation();
             }
 
-            checkInactiveResourcesForSelection({ showModal: false }).then(function (result) {
+            checkInactiveResourcesForSelection({ showModal: false, ignoreSuppression: true }).then(function (result) {
                 if (result.decisionRequired.length === 0) {
                     clearInactiveApprovalDecision();
                     submitRaceFormAfterInactiveDecision();
@@ -4068,7 +5681,9 @@
                     return;
                 }
 
-                if (!showInactiveModal(result.promptable, true)) {
+                var promptableUserVehicle = result.promptable.find(normalUserVehicleResource) || null;
+                var resourcesToPrompt = promptableUserVehicle !== null ? [promptableUserVehicle] : result.promptable;
+                if (!showInactiveModal(resourcesToPrompt, true)) {
                     setInactiveApprovalDecision('pending');
                     submitRaceFormAfterInactiveDecision();
                 }

@@ -25,6 +25,7 @@ return [
     'groups' => [
         'operational'  => ['label' => 'Operațional',   'icon' => 'bi-speedometer2'],
         'vehicule'     => ['label' => 'Vehicule',       'icon' => 'bi-car-front'],
+        'leasing'      => ['label' => 'Leasing',        'icon' => 'bi-calendar-check'],
         'soferi'       => ['label' => 'Șoferi',         'icon' => 'bi-person-vcard'],
         'contabilitate'=> ['label' => 'Contabilitate',  'icon' => 'bi-wallet2'],
         'mentenanta'   => ['label' => 'Mentenanță',     'icon' => 'bi-wrench-adjustable'],
@@ -43,7 +44,7 @@ return [
             'actions' => ['view' => ['label' => 'Vizualizare']],
         ],
         'inactive_approvals' => [
-            'group' => 'operational', 'label' => 'Solicitari aprobare inactive', 'icon' => 'bi-shield-exclamation', 'scope' => 'admin',
+            'group' => 'operational', 'label' => 'Solicitari aprobare inactive', 'icon' => 'bi-shield-exclamation', 'scope' => 'all',
             'actions' => [
                 'view' => ['label' => 'Vizualizare solicitari'],
                 'review' => ['label' => 'Aprobare / respingere solicitari', 'admin' => true, 'sensitive' => true],
@@ -86,6 +87,7 @@ return [
         ],
         'centralizator_facturare' => [
             'group' => 'operational', 'label' => 'Centralizator Facturare', 'icon' => 'bi-calendar-range', 'scope' => 'all',
+            'routes' => ['centralizator_facturare', 'istoric_activitate'],
             'actions' => [
                 'view'           => ['label' => 'Vizualizare'],
                 'billing_status' => ['label' => 'Schimbare status facturare'],
@@ -161,6 +163,22 @@ return [
         ],
 
         // ---------------- Șoferi ----------------
+        // ---------------- Leasing ----------------
+        'scadentar_leasing' => [
+            'group' => 'leasing', 'label' => 'ScadenÈ›ar Leasing', 'icon' => 'bi-calendar-check', 'scope' => 'all',
+            'actions' => [
+                'view'          => ['label' => 'Vizualizare scadenÈ›ar'],
+                'create'        => ['label' => 'AdÄƒugare contract leasing'],
+                'edit'          => ['label' => 'Editare contract leasing'],
+                'mark_paid'     => ['label' => 'Marcare ratÄƒ ca plÄƒtitÄƒ'],
+                'documents'     => ['label' => 'Documente leasing'],
+                'notifications' => ['label' => 'SetÄƒri notificÄƒri leasing'],
+                'close'         => ['label' => 'ÃŽnchidere contract'],
+                'archive'       => ['label' => 'Arhivare contract', 'sensitive' => true],
+                'export'        => ['label' => 'Export Excel'],
+            ],
+        ],
+
         'soferi' => [
             'group' => 'soferi', 'label' => 'Șoferi', 'icon' => 'bi-person-vcard', 'scope' => 'all',
             'actions' => [

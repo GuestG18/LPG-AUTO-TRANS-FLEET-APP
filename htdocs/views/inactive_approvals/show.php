@@ -11,16 +11,24 @@ $statusLabels = [
 $resourceTypeLabels = [
     'vehicle' => 'Vehicul',
     'driver' => 'Sofer',
+    'repair' => 'Reparatie',
 ];
 $formatDate = static fn(mixed $value): string => trim((string) $value) !== '' ? format_date_ro((string) $value) : '-';
 $formatDateTime = static fn(mixed $value): string => trim((string) $value) !== '' ? format_datetime_ro((string) $value) : '-';
 $snapshot = json_decode((string) ($approval['snapshot_json'] ?? ''), true);
 $snapshot = is_array($snapshot) ? $snapshot : [];
 $detail = trim((string) ($snapshot['detail'] ?? ''));
+$resourceType = (string) ($approval['resource_type'] ?? '');
+$resourceLabelTitle = match ($resourceType) {
+    'driver' => 'Sofer',
+    'repair' => 'Vehicul',
+    default => 'Vehicul',
+};
+$approvalId = (int) ($approval['id'] ?? 0);
 $returnUrl = build_query_url(['page' => 'inactive_approvals']);
 ?>
 
-<div class="inactive-approval-detail-page">
+<div class="inactive-approval-detail-page" data-approval-detail data-approval-id="<?= e((string) $approvalId) ?>">
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
         <div>
             <h2 class="h4 mb-1">Detalii solicitare aprobare</h2>
@@ -38,11 +46,11 @@ $returnUrl = build_query_url(['page' => 'inactive_approvals']);
                 <h3 class="h6 mb-3">Resursa</h3>
                 <dl class="inactive-approval-detail-list">
                     <dt>Tip</dt>
-                    <dd><?= e($resourceTypeLabels[(string) ($approval['resource_type'] ?? '')] ?? '-') ?></dd>
-                    <dt><?= (string) ($approval['resource_type'] ?? '') === 'driver' ? 'Sofer' : 'Vehicul' ?></dt>
+                    <dd><?= e($resourceTypeLabels[$resourceType] ?? '-') ?></dd>
+                    <dt><?= e($resourceLabelTitle) ?></dt>
                     <dd class="fw-semibold"><?= e((string) ($approval['resource_label'] ?? '-')) ?></dd>
                     <dt>Status</dt>
-                    <dd><span class="inactive-approval-status is-<?= e($status) ?>"><?= e($statusLabels[$status] ?? $status) ?></span></dd>
+                    <dd><span class="inactive-approval-status is-<?= e($status) ?>" data-approval-detail-status><?= e($statusLabels[$status] ?? $status) ?></span></dd>
                     <dt>Motiv</dt>
                     <dd><?= e((string) ($approval['inactive_reason_label'] ?? 'Alt motiv')) ?></dd>
                     <?php if ($documents !== []): ?>
@@ -86,7 +94,7 @@ $returnUrl = build_query_url(['page' => 'inactive_approvals']);
                     <dt>Solicitat la</dt>
                     <dd><?= e($formatDateTime($approval['requested_at'] ?? '')) ?></dd>
                     <dt>Status aprobare</dt>
-                    <dd><span class="inactive-approval-status is-<?= e($status) ?>"><?= e($statusLabels[$status] ?? $status) ?></span></dd>
+                    <dd><span class="inactive-approval-status is-<?= e($status) ?>" data-approval-detail-status><?= e($statusLabels[$status] ?? $status) ?></span></dd>
                     <?php if ($status !== 'pending'): ?>
                         <dt><?= $status === 'approved' ? 'Aprobat de' : 'Respins de' ?></dt>
                         <dd><?= e((string) ($approval['reviewed_by_name'] ?? '-')) ?></dd>
@@ -103,16 +111,30 @@ $returnUrl = build_query_url(['page' => 'inactive_approvals']);
                     <div class="inactive-approval-detail-actions">
                         <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'reject'])) ?>">
                             <?= csrf_field() ?>
-                            <input type="hidden" name="id" value="<?= e((string) ((int) ($approval['id'] ?? 0))) ?>">
+                            <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
                             <input type="hidden" name="return_url" value="<?= e($returnUrl) ?>">
                             <button class="btn btn-outline-danger" type="submit">Respinge</button>
                         </form>
                         <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'approve'])) ?>">
                             <?= csrf_field() ?>
-                            <input type="hidden" name="id" value="<?= e((string) ((int) ($approval['id'] ?? 0))) ?>">
+                            <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
                             <input type="hidden" name="return_url" value="<?= e($returnUrl) ?>">
                             <button class="btn btn-success" type="submit">Aproba</button>
                         </form>
+                    </div>
+                <?php elseif ($status === 'pending' && !$canReviewApprovals): ?>
+                    <div class="inactive-approval-detail-actions">
+                        <button
+                            class="btn btn-outline-danger"
+                            type="button"
+                            data-user-approval-cancel
+                            data-approval-id="<?= e((string) $approvalId) ?>"
+                            data-cancel-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'cancel_inactive_vehicle_approval'])) ?>"
+                            data-csrf-token="<?= e(csrf_token()) ?>"
+                        >
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                            Anuleaza solicitarea
+                        </button>
                     </div>
                 <?php endif; ?>
             </div>

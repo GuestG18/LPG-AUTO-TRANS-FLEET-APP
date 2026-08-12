@@ -23,6 +23,7 @@ class UserActivityModel extends BaseModel
         'documente_soferi' => 'Documente soferi',
         'concedii'         => 'Programare concedii',
         'dispecer_curse'   => 'Dispecer curse',
+        'scadentar_leasing'=> 'Scadentar leasing',
         'cont'             => 'Autentificare',
     ];
 

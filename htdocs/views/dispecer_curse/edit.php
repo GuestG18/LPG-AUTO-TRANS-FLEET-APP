@@ -63,6 +63,11 @@ $driversByVehicleJson = json_encode($driversByVehicle ?? [], JSON_UNESCAPED_UNIC
 if (!is_string($driversByVehicleJson)) {
     $driversByVehicleJson = '{}';
 }
+$dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url([
+    'page' => 'dispecer_curse',
+    'action' => 'edit',
+    'id' => (int) ($race['id'] ?? 0),
+]));
 $selectedTransportType = (string) ($raceFormData['tip_transport'] ?? 'primar');
 $isDistributionSelected = in_array($selectedTransportType, ['distributie', 'primar_distributie'], true);
 $isPrimarySelected = in_array($selectedTransportType, ['primar', 'primar_tona'], true);
@@ -176,7 +181,36 @@ foreach ($expenses as $expenseRow) {
 }
 $invoicedRefacturareTotal = (float) ($race['total_refacturare_facturata'] ?? 0);
 $expensesTotal = max(0.0, $expensesTotal - $invoicedRefacturareTotal);
-$focusEndTime = trim((string) ($_GET['focus'] ?? '')) === 'end_time';
+$raceExpenseStatus = (string) ($race['cheltuieli_status'] ?? 'pending');
+if (!in_array($raceExpenseStatus, ['pending', 'not_applicable'], true)) {
+    $raceExpenseStatus = 'pending';
+}
+$raceExpenseCount = max((int) ($race['expense_count'] ?? 0), count($expenses));
+$raceHasExpenses = $raceExpenseCount > 0;
+$raceExpenseStatusReturnUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]) . '#expense-section';
+$raceExpenseStatusChoice = $raceExpenseStatus === 'not_applicable' ? 'pending' : 'not_applicable';
+$raceExpenseStatusButtonLabel = $raceExpenseStatus === 'not_applicable' ? 'Marcheaza lipsa cheltuieli' : 'Nu e cazul';
+$raceExpenseStatusBadgeClass = $raceExpenseStatus === 'not_applicable' ? 'bg-secondary' : 'bg-warning text-dark';
+$raceExpenseStatusLabel = $raceExpenseStatus === 'not_applicable' ? 'Nu e cazul' : 'Lipsa cheltuieli';
+// Deep-link generic: ?focus=<cheie> deruleaza si evidentiaza campul corespunzator.
+$focusFieldMap = [
+    'end_time' => 'edit_race_ora_sfarsit',
+    'start_time' => 'edit_race_ora_inceput',
+    'loading_date' => 'edit_race_data_incarcare',
+    'km' => 'edit_race_km_cursa',
+    'km_total' => 'edit_race_km_totali',
+    'clients' => 'edit_race_nr_clienti',
+    'quantity' => 'edit_race_cantitate_incarcata',
+    'distribution_zone' => 'edit_race_zona_distributie_id',
+    'aspiration_hours' => 'edit_race_ore_aspirare',
+    'displacement_km' => 'edit_race_km_dislocare',
+    'delivered_quantity' => 'edit_race_tona_livrata',
+    'liquid_tons' => 'edit_race_tona_aspirata_lichida',
+    'gas_tons' => 'edit_race_tona_aspirata_gazoasa',
+];
+$focusKey = trim((string) ($_GET['focus'] ?? ''));
+$focusFieldId = (string) ($focusFieldMap[$focusKey] ?? '');
+$focusEndTime = $focusKey === 'end_time';
 $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invoicedRefacturareTotal;
 ?>
 
@@ -211,6 +245,9 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
               data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>'
               data-invoiced-refacturare-total='<?= e((string) $invoicedRefacturareTotal) ?>'
               data-inactive-resource-status-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'inactive_resource_status'])) ?>"
+              data-inactive-approval-mode="<?= (function_exists('can') && can('inactive_approvals', 'review')) ? 'admin' : 'user' ?>"
+              data-inactive-approval-request-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'request_inactive_vehicle_approval'])) ?>"
+              data-inactive-approval-cancel-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'cancel_inactive_vehicle_approval'])) ?>"
               data-inactive-trip-id="<?= e((string) $raceId) ?>"
               novalidate>
             <?= csrf_field() ?>
@@ -263,13 +300,22 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                                 ? (array) ($driversByVehicle[$selectedVehicleForDriver] ?? [])
                                 : [];
                         ?>
+                        <?php $storedDriverInList = false; ?>
                         <?php foreach ($driverOptions as $driver): ?>
                             <?php $driverId = (int) ($driver['id'] ?? 0); ?>
                             <?php if ($driverId <= 0) { continue; } ?>
+                            <?php if ($selectedDriverId === (string) $driverId) { $storedDriverInList = true; } ?>
                             <option value="<?= e((string) $driverId) ?>" <?= $selectedDriverId === (string) $driverId ? 'selected' : '' ?>>
                                 <?= e((string) ($driver['nume'] ?? '-')) ?>
                             </option>
                         <?php endforeach; ?>
+                        <?php if (!$storedDriverInList && $selectedDriverId !== '' && (int) $selectedDriverId > 0): ?>
+                            <?php // Soferul salvat pe cursa nu mai este asignat vehiculului: il pastram selectabil, nu il pierdem. ?>
+                            <?php $storedDriverName = trim((string) ($raceFormData['sofer_nume'] ?? '')); ?>
+                            <option value="<?= e($selectedDriverId) ?>" selected data-stored-out-of-scope="1">
+                                <?= e($storedDriverName !== '' ? $storedDriverName : ('Sofer #' . $selectedDriverId)) ?>
+                            </option>
+                        <?php endif; ?>
                     </select>
                     <?php if (isset($raceFormErrors['driver_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['driver_id']) ?></div><?php endif; ?>
                     <div class="form-text">Soferii se incarca automat dupa vehiculul selectat.</div>
@@ -370,12 +416,22 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <label class="form-label" for="edit_race_loc_incarcare_id">Loc incarcare <span class="text-danger">*</span></label>
                     <select class="form-select <?= isset($raceFormErrors['loc_incarcare_id']) ? 'is-invalid' : '' ?>" id="edit_race_loc_incarcare_id" name="loc_incarcare_id" required>
                         <option value="">-- Selecteaza --</option>
+                        <?php $selectedLoadLocationId = (string) ($raceFormData['loc_incarcare_id'] ?? ''); ?>
+                        <?php $storedLoadLocationInList = false; ?>
                         <?php foreach ($loadLocations as $location): ?>
                             <?php $locationId = (int) ($location['id'] ?? 0); ?>
-                            <option value="<?= e((string) $locationId) ?>" <?= (string) ($raceFormData['loc_incarcare_id'] ?? '') === (string) $locationId ? 'selected' : '' ?>>
+                            <?php if ($selectedLoadLocationId === (string) $locationId) { $storedLoadLocationInList = true; } ?>
+                            <option value="<?= e((string) $locationId) ?>" <?= $selectedLoadLocationId === (string) $locationId ? 'selected' : '' ?>>
                                 <?= e((string) ($location['nume'] ?? '-')) ?>
                             </option>
                         <?php endforeach; ?>
+                        <?php if (!$storedLoadLocationInList && (int) $selectedLoadLocationId > 0): ?>
+                            <?php // Locul salvat pe cursa nu mai este in lista activa: il pastram selectabil, nu il pierdem. ?>
+                            <?php $storedLoadLocationName = trim((string) ($raceFormData['loc_incarcare_nume'] ?? '')); ?>
+                            <option value="<?= e($selectedLoadLocationId) ?>" selected data-stored-out-of-scope="1">
+                                <?= e($storedLoadLocationName !== '' ? $storedLoadLocationName : ('Loc #' . $selectedLoadLocationId)) ?>
+                            </option>
+                        <?php endif; ?>
                     </select>
                     <?php if (isset($raceFormErrors['loc_incarcare_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['loc_incarcare_id']) ?></div><?php endif; ?>
                     <div class="form-text text-muted <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="distributie-note-loc">
@@ -466,14 +522,24 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <label class="form-label" for="edit_race_zona_distributie_id" data-role="zona-label" data-default-label="Zona distributie" data-primary-label="Zona descarcare" data-primary-km-label="Loc descarcare">Zona distributie</label>
                     <select class="form-select <?= isset($raceFormErrors['zona_distributie_id']) ? 'is-invalid' : '' ?>" id="edit_race_zona_distributie_id" name="zona_distributie_id" data-role="zona">
                         <option value="">-- Selecteaza --</option>
+                        <?php $selectedZoneId = (string) ($raceFormData['zona_distributie_id'] ?? ''); ?>
+                        <?php $storedZoneInList = false; ?>
                         <?php foreach ($distributionZones as $zone): ?>
                             <?php $zoneId = (int) ($zone['id'] ?? 0); ?>
+                            <?php if ($selectedZoneId === (string) $zoneId) { $storedZoneInList = true; } ?>
                             <?php $zoneExtraKmCost = (float) ($zone['cost_extra_km'] ?? 0); ?>
                             <option value="<?= e((string) $zoneId) ?>" <?= (string) ($raceFormData['zona_distributie_id'] ?? '') === (string) $zoneId ? 'selected' : '' ?>>
                                 <?= e((string) ($zone['nume'] ?? '-')) ?>
                                 (tarif zonÃ„Æ’: <?= e(format_number_ro((float) ($zone['tarif_distributie'] ?? 0), 2)) ?> lei<?php if ($zoneExtraKmCost > 0): ?>, extra km: <?= e(format_number_ro($zoneExtraKmCost, 2)) ?> lei/km<?php endif; ?>)
                             </option>
                         <?php endforeach; ?>
+                        <?php if (!$storedZoneInList && (int) $selectedZoneId > 0): ?>
+                            <?php // Zona salvata pe cursa nu mai este in lista activa: o pastram selectabila, nu o pierdem. ?>
+                            <?php $storedZoneName = trim((string) ($raceFormData['zona_distributie_nume'] ?? '')); ?>
+                            <option value="<?= e($selectedZoneId) ?>" selected data-stored-out-of-scope="1">
+                                <?= e($storedZoneName !== '' ? $storedZoneName : ('Zona #' . $selectedZoneId)) ?>
+                            </option>
+                        <?php endif; ?>
                     </select>
                     <?php if (isset($raceFormErrors['zona_distributie_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['zona_distributie_id']) ?></div><?php endif; ?>
                     <div class="form-text text-muted <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="distributie-note-zone">
@@ -554,11 +620,23 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
 <div class="row g-3 align-items-start dispatcher-expense-layout <?= $expenseRefacturareEnabled ? 'has-refacturare' : '' ?>" data-role="expense-layout">
     <div class="col-12 col-xl-5 dispatcher-expense-form-column" id="expense-section">
         <div class="card border-0 shadow-sm">
-            <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
+            <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
                 <h3 class="h6 mb-0"><?= $editingExpense ? 'Editeaza cheltuiala' : 'Adauga cheltuiala' ?></h3>
-                <?php if ($editingExpense): ?>
-                    <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">Anuleaza editarea</a>
-                <?php endif; ?>
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <?php if (!$raceHasExpenses): ?>
+                        <span class="badge <?= e($raceExpenseStatusBadgeClass) ?>"><?= e($raceExpenseStatusLabel) ?></span>
+                        <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'update_expense_status'])) ?>" class="m-0">
+                            <?= csrf_field() ?>
+                            <input type="hidden" name="id" value="<?= e((string) $raceId) ?>">
+                            <input type="hidden" name="cheltuieli_choice" value="<?= e($raceExpenseStatusChoice) ?>">
+                            <input type="hidden" name="return_url" value="<?= e($raceExpenseStatusReturnUrl) ?>">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary"><?= e($raceExpenseStatusButtonLabel) ?></button>
+                        </form>
+                    <?php endif; ?>
+                    <?php if ($editingExpense): ?>
+                        <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">Anuleaza editarea</a>
+                    <?php endif; ?>
+                </div>
             </div>
             <div class="card-body">
                 <form method="post"
@@ -1318,6 +1396,8 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
+<?php include __DIR__ . '/_expense_prompt_modal.php'; ?>
+
 <?php if (!empty($maintenancePopupMessages)): ?>
     <div class="modal fade" id="kmRevizieAlertModalEdit" tabindex="-1" aria-labelledby="kmRevizieAlertEditTitle" aria-hidden="true">
         <div class="modal-dialog">
@@ -1362,42 +1442,44 @@ document.addEventListener('DOMContentLoaded', function () {
 
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
 
-<?php if ($focusEndTime): ?>
+<?php if ($focusFieldId !== ''): ?>
 <script>
 (function () {
-    var focusEndTimeField = function () {
-        var endTimeInputEl = document.getElementById('edit_race_ora_sfarsit');
-        if (!(endTimeInputEl instanceof HTMLInputElement)) {
+    var focusTargetField = function () {
+        var targetEl = document.getElementById(<?= json_encode($focusFieldId) ?>);
+        if (!(targetEl instanceof HTMLElement)) {
             return;
         }
 
-        var alignEndTimeField = function () {
+        targetEl.classList.add('dispatcher-field-deep-focus');
+
+        var alignTargetField = function () {
             var topOffset = 112;
-            var targetTop = endTimeInputEl.getBoundingClientRect().top + window.pageYOffset - topOffset;
+            var targetTop = targetEl.getBoundingClientRect().top + window.pageYOffset - topOffset;
             window.scrollTo({
                 top: Math.max(0, Math.round(targetTop)),
                 behavior: 'auto'
             });
         };
 
-        alignEndTimeField();
+        alignTargetField();
         window.requestAnimationFrame(function () {
-            alignEndTimeField();
+            alignTargetField();
             window.setTimeout(function () {
-                alignEndTimeField();
+                alignTargetField();
                 try {
-                    endTimeInputEl.focus({ preventScroll: true });
+                    targetEl.focus({ preventScroll: true });
                 } catch (error) {
-                    endTimeInputEl.focus();
+                    targetEl.focus();
                 }
             }, 120);
         });
     };
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', focusEndTimeField);
+        document.addEventListener('DOMContentLoaded', focusTargetField);
     } else {
-        focusEndTimeField();
+        focusTargetField();
     }
 })();
 </script>

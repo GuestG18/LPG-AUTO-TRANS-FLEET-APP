@@ -94,6 +94,24 @@ $sortMark = static function (string $column) use ($sort, $direction): string {
 $tabUrl = static function (string $tab) use ($baseQuery): string {
     return build_query_url(array_merge($baseQuery, ['tab' => $tab, 'p' => 1]));
 };
+$listAnchor = '#former-employees-list';
+$kpiUrl = static function (array $overrides = []) use ($sort, $direction, $listAnchor): string {
+    $query = array_merge([
+        'page' => 'fosti_angajati',
+        'q' => '',
+        'personnel_type' => '',
+        'reason' => '',
+        'period' => '',
+        'date_start' => '',
+        'date_end' => '',
+        'tab' => 'all',
+        'sort' => $sort,
+        'dir' => $direction,
+        'p' => 1,
+    ], $overrides);
+
+    return build_query_url($query) . $listAnchor;
+};
 $activeTab = (string) ($filters['tab'] ?? 'all');
 ?>
 
@@ -116,7 +134,7 @@ $activeTab = (string) ($filters['tab'] ?? 'all');
 
     <div class="row g-3 mb-4 accountancy-kpi-row">
         <div class="col-12 col-md-6 col-xl-3">
-            <div class="accountancy-kpi h-100">
+            <a class="accountancy-kpi accountancy-kpi-link h-100" href="<?= e($kpiUrl(['tab' => 'all'])) ?>">
                 <div class="d-flex align-items-center gap-3">
                     <div class="accountancy-kpi-icon is-purple"><i class="bi bi-people" aria-hidden="true"></i></div>
                     <div>
@@ -125,10 +143,10 @@ $activeTab = (string) ($filters['tab'] ?? 'all');
                         <div class="accountancy-kpi-note">Toate categoriile</div>
                     </div>
                 </div>
-            </div>
+            </a>
         </div>
         <div class="col-12 col-md-6 col-xl-3">
-            <div class="accountancy-kpi h-100">
+            <a class="accountancy-kpi accountancy-kpi-link h-100" href="<?= e($kpiUrl(['tab' => 'operational'])) ?>">
                 <div class="d-flex align-items-center gap-3">
                     <div class="accountancy-kpi-icon is-green"><i class="bi bi-briefcase" aria-hidden="true"></i></div>
                     <div>
@@ -137,10 +155,10 @@ $activeTab = (string) ($filters['tab'] ?? 'all');
                         <div class="accountancy-kpi-note"><?= e($percentLabel($formerOperational)) ?></div>
                     </div>
                 </div>
-            </div>
+            </a>
         </div>
         <div class="col-12 col-md-6 col-xl-3">
-            <div class="accountancy-kpi h-100">
+            <a class="accountancy-kpi accountancy-kpi-link h-100" href="<?= e($kpiUrl(['tab' => 'office'])) ?>">
                 <div class="d-flex align-items-center gap-3">
                     <div class="accountancy-kpi-icon is-orange"><i class="bi bi-person" aria-hidden="true"></i></div>
                     <div>
@@ -149,10 +167,10 @@ $activeTab = (string) ($filters['tab'] ?? 'all');
                         <div class="accountancy-kpi-note"><?= e($percentLabel($formerOffice)) ?></div>
                     </div>
                 </div>
-            </div>
+            </a>
         </div>
         <div class="col-12 col-md-6 col-xl-3">
-            <div class="accountancy-kpi h-100">
+            <a class="accountancy-kpi accountancy-kpi-link h-100" href="<?= e($kpiUrl(['tab' => 'all', 'period' => 'last_12_months'])) ?>">
                 <div class="d-flex align-items-center gap-3">
                     <div class="accountancy-kpi-icon is-blue"><i class="bi bi-calendar2-check" aria-hidden="true"></i></div>
                     <div>
@@ -161,7 +179,7 @@ $activeTab = (string) ($filters['tab'] ?? 'all');
                         <div class="accountancy-kpi-note">Actualizat recent</div>
                     </div>
                 </div>
-            </div>
+            </a>
         </div>
     </div>
 
@@ -232,7 +250,7 @@ $activeTab = (string) ($filters['tab'] ?? 'all');
         <a class="former-tab <?= $activeTab === 'office' ? 'active' : '' ?>" href="<?= e($tabUrl('office')) ?>">Birou</a>
     </nav>
 
-    <section class="accountancy-section former-table-section">
+    <section class="accountancy-section former-table-section" id="former-employees-list">
         <div class="accountancy-section-header">
             <h3 class="h5 mb-0">List&#259; fo&#537;ti angaja&#539;i</h3>
         </div>
@@ -249,7 +267,7 @@ $activeTab = (string) ($filters['tab'] ?? 'all');
                         <th><a href="<?= e($sortUrl('motiv')) ?>">Motiv plecare<?= e($sortMark('motiv')) ?></a></th>
                         <th><a href="<?= e($sortUrl('sursa')) ?>">Sursa<?= e($sortMark('sursa')) ?></a></th>
                         <th><a href="<?= e($sortUrl('documente')) ?>">Documente<?= e($sortMark('documente')) ?></a></th>
-                        <th>Ac&#539;iuni</th>
+                        <th class="accountancy-actions-column">Ac&#539;iuni</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -275,6 +293,12 @@ $activeTab = (string) ($filters['tab'] ?? 'all');
                         $rowPhotoUrl = (string) ($row['source_type'] ?? '') === 'driver' ? driver_image_url((string) ($row['poza_stocata'] ?? '')) : null;
                         $sourceType = (string) ($row['source_type'] ?? '');
                         $sourceId = (int) ($row['source_id'] ?? 0);
+                        $staffTypeId = (int) ($row['staff_type_id'] ?? 0);
+                        $terminationReason = trim((string) ($row['termination_reason'] ?? ''));
+                        $standardTerminationReasons = array_values(array_filter(array_map('strval', $terminationReasons)));
+                        $isStandardTerminationReason = in_array($terminationReason, $standardTerminationReasons, true);
+                        $terminationReasonSelectValue = $isStandardTerminationReason ? $terminationReason : ($terminationReason !== '' ? 'Alte motive' : '');
+                        $terminationReasonCustomValue = $isStandardTerminationReason ? '' : $terminationReason;
                         ?>
                         <tr>
                             <td>
@@ -302,20 +326,61 @@ $activeTab = (string) ($filters['tab'] ?? 'all');
                                     <?= e((string) ($row['document_count'] ?? 0)) ?>
                                 </button>
                             </td>
-                            <td>
-                                <div class="accountancy-action-group">
-                                    <button type="button" class="accountancy-icon-action" data-bs-toggle="modal" data-bs-target="#formerProfileModal<?= e($rowId) ?>" title="Vizualizează profilul" aria-label="Vizualizează profilul">
-                                        <i class="bi bi-eye" aria-hidden="true"></i>
+                            <td class="accountancy-actions-cell">
+                                <div class="dropdown accountancy-action-dropdown">
+                                    <button
+                                        type="button"
+                                        class="accountancy-actions-trigger"
+                                        id="formerActionsMenu<?= e($rowId) ?>"
+                                        data-bs-toggle="dropdown"
+                                        data-bs-boundary="viewport"
+                                        data-bs-offset="0,6"
+                                        aria-expanded="false"
+                                        title="Ac&#539;iuni"
+                                        aria-label="Deschide ac&#539;iuni"
+                                    >
+                                        <i class="bi bi-three-dots" aria-hidden="true"></i>
                                     </button>
-                                    <a class="accountancy-icon-action" href="<?= e(build_query_url(['page' => 'fosti_angajati', 'action' => 'history_sheet', 'source_type' => $sourceType, 'source_id' => $sourceId])) ?>" target="_blank" rel="noopener" title="Fișă istoric angajat" aria-label="Fișă istoric angajat">
-                                        <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
-                                    </a>
-                                    <button type="button" class="accountancy-icon-action is-success" data-bs-toggle="modal" data-bs-target="#formerRehireModal<?= e($rowId) ?>" title="Reangajează" aria-label="Reangajează">
-                                        <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
-                                    </button>
-                                    <button type="button" class="accountancy-icon-action is-primary" data-bs-toggle="modal" data-bs-target="#formerEditTerminationModal<?= e($rowId) ?>" title="Editează datele plecării" aria-label="Editează datele plecării">
-                                        <i class="bi bi-pencil-square" aria-hidden="true"></i>
-                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end accountancy-actions-menu" aria-labelledby="formerActionsMenu<?= e($rowId) ?>">
+                                        <li>
+                                            <button type="button" class="dropdown-item accountancy-action-menu-item" data-bs-toggle="modal" data-bs-target="#formerProfileModal<?= e($rowId) ?>">
+                                                <i class="bi bi-eye" aria-hidden="true"></i>
+                                                <span>Vizualizeaz&#259; profilul</span>
+                                            </button>
+                                        </li>
+                                        <li>
+                                            <?php if ($sourceType === 'staff'): ?>
+                                                <button type="button" class="dropdown-item accountancy-action-menu-item is-primary" data-bs-toggle="modal" data-bs-target="#formerEditStaffModal<?= e($rowId) ?>">
+                                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                                    <span>Editeaz&#259; profilul</span>
+                                                </button>
+                                            <?php else: ?>
+                                                <a class="dropdown-item accountancy-action-menu-item is-primary" href="<?= e(build_query_url(['page' => 'soferi', 'action' => 'edit', 'id' => $sourceId])) ?>">
+                                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                                    <span>Editeaz&#259; profilul</span>
+                                                </a>
+                                            <?php endif; ?>
+                                        </li>
+                                        <li>
+                                            <a class="dropdown-item accountancy-action-menu-item" href="<?= e(build_query_url(['page' => 'fosti_angajati', 'action' => 'history_sheet', 'source_type' => $sourceType, 'source_id' => $sourceId])) ?>" target="_blank" rel="noopener">
+                                                <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
+                                                <span>Fi&#537;&#259; istoric angajat</span>
+                                            </a>
+                                        </li>
+                                        <li><hr class="dropdown-divider"></li>
+                                        <li>
+                                            <button type="button" class="dropdown-item accountancy-action-menu-item is-success" data-bs-toggle="modal" data-bs-target="#formerRehireModal<?= e($rowId) ?>">
+                                                <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
+                                                <span>Reangajeaz&#259;</span>
+                                            </button>
+                                        </li>
+                                        <li>
+                                            <button type="button" class="dropdown-item accountancy-action-menu-item is-primary" data-bs-toggle="modal" data-bs-target="#formerEditTerminationModal<?= e($rowId) ?>">
+                                                <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                                <span>Editeaz&#259; datele plec&#259;rii</span>
+                                            </button>
+                                        </li>
+                                    </ul>
                                 </div>
                             </td>
                         </tr>
@@ -459,6 +524,67 @@ $activeTab = (string) ($filters['tab'] ?? 'all');
                             </div>
                         </div>
 
+                        <?php if ($sourceType === 'staff'): ?>
+                            <div class="modal fade" id="formerEditStaffModal<?= e($rowId) ?>" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog modal-lg">
+                                    <div class="modal-content">
+                                        <form method="post" action="<?= e(build_query_url(['page' => 'fosti_angajati', 'action' => 'update_staff'])) ?>">
+                                            <?= csrf_field() ?>
+                                            <input type="hidden" name="id" value="<?= e((string) $sourceId) ?>">
+                                            <input type="hidden" name="return_to" value="fosti_angajati">
+                                            <input type="hidden" name="status" value="inactiv">
+                                            <div class="modal-header">
+                                                <h3 class="modal-title fs-5">Editare profil fost angajat</h3>
+                                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
+                                            </div>
+                                            <div class="modal-body">
+                                                <div class="row g-3">
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Nume complet</label>
+                                                        <input type="text" class="form-control" name="nume_complet" value="<?= e((string) ($row['nume'] ?? '')) ?>" required>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Tip personal</label>
+                                                        <select class="form-select" name="staff_type_id" required>
+                                                            <?php foreach ($staffTypeOptions as $type): ?>
+                                                                <?php if ((int) ($type['is_driver_linked'] ?? 0) === 1) { continue; } ?>
+                                                                <?php $typeId = (int) ($type['id'] ?? 0); ?>
+                                                                <option value="<?= e((string) $typeId) ?>" <?= $staffTypeId === $typeId ? 'selected' : '' ?>><?= e((string) ($type['name'] ?? '-')) ?></option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Telefon</label>
+                                                        <input type="text" class="form-control" name="telefon" value="<?= e((string) ($row['telefon'] ?? '')) ?>">
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Email</label>
+                                                        <input type="email" class="form-control" name="email" value="<?= e((string) ($row['email'] ?? '')) ?>">
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Data angajării</label>
+                                                        <input type="date" class="form-control" name="data_angajare" value="<?= e((string) ($row['data_angajare'] ?? '')) ?>">
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label">Status</label>
+                                                        <input type="text" class="form-control" value="Fost angajat" readonly>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <label class="form-label">Observații</label>
+                                                        <textarea class="form-control" name="observatii" rows="3"><?= e((string) ($row['observatii'] ?? '')) ?></textarea>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="modal-footer">
+                                                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
+                                                <button type="submit" class="btn btn-primary">Salvează</button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+
                         <div class="modal fade" id="formerEditTerminationModal<?= e($rowId) ?>" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-lg">
                                 <div class="modal-content">
@@ -481,8 +607,17 @@ $activeTab = (string) ($filters['tab'] ?? 'all');
                                                     <input type="date" class="form-control" name="last_working_day" value="<?= e((string) ($row['last_working_day'] ?? '')) ?>">
                                                 </div>
                                                 <div class="col-md-6">
-                                                    <label class="form-label">Motiv plecare</label>
-                                                    <input type="text" class="form-control" name="termination_reason" value="<?= e((string) ($row['termination_reason'] ?? '')) ?>" required>
+                                                    <label class="form-label">Motiv plecare <span class="text-danger">*</span></label>
+                                                    <select class="form-select" name="termination_reason" required>
+                                                        <option value="">Selectează motivul</option>
+                                                        <?php foreach ($standardTerminationReasons as $reason): ?>
+                                                            <option value="<?= e($reason) ?>" <?= $terminationReasonSelectValue === $reason ? 'selected' : '' ?>><?= e($reason) ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label class="form-label">Motiv personalizat</label>
+                                                    <input type="text" class="form-control" name="termination_reason_custom" value="<?= e($terminationReasonCustomValue) ?>" placeholder="Completează pentru Alte motive">
                                                 </div>
                                                 <div class="col-md-6">
                                                     <label class="form-label">Document încetare</label>

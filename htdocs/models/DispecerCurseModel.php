@@ -2597,8 +2597,9 @@ class DispecerCurseModel extends BaseModel
 
     public function getPaginatedRaces(array $filters, string $search, int $page, int $perPage): array
     {
+        $fetchAllRows = $perPage <= 0;
         $page = max(1, $page);
-        $perPage = max(1, $perPage);
+        $perPage = $fetchAllRows ? 0 : max(1, $perPage);
 
         $whereData = $this->buildRaceWhere($filters, $search);
         $from = $this->raceFromSql();
@@ -2609,9 +2610,9 @@ class DispecerCurseModel extends BaseModel
         $countStmt->execute();
         $totalRows = (int) $countStmt->fetchColumn();
 
-        $totalPages = max(1, (int) ceil($totalRows / $perPage));
-        $page = min($page, $totalPages);
-        $offset = ($page - 1) * $perPage;
+        $totalPages = $fetchAllRows ? 1 : max(1, (int) ceil($totalRows / $perPage));
+        $page = $fetchAllRows ? 1 : min($page, $totalPages);
+        $offset = $fetchAllRows ? 0 : (($page - 1) * $perPage);
 
         $dataSql = "
             SELECT
@@ -2631,13 +2632,15 @@ class DispecerCurseModel extends BaseModel
                 COALESCE(exp.total_refacturare_pending, 0) AS total_refacturare_pending
             " . $from . $whereData['where'] . "
             ORDER BY c.data_inceput DESC, c.data_sfarsit DESC, c.id DESC
-            LIMIT :limit_rows OFFSET :offset_rows
+            " . ($fetchAllRows ? '' : 'LIMIT :limit_rows OFFSET :offset_rows') . "
         ";
 
         $dataStmt = $this->db->prepare($dataSql);
         $this->bindParams($dataStmt, $whereData['params']);
-        $dataStmt->bindValue(':limit_rows', $perPage, PDO::PARAM_INT);
-        $dataStmt->bindValue(':offset_rows', $offset, PDO::PARAM_INT);
+        if (!$fetchAllRows) {
+            $dataStmt->bindValue(':limit_rows', $perPage, PDO::PARAM_INT);
+            $dataStmt->bindValue(':offset_rows', $offset, PDO::PARAM_INT);
+        }
         $dataStmt->execute();
 
         return [
@@ -3149,80 +3152,53 @@ class DispecerCurseModel extends BaseModel
         return $grouped;
     }
 
+    /**
+     * Candidatii pentru popup-ul "curse cu informatii lipsa": toate cursele active
+     * inca "in curs de facturare", cu toate coloanele necesare detectiei per tip de
+     * transport. Detectia efectiva (campuri lipsa + severitate) se face in controller
+     * (buildRaceMissingInformation) pentru a nu duplica regulile de business in SQL.
+     * O singura interogare — fara N+1.
+     */
     public function getOpenRacesOverview(int $limit = 25): array
     {
         $this->ensureRaceExpenseStatusColumn();
         $this->ensureRaceSoftDeleteSchema();
 
-        $limit = max(1, min(100, $limit));
+        $limit = max(1, min(500, $limit));
         $billingStatusExpr = $this->defaultBillingStatusExpression();
-
-        $countSql = "
-            SELECT
-                SUM(CASE WHEN c.ora_sfarsit IS NULL THEN 1 ELSE 0 END) AS missing_end_time_count,
-                SUM(
-                    CASE
-                        WHEN COALESCE(exp.expense_count, 0) = 0
-                         AND COALESCE(c.cheltuieli_status, 'pending') <> 'not_applicable' THEN 1
-                        ELSE 0
-                    END
-                ) AS missing_expenses_count,
-                SUM(
-                    CASE
-                        WHEN c.ora_sfarsit IS NULL
-                         AND COALESCE(exp.expense_count, 0) = 0
-                         AND COALESCE(c.cheltuieli_status, 'pending') <> 'not_applicable' THEN 1
-                        ELSE 0
-                    END
-                ) AS multiple_missing_count,
-                SUM(
-                    CASE
-                        WHEN c.ora_sfarsit IS NULL
-                          OR (
-                              COALESCE(exp.expense_count, 0) = 0
-                              AND COALESCE(c.cheltuieli_status, 'pending') <> 'not_applicable'
-                          ) THEN 1
-                        ELSE 0
-                    END
-                ) AS total_missing_count
-            FROM curse_dispecer c
-            LEFT JOIN (
-                SELECT cursa_id, COUNT(*) AS expense_count
-                FROM curse_cheltuieli
-                GROUP BY cursa_id
-            ) exp ON exp.cursa_id = c.id
-            WHERE c.deleted_at IS NULL
-              AND " . $billingStatusExpr . " = :open_races_billing_status
-        ";
-        $countStmt = $this->db->prepare($countSql);
-        $countStmt->bindValue(':open_races_billing_status', self::DEFAULT_BILLING_STATUS, PDO::PARAM_STR);
-        $countStmt->execute();
-        $countRow = $countStmt->fetch() ?: [];
-        $totalMissingCount = max(0, (int) ($countRow['total_missing_count'] ?? 0));
-        $missingEndTimeCount = max(0, (int) ($countRow['missing_end_time_count'] ?? 0));
-        $missingExpensesCount = max(0, (int) ($countRow['missing_expenses_count'] ?? 0));
-        $multipleMissingCount = max(0, (int) ($countRow['multiple_missing_count'] ?? 0));
-
-        if ($totalMissingCount <= 0) {
-            return [
-                'count' => 0,
-                'rows' => [],
-                'missing_end_time_count' => 0,
-                'missing_expenses_count' => 0,
-                'multiple_missing_count' => 0,
-            ];
-        }
 
         $listSql = "
             SELECT
                 c.id,
                 c.tip_transport,
+                c.data_incarcare,
                 c.data_inceput,
                 c.data_sfarsit,
                 c.ora_inceput,
                 c.ora_sfarsit,
                 c.status_facturare,
                 c.updated_at,
+                c.km_cursa,
+                c.km_totali,
+                c.nr_clienti,
+                c.cantitate_incarcata,
+                c.cantitate_prelevata,
+                c.ore_aspirare,
+                c.km_dislocare,
+                c.tona_livrata,
+                c.tona_aspirata_lichida,
+                c.tona_aspirata_gazoasa,
+                c.zona_distributie_id,
+                c.loc_incarcare_id,
+                c.tip_marfa,
+                c.capacitate_transport,
+                c.loc_plecare,
+                c.loc_livrare,
+                c.pret_tarifare,
+                c.total_facturare,
+                c.cost_km_distributie,
+                c.cost_km_mixt,
+                c.cheltuieli_status,
                 v.nr_inmatriculare,
                 v.marca,
                 v.model,
@@ -3230,17 +3206,15 @@ class DispecerCurseModel extends BaseModel
                 v.poza_stocata,
                 COALESCE(s.nume, '') AS sofer_nume,
                 COALESCE(bt.nume, '') AS beneficiar_nume,
-                CASE WHEN c.ora_sfarsit IS NULL THEN 1 ELSE 0 END AS missing_end_time,
-                CASE
-                    WHEN COALESCE(exp.expense_count, 0) = 0
-                     AND COALESCE(c.cheltuieli_status, 'pending') <> 'not_applicable' THEN 1
-                    ELSE 0
-                END AS missing_expenses,
+                COALESCE(li.nume, '') AS loc_incarcare_nume,
+                COALESCE(zd.nume, '') AS zona_distributie_nume,
                 COALESCE(exp.expense_count, 0) AS expense_count
             FROM curse_dispecer c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             LEFT JOIN soferi s ON s.id = c.driver_id
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+            LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
+            LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
             LEFT JOIN (
                 SELECT cursa_id, COUNT(*) AS expense_count
                 FROM curse_cheltuieli
@@ -3248,13 +3222,6 @@ class DispecerCurseModel extends BaseModel
             ) exp ON exp.cursa_id = c.id
             WHERE c.deleted_at IS NULL
               AND " . $billingStatusExpr . " = :open_races_billing_status
-              AND (
-                c.ora_sfarsit IS NULL
-                OR (
-                   COALESCE(exp.expense_count, 0) = 0
-                   AND COALESCE(c.cheltuieli_status, 'pending') <> 'not_applicable'
-                )
-              )
             ORDER BY c.data_inceput ASC, c.id ASC
             LIMIT :limit_rows
         ";
@@ -3265,16 +3232,13 @@ class DispecerCurseModel extends BaseModel
         $listStmt->execute();
 
         return [
-            'count' => $totalMissingCount,
             'rows' => $listStmt->fetchAll(),
-            'missing_end_time_count' => $missingEndTimeCount,
-            'missing_expenses_count' => $missingExpensesCount,
-            'multiple_missing_count' => $multipleMissingCount,
         ];
     }
 
     public function getRaceById(int $id): ?array
     {
+        $this->ensureRaceExpenseStatusColumn();
         $this->ensureRaceSoftDeleteSchema();
 
         $sql = "
@@ -3288,6 +3252,7 @@ class DispecerCurseModel extends BaseModel
                 li.nume AS loc_incarcare_nume,
                 bt.nume AS beneficiar_nume,
                 zd.nume AS zona_distributie_nume,
+                COALESCE(exp.expense_count, 0) AS expense_count,
                 COALESCE(exp.total_cheltuieli, 0) AS total_cheltuieli,
                 COALESCE(exp.total_refacturare_facturata, 0) AS total_refacturare_facturata,
                 COALESCE(exp.total_refacturare_pending, 0) AS total_refacturare_pending

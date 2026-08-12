@@ -30,10 +30,10 @@ $operationalTotal = (float) ($operationalCost['total_value'] ?? ((float) ($fuelC
 $fuelHasData = (float) ($fuelCost['total_value'] ?? 0) > 0 || (float) ($fuelCost['total_quantity'] ?? 0) > 0;
 $maintenanceHasData = (float) ($maintenanceCost['total_value'] ?? 0) > 0;
 $operationalInitiallyExpanded = isset($_GET['operational_expanded']) && (string) $_GET['operational_expanded'] === '1';
-$approvalCounts = is_array($approvalSummary['counts'] ?? null) ? $approvalSummary['counts'] : ['vehicle' => 0, 'driver' => 0];
+$approvalCounts = is_array($approvalSummary['counts'] ?? null) ? $approvalSummary['counts'] : ['vehicle' => 0, 'driver' => 0, 'repair' => 0];
 $approvalVehicleRows = is_array($approvalSummary['vehicles'] ?? null) ? $approvalSummary['vehicles'] : [];
 $approvalDriverRows = is_array($approvalSummary['drivers'] ?? null) ? $approvalSummary['drivers'] : [];
-$approvalTotal = (int) ($approvalSummary['total'] ?? ((int) ($approvalCounts['vehicle'] ?? 0) + (int) ($approvalCounts['driver'] ?? 0)));
+$approvalTotal = (int) ($approvalSummary['total'] ?? ((int) ($approvalCounts['vehicle'] ?? 0) + (int) ($approvalCounts['driver'] ?? 0) + (int) ($approvalCounts['repair'] ?? 0)));
 $dashboardReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dashboard']));
 
 $vehicleDetailsUrl = build_query_url([
@@ -724,8 +724,19 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                     'count' => (int) ($approvalCounts['driver'] ?? 0),
                     'rows' => $approvalDriverRows,
                 ],
+                'repair' => [
+                    'label' => 'Reparatii',
+                    'count' => (int) ($approvalCounts['repair'] ?? 0),
+                    'rows' => is_array($approvalSummary['repairs'] ?? null) ? $approvalSummary['repairs'] : [],
+                ],
             ];
-            $activeApprovalTab = (int) ($approvalCounts['vehicle'] ?? 0) > 0 ? 'vehicle' : 'driver';
+            $activeApprovalTab = 'vehicle';
+            foreach ($approvalTabs as $tabKey => $tab) {
+                if ((int) ($tab['count'] ?? 0) > 0) {
+                    $activeApprovalTab = $tabKey;
+                    break;
+                }
+            }
             ?>
             <aside class="dashboard-approval-panel" aria-labelledby="dashboard-approval-title">
                 <header class="dashboard-approval-header">

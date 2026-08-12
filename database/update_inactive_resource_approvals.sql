@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS inactive_resource_approvals (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    resource_type ENUM('vehicle', 'driver') NOT NULL,
+    resource_type ENUM('vehicle', 'driver', 'repair') NOT NULL,
     resource_id INT UNSIGNED NOT NULL,
     trip_id INT UNSIGNED NULL,
     usage_context VARCHAR(120) NOT NULL DEFAULT 'dispecer_curse',
@@ -26,6 +26,14 @@ CREATE TABLE IF NOT EXISTS inactive_resource_approvals (
     CONSTRAINT fk_inactive_approvals_requested_by FOREIGN KEY (requested_by_user_id) REFERENCES utilizatori(id) ON DELETE SET NULL,
     CONSTRAINT fk_inactive_approvals_reviewed_by FOREIGN KEY (reviewed_by_user_id) REFERENCES utilizatori(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE inactive_resource_approvals
+    MODIFY COLUMN resource_type ENUM('vehicle', 'driver', 'repair') NOT NULL;
+
+UPDATE inactive_resource_approvals
+SET resource_type = 'repair'
+WHERE resource_type = 'vehicle'
+  AND inactive_reason = 'repair';
 
 CREATE TABLE IF NOT EXISTS inactive_resource_approval_documents (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

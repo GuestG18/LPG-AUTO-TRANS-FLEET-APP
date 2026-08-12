@@ -11,7 +11,14 @@ $baseQuery = [
     'data_start' => $filters['data_start'] ?? '',
     'data_end' => $filters['data_end'] ?? '',
 ];
-$currentListUrl = build_query_url(array_merge($baseQuery, ['p' => (int) ($pagination['page'] ?? 1)]));
+$currentListUrl = build_query_url($baseQuery);
+$hasActiveFilters = $search !== '';
+foreach (['tip_transport', 'vehicle_id', 'loc_incarcare_id', 'beneficiar_id', 'zona_distributie_id', 'data_start', 'data_end'] as $filterKey) {
+    if (trim((string) ($filters[$filterKey] ?? '')) !== '') {
+        $hasActiveFilters = true;
+        break;
+    }
+}
 
 $zoneTariffJson = json_encode($zoneTariffs, JSON_UNESCAPED_UNICODE);
 if (!is_string($zoneTariffJson)) {
@@ -86,6 +93,18 @@ if (!is_string($activeDriverVehicleIdsJson)) {
 $driversByVehicleJson = json_encode($driversByVehicle ?? [], JSON_UNESCAPED_UNICODE);
 if (!is_string($driversByVehicleJson)) {
     $driversByVehicleJson = '{}';
+}
+$allDriversPayload = [];
+foreach ((array) ($allActiveDrivers ?? []) as $allDriverRow) {
+    $allDriverId = (int) ($allDriverRow['id'] ?? 0);
+    $allDriverName = trim((string) ($allDriverRow['nume'] ?? ''));
+    if ($allDriverId > 0 && $allDriverName !== '') {
+        $allDriversPayload[] = ['id' => $allDriverId, 'nume' => $allDriverName];
+    }
+}
+$allDriversJson = json_encode($allDriversPayload, JSON_UNESCAPED_UNICODE);
+if (!is_string($allDriversJson)) {
+    $allDriversJson = '[]';
 }
 $selectedTransportType = (string) ($formData['tip_transport'] ?? '');
 $isDistributionSelected = in_array($selectedTransportType, ['distributie', 'primar_distributie'], true);
@@ -207,10 +226,10 @@ $formatRaceDateForDisplay = static function (string $value): string {
 };
 $openRacesCount = (int) ($openRacesOverview['count'] ?? 0);
 $openRacesRows = is_array($openRacesOverview['rows'] ?? null) ? $openRacesOverview['rows'] : [];
-$openRacesMissingEndTimeCount = (int) ($openRacesOverview['missing_end_time_count'] ?? 0);
-$openRacesMissingExpensesCount = (int) ($openRacesOverview['missing_expenses_count'] ?? 0);
-$openRacesMultipleMissingCount = (int) ($openRacesOverview['multiple_missing_count'] ?? 0);
-$postCreateExpensePromptRaceId = (int) (($postCreateExpensePrompt['race_id'] ?? 0));
+$openRacesSeverityCounts = is_array($openRacesOverview['severity_counts'] ?? null)
+    ? $openRacesOverview['severity_counts']
+    : ['critical' => 0, 'important' => 0, 'minor' => 0];
+$openRacesPlates = is_array($openRacesOverview['plates'] ?? null) ? $openRacesOverview['plates'] : [];
 $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dispecer_curse']));
 ?>
 
@@ -228,6 +247,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
     </div>
 </div>
 
+
 <?php if ($openRacesCount > 0): ?>
     <div class="dispatcher-open-races-alert-container">
         <button
@@ -244,225 +264,350 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
     </div>
 
     <div class="dispatcher-open-races-modal-overlay d-none" id="open-races-panel" data-open-races-panel role="dialog" aria-modal="true" aria-labelledby="open-races-modal-title">
-        <section class="dispatcher-open-races-modal" role="document">
-            <header class="dispatcher-open-races-modal-header">
-                <div class="dispatcher-open-races-modal-title-group">
-                    <div class="dispatcher-open-races-alert-icon" aria-hidden="true">
-                        <i class="bi bi-exclamation-triangle"></i>
-                    </div>
-                    <div>
-                        <h3 id="open-races-modal-title">Atentie: curse cu informatii lipsa (<?= e((string) $openRacesCount) ?>)</h3>
-                        <p>Completeaza informatiile lipsa pentru a putea continua.</p>
-                    </div>
+        <section class="dispatcher-open-races-modal orx-modal" role="document">
+            <header class="orx-header">
+                <div class="orx-header-icon" aria-hidden="true">
+                    <i class="bi bi-exclamation-triangle-fill"></i>
                 </div>
-                <button type="button" class="dispatcher-open-races-icon-close" data-open-races-close aria-label="Inchide">
+                <div class="orx-header-titles">
+                    <h3 id="open-races-modal-title">Atenție: curse cu informații lipsă (<?= e((string) $openRacesCount) ?>)</h3>
+                    <p>Completează informațiile lipsă pentru a putea continua.</p>
+                </div>
+                <button type="button" class="orx-close" data-open-races-close aria-label="Închide">
                     <i class="bi bi-x-lg" aria-hidden="true"></i>
                 </button>
             </header>
 
-            <div class="dispatcher-open-races-modal-body">
-                <h4>Clasificare lipsuri</h4>
-
-                <div class="dispatcher-open-races-stats">
-                    <button
-                        type="button"
-                        class="dispatcher-open-races-stat dispatcher-open-races-stat-time"
-                        data-open-races-filter="missing_end_time"
-                        aria-pressed="false"
-                        <?= $openRacesMissingEndTimeCount > 0 ? '' : 'disabled' ?>
-                    >
-                        <span class="dispatcher-open-races-stat-icon"><i class="bi bi-clock" aria-hidden="true"></i></span>
-                        <span class="dispatcher-open-races-stat-label">Fara ora sfarsit</span>
-                        <strong><?= e((string) $openRacesMissingEndTimeCount) ?></strong>
+            <div class="orx-toolbar">
+                <div class="orx-tabs" role="tablist" aria-label="Filtrare după severitate">
+                    <button type="button" class="orx-tab is-active" data-orx-severity-tab="" aria-pressed="true">
+                        <i class="bi bi-list-ul" aria-hidden="true"></i>
+                        <span>Toate (<?= e((string) $openRacesCount) ?>)</span>
                     </button>
-                    <button
-                        type="button"
-                        class="dispatcher-open-races-stat dispatcher-open-races-stat-expenses"
-                        data-open-races-filter="missing_expenses"
-                        aria-pressed="false"
-                        <?= $openRacesMissingExpensesCount > 0 ? '' : 'disabled' ?>
-                    >
-                        <span class="dispatcher-open-races-stat-icon"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></span>
-                        <span class="dispatcher-open-races-stat-label">Fara cheltuieli</span>
-                        <strong><?= e((string) $openRacesMissingExpensesCount) ?></strong>
+                    <button type="button" class="orx-tab orx-tab-critical" data-orx-severity-tab="critical" aria-pressed="false">
+                        <i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i>
+                        <span>Critice (<?= e((string) ($openRacesSeverityCounts['critical'] ?? 0)) ?>)</span>
                     </button>
-                    <button
-                        type="button"
-                        class="dispatcher-open-races-stat dispatcher-open-races-stat-multiple"
-                        data-open-races-filter="multiple_missing"
-                        aria-pressed="false"
-                        <?= $openRacesMultipleMissingCount > 0 ? '' : 'disabled' ?>
-                    >
-                        <span class="dispatcher-open-races-stat-icon"><i class="bi bi-exclamation-diamond" aria-hidden="true"></i></span>
-                        <span class="dispatcher-open-races-stat-label">Informatii multiple lipsa</span>
-                        <strong><?= e((string) $openRacesMultipleMissingCount) ?></strong>
+                    <button type="button" class="orx-tab orx-tab-important" data-orx-severity-tab="important" aria-pressed="false">
+                        <i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i>
+                        <span>Importante (<?= e((string) ($openRacesSeverityCounts['important'] ?? 0)) ?>)</span>
+                    </button>
+                    <button type="button" class="orx-tab orx-tab-minor" data-orx-severity-tab="minor" aria-pressed="false">
+                        <i class="bi bi-info-circle-fill" aria-hidden="true"></i>
+                        <span>Minore (<?= e((string) ($openRacesSeverityCounts['minor'] ?? 0)) ?>)</span>
                     </button>
                 </div>
-
-                <div class="dispatcher-open-races-card-list">
-                    <?php foreach ($openRacesRows as $openRaceIndex => $openRace): ?>
-                        <?php
-                            $openRaceId = (int) ($openRace['id'] ?? 0);
-                            if ($openRaceId <= 0) {
-                                continue;
-                            }
-
-                            $openPlate = trim((string) ($openRace['nr_inmatriculare'] ?? ''));
-                            $openDriver = trim((string) ($openRace['sofer_nume'] ?? ''));
-                            $openBeneficiar = trim((string) ($openRace['beneficiar_nume'] ?? ''));
-                            $openStartDate = trim((string) ($openRace['data_inceput'] ?? ''));
-                            $openStartTime = trim((string) ($openRace['ora_inceput'] ?? ''));
-                            $openTransportType = (string) ($openRace['tip_transport'] ?? '');
-                            $openTransportLabel = $transportTypes[$openTransportType] ?? '-';
-                            $openMissingEndTime = (int) ($openRace['missing_end_time'] ?? 0) === 1;
-                            $openMissingExpenses = (int) ($openRace['missing_expenses'] ?? 0) === 1;
-                            $openMultipleMissing = $openMissingEndTime && $openMissingExpenses;
-                            $openExpenseCount = max(0, (int) ($openRace['expense_count'] ?? 0));
-                            $openUpdatedAt = trim((string) ($openRace['updated_at'] ?? ''));
-                            $openVehiclePhotoUrl = vehicle_image_url((string) ($openRace['poza_stocata'] ?? ''));
-                            $openVehiclePhotoAlt = trim((string) ($openRace['poza_original'] ?? ''));
-                            if ($openVehiclePhotoAlt === '') {
-                                $openVehiclePhotoAlt = $openPlate !== '' ? ('Poza ' . $openPlate) : 'Poza vehicul';
-                            }
-                            $openTitleParts = [];
-                            if ($openPlate !== '') {
-                                $openTitleParts[] = $openPlate;
-                            }
-                            if ($openDriver !== '') {
-                                $openTitleParts[] = $openDriver;
-                            }
-                            $openTitle = $openTitleParts !== [] ? implode(' - ', $openTitleParts) : ('Cursa #' . $openRaceId);
-                            $openStartDateLabel = $openStartDate !== '' ? format_date_ro($openStartDate) : '-';
-                            $openStartTimeLabel = $openStartTime !== '' ? substr($openStartTime, 0, 5) : '-';
-                            $openUpdatedLabel = $openUpdatedAt !== '' ? format_datetime_ro($openUpdatedAt) : '-';
-                            $openDetailsUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId]);
-                            $openEndTimeUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId, 'focus' => 'end_time']) . '#edit_race_ora_sfarsit';
-                            $openExpenseUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId]) . '#expense-section';
-                            $openMissingRows = [];
-                            if ($openMissingEndTime) {
-                                $openMissingRows[] = [
-                                    'type' => 'time',
-                                    'icon' => 'bi-clock',
-                                    'text' => 'Lipseste ora de sfarsit',
-                                ];
-                            }
-                            if ($openMissingExpenses) {
-                                $openMissingRows[] = [
-                                    'type' => 'expense',
-                                    'icon' => 'bi-file-earmark-text',
-                                    'text' => 'Nu exista cheltuieli asociate',
-                                ];
-                            }
-                            $openRaceExpanded = false;
-                        ?>
-                        <article
-                            class="dispatcher-open-race-card <?= $openRaceExpanded ? 'is-expanded' : '' ?>"
-                            data-open-race-card
-                            data-missing-end-time="<?= $openMissingEndTime ? '1' : '0' ?>"
-                            data-missing-expenses="<?= $openMissingExpenses ? '1' : '0' ?>"
-                            data-multiple-missing="<?= $openMultipleMissing ? '1' : '0' ?>"
-                        >
-                            <div class="dispatcher-open-race-card-head">
-                                <div class="dispatcher-open-race-title-block">
-                                    <div class="dispatcher-open-race-avatar <?= $openVehiclePhotoUrl !== null ? 'has-photo' : '' ?>" aria-hidden="true">
-                                        <?php if ($openVehiclePhotoUrl !== null): ?>
-                                            <img src="<?= e($openVehiclePhotoUrl) ?>" alt="<?= e($openVehiclePhotoAlt) ?>" loading="lazy">
-                                        <?php else: ?>
-                                            <i class="bi bi-truck"></i>
-                                        <?php endif; ?>
-                                    </div>
-                                    <div class="dispatcher-open-race-title-main">
-                                        <div class="dispatcher-open-race-title-row">
-                                            <strong><?= e($openTitle) ?></strong>
-                                            <span class="dispatcher-open-race-badge">
-                                                <i class="bi bi-circle-fill" aria-hidden="true"></i>
-                                                Lipsuri
-                                            </span>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div class="dispatcher-open-race-actions">
-                                    <a class="dispatcher-open-race-action dispatcher-open-race-action-secondary" href="<?= e($openDetailsUrl) ?>">
-                                        <i class="bi bi-info-circle" aria-hidden="true"></i>
-                                        <span>Detalii</span>
-                                    </a>
-                                    <?php if ($openMissingEndTime): ?>
-                                        <a class="dispatcher-open-race-action dispatcher-open-race-action-time" href="<?= e($openEndTimeUrl) ?>" data-open-race-action-type="missing_end_time">
-                                            <i class="bi bi-clock" aria-hidden="true"></i>
-                                            <span>Adaug&#259; ora final&#259;</span>
-                                        </a>
-                                    <?php endif; ?>
-                                    <?php if ($openMissingExpenses): ?>
-                                        <a class="dispatcher-open-race-action dispatcher-open-race-action-primary" href="<?= e($openExpenseUrl) ?>" data-open-race-action-type="missing_expenses">
-                                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
-                                            <span>Adauga cheltuieli</span>
-                                        </a>
-                                    <?php endif; ?>
-                                    <button
-                                        type="button"
-                                        class="dispatcher-open-race-chevron"
-                                        data-open-race-card-toggle
-                                        aria-label="<?= $openRaceExpanded ? 'Restrange lipsurile' : 'Extinde lipsurile' ?>"
-                                        aria-expanded="<?= $openRaceExpanded ? 'true' : 'false' ?>"
-                                    >
-                                        <i class="bi <?= $openRaceExpanded ? 'bi-chevron-up' : 'bi-chevron-down' ?>" aria-hidden="true"></i>
-                                    </button>
-                                </div>
+                <div class="orx-filters">
+                    <div class="orx-select-wrap">
+                        <i class="bi bi-truck" aria-hidden="true"></i>
+                        <select class="orx-transport-select" data-orx-transport aria-label="Filtrare după tip transport">
+                            <option value="">Tip transport</option>
+                            <?php foreach ($transportTypes as $transportTypeValue => $transportTypeLabel): ?>
+                                <option value="<?= e((string) $transportTypeValue) ?>"><?= e((string) $transportTypeLabel) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="orx-plates" data-orx-plates>
+                        <button type="button" class="orx-plates-toggle" data-orx-plates-toggle aria-haspopup="listbox" aria-expanded="false">
+                            <i class="bi bi-truck-front" aria-hidden="true"></i>
+                            <span data-orx-plates-label>Nr. înmatriculare</span>
+                            <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                        </button>
+                        <div class="orx-plates-menu" data-orx-plates-menu hidden>
+                            <div class="orx-plates-search">
+                                <i class="bi bi-search" aria-hidden="true"></i>
+                                <input type="search" data-orx-plates-search placeholder="Caută nr. înmatriculare..." aria-label="Caută număr de înmatriculare">
                             </div>
+                            <label class="orx-plates-option orx-plates-selectall">
+                                <input type="checkbox" data-orx-plates-all>
+                                <span>Selectează toate</span>
+                            </label>
+                            <div class="orx-plates-list" data-orx-plates-list>
+                                <?php foreach ($openRacesPlates as $openRacesPlate): ?>
+                                    <label class="orx-plates-option">
+                                        <input type="checkbox" value="<?= e((string) $openRacesPlate) ?>" data-orx-plate-option>
+                                        <span><?= e((string) $openRacesPlate) ?></span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                            <div class="orx-plates-footer">
+                                <span class="orx-plates-count" data-orx-plates-count>0 vehicule selectate</span>
+                                <a href="#" data-orx-plates-clear>Șterge selecția</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-                            <div class="dispatcher-open-race-meta">
-                                <span><i class="bi bi-signpost-2" aria-hidden="true"></i> <?= e((string) $openTransportLabel) ?></span>
-                                <?php if ($openBeneficiar !== ''): ?>
-                                    <span><i class="bi bi-fuel-pump" aria-hidden="true"></i> <?= e($openBeneficiar) ?></span>
+            <p class="orx-subnote">Cursele de mai jos conțin informații incomplete care ar putea afecta facturarea sau raportarea.</p>
+
+            <div class="orx-body dispatcher-open-races-modal-body">
+                <?php
+                $orxSeverityMeta = [
+                    'critical' => ['badge' => 'Lipsuri', 'chip' => 'Obligatorie', 'summary' => 'Informații lipsă critice', 'icon' => 'bi-exclamation-circle-fill'],
+                    'important' => ['badge' => 'Importanță', 'chip' => 'Importantă', 'summary' => 'Informații importante', 'icon' => 'bi-exclamation-circle-fill'],
+                    'minor' => ['badge' => 'Minoră', 'chip' => 'Minoră', 'summary' => 'Informații lipsă minore', 'icon' => 'bi-info-circle-fill'],
+                ];
+                $orxFieldIcons = [
+                    'ora_inceput' => 'bi-clock-history',
+                    'ora_sfarsit' => 'bi-clock',
+                    'data_incarcare' => 'bi-calendar-event',
+                    'km_cursa' => 'bi-signpost',
+                    'km_totali' => 'bi-signpost-split',
+                    'cantitate_incarcata' => 'bi-box-seam',
+                    'nr_clienti' => 'bi-people',
+                    'zona_distributie_id' => 'bi-geo-alt',
+                    'ore_aspirare' => 'bi-stopwatch',
+                    'km_dislocare' => 'bi-signpost',
+                    'tona_livrata' => 'bi-box-seam',
+                    'tona_aspirata_lichida' => 'bi-droplet',
+                    'tona_aspirata_gazoasa' => 'bi-wind',
+                    'cantitate_prelevata' => 'bi-eyedropper',
+                    'total_facturare' => 'bi-cash-coin',
+                    'cheltuieli' => 'bi-receipt',
+                    'cost_km_mixt' => 'bi-calculator',
+                ];
+                ?>
+                <?php foreach ($openRacesRows as $openRace): ?>
+                    <?php
+                        $openRaceId = (int) ($openRace['id'] ?? 0);
+                        $openPlate = trim((string) ($openRace['nr_inmatriculare'] ?? ''));
+                        $openDriver = trim((string) ($openRace['sofer_nume'] ?? ''));
+                        $openBeneficiar = trim((string) ($openRace['beneficiar_nume'] ?? ''));
+                        $openTransportType = (string) ($openRace['tip_transport'] ?? '');
+                        $openTransportLabel = $transportTypes[$openTransportType] ?? '-';
+                        $openSeverity = (string) ($openRace['missing_severity'] ?? 'minor');
+                        $openSeverityMeta = $orxSeverityMeta[$openSeverity] ?? $orxSeverityMeta['minor'];
+                        $openMissing = is_array($openRace['missing_information'] ?? null) ? $openRace['missing_information'] : [];
+                        $openTopSeverityItems = array_values(array_filter($openMissing, static fn ($item) => ($item['severity'] ?? '') === $openSeverity));
+                        $openStartDate = trim((string) ($openRace['data_inceput'] ?? ''));
+                        $openStartTime = trim((string) ($openRace['ora_inceput'] ?? ''));
+                        $openUpdatedAt = trim((string) ($openRace['updated_at'] ?? ''));
+                        $openExpenseCount = max(0, (int) ($openRace['expense_count'] ?? 0));
+                        $openVehiclePhotoUrl = vehicle_image_url((string) ($openRace['poza_stocata'] ?? ''));
+                        $openVehiclePhotoAlt = trim((string) ($openRace['poza_original'] ?? ''));
+                        if ($openVehiclePhotoAlt === '') {
+                            $openVehiclePhotoAlt = $openPlate !== '' ? ('Poza ' . $openPlate) : 'Poza vehicul';
+                        }
+                        $openTitle = trim($openPlate . ($openDriver !== '' ? ' - ' . $openDriver : ''));
+                        if ($openTitle === '') {
+                            $openTitle = 'Cursa #' . $openRaceId;
+                        }
+                        $openDetailsUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId]);
+                        $openExpenseUrl = $openDetailsUrl . '#expense-section';
+                        $openSummaryListed = array_slice($openTopSeverityItems, 0, 3);
+                        $openSummaryExtra = count($openTopSeverityItems) - count($openSummaryListed);
+                    ?>
+                    <article
+                        class="orx-card"
+                        data-open-race-card
+                        data-orx-severity-value="<?= e($openSeverity) ?>"
+                        data-orx-transport-value="<?= e($openTransportType) ?>"
+                        data-orx-plate-value="<?= e($openPlate) ?>"
+                    >
+                        <div class="orx-card-main">
+                            <div class="orx-card-avatar <?= $openVehiclePhotoUrl !== null ? 'has-photo' : '' ?>" aria-hidden="true">
+                                <?php if ($openVehiclePhotoUrl !== null): ?>
+                                    <img src="<?= e($openVehiclePhotoUrl) ?>" alt="<?= e($openVehiclePhotoAlt) ?>" loading="lazy">
+                                <?php else: ?>
+                                    <i class="bi bi-truck"></i>
                                 <?php endif; ?>
-                                <span><i class="bi bi-calendar3" aria-hidden="true"></i> Actualizat: <?= e($openUpdatedLabel) ?></span>
-                                <span><i class="bi bi-calendar3" aria-hidden="true"></i> Start: <?= e($openStartDateLabel) ?></span>
-                                <span><i class="bi bi-clock" aria-hidden="true"></i> Ora: <?= e($openStartTimeLabel) ?></span>
-                                <span><i class="bi bi-wallet2" aria-hidden="true"></i> Cheltuieli: <?= e((string) $openExpenseCount) ?></span>
                             </div>
-
-                            <div class="dispatcher-open-race-details" data-open-race-card-details <?= $openRaceExpanded ? '' : 'hidden' ?>>
-                                <div class="dispatcher-open-race-divider"></div>
-                                <h5>Lipsuri</h5>
-                                <div class="dispatcher-open-race-missing-list">
-                                    <?php foreach ($openMissingRows as $openMissingRow): ?>
-                                        <div class="dispatcher-open-race-missing-row dispatcher-open-race-missing-<?= e((string) $openMissingRow['type']) ?>">
-                                            <span class="dispatcher-open-race-missing-icon">
-                                                <i class="bi <?= e((string) $openMissingRow['icon']) ?>" aria-hidden="true"></i>
-                                            </span>
-                                            <span><?= e((string) $openMissingRow['text']) ?></span>
+                            <div class="orx-card-info">
+                                <div class="orx-card-title">
+                                    <strong><?= e($openTitle) ?></strong>
+                                    <span class="orx-badge orx-badge-<?= e($openSeverity) ?>">
+                                        <i class="bi bi-circle-fill" aria-hidden="true"></i>
+                                        <?= e($openSeverityMeta['badge']) ?>
+                                    </span>
+                                </div>
+                                <div class="orx-card-meta">
+                                    <span><i class="bi bi-truck" aria-hidden="true"></i> <?= e((string) $openTransportLabel) ?></span>
+                                    <span class="orx-meta-sep">|</span>
+                                    <span><i class="bi bi-building" aria-hidden="true"></i> <?= e($openBeneficiar !== '' ? $openBeneficiar : '-') ?></span>
+                                </div>
+                                <div class="orx-card-meta">
+                                    <span><i class="bi bi-calendar3" aria-hidden="true"></i> Actualizat: <?= e($openUpdatedAt !== '' ? format_datetime_ro($openUpdatedAt) : '-') ?></span>
+                                    <span class="orx-meta-sep">|</span>
+                                    <span><i class="bi bi-calendar-event" aria-hidden="true"></i> Start: <?= e($openStartDate !== '' ? format_date_ro($openStartDate) : '-') ?></span>
+                                    <span class="orx-meta-sep">|</span>
+                                    <span><i class="bi bi-clock" aria-hidden="true"></i> Ora: <?= e($openStartTime !== '' ? substr($openStartTime, 0, 5) : '-') ?></span>
+                                    <span class="orx-meta-sep">|</span>
+                                    <span><i class="bi bi-briefcase" aria-hidden="true"></i> Cheltuieli: <?= e((string) $openExpenseCount) ?></span>
+                                </div>
+                            </div>
+                            <div class="orx-card-actions">
+                                <a class="orx-btn orx-btn-outline" href="<?= e($openDetailsUrl) ?>">
+                                    <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                    <span>Detalii</span>
+                                </a>
+                                <div class="orx-summary orx-summary-<?= e($openSeverity) ?>">
+                                    <div class="orx-summary-title">
+                                        <i class="bi <?= e($openSeverityMeta['icon']) ?>" aria-hidden="true"></i>
+                                        <?= e($openSeverityMeta['summary']) ?> (<?= e((string) count($openTopSeverityItems)) ?>)
+                                    </div>
+                                    <ul class="orx-summary-list">
+                                        <?php foreach ($openSummaryListed as $openSummaryItem): ?>
+                                            <li><i class="bi bi-circle-fill" aria-hidden="true"></i> <?= e((string) ($openSummaryItem['label'] ?? '')) ?></li>
+                                        <?php endforeach; ?>
+                                        <?php if ($openSummaryExtra > 0): ?>
+                                            <li class="orx-summary-more">+ încă <?= e((string) $openSummaryExtra) ?></li>
+                                        <?php endif; ?>
+                                    </ul>
+                                </div>
+                                <a class="orx-btn orx-btn-primary" href="<?= e($openExpenseUrl) ?>">
+                                    <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                                    <span>Adaugă cheltuieli</span>
+                                </a>
+                                <button type="button" class="orx-expand" data-open-race-card-toggle aria-expanded="false" aria-label="Extinde lipsurile">
+                                    <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="orx-card-details" data-open-race-card-details hidden>
+                            <div class="orx-details-grid">
+                                <div class="orx-need orx-need-<?= e($openSeverity) ?>">
+                                    <div class="orx-need-head">
+                                        <i class="bi bi-geo-alt-fill" aria-hidden="true"></i>
+                                        <strong>Ce trebuie completat?</strong>
+                                    </div>
+                                    <p class="orx-need-intro">
+                                        <?php $orxMissingCount = count($openMissing); ?>
+                                        <?= e($orxMissingCount === 1 ? 'Este 1 informație lipsă' : ('Sunt ' . $orxMissingCount . ' informații lipsă')) ?> care pot afecta finalizarea corectă a cursei.
+                                    </p>
+                                    <?php foreach ($openMissing as $openMissingItem): ?>
+                                        <?php
+                                            $orxItemSeverity = (string) ($openMissingItem['severity'] ?? 'minor');
+                                            $orxItemMeta = $orxSeverityMeta[$orxItemSeverity] ?? $orxSeverityMeta['minor'];
+                                            $orxItemField = (string) ($openMissingItem['field'] ?? '');
+                                            $orxItemFocus = (string) ($openMissingItem['focus'] ?? '');
+                                            $orxItemIcon = $orxFieldIcons[$orxItemField] ?? 'bi-exclamation-circle';
+                                            if ($orxItemFocus === 'expenses') {
+                                                $orxItemUrl = $openExpenseUrl;
+                                                $orxItemLinkLabel = 'Adaugă cheltuieli';
+                                            } elseif ($orxItemFocus !== '') {
+                                                $orxItemUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId, 'focus' => $orxItemFocus]);
+                                                $orxItemLinkLabel = 'Mergi la datele cursei';
+                                            } else {
+                                                $orxItemUrl = $openDetailsUrl;
+                                                $orxItemLinkLabel = 'Mergi la detaliile cursei';
+                                            }
+                                        ?>
+                                        <div class="orx-need-item">
+                                            <i class="bi <?= e($orxItemIcon) ?> orx-need-item-icon" aria-hidden="true"></i>
+                                            <div class="orx-need-item-body">
+                                                <div class="orx-need-item-title">
+                                                    <strong><?= e((string) ($openMissingItem['label'] ?? '')) ?></strong>
+                                                    <span class="orx-chip orx-chip-<?= e($orxItemSeverity) ?>"><?= e($orxItemMeta['chip']) ?></span>
+                                                </div>
+                                                <div class="orx-need-item-expl"><?= e((string) ($openMissingItem['explanation'] ?? '')) ?></div>
+                                            </div>
+                                            <a class="orx-goto" href="<?= e($orxItemUrl) ?>">
+                                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                                <span><?= e($orxItemLinkLabel) ?></span>
+                                            </a>
                                         </div>
                                     <?php endforeach; ?>
                                 </div>
+                                <div class="orx-context">
+                                    <div class="orx-context-head">
+                                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                        <strong>Informații despre cursă</strong>
+                                    </div>
+                                    <?php
+                                        $orxIsCompressor = $openTransportType === 'compresor';
+                                        $orxGoodsLabels = [];
+                                        foreach (array_filter(array_map('trim', explode(',', (string) ($openRace['tip_marfa'] ?? '')))) as $orxGoodsKey) {
+                                            $orxGoodsLabels[] = (string) ($goodsTypeOptions[strtolower($orxGoodsKey)] ?? $orxGoodsKey);
+                                        }
+                                        $orxContextPairs = [];
+                                        $orxContextPairs['Beneficiar transport'] = $openBeneficiar;
+                                        $orxContextPairs['Șofer'] = $openDriver;
+                                        $orxContextPairs['Tip marfă'] = implode(', ', $orxGoodsLabels);
+                                        if ($orxIsCompressor) {
+                                            $orxContextPairs['Loc plecare'] = trim((string) ($openRace['loc_plecare'] ?? ''));
+                                            $orxContextPairs['Loc livrare'] = trim((string) ($openRace['loc_livrare'] ?? ''));
+                                            $orxContextPairs['Km efectuați'] = trim((string) ($openRace['km_dislocare'] ?? ''));
+                                        } else {
+                                            $orxContextPairs['Loc încărcare'] = trim((string) ($openRace['loc_incarcare_nume'] ?? ''));
+                                            $orxContextPairs[$openTransportType === 'primar' ? 'Loc descărcare' : 'Zona distribuție'] = trim((string) ($openRace['zona_distributie_nume'] ?? ''));
+                                            $orxContextPairs['Km efectuați'] = trim((string) ($openRace[in_array($openTransportType, ['primar', 'primar_tona', 'primar_distributie'], true) ? 'km_totali' : 'km_cursa'] ?? ''));
+                                        }
+                                        $orxContextPairs['Capacitate transport'] = trim((string) ($openRace['capacitate_transport'] ?? ''));
+                                        $orxContextPairs['Start'] = trim(($openStartDate !== '' ? format_date_ro($openStartDate) : '') . ($openStartTime !== '' ? ' ' . substr($openStartTime, 0, 5) : ''));
+                                    ?>
+                                    <dl class="orx-context-grid">
+                                        <?php foreach ($orxContextPairs as $orxContextLabel => $orxContextValue): ?>
+                                            <div class="orx-context-cell">
+                                                <dt><?= e((string) $orxContextLabel) ?></dt>
+                                                <dd><?= e($orxContextValue !== '' ? (string) $orxContextValue : '–') ?></dd>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </dl>
+                                </div>
                             </div>
-                        </article>
-                    <?php endforeach; ?>
+                        </div>
+                    </article>
+                <?php endforeach; ?>
+                <div class="orx-empty" data-orx-empty hidden>
+                    <i class="bi bi-filter-circle" aria-hidden="true"></i>
+                    Nicio cursă nu corespunde filtrelor selectate.
                 </div>
-
-                <?php if ($openRacesCount > count($openRacesRows)): ?>
-                    <div class="dispatcher-open-races-hidden-note">
-                        Mai exista inca <?= e((string) ($openRacesCount - count($openRacesRows))) ?> curse neafisate in lista rapida.
-                    </div>
-                <?php endif; ?>
             </div>
 
-            <footer class="dispatcher-open-races-modal-footer">
-                <button type="button" class="dispatcher-open-races-footer-close" data-open-races-close>Inchide</button>
+            <footer class="orx-footer">
+                <div class="orx-footer-info">
+                    <i class="bi bi-info-circle-fill" aria-hidden="true"></i>
+                    <div>
+                        <strong>Completează informațiile lipsă pentru a finaliza facturarea curselor sau corectează erorile de raportare.</strong>
+                        <span>Poți deschide cursa pentru editare și completa doar câmpurile marcate.</span>
+                    </div>
+                </div>
+                <button type="button" class="orx-footer-close" data-open-races-close>Închide</button>
             </footer>
         </section>
     </div>
 <?php endif; ?>
 
+<?php
+$resumeParentId = (int) ($formData['parent_cursa_id'] ?? 0);
+$isResumeMode = $resumeParentId > 0;
+$resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSource : null;
+?>
 <div class="row g-3 align-items-start">
     <div class="col-12">
-        <div class="card border-0 shadow-sm">
+        <div class="card border-0 shadow-sm" id="add-race-form">
             <div class="card-header bg-white">
-                <h3 class="h6 mb-0">Adaugă Cursă</h3>
+                <h3 class="h6 mb-0"><?= $isResumeMode ? 'Adaugă Cursă — continuare a cursei #' . e((string) $resumeParentId) : 'Adaugă Cursă' ?></h3>
             </div>
             <div class="card-body">
-                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store'])) ?>" class="dispatcher-race-form" data-zone-tariffs='<?= e($zoneTariffJson) ?>' data-zone-extra-km-costs='<?= e($zoneExtraKmJson) ?>' data-distribution-route-tariffs='<?= e($distributionRouteTariffMapJson) ?>' data-primary-route-km-map='<?= e($primaryRouteKmMapJson) ?>' data-beneficiary-pricing='<?= e($beneficiaryPricingJson) ?>' data-load-location-tariffs='<?= e($loadLocationTariffJson) ?>' data-vehicle-default-load-locations='<?= e($vehicleDefaultLoadLocationJson) ?>' data-vehicle-default-distribution-zones='<?= e($vehicleDefaultDistributionZoneJson) ?>' data-vehicle-garages='<?= e($vehicleGarageJson) ?>' data-load-locations-by-beneficiary='<?= e($loadLocationsByBeneficiaryJson) ?>' data-distribution-zones-by-beneficiary='<?= e($distributionZonesByBeneficiaryJson) ?>' data-vehicle-default-load-locations-by-beneficiary='<?= e($vehicleDefaultLoadLocationByBeneficiaryJson) ?>' data-vehicle-default-distribution-zones-by-beneficiary='<?= e($vehicleDefaultDistributionZoneByBeneficiaryJson) ?>' data-compresor-vehicles-by-beneficiary='<?= e($compressorVehicleByBeneficiaryJson) ?>' data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>' data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>' data-inactive-resource-status-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'inactive_resource_status'])) ?>" data-inactive-trip-id="" novalidate>
+                <?php if ($isResumeMode): ?>
+                    <div class="alert alert-info d-flex align-items-start gap-2" role="alert">
+                        <i class="bi bi-arrow-repeat mt-1" aria-hidden="true"></i>
+                        <div>
+                            <strong>Reluare cursă #<?= e((string) $resumeParentId) ?></strong>
+                            <?php if ($resumeSourceRow !== null): ?>
+                                <?php
+                                $resumeSrcVehicle = trim((string) ($resumeSourceRow['nr_inmatriculare'] ?? ''));
+                                $resumeSrcDriver = trim((string) ($resumeSourceRow['sofer_nume'] ?? ''));
+                                $resumeSrcEndDate = trim((string) ($resumeSourceRow['data_sfarsit'] ?? ''));
+                                $resumeSrcEndTime = substr(trim((string) ($resumeSourceRow['ora_sfarsit'] ?? '')), 0, 5);
+                                ?>
+                                <div class="small">
+                                    Segment anterior: <?= e($resumeSrcVehicle !== '' ? $resumeSrcVehicle : 'vehicul -') ?>,
+                                    șofer <?= e($resumeSrcDriver !== '' ? $resumeSrcDriver : '-') ?>,
+                                    încheiat la <?= e($resumeSrcEndDate !== '' ? format_date_ro($resumeSrcEndDate) : '-') ?><?= e($resumeSrcEndTime !== '' ? ' ' . $resumeSrcEndTime : '') ?>.
+                                </div>
+                            <?php endif; ?>
+                            <div class="small">Segmentul nou este o înregistrare separată: poți schimba șoferul sau vehiculul, iar calculele (tarife, costuri/km) se aplică vehiculului și șoferului din acest segment. Km, cantitățile și orele se introduc doar pentru acest segment.</div>
+                            <a class="small" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Renunță la reluare</a>
+                        </div>
+                    </div>
+                <?php endif; ?>
+                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store'])) ?>" class="dispatcher-race-form" data-zone-tariffs='<?= e($zoneTariffJson) ?>' data-zone-extra-km-costs='<?= e($zoneExtraKmJson) ?>' data-distribution-route-tariffs='<?= e($distributionRouteTariffMapJson) ?>' data-primary-route-km-map='<?= e($primaryRouteKmMapJson) ?>' data-beneficiary-pricing='<?= e($beneficiaryPricingJson) ?>' data-load-location-tariffs='<?= e($loadLocationTariffJson) ?>' data-vehicle-default-load-locations='<?= e($vehicleDefaultLoadLocationJson) ?>' data-vehicle-default-distribution-zones='<?= e($vehicleDefaultDistributionZoneJson) ?>' data-vehicle-garages='<?= e($vehicleGarageJson) ?>' data-load-locations-by-beneficiary='<?= e($loadLocationsByBeneficiaryJson) ?>' data-distribution-zones-by-beneficiary='<?= e($distributionZonesByBeneficiaryJson) ?>' data-vehicle-default-load-locations-by-beneficiary='<?= e($vehicleDefaultLoadLocationByBeneficiaryJson) ?>' data-vehicle-default-distribution-zones-by-beneficiary='<?= e($vehicleDefaultDistributionZoneByBeneficiaryJson) ?>' data-compresor-vehicles-by-beneficiary='<?= e($compressorVehicleByBeneficiaryJson) ?>' data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>' data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>' data-all-drivers='<?= e($allDriversJson) ?>' data-inactive-resource-status-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'inactive_resource_status'])) ?>" data-inactive-approval-mode="<?= (function_exists('can') && can('inactive_approvals', 'review')) ? 'admin' : 'user' ?>" data-inactive-approval-request-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'request_inactive_vehicle_approval'])) ?>" data-inactive-approval-cancel-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'cancel_inactive_vehicle_approval'])) ?>" data-inactive-trip-id="" novalidate>
                     <?= csrf_field() ?>
+                    <input type="hidden" name="parent_cursa_id" value="<?= e($isResumeMode ? (string) $resumeParentId : '') ?>">
+                    <input type="hidden" name="vehicle_config_decision" value="" data-vehicle-config-decision>
                     <input type="hidden" name="inactive_approval_decision" value="<?= e((string) ($formData['inactive_approval_decision'] ?? '')) ?>" data-inactive-approval-decision>
                     <input type="hidden" name="inactive_approval_signature" value="" data-inactive-approval-signature>
                     <datalist id="race_time_options">
@@ -550,7 +695,53 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             <?php if (isset($formErrors['driver_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['driver_id']) ?></div><?php endif; ?>
                         </div>
 
-                        <div class="col-12 col-md-6 dispatcher-schedule-field">
+                        <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-start-datetime">
+                            <label class="form-label" for="race_start_datetime">Data si ora inceput <span class="text-danger">*</span></label>
+                            <?php
+                                $startDateValue = (string) ($formData['data_inceput'] ?? ($formData['data_cursa'] ?? ''));
+                                $startDateDisplayValue = $formatRaceDateForDisplay($startDateValue);
+                                $startDateTimeDisplayValue = trim($startDateDisplayValue . ($formStartTimeValue !== '' ? ' ' . $formStartTimeValue : ''));
+                                $startDateTimeHasError = isset($formErrors['data_inceput']) || isset($formErrors['ora_inceput']);
+                            ?>
+                            <div class="dispatcher-datetime-field" data-role="start-datetime-field">
+                                <div class="input-group dispatcher-datetime-input-group">
+                                    <input
+                                        type="text"
+                                        class="form-control <?= $startDateTimeHasError ? 'is-invalid' : '' ?>"
+                                        id="race_start_datetime"
+                                        value="<?= e($startDateTimeDisplayValue) ?>"
+                                        placeholder="dd/mm/yyyy HH:mm"
+                                        inputmode="numeric"
+                                        autocomplete="off"
+                                        maxlength="16"
+                                        data-role="start-datetime-display"
+                                        aria-label="Data si ora inceput"
+                                    >
+                                    <button type="button" class="btn btn-outline-secondary" data-role="start-datetime-toggle" aria-label="Deschide calendarul si ora de inceput" aria-expanded="false">
+                                        <i class="bi bi-calendar3" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <div class="dispatcher-datetime-popover" data-role="start-datetime-popover" hidden></div>
+                                <input
+                                    type="hidden"
+                                    data-role="race-date-ro"
+                                    id="race_data_inceput"
+                                    name="data_inceput"
+                                    value="<?= e($startDateDisplayValue) ?>"
+                                    required
+                                >
+                                <input
+                                    type="hidden"
+                                    id="race_ora_inceput"
+                                    name="ora_inceput"
+                                    value="<?= e($formStartTimeValue) ?>"
+                                    data-role="ora-inceput"
+                                >
+                            </div>
+                            <?php if (isset($formErrors['data_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_inceput']) ?></div><?php endif; ?>
+                            <?php if (isset($formErrors['ora_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['ora_inceput']) ?></div><?php endif; ?>
+                        </div>
+                        <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-data-incarcare">
                             <label class="form-label" for="race_data_incarcare">Data incarcare</label>
                             <?php $loadingDateValue = (string) ($formData['data_incarcare'] ?? ''); ?>
                             <div class="input-group fleet-date-field">
@@ -560,69 +751,53 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             </div>
                             <?php if (isset($formErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_incarcare']) ?></div><?php endif; ?>
                         </div>
-                        <div class="col-12 col-md-6 dispatcher-schedule-field">
-                            <label class="form-label" for="race_data_inceput">Data inceput <span class="text-danger">*</span></label>
-                            <?php $startDateValue = (string) ($formData['data_inceput'] ?? ($formData['data_cursa'] ?? '')); ?>
-                            <div class="input-group fleet-date-field">
-                                <input type="text" class="form-control js-date-display-input <?= isset($formErrors['data_inceput']) ? 'is-invalid' : '' ?>" id="race_data_inceput" name="data_inceput" value="<?= e($formatRaceDateForDisplay($startDateValue)) ?>" placeholder="dd/mm/yyyy" inputmode="numeric" maxlength="10" autocomplete="off" data-date-picker-id="race_data_inceput_picker" required>
-                                <button type="button" class="btn btn-outline-secondary js-date-picker-button" data-date-picker-target="race_data_inceput_picker" aria-label="Deschide calendarul pentru data de inceput"><i class="bi bi-calendar3" aria-hidden="true"></i></button>
-                                <input type="date" id="race_data_inceput_picker" class="fleet-date-picker-native" value="<?= e($startDateValue) ?>" tabindex="-1" aria-hidden="true">
-                            </div>
-                            <?php if (isset($formErrors['data_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_inceput']) ?></div><?php endif; ?>
-                        </div>
 
                         <div class="col-12 col-md-6 dispatcher-schedule-field">
-                            <label class="form-label" for="race_ora_inceput">Ora inceput</label>
-                            <div class="input-group">
+                            <label class="form-label" for="race_end_datetime">Data si ora sfarsit <span class="text-danger">*</span></label>
+                            <?php
+                                $endDateValue = (string) ($formData['data_sfarsit'] ?? ($formData['data_cursa'] ?? ''));
+                                $endDateDisplayValue = $formatRaceDateForDisplay($endDateValue);
+                                $endDateTimeDisplayValue = trim($endDateDisplayValue . ($formEndTimeValue !== '' ? ' ' . $formEndTimeValue : ''));
+                                $endDateTimeHasError = isset($formErrors['data_sfarsit']) || isset($formErrors['ora_sfarsit']);
+                            ?>
+                            <div class="dispatcher-datetime-field" data-role="end-datetime-field">
+                                <div class="input-group dispatcher-datetime-input-group">
+                                    <input
+                                        type="text"
+                                        class="form-control <?= $endDateTimeHasError ? 'is-invalid' : '' ?>"
+                                        id="race_end_datetime"
+                                        value="<?= e($endDateTimeDisplayValue) ?>"
+                                        placeholder="dd/mm/yyyy HH:mm"
+                                        inputmode="numeric"
+                                        autocomplete="off"
+                                        maxlength="16"
+                                        data-role="end-datetime-display"
+                                        aria-label="Data si ora sfarsit"
+                                        title="<?= e($formDurationPreviewText) ?>"
+                                    >
+                                    <button type="button" class="btn btn-outline-secondary" data-role="end-datetime-toggle" aria-label="Deschide calendarul si ora de sfarsit" aria-expanded="false">
+                                        <i class="bi bi-calendar3" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <div class="dispatcher-datetime-popover" data-role="end-datetime-popover" hidden></div>
                                 <input
-                                    type="text"
-                                    class="form-control <?= isset($formErrors['ora_inceput']) ? 'is-invalid' : '' ?>"
-                                    id="race_ora_inceput"
-                                    name="ora_inceput"
-                                    value="<?= e($formStartTimeValue) ?>"
-                                    placeholder="HH:mm"
-                                    inputmode="numeric"
-                                    autocomplete="off"
-                                    pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]"
-                                    list="race_time_options"
-                                    data-role="ora-inceput"
+                                    type="hidden"
+                                    data-role="race-date-ro"
+                                    id="race_data_sfarsit"
+                                    name="data_sfarsit"
+                                    value="<?= e($endDateDisplayValue) ?>"
+                                    required
                                 >
-                                <button type="button" class="btn btn-outline-secondary" data-role="time-now" data-target-role="ora-inceput" title="Completeaza cu ora curenta">Acum</button>
-                            </div>
-                            <div class="form-text">Format 24h (HH:mm). Poti scrie si 0930.</div>
-                            <?php if (isset($formErrors['ora_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['ora_inceput']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-schedule-field">
-                            <label class="form-label" for="race_data_sfarsit">Data sfarsit <span class="text-danger">*</span></label>
-                            <?php $endDateValue = (string) ($formData['data_sfarsit'] ?? ($formData['data_cursa'] ?? '')); ?>
-                            <div class="input-group fleet-date-field">
-                                <input type="text" class="form-control js-date-display-input <?= isset($formErrors['data_sfarsit']) ? 'is-invalid' : '' ?>" id="race_data_sfarsit" name="data_sfarsit" value="<?= e($formatRaceDateForDisplay($endDateValue)) ?>" placeholder="dd/mm/yyyy" inputmode="numeric" maxlength="10" autocomplete="off" data-date-picker-id="race_data_sfarsit_picker" required>
-                                <button type="button" class="btn btn-outline-secondary js-date-picker-button" data-date-picker-target="race_data_sfarsit_picker" aria-label="Deschide calendarul pentru data de sfarsit"><i class="bi bi-calendar3" aria-hidden="true"></i></button>
-                                <input type="date" id="race_data_sfarsit_picker" class="fleet-date-picker-native" value="<?= e($endDateValue) ?>" tabindex="-1" aria-hidden="true">
-                            </div>
-                            <?php if (isset($formErrors['data_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_sfarsit']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-schedule-field">
-                            <label class="form-label" for="race_ora_sfarsit">Ora sfarsit</label>
-                            <div class="input-group">
                                 <input
-                                    type="text"
-                                    class="form-control <?= isset($formErrors['ora_sfarsit']) ? 'is-invalid' : '' ?>"
+                                    type="hidden"
                                     id="race_ora_sfarsit"
                                     name="ora_sfarsit"
                                     value="<?= e($formEndTimeValue) ?>"
-                                    placeholder="HH:mm"
-                                    inputmode="numeric"
-                                    autocomplete="off"
-                                    pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]"
-                                    list="race_time_options"
                                     data-role="ora-sfarsit"
                                     title="<?= e($formDurationPreviewText) ?>"
                                 >
-                                <button type="button" class="btn btn-outline-secondary" data-role="time-now" data-target-role="ora-sfarsit" title="Completeaza cu ora curenta">Acum</button>
                             </div>
+                            <?php if (isset($formErrors['data_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_sfarsit']) ?></div><?php endif; ?>
                             <?php if (isset($formErrors['ora_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['ora_sfarsit']) ?></div><?php endif; ?>
                             <div class="form-text d-none dispatcher-hover-note" data-role="durata-cursa-hint" data-default-text="<?= e($formDurationPreviewText) ?>"><?= e($formDurationPreviewText) ?></div>
                         </div>
@@ -811,10 +986,26 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
 
     <div class="col-12">
         <div class="card border-0 shadow-sm">
-            <div class="card-header bg-white">
-                <h3 class="h6 mb-0">Filtre</h3>
+            <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2 flex-wrap">
+                <div class="d-flex align-items-center gap-2">
+                    <h3 class="h6 mb-0">Filtre</h3>
+                    <?php if ($hasActiveFilters): ?>
+                        <span class="badge rounded-pill text-bg-primary">active</span>
+                    <?php endif; ?>
+                </div>
+                <button
+                    type="button"
+                    class="btn btn-sm btn-outline-primary dispatcher-filter-toggle"
+                    data-dispatcher-filter-toggle
+                    aria-expanded="false"
+                    aria-controls="dispatcher-filter-panel"
+                >
+                    <i class="bi bi-funnel" aria-hidden="true"></i>
+                    <span>Afiseaza filtre</span>
+                    <i class="bi bi-chevron-down dispatcher-filter-toggle-chevron" aria-hidden="true"></i>
+                </button>
             </div>
-            <div class="card-body">
+            <div class="card-body" id="dispatcher-filter-panel" hidden>
                 <form method="get" class="row g-3 align-items-end">
                     <input type="hidden" name="page" value="dispecer_curse">
                     <input type="hidden" name="action" value="index">
@@ -909,8 +1100,8 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
     </div>
 </div>
 
-<div class="card border-0 shadow-sm mt-3">
-    <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2 flex-wrap">
+<div class="card border-0 shadow-sm mt-3 dispatcher-races-card">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2 flex-wrap dispatcher-races-card-header">
         <h3 class="h6 mb-0">Desfasurator curse</h3>
         <div class="d-flex align-items-center gap-2">
             <div class="dispatcher-column-manager" data-dispatcher-column-manager>
@@ -956,6 +1147,15 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                 data-confirm="Ștergi cursele selectate? Cursele vor fi mutate în Curse șterse și vor putea fi restaurate ulterior."
             >
                 Sterge selectate
+            </button>
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+                id="races-reset-filters-btn"
+                title="Reseteaza toate filtrele din antetul tabelului"
+            >
+                <i class="bi bi-funnel" aria-hidden="true"></i>
+                Reseteaza filtre
             </button>
             <small class="text-muted">Total: <?= e((string) $pagination['total_rows']) ?> curse</small>
         </div>
@@ -1300,6 +1500,18 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                             >
                                             <strong class="dispatcher-cell-text dispatcher-cell-nowrap dispatcher-plate-value vehicle-cell nr-auto-cell"><?= e((string) ($row['nr_inmatriculare'] ?? '-')) ?></strong>
                                         </label>
+                                        <?php $rowParentId = (int) (($resumeParents ?? [])[$raceId] ?? 0); ?>
+                                        <?php $rowChildIds = (array) (($resumeChildren ?? [])[$raceId] ?? []); ?>
+                                        <?php if ($rowParentId > 0): ?>
+                                            <a class="badge bg-info text-dark text-decoration-none" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $rowParentId])) ?>" title="Această cursă este un segment care continuă cursa #<?= e((string) $rowParentId) ?>.">
+                                                <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Continuare #<?= e((string) $rowParentId) ?>
+                                            </a>
+                                        <?php endif; ?>
+                                        <?php foreach ($rowChildIds as $rowChildId): ?>
+                                            <a class="badge bg-secondary text-decoration-none" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => (int) $rowChildId])) ?>" title="Cursa a fost continuată de segmentul #<?= e((string) $rowChildId) ?>.">
+                                                <i class="bi bi-signpost-split" aria-hidden="true"></i> Continuată de #<?= e((string) $rowChildId) ?>
+                                            </a>
+                                        <?php endforeach; ?>
                                     </div>
                                 </div>
                             </td>
@@ -1386,6 +1598,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                         </button>
                                         <div class="dispatcher-race-actions-menu" id="dispatcher_race_actions_<?= e((string) $raceId) ?>" data-dispatcher-race-actions-menu role="menu" hidden>
                                             <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">Editează</a>
+                                            <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'resume_id' => $raceId]) . '#add-race-form') ?>" title="Creează o cursă nouă, legată de aceasta, cu posibilitatea de a schimba șoferul sau vehiculul.">Reia cursa (segment nou)</a>
                                             <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'delete'])) ?>" class="dispatcher-race-actions-form" role="none">
                                                 <?= csrf_field() ?>
                                                 <input type="hidden" name="id" value="<?= e((string) $raceId) ?>">
@@ -1405,89 +1618,627 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
             </table>
         </div>
     </div>
-    <?php if (($pagination['total_pages'] ?? 1) > 1): ?>
-        <div class="card-footer bg-white">
-            <?php
-            $currentPageIndex = (int) ($pagination['page'] ?? 1);
-            $totalPages = (int) ($pagination['total_pages'] ?? 1);
-            $prevPage = max(1, $currentPageIndex - 1);
-            $nextPage = min($totalPages, $currentPageIndex + 1);
-            ?>
-            <nav aria-label="Paginare curse">
-                <ul class="pagination pagination-sm mb-0">
-                    <li class="page-item <?= $currentPageIndex <= 1 ? 'disabled' : '' ?>">
-                        <a class="page-link" href="<?= e(build_query_url(array_merge($baseQuery, ['p' => $prevPage]))) ?>">Anterior</a>
-                    </li>
-                    <?php for ($p = 1; $p <= $totalPages; $p++): ?>
-                        <li class="page-item <?= $currentPageIndex === $p ? 'active' : '' ?>">
-                            <a class="page-link" href="<?= e(build_query_url(array_merge($baseQuery, ['p' => $p]))) ?>"><?= e((string) $p) ?></a>
-                        </li>
-                    <?php endfor; ?>
-                    <li class="page-item <?= $currentPageIndex >= $totalPages ? 'disabled' : '' ?>">
-                        <a class="page-link" href="<?= e(build_query_url(array_merge($baseQuery, ['p' => $nextPage]))) ?>">Următor</a>
-                    </li>
-                </ul>
-            </nav>
-        </div>
-    <?php endif; ?>
 </div>
 
 
-<?php if ($postCreateExpensePromptRaceId > 0): ?>
-    <div class="modal fade" id="postCreateExpensePromptModal" tabindex="-1" aria-labelledby="postCreateExpensePromptTitle" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="postCreateExpensePromptTitle">Cursa a fost adaugata</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
-                </div>
-                <div class="modal-body">
-                    Vrei sa adaugi cheltuieli pe cursa acum?
-                </div>
-                <div class="modal-footer justify-content-center gap-2">
-                    <a class="btn btn-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $postCreateExpensePromptRaceId]) . '#expense-section') ?>">Da</a>
-                    <button type="button" class="btn btn-outline-secondary" data-role="post-create-expense-no">Nu</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal fade" id="postCreateExpenseChoiceModal" tabindex="-1" aria-labelledby="postCreateExpenseChoiceTitle" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="postCreateExpenseChoiceTitle">Cheltuieli cursa</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
-                </div>
-                <div class="modal-body">
-                    Alege de ce nu adaugi cheltuieli acum pentru aceasta cursa.
-                </div>
-                <div class="modal-footer justify-content-center gap-2">
-                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'update_expense_status'])) ?>" class="m-0">
-                        <?= csrf_field() ?>
-                        <input type="hidden" name="id" value="<?= e((string) $postCreateExpensePromptRaceId) ?>">
-                        <input type="hidden" name="cheltuieli_choice" value="not_applicable">
-                        <input type="hidden" name="return_url" value="<?= e($dispecerReturnUrl) ?>">
-                        <button type="submit" class="btn btn-outline-secondary">Nu e cazul</button>
-                    </form>
-                    <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'update_expense_status'])) ?>" class="m-0">
-                        <?= csrf_field() ?>
-                        <input type="hidden" name="id" value="<?= e((string) $postCreateExpensePromptRaceId) ?>">
-                        <input type="hidden" name="cheltuieli_choice" value="pending">
-                        <input type="hidden" name="return_url" value="<?= e($dispecerReturnUrl) ?>">
-                        <button type="submit" class="btn btn-primary">Nu acum</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </div>
-<?php endif; ?>
+<?php include __DIR__ . '/_expense_prompt_modal.php'; ?>
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const selectAllEl = document.getElementById('bulk-race-select-all');
     const bulkDeleteBtnEl = document.getElementById('bulk-race-delete-btn');
     const raceCheckboxEls = Array.from(document.querySelectorAll('.bulk-race-checkbox'));
+    const filterToggleEl = document.querySelector('[data-dispatcher-filter-toggle]');
+    const filterPanelEl = document.getElementById('dispatcher-filter-panel');
+    const racesCardEl = document.querySelector('.dispatcher-races-card');
+    const racesHeaderEl = document.querySelector('.dispatcher-races-card-header');
+    const racesTableWrapEl = document.querySelector('.dispatcher-races-table-wrap');
+    const racesTableEl = document.querySelector('[data-dispatcher-column-table]');
+
+    if (filterToggleEl instanceof HTMLButtonElement && filterPanelEl instanceof HTMLElement) {
+        const filterToggleLabelEl = filterToggleEl.querySelector('span');
+        const filterToggleChevronEl = filterToggleEl.querySelector('.dispatcher-filter-toggle-chevron');
+        const setFilterExpanded = function (expanded) {
+            filterPanelEl.hidden = !expanded;
+            filterToggleEl.classList.toggle('is-open', expanded);
+            filterToggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            if (filterToggleLabelEl instanceof HTMLElement) {
+                filterToggleLabelEl.textContent = expanded ? 'Ascunde filtre' : 'Afiseaza filtre';
+            }
+            if (filterToggleChevronEl instanceof HTMLElement) {
+                filterToggleChevronEl.classList.toggle('bi-chevron-up', expanded);
+                filterToggleChevronEl.classList.toggle('bi-chevron-down', !expanded);
+            }
+        };
+
+        setFilterExpanded(false);
+        filterToggleEl.addEventListener('click', function () {
+            setFilterExpanded(filterPanelEl.hidden);
+        });
+    }
+
+    if (racesCardEl instanceof HTMLElement && racesHeaderEl instanceof HTMLElement) {
+        const syncRacesHeaderOffset = function () {
+            racesCardEl.style.setProperty('--dispatcher-races-header-offset', racesHeaderEl.offsetHeight + 'px');
+        };
+
+        syncRacesHeaderOffset();
+        window.addEventListener('resize', syncRacesHeaderOffset);
+        if (typeof ResizeObserver !== 'undefined') {
+            const racesHeaderObserver = new ResizeObserver(syncRacesHeaderOffset);
+            racesHeaderObserver.observe(racesHeaderEl);
+            racesHeaderEl.dispatcherStickyObserver = racesHeaderObserver;
+        }
+    }
+
+    if (
+        racesCardEl instanceof HTMLElement
+        && racesHeaderEl instanceof HTMLElement
+        && racesTableWrapEl instanceof HTMLElement
+        && racesTableEl instanceof HTMLTableElement
+    ) {
+        const stickyHeaderEl = document.createElement('div');
+        stickyHeaderEl.className = 'dispatcher-races-sticky-column-header';
+        stickyHeaderEl.setAttribute('aria-hidden', 'true');
+        stickyHeaderEl.hidden = true;
+        document.body.appendChild(stickyHeaderEl);
+
+        let stickyHeaderTableEl = null;
+        let stickyHeaderFrame = 0;
+
+        const sanitizeStickyHeader = function () {
+            stickyHeaderEl.querySelectorAll('[id]').forEach(function (el) {
+                el.removeAttribute('id');
+            });
+            // Controalele de sortare/filtrare (.races-head-control) raman active si in antetul lipicios.
+            stickyHeaderEl.querySelectorAll('input, button:not(.races-head-control), select, textarea, a').forEach(function (el) {
+                el.setAttribute('tabindex', '-1');
+                if ('disabled' in el) {
+                    el.disabled = true;
+                }
+            });
+        };
+
+        const rebuildStickyHeader = function () {
+            const tableHeadEl = racesTableEl.querySelector('thead');
+            if (!(tableHeadEl instanceof HTMLTableSectionElement)) {
+                stickyHeaderEl.hidden = true;
+                stickyHeaderTableEl = null;
+                return;
+            }
+
+            const tableCloneEl = racesTableEl.cloneNode(false);
+            tableCloneEl.removeAttribute('data-dispatcher-column-table');
+            tableCloneEl.classList.add('dispatcher-races-sticky-table');
+
+            const colGroupEl = racesTableEl.querySelector('colgroup');
+            if (colGroupEl instanceof HTMLTableColElement || colGroupEl instanceof HTMLElement) {
+                tableCloneEl.appendChild(colGroupEl.cloneNode(true));
+            }
+            tableCloneEl.appendChild(tableHeadEl.cloneNode(true));
+
+            stickyHeaderEl.replaceChildren(tableCloneEl);
+            stickyHeaderTableEl = tableCloneEl;
+            sanitizeStickyHeader();
+        };
+
+        const syncStickyHeaderPosition = function () {
+            stickyHeaderFrame = 0;
+
+            const tableHeadEl = racesTableEl.querySelector('thead');
+            if (!(tableHeadEl instanceof HTMLTableSectionElement)) {
+                stickyHeaderEl.hidden = true;
+                return;
+            }
+
+            if (!(stickyHeaderTableEl instanceof HTMLTableElement)) {
+                rebuildStickyHeader();
+            }
+
+            const tableRect = racesTableEl.getBoundingClientRect();
+            const wrapRect = racesTableWrapEl.getBoundingClientRect();
+            const headerRect = tableHeadEl.getBoundingClientRect();
+            const titleHeaderRect = racesHeaderEl.getBoundingClientRect();
+            const topOffset = Math.max(0, Math.round(titleHeaderRect.bottom));
+            const headerHeight = Math.max(1, Math.round(headerRect.height));
+            const shouldShow = tableRect.top < topOffset && tableRect.bottom > (topOffset + headerHeight);
+
+            stickyHeaderEl.hidden = !shouldShow;
+            // Butonul "informatii lipsa" ramane vizibil pana cand atinge efectiv banda
+            // antetului lipicios; doar atunci se ascunde, ca sa nu blocheze sortarea/filtrarea.
+            // Reapare automat cand utilizatorul deruleaza inapoi in sus.
+            var openRacesAlertEl = document.querySelector('.dispatcher-open-races-alert-container');
+            var alertTouchesStickyHeader = false;
+            if (shouldShow && openRacesAlertEl instanceof HTMLElement) {
+                var openRacesAlertRect = openRacesAlertEl.getBoundingClientRect();
+                alertTouchesStickyHeader = openRacesAlertRect.bottom > topOffset
+                    && openRacesAlertRect.top < (topOffset + headerHeight);
+            }
+            document.body.classList.toggle('dispatcher-races-header-pinned', alertTouchesStickyHeader);
+            if (!shouldShow || !(stickyHeaderTableEl instanceof HTMLTableElement)) {
+                return;
+            }
+
+            stickyHeaderEl.style.left = Math.round(wrapRect.left) + 'px';
+            stickyHeaderEl.style.top = topOffset + 'px';
+            stickyHeaderEl.style.width = Math.round(wrapRect.width) + 'px';
+            stickyHeaderEl.style.height = headerHeight + 'px';
+            stickyHeaderTableEl.style.width = Math.round(racesTableEl.offsetWidth) + 'px';
+            stickyHeaderTableEl.style.transform = 'translateX(' + (-racesTableWrapEl.scrollLeft) + 'px)';
+        };
+
+        const scheduleStickyHeaderSync = function () {
+            if (stickyHeaderFrame !== 0) {
+                return;
+            }
+            stickyHeaderFrame = window.requestAnimationFrame(syncStickyHeaderPosition);
+        };
+
+        rebuildStickyHeader();
+        scheduleStickyHeaderSync();
+        window.addEventListener('scroll', scheduleStickyHeaderSync, { passive: true });
+        window.addEventListener('resize', scheduleStickyHeaderSync);
+        racesTableWrapEl.addEventListener('scroll', scheduleStickyHeaderSync, { passive: true });
+
+        if (typeof ResizeObserver !== 'undefined') {
+            const stickyTableObserver = new ResizeObserver(scheduleStickyHeaderSync);
+            stickyTableObserver.observe(racesTableEl);
+            stickyTableObserver.observe(racesTableWrapEl);
+            racesTableEl.dispatcherStickyTableObserver = stickyTableObserver;
+        }
+
+        if (typeof MutationObserver !== 'undefined') {
+            const stickyHeaderMutationObserver = new MutationObserver(function () {
+                rebuildStickyHeader();
+                scheduleStickyHeaderSync();
+            });
+            stickyHeaderMutationObserver.observe(racesTableEl, {
+                attributes: true,
+                childList: true,
+                subtree: true,
+            });
+            racesTableEl.dispatcherStickyHeaderMutationObserver = stickyHeaderMutationObserver;
+        }
+    }
+
+    // --- Sortare si filtrare rapida direct din antetul Desfasuratorului ---
+    // Click pe antet = sortare asc/desc; butonul palnie = filtru rapid pe valorile coloanei.
+    // Functioneaza si din antetul lipicios (clona), prin delegare catre antetul real.
+    if (racesTableEl instanceof HTMLTableElement) {
+        const racesHeadRowEl = racesTableEl.querySelector('thead tr');
+        const racesBodyEl = racesTableEl.querySelector('tbody');
+
+        if (racesHeadRowEl instanceof HTMLTableRowElement && racesBodyEl instanceof HTMLTableSectionElement) {
+            const columnFilters = {};
+            const resetFiltersButtonEl = document.getElementById('races-reset-filters-btn');
+            let currentSortIndex = -1;
+            let currentSortDir = 1;
+
+            const getDataRows = function () {
+                return Array.from(racesBodyEl.querySelectorAll('tr')).filter(function (rowEl) {
+                    return rowEl.querySelector('td[colspan]') === null;
+                });
+            };
+
+            const getCellValue = function (rowEl, columnIndex) {
+                const cellEl = rowEl.cells[columnIndex];
+                if (!cellEl) {
+                    return '';
+                }
+                const titledEl = cellEl.querySelector('[title]');
+                const raw = (titledEl && titledEl.getAttribute('title')) || cellEl.textContent || '';
+                return raw.replace(/\s+/g, ' ').trim();
+            };
+
+            const parseDateValue = function (text) {
+                const m = text.match(/(\d{2})[.\/-](\d{2})[.\/-](\d{4})(?:[ T]?(\d{2}):(\d{2}))?/);
+                if (!m) {
+                    return null;
+                }
+                return Date.UTC(+m[3], +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0));
+            };
+
+            const parseNumberValue = function (text) {
+                const normalized = text.replace(/\./g, '').replace(/,/g, '.');
+                const m = normalized.match(/-?\d+(?:\.\d+)?/);
+                return m ? parseFloat(m[0]) : null;
+            };
+
+            const updateHeadIndicators = function () {
+                Array.from(racesHeadRowEl.cells).forEach(function (thEl, columnIndex) {
+                    thEl.classList.toggle('races-sorted-asc', columnIndex === currentSortIndex && currentSortDir === 1);
+                    thEl.classList.toggle('races-sorted-desc', columnIndex === currentSortIndex && currentSortDir === -1);
+                    const arrowEl = thEl.querySelector('.races-sort-arrow');
+                    if (arrowEl instanceof HTMLElement) {
+                        arrowEl.textContent = columnIndex === currentSortIndex ? (currentSortDir === 1 ? '▲' : '▼') : '↕';
+                    }
+                    const filterSet = columnFilters[columnIndex];
+                    thEl.classList.toggle('races-filtered', !!(filterSet && filterSet.size > 0));
+                });
+
+                if (resetFiltersButtonEl instanceof HTMLButtonElement) {
+                    resetFiltersButtonEl.disabled = Object.keys(columnFilters).length === 0;
+                }
+            };
+
+            const applySort = function (columnIndex) {
+                if (columnIndex === currentSortIndex) {
+                    currentSortDir = -currentSortDir;
+                } else {
+                    currentSortIndex = columnIndex;
+                    currentSortDir = 1;
+                }
+
+                const rows = getDataRows();
+                // Tipul coloanei se decide dupa primele valori nenule: data -> numar -> text.
+                let dateHits = 0;
+                let numberHits = 0;
+                let sampled = 0;
+                rows.some(function (rowEl) {
+                    const value = getCellValue(rowEl, columnIndex);
+                    if (value === '' || value === '-') {
+                        return false;
+                    }
+                    sampled++;
+                    if (parseDateValue(value) !== null) {
+                        dateHits++;
+                    } else if (parseNumberValue(value) !== null) {
+                        numberHits++;
+                    }
+                    return sampled >= 10;
+                });
+                const columnType = sampled > 0 && dateHits >= sampled / 2
+                    ? 'date'
+                    : (sampled > 0 && numberHits >= sampled / 2 ? 'number' : 'text');
+
+                const sortKey = function (rowEl) {
+                    const value = getCellValue(rowEl, columnIndex);
+                    if (columnType === 'date') {
+                        const parsedDate = parseDateValue(value);
+                        return parsedDate === null ? -Infinity : parsedDate;
+                    }
+                    if (columnType === 'number') {
+                        const parsedNumber = parseNumberValue(value);
+                        return parsedNumber === null ? -Infinity : parsedNumber;
+                    }
+                    return value.toLowerCase();
+                };
+
+                rows
+                    .map(function (rowEl, position) {
+                        return { rowEl: rowEl, key: sortKey(rowEl), position: position };
+                    })
+                    .sort(function (a, b) {
+                        if (a.key < b.key) {
+                            return -1 * currentSortDir;
+                        }
+                        if (a.key > b.key) {
+                            return 1 * currentSortDir;
+                        }
+                        if (typeof a.key === 'string' && typeof b.key === 'string') {
+                            const cmp = a.key.localeCompare(b.key, 'ro');
+                            if (cmp !== 0) {
+                                return cmp * currentSortDir;
+                            }
+                        }
+                        return a.position - b.position;
+                    })
+                    .forEach(function (entry) {
+                        racesBodyEl.appendChild(entry.rowEl);
+                    });
+
+                updateHeadIndicators();
+            };
+
+            const applyFilters = function () {
+                getDataRows().forEach(function (rowEl) {
+                    let visible = true;
+                    Object.keys(columnFilters).forEach(function (key) {
+                        const allowed = columnFilters[key];
+                        if (!allowed || allowed.size === 0) {
+                            return;
+                        }
+                        if (!allowed.has(getCellValue(rowEl, parseInt(key, 10)))) {
+                            visible = false;
+                        }
+                    });
+                    rowEl.classList.toggle('d-none', !visible);
+                    if (!visible) {
+                        const checkboxEl = rowEl.querySelector('.bulk-race-checkbox');
+                        if (checkboxEl instanceof HTMLInputElement && checkboxEl.checked) {
+                            checkboxEl.checked = false;
+                            checkboxEl.dispatchEvent(new Event('change'));
+                        }
+                    }
+                });
+                updateHeadIndicators();
+            };
+
+            // Dropdown-ul de filtrare rapida (unic, repozitionat per coloana).
+            const filterDropdownEl = document.createElement('div');
+            filterDropdownEl.className = 'dispatcher-races-filter-dropdown';
+            filterDropdownEl.hidden = true;
+            document.body.appendChild(filterDropdownEl);
+            let openFilterColumn = -1;
+
+            const closeFilterDropdown = function () {
+                filterDropdownEl.hidden = true;
+                openFilterColumn = -1;
+            };
+
+            // Trece rândul prin toate filtrele active, cu exceptia coloanei date.
+            // Folosit pentru filtrarea in cascada: optiunile unei coloane reflecta doar
+            // randurile ramase dupa filtrele celorlalte coloane.
+            const rowMatchesFiltersExcept = function (rowEl, excludedColumnIndex) {
+                let matches = true;
+                Object.keys(columnFilters).forEach(function (key) {
+                    const filterColumnIndex = parseInt(key, 10);
+                    if (filterColumnIndex === excludedColumnIndex) {
+                        return;
+                    }
+                    const allowed = columnFilters[key];
+                    if (!allowed || allowed.size === 0) {
+                        return;
+                    }
+                    if (!allowed.has(getCellValue(rowEl, filterColumnIndex))) {
+                        matches = false;
+                    }
+                });
+                return matches;
+            };
+
+            const openFilterDropdown = function (columnIndex, anchorRect) {
+                openFilterColumn = columnIndex;
+                const headTh = racesHeadRowEl.cells[columnIndex];
+                const columnLabel = headTh ? headTh.textContent.replace(/[▲▼↕]/g, '').replace(/\s+/g, ' ').trim() : '';
+
+                const activeSet = columnFilters[columnIndex] || new Set();
+
+                const uniqueValues = [];
+                const seenValues = {};
+                getDataRows().forEach(function (rowEl) {
+                    // Cascada: arata doar valorile disponibile dupa filtrele celorlalte coloane.
+                    if (!rowMatchesFiltersExcept(rowEl, columnIndex)) {
+                        return;
+                    }
+                    const value = getCellValue(rowEl, columnIndex);
+                    if (value === '' || Object.prototype.hasOwnProperty.call(seenValues, value)) {
+                        return;
+                    }
+                    seenValues[value] = true;
+                    uniqueValues.push(value);
+                });
+                // Valorile deja bifate pe aceasta coloana raman vizibile chiar daca nu mai au
+                // randuri disponibile, ca sa poata fi debifate.
+                activeSet.forEach(function (value) {
+                    if (!Object.prototype.hasOwnProperty.call(seenValues, value)) {
+                        seenValues[value] = true;
+                        uniqueValues.push(value);
+                    }
+                });
+                uniqueValues.sort(function (a, b) {
+                    // Valorile deja bifate apar primele, ca selectia activa sa fie mereu vizibila.
+                    const aChecked = activeSet.has(a);
+                    const bChecked = activeSet.has(b);
+                    if (aChecked !== bChecked) {
+                        return aChecked ? -1 : 1;
+                    }
+                    // Datele calendaristice se ordoneaza cronologic, restul alfabetic.
+                    const aDate = parseDateValue(a);
+                    const bDate = parseDateValue(b);
+                    if (aDate !== null && bDate !== null) {
+                        return aDate - bDate;
+                    }
+                    return a.localeCompare(b, 'ro');
+                });
+
+                filterDropdownEl.replaceChildren();
+                const headerEl = document.createElement('div');
+                headerEl.className = 'races-filter-head';
+                const titleEl = document.createElement('strong');
+                titleEl.textContent = 'Filtru: ' + columnLabel;
+                const resetEl = document.createElement('a');
+                resetEl.href = '#';
+                resetEl.textContent = 'Toate';
+                resetEl.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    delete columnFilters[columnIndex];
+                    applyFilters();
+                    closeFilterDropdown();
+                });
+                headerEl.appendChild(titleEl);
+                headerEl.appendChild(resetEl);
+                filterDropdownEl.appendChild(headerEl);
+
+                const searchEl = document.createElement('input');
+                searchEl.type = 'search';
+                searchEl.className = 'form-control form-control-sm mt-1';
+                searchEl.placeholder = 'Cauta valoare...';
+                filterDropdownEl.appendChild(searchEl);
+
+                const listEl = document.createElement('div');
+                listEl.className = 'races-filter-list';
+                uniqueValues.forEach(function (value) {
+                    const optionEl = document.createElement('label');
+                    optionEl.className = 'races-filter-option';
+                    const checkboxEl = document.createElement('input');
+                    checkboxEl.type = 'checkbox';
+                    checkboxEl.className = 'form-check-input m-0 mt-1';
+                    checkboxEl.checked = activeSet.has(value);
+                    checkboxEl.addEventListener('change', function () {
+                        const targetSet = columnFilters[columnIndex] || new Set();
+                        if (checkboxEl.checked) {
+                            targetSet.add(value);
+                        } else {
+                            targetSet.delete(value);
+                        }
+                        if (targetSet.size > 0) {
+                            columnFilters[columnIndex] = targetSet;
+                        } else {
+                            delete columnFilters[columnIndex];
+                        }
+                        applyFilters();
+                    });
+                    const labelSpan = document.createElement('span');
+                    labelSpan.textContent = value;
+                    optionEl.appendChild(checkboxEl);
+                    optionEl.appendChild(labelSpan);
+                    listEl.appendChild(optionEl);
+                });
+                filterDropdownEl.appendChild(listEl);
+
+                // Resetare globala, direct din zona de filtrare: sterge filtrele tuturor coloanelor.
+                const resetAllWrapEl = document.createElement('div');
+                resetAllWrapEl.className = 'races-filter-reset-all-wrap';
+                const resetAllEl = document.createElement('a');
+                resetAllEl.href = '#';
+                resetAllEl.className = 'races-filter-reset-all';
+                resetAllEl.innerHTML = '<i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Resetează toate filtrele';
+                resetAllEl.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    resetAllColumnFilters();
+                });
+                resetAllWrapEl.appendChild(resetAllEl);
+                filterDropdownEl.appendChild(resetAllWrapEl);
+
+                searchEl.addEventListener('input', function () {
+                    const needle = searchEl.value.toLowerCase();
+                    Array.from(listEl.children).forEach(function (optionEl) {
+                        optionEl.classList.toggle('d-none', optionEl.textContent.toLowerCase().indexOf(needle) === -1);
+                    });
+                });
+
+                filterDropdownEl.hidden = false;
+                const dropdownWidth = Math.min(320, Math.max(220, anchorRect.width * 2));
+                let left = Math.round(anchorRect.left);
+                if (left + dropdownWidth > window.innerWidth - 8) {
+                    left = Math.max(8, window.innerWidth - dropdownWidth - 8);
+                }
+                filterDropdownEl.style.left = left + 'px';
+                filterDropdownEl.style.top = Math.round(anchorRect.bottom + 4) + 'px';
+                filterDropdownEl.style.width = dropdownWidth + 'px';
+
+                // Dropdown-ul ramane mereu in interiorul ferestrei: daca nu are loc sub
+                // palnie, se deschide deasupra ei; altfel se lipeste de marginea de jos.
+                const dropdownRect = filterDropdownEl.getBoundingClientRect();
+                if (dropdownRect.bottom > window.innerHeight - 8) {
+                    const topAbove = Math.round(anchorRect.top - dropdownRect.height - 4);
+                    if (topAbove >= 8) {
+                        filterDropdownEl.style.top = topAbove + 'px';
+                    } else {
+                        filterDropdownEl.style.top = Math.max(8, window.innerHeight - dropdownRect.height - 8) + 'px';
+                    }
+                }
+                searchEl.focus();
+            };
+
+            document.addEventListener('click', function (event) {
+                if (filterDropdownEl.hidden) {
+                    return;
+                }
+                if (filterDropdownEl.contains(event.target) || (event.target instanceof Element && event.target.closest('.races-filter-btn'))) {
+                    return;
+                }
+                closeFilterDropdown();
+            });
+            document.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape') {
+                    closeFilterDropdown();
+                }
+            });
+            window.addEventListener('scroll', closeFilterDropdown, { passive: true });
+
+            // Sterge toate filtrele de coloana (sortarea ramane neatinsa).
+            const resetAllColumnFilters = function () {
+                Object.keys(columnFilters).forEach(function (key) {
+                    delete columnFilters[key];
+                });
+                closeFilterDropdown();
+                applyFilters();
+            };
+
+            if (resetFiltersButtonEl instanceof HTMLButtonElement) {
+                resetFiltersButtonEl.addEventListener('click', resetAllColumnFilters);
+            }
+
+            const handleHeaderIntent = function (thEl, targetEl, anchorRect) {
+                const columnIndex = thEl.cellIndex;
+                if (thEl.classList.contains('col-actions')) {
+                    return;
+                }
+                if (targetEl.closest('.races-filter-btn')) {
+                    if (openFilterColumn === columnIndex && !filterDropdownEl.hidden) {
+                        closeFilterDropdown();
+                    } else {
+                        openFilterDropdown(columnIndex, anchorRect);
+                    }
+                    return;
+                }
+                // Click pe eticheta cu checkbox-ul "selecteaza tot" nu declanseaza sortarea.
+                if (targetEl.closest('label, input')) {
+                    return;
+                }
+                applySort(columnIndex);
+            };
+
+            // Pregateste antetul real: cursor, sageata de sortare, buton de filtrare.
+            Array.from(racesHeadRowEl.cells).forEach(function (thEl) {
+                if (thEl.classList.contains('col-actions')) {
+                    return;
+                }
+                thEl.classList.add('races-sortable');
+                thEl.title = 'Click: sorteaza. Palnie: filtreaza valorile coloanei.';
+                const controlsEl = document.createElement('span');
+                controlsEl.className = 'races-head-controls';
+                const arrowEl = document.createElement('span');
+                arrowEl.className = 'races-sort-arrow';
+                arrowEl.textContent = '↕';
+                const filterBtnEl = document.createElement('button');
+                filterBtnEl.type = 'button';
+                filterBtnEl.className = 'races-head-control races-filter-btn';
+                filterBtnEl.setAttribute('aria-label', 'Filtreaza coloana');
+                filterBtnEl.innerHTML = '<i class="bi bi-funnel" aria-hidden="true"></i>';
+                controlsEl.appendChild(arrowEl);
+                controlsEl.appendChild(filterBtnEl);
+
+                // Continutul existent al antetului intra intr-un container flexibil:
+                // textul se scurteaza cu "..." cand coloana e ingusta, iar sageata de
+                // sortare si palnia raman mereu vizibile si clickabile.
+                const headWrapEl = document.createElement('div');
+                headWrapEl.className = 'races-head-wrap';
+                const headLabelEl = document.createElement('span');
+                headLabelEl.className = 'races-head-label';
+                while (thEl.firstChild) {
+                    headLabelEl.appendChild(thEl.firstChild);
+                }
+                headWrapEl.appendChild(headLabelEl);
+                headWrapEl.appendChild(controlsEl);
+                thEl.appendChild(headWrapEl);
+            });
+
+            racesHeadRowEl.addEventListener('click', function (event) {
+                const thEl = event.target instanceof Element ? event.target.closest('th') : null;
+                if (thEl instanceof HTMLTableCellElement) {
+                    const anchorEl = event.target instanceof Element ? (event.target.closest('.races-filter-btn') || thEl) : thEl;
+                    handleHeaderIntent(thEl, event.target, anchorEl.getBoundingClientRect());
+                }
+            });
+
+            // Delegare din antetul lipicios (clona): actiunile se aplica pe antetul real.
+            const stickyHostEl = document.querySelector('.dispatcher-races-sticky-column-header');
+            if (stickyHostEl instanceof HTMLElement) {
+                stickyHostEl.addEventListener('click', function (event) {
+                    const thEl = event.target instanceof Element ? event.target.closest('th') : null;
+                    if (thEl instanceof HTMLTableCellElement) {
+                        const anchorEl = event.target instanceof Element ? (event.target.closest('.races-filter-btn') || thEl) : thEl;
+                        handleHeaderIntent(thEl, event.target, anchorEl.getBoundingClientRect());
+                    }
+                });
+            }
+
+            updateHeadIndicators();
+        }
+    }
 
     const refreshBulkDeleteState = function () {
         if (!(bulkDeleteBtnEl instanceof HTMLButtonElement)) {
@@ -2218,60 +2969,191 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         };
 
-        var syncOpenRaceCardActions = function (cardEl, filterType) {
-            if (!(cardEl instanceof HTMLElement)) {
-                return;
-            }
+        // Filtrare combinata: tab severitate + tip transport + numere de inmatriculare (multi-select).
+        var orxActiveSeverity = '';
+        var orxSeverityTabEls = openRacesModalEl.querySelectorAll('[data-orx-severity-tab]');
+        var orxTransportSelectEl = openRacesModalEl.querySelector('[data-orx-transport]');
+        var orxPlatesWrapEl = openRacesModalEl.querySelector('[data-orx-plates]');
+        var orxPlatesToggleEl = openRacesModalEl.querySelector('[data-orx-plates-toggle]');
+        var orxPlatesMenuEl = openRacesModalEl.querySelector('[data-orx-plates-menu]');
+        var orxPlatesSearchEl = openRacesModalEl.querySelector('[data-orx-plates-search]');
+        var orxPlatesAllEl = openRacesModalEl.querySelector('[data-orx-plates-all]');
+        var orxPlatesLabelEl = openRacesModalEl.querySelector('[data-orx-plates-label]');
+        var orxPlatesCountEl = openRacesModalEl.querySelector('[data-orx-plates-count]');
+        var orxPlatesClearEl = openRacesModalEl.querySelector('[data-orx-plates-clear]');
+        var orxPlateOptionEls = openRacesModalEl.querySelectorAll('[data-orx-plate-option]');
+        var orxEmptyEl = openRacesModalEl.querySelector('[data-orx-empty]');
 
-            cardEl.querySelectorAll('[data-open-race-action-type]').forEach(function (actionEl) {
-                if (!(actionEl instanceof HTMLElement)) {
-                    return;
+        var orxSelectedPlates = function () {
+            var plates = [];
+            orxPlateOptionEls.forEach(function (optionEl) {
+                if (optionEl instanceof HTMLInputElement && optionEl.checked) {
+                    plates.push(optionEl.value);
                 }
-
-                var actionType = actionEl.getAttribute('data-open-race-action-type') || '';
-                var shouldShow = filterType === ''
-                    || filterType === 'multiple_missing'
-                    || actionType === filterType;
-
-                actionEl.hidden = !shouldShow;
             });
+            return plates;
         };
 
-        var setOpenRacesFilter = function (filterType) {
-            var activeFilter = openRacesModalEl.getAttribute('data-active-filter') || '';
-            var nextFilter = activeFilter === filterType ? '' : filterType;
+        var orxSyncPlatesUi = function () {
+            var selected = orxSelectedPlates();
+            if (orxPlatesLabelEl instanceof HTMLElement) {
+                orxPlatesLabelEl.textContent = selected.length > 0
+                    ? 'Nr. înmatriculare (' + selected.length + ')'
+                    : 'Nr. înmatriculare';
+            }
+            if (orxPlatesCountEl instanceof HTMLElement) {
+                orxPlatesCountEl.textContent = selected.length === 1
+                    ? '1 vehicul selectat'
+                    : selected.length + ' vehicule selectate';
+            }
+            if (orxPlatesAllEl instanceof HTMLInputElement) {
+                var total = orxPlateOptionEls.length;
+                orxPlatesAllEl.checked = total > 0 && selected.length === total;
+                orxPlatesAllEl.indeterminate = selected.length > 0 && selected.length < total;
+            }
+        };
 
-            openRacesModalEl.setAttribute('data-active-filter', nextFilter);
-
-            openRacesFilterEls.forEach(function (filterEl) {
-                if (!(filterEl instanceof HTMLButtonElement)) {
-                    return;
-                }
-
-                var isActive = nextFilter !== '' && filterEl.getAttribute('data-open-races-filter') === nextFilter;
-                filterEl.classList.toggle('is-active', isActive);
-                filterEl.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-            });
+        var applyOpenRacesFilters = function () {
+            var transport = orxTransportSelectEl instanceof HTMLSelectElement ? orxTransportSelectEl.value : '';
+            var plates = orxSelectedPlates();
+            var visibleCount = 0;
 
             openRacesModalEl.querySelectorAll('[data-open-race-card]').forEach(function (cardEl) {
                 if (!(cardEl instanceof HTMLElement)) {
                     return;
                 }
 
-                var shouldShow = true;
-                if (nextFilter === 'missing_end_time') {
-                    shouldShow = cardEl.getAttribute('data-missing-end-time') === '1';
-                } else if (nextFilter === 'missing_expenses') {
-                    shouldShow = cardEl.getAttribute('data-missing-expenses') === '1';
-                } else if (nextFilter === 'multiple_missing') {
-                    shouldShow = cardEl.getAttribute('data-multiple-missing') === '1';
-                }
+                var matches = (orxActiveSeverity === '' || cardEl.getAttribute('data-orx-severity-value') === orxActiveSeverity)
+                    && (transport === '' || cardEl.getAttribute('data-orx-transport-value') === transport)
+                    && (plates.length === 0 || plates.indexOf(cardEl.getAttribute('data-orx-plate-value') || '') !== -1);
 
-                cardEl.hidden = !shouldShow;
-                syncOpenRaceCardActions(cardEl, nextFilter);
-                setOpenRaceCardExpanded(cardEl, false);
+                cardEl.hidden = !matches;
+                if (!matches) {
+                    setOpenRaceCardExpanded(cardEl, false);
+                } else {
+                    visibleCount++;
+                }
             });
+
+            if (orxEmptyEl instanceof HTMLElement) {
+                orxEmptyEl.hidden = visibleCount > 0;
+            }
+
+            orxSeverityTabEls.forEach(function (tabEl) {
+                if (!(tabEl instanceof HTMLButtonElement)) {
+                    return;
+                }
+                var isActive = (tabEl.getAttribute('data-orx-severity-tab') || '') === orxActiveSeverity;
+                tabEl.classList.toggle('is-active', isActive);
+                tabEl.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+            });
+
+            orxSyncPlatesUi();
         };
+
+        var setOpenRacesFilter = function () {
+            // Reset complet al filtrelor (la deschiderea popup-ului).
+            orxActiveSeverity = '';
+            if (orxTransportSelectEl instanceof HTMLSelectElement) {
+                orxTransportSelectEl.value = '';
+            }
+            orxPlateOptionEls.forEach(function (optionEl) {
+                if (optionEl instanceof HTMLInputElement) {
+                    optionEl.checked = false;
+                }
+            });
+            if (orxPlatesSearchEl instanceof HTMLInputElement) {
+                orxPlatesSearchEl.value = '';
+                orxPlateOptionEls.forEach(function (optionEl) {
+                    var labelEl = optionEl instanceof HTMLElement ? optionEl.closest('.orx-plates-option') : null;
+                    if (labelEl instanceof HTMLElement) {
+                        labelEl.classList.remove('d-none');
+                    }
+                });
+            }
+            if (orxPlatesMenuEl instanceof HTMLElement) {
+                orxPlatesMenuEl.hidden = true;
+            }
+            applyOpenRacesFilters();
+        };
+
+        orxSeverityTabEls.forEach(function (tabEl) {
+            if (!(tabEl instanceof HTMLButtonElement)) {
+                return;
+            }
+            tabEl.addEventListener('click', function () {
+                orxActiveSeverity = tabEl.getAttribute('data-orx-severity-tab') || '';
+                applyOpenRacesFilters();
+            });
+        });
+
+        if (orxTransportSelectEl instanceof HTMLSelectElement) {
+            orxTransportSelectEl.addEventListener('change', applyOpenRacesFilters);
+        }
+
+        if (orxPlatesToggleEl instanceof HTMLButtonElement && orxPlatesMenuEl instanceof HTMLElement) {
+            orxPlatesToggleEl.addEventListener('click', function () {
+                var willOpen = orxPlatesMenuEl.hidden;
+                orxPlatesMenuEl.hidden = !willOpen;
+                orxPlatesToggleEl.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+                if (willOpen && orxPlatesSearchEl instanceof HTMLInputElement) {
+                    orxPlatesSearchEl.focus();
+                }
+            });
+            document.addEventListener('click', function (event) {
+                if (orxPlatesMenuEl.hidden) {
+                    return;
+                }
+                if (event.target instanceof Node && orxPlatesWrapEl instanceof HTMLElement && !orxPlatesWrapEl.contains(event.target)) {
+                    orxPlatesMenuEl.hidden = true;
+                    orxPlatesToggleEl.setAttribute('aria-expanded', 'false');
+                }
+            });
+        }
+
+        orxPlateOptionEls.forEach(function (optionEl) {
+            if (optionEl instanceof HTMLInputElement) {
+                optionEl.addEventListener('change', applyOpenRacesFilters);
+            }
+        });
+
+        if (orxPlatesAllEl instanceof HTMLInputElement) {
+            orxPlatesAllEl.addEventListener('change', function () {
+                var check = orxPlatesAllEl.checked;
+                orxPlateOptionEls.forEach(function (optionEl) {
+                    var labelEl = optionEl instanceof HTMLElement ? optionEl.closest('.orx-plates-option') : null;
+                    var isVisible = !(labelEl instanceof HTMLElement) || !labelEl.classList.contains('d-none');
+                    if (optionEl instanceof HTMLInputElement && isVisible) {
+                        optionEl.checked = check;
+                    }
+                });
+                applyOpenRacesFilters();
+            });
+        }
+
+        if (orxPlatesSearchEl instanceof HTMLInputElement) {
+            orxPlatesSearchEl.addEventListener('input', function () {
+                var needle = orxPlatesSearchEl.value.toLowerCase();
+                orxPlateOptionEls.forEach(function (optionEl) {
+                    var labelEl = optionEl instanceof HTMLElement ? optionEl.closest('.orx-plates-option') : null;
+                    if (labelEl instanceof HTMLElement) {
+                        labelEl.classList.toggle('d-none', labelEl.textContent.toLowerCase().indexOf(needle) === -1);
+                    }
+                });
+            });
+        }
+
+        if (orxPlatesClearEl instanceof HTMLElement) {
+            orxPlatesClearEl.addEventListener('click', function (event) {
+                event.preventDefault();
+                orxPlateOptionEls.forEach(function (optionEl) {
+                    if (optionEl instanceof HTMLInputElement) {
+                        optionEl.checked = false;
+                    }
+                });
+                applyOpenRacesFilters();
+            });
+        }
 
         var setOpenRacesOpen = function (open) {
             if (open === isOpenRacesOpen()) {
@@ -2369,36 +3251,31 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    var postCreateExpensePromptModalEl = document.getElementById('postCreateExpensePromptModal');
-    var postCreateExpenseChoiceModalEl = document.getElementById('postCreateExpenseChoiceModal');
-    var postCreateExpenseNoButtonEl = document.querySelector('[data-role="post-create-expense-no"]');
-    if (postCreateExpensePromptModalEl instanceof HTMLElement && typeof bootstrap !== 'undefined' && bootstrap.Modal) {
-        var postCreateExpensePromptModal = new bootstrap.Modal(postCreateExpensePromptModalEl);
-        var postCreateExpenseChoiceModal = postCreateExpenseChoiceModalEl instanceof HTMLElement
-            ? new bootstrap.Modal(postCreateExpenseChoiceModalEl)
-            : null;
-        var shouldShowExpenseChoice = false;
-
-        if (postCreateExpenseNoButtonEl instanceof HTMLButtonElement && postCreateExpenseChoiceModal !== null) {
-            postCreateExpenseNoButtonEl.addEventListener('click', function () {
-                shouldShowExpenseChoice = true;
-                postCreateExpensePromptModal.hide();
-            });
-
-            postCreateExpensePromptModalEl.addEventListener('hidden.bs.modal', function () {
-                if (!shouldShowExpenseChoice) {
-                    return;
-                }
-
-                shouldShowExpenseChoice = false;
-                postCreateExpenseChoiceModal.show();
-            });
-        }
-
-        postCreateExpensePromptModal.show();
-    }
 });
 </script>
+
+<div class="modal fade" tabindex="-1" data-vehicle-route-decision-modal aria-labelledby="vehicle-route-decision-title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="vehicle-route-decision-title">
+                    <i class="bi bi-truck me-1" aria-hidden="true"></i>
+                    Vehicul neconfigurat pe rută
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Renunță"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-2">Vehiculul <strong data-vehicle-route-decision-name>-</strong> nu este configurat pentru beneficiarul și tipul de transport ales (Configurare Transport).</p>
+                <p class="mb-0">Cum vrei să îl folosești?</p>
+            </div>
+            <div class="modal-footer flex-wrap">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Renunță</button>
+                <button type="button" class="btn btn-outline-primary" data-vehicle-route-decision-trip title="Vehiculul este folosit doar pentru această cursă, fără a modifica Configurare Transport.">Doar pentru această cursă</button>
+                <button type="button" class="btn btn-primary" data-vehicle-route-decision-permanent title="Vehiculul este adăugat pe ruta corespunzătoare (beneficiar + tip transport) în Configurare Transport.">Adaugă permanent pe rută</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <?php include __DIR__ . '/_inactive_resource_modal.php'; ?>
 

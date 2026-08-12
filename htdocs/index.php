@@ -321,9 +321,11 @@ require_once __DIR__ . '/models/TechnicalHealthModel.php';
 require_once __DIR__ . '/models/DriverActivityHistoryModel.php';
 require_once __DIR__ . '/models/FuelModel.php';
 require_once __DIR__ . '/models/UserActivityModel.php';
+require_once __DIR__ . '/models/LeasingSchedulerModel.php';
 
 require_once __DIR__ . '/services/EntityStatusService.php';
 require_once __DIR__ . '/services/InactiveResourceStatusService.php';
+require_once __DIR__ . '/services/CentralizatorFacturareService.php';
 require_once __DIR__ . '/services/EmailService.php';
 require_once __DIR__ . '/services/CardOilApiClient.php';
 require_once __DIR__ . '/services/WebAuthnService.php';
@@ -350,6 +352,7 @@ require_once __DIR__ . '/controllers/DriverActivityHistoryController.php';
 require_once __DIR__ . '/controllers/FuelController.php';
 require_once __DIR__ . '/controllers/AccessRightsController.php';
 require_once __DIR__ . '/controllers/UserActivityController.php';
+require_once __DIR__ . '/controllers/LeasingSchedulerController.php';
 
 $db = get_pdo();
 
@@ -522,6 +525,11 @@ try {
             (new VehicleAuthorizationController($db))->handle($action);
             break;
 
+        case 'scadentar_leasing':
+            require_auth();
+            (new LeasingSchedulerController($db))->handle($action);
+            break;
+
         case 'dispecer_curse':
             require_auth();
             (new DispecerCurseController($db))->handle($action);
@@ -537,9 +545,14 @@ try {
             (new CourseExpenseHistoryController($db))->handle($action);
             break;
 
+        case 'istoric_activitate':
+            require_auth();
+            (new CentralizatorFacturareController($db, 'istoric_activitate'))->handle($action);
+            break;
+
         case 'centralizator_facturare':
             require_auth();
-            (new CentralizatorFacturareController($db))->handle($action);
+            (new CentralizatorFacturareController($db, 'centralizator_facturare'))->handle($action);
             break;
 
         case 'programare_concedii':

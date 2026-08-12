@@ -13,6 +13,7 @@ $statusLabels = [
 $resourceTypeLabels = [
     'vehicle' => 'Vehicul',
     'driver' => 'Sofer',
+    'repair' => 'Reparatie',
 ];
 $formatDate = static fn(mixed $value): string => trim((string) $value) !== '' ? format_date_ro((string) $value) : '-';
 $formatDateTime = static fn(mixed $value): string => trim((string) $value) !== '' ? format_datetime_ro((string) $value) : '-';
@@ -40,7 +41,7 @@ $currentUrl = build_query_url(array_merge($baseQuery, ['p' => (int) ($result['pa
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
         <div>
             <h2 class="h4 mb-1">Solicitari aprobare</h2>
-            <p class="text-muted mb-0">Aprobari si istoric pentru utilizarea vehiculelor sau soferilor inactivi in Dispecer curse.</p>
+            <p class="text-muted mb-0">Aprobari si istoric pentru utilizarea vehiculelor, soferilor sau reparatiilor in Dispecer curse.</p>
         </div>
         <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dashboard'])) ?>">
             <i class="bi bi-arrow-left" aria-hidden="true"></i>
@@ -67,6 +68,7 @@ $currentUrl = build_query_url(array_merge($baseQuery, ['p' => (int) ($result['pa
                         <option value="all" <?= $selectedResourceType === '' ? 'selected' : '' ?>>Toate</option>
                         <option value="vehicle" <?= $selectedResourceType === 'vehicle' ? 'selected' : '' ?>>Vehicul</option>
                         <option value="driver" <?= $selectedResourceType === 'driver' ? 'selected' : '' ?>>Sofer</option>
+                        <option value="repair" <?= $selectedResourceType === 'repair' ? 'selected' : '' ?>>Reparatie</option>
                     </select>
                 </div>
                 <div class="col-12 col-md-6 col-xl-2">

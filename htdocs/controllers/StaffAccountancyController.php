@@ -83,6 +83,9 @@ class StaffAccountancyController
             case 'update_termination':
                 $this->updateTerminationAction();
                 return;
+            case 'update_staff':
+                $this->updateStaffAction();
+                return;
             case 'rehire':
                 $this->rehireAction();
                 return;
@@ -581,22 +584,25 @@ class StaffAccountancyController
 
     private function updateStaffAction(): void
     {
-        $this->requirePost('contabilitate_personal');
-        ensure_csrf_or_redirect($this->indexUrl());
+        $returnUrl = $this->staffEditReturnUrl();
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($returnUrl);
+        }
+        ensure_csrf_or_redirect($returnUrl);
 
         $id = (int) ($_POST['id'] ?? 0);
         $staffTypeId = (int) ($_POST['staff_type_id'] ?? 0);
         $type = $this->model->findStaffType($staffTypeId);
         if ($id <= 0 || $type === null || (int) ($type['is_driver_linked'] ?? 0) === 1) {
             flash_set('danger', 'Inregistrarea selectata nu poate fi editata aici.');
-            redirect($this->indexUrl());
+            redirect($returnUrl);
         }
 
         $data = $this->collectStaffMemberInput($_POST, $staffTypeId, $type);
         $errors = $this->validateStaffMemberInput($data, false);
         if ($errors !== []) {
             flash_set('danger', implode(' ', $errors));
-            redirect($this->indexUrl());
+            redirect($returnUrl);
         }
 
         try {
@@ -610,7 +616,7 @@ class StaffAccountancyController
             flash_set('danger', 'Nu am putut actualiza personalul.');
         }
 
-        redirect($this->indexUrl());
+        redirect($returnUrl);
     }
 
     private function endActivityAction(): void
@@ -1280,6 +1286,13 @@ class StaffAccountancyController
     private function formerUrl(): string
     {
         return build_query_url(['page' => 'fosti_angajati']);
+    }
+
+    private function staffEditReturnUrl(): string
+    {
+        return trim((string) ($_POST['return_to'] ?? '')) === 'fosti_angajati'
+            ? $this->formerUrl()
+            : $this->indexUrl();
     }
 
     private function terminationReturnUrl(): string

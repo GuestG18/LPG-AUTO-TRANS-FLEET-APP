@@ -430,6 +430,10 @@ $expenseTotalsByType = $buildTypeTotals($expenseTypeTotals, 'tip_cheltuiala');
 $refacturareTotalsByType = $buildTypeTotals($refacturareTypeTotals, 'refacturare_tip_cheltuiala');
 $totalExpenses = array_sum($expenseTotalsByType);
 $totalRefacturare = array_sum($refacturareTotalsByType);
+$activityPageKey = trim((string) ($activityPageKey ?? 'istoric_activitate'));
+if ($activityPageKey === '') {
+    $activityPageKey = 'istoric_activitate';
+}
 
 $filterValue = static fn (string $key): string => trim((string) ($filters[$key] ?? ''));
 $filterArray = static fn (string $key): array => array_values(array_filter((array) ($filters[$key] ?? []), static fn ($value): bool => trim((string) $value) !== ''));
@@ -457,7 +461,7 @@ foreach (['locatie_operationala', 'loc_incarcare', 'zona_distributie'] as $array
 
 $filtersOpen = $activeFilterCount > 0 || (string) ($_GET['filters_open'] ?? '') === '1';
 $currentListUrl = build_query_url([
-    'page' => 'centralizator_facturare',
+    'page' => $activityPageKey,
     'action' => 'index',
     'q' => $search,
     'status_facturare' => $filterValue('status_facturare'),
@@ -471,7 +475,7 @@ $currentListUrl = build_query_url([
     'loc_incarcare' => $filterArray('loc_incarcare'),
     'zona_distributie' => $filterArray('zona_distributie'),
 ]);
-$resetUrl = build_query_url(['page' => 'centralizator_facturare', 'action' => 'index', 'filters_open' => '1']);
+$resetUrl = build_query_url(['page' => $activityPageKey, 'action' => 'index', 'filters_open' => '1']);
 $openVehicleId = (int) ($_GET['open_vehicle'] ?? 0);
 
 $locationOptionRows = static function (array $source, string $bucket): array {
@@ -1873,7 +1877,7 @@ $renderMultiSelect = static function (
                 <div class="billing-ref-filter-body">
                     <div class="billing-ref-filter-inner">
                         <form method="get" data-filter-form>
-                            <input type="hidden" name="page" value="centralizator_facturare">
+                            <input type="hidden" name="page" value="<?= e($activityPageKey) ?>">
                             <input type="hidden" name="action" value="index">
                             <input type="hidden" name="filters_open" value="1">
 
@@ -2073,7 +2077,7 @@ $renderMultiSelect = static function (
                                                         <td><?= e($money($row['_display_total'] ?? 0)) ?></td>
                                                         <td><?= e((string) ($row['_formula'] ?? '-')) ?></td>
                                                         <td>
-                                                            <form method="post" action="<?= e(build_query_url(['page' => 'centralizator_facturare', 'action' => 'update_status'])) ?>" data-status-form>
+                                                            <form method="post" action="<?= e(build_query_url(['page' => $activityPageKey, 'action' => 'update_status'])) ?>" data-status-form>
                                                                 <?= csrf_field() ?>
                                                                 <input type="hidden" name="id" value="<?= e((string) $raceId) ?>">
                                                                 <input type="hidden" name="return_url" value="<?= e($currentListUrl) ?>">

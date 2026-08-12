@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 class InactiveResourceApprovalModel extends BaseModel
 {
+    private const RESOURCE_TYPES = ['vehicle', 'driver', 'repair'];
     private const REVIEW_STATUSES = ['approved', 'rejected'];
 
     public function ensureSchema(): void
@@ -15,7 +16,7 @@ class InactiveResourceApprovalModel extends BaseModel
         $this->db->exec("
             CREATE TABLE IF NOT EXISTS inactive_resource_approvals (
                 id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                resource_type ENUM('vehicle', 'driver') NOT NULL,
+                resource_type ENUM('vehicle', 'driver', 'repair') NOT NULL,
                 resource_id INT UNSIGNED NOT NULL,
                 trip_id INT UNSIGNED NULL,
                 usage_context VARCHAR(120) NOT NULL DEFAULT 'dispecer_curse',
@@ -60,6 +61,9 @@ class InactiveResourceApprovalModel extends BaseModel
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
+        $this->ensureRepairResourceTypeColumn();
+        $this->migrateRepairCategoryRows();
+
         $ensured = true;
     }
 
@@ -67,7 +71,7 @@ class InactiveResourceApprovalModel extends BaseModel
     {
         $this->ensureSchema();
 
-        $counts = ['vehicle' => 0, 'driver' => 0];
+        $counts = ['vehicle' => 0, 'driver' => 0, 'repair' => 0];
         $stmt = $this->db->query("
             SELECT resource_type, COUNT(*) AS total
             FROM inactive_resource_approvals
@@ -84,9 +88,10 @@ class InactiveResourceApprovalModel extends BaseModel
 
         return [
             'counts' => $counts,
-            'total' => $counts['vehicle'] + $counts['driver'],
+            'total' => $counts['vehicle'] + $counts['driver'] + $counts['repair'],
             'vehicles' => $this->getPendingRowsByType('vehicle', $limitPerType),
             'drivers' => $this->getPendingRowsByType('driver', $limitPerType),
+            'repairs' => $this->getPendingRowsByType('repair', $limitPerType),
         ];
     }
 
@@ -154,6 +159,12 @@ class InactiveResourceApprovalModel extends BaseModel
             $params[':q'] = '%' . $search . '%';
         }
 
+        $requestedByUserId = (int) ($filters['requested_by_user_id'] ?? 0);
+        if ($requestedByUserId > 0) {
+            $where[] = 'a.requested_by_user_id = :requested_by_user_id';
+            $params[':requested_by_user_id'] = $requestedByUserId;
+        }
+
         $whereSql = $where !== [] ? ('WHERE ' . implode(' AND ', $where)) : '';
         $page = max(1, $page);
         $perPage = max(5, min(100, $perPage));
@@ -181,6 +192,68 @@ class InactiveResourceApprovalModel extends BaseModel
             'total_rows' => $totalRows,
             'total_pages' => max(1, (int) ceil($totalRows / $perPage)),
         ];
+    }
+
+    public function getRequesterSummary(int $userId, int $limitPerStatus = 20): array
+    {
+        $this->ensureSchema();
+
+        $counts = ['pending' => 0, 'approved' => 0, 'rejected' => 0];
+        if ($userId <= 0) {
+            return [
+                'counts' => $counts,
+                'total' => 0,
+                'pending' => [],
+                'approved' => [],
+                'rejected' => [],
+            ];
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT status, COUNT(*) AS total
+            FROM inactive_resource_approvals
+            WHERE requested_by_user_id = :requested_by_user_id
+            GROUP BY status
+        ");
+        $stmt->bindValue(':requested_by_user_id', $userId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        foreach ($stmt->fetchAll() as $row) {
+            $status = (string) ($row['status'] ?? '');
+            if (isset($counts[$status])) {
+                $counts[$status] = (int) ($row['total'] ?? 0);
+            }
+        }
+
+        return [
+            'counts' => $counts,
+            'total' => $counts['pending'] + $counts['approved'] + $counts['rejected'],
+            'pending' => $this->getRequesterRowsByStatus($userId, 'pending', $limitPerStatus),
+            'approved' => $this->getRequesterRowsByStatus($userId, 'approved', $limitPerStatus),
+            'rejected' => $this->getRequesterRowsByStatus($userId, 'rejected', $limitPerStatus),
+        ];
+    }
+
+    public function getRequesterRowsByStatus(int $userId, string $status, int $limit = 20): array
+    {
+        $this->ensureSchema();
+        if ($userId <= 0) {
+            return [];
+        }
+
+        $status = $this->normalizeStatus($status);
+        $stmt = $this->db->prepare($this->baseSelectSql() . "
+            WHERE a.requested_by_user_id = :requested_by_user_id
+              AND a.status = :status
+            ORDER BY a.requested_at DESC, a.id DESC
+            LIMIT :limit_rows
+        ");
+        $stmt->bindValue(':requested_by_user_id', $userId, PDO::PARAM_INT);
+        $stmt->bindValue(':status', $status);
+        $stmt->bindValue(':limit_rows', max(1, $limit), PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $this->hydrateDocuments($stmt->fetchAll());
     }
 
     public function getById(int $id): ?array
@@ -245,6 +318,134 @@ class InactiveResourceApprovalModel extends BaseModel
         return $row !== null ? (string) ($row['status'] ?? '') : null;
     }
 
+    public function getPendingForRequesterResourceContext(int $userId, string $resourceType, int $resourceId, string $usageContext = 'Dispecer curse'): ?array
+    {
+        $this->ensureSchema();
+        $resourceType = $this->normalizeResourceType($resourceType);
+        if ($userId <= 0 || $resourceType === '' || $resourceId <= 0) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare($this->baseSelectSql() . "
+            WHERE a.status = 'pending'
+              AND a.requested_by_user_id = :requested_by_user_id
+              AND a.resource_type = :resource_type
+              AND a.resource_id = :resource_id
+              AND LOWER(REPLACE(a.usage_context, ' ', '_')) = LOWER(REPLACE(:usage_context, ' ', '_'))
+            ORDER BY a.requested_at DESC, a.id DESC
+            LIMIT 1
+        ");
+        $stmt->bindValue(':requested_by_user_id', $userId, PDO::PARAM_INT);
+        $stmt->bindValue(':resource_type', $resourceType);
+        $stmt->bindValue(':resource_id', $resourceId, PDO::PARAM_INT);
+        $stmt->bindValue(':usage_context', trim($usageContext) !== '' ? trim($usageContext) : 'Dispecer curse');
+        $stmt->execute();
+
+        $rows = $this->hydrateDocuments($stmt->fetchAll());
+
+        return $rows[0] ?? null;
+    }
+
+    public function createPendingForRequesterResource(array $resource, int $userId): ?array
+    {
+        $this->ensureSchema();
+
+        $resourceType = $this->approvalResourceTypeForSnapshot($resource);
+        $resourceId = (int) ($resource['resource_id'] ?? 0);
+        $usageContext = (string) ($resource['usage_context'] ?? 'Dispecer curse');
+        if ($userId <= 0 || $resourceType === '' || $resourceId <= 0 || empty($resource['is_inactive'])) {
+            return null;
+        }
+
+        $existing = $this->getPendingForRequesterResourceContext($userId, $resourceType, $resourceId, $usageContext);
+        if ($existing !== null) {
+            return $existing;
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $stmt = $this->db->prepare("
+            INSERT INTO inactive_resource_approvals (
+                resource_type,
+                resource_id,
+                trip_id,
+                usage_context,
+                resource_label,
+                inactive_reason,
+                inactive_reason_label,
+                inactive_since,
+                status,
+                requested_by_user_id,
+                requested_at,
+                reviewed_by_user_id,
+                reviewed_at,
+                review_note,
+                snapshot_json,
+                created_at,
+                updated_at
+            ) VALUES (
+                :resource_type,
+                :resource_id,
+                NULL,
+                :usage_context,
+                :resource_label,
+                :inactive_reason,
+                :inactive_reason_label,
+                :inactive_since,
+                'pending',
+                :requested_by_user_id,
+                :requested_at,
+                NULL,
+                NULL,
+                NULL,
+                :snapshot_json,
+                :created_at,
+                :updated_at
+            )
+        ");
+
+        $snapshot = $resource;
+        $snapshot['approval_resource_type'] = $resourceType;
+
+        $stmt->bindValue(':resource_type', $resourceType);
+        $stmt->bindValue(':resource_id', $resourceId, PDO::PARAM_INT);
+        $stmt->bindValue(':usage_context', trim($usageContext) !== '' ? trim($usageContext) : 'Dispecer curse');
+        $stmt->bindValue(':resource_label', $this->limitString((string) ($resource['resource_label'] ?? ''), 190));
+        $stmt->bindValue(':inactive_reason', $this->limitString((string) ($resource['reason_key'] ?? 'other'), 80));
+        $stmt->bindValue(':inactive_reason_label', $this->limitString((string) ($resource['reason_label'] ?? 'Alt motiv'), 160));
+        $this->bindNullableString($stmt, ':inactive_since', $this->normalizeDate($resource['inactive_since'] ?? null));
+        $stmt->bindValue(':requested_by_user_id', $userId, PDO::PARAM_INT);
+        $stmt->bindValue(':requested_at', $now);
+        $this->bindNullableString($stmt, ':snapshot_json', $this->encodeSnapshot($snapshot));
+        $stmt->bindValue(':created_at', $now);
+        $stmt->bindValue(':updated_at', $now);
+        $stmt->execute();
+
+        $approvalId = (int) $this->db->lastInsertId();
+        $this->insertDocumentSnapshots($approvalId, is_array($resource['documents'] ?? null) ? $resource['documents'] : []);
+
+        return $this->getById($approvalId);
+    }
+
+    public function cancelPendingByRequester(int $approvalId, int $userId): bool
+    {
+        $this->ensureSchema();
+        if ($approvalId <= 0 || $userId <= 0) {
+            return false;
+        }
+
+        $stmt = $this->db->prepare("
+            DELETE FROM inactive_resource_approvals
+            WHERE id = :id
+              AND requested_by_user_id = :requested_by_user_id
+              AND status = 'pending'
+        ");
+        $stmt->bindValue(':id', $approvalId, PDO::PARAM_INT);
+        $stmt->bindValue(':requested_by_user_id', $userId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->rowCount() > 0;
+    }
+
     public function createForInactiveResources(array $resources, int $tripId, string $decision, ?int $userId): array
     {
         $createdIds = [];
@@ -265,7 +466,7 @@ class InactiveResourceApprovalModel extends BaseModel
     {
         $this->ensureSchema();
 
-        $resourceType = $this->normalizeResourceType((string) ($resource['resource_type'] ?? ''));
+        $resourceType = $this->approvalResourceTypeForSnapshot($resource);
         $resourceId = (int) ($resource['resource_id'] ?? 0);
         $status = $status === 'approved' ? 'approved' : 'pending';
 
@@ -324,6 +525,9 @@ class InactiveResourceApprovalModel extends BaseModel
             )
         ");
 
+        $snapshot = $resource;
+        $snapshot['approval_resource_type'] = $resourceType;
+
         $stmt->bindValue(':resource_type', $resourceType);
         $stmt->bindValue(':resource_id', $resourceId, PDO::PARAM_INT);
         $this->bindNullableInt($stmt, ':trip_id', $tripId);
@@ -338,7 +542,7 @@ class InactiveResourceApprovalModel extends BaseModel
         $this->bindNullableInt($stmt, ':reviewed_by_user_id', $status === 'approved' ? $userId : null);
         $this->bindNullableString($stmt, ':reviewed_at', $status === 'approved' ? $now : null);
         $this->bindNullableString($stmt, ':review_note', $status === 'approved' ? 'Aprobat imediat din Dispecer curse.' : null);
-        $this->bindNullableString($stmt, ':snapshot_json', $this->encodeSnapshot($resource));
+        $this->bindNullableString($stmt, ':snapshot_json', $this->encodeSnapshot($snapshot));
         $stmt->bindValue(':created_at', $now);
         $stmt->bindValue(':updated_at', $now);
         $stmt->execute();
@@ -358,7 +562,7 @@ class InactiveResourceApprovalModel extends BaseModel
 
         $currentKeys = [];
         foreach ($currentResources as $resource) {
-            $type = $this->normalizeResourceType((string) ($resource['resource_type'] ?? ''));
+            $type = $this->approvalResourceTypeForSnapshot($resource);
             $id = (int) ($resource['resource_id'] ?? 0);
             if ($type !== '' && $id > 0) {
                 $currentKeys[$type . ':' . $id] = true;
@@ -410,7 +614,7 @@ class InactiveResourceApprovalModel extends BaseModel
             LEFT JOIN utilizatori requester ON requester.id = a.requested_by_user_id
             LEFT JOIN utilizatori reviewer ON reviewer.id = a.reviewed_by_user_id
             LEFT JOIN curse_dispecer c ON c.id = a.trip_id
-            LEFT JOIN vehicule v ON v.id = a.resource_id AND a.resource_type = 'vehicle'
+            LEFT JOIN vehicule v ON v.id = a.resource_id AND a.resource_type IN ('vehicle', 'repair')
             LEFT JOIN soferi s ON s.id = a.resource_id AND a.resource_type = 'driver'
         ";
     }
@@ -574,7 +778,49 @@ class InactiveResourceApprovalModel extends BaseModel
     private function normalizeResourceType(string $resourceType): string
     {
         $resourceType = strtolower(trim($resourceType));
-        return in_array($resourceType, ['vehicle', 'driver'], true) ? $resourceType : '';
+        return in_array($resourceType, self::RESOURCE_TYPES, true) ? $resourceType : '';
+    }
+
+    private function approvalResourceTypeForSnapshot(array $resource): string
+    {
+        $resourceType = $this->normalizeResourceType((string) ($resource['approval_resource_type'] ?? ''));
+        if ($resourceType !== '') {
+            return $resourceType;
+        }
+
+        $resourceType = $this->normalizeResourceType((string) ($resource['resource_type'] ?? ''));
+        $reasonKey = strtolower(trim((string) ($resource['reason_key'] ?? $resource['inactive_reason'] ?? '')));
+        if ($resourceType === 'vehicle' && $reasonKey === 'repair') {
+            return 'repair';
+        }
+
+        return $resourceType;
+    }
+
+    private function ensureRepairResourceTypeColumn(): void
+    {
+        $stmt = $this->db->query("
+            SELECT COLUMN_TYPE
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'inactive_resource_approvals'
+              AND COLUMN_NAME = 'resource_type'
+            LIMIT 1
+        ");
+        $columnType = (string) $stmt->fetchColumn();
+        if ($columnType !== '' && !str_contains($columnType, "'repair'")) {
+            $this->db->exec("ALTER TABLE inactive_resource_approvals MODIFY COLUMN resource_type ENUM('vehicle','driver','repair') NOT NULL");
+        }
+    }
+
+    private function migrateRepairCategoryRows(): void
+    {
+        $this->db->exec("
+            UPDATE inactive_resource_approvals
+            SET resource_type = 'repair'
+            WHERE resource_type = 'vehicle'
+              AND inactive_reason = 'repair'
+        ");
     }
 
     private function normalizeStatus(string $status, bool $allowAll = false): string

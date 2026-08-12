@@ -34,10 +34,11 @@ class DashboardController
 
         $canReviewInactiveApprovals = $this->canReviewInactiveApprovals();
         $approvalSummary = [
-            'counts' => ['vehicle' => 0, 'driver' => 0],
+            'counts' => ['vehicle' => 0, 'driver' => 0, 'repair' => 0],
             'total' => 0,
             'vehicles' => [],
             'drivers' => [],
+            'repairs' => [],
         ];
         if ($canReviewInactiveApprovals) {
             try {
