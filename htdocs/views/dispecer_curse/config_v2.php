@@ -411,7 +411,7 @@ if ($configCreateMode) {
     <aside class="tcv2-sidebar">
         <div class="tcv2-side-head">
             <span class="tcv2-kicker">Beneficiari (<?= e((string) count($beneficiaries ?? [])) ?>)</span>
-            <a class="btn btn-sm btn-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config'])) ?>">+ Nou</a>
+            <a class="btn btn-sm btn-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2'])) ?>">+ Nou</a>
         </div>
         <input type="search" class="form-control form-control-sm tcv2-side-search" placeholder="Cauta beneficiar..." aria-label="Cauta beneficiar">
         <div class="tcv2-side-bulk">
@@ -457,7 +457,7 @@ if ($configCreateMode) {
                             form="bulk-beneficiary-delete-form"
                             aria-label="Selecteaza beneficiarul <?= e($sideBeneficiaryName) ?>"
                         >
-                        <a class="tcv2-side-link" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $sideBeneficiaryId])) ?>" title="Editeaza <?= e($sideBeneficiaryName) ?>">
+                        <a class="tcv2-side-link" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_edit_id' => $sideBeneficiaryId])) ?>" title="Editeaza <?= e($sideBeneficiaryName) ?>">
                             <span class="tcv2-side-name">
                                 <span class="tcv2-side-status <?= !empty($sideBeneficiary['activ']) ? 'is-on' : 'is-off' ?>" title="<?= !empty($sideBeneficiary['activ']) ? 'Activ' : 'Inactiv' ?>"></span>
                                 <strong><?= e($sideBeneficiaryName) ?></strong>
@@ -469,7 +469,7 @@ if ($configCreateMode) {
                             </span>
                         </a>
                         <div class="tcv2-side-actions">
-                            <a class="tcv2-side-icon" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_view_id' => $sideBeneficiaryId])) ?>" title="Detalii"><i class="bi bi-info-circle" aria-hidden="true"></i></a>
+                            <a class="tcv2-side-icon" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_view_id' => $sideBeneficiaryId])) ?>" title="Detalii"><i class="bi bi-info-circle" aria-hidden="true"></i></a>
                             <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_beneficiar'])) ?>" class="d-inline">
                                 <?= csrf_field() ?>
                                 <input type="hidden" name="id" value="<?= e((string) $sideBeneficiaryId) ?>">
@@ -548,7 +548,7 @@ if ($configCreateMode) {
                     <p class="tcv2-panel-hint mb-0">Alege tipurile de transport pentru care exista reguli active. Tarifele de baza pentru Primar si Compresor se completeaza aici; preturile pentru Distributie si Primar+Distributie se definesc pe fiecare ruta, la pasul 3.</p>
                 </div>
                 <?php if (($beneficiaryFormMode ?? 'create') === 'edit'): ?>
-                    <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config'])) ?>">Reseteaza formular</a>
+                    <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2'])) ?>">Reseteaza formular</a>
                 <?php endif; ?>
             </div>
 
@@ -771,7 +771,7 @@ if ($configCreateMode) {
                                 <?php if ($catalogEditingZoneId > 0): ?>zona „<strong><?= e((string) ($zoneFormData['nume'] ?? '')) ?></strong>"<?php endif; ?>
                                 — salvarea actualizeaza intrarea existenta peste tot unde e folosita.
                             </span>
-                            <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId])) ?>">Renunta</a>
+                            <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_edit_id' => $distributionBeneficiaryId])) ?>">Renunta</a>
                         </div>
                     <?php endif; ?>
                     <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_store_catalog'])) ?>" novalidate class="transport-distribution-inline-form transport-config-inline-form">
@@ -814,7 +814,7 @@ if ($configCreateMode) {
                                         $catalogLocationUsage = $locUsageByName[mb_strtolower(trim($catalogLocationName))] ?? 0;
                                         ?>
                                         <li class="tcv2-catalog-item<?= $catalogEditingLocId === $catalogLocationId ? ' is-editing' : '' ?>" data-catalog-item data-search="<?= e(mb_strtolower($catalogLocationName)) ?>">
-                                            <a class="tcv2-catalog-name" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'loc_edit_id' => $catalogLocationId])) ?>" title="Redenumeste locul">
+                                            <a class="tcv2-catalog-name" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'loc_edit_id' => $catalogLocationId])) ?>" title="Redenumeste locul">
                                                 <i class="bi bi-geo-alt" aria-hidden="true"></i>
                                                 <span><?= e($catalogLocationName) ?></span>
                                             </a>
@@ -838,7 +838,7 @@ if ($configCreateMode) {
                                         $catalogZoneUsage = $zoneUsageByName[mb_strtolower(trim($catalogZoneName))] ?? 0;
                                         ?>
                                         <li class="tcv2-catalog-item<?= $catalogEditingZoneId === $catalogZoneId ? ' is-editing' : '' ?>" data-catalog-item data-search="<?= e(mb_strtolower($catalogZoneName)) ?>">
-                                            <a class="tcv2-catalog-name" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'zona_edit_id' => $catalogZoneId])) ?>" title="Redenumeste zona">
+                                            <a class="tcv2-catalog-name" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'zona_edit_id' => $catalogZoneId])) ?>" title="Redenumeste zona">
                                                 <i class="bi bi-pin-map" aria-hidden="true"></i>
                                                 <span><?= e($catalogZoneName) ?></span>
                                             </a>
@@ -1001,7 +1001,7 @@ if ($configCreateMode) {
 
                             <div class="mt-3 d-flex justify-content-end gap-2 transport-config-inline-actions">
                                 <?php if ($isDistributionOnlyRouteEditMode): ?>
-                                    <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId])) ?>">Renunta editarea</a>
+                                    <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_edit_id' => $distributionBeneficiaryId])) ?>">Renunta editarea</a>
                                 <?php endif; ?>
                                 <button type="submit" class="btn btn-primary" name="panel_action" value="add_route" <?= $canAddDistributionRoute ? '' : 'disabled' ?>>
                                     <?= $isDistributionOnlyRouteEditMode ? 'Actualizeaza configuratia' : 'Adauga configuratie' ?>
@@ -1052,7 +1052,7 @@ if ($configCreateMode) {
                                                 <td class="text-end transport-route-actions-cell">
                                                     <?= $renderTransportRowActions(
                                                         'distributie-' . $routeId,
-                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_distributie_edit_id' => $routeId]),
+                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_distributie_edit_id' => $routeId]),
                                                         build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_ruta']),
                                                         [
                                                             'id' => $routeId,
@@ -1224,7 +1224,7 @@ if ($configCreateMode) {
 
                             <div class="mt-3 d-flex justify-content-end gap-2 transport-config-inline-actions">
                                 <?php if ($isPrimaryDistributionRouteEditMode): ?>
-                                    <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId])) ?>">Renunta editarea</a>
+                                    <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_edit_id' => $distributionBeneficiaryId])) ?>">Renunta editarea</a>
                                 <?php endif; ?>
                                 <button type="submit" class="btn btn-primary" name="panel_action" value="add_route" <?= $canAddDistributionRoute ? '' : 'disabled' ?>>
                                     <?= $isPrimaryDistributionRouteEditMode ? 'Actualizeaza configuratia' : 'Adauga configuratie' ?>
@@ -1273,7 +1273,7 @@ if ($configCreateMode) {
                                                 <td class="text-end transport-route-actions-cell">
                                                     <?= $renderTransportRowActions(
                                                         'primar-distributie-' . $routeId,
-                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_primar_distributie_edit_id' => $routeId]),
+                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_primar_distributie_edit_id' => $routeId]),
                                                         build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_ruta']),
                                                         [
                                                             'id' => $routeId,
@@ -1446,7 +1446,7 @@ if ($configCreateMode) {
                             <?php if ($isPrimaryRouteEditMode): ?>
                                 <a
                                     class="btn btn-outline-secondary"
-                                    href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId])) ?>"
+                                    href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_edit_id' => $distributionBeneficiaryId])) ?>"
                                 >
                                     Renunta editarea
                                 </a>
@@ -1497,7 +1497,7 @@ if ($configCreateMode) {
                                                 <td class="text-end transport-route-actions-cell">
                                                     <?= $renderTransportRowActions(
                                                         'primar-' . $primaryRouteId,
-                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_primar_edit_id' => $primaryRouteId]),
+                                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'route_primar_edit_id' => $primaryRouteId]),
                                                         build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_ruta_primar']),
                                                         [
                                                             'id' => $primaryRouteId,
@@ -1594,13 +1594,13 @@ if ($configCreateMode) {
                                 <td class="col-actions text-end transport-route-actions-cell">
                                     <?= $renderTransportRowActions(
                                         'beneficiar-' . $beneficiaryId,
-                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $beneficiaryId]),
+                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_edit_id' => $beneficiaryId]),
                                         build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_beneficiar']),
                                         [
                                             'id' => $beneficiaryId,
                                         ],
                                         'Sigur doresti sa stergi acest beneficiar?',
-                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_view_id' => $beneficiaryId])
+                                        build_query_url(['page' => 'dispecer_curse', 'action' => 'config_v2', 'beneficiar_view_id' => $beneficiaryId])
                                     ) ?>
                                 </td>
                             </tr>

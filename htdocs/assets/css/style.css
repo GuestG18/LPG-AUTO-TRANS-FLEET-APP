@@ -21109,3 +21109,21 @@ body.dispatcher-races-header-pinned .dispatcher-open-races-alert-container {
 .dispatcher-races-table thead th.text-end .races-head-wrap {
     justify-content: flex-end;
 }
+
+/* Popup-ul "curse cu informatii lipsa" ocupa tot ecranul, fara spatii in jur */
+.dispatcher-open-races-modal-overlay {
+    padding: 0 !important;
+}
+
+.orx-modal {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+}
+
+/* Fara selectie de text la Shift + click in listele de filtrare */
+.dispatcher-races-filter-dropdown .races-filter-option {
+    user-select: none;
+}

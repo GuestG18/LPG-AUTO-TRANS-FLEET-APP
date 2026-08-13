@@ -128,6 +128,9 @@ class DispecerCurseController
             case 'config':
                 $this->configAction();
                 return;
+            case 'config_v2':
+                $this->configAction(true);
+                return;
             case 'refacturari':
                 $this->refacturariAction();
                 return;
@@ -2389,7 +2392,7 @@ class DispecerCurseController
         $this->redirectToSafeDispecerUrl($returnUrl !== '' ? $returnUrl : $redirectUrl);
     }
 
-    private function configAction(): void
+    private function configAction(bool $isSandbox = false): void
     {
         require_admin_or_403();
 
@@ -2856,8 +2859,8 @@ class DispecerCurseController
             : [];
         $primaryRouteFormMode = trim((string) ($primaryRouteFormData['route_id'] ?? '')) !== '' ? 'edit' : 'create';
 
-        render('dispecer_curse/config.php', [
-            'pageTitle' => 'Configurare transport',
+        render($isSandbox ? 'dispecer_curse/config_v2.php' : 'dispecer_curse/config.php', [
+            'pageTitle' => $isSandbox ? 'Configurare transport (Sandbox)' : 'Configurare transport',
             'currentPage' => 'dispecer_curse',
             'locations' => $locations,
             'zones' => $zones,

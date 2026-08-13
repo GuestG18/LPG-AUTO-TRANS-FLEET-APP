@@ -1961,10 +1961,91 @@ document.addEventListener('DOMContentLoaded', function () {
             document.body.appendChild(filterDropdownEl);
             let openFilterColumn = -1;
 
+            // Selectie pe interval cu Shift + click, generica pentru orice filtru de coloana:
+            // ancora este ultima optiune apasata fara Shift, valabila doar in dropdown-ul curent.
+            let filterRangeAnchorEl = null;
+            let suppressRangeChange = false;
+
             const closeFilterDropdown = function () {
                 filterDropdownEl.hidden = true;
                 openFilterColumn = -1;
+                filterRangeAnchorEl = null;
             };
+
+            // Un singur handler delegat pe componenta de dropdown: functioneaza identic
+            // pentru toate coloanele, actuale sau viitoare, fara cod specific per coloana.
+            filterDropdownEl.addEventListener('click', function (event) {
+                const optionEl = event.target instanceof Element
+                    ? event.target.closest('.races-filter-list .races-filter-option')
+                    : null;
+                if (!(optionEl instanceof HTMLElement)) {
+                    return;
+                }
+                const checkboxEl = optionEl.querySelector('input[type="checkbox"]');
+                if (!(checkboxEl instanceof HTMLInputElement)) {
+                    return;
+                }
+
+                const listEl = optionEl.closest('.races-filter-list');
+                const visibleOptions = listEl instanceof HTMLElement
+                    ? Array.prototype.filter.call(listEl.querySelectorAll('.races-filter-option'), function (el) {
+                        return !el.classList.contains('d-none');
+                    })
+                    : [];
+
+                if (!event.shiftKey) {
+                    // Click normal: comportamentul existent ramane; optiunea devine ancora.
+                    filterRangeAnchorEl = optionEl;
+                    return;
+                }
+
+                const anchorIndex = visibleOptions.indexOf(filterRangeAnchorEl);
+                const targetIndex = visibleOptions.indexOf(optionEl);
+                if (anchorIndex === -1 || targetIndex === -1) {
+                    // Ancora lipseste sau a fost ascunsa de cautare: tratam ca selectie
+                    // normala, iar optiunea apasata devine noua ancora.
+                    filterRangeAnchorEl = optionEl;
+                    return;
+                }
+
+                // Starea rezultata a tintei: daca clickul a fost direct pe checkbox,
+                // starea e deja comutata; daca a fost pe eticheta, comutarea nativa e oprita
+                // si o aplicam noi pe tot intervalul.
+                const clickedCheckboxDirectly = event.target === checkboxEl;
+                const resultingChecked = clickedCheckboxDirectly ? checkboxEl.checked : !checkboxEl.checked;
+                if (!clickedCheckboxDirectly) {
+                    event.preventDefault();
+                }
+
+                const from = Math.min(anchorIndex, targetIndex);
+                const to = Math.max(anchorIndex, targetIndex);
+                const targetSet = columnFilters[openFilterColumn] || new Set();
+                for (let optionIdx = from; optionIdx <= to; optionIdx++) {
+                    const rangeCheckboxEl = visibleOptions[optionIdx].querySelector('input[type="checkbox"]');
+                    if (!(rangeCheckboxEl instanceof HTMLInputElement)) {
+                        continue;
+                    }
+                    rangeCheckboxEl.checked = resultingChecked;
+                    if (resultingChecked) {
+                        targetSet.add(rangeCheckboxEl.value);
+                    } else {
+                        targetSet.delete(rangeCheckboxEl.value);
+                    }
+                }
+                if (targetSet.size > 0) {
+                    columnFilters[openFilterColumn] = targetSet;
+                } else {
+                    delete columnFilters[openFilterColumn];
+                }
+
+                // O singura aplicare a filtrelor pentru intregul interval; change-ul nativ
+                // al checkboxului tinta (cand exista) este suprimat pana la finalul clickului.
+                suppressRangeChange = true;
+                applyFilters();
+                window.setTimeout(function () {
+                    suppressRangeChange = false;
+                }, 0);
+            });
 
             // Trece rândul prin toate filtrele active, cu exceptia coloanei date.
             // Folosit pentru filtrarea in cascada: optiunile unei coloane reflecta doar
@@ -1989,6 +2070,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
             const openFilterDropdown = function (columnIndex, anchorRect) {
                 openFilterColumn = columnIndex;
+                // Continutul se reconstruieste: ancora Shift a vechii liste nu mai e valabila.
+                filterRangeAnchorEl = null;
                 const headTh = racesHeadRowEl.cells[columnIndex];
                 const columnLabel = headTh ? headTh.textContent.replace(/[▲▼↕]/g, '').replace(/\s+/g, ' ').trim() : '';
 
@@ -2058,14 +2141,20 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 const listEl = document.createElement('div');
                 listEl.className = 'races-filter-list';
+                listEl.title = 'Shift + click pentru selectarea unui interval';
                 uniqueValues.forEach(function (value) {
                     const optionEl = document.createElement('label');
                     optionEl.className = 'races-filter-option';
                     const checkboxEl = document.createElement('input');
                     checkboxEl.type = 'checkbox';
                     checkboxEl.className = 'form-check-input m-0 mt-1';
+                    checkboxEl.value = value;
                     checkboxEl.checked = activeSet.has(value);
                     checkboxEl.addEventListener('change', function () {
+                        if (suppressRangeChange) {
+                            // Selectia pe interval (Shift) a actualizat deja starea si filtrele.
+                            return;
+                        }
                         const targetSet = columnFilters[columnIndex] || new Set();
                         if (checkboxEl.checked) {
                             targetSet.add(value);
