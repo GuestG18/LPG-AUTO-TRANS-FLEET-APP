@@ -328,6 +328,8 @@ require_once __DIR__ . '/services/InactiveResourceStatusService.php';
 require_once __DIR__ . '/services/CentralizatorFacturareService.php';
 require_once __DIR__ . '/services/EmailService.php';
 require_once __DIR__ . '/services/CardOilApiClient.php';
+require_once __DIR__ . '/services/SasFleetClient.php';
+require_once __DIR__ . '/services/FleetLivePositionService.php';
 require_once __DIR__ . '/services/WebAuthnService.php';
 
 require_once __DIR__ . '/controllers/AuthController.php';
@@ -339,6 +341,7 @@ require_once __DIR__ . '/controllers/VehicleEquipmentInventoryController.php';
 require_once __DIR__ . '/controllers/VehicleAuthorizationController.php';
 require_once __DIR__ . '/controllers/ProfileController.php';
 require_once __DIR__ . '/controllers/DispecerCurseController.php';
+require_once __DIR__ . '/controllers/FleetMapController.php';
 require_once __DIR__ . '/controllers/CourseExpenseHistoryController.php';
 require_once __DIR__ . '/controllers/CentralizatorFacturareController.php';
 require_once __DIR__ . '/controllers/ProgramareConcediiController.php';
@@ -533,6 +536,11 @@ try {
         case 'dispecer_curse':
             require_auth();
             (new DispecerCurseController($db))->handle($action);
+            break;
+
+        case 'harta_flota':
+            require_auth();
+            (new FleetMapController($db))->handle($action);
             break;
 
         case 'carburanti':

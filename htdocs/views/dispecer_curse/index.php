@@ -610,6 +610,7 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                     <input type="hidden" name="vehicle_config_decision" value="" data-vehicle-config-decision>
                     <input type="hidden" name="inactive_approval_decision" value="<?= e((string) ($formData['inactive_approval_decision'] ?? '')) ?>" data-inactive-approval-decision>
                     <input type="hidden" name="inactive_approval_signature" value="" data-inactive-approval-signature>
+            <input type="hidden" name="confirm_incomplete" value="">
                     <datalist id="race_time_options">
                         <?php for ($hour = 0; $hour < 24; $hour++): ?>
                             <?php foreach (['00', '15', '30', '45'] as $minute): ?>
@@ -3417,6 +3418,58 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             alert(<?= json_encode(implode("\n", (array) $maintenancePopupMessages), JSON_UNESCAPED_UNICODE) ?>);
+        });
+    </script>
+<?php endif; ?>
+
+<?php $incompleteConfirmItems = is_array($incompleteConfirmItems ?? null) ? array_values(array_filter(array_map('strval', $incompleteConfirmItems))) : []; ?>
+<?php if ($incompleteConfirmItems !== []): ?>
+    <div class="modal fade" id="incompleteTripConfirmModal" tabindex="-1" aria-labelledby="incompleteTripConfirmTitle" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="incompleteTripConfirmTitle">Salvezi cursa fara toate informatiile?</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-2">Cursei ii lipsesc urmatoarele informatii:</p>
+                    <ul class="mb-2">
+                        <?php foreach ($incompleteConfirmItems as $incompleteConfirmItem): ?>
+                            <li><?= e($incompleteConfirmItem) ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                    <p class="text-muted small mb-0">Poti salva oricum — cursa va aparea in meniul „curse cu informatii lipsa" si o poti completa ulterior de acolo.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Nu, completez acum</button>
+                    <button type="button" class="btn btn-primary" data-role="confirm-incomplete-save">Da, salveaza oricum</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var incompleteModalElement = document.getElementById('incompleteTripConfirmModal');
+            if (!incompleteModalElement) { return; }
+            var incompleteRaceForm = document.querySelector('form.dispatcher-race-form');
+            var incompleteConfirmButton = incompleteModalElement.querySelector('[data-role="confirm-incomplete-save"]');
+            if (incompleteConfirmButton && incompleteRaceForm) {
+                incompleteConfirmButton.addEventListener('click', function () {
+                    var incompleteFlagInput = incompleteRaceForm.querySelector('input[name="confirm_incomplete"]');
+                    if (incompleteFlagInput) { incompleteFlagInput.value = '1'; }
+                    if (typeof incompleteRaceForm.requestSubmit === 'function') {
+                        incompleteRaceForm.requestSubmit();
+                    } else {
+                        incompleteRaceForm.submit();
+                    }
+                });
+            }
+            if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                new bootstrap.Modal(incompleteModalElement).show();
+                return;
+            }
+            incompleteModalElement.classList.add('show');
+            incompleteModalElement.style.display = 'block';
         });
     </script>
 <?php endif; ?>

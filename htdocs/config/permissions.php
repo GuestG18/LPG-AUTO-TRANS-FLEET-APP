@@ -43,6 +43,10 @@ return [
             'routes' => ['dashboard_analitic', 'dashboard_analytic_data'],
             'actions' => ['view' => ['label' => 'Vizualizare']],
         ],
+        'harta_flota' => [
+            'group' => 'operational', 'label' => 'Harta Flota', 'icon' => 'bi-map', 'scope' => 'all',
+            'actions' => ['view' => ['label' => 'Vizualizare']],
+        ],
         'inactive_approvals' => [
             'group' => 'operational', 'label' => 'Solicitari aprobare inactive', 'icon' => 'bi-shield-exclamation', 'scope' => 'all',
             'actions' => [

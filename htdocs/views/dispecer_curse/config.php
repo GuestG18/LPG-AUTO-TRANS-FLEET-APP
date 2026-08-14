@@ -309,6 +309,16 @@ $formatVehicleCountLabel = static function (array $selectedVehicleIds, array $la
     return $selectedCount === 1 ? '1 vehicul selectat' : $selectedCount . ' vehicule selectate';
 };
 
+// V2.8: lista distincta de garaje, pentru filtrul de vehicule din formularul de rute
+$vehicleGarageOptions = [];
+foreach (($vehicles ?? []) as $garageVehicle) {
+    $garageName = trim((string) ($garageVehicle['garaj'] ?? ''));
+    if ($garageName !== '') {
+        $vehicleGarageOptions[mb_strtolower($garageName)] = $garageName;
+    }
+}
+ksort($vehicleGarageOptions);
+
 // V2.7: vehiculele grupate dupa capacitatea de transport, pentru dropdown-urile de selectie
 $vehicleCapacityGroups = [];
 foreach (($vehicles ?? []) as $capacityGroupVehicle) {
@@ -411,7 +421,7 @@ if ($configCreateMode) {
     <aside class="tcv2-sidebar">
         <div class="tcv2-side-head">
             <span class="tcv2-kicker">Beneficiari (<?= e((string) count($beneficiaries ?? [])) ?>)</span>
-            <a class="btn btn-sm btn-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config'])) ?>">+ Nou</a>
+            <a class="btn btn-sm btn-primary" data-new-beneficiary href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config'])) ?>">+ Nou</a>
         </div>
         <input type="search" class="form-control form-control-sm tcv2-side-search" placeholder="Cauta beneficiar..." aria-label="Cauta beneficiar">
         <div class="tcv2-side-bulk">
@@ -716,7 +726,7 @@ if ($configCreateMode) {
                                                         $vehicleLabel = trim((string) ($vehicle['nr_inmatriculare'] ?? '-')) . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? ''));
                                                         $vehiclePlate = trim((string) ($vehicle['nr_inmatriculare'] ?? ''));
                                                         ?>
-                                                        <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option">
+                                                        <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option" data-vehicle-garage="<?= e(mb_strtolower(trim((string) ($vehicle['garaj'] ?? '')))) ?>">
                                                             <input class="form-check-input m-0" type="checkbox" name="compresor_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" data-vehicle-plate="<?= e($vehiclePlate) ?>" <?= in_array((string) $vehicleId, $compresorSelectedVehicleIds, true) ? 'checked' : '' ?>>
                                                             <span><?= e($vehicleLabel) ?></span>
                                                         </label>
@@ -985,7 +995,7 @@ if ($configCreateMode) {
                                                     <?php foreach ($capacityGroup['vehicles'] as $vehicle): ?>
                                                         <?php $vehicleId = (int) ($vehicle['id'] ?? 0); ?>
                                                         <?php $vehicleLabel = trim((string) ($vehicle['nr_inmatriculare'] ?? '-')) . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? '')); ?>
-                                                        <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option">
+                                                        <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option" data-vehicle-garage="<?= e(mb_strtolower(trim((string) ($vehicle['garaj'] ?? '')))) ?>">
                                                             <input class="form-check-input m-0" type="checkbox" name="route_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" <?= in_array((string) $vehicleId, $distributionOnlyRouteSelectedVehicleIds, true) ? 'checked' : '' ?>>
                                                             <span><?= e(trim($vehicleLabel)) ?></span>
                                                         </label>
@@ -1200,7 +1210,7 @@ if ($configCreateMode) {
                                                     <?php foreach ($capacityGroup['vehicles'] as $vehicle): ?>
                                                         <?php $vehicleId = (int) ($vehicle['id'] ?? 0); ?>
                                                         <?php $vehicleLabel = trim((string) ($vehicle['nr_inmatriculare'] ?? '-')) . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? '')); ?>
-                                                        <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option">
+                                                        <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option" data-vehicle-garage="<?= e(mb_strtolower(trim((string) ($vehicle['garaj'] ?? '')))) ?>">
                                                             <input class="form-check-input m-0" type="checkbox" name="route_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" <?= in_array((string) $vehicleId, $primaryDistributionRouteSelectedVehicleIds, true) ? 'checked' : '' ?>>
                                                             <span><?= e(trim($vehicleLabel)) ?></span>
                                                         </label>
@@ -1377,6 +1387,23 @@ if ($configCreateMode) {
 
                             <div class="col-12 tcv2-group-sep">Vehicule si optiuni</div>
                             <div class="col-12 col-md-6">
+                                <label class="form-label" for="config_primary_route_garage_filter_toggle">Garaj (filtru vehicule)</label>
+                                <div class="dropdown vehicle-multiselect-dropdown" data-garage-filter-menu="config_primary_route_vehicle_ids_toggle">
+                                    <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start vehicle-multiselect-toggle" type="button" id="config_primary_route_garage_filter_toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+                                        <span data-role="garage-filter-label">Toate garajele</span>
+                                    </button>
+                                    <div class="dropdown-menu w-100 p-2 vehicle-multiselect-menu">
+                                        <?php foreach ($vehicleGarageOptions as $garageKey => $garageLabel): ?>
+                                            <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1">
+                                                <input class="form-check-input m-0" type="checkbox" value="<?= e((string) $garageKey) ?>">
+                                                <span><?= e((string) $garageLabel) ?></span>
+                                            </label>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                                <div class="form-text">Optional: alege unul sau mai multe garaje — lista de vehicule arata doar vehiculele din garajele selectate.</div>
+                            </div>
+                            <div class="col-12 col-md-6">
                                 <label class="form-label" for="config_primary_route_vehicle_ids_toggle">Vehicule <span class="text-danger">*</span></label>
                                 <div class="dropdown vehicle-multiselect-dropdown">
                                     <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start vehicle-multiselect-toggle <?= isset($primaryRouteFormErrors['vehicle_ids']) ? 'is-invalid' : '' ?>" type="button" id="config_primary_route_vehicle_ids_toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
@@ -1405,7 +1432,7 @@ if ($configCreateMode) {
                                                 <?php foreach ($capacityGroup['vehicles'] as $vehicle): ?>
                                                     <?php $vehicleId = (int) ($vehicle['id'] ?? 0); ?>
                                                     <?php $vehicleLabel = trim((string) ($vehicle['nr_inmatriculare'] ?? '-')) . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? '')); ?>
-                                                    <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option">
+                                                    <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option" data-vehicle-garage="<?= e(mb_strtolower(trim((string) ($vehicle['garaj'] ?? '')))) ?>">
                                                         <input class="form-check-input m-0" type="checkbox" name="route_primar_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" <?= in_array((string) $vehicleId, $primaryRouteSelectedVehicleIds, true) ? 'checked' : '' ?>>
                                                         <span><?= e(trim($vehicleLabel)) ?></span>
                                                     </label>
@@ -3647,6 +3674,27 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
+    // --- V2.8: "+ Nou" reactioneaza si cand esti deja pe formularul de creare ---
+    const newBeneficiaryLink = document.querySelector('[data-new-beneficiary]');
+    if (newBeneficiaryLink instanceof HTMLElement) {
+        newBeneficiaryLink.addEventListener('click', function (event) {
+            const currentParams = new URLSearchParams(window.location.search);
+            const hasServerState = ['beneficiar_edit_id', 'beneficiar_view_id', 'loc_edit_id', 'zona_edit_id', 'route_distributie_edit_id', 'route_primar_distributie_edit_id', 'route_primar_edit_id', 'route_edit_id']
+                .some(function (paramName) { return currentParams.has(paramName); });
+            const nameInput = document.getElementById('config_beneficiar_nume');
+            const nameHasContent = nameInput instanceof HTMLInputElement && nameInput.value.trim() !== '';
+            if (hasServerState || nameHasContent) {
+                return;
+            }
+            event.preventDefault();
+            activateConfigTab('beneficiar');
+            if (nameInput instanceof HTMLInputElement) {
+                nameInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                nameInput.focus({ preventScroll: true });
+            }
+        });
+    }
+
     // --- V2.1: disclosure pentru formularele de rute ---
     document.querySelectorAll('[data-toggle-form]').forEach(function (toggleEl) {
         toggleEl.addEventListener('click', function () {
@@ -3749,7 +3797,12 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
         const query = searchInput.value.trim().toLocaleLowerCase('ro-RO');
-        menuEl.classList.toggle('is-searching', query !== '');
+        const menuToggleId = String(menuEl.getAttribute('aria-labelledby') || '');
+        const garageFilterEl = menuToggleId !== '' ? document.querySelector('[data-garage-filter-menu="' + menuToggleId + '"]') : null;
+        const selectedGarages = garageFilterEl
+            ? Array.from(garageFilterEl.querySelectorAll('input[type="checkbox"]:checked')).map(function (garageInput) { return String(garageInput.value); })
+            : [];
+        menuEl.classList.toggle('is-searching', query !== '' || selectedGarages.length > 0);
         let visibleCount = 0;
         menuEl.querySelectorAll('[data-vehicle-group]').forEach(function (groupEl) {
             if (!(groupEl instanceof HTMLElement)) {
@@ -3762,7 +3815,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     return;
                 }
                 const optionText = String(optionEl.textContent || '').toLocaleLowerCase('ro-RO');
-                const isVisible = query === '' || groupLabelMatches || optionText.includes(query);
+                const garageAllowed = selectedGarages.length === 0 || selectedGarages.indexOf(String(optionEl.dataset.vehicleGarage || '')) !== -1;
+                const isVisible = garageAllowed && (query === '' || groupLabelMatches || optionText.includes(query));
                 optionEl.hidden = !isVisible;
                 if (isVisible) {
                     groupVisibleCount += 1;
@@ -3838,6 +3892,26 @@ document.addEventListener('DOMContentLoaded', function () {
         const menuSearchInput = closestElement(event.target, '[data-vehicle-menu-search]');
         if (menuSearchInput instanceof HTMLInputElement) {
             filterVehicleMenu(menuSearchInput);
+        }
+    });
+
+    // --- V2.8: filtrul de garaj pentru lista de vehicule ---
+    document.addEventListener('change', function (event) {
+        const garageFilterRoot = closestElement(event.target, '[data-garage-filter-menu]');
+        if (!(garageFilterRoot instanceof HTMLElement) || !(event.target instanceof HTMLInputElement)) {
+            return;
+        }
+        const selectedGarageCount = garageFilterRoot.querySelectorAll('input[type="checkbox"]:checked').length;
+        const garageFilterLabel = garageFilterRoot.querySelector('[data-role="garage-filter-label"]');
+        if (garageFilterLabel instanceof HTMLElement) {
+            garageFilterLabel.textContent = selectedGarageCount === 0
+                ? 'Toate garajele'
+                : (selectedGarageCount === 1 ? '1 garaj selectat' : selectedGarageCount + ' garaje selectate');
+        }
+        const targetToggleId = String(garageFilterRoot.dataset.garageFilterMenu || '');
+        const targetSearchInput = document.querySelector('[aria-labelledby="' + targetToggleId + '"] [data-vehicle-menu-search]');
+        if (targetSearchInput instanceof HTMLInputElement) {
+            filterVehicleMenu(targetSearchInput);
         }
     });
 

@@ -194,9 +194,17 @@ $raceExpenseStatusBadgeClass = $raceExpenseStatus === 'not_applicable' ? 'bg-sec
 $raceExpenseStatusLabel = $raceExpenseStatus === 'not_applicable' ? 'Nu e cazul' : 'Lipsa cheltuieli';
 // Deep-link generic: ?focus=<cheie> deruleaza si evidentiaza campul corespunzator.
 $focusFieldMap = [
-    'end_time' => 'edit_race_ora_sfarsit',
-    'start_time' => 'edit_race_ora_inceput',
+    'end_time' => 'edit_race_end_datetime',
+    'start_time' => 'edit_race_start_datetime',
     'loading_date' => 'edit_race_data_incarcare',
+    'driver' => 'edit_race_driver_id',
+    'beneficiary' => 'edit_race_beneficiar_id',
+    'goods' => 'edit_race_tip_marfa',
+    'loading_location' => 'edit_race_loc_incarcare_id',
+    'departure_location' => 'edit_race_loc_plecare',
+    'suction_location' => 'edit_race_loc_aspirare',
+    'delivery_location' => 'edit_race_loc_livrare',
+    'closing_location' => 'edit_race_loc_livrare_cursa',
     'km' => 'edit_race_km_cursa',
     'km_total' => 'edit_race_km_totali',
     'clients' => 'edit_race_nr_clienti',
@@ -253,6 +261,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
             <?= csrf_field() ?>
             <input type="hidden" name="inactive_approval_decision" value="<?= e((string) ($raceFormData['inactive_approval_decision'] ?? '')) ?>" data-inactive-approval-decision>
             <input type="hidden" name="inactive_approval_signature" value="" data-inactive-approval-signature>
+            <input type="hidden" name="confirm_incomplete" value="">
             <datalist id="edit_race_time_options">
                 <?php for ($hour = 0; $hour < 24; $hour++): ?>
                     <?php foreach (['00', '15', '30', '45'] as $minute): ?>
@@ -270,6 +279,36 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                         </div>
                     </div>
                 <?php endif; ?>
+
+                <div class="col-12 col-md-6 dispatcher-top-field">
+                    <label class="form-label" for="edit_race_beneficiar_id">Beneficiar transport <span class="text-danger">*</span></label>
+                    <select class="form-select <?= isset($raceFormErrors['beneficiar_id']) ? 'is-invalid' : '' ?>" id="edit_race_beneficiar_id" name="beneficiar_id" required>
+                        <option value="">-- Selecteaza --</option>
+                        <?php foreach ($beneficiaries as $beneficiary): ?>
+                            <?php
+                                $beneficiaryId = (int) ($beneficiary['id'] ?? 0);
+                                $beneficiaryName = (string) ($beneficiary['nume'] ?? '-');
+                                $beneficiaryIsActive = !empty($beneficiary['activ']);
+                            ?>
+                            <option value="<?= e((string) $beneficiaryId) ?>" <?= (string) ($raceFormData['beneficiar_id'] ?? '') === (string) $beneficiaryId ? 'selected' : '' ?>>
+                                <?= e($beneficiaryName) ?><?= $beneficiaryIsActive ? '' : ' (inactiv)' ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <?php if (isset($raceFormErrors['beneficiar_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['beneficiar_id']) ?></div><?php endif; ?>
+                </div>
+
+                <div class="col-12 col-md-6 dispatcher-top-field">
+                    <label class="form-label" for="edit_race_tip_transport">Tip Transport <span class="text-danger">*</span></label>
+                    <select class="form-select <?= isset($raceFormErrors['tip_transport']) ? 'is-invalid' : '' ?>" id="edit_race_tip_transport" name="tip_transport" data-role="tip-transport" required>
+                        <?php foreach ($transportTypes as $value => $label): ?>
+                            <option value="<?= e((string) $value) ?>" <?= (string) ($raceFormData['tip_transport'] ?? 'primar') === (string) $value ? 'selected' : '' ?>>
+                                <?= e((string) $label) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <?php if (isset($raceFormErrors['tip_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tip_transport']) ?></div><?php endif; ?>
+                </div>
 
                 <div class="col-12 col-md-6 dispatcher-top-field">
                     <label class="form-label" for="edit_race_vehicle_id">Nr. Inmatriculare <span class="text-danger">*</span></label>
@@ -321,98 +360,118 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <div class="form-text">Soferii se incarca automat dupa vehiculul selectat.</div>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-top-field">
-                    <label class="form-label" for="edit_race_tip_transport">Tip transport <span class="text-danger">*</span></label>
-                    <select class="form-select <?= isset($raceFormErrors['tip_transport']) ? 'is-invalid' : '' ?>" id="edit_race_tip_transport" name="tip_transport" data-role="tip-transport" required>
-                        <?php foreach ($transportTypes as $value => $label): ?>
-                            <option value="<?= e((string) $value) ?>" <?= (string) ($raceFormData['tip_transport'] ?? 'primar') === (string) $value ? 'selected' : '' ?>>
-                                <?= e((string) $label) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <?php if (isset($raceFormErrors['tip_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tip_transport']) ?></div><?php endif; ?>
-                </div>
-
-                <div class="col-12 col-md-6 dispatcher-top-field">
-                    <label class="form-label" for="edit_race_beneficiar_id">Beneficiar transport <span class="text-danger">*</span></label>
-                    <select class="form-select <?= isset($raceFormErrors['beneficiar_id']) ? 'is-invalid' : '' ?>" id="edit_race_beneficiar_id" name="beneficiar_id" required>
-                        <option value="">-- Selecteaza --</option>
-                        <?php foreach ($beneficiaries as $beneficiary): ?>
-                            <?php
-                                $beneficiaryId = (int) ($beneficiary['id'] ?? 0);
-                                $beneficiaryName = (string) ($beneficiary['nume'] ?? '-');
-                                $beneficiaryIsActive = !empty($beneficiary['activ']);
-                            ?>
-                            <option value="<?= e((string) $beneficiaryId) ?>" <?= (string) ($raceFormData['beneficiar_id'] ?? '') === (string) $beneficiaryId ? 'selected' : '' ?>>
-                                <?= e($beneficiaryName) ?><?= $beneficiaryIsActive ? '' : ' (inactiv)' ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <?php if (isset($raceFormErrors['beneficiar_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['beneficiar_id']) ?></div><?php endif; ?>
-                </div>
-
-                <div class="col-12 col-md-6 dispatcher-schedule-field">
-                    <label class="form-label" for="edit_race_data_incarcare">Data incarcare</label>
-                    <input type="text" class="form-control <?= isset($raceFormErrors['data_incarcare']) ? 'is-invalid' : '' ?>" id="edit_race_data_incarcare" name="data_incarcare" value="<?= e($formatRaceDateInput($raceFormData['data_incarcare'] ?? '')) ?>" placeholder="zz/ll/aaaa" inputmode="numeric" autocomplete="off" maxlength="10" pattern="(?:0?[1-9]|[12][0-9]|3[01])[\/.-](?:0?[1-9]|1[0-2])[\/.-][0-9]{4}" title="Format zi/luna/an, de exemplu 07/01/2026" data-role="race-date-ro">
-                    <?php if (isset($raceFormErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_incarcare']) ?></div><?php endif; ?>
-                </div>
-                <div class="col-12 col-md-6 dispatcher-schedule-field">
-                    <label class="form-label" for="edit_race_data_inceput">Data inceput <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control <?= isset($raceFormErrors['data_inceput']) ? 'is-invalid' : '' ?>" id="edit_race_data_inceput" name="data_inceput" value="<?= e($formatRaceDateInput($raceFormData['data_inceput'] ?? ($raceFormData['data_cursa'] ?? ''))) ?>" placeholder="zz/ll/aaaa" inputmode="numeric" autocomplete="off" maxlength="10" pattern="(?:0?[1-9]|[12][0-9]|3[01])[\/.-](?:0?[1-9]|1[0-2])[\/.-][0-9]{4}" title="Format zi/luna/an, de exemplu 07/01/2026" data-role="race-date-ro" required>
-                    <?php if (isset($raceFormErrors['data_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_inceput']) ?></div><?php endif; ?>
-                </div>
-
-                <div class="col-12 col-md-6 dispatcher-schedule-field">
-                    <label class="form-label" for="edit_race_ora_inceput">Ora inceput</label>
-                    <div class="input-group">
+                <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-start-datetime">
+                    <label class="form-label" for="edit_race_start_datetime">Data si ora inceput <span class="text-danger">*</span></label>
+                    <?php
+                        $startDateDisplayValue = $formatRaceDateInput($raceFormData['data_inceput'] ?? ($raceFormData['data_cursa'] ?? ''));
+                        $startDateTimeDisplayValue = trim($startDateDisplayValue . ($formStartTimeValue !== '' ? ' ' . $formStartTimeValue : ''));
+                        $startDateTimeHasError = isset($raceFormErrors['data_inceput']) || isset($raceFormErrors['ora_inceput']);
+                    ?>
+                    <div class="dispatcher-datetime-field" data-role="start-datetime-field">
+                        <div class="input-group dispatcher-datetime-input-group">
+                            <input
+                                type="text"
+                                class="form-control <?= $startDateTimeHasError ? 'is-invalid' : '' ?>"
+                                id="edit_race_start_datetime"
+                                value="<?= e($startDateTimeDisplayValue) ?>"
+                                placeholder="dd/mm/yyyy HH:mm"
+                                inputmode="numeric"
+                                autocomplete="off"
+                                maxlength="16"
+                                data-role="start-datetime-display"
+                                aria-label="Data si ora inceput"
+                            >
+                            <button type="button" class="btn btn-outline-secondary" data-role="start-datetime-toggle" aria-label="Deschide calendarul si ora de inceput" aria-expanded="false">
+                                <i class="bi bi-calendar3" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                        <div class="dispatcher-datetime-popover" data-role="start-datetime-popover" hidden></div>
                         <input
-                            type="text"
-                            class="form-control <?= isset($raceFormErrors['ora_inceput']) ? 'is-invalid' : '' ?>"
+                            type="hidden"
+                            data-role="race-date-ro"
+                            id="edit_race_data_inceput"
+                            name="data_inceput"
+                            value="<?= e($startDateDisplayValue) ?>"
+                            required
+                        >
+                        <input
+                            type="hidden"
                             id="edit_race_ora_inceput"
                             name="ora_inceput"
                             value="<?= e($formStartTimeValue) ?>"
-                            placeholder="HH:mm"
-                            inputmode="numeric"
-                            autocomplete="off"
-                            pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]"
-                            list="edit_race_time_options"
                             data-role="ora-inceput"
                         >
-                        <button type="button" class="btn btn-outline-secondary" data-role="time-now" data-target-role="ora-inceput" title="Completeaza cu ora curenta">Acum</button>
                     </div>
-                    <div class="form-text">Format 24h (HH:mm). Poti scrie si 0930.</div>
+                    <?php if (isset($raceFormErrors['data_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_inceput']) ?></div><?php endif; ?>
                     <?php if (isset($raceFormErrors['ora_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['ora_inceput']) ?></div><?php endif; ?>
                 </div>
-
-                <div class="col-12 col-md-6 dispatcher-schedule-field">
-                    <label class="form-label" for="edit_race_data_sfarsit">Data sfarsit <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control <?= isset($raceFormErrors['data_sfarsit']) ? 'is-invalid' : '' ?>" id="edit_race_data_sfarsit" name="data_sfarsit" value="<?= e($formatRaceDateInput($raceFormData['data_sfarsit'] ?? ($raceFormData['data_cursa'] ?? ''))) ?>" placeholder="zz/ll/aaaa" inputmode="numeric" autocomplete="off" maxlength="10" pattern="(?:0?[1-9]|[12][0-9]|3[01])[\/.-](?:0?[1-9]|1[0-2])[\/.-][0-9]{4}" title="Format zi/luna/an, de exemplu 07/01/2026" data-role="race-date-ro" required>
-                    <?php if (isset($raceFormErrors['data_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_sfarsit']) ?></div><?php endif; ?>
+                <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-data-incarcare">
+                    <label class="form-label" for="edit_race_data_incarcare">Data incarcare</label>
+                    <?php
+                        $loadingDateRawValue = trim((string) ($raceFormData['data_incarcare'] ?? ''));
+                        $loadingDateIsoValue = $loadingDateRawValue;
+                        if (preg_match('/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/', $loadingDateRawValue, $loadingDateParts)) {
+                            $loadingDateIsoValue = sprintf('%04d-%02d-%02d', (int) $loadingDateParts[3], (int) $loadingDateParts[2], (int) $loadingDateParts[1]);
+                        }
+                    ?>
+                    <div class="input-group fleet-date-field">
+                        <input type="text" class="form-control js-date-display-input <?= isset($raceFormErrors['data_incarcare']) ? 'is-invalid' : '' ?>" id="edit_race_data_incarcare" name="data_incarcare" value="<?= e($formatRaceDateInput($loadingDateRawValue)) ?>" placeholder="dd/mm/yyyy" inputmode="numeric" maxlength="10" autocomplete="off" data-date-picker-id="edit_race_data_incarcare_picker">
+                        <button type="button" class="btn btn-outline-secondary js-date-picker-button" data-date-picker-target="edit_race_data_incarcare_picker" aria-label="Deschide calendarul pentru data incarcarii"><i class="bi bi-calendar3" aria-hidden="true"></i></button>
+                        <input type="date" id="edit_race_data_incarcare_picker" class="fleet-date-picker-native" value="<?= e($loadingDateIsoValue) ?>" tabindex="-1" aria-hidden="true">
+                    </div>
+                    <?php if (isset($raceFormErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_incarcare']) ?></div><?php endif; ?>
                 </div>
 
                 <div class="col-12 col-md-6 dispatcher-schedule-field">
-                    <label class="form-label" for="edit_race_ora_sfarsit">Ora sfarsit</label>
-                    <div class="input-group">
+                    <label class="form-label" for="edit_race_end_datetime">Data si ora sfarsit <span class="text-danger">*</span></label>
+                    <?php
+                        $endDateDisplayValue = $formatRaceDateInput($raceFormData['data_sfarsit'] ?? ($raceFormData['data_cursa'] ?? ''));
+                        $endDateTimeDisplayValue = trim($endDateDisplayValue . ($formEndTimeValue !== '' ? ' ' . $formEndTimeValue : ''));
+                        $endDateTimeHasError = isset($raceFormErrors['data_sfarsit']) || isset($raceFormErrors['ora_sfarsit']);
+                    ?>
+                    <div class="dispatcher-datetime-field" data-role="end-datetime-field">
+                        <div class="input-group dispatcher-datetime-input-group">
+                            <input
+                                type="text"
+                                class="form-control <?= $endDateTimeHasError ? 'is-invalid' : '' ?><?= $focusEndTime ? ' dispatcher-end-time-focus' : '' ?>"
+                                id="edit_race_end_datetime"
+                                value="<?= e($endDateTimeDisplayValue) ?>"
+                                placeholder="dd/mm/yyyy HH:mm"
+                                inputmode="numeric"
+                                autocomplete="off"
+                                maxlength="16"
+                                data-role="end-datetime-display"
+                                aria-label="Data si ora sfarsit"
+                                title="<?= e($formDurationPreviewText) ?>"
+                            >
+                            <button type="button" class="btn btn-outline-secondary" data-role="end-datetime-toggle" aria-label="Deschide calendarul si ora de sfarsit" aria-expanded="false">
+                                <i class="bi bi-calendar3" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                        <div class="dispatcher-datetime-popover" data-role="end-datetime-popover" hidden></div>
                         <input
-                            type="text"
-                            class="form-control <?= isset($raceFormErrors['ora_sfarsit']) ? 'is-invalid' : '' ?><?= $focusEndTime ? ' dispatcher-end-time-focus' : '' ?>"
+                            type="hidden"
+                            data-role="race-date-ro"
+                            id="edit_race_data_sfarsit"
+                            name="data_sfarsit"
+                            value="<?= e($endDateDisplayValue) ?>"
+                            required
+                        >
+                        <input
+                            type="hidden"
                             id="edit_race_ora_sfarsit"
                             name="ora_sfarsit"
                             value="<?= e($formEndTimeValue) ?>"
-                            placeholder="HH:mm"
-                            inputmode="numeric"
-                            autocomplete="off"
-                            pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]"
-                            list="edit_race_time_options"
                             data-role="ora-sfarsit"
+                            title="<?= e($formDurationPreviewText) ?>"
                         >
-                        <button type="button" class="btn btn-outline-secondary" data-role="time-now" data-target-role="ora-sfarsit" title="Completeaza cu ora curenta">Acum</button>
                     </div>
+                    <?php if (isset($raceFormErrors['data_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_sfarsit']) ?></div><?php endif; ?>
                     <?php if (isset($raceFormErrors['ora_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['ora_sfarsit']) ?></div><?php endif; ?>
-                    <div class="form-text" data-role="durata-cursa-hint" data-default-text="<?= e($formDurationPreviewText) ?>"><?= e($formDurationPreviewText) ?></div>
+                    <div class="form-text d-none dispatcher-hover-note" data-role="durata-cursa-hint" data-default-text="<?= e($formDurationPreviewText) ?>"><?= e($formDurationPreviewText) ?></div>
                 </div>
 
-                <div class="col-12 col-md-6" data-role="field-loc-incarcare">
+                <div class="col-12 col-md-6 dispatcher-primary-grid-field" data-role="field-loc-incarcare">
                     <label class="form-label" for="edit_race_loc_incarcare_id">Loc incarcare <span class="text-danger">*</span></label>
                     <select class="form-select <?= isset($raceFormErrors['loc_incarcare_id']) ? 'is-invalid' : '' ?>" id="edit_race_loc_incarcare_id" name="loc_incarcare_id" required>
                         <option value="">-- Selecteaza --</option>
@@ -466,7 +525,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <?php if (isset($raceFormErrors['loc_livrare_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['loc_livrare_cursa']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-tip-marfa">
+                <div class="col-12 col-md-6 dispatcher-primary-grid-field dispatcher-compressor-grid-field dispatcher-compressor-metric-field" data-role="field-tip-marfa">
                     <label class="form-label" for="edit_race_tip_marfa">Tip marfa <span class="text-danger">*</span></label>
                     <div class="dropdown transport-multiselect-dropdown goods-multiselect-dropdown" data-role="goods-type-dropdown">
                         <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start transport-multiselect-toggle <?= isset($raceFormErrors['tip_marfa']) ? 'is-invalid' : '' ?>" type="button" id="edit_race_tip_marfa" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
@@ -485,20 +544,14 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <?php if (isset($raceFormErrors['tip_marfa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tip_marfa']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6" data-role="field-cantitate">
+                <div class="col-12 col-md-6 dispatcher-primary-grid-field" data-role="field-cantitate">
                     <label class="form-label" for="edit_race_cantitate_incarcata">Cantitate incarcata</label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['cantitate_incarcata']) ? 'is-invalid' : '' ?>" id="edit_race_cantitate_incarcata" name="cantitate_incarcata" step="0.01" min="0" value="<?= e((string) ($raceFormData['cantitate_incarcata'] ?? '')) ?>" data-role="cantitate">
                     <div class="form-text text-muted">Valoarea introdusa este folosita direct in calcule, fara conversie automata.</div>
                     <?php if (isset($raceFormErrors['cantitate_incarcata'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['cantitate_incarcata']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="field-nr-clienti">
-                    <label class="form-label" for="edit_race_nr_clienti">Nr. clienti</label>
-                    <input type="number" class="form-control <?= isset($raceFormErrors['nr_clienti']) ? 'is-invalid' : '' ?>" id="edit_race_nr_clienti" name="nr_clienti" min="0" step="1" value="<?= e((string) ($raceFormData['nr_clienti'] ?? '')) ?>">
-                    <?php if (isset($raceFormErrors['nr_clienti'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['nr_clienti']) ?></div><?php endif; ?>
-                </div>
-
-                <div class="col-12 col-md-6" data-role="field-capacitate-transport">
+                <div class="col-12 col-md-6 dispatcher-primary-grid-field" data-role="field-capacitate-transport">
                     <label class="form-label" for="edit_race_capacitate_transport">Capacitate transport</label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['capacitate_transport']) ? 'is-invalid' : '' ?>" id="edit_race_capacitate_transport" name="capacitate_transport" step="0.01" min="0" value="<?= e((string) ($raceFormData['capacitate_transport'] ?? '')) ?>" data-role="capacitate-transport" readonly>
                     <?php if (isset($raceFormErrors['capacitate_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['capacitate_transport']) ?></div><?php endif; ?>
@@ -511,11 +564,10 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <?php if (isset($raceFormErrors['km_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_cursa']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 <?= $isKmTotalSelected ? '' : 'd-none' ?>" data-role="field-km-totali">
-                    <label class="form-label" for="edit_race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
-                    <input type="number" class="form-control <?= isset($raceFormErrors['km_totali']) ? 'is-invalid' : '' ?>" id="edit_race_km_totali" name="km_totali" min="0" step="1" value="<?= e((string) ($raceFormData['km_totali'] ?? '')) ?>" data-role="km-totali">
-                    <?php if (isset($raceFormErrors['km_totali'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_totali']) ?></div><?php endif; ?>
-                    <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Cost/km Distributie (calcul): Km distributie = Km efectuati - Km agreati; Cost/km Distributie = Cost distributie (Pret tona x tone) / Km distributie.</div>
+                <div class="col-12 col-md-6 <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="field-nr-clienti">
+                    <label class="form-label" for="edit_race_nr_clienti">Nr. clienti</label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['nr_clienti']) ? 'is-invalid' : '' ?>" id="edit_race_nr_clienti" name="nr_clienti" min="0" step="1" value="<?= e((string) ($raceFormData['nr_clienti'] ?? '')) ?>">
+                    <?php if (isset($raceFormErrors['nr_clienti'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['nr_clienti']) ?></div><?php endif; ?>
                 </div>
 
                 <div class="col-12 col-md-6" data-role="field-zona">
@@ -548,6 +600,13 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <div class="form-text text-muted <?= $isPrimarySelected ? '' : 'd-none' ?>" data-role="primar-note-zone">
                         Pentru Primar km / Primar tone, selectia Loc - Zona este filtrata din Setari Primar si se aplica bidirectional.
                     </div>
+                </div>
+
+                <div class="col-12 col-md-6 <?= $isKmTotalSelected ? '' : 'd-none' ?>" data-role="field-km-totali">
+                    <label class="form-label" for="edit_race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
+                    <input type="number" class="form-control <?= isset($raceFormErrors['km_totali']) ? 'is-invalid' : '' ?>" id="edit_race_km_totali" name="km_totali" min="0" step="1" value="<?= e((string) ($raceFormData['km_totali'] ?? '')) ?>" data-role="km-totali">
+                    <?php if (isset($raceFormErrors['km_totali'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_totali']) ?></div><?php endif; ?>
+                    <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Cost/km Distributie (calcul): Km distributie = Km efectuati - Km agreati; Cost/km Distributie = Cost distributie (Pret tona x tone) / Km distributie.</div>
                 </div>
 
                 <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-ore-aspirare">
@@ -1439,6 +1498,58 @@ document.addEventListener('DOMContentLoaded', function () {
 <?php endif; ?>
 
 <?php include __DIR__ . '/_inactive_resource_modal.php'; ?>
+
+<?php $incompleteConfirmItems = is_array($incompleteConfirmItems ?? null) ? array_values(array_filter(array_map('strval', $incompleteConfirmItems))) : []; ?>
+<?php if ($incompleteConfirmItems !== []): ?>
+    <div class="modal fade" id="incompleteTripConfirmModal" tabindex="-1" aria-labelledby="incompleteTripConfirmTitle" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="incompleteTripConfirmTitle">Salvezi cursa fara toate informatiile?</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-2">Cursei ii lipsesc urmatoarele informatii:</p>
+                    <ul class="mb-2">
+                        <?php foreach ($incompleteConfirmItems as $incompleteConfirmItem): ?>
+                            <li><?= e($incompleteConfirmItem) ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                    <p class="text-muted small mb-0">Poti salva oricum — cursa va aparea in meniul „curse cu informatii lipsa" si o poti completa ulterior de acolo.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Nu, completez acum</button>
+                    <button type="button" class="btn btn-primary" data-role="confirm-incomplete-save">Da, salveaza oricum</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var incompleteModalElement = document.getElementById('incompleteTripConfirmModal');
+            if (!incompleteModalElement) { return; }
+            var incompleteRaceForm = document.querySelector('form.dispatcher-race-form');
+            var incompleteConfirmButton = incompleteModalElement.querySelector('[data-role="confirm-incomplete-save"]');
+            if (incompleteConfirmButton && incompleteRaceForm) {
+                incompleteConfirmButton.addEventListener('click', function () {
+                    var incompleteFlagInput = incompleteRaceForm.querySelector('input[name="confirm_incomplete"]');
+                    if (incompleteFlagInput) { incompleteFlagInput.value = '1'; }
+                    if (typeof incompleteRaceForm.requestSubmit === 'function') {
+                        incompleteRaceForm.requestSubmit();
+                    } else {
+                        incompleteRaceForm.submit();
+                    }
+                });
+            }
+            if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                new bootstrap.Modal(incompleteModalElement).show();
+                return;
+            }
+            incompleteModalElement.classList.add('show');
+            incompleteModalElement.style.display = 'block';
+        });
+    </script>
+<?php endif; ?>
 
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
 

@@ -200,6 +200,99 @@ body {
     background: rgba(203, 213, 225, 0.9);
 }
 
+.sidebar-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin: -1rem -1rem 0.8rem;
+    padding: 1rem 1rem 0.85rem;
+    background: linear-gradient(180deg, #111827 0%, rgba(17, 24, 39, 0.98) 64%, rgba(15, 23, 42, 0.96) 100%);
+}
+
+.sidebar-search {
+    display: grid;
+    gap: 0.45rem;
+}
+
+.sidebar-search-control {
+    position: relative;
+}
+
+.sidebar-search-control > i {
+    position: absolute;
+    top: 50%;
+    left: 0.72rem;
+    z-index: 1;
+    color: #94a3b8;
+    font-size: 0.92rem;
+    line-height: 1;
+    transform: translateY(-50%);
+    pointer-events: none;
+}
+
+.sidebar-search-control .form-control {
+    min-height: 2.35rem;
+    padding: 0.42rem 2.25rem 0.42rem 2.22rem;
+    color: #e2e8f0;
+    background: rgba(15, 23, 42, 0.72);
+    border-color: rgba(148, 163, 184, 0.38);
+    border-radius: 8px;
+    box-shadow: none;
+    font-size: 0.88rem;
+}
+
+.sidebar-search-control .form-control::placeholder {
+    color: #94a3b8;
+}
+
+.sidebar-search-control .form-control:focus {
+    color: #ffffff;
+    background: rgba(15, 23, 42, 0.94);
+    border-color: rgba(96, 165, 250, 0.95);
+    box-shadow: 0 0 0 0.16rem rgba(13, 110, 253, 0.18);
+}
+
+.sidebar-search-control .form-control::-webkit-search-cancel-button {
+    appearance: none;
+}
+
+.sidebar-search-clear {
+    position: absolute;
+    top: 50%;
+    right: 0.42rem;
+    width: 1.65rem;
+    height: 1.65rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    color: #94a3b8;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    transform: translateY(-50%);
+}
+
+.sidebar-search-clear:hover,
+.sidebar-search-clear:focus {
+    color: #ffffff;
+    background: rgba(148, 163, 184, 0.16);
+}
+
+.sidebar-search-clear[hidden] {
+    display: none;
+}
+
+.sidebar-search-empty {
+    padding: 0.55rem 0.65rem;
+    color: #cbd5e1;
+    background: rgba(15, 23, 42, 0.48);
+    border: 1px dashed rgba(148, 163, 184, 0.42);
+    border-radius: 7px;
+    font-size: 0.8rem;
+    line-height: 1.25;
+}
+
 .sidebar .nav-link {
     display: flex;
     align-items: center;

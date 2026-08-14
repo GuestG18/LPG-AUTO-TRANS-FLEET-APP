@@ -339,6 +339,190 @@ document.addEventListener('click', function (event) {
     refreshFleetSidebarLayout();
 });
 
+function normalizeFleetSidebarSearchValue(value) {
+    var text = String(value || '').trim().toLowerCase();
+
+    if (typeof text.normalize === 'function') {
+        text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    }
+
+    return text;
+}
+
+function getFleetSidebarSearchText(element) {
+    if (!(element instanceof HTMLElement)) {
+        return '';
+    }
+
+    return normalizeFleetSidebarSearchValue(element.textContent || '');
+}
+
+function setFleetSidebarSearchCollapseState(collapse, button, expanded) {
+    if (!(collapse instanceof HTMLElement)) {
+        if (button instanceof HTMLElement) {
+            button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        }
+        return;
+    }
+
+    collapse.classList.remove('collapsing');
+    collapse.classList.add('collapse');
+    collapse.classList.toggle('show', expanded);
+    collapse.style.height = '';
+
+    if (button instanceof HTMLElement) {
+        button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    }
+}
+
+function restoreFleetSidebarSearchGroup(group, collapse, button) {
+    group.hidden = false;
+
+    group.querySelectorAll('.sidebar-submenu .nav-link').forEach(function (link) {
+        if (link instanceof HTMLElement) {
+            link.hidden = false;
+        }
+    });
+
+    if (!group.hasAttribute('data-sidebar-search-initial-expanded')) {
+        return;
+    }
+
+    setFleetSidebarSearchCollapseState(
+        collapse,
+        button,
+        group.getAttribute('data-sidebar-search-initial-expanded') === '1'
+    );
+    group.removeAttribute('data-sidebar-search-initial-expanded');
+}
+
+function filterFleetSidebarSearchGroup(group, query) {
+    var button = group.querySelector('.sidebar-parent-link');
+    var collapse = group.querySelector('.collapse');
+    var links = Array.prototype.slice.call(group.querySelectorAll('.sidebar-submenu .nav-link'));
+
+    if (!(button instanceof HTMLElement) || !(collapse instanceof HTMLElement)) {
+        return false;
+    }
+
+    if (!group.hasAttribute('data-sidebar-search-initial-expanded')) {
+        group.setAttribute('data-sidebar-search-initial-expanded', collapse.classList.contains('show') ? '1' : '0');
+    }
+
+    var parentMatches = getFleetSidebarSearchText(button).indexOf(query) !== -1;
+    var matchingLinks = links.filter(function (link) {
+        return getFleetSidebarSearchText(link).indexOf(query) !== -1;
+    });
+    var groupMatches = parentMatches || matchingLinks.length > 0;
+
+    group.hidden = !groupMatches;
+
+    links.forEach(function (link) {
+        if (link instanceof HTMLElement) {
+            link.hidden = !(parentMatches || matchingLinks.indexOf(link) !== -1);
+        }
+    });
+
+    if (groupMatches) {
+        setFleetSidebarSearchCollapseState(collapse, button, true);
+    }
+
+    return groupMatches;
+}
+
+function initFleetSidebarSearch() {
+    var search = document.querySelector('[data-sidebar-search]');
+    var nav = document.querySelector('[data-sidebar-nav]');
+
+    if (!(search instanceof HTMLElement) || !(nav instanceof HTMLElement)) {
+        return;
+    }
+
+    var input = search.querySelector('[data-sidebar-search-input]');
+    var clearButton = search.querySelector('[data-sidebar-search-clear]');
+    var emptyState = search.querySelector('[data-sidebar-search-empty]');
+
+    if (!(input instanceof HTMLInputElement)) {
+        return;
+    }
+
+    function syncSearchState() {
+        var query = normalizeFleetSidebarSearchValue(input.value);
+        var hasQuery = query !== '';
+        var matchCount = 0;
+
+        Array.prototype.slice.call(nav.children).forEach(function (item) {
+            if (!(item instanceof HTMLElement)) {
+                return;
+            }
+
+            if (item.hasAttribute('data-sidebar-search-static')) {
+                item.hidden = hasQuery;
+                return;
+            }
+
+            if (item.classList.contains('sidebar-nav-group')) {
+                if (!hasQuery) {
+                    restoreFleetSidebarSearchGroup(
+                        item,
+                        item.querySelector('.collapse'),
+                        item.querySelector('.sidebar-parent-link')
+                    );
+                    return;
+                }
+
+                if (filterFleetSidebarSearchGroup(item, query)) {
+                    matchCount += 1;
+                }
+                return;
+            }
+
+            if (!item.classList.contains('nav-link')) {
+                item.hidden = false;
+                return;
+            }
+
+            var linkMatches = !hasQuery || getFleetSidebarSearchText(item).indexOf(query) !== -1;
+            item.hidden = !linkMatches;
+
+            if (hasQuery && linkMatches) {
+                matchCount += 1;
+            }
+        });
+
+        nav.classList.toggle('is-searching', hasQuery);
+
+        if (clearButton instanceof HTMLButtonElement) {
+            clearButton.hidden = !hasQuery;
+        }
+
+        if (emptyState instanceof HTMLElement) {
+            emptyState.hidden = !hasQuery || matchCount > 0;
+        }
+    }
+
+    input.addEventListener('input', syncSearchState);
+    input.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape' || input.value === '') {
+            return;
+        }
+
+        input.value = '';
+        syncSearchState();
+        event.stopPropagation();
+    });
+
+    if (clearButton instanceof HTMLButtonElement) {
+        clearButton.addEventListener('click', function () {
+            input.value = '';
+            syncSearchState();
+            input.focus();
+        });
+    }
+
+    syncSearchState();
+}
+
 var fleetStickyDocumentTables = [];
 var fleetStickyDocumentTableFrame = null;
 
@@ -1473,6 +1657,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }, { passive: true });
 
     syncFleetSidebarToggleState();
+    initFleetSidebarSearch();
     initDashboardOperationalCostCard();
     initDashboardApprovalTabs();
     initGlobalApprovalDrawer();

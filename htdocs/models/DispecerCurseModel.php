@@ -112,6 +112,7 @@ class DispecerCurseModel extends BaseModel
                 v.marca,
                 v.model,
                 v.tip_vehicul,
+                v.garaj,
                 CASE
                     WHEN v.tip_vehicul = 'cap_tractor' THEN s.capacitate_transport
                     ELSE v.capacitate_transport
@@ -1441,7 +1442,8 @@ class DispecerCurseModel extends BaseModel
         int $beneficiaryId,
         int $locationId,
         int $zoneId,
-        bool $onlyActive = true
+        bool $onlyActive = true,
+        ?int $vehicleId = null
     ): ?array {
         if ($beneficiaryId <= 0 || $locationId <= 0 || $zoneId <= 0) {
             return null;
@@ -1466,7 +1468,6 @@ class DispecerCurseModel extends BaseModel
               AND zona_distributie_id = :zona_distributie_id
               " . ($onlyActive ? " AND activ = 1" : "") . "
             ORDER BY id DESC
-            LIMIT 1
         ";
 
         $stmt = $this->db->prepare($sql);
@@ -1474,9 +1475,32 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':loc_incarcare_id', $locationId, PDO::PARAM_INT);
         $stmt->bindValue(':zona_distributie_id', $zoneId, PDO::PARAM_INT);
         $stmt->execute();
-        $row = $stmt->fetch();
+        $rules = $stmt->fetchAll();
+        if ($rules === []) {
+            return null;
+        }
 
-        return $row ?: null;
+        // Aceeasi pereche poate avea mai multe reguli, diferentiate prin vehicule
+        // (ex. km diferiti pe garaje). Selectie: regula care contine vehiculul >
+        // regula fara restrictie de vehicule > fallback istoric doar cand exista o
+        // singura regula (compatibilitate cu datele vechi).
+        if ($vehicleId !== null && $vehicleId > 0) {
+            foreach ($rules as $rule) {
+                $ruleVehicleIds = array_filter(array_map('intval', explode(',', (string) ($rule['vehicle_ids'] ?? ''))));
+                if (in_array($vehicleId, $ruleVehicleIds, true)) {
+                    return $rule;
+                }
+            }
+            foreach ($rules as $rule) {
+                if (trim((string) ($rule['vehicle_ids'] ?? '')) === '') {
+                    return $rule;
+                }
+            }
+
+            return count($rules) === 1 ? $rules[0] : null;
+        }
+
+        return $rules[0];
     }
 
     public function deletePrimaryRouteRule(int $id, ?int $beneficiaryId = null): bool
@@ -1539,7 +1563,7 @@ class DispecerCurseModel extends BaseModel
 
     public function getPrimaryRouteKmMap(bool $onlyActive = true): array
     {
-        $map = [];
+        $entriesByKey = [];
         foreach ($this->getPrimaryRouteRules($onlyActive) as $rule) {
             $beneficiaryId = (int) ($rule['beneficiar_id'] ?? 0);
             $locationId = (int) ($rule['loc_incarcare_id'] ?? 0);
@@ -1549,7 +1573,7 @@ class DispecerCurseModel extends BaseModel
             }
 
             $key = $beneficiaryId . '|' . $locationId . '|' . $zoneId;
-            $map[$key] = [
+            $entriesByKey[$key][] = [
                 'id' => (int) ($rule['id'] ?? 0),
                 'km_tarifare' => (int) max(0, (int) ($rule['km_tarifare'] ?? 0)),
                 'cost_cursa' => (float) max(0, (float) ($rule['cost_cursa'] ?? 0)),
@@ -1560,6 +1584,32 @@ class DispecerCurseModel extends BaseModel
                 'km_agreati_manual' => !empty($rule['km_agreati_manual']),
                 'activ' => !empty($rule['activ']),
             ];
+        }
+
+        // O pereche poate avea mai multe reguli (vehicule diferite, km diferiti).
+        // Intrarea de baza ramane compatibila cu vechiul format (o singura regula),
+        // iar toate regulile perechii sunt disponibile in 'variants' pentru selectia
+        // dupa vehicul.
+        $map = [];
+        foreach ($entriesByKey as $key => $entries) {
+            $defaultEntry = null;
+            foreach ($entries as $entry) {
+                if ($entry['vehicle_ids'] === []) {
+                    if ($defaultEntry === null || $entry['id'] > $defaultEntry['id']) {
+                        $defaultEntry = $entry;
+                    }
+                }
+            }
+            if ($defaultEntry === null) {
+                foreach ($entries as $entry) {
+                    if ($defaultEntry === null || $entry['id'] > $defaultEntry['id']) {
+                        $defaultEntry = $entry;
+                    }
+                }
+            }
+
+            $map[$key] = $defaultEntry;
+            $map[$key]['variants'] = $entries;
         }
 
         return $map;
@@ -1792,7 +1842,7 @@ class DispecerCurseModel extends BaseModel
                 activ TINYINT(1) NOT NULL DEFAULT 1,
                 created_at DATETIME NOT NULL,
                 updated_at DATETIME NOT NULL,
-                UNIQUE KEY uk_config_rute_primar_beneficiar_loc_zona (beneficiar_id, loc_incarcare_id, zona_distributie_id),
+                INDEX idx_config_rute_primar_pereche (beneficiar_id, loc_incarcare_id, zona_distributie_id),
                 INDEX idx_config_rute_primar_beneficiar (beneficiar_id),
                 INDEX idx_config_rute_primar_loc (loc_incarcare_id),
                 INDEX idx_config_rute_primar_zona (zona_distributie_id),
@@ -1847,6 +1897,21 @@ class DispecerCurseModel extends BaseModel
         $applyRideCostColumnCheckStmt->execute();
         if ((int) $applyRideCostColumnCheckStmt->fetchColumn() === 0) {
             $this->db->exec("ALTER TABLE configurare_rute_primar ADD COLUMN aplica_cost_cursa TINYINT(1) NOT NULL DEFAULT 0 AFTER cost_cursa");
+        }
+        // Aceeasi pereche Loc-Zona poate exista pe mai multe reguli, cu seturi de vehicule
+        // diferite (ex. km diferiti in functie de garajul vehiculului): indexul unic istoric
+        // pe (beneficiar, loc, zona) devine index simplu.
+        $uniquePairIndexCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'configurare_rute_primar'
+              AND INDEX_NAME = 'uk_config_rute_primar_beneficiar_loc_zona'
+              AND NON_UNIQUE = 0
+        ");
+        $uniquePairIndexCheckStmt->execute();
+        if ((int) $uniquePairIndexCheckStmt->fetchColumn() > 0) {
+            $this->db->exec("ALTER TABLE configurare_rute_primar DROP INDEX uk_config_rute_primar_beneficiar_loc_zona, ADD INDEX idx_config_rute_primar_pereche (beneficiar_id, loc_incarcare_id, zona_distributie_id)");
         }
         $this->primaryRouteTableEnsured = true;
     }
@@ -3192,8 +3257,12 @@ class DispecerCurseModel extends BaseModel
                 c.loc_incarcare_id,
                 c.tip_marfa,
                 c.capacitate_transport,
+                c.driver_id,
+                c.beneficiar_id,
                 c.loc_plecare,
+                c.loc_aspirare,
                 c.loc_livrare,
+                c.loc_livrare_cursa,
                 c.pret_tarifare,
                 c.total_facturare,
                 c.cost_km_distributie,

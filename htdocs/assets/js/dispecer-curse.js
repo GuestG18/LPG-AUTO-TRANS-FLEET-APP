@@ -3868,6 +3868,45 @@
             };
         }
 
+        function selectPrimaryRouteVariantForVehicle(mapEntry) {
+            if (!mapEntry || typeof mapEntry !== 'object') {
+                return mapEntry;
+            }
+
+            var variants = Array.isArray(mapEntry.variants) ? mapEntry.variants : [];
+            if (variants.length <= 1) {
+                return mapEntry;
+            }
+
+            // Perechea are mai multe reguli (vehicule diferite => km diferiti):
+            // alegem varianta care contine vehiculul selectat, apoi varianta fara
+            // restrictie de vehicule; daca niciuna nu acopera vehiculul, nu exista
+            // regula aplicabila.
+            var vehicleValue = parseInt(String(vehicleField ? (vehicleField.value || '') : '').trim(), 10);
+            if (!Number.isFinite(vehicleValue) || vehicleValue <= 0) {
+                return mapEntry;
+            }
+
+            for (var variantIndex = 0; variantIndex < variants.length; variantIndex += 1) {
+                var variantVehicleIds = Array.isArray(variants[variantIndex].vehicle_ids) ? variants[variantIndex].vehicle_ids : [];
+                var containsVehicle = variantVehicleIds.some(function (variantVehicleId) {
+                    return parseInt(String(variantVehicleId), 10) === vehicleValue;
+                });
+                if (containsVehicle) {
+                    return variants[variantIndex];
+                }
+            }
+
+            for (var fallbackIndex = 0; fallbackIndex < variants.length; fallbackIndex += 1) {
+                var fallbackVehicleIds = Array.isArray(variants[fallbackIndex].vehicle_ids) ? variants[fallbackIndex].vehicle_ids : [];
+                if (fallbackVehicleIds.length === 0) {
+                    return variants[fallbackIndex];
+                }
+            }
+
+            return null;
+        }
+
         function normalizePrimaryRouteRule(rawRule, matchDirection) {
             if (!rawRule || typeof rawRule !== 'object') {
                 return null;
@@ -3918,7 +3957,7 @@
                 return null;
             }
 
-            return normalizePrimaryRouteRule(primaryRouteKmMap[pairKey], matchDirection);
+            return normalizePrimaryRouteRule(selectPrimaryRouteVariantForVehicle(primaryRouteKmMap[pairKey]), matchDirection);
         }
 
         function getPrimaryRouteRuleFromNamePair(beneficiaryKey, expectedLocationName, expectedZoneName, matchDirection) {

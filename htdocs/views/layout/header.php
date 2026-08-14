@@ -58,12 +58,34 @@ if (
     <div class="app-shell">
         <div class="fleet-sidebar-edge" data-sidebar-edge aria-hidden="true"></div>
         <aside class="sidebar p-3">
-            <div class="sidebar-brand mb-4">
-                <div class="fw-bold fs-5">Fleet Management</div>
-                <div class="text-muted small">MVP trial</div>
+            <div class="sidebar-header">
+                <div class="sidebar-brand mb-3">
+                    <div class="fw-bold fs-5">Fleet Management</div>
+                    <div class="text-muted small">MVP trial</div>
+                </div>
+
+                <div class="sidebar-search" data-sidebar-search>
+                    <label class="visually-hidden" for="fleetSidebarSearch">Cauta pagina</label>
+                    <div class="sidebar-search-control">
+                        <i class="bi bi-search" aria-hidden="true"></i>
+                        <input
+                            class="form-control"
+                            id="fleetSidebarSearch"
+                            type="search"
+                            autocomplete="off"
+                            placeholder="Cauta pagina..."
+                            data-sidebar-search-input
+                            aria-controls="fleetSidebarNav"
+                        >
+                        <button class="sidebar-search-clear" type="button" aria-label="Sterge cautarea" data-sidebar-search-clear hidden>
+                            <i class="bi bi-x-lg" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                    <div class="sidebar-search-empty" data-sidebar-search-empty hidden>Nu am gasit nicio pagina.</div>
+                </div>
             </div>
 
-            <nav class="nav flex-column gap-1">
+            <nav class="nav flex-column gap-1" id="fleetSidebarNav" data-sidebar-nav>
 <?php $can = static fn(string $k, string $a = 'view'): bool => !function_exists('can') || can($k, $a); ?>
                 <?php if ($can('dashboard')): ?><a class="nav-link <?= $currentPage === 'dashboard' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard'])) ?>"><i class="bi bi-house-door" aria-hidden="true"></i><span>Tablou de bord</span></a><?php endif; ?>
                 <?php if ($can('dashboard_analitic')): ?><a class="nav-link <?= $currentPage === 'dashboard_analitic' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dashboard_analitic'])) ?>"><i class="bi bi-bar-chart-line" aria-hidden="true"></i><span>Dashboard Analitic</span></a><?php endif; ?>
@@ -71,6 +93,7 @@ if (
                 <?php if ($can('dispecer_curse', 'deleted_view')): ?>
                     <a class="nav-link <?= $currentPage === 'dispecer_curse' && $currentAction === 'curse_sterse' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'curse_sterse'])) ?>"><i class="bi bi-trash3" aria-hidden="true"></i><span>Curse șterse</span></a>
                 <?php endif; ?>
+                <?php if ($can('harta_flota')): ?><a class="nav-link <?= $currentPage === 'harta_flota' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'harta_flota'])) ?>"><i class="bi bi-map" aria-hidden="true"></i><span>Harta Flota</span></a><?php endif; ?>
                 <?php if ($can('carburanti')): ?><a class="nav-link <?= $currentPage === 'carburanti' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'carburanti'])) ?>"><i class="bi bi-fuel-pump" aria-hidden="true"></i><span>Carburan&#539;i</span></a><?php endif; ?>
                 <?php if ($can('istoric_cheltuieli_curse')): ?><a class="nav-link <?= $currentPage === 'istoric_cheltuieli_curse' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'istoric_cheltuieli_curse'])) ?>"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span>Istoric cheltuieli curse</span></a><?php endif; ?>
                 <?php if ($currentPage !== 'istoric_cheltuieli_curse' && $can('dispecer_curse', 'refacturari_view')): ?>
@@ -203,8 +226,8 @@ if (
                 <?php if ($can('utilizatori')): ?><a class="nav-link <?= $currentPage === 'utilizatori' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'utilizatori'])) ?>"><i class="bi bi-gear-wide-connected" aria-hidden="true"></i><span>Set&#259;ri sistem</span></a><?php endif; ?>
                 <?php if ($can('drepturi_acces')): ?><a class="nav-link <?= $currentPage === 'drepturi_acces' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'drepturi_acces'])) ?>"><i class="bi bi-shield-lock" aria-hidden="true"></i><span>Drepturi de acces</span></a><?php endif; ?>
                 <?php if ($can('activitate_utilizatori')): ?><a class="nav-link <?= $currentPage === 'activitate_utilizatori' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'activitate_utilizatori'])) ?>"><i class="bi bi-person-lines-fill" aria-hidden="true"></i><span>Activitate utilizatori</span></a><?php endif; ?>
-                <hr class="my-3">
-                <a class="nav-link text-danger" href="<?= e(build_query_url(['page' => 'logout'])) ?>"><i class="bi bi-box-arrow-right" aria-hidden="true"></i><span>Deconectare</span></a>
+                <hr class="my-3" data-sidebar-search-static>
+                <a class="nav-link text-danger" href="<?= e(build_query_url(['page' => 'logout'])) ?>" data-sidebar-search-static><i class="bi bi-box-arrow-right" aria-hidden="true"></i><span>Deconectare</span></a>
             </nav>
         </aside>
 

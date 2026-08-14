@@ -445,6 +445,8 @@ class DispecerCurseController
             $formData = array_merge($formData, $formFlash['old']);
         }
         $formData['tip_marfa'] = $this->normalizeGoodsTypeSelection($formData['tip_marfa'] ?? []);
+        $incompleteConfirmItems = (array) ($_SESSION['_dispecer_incomplete_confirm_race_create'] ?? []);
+        unset($_SESSION['_dispecer_incomplete_confirm_race_create']);
 
         // Reluare cursa: precompleteaza formularul dintr-o cursa existenta; segmentul nou
         // pastreaza contextul (beneficiar, tip transport, traseu), dar km/cantitatile/orele
@@ -537,6 +539,7 @@ class DispecerCurseController
         render('dispecer_curse/index.php', [
             'pageTitle' => 'Dispecer curse',
             'currentPage' => 'dispecer_curse',
+            'incompleteConfirmItems' => $incompleteConfirmItems,
             'rows' => $result['rows'],
             'search' => $search,
             'filters' => $filters,
@@ -807,7 +810,18 @@ class DispecerCurseController
             ];
         };
 
-        // --- Comune tuturor tipurilor: cronometrare si documente ---
+        // --- Comune tuturor tipurilor: resurse, cronometrare si documente ---
+        $driverId = (int) ($race['driver_id'] ?? 0);
+        if ($driverId <= 0 && trim((string) ($race['sofer_nume'] ?? '')) === '') {
+            $add('driver_id', 'Șofer neasignat', 'critical', 'Cursa nu are șofer — asignează șoferul pentru pontaj și raportare.', 'driver');
+        }
+        $beneficiaryId = (int) ($race['beneficiar_id'] ?? 0);
+        if ($beneficiaryId <= 0 && trim((string) ($race['beneficiar_nume'] ?? '')) === '') {
+            $add('beneficiar_id', 'Beneficiar transport', 'critical', 'Cursa nu are beneficiar — fără el nu se poate factura.', 'beneficiary');
+        }
+        if ($isMissing($race['tip_marfa'] ?? null)) {
+            $add('tip_marfa', 'Tip marfă', 'important', 'Selectează tipul de marfă pentru documentele de transport.', 'goods');
+        }
         if ($isMissing($race['ora_inceput'] ?? null)) {
             $add('ora_inceput', 'Ora de început', 'critical', 'Completează ora de început — fără ea nu se poate seta ora finală și durata cursei.', 'start_time');
         }
@@ -816,6 +830,9 @@ class DispecerCurseController
         }
         if ($isMissing($race['data_incarcare'] ?? null)) {
             $add('data_incarcare', 'Data încărcare', 'minor', 'Selectează data încărcării pentru completarea documentelor.', 'loading_date');
+        }
+        if ($type !== 'compresor' && $isMissing($race['loc_incarcare_id'] ?? null)) {
+            $add('loc_incarcare_id', 'Loc încărcare', 'important', 'Selectează locul de încărcare — este folosit la potrivirea rutelor și în documente.', 'loading_location');
         }
 
         $hasPricingGap = false;
@@ -838,6 +855,12 @@ class DispecerCurseController
                     $add('cantitate_incarcata', 'Cantitate încărcată (valoare invalidă: 0)', 'critical', 'Valoarea 0 nu este acceptată la facturarea pe tone — corectează cantitatea.', 'quantity');
                     $hasPricingGap = true;
                 }
+            }
+            if ($type === 'primar' && $isMissing($race['cantitate_incarcata'] ?? null)) {
+                $add('cantitate_incarcata', 'Cantitate încărcată', 'minor', 'Completează cantitatea încărcată pentru raportarea operațională.', 'quantity');
+            }
+            if ($isMissing($race['zona_distributie_id'] ?? null)) {
+                $add('zona_distributie_id', 'Loc descărcare', 'important', 'Selectează locul de descărcare — perechea Loc ↔ Zonă valideză ruta din Setări Primar.', 'distribution_zone');
             }
         } elseif ($type === 'distributie' || $type === 'primar_distributie') {
             $quantity = $race['cantitate_incarcata'] ?? null;
@@ -867,6 +890,17 @@ class DispecerCurseController
                 }
             }
         } elseif ($type === 'compresor') {
+            $compressorLocationDefinitions = [
+                ['loc_plecare', 'Loc plecare', 'departure_location'],
+                ['loc_aspirare', 'Loc aspirare', 'suction_location'],
+                ['loc_livrare', 'Loc livrare', 'delivery_location'],
+                ['loc_livrare_cursa', 'Loc închidere cursă', 'closing_location'],
+            ];
+            foreach ($compressorLocationDefinitions as [$locationField, $locationLabel, $locationFocus]) {
+                if ($isMissing($race[$locationField] ?? null)) {
+                    $add($locationField, $locationLabel, 'important', 'Completează ' . mb_strtolower($locationLabel) . ' pentru traseul cursei de compresor.', $locationFocus);
+                }
+            }
             $metricDefinitions = [
                 ['ore_aspirare', 'Ore aspirare', 'Completează orele de aspirare — componentă de facturare și de mentenanță.', 'aspiration_hours'],
                 ['km_dislocare', 'Km efectuați (dislocare)', 'Completează km de dislocare — componentă de facturare.', 'displacement_km'],
@@ -950,7 +984,7 @@ class DispecerCurseController
 
         ensure_csrf_or_redirect(build_query_url(['page' => 'dispecer_curse']));
 
-        [$data, $errors, $old] = $this->validateRaceInput($_POST, false);
+        [$data, $errors, $old, $softErrors] = $this->validateRaceInput($_POST, false);
 
         // Reluare cursa: segmentul nou refera cursa-parinte.
         $parentCursaId = (int) ($_POST['parent_cursa_id'] ?? 0);
@@ -968,7 +1002,15 @@ class DispecerCurseController
         }
 
         if ($errors !== []) {
-            $this->setFormFlash('race_create', $old, $errors);
+            $this->setFormFlash('race_create', $old, $errors + $softErrors);
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        // Informatii lipsa (ne-blocante): cerem confirmare explicita inainte de salvare.
+        $confirmIncomplete = trim((string) ($_POST['confirm_incomplete'] ?? '')) === '1';
+        if ($softErrors !== [] && !$confirmIncomplete) {
+            $_SESSION['_dispecer_incomplete_confirm_race_create'] = array_values($softErrors);
+            $this->setFormFlash('race_create', $old, []);
             redirect(build_query_url(['page' => 'dispecer_curse']));
         }
 
@@ -1062,6 +1104,8 @@ class DispecerCurseController
         }
 
         $raceFlash = $this->consumeFormFlash('race_edit_' . $raceId);
+        $incompleteConfirmItems = (array) ($_SESSION['_dispecer_incomplete_confirm_race_edit_' . $raceId] ?? []);
+        unset($_SESSION['_dispecer_incomplete_confirm_race_edit_' . $raceId]);
         $raceFormData = $race;
         if ($raceFlash['old'] !== []) {
             $raceFormData = array_merge($raceFormData, $raceFlash['old']);
@@ -1131,6 +1175,7 @@ class DispecerCurseController
         render('dispecer_curse/edit.php', [
             'pageTitle' => 'Editare cursa',
             'currentPage' => 'dispecer_curse',
+            'incompleteConfirmItems' => $incompleteConfirmItems,
             'race' => $race,
             'raceFormData' => $raceFormData,
             'raceFormErrors' => $raceFlash['errors'],
@@ -1195,9 +1240,17 @@ class DispecerCurseController
             $updateInput['vehicle_config_decision'] = 'trip';
         }
 
-        [$data, $errors, $old] = $this->validateRaceInput($updateInput, false, true);
+        [$data, $errors, $old, $softErrors] = $this->validateRaceInput($updateInput, false, true);
         if ($errors !== []) {
-            $this->setFormFlash('race_edit_' . $raceId, $old, $errors);
+            $this->setFormFlash('race_edit_' . $raceId, $old, $errors + $softErrors);
+            redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
+        }
+
+        // Informatii lipsa (ne-blocante): cerem confirmare explicita inainte de salvare.
+        $confirmIncomplete = trim((string) ($_POST['confirm_incomplete'] ?? '')) === '1';
+        if ($softErrors !== [] && !$confirmIncomplete) {
+            $_SESSION['_dispecer_incomplete_confirm_race_edit_' . $raceId] = array_values($softErrors);
+            $this->setFormFlash('race_edit_' . $raceId, $old, []);
             redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
         }
 
@@ -3267,6 +3320,33 @@ class DispecerCurseController
             }
         }
 
+        // Aceeasi pereche Loc-Zona poate exista pe mai multe reguli (ex. km diferiti
+        // pe garaje), dar vehiculele NU au voie sa se suprapuna intre reguli — altfel
+        // potrivirea rutei la crearea cursei ar fi ambigua.
+        if ($errors === [] && $locationId > 0 && $zoneId > 0 && $routeVehicleIds !== []) {
+            foreach ($this->model->getPrimaryRouteRules(false, $beneficiaryId) as $pairRule) {
+                $pairRuleId = (int) ($pairRule['id'] ?? 0);
+                if ($pairRuleId <= 0 || $pairRuleId === $routeEditId) {
+                    continue;
+                }
+                if ((int) ($pairRule['loc_incarcare_id'] ?? 0) !== $locationId || (int) ($pairRule['zona_distributie_id'] ?? 0) !== $zoneId) {
+                    continue;
+                }
+
+                $pairRuleVehicleIds = array_filter(array_map('intval', explode(',', (string) ($pairRule['vehicle_ids'] ?? ''))));
+                if ($pairRuleVehicleIds === []) {
+                    $errors['vehicle_ids'] = 'Exista deja o configuratie pentru aceasta combinatie fara restrictie de vehicule (acopera toate vehiculele). Editeaza-o pe aceea sau limiteaza-i vehiculele mai intai.';
+                    break;
+                }
+
+                $overlappingVehicleIds = array_values(array_intersect($routeVehicleIds, $pairRuleVehicleIds));
+                if ($overlappingVehicleIds !== []) {
+                    $errors['vehicle_ids'] = 'Vehiculele selectate se suprapun cu o alta configuratie existenta pe aceeasi combinatie Loc ↔ Zona. Fiecare vehicul poate aparea intr-o singura configuratie a perechii.';
+                    break;
+                }
+            }
+        }
+
         $old = [
             'route_id' => $routeEditId > 0 ? (string) $routeEditId : '',
             'loc_id' => $locationId > 0 ? (string) $locationId : '',
@@ -4851,6 +4931,10 @@ class DispecerCurseController
     ): array
     {
         $errors = [];
+        // Campuri necompletate: nu blocheaza salvarea, dar cer confirmare explicita
+        // (popup "Salvezi fara aceste informatii?"); raman vizibile in meniul
+        // "curse cu informatii lipsa" pana sunt completate.
+        $softErrors = [];
 
         $vehicleId = (int) ($input['vehicle_id'] ?? 0);
         if ($vehicleId <= 0) {
@@ -4971,7 +5055,10 @@ class DispecerCurseController
         if ($isCompressorTransport) {
             $loadLocationIdRaw = '';
             $loadLocationId = null;
-        } elseif ($loadLocationId === null || $loadLocationId <= 0 || !$this->model->existsLoadLocation($loadLocationId)) {
+        } elseif ($loadLocationId === null || $loadLocationId <= 0) {
+            $loadLocationId = null;
+            $softErrors['loc_incarcare_id'] = 'Locul de incarcare nu este selectat.';
+        } elseif (!$this->model->existsLoadLocation($loadLocationId)) {
             $errors['loc_incarcare_id'] = 'Selecteaza un loc de incarcare valid.';
         } else {
             $loadLocation = $this->model->getLoadLocationById($loadLocationId);
@@ -4986,7 +5073,8 @@ class DispecerCurseController
         $beneficiaryId = $beneficiaryIdRaw === '' ? null : (int) $beneficiaryIdRaw;
         $beneficiary = null;
         if ($beneficiaryId === null || $beneficiaryId <= 0) {
-            $errors['beneficiar_id'] = 'Selecteaza un beneficiar de transport valid.';
+            $beneficiaryId = null;
+            $softErrors['beneficiar_id'] = 'Beneficiarul de transport nu este selectat.';
         } else {
             $beneficiary = $this->model->getTransportBeneficiaryById($beneficiaryId);
             if ($beneficiary === null) {
@@ -5013,7 +5101,8 @@ class DispecerCurseController
         $driverIdRaw = trim((string) ($input['driver_id'] ?? ''));
         $driverId = $driverIdRaw === '' ? null : (int) $driverIdRaw;
         if ($driverId === null || $driverId <= 0) {
-            $errors['driver_id'] = 'Selecteaza un sofer valid.';
+            $driverId = null;
+            $softErrors['driver_id'] = 'Soferul nu este selectat.';
         } else {
             $driver = $this->model->getDriverById($driverId);
             if ($driver === null) {
@@ -5145,11 +5234,11 @@ class DispecerCurseController
 
         if ($isPrimaryTransport) {
             if ($zoneId === null || $zoneId <= 0) {
-                $errors['zona_distributie_id'] = 'Pentru Primar, selecteaza zona de descarcare.';
+                $softErrors['zona_distributie_id'] = 'Locul de descarcare nu este selectat.';
             }
 
             if ($beneficiaryId !== null && $beneficiaryId > 0) {
-                if ($loadLocation === null || (int) ($loadLocation['beneficiar_id'] ?? 0) !== $beneficiaryId) {
+                if ($loadLocation !== null && (int) ($loadLocation['beneficiar_id'] ?? 0) !== $beneficiaryId) {
                     $errors['loc_incarcare_id'] = 'Pentru Primar, selecteaza un loc de incarcare configurat pentru beneficiarul ales.';
                 }
 
@@ -5169,7 +5258,8 @@ class DispecerCurseController
                         $loadLocationId,
                         $zoneId,
                         $loadLocation,
-                        $zone
+                        $zone,
+                        $vehicleId
                     );
                     if ($primaryRouteRule !== null) {
                         $primaryRouteKmTariff = max(0, (int) ($primaryRouteRule['km_tarifare'] ?? 0));
@@ -5184,13 +5274,15 @@ class DispecerCurseController
             }
 
             if (!$hasMatchedPrimaryRouteRule) {
-                $errors['zona_distributie_id'] = 'Combinatia selectata Loc ↔ Zona nu este configurata in Setari Primar pentru beneficiarul ales.';
+                if ($loadLocationId !== null && $loadLocationId > 0 && $zoneId !== null && $zoneId > 0) {
+                    $softErrors['zona_distributie_id'] = 'Combinatia selectata Loc ↔ Zona nu este configurata in Setari Primar pentru beneficiarul ales.';
+                }
             } elseif ($primaryRouteUsesManualAgreedKm) {
                 if ($km === null || $km <= 0) {
-                    $errors['km_cursa'] = 'Completeaza Km agreati pentru ruta Primar selectata.';
+                    $softErrors['km_cursa'] = 'Km agreati nu sunt completati pentru ruta Primar selectata.';
                 }
             } elseif ($primaryRouteKmTariff === null || $primaryRouteKmTariff <= 0) {
-                $errors['km_cursa'] = 'Configureaza un Km efectuat valid in Setari Primar pentru combinatia selectata.';
+                $softErrors['km_cursa'] = 'Km efectuati nu sunt configurati in Setari Primar pentru combinatia selectata.';
             } else {
                 // Pentru Primar, km efectuati vine din configuratia de ruta.
                 $km = $primaryRouteKmTariff;
@@ -5215,7 +5307,7 @@ class DispecerCurseController
         }
         $goodsTypeValues = array_values($goodsTypeValues);
         if ($goodsTypeValues === []) {
-            $errors['tip_marfa'] = 'Selecteaza tipul de marfa.';
+            $softErrors['tip_marfa'] = 'Tipul de marfa nu este selectat.';
         } elseif ($invalidGoodsTypeSelected) {
             $errors['tip_marfa'] = 'Selecteaza doar tipuri de marfa valide.';
         }
@@ -5227,24 +5319,24 @@ class DispecerCurseController
             $billingStatus = self::DEFAULT_BILLING_STATUS;
         }
 
-        if ($isPrimaryKmTransport && ($km === null || $km <= 0) && !isset($errors['km_cursa'])) {
-            $errors['km_cursa'] = 'Pentru Primar km, completeaza un Km efectuat valid din setarile Primar.';
+        if ($isPrimaryKmTransport && ($km === null || $km <= 0) && !isset($errors['km_cursa']) && !isset($softErrors['km_cursa'])) {
+            $softErrors['km_cursa'] = 'Km agreati (tarifare) nu sunt completati.';
         }
 
         if ($isPrimaryTonTransport && ($qtyForTonPricing === null || $qtyForTonPricing <= 0)) {
-            $errors['cantitate_incarcata'] = 'Pentru Primar tone, completeaza Cantitate incarcata.';
+            $softErrors['cantitate_incarcata'] = 'Cantitatea incarcata nu este completata (necesara facturarii pe tone).';
         }
 
         if ($isDistributionTransport) {
             if ($qtyForTonPricing === null || $qtyForTonPricing <= 0) {
-                $errors['cantitate_incarcata'] = 'Pentru distributie, completeaza cantitatea incarcata.';
+                $softErrors['cantitate_incarcata'] = 'Cantitatea incarcata nu este completata (necesara facturarii distributiei).';
             }
             if ($zoneId === null || $zoneId <= 0) {
-                $errors['zona_distributie_id'] = 'Pentru distributie, selecteaza zona de distributie.';
+                $softErrors['zona_distributie_id'] = 'Zona de distributie nu este selectata.';
             }
 
             if ($beneficiaryId !== null && $beneficiaryId > 0) {
-                if ($loadLocation === null || (int) ($loadLocation['beneficiar_id'] ?? 0) !== $beneficiaryId) {
+                if ($loadLocation !== null && (int) ($loadLocation['beneficiar_id'] ?? 0) !== $beneficiaryId) {
                     $errors['loc_incarcare_id'] = 'Pentru distributie, selecteaza un loc de incarcare configurat pentru beneficiarul ales.';
                 }
 
@@ -5309,13 +5401,13 @@ class DispecerCurseController
                     : [];
 
                 if ($scopedRules === []) {
-                    $errors['zona_distributie_id'] = 'Pentru vehiculul selectat nu exista perechi de ruta configurate (Loc ↔ Zona).';
+                    $softErrors['zona_distributie_id'] = 'Pentru vehiculul selectat nu exista perechi de ruta configurate (Loc ↔ Zona).';
                 } elseif (
                     $loadLocationId !== null && $loadLocationId > 0
                     && $zoneId !== null && $zoneId > 0
                     && !$hasMatchedDistributionRouteRule
                 ) {
-                    $errors['zona_distributie_id'] = 'Combinatia selectata Loc ↔ Zona nu este configurata pentru vehiculul ales.';
+                    $softErrors['zona_distributie_id'] = 'Combinatia selectata Loc ↔ Zona nu este configurata pentru vehiculul ales.';
                 }
             }
         }
@@ -5343,7 +5435,7 @@ class DispecerCurseController
                 $pricePerTon = $this->resolveBeneficiaryRate($beneficiary, 'primar', true);
 
                 if ($pricePerKm <= 0 && $pricePerTon <= 0 && !$primaryRouteApplyRideCost) {
-                    $errors['beneficiar_id'] = 'Beneficiarul selectat nu are tarife valide pentru transport primar.';
+                    $softErrors['beneficiar_id'] = 'Beneficiarul selectat nu are tarife valide pentru transport primar.';
                 } else {
                     $price = $primaryRouteApplyRideCost
                         ? $primaryRouteRideCost
@@ -5380,7 +5472,7 @@ class DispecerCurseController
                         ? ($routeExtraKmCost > 0 ? $routeExtraKmCost : ($zoneExtraKmCost > 0 ? $zoneExtraKmCost : $beneficiaryDistributionPerKm))
                         : 0.0;
                     if ($effectiveTonRate <= 0 && $effectiveKmRate <= 0 && !$routeApplyRideCost) {
-                        $errors['zona_distributie_id'] = 'Configureaza un tarif valid pentru distributie (Loc incarcare, Zona sau Cost extra km).';
+                        $softErrors['zona_distributie_id'] = 'Nu exista un tarif valid pentru distributie (Loc incarcare, Zona sau Cost extra km).';
                     } else {
                         // In pret_tarifare stocam componenta de baza pentru distributie.
                         $price = $routeApplyRideCost
@@ -5402,7 +5494,7 @@ class DispecerCurseController
                         && $compressorRates['pret_tona_aspirata_lichida'] <= 0
                         && $compressorRates['pret_tona_aspirata_gazoasa'] <= 0
                     ) {
-                        $errors['beneficiar_id'] = 'Beneficiarul selectat nu are tarife valide pentru transport Compresor.';
+                        $softErrors['beneficiar_id'] = 'Beneficiarul selectat nu are tarife valide pentru transport Compresor.';
                     } else {
                         $price = $compressorRates['pret_ora_aspirare'] > 0
                             ? $compressorRates['pret_ora_aspirare']
@@ -5621,7 +5713,7 @@ class DispecerCurseController
         ];
 
         if ($errors !== []) {
-            return [[], $errors, $old];
+            return [[], $errors, $old, $softErrors];
         }
 
         $data = [
@@ -5665,7 +5757,7 @@ class DispecerCurseController
             'observatii' => $observations !== '' ? $observations : null,
         ];
 
-        return [$data, [], $old];
+        return [$data, [], $old, $softErrors];
     }
 
     private function isDistributionTransportType(string $transportType): bool
@@ -7175,13 +7267,15 @@ class DispecerCurseController
         int $locationId,
         int $zoneId,
         ?array $loadLocation = null,
-        ?array $zone = null
+        ?array $zone = null,
+        ?int $vehicleId = null
     ): ?array {
         $directRule = $this->model->getPrimaryRouteRuleForBeneficiary(
             $beneficiaryId,
             $locationId,
             $zoneId,
-            true
+            true,
+            $vehicleId
         );
         if ($directRule !== null) {
             return $directRule;
@@ -7192,7 +7286,8 @@ class DispecerCurseController
                 $beneficiaryId,
                 $zoneId,
                 $locationId,
-                true
+                true,
+                $vehicleId
             );
             if ($reverseRule !== null) {
                 return $reverseRule;
@@ -7210,7 +7305,8 @@ class DispecerCurseController
             return null;
         }
 
-        $resolveByNamePair = function (array $rules, string $expectedLocationName, string $expectedZoneName): ?array {
+        $resolveByNamePair = function (array $rules, string $expectedLocationName, string $expectedZoneName) use ($vehicleId): ?array {
+            $matchedRules = [];
             foreach ($rules as $rule) {
                 if (!is_array($rule)) {
                     continue;
@@ -7223,11 +7319,33 @@ class DispecerCurseController
                 }
 
                 if ($ruleLocationName === $expectedLocationName && $ruleZoneName === $expectedZoneName) {
-                    return $rule;
+                    $matchedRules[] = $rule;
                 }
             }
 
-            return null;
+            if ($matchedRules === []) {
+                return null;
+            }
+
+            // Aceeasi preferinta ca la potrivirea pe id-uri: regula care contine
+            // vehiculul > regula fara restrictie > fallback doar la regula unica.
+            if ($vehicleId !== null && $vehicleId > 0) {
+                foreach ($matchedRules as $matchedRule) {
+                    $matchedVehicleIds = array_filter(array_map('intval', explode(',', (string) ($matchedRule['vehicle_ids'] ?? ''))));
+                    if (in_array($vehicleId, $matchedVehicleIds, true)) {
+                        return $matchedRule;
+                    }
+                }
+                foreach ($matchedRules as $matchedRule) {
+                    if (trim((string) ($matchedRule['vehicle_ids'] ?? '')) === '') {
+                        return $matchedRule;
+                    }
+                }
+
+                return count($matchedRules) === 1 ? $matchedRules[0] : null;
+            }
+
+            return $matchedRules[0];
         };
 
         $directNameRule = $resolveByNamePair($primaryRules, $selectedLocationName, $selectedZoneName);
