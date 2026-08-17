@@ -122,6 +122,15 @@ $returnUrl = build_query_url(['page' => 'inactive_approvals']);
                             <button class="btn btn-success" type="submit">Aproba</button>
                         </form>
                     </div>
+                <?php elseif ($status !== 'pending' && $canReviewApprovals): ?>
+                    <div class="inactive-approval-detail-actions">
+                        <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'reopen'])) ?>">
+                            <?= csrf_field() ?>
+                            <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
+                            <input type="hidden" name="return_url" value="<?= e($returnUrl) ?>">
+                            <button class="btn btn-outline-warning" type="submit">Repune in asteptare</button>
+                        </form>
+                    </div>
                 <?php elseif ($status === 'pending' && !$canReviewApprovals): ?>
                     <div class="inactive-approval-detail-actions">
                         <button

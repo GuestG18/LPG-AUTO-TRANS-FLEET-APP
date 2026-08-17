@@ -1667,3 +1667,104 @@ document.addEventListener('DOMContentLoaded', function () {
     initFleetStickyDocumentTables();
     initFleetIdleRefreshLoader();
 });
+
+/**
+ * Meniul de actiuni (trei puncte) din tabelul de solicitari aprobare.
+ *
+ * Nu foloseste dropdown-ul Bootstrap pentru ca tabelul are `overflow-x: auto`,
+ * iar CSS-ul nu permite overflow-x auto impreuna cu overflow-y visible: meniul
+ * pozitionat absolut este taiat de marginea containerului, indiferent de flip.
+ * Solutia este mutarea meniului in <body> si pozitionarea lui `fixed` sub buton.
+ */
+(function initInactiveApprovalMenus() {
+    var TOGGLE_SELECTOR = '[data-approval-menu-toggle]';
+    var MENU_SELECTOR = '.inactive-approval-menu-list';
+    var open = null;
+
+    function closeMenu() {
+        if (!open) {
+            return;
+        }
+
+        var menu = open.menu;
+        menu.classList.remove('show');
+        menu.removeAttribute('style');
+        if (open.placeholder && open.placeholder.parentNode) {
+            open.placeholder.parentNode.replaceChild(menu, open.placeholder);
+        }
+        open.toggle.setAttribute('aria-expanded', 'false');
+        open = null;
+    }
+
+    function positionMenu(menu, toggle) {
+        var rect = toggle.getBoundingClientRect();
+        var height = menu.offsetHeight;
+        var width = menu.offsetWidth;
+        var margin = 8;
+
+        var top = rect.bottom + 4;
+        if (top + height > window.innerHeight - margin) {
+            var above = rect.top - height - 4;
+            top = above >= margin ? above : Math.max(margin, window.innerHeight - height - margin);
+        }
+
+        var left = rect.right - width;
+        if (left < margin) {
+            left = margin;
+        }
+        if (left + width > window.innerWidth - margin) {
+            left = Math.max(margin, window.innerWidth - width - margin);
+        }
+
+        menu.style.top = Math.round(top) + 'px';
+        menu.style.left = Math.round(left) + 'px';
+    }
+
+    function openMenu(toggle) {
+        var wrapper = toggle.closest('.inactive-approval-menu');
+        var menu = wrapper ? wrapper.querySelector(MENU_SELECTOR) : null;
+        if (!menu) {
+            return;
+        }
+
+        var placeholder = document.createComment('inactive-approval-menu');
+        menu.parentNode.replaceChild(placeholder, menu);
+        document.body.appendChild(menu);
+
+        menu.style.position = 'fixed';
+        menu.style.margin = '0';
+        menu.classList.add('show');
+        toggle.setAttribute('aria-expanded', 'true');
+
+        open = { menu: menu, toggle: toggle, placeholder: placeholder };
+        positionMenu(menu, toggle);
+    }
+
+    document.addEventListener('click', function (event) {
+        var toggle = event.target.closest(TOGGLE_SELECTOR);
+        if (toggle) {
+            event.preventDefault();
+            var wasOpen = open && open.toggle === toggle;
+            closeMenu();
+            if (!wasOpen) {
+                openMenu(toggle);
+            }
+            return;
+        }
+
+        if (open && !event.target.closest(MENU_SELECTOR)) {
+            closeMenu();
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') {
+            closeMenu();
+        }
+    });
+
+    // Meniul este ancorat vizual de buton; daca pagina sau tabelul se misca sub el,
+    // il inchidem in loc sa ramana suspendat langa alt rand.
+    window.addEventListener('resize', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+})();

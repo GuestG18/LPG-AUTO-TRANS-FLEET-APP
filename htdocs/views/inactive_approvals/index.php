@@ -115,14 +115,13 @@ $currentUrl = build_query_url(array_merge($baseQuery, ['p' => (int) ($result['pa
                     <th>Cursa</th>
                     <th>Solicitat de</th>
                     <th>Data solicitarii</th>
-                    <th>Status</th>
                     <th class="text-end">Actiuni</th>
                 </tr>
                 </thead>
                 <tbody>
                 <?php if ($rows === []): ?>
                     <tr>
-                        <td colspan="10" class="text-center text-muted py-4">Nu exista solicitari pentru filtrele selectate.</td>
+                        <td colspan="9" class="text-center text-muted py-4">Nu exista solicitari pentru filtrele selectate.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($rows as $row): ?>
@@ -131,8 +130,13 @@ $currentUrl = build_query_url(array_merge($baseQuery, ['p' => (int) ($result['pa
                         $status = (string) ($row['status'] ?? 'pending');
                         $resourceType = (string) ($row['resource_type'] ?? '');
                         ?>
-                        <tr>
-                            <td class="fw-semibold"><?= e((string) ($row['resource_label'] ?? '-')) ?></td>
+                        <?php // Statusul nu mai are coloana proprie: il arata culoarea intregului rand. ?>
+                        <tr class="inactive-approval-row is-<?= e($status) ?>">
+                            <td class="fw-semibold">
+                                <?= e((string) ($row['resource_label'] ?? '-')) ?>
+                                <?php // Culoarea singura nu e accesibila; statusul ramane citibil de cititoarele de ecran. ?>
+                                <span class="visually-hidden">Status: <?= e($statusLabels[$status] ?? $status) ?></span>
+                            </td>
                             <td><?= e($resourceTypeLabels[$resourceType] ?? '-') ?></td>
                             <td>
                                 <span class="inactive-approval-reason-badge tone-<?= e((string) ($row['inactive_reason'] ?? 'other')) ?>">
@@ -144,24 +148,65 @@ $currentUrl = build_query_url(array_merge($baseQuery, ['p' => (int) ($result['pa
                             <td><?= !empty($row['trip_id']) ? ('#' . e((string) $row['trip_id'])) : '-' ?></td>
                             <td><?= e((string) ($row['requested_by_name'] ?? '-')) ?></td>
                             <td><?= e($formatDateTime($row['requested_at'] ?? '')) ?></td>
-                            <td><span class="inactive-approval-status is-<?= e($status) ?>"><?= e($statusLabels[$status] ?? $status) ?></span></td>
                             <td class="text-end">
-                                <div class="inactive-approval-actions">
-                                    <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'show', 'id' => $approvalId])) ?>">Vezi detalii</a>
-                                    <?php if ($status === 'pending' && $canReviewApprovals): ?>
-                                        <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'reject'])) ?>">
-                                            <?= csrf_field() ?>
-                                            <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
-                                            <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
-                                            <button class="btn btn-sm btn-outline-danger" type="submit">Respinge</button>
-                                        </form>
-                                        <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'approve'])) ?>">
-                                            <?= csrf_field() ?>
-                                            <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
-                                            <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
-                                            <button class="btn btn-sm btn-outline-success" type="submit">Aproba</button>
-                                        </form>
-                                    <?php endif; ?>
+                                <?php
+                                // Meniu compact: coloana Actiuni ocupa o singura iconita, nu trei butoane.
+                                // Deschiderea e gestionata din app.js, nu de dropdown-ul Bootstrap: tabelul
+                                // are overflow-x, care taie orice meniu pozitionat absolut inauntrul lui.
+                                ?>
+                                <div class="inactive-approval-menu">
+                                    <button
+                                        class="btn btn-sm btn-outline-secondary inactive-approval-menu-toggle"
+                                        type="button"
+                                        data-approval-menu-toggle
+                                        aria-haspopup="true"
+                                        aria-expanded="false"
+                                        aria-label="Actiuni pentru <?= e((string) ($row['resource_label'] ?? 'solicitare')) ?>"
+                                    >
+                                        <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end inactive-approval-menu-list">
+                                        <li>
+                                            <a class="dropdown-item" href="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'show', 'id' => $approvalId])) ?>">
+                                                <i class="bi bi-eye" aria-hidden="true"></i> Vezi detalii
+                                            </a>
+                                        </li>
+                                        <?php if ($status === 'pending' && $canReviewApprovals): ?>
+                                            <li><hr class="dropdown-divider"></li>
+                                            <li>
+                                                <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'approve'])) ?>">
+                                                    <?= csrf_field() ?>
+                                                    <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
+                                                    <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+                                                    <button class="dropdown-item text-success" type="submit">
+                                                        <i class="bi bi-check-lg" aria-hidden="true"></i> Aproba
+                                                    </button>
+                                                </form>
+                                            </li>
+                                            <li>
+                                                <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'reject'])) ?>">
+                                                    <?= csrf_field() ?>
+                                                    <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
+                                                    <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+                                                    <button class="dropdown-item text-danger" type="submit">
+                                                        <i class="bi bi-x-lg" aria-hidden="true"></i> Respinge
+                                                    </button>
+                                                </form>
+                                            </li>
+                                        <?php elseif ($status !== 'pending' && $canReviewApprovals): ?>
+                                            <li><hr class="dropdown-divider"></li>
+                                            <li>
+                                                <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'reopen'])) ?>">
+                                                    <?= csrf_field() ?>
+                                                    <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
+                                                    <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+                                                    <button class="dropdown-item text-warning-emphasis" type="submit">
+                                                        <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Repune in asteptare
+                                                    </button>
+                                                </form>
+                                            </li>
+                                        <?php endif; ?>
+                                    </ul>
                                 </div>
                             </td>
                         </tr>

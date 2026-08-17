@@ -30,6 +30,10 @@ class InactiveResourceApprovalController
                 $this->reviewAction('rejected');
                 return;
 
+            case 'reopen':
+                $this->reopenAction();
+                return;
+
             default:
                 http_response_code(404);
                 render('errors/404.php', [
@@ -118,6 +122,34 @@ class InactiveResourceApprovalController
         $message = $targetStatus === 'approved'
             ? ($ok ? 'Solicitarea a fost aprobata.' : 'Solicitarea nu mai este in asteptare.')
             : ($ok ? 'Solicitarea a fost respinsa.' : 'Solicitarea nu mai este in asteptare.');
+
+        if ($this->wantsJson()) {
+            $this->sendJson([
+                'success' => $ok,
+                'message' => $message,
+            ], $ok ? 200 : 409);
+        }
+
+        flash_set($ok ? 'success' : 'warning', $message);
+        $this->redirectAfterAction();
+    }
+
+    private function reopenAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'inactive_approvals']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'inactive_approvals']));
+        $this->requireReviewAccess();
+
+        $id = (int) ($_POST['id'] ?? 0);
+        $note = trim((string) ($_POST['review_note'] ?? ''));
+        $ok = $this->model->reopen($id, $this->currentUserId(), $note);
+
+        $message = $ok
+            ? 'Solicitarea a fost repusa in asteptare.'
+            : 'Solicitarea este deja in asteptare sau nu a fost gasita.';
 
         if ($this->wantsJson()) {
             $this->sendJson([

@@ -8941,7 +8941,7 @@ button.dispatcher-datetime-picker-title:focus-visible {
 
 .refacturare-actions-column,
 .refacturare-actions-cell {
-    min-width: 240px;
+    min-width: 84px;
     white-space: nowrap;
 }
 
@@ -9054,46 +9054,85 @@ button.dispatcher-datetime-picker-title:focus-visible {
 
 .refacturare-invoice-form {
     margin: 0;
-    display: inline-flex;
+    display: block;
 }
 
-.refacturare-action-edit,
-.refacturare-action-invoice {
+/* Butonul cu trei puncte care deschide meniul de actiuni al randului. */
+.refacturare-action-menu {
+    width: 38px;
     min-height: 38px;
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0.48rem 0.82rem;
+    padding: 0;
+    border: 1px solid #cbd5e1;
     border-radius: 6px;
-    font-size: 0.9rem;
-    font-weight: 760;
+    color: #475569;
+    background: #ffffff;
+    font-size: 1.05rem;
     line-height: 1;
-    white-space: nowrap;
 }
 
-.refacturare-action-edit {
-    border: 1px solid #0d6efd;
+.refacturare-action-menu:hover,
+.refacturare-action-menu:focus-visible,
+.refacturare-action-menu[aria-expanded="true"] {
     color: #0d6efd;
-    background: #ffffff;
+    border-color: #0d6efd;
+    background: #f1f6ff;
 }
 
-.refacturare-action-edit:hover,
-.refacturare-action-edit:focus-visible {
-    color: #ffffff;
-    background: #0d6efd;
+.refacturare-action-list {
+    --bs-dropdown-min-width: 16rem;
+    padding: 0.35rem;
+    border-color: #dbe3ee;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.14);
 }
 
-.refacturare-action-invoice {
-    border: 1px solid #22c55e;
-    color: #16a34a;
-    background: #ffffff;
+.refacturare-action-list .dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    font-size: 0.9rem;
+    font-weight: 700;
+    text-align: left;
+    white-space: normal;
 }
 
-.refacturare-action-invoice:hover,
-.refacturare-action-invoice:focus-visible {
-    color: #ffffff;
-    background: #22c55e;
+/*
+ * Iconurile nu primesc click: handlerul global [data-confirm] verifica
+ * exact elementul apasat, iar un <i> interior ar sari peste confirmare.
+ */
+.refacturare-action-list .dropdown-item i {
+    pointer-events: none;
+    font-size: 1rem;
+}
+
+.refacturare-action-list .dropdown-item.is-invoice { color: #16a34a; }
+.refacturare-action-list .dropdown-item.is-invoice:hover,
+.refacturare-action-list .dropdown-item.is-invoice:focus-visible {
+    color: #14532d;
+    background: #dcfce7;
+}
+
+.refacturare-action-list .dropdown-item.is-revert { color: #b45309; }
+.refacturare-action-list .dropdown-item.is-revert:hover,
+.refacturare-action-list .dropdown-item.is-revert:focus-visible {
+    color: #7c2d12;
+    background: #fef3c7;
+}
+
+/* Starea curenta ramane vizibila, dar nu e actionabila. */
+.refacturare-action-list .dropdown-item.is-current {
+    color: #94a3b8;
+    background: transparent;
+    cursor: default;
+    font-weight: 650;
 }
 
 .refacturare-empty-row {
@@ -9195,11 +9234,8 @@ button.dispatcher-datetime-picker-title:focus-visible {
         gap: 0.45rem;
     }
 
-    .refacturare-action-edit,
-    .refacturare-action-invoice {
-        padding-right: 0.62rem;
-        padding-left: 0.62rem;
-        font-size: 0.84rem;
+    .refacturare-action-list .dropdown-item {
+        font-size: 0.86rem;
     }
 }
 
@@ -18472,6 +18508,48 @@ button.dispatcher-datetime-picker-title:focus-visible {
     margin: 0;
 }
 
+/* Meniu compact de actiuni in tabelul de solicitari: coloana ramane ingusta,
+   asa ca tabelul nu mai are nevoie de scroll orizontal pentru butoane. */
+.inactive-approval-menu {
+    display: inline-block;
+}
+
+.inactive-approval-menu-toggle {
+    --bs-btn-padding-x: 8px;
+    --bs-btn-padding-y: 4px;
+    line-height: 1;
+}
+
+.inactive-approval-menu-toggle::after {
+    display: none;
+}
+
+/* Selectoarele tintesc direct lista: la deschidere meniul este mutat in <body>,
+   deci nu mai este descendent al .inactive-approval-menu. */
+.inactive-approval-menu-list {
+    min-width: 210px;
+    z-index: 1080;
+}
+
+.inactive-approval-menu-list form {
+    margin: 0;
+}
+
+.inactive-approval-menu-list .dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: none;
+    font-size: 14px;
+}
+
+.inactive-approval-menu-list .dropdown-item i {
+    font-size: 13px;
+}
+
 .dashboard-approval-action {
     min-height: 34px;
     padding: 7px 18px;
@@ -18554,6 +18632,37 @@ button.dispatcher-datetime-picker-title:focus-visible {
     border-radius: 7px;
     font-size: 11px;
     font-weight: 900;
+}
+
+/* Statusul nu mai are coloana proprie: se citeste din culoarea randului.
+   Fundalul este o versiune mult diluata a paletei de pe badge-uri, ca textul
+   sa ramana lizibil; dunga colorata din stanga da semnalul tare. */
+.inactive-approval-row > td:first-child {
+    border-left: 3px solid transparent;
+}
+
+.inactive-approval-row.is-pending {
+    --bs-table-bg: #fff3e0;
+}
+
+.inactive-approval-row.is-pending > td:first-child {
+    border-left-color: #f59e0b;
+}
+
+.inactive-approval-row.is-approved {
+    --bs-table-bg: #eaf7ef;
+}
+
+.inactive-approval-row.is-approved > td:first-child {
+    border-left-color: #16a34a;
+}
+
+.inactive-approval-row.is-rejected {
+    --bs-table-bg: #fdecec;
+}
+
+.inactive-approval-row.is-rejected > td:first-child {
+    border-left-color: #dc2626;
 }
 
 .inactive-approval-status.is-pending {

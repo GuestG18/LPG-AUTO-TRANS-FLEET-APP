@@ -308,6 +308,7 @@ require_once __DIR__ . '/models/TireModel.php';
 require_once __DIR__ . '/models/DashboardModel.php';
 require_once __DIR__ . '/models/DocumentModel.php';
 require_once __DIR__ . '/models/InactiveResourceApprovalModel.php';
+require_once __DIR__ . '/models/ApprovalEmailActionModel.php';
 require_once __DIR__ . '/models/VehicleEquipmentInventoryModel.php';
 require_once __DIR__ . '/models/VehicleAuthorizationModel.php';
 require_once __DIR__ . '/models/DispecerCurseModel.php';
@@ -336,6 +337,7 @@ require_once __DIR__ . '/controllers/AuthController.php';
 require_once __DIR__ . '/controllers/DashboardController.php';
 require_once __DIR__ . '/controllers/DashboardAnaliticController.php';
 require_once __DIR__ . '/controllers/InactiveResourceApprovalController.php';
+require_once __DIR__ . '/controllers/EmailApprovalController.php';
 require_once __DIR__ . '/controllers/ModuleController.php';
 require_once __DIR__ . '/controllers/VehicleEquipmentInventoryController.php';
 require_once __DIR__ . '/controllers/VehicleAuthorizationController.php';
@@ -406,6 +408,13 @@ if (in_array($page, ['vehicule_usoare', 'vehicule_grele'], true) && isset($modul
 }
 
 try {
+    // Ruta publica: decizia se ia dintr-un link primit pe email, fara autentificare.
+    // Token-ul din URL tine loc de sesiune, deci trece inaintea garzii de login.
+    if ($page === 'aprobare_email') {
+        (new EmailApprovalController($db))->handle($action);
+        exit;
+    }
+
     if (!is_logged_in() && $page !== 'login') {
         flash_set('warning', "Te rug\u{0103}m s\u{0103} te autentifici pentru a continua.");
         redirect(url('index.php?page=login'));

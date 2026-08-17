@@ -377,24 +377,71 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
                                     <?php endif; ?>
                                 </td>
                                 <td class="refacturare-actions-cell text-end">
-                                    <div class="refacturare-actions">
-                                        <a class="btn refacturare-action-edit" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $historyRaceId, 'expense_id' => $historyExpenseId])) ?>">
-                                            Editează
-                                        </a>
-                                        <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'toggle_refacturare_facturata'])) ?>" class="refacturare-invoice-form">
-                                            <?= csrf_field() ?>
-                                            <input type="hidden" name="race_id" value="<?= e((string) $historyRaceId) ?>">
-                                            <input type="hidden" name="expense_id" value="<?= e((string) $historyExpenseId) ?>">
-                                            <input type="hidden" name="is_invoiced" value="<?= $historyIsInvoiced ? '0' : '1' ?>">
-                                            <input type="hidden" name="return_url" value="<?= e($returnUrl) ?>">
-                                            <button
-                                                type="submit"
-                                                class="btn refacturare-action-invoice"
-                                                data-confirm="<?= $historyIsInvoiced ? 'Anulezi marcarea facturii pentru această refacturare?' : 'Confirmi că factura de refacturare a fost emisă?' ?>"
-                                            >
-                                                Factura emisă
-                                            </button>
-                                        </form>
+                                    <?php
+                                        /*
+                                         * Cele doua stari se trimit explicit (is_invoiced 1 sau 0), nu prin
+                                         * reapasarea aceluiasi buton: altfel "Factura emisa" apasat a doua
+                                         * oara anula marcarea, fara ca eticheta sa spuna asta.
+                                         */
+                                        $invoiceAction = build_query_url(['page' => 'dispecer_curse', 'action' => 'toggle_refacturare_facturata']);
+                                        $menuId = 'ref_menu_' . $historyExpenseId;
+                                    ?>
+                                    <div class="refacturare-actions dropdown">
+                                        <button
+                                            class="btn refacturare-action-menu"
+                                            type="button"
+                                            id="<?= e($menuId) ?>"
+                                            data-bs-toggle="dropdown"
+                                            data-bs-boundary="viewport"
+                                            aria-expanded="false"
+                                            aria-label="Acțiuni pentru această refacturare"
+                                        >
+                                            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                                        </button>
+                                        <ul class="dropdown-menu dropdown-menu-end refacturare-action-list" aria-labelledby="<?= e($menuId) ?>">
+                                            <li>
+                                                <a class="dropdown-item" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $historyRaceId, 'expense_id' => $historyExpenseId])) ?>">
+                                                    <i class="bi bi-pencil" aria-hidden="true"></i> Editează
+                                                </a>
+                                            </li>
+                                            <li><hr class="dropdown-divider"></li>
+                                            <li>
+                                                <?php if ($historyIsInvoiced): ?>
+                                                    <span class="dropdown-item is-current" aria-disabled="true">
+                                                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i> Factura emisă (stare curentă)
+                                                    </span>
+                                                <?php else: ?>
+                                                    <form method="post" action="<?= e($invoiceAction) ?>" class="refacturare-invoice-form">
+                                                        <?= csrf_field() ?>
+                                                        <input type="hidden" name="race_id" value="<?= e((string) $historyRaceId) ?>">
+                                                        <input type="hidden" name="expense_id" value="<?= e((string) $historyExpenseId) ?>">
+                                                        <input type="hidden" name="is_invoiced" value="1">
+                                                        <input type="hidden" name="return_url" value="<?= e($returnUrl) ?>">
+                                                        <button type="submit" class="dropdown-item is-invoice" data-confirm="Confirmi că factura de refacturare a fost emisă?">
+                                                            <i class="bi bi-check-circle" aria-hidden="true"></i> Marchează „Factura emisă”
+                                                        </button>
+                                                    </form>
+                                                <?php endif; ?>
+                                            </li>
+                                            <li>
+                                                <?php if ($historyIsInvoiced): ?>
+                                                    <form method="post" action="<?= e($invoiceAction) ?>" class="refacturare-invoice-form">
+                                                        <?= csrf_field() ?>
+                                                        <input type="hidden" name="race_id" value="<?= e((string) $historyRaceId) ?>">
+                                                        <input type="hidden" name="expense_id" value="<?= e((string) $historyExpenseId) ?>">
+                                                        <input type="hidden" name="is_invoiced" value="0">
+                                                        <input type="hidden" name="return_url" value="<?= e($returnUrl) ?>">
+                                                        <button type="submit" class="dropdown-item is-revert" data-confirm="Readuci refacturarea în starea „În așteptare”? Suma revine în Total Refacturare.">
+                                                            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Readu în „În așteptare”
+                                                        </button>
+                                                    </form>
+                                                <?php else: ?>
+                                                    <span class="dropdown-item is-current" aria-disabled="true">
+                                                        <i class="bi bi-hourglass-split" aria-hidden="true"></i> În așteptare (stare curentă)
+                                                    </span>
+                                                <?php endif; ?>
+                                            </li>
+                                        </ul>
                                     </div>
                                 </td>
                             </tr>
@@ -477,6 +524,20 @@ document.addEventListener('DOMContentLoaded', function () {
                 window.clearTimeout(debounceTimer);
                 submitFilters();
             }
+        });
+    }
+
+    /*
+     * Tabelul are overflow: auto, care ar decupa meniul de actiuni. Popper cu
+     * strategy "fixed" il scoate din containerul care il taie.
+     */
+    if (window.bootstrap && window.bootstrap.Dropdown) {
+        document.querySelectorAll('.refacturare-action-menu').forEach(function (toggleEl) {
+            window.bootstrap.Dropdown.getOrCreateInstance(toggleEl, {
+                popperConfig: function (defaultConfig) {
+                    return Object.assign({}, defaultConfig, { strategy: 'fixed' });
+                }
+            });
         });
     }
 });

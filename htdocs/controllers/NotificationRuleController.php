@@ -5,13 +5,25 @@ class NotificationRuleController
 {
     private NotificationRuleModel $model;
 
+    private PDO $db;
+
     private const ENTITY_LABELS = [
         'vehicle' => 'Vehicul',
         'driver' => 'Sofer',
         'tire' => 'Anvelopa',
         'leave' => 'Concediu',
         'equipment' => 'Dotare / Inventar',
+        'approval' => 'Solicitare aprobare',
     ];
+
+    /** Tipuri de resursa pentru regulile de aprobare. Gol = toate. */
+    private const APPROVAL_RESOURCE_LABELS = [
+        'vehicle' => 'Vehicul',
+        'driver' => 'Sofer',
+        'repair' => 'Reparatie',
+    ];
+
+    public const APPROVAL_EVENT = 'inactive_approval_pending';
 
     private const EVENT_LABELS = [
         'vehicle_document_expiry' => 'Expirare document',
@@ -24,6 +36,7 @@ class NotificationRuleController
         'equipment_expiry' => 'Expirare dotare',
         'equipment_inspection' => 'Inspectie dotare',
         'document_missing' => 'Document lipsa',
+        'inactive_approval_pending' => 'Cerere aprobare in asteptare',
     ];
 
     private const EVENT_ENTITY = [
@@ -37,6 +50,7 @@ class NotificationRuleController
         'equipment_expiry' => 'equipment',
         'equipment_inspection' => 'equipment',
         'document_missing' => 'vehicle',
+        'inactive_approval_pending' => 'approval',
     ];
 
     private const RECIPIENT_LABELS = [
@@ -52,6 +66,7 @@ class NotificationRuleController
 
     public function __construct(PDO $db)
     {
+        $this->db = $db;
         $this->model = new NotificationRuleModel($db);
     }
 
@@ -174,6 +189,9 @@ class NotificationRuleController
             'vehicleDocumentTypes' => $vehicleDocumentTypes,
             'driverDocumentTypes' => $driverDocumentTypes,
             'equipmentTypes' => $equipmentTypes,
+            'approvalEvent' => self::APPROVAL_EVENT,
+            'approvalResourceLabels' => self::APPROVAL_RESOURCE_LABELS,
+            'approvalReasonOptions' => $this->approvalReasonOptions(),
             'mailSummary' => $this->mailSummary(),
         ]);
     }
@@ -310,6 +328,31 @@ class NotificationRuleController
             'metadata' => [],
         ];
 
+        // Regula de aprobare nu foloseste tip document / zile inainte / praguri;
+        // filtrele ei proprii merg in metadata_json, ca sa nu adaug coloane noi.
+        if ($data['event_type'] === self::APPROVAL_EVENT) {
+            $resourceTypes = array_values(array_intersect(
+                array_map('strval', (array) ($input['approval_resource_types'] ?? [])),
+                array_keys(self::APPROVAL_RESOURCE_LABELS)
+            ));
+
+            $reasons = array_values(array_unique(array_filter(
+                array_map(static fn ($value): string => trim((string) $value), (array) ($input['approval_reasons'] ?? [])),
+                static fn (string $value): bool => $value !== ''
+            )));
+
+            $data['metadata'] = [
+                'approval_resource_types' => $resourceTypes,
+                'approval_reasons' => $reasons,
+                'repeat_days' => max(1, min(30, (int) ($input['approval_repeat_days'] ?? 1))),
+            ];
+
+            $data['document_type'] = '';
+            $data['days_before'] = 0;
+            $data['threshold_km'] = null;
+            $data['threshold_tread_depth'] = null;
+        }
+
         $recipientUserIds = array_values(array_unique(array_filter(array_map(
             'intval',
             (array) ($input['recipient_user_ids'] ?? [])
@@ -377,14 +420,39 @@ class NotificationRuleController
             'repeat_until_resolved' => 1,
             'daily_limit_enabled' => 1,
             'recipient_user_ids' => [],
+            'approval_resource_types' => [],
+            'approval_reasons' => [],
+            'approval_repeat_days' => 1,
         ];
+    }
+
+    /** Optiunile de motiv sunt aceleasi cu cele din modulul de aprobari. */
+    private function approvalReasonOptions(): array
+    {
+        if (!class_exists(InactiveResourceApprovalModel::class)) {
+            return [];
+        }
+
+        return (new InactiveResourceApprovalModel($this->db))->getReasonOptions();
     }
 
     private function mapRuleToFormData(array $rule): array
     {
         $eventType = (string) ($rule['event_type'] ?? 'vehicle_document_expiry');
 
+        $metadata = $rule['metadata'] ?? $rule['metadata_json'] ?? [];
+        if (is_string($metadata)) {
+            $decoded = json_decode($metadata, true);
+            $metadata = is_array($decoded) ? $decoded : [];
+        }
+        if (!is_array($metadata)) {
+            $metadata = [];
+        }
+
         return [
+            'approval_resource_types' => array_map('strval', (array) ($metadata['approval_resource_types'] ?? [])),
+            'approval_reasons' => array_map('strval', (array) ($metadata['approval_reasons'] ?? [])),
+            'approval_repeat_days' => max(1, (int) ($metadata['repeat_days'] ?? 1)),
             'name' => (string) ($rule['name'] ?? ''),
             'entity_type' => (string) ($rule['entity_type'] ?? (self::EVENT_ENTITY[$eventType] ?? 'vehicle')),
             'event_type' => $eventType,

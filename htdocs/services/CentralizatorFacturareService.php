@@ -94,10 +94,12 @@ class CentralizatorFacturareService
         }
 
         $bounds = $this->monthBounds($month);
+        /*
+         * beneficiar_id <= 0 (sau lipsa) inseamna "toti beneficiarii", adica
+         * situatia generala - acesta este si comportamentul implicit al paginii.
+         * Un id pozitiv restrange raportul la un singur client.
+         */
         $beneficiaryId = $this->normalizePositiveInt($input['beneficiar_id'] ?? null);
-        if ($beneficiaryId <= 0) {
-            $beneficiaryId = $this->findDefaultBeneficiaryId($bounds['start'], $bounds['next']);
-        }
 
         $activity = trim(strtolower((string) ($input['tip_activitate'] ?? '')));
         if (!array_key_exists($activity, self::ACTIVITY_OPTIONS)) {
@@ -1056,15 +1058,22 @@ class CentralizatorFacturareService
         ];
     }
 
+    /*
+     * Panourile specifice unui tip de transport apar doar cand tipul respectiv
+     * este selectat in filtru. In situatia generala ($mode === '') raman doar
+     * panourile transversale: sumarul pe tipuri, vehiculele si refacturarile -
+     * altfel pagina "generala" ar afisa detalii de distributie sau de primar
+     * fara ca utilizatorul sa fi cerut acel tip.
+     */
     private function buildVisibility(array $filters, array $core): array
     {
         $mode = (string) $filters['tip_activitate'];
 
         return [
             'activity_summary' => $mode === '',
-            'primary_routes' => in_array($mode, ['primar', 'primar_distributie'], true) || ($mode === '' && $core['primary_routes']['routes'] !== []),
-            'distribution' => in_array($mode, ['distributie', 'primar_distributie'], true) || ($mode === '' && $core['distribution']['total_tone'] > 0),
-            'distribution_matrix' => in_array($mode, ['distributie', 'primar_distributie'], true) || ($mode === '' && $core['distribution']['cargo_by_tariff'] !== []),
+            'primary_routes' => in_array($mode, ['primar', 'primar_distributie'], true),
+            'distribution' => in_array($mode, ['distributie', 'primar_distributie'], true),
+            'distribution_matrix' => in_array($mode, ['distributie', 'primar_distributie'], true),
             'vehicle_matrix' => $mode === '',
             'vehicle_detail' => true,
             'refacturari' => true,
@@ -1423,12 +1432,23 @@ class CentralizatorFacturareService
     private function unloadingLabel(array $row): string
     {
         $label = trim((string) ($row['zona_distributie_nume'] ?? ''));
-        return $label !== '' ? $label : 'Necunoscut';
+        return $label !== '' ? $label : 'Necompletat';
     }
 
+    /*
+     * Traseul este acelasi camp pentru toate tipurile de transport (loc_incarcare_id
+     * + zona_distributie_id, exact perechea pe care o folosesc si configurare_rute_primar
+     * si configurare_rute_distributie). Cand zona lipseste pe cursa, nu inventam o
+     * destinatie "Necunoscut" - spunem explicit ca nu a fost completata.
+     */
     private function routeAuditLabel(array $row): string
     {
-        return $this->loadingLabel($row) . ' → ' . $this->unloadingLabel($row);
+        $destination = trim((string) ($row['zona_distributie_nume'] ?? ''));
+        if ($destination === '') {
+            return $this->loadingLabel($row) . ' → destinație necompletată';
+        }
+
+        return $this->loadingLabel($row) . ' → ' . $destination;
     }
 
     private function compactRouteSummary(array $routes): string
@@ -1673,10 +1693,19 @@ class CentralizatorFacturareService
                 'km' => $this->rowKm($expense),
                 'trip_value' => $this->rowValue($expense),
                 'refacturare_amount' => 0.0,
+                'refacturare_types' => [],
                 'observations' => [],
             ];
         }
         $tripRows[$tripId]['refacturare_amount'] = round((float) $tripRows[$tripId]['refacturare_amount'] + $amount, 2);
+        /*
+         * Randul este un sumar pe cursa, iar o cursa poate avea mai multe
+         * refacturari de tipuri diferite: pastram tipurile distincte.
+         */
+        $expenseType = (string) (($expense['refacturare_tip_cheltuiala'] ?? '') ?: ($expense['tip_cheltuiala'] ?? ''));
+        if ($expenseType !== '') {
+            $tripRows[$tripId]['refacturare_types'][$expenseType] = $this->expenseTypeLabel($expenseType);
+        }
         $obs = trim((string) ($expense['refacturare_observatii'] ?? ''));
         if ($obs !== '') {
             $tripRows[$tripId]['observations'][$this->normalizeGroupKey($obs)] = $obs;
@@ -1819,27 +1848,6 @@ class CentralizatorFacturareService
         $value = (string) ($this->db->query($sql)->fetchColumn() ?: '');
 
         return $value !== '' ? substr($value, 0, 7) : date('Y-m');
-    }
-
-    private function findDefaultBeneficiaryId(string $start, string $next): int
-    {
-        $stmt = $this->db->prepare("
-            SELECT c.beneficiar_id
-            FROM curse_dispecer c
-            INNER JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
-            WHERE c.deleted_at IS NULL
-              AND COALESCE(c.data_inceput, c.data_cursa) >= :start
-              AND COALESCE(c.data_inceput, c.data_cursa) < :next
-            GROUP BY c.beneficiar_id, bt.nume
-            ORDER BY COUNT(*) DESC, bt.nume ASC
-            LIMIT 1
-        ");
-        $stmt->execute([':start' => $start, ':next' => $next]);
-        $id = (int) ($stmt->fetchColumn() ?: 0);
-        if ($id > 0) {
-            return $id;
-        }
-        return (int) ($this->db->query("SELECT id FROM configurare_beneficiari_transport WHERE activ = 1 ORDER BY nume ASC LIMIT 1")->fetchColumn() ?: 0);
     }
 
     private function normalizeMonth(string $value): string

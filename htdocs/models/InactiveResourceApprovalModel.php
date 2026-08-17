@@ -310,6 +310,46 @@ class InactiveResourceApprovalModel extends BaseModel
         return $stmt->rowCount() > 0;
     }
 
+    /**
+     * Readuce o cerere deja decisa in starea 'pending'.
+     *
+     * Decizia anterioara se sterge complet (cine si cand a decis), pentru ca
+     * altfel cererea ar arata ca fiind in asteptare dar cu un aprobator trecut
+     * in dreptul ei. Motivul repunerii ramane in review_note ca urma.
+     */
+    public function reopen(int $id, ?int $userId, string $note = ''): bool
+    {
+        $this->ensureSchema();
+        if ($id <= 0) {
+            return false;
+        }
+
+        $trace = trim($note);
+        if ($trace === '') {
+            $trace = 'Repusa in asteptare.';
+        }
+        if ($userId !== null && $userId > 0) {
+            $trace .= ' (repusa de utilizator #' . $userId . ' la ' . date('d.m.Y H:i') . ')';
+        }
+
+        $stmt = $this->db->prepare("
+            UPDATE inactive_resource_approvals
+            SET status = 'pending',
+                reviewed_by_user_id = NULL,
+                reviewed_at = NULL,
+                review_note = :review_note,
+                updated_at = :updated_at
+            WHERE id = :id
+              AND status IN ('approved', 'rejected')
+        ");
+        $stmt->bindValue(':review_note', $trace);
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'));
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->rowCount() > 0;
+    }
+
     public function getExistingOpenStatusForResourceTrip(string $resourceType, int $resourceId, ?int $tripId): ?string
     {
         $this->ensureSchema();

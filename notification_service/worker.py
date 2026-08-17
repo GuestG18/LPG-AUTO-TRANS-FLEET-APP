@@ -1004,6 +1004,26 @@ def normalize_error(exception: BaseException) -> str:
     return text[:2000]
 
 
+def run_approval_flow() -> dict[str, Any] | None:
+    """Ruleaza fluxul de aprobare prin email, daca este activat din .env.
+
+    Import lazy si erori izolate: un flux de aprobare picat nu trebuie sa opreasca
+    trimiterea notificarilor obisnuite.
+    """
+    if os.getenv("APPROVAL_EMAIL_ENABLED", "").strip().lower() not in {"1", "true", "yes", "on", "da"}:
+        return None
+
+    try:
+        import approval_flow
+    except ImportError as exc:
+        return {"error": f"approval_flow indisponibil: {exc}"}
+
+    try:
+        return approval_flow.run()
+    except Exception as exc:
+        return {"error": normalize_error(exc)}
+
+
 def process_jobs(limit: int, enqueue: bool = True, send: bool = True) -> dict[str, Any]:
     conn = connect_db()
     config = mail_config()
@@ -1061,6 +1081,10 @@ def process_jobs(limit: int, enqueue: bool = True, send: bool = True) -> dict[st
                 summary["errors"].append({"queue_id": queue_id, "status": status, "error": error})
     finally:
         conn.close()
+
+    approvals = run_approval_flow()
+    if approvals is not None:
+        summary["approvals"] = approvals
 
     return summary
 

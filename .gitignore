@@ -10,7 +10,9 @@ Thumbs.db
 *.cache
 __pycache__/
 *.pyc
-storage/cache/
+# Tot ce e sub storage/ e generat local: cache cu token de sesiune SAS,
+# loguri si dump-uri de baza de date. Nimic din ele nu trebuie versionat.
+storage/
 
 # Dependencies
 vendor/

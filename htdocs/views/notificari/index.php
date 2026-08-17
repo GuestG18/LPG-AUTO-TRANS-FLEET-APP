@@ -597,6 +597,34 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
                     </select>
                     <?php if (isset($formErrors['channel'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['channel']) ?></small><?php endif; ?>
                 </label>
+                <?php
+                // Filtre specifice regulii de aprobare. Se salveaza in metadata_json,
+                // deci nu au coloane proprii in notification_rules.
+                $approvalEvent = $approvalEvent ?? 'inactive_approval_pending';
+                $selectedApprovalTypes = (array) ($formData['approval_resource_types'] ?? []);
+                $selectedApprovalReasons = (array) ($formData['approval_reasons'] ?? []);
+                ?>
+                <label class="notification-wide" data-approval-only hidden>
+                    <span>Tip resursa (gol = toate)</span>
+                    <select class="form-select" name="approval_resource_types[]" multiple size="3">
+                        <?php foreach (($approvalResourceLabels ?? []) as $value => $label): ?>
+                            <option value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedApprovalTypes, true) ? 'selected' : '' ?>><?= e((string) $label) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label class="notification-wide" data-approval-only hidden>
+                    <span>Motiv (gol = toate)</span>
+                    <select class="form-select" name="approval_reasons[]" multiple size="4">
+                        <?php foreach (($approvalReasonOptions ?? []) as $value => $label): ?>
+                            <option value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedApprovalReasons, true) ? 'selected' : '' ?>><?= e((string) $label) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label data-approval-only hidden>
+                    <span>Reaminteste la (zile)</span>
+                    <input class="form-control" name="approval_repeat_days" type="number" min="1" max="30" step="1" value="<?= e((string) ($formData['approval_repeat_days'] ?? 1)) ?>">
+                    <small class="text-muted">Are efect doar cu „Repeta pana la rezolvare" bifat.</small>
+                </label>
                 <label class="notification-wide">
                     <span>Destinatari <em>*</em></span>
                     <select class="form-select <?= isset($formErrors['recipient_mode']) ? 'is-invalid' : '' ?>" name="recipient_mode" data-notification-recipient-mode required>
@@ -678,6 +706,24 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
         syncThresholds();
     };
 
+    const approvalFields = document.querySelectorAll('[data-approval-only]');
+    const approvalEvent = <?= json_encode($approvalEvent ?? 'inactive_approval_pending') ?>;
+
+    // Campurile de aprobare se ascund SI se dezactiveaza: altfel ar fi trimise
+    // la salvare si pentru reguli de alt tip.
+    const syncApprovalFields = () => {
+        if (!eventSelect) {
+            return;
+        }
+        const isApproval = eventSelect.value === approvalEvent;
+        approvalFields.forEach((field) => {
+            field.hidden = !isApproval;
+            field.querySelectorAll('select, input').forEach((control) => {
+                control.disabled = !isApproval;
+            });
+        });
+    };
+
     const syncThresholds = () => {
         if (!eventSelect) {
             return;
@@ -688,6 +734,7 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
         if (treadInput) {
             treadInput.disabled = eventSelect.value !== 'tire_tread_depth';
         }
+        syncApprovalFields();
     };
 
     if (modeSelect) {
@@ -702,5 +749,8 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
 
     syncRecipients();
     syncEvents();
+    // syncEvents() iese devreme daca lipseste selectul de entitate; apelul asta
+    // garanteaza ca starea campurilor de aprobare e corecta la incarcare.
+    syncThresholds();
 })();
 </script>
