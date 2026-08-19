@@ -27,9 +27,13 @@ class CardOilApiClient
 
     public function fetchFillups(DateTimeInterface $dateFrom, DateTimeInterface $dateTo): array
     {
+        // Ora trimisa EXPLICIT: fara ea, API-ul interpreteaza data_sfarsit ca
+        // ora 00:00:00, iar alimentarile din ziua de granita a fiecarei
+        // ferestre s-ar pierde (confirmat pe date reale: 23 de randuri din
+        // 31.07 lipseau din fereastra 01.07-31.07).
         return $this->fetchWithPayload([
-            'data_inceput' => $dateFrom->format('d.m.Y'),
-            'data_sfarsit' => $dateTo->format('d.m.Y'),
+            'data_inceput' => $dateFrom->format('d.m.Y') . ' 00:00:00',
+            'data_sfarsit' => $dateTo->format('d.m.Y') . ' 23:59:59',
         ]);
     }
 
