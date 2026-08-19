@@ -50,7 +50,9 @@ class EmailApprovalController
             'state' => 'confirm',
             'title' => (string) $record['action'] === 'approve' ? 'Confirmi aprobarea?' : 'Confirmi respingerea?',
             'record' => $record,
-            'documents' => $this->model->documentsFor((int) $record['approval_id']),
+            'documents' => is_array($record['documents'] ?? null)
+                ? $record['documents']
+                : $this->model->documentsFor((int) $record['approval_id']),
             'token' => $token,
         ]);
     }

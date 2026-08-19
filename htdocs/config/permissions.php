@@ -77,7 +77,9 @@ return [
                 'view'    => ['label' => 'Vizualizare (6 sub-tab-uri)'],
                 'sync'    => ['label' => 'Sincronizare CardOil (API)', 'sensitive' => true],
                 'link'    => ['label' => 'Asociere manuală alimentare ↔ cursă'],
-                'set_full'=> ['label' => 'Marcare Full / Parțial'],
+                // Aceeasi permisiune acopera si setarea/eliminarea T0 manual
+                // (actiunile set_t0 / clear_t0), fiind aceeasi clasa de decizie.
+                'set_full'=> ['label' => 'Marcare Full / Parțial, T0 manual + corecție odometru'],
             ],
         ],
         'istoric_cheltuieli_curse' => [
@@ -87,6 +89,13 @@ return [
                 'export'           => ['label' => 'Export CSV'],
                 'add_expense'      => ['label' => 'Adăugare cheltuială (+document)'],
                 'manage_categories'=> ['label' => 'Gestionare categorii', 'admin' => true],
+            ],
+        ],
+        'tarife_transport' => [
+            'group' => 'operational', 'label' => 'Administrare tarife transport', 'icon' => 'bi-tags', 'scope' => 'admin',
+            'actions' => [
+                'view'   => ['label' => 'Vizualizare tarife & monitorizare motorină'],
+                'manage' => ['label' => 'Modificare tarife (versionare)', 'admin' => true, 'sensitive' => true],
             ],
         ],
         'centralizator_facturare' => [

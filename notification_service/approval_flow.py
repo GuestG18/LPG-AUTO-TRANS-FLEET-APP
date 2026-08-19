@@ -322,9 +322,31 @@ def fetch_pending_approvals(conn, limit: int) -> list[dict[str, Any]]:
             a.usage_context,
             a.requested_at,
             a.updated_at,
+            a.trip_id,
+            a.snapshot_json,
+            c.data_cursa AS trip_date,
+            c.data_incarcare AS trip_loading_date,
+            c.data_inceput AS trip_start_date,
+            c.data_sfarsit AS trip_end_date,
+            c.tip_transport AS trip_transport_type,
+            c.loc_plecare AS trip_departure_text,
+            c.loc_aspirare AS trip_suction_text,
+            c.loc_livrare AS trip_delivery_text,
+            c.loc_livrare_cursa AS trip_closing_location_text,
+            trip_vehicle.nr_inmatriculare AS trip_vehicle_label,
+            trip_driver.nume AS trip_driver_label,
+            beneficiary.nume AS trip_beneficiary_name,
+            load_location.nume AS trip_load_location_name,
+            unload_zone.nume AS trip_unload_zone_name,
             u.nume AS requested_by_name
         FROM inactive_resource_approvals a
         LEFT JOIN utilizatori u ON u.id = a.requested_by_user_id
+        LEFT JOIN curse_dispecer c ON c.id = a.trip_id
+        LEFT JOIN vehicule trip_vehicle ON trip_vehicle.id = c.vehicle_id
+        LEFT JOIN soferi trip_driver ON trip_driver.id = c.driver_id
+        LEFT JOIN configurare_beneficiari_transport beneficiary ON beneficiary.id = c.beneficiar_id
+        LEFT JOIN configurare_locuri_incarcare load_location ON load_location.id = c.loc_incarcare_id
+        LEFT JOIN configurare_zone_distributie unload_zone ON unload_zone.id = c.zona_distributie_id
         WHERE a.status = 'pending'
         ORDER BY a.requested_at ASC
         LIMIT %s
@@ -452,6 +474,194 @@ def resource_type_label(resource_type: str) -> str:
     }.get(resource_type, resource_type)
 
 
+TRANSPORT_TYPE_LABELS = {
+    "primar": "Primar km",
+    "primar_tona": "Primar tone",
+    "distributie": "Distributie",
+    "primar_distributie": "Primar+Distributie",
+    "compresor": "Compresor",
+}
+
+
+def clean(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def first_non_empty(*values: Any) -> str:
+    for value in values:
+        text = clean(value)
+        if text:
+            return text
+    return ""
+
+
+def parse_date(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.combine(value, datetime.min.time())
+    except TypeError:
+        pass
+    text = str(value).strip()[:10]
+    try:
+        return datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def format_date_compact(value: Any) -> str:
+    parsed = parse_date(value)
+    if parsed is not None:
+        return parsed.strftime("%d.%m.%Y")
+    if isinstance(value, datetime):
+        return value.strftime("%d.%m.%Y %H:%M")
+    return clean(value)
+
+
+def format_datetime_compact(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d.%m.%Y %H:%M")
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%d.%m.%Y %H:%M")
+        except ValueError:
+            pass
+    return text
+
+
+def document_problem(documents: list[dict[str, Any]], fallback: str) -> str:
+    expired: list[str] = []
+    missing: list[str] = []
+    for document in documents:
+        name = clean(document.get("document_name"))
+        if not name:
+            continue
+        if clean(document.get("document_status")) == "missing":
+            missing.append(name)
+        else:
+            expired.append(name)
+
+    names = ", ".join(dict.fromkeys(expired + missing))
+    if expired and missing:
+        return f"Documente lipsa/expirate: {names}"
+    if expired:
+        return ("Document expirat: " if len(expired) == 1 else "Documente expirate: ") + ", ".join(dict.fromkeys(expired))
+    if missing:
+        return ("Document lipsa: " if len(missing) == 1 else "Documente lipsa: ") + ", ".join(dict.fromkeys(missing))
+    return fallback
+
+
+def first_document_expiry(documents: list[dict[str, Any]]) -> Any:
+    dates: list[str] = []
+    for document in documents:
+        if clean(document.get("document_status")) != "expired":
+            continue
+        parsed = parse_date(document.get("expiry_date"))
+        if parsed is not None:
+            dates.append(parsed.strftime("%Y-%m-%d"))
+    return sorted(dates)[0] if dates else ""
+
+
+def operation_title(approval: dict[str, Any]) -> str:
+    trip_id = int(approval.get("trip_id") or 0)
+    if trip_id <= 0:
+        return "Solicitare fara cursa asociata"
+    transport = TRANSPORT_TYPE_LABELS.get(clean(approval.get("trip_transport_type")), clean(approval.get("trip_transport_type")))
+    return f"Cursa #{trip_id}" + (f" · {transport}" if transport else "")
+
+
+def usage_date(approval: dict[str, Any]) -> Any:
+    return first_non_empty(
+        approval.get("trip_loading_date"),
+        approval.get("trip_start_date"),
+        approval.get("trip_date"),
+    )
+
+
+def route_label(approval: dict[str, Any]) -> str:
+    start = first_non_empty(
+        approval.get("trip_load_location_name"),
+        approval.get("trip_departure_text"),
+        approval.get("trip_suction_text"),
+    )
+    end = first_non_empty(
+        approval.get("trip_unload_zone_name"),
+        approval.get("trip_delivery_text"),
+        approval.get("trip_closing_location_text"),
+    )
+    if start and end and start.lower() != end.lower():
+        return f"{start} -> {end}"
+    return start or end
+
+
+def overdue_label(use_date: Any, documents: list[dict[str, Any]]) -> str:
+    expiry = first_document_expiry(documents)
+    parsed_usage = parse_date(use_date)
+    parsed_expiry = parse_date(expiry)
+    if parsed_usage is None or parsed_expiry is None or parsed_usage <= parsed_expiry:
+        return ""
+    days = (parsed_usage - parsed_expiry).days
+    return "1 zi" if days == 1 else f"{days} zile"
+
+
+def append_row(rows: list[tuple[str, str]], label: str, value: Any) -> None:
+    text = clean(value)
+    if label and text:
+        rows.append((label, text))
+
+
+def approval_scope_message(approval: dict[str, Any], primary_label: str, problem: str) -> str:
+    resource_type = clean(approval.get("resource_type"))
+    trip_id = int(approval.get("trip_id") or 0)
+    resource_text = "soferului" if resource_type == "driver" else "vehiculului"
+    request_resource_text = "soferul" if resource_type == "driver" else "vehiculul"
+    target = f"{resource_text} {primary_label}".strip()
+    request_target = f"{request_resource_text} {primary_label}".strip()
+    suffix = f", desi exista motivul: {problem}." if problem else "."
+    if trip_id > 0:
+        return f"Prin aprobare permiti utilizarea {target} in cursa #{trip_id}{suffix}"
+    return (
+        f"Prin aprobare confirmi aceasta solicitare din Dispecer curse pentru {request_target}{suffix} "
+        "Resursa nu este reactivata global."
+    )
+
+
+def build_approval_context(approval: dict[str, Any], documents: list[dict[str, Any]]) -> dict[str, Any]:
+    primary_label = first_non_empty(approval.get("resource_label"), resource_type_label(clean(approval.get("resource_type"))))
+    problem = document_problem(documents, clean(approval.get("inactive_reason_label")) or "Alt motiv")
+    use_date = usage_date(approval)
+    inactive_date = first_document_expiry(documents) or approval.get("inactive_since")
+
+    rows: list[tuple[str, str]] = []
+    append_row(rows, "Solicitare pentru", operation_title(approval))
+    append_row(rows, "Data incarcarii" if clean(approval.get("trip_loading_date")) else "Data utilizarii", format_date_compact(use_date))
+    append_row(rows, "Expirat/Inactiv din", format_date_compact(inactive_date))
+    append_row(rows, "Depasire", overdue_label(use_date, documents))
+    append_row(rows, "Beneficiar", approval.get("trip_beneficiary_name"))
+    append_row(rows, "Vehicul cursa", approval.get("trip_vehicle_label"))
+    append_row(rows, "Sofer cursa", approval.get("trip_driver_label"))
+    append_row(rows, "Loc incarcare", first_non_empty(approval.get("trip_load_location_name"), approval.get("trip_departure_text"), approval.get("trip_suction_text")))
+    append_row(rows, "Descarcare / zona", first_non_empty(approval.get("trip_unload_zone_name"), approval.get("trip_delivery_text"), approval.get("trip_closing_location_text")))
+    append_row(rows, "Ruta", route_label(approval))
+    append_row(rows, "Solicitat de", approval.get("requested_by_name"))
+    append_row(rows, "Solicitat la", format_datetime_compact(approval.get("requested_at")))
+
+    return {
+        "primary_label": primary_label,
+        "problem": problem,
+        "operation": operation_title(approval),
+        "rows": rows,
+        "scope": approval_scope_message(approval, primary_label, problem),
+    }
+
+
 def mailto_link(address: str, subject: str, body: str) -> str:
     return f"mailto:{address}?subject={quote(subject)}&body={quote(body)}"
 
@@ -470,8 +680,10 @@ def build_approval_email(
     casuta ascultata de worker, iar un token in subiect ar putea fi confundat cu
     un raspuns. Token-ul apare doar in linkurile mailto.
     """
-    label = str(approval.get("resource_label") or "-")
+    context = build_approval_context(approval, documents)
+    label = str(context["primary_label"] or approval.get("resource_label") or "-")
     reason = str(approval.get("inactive_reason_label") or "-")
+    problem = str(context["problem"] or reason)
     approval_id = int(approval["id"])
 
     approve_address = tagged_address(config.inbox_address, approve_token)
@@ -491,17 +703,8 @@ def build_approval_email(
     approve_url = f"{config.app_url}/index.php?page=aprobare_email&t={approve_token}" if has_links else approve_mailto
     reject_url = f"{config.app_url}/index.php?page=aprobare_email&t={reject_token}" if has_links else reject_mailto
 
-    doc_names = [str(d.get("document_name") or "") for d in documents if d.get("document_name")]
-    doc_line = ", ".join(doc_names) if doc_names else "-"
-
-    rows = [
-        ("Motiv", reason),
-        ("Documente afectate", doc_line),
-        ("Inactiv din", format_date(approval.get("inactive_since"))),
-        ("Utilizat in", str(approval.get("usage_context") or "-")),
-        ("Solicitat de", str(approval.get("requested_by_name") or "-")),
-        ("Solicitat la", format_date(approval.get("requested_at"))),
-    ]
+    rows = list(context["rows"])
+    scope = str(context["scope"])
 
     subject = f"Cerere aprobare: {label} ({reason})"
 
@@ -510,9 +713,11 @@ def build_approval_email(
         greeting,
         "",
         f"Ai o cerere de aprobare in asteptare pentru {resource_type_label(str(approval.get('resource_type')))}: {label}.",
+        f"Motiv: {problem}",
         "",
     ]
     text_lines += [f"{key}: {value}" for key, value in rows]
+    text_lines += ["", f"Ce aprob? {scope}"]
     if has_links:
         text_lines += [
             "",
@@ -583,10 +788,20 @@ def build_approval_email(
             {escape(resource_type_label(str(approval.get('resource_type'))))} &middot; cerere #{approval_id}
           </p>
 
+          <p style="margin:0 0 14px;color:#0f172a;font-size:15px;font-weight:700;line-height:1.4;">
+            {escape(problem)}
+          </p>
+
           <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
                  style="border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;padding:8px 0;">
             {detail_rows}
           </table>
+
+          <div style="margin:16px 0 0;padding:12px;border:1px solid #bbf7d0;border-radius:8px;
+                      background:#f0fdf4;color:#166534;font-size:13px;font-weight:700;line-height:1.45;">
+            <strong>Ce aprob?</strong><br>
+            {escape(scope)}
+          </div>
 
           <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:24px;">
             <tr>

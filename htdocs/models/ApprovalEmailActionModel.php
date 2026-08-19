@@ -48,7 +48,21 @@ class ApprovalEmailActionModel extends BaseModel
         $stmt->execute([':token_hash' => $this->hashToken($token)]);
 
         $row = $stmt->fetch();
-        return $row === false ? null : $row;
+        if ($row === false) {
+            return null;
+        }
+
+        $row['email_action_id'] = (int) ($row['id'] ?? 0);
+        if (class_exists('InactiveResourceApprovalModel')) {
+            $approval = (new InactiveResourceApprovalModel($this->db))->getById((int) ($row['approval_id'] ?? 0));
+            if ($approval !== null) {
+                $row['approval'] = $approval;
+                $row['approval_context'] = is_array($approval['approval_context'] ?? null) ? $approval['approval_context'] : [];
+                $row['documents'] = is_array($approval['documents'] ?? null) ? $approval['documents'] : [];
+            }
+        }
+
+        return $row;
     }
 
     public function documentsFor(int $approvalId): array

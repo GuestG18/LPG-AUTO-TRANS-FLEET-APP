@@ -121,6 +121,17 @@ $approvalRows = [
                 if ($resourceLabel === '') {
                     $resourceLabel = $resourceTypeLabels[$resourceType] ?? 'Solicitare';
                 }
+                $context = is_array($row['approval_context'] ?? null) ? $row['approval_context'] : [];
+                $summaryRows = is_array($context['summary_rows'] ?? null) ? $context['summary_rows'] : [];
+                $primaryLabel = trim((string) ($context['primary_label'] ?? ''));
+                if ($primaryLabel === '') {
+                    $primaryLabel = $resourceLabel;
+                }
+                $problemTitle = trim((string) ($context['problem_title'] ?? ''));
+                if ($problemTitle === '') {
+                    $problemTitle = (string) ($row['inactive_reason_label'] ?? 'Alt motiv');
+                }
+                $operationTitle = trim((string) ($context['operation_title'] ?? ''));
                 ?>
                 <article class="user-approval-card" data-approval-card data-approval-id="<?= e((string) $approvalId) ?>" data-approval-status="<?= e($selectedStatus) ?>">
                     <div class="user-approval-card-main">
@@ -129,29 +140,39 @@ $approvalRows = [
                         </span>
                         <div class="user-approval-card-body">
                             <span class="user-approval-reason tone-<?= e($reasonTone($reasonKey)) ?>">
-                                <?= e((string) ($row['inactive_reason_label'] ?? 'Alt motiv')) ?>
+                                <?= e((string) ($context['request_type_label'] ?? $row['inactive_reason_label'] ?? 'Alt motiv')) ?>
                             </span>
-                            <h2><?= e($resourceLabel) ?></h2>
+                            <h2><?= e($primaryLabel) ?></h2>
                             <dl class="user-approval-card-list">
                                 <dt>Motiv:</dt>
-                                <dd><?= e((string) ($row['inactive_reason_label'] ?? 'Alt motiv')) ?></dd>
-                                <?php if ($resourceType === 'driver' && $affectedDocuments !== ''): ?>
-                                    <dt>Documente afectate:</dt>
-                                    <dd><?= e($affectedDocuments) ?></dd>
-                                <?php elseif ($affectedDocuments !== ''): ?>
+                                <dd><?= e($problemTitle) ?></dd>
+                                <?php if ($operationTitle !== ''): ?>
+                                    <dt>Solicitare pentru:</dt>
+                                    <dd><?= e($operationTitle) ?></dd>
+                                <?php endif; ?>
+                                <?php foreach ($summaryRows as $contextRow): ?>
+                                    <?php
+                                    $contextLabelText = trim((string) ($contextRow['label'] ?? ''));
+                                    $contextValueText = trim((string) ($contextRow['value'] ?? ''));
+                                    if ($contextLabelText === '' || $contextValueText === '') {
+                                        continue;
+                                    }
+                                    ?>
+                                    <dt><?= e($contextLabelText) ?>:</dt>
+                                    <dd><?= e($contextValueText) ?></dd>
+                                <?php endforeach; ?>
+                                <?php if ($affectedDocuments !== '' && $summaryRows === []): ?>
                                     <dt>Documente afectate:</dt>
                                     <dd><?= e($affectedDocuments) ?></dd>
                                 <?php endif; ?>
-                                <?php if ($resourceType === 'repair'): ?>
+                                <?php if ($resourceType === 'repair' && $detail !== ''): ?>
                                     <dt>Detalii reparatie:</dt>
-                                    <dd><?= e($detail !== '' ? $detail : '-') ?></dd>
+                                    <dd><?= e($detail) ?></dd>
                                 <?php endif; ?>
-                                <dt>Inactiv din:</dt>
-                                <dd><?= e($formatDate($row['inactive_since'] ?? '')) ?></dd>
-                                <dt>Utilizat in:</dt>
-                                <dd><?= e($contextLabel($row['usage_context'] ?? '')) ?></dd>
-                                <dt>Observatii:</dt>
-                                <dd><?= e($observations !== '' ? $observations : '-') ?></dd>
+                                <?php if ($observations !== ''): ?>
+                                    <dt>Observatii:</dt>
+                                    <dd><?= e($observations) ?></dd>
+                                <?php endif; ?>
                             </dl>
                         </div>
                     </div>

@@ -26,6 +26,15 @@ class FuelController
             case 'set_full':
                 $this->setFullAction();
                 return;
+            case 'set_odometer':
+                $this->setOdometerAction();
+                return;
+            case 'set_t0':
+                $this->setT0Action();
+                return;
+            case 'clear_t0':
+                $this->clearT0Action();
+                return;
             default:
                 http_response_code(404);
                 render('errors/404.php', [
@@ -86,6 +95,7 @@ class FuelController
             'compare' => $compare,
             'transportLabels' => $this->model->getTransportLabels(),
             'fuelData' => $data,
+            'canManageFull' => $this->canManageFull(),
         ]);
     }
 
@@ -97,20 +107,20 @@ class FuelController
 
         ensure_csrf_or_redirect(build_query_url(['page' => 'carburanti']));
 
-        [$dateFrom, $dateTo] = $this->currentMonthInterval();
-
         try {
-            $result = $this->model->syncFromApi($dateFrom, $dateTo, new CardOilApiClient());
+            // La zi: incremental dupa ultimul ID din baza (fara limita celor
+            // 31 de zile), cu fallback pe fereastra rulanta cand baza e goala.
+            $result = $this->model->syncLatestFromApi(new CardOilApiClient());
             $status = (string) ($result['status'] ?? 'success');
             $message = sprintf(
-                'Sincronizare CardOil finalizata pentru %s - %s: %d primite, %d inserate, %d actualizate.',
-                $dateFrom->format('d.m.Y'),
-                $dateTo->format('d.m.Y'),
+                'Sincronizare CardOil (%s) finalizata: %d primite, %d inserate, %d actualizate, %d cereri.',
+                (string) ($result['mode'] ?? 'range') === 'incremental' ? 'incremental, dupa ID' : 'ultimele 31 zile',
                 (int) ($result['records_received'] ?? 0),
                 (int) ($result['records_inserted'] ?? 0),
-                (int) ($result['records_updated'] ?? 0)
+                (int) ($result['records_updated'] ?? 0),
+                (int) ($result['requests'] ?? 1)
             );
-            flash_set($status === 'error' ? 'danger' : ($status === 'demo' ? 'warning' : 'success'), $message);
+            flash_set($status === 'error' ? 'danger' : ($status === 'partial' ? 'warning' : 'success'), $message);
         } catch (Throwable $exception) {
             error_log('[FuelController][sync_now] ' . $exception->getMessage());
             flash_set('danger', 'Sincronizarea CardOil a esuat: ' . $exception->getMessage());
@@ -179,6 +189,205 @@ class FuelController
         redirect($this->safeReturnUrl($_POST['return_url'] ?? null));
     }
 
+    /**
+     * Corecteaza manual odometrul unei alimentari (km gresiti din CardOil)
+     * sau revine la valoarea bruta din API. Corectia este persistenta la sync.
+     */
+    private function setOdometerAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'carburanti']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'carburanti']));
+        $this->requireFullManagement();
+
+        $fillupId = (int) ($_POST['fillup_id'] ?? 0);
+        if ($fillupId <= 0) {
+            flash_set('warning', 'Alimentarea selectata nu este valida.');
+            redirect($this->safeReturnUrl($_POST['return_url'] ?? null));
+        }
+
+        try {
+            if (isset($_POST['reset_api'])) {
+                if ($this->model->clearFillupOdometerOverride($fillupId)) {
+                    flash_set('success', 'Odometrul a revenit la valoarea primita din CardOil.');
+                } else {
+                    flash_set('warning', 'Odometrul nu a putut fi resetat.');
+                }
+                redirect($this->safeReturnUrl($_POST['return_url'] ?? null));
+            }
+
+            $rawValue = str_replace([' ', '.', ','], '', trim((string) ($_POST['odometer_km'] ?? '')));
+            if ($rawValue === '' || !ctype_digit($rawValue)) {
+                flash_set('warning', 'Introdu un kilometraj valid (numar intreg pozitiv).');
+                redirect($this->safeReturnUrl($_POST['return_url'] ?? null));
+            }
+
+            $odometerKm = (int) $rawValue;
+            if ($odometerKm <= 0 || $odometerKm > 5000000) {
+                flash_set('warning', 'Kilometrajul trebuie sa fie intre 1 si 5.000.000 km.');
+                redirect($this->safeReturnUrl($_POST['return_url'] ?? null));
+            }
+
+            if ($this->model->setFillupOdometer($fillupId, $odometerKm)) {
+                flash_set('success', sprintf('Odometrul a fost corectat manual la %s km. Valoarea este protejata la sincronizarile CardOil.', number_format($odometerKm, 0, ',', '.')));
+            } else {
+                flash_set('warning', 'Odometrul nu a putut fi actualizat.');
+            }
+        } catch (Throwable $exception) {
+            error_log('[FuelController][set_odometer] ' . $exception->getMessage());
+            flash_set('danger', 'A aparut o eroare la corectarea odometrului.');
+        }
+
+        redirect($this->safeReturnUrl($_POST['return_url'] ?? null));
+    }
+
+    /**
+     * Stabileste manual T0 pentru (vehicul, luna).
+     *
+     * Este actiunea prevazuta explicit pentru cazul in care regula automata
+     * ±4 zile nu gaseste niciun FULL eligibil.
+     */
+    private function setT0Action(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'carburanti']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'carburanti']));
+        $this->requireFullManagement();
+
+        $returnUrl = $this->safeReturnUrl($_POST['return_url'] ?? null);
+        $fillupId = (int) ($_POST['fillup_id'] ?? 0);
+        $vehicle = trim((string) ($_POST['vehicle'] ?? ''));
+        $monthStart = $this->parseMonthStart((string) ($_POST['month_start'] ?? ''));
+        $confirmMarkFull = (int) ($_POST['confirm_mark_full'] ?? 0) === 1;
+        $note = trim((string) ($_POST['note'] ?? ''));
+
+        if ($fillupId <= 0 || $vehicle === '' || $monthStart === null) {
+            flash_set('warning', 'Selectează vehiculul, luna și alimentarea pentru a stabili T0.');
+            redirect($returnUrl);
+        }
+
+        try {
+            $result = $this->model->setManualT0(
+                $fillupId,
+                $vehicle,
+                $monthStart,
+                $confirmMarkFull,
+                $this->currentUserId(),
+                $note !== '' ? $note : null
+            );
+
+            if (!$result['ok']) {
+                flash_set('warning', $result['message']);
+                redirect($returnUrl);
+            }
+
+            $message = $result['message'];
+            if ($result['warnings'] !== []) {
+                $message .= ' Atenție: ' . implode(' ', $result['warnings']);
+            }
+            flash_set('success', $message);
+        } catch (Throwable $exception) {
+            error_log('[FuelController][set_t0] ' . $exception->getMessage());
+            flash_set('danger', 'A aparut o eroare la stabilirea manuala a T0.');
+        }
+
+        redirect($returnUrl);
+    }
+
+    /** Revine la selectia automata a T0 pentru (vehicul, luna). */
+    private function clearT0Action(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'carburanti']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'carburanti']));
+        $this->requireFullManagement();
+
+        $returnUrl = $this->safeReturnUrl($_POST['return_url'] ?? null);
+        $vehicle = trim((string) ($_POST['vehicle'] ?? ''));
+        $monthStart = $this->parseMonthStart((string) ($_POST['month_start'] ?? ''));
+
+        if ($vehicle === '' || $monthStart === null) {
+            flash_set('warning', 'Nu s-a putut identifica vehiculul sau luna.');
+            redirect($returnUrl);
+        }
+
+        try {
+            if ($this->model->clearManualT0($vehicle, $monthStart)) {
+                flash_set('success', 'T0 manual a fost eliminat. Luna revine la selecția automată.');
+            } else {
+                flash_set('info', 'Nu exista un T0 manual pentru vehiculul si luna selectate.');
+            }
+        } catch (Throwable $exception) {
+            error_log('[FuelController][clear_t0] ' . $exception->getMessage());
+            flash_set('danger', 'A aparut o eroare la eliminarea T0 manual.');
+        }
+
+        redirect($returnUrl);
+    }
+
+    /**
+     * Deciziile FULL/T0 reutilizeaza permisiunea existenta `carburanti.set_full`,
+     * ca sa nu fie nevoie de reconfigurarea drepturilor dupa deploy.
+     */
+    private function requireFullManagement(): void
+    {
+        if ($this->canManageFull()) {
+            return;
+        }
+
+        flash_set('danger', 'Nu ai dreptul sa modifici marcajul Full / T0.');
+        redirect(build_query_url(['page' => 'carburanti']));
+    }
+
+    public function canManageFull(): bool
+    {
+        if (function_exists('is_admin') && is_admin()) {
+            return true;
+        }
+
+        return function_exists('can') && can('carburanti', 'set_full');
+    }
+
+    private function currentUserId(): ?int
+    {
+        if (function_exists('current_user')) {
+            $user = current_user();
+            $id = (int) ($user['id'] ?? 0);
+            if ($id > 0) {
+                return $id;
+            }
+        }
+
+        $id = (int) ($_SESSION['user']['id'] ?? $_SESSION['user_id'] ?? 0);
+
+        return $id > 0 ? $id : null;
+    }
+
+    /** Accepta `Y-m-d` sau `Y-m` si normalizeaza la prima zi a lunii. */
+    private function parseMonthStart(string $value): ?DateTimeImmutable
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+
+        if (preg_match('/^\d{4}-\d{2}$/', $value) === 1) {
+            $value .= '-01';
+        }
+
+        try {
+            return (new DateTimeImmutable($value))->modify('first day of this month')->setTime(0, 0);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
     private function collectFilters(array $input): array
     {
         $today = new DateTimeImmutable('today');
@@ -236,6 +445,11 @@ class FuelController
             $fuelType = '';
         }
 
+        $brand = trim((string) ($input['brand'] ?? ''));
+        if (mb_strlen($brand) > 60) {
+            $brand = '';
+        }
+
         return [
             'date_from' => $dateFrom->format('Y-m-d'),
             'date_to' => $dateTo->format('Y-m-d'),
@@ -244,6 +458,7 @@ class FuelController
             'vehicles' => $vehicles,
             'transport_group' => $transportGroup,
             'fuel_type' => $fuelType,
+            'brand' => $brand,
         ];
     }
 
@@ -255,8 +470,17 @@ class FuelController
         $baseFrom = new DateTimeImmutable((string) $filters['date_from']);
         $baseTo = new DateTimeImmutable((string) $filters['date_to']);
         $days = max(1, ((int) $baseFrom->diff($baseTo)->format('%a')) + 1);
-        $previousTo = $baseFrom->modify('-1 day');
-        $previousFrom = $previousTo->modify('-' . ($days - 1) . ' days');
+        if ($baseFrom->format('j') === '1'
+            && $baseTo->format('Y-m-d') === $baseFrom->modify('last day of this month')->format('Y-m-d')) {
+            // Perioada analizata este o luna calendaristica intreaga: perioada
+            // B implicita devine LUNA PRECEDENTA, nu "acelasi numar de zile
+            // inapoi" (care producea intervale de tip 31.05 - 30.06).
+            $previousFrom = $baseFrom->modify('first day of previous month');
+            $previousTo = $previousFrom->modify('last day of this month');
+        } else {
+            $previousTo = $baseFrom->modify('-1 day');
+            $previousFrom = $previousTo->modify('-' . ($days - 1) . ' days');
+        }
 
         $parsePeriod = static function (string $value, DateTimeImmutable $defaultFrom, DateTimeImmutable $defaultTo): array {
             if (preg_match('/(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})/', $value, $matches) === 1) {
@@ -337,16 +561,6 @@ class FuelController
             'period_a' => $formatPeriod($fromA, $toA),
             'period_b' => $formatPeriod($fromB, $toB),
             'subtitle' => 'Vehicule: ' . $vehicleLabel,
-        ];
-    }
-
-    private function currentMonthInterval(): array
-    {
-        $today = new DateTimeImmutable('today');
-
-        return [
-            $today->modify('first day of this month'),
-            $today->modify('last day of this month'),
         ];
     }
 

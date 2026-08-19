@@ -129,6 +129,10 @@ $currentUrl = build_query_url(array_merge($baseQuery, ['p' => (int) ($result['pa
                         $approvalId = (int) ($row['id'] ?? 0);
                         $status = (string) ($row['status'] ?? 'pending');
                         $resourceType = (string) ($row['resource_type'] ?? '');
+                        $context = is_array($row['approval_context'] ?? null) ? $row['approval_context'] : [];
+                        $operationTitle = trim((string) ($context['operation_title'] ?? ''));
+                        $operationUrl = trim((string) ($context['operation_url'] ?? ''));
+                        $problemTitle = trim((string) ($context['problem_title'] ?? ''));
                         ?>
                         <?php // Statusul nu mai are coloana proprie: il arata culoarea intregului rand. ?>
                         <tr class="inactive-approval-row is-<?= e($status) ?>">
@@ -140,12 +144,20 @@ $currentUrl = build_query_url(array_merge($baseQuery, ['p' => (int) ($result['pa
                             <td><?= e($resourceTypeLabels[$resourceType] ?? '-') ?></td>
                             <td>
                                 <span class="inactive-approval-reason-badge tone-<?= e((string) ($row['inactive_reason'] ?? 'other')) ?>">
-                                    <?= e((string) ($row['inactive_reason_label'] ?? 'Alt motiv')) ?>
+                                    <?= e($problemTitle !== '' ? $problemTitle : (string) ($row['inactive_reason_label'] ?? 'Alt motiv')) ?>
                                 </span>
                             </td>
                             <td><?= e($documentsLabel($row)) ?></td>
                             <td><?= e($formatDate($row['inactive_since'] ?? '')) ?></td>
-                            <td><?= !empty($row['trip_id']) ? ('#' . e((string) $row['trip_id'])) : '-' ?></td>
+                            <td>
+                                <?php if ($operationTitle !== '' && $operationUrl !== ''): ?>
+                                    <a class="inactive-approval-source-link" href="<?= e($operationUrl) ?>"><?= e($operationTitle) ?></a>
+                                <?php elseif (!empty($row['trip_id'])): ?>
+                                    #<?= e((string) $row['trip_id']) ?>
+                                <?php else: ?>
+                                    -
+                                <?php endif; ?>
+                            </td>
                             <td><?= e((string) ($row['requested_by_name'] ?? '-')) ?></td>
                             <td><?= e($formatDateTime($row['requested_at'] ?? '')) ?></td>
                             <td class="text-end">
@@ -178,6 +190,7 @@ $currentUrl = build_query_url(array_merge($baseQuery, ['p' => (int) ($result['pa
                                                     <?= csrf_field() ?>
                                                     <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
                                                     <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+                                                    <input type="hidden" name="decision_source" value="approval_page">
                                                     <button class="dropdown-item text-success" type="submit">
                                                         <i class="bi bi-check-lg" aria-hidden="true"></i> Aproba
                                                     </button>
@@ -188,6 +201,7 @@ $currentUrl = build_query_url(array_merge($baseQuery, ['p' => (int) ($result['pa
                                                     <?= csrf_field() ?>
                                                     <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
                                                     <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+                                                    <input type="hidden" name="decision_source" value="approval_page">
                                                     <button class="dropdown-item text-danger" type="submit">
                                                         <i class="bi bi-x-lg" aria-hidden="true"></i> Respinge
                                                     </button>

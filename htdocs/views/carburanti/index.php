@@ -30,6 +30,26 @@ $compare = is_array($compare ?? null) ? $compare : [
 ];
 $currentUrl = $_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'carburanti']);
 
+// ---------------------------------------------------------------------
+// Eticheta afisata in campul unic de perioada: "Iulie 2026" pentru o luna
+// intreaga, altfel "01.07.2026 – 15.07.2026".
+// ---------------------------------------------------------------------
+$monthNamesRo = [1 => 'Ianuarie', 2 => 'Februarie', 3 => 'Martie', 4 => 'Aprilie', 5 => 'Mai', 6 => 'Iunie',
+    7 => 'Iulie', 8 => 'August', 9 => 'Septembrie', 10 => 'Octombrie', 11 => 'Noiembrie', 12 => 'Decembrie'];
+$periodLabel = (string) ($filters['period'] ?? '');
+try {
+    $periodFromDate = new DateTimeImmutable((string) ($filters['date_from'] ?? ''));
+    $periodToDate = new DateTimeImmutable((string) ($filters['date_to'] ?? ''));
+    if ($periodFromDate->format('j') === '1'
+        && $periodToDate->format('Y-m-d') === $periodFromDate->modify('last day of this month')->format('Y-m-d')) {
+        $periodLabel = $monthNamesRo[(int) $periodFromDate->format('n')] . ' ' . $periodFromDate->format('Y');
+    } else {
+        $periodLabel = $periodFromDate->format('d.m.Y') . ' – ' . $periodToDate->format('d.m.Y');
+    }
+} catch (Throwable) {
+    // pastreaza eticheta implicita din filtre
+}
+
 $formatLiters = static fn (mixed $value): string => format_number_ro((float) $value, 2) . ' L';
 $formatCurrency = static fn (mixed $value): string => format_number_ro((float) $value, 2) . ' lei';
 $formatPercent = static fn (mixed $value): string => format_number_ro((float) $value, 2) . ' %';
@@ -39,6 +59,105 @@ $normKmSource = match ((string) ($normative['km_source'] ?? '')) {
     'alimentari' => 'alimentări',
     'dispecer' => 'dispecer',
     default => '',
+};
+
+// ---------------------------------------------------------------------
+// Starea T0 (mecanismul FULL / T0)
+// ---------------------------------------------------------------------
+$canManageFull = (bool) ($canManageFull ?? false);
+$t0Mode = (string) ($normative['t0_mode'] ?? 'missing');
+$t0Vehicle = (string) ($normative['vehicle'] ?? '');
+$t0MonthStart = (string) ($normative['month_start'] ?? '');
+$t0Candidates = is_array($normative['candidates'] ?? null) ? $normative['candidates'] : [];
+$t0WindowLabel = '';
+if (($normative['t0_window_start'] ?? '') !== '' && ($normative['t0_window_end'] ?? '') !== '') {
+    $t0WindowLabel = (new DateTimeImmutable((string) $normative['t0_window_start']))->format('d.m.Y')
+        . ' – '
+        . (new DateTimeImmutable((string) $normative['t0_window_end']))->format('d.m.Y');
+}
+$t0MonthLabel = $t0MonthStart !== '' ? (new DateTimeImmutable($t0MonthStart))->format('m.Y') : '';
+
+/**
+ * Blocul de stare T0, reutilizat in tab-ul General si in tab-ul Consum normat.
+ */
+$renderT0Status = static function () use (
+    $normative,
+    $t0Mode,
+    $t0Vehicle,
+    $t0MonthStart,
+    $t0MonthLabel,
+    $t0WindowLabel,
+    $canManageFull,
+    $currentUrl,
+    $formatDateTime,
+    $formatLiters,
+    $formatKm
+): void {
+    $startFull = is_array($normative['start_full'] ?? null) ? $normative['start_full'] : null;
+    $pillClass = match ($t0Mode) {
+        'manual' => 'fuel-pill-manual',
+        'auto' => 'fuel-pill-auto',
+        default => 'fuel-pill-warning',
+    };
+    $pillLabel = match ($t0Mode) {
+        'manual' => 'Setat manual',
+        'auto' => 'Determinat automat',
+        'no_vehicle' => 'Fără vehicul',
+        default => 'Lipsă',
+    };
+    ?>
+    <div class="fuel-t0-block <?= $t0Mode === 'missing' ? 'is-missing' : '' ?>">
+        <div class="fuel-t0-head">
+            <span class="fuel-t0-label">T0<?= $t0MonthLabel !== '' ? ' · ' . e($t0MonthLabel) : '' ?></span>
+            <span class="fuel-pill <?= e($pillClass) ?>"><?= e($pillLabel) ?></span>
+        </div>
+        <?php if ($startFull !== null): ?>
+            <div class="fuel-t0-value">
+                <strong><?= e($formatDateTime((string) ($startFull['fillup_datetime'] ?? ''))) ?></strong>
+                <span class="fuel-pill fuel-pill-full">FULL</span>
+            </div>
+            <div class="fuel-t0-meta">
+                <?= e($formatLiters((float) ($startFull['quantity_liters'] ?? 0))) ?>
+                · <?= e($formatKm((float) ($startFull['odometer_km'] ?? 0))) ?>
+                · <?= e((string) ($startFull['vehicle_registration'] ?? '')) ?>
+            </div>
+            <?php if ($t0Mode === 'manual' && ($normative['t0_manual_note'] ?? null) !== null): ?>
+                <div class="fuel-t0-meta">Notă: <?= e((string) $normative['t0_manual_note']) ?></div>
+            <?php endif; ?>
+            <?php if ($t0Mode === 'auto'): ?>
+                <div class="fuel-t0-meta">Fereastră ±4 zile: <?= e($t0WindowLabel) ?><?php
+                    $count = (int) ($normative['t0_candidate_count'] ?? 0);
+                    echo $count > 1 ? ' · ' . e((string) $count) . ' FULL-uri eligibile, ales cel mai apropiat de 1 ale lunii' : '';
+                ?></div>
+            <?php endif; ?>
+        <?php elseif ($t0Mode === 'no_vehicle'): ?>
+            <div class="fuel-t0-value"><strong>Nu există vehicul pentru calcul</strong></div>
+        <?php else: ?>
+            <div class="fuel-t0-value"><strong>T0 lipsă</strong></div>
+            <div class="fuel-t0-meta">Nu există FULL în fereastra ±4 zile (<?= e($t0WindowLabel) ?>).</div>
+        <?php endif; ?>
+
+        <?php if ($canManageFull && $t0Vehicle !== '' && $t0MonthStart !== ''): ?>
+            <div class="fuel-t0-actions">
+                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#fuelT0Modal">
+                    <i class="bi bi-pin-map" aria-hidden="true"></i> Setează T0 manual
+                </button>
+                <?php if ($t0Mode === 'manual'): ?>
+                    <form method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'clear_t0'])) ?>" class="d-inline">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="vehicle" value="<?= e($t0Vehicle) ?>">
+                        <input type="hidden" name="month_start" value="<?= e($t0MonthStart) ?>">
+                        <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+                        <button type="submit" class="btn btn-sm btn-outline-secondary"
+                                onclick="return confirm('Elimini T0 manual si revii la selectia automata?');">
+                            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Revino la automat
+                        </button>
+                    </form>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
+    </div>
+    <?php
 };
 $consumptionKmSource = (string) ($kpis['consumption_km_source'] ?? '');
 $consumptionDetail = '';
@@ -116,12 +235,32 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
             <td><?= e($fuelTypeLabel((string) ($row['fuel_type'] ?? ''))) ?></td>
             <td><?= e($formatLiters((float) ($row['quantity_liters'] ?? 0))) ?></td>
             <?php if (!$compact): ?>
-                <td><?= e($formatKm((float) ($row['odometer_km'] ?? 0))) ?></td>
+                <td>
+                    <?php
+                    $odoValue = (float) ($row['odometer_km'] ?? 0);
+                    $odoPrevious = (float) ($row['previous_odometer_km'] ?? 0);
+                    $odoIsManual = ($row['odometer_km_manual'] ?? null) !== null;
+                    $odoInconsistent = !$odoIsManual
+                        && (string) ($row['fuel_type'] ?? '') === 'motorina'
+                        && $odoValue > 0 && $odoPrevious > 0 && $odoValue < $odoPrevious;
+                    ?>
+                    <?= e($formatKm($odoValue)) ?>
+                    <?php if ($odoIsManual): ?>
+                        <span class="fuel-pill fuel-pill-manual" title="Odometru corectat manual, protejat la sincronizarea CardOil">corectat</span>
+                    <?php elseif ($odoInconsistent): ?>
+                        <i class="bi bi-exclamation-triangle-fill text-warning"
+                           title="Odometru mai mic decât alimentarea precedentă (<?= e(format_number_ro($odoPrevious, 0)) ?> km) — probabil km tastați greșit la pompă"
+                           aria-hidden="true"></i>
+                    <?php endif; ?>
+                </td>
                 <td><?= e($formatCurrency((float) ($row['total_value'] ?? 0))) ?></td>
                 <td>
                     <span class="fuel-pill <?= !empty($row['is_full']) ? 'fuel-pill-full' : 'fuel-pill-partial' ?>">
                         <?= !empty($row['is_full']) ? 'Full' : 'Partial' ?>
                     </span>
+                    <?php if (($row['is_full_manual'] ?? null) !== null): ?>
+                        <span class="fuel-pill fuel-pill-manual" title="Decizie manuală, protejată la sincronizarea CardOil">manual</span>
+                    <?php endif; ?>
                 </td>
                 <td><?= $associationLabel($row) ?></td>
             <?php endif; ?>
@@ -137,6 +276,18 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
                                 <i class="bi <?= !empty($row['is_full']) ? 'bi-circle' : 'bi-check2-circle' ?>" aria-hidden="true"></i>
                             </button>
                         </form>
+                        <button
+                            type="button"
+                            class="fuel-icon-btn"
+                            data-fuel-odo-open
+                            data-fillup-id="<?= e((string) ((int) ($row['id'] ?? 0))) ?>"
+                            data-fillup-label="<?= e($formatDateTime((string) ($row['fillup_datetime'] ?? '')) . ' · ' . (string) ($row['vehicle_registration'] ?? '-') . ' · ' . $formatLiters((float) ($row['quantity_liters'] ?? 0))) ?>"
+                            data-odo-value="<?= e((string) ((int) ($row['odometer_km'] ?? 0))) ?>"
+                            data-odo-manual="<?= ($row['odometer_km_manual'] ?? null) !== null ? '1' : '0' ?>"
+                            title="Corectează odometrul"
+                        >
+                            <i class="bi bi-speedometer2" aria-hidden="true"></i>
+                        </button>
                     <?php endif; ?>
                     <?php if ($tripId > 0): ?>
                         <a class="fuel-icon-btn" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $tripId])) ?>" title="Deschide cursa">
@@ -486,11 +637,42 @@ $donutStyle = static function (array $items): string {
         <input type="hidden" name="page" value="carburanti">
         <div class="fuel-filter-grid">
             <div>
-                <label class="form-label" for="fuel_period">Perioadă</label>
+                <label class="form-label" for="fuel_period_display">Perioadă</label>
                 <div class="fuel-date-input">
-                    <input type="text" class="form-control" id="fuel_period" name="period" value="<?= e((string) ($filters['period'] ?? '')) ?>">
+                    <input type="text" class="form-control" id="fuel_period_display"
+                           value="<?= e($periodLabel) ?>" placeholder="Alege perioada" readonly>
                     <i class="bi bi-calendar3" aria-hidden="true"></i>
                 </div>
+                <input type="hidden" name="date_from" id="fuel_date_from" value="<?= e((string) ($filters['date_from'] ?? '')) ?>">
+                <input type="hidden" name="date_to" id="fuel_date_to" value="<?= e((string) ($filters['date_to'] ?? '')) ?>">
+            </div>
+            <?php
+            // Marcile disponibile, din optiunile de vehicule (fisa flotei).
+            $fuelBrands = [];
+            foreach ($vehicleOptions as $brandOption) {
+                $brandValue = trim((string) ($brandOption['marca'] ?? ''));
+                if ($brandValue === '') {
+                    continue;
+                }
+                // aceeasi marca poate fi scrisa diferit in fise (Mercedes /
+                // MERCEDES); pastram o singura optiune, prima intalnita
+                $brandKey = mb_strtoupper($brandValue);
+                if (!isset($fuelBrands[$brandKey])) {
+                    $fuelBrands[$brandKey] = $brandValue;
+                }
+            }
+            $fuelBrands = array_values($fuelBrands);
+            usort($fuelBrands, static fn (string $a, string $b): int => strcasecmp($a, $b));
+            $activeBrand = trim((string) ($filters['brand'] ?? ''));
+            ?>
+            <div>
+                <label class="form-label" for="fuel_brand">Marcă</label>
+                <select class="form-select" id="fuel_brand" name="brand">
+                    <option value="">Toate mărcile</option>
+                    <?php foreach ($fuelBrands as $brandValue): ?>
+                        <option value="<?= e($brandValue) ?>" <?= strcasecmp($activeBrand, $brandValue) === 0 ? 'selected' : '' ?>><?= e($brandValue) ?></option>
+                    <?php endforeach; ?>
+                </select>
             </div>
             <div>
                 <label class="form-label" id="fuel_vehicles_label">Vehicule</label>
@@ -507,21 +689,73 @@ $donutStyle = static function (array $items): string {
                         }
                         ?>
                     </button>
+                    <?php
+                    // Vehiculele grupate pe capacitatea de transport, ca in
+                    // Configurare transport: grupe "X tone" descrescator, iar
+                    // vehiculele fara fisa/capacitate la final.
+                    $fuelVehicleGroups = [];
+                    foreach ($vehicleOptions as $vehicle) {
+                        $vehicleValue = trim((string) ($vehicle['vehicle_registration'] ?? ''));
+                        if ($vehicleValue === '') {
+                            continue;
+                        }
+                        // Cu filtrul de marca activ, selectorul arata doar
+                        // vehiculele marcii respective.
+                        if ($activeBrand !== '' && strcasecmp(trim((string) ($vehicle['marca'] ?? '')), $activeBrand) !== 0) {
+                            continue;
+                        }
+                        $capacityValue = (float) ($vehicle['capacitate_transport'] ?? 0);
+                        $capacityKey = $capacityValue > 0 ? number_format($capacityValue, 2, '.', '') : 'fara';
+                        if (!isset($fuelVehicleGroups[$capacityKey])) {
+                            $fuelVehicleGroups[$capacityKey] = [
+                                'label' => $capacityValue > 0
+                                    ? rtrim(rtrim(number_format($capacityValue, 2, '.', ''), '0'), '.') . ' tone'
+                                    : 'Fără capacitate',
+                                'capacity' => $capacityValue,
+                                'vehicles' => [],
+                            ];
+                        }
+                        $fuelVehicleGroups[$capacityKey]['vehicles'][] = $vehicle;
+                    }
+                    uasort($fuelVehicleGroups, static fn (array $a, array $b): int => $b['capacity'] <=> $a['capacity']);
+                    ?>
                     <div class="dropdown-menu fuel-vehicle-menu">
                         <input type="search" class="form-control form-control-sm mb-2" placeholder="Caută vehicul..." data-vehicle-search>
                         <div class="fuel-vehicle-menu-actions">
                             <button type="button" class="btn btn-link btn-sm p-0" data-vehicle-clear>Șterge selecția (toate vehiculele)</button>
                         </div>
-                        <?php foreach ($vehicleOptions as $vehicle): ?>
-                            <?php $vehicleValue = (string) ($vehicle['vehicle_registration'] ?? ''); ?>
-                            <label class="fuel-vehicle-option">
-                                <input type="checkbox" class="form-check-input" name="vehicles[]" value="<?= e($vehicleValue) ?>" <?= in_array($vehicleValue, $selectedVehicles, true) ? 'checked' : '' ?>>
-                                <span><?= e($vehicleValue) ?></span>
-                            </label>
+                        <div class="fuel-vehicle-menu-empty text-muted small px-2 py-1" hidden>Niciun vehicul găsit.</div>
+                        <?php foreach ($fuelVehicleGroups as $capacityGroup): ?>
+                            <?php
+                            $groupHasSelection = false;
+                            foreach ($capacityGroup['vehicles'] as $groupVehicle) {
+                                if (in_array(trim((string) ($groupVehicle['vehicle_registration'] ?? '')), $selectedVehicles, true)) {
+                                    $groupHasSelection = true;
+                                    break;
+                                }
+                            }
+                            ?>
+                            <div class="fuel-vehicle-group<?= $groupHasSelection ? '' : ' is-collapsed' ?>" data-vehicle-group>
+                                <div class="fuel-vehicle-group-head" data-vehicle-group-head>
+                                    <input class="form-check-input m-0" type="checkbox" data-vehicle-group-toggle aria-label="Selectează toate vehiculele: <?= e((string) $capacityGroup['label']) ?>">
+                                    <span><?= e((string) $capacityGroup['label']) ?></span>
+                                    <span class="fuel-vehicle-group-count"><?= e((string) count($capacityGroup['vehicles'])) ?></span>
+                                    <i class="bi bi-chevron-down fuel-vehicle-group-chevron" aria-hidden="true"></i>
+                                </div>
+                                <?php foreach ($capacityGroup['vehicles'] as $vehicle): ?>
+                                    <?php
+                                    $vehicleValue = trim((string) ($vehicle['vehicle_registration'] ?? ''));
+                                    $vehicleBrand = trim(trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? '')));
+                                    ?>
+                                    <label class="fuel-vehicle-option" data-brand="<?= e(mb_strtoupper(trim((string) ($vehicle['marca'] ?? '')))) ?>">
+                                        <input type="checkbox" class="form-check-input" name="vehicles[]" value="<?= e($vehicleValue) ?>" <?= in_array($vehicleValue, $selectedVehicles, true) ? 'checked' : '' ?>>
+                                        <span><?= e($vehicleValue . ($vehicleBrand !== '' ? ' - ' . $vehicleBrand : '')) ?></span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
                         <?php endforeach; ?>
                     </div>
                 </div>
-                <small class="fuel-vehicle-filter-hint">Bifează 2+ vehicule pentru comparație</small>
             </div>
             <div>
                 <label class="form-label" for="fuel_transport_group">Tip Transport</label>
@@ -542,26 +776,11 @@ $donutStyle = static function (array $items): string {
                 </select>
             </div>
             <div class="fuel-filter-actions">
-                <button class="btn btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#fuelAdvancedFilters" aria-expanded="false" aria-controls="fuelAdvancedFilters">
-                    <i class="bi bi-funnel" aria-hidden="true"></i>
-                    Filtre avansate
+                <!-- Filtrele se aplica automat la schimbare; butonul ramane ca fallback fara JS. -->
+                <button class="btn btn-outline-primary" type="submit" data-fuel-filter-submit>
+                    <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+                    Actualizează
                 </button>
-                <button class="btn btn-primary" type="submit">
-                    <i class="bi bi-search" aria-hidden="true"></i>
-                    Aplică filtre
-                </button>
-            </div>
-        </div>
-        <div class="collapse" id="fuelAdvancedFilters">
-            <div class="fuel-advanced-row">
-                <div>
-                    <label class="form-label" for="fuel_date_from">De la</label>
-                    <input type="date" class="form-control" id="fuel_date_from" name="date_from" value="<?= e((string) ($filters['date_from'] ?? '')) ?>">
-                </div>
-                <div>
-                    <label class="form-label" for="fuel_date_to">Până la</label>
-                    <input type="date" class="form-control" id="fuel_date_to" name="date_to" value="<?= e((string) ($filters['date_to'] ?? '')) ?>">
-                </div>
             </div>
         </div>
     </form>
@@ -762,6 +981,7 @@ $donutStyle = static function (array $items): string {
                                 <?= e((string) ($normative['message'] ?? 'Interval invalid')) ?>
                             </span>
                         </div>
+                        <?php $renderT0Status(); ?>
                         <div class="fuel-norm-grid">
                             <div>
                                 <small>Full început</small>
@@ -795,6 +1015,12 @@ $donutStyle = static function (array $items): string {
                             <i class="bi <?= ($normative['status'] ?? '') === 'valid' ? 'bi-check-circle-fill' : 'bi-exclamation-circle-fill' ?>" aria-hidden="true"></i>
                             Status: <?= e((string) ($normative['message'] ?? 'Interval invalid')) ?>
                         </p>
+                        <?php if (!empty($normative['odometer_warning'])): ?>
+                            <p class="fuel-norm-status text-warning">
+                                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                                <?= e((string) $normative['odometer_warning']) ?>
+                            </p>
+                        <?php endif; ?>
                     </article>
                 </div>
 
@@ -961,6 +1187,7 @@ $donutStyle = static function (array $items): string {
                         <h2>Consum normat</h2>
                         <span class="fuel-status-badge <?= ($normative['status'] ?? '') === 'valid' ? 'is-valid' : 'is-invalid' ?>"><?= e((string) ($normative['message'] ?? 'Interval invalid')) ?></span>
                     </div>
+                    <?php $renderT0Status(); ?>
                     <div class="fuel-norm-grid is-wide">
                         <div><small>Vehicul</small><strong><?= e((string) ($normative['vehicle'] ?? '-')) ?></strong></div>
                         <div><small>Full început</small><strong><?= e($formatDateTime((string) (($normative['start_full']['fillup_datetime'] ?? '') ?: ''))) ?></strong><span><?= e($formatKm((float) ($normative['start_full']['odometer_km'] ?? 0))) ?></span></div>
@@ -969,7 +1196,11 @@ $donutStyle = static function (array $items): string {
                         <div><small>Motorină consumată</small><strong><?= e($formatLiters((float) ($normative['motorina_liters'] ?? 0))) ?></strong></div>
                         <div><small>Consum normat</small><strong><?= e(format_number_ro((float) ($normative['norm_l100'] ?? 0), 2)) ?> L/100 km</strong></div>
                         <div><small>Consum AdBlue</small><strong><?= e($formatPercent((float) ($normative['adblue_percent'] ?? 0))) ?></strong></div>
-                        <div><small>Status</small><strong><?= e((string) ($normative['message'] ?? 'Interval invalid')) ?></strong></div>
+                        <div><small>Status</small><strong><?= e((string) ($normative['message'] ?? 'Interval invalid')) ?></strong>
+                            <?php if (!empty($normative['odometer_warning'])): ?>
+                                <span class="text-warning d-block mt-1"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> <?= e((string) $normative['odometer_warning']) ?></span>
+                            <?php endif; ?>
+                        </div>
                     </div>
                 </article>
             </section>
@@ -1096,6 +1327,7 @@ $donutStyle = static function (array $items): string {
                         <?php endforeach; ?>
                         <input type="hidden" name="transport_group" value="<?= e((string) ($filters['transport_group'] ?? '')) ?>">
                         <input type="hidden" name="fuel_type" value="<?= e((string) ($filters['fuel_type'] ?? '')) ?>">
+                        <input type="hidden" name="brand" value="<?= e((string) ($filters['brand'] ?? '')) ?>">
                         <div class="fuel-compare-form-grid">
                             <div>
                                 <label class="form-label" for="fuel_compare_mode">Mod comparație</label>
@@ -1107,14 +1339,22 @@ $donutStyle = static function (array $items): string {
                             <div data-compare-mode="periods">
                                 <label class="form-label" for="fuel_compare_period_a">Perioada A</label>
                                 <div class="fuel-date-input">
-                                    <input type="text" class="form-control" id="fuel_compare_period_a" name="compare_period_a" value="<?= e((string) ($compare['period_a'] ?? '')) ?>" placeholder="zz.ll.aaaa - zz.ll.aaaa">
+                                    <input type="text" class="form-control" id="fuel_compare_period_a" name="compare_period_a"
+                                           value="<?= e((string) ($compare['period_a'] ?? '')) ?>"
+                                           data-range-from="<?= e((string) (($compare['filters_a']['date_from'] ?? ''))) ?>"
+                                           data-range-to="<?= e((string) (($compare['filters_a']['date_to'] ?? ''))) ?>"
+                                           placeholder="Alege perioada A" readonly>
                                     <i class="bi bi-calendar3" aria-hidden="true"></i>
                                 </div>
                             </div>
                             <div data-compare-mode="periods">
                                 <label class="form-label" for="fuel_compare_period_b">Perioada B</label>
                                 <div class="fuel-date-input">
-                                    <input type="text" class="form-control" id="fuel_compare_period_b" name="compare_period_b" value="<?= e((string) ($compare['period_b'] ?? '')) ?>" placeholder="zz.ll.aaaa - zz.ll.aaaa">
+                                    <input type="text" class="form-control" id="fuel_compare_period_b" name="compare_period_b"
+                                           value="<?= e((string) ($compare['period_b'] ?? '')) ?>"
+                                           data-range-from="<?= e((string) (($compare['filters_b']['date_from'] ?? ''))) ?>"
+                                           data-range-to="<?= e((string) (($compare['filters_b']['date_to'] ?? ''))) ?>"
+                                           placeholder="Alege perioada B" readonly>
                                     <i class="bi bi-calendar3" aria-hidden="true"></i>
                                 </div>
                             </div>
@@ -1154,7 +1394,27 @@ $donutStyle = static function (array $items): string {
                     $compareMetrics = is_array($comparison['metrics'] ?? null) ? $comparison['metrics'] : [];
                     $compareLabelA = (string) ($compare['label_a'] ?? 'A');
                     $compareLabelB = (string) ($compare['label_b'] ?? 'B');
+                    $sideHasData = static fn (array $summary): bool =>
+                        (float) ($summary['motorina_liters'] ?? 0) > 0
+                        || (float) ($summary['adblue_liters'] ?? 0) > 0
+                        || (float) ($summary['total_value'] ?? 0) > 0;
+                    $emptySides = [];
+                    if (!$sideHasData((array) ($comparison['summary_a'] ?? []))) {
+                        $emptySides[] = $compareLabelA;
+                    }
+                    if (!$sideHasData((array) ($comparison['summary_b'] ?? []))) {
+                        $emptySides[] = $compareLabelB;
+                    }
                     ?>
+                    <?php if ($emptySides !== []): ?>
+                        <div class="alert alert-warning d-flex align-items-center gap-2 mb-3">
+                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                            <div>
+                                Nu există alimentări pentru <?= count($emptySides) === 2 ? 'niciuna dintre perioade' : ('<strong>' . e(implode('', $emptySides)) . '</strong>') ?>.
+                                Comparația de mai jos arată doar cifrele celeilalte perioade — alege o perioadă cu date pentru o comparație reală.
+                            </div>
+                        </div>
+                    <?php endif; ?>
                     <div class="fuel-compare-grid">
                         <article class="fuel-card">
                             <div class="fuel-card-header">
@@ -1291,6 +1551,108 @@ $donutStyle = static function (array $items): string {
     </div>
 </div>
 
+<?php if ($canManageFull && $t0Vehicle !== '' && $t0MonthStart !== ''): ?>
+<div class="modal fade" id="fuelT0Modal" tabindex="-1" aria-labelledby="fuelT0ModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'set_t0'])) ?>">
+            <?= csrf_field() ?>
+            <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+            <input type="hidden" name="vehicle" value="<?= e($t0Vehicle) ?>">
+            <input type="hidden" name="month_start" value="<?= e($t0MonthStart) ?>">
+            <div class="modal-header">
+                <h5 class="modal-title" id="fuelT0ModalTitle">Setează T0 manual — <?= e($t0Vehicle) ?> · <?= e($t0MonthLabel) ?></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+            </div>
+            <div class="modal-body">
+                <p class="fuel-modal-subtitle">
+                    Fereastra automată ±4 zile este <strong><?= e($t0WindowLabel) ?></strong>.
+                    Alimentările din fereastră sunt marcate cu <span class="fuel-pill fuel-pill-auto">în fereastră</span>.
+                    Poți alege și o alimentare din afara ferestrei — decizia rămâne înregistrată ca manuală.
+                </p>
+                <?php if ($t0Candidates === []): ?>
+                    <p class="text-muted mb-0">Nu există alimentări de motorină pentru acest vehicul în intervalul afișabil.</p>
+                <?php else: ?>
+                    <div class="fuel-table-wrap">
+                        <table class="fuel-table fuel-t0-table">
+                            <thead>
+                                <tr>
+                                    <th scope="col"><span class="visually-hidden">Selectează</span></th>
+                                    <th scope="col">Data / ora</th>
+                                    <th scope="col">Vehicul</th>
+                                    <th scope="col">Litri</th>
+                                    <th scope="col">Odometru</th>
+                                    <th scope="col">Carburant</th>
+                                    <th scope="col">Status</th>
+                                    <th scope="col">Sursa</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($t0Candidates as $candidate): ?>
+                                    <?php
+                                    $candidateId = (int) ($candidate['id'] ?? 0);
+                                    $candidateIsFull = !empty($candidate['is_full']);
+                                    $candidateOdo = (int) ($candidate['odometer_km'] ?? 0);
+                                    $candidateSource = (string) ($candidate['full_source'] ?? 'api');
+                                    ?>
+                                    <tr class="<?= !empty($candidate['in_t0_window']) ? 'is-in-window' : '' ?>">
+                                        <td>
+                                            <input class="form-check-input" type="radio" name="fillup_id"
+                                                   id="fuelT0Pick<?= e((string) $candidateId) ?>"
+                                                   value="<?= e((string) $candidateId) ?>"
+                                                   data-is-full="<?= $candidateIsFull ? '1' : '0' ?>" required>
+                                        </td>
+                                        <td>
+                                            <label class="mb-0" for="fuelT0Pick<?= e((string) $candidateId) ?>">
+                                                <?= e($formatDateTime((string) ($candidate['fillup_datetime'] ?? ''))) ?>
+                                            </label>
+                                            <?php if (!empty($candidate['in_t0_window'])): ?>
+                                                <span class="fuel-pill fuel-pill-auto">în fereastră</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td><?= e((string) ($candidate['vehicle_registration'] ?? '-')) ?></td>
+                                        <td><?= e($formatLiters((float) ($candidate['quantity_liters'] ?? 0))) ?></td>
+                                        <td>
+                                            <?= e($formatKm((float) $candidateOdo)) ?>
+                                            <?php if ($candidateOdo <= 0): ?>
+                                                <span class="fuel-pill fuel-pill-warning">fără odometru</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td><?= e($fuelTypeLabel((string) ($candidate['fuel_type'] ?? ''))) ?></td>
+                                        <td>
+                                            <span class="fuel-pill <?= $candidateIsFull ? 'fuel-pill-full' : 'fuel-pill-partial' ?>">
+                                                <?= $candidateIsFull ? 'Full' : 'Partial' ?>
+                                            </span>
+                                        </td>
+                                        <td><span class="fuel-pill <?= $candidateSource === 'manual' ? 'fuel-pill-manual' : 'fuel-pill-auto' ?>"><?= e($candidateSource === 'manual' ? 'manual' : 'API') ?></span></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="fuel-t0-confirm" id="fuelT0Confirm" hidden>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" value="1" id="fuelT0ConfirmFull" name="confirm_mark_full">
+                            <label class="form-check-label" for="fuelT0ConfirmFull">
+                                Alimentarea selectată este <strong>Parțială</strong>. Confirm transformarea ei în FULL pentru a o folosi ca T0.
+                            </label>
+                        </div>
+                    </div>
+
+                    <label class="form-label mt-3" for="fuelT0Note">Notă (opțional)</label>
+                    <input type="text" class="form-control" id="fuelT0Note" name="note" maxlength="255"
+                           placeholder="Motivul setării manuale">
+                <?php endif; ?>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
+                <button type="submit" class="btn btn-primary" <?= $t0Candidates === [] ? 'disabled' : '' ?>>Stabilește T0</button>
+            </div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
+
 <div class="modal fade" id="fuelLinkModal" tabindex="-1" aria-labelledby="fuelLinkModalTitle" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <form class="modal-content" method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'link_fillup'])) ?>">
@@ -1325,8 +1687,177 @@ $donutStyle = static function (array $items): string {
     </div>
 </div>
 
+<div class="modal fade" id="fuelOdoModal" tabindex="-1" aria-labelledby="fuelOdoModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form class="modal-content" method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'set_odometer'])) ?>">
+            <?= csrf_field() ?>
+            <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+            <input type="hidden" name="fillup_id" id="fuelOdoFillupId" value="">
+            <div class="modal-header">
+                <h5 class="modal-title" id="fuelOdoModalTitle">Corectează odometrul</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+            </div>
+            <div class="modal-body">
+                <p class="fuel-modal-subtitle" id="fuelOdoFillupLabel">Alimentare</p>
+                <label class="form-label" for="fuelOdoValue">Kilometraj corect (km bord)</label>
+                <input type="number" class="form-control" id="fuelOdoValue" name="odometer_km" min="1" max="5000000" step="1" required>
+                <small class="text-muted d-block mt-2">
+                    Corecția este o decizie manuală: rămâne valabilă la sincronizările CardOil.
+                    Folosește km reali din bord / foaia de parcurs.
+                </small>
+            </div>
+            <div class="modal-footer">
+                <button type="submit" class="btn btn-outline-secondary me-auto" name="reset_api" value="1"
+                        id="fuelOdoResetBtn" formnovalidate hidden>
+                    Revino la valoarea API
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
+                <button type="submit" class="btn btn-primary">Salvează corecția</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/l10n/ro.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+    // -----------------------------------------------------------------
+    // Filtre cu auto-aplicare: orice schimbare retrimite formularul,
+    // fara sa mai fie nevoie de butonul "Actualizeaza".
+    // -----------------------------------------------------------------
+    var filterForm = document.querySelector('.fuel-filter-card');
+    var submitFilters = function () {
+        if (!filterForm) {
+            return;
+        }
+        // Feedback vizual pana la reincarcarea paginii.
+        filterForm.classList.add('is-reloading');
+        if (filterForm.requestSubmit) {
+            filterForm.requestSubmit();
+        } else {
+            filterForm.submit();
+        }
+    };
+
+    // Un singur camp de perioada: calendar de interval (flatpickr) cu scurtaturi
+    // de luna. Selectarea completa a intervalului aplica filtrul imediat.
+    var periodDisplay = document.getElementById('fuel_period_display');
+    var dateFromInput = document.getElementById('fuel_date_from');
+    var dateToInput = document.getElementById('fuel_date_to');
+    if (filterForm && periodDisplay && dateFromInput && dateToInput) {
+        var MONTHS_RO = ['Ianuarie', 'Februarie', 'Martie', 'Aprilie', 'Mai', 'Iunie',
+            'Iulie', 'August', 'Septembrie', 'Octombrie', 'Noiembrie', 'Decembrie'];
+        var toIso = function (d) {
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        };
+        var toRo = function (d) {
+            return String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+        };
+        var prettyLabel = function (start, end) {
+            var lastDay = new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate();
+            if (start.getDate() === 1
+                && end.getFullYear() === start.getFullYear()
+                && end.getMonth() === start.getMonth()
+                && end.getDate() === lastDay) {
+                return MONTHS_RO[start.getMonth()] + ' ' + start.getFullYear();
+            }
+            return toRo(start) + ' – ' + toRo(end);
+        };
+        var applyRange = function (start, end) {
+            var newFrom = toIso(start);
+            var newTo = toIso(end);
+            if (newFrom === dateFromInput.value && newTo === dateToInput.value) {
+                return; // deschis si inchis fara schimbare: nu reincarca
+            }
+            dateFromInput.value = newFrom;
+            dateToInput.value = newTo;
+            periodDisplay.value = prettyLabel(start, end);
+            submitFilters();
+        };
+
+        if (window.flatpickr) {
+            var initialDates = [];
+            if (dateFromInput.value && dateToInput.value) {
+                initialDates = [dateFromInput.value, dateToInput.value];
+            }
+            flatpickr(periodDisplay, {
+                mode: 'range',
+                locale: window.flatpickr.l10ns && window.flatpickr.l10ns.ro ? 'ro' : 'default',
+                dateFormat: 'Y-m-d',
+                defaultDate: initialDates,
+                onReady: function (selectedDates, dateStr, fp) {
+                    // Scurtaturi: luna aceasta / luna trecuta, direct in calendar.
+                    var presets = document.createElement('div');
+                    presets.className = 'fuel-fp-presets';
+                    [['Luna aceasta', 0], ['Luna trecută', 1]].forEach(function (preset) {
+                        var button = document.createElement('button');
+                        button.type = 'button';
+                        button.textContent = preset[0];
+                        button.addEventListener('click', function () {
+                            var now = new Date();
+                            var start = new Date(now.getFullYear(), now.getMonth() - preset[1], 1);
+                            var end = new Date(now.getFullYear(), now.getMonth() - preset[1] + 1, 0);
+                            fp.setDate([start, end], false);
+                            fp.close();
+                        });
+                        presets.appendChild(button);
+                    });
+                    fp.calendarContainer.appendChild(presets);
+                },
+                onClose: function (selectedDates) {
+                    if (selectedDates.length === 2) {
+                        applyRange(selectedDates[0], selectedDates[1]);
+                    } else {
+                        // selectie incompleta: revino la eticheta valorii curente
+                        periodDisplay.value = periodDisplay.defaultValue;
+                    }
+                }
+            });
+            // flatpickr isi scrie propriul format la initializare; readucem
+            // eticheta prietenoasa generata de server ("Iulie 2026").
+            periodDisplay.value = periodDisplay.defaultValue;
+        } else {
+            // Fallback fara CDN: cele doua campuri devin calendare native vizibile.
+            periodDisplay.closest('.fuel-date-input').hidden = true;
+            [dateFromInput, dateToInput].forEach(function (input) {
+                input.type = 'date';
+                input.classList.add('form-control', 'mt-1');
+                input.addEventListener('change', function () {
+                    if (dateFromInput.value && dateToInput.value && dateFromInput.value <= dateToInput.value) {
+                        submitFilters();
+                    }
+                });
+            });
+        }
+    }
+
+    ['fuel_transport_group', 'fuel_type'].forEach(function (id) {
+        var select = document.getElementById(id);
+        if (select) {
+            select.addEventListener('change', submitFilters);
+        }
+    });
+
+    // Filtrul de marca: pastreaza doar vehiculele bifate care apartin marcii
+    // alese (restul selectiei ar produce un rezultat gol), apoi aplica.
+    var brandSelect = document.getElementById('fuel_brand');
+    if (brandSelect) {
+        brandSelect.addEventListener('change', function () {
+            var brand = brandSelect.value.trim().toUpperCase();
+            if (brand !== '') {
+                document.querySelectorAll('#fuelVehicleMultiselect .fuel-vehicle-option').forEach(function (option) {
+                    var checkbox = option.querySelector('input[type="checkbox"]');
+                    if (checkbox && checkbox.checked && (option.getAttribute('data-brand') || '') !== brand) {
+                        checkbox.checked = false;
+                    }
+                });
+            }
+            submitFilters();
+        });
+    }
+
     var vehicleMultiselect = document.getElementById('fuelVehicleMultiselect');
     if (vehicleMultiselect) {
         var toggleButton = vehicleMultiselect.querySelector('[data-bs-toggle="dropdown"]');
@@ -1364,12 +1895,110 @@ document.addEventListener('DOMContentLoaded', function () {
         if (searchInput) {
             searchInput.addEventListener('input', function () {
                 var term = searchInput.value.trim().toUpperCase().replace(/\s+/g, '');
-                vehicleMultiselect.querySelectorAll('.fuel-vehicle-option').forEach(function (option) {
-                    var plate = (option.textContent || '').trim().toUpperCase().replace(/\s+/g, '');
-                    option.hidden = term !== '' && plate.indexOf(term) === -1;
+                var menu = vehicleMultiselect.querySelector('.fuel-vehicle-menu');
+                var totalVisible = 0;
+                // In timpul cautarii, grupele restranse isi arata optiunile
+                // potrivite; grupele fara potriviri se ascund complet.
+                if (menu) {
+                    menu.classList.toggle('is-searching', term !== '');
+                }
+                vehicleMultiselect.querySelectorAll('[data-vehicle-group]').forEach(function (group) {
+                    var groupVisible = 0;
+                    group.querySelectorAll('.fuel-vehicle-option').forEach(function (option) {
+                        var text = (option.textContent || '').trim().toUpperCase().replace(/\s+/g, '');
+                        var visible = term === '' || text.indexOf(term) !== -1;
+                        option.hidden = !visible;
+                        if (visible) {
+                            groupVisible += 1;
+                        }
+                    });
+                    group.hidden = groupVisible === 0;
+                    totalVisible += groupVisible;
                 });
+                var emptyMessage = vehicleMultiselect.querySelector('.fuel-vehicle-menu-empty');
+                if (emptyMessage) {
+                    emptyMessage.hidden = totalVisible > 0;
+                }
             });
         }
+
+        // Grupele de capacitate: bifarea grupului (selecteaza tot / nimic),
+        // starea indeterminate si plierea la click pe antet.
+        var refreshGroupToggle = function (group) {
+            if (!group) {
+                return;
+            }
+            var toggle = group.querySelector('[data-vehicle-group-toggle]');
+            if (!toggle) {
+                return;
+            }
+            var options = Array.prototype.slice.call(group.querySelectorAll('.fuel-vehicle-option input[type="checkbox"]'));
+            var checkedCount = options.filter(function (input) { return input.checked; }).length;
+            toggle.checked = options.length > 0 && checkedCount === options.length;
+            toggle.indeterminate = checkedCount > 0 && checkedCount < options.length;
+        };
+
+        if (clearButton) {
+            clearButton.addEventListener('click', function () {
+                vehicleMultiselect.querySelectorAll('[data-vehicle-group]').forEach(refreshGroupToggle);
+            });
+        }
+
+        vehicleMultiselect.querySelectorAll('[data-vehicle-group]').forEach(function (group) {
+            refreshGroupToggle(group);
+
+            var head = group.querySelector('[data-vehicle-group-head]');
+            if (head) {
+                head.addEventListener('click', function (event) {
+                    if (event.target instanceof HTMLInputElement) {
+                        return; // click pe checkbox-ul de grup, nu pe antet
+                    }
+                    group.classList.toggle('is-collapsed');
+                });
+            }
+
+            var toggle = group.querySelector('[data-vehicle-group-toggle]');
+            if (toggle) {
+                toggle.addEventListener('change', function () {
+                    var shouldCheck = toggle.checked;
+                    group.querySelectorAll('.fuel-vehicle-option input[type="checkbox"]').forEach(function (input) {
+                        if (!input.closest('[hidden]') && input.checked !== shouldCheck) {
+                            input.checked = shouldCheck;
+                        }
+                    });
+                    toggle.indeterminate = false;
+                    updateVehicleLabel();
+                });
+            }
+
+            group.querySelectorAll('.fuel-vehicle-option input[type="checkbox"]').forEach(function (input) {
+                input.addEventListener('change', function () {
+                    refreshGroupToggle(group);
+                });
+            });
+        });
+
+        // Auto-aplicare la inchiderea dropdown-ului, doar daca selectia s-a
+        // schimbat. Bifarea mai multor vehicule nu declanseaza reincarcari
+        // intermediare - filtrul pleaca o singura data, la inchidere.
+        var vehicleSelectionSnapshot = '';
+        var currentVehicleSelection = function () {
+            var selected = [];
+            checkboxes.forEach(function (checkbox) {
+                if (checkbox.checked) {
+                    selected.push(checkbox.value);
+                }
+            });
+            return selected.join('|');
+        };
+        vehicleMultiselect.addEventListener('show.bs.dropdown', function () {
+            vehicleSelectionSnapshot = currentVehicleSelection();
+        });
+        vehicleMultiselect.addEventListener('hidden.bs.dropdown', function () {
+            if (currentVehicleSelection() !== vehicleSelectionSnapshot) {
+                submitFilters();
+            }
+        });
     }
 
     var compareModeSelect = document.getElementById('fuel_compare_mode');
@@ -1385,6 +2014,44 @@ document.addEventListener('DOMContentLoaded', function () {
         };
         compareModeSelect.addEventListener('change', syncCompareMode);
         syncCompareMode();
+    }
+
+    // Perioadele A/B din comparatie: acelasi calendar de interval ca filtrul
+    // principal; selectia completa trimite direct formularul de comparatie.
+    var compareForm = document.getElementById('fuelCompareForm');
+    if (compareForm && window.flatpickr) {
+        ['fuel_compare_period_a', 'fuel_compare_period_b'].forEach(function (id) {
+            var input = document.getElementById(id);
+            if (!input) {
+                return;
+            }
+            var pad = function (n) { return String(n).padStart(2, '0'); };
+            var toRoDate = function (d) { return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(); };
+            var initial = [];
+            if (input.getAttribute('data-range-from') && input.getAttribute('data-range-to')) {
+                initial = [input.getAttribute('data-range-from'), input.getAttribute('data-range-to')];
+            }
+            flatpickr(input, {
+                mode: 'range',
+                locale: window.flatpickr.l10ns && window.flatpickr.l10ns.ro ? 'ro' : 'default',
+                dateFormat: 'Y-m-d',
+                defaultDate: initial,
+                onClose: function (selectedDates) {
+                    if (selectedDates.length === 2) {
+                        // formatul asteptat de server: "zz.ll.aaaa - zz.ll.aaaa"
+                        input.value = toRoDate(selectedDates[0]) + ' - ' + toRoDate(selectedDates[1]);
+                        if (compareForm.requestSubmit) {
+                            compareForm.requestSubmit();
+                        } else {
+                            compareForm.submit();
+                        }
+                    } else {
+                        input.value = input.defaultValue;
+                    }
+                }
+            });
+            input.value = input.defaultValue;
+        });
     }
 
     var vehicleTable = document.getElementById('fuelVehicleTable');
@@ -1428,6 +2095,25 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    // T0 manual: cere confirmare explicita cand alimentarea aleasa nu e FULL.
+    // Nicio alimentare partiala nu devine FULL in tacere.
+    var t0Confirm = document.getElementById('fuelT0Confirm');
+    if (t0Confirm) {
+        var t0ConfirmBox = document.getElementById('fuelT0ConfirmFull');
+        document.querySelectorAll('#fuelT0Modal input[name="fillup_id"]').forEach(function (radio) {
+            radio.addEventListener('change', function () {
+                var needsConfirm = radio.checked && radio.getAttribute('data-is-full') !== '1';
+                t0Confirm.hidden = !needsConfirm;
+                if (t0ConfirmBox) {
+                    t0ConfirmBox.required = needsConfirm;
+                    if (!needsConfirm) {
+                        t0ConfirmBox.checked = false;
+                    }
+                }
+            });
+        });
+    }
+
     var modalElement = document.getElementById('fuelLinkModal');
     var fillupIdInput = document.getElementById('fuelLinkFillupId');
     var fillupLabel = document.getElementById('fuelLinkFillupLabel');
@@ -1443,5 +2129,26 @@ document.addEventListener('DOMContentLoaded', function () {
             modal.show();
         });
     });
+
+    // Modalul de corectie a odometrului.
+    var odoModalElement = document.getElementById('fuelOdoModal');
+    if (odoModalElement && window.bootstrap) {
+        var odoModal = new bootstrap.Modal(odoModalElement);
+        var odoFillupId = document.getElementById('fuelOdoFillupId');
+        var odoLabel = document.getElementById('fuelOdoFillupLabel');
+        var odoValue = document.getElementById('fuelOdoValue');
+        var odoResetBtn = document.getElementById('fuelOdoResetBtn');
+        document.querySelectorAll('[data-fuel-odo-open]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                odoFillupId.value = button.getAttribute('data-fillup-id') || '';
+                odoLabel.textContent = button.getAttribute('data-fillup-label') || 'Alimentare';
+                var current = parseInt(button.getAttribute('data-odo-value') || '0', 10);
+                odoValue.value = current > 0 ? current : '';
+                // Butonul de revenire la API apare doar cand exista o corectie manuala.
+                odoResetBtn.hidden = button.getAttribute('data-odo-manual') !== '1';
+                odoModal.show();
+            });
+        });
+    }
 });
 </script>

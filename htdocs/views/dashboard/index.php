@@ -742,7 +742,7 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                 <header class="dashboard-approval-header">
                     <div>
                         <h2 id="dashboard-approval-title">Solicitari aprobare in asteptare</h2>
-                        <span><?= e((string) $approvalTotal) ?> total</span>
+                        <span><span data-approval-total-count><?= e((string) $approvalTotal) ?></span> total</span>
                     </div>
                     <button class="dashboard-approval-close" type="button" aria-label="Ascunde panoul">
                         <i class="bi bi-x-lg" aria-hidden="true"></i>
@@ -761,7 +761,7 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                             aria-selected="<?= $isActiveTab ? 'true' : 'false' ?>"
                             data-dashboard-approval-tab="<?= e($tabKey) ?>"
                         >
-                            <?= e((string) $tab['label']) ?> (<?= e((string) ((int) $tab['count'])) ?>)
+                            <?= e((string) $tab['label']) ?> (<span data-approval-tab-count="<?= e($tabKey) ?>"><?= e((string) ((int) $tab['count'])) ?></span>)
                         </button>
                     <?php endforeach; ?>
                 </div>
@@ -780,7 +780,7 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                         <?= $isActiveTab ? '' : 'hidden' ?>
                     >
                         <?php if ($rowsForTab === []): ?>
-                            <div class="dashboard-approval-empty">
+                            <div class="dashboard-approval-empty" data-approval-empty="<?= e($tabKey) ?>">
                                 Nu exista solicitari in asteptare.
                             </div>
                         <?php else: ?>
@@ -788,55 +788,93 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                                 <?php
                                 $approvalId = (int) ($approval['id'] ?? 0);
                                 $reasonKey = (string) ($approval['inactive_reason'] ?? 'other');
-                                $documents = is_array($approval['documents'] ?? null) ? $approval['documents'] : [];
-                                $documentNames = is_array($approval['affected_document_names'] ?? null) ? $approval['affected_document_names'] : [];
-                                $snapshot = json_decode((string) ($approval['snapshot_json'] ?? ''), true);
-                                $snapshot = is_array($snapshot) ? $snapshot : [];
-                                $detail = trim((string) ($snapshot['detail'] ?? ''));
-                                $affectedDocuments = $documentNames !== []
-                                    ? implode(', ', array_map('strval', $documentNames))
-                                    : implode(', ', array_map(static fn(array $doc): string => (string) ($doc['document_name'] ?? ''), $documents));
-                                $affectedDocuments = trim($affectedDocuments, " \t\n\r\0\x0B,");
+                                $context = is_array($approval['approval_context'] ?? null) ? $approval['approval_context'] : [];
+                                $summaryRows = is_array($context['summary_rows'] ?? null) ? $context['summary_rows'] : [];
+                                $detailRows = is_array($context['detail_rows'] ?? null) ? $context['detail_rows'] : [];
+                                $requestTypeLabel = trim((string) ($context['request_type_label'] ?? ''));
+                                if ($requestTypeLabel === '') {
+                                    $requestTypeLabel = (string) ($approval['inactive_reason_label'] ?? 'Alt motiv');
+                                }
+                                $primaryLabel = trim((string) ($context['primary_label'] ?? $approval['resource_label'] ?? '-'));
+                                $problemTitle = trim((string) ($context['problem_title'] ?? $approval['inactive_reason_label'] ?? 'Alt motiv'));
+                                $operationTitle = trim((string) ($context['operation_title'] ?? ''));
+                                $operationUrl = trim((string) ($context['operation_url'] ?? ''));
+                                $operationLinkLabel = trim((string) ($context['operation_link_label'] ?? ''));
+                                $scopeMessage = trim((string) ($context['scope_message'] ?? ''));
                                 ?>
-                                <article class="dashboard-approval-card">
+                                <article class="dashboard-approval-card" data-approval-card data-approval-id="<?= e((string) $approvalId) ?>" data-approval-status="pending" data-approval-tab-key="<?= e($tabKey) ?>">
                                     <div class="dashboard-approval-card-meta">
                                         <span class="dashboard-approval-reason tone-<?= e($approvalTone($reasonKey)) ?>">
                                             <i class="bi <?= e($approvalIcon($reasonKey)) ?>" aria-hidden="true"></i>
-                                            <?= e((string) ($approval['inactive_reason_label'] ?? 'Alt motiv')) ?>
+                                            <?= e($requestTypeLabel) ?>
                                         </span>
                                         <span><?= e($formatApprovalTime($approval['requested_at'] ?? '')) ?></span>
                                     </div>
 
-                                    <h3><?= e((string) ($approval['resource_label'] ?? '-')) ?></h3>
+                                    <h3><?= e($primaryLabel) ?></h3>
+                                    <p class="dashboard-approval-problem"><?= e($problemTitle) ?></p>
 
-                                    <dl class="dashboard-approval-card-list">
-                                        <dt>Motiv:</dt>
-                                        <dd><?= e((string) ($approval['inactive_reason_label'] ?? 'Alt motiv')) ?></dd>
-                                        <?php if ($affectedDocuments !== ''): ?>
-                                            <dt>Documente afectate:</dt>
-                                            <dd><?= e($affectedDocuments) ?></dd>
-                                        <?php endif; ?>
-                                        <?php if ($detail !== ''): ?>
-                                            <dt>Detaliu:</dt>
-                                            <dd><?= e($detail) ?></dd>
-                                        <?php endif; ?>
-                                        <dt>Inactiv din:</dt>
-                                        <dd><?= e($formatDate($approval['inactive_since'] ?? '')) ?></dd>
-                                        <dt>Utilizat in:</dt>
-                                        <dd><?= e($formatApprovalContext($approval['usage_context'] ?? '')) ?></dd>
-                                    </dl>
+                                    <?php if ($operationTitle !== ''): ?>
+                                        <div class="dashboard-approval-operation">
+                                            <span><?= e($operationTitle) ?></span>
+                                            <?php if ($operationUrl !== '' && $operationLinkLabel !== ''): ?>
+                                                <a href="<?= e($operationUrl) ?>"><?= e($operationLinkLabel) ?> <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endif; ?>
+
+                                    <?php if ($summaryRows !== []): ?>
+                                        <dl class="dashboard-approval-card-list dashboard-approval-summary-list">
+                                            <?php foreach ($summaryRows as $row): ?>
+                                                <?php
+                                                $rowLabel = trim((string) ($row['label'] ?? ''));
+                                                $rowValue = trim((string) ($row['value'] ?? ''));
+                                                if ($rowLabel === '' || $rowValue === '') {
+                                                    continue;
+                                                }
+                                                ?>
+                                                <dt><?= e($rowLabel) ?>:</dt>
+                                                <dd><?= e($rowValue) ?></dd>
+                                            <?php endforeach; ?>
+                                        </dl>
+                                    <?php endif; ?>
+
+                                    <?php if ($detailRows !== []): ?>
+                                        <details class="dashboard-approval-details">
+                                            <summary>Vezi detalii</summary>
+                                            <dl class="dashboard-approval-card-list">
+                                                <?php foreach ($detailRows as $row): ?>
+                                                    <?php
+                                                    $rowLabel = trim((string) ($row['label'] ?? ''));
+                                                    $rowValue = trim((string) ($row['value'] ?? ''));
+                                                    if ($rowLabel === '' || $rowValue === '') {
+                                                        continue;
+                                                    }
+                                                    ?>
+                                                    <dt><?= e($rowLabel) ?>:</dt>
+                                                    <dd><?= e($rowValue) ?></dd>
+                                                <?php endforeach; ?>
+                                            </dl>
+                                        </details>
+                                    <?php endif; ?>
+
+                                    <?php if ($scopeMessage !== ''): ?>
+                                        <p class="dashboard-approval-scope"><?= e($scopeMessage) ?></p>
+                                    <?php endif; ?>
 
                                     <div class="dashboard-approval-actions">
-                                        <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'reject'])) ?>">
+                                        <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'reject'])) ?>" data-approval-review-form data-approval-decision="rejected">
                                             <?= csrf_field() ?>
                                             <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
                                             <input type="hidden" name="return_url" value="<?= e($dashboardReturnUrl) ?>">
+                                            <input type="hidden" name="decision_source" value="popup">
                                             <button class="dashboard-approval-action is-reject" type="submit">Respinge</button>
                                         </form>
-                                        <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'approve'])) ?>">
+                                        <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'approve'])) ?>" data-approval-review-form data-approval-decision="approved">
                                             <?= csrf_field() ?>
                                             <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
                                             <input type="hidden" name="return_url" value="<?= e($dashboardReturnUrl) ?>">
+                                            <input type="hidden" name="decision_source" value="popup">
                                             <button class="dashboard-approval-action is-approve" type="submit">Aproba</button>
                                         </form>
                                     </div>

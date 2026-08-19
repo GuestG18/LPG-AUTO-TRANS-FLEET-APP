@@ -26,6 +26,21 @@ $resourceLabelTitle = match ($resourceType) {
 };
 $approvalId = (int) ($approval['id'] ?? 0);
 $returnUrl = build_query_url(['page' => 'inactive_approvals']);
+$context = is_array($approval['approval_context'] ?? null) ? $approval['approval_context'] : [];
+$summaryRows = is_array($context['summary_rows'] ?? null) ? $context['summary_rows'] : [];
+$detailRows = is_array($context['detail_rows'] ?? null) ? $context['detail_rows'] : [];
+$primaryLabel = trim((string) ($context['primary_label'] ?? ''));
+if ($primaryLabel === '') {
+    $primaryLabel = (string) ($approval['resource_label'] ?? '-');
+}
+$problemTitle = trim((string) ($context['problem_title'] ?? ''));
+if ($problemTitle === '') {
+    $problemTitle = (string) ($approval['inactive_reason_label'] ?? 'Alt motiv');
+}
+$operationTitle = trim((string) ($context['operation_title'] ?? ''));
+$operationUrl = trim((string) ($context['operation_url'] ?? ''));
+$operationLinkLabel = trim((string) ($context['operation_link_label'] ?? ''));
+$scopeMessage = trim((string) ($context['scope_message'] ?? ''));
 ?>
 
 <div class="inactive-approval-detail-page" data-approval-detail data-approval-id="<?= e((string) $approvalId) ?>">
@@ -43,16 +58,39 @@ $returnUrl = build_query_url(['page' => 'inactive_approvals']);
     <div class="inactive-approval-detail-grid">
         <section class="card border-0 shadow-sm">
             <div class="card-body">
-                <h3 class="h6 mb-3">Resursa</h3>
-                <dl class="inactive-approval-detail-list">
+                <h3 class="h6 mb-3">Context operational</h3>
+                <div class="inactive-approval-context-head">
+                    <span class="inactive-approval-reason-badge tone-<?= e((string) ($approval['inactive_reason'] ?? 'other')) ?>">
+                        <?= e((string) ($context['request_type_label'] ?? $approval['inactive_reason_label'] ?? 'Alt motiv')) ?>
+                    </span>
+                    <h4><?= e($primaryLabel) ?></h4>
+                    <p><?= e($problemTitle) ?></p>
+                    <?php if ($operationTitle !== ''): ?>
+                        <div class="inactive-approval-operation-link">
+                            <span><?= e($operationTitle) ?></span>
+                            <?php if ($operationUrl !== '' && $operationLinkLabel !== ''): ?>
+                                <a href="<?= e($operationUrl) ?>"><?= e($operationLinkLabel) ?> <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <dl class="inactive-approval-detail-list inactive-approval-context-list">
+                    <?php foreach ($summaryRows as $row): ?>
+                        <?php
+                        $rowLabel = trim((string) ($row['label'] ?? ''));
+                        $rowValue = trim((string) ($row['value'] ?? ''));
+                        if ($rowLabel === '' || $rowValue === '') {
+                            continue;
+                        }
+                        ?>
+                        <dt><?= e($rowLabel) ?></dt>
+                        <dd><?= e($rowValue) ?></dd>
+                    <?php endforeach; ?>
                     <dt>Tip</dt>
                     <dd><?= e($resourceTypeLabels[$resourceType] ?? '-') ?></dd>
-                    <dt><?= e($resourceLabelTitle) ?></dt>
-                    <dd class="fw-semibold"><?= e((string) ($approval['resource_label'] ?? '-')) ?></dd>
                     <dt>Status</dt>
                     <dd><span class="inactive-approval-status is-<?= e($status) ?>" data-approval-detail-status><?= e($statusLabels[$status] ?? $status) ?></span></dd>
-                    <dt>Motiv</dt>
-                    <dd><?= e((string) ($approval['inactive_reason_label'] ?? 'Alt motiv')) ?></dd>
                     <?php if ($documents !== []): ?>
                         <dt>Documente afectate</dt>
                         <dd>
@@ -71,17 +109,21 @@ $returnUrl = build_query_url(['page' => 'inactive_approvals']);
                             </ul>
                         </dd>
                     <?php endif; ?>
-                    <?php if ($detail !== ''): ?>
-                        <dt>Detaliu</dt>
-                        <dd><?= e($detail) ?></dd>
-                    <?php endif; ?>
-                    <dt>Inactiv din</dt>
-                    <dd><?= e($formatDate($approval['inactive_since'] ?? '')) ?></dd>
-                    <dt>Utilizat in</dt>
-                    <dd><?= e((string) ($approval['usage_context'] ?? 'Dispecer curse')) ?></dd>
-                    <dt>Cursa</dt>
-                    <dd><?= !empty($approval['trip_id']) ? ('#' . e((string) $approval['trip_id'])) : '-' ?></dd>
+                    <?php foreach ($detailRows as $row): ?>
+                        <?php
+                        $rowLabel = trim((string) ($row['label'] ?? ''));
+                        $rowValue = trim((string) ($row['value'] ?? ''));
+                        if ($rowLabel === '' || $rowValue === '') {
+                            continue;
+                        }
+                        ?>
+                        <dt><?= e($rowLabel) ?></dt>
+                        <dd><?= e($rowValue) ?></dd>
+                    <?php endforeach; ?>
                 </dl>
+                <?php if ($scopeMessage !== ''): ?>
+                    <div class="inactive-approval-scope-box"><?= e($scopeMessage) ?></div>
+                <?php endif; ?>
             </div>
         </section>
 
@@ -113,12 +155,14 @@ $returnUrl = build_query_url(['page' => 'inactive_approvals']);
                             <?= csrf_field() ?>
                             <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
                             <input type="hidden" name="return_url" value="<?= e($returnUrl) ?>">
+                            <input type="hidden" name="decision_source" value="approval_page">
                             <button class="btn btn-outline-danger" type="submit">Respinge</button>
                         </form>
                         <form method="post" action="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'approve'])) ?>">
                             <?= csrf_field() ?>
                             <input type="hidden" name="id" value="<?= e((string) $approvalId) ?>">
                             <input type="hidden" name="return_url" value="<?= e($returnUrl) ?>">
+                            <input type="hidden" name="decision_source" value="approval_page">
                             <button class="btn btn-success" type="submit">Aproba</button>
                         </form>
                     </div>

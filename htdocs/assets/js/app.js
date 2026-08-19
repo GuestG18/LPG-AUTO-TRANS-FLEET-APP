@@ -1261,6 +1261,13 @@ function refreshApprovalEmptyState(panel) {
 
     var hasCards = panel.querySelector('[data-approval-card]') !== null;
     var empty = panel.querySelector('[data-approval-empty]');
+    if (!(empty instanceof HTMLElement) && !hasCards) {
+        empty = document.createElement('div');
+        empty.className = 'dashboard-approval-empty';
+        empty.setAttribute('data-approval-empty', panel.getAttribute('data-dashboard-approval-panel') || '');
+        empty.textContent = 'Nu exista solicitari in asteptare.';
+        panel.insertBefore(empty, panel.firstChild);
+    }
     if (empty instanceof HTMLElement) {
         empty.hidden = hasCards;
     }
@@ -1297,6 +1304,204 @@ function removeCancelledApprovalFromUi(approvalId) {
         decrementApprovalCounter('[data-approval-total-count]');
         decrementApprovalCounter('[data-approval-total-badge]');
     }
+}
+
+function showApprovalReviewFeedback(host, message, tone) {
+    if (!(host instanceof HTMLElement)) {
+        return;
+    }
+
+    host.querySelectorAll('[data-approval-review-feedback]').forEach(function (existing) {
+        existing.remove();
+    });
+
+    var feedback = document.createElement('div');
+    feedback.className = 'dashboard-approval-feedback is-' + (tone === 'success' ? 'success' : 'error');
+    feedback.setAttribute('data-approval-review-feedback', '');
+    feedback.setAttribute('role', tone === 'success' ? 'status' : 'alert');
+
+    var icon = document.createElement('i');
+    icon.className = tone === 'success' ? 'bi bi-check-circle' : 'bi bi-exclamation-triangle';
+    icon.setAttribute('aria-hidden', 'true');
+    feedback.appendChild(icon);
+    feedback.appendChild(document.createTextNode(String(message || 'Solicitarea nu a putut fi procesata.')));
+
+    var actions = host.querySelector('.dashboard-approval-actions');
+    if (actions instanceof HTMLElement) {
+        actions.parentNode.insertBefore(feedback, actions);
+        return;
+    }
+
+    host.insertBefore(feedback, host.firstChild);
+}
+
+function showApprovalPanelFeedback(panel, message, tone) {
+    if (!(panel instanceof HTMLElement)) {
+        return;
+    }
+
+    panel.querySelectorAll(':scope > [data-approval-review-feedback]').forEach(function (existing) {
+        existing.remove();
+    });
+
+    var feedback = document.createElement('div');
+    feedback.className = 'dashboard-approval-feedback is-' + (tone === 'success' ? 'success' : 'error');
+    feedback.setAttribute('data-approval-review-feedback', '');
+    feedback.setAttribute('role', tone === 'success' ? 'status' : 'alert');
+
+    var icon = document.createElement('i');
+    icon.className = tone === 'success' ? 'bi bi-check-circle' : 'bi bi-exclamation-triangle';
+    icon.setAttribute('aria-hidden', 'true');
+    feedback.appendChild(icon);
+    feedback.appendChild(document.createTextNode(String(message || 'Solicitarea a fost actualizata.')));
+
+    var header = panel.querySelector('.dashboard-approval-header');
+    if (header instanceof HTMLElement && header.nextSibling) {
+        panel.insertBefore(feedback, header.nextSibling);
+        return;
+    }
+
+    panel.insertBefore(feedback, panel.firstChild);
+}
+
+function setApprovalReviewBusy(card, busy) {
+    if (!(card instanceof HTMLElement)) {
+        return;
+    }
+
+    card.dataset.approvalReviewBusy = busy ? '1' : '';
+    card.classList.toggle('is-reviewing', busy);
+    card.querySelectorAll('[data-approval-review-form] button').forEach(function (button) {
+        if (button instanceof HTMLButtonElement) {
+            button.disabled = busy;
+        }
+    });
+}
+
+function removeResolvedApprovalFromUi(approvalId, summary) {
+    var normalizedId = String(approvalId || '').trim();
+    if (normalizedId === '') {
+        return;
+    }
+
+    var selector = '[data-approval-card][data-approval-id="' + normalizedId.replace(/"/g, '\\"') + '"]';
+    var affectedPanels = [];
+    var affectedTabKeys = {};
+
+    document.querySelectorAll(selector).forEach(function (card) {
+        if (!(card instanceof HTMLElement)) {
+            return;
+        }
+
+        var tabKey = String(card.getAttribute('data-approval-tab-key') || '').trim();
+        if (tabKey !== '') {
+            affectedTabKeys[tabKey] = true;
+        }
+
+        var panel = card.closest('[data-dashboard-approval-panel], .user-approval-card-stack');
+        card.remove();
+        if (panel instanceof HTMLElement) {
+            affectedPanels.push(panel);
+        }
+    });
+
+    affectedPanels.forEach(refreshApprovalEmptyState);
+
+    if (summary && typeof summary === 'object') {
+        syncApprovalCountersFromSummary(summary);
+        return;
+    }
+
+    Object.keys(affectedTabKeys).forEach(function (tabKey) {
+        decrementApprovalCounter('[data-approval-tab-count="' + tabKey.replace(/"/g, '\\"') + '"]');
+    });
+    if (Object.keys(affectedTabKeys).length > 0) {
+        decrementApprovalCounter('[data-approval-total-count]');
+        decrementApprovalCounter('[data-approval-total-badge]');
+    }
+}
+
+function approvalReviewErrorMessage(error) {
+    if (error && typeof error.message === 'string' && error.message.trim() !== '') {
+        return error.message.trim();
+    }
+
+    return 'Solicitarea nu a putut fi procesata. Reincarca si incearca din nou.';
+}
+
+function submitApprovalReviewForm(form) {
+    if (!(form instanceof HTMLFormElement)) {
+        return;
+    }
+
+    var card = form.closest('[data-approval-card]');
+    if (!(card instanceof HTMLElement)) {
+        form.submit();
+        return;
+    }
+
+    if (card.dataset.approvalReviewBusy === '1') {
+        return;
+    }
+
+    var actionUrl = String(form.getAttribute('action') || '').trim();
+    if (actionUrl === '') {
+        showApprovalReviewFeedback(card, 'Actiune invalida. Reincarca pagina si incearca din nou.', 'error');
+        return;
+    }
+
+    var panel = card.closest('.dashboard-approval-panel');
+    setApprovalReviewBusy(card, true);
+
+    fetch(actionUrl, {
+        method: 'POST',
+        headers: {
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: new FormData(form)
+    })
+        .then(function (response) {
+            return response.json().catch(function () {
+                return {};
+            }).then(function (payload) {
+                if (!response.ok || !payload.success) {
+                    var error = new Error(payload.message || 'Solicitarea nu a putut fi procesata.');
+                    error.payload = payload;
+                    error.status = response.status;
+                    throw error;
+                }
+
+                return payload;
+            });
+        })
+        .then(function (payload) {
+            showApprovalPanelFeedback(panel, payload.message || 'Solicitarea a fost procesata.', 'success');
+            removeResolvedApprovalFromUi(payload.approval_id || form.querySelector('input[name="id"]')?.value, payload.summary || null);
+        })
+        .catch(function (error) {
+            var message = approvalReviewErrorMessage(error);
+            if (error && error.status === 409 && error.payload && String(error.payload.current_status || '').trim() !== 'pending') {
+                showApprovalPanelFeedback(panel, message, 'error');
+                removeResolvedApprovalFromUi(error.payload.approval_id || form.querySelector('input[name="id"]')?.value, error.payload.summary || null);
+                return;
+            }
+
+            showApprovalReviewFeedback(card, message, 'error');
+            setApprovalReviewBusy(card, false);
+        });
+}
+
+function initApprovalReviewActions() {
+    document.addEventListener('submit', function (event) {
+        var form = event.target instanceof HTMLFormElement ? event.target : null;
+        if (!(form instanceof HTMLFormElement) || !form.hasAttribute('data-approval-review-form')) {
+            return;
+        }
+
+        event.preventDefault();
+        submitApprovalReviewForm(form);
+    });
 }
 
 function userApprovalCancelMessageFromError(error) {
@@ -1661,6 +1866,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initDashboardOperationalCostCard();
     initDashboardApprovalTabs();
     initGlobalApprovalDrawer();
+    initApprovalReviewActions();
     initApprovalRequestStateSync();
     initUserApprovalCancellation();
     initUserApprovalInfoPanel();

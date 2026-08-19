@@ -15576,9 +15576,47 @@ button.dispatcher-datetime-picker-title:focus-visible {
 
 .fuel-filter-grid {
     display: grid;
-    grid-template-columns: minmax(210px, 1.1fr) minmax(170px, .95fr) minmax(190px, .95fr) minmax(180px, .95fr) auto;
+    grid-template-columns: minmax(200px, 1.05fr) minmax(130px, .7fr) minmax(170px, .95fr) minmax(180px, .9fr) minmax(170px, .9fr) auto;
     gap: 1rem;
     align-items: end;
+}
+
+/* Campul unic de perioada se comporta ca un buton care deschide calendarul. */
+.fuel-date-input .form-control[readonly] {
+    background: #ffffff;
+    cursor: pointer;
+}
+
+/* Scurtaturile de luna din interiorul calendarului flatpickr. */
+.fuel-fp-presets {
+    display: flex;
+    gap: .5rem;
+    justify-content: center;
+    padding: .55rem .75rem;
+    border-top: 1px solid #e2e8f0;
+    background: #f8fafc;
+}
+
+.fuel-fp-presets button {
+    border: 1px solid #bfdbfe;
+    background: #ffffff;
+    border-radius: 999px;
+    padding: .25rem .75rem;
+    font-size: .78rem;
+    font-weight: 750;
+    color: #1d4ed8;
+    cursor: pointer;
+}
+
+.fuel-fp-presets button:hover {
+    background: #eff6ff;
+}
+
+/* Feedback discret cat timp pagina se reincarca dupa auto-aplicare. */
+.fuel-filter-card.is-reloading {
+    opacity: .55;
+    pointer-events: none;
+    transition: opacity .15s ease;
 }
 
 .fuel-filter-card .form-label {
@@ -15631,14 +15669,6 @@ button.dispatcher-datetime-picker-title:focus-visible {
     font-weight: 750;
     border-radius: 6px;
     white-space: nowrap;
-}
-
-.fuel-advanced-row {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(180px, 1fr));
-    gap: 1rem;
-    max-width: 520px;
-    padding-top: 1rem;
 }
 
 .fuel-kpi-grid {
@@ -16030,6 +16060,66 @@ button.dispatcher-datetime-picker-title:focus-visible {
     text-decoration: none;
 }
 
+/* Grupele de capacitate din selectorul de vehicule (ca in Configurare transport). */
+.fuel-vehicle-group[hidden] {
+    display: none !important;
+}
+
+.fuel-vehicle-group + .fuel-vehicle-group {
+    margin-top: .35rem;
+}
+
+.fuel-vehicle-group-head {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    width: 100%;
+    padding: .35rem .55rem;
+    margin: 0;
+    background: #f1f5f9;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: .76rem;
+    font-weight: 800;
+    color: #334155;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+}
+
+.fuel-vehicle-group-head:hover {
+    background: #e8eef5;
+}
+
+.fuel-vehicle-group-count {
+    margin-left: auto;
+    color: #64748b;
+    font-size: .72rem;
+    font-weight: 700;
+}
+
+.fuel-vehicle-group-chevron {
+    margin-left: .3rem;
+    font-size: .72rem;
+    color: #64748b;
+    transition: transform .12s ease;
+}
+
+.fuel-vehicle-group.is-collapsed .fuel-vehicle-group-chevron {
+    transform: rotate(-90deg);
+}
+
+.fuel-vehicle-group .fuel-vehicle-option {
+    padding-left: 1.5rem;
+}
+
+.fuel-vehicle-menu:not(.is-searching) .fuel-vehicle-group.is-collapsed .fuel-vehicle-option {
+    display: none !important;
+}
+
+.fuel-vehicle-option[hidden] {
+    display: none !important;
+}
+
 .fuel-vehicle-option {
     display: flex;
     align-items: center;
@@ -16049,13 +16139,6 @@ button.dispatcher-datetime-picker-title:focus-visible {
 .fuel-vehicle-option .form-check-input {
     margin: 0;
     flex: 0 0 auto;
-}
-
-.fuel-vehicle-filter-hint {
-    display: block;
-    margin-top: .3rem;
-    color: #94a3b8;
-    font-size: .72rem;
 }
 
 .fuel-selected-compare-card {
@@ -16288,6 +16371,82 @@ button.dispatcher-datetime-picker-title:focus-visible {
     margin-right: .25rem;
 }
 
+/* --- Mecanismul FULL / T0 ------------------------------------------- */
+
+.fuel-t0-block {
+    margin: 0 0 .9rem;
+    padding: .7rem .85rem;
+    border: 1px solid #dbeafe;
+    border-left: 4px solid #2563eb;
+    border-radius: 8px;
+    background: #f8fbff;
+}
+
+.fuel-t0-block.is-missing {
+    border-color: #fde68a;
+    border-left-color: #d97706;
+    background: #fffbeb;
+}
+
+.fuel-t0-head {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex-wrap: wrap;
+    margin-bottom: .3rem;
+}
+
+.fuel-t0-label {
+    color: #475569;
+    font-size: .74rem;
+    font-weight: 820;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+.fuel-t0-value {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    flex-wrap: wrap;
+    color: #0f172a;
+    font-size: .98rem;
+    font-weight: 820;
+}
+
+.fuel-t0-meta {
+    margin-top: .2rem;
+    color: #64748b;
+    font-size: .78rem;
+    font-weight: 600;
+}
+
+.fuel-t0-actions {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    flex-wrap: wrap;
+    margin-top: .6rem;
+}
+
+.fuel-t0-table tr.is-in-window > td {
+    background: #eff6ff;
+}
+
+.fuel-t0-table label {
+    cursor: pointer;
+}
+
+.fuel-t0-confirm {
+    margin-top: .9rem;
+    padding: .6rem .75rem;
+    border: 1px solid #fcd34d;
+    border-radius: 8px;
+    background: #fffbeb;
+    color: #78350f;
+    font-size: .84rem;
+}
+
 .fuel-table-split {
     display: grid;
     grid-template-columns: minmax(520px, 1.7fr) minmax(360px, .93fr);
@@ -16476,7 +16635,6 @@ button.dispatcher-datetime-picker-title:focus-visible {
     }
 
     .fuel-filter-grid,
-    .fuel-advanced-row,
     .fuel-kpi-grid,
     .fuel-norm-grid,
     .fuel-norm-grid.is-wide {
@@ -18437,6 +18595,111 @@ button.dispatcher-datetime-picker-title:focus-visible {
     color: #071735;
     font-size: 16px;
     font-weight: 900;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+
+.dashboard-approval-problem {
+    margin: -2px 0 0;
+    color: #1e3357;
+    font-size: 13px;
+    font-weight: 900;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.dashboard-approval-operation {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid #cfe0fb;
+    border-radius: 7px;
+    color: #1e3a8a;
+    background: #f8fbff;
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1.25;
+}
+
+.dashboard-approval-operation span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.dashboard-approval-operation a,
+.inactive-approval-operation-link a,
+.inactive-approval-source-link {
+    color: #0d6efd;
+    font-weight: 900;
+    text-decoration: none;
+}
+
+.dashboard-approval-operation a:hover,
+.inactive-approval-operation-link a:hover,
+.inactive-approval-source-link:hover {
+    color: #0a58ca;
+    text-decoration: underline;
+}
+
+.dashboard-approval-details {
+    border-top: 1px solid #e4ebf5;
+    padding-top: 7px;
+}
+
+.dashboard-approval-details summary {
+    width: fit-content;
+    color: #0d6efd;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 900;
+    line-height: 1.2;
+}
+
+.dashboard-approval-details[open] summary {
+    margin-bottom: 8px;
+}
+
+.dashboard-approval-scope,
+.inactive-approval-scope-box {
+    margin: 0;
+    padding: 9px 10px;
+    border: 1px solid #bbf7d0;
+    border-radius: 7px;
+    color: #166534;
+    background: #f0fdf4;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.dashboard-approval-feedback {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 9px 10px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.35;
+}
+
+.dashboard-approval-feedback.is-error {
+    color: #b91c1c;
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.dashboard-approval-feedback.is-success {
+    color: #166534;
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+}
+
+.dashboard-approval-card.is-reviewing {
+    opacity: 0.74;
 }
 
 .dashboard-approval-reason,
@@ -18689,6 +18952,47 @@ button.dispatcher-datetime-picker-title:focus-visible {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
     gap: 16px;
+}
+
+.inactive-approval-context-head {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.inactive-approval-context-head h4 {
+    margin: 0;
+    color: #071735;
+    font-size: 21px;
+    font-weight: 900;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+
+.inactive-approval-context-head p {
+    margin: 0;
+    color: #1e3357;
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1.35;
+}
+
+.inactive-approval-operation-link {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 10px 12px;
+    border: 1px solid #cfe0fb;
+    border-radius: 8px;
+    color: #1e3a8a;
+    background: #f8fbff;
+    font-size: 14px;
+    font-weight: 900;
+}
+
+.inactive-approval-context-list {
+    margin-bottom: 14px;
 }
 
 .inactive-approval-document-list {

@@ -115,6 +115,9 @@ class InactiveResourceApprovalController
 
         $id = (int) ($_POST['id'] ?? 0);
         $note = trim((string) ($_POST['review_note'] ?? ''));
+        if ($note === '') {
+            $note = $this->defaultReviewNote($targetStatus, (string) ($_POST['decision_source'] ?? ''));
+        }
         $ok = $targetStatus === 'approved'
             ? $this->model->approve($id, $this->currentUserId(), $note)
             : $this->model->reject($id, $this->currentUserId(), $note);
@@ -124,10 +127,20 @@ class InactiveResourceApprovalController
             : ($ok ? 'Solicitarea a fost respinsa.' : 'Solicitarea nu mai este in asteptare.');
 
         if ($this->wantsJson()) {
-            $this->sendJson([
+            $payload = [
                 'success' => $ok,
                 'message' => $message,
-            ], $ok ? 200 : 409);
+                'approval_id' => $id,
+                'summary' => $this->model->getPendingSummary(5),
+            ];
+            if (!$ok) {
+                $current = $this->model->getById($id);
+                if ($current !== null) {
+                    $payload['current_status'] = (string) ($current['status'] ?? '');
+                }
+            }
+
+            $this->sendJson($payload, $ok ? 200 : 409);
         }
 
         flash_set($ok ? 'success' : 'warning', $message);
@@ -230,6 +243,18 @@ class InactiveResourceApprovalController
         }
 
         redirect(build_query_url(['page' => 'inactive_approvals']));
+    }
+
+    private function defaultReviewNote(string $targetStatus, string $source): string
+    {
+        $source = strtolower(trim($source));
+        $sourceLabel = match ($source) {
+            'popup' => 'popup-ul de aprobari',
+            'approval_page' => 'pagina de detalii',
+            default => 'aplicatie',
+        };
+
+        return ($targetStatus === 'approved' ? 'Aprobat' : 'Respins') . ' din ' . $sourceLabel . '.';
     }
 
     private function wantsJson(): bool

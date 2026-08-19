@@ -18,6 +18,25 @@ class FuelModel extends BaseModel
         'neasociat' => 'Neasociat',
     ];
 
+    /**
+     * Limita documentata CardOil: maximum 1000 de inregistrari per cerere;
+     * ce depaseste NU este returnat. O fereastra care atinge pragul este
+     * considerata potential trunchiata si se imparte in doua.
+     */
+    private const API_MAX_RECORDS_PER_REQUEST = 1000;
+
+    /** Limita documentata CardOil: o cerere acopera cel mult 31 de zile. */
+    private const API_MAX_WINDOW_DAYS = 31;
+
+    /**
+     * Plaja de consum fizic posibil (L/100 km) pentru un interval intre doua
+     * alimentari consecutive. In afara ei, kilometrajul e considerat tastat
+     * gresit la pompa si intervalul este exclus din medii (randul ramane
+     * vizibil in tabel, cu avertisment, si poate fi corectat manual).
+     */
+    private const MIN_PLAUSIBLE_L100 = 4.0;
+    private const MAX_PLAUSIBLE_L100 = 120.0;
+
     private bool $schemaEnsured = false;
     private ?bool $raceSoftDeleteAvailable = null;
 
@@ -58,7 +77,67 @@ class FuelModel extends BaseModel
             $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN driver_name VARCHAR(180) NULL AFTER vehicle_registration');
         }
 
+        // Modul "Administrare tarife transport": pretul unitar autoritar din CardOil
+        // si provenienta randului. Ambele sunt aditive si nullable.
+        if (!$this->columnExists('fuel_fillups', 'unit_price')) {
+            $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN unit_price DECIMAL(12,4) NULL AFTER quantity_liters');
+        }
+        if (!$this->columnExists('fuel_fillups', 'unit_price_source')) {
+            $this->db->exec("ALTER TABLE fuel_fillups ADD COLUMN unit_price_source ENUM('api','derived') NULL AFTER unit_price");
+        }
+        if (!$this->columnExists('fuel_fillups', 'source_type')) {
+            $this->db->exec("ALTER TABLE fuel_fillups ADD COLUMN source_type ENUM('api','manual','test','demo') NOT NULL DEFAULT 'api' AFTER raw_payload");
+        }
+
+        // Mecanismul FULL / T0: decizia operatorului este pastrata separat de
+        // valoarea efectiva folosita in calcule, ca sa nu poata fi suprascrisa
+        // de sincronizarea CardOil (API-ul nu furnizeaza informatia de plin).
+        //   is_full_manual: NULL = nicio decizie manuala, 1 = FULL, 0 = Partial
+        //   full_source:    provenienta valorii curente din is_full
+        if (!$this->columnExists('fuel_fillups', 'is_full_manual')) {
+            $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN is_full_manual TINYINT(1) NULL DEFAULT NULL AFTER is_full');
+            // Backfill non-distructiv: API-ul nu trimite niciodata is_full = 1,
+            // deci orice FULL deja existent este o decizie manuala si trebuie
+            // protejat de la primul sync de dupa deploy.
+            $this->db->exec('UPDATE fuel_fillups SET is_full_manual = 1 WHERE is_full = 1 AND is_full_manual IS NULL');
+        }
+        if (!$this->columnExists('fuel_fillups', 'full_source')) {
+            $this->db->exec("ALTER TABLE fuel_fillups ADD COLUMN full_source ENUM('api','manual') NULL DEFAULT NULL AFTER is_full_manual");
+            $this->db->exec("UPDATE fuel_fillups SET full_source = 'manual' WHERE is_full_manual IS NOT NULL AND full_source IS NULL");
+            $this->db->exec("UPDATE fuel_fillups SET full_source = 'api' WHERE full_source IS NULL");
+        }
+
+        // Corectia manuala a odometrului: soferii mai tasteaza gresit km la
+        // pompa, iar valoarea vine asa din CardOil. Aceeasi arhitectura ca la
+        // FULL: odometer_km ramane valoarea EFECTIVA folosita in calcule, iar
+        // odometer_km_manual (NULL = fara corectie) marcheaza si protejeaza
+        // decizia operatorului la sincronizarile urmatoare.
+        if (!$this->columnExists('fuel_fillups', 'odometer_km_manual')) {
+            $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN odometer_km_manual INT UNSIGNED NULL DEFAULT NULL AFTER odometer_km');
+        }
+
         $this->backfillDriverNamesFromRawPayload();
+
+        // T0 = ROLUL unei alimentari pentru o luna anume, distinct de
+        // proprietatea is_full a alimentarii. Se persista exclusiv deciziile
+        // manuale; selectia automata ramane calculata la runtime.
+        $this->db->exec("
+            CREATE TABLE IF NOT EXISTS fuel_month_t0 (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                vehicle_key VARCHAR(40) NOT NULL,
+                month_start DATE NOT NULL,
+                fillup_id INT UNSIGNED NOT NULL,
+                mode ENUM('manual') NOT NULL DEFAULT 'manual',
+                note VARCHAR(255) NULL,
+                created_by INT UNSIGNED NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                UNIQUE KEY uk_fuel_month_t0 (vehicle_key, month_start),
+                INDEX idx_fuel_month_t0_fillup (fillup_id),
+                CONSTRAINT fk_fuel_month_t0_fillup
+                    FOREIGN KEY (fillup_id) REFERENCES fuel_fillups(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
 
         $this->db->exec("
             CREATE TABLE IF NOT EXISTS fuel_trip_links (
@@ -112,17 +191,45 @@ class FuelModel extends BaseModel
     {
         $this->ensureSchema();
 
+        // Capacitatea, marca si modelul vin din fisa vehiculului (daca exista),
+        // pentru gruparea pe tonaj din selectorul de vehicule.
+        //
+        // Capetele tractor nu au capacitate proprie: capacitatea lor este cea a
+        // semiremorcii cuplate (vehicule_cuplaje, activ = 1). Semiremorcile nu
+        // apar in selector — nu alimenteaza niciodata; lista din vehicule este
+        // restransa la vehiculele care pot avea alimentari, dar orice numar
+        // prezent in fuel_fillups ramane selectabil indiferent de tip.
         $stmt = $this->db->query("
-            SELECT vehicle_registration
+            SELECT
+                -- acelasi numar poate veni scris diferit din CardOil (fara
+                -- spatii); afisam o singura optiune, cu scrierea din flota
+                COALESCE(MAX(veh.nr_inmatriculare), MAX(vehicles.vehicle_registration)) AS vehicle_registration,
+                MAX(
+                    CASE
+                        WHEN COALESCE(veh.capacitate_transport, 0) > 0 THEN veh.capacitate_transport
+                        ELSE semi.capacitate_transport
+                    END
+                ) AS capacitate_transport,
+                MAX(veh.marca) AS marca,
+                MAX(veh.model) AS model
             FROM (
                 SELECT DISTINCT TRIM(nr_inmatriculare) AS vehicle_registration
                 FROM vehicule
                 WHERE COALESCE(TRIM(nr_inmatriculare), '') <> ''
+                  AND tip_vehicul NOT IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')
                 UNION
                 SELECT DISTINCT TRIM(vehicle_registration) AS vehicle_registration
                 FROM fuel_fillups
                 WHERE COALESCE(TRIM(vehicle_registration), '') <> ''
             ) vehicles
+            LEFT JOIN vehicule veh
+              ON REPLACE(UPPER(veh.nr_inmatriculare), ' ', '') = REPLACE(UPPER(vehicles.vehicle_registration), ' ', '')
+            LEFT JOIN vehicule_cuplaje cuplaj
+              ON cuplaj.tractor_id = veh.id
+             AND cuplaj.activ = 1
+            LEFT JOIN vehicule semi
+              ON semi.id = cuplaj.semiremorca_id
+            GROUP BY REPLACE(UPPER(vehicles.vehicle_registration), ' ', '')
             ORDER BY vehicle_registration ASC
         ");
 
@@ -160,6 +267,7 @@ class FuelModel extends BaseModel
             $upsert = $this->upsertFillups($records);
             $this->refreshAutomaticAssociations($dateFrom->format('Y-m-d'), $dateTo->format('Y-m-d'));
             $this->storeSyncMeta($meta);
+            $this->refreshFuelTariffMonitoring();
 
             $this->finishSyncLog($logId, [
                 'status' => $status,
@@ -211,6 +319,303 @@ class FuelModel extends BaseModel
             ]);
 
             throw $exception;
+        }
+    }
+
+    /**
+     * Dupa un import CardOil reusit: completeaza preturile unitare exacte si
+     * reevalueaza starea de monitorizare a tarifelor.
+     *
+     * NU modifica niciun tarif comercial — doar starea recomandarilor.
+     */
+    /**
+     * Sincronizare pe interval oricat de lung, fara pierderi de date:
+     *
+     *  - intervalul este spart in ferestre de maximum 31 de zile (limita
+     *    documentata a API-ului CardOil);
+     *  - o fereastra al carei raspuns atinge 1000 de inregistrari (limita per
+     *    cerere, restul NU se mai returneaza) este considerata trunchiata si
+     *    se imparte in doua, recursiv, pana la nivel de o singura zi;
+     *  - trunchierea se detecteaza si din meta `nr_inregistrari`, nu doar din
+     *    numarul de randuri primite;
+     *  - upsert-ul e idempotent pe api_id, deci suprapunerile si re-rularile
+     *    sunt sigure; deciziile manuale (FULL, odometru) raman protejate.
+     *
+     * Nu injecteaza date demo: este calea de productie pentru aducerea la zi.
+     */
+    public function syncRangeFromApi(DateTimeInterface $dateFrom, DateTimeInterface $dateTo, CardOilApiClient $client): array
+    {
+        $this->ensureSchema();
+
+        $from = (new DateTimeImmutable($dateFrom->format('Y-m-d')));
+        $to = (new DateTimeImmutable($dateTo->format('Y-m-d')));
+        if ($to < $from) {
+            [$from, $to] = [$to, $from];
+        }
+
+        $logId = $this->createSyncLog(date('Y-m-d H:i:s'), $from, $to);
+
+        // Ferestre initiale de maximum 31 de zile.
+        $windows = [];
+        $cursor = $from;
+        while ($cursor <= $to) {
+            $windowEnd = $cursor->modify('+' . (self::API_MAX_WINDOW_DAYS - 1) . ' days');
+            if ($windowEnd > $to) {
+                $windowEnd = $to;
+            }
+            $windows[] = [$cursor, $windowEnd];
+            $cursor = $windowEnd->modify('+1 day');
+        }
+
+        $recordsByApiId = [];
+        $warnings = [];
+        $errors = [];
+        $requests = 0;
+        $splits = 0;
+        $apiReportedTotal = 0;
+        $lastMeta = [];
+
+        while ($windows !== []) {
+            [$windowFrom, $windowTo] = array_shift($windows);
+            $windowDays = ((int) $windowFrom->diff($windowTo)->format('%a')) + 1;
+            $windowLabel = $windowFrom->format('d.m.Y') . '-' . $windowTo->format('d.m.Y');
+
+            try {
+                $result = $client->fetchFillups($windowFrom, $windowTo);
+                $requests++;
+            } catch (Throwable $exception) {
+                $errors[] = $windowLabel . ': ' . $exception->getMessage();
+                continue;
+            }
+
+            $source = (string) ($result['source'] ?? 'api');
+            if ($source !== 'api') {
+                $errors[] = $windowLabel . ': ' . (string) ($result['error'] ?? ('sursa ' . $source));
+                continue;
+            }
+
+            $records = (array) ($result['records'] ?? []);
+            $meta = is_array($result['meta'] ?? null) ? $result['meta'] : [];
+            $metaCount = (int) ($meta['nr_inregistrari'] ?? 0);
+            $received = count($records);
+
+            // Fereastra potential trunchiata: imparte si reia ambele jumatati.
+            if (max($received, $metaCount) >= self::API_MAX_RECORDS_PER_REQUEST) {
+                if ($windowDays > 1) {
+                    $middle = $windowFrom->modify('+' . intdiv($windowDays, 2) . ' days')->modify('-1 day');
+                    array_unshift($windows, [$middle->modify('+1 day'), $windowTo]);
+                    array_unshift($windows, [$windowFrom, $middle]);
+                    $splits++;
+                    continue;
+                }
+                // O singura zi cu >= 1000 inregistrari nu mai poate fi sparta.
+                $warnings[] = 'Ziua ' . $windowFrom->format('d.m.Y') . ' atinge limita API de '
+                    . self::API_MAX_RECORDS_PER_REQUEST . ' inregistrari - posibile date lipsa.';
+            }
+
+            if ($metaCount > $received) {
+                // Diferenta normala: produse non-carburant filtrate la import.
+                $warnings[] = $windowLabel . ': API raporteaza ' . $metaCount . ', importabile ' . $received
+                    . ' (' . ($metaCount - $received) . ' produse non-carburant ignorate).';
+            }
+
+            $apiReportedTotal += max($metaCount, $received);
+            $lastMeta = $meta !== [] ? $meta : $lastMeta;
+
+            foreach ($records as $record) {
+                if (is_array($record) && !empty($record['api_id'])) {
+                    $recordsByApiId[(string) $record['api_id']] = $record;
+                }
+            }
+        }
+
+        $upsert = $this->upsertFillups(array_values($recordsByApiId));
+        $this->refreshAutomaticAssociations($from->format('Y-m-d'), $to->format('Y-m-d'));
+        if ($lastMeta !== []) {
+            $this->storeSyncMeta($lastMeta);
+        }
+        $this->refreshFuelTariffMonitoring();
+
+        $status = $errors === [] ? 'success' : ($recordsByApiId === [] ? 'error' : 'partial');
+        $infoParts = array_merge(
+            ['cereri=' . $requests, 'ferestre_sparte=' . $splits],
+            $warnings,
+            $errors !== [] ? array_map(static fn (string $e): string => 'EROARE ' . $e, $errors) : []
+        );
+
+        $this->finishSyncLog($logId, [
+            'status' => $status,
+            'records_received' => count($recordsByApiId),
+            'records_inserted' => $upsert['inserted'],
+            'records_updated' => $upsert['updated'],
+            'error_message' => $infoParts !== [] ? implode(' | ', $infoParts) : null,
+        ]);
+
+        return [
+            'status' => $status,
+            'source' => 'api',
+            'date_from' => $from->format('Y-m-d'),
+            'date_to' => $to->format('Y-m-d'),
+            'requests' => $requests,
+            'splits' => $splits,
+            'api_reported_total' => $apiReportedTotal,
+            'records_received' => count($recordsByApiId),
+            'records_inserted' => $upsert['inserted'],
+            'records_updated' => $upsert['updated'],
+            'warnings' => $warnings,
+            'errors' => $errors,
+            'error_message' => $errors !== [] ? implode(' | ', $errors) : null,
+        ];
+    }
+
+    /**
+     * Sincronizare incrementala dupa ID (modul recomandat pentru rularea
+     * periodica): cere alimentarile cu id_alimentare strict mai mare decat
+     * cel mai mare api_id numeric din baza si pagineaza avansand cursorul
+     * cat timp raspunsul atinge limita de 1000 de inregistrari.
+     *
+     * Nu poate pierde nimic: ID-urile CardOil sunt crescatoare, iar cursorul
+     * avanseaza pe ID-ul maxim BRUT din raspuns (inclusiv randurile
+     * non-carburant filtrate la import).
+     */
+    public function syncIncrementalFromApi(CardOilApiClient $client, int $maxRequests = 20): array
+    {
+        $this->ensureSchema();
+
+        $cursor = (int) $this->db->query("
+            SELECT COALESCE(MAX(CAST(api_id AS UNSIGNED)), 0)
+            FROM fuel_fillups
+            WHERE api_id REGEXP '^[0-9]+$'
+        ")->fetchColumn();
+
+        if ($cursor <= 0) {
+            // Baza nu are inca niciun rand din API: nu exista punct de pornire.
+            return ['status' => 'no_cursor', 'records_received' => 0, 'records_inserted' => 0, 'records_updated' => 0];
+        }
+
+        $startCursor = $cursor;
+        $today = new DateTimeImmutable('today');
+        $logId = $this->createSyncLog(date('Y-m-d H:i:s'), $today, $today);
+
+        $recordsByApiId = [];
+        $warnings = [];
+        $errors = [];
+        $requests = 0;
+
+        while ($requests < $maxRequests) {
+            try {
+                $result = $client->fetchFillupsSinceId($cursor);
+                $requests++;
+            } catch (Throwable $exception) {
+                $errors[] = 'id_minim=' . $cursor . ': ' . $exception->getMessage();
+                break;
+            }
+
+            if ((string) ($result['source'] ?? 'api') !== 'api') {
+                $errors[] = (string) ($result['error'] ?? 'sursa ' . (string) ($result['source'] ?? '?'));
+                break;
+            }
+
+            foreach ((array) ($result['records'] ?? []) as $record) {
+                if (is_array($record) && !empty($record['api_id'])) {
+                    $recordsByApiId[(string) $record['api_id']] = $record;
+                }
+            }
+
+            $rawCount = (int) ($result['raw_count'] ?? 0);
+            $maxId = (int) ($result['max_id'] ?? 0);
+
+            if ($rawCount < self::API_MAX_RECORDS_PER_REQUEST) {
+                break; // pagina incompleta = am ajuns la zi
+            }
+            if ($maxId <= $cursor) {
+                $warnings[] = 'Cursorul nu a avansat (id ' . $cursor . '), paginare oprita preventiv.';
+                break;
+            }
+            $cursor = $maxId;
+        }
+        if ($requests >= $maxRequests) {
+            $warnings[] = 'Atins plafonul de ' . $maxRequests . ' cereri; se continua la urmatoarea rulare.';
+        }
+
+        $records = array_values($recordsByApiId);
+        $upsert = $this->upsertFillups($records);
+
+        // Cursorul final real: ID-ul maxim adus (bucla se opreste inainte de a
+        // avansa cursorul pe ultima pagina, deci $cursor singur ar fi in urma).
+        $endId = max($cursor, $startCursor);
+        foreach ($records as $record) {
+            $recordId = (int) $record['api_id'];
+            if ($recordId > $endId) {
+                $endId = $recordId;
+            }
+        }
+
+        // Reimprospatam asocierile doar pe intervalul efectiv adus.
+        if ($records !== []) {
+            $dates = array_map(static fn (array $r): string => substr((string) $r['fillup_datetime'], 0, 10), $records);
+            $this->refreshAutomaticAssociations(min($dates), max($dates));
+            $this->refreshFuelTariffMonitoring();
+        }
+        $this->storeSyncMeta(['last_id' => (string) $endId]);
+
+        $status = $errors === [] ? 'success' : ($records === [] ? 'error' : 'partial');
+        $infoParts = array_merge(
+            ['incremental id>' . $startCursor, 'cereri=' . $requests],
+            $warnings,
+            array_map(static fn (string $e): string => 'EROARE ' . $e, $errors)
+        );
+
+        $this->finishSyncLog($logId, [
+            'status' => $status,
+            'records_received' => count($records),
+            'records_inserted' => $upsert['inserted'],
+            'records_updated' => $upsert['updated'],
+            'error_message' => implode(' | ', $infoParts),
+        ]);
+
+        return [
+            'status' => $status,
+            'mode' => 'incremental',
+            'start_id' => $startCursor,
+            'end_id' => $endId,
+            'requests' => $requests,
+            'records_received' => count($records),
+            'records_inserted' => $upsert['inserted'],
+            'records_updated' => $upsert['updated'],
+            'warnings' => $warnings,
+            'errors' => $errors,
+            'error_message' => $errors !== [] ? implode(' | ', $errors) : null,
+        ];
+    }
+
+    /**
+     * Aducerea la zi cu o singura comanda: incremental dupa ID daca baza are
+     * deja date din API, altfel fereastra rulanta de 31 de zile (bootstrap).
+     */
+    public function syncLatestFromApi(CardOilApiClient $client): array
+    {
+        $result = $this->syncIncrementalFromApi($client);
+        if ((string) ($result['status'] ?? '') !== 'no_cursor') {
+            return $result;
+        }
+
+        $today = new DateTimeImmutable('today');
+
+        return $this->syncRangeFromApi($today->modify('-30 days'), $today, $client) + ['mode' => 'range'];
+    }
+
+    private function refreshFuelTariffMonitoring(): void
+    {
+        if (!class_exists('FuelPriceIndexService') || !class_exists('TariffReviewService')) {
+            return;
+        }
+
+        try {
+            (new FuelPriceIndexService($this->db))->backfillUnitPrices();
+            (new TariffReviewService($this->db))->evaluateActiveVersions(null);
+        } catch (Throwable $exception) {
+            error_log('[FuelModel][tariff_monitoring] ' . $exception->getMessage());
         }
     }
 
@@ -278,12 +683,17 @@ class FuelModel extends BaseModel
                 driver_name,
                 fuel_type,
                 quantity_liters,
+                unit_price,
+                unit_price_source,
                 odometer_km,
                 total_value,
                 station_name,
                 fillup_datetime,
                 is_full,
+                is_full_manual,
+                full_source,
                 raw_payload,
+                source_type,
                 created_at,
                 updated_at
             ) VALUES (
@@ -292,12 +702,17 @@ class FuelModel extends BaseModel
                 :driver_name,
                 :fuel_type,
                 :quantity_liters,
+                :unit_price,
+                :unit_price_source,
                 :odometer_km,
                 :total_value,
                 :station_name,
                 :fillup_datetime,
                 :is_full,
+                :is_full_manual,
+                :full_source,
                 :raw_payload,
+                :source_type,
                 :created_at,
                 :updated_at
             )
@@ -306,12 +721,43 @@ class FuelModel extends BaseModel
                 driver_name = VALUES(driver_name),
                 fuel_type = VALUES(fuel_type),
                 quantity_liters = VALUES(quantity_liters),
-                odometer_km = VALUES(odometer_km),
+                unit_price = VALUES(unit_price),
+                unit_price_source = VALUES(unit_price_source),
+                -- Odometrul corectat manual are prioritate: importul nu are voie
+                -- sa readuca o valoare gresita tastata la pompa.
+                odometer_km = IF(
+                    fuel_fillups.odometer_km_manual IS NOT NULL,
+                    fuel_fillups.odometer_km_manual,
+                    VALUES(odometer_km)
+                ),
                 total_value = VALUES(total_value),
                 station_name = VALUES(station_name),
                 fillup_datetime = VALUES(fillup_datetime),
-                is_full = VALUES(is_full),
+                -- Decizia manuala a operatorului are prioritate absoluta.
+                -- API-ul CardOil nu furnizeaza informatia de plin, deci nu are
+                -- voie sa reseteze un FULL setat din interfata.
+                is_full_manual = IF(
+                    VALUES(is_full_manual) IS NOT NULL,
+                    VALUES(is_full_manual),
+                    fuel_fillups.is_full_manual
+                ),
+                is_full = IF(
+                    COALESCE(VALUES(is_full_manual), fuel_fillups.is_full_manual) IS NOT NULL,
+                    COALESCE(VALUES(is_full_manual), fuel_fillups.is_full_manual),
+                    VALUES(is_full)
+                ),
+                full_source = IF(
+                    COALESCE(VALUES(is_full_manual), fuel_fillups.is_full_manual) IS NOT NULL,
+                    'manual',
+                    'api'
+                ),
                 raw_payload = VALUES(raw_payload),
+                -- Randurile create manual sau de teste isi pastreaza provenienta.
+                source_type = IF(
+                    fuel_fillups.source_type IN ('manual', 'test'),
+                    fuel_fillups.source_type,
+                    VALUES(source_type)
+                ),
                 updated_at = VALUES(updated_at)
         ");
 
@@ -338,7 +784,31 @@ class FuelModel extends BaseModel
             $stmt->bindValue(':vehicle_registration', $this->normalizeRegistration((string) ($record['vehicle_registration'] ?? '')));
             $this->bindNullableString($stmt, ':driver_name', isset($record['driver_name']) ? (string) $record['driver_name'] : null);
             $stmt->bindValue(':fuel_type', (string) ($record['fuel_type'] ?? 'motorina'));
-            $stmt->bindValue(':quantity_liters', max(0.0, (float) ($record['quantity_liters'] ?? 0)));
+            $quantityLiters = max(0.0, (float) ($record['quantity_liters'] ?? 0));
+            $stmt->bindValue(':quantity_liters', $quantityLiters);
+
+            // Pretul unitar: valoarea din API este autoritara; derivarea este ultima solutie.
+            $unitPrice = (float) ($record['unit_price'] ?? 0);
+            $unitPriceSource = 'api';
+            if ($unitPrice <= 0.0) {
+                $unitPrice = $quantityLiters > 0
+                    ? round(max(0.0, (float) ($record['total_value'] ?? 0)) / $quantityLiters, 4)
+                    : 0.0;
+                $unitPriceSource = 'derived';
+            }
+            if ($unitPrice > 0.0) {
+                $stmt->bindValue(':unit_price', $unitPrice);
+                $stmt->bindValue(':unit_price_source', $unitPriceSource);
+            } else {
+                $stmt->bindValue(':unit_price', null, PDO::PARAM_NULL);
+                $stmt->bindValue(':unit_price_source', null, PDO::PARAM_NULL);
+            }
+
+            $sourceType = (string) ($record['source_type'] ?? 'api');
+            if (!in_array($sourceType, ['api', 'manual', 'test', 'demo'], true)) {
+                $sourceType = 'api';
+            }
+            $stmt->bindValue(':source_type', $sourceType);
             $odometerKm = (int) round((float) ($record['odometer_km'] ?? 0));
             if ($odometerKm > 0) {
                 $stmt->bindValue(':odometer_km', $odometerKm, PDO::PARAM_INT);
@@ -348,7 +818,21 @@ class FuelModel extends BaseModel
             $stmt->bindValue(':total_value', max(0.0, (float) ($record['total_value'] ?? 0)));
             $this->bindNullableString($stmt, ':station_name', isset($record['station_name']) ? (string) $record['station_name'] : null);
             $stmt->bindValue(':fillup_datetime', (string) ($record['fillup_datetime'] ?? $now));
-            $stmt->bindValue(':is_full', !empty($record['is_full']) ? 1 : 0, PDO::PARAM_INT);
+            // Un import care poarta explicit o decizie manuala (import manual,
+            // fixture de test) o pastreaza; importul CardOil trimite mereu NULL,
+            // deci nu poate atinge deciziile deja luate de operator.
+            $manualFlag = array_key_exists('is_full_manual', $record) && $record['is_full_manual'] !== null
+                ? (!empty($record['is_full_manual']) ? 1 : 0)
+                : null;
+            if ($manualFlag === null) {
+                $stmt->bindValue(':is_full', !empty($record['is_full']) ? 1 : 0, PDO::PARAM_INT);
+                $stmt->bindValue(':is_full_manual', null, PDO::PARAM_NULL);
+                $stmt->bindValue(':full_source', 'api');
+            } else {
+                $stmt->bindValue(':is_full', $manualFlag, PDO::PARAM_INT);
+                $stmt->bindValue(':is_full_manual', $manualFlag, PDO::PARAM_INT);
+                $stmt->bindValue(':full_source', 'manual');
+            }
             $this->bindNullableString($stmt, ':raw_payload', $rawPayloadJson);
             $stmt->bindValue(':created_at', $now);
             $stmt->bindValue(':updated_at', $now);
@@ -461,20 +945,163 @@ class FuelModel extends BaseModel
         return $stmt->execute();
     }
 
+    /**
+     * Marcheaza o alimentare Full/Partial ca DECIZIE MANUALA a operatorului.
+     *
+     * Valoarea este scrisa si in is_full (folosita de calcule) si in
+     * is_full_manual (folosita de upsertFillups pentru a bloca suprascrierea
+     * de catre sincronizarea CardOil).
+     */
     public function setFillupFull(int $fillupId, bool $isFull): bool
     {
         $this->ensureSchema();
 
+        $stmt = $this->db->prepare("
+            UPDATE fuel_fillups
+            SET is_full = :is_full,
+                is_full_manual = :is_full_manual,
+                full_source = 'manual',
+                updated_at = :updated_at
+            WHERE id = :id
+        ");
+        $stmt->bindValue(':is_full', $isFull ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(':is_full_manual', $isFull ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'));
+        $stmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        // rowCount() = 0 cand valoarea era deja identica; verificam existenta
+        // randului ca sa nu raportam esec pentru o operatie idempotenta.
+        if ($stmt->rowCount() > 0) {
+            return true;
+        }
+
+        $check = $this->db->prepare('SELECT COUNT(*) FROM fuel_fillups WHERE id = :id');
+        $check->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $check->execute();
+
+        return (int) $check->fetchColumn() > 0;
+    }
+
+    /**
+     * Corecteaza manual odometrul unei alimentari (km tastati gresit la pompa).
+     *
+     * odometer_km devine valoarea corectata (toate calculele o folosesc direct),
+     * iar odometer_km_manual pastreaza decizia ca sa nu poata fi suprascrisa
+     * de sincronizarea CardOil. Functioneaza si pentru a COMPLETA un odometru
+     * lipsa din API.
+     */
+    public function setFillupOdometer(int $fillupId, int $odometerKm): bool
+    {
+        $this->ensureSchema();
+
+        if ($fillupId <= 0 || $odometerKm <= 0) {
+            return false;
+        }
+
         $stmt = $this->db->prepare('
             UPDATE fuel_fillups
-            SET is_full = :is_full, updated_at = :updated_at
+            SET odometer_km = :odometer_km,
+                odometer_km_manual = :odometer_km_manual,
+                updated_at = :updated_at
             WHERE id = :id
         ');
-        $stmt->bindValue(':is_full', $isFull ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(':odometer_km', $odometerKm, PDO::PARAM_INT);
+        $stmt->bindValue(':odometer_km_manual', $odometerKm, PDO::PARAM_INT);
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'));
+        $stmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        if ($stmt->rowCount() > 0) {
+            return true;
+        }
+
+        $check = $this->db->prepare('SELECT COUNT(*) FROM fuel_fillups WHERE id = :id');
+        $check->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $check->execute();
+
+        return (int) $check->fetchColumn() > 0;
+    }
+
+    /**
+     * Renunta la corectia manuala: odometrul revine la valoarea bruta din API
+     * (extrasa din raw_payload) sau la NULL daca API-ul nu a trimis km.
+     */
+    public function clearFillupOdometerOverride(int $fillupId): bool
+    {
+        $this->ensureSchema();
+
+        $rowStmt = $this->db->prepare('SELECT raw_payload FROM fuel_fillups WHERE id = :id');
+        $rowStmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $rowStmt->execute();
+        $row = $rowStmt->fetch();
+        if ($row === false) {
+            return false;
+        }
+
+        $apiOdometer = $this->apiOdometerFromRawPayload((string) ($row['raw_payload'] ?? ''));
+
+        $stmt = $this->db->prepare('
+            UPDATE fuel_fillups
+            SET odometer_km = :odometer_km,
+                odometer_km_manual = NULL,
+                updated_at = :updated_at
+            WHERE id = :id
+        ');
+        if ($apiOdometer !== null && $apiOdometer > 0) {
+            $stmt->bindValue(':odometer_km', $apiOdometer, PDO::PARAM_INT);
+        } else {
+            $stmt->bindValue(':odometer_km', null, PDO::PARAM_NULL);
+        }
         $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'));
         $stmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
 
-        return $stmt->execute() && $stmt->rowCount() > 0;
+        return $stmt->execute();
+    }
+
+    /** Km asa cum au venit de la API, din payload-ul brut pastrat la import. */
+    public function apiOdometerFromRawPayload(string $rawPayload): ?int
+    {
+        if ($rawPayload === '') {
+            return null;
+        }
+
+        $payload = json_decode($rawPayload, true);
+        if (!is_array($payload)) {
+            return null;
+        }
+
+        foreach (['odometer_km', 'km_alimentare', 'kilometraj', 'km'] as $key) {
+            if (isset($payload[$key]) && is_scalar($payload[$key])) {
+                $value = (int) round((float) str_replace([' ', ','], ['', '.'], (string) $payload[$key]));
+                if ($value > 0) {
+                    return $value;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Renunta la decizia manuala si redevine controlata de import.
+     * Nu este expusa inca in UI, dar mentine simetria modelului.
+     */
+    public function clearFillupFullOverride(int $fillupId): bool
+    {
+        $this->ensureSchema();
+
+        $stmt = $this->db->prepare("
+            UPDATE fuel_fillups
+            SET is_full_manual = NULL,
+                full_source = 'api',
+                updated_at = :updated_at
+            WHERE id = :id
+        ");
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'));
+        $stmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+
+        return $stmt->execute();
     }
 
     public function getDashboardData(array $filters): array
@@ -738,7 +1365,21 @@ class FuelModel extends BaseModel
                 c.data_sfarsit,
                 c.ora_inceput,
                 c.ora_sfarsit,
-                " . $this->effectiveKmExpr('c') . " AS trip_km
+                " . $this->effectiveKmExpr('c') . " AS trip_km,
+                (
+                    SELECT fp.odometer_km
+                    FROM fuel_fillups fp
+                    WHERE REPLACE(UPPER(fp.vehicle_registration), ' ', '') = REPLACE(UPPER(f.vehicle_registration), ' ', '')
+                      AND fp.fuel_type = 'motorina'
+                      AND fp.odometer_km IS NOT NULL
+                      AND fp.odometer_km > 0
+                      AND (
+                          fp.fillup_datetime < f.fillup_datetime
+                          OR (fp.fillup_datetime = f.fillup_datetime AND fp.id < f.id)
+                      )
+                    ORDER BY fp.fillup_datetime DESC, fp.id DESC
+                    LIMIT 1
+                ) AS previous_odometer_km
             FROM fuel_fillups f
             LEFT JOIN fuel_trip_links l ON l.fillup_id = f.id
             LEFT JOIN curse_dispecer c ON c.id = l.trip_id
@@ -955,12 +1596,46 @@ class FuelModel extends BaseModel
         $this->bindParams($stmt, $where['params']);
         $stmt->execute();
 
+        // Parcurgere secventiala per vehicul, cu baza de km resetata dupa orice
+        // citire respinsa. Vechiul cod folosea orbeste citirea precedenta:
+        // un odometru tastat gresit (ex. 1.236.604 in loc de ~1.326.000) era
+        // exclus ca interval negativ, dar ramanea BAZA intervalului urmator,
+        // care iesea +90.000 km si distrugea media flotei.
         $rows = [];
+        $baselines = [];
         foreach ($stmt->fetchAll() as $row) {
+            $vehicleKey = str_replace(' ', '', strtoupper((string) ($row['vehicle_registration'] ?? '')));
             $currentKm = (float) ($row['odometer_km'] ?? 0);
-            $previousKm = (float) ($row['previous_odometer_km'] ?? 0);
-            $intervalKm = $currentKm - $previousKm;
-            if ($previousKm <= 0.0 || $intervalKm <= 0.0) {
+
+            if (!array_key_exists($vehicleKey, $baselines)) {
+                // Prima citire din perioada: baza vine din ultima alimentare
+                // dinaintea perioadei (subinterogarea), ca sa nu pierdem
+                // intervalul de la granita de luna.
+                $baselines[$vehicleKey] = (float) ($row['previous_odometer_km'] ?? 0);
+            }
+
+            $baselineKm = $baselines[$vehicleKey];
+            // Indiferent de verdict, citirea curenta devine noua baza: daca a
+            // fost un typo, intervalul urmator pica la garda de plauzibilitate
+            // si baza se re-sincronizeaza; se pierd cel mult 1-2 intervale.
+            $baselines[$vehicleKey] = $currentKm;
+
+            if ($baselineKm <= 0.0) {
+                continue;
+            }
+
+            $intervalKm = $currentKm - $baselineKm;
+            if ($intervalKm <= 0.0) {
+                continue;
+            }
+
+            // Garda de plauzibilitate fizica: consumul implicat de interval
+            // (litri alimentati / km parcursi) trebuie sa fie intr-o plaja
+            // posibila pentru un vehicul real. In afara ei, odometrul e gresit
+            // (cifre lipsa/in plus la pompa), nu consumul.
+            $liters = (float) ($row['quantity_liters'] ?? 0);
+            $impliedL100 = ($liters / $intervalKm) * 100;
+            if ($impliedL100 < self::MIN_PLAUSIBLE_L100 || $impliedL100 > self::MAX_PLAUSIBLE_L100) {
                 continue;
             }
 
@@ -1130,12 +1805,13 @@ class FuelModel extends BaseModel
             $vehicle = $this->firstVehicleForNormative($filters);
         }
 
-        $monthStart = (new DateTimeImmutable((string) $filters['date_from']))->modify('first day of this month')->setTime(0, 0);
+        $monthStart = $this->monthStartFor((string) $filters['date_from']);
+        $window = $this->t0Window($monthStart);
         $base = [
             'vehicle' => $vehicle,
             'month_start' => $monthStart->format('Y-m-d'),
-            'status' => 'invalid',
-            'message' => 'Lipsește full început lună',
+            'status' => 'missing_t0',
+            'message' => 'T0 lipsă — necesită setare manuală',
             'start_full' => null,
             'next_full' => null,
             'km' => 0.0,
@@ -1144,21 +1820,46 @@ class FuelModel extends BaseModel
             'norm_l100' => 0.0,
             'adblue_percent' => 0.0,
             'km_source' => '',
+            // Metadate T0 pentru UI.
+            't0_mode' => 'missing',
+            't0_message' => 'T0 lipsă — necesită setare manuală',
+            't0_window_start' => $window['start']->format('Y-m-d H:i:s'),
+            't0_window_end' => $window['end']->format('Y-m-d H:i:s'),
+            't0_candidate_count' => 0,
+            't0_manual_note' => null,
+            't0_manual_set_at' => null,
+            't0_requires_manual' => true,
+            'candidates' => [],
         ];
 
         if ($vehicle === '') {
+            $base['t0_mode'] = 'no_vehicle';
+            $base['status'] = 'invalid';
             $base['message'] = 'Nu exista vehicul pentru calcul.';
+            $base['t0_message'] = 'Nu există vehicul pentru calcul.';
+            $base['t0_requires_manual'] = false;
             return $base;
         }
 
-        $startFull = $this->findStartFull($vehicle, $monthStart);
+        $t0 = $this->resolveT0($vehicle, $monthStart);
+        $base['t0_mode'] = $t0['mode'];
+        $base['t0_message'] = $t0['message'];
+        $base['t0_candidate_count'] = $t0['candidate_count'];
+        $base['t0_manual_note'] = $t0['manual_note'];
+        $base['t0_manual_set_at'] = $t0['manual_set_at'];
+        $base['candidates'] = $this->getT0Candidates($vehicle, $monthStart);
+
+        $startFull = $t0['fillup'];
         if ($startFull === null) {
             return $base;
         }
 
+        $base['t0_requires_manual'] = false;
+
         $nextFull = $this->findNextFull($vehicle, (string) $startFull['fillup_datetime'], (int) $startFull['id']);
         if ($nextFull === null) {
             $base['start_full'] = $startFull;
+            $base['status'] = 'invalid';
             $base['message'] = 'Minimum două alimentări FULL necesare';
             return $base;
         }
@@ -1176,9 +1877,9 @@ class FuelModel extends BaseModel
         $adblue = (float) ($fuel['adblue'] ?? 0);
         $valid = $km > 0 && $motorina > 0;
 
-        return [
-            'vehicle' => $vehicle,
-            'month_start' => $monthStart->format('Y-m-d'),
+        // Formula FULL -> intermediare -> FULL ramane neschimbata; se schimba
+        // doar provenienta lui T0. Metadatele T0 din $base sunt pastrate.
+        return array_merge($base, [
             'status' => $valid ? 'valid' : 'invalid',
             'message' => $valid ? 'Interval valid' : 'Interval invalid',
             'start_full' => $startFull,
@@ -1189,7 +1890,51 @@ class FuelModel extends BaseModel
             'norm_l100' => $km > 0 ? round(($motorina / $km) * 100, 2) : 0.0,
             'adblue_percent' => $motorina > 0 ? round(($adblue / $motorina) * 100, 2) : 0.0,
             'km_source' => $kmSource,
-        ];
+            'odometer_warning' => $this->odometerSequenceWarning($vehicle, $startDateTime, $endDateTime),
+        ]);
+    }
+
+    /**
+     * Detecteaza odometru ne-monoton in intervalul T0 -> T1 (km tastati gresit
+     * la pompa). Nu blocheaza calculul: doar semnaleaza ca baza de km poate fi
+     * distorsionata, iar operatorul poate corecta valoarea din tabel.
+     */
+    private function odometerSequenceWarning(string $vehicle, string $startDateTime, string $endDateTime): ?string
+    {
+        $stmt = $this->db->prepare("
+            SELECT fillup_datetime, odometer_km
+            FROM fuel_fillups
+            WHERE REPLACE(UPPER(vehicle_registration), ' ', '') = REPLACE(UPPER(:vehicle), ' ', '')
+              AND fuel_type = 'motorina'
+              AND odometer_km IS NOT NULL
+              AND odometer_km > 0
+              AND fillup_datetime >= :start_datetime
+              AND fillup_datetime <= :end_datetime
+            ORDER BY fillup_datetime ASC, id ASC
+        ");
+        $stmt->bindValue(':vehicle', $vehicle);
+        $stmt->bindValue(':start_datetime', $startDateTime);
+        $stmt->bindValue(':end_datetime', $endDateTime);
+        $stmt->execute();
+
+        $formatDate = static fn (string $value): string =>
+            (new DateTimeImmutable($value))->format('d.m.Y H:i');
+
+        $previous = null;
+        foreach ($stmt->fetchAll() as $row) {
+            if ($previous !== null && (int) $row['odometer_km'] < (int) $previous['odometer_km']) {
+                return sprintf(
+                    'Odometru inconsistent în interval: %s are %s km, mai puțin decât %s (%s km). Corectează valoarea din tabelul de alimentări.',
+                    $formatDate((string) $row['fillup_datetime']),
+                    number_format((int) $row['odometer_km'], 0, ',', '.'),
+                    $formatDate((string) $previous['fillup_datetime']),
+                    number_format((int) $previous['odometer_km'], 0, ',', '.')
+                );
+            }
+            $previous = $row;
+        }
+
+        return null;
     }
 
     private function getConsumptionByTrip(array $filters): array
@@ -1359,33 +2104,481 @@ class FuelModel extends BaseModel
         return $row ?: null;
     }
 
-    private function findStartFull(string $vehicle, DateTimeImmutable $monthStart): ?array
+    // =================================================================
+    // Mecanismul T0
+    //
+    // Distinctia esentiala:
+    //   - is_full  este o PROPRIETATE a alimentarii;
+    //   - T0       este ROLUL unei alimentari pentru o anumita luna.
+    // O alimentare FULL din 30 aprilie poate fi T0 pentru mai, dar poate
+    // la fel de bine sa nu fie T0 pentru nicio luna.
+    // =================================================================
+
+    /** Numarul de zile calendaristice ale ferestrei, de o parte si de alta. */
+    private const T0_WINDOW_DAYS = 4;
+
+    /**
+     * Prima zi (00:00:00) a lunii careia ii apartine data primita.
+     */
+    public function monthStartFor(string $date): DateTimeImmutable
     {
-        $windowStart = $monthStart->modify('-3 days')->format('Y-m-d 00:00:00');
-        $windowEnd = $monthStart->modify('+3 days')->format('Y-m-d 23:59:59');
+        try {
+            $reference = new DateTimeImmutable($date !== '' ? $date : 'today');
+        } catch (Throwable) {
+            $reference = new DateTimeImmutable('today');
+        }
+
+        return $reference->modify('first day of this month')->setTime(0, 0);
+    }
+
+    /**
+     * Fereastra de eligibilitate T0 pentru luna care incepe la $monthStart:
+     * ultimele 4 zile calendaristice ale lunii precedente + zilele 1..4 ale
+     * lunii analizate.
+     *
+     * Totul este derivat din aritmetica de calendar a lui DateTimeImmutable,
+     * deci functioneaza identic pentru februarie (28/29 zile), luni de 30 sau
+     * 31 de zile, ani bisecti si trecerea decembrie -> ianuarie. Nicio luna si
+     * niciun numar de zile nu este hardcodat.
+     *
+     * Exemplu august 2026: 28,29,30,31 iulie + 1,2,3,4 august.
+     * Exemplu martie 2027 (nebisect): 25,26,27,28 februarie + 1,2,3,4 martie.
+     * Exemplu martie 2028 (bisect):   26,27,28,29 februarie + 1,2,3,4 martie.
+     * Exemplu ianuarie 2027: 28,29,30,31 decembrie 2026 + 1,2,3,4 ianuarie.
+     *
+     * @return array{start: DateTimeImmutable, end: DateTimeImmutable}
+     */
+    public function t0Window(DateTimeImmutable $monthStart): array
+    {
+        $days = self::T0_WINDOW_DAYS;
+
+        return [
+            // Prima zi a lunii minus 4 zile = a 4-a zi de la sfarsitul lunii precedente.
+            'start' => $monthStart->modify('-' . $days . ' days')->setTime(0, 0, 0),
+            // Ziua 4 a lunii analizate, pana la finalul ei.
+            'end' => $monthStart->modify('+' . ($days - 1) . ' days')->setTime(23, 59, 59),
+        ];
+    }
+
+    /**
+     * Determina T0 pentru un vehicul si o luna.
+     *
+     * Ordinea de precedenta:
+     *   1. T0 stabilit MANUAL pentru (vehicul, luna) — nu se recalculeaza
+     *      niciodata automat, nici la refresh, nici la sync;
+     *   2. selectia automata din fereastra ±4 zile, doar dintre alimentarile
+     *      FULL de motorina;
+     *   3. T0 lipsa — necesita interventie manuala. Nu exista fallback.
+     *
+     * @return array{
+     *     mode: string, fillup: ?array, window_start: string, window_end: string,
+     *     candidate_count: int, message: string, manual_note: ?string,
+     *     manual_set_at: ?string, stale_manual: bool
+     * }
+     */
+    public function resolveT0(string $vehicle, DateTimeImmutable $monthStart): array
+    {
+        $this->ensureSchema();
+
+        $window = $this->t0Window($monthStart);
+        $result = [
+            'mode' => 'missing',
+            'fillup' => null,
+            'window_start' => $window['start']->format('Y-m-d H:i:s'),
+            'window_end' => $window['end']->format('Y-m-d H:i:s'),
+            'candidate_count' => 0,
+            'message' => 'T0 lipsă — necesită setare manuală',
+            'manual_note' => null,
+            'manual_set_at' => null,
+            'stale_manual' => false,
+        ];
+
+        if (trim($vehicle) === '') {
+            $result['message'] = 'Nu există vehicul pentru calcul.';
+            return $result;
+        }
+
+        // (1) Decizia manuala are prioritate absoluta.
+        $manual = $this->getManualT0($vehicle, $monthStart);
+        if ($manual !== null) {
+            $result['mode'] = 'manual';
+            $result['fillup'] = $manual['fillup'];
+            $result['manual_note'] = $manual['note'];
+            $result['manual_set_at'] = $manual['updated_at'];
+            $result['message'] = 'Setat manual';
+
+            return $result;
+        }
+
+        // (2) Selectia automata, strict din fereastra.
+        $candidates = $this->findT0CandidatesInWindow($vehicle, $window['start'], $window['end']);
+        $result['candidate_count'] = count($candidates);
+        if ($candidates !== []) {
+            $result['mode'] = 'auto';
+            $result['fillup'] = $candidates[0];
+            $result['message'] = 'Determinat automat';
+
+            return $result;
+        }
+
+        // (3) Fara fallback in afara ferestrei.
+        return $result;
+    }
+
+    /**
+     * Alimentarile FULL de motorina eligibile ca T0, ordonate dupa regula
+     * determinista de selectie:
+     *   1. cea mai mica distanta temporala absoluta fata de prima zi a lunii;
+     *   2. la egalitate reala de distanta, FULL-ul ANTERIOR inceputului lunii;
+     *   3. la egalitate in continuare, fillup_datetime apoi id (rezultat stabil).
+     *
+     * Exemplu regula (2): FULL 31.07 22:00 si FULL 01.08 02:00 sunt ambele la
+     * 7200 s de 01.08 00:00 -> se alege 31.07 22:00.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function findT0CandidatesInWindow(
+        string $vehicle,
+        DateTimeImmutable $windowStart,
+        DateTimeImmutable $windowEnd
+    ): array {
+        $monthStartSql = $windowStart->modify('+' . self::T0_WINDOW_DAYS . ' days')->setTime(0, 0, 0);
+
+        $stmt = $this->db->prepare("
+            SELECT
+                f.*,
+                ABS(TIMESTAMPDIFF(SECOND, f.fillup_datetime, :month_start_distance)) AS t0_distance_seconds
+            FROM fuel_fillups f
+            WHERE REPLACE(UPPER(f.vehicle_registration), ' ', '') = REPLACE(UPPER(:vehicle), ' ', '')
+              AND f.fuel_type = 'motorina'
+              AND f.is_full = 1
+              AND f.fillup_datetime BETWEEN :window_start AND :window_end
+            ORDER BY
+                ABS(TIMESTAMPDIFF(SECOND, f.fillup_datetime, :month_start_order)) ASC,
+                CASE WHEN f.fillup_datetime < :month_start_side THEN 0 ELSE 1 END ASC,
+                f.fillup_datetime ASC,
+                f.id ASC
+        ");
+        $stmt->bindValue(':vehicle', $vehicle);
+        $stmt->bindValue(':window_start', $windowStart->format('Y-m-d H:i:s'));
+        $stmt->bindValue(':window_end', $windowEnd->format('Y-m-d H:i:s'));
+        $stmt->bindValue(':month_start_distance', $monthStartSql->format('Y-m-d H:i:s'));
+        $stmt->bindValue(':month_start_order', $monthStartSql->format('Y-m-d H:i:s'));
+        $stmt->bindValue(':month_start_side', $monthStartSql->format('Y-m-d H:i:s'));
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Expune candidatii automati din fereastra (pentru UI si teste).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function getT0WindowCandidates(string $vehicle, DateTimeImmutable $monthStart): array
+    {
+        $this->ensureSchema();
+        if (trim($vehicle) === '') {
+            return [];
+        }
+
+        $window = $this->t0Window($monthStart);
+
+        return $this->findT0CandidatesInWindow($vehicle, $window['start'], $window['end']);
+    }
+
+    /**
+     * T0 manual stocat pentru (vehicul, luna), impreuna cu alimentarea tinta.
+     *
+     * @return array{fillup: array<string, mixed>, note: ?string, updated_at: string}|null
+     */
+    public function getManualT0(string $vehicle, DateTimeImmutable $monthStart): ?array
+    {
+        $this->ensureSchema();
+
+        $stmt = $this->db->prepare('
+            SELECT t.note, t.updated_at, f.*
+            FROM fuel_month_t0 t
+            INNER JOIN fuel_fillups f ON f.id = t.fillup_id
+            WHERE t.vehicle_key = :vehicle_key
+              AND t.month_start = :month_start
+            LIMIT 1
+        ');
+        $stmt->bindValue(':vehicle_key', $this->vehicleKey($vehicle));
+        $stmt->bindValue(':month_start', $monthStart->format('Y-m-d'));
+        $stmt->execute();
+        $row = $stmt->fetch();
+        if (!$row) {
+            return null;
+        }
+
+        $note = $row['note'] !== null ? (string) $row['note'] : null;
+        $updatedAt = (string) $row['updated_at'];
+        unset($row['note'], $row['updated_at']);
+
+        return ['fillup' => $row, 'note' => $note, 'updated_at' => $updatedAt];
+    }
+
+    /**
+     * Valideaza o alimentare inainte de a o accepta ca T0 manual.
+     *
+     * Blocantele opresc operatia; avertismentele sunt afisate operatorului dar
+     * permit continuarea (ex. odometru lipsa, pentru care calculul FULL->FULL
+     * are deja fallback pe km din dispecer).
+     *
+     * @return array{ok: bool, errors: list<string>, warnings: list<string>, fillup: ?array}
+     */
+    public function validateT0Candidate(int $fillupId, string $vehicle, DateTimeImmutable $monthStart): array
+    {
+        $this->ensureSchema();
+
+        $errors = [];
+        $warnings = [];
+
+        if ($fillupId <= 0) {
+            return ['ok' => false, 'errors' => ['Alimentarea selectată nu este validă.'], 'warnings' => [], 'fillup' => null];
+        }
+        if (trim($vehicle) === '') {
+            return ['ok' => false, 'errors' => ['Nu a fost transmis vehiculul.'], 'warnings' => [], 'fillup' => null];
+        }
+
+        $stmt = $this->db->prepare('SELECT * FROM fuel_fillups WHERE id = :id LIMIT 1');
+        $stmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $stmt->execute();
+        $fillup = $stmt->fetch();
+
+        if (!$fillup) {
+            return ['ok' => false, 'errors' => ['Alimentarea nu mai există în baza de date.'], 'warnings' => [], 'fillup' => null];
+        }
+
+        // Vehiculul corect.
+        if ($this->vehicleKey((string) $fillup['vehicle_registration']) !== $this->vehicleKey($vehicle)) {
+            $errors[] = sprintf(
+                'Alimentarea aparține vehiculului %s, nu %s.',
+                (string) $fillup['vehicle_registration'],
+                $vehicle
+            );
+        }
+
+        // Doar motorina poate defini T0.
+        if ((string) $fillup['fuel_type'] !== 'motorina') {
+            $errors[] = 'T0 poate fi stabilit doar pe o alimentare de motorină.';
+        }
+
+        // Data valida.
+        $fillupDateTime = null;
+        $rawDateTime = (string) ($fillup['fillup_datetime'] ?? '');
+        if ($rawDateTime === '' || str_starts_with($rawDateTime, '0000')) {
+            $errors[] = 'Alimentarea nu are o dată validă.';
+        } else {
+            try {
+                $fillupDateTime = new DateTimeImmutable($rawDateTime);
+            } catch (Throwable) {
+                $errors[] = 'Data alimentării nu poate fi interpretată.';
+            }
+        }
+
+        // Cantitate coerenta.
+        if ((float) ($fillup['quantity_liters'] ?? 0) <= 0.0) {
+            $errors[] = 'Alimentarea are cantitate zero — record inconsistent.';
+        }
+
+        // T0 nu poate fi dupa sfarsitul lunii analizate.
+        $monthEnd = $monthStart->modify('last day of this month')->setTime(23, 59, 59);
+        if ($fillupDateTime instanceof DateTimeImmutable && $fillupDateTime > $monthEnd) {
+            $errors[] = sprintf(
+                'Alimentarea (%s) este ulterioară lunii analizate (%s).',
+                $fillupDateTime->format('d.m.Y H:i'),
+                $monthStart->format('m.Y')
+            );
+        }
+
+        // Odometru: nu blocheaza, dar consumul va cadea pe km din dispecer.
+        if ((int) ($fillup['odometer_km'] ?? 0) <= 0) {
+            $warnings[] = 'Alimentarea nu are odometru. Km-ii intervalului vor fi preluați din Dispecer curse, dacă există.';
+        }
+
+        // In afara ferestrei automate: permis, dar semnalat.
+        if ($fillupDateTime instanceof DateTimeImmutable) {
+            $window = $this->t0Window($monthStart);
+            if ($fillupDateTime < $window['start'] || $fillupDateTime > $window['end']) {
+                $warnings[] = sprintf(
+                    'Alimentarea este în afara ferestrei automate (%s – %s).',
+                    $window['start']->format('d.m.Y'),
+                    $window['end']->format('d.m.Y')
+                );
+            }
+        }
+
+        // FULL: nu blocheaza, dar impune confirmare explicita in controller.
+        if ((int) ($fillup['is_full'] ?? 0) !== 1) {
+            $warnings[] = 'Alimentarea este marcată Parțial și va fi transformată în FULL.';
+        }
+
+        return [
+            'ok' => $errors === [],
+            'errors' => $errors,
+            'warnings' => $warnings,
+            'fillup' => $fillup,
+        ];
+    }
+
+    /**
+     * Stabileste T0 manual pentru (vehicul, luna).
+     *
+     * Nu modifica data originala a alimentarii si nu creeaza date fictive —
+     * se pastreaza referinta catre alimentarea reala selectata. Daca
+     * alimentarea nu era FULL, este marcata FULL ca decizie manuala
+     * (persistenta la sync), dar numai cand apelantul a confirmat explicit.
+     *
+     * @return array{ok: bool, message: string, warnings: list<string>}
+     */
+    public function setManualT0(
+        int $fillupId,
+        string $vehicle,
+        DateTimeImmutable $monthStart,
+        bool $confirmMarkFull,
+        ?int $userId = null,
+        ?string $note = null
+    ): array {
+        $validation = $this->validateT0Candidate($fillupId, $vehicle, $monthStart);
+        if (!$validation['ok']) {
+            return ['ok' => false, 'message' => implode(' ', $validation['errors']), 'warnings' => []];
+        }
+
+        $fillup = $validation['fillup'];
+        $needsFull = (int) ($fillup['is_full'] ?? 0) !== 1;
+        if ($needsFull && !$confirmMarkFull) {
+            return [
+                'ok' => false,
+                'message' => 'Alimentarea selectată este Parțială. Confirmă transformarea ei în FULL pentru a o folosi ca T0.',
+                'warnings' => $validation['warnings'],
+            ];
+        }
+
+        $this->db->beginTransaction();
+        try {
+            if ($needsFull) {
+                $this->setFillupFull($fillupId, true);
+            }
+
+            $now = date('Y-m-d H:i:s');
+            $stmt = $this->db->prepare("
+                INSERT INTO fuel_month_t0
+                    (vehicle_key, month_start, fillup_id, mode, note, created_by, created_at, updated_at)
+                VALUES
+                    (:vehicle_key, :month_start, :fillup_id, 'manual', :note, :created_by, :created_at, :updated_at)
+                ON DUPLICATE KEY UPDATE
+                    fillup_id = VALUES(fillup_id),
+                    mode = 'manual',
+                    note = VALUES(note),
+                    created_by = VALUES(created_by),
+                    updated_at = VALUES(updated_at)
+            ");
+            $stmt->bindValue(':vehicle_key', $this->vehicleKey($vehicle));
+            $stmt->bindValue(':month_start', $monthStart->format('Y-m-d'));
+            $stmt->bindValue(':fillup_id', $fillupId, PDO::PARAM_INT);
+            $this->bindNullableString($stmt, ':note', $note);
+            if ($userId !== null && $userId > 0) {
+                $stmt->bindValue(':created_by', $userId, PDO::PARAM_INT);
+            } else {
+                $stmt->bindValue(':created_by', null, PDO::PARAM_NULL);
+            }
+            $stmt->bindValue(':created_at', $now);
+            $stmt->bindValue(':updated_at', $now);
+            $stmt->execute();
+
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            $this->db->rollBack();
+            throw $exception;
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'T0 a fost stabilit manual pentru ' . $monthStart->format('m.Y') . '.',
+            'warnings' => $validation['warnings'],
+        ];
+    }
+
+    /**
+     * Sterge T0 manual si readuce luna la selectia automata.
+     * Nu atinge alimentarea si nu revoca marcajul FULL.
+     */
+    public function clearManualT0(string $vehicle, DateTimeImmutable $monthStart): bool
+    {
+        $this->ensureSchema();
+
+        $stmt = $this->db->prepare('
+            DELETE FROM fuel_month_t0
+            WHERE vehicle_key = :vehicle_key
+              AND month_start = :month_start
+        ');
+        $stmt->bindValue(':vehicle_key', $this->vehicleKey($vehicle));
+        $stmt->bindValue(':month_start', $monthStart->format('Y-m-d'));
+        $stmt->execute();
+
+        return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Alimentarile din care operatorul poate alege T0 manual.
+     *
+     * Fereastra de listare este intentionat mai larga decat cea automata
+     * (o luna inainte de inceputul lunii pana la finalul lunii analizate),
+     * exact pentru cazul in care regula ±4 nu gaseste niciun FULL.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function getT0Candidates(string $vehicle, DateTimeImmutable $monthStart, int $limit = 120): array
+    {
+        $this->ensureSchema();
+        if (trim($vehicle) === '') {
+            return [];
+        }
+
+        $window = $this->t0Window($monthStart);
+        $from = $monthStart->modify('-1 month')->setTime(0, 0, 0);
+        $to = $monthStart->modify('last day of this month')->setTime(23, 59, 59);
+
         $stmt = $this->db->prepare("
             SELECT *
             FROM fuel_fillups
             WHERE REPLACE(UPPER(vehicle_registration), ' ', '') = REPLACE(UPPER(:vehicle), ' ', '')
               AND fuel_type = 'motorina'
-              AND is_full = 1
-              AND fillup_datetime BETWEEN :window_start AND :window_end
-            ORDER BY
-                ABS(TIMESTAMPDIFF(SECOND, fillup_datetime, :month_start)) ASC,
-                CASE WHEN fillup_datetime >= :month_start_after THEN 0 ELSE 1 END ASC,
-                fillup_datetime ASC,
-                id ASC
-            LIMIT 1
+              AND fillup_datetime BETWEEN :date_from AND :date_to
+            ORDER BY fillup_datetime DESC, id DESC
+            LIMIT :limit_rows
         ");
         $stmt->bindValue(':vehicle', $vehicle);
-        $stmt->bindValue(':window_start', $windowStart);
-        $stmt->bindValue(':window_end', $windowEnd);
-        $stmt->bindValue(':month_start', $monthStart->format('Y-m-d 00:00:00'));
-        $stmt->bindValue(':month_start_after', $monthStart->format('Y-m-d 00:00:00'));
+        $stmt->bindValue(':date_from', $from->format('Y-m-d H:i:s'));
+        $stmt->bindValue(':date_to', $to->format('Y-m-d H:i:s'));
+        $stmt->bindValue(':limit_rows', max(1, min(300, $limit)), PDO::PARAM_INT);
         $stmt->execute();
-        $row = $stmt->fetch();
 
-        return $row ?: null;
+        $rows = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $rawDateTime = (string) ($row['fillup_datetime'] ?? '');
+            $inWindow = false;
+            if ($rawDateTime !== '') {
+                try {
+                    $moment = new DateTimeImmutable($rawDateTime);
+                    $inWindow = $moment >= $window['start'] && $moment <= $window['end'];
+                } catch (Throwable) {
+                    $inWindow = false;
+                }
+            }
+            $row['in_t0_window'] = $inWindow;
+            $rows[] = $row;
+        }
+
+        return $rows;
+    }
+
+    /** Cheia normalizata folosita pentru identificarea vehiculului. */
+    private function vehicleKey(string $registration): string
+    {
+        return str_replace(' ', '', strtoupper(trim($registration)));
     }
 
     private function findNextFull(string $vehicle, string $afterDateTime, int $excludeId): ?array
@@ -1517,6 +2710,19 @@ class FuelModel extends BaseModel
         if (in_array($fuelType, ['motorina', 'adblue'], true)) {
             $where[] = "f.fuel_type = :{$prefix}_fuel_type";
             $params[":{$prefix}_fuel_type"] = $fuelType;
+        }
+
+        // Filtrul de marca: alimentarea apartine unui vehicul din flota cu
+        // marca respectiva (numerele doar-din-CardOil, fara fisa, sunt excluse
+        // cat timp filtrul e activ).
+        $brand = trim((string) ($filters['brand'] ?? ''));
+        if ($brand !== '') {
+            $where[] = "EXISTS (
+                SELECT 1 FROM vehicule vb
+                WHERE REPLACE(UPPER(vb.nr_inmatriculare), ' ', '') = REPLACE(UPPER(f.vehicle_registration), ' ', '')
+                  AND UPPER(TRIM(vb.marca)) = UPPER(:{$prefix}_brand)
+            )";
+            $params[":{$prefix}_brand"] = $brand;
         }
 
         $transportGroup = trim((string) ($filters['transport_group'] ?? ''));
@@ -1691,6 +2897,7 @@ class FuelModel extends BaseModel
                 'fillup_datetime' => $datetime->format('Y-m-d H:i:s'),
                 'is_full' => $isFull,
                 'raw_payload' => ['source' => 'demo', 'sequence' => $index + 1],
+                'source_type' => 'demo',
             ];
         }
 

@@ -27,19 +27,37 @@ class CardOilApiClient
 
     public function fetchFillups(DateTimeInterface $dateFrom, DateTimeInterface $dateTo): array
     {
+        return $this->fetchWithPayload([
+            'data_inceput' => $dateFrom->format('d.m.Y'),
+            'data_sfarsit' => $dateTo->format('d.m.Y'),
+        ]);
+    }
+
+    /**
+     * Preluare incrementala dupa ID: intoarce alimentarile cu id_alimentare
+     * STRICT mai mare decat $idMinim, fara restrictia de 31 de zile a
+     * parametrilor de data (conform documentatiei v2.4). Maximum 1000 de
+     * inregistrari per cerere - apelantul pagineaza avansand cursorul.
+     */
+    public function fetchFillupsSinceId(int $idMinim): array
+    {
+        return $this->fetchWithPayload([
+            'id_minim' => $idMinim,
+        ]);
+    }
+
+    private function fetchWithPayload(array $payload): array
+    {
         if (!$this->credentialsAvailable()) {
             return [
                 'records' => [],
                 'source' => 'missing_credentials',
                 'error' => 'Credentialele CardOil lipsesc din .env.',
                 'meta' => [],
+                'raw_count' => 0,
+                'max_id' => 0,
             ];
         }
-
-        $payload = [
-            'data_inceput' => $dateFrom->format('d.m.Y'),
-            'data_sfarsit' => $dateTo->format('d.m.Y'),
-        ];
 
         $response = $this->request($payload);
         $decoded = json_decode($response, true);
@@ -54,9 +72,18 @@ class CardOilApiClient
 
         $items = $this->extractItems($decoded);
         $records = [];
+        $maxRawId = 0;
         foreach ($items as $item) {
             if (!is_array($item)) {
                 continue;
+            }
+
+            // ID-ul maxim din raspunsul BRUT (inainte de filtrarea pe produs):
+            // cursorul incremental trebuie sa avanseze si peste randurile
+            // non-carburant, altfel paginarea s-ar bloca pe ele.
+            $rawId = (int) ($item['id_alimentare'] ?? ($item['id'] ?? 0));
+            if ($rawId > $maxRawId) {
+                $maxRawId = $rawId;
             }
 
             $record = $this->normalizeFillup($item);
@@ -70,6 +97,8 @@ class CardOilApiClient
             'source' => 'api',
             'error' => null,
             'meta' => $this->extractMeta($decoded),
+            'raw_count' => count($items),
+            'max_id' => $maxRawId,
         ];
     }
 
@@ -298,6 +327,17 @@ class CardOilApiClient
                 'suma',
                 'valoare_alimentare',
             ])),
+            // Pretul unitar autoritar din API (4 zecimale). Documentat ca INCLUZAND TVA.
+            // Este pastrat ca atare; indicatorul de flota ramane ponderat volumetric.
+            'unit_price' => $this->firstNumber($payload, [
+                'unit_price',
+                'pu_alimentare',
+                'pret_unitar',
+                'pret_litru',
+            ]),
+            'currency' => $this->firstString($payload, ['nume_moneda', 'currency', 'moneda']),
+            'vat_percent' => $this->firstNumber($payload, ['cota_tva', 'vat_percent']),
+            'product_subcategory' => $this->firstString($payload, ['nume_subcategorie', 'subcategorie']),
             'station_name' => $this->firstString($payload, ['station_name', 'statie', 'nume_statie', 'station', 'locatie', 'nume_furnizor']),
             'fillup_datetime' => $datetime->format('Y-m-d H:i:s'),
             'is_full' => $this->normalizeFullFlag($payload),

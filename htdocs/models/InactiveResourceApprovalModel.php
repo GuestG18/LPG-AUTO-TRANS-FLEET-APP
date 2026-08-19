@@ -5,6 +5,13 @@ class InactiveResourceApprovalModel extends BaseModel
 {
     private const RESOURCE_TYPES = ['vehicle', 'driver', 'repair'];
     private const REVIEW_STATUSES = ['approved', 'rejected'];
+    private const TRANSPORT_TYPE_LABELS = [
+        'primar' => 'Primar km',
+        'primar_tona' => 'Primar tone',
+        'distributie' => 'Distributie',
+        'primar_distributie' => 'Primar+Distributie',
+        'compresor' => 'Compresor',
+    ];
 
     public function ensureSchema(): void
     {
@@ -648,14 +655,37 @@ class InactiveResourceApprovalModel extends BaseModel
                 requester.nume AS requested_by_name,
                 reviewer.nume AS reviewed_by_name,
                 c.data_cursa AS trip_date,
-                v.nr_inmatriculare AS current_vehicle_label,
-                s.nume AS current_driver_label
+                c.data_incarcare AS trip_loading_date,
+                c.data_inceput AS trip_start_date,
+                c.data_sfarsit AS trip_end_date,
+                c.tip_transport AS trip_transport_type,
+                c.vehicle_id AS trip_vehicle_id,
+                c.driver_id AS trip_driver_id,
+                c.beneficiar_id AS trip_beneficiary_id,
+                c.loc_incarcare_id AS trip_load_location_id,
+                c.zona_distributie_id AS trip_unload_zone_id,
+                c.loc_plecare AS trip_departure_text,
+                c.loc_aspirare AS trip_suction_text,
+                c.loc_livrare AS trip_delivery_text,
+                c.loc_livrare_cursa AS trip_closing_location_text,
+                current_vehicle.nr_inmatriculare AS current_vehicle_label,
+                current_driver.nume AS current_driver_label,
+                trip_vehicle.nr_inmatriculare AS trip_vehicle_label,
+                trip_driver.nume AS trip_driver_label,
+                beneficiary.nume AS trip_beneficiary_name,
+                load_location.nume AS trip_load_location_name,
+                unload_zone.nume AS trip_unload_zone_name
             FROM inactive_resource_approvals a
             LEFT JOIN utilizatori requester ON requester.id = a.requested_by_user_id
             LEFT JOIN utilizatori reviewer ON reviewer.id = a.reviewed_by_user_id
             LEFT JOIN curse_dispecer c ON c.id = a.trip_id
-            LEFT JOIN vehicule v ON v.id = a.resource_id AND a.resource_type IN ('vehicle', 'repair')
-            LEFT JOIN soferi s ON s.id = a.resource_id AND a.resource_type = 'driver'
+            LEFT JOIN vehicule current_vehicle ON current_vehicle.id = a.resource_id AND a.resource_type IN ('vehicle', 'repair')
+            LEFT JOIN soferi current_driver ON current_driver.id = a.resource_id AND a.resource_type = 'driver'
+            LEFT JOIN vehicule trip_vehicle ON trip_vehicle.id = c.vehicle_id
+            LEFT JOIN soferi trip_driver ON trip_driver.id = c.driver_id
+            LEFT JOIN configurare_beneficiari_transport beneficiary ON beneficiary.id = c.beneficiar_id
+            LEFT JOIN configurare_locuri_incarcare load_location ON load_location.id = c.loc_incarcare_id
+            LEFT JOIN configurare_zone_distributie unload_zone ON unload_zone.id = c.zona_distributie_id
         ";
     }
 
@@ -796,10 +826,433 @@ class InactiveResourceApprovalModel extends BaseModel
             $id = (int) ($row['id'] ?? 0);
             $row['documents'] = $documentsByApproval[$id] ?? [];
             $row['affected_document_names'] = $this->affectedDocumentNames($row['documents']);
+            $row['approval_context'] = $this->buildApprovalContext($row);
         }
         unset($row);
 
         return $rows;
+    }
+
+    private function buildApprovalContext(array $approval): array
+    {
+        $snapshot = $this->decodeSnapshot((string) ($approval['snapshot_json'] ?? ''));
+        $documents = is_array($approval['documents'] ?? null) ? $approval['documents'] : [];
+        $resourceType = (string) ($approval['resource_type'] ?? '');
+        $tripId = (int) ($approval['trip_id'] ?? 0);
+        $primaryLabel = $this->approvalPrimaryLabel($approval);
+        $problemTitle = $this->approvalProblemTitle($approval, $documents, $snapshot);
+        $operationTitle = $this->approvalOperationTitle($approval);
+        $usageDate = $this->approvalUsageDate($approval);
+        $usageLabel = trim((string) ($approval['trip_loading_date'] ?? '')) !== '' ? 'Data incarcarii' : 'Data utilizarii';
+        $inactiveDate = $this->approvalInactiveDate($approval, $documents);
+        $inactiveLabel = $this->approvalInactiveDateLabel($approval, $documents);
+
+        $summaryRows = [];
+        $this->appendContextRow($summaryRows, $usageLabel, $this->formatContextDate($usageDate));
+        $this->appendContextRow($summaryRows, $inactiveLabel, $this->formatContextDate($inactiveDate));
+        $this->appendContextRow($summaryRows, 'Depasire', $this->approvalOverdueLabel($usageDate, $documents));
+
+        $detailRows = [];
+        $this->appendContextRow($detailRows, 'Beneficiar', $this->stringValue($approval['trip_beneficiary_name'] ?? ''));
+        $this->appendContextRow($detailRows, 'Tip transport', $this->transportTypeLabel((string) ($approval['trip_transport_type'] ?? '')));
+        $this->appendContextRow($detailRows, 'Vehicul cursa', $this->stringValue($approval['trip_vehicle_label'] ?? ''));
+        $this->appendContextRow($detailRows, 'Sofer cursa', $this->stringValue($approval['trip_driver_label'] ?? ''));
+        $this->appendContextRow($detailRows, 'Loc incarcare', $this->firstNonEmpty(
+            $approval['trip_load_location_name'] ?? '',
+            $approval['trip_departure_text'] ?? '',
+            $approval['trip_suction_text'] ?? ''
+        ));
+        $this->appendContextRow($detailRows, 'Descarcare / zona', $this->firstNonEmpty(
+            $approval['trip_unload_zone_name'] ?? '',
+            $approval['trip_delivery_text'] ?? '',
+            $approval['trip_closing_location_text'] ?? ''
+        ));
+        $this->appendContextRow($detailRows, 'Ruta', $this->approvalRouteLabel($approval));
+        $this->appendContextRow($detailRows, 'Data incarcarii', $this->formatContextDate($approval['trip_loading_date'] ?? ''));
+        $this->appendContextRow($detailRows, 'Interval cursa', $this->approvalIntervalLabel($approval));
+        $this->appendDocumentContextRows($detailRows, $documents);
+        $this->appendRepairContextRows($detailRows, $snapshot);
+        $this->appendLeaveContextRows($detailRows, $snapshot);
+        $this->appendContextRow($detailRows, 'Solicitat de', $this->stringValue($approval['requested_by_name'] ?? ''));
+        $this->appendContextRow($detailRows, 'Solicitat la', $this->formatContextDateTime($approval['requested_at'] ?? ''));
+        $this->appendContextRow($detailRows, 'Modul', $this->usageContextLabel((string) ($approval['usage_context'] ?? '')));
+
+        return [
+            'request_type_label' => $this->stringValue($approval['inactive_reason_label'] ?? 'Alt motiv'),
+            'resource_type' => $resourceType,
+            'resource_type_label' => $this->resourceTypeLabel($resourceType),
+            'primary_label' => $primaryLabel,
+            'problem_title' => $problemTitle,
+            'operation_title' => $operationTitle,
+            'operation_has_trip' => $tripId > 0,
+            'operation_url' => $this->approvalOperationUrl($tripId),
+            'operation_link_label' => $tripId > 0 ? 'Vezi cursa' : '',
+            'usage_date' => $usageDate,
+            'usage_date_label' => $usageLabel,
+            'inactive_date' => $inactiveDate,
+            'inactive_date_label' => $inactiveLabel,
+            'summary_rows' => $summaryRows,
+            'detail_rows' => $detailRows,
+            'scope_message' => $this->approvalScopeMessage($approval, $primaryLabel, $problemTitle),
+            'scope_kind' => $tripId > 0 ? 'trip' : 'request',
+            'module_label' => $this->usageContextLabel((string) ($approval['usage_context'] ?? '')),
+        ];
+    }
+
+    private function approvalPrimaryLabel(array $approval): string
+    {
+        return $this->firstNonEmpty(
+            $approval['resource_label'] ?? '',
+            $approval['current_vehicle_label'] ?? '',
+            $approval['current_driver_label'] ?? '',
+            $this->resourceTypeLabel((string) ($approval['resource_type'] ?? ''))
+        );
+    }
+
+    private function approvalProblemTitle(array $approval, array $documents, array $snapshot): string
+    {
+        $reason = (string) ($approval['inactive_reason'] ?? 'other');
+        $documentNames = $this->affectedDocumentNames($documents);
+        $documentLabel = implode(', ', $documentNames);
+
+        if ($documentNames !== []) {
+            $expired = [];
+            $missing = [];
+            foreach ($documents as $document) {
+                $name = trim((string) ($document['document_name'] ?? ''));
+                if ($name === '') {
+                    continue;
+                }
+                if ((string) ($document['document_status'] ?? '') === 'missing') {
+                    $missing[$name] = $name;
+                } else {
+                    $expired[$name] = $name;
+                }
+            }
+
+            if ($expired !== [] && $missing !== []) {
+                return 'Documente lipsa/expirate: ' . $documentLabel;
+            }
+            if ($expired !== []) {
+                return (count($expired) === 1 ? 'Document expirat: ' : 'Documente expirate: ') . implode(', ', array_values($expired));
+            }
+            if ($missing !== []) {
+                return (count($missing) === 1 ? 'Document lipsa: ' : 'Documente lipsa: ') . implode(', ', array_values($missing));
+            }
+        }
+
+        if ($reason === 'repair') {
+            return 'Reparatie activa/programata';
+        }
+
+        $detail = trim((string) ($snapshot['detail'] ?? ''));
+        if ($detail !== '') {
+            return (string) ($approval['inactive_reason_label'] ?? 'Alt motiv') . ': ' . $detail;
+        }
+
+        return (string) ($approval['inactive_reason_label'] ?? 'Alt motiv');
+    }
+
+    private function approvalOperationTitle(array $approval): string
+    {
+        $tripId = (int) ($approval['trip_id'] ?? 0);
+        if ($tripId <= 0) {
+            return 'Solicitare fara cursa asociata';
+        }
+
+        $transportLabel = $this->transportTypeLabel((string) ($approval['trip_transport_type'] ?? ''));
+
+        return trim('Cursa #' . $tripId . ($transportLabel !== '' ? ' · ' . $transportLabel : ''));
+    }
+
+    private function approvalUsageDate(array $approval): string
+    {
+        return $this->firstNonEmpty(
+            $approval['trip_loading_date'] ?? '',
+            $approval['trip_start_date'] ?? '',
+            $approval['trip_date'] ?? ''
+        );
+    }
+
+    private function approvalInactiveDate(array $approval, array $documents): string
+    {
+        $expiry = $this->firstDocumentExpiry($documents);
+        if ($expiry !== '') {
+            return $expiry;
+        }
+
+        return $this->normalizeDate($approval['inactive_since'] ?? null) ?? '';
+    }
+
+    private function approvalInactiveDateLabel(array $approval, array $documents): string
+    {
+        foreach ($documents as $document) {
+            if ((string) ($document['document_status'] ?? '') === 'expired') {
+                return 'Expirat din';
+            }
+        }
+
+        $reason = (string) ($approval['inactive_reason'] ?? '');
+        return $reason === 'missing_documents' ? 'Lipsa din' : 'Inactiv din';
+    }
+
+    private function approvalOverdueLabel(string $usageDate, array $documents): string
+    {
+        $expiry = $this->firstDocumentExpiry($documents);
+        if ($usageDate === '' || $expiry === '') {
+            return '';
+        }
+
+        try {
+            $usage = new DateTimeImmutable($usageDate);
+            $expires = new DateTimeImmutable($expiry);
+        } catch (Throwable) {
+            return '';
+        }
+
+        if ($usage <= $expires) {
+            return '';
+        }
+
+        $days = $expires->diff($usage)->days;
+        if ($days <= 0) {
+            return '';
+        }
+
+        return $days === 1 ? '1 zi' : $days . ' zile';
+    }
+
+    private function firstDocumentExpiry(array $documents): string
+    {
+        $dates = [];
+        foreach ($documents as $document) {
+            if ((string) ($document['document_status'] ?? '') !== 'expired') {
+                continue;
+            }
+            $date = $this->normalizeDate($document['expiry_date'] ?? null);
+            if ($date !== null) {
+                $dates[] = $date;
+            }
+        }
+
+        sort($dates);
+        return $dates[0] ?? '';
+    }
+
+    private function appendDocumentContextRows(array &$rows, array $documents): void
+    {
+        foreach ($documents as $document) {
+            $name = trim((string) ($document['document_name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            $status = (string) ($document['document_status'] ?? '');
+            $label = $status === 'missing' ? 'Document lipsa' : 'Document expirat';
+            $value = $name;
+            $expiry = $this->normalizeDate($document['expiry_date'] ?? null);
+            if ($expiry !== null && $status === 'expired') {
+                $value .= ' · expira la ' . $this->formatContextDate($expiry);
+            }
+            $this->appendContextRow($rows, $label, $value);
+        }
+    }
+
+    private function appendRepairContextRows(array &$rows, array $snapshot): void
+    {
+        $repair = is_array($snapshot['repair'] ?? null) ? $snapshot['repair'] : [];
+        if ($repair === []) {
+            return;
+        }
+
+        $this->appendContextRow($rows, 'Status reparatie', $this->stringValue($repair['status'] ?? ''));
+        $this->appendContextRow($rows, 'Data reparatie', $this->formatContextDate($repair['start_date'] ?? ''));
+        $this->appendContextRow($rows, 'Service', $this->stringValue($repair['supplier'] ?? ''));
+        $this->appendContextRow($rows, 'Detaliu reparatie', $this->stringValue($repair['detail'] ?? ''));
+    }
+
+    private function appendLeaveContextRows(array &$rows, array $snapshot): void
+    {
+        $leave = is_array($snapshot['leave'] ?? null) ? $snapshot['leave'] : [];
+        if ($leave === []) {
+            return;
+        }
+
+        $start = $this->formatContextDate($leave['start_date'] ?? '');
+        $end = $this->formatContextDate($leave['end_date'] ?? '');
+        $period = $start;
+        if ($end !== '' && $end !== $start) {
+            $period .= ' - ' . $end;
+        }
+        $this->appendContextRow($rows, 'Perioada indisponibila', $period);
+        $this->appendContextRow($rows, 'Detaliu indisponibilitate', $this->stringValue($leave['detail'] ?? ''));
+    }
+
+    private function approvalRouteLabel(array $approval): string
+    {
+        $start = $this->firstNonEmpty(
+            $approval['trip_load_location_name'] ?? '',
+            $approval['trip_departure_text'] ?? '',
+            $approval['trip_suction_text'] ?? ''
+        );
+        $end = $this->firstNonEmpty(
+            $approval['trip_unload_zone_name'] ?? '',
+            $approval['trip_delivery_text'] ?? '',
+            $approval['trip_closing_location_text'] ?? ''
+        );
+
+        if ($start !== '' && $end !== '' && mb_strtolower($start, 'UTF-8') !== mb_strtolower($end, 'UTF-8')) {
+            return $start . ' -> ' . $end;
+        }
+
+        return $start !== '' ? $start : $end;
+    }
+
+    private function approvalIntervalLabel(array $approval): string
+    {
+        $start = $this->formatContextDate($approval['trip_start_date'] ?? '');
+        $end = $this->formatContextDate($approval['trip_end_date'] ?? '');
+        if ($start === '') {
+            return $end;
+        }
+        if ($end === '' || $end === $start) {
+            return $start;
+        }
+
+        return $start . ' - ' . $end;
+    }
+
+    private function approvalScopeMessage(array $approval, string $primaryLabel, string $problemTitle): string
+    {
+        $resourceType = (string) ($approval['resource_type'] ?? '');
+        $tripId = (int) ($approval['trip_id'] ?? 0);
+        $resourceText = match ($resourceType) {
+            'driver' => 'soferului',
+            'repair' => 'vehiculului',
+            default => 'vehiculului',
+        };
+        $resourceSubjectText = match ($resourceType) {
+            'driver' => 'soferul',
+            'repair' => 'vehiculul',
+            default => 'vehiculul',
+        };
+        $targetText = $primaryLabel !== '' ? $resourceText . ' ' . $primaryLabel : $resourceText;
+        $requestTargetText = $primaryLabel !== '' ? $resourceSubjectText . ' ' . $primaryLabel : $resourceSubjectText;
+        $problem = trim($problemTitle);
+        $problemSuffix = $problem !== '' ? ', desi exista motivul: ' . $problem . '.' : '.';
+
+        if ($tripId > 0) {
+            return 'Prin aprobare permiti utilizarea ' . $targetText . ' in cursa #' . $tripId . $problemSuffix;
+        }
+
+        return 'Prin aprobare confirmi aceasta solicitare din Dispecer curse pentru ' . $requestTargetText . $problemSuffix . ' Resursa nu este reactivata global.';
+    }
+
+    private function approvalOperationUrl(int $tripId): string
+    {
+        if ($tripId <= 0) {
+            return '';
+        }
+
+        if (function_exists('build_query_url')) {
+            return build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $tripId]);
+        }
+
+        return 'index.php?page=dispecer_curse&action=edit&id=' . $tripId;
+    }
+
+    private function resourceTypeLabel(string $resourceType): string
+    {
+        return match ($resourceType) {
+            'driver' => 'Sofer',
+            'repair' => 'Reparatie',
+            default => 'Vehicul',
+        };
+    }
+
+    private function transportTypeLabel(string $transportType): string
+    {
+        $transportType = trim($transportType);
+        return self::TRANSPORT_TYPE_LABELS[$transportType] ?? $transportType;
+    }
+
+    private function usageContextLabel(string $usageContext): string
+    {
+        $usageContext = trim($usageContext);
+        if ($usageContext === '' || $usageContext === 'dispecer_curse') {
+            return 'Dispecer curse';
+        }
+
+        return ucfirst(str_replace('_', ' ', $usageContext));
+    }
+
+    private function appendContextRow(array &$rows, string $label, string $value): void
+    {
+        $label = trim($label);
+        $value = trim($value);
+        if ($label === '' || $value === '') {
+            return;
+        }
+
+        $rows[] = [
+            'label' => $label,
+            'value' => $value,
+        ];
+    }
+
+    private function firstNonEmpty(mixed ...$values): string
+    {
+        foreach ($values as $value) {
+            $string = $this->stringValue($value);
+            if ($string !== '') {
+                return $string;
+            }
+        }
+
+        return '';
+    }
+
+    private function stringValue(mixed $value): string
+    {
+        if ($value === null) {
+            return '';
+        }
+
+        return trim((string) $value);
+    }
+
+    private function formatContextDate(mixed $value): string
+    {
+        $date = $this->normalizeDate($value);
+        if ($date === null) {
+            return '';
+        }
+
+        try {
+            return (new DateTimeImmutable($date))->format('d.m.Y');
+        } catch (Throwable) {
+            return $date;
+        }
+    }
+
+    private function formatContextDateTime(mixed $value): string
+    {
+        $raw = trim((string) $value);
+        if ($raw === '' || $raw === '0000-00-00 00:00:00') {
+            return '';
+        }
+
+        try {
+            return (new DateTimeImmutable($raw))->format('d.m.Y H:i');
+        } catch (Throwable) {
+            return $raw;
+        }
+    }
+
+    private function decodeSnapshot(string $json): array
+    {
+        $snapshot = json_decode($json, true);
+
+        return is_array($snapshot) ? $snapshot : [];
     }
 
     private function affectedDocumentNames(array $documents): array

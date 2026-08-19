@@ -52,11 +52,32 @@ function cardoil_cli_flag(string $name, array $argv): bool
     return false;
 }
 
+/*
+ * Moduri de rulare:
+ *  (fara argumente)      incremental dupa ID (id_minim = MAX(api_id) din DB),
+ *                        cu paginare automata la limita de 1000/cerere.
+ *                        Recomandat pentru rularea programata (VPS / cron).
+ *                        Fallback: daca baza e goala, fereastra ultimelor 31 zile.
+ *  --days=N              fereastra rulanta: ultimele N zile pana azi (chunked).
+ *  --from=... --to=...   interval explicit, oricat de lung: se sparge automat in
+ *                        ferestre de max 31 zile, injumatatite cand raspunsul
+ *                        atinge 1000 de inregistrari. Pentru backfill.
+ *  --clear[=all]         sterge inainte de import (intervalul / tot).
+ */
 $today = new DateTimeImmutable('today');
-$monthFrom = $today->modify('first day of this month');
-$monthTo = $today->modify('last day of this month');
-$dateFrom = cardoil_cli_date(cardoil_cli_arg('from', $argv), $monthFrom);
-$dateTo = cardoil_cli_date(cardoil_cli_arg('to', $argv), $monthTo);
+$fromArg = cardoil_cli_arg('from', $argv);
+$toArg = cardoil_cli_arg('to', $argv);
+$daysArg = cardoil_cli_arg('days', $argv);
+$incrementalMode = $fromArg === null && $toArg === null && $daysArg === null;
+
+if ($daysArg !== null) {
+    $days = max(1, (int) $daysArg);
+    $dateFrom = $today->modify('-' . ($days - 1) . ' days');
+    $dateTo = $today;
+} else {
+    $dateFrom = cardoil_cli_date($fromArg, $today->modify('-30 days'));
+    $dateTo = cardoil_cli_date($toArg, $today);
+}
 $clearMode = strtolower(trim((string) (cardoil_cli_arg('clear', $argv) ?? '')));
 $clearRequested = cardoil_cli_flag('clear', $argv);
 $noDemo = cardoil_cli_flag('no-demo', $argv);
@@ -72,7 +93,9 @@ if ($dateTo < $dateFrom) {
 }
 
 $startedAt = date('Y-m-d H:i:s');
-echo '[' . $startedAt . '] CardOil sync start: ' . $dateFrom->format('Y-m-d') . ' - ' . $dateTo->format('Y-m-d') . PHP_EOL;
+echo '[' . $startedAt . '] CardOil sync start: '
+    . ($incrementalMode ? 'incremental (dupa ultimul ID din DB)' : $dateFrom->format('Y-m-d') . ' - ' . $dateTo->format('Y-m-d'))
+    . PHP_EOL;
 
 try {
     $model = new FuelModel(get_pdo());
@@ -89,22 +112,30 @@ try {
         );
     }
 
-    $result = $model->syncFromApi($dateFrom, $dateTo, new CardOilApiClient());
+    $client = new CardOilApiClient();
+    $result = $incrementalMode
+        ? $model->syncLatestFromApi($client)
+        : $model->syncRangeFromApi($dateFrom, $dateTo, $client);
 
     echo sprintf(
-        "[%s] CardOil sync %s: primite=%d inserate=%d actualizate=%d\n",
+        "[%s] CardOil sync %s (%s): primite=%d inserate=%d actualizate=%d cereri=%d\n",
         date('Y-m-d H:i:s'),
         (string) ($result['status'] ?? 'success'),
+        (string) ($result['mode'] ?? 'range'),
         (int) ($result['records_received'] ?? 0),
         (int) ($result['records_inserted'] ?? 0),
-        (int) ($result['records_updated'] ?? 0)
+        (int) ($result['records_updated'] ?? 0),
+        (int) ($result['requests'] ?? 1)
     );
 
+    foreach ((array) ($result['warnings'] ?? []) as $warning) {
+        echo '[' . date('Y-m-d H:i:s') . '] Atentie: ' . $warning . PHP_EOL;
+    }
     if (!empty($result['error_message'])) {
         echo '[' . date('Y-m-d H:i:s') . '] Info: ' . (string) $result['error_message'] . PHP_EOL;
     }
 
-    exit(0);
+    exit(((string) ($result['status'] ?? 'success')) === 'error' ? 1 : 0);
 } catch (Throwable $exception) {
     fwrite(STDERR, '[' . date('Y-m-d H:i:s') . '] CardOil sync error: ' . $exception->getMessage() . PHP_EOL);
     exit(1);

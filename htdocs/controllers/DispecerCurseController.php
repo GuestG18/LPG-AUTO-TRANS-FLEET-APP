@@ -1024,6 +1024,9 @@ class DispecerCurseController
             redirect(build_query_url(['page' => 'dispecer_curse']));
         }
 
+        // Tariful se rezolva dupa DATA CURSEI, nu dupa data curenta.
+        $data = $this->applyVersionedPricing($data);
+
         $now = date('Y-m-d H:i:s');
         $data['created_by'] = $this->currentUserId();
         $data['created_at'] = $now;
@@ -1041,6 +1044,7 @@ class DispecerCurseController
             $result = $this->model->createRaceAndSyncVehicleKm($data);
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
             $raceId = (int) ($result['race_id'] ?? 0);
+            $this->persistTariffTraceability($raceId, $data);
             $resourcesForTripApproval = $this->resourcesForTripInactiveApprovalCreation($inactiveResources, $approvalDecision);
             if ($raceId > 0 && $resourcesForTripApproval !== []) {
                 $createdApprovalIds = $this->inactiveApprovalModel->createForInactiveResources(
@@ -1269,6 +1273,14 @@ class DispecerCurseController
         // valorile financiare se recalculeaza doar cand se schimba un camp de tarifare.
         $data = $this->mergeRaceUpdateData($data, $raceBeforeUpdate, $_POST);
 
+        // Recalcularea comerciala se face DOAR la cererea explicita a operatorului
+        // si niciodata pentru o cursa deja facturata. Tariful se rezolva dupa data cursei.
+        $explicitRecalculation = trim((string) ($_POST['recalculate_tariff'] ?? '')) === '1'
+            && (string) ($raceBeforeUpdate['status_facturare'] ?? '') !== 'facturat';
+        if ($explicitRecalculation) {
+            $data = $this->applyVersionedPricing($data);
+        }
+
         // Statusul de facturare nu se editeaza din acest formular: se pastreaza
         // valoarea existenta (se schimba doar din Centralizator Facturare).
         $existingRace = $this->model->getRaceById($raceId);
@@ -1287,6 +1299,9 @@ class DispecerCurseController
             }
 
             $result = $this->model->updateRaceAndSyncVehicleKm($raceId, $data, $this->currentUserId());
+            if ($explicitRecalculation) {
+                $this->persistTariffTraceability($raceId, $data);
+            }
             $resourcesForTripApproval = $this->resourcesForTripInactiveApprovalCreation($inactiveResources, $approvalDecision);
             if ($resourcesForTripApproval !== []) {
                 $createdApprovalIds = $this->inactiveApprovalModel->createForInactiveResources(
@@ -1329,6 +1344,126 @@ class DispecerCurseController
         }
 
         redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
+    }
+
+    /**
+     * Reevalueaza valorile comerciale prin serviciul de tarife versionate,
+     * folosind DATA DE BUSINESS a cursei (`data_cursa`), nu data curenta.
+     *
+     * Daca nicio componenta nu se rezolva dintr-o versiune de tarif (adica modulul
+     * nu este inca migrat), valorile calculate de motorul existent raman neatinse.
+     */
+    private function applyVersionedPricing(array $data): array
+    {
+        if (!class_exists('TransportPricingService')) {
+            return $data;
+        }
+
+        try {
+            $service = new TransportPricingService($this->db);
+            $quote = $service->quote([
+                'beneficiar_id' => (int) ($data['beneficiar_id'] ?? 0),
+                'tip_transport' => (string) ($data['tip_transport'] ?? ''),
+                'data_cursa' => (string) ($data['data_cursa'] ?? date('Y-m-d')),
+                'vehicle_id' => (int) ($data['vehicle_id'] ?? 0),
+                'loc_incarcare_id' => (int) ($data['loc_incarcare_id'] ?? 0),
+                'zona_distributie_id' => (int) ($data['zona_distributie_id'] ?? 0),
+                'cantitate_incarcata' => (float) ($data['cantitate_incarcata'] ?? 0),
+                'km_cursa' => (float) ($data['km_cursa'] ?? 0),
+                'km_totali' => (float) ($data['km_totali'] ?? 0),
+                'ore_aspirare' => (float) ($data['ore_aspirare'] ?? 0),
+                'km_dislocare' => (float) ($data['km_dislocare'] ?? 0),
+                'tona_livrata' => (float) ($data['tona_livrata'] ?? 0),
+                'tona_aspirata_lichida' => (float) ($data['tona_aspirata_lichida'] ?? 0),
+                'tona_aspirata_gazoasa' => (float) ($data['tona_aspirata_gazoasa'] ?? 0),
+            ]);
+
+            if (empty($quote['ok'])) {
+                return $data;
+            }
+
+            $resolvedFromVersion = false;
+            foreach ((array) ($quote['components'] ?? []) as $component) {
+                if ((string) ($component['source'] ?? '') === 'version') {
+                    $resolvedFromVersion = true;
+                    break;
+                }
+            }
+
+            if (!$resolvedFromVersion) {
+                return $data;
+            }
+
+            $data['pret_tarifare'] = round((float) ($quote['pret_tarifare'] ?? 0), 2);
+            $data['total_facturare'] = round((float) ($quote['total_facturare'] ?? 0), 2);
+            $data['__tariff_version_id'] = $quote['tariff_version_id'] ?? null;
+            $encoded = json_encode($quote, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $data['__tariff_breakdown'] = is_string($encoded) ? $encoded : null;
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][versioned_pricing] ' . $exception->getMessage());
+        }
+
+        return $data;
+    }
+
+    /**
+     * Persista trasabilitatea tarifului pe cursa, printr-un UPDATE separat si
+     * aditiv (coloanele sunt nullable, cursele istorice raman NULL).
+     */
+    private function persistTariffTraceability(int $raceId, array $data): void
+    {
+        if ($raceId <= 0 || !array_key_exists('__tariff_breakdown', $data)) {
+            return;
+        }
+        if (!$this->columnExists('curse_dispecer', 'tariff_version_id')) {
+            return;
+        }
+
+        try {
+            $stmt = $this->db->prepare('
+                UPDATE curse_dispecer
+                SET tariff_version_id = :version_id, tariff_breakdown_json = :breakdown
+                WHERE id = :id
+            ');
+            $versionId = $data['__tariff_version_id'] ?? null;
+            if ($versionId !== null && (int) $versionId > 0) {
+                $stmt->bindValue(':version_id', (int) $versionId, PDO::PARAM_INT);
+            } else {
+                $stmt->bindValue(':version_id', null, PDO::PARAM_NULL);
+            }
+            $breakdown = $data['__tariff_breakdown'] ?? null;
+            if (is_string($breakdown) && $breakdown !== '') {
+                $stmt->bindValue(':breakdown', $breakdown);
+            } else {
+                $stmt->bindValue(':breakdown', null, PDO::PARAM_NULL);
+            }
+            $stmt->bindValue(':id', $raceId, PDO::PARAM_INT);
+            $stmt->execute();
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][tariff_traceability] ' . $exception->getMessage());
+        }
+    }
+
+    private function columnExists(string $table, string $column): bool
+    {
+        static $cache = [];
+        $key = $table . '.' . $column;
+        if (array_key_exists($key, $cache)) {
+            return $cache[$key];
+        }
+
+        try {
+            $stmt = $this->db->prepare('
+                SELECT COUNT(*) FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c
+            ');
+            $stmt->execute(['t' => $table, 'c' => $column]);
+            $cache[$key] = (int) $stmt->fetchColumn() > 0;
+        } catch (Throwable) {
+            $cache[$key] = false;
+        }
+
+        return $cache[$key];
     }
 
     /**
@@ -1460,7 +1595,22 @@ class DispecerCurseController
         }
 
         $isInvoiced = (string) ($existing['status_facturare'] ?? '') === 'facturat';
-        if (!$pricingChanged || $isInvoiced) {
+
+        // NOU (modul Administrare tarife transport):
+        // Editarea unei curse NU mai reevalueaza tacit valorile comerciale.
+        // Recalcularea se face doar la cerere explicita a operatorului
+        // (`recalculate_tariff=1`) si niciodata pentru o cursa facturata.
+        $recalculationRequested = trim((string) ($post['recalculate_tariff'] ?? '')) === '1';
+
+        if ($pricingChanged && !$isInvoiced && !$recalculationRequested) {
+            flash_set(
+                'info',
+                'Datele operationale au fost actualizate. Valorile comerciale au ramas neschimbate; '
+                . 'foloseste actiunea "Recalculeaza tariful" daca vrei sa le reevaluezi.'
+            );
+        }
+
+        if ($isInvoiced || !$recalculationRequested) {
             foreach (['pret_tarifare', 'total_facturare', 'cost_km_primar', 'cost_km_distributie', 'cost_km_mixt', 'cost_km_compresor'] as $field) {
                 $data[$field] = round((float) ($existing[$field] ?? 0), 2);
             }

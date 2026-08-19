@@ -10,6 +10,14 @@ $record = $record ?? null;
 $documents = $documents ?? [];
 $message = $message ?? '';
 $isApprove = $record !== null && (string) $record['action'] === 'approve';
+$context = $record !== null && is_array($record['approval_context'] ?? null) ? $record['approval_context'] : [];
+$summaryRows = is_array($context['summary_rows'] ?? null) ? $context['summary_rows'] : [];
+$detailRows = is_array($context['detail_rows'] ?? null) ? $context['detail_rows'] : [];
+$primaryLabel = trim((string) ($context['primary_label'] ?? ($record['resource_label'] ?? '')));
+$problemTitle = trim((string) ($context['problem_title'] ?? ($record['inactive_reason_label'] ?? '')));
+$operationTitle = trim((string) ($context['operation_title'] ?? ''));
+$scopeMessage = trim((string) ($context['scope_message'] ?? ''));
+$requestTypeLabel = trim((string) ($context['request_type_label'] ?? ($record['inactive_reason_label'] ?? '')));
 
 $resourceTypes = ['vehicle' => 'Vehicul', 'driver' => 'Sofer', 'repair' => 'Reparatie'];
 
@@ -59,6 +67,15 @@ $accent = $isApprove ? '#16a34a' : '#dc2626';
     }
     button:active { filter: brightness(.92); }
     .hint { margin: 14px 0 0; color: #64748b; font-size: 12px; line-height: 1.6; text-align: center; }
+    .problem { margin: 0 0 12px; color: #0f172a; font-size: 15px; font-weight: 800; line-height: 1.35; }
+    .operation {
+        margin: 0 0 14px; padding: 10px 12px; border: 1px solid #dbeafe; border-radius: 8px;
+        background: #eff6ff; color: #1e3a8a; font-size: 14px; font-weight: 800;
+    }
+    .scope {
+        margin: 16px 0 4px; padding: 12px; border: 1px solid #bbf7d0; border-radius: 8px;
+        background: #f0fdf4; color: #166534; font-size: 13px; font-weight: 700; line-height: 1.45;
+    }
     .result-icon {
         width: 60px; height: 60px; margin: 0 auto 16px; border-radius: 50%;
         display: flex; align-items: center; justify-content: center;
@@ -80,26 +97,47 @@ $accent = $isApprove ? '#16a34a' : '#dc2626';
 
     <?php if ($state === 'confirm' && $record !== null): ?>
 
-        <span class="badge"><?= e((string) $record['inactive_reason_label']) ?></span>
-        <h1><?= e((string) $record['resource_label']) ?></h1>
+        <span class="badge"><?= e($requestTypeLabel !== '' ? $requestTypeLabel : (string) $record['inactive_reason_label']) ?></span>
+        <h1><?= e($primaryLabel !== '' ? $primaryLabel : (string) $record['resource_label']) ?></h1>
         <p class="sub">
             <?= e($resourceTypes[(string) $record['resource_type']] ?? (string) $record['resource_type']) ?>
             &middot; cerere #<?= (int) $record['approval_id'] ?>
         </p>
 
         <div class="rule"></div>
+        <?php if ($problemTitle !== ''): ?>
+            <p class="problem"><?= e($problemTitle) ?></p>
+        <?php endif; ?>
+        <?php if ($operationTitle !== ''): ?>
+            <div class="operation"><?= e($operationTitle) ?></div>
+        <?php endif; ?>
         <table>
-            <tr><td class="k">Motiv</td><td class="v"><?= e((string) $record['inactive_reason_label']) ?></td></tr>
-            <?php if ($documents !== []): ?>
-                <tr>
-                    <td class="k">Documente afectate</td>
-                    <td class="v"><?= e(implode(', ', array_column($documents, 'document_name'))) ?></td>
-                </tr>
+            <?php foreach (array_merge($summaryRows, $detailRows) as $row): ?>
+                <?php
+                $rowLabel = trim((string) ($row['label'] ?? ''));
+                $rowValue = trim((string) ($row['value'] ?? ''));
+                if ($rowLabel === '' || $rowValue === '') {
+                    continue;
+                }
+                ?>
+                <tr><td class="k"><?= e($rowLabel) ?></td><td class="v"><?= e($rowValue) ?></td></tr>
+            <?php endforeach; ?>
+            <?php if ($summaryRows === [] && $detailRows === []): ?>
+                <tr><td class="k">Motiv</td><td class="v"><?= e((string) $record['inactive_reason_label']) ?></td></tr>
+                <?php if ($documents !== []): ?>
+                    <tr>
+                        <td class="k">Documente afectate</td>
+                        <td class="v"><?= e(implode(', ', array_column($documents, 'document_name'))) ?></td>
+                    </tr>
+                <?php endif; ?>
+                <tr><td class="k">Inactiv din</td><td class="v"><?= e($formatDate($record['inactive_since'])) ?></td></tr>
+                <tr><td class="k">Utilizat in</td><td class="v"><?= e((string) $record['usage_context']) ?></td></tr>
+                <tr><td class="k">Solicitat de</td><td class="v"><?= e((string) ($record['requested_by_name'] ?? '-')) ?></td></tr>
             <?php endif; ?>
-            <tr><td class="k">Inactiv din</td><td class="v"><?= e($formatDate($record['inactive_since'])) ?></td></tr>
-            <tr><td class="k">Utilizat in</td><td class="v"><?= e((string) $record['usage_context']) ?></td></tr>
-            <tr><td class="k">Solicitat de</td><td class="v"><?= e((string) ($record['requested_by_name'] ?? '-')) ?></td></tr>
         </table>
+        <?php if ($scopeMessage !== ''): ?>
+            <div class="scope"><strong>Ce aprob?</strong><br><?= e($scopeMessage) ?></div>
+        <?php endif; ?>
         <div class="rule"></div>
 
         <form method="post" action="<?= e(url('index.php')) ?>?page=aprobare_email&amp;action=confirm">
@@ -121,7 +159,7 @@ $accent = $isApprove ? '#16a34a' : '#dc2626';
             <h1 style="margin-top:0;"><?= e($title ?? '') ?></h1>
             <?php if ($record !== null): ?>
                 <p class="sub" style="margin-bottom:16px;">
-                    <?= e((string) $record['resource_label']) ?> &middot; cerere #<?= (int) $record['approval_id'] ?>
+                    <?= e($primaryLabel !== '' ? $primaryLabel : (string) $record['resource_label']) ?> &middot; cerere #<?= (int) $record['approval_id'] ?>
                 </p>
             <?php endif; ?>
             <p class="muted"><?= e($message) ?></p>
@@ -135,7 +173,7 @@ $accent = $isApprove ? '#16a34a' : '#dc2626';
             <p class="muted"><?= e($message) ?></p>
             <?php if ($record !== null): ?>
                 <p class="sub" style="margin-top:16px;">
-                    <?= e((string) $record['resource_label']) ?> &middot; cerere #<?= (int) $record['approval_id'] ?>
+                    <?= e($primaryLabel !== '' ? $primaryLabel : (string) $record['resource_label']) ?> &middot; cerere #<?= (int) $record['approval_id'] ?>
                 </p>
             <?php endif; ?>
         </div>

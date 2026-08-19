@@ -323,6 +323,7 @@ require_once __DIR__ . '/models/DriverActivityHistoryModel.php';
 require_once __DIR__ . '/models/FuelModel.php';
 require_once __DIR__ . '/models/UserActivityModel.php';
 require_once __DIR__ . '/models/LeasingSchedulerModel.php';
+require_once __DIR__ . '/models/TransportTariffModel.php';
 
 require_once __DIR__ . '/services/EntityStatusService.php';
 require_once __DIR__ . '/services/InactiveResourceStatusService.php';
@@ -332,6 +333,9 @@ require_once __DIR__ . '/services/CardOilApiClient.php';
 require_once __DIR__ . '/services/SasFleetClient.php';
 require_once __DIR__ . '/services/FleetLivePositionService.php';
 require_once __DIR__ . '/services/WebAuthnService.php';
+require_once __DIR__ . '/services/FuelPriceIndexService.php';
+require_once __DIR__ . '/services/TransportPricingService.php';
+require_once __DIR__ . '/services/TariffReviewService.php';
 
 require_once __DIR__ . '/controllers/AuthController.php';
 require_once __DIR__ . '/controllers/DashboardController.php';
@@ -358,6 +362,7 @@ require_once __DIR__ . '/controllers/FuelController.php';
 require_once __DIR__ . '/controllers/AccessRightsController.php';
 require_once __DIR__ . '/controllers/UserActivityController.php';
 require_once __DIR__ . '/controllers/LeasingSchedulerController.php';
+require_once __DIR__ . '/controllers/TransportTariffController.php';
 
 $db = get_pdo();
 
@@ -550,6 +555,11 @@ try {
         case 'harta_flota':
             require_auth();
             (new FleetMapController($db))->handle($action);
+            break;
+
+        case 'tarife_transport':
+            require_auth();
+            (new TransportTariffController($db))->handle($action);
             break;
 
         case 'carburanti':
