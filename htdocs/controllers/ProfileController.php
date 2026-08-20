@@ -31,6 +31,8 @@ class ProfileController
             'nume' => $old['nume'] ?? $user['nume'],
             'email' => $old['email'] ?? $user['email'],
             'telefon' => $old['telefon'] ?? ($user['telefon'] ?? ''),
+            'profile_status' => $old['profile_status'] ?? ($user['profile_status'] ?? 'activ'),
+            'status_message' => $old['status_message'] ?? ($user['status_message'] ?? ''),
         ];
 
         $passkeys = [];
@@ -46,6 +48,12 @@ class ProfileController
             'formData' => $formData,
             'errors' => $errors,
             'passkeys' => $passkeys,
+            'user' => $user,
+            'avatar' => profile_avatar_data($user),
+            'statusMeta' => profile_status_meta((string) ($user['profile_status'] ?? 'activ')),
+            'emojiChoices' => profile_emoji_choices(),
+            'avatarColors' => profile_avatar_colors(),
+            'statusOptions' => profile_status_options(),
         ]);
     }
 
@@ -195,6 +203,13 @@ class ProfileController
         $parolaNoua = (string) ($_POST['parola_noua'] ?? '');
         $confirmareParola = (string) ($_POST['confirmare_parola'] ?? '');
 
+        // Status de PREZENTA — separat de `utilizatori.status` (securitate).
+        $profileStatus = strtolower(trim((string) ($_POST['profile_status'] ?? '')));
+        if (!in_array($profileStatus, ['activ', 'ocupat', 'indisponibil'], true)) {
+            $profileStatus = (string) ($user['profile_status'] ?? 'activ');
+        }
+        $statusMessage = trim((string) ($_POST['status_message'] ?? ''));
+
         $errors = [];
         if ($nume === '') {
             $errors['nume'] = 'Numele este obligatoriu.';
@@ -212,6 +227,10 @@ class ProfileController
             $errors['telefon'] = 'Numarul de telefon este prea lung.';
         }
 
+        if (mb_strlen($statusMessage) > 255) {
+            $errors['status_message'] = 'Mesajul personalizat este prea lung (maxim 255 caractere).';
+        }
+
         if ($parolaNoua !== '' || $confirmareParola !== '') {
             if (strlen($parolaNoua) < 8) {
                 $errors['parola_noua'] = 'Parola noua trebuie sa aiba minimum 8 caractere.';
@@ -227,6 +246,8 @@ class ProfileController
                 'nume' => $nume,
                 'email' => $email,
                 'telefon' => $telefon,
+                'profile_status' => $profileStatus,
+                'status_message' => $statusMessage,
             ], $errors);
             redirect(url('index.php?page=profil'));
         }
@@ -235,6 +256,9 @@ class ProfileController
             'nume' => $nume,
             'email' => $email,
             'telefon' => $telefon !== '' ? $telefon : null,
+            'profile_status' => $profileStatus,
+            // Mesajul gol se persista ca NULL, nu ca sir vid.
+            'status_message' => $statusMessage !== '' ? $statusMessage : null,
             'updated_at' => date('Y-m-d H:i:s'),
         ];
 
@@ -246,8 +270,156 @@ class ProfileController
 
         $_SESSION['auth_user']['nume'] = $nume;
         $_SESSION['auth_user']['email'] = $email;
+        $_SESSION['auth_user']['profile_status'] = $profileStatus;
 
         flash_set('success', 'Profilul a fost actualizat cu succes.');
         redirect(url('index.php?page=profil'));
+    }
+
+    // =================================================================
+    // Avatar — imagine decupata sau emoji
+    //
+    // Ambele actiuni modifica EXCLUSIV utilizatorul autentificat: id-ul este
+    // luat din sesiune, niciodata din request.
+    // =================================================================
+
+    /** Primeste imaginea deja decupata in browser, o normalizeaza si o salveaza. */
+    public function avatarUpload(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->json(['ok' => false, 'error' => 'Metoda invalida.'], 405);
+        }
+        if (!verify_csrf_token((string) ($_POST['_token'] ?? ''))) {
+            $this->json(['ok' => false, 'error' => 'Token CSRF invalid. Reincarca pagina.'], 400);
+        }
+
+        $id = (int) (current_user()['id'] ?? 0);
+        $user = $id > 0 ? $this->userModel->findById($id) : null;
+        if ($user === null) {
+            $this->json(['ok' => false, 'error' => 'Utilizatorul curent nu a fost gasit.'], 404);
+        }
+
+        $file = $_FILES['avatar'] ?? null;
+        if (!is_array($file)) {
+            $this->json(['ok' => false, 'error' => 'Nu a fost primit niciun fisier.'], 400);
+        }
+
+        $service = new UserAvatarService();
+        $result = $service->storeUploadedImage($file);
+        if (!$result['ok']) {
+            $this->json(['ok' => false, 'error' => (string) $result['error']], 422);
+        }
+
+        $previousType = (string) ($user['avatar_type'] ?? 'none');
+        $previousValue = (string) ($user['avatar_value'] ?? '');
+
+        try {
+            // Badge-ul emoji NU este atins: poza si emoji-ul coexista.
+            $this->userModel->updateProfile($id, [
+                'avatar_type' => 'image',
+                'avatar_value' => $result['filename'],
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[profile][avatar_upload] ' . $exception->getMessage());
+            $service->deleteStoredImage($result['filename']);
+            $this->json(['ok' => false, 'error' => 'Nu s-a putut salva avatarul.'], 500);
+        }
+
+        // Curatam fisierul vechi doar dupa ce noul avatar este persistat.
+        if ($previousType === 'image' && $previousValue !== '' && $previousValue !== $result['filename']) {
+            $service->deleteStoredImage($previousValue);
+        }
+
+        refresh_current_user_profile_visuals([
+            'avatar_type' => 'image',
+            'avatar_value' => $result['filename'],
+            'avatar_emoji' => $user['avatar_emoji'] ?? null,
+            'avatar_color' => $user['avatar_color'] ?? null,
+            'profile_status' => $user['profile_status'] ?? 'activ',
+        ]);
+
+        flash_set('success', 'Poza de profil a fost actualizata.');
+        $this->json([
+            'ok' => true,
+            'type' => 'image',
+            'url' => $service->publicUrl((string) $result['filename']),
+        ]);
+    }
+
+    /**
+     * Seteaza (sau elimina) badge-ul emoji.
+     *
+     * Emoji-ul este INDEPENDENT de poza: nu sterge avatarul de baza si nu
+     * elibereaza niciun fisier. Trimiterea unui emoji gol sterge badge-ul.
+     */
+    public function avatarEmoji(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->json(['ok' => false, 'error' => 'Metoda invalida.'], 405);
+        }
+        if (!verify_csrf_token((string) ($_POST['_token'] ?? ''))) {
+            $this->json(['ok' => false, 'error' => 'Token CSRF invalid. Reincarca pagina.'], 400);
+        }
+
+        $id = (int) (current_user()['id'] ?? 0);
+        $user = $id > 0 ? $this->userModel->findById($id) : null;
+        if ($user === null) {
+            $this->json(['ok' => false, 'error' => 'Utilizatorul curent nu a fost gasit.'], 404);
+        }
+
+        $emoji = trim((string) ($_POST['emoji'] ?? ''));
+
+        // Emoji gol = eliminarea badge-ului (toggle off).
+        if ($emoji === '') {
+            $this->userModel->updateProfile($id, [
+                'avatar_emoji' => null,
+                'avatar_color' => null,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            refresh_current_user_profile_visuals([
+                'avatar_type' => $user['avatar_type'] ?? 'none',
+                'avatar_value' => $user['avatar_value'] ?? null,
+                'avatar_emoji' => null,
+                'avatar_color' => null,
+                'profile_status' => $user['profile_status'] ?? 'activ',
+            ]);
+
+            $this->json(['ok' => true, 'emoji' => null, 'color' => null]);
+        }
+
+        if (!UserAvatarService::isAllowedEmoji($emoji)) {
+            $this->json(['ok' => false, 'error' => 'Emoji invalid.'], 422);
+        }
+
+        $color = UserAvatarService::normalizeColor((string) ($_POST['color'] ?? ''));
+        if ($color === null) {
+            $colors = UserAvatarService::AVATAR_COLORS;
+            $index = array_search($emoji, UserAvatarService::EMOJI_CHOICES, true);
+            $color = $colors[is_int($index) ? ($index % count($colors)) : 0];
+        }
+
+        try {
+            // Nu atingem avatar_type / avatar_value: poza ramane neschimbata.
+            $this->userModel->updateProfile($id, [
+                'avatar_emoji' => $emoji,
+                'avatar_color' => $color,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[profile][avatar_emoji] ' . $exception->getMessage());
+            $this->json(['ok' => false, 'error' => 'Nu s-a putut salva emoji-ul.'], 500);
+        }
+
+        refresh_current_user_profile_visuals([
+            'avatar_type' => $user['avatar_type'] ?? 'none',
+            'avatar_value' => $user['avatar_value'] ?? null,
+            'avatar_emoji' => $emoji,
+            'avatar_color' => $color,
+            'profile_status' => $user['profile_status'] ?? 'activ',
+        ]);
+
+        $this->json(['ok' => true, 'emoji' => $emoji, 'color' => $color]);
     }
 }

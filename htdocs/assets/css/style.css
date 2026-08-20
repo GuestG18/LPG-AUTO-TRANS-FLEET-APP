@@ -5,6 +5,10 @@
     --sidebar-active-bg: #1e293b;
     --body-bg: #f5f7fb;
     --content-max-width: 1680px;
+    /* Culori severitate informatii lipsa (sursa unica: meniul Critice/Importante/Minore + randurile din Desfasurator curse) */
+    --orx-severity-critical: #dc2626;
+    --orx-severity-important: #f59e0b;
+    --orx-severity-minor: #2563eb;
 }
 
 body {
@@ -4938,6 +4942,43 @@ button.dispatcher-datetime-picker-title:focus-visible {
 .dispatcher-races-table tbody tr:hover > td,
 .curse-table tbody tr:hover > td {
     background: #f8fbff !important;
+}
+
+/* Rand evidentiat dupa severitatea informatiilor lipsa (aceleasi culori ca in meniul Critice/Importante/Minore).
+   Doar fundal translucid pe celule — fara bara laterala; normal 18%, hover 25%, selectat 30%. */
+.dispatcher-races-table tbody tr[class*="race-severity-"],
+.curse-table tbody tr[class*="race-severity-"] {
+    --row-color: transparent;
+}
+
+.dispatcher-races-table tbody tr.race-severity-critical,
+.curse-table tbody tr.race-severity-critical {
+    --row-color: var(--orx-severity-critical);
+}
+
+.dispatcher-races-table tbody tr.race-severity-important,
+.curse-table tbody tr.race-severity-important {
+    --row-color: var(--orx-severity-important);
+}
+
+.dispatcher-races-table tbody tr.race-severity-minor,
+.curse-table tbody tr.race-severity-minor {
+    --row-color: var(--orx-severity-minor);
+}
+
+.dispatcher-races-table tbody tr[class*="race-severity-"] > td,
+.curse-table tbody tr[class*="race-severity-"] > td {
+    background: color-mix(in srgb, var(--row-color) 18%, transparent) !important;
+}
+
+.dispatcher-races-table tbody tr[class*="race-severity-"]:hover > td,
+.curse-table tbody tr[class*="race-severity-"]:hover > td {
+    background: color-mix(in srgb, var(--row-color) 25%, transparent) !important;
+}
+
+.dispatcher-races-table tbody tr[class*="race-severity-"]:has(.bulk-race-checkbox:checked) > td,
+.curse-table tbody tr[class*="race-severity-"]:has(.bulk-race-checkbox:checked) > td {
+    background: color-mix(in srgb, var(--row-color) 30%, transparent) !important;
 }
 
 .dispatcher-cell-text {
@@ -21029,9 +21070,9 @@ button.dispatcher-datetime-picker-title:focus-visible {
     color: #1d4ed8;
 }
 
-.orx-tab-critical i { color: #dc2626; }
-.orx-tab-important i { color: #f59e0b; }
-.orx-tab-minor i { color: #2563eb; }
+.orx-tab-critical i { color: var(--orx-severity-critical); }
+.orx-tab-important i { color: var(--orx-severity-important); }
+.orx-tab-minor i { color: var(--orx-severity-minor); }
 
 .orx-filters {
     display: flex;
@@ -21230,9 +21271,9 @@ button.dispatcher-datetime-picker-title:focus-visible {
 }
 
 .orx-badge i { font-size: 0.45rem; }
-.orx-badge-critical { background: #fee2e2; color: #dc2626; }
-.orx-badge-important { background: #fef3c7; color: #b45309; }
-.orx-badge-minor { background: #dbeafe; color: #2563eb; }
+.orx-badge-critical { background: color-mix(in srgb, var(--orx-severity-critical) 14%, #fff); color: var(--orx-severity-critical); }
+.orx-badge-important { background: color-mix(in srgb, var(--orx-severity-important) 22%, #fff); color: #b45309; }
+.orx-badge-minor { background: color-mix(in srgb, var(--orx-severity-minor) 16%, #fff); color: var(--orx-severity-minor); }
 
 .orx-card-meta {
     display: flex;

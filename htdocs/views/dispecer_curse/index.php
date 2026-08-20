@@ -230,6 +230,15 @@ $openRacesSeverityCounts = is_array($openRacesOverview['severity_counts'] ?? nul
     ? $openRacesOverview['severity_counts']
     : ['critical' => 0, 'important' => 0, 'minor' => 0];
 $openRacesPlates = is_array($openRacesOverview['plates'] ?? null) ? $openRacesOverview['plates'] : [];
+$showMissingSeverityHighlight = !(function_exists('is_admin') && is_admin());
+$openRaceSeverityByRaceId = [];
+foreach ($openRacesRows as $openRacesSeverityRow) {
+    $openRacesSeverityRowId = (int) ($openRacesSeverityRow['id'] ?? 0);
+    $openRacesSeverityValue = (string) ($openRacesSeverityRow['missing_severity'] ?? '');
+    if ($openRacesSeverityRowId > 0 && in_array($openRacesSeverityValue, ['critical', 'important', 'minor'], true)) {
+        $openRaceSeverityByRaceId[$openRacesSeverityRowId] = $openRacesSeverityValue;
+    }
+}
 $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dispecer_curse']));
 ?>
 
@@ -1484,8 +1493,10 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                         }
                         $financialTitle = implode(' | ', $financialTitleParts);
                         $billingStatusRowClass = 'race-status-' . preg_replace('/[^a-z0-9_]/', '', strtolower($billingStatus));
+                        $rowMissingSeverity = $showMissingSeverityHighlight ? ($openRaceSeverityByRaceId[$raceId] ?? '') : '';
+                        $rowSeverityClass = $rowMissingSeverity !== '' ? ' race-severity-' . $rowMissingSeverity : '';
                         ?>
-                        <tr class="<?= e($billingStatusRowClass) ?>" data-billing-status="<?= e($billingStatus) ?>">
+                        <tr class="<?= e($billingStatusRowClass . $rowSeverityClass) ?>" data-billing-status="<?= e($billingStatus) ?>"<?= $rowMissingSeverity !== '' ? ' data-missing-severity="' . e($rowMissingSeverity) . '"' : '' ?>>
                             <td class="col-plate">
                                 <div class="cell-content">
                                     <div class="vehicle-wrap">

@@ -295,6 +295,7 @@ require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/csrf.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/access.php';
+require_once __DIR__ . '/includes/profile_helpers.php';
 
 require_once __DIR__ . '/models/BaseModel.php';
 require_once __DIR__ . '/models/AccessRightsModel.php';
@@ -333,6 +334,7 @@ require_once __DIR__ . '/services/CardOilApiClient.php';
 require_once __DIR__ . '/services/SasFleetClient.php';
 require_once __DIR__ . '/services/FleetLivePositionService.php';
 require_once __DIR__ . '/services/WebAuthnService.php';
+require_once __DIR__ . '/services/UserAvatarService.php';
 require_once __DIR__ . '/services/FuelPriceIndexService.php';
 require_once __DIR__ . '/services/TransportPricingService.php';
 require_once __DIR__ . '/services/TariffReviewService.php';
@@ -497,6 +499,10 @@ try {
                 $profileController->passkeyRegisterVerify();
             } elseif ($action === 'passkey_delete' && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 $profileController->passkeyDelete();
+            } elseif ($action === 'avatar_upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                $profileController->avatarUpload();
+            } elseif ($action === 'avatar_emoji' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                $profileController->avatarEmoji();
             } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'actualizeaza') {
                 $profileController->actualizeaza();
             } else {

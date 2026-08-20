@@ -1,0 +1,769 @@
+/* ===================================================================
+   Profilul meu — refactor vizual dupa mockup-urile de referinta
+   =================================================================== */
+
+/* Variabilele sunt declarate si pe backdrop-ul modalului: acesta este randat
+   in afara containerului .pf-page, deci nu ar mosteni altfel tokenii. */
+.pf-page,
+.pf-modal-backdrop {
+    --pf-bg: #f6f8fb;
+    --pf-card: #ffffff;
+    --pf-border: #e6eaf0;
+    --pf-border-strong: #d9e0ea;
+    --pf-text: #0f172a;
+    --pf-muted: #64748b;
+    --pf-muted-soft: #94a3b8;
+    --pf-primary: #2563eb;
+    --pf-primary-dark: #1d4ed8;
+    --pf-primary-soft: #eff4ff;
+    --pf-green: #22c55e;
+    --pf-green-dark: #15803d;
+    --pf-green-soft: #ecfdf3;
+    --pf-green-border: #bbf7d0;
+    --pf-amber: #f59e0b;
+    --pf-radius: 16px;
+    --pf-radius-sm: 10px;
+    --pf-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .05);
+}
+
+.pf-page {
+    color: var(--pf-text);
+    font-size: 14px;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+/* ---------- Page header ------------------------------------------- */
+.pf-head {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 22px;
+}
+
+.pf-head-icon {
+    width: 46px;
+    height: 46px;
+    flex: 0 0 46px;
+    border-radius: 12px;
+    background: var(--pf-primary-soft);
+    color: var(--pf-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+}
+
+.pf-head h1 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    margin: 0 0 3px;
+}
+
+.pf-head p {
+    margin: 0;
+    color: var(--pf-muted);
+    font-size: 13.5px;
+}
+
+/* ---------- Cards -------------------------------------------------- */
+.pf-card {
+    background: var(--pf-card);
+    border: 1px solid var(--pf-border);
+    border-radius: var(--pf-radius);
+    box-shadow: var(--pf-shadow);
+}
+
+.pf-card-pad { padding: 24px 28px; }
+
+.pf-card-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15.5px;
+    font-weight: 700;
+    margin: 0 0 18px;
+}
+
+.pf-card-title .pf-title-icon {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    background: var(--pf-primary-soft);
+    color: var(--pf-primary);
+}
+.pf-title-icon.is-green { background: var(--pf-green-soft); color: var(--pf-green-dark); }
+.pf-title-icon.is-amber { background: #fff7ed; color: #c2410c; }
+
+/* ---------- Identity card ------------------------------------------ */
+.pf-identity {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, .72fr) minmax(0, 1fr);
+    gap: 26px;
+    align-items: start;
+    margin-bottom: 22px;
+}
+
+.pf-identity-main {
+    display: flex;
+    align-items: center;
+    gap: 26px;
+    min-width: 0;
+}
+
+/* ---------- Avatar --------------------------------------------------
+   Primitivele (.profile-avatar-stack / .profile-avatar / .profile-avatar-badge)
+   sunt definite global in assets/css/avatar.css, pentru ca sunt folosite si de
+   bara de sus. Aici raman doar dimensiunile specifice paginii de profil.
+   -------------------------------------------------------------------- */
+.pf-avatar-wrap { position: relative; flex: 0 0 auto; }
+
+.pf-avatar-lg {
+    width: 132px;
+    height: 132px;
+    font-size: 62px;
+}
+.pf-avatar-lg .profile-avatar-initials { font-size: 44px; }
+.pf-avatar-lg .profile-avatar-badge {
+    width: 44px;
+    height: 44px;
+    font-size: 21px;
+}
+
+.pf-avatar-dot {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 3px solid #fff;
+    background: var(--pf-green);
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, .05);
+}
+
+.pf-identity-text { min-width: 0; }
+
+.pf-identity-name {
+    font-size: 27px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    margin: 0 0 8px;
+    word-break: break-word;
+}
+
+.pf-role-badge {
+    display: inline-flex;
+    align-items: center;
+    background: var(--pf-primary-soft);
+    color: #1d4ed8;
+    border-radius: 999px;
+    padding: 4px 13px;
+    font-size: 12.5px;
+    font-weight: 600;
+    text-transform: capitalize;
+    margin-bottom: 14px;
+}
+
+.pf-contact {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--pf-muted);
+    font-size: 13.5px;
+    margin-bottom: 7px;
+    word-break: break-all;
+}
+.pf-contact:last-child { margin-bottom: 0; }
+.pf-contact i { color: var(--pf-muted-soft); font-size: 15px; flex: 0 0 auto; }
+
+/* ---------- Account status (middle column) -------------------------- */
+.pf-status-block { padding-top: 6px; }
+
+.pf-block-label {
+    font-size: 13.5px;
+    font-weight: 700;
+    margin: 0 0 12px;
+}
+
+.pf-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--pf-green-soft);
+    border: 1px solid var(--pf-green-border);
+    color: var(--pf-green-dark);
+    border-radius: 10px;
+    padding: 8px 16px;
+    font-size: 13.5px;
+    font-weight: 600;
+    margin-bottom: 14px;
+}
+.pf-status-pill.is-warn { background: #fffbeb; border-color: #fde68a; color: #b45309; }
+.pf-status-pill.is-muted { background: #f8fafc; border-color: var(--pf-border-strong); color: var(--pf-muted); }
+
+.pf-status-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--pf-green);
+    flex: 0 0 auto;
+}
+
+.pf-status-note {
+    color: var(--pf-muted);
+    font-size: 12.8px;
+    line-height: 1.55;
+    margin: 0;
+    max-width: 230px;
+}
+
+/* ---------- Personalize (right column) ------------------------------ */
+.pf-personalize { padding-top: 2px; }
+
+.pf-personalize h3 {
+    font-size: 15px;
+    font-weight: 700;
+    margin: 0 0 5px;
+}
+
+.pf-personalize > p {
+    color: var(--pf-muted);
+    font-size: 12.8px;
+    margin: 0 0 14px;
+}
+
+.pf-btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+
+.pf-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: var(--pf-radius-sm);
+    border: 1px solid var(--pf-border-strong);
+    background: #fff;
+    color: var(--pf-text);
+    font-size: 13.5px;
+    font-weight: 600;
+    padding: 0 16px;
+    height: 42px;
+    cursor: pointer;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.pf-btn:hover { background: #f8fafc; border-color: #c7d2e0; color: var(--pf-text); }
+
+.pf-btn-outline-primary {
+    border-color: #bfdbfe;
+    color: var(--pf-primary);
+    background: #fff;
+}
+.pf-btn-outline-primary:hover { background: var(--pf-primary-soft); border-color: #93c5fd; color: var(--pf-primary-dark); }
+
+.pf-btn-primary {
+    background: var(--pf-primary);
+    border-color: var(--pf-primary);
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(37, 99, 235, .25);
+}
+.pf-btn-primary:hover { background: var(--pf-primary-dark); border-color: var(--pf-primary-dark); color: #fff; }
+.pf-btn[disabled] { opacity: .6; pointer-events: none; }
+
+.pf-btn-sm { height: 36px; font-size: 13px; padding: 0 14px; }
+
+/* ---------- Emoji picker -------------------------------------------- */
+.pf-emoji-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.pf-emoji {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    background: #f1f5f9;
+    font-size: 22px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+}
+.pf-emoji:hover { transform: translateY(-1px); }
+.pf-emoji.is-selected {
+    border-color: var(--pf-primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .15);
+}
+
+.pf-hint { color: var(--pf-muted-soft); font-size: 11.8px; margin: 0; }
+
+/* ---------- Two-column body ----------------------------------------- */
+.pf-body {
+    display: grid;
+    /* Coloana din dreapta are un MINIM real: fara el, la latimi medii cardul de
+       status se comprima si controalele se suprapun. Inaltimea ramane dictata
+       de continut (align-items: start), fara min-height artificial. */
+    grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr);
+    gap: 22px;
+    align-items: start;
+    margin-bottom: 22px;
+}
+.pf-body-col { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+
+/* ---------- Fields --------------------------------------------------- */
+.pf-field-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 14px;
+    margin-bottom: 16px;
+}
+
+.pf-field-icon {
+    width: 34px;
+    height: 42px;
+    flex: 0 0 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--pf-muted-soft);
+    font-size: 17px;
+}
+
+.pf-field { flex: 1 1 auto; min-width: 0; }
+
+.pf-field label {
+    display: block;
+    font-size: 12.5px;
+    color: var(--pf-muted);
+    margin-bottom: 5px;
+}
+
+.pf-input,
+.pf-page select.pf-input,
+.pf-page textarea.pf-input {
+    width: 100%;
+    height: 42px;
+    border: 1px solid var(--pf-border-strong);
+    border-radius: var(--pf-radius-sm);
+    padding: 0 13px;
+    font-size: 13.8px;
+    color: var(--pf-text);
+    background: #fff;
+    outline: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
+}
+.pf-input:focus {
+    border-color: var(--pf-primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+}
+.pf-input.is-invalid { border-color: #ef4444; }
+.pf-input::placeholder { color: #b4bece; }
+
+.pf-invalid { color: #dc2626; font-size: 12px; margin-top: 5px; }
+
+.pf-divider {
+    border: 0;
+    border-top: 1px solid var(--pf-border);
+    margin: 22px 0 16px;
+}
+
+.pf-section-label {
+    font-size: 13px;
+    color: var(--pf-muted);
+    margin: 0 0 14px;
+}
+
+.pf-password-grid {
+    display: grid;
+    /* auto-fit + minmax => cele doua campuri stau alaturat cat incap si trec
+       automat unul sub altul cand spatiul REAL al cardului nu mai permite,
+       indiferent de latimea ferestrei. */
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 16px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.pf-input-wrap { position: relative; }
+.pf-input-wrap .pf-input { padding-right: 40px; }
+
+.pf-eye {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 30px;
+    height: 30px;
+    border: 0;
+    background: transparent;
+    color: var(--pf-muted-soft);
+    cursor: pointer;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.pf-eye:hover { color: var(--pf-muted); background: #f1f5f9; }
+
+.pf-form-actions { margin-top: 20px; }
+
+/* ---------- Status card ---------------------------------------------- */
+.pf-select-wrap {
+    position: relative;
+    display: block;
+    width: 100%;
+    min-width: 0;
+}
+
+/* Specificitatea trebuie sa depaseasca `.pf-page select.pf-input` (0,2,1) din
+   regula de baza, altfel `padding: 0 13px` de acolo castiga si textul ajunge
+   sub bulina de status. Padding-ul este corelat cu pozitia bulinei si a sagetii. */
+.pf-page .pf-select-wrap select.pf-input {
+    width: 100%;
+    padding-left: 34px;
+    padding-right: 38px;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    text-overflow: ellipsis;
+}
+
+.pf-select-dot {
+    position: absolute;
+    left: 13px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--pf-green);
+    pointer-events: none;
+}
+.pf-select-caret {
+    position: absolute;
+    right: 13px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--pf-muted-soft);
+    pointer-events: none;
+    font-size: 12px;
+}
+
+.pf-help {
+    color: var(--pf-muted);
+    font-size: 12.2px;
+    margin: 7px 0 0;
+}
+
+.pf-status-panel {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    min-width: 0;
+    background: var(--pf-green-soft);
+    border: 1px solid var(--pf-green-border);
+    border-radius: 12px;
+    padding: 15px 17px;
+    margin-top: 20px;
+}
+.pf-status-panel i { color: var(--pf-green-dark); font-size: 17px; margin-top: 1px; flex: 0 0 auto; }
+.pf-status-panel > div { min-width: 0; }
+.pf-status-panel strong { display: block; font-size: 13.5px; color: #14532d; margin-bottom: 3px; }
+.pf-status-panel span { font-size: 12.6px; color: #3f6b4d; line-height: 1.5; overflow-wrap: anywhere; }
+
+.pf-status-panel.is-warn { background: #fffbeb; border-color: #fde68a; }
+.pf-status-panel.is-warn i { color: #b45309; }
+.pf-status-panel.is-warn strong { color: #78350f; }
+.pf-status-panel.is-warn span { color: #92400e; }
+
+.pf-status-panel.is-muted { background: #f8fafc; border-color: var(--pf-border-strong); }
+.pf-status-panel.is-muted i,
+.pf-status-panel.is-muted strong { color: #475569; }
+.pf-status-panel.is-muted span { color: var(--pf-muted); }
+
+/* ---------- Passkeys ---------------------------------------------------- */
+.pf-passkeys-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 6px;
+}
+
+.pf-counter {
+    background: #f1f5f9;
+    color: #475569;
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 11.8px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.pf-passkeys-desc {
+    color: var(--pf-muted);
+    font-size: 13px;
+    margin: 0 0 18px;
+    max-width: 720px;
+    line-height: 1.55;
+}
+
+.pf-table-wrap { overflow-x: auto; }
+
+.pf-table { width: 100%; border-collapse: collapse; font-size: 13.2px; }
+.pf-table thead th {
+    text-align: left;
+    font-size: 12.2px;
+    font-weight: 600;
+    color: var(--pf-muted);
+    padding: 0 14px 11px;
+    border-bottom: 1px solid var(--pf-border);
+    white-space: nowrap;
+}
+.pf-table tbody td {
+    padding: 14px;
+    border-bottom: 1px solid #f1f5f9;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+.pf-table tbody tr:last-child td { border-bottom: 0; }
+
+.pf-empty {
+    text-align: center;
+    padding: 34px 20px 8px;
+}
+.pf-empty-icon { font-size: 30px; color: #cbd5e1; display: block; margin-bottom: 12px; }
+.pf-empty strong { display: block; font-size: 14px; font-weight: 700; margin-bottom: 5px; }
+.pf-empty span { color: var(--pf-muted); font-size: 13px; }
+
+.pf-passkeys-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 18px;
+}
+
+/* ---------- Crop modal --------------------------------------------------- */
+.pf-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 3080;
+    background: rgba(15, 23, 42, .55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    overflow-y: auto;
+}
+.pf-modal-backdrop[hidden] { display: none; }
+
+.pf-modal {
+    background: #fff;
+    border-radius: 16px;
+    width: 100%;
+    max-width: 432px;
+    box-shadow: 0 24px 60px rgba(15, 23, 42, .28);
+    padding: 24px 28px 22px;
+    margin: auto;
+}
+
+.pf-modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 12px;
+}
+.pf-modal-head h2 { font-size: 17px; font-weight: 700; margin: 0; }
+
+.pf-modal-close {
+    border: 0;
+    background: transparent;
+    color: var(--pf-muted);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 6px;
+}
+.pf-modal-close:hover { color: var(--pf-text); background: #f1f5f9; }
+
+.pf-modal-desc {
+    color: var(--pf-muted);
+    font-size: 13px;
+    margin: 0 0 16px;
+    line-height: 1.5;
+}
+
+/* Crop workspace: square stage with a circular mask overlay */
+.pf-crop-stage {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #0f172a;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+}
+.pf-crop-stage.is-dragging { cursor: grabbing; }
+
+.pf-crop-canvas { display: block; width: 100%; height: 100%; }
+
+.pf-crop-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+/* Dim everything outside the circle using a huge spread shadow. */
+.pf-crop-circle {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 86%;
+    height: 86%;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, .95);
+    box-shadow: 0 0 0 9999px rgba(15, 23, 42, .45);
+}
+/* Rule-of-thirds guides, as in the reference */
+.pf-crop-grid { position: absolute; inset: 0; }
+.pf-crop-grid::before,
+.pf-crop-grid::after {
+    content: "";
+    position: absolute;
+    background: rgba(255, 255, 255, .28);
+}
+.pf-crop-grid::before { left: 33.33%; right: 33.33%; top: 0; bottom: 0; border-left: 1px dashed rgba(255,255,255,.45); border-right: 1px dashed rgba(255,255,255,.45); background: transparent; }
+.pf-crop-grid::after { top: 33.33%; bottom: 33.33%; left: 0; right: 0; border-top: 1px dashed rgba(255,255,255,.45); border-bottom: 1px dashed rgba(255,255,255,.45); background: transparent; }
+
+.pf-crop-controls {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 16px 0 14px;
+}
+
+.pf-icon-btn {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    border-radius: 9px;
+    border: 1px solid var(--pf-border-strong);
+    background: #fff;
+    color: var(--pf-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 15px;
+}
+.pf-icon-btn:hover { background: #f1f5f9; color: var(--pf-text); }
+
+.pf-range {
+    flex: 1 1 auto;
+    appearance: none;
+    height: 4px;
+    border-radius: 3px;
+    background: #e2e8f0;
+    outline: none;
+    cursor: pointer;
+}
+.pf-range::-webkit-slider-thumb {
+    appearance: none;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: var(--pf-primary);
+    border: 2px solid #fff;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, .25);
+    cursor: pointer;
+}
+.pf-range::-moz-range-thumb {
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: var(--pf-primary);
+    border: 2px solid #fff;
+    cursor: pointer;
+}
+
+.pf-modal-info {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    background: var(--pf-primary-soft);
+    border: 1px solid #dbeafe;
+    border-radius: 10px;
+    padding: 11px 13px;
+    font-size: 12.6px;
+    color: #1e40af;
+    margin-bottom: 18px;
+}
+.pf-modal-info i { margin-top: 1px; }
+
+.pf-modal-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.pf-modal-error {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #b91c1c;
+    border-radius: 10px;
+    padding: 10px 13px;
+    font-size: 12.6px;
+    margin-bottom: 14px;
+}
+.pf-modal-error[hidden] { display: none; }
+
+/* ---------- Responsive ----------------------------------------------------- */
+@media (max-width: 1280px) {
+    .pf-identity { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .pf-personalize { grid-column: 1 / -1; }
+}
+
+/* Sub ~1024px cele doua carduri nu mai incap confortabil una langa alta
+   (bara laterala a aplicatiei consuma din latimea utila), deci se stivuiesc. */
+@media (max-width: 1024px) {
+    .pf-body { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 992px) {
+    .pf-identity { grid-template-columns: minmax(0, 1fr); }
+    .pf-personalize { grid-column: auto; }
+    .pf-status-note { max-width: none; }
+}
+
+@media (max-width: 720px) {
+    .pf-card-pad { padding: 20px; }
+    .pf-identity-main { flex-direction: column; align-items: flex-start; gap: 18px; }
+    .pf-identity-name { font-size: 23px; }
+    .pf-avatar-lg { width: 108px; height: 108px; font-size: 52px; }
+    .pf-avatar-lg .profile-avatar-badge { width: 38px; height: 38px; font-size: 18px; }
+    .pf-head h1 { font-size: 22px; }
+    .pf-btn-row .pf-btn { flex: 1 1 auto; }
+}
+
+@media (max-width: 520px) {
+    .pf-field-row { gap: 10px; }
+    .pf-field-icon { display: none; }
+    .pf-modal { padding: 18px 18px 16px; }
+    .pf-crop-controls { gap: 10px; }
+}

@@ -52,6 +52,8 @@ if (
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="<?= e(url('assets/css/style.css?v=' . $styleVersion)) ?>">
+    <?php // Primitivele de avatar sunt folosite si in bara de sus, pe toate paginile. ?>
+    <link rel="stylesheet" href="<?= e(url('assets/css/avatar.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/avatar.css'))) ?>">
 </head>
 <body class="<?= e(implode(' ', $bodyClasses)) ?>">
 <?php if ($showSidebar && is_logged_in()): ?>
@@ -241,7 +243,14 @@ if (
                     </a>
                     <span class="topbar-divider"></span>
                     <a class="topbar-profile" href="<?= e(build_query_url(['page' => 'profil'])) ?>">
-                        <span class="topbar-avatar"><i class="bi bi-person-fill" aria-hidden="true"></i></span>
+                        <?php
+                            $topbarVisuals = function_exists('current_user_profile_visuals')
+                                ? current_user_profile_visuals()
+                                : ['avatar' => ['type' => 'none', 'initials' => ''], 'status' => ['dot' => '#22c55e']];
+                            echo function_exists('profile_avatar_markup')
+                                ? profile_avatar_markup($topbarVisuals['avatar'], 'topbar-avatar', (string) ($user['nume'] ?? 'Avatar'))
+                                : '<span class="topbar-avatar"><i class="bi bi-person-fill" aria-hidden="true"></i></span>';
+                        ?>
                         <span class="topbar-profile-text">
                             <strong><?= e($user['nume'] ?? '') ?></strong>
                             <small><?= e(function_exists('role_display_name') ? role_display_name((string) ($user['rol'] ?? '')) : (string) ($user['rol'] ?? '')) ?></small>

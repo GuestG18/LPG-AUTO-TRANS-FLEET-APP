@@ -2079,25 +2079,43 @@ class FuelModel extends BaseModel
             return null;
         }
 
+        // Alimentarea reala se face de obicei LA SOSIRE sau in seara dinaintea
+        // plecarii, adica in afara intervalului strict al cursei. Toleranta
+        // (±TRIP_MATCH_TOLERANCE_HOURS) prinde aceste cazuri; prioritatea
+        // ramane insa: (1) cursa care contine strict momentul alimentarii,
+        // (2) cursa cu marginea cea mai apropiata, (3) intervalul mai scurt.
+        // boundary_distance = 0 cand alimentarea e in interval, altfel
+        // distanta in secunde pana la cea mai apropiata margine.
         $startExpr = $this->tripIntervalStartExpr('c');
         $endExpr = $this->tripIntervalEndExpr('c');
+        $toleranceHours = self::TRIP_MATCH_TOLERANCE_HOURS;
         $stmt = $this->db->prepare("
             SELECT
                 c.id,
-                0.95 AS confidence,
-                ABS(TIMESTAMPDIFF(SECOND, {$startExpr}, :fillup_datetime_order)) AS start_distance,
+                CASE
+                    WHEN :fd_conf BETWEEN {$startExpr} AND {$endExpr} THEN 0.95
+                    ELSE 0.70
+                END AS confidence,
+                GREATEST(
+                    0,
+                    TIMESTAMPDIFF(SECOND, :fd_before, {$startExpr}),
+                    TIMESTAMPDIFF(SECOND, {$endExpr}, :fd_after)
+                ) AS boundary_distance,
                 TIMESTAMPDIFF(SECOND, {$startExpr}, {$endExpr}) AS interval_seconds
             FROM curse_dispecer c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             WHERE REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = REPLACE(UPPER(:registration), ' ', '')
               AND " . $this->activeRaceCondition('c') . "
-              AND :fillup_datetime BETWEEN {$startExpr} AND {$endExpr}
-            ORDER BY interval_seconds ASC, start_distance ASC, c.id DESC
+              AND :fillup_datetime BETWEEN DATE_SUB({$startExpr}, INTERVAL {$toleranceHours} HOUR)
+                                       AND DATE_ADD({$endExpr}, INTERVAL {$toleranceHours} HOUR)
+            ORDER BY boundary_distance ASC, interval_seconds ASC, c.id DESC
             LIMIT 1
         ");
         $stmt->bindValue(':registration', $registration);
         $stmt->bindValue(':fillup_datetime', $datetime);
-        $stmt->bindValue(':fillup_datetime_order', $datetime);
+        $stmt->bindValue(':fd_conf', $datetime);
+        $stmt->bindValue(':fd_before', $datetime);
+        $stmt->bindValue(':fd_after', $datetime);
         $stmt->execute();
         $row = $stmt->fetch();
 
