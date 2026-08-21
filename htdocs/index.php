@@ -338,6 +338,10 @@ require_once __DIR__ . '/services/UserAvatarService.php';
 require_once __DIR__ . '/services/FuelPriceIndexService.php';
 require_once __DIR__ . '/services/TransportPricingService.php';
 require_once __DIR__ . '/services/TariffReviewService.php';
+require_once __DIR__ . '/services/OcrSpaceService.php';
+require_once __DIR__ . '/services/OcrInvoiceHeuristics.php';
+require_once __DIR__ . '/services/OcrPartsLineExtractor.php';
+require_once __DIR__ . '/models/OcrPartsModel.php';
 
 require_once __DIR__ . '/controllers/AuthController.php';
 require_once __DIR__ . '/controllers/DashboardController.php';
@@ -365,6 +369,8 @@ require_once __DIR__ . '/controllers/AccessRightsController.php';
 require_once __DIR__ . '/controllers/UserActivityController.php';
 require_once __DIR__ . '/controllers/LeasingSchedulerController.php';
 require_once __DIR__ . '/controllers/TransportTariffController.php';
+require_once __DIR__ . '/controllers/DevOcrTestController.php';
+require_once __DIR__ . '/controllers/OcrPartsController.php';
 
 $db = get_pdo();
 
@@ -626,6 +632,24 @@ try {
         case 'activitate_utilizatori':
             require_auth();
             (new UserActivityController($db))->handle($action);
+            break;
+
+        // Sandbox experimental OCR (doar admin, nu apare in meniu, nu scrie in DB).
+        case 'dev_ocr_test':
+            require_auth();
+            if (!is_admin()) {
+                access_deny_403();
+            }
+            (new DevOcrTestController($db))->handle($action);
+            break;
+
+        // Tracker experimental piese din facturi OCR (doar admin, tabele separate).
+        case 'ocr_piese':
+            require_auth();
+            if (!is_admin()) {
+                access_deny_403();
+            }
+            (new OcrPartsController($db))->handle($action);
             break;
 
         default:

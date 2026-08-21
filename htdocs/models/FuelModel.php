@@ -37,6 +37,13 @@ class FuelModel extends BaseModel
     private const MIN_PLAUSIBLE_L100 = 4.0;
     private const MAX_PLAUSIBLE_L100 = 120.0;
 
+    /**
+     * Toleranta (ore) in jurul intervalului cursei la asocierea automata a
+     * alimentarilor: acopera plinul facut la sosire sau in seara dinaintea
+     * plecarii, cand momentul alimentarii cade in afara intervalului strict.
+     */
+    private const TRIP_MATCH_TOLERANCE_HOURS = 12;
+
     private bool $schemaEnsured = false;
     private ?bool $raceSoftDeleteAvailable = null;
 
