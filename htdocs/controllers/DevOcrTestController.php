@@ -41,6 +41,7 @@ class DevOcrTestController
             'apiKeyConfigured' => $this->service->isConfigured(),
             'engineLabel' => $this->service->engineLabel(),
             'maxFileBytes' => $this->service->maxFileBytes(),
+            'maxImageBytes' => $this->service->maxImageUploadBytes(),
             'allowedExtensions' => $this->service->allowedExtensions(),
         ]);
     }

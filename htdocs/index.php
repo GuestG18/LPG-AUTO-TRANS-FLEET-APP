@@ -316,8 +316,7 @@ require_once __DIR__ . '/models/DispecerCurseModel.php';
 require_once __DIR__ . '/models/ProgramareConcediiModel.php';
 require_once __DIR__ . '/models/NotificationRuleModel.php';
 require_once __DIR__ . '/models/StaffAccountancyModel.php';
-require_once __DIR__ . '/models/OfficeExpenseModel.php';
-require_once __DIR__ . '/models/AdministrativeExpenseModel.php';
+require_once __DIR__ . '/models/ExpenseModel.php';
 require_once __DIR__ . '/models/MaintenanceModel.php';
 require_once __DIR__ . '/models/TechnicalHealthModel.php';
 require_once __DIR__ . '/models/DriverActivityHistoryModel.php';
@@ -325,6 +324,7 @@ require_once __DIR__ . '/models/FuelModel.php';
 require_once __DIR__ . '/models/UserActivityModel.php';
 require_once __DIR__ . '/models/LeasingSchedulerModel.php';
 require_once __DIR__ . '/models/TransportTariffModel.php';
+require_once __DIR__ . '/models/OperationalCostModel.php';
 
 require_once __DIR__ . '/services/EntityStatusService.php';
 require_once __DIR__ . '/services/InactiveResourceStatusService.php';
@@ -333,11 +333,16 @@ require_once __DIR__ . '/services/EmailService.php';
 require_once __DIR__ . '/services/CardOilApiClient.php';
 require_once __DIR__ . '/services/SasFleetClient.php';
 require_once __DIR__ . '/services/FleetLivePositionService.php';
+require_once __DIR__ . '/services/SasTripPrefillService.php';
+require_once __DIR__ . '/services/SasDashboardService.php';
 require_once __DIR__ . '/services/WebAuthnService.php';
 require_once __DIR__ . '/services/UserAvatarService.php';
 require_once __DIR__ . '/services/FuelPriceIndexService.php';
 require_once __DIR__ . '/services/TransportPricingService.php';
 require_once __DIR__ . '/services/TariffReviewService.php';
+require_once __DIR__ . '/services/CostNormalizationService.php';
+require_once __DIR__ . '/services/CostBreakEvenService.php';
+require_once __DIR__ . '/services/OperationalCostService.php';
 require_once __DIR__ . '/services/OcrSpaceService.php';
 require_once __DIR__ . '/services/OcrInvoiceHeuristics.php';
 require_once __DIR__ . '/services/OcrPartsLineExtractor.php';
@@ -354,13 +359,14 @@ require_once __DIR__ . '/controllers/VehicleAuthorizationController.php';
 require_once __DIR__ . '/controllers/ProfileController.php';
 require_once __DIR__ . '/controllers/DispecerCurseController.php';
 require_once __DIR__ . '/controllers/FleetMapController.php';
+require_once __DIR__ . '/controllers/DispecerSasSandboxController.php';
+require_once __DIR__ . '/controllers/SasDashboardSandboxController.php';
 require_once __DIR__ . '/controllers/CourseExpenseHistoryController.php';
 require_once __DIR__ . '/controllers/CentralizatorFacturareController.php';
 require_once __DIR__ . '/controllers/ProgramareConcediiController.php';
 require_once __DIR__ . '/controllers/NotificationRuleController.php';
 require_once __DIR__ . '/controllers/StaffAccountancyController.php';
-require_once __DIR__ . '/controllers/OfficeExpenseController.php';
-require_once __DIR__ . '/controllers/AdministrativeExpenseController.php';
+require_once __DIR__ . '/controllers/ExpenseController.php';
 require_once __DIR__ . '/controllers/MaintenanceController.php';
 require_once __DIR__ . '/controllers/TechnicalHealthController.php';
 require_once __DIR__ . '/controllers/DriverActivityHistoryController.php';
@@ -369,6 +375,7 @@ require_once __DIR__ . '/controllers/AccessRightsController.php';
 require_once __DIR__ . '/controllers/UserActivityController.php';
 require_once __DIR__ . '/controllers/LeasingSchedulerController.php';
 require_once __DIR__ . '/controllers/TransportTariffController.php';
+require_once __DIR__ . '/controllers/OperationalCostController.php';
 require_once __DIR__ . '/controllers/DevOcrTestController.php';
 require_once __DIR__ . '/controllers/OcrPartsController.php';
 
@@ -569,6 +576,16 @@ try {
             (new FleetMapController($db))->handle($action);
             break;
 
+        case 'dispecer_sandbox':
+            require_auth();
+            (new DispecerSasSandboxController($db))->handle($action);
+            break;
+
+        case 'sas_dashboard_sandbox':
+            require_auth();
+            (new SasDashboardSandboxController($db))->handle($action);
+            break;
+
         case 'tarife_transport':
             require_auth();
             (new TransportTariffController($db))->handle($action);
@@ -609,14 +626,22 @@ try {
             (new StaffAccountancyController($db))->handleFormerEmployees($action);
             break;
 
-        case 'cheltuieli_birou':
+        case 'cheltuieli':
             require_auth();
-            (new OfficeExpenseController($db))->handle($action);
+            (new ExpenseController($db))->handle($action);
             break;
 
+        // Rutele legacy (Cheltuieli Birou / Administrative) redirectioneaza
+        // catre pagina unificata Cheltuieli.
+        case 'cheltuieli_birou':
         case 'cheltuieli_administrative':
             require_auth();
-            (new AdministrativeExpenseController($db))->handle($action);
+            redirect(build_query_url(['page' => 'cheltuieli']));
+            break;
+
+        case 'cost_operational':
+            require_auth();
+            (new OperationalCostController($db))->handle($action);
             break;
 
         case 'notificari':

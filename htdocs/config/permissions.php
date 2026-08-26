@@ -47,6 +47,14 @@ return [
             'group' => 'operational', 'label' => 'Harta Flota', 'icon' => 'bi-map', 'scope' => 'all',
             'actions' => ['view' => ['label' => 'Vizualizare']],
         ],
+        'dispecer_sandbox' => [
+            'group' => 'operational', 'label' => 'Sandbox GPS curse', 'icon' => 'bi-broadcast', 'scope' => 'all',
+            'actions' => ['view' => ['label' => 'Vizualizare']],
+        ],
+        'sas_dashboard_sandbox' => [
+            'group' => 'operational', 'label' => 'Sandbox Dashboard Flota', 'icon' => 'bi-activity', 'scope' => 'all',
+            'actions' => ['view' => ['label' => 'Vizualizare']],
+        ],
         'inactive_approvals' => [
             'group' => 'operational', 'label' => 'Solicitari aprobare inactive', 'icon' => 'bi-shield-exclamation', 'scope' => 'all',
             'actions' => [
@@ -244,8 +252,11 @@ return [
                 'export'          => ['label' => 'Export CSV'],
             ],
         ],
-        'cheltuieli_birou' => [
-            'group' => 'contabilitate', 'label' => 'Cheltuieli Birou', 'icon' => 'bi-receipt', 'scope' => 'accountancy',
+        'cheltuieli' => [
+            'group' => 'contabilitate', 'label' => 'Cheltuieli', 'icon' => 'bi-wallet2', 'scope' => 'accountancy',
+            // Rutele legacy raman mapate pe aceeasi cheie: bookmark-urile vechi
+            // sunt redirectionate de router catre pagina unificata.
+            'routes' => ['cheltuieli', 'cheltuieli_birou', 'cheltuieli_administrative'],
             'actions' => [
                 'view'   => ['label' => 'Vizualizare'],
                 'create' => ['label' => 'Adăugare cheltuială'],
@@ -254,14 +265,13 @@ return [
                 'export' => ['label' => 'Export CSV'],
             ],
         ],
-        'cheltuieli_administrative' => [
-            'group' => 'contabilitate', 'label' => 'Cheltuieli Administrative', 'icon' => 'bi-file-earmark-ruled', 'scope' => 'accountancy',
+
+        'cost_operational' => [
+            'group' => 'contabilitate', 'label' => 'Cost operațional / km', 'icon' => 'bi-graph-up', 'scope' => 'accountancy',
             'actions' => [
-                'view'   => ['label' => 'Vizualizare'],
-                'create' => ['label' => 'Adăugare cheltuială'],
-                'edit'   => ['label' => 'Editare cheltuială'],
-                'delete' => ['label' => 'Ștergere cheltuială'],
-                'export' => ['label' => 'Export CSV'],
+                'view'      => ['label' => 'Vizualizare analiză cost/km', 'sensitive' => true],
+                'configure' => ['label' => 'Configurare elemente financiare & parametri', 'admin' => true, 'sensitive' => true],
+                'export'    => ['label' => 'Export raport CSV'],
             ],
         ],
 

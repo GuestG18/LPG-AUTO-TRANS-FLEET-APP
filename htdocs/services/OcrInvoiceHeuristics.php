@@ -20,7 +20,11 @@ class OcrInvoiceHeuristics
     public static function analyze(string $parsedText): array
     {
         $lines = preg_split('/\r\n|\r|\n/', $parsedText) ?: [];
-        $lines = array_map(static fn (string $line): string => trim($line), $lines);
+        $lines = array_map(
+            static fn (string $line): string => trim(str_replace('**', '', $line)),
+            $lines
+        );
+        $lines = self::expandPipeTableLines($lines);
         $nonEmptyLines = array_values(array_filter($lines, static fn (string $line): bool => $line !== ''));
 
         $dates = self::findDates($parsedText);
@@ -29,7 +33,7 @@ class OcrInvoiceHeuristics
 
         $fields = [
             'numar_factura' => self::detectInvoiceNumber($nonEmptyLines),
-            'data_facturii' => self::detectDateNearKeyword($nonEmptyLines, ['data facturii', 'data emiterii', 'data emitere', 'data factura', 'din data'], $dates),
+            'data_facturii' => self::detectDateNearKeyword($nonEmptyLines, ['data facturii', 'data emiterii', 'data emitere', 'data factura', 'din data', 'data:', 'data :'], $dates),
             'data_scadentei' => self::detectDateNearKeyword($nonEmptyLines, ['scadent', 'termen de plata', 'termen plata', 'data platii'], []),
             'furnizor' => self::detectSupplier($nonEmptyLines),
             'cui' => $cuiCandidates[0] ?? null,
@@ -49,6 +53,44 @@ class OcrInvoiceHeuristics
                 'valori_monetare' => array_slice($moneyValues, 0, 30),
             ],
         ];
+    }
+
+    /**
+     * OCR Engine 3 intoarce antetele ca tabele Markdown:
+     * "| Furnizor | : Augsburg SRL | Cod Client | : 10016328 |".
+     * Spargem celulele in linii sintetice "Eticheta: valoare" ca detectoarele
+     * pe baza de cuvinte-cheie sa functioneze si pe acest format.
+     *
+     * @param string[] $lines
+     * @return string[]
+     */
+    private static function expandPipeTableLines(array $lines): array
+    {
+        $expanded = [];
+        foreach ($lines as $line) {
+            if (substr_count($line, '|') < 2) {
+                $expanded[] = $line;
+                continue;
+            }
+
+            $expanded[] = $line;
+            $cells = array_values(array_filter(
+                array_map(static fn (string $cell): string => trim($cell), explode('|', $line)),
+                static fn (string $cell): bool => $cell !== '' && $cell !== '---'
+            ));
+
+            // Perechi eticheta -> valoare: valoarea incepe cu ":".
+            for ($i = 0; $i < count($cells) - 1; $i++) {
+                if (str_starts_with($cells[$i + 1], ':') && !str_starts_with($cells[$i], ':')) {
+                    $value = trim(ltrim($cells[$i + 1], ':'));
+                    if ($value !== '') {
+                        $expanded[] = $cells[$i] . ': ' . $value;
+                    }
+                }
+            }
+        }
+
+        return $expanded;
     }
 
     /** @return string[] date valide, in ordinea aparitiei, normalizate d.m.Y */
@@ -136,6 +178,10 @@ class OcrInvoiceHeuristics
             if (preg_match('/seria?\s+([A-Z]{1,6})\s*,?\s*(?:nr|num[aă]r)\.?\s*[:.]?\s*(\d{1,12})/iu', $line, $match)) {
                 return trim($match[1]) . ' ' . trim($match[2]);
             }
+            // "Seria RR 38759775" - serie + numar lipite, fara "nr." intre ele.
+            if (preg_match('/\bseria\s+([A-Z]{1,6})\s+(\d{4,12})\b/iu', $line, $match)) {
+                return trim($match[1]) . ' ' . trim($match[2]);
+            }
         }
 
         return null;
@@ -183,29 +229,42 @@ class OcrInvoiceHeuristics
         foreach ($lines as $index => $line) {
             $lowered = mb_strtolower($line);
             if (preg_match('/^furnizor\b/u', $lowered)) {
-                $value = trim((string) preg_replace('/^furnizor\s*[:\-]?\s*/iu', '', $line));
+                $value = self::stripValuePrefix((string) preg_replace('/^furnizor\s*[:\-]?\s*/iu', '', $line));
                 if ($value !== '' && !self::looksLikeLabel($value)) {
                     return $value;
                 }
                 // OCR-ul pune des eticheta si valoarea pe linii diferite; sarim
                 // peste alte etichete (Adresa, CUI...) pana la un nume real.
                 for ($next = $index + 1; $next < min($index + 4, $lineCount); $next++) {
-                    if (!self::looksLikeLabel($lines[$next])) {
-                        return $lines[$next];
+                    $candidate = self::stripValuePrefix($lines[$next]);
+                    if ($candidate !== '' && !self::looksLikeLabel($candidate)) {
+                        return $candidate;
                     }
                 }
             }
         }
 
         // Fallback: prima linie care arata ca un nume de firma romaneasca.
-        foreach (array_slice($lines, 0, 12) as $line) {
-            if (preg_match('/\b(S\.?R\.?L\.?|S\.?A\.?|P\.?F\.?A\.?|S\.?C\.?S\.?)\b\.?$|^S\.?C\.?\s/iu', $line)
-                && mb_strlen($line) >= 5 && mb_strlen($line) <= 80) {
-                return $line;
+        // Unele rulari OCR separa coloana de etichete de cea de valori, asa ca
+        // valoarea "(: )Augsburg ... SRL" poate aparea oriunde in antet.
+        foreach (array_slice($lines, 0, 40) as $line) {
+            $candidate = self::stripValuePrefix($line);
+            if ($candidate === '' || self::looksLikeLabel($candidate)) {
+                continue;
+            }
+            if (preg_match('/\b(S\.?R\.?L\.?|S\.?A\.?|P\.?F\.?A\.?|S\.?C\.?S\.?)\b\.?$|^S\.?C\.?\s/iu', $candidate)
+                && mb_strlen($candidate) >= 5 && mb_strlen($candidate) <= 80) {
+                return $candidate;
             }
         }
 
         return null;
+    }
+
+    /** Valorile din tabelele OCR incep des cu ": " - il eliminam. */
+    private static function stripValuePrefix(string $line): string
+    {
+        return trim(ltrim(trim($line), ':'));
     }
 
     /** Linia e o eticheta de formular (Adresa, CUI, Reg. com...), nu un nume de firma? */
@@ -246,6 +305,24 @@ class OcrInvoiceHeuristics
         $value = self::detectAmountNearKeyword($lines, $priorityKeywords);
         if ($value !== null) {
             return $value;
+        }
+
+        // "Valoare document": sumele stau pe liniile urmatoare (net, TVA, total cu
+        // TVA) - luam ultima valoare monetara din blocul de sub eticheta.
+        $lineCount = count($lines);
+        foreach ($lines as $index => $line) {
+            if (!str_contains(mb_strtolower($line), 'valoare document')) {
+                continue;
+            }
+            $lastInBlock = null;
+            for ($next = $index; $next < min($index + 6, $lineCount); $next++) {
+                if (preg_match_all(self::MONEY_PATTERN, $lines[$next], $matches) && $matches[0] !== []) {
+                    $lastInBlock = end($matches[0]);
+                }
+            }
+            if ($lastInBlock !== null) {
+                return $lastInBlock;
+            }
         }
 
         // "Total" generic: luam ULTIMA linie cu total, care pe facturi este de

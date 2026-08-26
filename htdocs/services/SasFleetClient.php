@@ -248,6 +248,27 @@ class SasFleetClient
     }
 
     /**
+     * POST /SASFleetService/api/pois/find — lista POI-urilor (locatii definite in SAS)
+     * care contin filtrul dat in nume. Filtru gol = toate POI-urile companiei.
+     * Fiecare element: locationId, name, memo, latitudeMin/MaxInDegrees, longitudeMin/MaxInDegrees.
+     */
+    public function findPois(string $companyName, string $filter = ''): array
+    {
+        $payload = [
+            'companyName' => $companyName,
+            'filter' => $filter,
+        ];
+
+        $body = $this->authenticatedRequest('POST', '/SASFleetService/api/pois/find?api-version=1.0', $payload);
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded)) {
+            throw new RuntimeException('Raspuns SAS invalid sau non-JSON la pois/find.');
+        }
+
+        return array_values(array_filter($decoded, 'is_array'));
+    }
+
+    /**
      * Returneaza pozitiile curente normalizate in formatul intern al aplicatiei.
      * Cheile SAS sunt izolate aici; restul aplicatiei foloseste doar formatul intern.
      */

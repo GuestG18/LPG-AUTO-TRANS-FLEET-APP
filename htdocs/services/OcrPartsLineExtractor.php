@@ -36,6 +36,10 @@ class OcrPartsLineExtractor
         '/\bRO\d{2}[A-Z]{4}[A-Z0-9]{4,}\b/u',          // IBAN
         '/\b(jud(et)?\.?|str(ada)?\.?|sos(eaua)?\.?|b(uleva)?rdul|com(una)?\.\s|sat\s|cod\s+postal|sector\s?\d)\b/iu',
         '/\b(sediul?|punct\s+de\s+lucru|capital\s+social|trezoreri|inmatriculat|autorizat)\b/iu',
+        '/\b(banca|raiffeisen|transilvania|brd\b|bcr\b|ing\s?bank|unicredit)\b/iu',
+        '/\btva\s*\d{1,2}\s*%|\d{1,2}\s*%\s*tva\b/iu',
+        '/^(luni|mar[tț]i|miercuri|joi|vineri|s[aâ]mb[aă]t[aă]|duminic[aă])\b/iu', // program de lucru
+        '/\b(bl|sc|et|ap)\.\s?[a-z0-9]/iu', // fragmente de adresa: Bl.C22 Et.1 Ap.3
     ];
 
     // Valorile monetare de pe o linie de articol trebuie sa fie plauzibile;
@@ -51,18 +55,132 @@ class OcrPartsLineExtractor
         $rows = [];
 
         foreach ($lines as $line) {
+            // Engine 3 intoarce tabelele in format Markdown: "| 1 Buc | XF2/98 | Nume |".
+            // Normalizam artefactele (bold **, <br>) inainte de orice evaluare.
+            $line = str_ireplace(['<br>', '<br/>', '<br />'], ' ', $line);
+            $line = str_replace('**', '', $line);
             $line = trim(preg_replace('/\s+/u', ' ', $line) ?? '');
+
             if ($line === '' || mb_strlen($line) < 6 || self::shouldSkip($line)) {
                 continue;
             }
 
-            $row = self::parseLine($line);
+            $row = substr_count($line, '|') >= 2
+                ? self::parsePipeLine($line)
+                : self::parseLine($line);
             if ($row !== null) {
                 $rows[] = $row;
             }
         }
 
         return $rows;
+    }
+
+    /**
+     * Parseaza un rand de tabel Markdown (OCR Engine 3): celulele sunt separate
+     * cu "|", tipic: cantitate+UM | cod piesa | denumire | pret | valoare [| TVA].
+     */
+    private static function parsePipeLine(string $line): ?array
+    {
+        $cells = array_values(array_filter(
+            array_map(static fn (string $cell): string => trim($cell), explode('|', $line)),
+            static fn (string $cell): bool => $cell !== '' && $cell !== ':'
+        ));
+
+        if (count($cells) < 2) {
+            return null;
+        }
+
+        $quantity = null;
+        $unit = null;
+        $code = null;
+        $name = null;
+        $amounts = [];
+
+        foreach ($cells as $cell) {
+            // "1 Buc", "2,5 l" -> cantitate + UM.
+            if ($quantity === null
+                && preg_match('/^(\d+(?:[.,]\d+)?)\s*(buc|set|l|litri|kg|g|ml|m|per|pereche|cutie|bax|rol[aă]|kit)\.?$/iu', $cell, $match)) {
+                $quantity = self::parseRomanianNumber($match[1]);
+                $unit = mb_strtolower($match[2]);
+                continue;
+            }
+
+            // Celula pur numerica -> pret / valoare / TVA, in ordinea aparitiei.
+            if (preg_match('/^-?\d{1,3}(?:[.\s]\d{3})*(?:,\d{1,2})?$|^-?\d+(?:[.,]\d{1,2})?$/u', $cell)) {
+                $amounts[] = self::parseRomanianNumber($cell);
+                continue;
+            }
+
+            // Cod piesa: token compact alfanumeric cu cifre, fara spatii ("XF2/98").
+            if ($code === null && !str_contains($cell, ' ')
+                && preg_match('/^[A-Z0-9][A-Z0-9\/\-\.]{1,19}$/i', $cell) && preg_match('/\d/', $cell)) {
+                $code = $cell;
+                continue;
+            }
+
+            // Denumirea: cea mai lunga celula cu text real.
+            if (mb_strlen(preg_replace('/[^\p{L}]/u', '', $cell) ?? '') >= 3
+                && ($name === null || mb_strlen($cell) > mb_strlen($name))) {
+                $name = $cell;
+            }
+        }
+
+        // Un articol real are macar cantitate+UM sau doua sume (pret + valoare).
+        // Randurile de antet/subsol ("Data scadenta", "RON 969,15") nu au.
+        if ($name === null || ($quantity === null && count($amounts) < 2)) {
+            return null;
+        }
+
+        [$unitPrice, $value, $verified] = self::mapPipeAmounts($amounts, $quantity);
+
+        foreach ([$quantity, $unitPrice, $value] as $amount) {
+            if ($amount !== null && $amount > self::MAX_PLAUSIBLE_AMOUNT) {
+                return null;
+            }
+        }
+
+        return [
+            'denumire' => $name,
+            'cod_piesa' => $code,
+            'cantitate' => $quantity,
+            'unitate_masura' => $unit,
+            'pret_unitar' => $unitPrice,
+            'valoare' => $value,
+            'verificat' => $verified,
+            'linie_sursa' => $line,
+        ];
+    }
+
+    /**
+     * @param float[] $amounts celulele numerice in ordinea aparitiei
+     * @return array{0:?float,1:?float,2:bool} [pret_unitar, valoare, verificat]
+     */
+    private static function mapPipeAmounts(array $amounts, ?float $quantity): array
+    {
+        $count = count($amounts);
+        if ($count === 0) {
+            return [null, null, false];
+        }
+        if ($count === 1) {
+            // O singura suma: la cantitate 1 este si pret si valoare.
+            return $quantity !== null && abs($quantity - 1.0) < 0.001
+                ? [$amounts[0], $amounts[0], true]
+                : [null, $amounts[0], false];
+        }
+
+        // Cautam perechea (pret, valoare) care se verifica cu cantitatea.
+        if ($quantity !== null) {
+            for ($i = 0; $i < $count - 1; $i++) {
+                for ($j = $i + 1; $j < $count; $j++) {
+                    if (self::approxEquals($quantity * $amounts[$i], $amounts[$j])) {
+                        return [$amounts[$i], $amounts[$j], true];
+                    }
+                }
+            }
+        }
+
+        return [$amounts[0], $amounts[1], false];
     }
 
     private static function shouldSkip(string $line): bool
@@ -136,6 +254,7 @@ class OcrPartsLineExtractor
 
         return [
             'denumire' => $namePart,
+            'cod_piesa' => null,
             'cantitate' => $quantity,
             'unitate_masura' => $unit,
             'pret_unitar' => $unitPrice,

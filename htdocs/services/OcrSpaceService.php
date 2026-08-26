@@ -15,8 +15,12 @@ class OcrSpaceService
 {
     private const API_ENDPOINT = 'https://api.ocr.space/parse/image';
 
-    // Limite ale planului gratuit OCR.Space: 1 MB / fisier, max 3 pagini PDF.
+    // Limita planului gratuit OCR.Space: 1 MB / fisier, max 3 pagini PDF.
     private const MAX_FILE_BYTES = 1024 * 1024;
+    // Imaginile mai mari sunt acceptate si comprimate automat cu GD sub limita API.
+    private const MAX_IMAGE_UPLOAD_BYTES = 15 * 1024 * 1024;
+    // Tinta de compresie: putin sub limita API, ca sa nu fim respinsi la limita.
+    private const COMPRESS_TARGET_BYTES = 950 * 1024;
     private const ALLOWED_EXTENSIONS = ['pdf', 'jpg', 'jpeg', 'png'];
     private const ALLOWED_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
 
@@ -61,6 +65,16 @@ class OcrSpaceService
         return self::MAX_FILE_BYTES;
     }
 
+    public function maxImageUploadBytes(): int
+    {
+        return $this->canCompressImages() ? self::MAX_IMAGE_UPLOAD_BYTES : self::MAX_FILE_BYTES;
+    }
+
+    public function canCompressImages(): bool
+    {
+        return extension_loaded('gd');
+    }
+
     /** @return string[] */
     public function allowedExtensions(): array
     {
@@ -98,16 +112,26 @@ class OcrSpaceService
         if ($size <= 0) {
             throw new InvalidArgumentException('Fișierul este gol (0 bytes).');
         }
-        if ($size > self::MAX_FILE_BYTES) {
-            throw new InvalidArgumentException(sprintf(
-                'Fișierul are %s și depășește limita planului gratuit OCR.Space (1 MB / fișier). Comprimă documentul sau folosește o rezoluție mai mică.',
-                self::formatBytes($size)
-            ));
-        }
 
         $extension = strtolower(pathinfo((string) ($file['name'] ?? ''), PATHINFO_EXTENSION));
         if (!in_array($extension, self::ALLOWED_EXTENSIONS, true)) {
             throw new InvalidArgumentException('Tip de fișier neacceptat. Formate permise: PDF, JPG, JPEG, PNG.');
+        }
+
+        // PDF-urile merg direct la API, deci raman sub limita planului gratuit.
+        // Imaginile mari sunt comprimate automat (GD) inainte de trimitere.
+        if ($extension === 'pdf' && $size > self::MAX_FILE_BYTES) {
+            throw new InvalidArgumentException(sprintf(
+                'PDF-ul are %s și depășește limita planului gratuit OCR.Space (1 MB). Alternativă: fotografiază factura (JPG/PNG până la 15 MB — o comprimăm noi automat) sau folosește un plan OCR.Space PRO.',
+                self::formatBytes($size)
+            ));
+        }
+        if ($extension !== 'pdf' && $size > $this->maxImageUploadBytes()) {
+            throw new InvalidArgumentException(sprintf(
+                'Imaginea are %s și depășește limita de %s. Folosește o rezoluție mai mică.',
+                self::formatBytes($size),
+                self::formatBytes($this->maxImageUploadBytes())
+            ));
         }
 
         $mime = '';
@@ -146,11 +170,35 @@ class OcrSpaceService
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
         $mime = $extension === 'pdf' ? 'application/pdf' : ($extension === 'png' ? 'image/png' : 'image/jpeg');
 
+        // Imaginile peste limita API sunt comprimate automat (GD) intr-un JPEG
+        // temporar; PDF-urile au fost deja validate sub limita.
+        $compressedPath = null;
+        $compressionNote = null;
+        $originalSize = (int) $file['size'];
+        if ($extension !== 'pdf' && $originalSize > self::MAX_FILE_BYTES) {
+            $compressedPath = $this->compressImageUnderLimit($tmpPath);
+            if ($compressedPath === null) {
+                throw new InvalidArgumentException(sprintf(
+                    'Imaginea are %s și nu a putut fi comprimată sub limita OCR.Space de 1 MB. Încearcă o rezoluție mai mică.',
+                    self::formatBytes($originalSize)
+                ));
+            }
+            $tmpPath = $compressedPath;
+            $mime = 'image/jpeg';
+            $extension = 'jpg';
+            $compressionNote = sprintf(
+                'Imaginea a fost comprimată automat: %s → %s.',
+                self::formatBytes($originalSize),
+                self::formatBytes((int) filesize($compressedPath))
+            );
+            error_log('[OcrSpaceService] ' . $compressionNote);
+        }
+
         $postFields = $this->requestParams;
         $postFields['filetype'] = strtoupper($extension === 'jpeg' ? 'jpg' : $extension);
         $postFields['file'] = new CURLFile($tmpPath, $mime, $originalName);
 
-        error_log('[OcrSpaceService] OCR request started: ' . $originalName . ' (' . self::formatBytes((int) $file['size']) . ')');
+        error_log('[OcrSpaceService] OCR request started: ' . $originalName . ' (' . self::formatBytes($originalSize) . ')');
         $startedAt = microtime(true);
 
         $curl = curl_init(self::API_ENDPOINT);
@@ -174,6 +222,10 @@ class OcrSpaceService
         $curlError = curl_error($curl);
         $httpCode = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
         curl_close($curl);
+
+        if ($compressedPath !== null) {
+            @unlink($compressedPath);
+        }
 
         $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
 
@@ -243,9 +295,72 @@ class OcrSpaceService
             'duration_ms' => $durationMs,
             'engine' => $this->engineLabel(),
             'http_code' => $httpCode,
+            'compression_note' => $compressionNote,
             'error' => null,
             'error_details' => null,
         ];
+    }
+
+    /**
+     * Comprima o imagine (JPG/PNG) sub limita API folosind GD: redimensionare
+     * progresiva + recomprimare JPEG. Intoarce calea fisierului temporar sau
+     * null daca nu s-a putut ajunge sub limita.
+     */
+    private function compressImageUnderLimit(string $sourcePath): ?string
+    {
+        if (!$this->canCompressImages()) {
+            return null;
+        }
+
+        $info = @getimagesize($sourcePath);
+        if ($info === false) {
+            return null;
+        }
+
+        $image = match ($info[2]) {
+            IMAGETYPE_JPEG => @imagecreatefromjpeg($sourcePath),
+            IMAGETYPE_PNG => @imagecreatefrompng($sourcePath),
+            default => false,
+        };
+        if ($image === false) {
+            return null;
+        }
+
+        $targetPath = tempnam(sys_get_temp_dir(), 'ocr_cmp_');
+        if ($targetPath === false) {
+            imagedestroy($image);
+            return null;
+        }
+
+        // Incercari progresive: latura maxima si calitatea scad pana incape.
+        // Textul facturilor ramane lizibil pentru OCR pana pe la ~1600px.
+        $attempts = [[3000, 85], [2400, 82], [2000, 78], [1600, 72], [1300, 65]];
+        $width = imagesx($image);
+        $height = imagesy($image);
+
+        foreach ($attempts as [$maxSide, $quality]) {
+            $scale = min(1.0, $maxSide / max($width, $height));
+            $newWidth = max(1, (int) round($width * $scale));
+            $newHeight = max(1, (int) round($height * $scale));
+
+            $resized = imagecreatetruecolor($newWidth, $newHeight);
+            // Fundal alb pentru PNG-urile cu transparenta (altfel devine negru in JPEG).
+            $white = imagecolorallocate($resized, 255, 255, 255);
+            imagefill($resized, 0, 0, $white);
+            imagecopyresampled($resized, $image, 0, 0, 0, 0, $newWidth, $newHeight, $width, $height);
+
+            $saved = imagejpeg($resized, $targetPath, $quality);
+            imagedestroy($resized);
+
+            if ($saved && (int) filesize($targetPath) <= self::COMPRESS_TARGET_BYTES) {
+                imagedestroy($image);
+                return $targetPath;
+            }
+        }
+
+        imagedestroy($image);
+        @unlink($targetPath);
+        return null;
     }
 
     private function collectParsedText(array $decoded): string

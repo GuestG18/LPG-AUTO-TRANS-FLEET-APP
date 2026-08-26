@@ -1,7 +1,10 @@
 <?php
 $apiKeyConfigured = !empty($apiKeyConfigured);
+$vehicles = is_array($vehicles ?? null) ? $vehicles : [];
 $maxFileBytes = (int) ($maxFileBytes ?? 1048576);
+$maxImageBytes = (int) ($maxImageBytes ?? $maxFileBytes);
 $maxFileMb = number_format($maxFileBytes / 1048576, 1, ',', '.');
+$maxImageMb = number_format($maxImageBytes / 1048576, 0, ',', '.');
 $runUrl = build_query_url(['page' => 'ocr_piese', 'action' => 'run']);
 $saveUrl = build_query_url(['page' => 'ocr_piese', 'action' => 'save']);
 $trackerUrl = build_query_url(['page' => 'ocr_piese']);
@@ -56,7 +59,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                      aria-label="Trage factura aici sau apasă pentru a selecta un fișier">
                     <i class="bi bi-file-earmark-arrow-up fs-2 text-secondary" aria-hidden="true"></i>
                     <div class="fw-semibold">Trage factura aici sau apasă pentru selectare</div>
-                    <div class="text-muted small">PDF / JPG / PNG &middot; max <?= e($maxFileMb) ?> MB (limită OCR.Space gratuit)</div>
+                    <div class="text-muted small">PDF max <?= e($maxFileMb) ?> MB (limită OCR.Space gratuit) &middot; JPG / PNG max <?= e($maxImageMb) ?> MB (comprimăm automat)</div>
                     <input type="file" id="ocr-file-input" class="d-none" accept=".pdf,.jpg,.jpeg,.png">
                 </div>
             </div>
@@ -110,6 +113,19 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                     <label class="form-label small mb-1" for="f-total">Total factură</label>
                     <input type="number" step="0.01" min="0" class="form-control form-control-sm" id="f-total">
                 </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label small mb-1" for="f-vehicul">Vehicul (pentru registru)</label>
+                    <select class="form-select form-select-sm" id="f-vehicul">
+                        <option value="0">— fără vehicul —</option>
+                        <?php foreach ($vehicles as $vehicle): ?>
+                            <option value="<?= (int) $vehicle['id'] ?>"><?= e((string) $vehicle['nr_inmatriculare']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small mb-1" for="f-km">KM bord</label>
+                    <input type="number" step="1" min="0" class="form-control form-control-sm" id="f-km" placeholder="Opțional">
+                </div>
             </div>
             <div class="mt-2">
                 <label class="form-label small mb-1" for="f-observatii">Observații</label>
@@ -137,7 +153,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                         <tr>
                             <th style="width:26%">Denumire piesă *</th>
                             <th style="width:12%">Cod piesă</th>
-                            <th style="width:13%">Categorie</th>
+                            <th style="width:13%">Tip (coloana din registru)</th>
                             <th style="width:7%">U.M.</th>
                             <th style="width:9%" class="text-end">Cantitate</th>
                             <th style="width:11%" class="text-end">Preț unitar</th>
@@ -180,19 +196,6 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
     </div>
 </div>
 
-<datalist id="ocr-categorii">
-    <option value="Motor"></option>
-    <option value="Transmisie"></option>
-    <option value="Sistem franare"></option>
-    <option value="Sistem electric"></option>
-    <option value="Suspensie"></option>
-    <option value="Filtre"></option>
-    <option value="Uleiuri si lichide"></option>
-    <option value="Caroserie"></option>
-    <option value="Anvelope"></option>
-    <option value="Consumabile"></option>
-</datalist>
-
 <form class="d-none" id="ocr-token-form"><?= csrf_field() ?></form>
 
 <script>
@@ -202,6 +205,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
     var RUN_URL = <?= json_encode($runUrl, JSON_UNESCAPED_SLASHES) ?>;
     var SAVE_URL = <?= json_encode($saveUrl, JSON_UNESCAPED_SLASHES) ?>;
     var MAX_BYTES = <?= (int) $maxFileBytes ?>;
+    var MAX_IMG_BYTES = <?= (int) $maxImageBytes ?>;
     var API_KEY_CONFIGURED = <?= $apiKeyConfigured ? 'true' : 'false' ?>;
     var ALLOWED_EXT = ['pdf', 'jpg', 'jpeg', 'png'];
 
@@ -267,8 +271,13 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
             showError('Tip de fișier neacceptat. Formate permise: PDF, JPG, JPEG, PNG.');
             return;
         }
-        if (file.size > MAX_BYTES) {
-            showError('Fișierul are ' + formatBytes(file.size) + ' și depășește limita OCR.Space gratuit (' + formatBytes(MAX_BYTES) + ').');
+        if (ext === 'pdf' && file.size > MAX_BYTES) {
+            showError('PDF-ul are ' + formatBytes(file.size) + ' și depășește limita OCR.Space gratuit (' + formatBytes(MAX_BYTES) +
+                '). Alternativă: fotografiază factura (JPG/PNG până la ' + formatBytes(MAX_IMG_BYTES) + ' — o comprimăm automat).');
+            return;
+        }
+        if (ext !== 'pdf' && file.size > MAX_IMG_BYTES) {
+            showError('Imaginea are ' + formatBytes(file.size) + ' și depășește limita de ' + formatBytes(MAX_IMG_BYTES) + '.');
             return;
         }
         selectedFile = file;
@@ -307,7 +316,15 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
         if (line.linie_sursa) { nameInput.title = 'Linie OCR: ' + line.linie_sursa; }
 
         var codeInput = textInput(line.cod_piesa, 80); codeInput.classList.add('ocr-in-code');
-        var categoryInput = textInput(line.categorie, 100, 'ocr-categorii'); categoryInput.classList.add('ocr-in-cat');
+        var typeSelect = document.createElement('select');
+        typeSelect.className = 'form-select form-select-sm ocr-in-tip';
+        [['inlocuiri', 'Înlocuiri'], ['reparatii', 'Reparații'], ['imbunatatiri', 'Îmbunătățiri']].forEach(function (opt) {
+            var option = document.createElement('option');
+            option.value = opt[0];
+            option.textContent = opt[1];
+            if ((line.tip || 'inlocuiri') === opt[0]) { option.selected = true; }
+            typeSelect.appendChild(option);
+        });
         var umInput = textInput(line.unitate_masura || 'buc', 30); umInput.classList.add('ocr-in-um');
         var qtyInput = numberInput(line.cantitate !== undefined && line.cantitate !== null ? line.cantitate : 1, 'ocr-in-qty');
         var priceInput = numberInput(line.pret_unitar, 'ocr-in-price');
@@ -331,7 +348,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
 
         row.appendChild(cell(nameInput));
         row.appendChild(cell(codeInput));
-        row.appendChild(cell(categoryInput));
+        row.appendChild(cell(typeSelect));
         row.appendChild(cell(umInput));
         row.appendChild(cell(qtyInput));
         row.appendChild(cell(priceInput));
@@ -443,7 +460,8 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                     throw new Error((payload.error || 'OCR eșuat.') + (payload.error_details ? ' — ' + payload.error_details : ''));
                 }
                 runStatus.textContent = 'OCR finalizat în ' + ((payload.duration_ms || 0) / 1000).toFixed(2).replace('.', ',') +
-                    ' sec — ' + (payload.lines || []).length + ' articole propuse. Verifică și corectează mai jos.';
+                    ' sec — ' + (payload.lines || []).length + ' articole propuse. Verifică și corectează mai jos.' +
+                    (payload.compression_note ? ' ' + payload.compression_note : '');
                 if (payload.parse_warning) { showError(payload.parse_warning); }
                 openReview(payload);
             })
@@ -467,7 +485,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
             lines.push({
                 denumire: name,
                 cod_piesa: row.querySelector('.ocr-in-code').value.trim(),
-                categorie: row.querySelector('.ocr-in-cat').value.trim(),
+                tip: row.querySelector('.ocr-in-tip').value,
                 unitate_masura: row.querySelector('.ocr-in-um').value.trim() || 'buc',
                 cantitate: parseFloat(row.querySelector('.ocr-in-qty').value) || 0,
                 pret_unitar: parseFloat(row.querySelector('.ocr-in-price').value) || 0,
@@ -502,6 +520,8 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
         formData.append('moneda', document.getElementById('f-moneda').value);
         formData.append('total_factura', document.getElementById('f-total').value);
         formData.append('observatii', document.getElementById('f-observatii').value);
+        formData.append('vehicle_id', document.getElementById('f-vehicul').value);
+        formData.append('km_bord', document.getElementById('f-km').value);
         formData.append('ocr_text', ocrText);
         if (ocrDurationMs !== null) { formData.append('ocr_durata_ms', String(ocrDurationMs)); }
         formData.append('lines', JSON.stringify(collected.lines));

@@ -2,14 +2,17 @@
 declare(strict_types=1);
 
 /**
- * Tracker EXPERIMENTAL piese auto receptionate din facturi citite cu OCR.
+ * Registru EXPERIMENTAL de piese/lucrari per vehicul, in stil Excel
+ * (REPARATII / INLOCUIRI / IMBUNATATIRI), alimentat manual sau prin OCR.
  *
  * Rute (toate doar pentru admin, gate in index.php):
- *   ?page=ocr_piese                -> lista facturi + articole (tracker)
- *   ?page=ocr_piese&action=intake  -> ecran de receptie: upload -> OCR -> formular editabil
- *   ?page=ocr_piese&action=run     -> POST fisier, JSON cu antet + linii propuse de OCR
- *   ?page=ocr_piese&action=save    -> POST formular confirmat, salveaza in tracker
- *   ?page=ocr_piese&action=delete  -> POST stergere factura din tracker
+ *   ?page=ocr_piese                    -> grila editabila (trackerul principal)
+ *   ?page=ocr_piese&action=intake      -> receptie factura: upload -> OCR -> formular
+ *   ?page=ocr_piese&action=run         -> POST fisier, JSON cu antet + linii propuse
+ *   ?page=ocr_piese&action=save        -> POST formular confirmat -> factura + randuri registru
+ *   ?page=ocr_piese&action=row_add     -> POST, adauga rand gol in grila (JSON)
+ *   ?page=ocr_piese&action=row_update  -> POST, salveaza o celula editata inline (JSON)
+ *   ?page=ocr_piese&action=row_delete  -> POST, sterge un rand din grila (JSON)
  *
  * Separat complet de stocul de productie (mentenanta_piese).
  */
@@ -17,6 +20,7 @@ class OcrPartsController
 {
     private const UPLOAD_DIR = 'uploads/ocr_piese';
     private const MAX_LINES = 200;
+    private const LINE_TYPES = ['reparatii', 'inlocuiri', 'imbunatatiri'];
 
     private PDO $db;
     private OcrPartsModel $model;
@@ -41,8 +45,14 @@ class OcrPartsController
             case 'save':
                 $this->save();
                 return;
-            case 'delete':
-                $this->delete();
+            case 'row_add':
+                $this->rowAdd();
+                return;
+            case 'row_update':
+                $this->rowUpdate();
+                return;
+            case 'row_delete':
+                $this->rowDelete();
                 return;
             default:
                 $this->index();
@@ -51,11 +61,15 @@ class OcrPartsController
 
     private function index(): void
     {
+        $vehicleId = (int) ($_GET['vehicul'] ?? 0);
+
         render('ocr_piese/index.php', [
-            'pageTitle' => 'Tracker piese OCR (experimental)',
+            'pageTitle' => 'Registru piese (OCR)',
             'currentPage' => 'ocr_piese',
-            'invoices' => $this->model->getInvoicesWithLines(),
-            'kpis' => $this->model->getKpis(),
+            'rows' => $this->model->getRegistryRows($vehicleId > 0 ? $vehicleId : null),
+            'kpis' => $this->model->getRegistryKpis($vehicleId > 0 ? $vehicleId : null),
+            'vehicles' => $this->model->getVehicleOptions(),
+            'selectedVehicleId' => $vehicleId,
         ]);
     }
 
@@ -66,6 +80,8 @@ class OcrPartsController
             'currentPage' => 'ocr_piese',
             'apiKeyConfigured' => $this->ocrService->isConfigured(),
             'maxFileBytes' => $this->ocrService->maxFileBytes(),
+            'maxImageBytes' => $this->ocrService->maxImageUploadBytes(),
+            'vehicles' => $this->model->getVehicleOptions(),
         ]);
     }
 
@@ -125,66 +141,23 @@ class OcrPartsController
             'header' => $headerAnalysis['fields'],
             'lines' => $proposedLines,
             'parse_warning' => $parseWarning,
+            'compression_note' => $result['compression_note'] ?? null,
         ]);
     }
 
-    /** Salveaza formularul confirmat de utilizator (antet + linii + fisierul facturii). */
+    /**
+     * Salveaza formularul confirmat: factura (dovada) + cate un rand de registru
+     * pentru fiecare linie, cu textul pus in coloana Reparatii/Inlocuiri/Imbunatatiri.
+     */
     private function save(): void
     {
         $this->requirePost();
         $this->requireCsrfJson();
 
-        $linesJson = (string) ($_POST['lines'] ?? '[]');
-        $lines = json_decode($linesJson, true);
-        if (!is_array($lines)) {
+        $lines = json_decode((string) ($_POST['lines'] ?? '[]'), true);
+        if (!is_array($lines) || count($lines) > self::MAX_LINES) {
             http_response_code(422);
-            $this->sendJson(['ok' => false, 'error' => 'Liniile de articole nu au putut fi citite. Reîncearcă.']);
-            return;
-        }
-        if (count($lines) > self::MAX_LINES) {
-            http_response_code(422);
-            $this->sendJson(['ok' => false, 'error' => 'Prea multe linii (maxim ' . self::MAX_LINES . ').']);
-            return;
-        }
-
-        $cleanLines = [];
-        foreach ($lines as $index => $line) {
-            if (!is_array($line)) {
-                continue;
-            }
-            $name = trim((string) ($line['denumire'] ?? ''));
-            if ($name === '') {
-                http_response_code(422);
-                $this->sendJson(['ok' => false, 'error' => 'Linia ' . ((int) $index + 1) . ' nu are denumire. Completează sau șterge linia.']);
-                return;
-            }
-            // Coloanele sunt DECIMAL(12,2): validam aici ca sa dam un mesaj
-            // clar in loc de o eroare SQL "out of range".
-            foreach (['cantitate' => 'Cantitatea', 'pret_unitar' => 'Prețul unitar', 'valoare' => 'Valoarea'] as $field => $label) {
-                $amount = (float) ($line[$field] ?? 0);
-                if (!is_finite($amount) || $amount < 0 || $amount > 9999999999.99) {
-                    http_response_code(422);
-                    $this->sendJson(['ok' => false, 'error' => $label . ' de pe linia ' . ((int) $index + 1)
-                        . ' („' . mb_substr($name, 0, 40) . '") nu este un număr valid — probabil OCR-ul a citit greșit. Corectează sau șterge linia.']);
-                    return;
-                }
-            }
-            $cleanLines[] = [
-                'denumire' => mb_substr($name, 0, 255),
-                'cod_piesa' => mb_substr(trim((string) ($line['cod_piesa'] ?? '')), 0, 80),
-                'categorie' => mb_substr(trim((string) ($line['categorie'] ?? '')), 0, 100),
-                'unitate_masura' => mb_substr(trim((string) ($line['unitate_masura'] ?? 'buc')), 0, 30),
-                'cantitate' => (float) ($line['cantitate'] ?? 1),
-                'pret_unitar' => (float) ($line['pret_unitar'] ?? 0),
-                'valoare' => (float) ($line['valoare'] ?? 0),
-                'din_ocr' => !empty($line['din_ocr']),
-                'observatii' => mb_substr(trim((string) ($line['observatii'] ?? '')), 0, 1000),
-            ];
-        }
-
-        if ($cleanLines === []) {
-            http_response_code(422);
-            $this->sendJson(['ok' => false, 'error' => 'Adaugă cel puțin un articol înainte de salvare.']);
+            $this->sendJson(['ok' => false, 'error' => 'Liniile de articole nu au putut fi citite (sau sunt prea multe).']);
             return;
         }
 
@@ -195,8 +168,62 @@ class OcrPartsController
             return;
         }
 
-        // Fisierul facturii este optional la salvare (dar recomandat): pastram
-        // dovada pentru verificari ulterioare.
+        $vehicleId = (int) ($_POST['vehicle_id'] ?? 0);
+        $kmBord = trim((string) ($_POST['km_bord'] ?? ''));
+        $supplier = mb_substr(trim((string) ($_POST['furnizor'] ?? '')), 0, 190);
+
+        $registryRows = [];
+        foreach ($lines as $index => $line) {
+            if (!is_array($line)) {
+                continue;
+            }
+            $name = trim((string) ($line['denumire'] ?? ''));
+            if ($name === '') {
+                http_response_code(422);
+                $this->sendJson(['ok' => false, 'error' => 'Linia ' . ((int) $index + 1) . ' nu are denumire. Completează sau șterge linia.']);
+                return;
+            }
+
+            $value = (float) ($line['valoare'] ?? 0);
+            $quantity = (float) ($line['cantitate'] ?? 1);
+            if (!is_finite($value) || $value < 0 || $value > 9999999999.99 || !is_finite($quantity) || $quantity < 0) {
+                http_response_code(422);
+                $this->sendJson(['ok' => false, 'error' => 'Linia ' . ((int) $index + 1) . ' („' . mb_substr($name, 0, 40)
+                    . '") are o valoare invalidă — probabil OCR-ul a citit greșit. Corectează sau șterge linia.']);
+                return;
+            }
+
+            $type = in_array($line['tip'] ?? '', self::LINE_TYPES, true) ? (string) $line['tip'] : 'inlocuiri';
+
+            // Textul in stilul Excel: denumire + cod + cantitate cand nu e 1.
+            $text = mb_substr($name, 0, 255);
+            $code = trim((string) ($line['cod_piesa'] ?? ''));
+            if ($code !== '') {
+                $text .= ' [' . mb_substr($code, 0, 40) . ']';
+            }
+            $unit = trim((string) ($line['unitate_masura'] ?? 'buc')) ?: 'buc';
+            if ($quantity > 0 && abs($quantity - 1.0) > 0.001) {
+                $formattedQty = fmod($quantity, 1.0) === 0.0 ? (string) (int) $quantity : (string) $quantity;
+                $text .= ' (' . $formattedQty . ' ' . mb_substr($unit, 0, 20) . ')';
+            }
+
+            $registryRows[] = [
+                'vehicle_id' => $vehicleId,
+                'data_interventie' => $invoiceDate,
+                $type => $text,
+                'pret' => $value,
+                'furnizor' => $supplier,
+                'km_bord' => $kmBord !== '' ? (int) $kmBord : null,
+            ];
+        }
+
+        if ($registryRows === []) {
+            http_response_code(422);
+            $this->sendJson(['ok' => false, 'error' => 'Adaugă cel puțin un articol înainte de salvare.']);
+            return;
+        }
+
+        // Fisierul facturii (dovada) este optional dar recomandat.
         $storedFile = null;
         $originalFile = null;
         $file = $_FILES['invoice'] ?? null;
@@ -214,10 +241,10 @@ class OcrPartsController
         $user = function_exists('current_user') ? current_user() : null;
 
         try {
-            $invoiceId = $this->model->saveInvoice([
+            $this->model->saveInvoiceToRegistry([
                 'numar_factura' => mb_substr(trim((string) ($_POST['numar_factura'] ?? '')), 0, 80),
                 'data_facturii' => $invoiceDate,
-                'furnizor' => mb_substr(trim((string) ($_POST['furnizor'] ?? '')), 0, 190),
+                'furnizor' => $supplier,
                 'cui_furnizor' => mb_substr(trim((string) ($_POST['cui_furnizor'] ?? '')), 0, 20),
                 'moneda' => mb_substr(trim((string) ($_POST['moneda'] ?? 'RON')), 0, 10),
                 'total_factura' => $_POST['total_factura'] ?? null,
@@ -226,45 +253,96 @@ class OcrPartsController
                 'ocr_text' => (string) ($_POST['ocr_text'] ?? ''),
                 'ocr_durata_ms' => $_POST['ocr_durata_ms'] ?? null,
                 'observatii' => (string) ($_POST['observatii'] ?? ''),
-            ], $cleanLines, isset($user['id']) ? (int) $user['id'] : null);
+            ], $registryRows, isset($user['id']) ? (int) $user['id'] : null);
         } catch (Throwable $exception) {
             error_log('[OcrPartsController][save] ' . $exception->getMessage());
             if ($storedFile !== null) {
                 @unlink(BASE_PATH . '/' . self::UPLOAD_DIR . '/' . $storedFile);
             }
             http_response_code(500);
-            $this->sendJson(['ok' => false, 'error' => 'Salvarea în tracker a eșuat. Detalii în logul serverului.']);
+            $this->sendJson(['ok' => false, 'error' => 'Salvarea în registru a eșuat. Detalii în logul serverului.']);
             return;
         }
 
-        flash_set('success', 'Factura a fost salvată în tracker (' . count($cleanLines) . ' articole).');
+        flash_set('success', 'Factura a fost salvată: ' . count($registryRows) . ' rânduri adăugate în registru.');
         $this->sendJson([
             'ok' => true,
-            'invoice_id' => $invoiceId,
-            'redirect' => build_query_url(['page' => 'ocr_piese']),
+            'redirect' => build_query_url(['page' => 'ocr_piese', 'vehicul' => $vehicleId > 0 ? $vehicleId : null]),
         ]);
     }
 
-    private function delete(): void
+    private function rowAdd(): void
     {
         $this->requirePost();
-        ensure_csrf_or_redirect(build_query_url(['page' => 'ocr_piese']));
+        $this->requireCsrfJson();
 
-        $invoiceId = (int) ($_POST['invoice_id'] ?? 0);
-        if ($invoiceId > 0) {
+        $user = function_exists('current_user') ? current_user() : null;
+        $vehicleId = (int) ($_POST['vehicle_id'] ?? 0);
+
+        try {
+            $rowId = $this->model->addRegistryRow(
+                $vehicleId > 0 ? $vehicleId : null,
+                isset($user['id']) ? (int) $user['id'] : null
+            );
+        } catch (Throwable $exception) {
+            error_log('[OcrPartsController][row_add] ' . $exception->getMessage());
+            http_response_code(500);
+            $this->sendJson(['ok' => false, 'error' => 'Rândul nu a putut fi adăugat.']);
+            return;
+        }
+
+        $this->sendJson(['ok' => true, 'row_id' => $rowId, 'data_interventie' => date('Y-m-d')]);
+    }
+
+    private function rowUpdate(): void
+    {
+        $this->requirePost();
+        $this->requireCsrfJson();
+
+        $rowId = (int) ($_POST['row_id'] ?? 0);
+        $field = (string) ($_POST['field'] ?? '');
+        $value = $_POST['value'] ?? null;
+
+        if ($rowId <= 0) {
+            http_response_code(422);
+            $this->sendJson(['ok' => false, 'error' => 'Rând invalid.']);
+            return;
+        }
+
+        try {
+            $normalized = $this->model->updateRegistryCell($rowId, $field, is_string($value) ? $value : null);
+        } catch (InvalidArgumentException $exception) {
+            http_response_code(422);
+            $this->sendJson(['ok' => false, 'error' => $exception->getMessage()]);
+            return;
+        } catch (Throwable $exception) {
+            error_log('[OcrPartsController][row_update] ' . $exception->getMessage());
+            http_response_code(500);
+            $this->sendJson(['ok' => false, 'error' => 'Modificarea nu a putut fi salvată.']);
+            return;
+        }
+
+        $this->sendJson(['ok' => true, 'value' => $normalized]);
+    }
+
+    private function rowDelete(): void
+    {
+        $this->requirePost();
+        $this->requireCsrfJson();
+
+        $rowId = (int) ($_POST['row_id'] ?? 0);
+        if ($rowId > 0) {
             try {
-                $storedFile = $this->model->deleteInvoice($invoiceId);
-                if ($storedFile !== null) {
-                    @unlink(BASE_PATH . '/' . self::UPLOAD_DIR . '/' . basename($storedFile));
-                }
-                flash_set('success', 'Factura a fost ștearsă din tracker.');
+                $this->model->deleteRegistryRow($rowId);
             } catch (Throwable $exception) {
-                error_log('[OcrPartsController][delete] ' . $exception->getMessage());
-                flash_set('danger', 'Ștergerea a eșuat.');
+                error_log('[OcrPartsController][row_delete] ' . $exception->getMessage());
+                http_response_code(500);
+                $this->sendJson(['ok' => false, 'error' => 'Ștergerea a eșuat.']);
+                return;
             }
         }
 
-        redirect(build_query_url(['page' => 'ocr_piese']));
+        $this->sendJson(['ok' => true]);
     }
 
     /** @return array{0:string,1:string} [nume original, nume stocat] */

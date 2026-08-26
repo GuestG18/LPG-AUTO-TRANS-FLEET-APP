@@ -96,6 +96,8 @@ if (
                     <a class="nav-link <?= $currentPage === 'dispecer_curse' && $currentAction === 'curse_sterse' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'curse_sterse'])) ?>"><i class="bi bi-trash3" aria-hidden="true"></i><span>Curse șterse</span></a>
                 <?php endif; ?>
                 <?php if ($can('harta_flota')): ?><a class="nav-link <?= $currentPage === 'harta_flota' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'harta_flota'])) ?>"><i class="bi bi-map" aria-hidden="true"></i><span>Harta Flota</span></a><?php endif; ?>
+                <?php if ($can('dispecer_sandbox')): ?><a class="nav-link <?= $currentPage === 'dispecer_sandbox' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_sandbox'])) ?>"><i class="bi bi-broadcast" aria-hidden="true"></i><span>Sandbox GPS curse</span></a><?php endif; ?>
+                <?php if ($can('sas_dashboard_sandbox')): ?><a class="nav-link <?= $currentPage === 'sas_dashboard_sandbox' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'sas_dashboard_sandbox'])) ?>"><i class="bi bi-activity" aria-hidden="true"></i><span>Sandbox Dashboard Flota</span></a><?php endif; ?>
                 <?php if ($can('carburanti')): ?><a class="nav-link <?= $currentPage === 'carburanti' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'carburanti'])) ?>"><i class="bi bi-fuel-pump" aria-hidden="true"></i><span>Carburan&#539;i</span></a><?php endif; ?>
                 <?php if ($can('istoric_cheltuieli_curse')): ?><a class="nav-link <?= $currentPage === 'istoric_cheltuieli_curse' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'istoric_cheltuieli_curse'])) ?>"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i><span>Istoric cheltuieli curse</span></a><?php endif; ?>
                 <?php if ($currentPage !== 'istoric_cheltuieli_curse' && $can('dispecer_curse', 'refacturari_view')): ?>
@@ -189,8 +191,8 @@ if (
                 </div>
                 <?php endif; ?>
                 <?php if ($can('contabilitate_personal')): ?><a class="nav-link <?= $currentPage === 'contabilitate_personal' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'contabilitate_personal'])) ?>"><i class="bi bi-person-badge" aria-hidden="true"></i><span>Contabilitate Personal</span></a><?php endif; ?>
-                <?php if ($can('cheltuieli_birou')): ?><a class="nav-link <?= $currentPage === 'cheltuieli_birou' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cheltuieli_birou'])) ?>"><i class="bi bi-wallet2" aria-hidden="true"></i><span>Cheltuieli Birou</span></a><?php endif; ?>
-                <?php if ($can('cheltuieli_administrative')): ?><a class="nav-link <?= $currentPage === 'cheltuieli_administrative' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cheltuieli_administrative'])) ?>"><i class="bi bi-file-earmark-text" aria-hidden="true"></i><span>Cheltuieli Administrative</span></a><?php endif; ?>
+                <?php if ($can('cheltuieli')): ?><a class="nav-link <?= $currentPage === 'cheltuieli' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cheltuieli'])) ?>"><i class="bi bi-wallet2" aria-hidden="true"></i><span>Cheltuieli</span></a><?php endif; ?>
+                <?php if ($can('cost_operational')): ?><a class="nav-link <?= $currentPage === 'cost_operational' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cost_operational'])) ?>"><i class="bi bi-graph-up" aria-hidden="true"></i><span>Cost opera&#539;ional / km</span></a><?php endif; ?>
                 <?php
                 $isTireModule = $currentPage === 'mentenanta' && in_array($currentAction, ['tire_stock', 'axis_config'], true);
                 $isMaintenanceModule = $currentPage === 'mentenanta';

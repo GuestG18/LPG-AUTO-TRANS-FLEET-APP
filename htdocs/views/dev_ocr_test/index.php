@@ -2,9 +2,11 @@
 $apiKeyConfigured = !empty($apiKeyConfigured);
 $engineLabel = (string) ($engineLabel ?? 'OCR.Space');
 $maxFileBytes = (int) ($maxFileBytes ?? 1048576);
+$maxImageBytes = (int) ($maxImageBytes ?? $maxFileBytes);
 $allowedExtensions = (array) ($allowedExtensions ?? ['pdf', 'jpg', 'jpeg', 'png']);
 $runUrl = build_query_url(['page' => 'dev_ocr_test', 'action' => 'run']);
 $maxFileMb = number_format($maxFileBytes / 1048576, 1, ',', '.');
+$maxImageMb = number_format($maxImageBytes / 1048576, 0, ',', '.');
 ?>
 <style>
     /* Stiluri locale doar pentru sandbox-ul OCR - pagina este un utilitar de dev. */
@@ -67,7 +69,7 @@ $maxFileMb = number_format($maxFileBytes / 1048576, 1, ',', '.');
                      aria-label="Trage factura aici sau apasă pentru a selecta un fișier">
                     <i class="bi bi-file-earmark-arrow-up fs-1 text-secondary" aria-hidden="true"></i>
                     <div class="fw-semibold mt-2">Trage factura aici</div>
-                    <div class="text-muted small mb-2">PDF / JPG / JPEG / PNG &middot; maxim <?= e($maxFileMb) ?> MB (limita planului gratuit OCR.Space; PDF max 3 pagini)</div>
+                    <div class="text-muted small mb-2">PDF maxim <?= e($maxFileMb) ?> MB (limita OCR.Space gratuit; max 3 pagini) &middot; JPG / PNG maxim <?= e($maxImageMb) ?> MB (comprimare automată)</div>
                     <button type="button" class="btn btn-outline-primary btn-sm" id="ocr-pick-btn">Selectează fișier</button>
                     <input type="file" id="ocr-file-input" class="d-none" accept=".pdf,.jpg,.jpeg,.png">
                 </div>
@@ -206,6 +208,7 @@ $maxFileMb = number_format($maxFileBytes / 1048576, 1, ',', '.');
 
     var RUN_URL = <?= json_encode($runUrl, JSON_UNESCAPED_SLASHES) ?>;
     var MAX_BYTES = <?= (int) $maxFileBytes ?>;
+    var MAX_IMG_BYTES = <?= (int) $maxImageBytes ?>;
     var ALLOWED_EXT = <?= json_encode(array_values($allowedExtensions)) ?>;
     var API_KEY_CONFIGURED = <?= $apiKeyConfigured ? 'true' : 'false' ?>;
 
@@ -266,9 +269,13 @@ $maxFileMb = number_format($maxFileBytes / 1048576, 1, ',', '.');
             showClientError('Tip de fișier neacceptat („' + ext + '"). Formate permise: PDF, JPG, JPEG, PNG.');
             return;
         }
-        if (file.size > MAX_BYTES) {
-            showClientError('Fișierul are ' + formatBytes(file.size) + ' și depășește limita planului gratuit OCR.Space (' +
-                formatBytes(MAX_BYTES) + '). Comprimă documentul sau scanează la rezoluție mai mică.');
+        if (ext === 'pdf' && file.size > MAX_BYTES) {
+            showClientError('PDF-ul are ' + formatBytes(file.size) + ' și depășește limita planului gratuit OCR.Space (' +
+                formatBytes(MAX_BYTES) + '). Alternativă: fotografiază factura ca JPG/PNG — o comprimăm automat.');
+            return;
+        }
+        if (ext !== 'pdf' && file.size > MAX_IMG_BYTES) {
+            showClientError('Imaginea are ' + formatBytes(file.size) + ' și depășește limita de ' + formatBytes(MAX_IMG_BYTES) + '.');
             return;
         }
 
