@@ -1186,7 +1186,8 @@ if ($configCreateMode) {
 
                                 <div class="col-12 col-md-3">
                                     <label class="form-label" for="config_primary_distribution_route_cost_cursa">Cost cursa (RON)</label>
-                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['cost_cursa']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_cost_cursa" name="route_cost_cursa" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($primaryDistributionRouteFormData['cost_cursa'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['cost_cursa']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_cost_cursa" name="route_cost_cursa" min="0" step="0.01" readonly data-ride-cost-input="1" data-ride-cost-toggle-id="config_primary_distribution_route_aplica_cost_cursa" value="<?= e((string) ($primaryDistributionRouteFormData['cost_cursa'] ?? '')) ?>">
+                                    <div class="form-text" data-ride-cost-hint="1">Activeaza &bdquo;Aplica doar pe aceasta ruta&rdquo; pentru a putea completa costul.</div>
                                     <?php if (isset($primaryDistributionRouteFormErrors['cost_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['cost_cursa']) ?></div><?php endif; ?>
                                 </div>
 
@@ -1391,7 +1392,8 @@ if ($configCreateMode) {
 
                             <div class="col-12 col-md-6">
                                 <label class="form-label" for="config_primary_route_cost_cursa">Cost cursa (RON)</label>
-                                <input type="number" class="form-control <?= isset($primaryRouteFormErrors['cost_cursa']) ? 'is-invalid' : '' ?>" id="config_primary_route_cost_cursa" name="route_primar_cost_cursa" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($primaryRouteFormData['cost_cursa'] ?? '')) ?>">
+                                <input type="number" class="form-control <?= isset($primaryRouteFormErrors['cost_cursa']) ? 'is-invalid' : '' ?>" id="config_primary_route_cost_cursa" name="route_primar_cost_cursa" min="0" step="0.01" readonly data-ride-cost-input="1" data-ride-cost-toggle-id="config_primary_route_aplica_cost_cursa" value="<?= e((string) ($primaryRouteFormData['cost_cursa'] ?? '')) ?>">
+                                <div class="form-text" data-ride-cost-hint="1">Activeaza &bdquo;Aplica doar pe aceasta ruta&rdquo; pentru a putea completa costul.</div>
                                 <?php if (isset($primaryRouteFormErrors['cost_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryRouteFormErrors['cost_cursa']) ?></div><?php endif; ?>
                             </div>
 
@@ -3103,6 +3105,39 @@ document.addEventListener('DOMContentLoaded', function () {
         primaryManualKmToggle.addEventListener('change', updatePrimaryKmInputMode);
         updatePrimaryKmInputMode();
     }
+
+    document.querySelectorAll('input[data-ride-cost-input]').forEach(function (rideCostInput) {
+        if (!(rideCostInput instanceof HTMLInputElement)) {
+            return;
+        }
+
+        const toggleId = rideCostInput.dataset.rideCostToggleId || '';
+        const rideCostToggle = toggleId !== '' ? document.getElementById(toggleId) : null;
+        if (!(rideCostToggle instanceof HTMLInputElement)) {
+            return;
+        }
+
+        const rideCostHint = rideCostInput.parentElement
+            ? rideCostInput.parentElement.querySelector('[data-ride-cost-hint]')
+            : null;
+
+        const updateRideCostInputMode = function () {
+            const appliesRideCost = rideCostToggle.checked;
+            rideCostInput.readOnly = !appliesRideCost;
+            rideCostInput.required = appliesRideCost;
+            if (rideCostHint instanceof HTMLElement) {
+                rideCostHint.hidden = appliesRideCost;
+            }
+        };
+
+        rideCostToggle.addEventListener('change', function () {
+            updateRideCostInputMode();
+            if (rideCostToggle.checked) {
+                rideCostInput.focus();
+            }
+        });
+        updateRideCostInputMode();
+    });
 
     const primarTonField = document.getElementById('config_primar_pret_tona');
     const compresorTonField = document.getElementById('config_compresor_pret_tona');

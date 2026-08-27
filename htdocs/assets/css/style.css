@@ -22942,3 +22942,70 @@ body.dispatcher-races-header-pinned .dispatcher-open-races-alert-container {
         grid-column: auto;
     }
 }
+
+/* Legenda distributiei este clickabila (link catre lista filtrata) */
+a.chx-legend-line {
+    text-decoration: none;
+    color: inherit;
+    border-radius: 0.35rem;
+    padding: 0.15rem 0.3rem;
+    margin: -0.15rem -0.3rem;
+}
+
+a.chx-legend-line:hover {
+    background: #f1f5f9;
+}
+
+a.chx-legend-line:hover .chx-legend-name {
+    color: #2563eb;
+}
+
+/* Soferul responsabil (informativ) afisat sub alocare in tabel */
+.chx-resp-driver {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-top: 0.3rem;
+    font-size: 0.74rem;
+    color: #64748b;
+}
+
+.chx-resp-driver i {
+    color: #16a34a;
+    font-size: 0.8rem;
+}
+
+/* Calendarul pentru "Data cheltuielii" se deschide spre interiorul
+   modalului (campul e langa marginea dreapta, altfel se taie). */
+[data-chx-date] .chx-range-menu {
+    left: auto;
+    right: 0;
+    max-width: min(292px, calc(100vw - 3rem));
+}
+
+/* Coloane noi in tabelul de cheltuieli: sursa + text secundar */
+.chx-src {
+    display: inline-block;
+    padding: 0.22rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.chx-src.is-spv { background: #e3edff; color: #2563eb; }
+.chx-src.is-ocr { background: #f3e8ff; color: #7c3aed; }
+.chx-src.is-import { background: #ddf5e7; color: #16a34a; }
+
+.chx-cell-sub {
+    font-size: 0.72rem;
+    color: #94a3b8;
+}
+
+.chx-cell-desc {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

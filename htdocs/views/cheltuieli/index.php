@@ -70,7 +70,47 @@ $allocationBadge = static function (array $allocation) use ($money): array {
         }
         return ['icon' => 'bi-person', 'label' => $label, 'sub' => '', 'suma' => $money($allocation['suma'] ?? 0)];
     }
-    return ['icon' => 'bi-building', 'label' => 'Companie', 'sub' => '', 'suma' => $money($allocation['suma'] ?? 0)];
+    return ['icon' => 'bi-briefcase', 'label' => 'Birou / Administrativ', 'sub' => '', 'suma' => $money($allocation['suma'] ?? 0)];
+};
+
+$documentLabel = static function (array $row): string {
+    $label = ExpenseModel::DOCUMENT_TYPES[(string) ($row['tip_document'] ?? '')] ?? 'Factură';
+    $numar = trim((string) ($row['numar_document'] ?? ''));
+
+    return $numar !== '' ? $label . ' · ' . $numar : $label;
+};
+
+// Selector de data cu afisare dd.mm.yyyy (acelasi calendar ca la Perioada).
+// $optional = true adauga optiunea "Fara data" si permite valoarea goala.
+$datePicker = static function (string $name, string $value, bool $optional = false): void {
+    ?>
+    <div class="chx-range" data-chx-date <?= $optional ? 'data-chx-date-optional' : '' ?>>
+        <input type="hidden" name="<?= e($name) ?>" value="<?= e($value) ?>">
+        <button type="button" class="form-control chx-range-btn" data-chx-date-btn aria-haspopup="dialog" aria-expanded="false">
+            <i class="bi bi-calendar3" aria-hidden="true"></i>
+            <span data-chx-date-label></span>
+            <i class="bi bi-chevron-down chx-range-caret" aria-hidden="true"></i>
+        </button>
+        <div class="chx-range-menu" hidden data-chx-date-menu role="dialog" aria-label="Alege data">
+            <div class="chx-range-cal">
+                <div class="chx-range-cal-head">
+                    <button type="button" data-chx-date-prev aria-label="Luna anterioară"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
+                    <strong data-chx-date-title></strong>
+                    <button type="button" data-chx-date-next aria-label="Luna următoare"><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                </div>
+                <div class="chx-range-weekdays">
+                    <span>Lu</span><span>Ma</span><span>Mi</span><span>Jo</span><span>Vi</span><span>Sâ</span><span>Du</span>
+                </div>
+                <div class="chx-range-days" data-chx-date-days></div>
+                <?php if ($optional): ?>
+                    <div class="chx-range-foot">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-chx-date-clear>Fără dată</button>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+    <?php
 };
 
 $totalRows = (int) ($pagination['total_rows'] ?? 0);
@@ -117,12 +157,23 @@ foreach ($rows as $row) {
         'id' => $rowId,
         'categorie' => (string) ($row['categorie'] ?? ''),
         'tip_id' => (int) ($row['tip_id'] ?? 0),
+        'tip_document' => (string) ($row['tip_document'] ?? 'factura'),
         'data_cheltuiala' => (string) ($row['data_cheltuiala'] ?? ''),
         'furnizor' => (string) ($row['furnizor'] ?? ''),
+        'descriere' => (string) ($row['descriere'] ?? ''),
+        'cui' => (string) ($row['cui'] ?? ''),
         'valoare' => (float) ($row['valoare'] ?? 0),
+        'valoare_neta' => ($row['valoare_neta'] ?? null) !== null ? (float) $row['valoare_neta'] : null,
+        'tva' => ($row['tva'] ?? null) !== null ? (float) $row['tva'] : null,
+        'moneda' => (string) ($row['moneda'] ?? 'RON'),
+        'modalitate_plata' => (string) ($row['modalitate_plata'] ?? ''),
+        'status_plata' => (string) ($row['status_plata'] ?? ''),
+        'data_platii' => (string) ($row['data_platii'] ?? ''),
+        'scadenta' => (string) ($row['scadenta'] ?? ''),
         'numar_document' => (string) ($row['numar_document'] ?? ''),
         'observatii' => (string) ($row['observatii'] ?? ''),
         'beneficiar_id' => (int) ($row['beneficiar_id'] ?? 0),
+        'sofer_responsabil_id' => (int) ($row['sofer_responsabil_id'] ?? 0),
         'alocare_tip' => (string) ($row['alocare_tip'] ?? 'companie'),
         'distribuire' => (string) ($row['distribuire'] ?? 'egal'),
         'alocari' => $rowAllocations,
@@ -198,7 +249,7 @@ foreach ($rows as $row) {
                     <option value="">Toate</option>
                     <option value="vehicul" <?= (string) ($filters['alocare'] ?? '') === 'vehicul' ? 'selected' : '' ?>>Vehicul</option>
                     <option value="sofer" <?= (string) ($filters['alocare'] ?? '') === 'sofer' ? 'selected' : '' ?>>Șofer</option>
-                    <option value="companie" <?= (string) ($filters['alocare'] ?? '') === 'companie' ? 'selected' : '' ?>>Companie</option>
+                    <option value="companie" <?= (string) ($filters['alocare'] ?? '') === 'companie' ? 'selected' : '' ?>>Birou / Administrativ</option>
                 </select>
             </div>
             <div class="chx-filter-field">
@@ -235,7 +286,7 @@ foreach ($rows as $row) {
                 </select>
             </div>
             <div class="chx-filter-field">
-                <label class="chx-filter-label">Tip cheltuială</label>
+                <label class="chx-filter-label">Subcategorie</label>
                 <select class="form-select" name="tip_id" data-chx-autosubmit>
                     <option value="">Toate</option>
                     <?php foreach ($types as $type): ?>
@@ -309,21 +360,22 @@ foreach ($rows as $row) {
                         <thead>
                             <tr>
                                 <th>Data</th>
+                                <th>Document</th>
+                                <th>Furnizor / Comerciant</th>
+                                <th>Descriere</th>
                                 <th>Categorie</th>
-                                <th>Tip cheltuială</th>
-                                <th>Alocată către</th>
+                                <th>Subcategorie</th>
                                 <th>Alocare</th>
-                                <th>Beneficiar / Client</th>
-                                <th>Furnizor</th>
-                                <th class="text-end">Valoare</th>
-                                <th class="text-center">Document</th>
+                                <th class="text-end">Total</th>
+                                <th>Modalitate plată</th>
+                                <th>Sursă</th>
                                 <th class="text-center">Acțiuni</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php if ($rows === []): ?>
                                 <tr>
-                                    <td colspan="10" class="text-center text-muted py-5">
+                                    <td colspan="11" class="text-center text-muted py-5">
                                         Nicio cheltuială în perioada selectată. Ajustează filtrele sau adaugă o cheltuială nouă.
                                     </td>
                                 </tr>
@@ -333,10 +385,27 @@ foreach ($rows as $row) {
                                 $rowId = (int) ($row['id'] ?? 0);
                                 $rowAllocations = $allocationsByExpense[$rowId] ?? [];
                                 $isMulti = count($rowAllocations) > 1;
-                                $alocareTip = (string) ($row['alocare_tip'] ?? 'companie');
+                                $moneda = strtoupper(trim((string) ($row['moneda'] ?? 'RON')));
+                                $totalText = format_number_ro((float) ($row['valoare'] ?? 0), 2) . ' ' . ($moneda === 'RON' ? 'lei' : $moneda);
                                 ?>
                                 <tr>
                                     <td class="text-nowrap"><?= e($date($row['data_cheltuiala'] ?? null)) ?></td>
+                                    <td class="text-nowrap">
+                                        <?php if ((int) ($row['document_count'] ?? 0) > 0): ?>
+                                            <a class="chx-doc-link" href="<?= e(build_query_url(['page' => 'cheltuieli', 'action' => 'download_document', 'document_id' => (string) ($row['document_id'] ?? 0)])) ?>" title="Descarcă: <?= e($show($row['document_original_name'] ?? null)) ?>">
+                                                <i class="bi bi-paperclip" aria-hidden="true"></i> <?= e($documentLabel($row)) ?>
+                                            </a>
+                                        <?php else: ?>
+                                            <?= e($documentLabel($row)) ?>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?= e($show($row['furnizor'] ?? null)) ?>
+                                        <?php if (trim((string) ($row['cui'] ?? '')) !== ''): ?>
+                                            <div class="chx-cell-sub"><?= e((string) $row['cui']) ?></div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="chx-cell-desc"><?= e($show($row['descriere'] ?? null)) ?></td>
                                     <td>
                                         <?php if ((string) ($row['categorie'] ?? '') === 'operationala'): ?>
                                             <span class="chx-badge is-operational">Operațională</span>
@@ -345,7 +414,6 @@ foreach ($rows as $row) {
                                         <?php endif; ?>
                                     </td>
                                     <td><?= e($show($row['tip_nume'] ?? null)) ?></td>
-                                    <td><?= e(ExpenseModel::ALLOCATION_TYPES[$alocareTip] ?? $alocareTip) ?></td>
                                     <td>
                                         <?php if ($rowAllocations === []): ?>
                                             <span class="text-muted">-</span>
@@ -365,18 +433,21 @@ foreach ($rows as $row) {
                                                 <i class="bi bi-chevron-down" aria-hidden="true"></i>
                                             </button>
                                         <?php endif; ?>
-                                    </td>
-                                    <td><?= e($show($row['beneficiar_nume'] ?? null)) ?></td>
-                                    <td><?= e($show($row['furnizor'] ?? null)) ?></td>
-                                    <td class="text-end text-nowrap fw-semibold"><?= e($money($row['valoare'] ?? 0)) ?></td>
-                                    <td class="text-center">
-                                        <?php if ((int) ($row['document_count'] ?? 0) > 0): ?>
-                                            <a class="chx-doc-link" href="<?= e(build_query_url(['page' => 'cheltuieli', 'action' => 'download_document', 'document_id' => (string) ($row['document_id'] ?? 0)])) ?>" title="<?= e($show($row['document_original_name'] ?? null)) ?>">
-                                                <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
-                                            </a>
-                                        <?php else: ?>
-                                            <span class="text-muted">-</span>
+                                        <?php if (trim((string) ($row['beneficiar_nume'] ?? '')) !== ''): ?>
+                                            <div class="chx-resp-driver" title="Beneficiar / Client">
+                                                <i class="bi bi-person-badge" aria-hidden="true"></i> <?= e((string) $row['beneficiar_nume']) ?>
+                                            </div>
                                         <?php endif; ?>
+                                        <?php if (trim((string) ($row['sofer_responsabil_nume'] ?? '')) !== ''): ?>
+                                            <div class="chx-resp-driver" title="Șofer responsabil (informativ)">
+                                                <i class="bi bi-person-check" aria-hidden="true"></i> <?= e((string) $row['sofer_responsabil_nume']) ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-end text-nowrap fw-semibold"><?= e($totalText) ?></td>
+                                    <td class="text-nowrap"><?= e(ExpenseModel::PAYMENT_METHODS[(string) ($row['modalitate_plata'] ?? '')] ?? '-') ?></td>
+                                    <td>
+                                        <span class="chx-src is-<?= e((string) ($row['sursa'] ?? 'manual')) ?>"><?= e(ExpenseModel::SOURCES[(string) ($row['sursa'] ?? 'manual')] ?? 'Manual') ?></span>
                                     </td>
                                     <td class="text-center">
                                         <div class="dropdown">
@@ -405,7 +476,7 @@ foreach ($rows as $row) {
                                 </tr>
                                 <?php if ($isMulti): ?>
                                     <tr class="chx-detail-row" id="chxDetail<?= e((string) $rowId) ?>" hidden>
-                                        <td colspan="10">
+                                        <td colspan="11">
                                             <div class="chx-detail-box">
                                                 <div class="chx-detail-title">Alocările cheltuielii (<?= e($money($row['valoare'] ?? 0)) ?> în total)</div>
                                                 <div class="chx-detail-grid">
@@ -463,16 +534,26 @@ foreach ($rows as $row) {
                     <div class="chx-donut" style="<?= e($donutStyle) ?>"><span></span></div>
                     <div class="chx-legend">
                         <?php
-                        $legendLabels = ['vehicul' => 'Vehicule', 'sofer' => 'Șoferi', 'companie' => 'Companie'];
-                        foreach ($legendLabels as $key => $label):
+                        // Fiecare intrare din legenda este un link catre lista filtrata:
+                        // Vehicule/Soferi -> filtrul de alocare, Administrative -> tab-ul
+                        // de categorie (cheltuielile fara vehicul/sofer sunt cele
+                        // administrative, la nivel de firma).
+                        $legendQuery = $baseQuery;
+                        unset($legendQuery['p'], $legendQuery['alocare'], $legendQuery['categorie']);
+                        $legendEntries = [
+                            'vehicul' => ['label' => 'Vehicule', 'url' => build_query_url(array_merge($legendQuery, ['alocare' => 'vehicul']))],
+                            'sofer' => ['label' => 'Șoferi', 'url' => build_query_url(array_merge($legendQuery, ['alocare' => 'sofer']))],
+                            'companie' => ['label' => 'Administrative', 'url' => build_query_url(array_merge($legendQuery, ['categorie' => 'administrativa']))],
+                        ];
+                        foreach ($legendEntries as $key => $entry):
                             $value = (float) ($alocare[$key] ?? 0);
                             $percent = $alocareTotal > 0 ? ($value / $alocareTotal) * 100 : 0;
                         ?>
-                            <div class="chx-legend-line">
+                            <a class="chx-legend-line" href="<?= e($entry['url']) ?>" title="Vezi cheltuielile <?= e(mb_strtolower($entry['label'])) ?>">
                                 <span class="chx-dot" style="background: <?= e($donutColors[$key]) ?>"></span>
-                                <span class="chx-legend-name"><?= e($label) ?></span>
+                                <span class="chx-legend-name"><?= e($entry['label']) ?></span>
                                 <span class="chx-legend-value"><?= e($money($value)) ?> (<?= e(format_number_ro($percent, 1)) ?>%)</span>
-                            </div>
+                            </a>
                         <?php endforeach; ?>
                     </div>
                 </div>
@@ -516,8 +597,6 @@ foreach ($rows as $row) {
                   data-update-url="<?= e(build_query_url(['page' => 'cheltuieli', 'action' => 'update'])) ?>">
                 <?= csrf_field() ?>
                 <input type="hidden" name="id" value="" data-chx-id>
-                <input type="hidden" name="aloc_mode" value="simplu" data-chx-aloc-mode>
-                <input type="hidden" name="alocare_tip" value="companie" data-chx-alocare-tip>
 
                 <div class="modal-header chx-modal-header">
                     <h3 class="modal-title chx-modal-title" data-chx-modal-title>Adaugă cheltuială</h3>
@@ -541,9 +620,9 @@ foreach ($rows as $row) {
                             </div>
                         </div>
                         <div class="col-12 col-md-6 col-lg-4">
-                            <label class="chx-form-label">Tip cheltuială <span class="chx-req">*</span></label>
+                            <label class="chx-form-label">Subcategorie <span class="chx-req">*</span></label>
                             <select class="form-select" name="tip_id" data-chx-tip required>
-                                <option value="">Selectează tipul</option>
+                                <option value="">Selectează subcategoria</option>
                                 <?php foreach ($types as $type): ?>
                                     <option value="<?= e((string) $type['id']) ?>" data-categorie="<?= e((string) $type['categorie']) ?>">
                                         <?= e((string) $type['nume']) ?>
@@ -552,12 +631,24 @@ foreach ($rows as $row) {
                             </select>
                         </div>
                         <div class="col-12 col-md-6 col-lg-3">
-                            <label class="chx-form-label">Data cheltuielii <span class="chx-req">*</span></label>
-                            <input type="date" class="form-control" name="data_cheltuiala" value="<?= e(date('Y-m-d')) ?>" required>
+                            <label class="chx-form-label">Tip document <span class="chx-req">*</span></label>
+                            <select class="form-select" name="tip_document" data-chx-tipdoc>
+                                <?php foreach (ExpenseModel::DOCUMENT_TYPES as $value => $label): ?>
+                                    <option value="<?= e($value) ?>"><?= e($label) ?></option>
+                                <?php endforeach; ?>
+                            </select>
                         </div>
 
                         <div class="col-12 col-md-6 col-lg-3">
-                            <label class="chx-form-label">Furnizor <span class="chx-req">*</span></label>
+                            <label class="chx-form-label">Număr document</label>
+                            <input type="text" class="form-control" name="numar_document" placeholder="Ex: 1258">
+                        </div>
+                        <div class="col-12 col-md-6 col-lg-3">
+                            <label class="chx-form-label">Data documentului <span class="chx-req">*</span></label>
+                            <?php $datePicker('data_cheltuiala', date('Y-m-d')); ?>
+                        </div>
+                        <div class="col-12 col-md-6 col-lg-3">
+                            <label class="chx-form-label">Furnizor / Comerciant <span class="chx-req">*</span></label>
                             <div class="input-group">
                                 <input type="text" class="form-control" name="furnizor" placeholder="Caută furnizor" list="chxSupplierList" required>
                                 <button type="button" class="btn btn-outline-primary" title="Furnizor nou: scrie direct numele în câmp" data-chx-new-supplier>
@@ -566,20 +657,66 @@ foreach ($rows as $row) {
                             </div>
                         </div>
                         <div class="col-12 col-md-6 col-lg-3">
-                            <label class="chx-form-label">Valoare (fără TVA) <span class="chx-req">*</span></label>
-                            <div class="input-group">
-                                <input type="number" min="0.01" step="0.01" class="form-control" name="valoare" placeholder="0,00" data-chx-valoare required>
-                                <span class="input-group-text">lei</span>
-                            </div>
+                            <label class="chx-form-label">CUI/CIF <span class="text-muted fw-normal">(opțional)</span></label>
+                            <input type="text" class="form-control" name="cui" placeholder="RO12345678" maxlength="20">
+                        </div>
+
+                        <div class="col-12 col-md-6 col-lg-3">
+                            <label class="chx-form-label">Valoare fără TVA <span class="text-muted fw-normal">(opțional)</span></label>
+                            <input type="number" min="0" step="0.01" class="form-control" name="valoare_neta" placeholder="0,00" data-chx-neta>
                         </div>
                         <div class="col-12 col-md-6 col-lg-3">
-                            <label class="chx-form-label">Nr. document / Factură</label>
-                            <input type="text" class="form-control" name="numar_document" placeholder="FAC-0000">
+                            <label class="chx-form-label">TVA <span class="text-muted fw-normal">(opțional)</span></label>
+                            <input type="number" min="0" step="0.01" class="form-control" name="tva" placeholder="0,00" data-chx-tva>
                         </div>
                         <div class="col-12 col-md-6 col-lg-3">
-                            <label class="chx-form-label">Document</label>
-                            <input type="file" class="form-control chx-file-input" name="document_upload" accept=".pdf,.jpg,.jpeg,.png">
-                            <div class="chx-hint">PDF, JPG, PNG (max. 10MB)</div>
+                            <label class="chx-form-label">Total <span class="chx-req">*</span></label>
+                            <input type="number" min="0.01" step="0.01" class="form-control" name="valoare" placeholder="0,00" data-chx-valoare required>
+                        </div>
+                        <div class="col-12 col-md-6 col-lg-3">
+                            <label class="chx-form-label">Monedă</label>
+                            <select class="form-select" name="moneda">
+                                <?php foreach (ExpenseModel::CURRENCIES as $currency): ?>
+                                    <option value="<?= e($currency) ?>"><?= e($currency) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="col-12 col-md-6 col-lg-3">
+                            <label class="chx-form-label">Modalitate plată</label>
+                            <select class="form-select" name="modalitate_plata">
+                                <option value="">Selectează</option>
+                                <?php foreach (ExpenseModel::PAYMENT_METHODS as $value => $label): ?>
+                                    <option value="<?= e($value) ?>"><?= e($label) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-6 col-lg-3" data-chx-invoice-field>
+                            <label class="chx-form-label">Status plată</label>
+                            <select class="form-select" name="status_plata" data-chx-status-plata>
+                                <option value="">Selectează</option>
+                                <?php foreach (ExpenseModel::PAYMENT_STATUSES as $value => $label): ?>
+                                    <option value="<?= e($value) ?>"><?= e($label) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-6 col-lg-3" data-chx-invoice-field data-chx-payment-date-field>
+                            <label class="chx-form-label">Data plății</label>
+                            <?php $datePicker('data_platii', '', true); ?>
+                        </div>
+                        <div class="col-12 col-md-6 col-lg-3" data-chx-invoice-field>
+                            <label class="chx-form-label">Scadență</label>
+                            <?php $datePicker('scadenta', '', true); ?>
+                        </div>
+
+                        <div class="col-12 col-lg-9">
+                            <label class="chx-form-label">Descriere</label>
+                            <input type="text" class="form-control" name="descriere" placeholder="Ex: Abonament telefonie august" maxlength="255">
+                        </div>
+                        <div class="col-12 col-md-6 col-lg-3">
+                            <label class="chx-form-label">Upload document</label>
+                            <input type="file" class="form-control chx-file-input" name="document_upload" accept=".pdf,.xml,.jpg,.jpeg,.png">
+                            <div class="chx-hint">PDF, XML, JPG, PNG (max. 10MB)</div>
                         </div>
 
                         <div class="col-12">
@@ -590,20 +727,20 @@ foreach ($rows as $row) {
 
                     <div class="chx-section-title mt-4">2. Alocare cheltuială</div>
                     <div data-chx-simple-alloc>
-                        <label class="chx-form-label">Alocată către <span class="chx-req">*</span></label>
+                        <label class="chx-form-label">Alocată către <span class="text-muted fw-normal">(opțional)</span></label>
                         <div class="chx-toggle-group chx-toggle-wide" data-chx-alloc-group>
                             <label class="chx-toggle">
-                                <input type="radio" name="alocare_tip_ui" value="vehicul">
+                                <input type="checkbox" name="aloc_vehicul" value="1">
                                 <i class="bi bi-truck" aria-hidden="true"></i> Vehicul
                             </label>
                             <label class="chx-toggle">
-                                <input type="radio" name="alocare_tip_ui" value="sofer">
+                                <input type="checkbox" name="aloc_sofer" value="1">
                                 <i class="bi bi-person" aria-hidden="true"></i> Șofer
                             </label>
-                            <label class="chx-toggle is-active">
-                                <input type="radio" name="alocare_tip_ui" value="companie" checked>
-                                <i class="bi bi-building" aria-hidden="true"></i> Companie
-                            </label>
+                        </div>
+                        <div class="chx-hint mt-2" data-chx-company-note>
+                            <i class="bi bi-info-circle" aria-hidden="true"></i>
+                            Fără vehicul sau șofer selectat, cheltuiala rămâne la Birou / Administrativ (nivel de firmă).
                         </div>
 
                         <div class="mt-3" data-chx-entity-block="vehicul" hidden>
@@ -657,7 +794,7 @@ foreach ($rows as $row) {
                                     <span class="chx-dist-radio"></span>
                                     <span>
                                         <strong>Egal <span class="text-primary">(recomandat)</span></strong>
-                                        <small>Valoarea se împarte egal între entitățile selectate</small>
+                                        <small>Valoarea se împarte egal între alocările selectate</small>
                                     </span>
                                 </label>
                                 <label class="chx-dist-card">
@@ -665,7 +802,7 @@ foreach ($rows as $row) {
                                     <span class="chx-dist-radio"></span>
                                     <span>
                                         <strong>Manual</strong>
-                                        <small>Introduceți valoarea pentru fiecare entitate</small>
+                                        <small>Introduceți valoarea pentru fiecare alocare</small>
                                     </span>
                                 </label>
                             </div>
@@ -676,11 +813,17 @@ foreach ($rows as $row) {
                             </div>
                             <div class="mt-3" data-chx-manual-list hidden></div>
                         </div>
-                    </div>
 
-                    <div class="chx-mixed-note" data-chx-mixed-note hidden>
-                        <i class="bi bi-info-circle" aria-hidden="true"></i>
-                        Alocarea se face prin pozițiile din secțiunea 4 (factură cu alocări multiple).
+                        <div class="mt-3">
+                            <label class="chx-form-label">Șofer responsabil <span class="text-muted fw-normal">(opțional, doar informativ — nu preia din valoare)</span></label>
+                            <select class="form-select" name="sofer_responsabil_id">
+                                <option value="">Fără șofer responsabil</option>
+                                <?php foreach ($drivers as $driver): ?>
+                                    <option value="<?= e((string) $driver['id']) ?>"><?= e((string) $driver['nume']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <div class="chx-hint">Cine a generat cheltuiala (ex. cine a dus vehiculul la spălătorie). Apare la filtrarea după șofer, dar valoarea rămâne alocată integral conform selecției de mai sus.</div>
+                        </div>
                     </div>
 
                     <div class="chx-alloc-total mt-3" data-chx-alloc-total hidden>
@@ -710,23 +853,6 @@ foreach ($rows as $row) {
                         </div>
                     </div>
 
-                    <div class="chx-mixed-card mt-4">
-                        <button type="button" class="chx-mixed-head" data-bs-toggle="collapse" data-bs-target="#chxMixedBody" aria-expanded="false" aria-controls="chxMixedBody">
-                            <span>
-                                <strong>4. Factură cu mai multe alocări diferite</strong> <span class="text-muted fw-normal">(opțional)</span>
-                                <small>Pentru alocări mixte (vehicule, șoferi și companie)</small>
-                            </span>
-                            <i class="bi bi-chevron-down" aria-hidden="true"></i>
-                        </button>
-                        <div class="collapse" id="chxMixedBody">
-                            <div class="chx-mixed-body">
-                                <div data-chx-mixed-lines></div>
-                                <button type="button" class="btn btn-outline-primary btn-sm mt-2" data-chx-add-line>
-                                    <i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă poziție
-                                </button>
-                            </div>
-                        </div>
-                    </div>
                 </div>
 
                 <div class="modal-footer chx-modal-footer">
@@ -744,8 +870,6 @@ foreach ($rows as $row) {
     'use strict';
 
     var EXPENSES = <?= json_encode($rowsJson, JSON_UNESCAPED_UNICODE) ?>;
-    var VEHICLE_LABELS = <?= json_encode(array_column(array_map(static fn(array $v): array => ['id' => (int) $v['id'], 'label' => (string) $v['nr_inmatriculare'] . ' - ' . (string) $v['marca'] . ' ' . (string) $v['model']], $vehicles), 'label', 'id'), JSON_UNESCAPED_UNICODE) ?>;
-    var DRIVER_LABELS = <?= json_encode(array_column(array_map(static fn(array $d): array => ['id' => (int) $d['id'], 'label' => (string) $d['nume']], $drivers), 'label', 'id'), JSON_UNESCAPED_UNICODE) ?>;
 
     function formatLei(value) {
         return value.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' lei';
@@ -899,6 +1023,20 @@ foreach ($rows as $row) {
         });
     });
 
+    // Meniul de actiuni se pozitioneaza fix (fata de viewport), altfel ramane
+    // prins in scroll-ul containerului .table-responsive si trebuie derulat.
+    // Bundle-ul Bootstrap se incarca in footer, dupa acest script, deci
+    // initializarea se amana pana la DOMContentLoaded.
+    document.addEventListener('DOMContentLoaded', function () {
+        if (typeof bootstrap === 'undefined') {
+            return;
+        }
+        document.querySelectorAll('.chx-table [data-bs-toggle="dropdown"]').forEach(function (toggle) {
+            bootstrap.Dropdown.getOrCreateInstance(toggle, { popperConfig: { strategy: 'fixed' } });
+        });
+    });
+
+
     // ------------------------------------------------------------------ modal
     var form = document.getElementById('chxExpenseForm');
     if (!form) {
@@ -908,10 +1046,6 @@ foreach ($rows as $row) {
     var modalEl = document.getElementById('chxExpenseModal');
     var valInput = form.querySelector('[data-chx-valoare]');
     var tipSelect = form.querySelector('[data-chx-tip]');
-    var allocModeInput = form.querySelector('[data-chx-aloc-mode]');
-    var allocTipInput = form.querySelector('[data-chx-alocare-tip]');
-    var simpleAllocBlock = form.querySelector('[data-chx-simple-alloc]');
-    var mixedNote = form.querySelector('[data-chx-mixed-note]');
     var distBlock = form.querySelector('[data-chx-dist-block]');
     var equalInfo = form.querySelector('[data-chx-equal-info]');
     var equalText = form.querySelector('[data-chx-equal-text]');
@@ -922,11 +1056,16 @@ foreach ($rows as $row) {
     var totalCheltEl = form.querySelector('[data-chx-total-cheltuiala]');
     var allocStatusEl = form.querySelector('[data-chx-alloc-status]');
     var submitBtn = form.querySelector('[data-chx-submit]');
-    var mixedLines = form.querySelector('[data-chx-mixed-lines]');
-    var mixedCollapseEl = document.getElementById('chxMixedBody');
     var benefSwitch = form.querySelector('[data-chx-benef-switch]');
     var benefBlock = form.querySelector('[data-chx-benef-block]');
-    var mixedLineIndex = 0;
+
+    // Optiunile de tip se reconstruiesc per categorie: lista incepe mereu
+    // curat de sus (option[hidden] nu este respectat de toate browserele).
+    var TYPE_OPTIONS = Array.prototype.slice.call(tipSelect.options)
+        .filter(function (option) { return option.value !== ''; })
+        .map(function (option) {
+            return { value: option.value, categorie: option.getAttribute('data-categorie'), label: option.textContent.trim() };
+        });
 
     function currentValue() {
         var raw = parseFloat(String(valInput.value).replace(',', '.'));
@@ -938,58 +1077,90 @@ foreach ($rows as $row) {
         return checked ? checked.value : 'administrativa';
     }
 
-    function activeAllocType() {
-        var checked = form.querySelector('input[name="alocare_tip_ui"]:checked');
-        return checked ? checked.value : 'companie';
-    }
-
     function activeDistribution() {
         var checked = form.querySelector('input[name="distribuire"]:checked');
         return checked ? checked.value : 'egal';
     }
 
-    function selectedEntities(type) {
-        var name = type === 'vehicul' ? 'vehicule[]' : 'soferi[]';
-        return Array.prototype.slice.call(form.querySelectorAll('input[name="' + name + '"]:checked'));
-    }
-
-    function isMixedMode() {
-        return mixedLines.children.length > 0;
-    }
-
-    // Sincronizeaza tab-urile vizuale (categorie / alocare) cu radio-urile.
-    form.querySelectorAll('[data-chx-cat-group] input, [data-chx-alloc-group] input').forEach(function (radio) {
-        radio.addEventListener('change', function () {
-            var group = radio.closest('[data-chx-cat-group], [data-chx-alloc-group]');
-            group.querySelectorAll('.chx-toggle').forEach(function (toggle) {
-                toggle.classList.toggle('is-active', toggle.querySelector('input').checked);
-            });
-            if (group.hasAttribute('data-chx-cat-group')) {
-                filterTipOptions();
-            } else {
-                refreshAllocationUi();
-            }
-        });
-    });
-
     function filterTipOptions(keepValue) {
         var category = activeCategory();
-        var currentTip = keepValue || '';
-        Array.prototype.slice.call(tipSelect.options).forEach(function (option) {
-            if (!option.value) {
+        var previous = keepValue || tipSelect.value;
+        tipSelect.innerHTML = '';
+        var placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Selectează tipul';
+        tipSelect.appendChild(placeholder);
+        TYPE_OPTIONS.forEach(function (type) {
+            if (type.categorie !== category) {
                 return;
             }
-            var matches = option.getAttribute('data-categorie') === category;
-            option.hidden = !matches;
-            option.disabled = !matches;
+            var option = document.createElement('option');
+            option.value = type.value;
+            option.textContent = type.label;
+            tipSelect.appendChild(option);
         });
-        var selected = tipSelect.options[tipSelect.selectedIndex];
-        if (currentTip) {
-            tipSelect.value = currentTip;
-        } else if (selected && selected.value && selected.disabled) {
+        tipSelect.value = previous;
+        if (tipSelect.value !== previous) {
             tipSelect.value = '';
         }
     }
+
+    function dimChecked(name) {
+        var checkbox = form.querySelector('input[name="' + name + '"]');
+        return !!(checkbox && checkbox.checked);
+    }
+
+    function selectedEntities(kind) {
+        var name = kind === 'vehicul' ? 'vehicule[]' : 'soferi[]';
+        return Array.prototype.slice.call(form.querySelectorAll('input[name="' + name + '"]:checked'));
+    }
+
+    // Lista alocarilor selectate (vehicule + soferi). Fara nicio selectie,
+    // cheltuiala ramane la nivel de companie (serverul aloca automat 100%).
+    function entityList() {
+        var list = [];
+        if (dimChecked('aloc_vehicul')) {
+            selectedEntities('vehicul').forEach(function (checkbox) {
+                list.push({ kind: 'vehicul', id: checkbox.value, label: checkbox.getAttribute('data-label') });
+            });
+        }
+        if (dimChecked('aloc_sofer')) {
+            selectedEntities('sofer').forEach(function (checkbox) {
+                list.push({ kind: 'sofer', id: checkbox.value, label: checkbox.getAttribute('data-label') });
+            });
+        }
+        return list;
+    }
+
+    function syncToggleGroup(group) {
+        group.querySelectorAll('.chx-toggle').forEach(function (toggle) {
+            toggle.classList.toggle('is-active', toggle.querySelector('input').checked);
+        });
+    }
+
+    form.querySelectorAll('[data-chx-cat-group] input').forEach(function (radio) {
+        radio.addEventListener('change', function () {
+            syncToggleGroup(radio.closest('[data-chx-cat-group]'));
+            filterTipOptions();
+        });
+    });
+
+    form.querySelectorAll('[data-chx-alloc-group] input').forEach(function (checkbox) {
+        checkbox.addEventListener('change', function () {
+            // Alocarea banilor este exclusiva: fie pe vehicule, fie pe soferi.
+            // Legatura cu soferul unei cheltuieli de vehicul se face prin
+            // campul "Sofer responsabil", fara sa imparta valoarea.
+            if (checkbox.checked) {
+                form.querySelectorAll('[data-chx-alloc-group] input').forEach(function (other) {
+                    if (other !== checkbox) {
+                        other.checked = false;
+                    }
+                });
+            }
+            syncToggleGroup(checkbox.closest('[data-chx-alloc-group]'));
+            refreshAllocationUi();
+        });
+    });
 
     // ------------------------------------------------------------ multiselect
     document.querySelectorAll('[data-chx-multiselect]').forEach(function (wrapper) {
@@ -1059,7 +1230,7 @@ foreach ($rows as $row) {
         chips.appendChild(caret);
     }
 
-    // ------------------------------------------------- logica alocare simpla
+    // ------------------------------------------------------- logica alocare
     form.querySelectorAll('input[name="distribuire"]').forEach(function (radio) {
         radio.addEventListener('change', function () {
             form.querySelectorAll('.chx-dist-card').forEach(function (card) {
@@ -1072,79 +1243,66 @@ foreach ($rows as $row) {
     valInput.addEventListener('input', refreshAllocationUi);
 
     function refreshAllocationUi() {
-        var mixed = isMixedMode();
-        var allocType = activeAllocType();
-        var value = currentValue();
-
-        allocModeInput.value = mixed ? 'mixt' : 'simplu';
-        simpleAllocBlock.hidden = mixed;
-        mixedNote.hidden = !mixed;
-
-        // Dezactiveaza inputurile din alocarea simpla cand se folosesc pozitiile mixte,
-        // ca sa nu ajunga in POST date contradictorii.
-        simpleAllocBlock.querySelectorAll('input, select').forEach(function (field) {
-            field.disabled = mixed;
+        form.querySelectorAll('[data-chx-entity-block]').forEach(function (block) {
+            var visible = dimChecked(block.getAttribute('data-chx-entity-block') === 'vehicul' ? 'aloc_vehicul' : 'aloc_sofer');
+            block.hidden = !visible;
+            block.querySelectorAll('input').forEach(function (field) {
+                field.disabled = !visible;
+            });
         });
 
-        if (!mixed) {
-            allocTipInput.value = allocType;
-            form.querySelectorAll('[data-chx-entity-block]').forEach(function (block) {
-                var visible = block.getAttribute('data-chx-entity-block') === allocType;
-                block.hidden = !visible;
-                block.querySelectorAll('input').forEach(function (field) {
-                    field.disabled = !visible;
-                });
-            });
+        var companyNote = form.querySelector('[data-chx-company-note]');
+        companyNote.hidden = dimChecked('aloc_vehicul') || dimChecked('aloc_sofer');
 
-            var entities = allocType === 'companie' ? [] : selectedEntities(allocType);
-            var showDist = allocType !== 'companie' && entities.length > 1;
-            distBlock.hidden = !showDist;
-            distBlock.querySelectorAll('input').forEach(function (field) {
-                field.disabled = !showDist;
-            });
+        var entities = entityList();
+        var value = currentValue();
+        var showDist = entities.length > 1;
+        distBlock.hidden = !showDist;
+        distBlock.querySelectorAll('input').forEach(function (field) {
+            field.disabled = !showDist;
+        });
 
-            if (showDist && activeDistribution() === 'egal') {
-                equalInfo.hidden = false;
-                manualList.hidden = true;
-                manualList.innerHTML = '';
-                var per = entities.length > 0 ? value / entities.length : 0;
-                var entityWord = allocType === 'vehicul' ? 'vehicule' : 'șoferi';
-                equalText.textContent = 'Valoarea totală de ' + formatLei(value) + ' va fi împărțită egal între cele ' + entities.length + ' ' + (allocType === 'vehicul' ? entityWord + ' selectate.' : entityWord + ' selectați.');
-                equalPer.textContent = '≈ ' + formatLei(per) + ' / ' + (allocType === 'vehicul' ? 'vehicul' : 'șofer');
-            } else if (showDist) {
-                equalInfo.hidden = true;
-                renderManualInputs(allocType, entities);
-            } else {
-                equalInfo.hidden = true;
-                manualList.hidden = true;
-                manualList.innerHTML = '';
-            }
+        if (showDist && activeDistribution() === 'egal') {
+            equalInfo.hidden = false;
+            manualList.hidden = true;
+            manualList.innerHTML = '';
+            equalText.textContent = 'Valoarea totală de ' + formatLei(value) + ' va fi împărțită egal între cele ' + entities.length + ' alocări selectate.';
+            equalPer.textContent = '≈ ' + formatLei(value / entities.length) + ' / alocare';
+        } else if (showDist) {
+            equalInfo.hidden = true;
+            renderManualInputs(entities);
+        } else {
+            equalInfo.hidden = true;
+            manualList.hidden = true;
+            manualList.innerHTML = '';
         }
 
         updateTotals();
     }
 
-    function renderManualInputs(allocType, entities) {
-        var prefix = allocType === 'vehicul' ? 'suma_vehicul' : 'suma_sofer';
+    function manualInputName(entity) {
+        return (entity.kind === 'vehicul' ? 'suma_vehicul[' : 'suma_sofer[') + entity.id + ']';
+    }
+
+    function renderManualInputs(entities) {
         var existing = {};
         manualList.querySelectorAll('input').forEach(function (input) {
             existing[input.name] = input.value;
         });
         manualList.innerHTML = '';
         manualList.hidden = false;
-        entities.forEach(function (checkbox) {
-            var name = prefix + '[' + checkbox.value + ']';
+        entities.forEach(function (entity) {
             var row = document.createElement('div');
             row.className = 'chx-manual-row';
             row.innerHTML = '<span class="chx-manual-label"></span>' +
                 '<div class="input-group input-group-sm chx-manual-input">' +
                 '<input type="number" min="0.01" step="0.01" class="form-control" placeholder="0,00">' +
                 '<span class="input-group-text">lei</span></div>';
-            row.querySelector('.chx-manual-label').textContent = checkbox.getAttribute('data-label');
+            row.querySelector('.chx-manual-label').textContent = entity.label;
             var input = row.querySelector('input');
-            input.name = name;
-            if (existing[name]) {
-                input.value = existing[name];
+            input.name = manualInputName(entity);
+            if (existing[input.name]) {
+                input.value = existing[input.name];
             }
             input.addEventListener('input', updateTotals);
             manualList.appendChild(row);
@@ -1153,35 +1311,23 @@ foreach ($rows as $row) {
 
     function updateTotals() {
         var value = currentValue();
-        var mixed = isMixedMode();
-        var allocType = activeAllocType();
-        var needsBar = false;
-        var allocated = 0;
-
-        if (mixed) {
-            needsBar = true;
-            mixedLines.querySelectorAll('[data-chx-line-suma]').forEach(function (input) {
-                var amount = parseFloat(String(input.value).replace(',', '.'));
-                if (!isNaN(amount)) {
-                    allocated += amount;
-                }
-            });
-        } else if (allocType !== 'companie' && selectedEntities(allocType).length > 1 && activeDistribution() === 'manual') {
-            needsBar = true;
-            manualList.querySelectorAll('input').forEach(function (input) {
-                var amount = parseFloat(String(input.value).replace(',', '.'));
-                if (!isNaN(amount)) {
-                    allocated += amount;
-                }
-            });
-        }
+        var entities = entityList();
+        var needsBar = entities.length > 1 && activeDistribution() === 'manual';
 
         allocTotalBar.hidden = !needsBar;
         if (!needsBar) {
+            // Fara vehicul/sofer, cheltuiala merge automat pe companie.
             submitBtn.disabled = false;
             return;
         }
 
+        var allocated = 0;
+        manualList.querySelectorAll('input').forEach(function (input) {
+            var amount = parseFloat(String(input.value).replace(',', '.'));
+            if (!isNaN(amount)) {
+                allocated += amount;
+            }
+        });
         allocated = Math.round(allocated * 100) / 100;
         totalAlocatEl.textContent = formatLei(allocated);
         totalCheltEl.textContent = formatLei(value);
@@ -1193,93 +1339,171 @@ foreach ($rows as $row) {
         submitBtn.disabled = !matches;
     }
 
-    // ----------------------------------------------------- pozitii mixte (4)
-    form.querySelector('[data-chx-add-line]').addEventListener('click', function () {
-        addMixedLine();
-    });
+    // --------------------------------------------- selectoare data (dd.mm.yyyy)
+    // Inputurile native de tip date afiseaza formatul locale-ului browserului
+    // (mm/dd/yyyy pe engleza); calendarul propriu garanteaza dd.mm.yyyy.
+    // Acelasi component este folosit pentru Data documentului, Data platii si
+    // Scadenta (ultimele doua sunt optionale si pot ramane goale).
+    var dateWrappers = Array.prototype.slice.call(form.querySelectorAll('[data-chx-date]'));
+    dateWrappers.forEach(function (wrapper) {
+        var MONTHS = ['Ianuarie', 'Februarie', 'Martie', 'Aprilie', 'Mai', 'Iunie', 'Iulie', 'August', 'Septembrie', 'Octombrie', 'Noiembrie', 'Decembrie'];
+        var hidden = wrapper.querySelector('input[type="hidden"]');
+        var btn = wrapper.querySelector('[data-chx-date-btn]');
+        var label = wrapper.querySelector('[data-chx-date-label]');
+        var menu = wrapper.querySelector('[data-chx-date-menu]');
+        var title = wrapper.querySelector('[data-chx-date-title]');
+        var daysEl = wrapper.querySelector('[data-chx-date-days]');
+        var clearBtn = wrapper.querySelector('[data-chx-date-clear]');
 
-    function addMixedLine(preset) {
-        var index = mixedLineIndex++;
-        var row = document.createElement('div');
-        row.className = 'chx-mixed-line';
-        row.innerHTML =
-            '<select class="form-select form-select-sm" data-chx-line-tip>' +
-            '<option value="vehicul">Vehicul</option>' +
-            '<option value="sofer">Șofer</option>' +
-            '<option value="companie">Companie</option>' +
-            '</select>' +
-            '<select class="form-select form-select-sm" data-chx-line-entity></select>' +
-            '<div class="input-group input-group-sm chx-mixed-suma">' +
-            '<input type="number" min="0.01" step="0.01" class="form-control" placeholder="0,00" data-chx-line-suma>' +
-            '<span class="input-group-text">lei</span></div>' +
-            '<button type="button" class="btn btn-outline-danger btn-sm" aria-label="Șterge poziția"><i class="bi bi-trash" aria-hidden="true"></i></button>';
+        function parseIso(value) {
+            var parts = String(value || '').split('-');
+            if (parts.length !== 3) { return null; }
+            var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+            return isNaN(d.getTime()) ? null : d;
+        }
+        function iso(d) {
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        }
+        function fmt(d) {
+            return String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+        }
 
-        var tipField = row.querySelector('[data-chx-line-tip]');
-        var entityField = row.querySelector('[data-chx-line-entity]');
-        var sumaField = row.querySelector('[data-chx-line-suma]');
+        var today = new Date();
+        var view = new Date(today.getFullYear(), today.getMonth(), 1);
 
-        tipField.name = 'pozitii[' + index + '][tip]';
-        sumaField.name = 'pozitii[' + index + '][suma]';
+        function sync() {
+            var selected = parseIso(hidden.value);
+            label.textContent = selected ? fmt(selected) : 'Alege data';
+            label.classList.toggle('chx-chips-placeholder', !selected);
+        }
 
-        function fillEntityOptions() {
-            var tip = tipField.value;
-            entityField.innerHTML = '';
-            if (tip === 'companie') {
-                entityField.hidden = true;
-                entityField.name = '';
-                entityField.required = false;
-                return;
+        function render() {
+            title.textContent = MONTHS[view.getMonth()] + ' ' + view.getFullYear();
+            daysEl.innerHTML = '';
+            var selected = parseIso(hidden.value);
+            var lead = (new Date(view.getFullYear(), view.getMonth(), 1).getDay() + 6) % 7;
+            var total = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
+            for (var i = 0; i < lead; i++) {
+                daysEl.appendChild(document.createElement('span'));
             }
-            entityField.hidden = false;
-            entityField.required = true;
-            entityField.name = 'pozitii[' + index + '][' + (tip === 'vehicul' ? 'vehicul_id' : 'sofer_id') + ']';
-            var labels = tip === 'vehicul' ? VEHICLE_LABELS : DRIVER_LABELS;
-            var placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = tip === 'vehicul' ? 'Selectează vehiculul' : 'Selectează șoferul';
-            entityField.appendChild(placeholder);
-            Object.keys(labels).forEach(function (id) {
-                var option = document.createElement('option');
-                option.value = id;
-                option.textContent = labels[id];
-                entityField.appendChild(option);
+            for (var day = 1; day <= total; day++) {
+                (function (day) {
+                    var d = new Date(view.getFullYear(), view.getMonth(), day);
+                    var cell = document.createElement('button');
+                    cell.type = 'button';
+                    cell.textContent = String(day);
+                    if (selected && d.getTime() === selected.getTime()) { cell.classList.add('is-edge'); }
+                    if (d.getTime() === new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) { cell.classList.add('is-today'); }
+                    cell.addEventListener('click', function () {
+                        hidden.value = iso(d);
+                        sync();
+                        toggleMenu(false);
+                    });
+                    daysEl.appendChild(cell);
+                })(day);
+            }
+        }
+
+        function toggleMenu(force) {
+            var show = typeof force === 'boolean' ? force : menu.hidden;
+            if (show) {
+                var selected = parseIso(hidden.value) || today;
+                view = new Date(selected.getFullYear(), selected.getMonth(), 1);
+                render();
+            }
+            menu.hidden = !show;
+            btn.setAttribute('aria-expanded', show ? 'true' : 'false');
+        }
+
+        btn.addEventListener('click', function () { toggleMenu(); });
+        document.addEventListener('click', function (event) {
+            if (!wrapper.contains(event.target)) {
+                toggleMenu(false);
+            }
+        });
+        wrapper.querySelector('[data-chx-date-prev]').addEventListener('click', function () {
+            view = new Date(view.getFullYear(), view.getMonth() - 1, 1);
+            render();
+        });
+        wrapper.querySelector('[data-chx-date-next]').addEventListener('click', function () {
+            view = new Date(view.getFullYear(), view.getMonth() + 1, 1);
+            render();
+        });
+        if (clearBtn) {
+            clearBtn.addEventListener('click', function () {
+                hidden.value = '';
+                sync();
+                toggleMenu(false);
             });
         }
 
-        tipField.addEventListener('change', fillEntityOptions);
-        sumaField.addEventListener('input', updateTotals);
-        row.querySelector('.btn-outline-danger').addEventListener('click', function () {
-            row.remove();
-            refreshAllocationUi();
-        });
+        // La input[type=hidden], .value se reflecta in atribut (defaultValue se
+        // schimba odata cu el), asa ca valoarea initiala se pastreaza separat.
+        var initialDate = hidden.value;
+        wrapper.chxSync = sync;
+        wrapper.chxReset = function () {
+            hidden.value = initialDate;
+            sync();
+        };
+        sync();
+    });
 
-        fillEntityOptions();
-        if (preset) {
-            tipField.value = preset.tip;
-            fillEntityOptions();
-            if (preset.tip === 'vehicul') {
-                entityField.value = String(preset.vehicul_id);
-            } else if (preset.tip === 'sofer') {
-                entityField.value = String(preset.sofer_id);
+    function syncDateWrappers() {
+        dateWrappers.forEach(function (wrapper) {
+            if (wrapper.chxSync) {
+                wrapper.chxSync();
             }
-            sumaField.value = preset.suma;
+        });
+    }
+
+    // -------------------------------------------------- dinamica tip document
+    // Bonul fiscal / chitanta nu au campuri specifice facturii (status plata,
+    // data platii, scadenta); acestea apar doar pentru Factura.
+    var tipDocSelect = form.querySelector('[data-chx-tipdoc]');
+    var statusPlataSelect = form.querySelector('[data-chx-status-plata]');
+
+    function refreshDocFields() {
+        var isInvoice = tipDocSelect.value === 'factura';
+        form.querySelectorAll('[data-chx-invoice-field]').forEach(function (field) {
+            field.hidden = !isInvoice;
+            field.querySelectorAll('input, select, button').forEach(function (control) {
+                control.disabled = !isInvoice;
+            });
+        });
+        if (isInvoice) {
+            // Data platii are sens doar daca factura nu e neplatita.
+            var paymentDateField = form.querySelector('[data-chx-payment-date-field]');
+            var blocked = statusPlataSelect.value === 'neplatita';
+            paymentDateField.querySelectorAll('input, button').forEach(function (control) {
+                control.disabled = blocked;
+            });
+            if (blocked) {
+                var hiddenDate = paymentDateField.querySelector('input[type="hidden"]');
+                hiddenDate.value = '';
+                var pw = paymentDateField.querySelector('[data-chx-date]');
+                if (pw && pw.chxSync) {
+                    pw.chxSync();
+                }
+            }
         }
-
-        mixedLines.appendChild(row);
-        refreshAllocationUi();
     }
 
-    if (mixedCollapseEl) {
-        mixedCollapseEl.addEventListener('shown.bs.collapse', function () {
-            if (mixedLines.children.length === 0) {
-                addMixedLine();
-            }
-        });
-        mixedCollapseEl.addEventListener('hidden.bs.collapse', function () {
-            mixedLines.innerHTML = '';
+    tipDocSelect.addEventListener('change', refreshDocFields);
+    statusPlataSelect.addEventListener('change', refreshDocFields);
+
+    // Total = Valoare fara TVA + TVA, completat automat cand ambele exista.
+    var netaInput = form.querySelector('[data-chx-neta]');
+    var tvaInput = form.querySelector('[data-chx-tva]');
+    function autoTotal() {
+        var neta = parseFloat(String(netaInput.value).replace(',', '.'));
+        var tvaVal = parseFloat(String(tvaInput.value).replace(',', '.'));
+        if (!isNaN(neta) && !isNaN(tvaVal) && (neta > 0 || tvaVal > 0)) {
+            valInput.value = (Math.round((neta + tvaVal) * 100) / 100).toFixed(2);
             refreshAllocationUi();
-        });
+        }
     }
+    netaInput.addEventListener('input', autoTotal);
+    tvaInput.addEventListener('input', autoTotal);
 
     // ----------------------------------------------------------- beneficiar
     benefSwitch.addEventListener('change', function () {
@@ -1300,26 +1524,26 @@ foreach ($rows as $row) {
         form.querySelector('[data-chx-id]').value = '';
         form.querySelector('[data-chx-modal-title]').textContent = 'Adaugă cheltuială';
         submitBtn.textContent = 'Salvează cheltuiala';
-        mixedLines.innerHTML = '';
-        if (mixedCollapseEl && mixedCollapseEl.classList.contains('show')) {
-            bootstrap.Collapse.getOrCreateInstance(mixedCollapseEl).hide();
-        }
         form.querySelectorAll('[data-chx-multiselect] input[type="checkbox"]').forEach(function (checkbox) {
             checkbox.checked = false;
         });
         form.querySelectorAll('[data-chx-multiselect]').forEach(renderChips);
-        form.querySelectorAll('.chx-toggle-group').forEach(function (group) {
-            group.querySelectorAll('.chx-toggle').forEach(function (toggle) {
-                toggle.classList.toggle('is-active', toggle.querySelector('input').checked);
-            });
-        });
+        form.querySelectorAll('.chx-toggle-group').forEach(syncToggleGroup);
         form.querySelectorAll('.chx-dist-card').forEach(function (card) {
             card.classList.toggle('is-active', card.querySelector('input').checked);
         });
         benefBlock.hidden = true;
         benefBlock.querySelector('select').required = false;
         manualList.innerHTML = '';
+        // Inputurile hidden nu sunt atinse de form.reset() - datele revin explicit
+        // la valorile initiale (azi pentru document, gol pentru plata/scadenta).
+        dateWrappers.forEach(function (wrapper) {
+            if (wrapper.chxReset) {
+                wrapper.chxReset();
+            }
+        });
         filterTipOptions();
+        refreshDocFields();
         refreshAllocationUi();
     }
 
@@ -1342,13 +1566,23 @@ foreach ($rows as $row) {
             submitBtn.textContent = 'Salvează modificările';
 
             form.querySelector('input[name="categorie"][value="' + expense.categorie + '"]').checked = true;
-            form.querySelectorAll('[data-chx-cat-group] .chx-toggle').forEach(function (toggle) {
-                toggle.classList.toggle('is-active', toggle.querySelector('input').checked);
-            });
+            syncToggleGroup(form.querySelector('[data-chx-cat-group]'));
             filterTipOptions(String(expense.tip_id));
+            tipDocSelect.value = expense.tip_document || 'factura';
             form.querySelector('input[name="data_cheltuiala"]').value = expense.data_cheltuiala;
+            form.querySelector('input[name="data_platii"]').value = expense.data_platii || '';
+            form.querySelector('input[name="scadenta"]').value = expense.scadenta || '';
+            syncDateWrappers();
             form.querySelector('input[name="furnizor"]').value = expense.furnizor;
+            form.querySelector('input[name="cui"]').value = expense.cui || '';
+            form.querySelector('input[name="descriere"]').value = expense.descriere || '';
             valInput.value = expense.valoare;
+            netaInput.value = expense.valoare_neta !== null && expense.valoare_neta > 0 ? expense.valoare_neta : '';
+            tvaInput.value = expense.tva !== null && expense.tva > 0 ? expense.tva : '';
+            form.querySelector('select[name="moneda"]').value = expense.moneda || 'RON';
+            form.querySelector('select[name="modalitate_plata"]').value = expense.modalitate_plata || '';
+            statusPlataSelect.value = expense.status_plata || '';
+            refreshDocFields();
             form.querySelector('input[name="numar_document"]').value = expense.numar_document;
             form.querySelector('textarea[name="observatii"]').value = expense.observatii;
 
@@ -1360,50 +1594,68 @@ foreach ($rows as $row) {
                 benefSelect.value = String(expense.beneficiar_id);
             }
 
-            if (expense.alocare_tip === 'mixt') {
-                if (mixedCollapseEl) {
-                    bootstrap.Collapse.getOrCreateInstance(mixedCollapseEl).show();
-                }
-                mixedLines.innerHTML = '';
-                expense.alocari.forEach(function (allocation) {
-                    addMixedLine(allocation);
-                });
-            } else {
-                var allocRadio = form.querySelector('input[name="alocare_tip_ui"][value="' + expense.alocare_tip + '"]');
-                if (allocRadio) {
-                    allocRadio.checked = true;
-                }
-                form.querySelectorAll('[data-chx-alloc-group] .chx-toggle').forEach(function (toggle) {
-                    toggle.classList.toggle('is-active', toggle.querySelector('input').checked);
-                });
-                if (expense.alocare_tip === 'vehicul' || expense.alocare_tip === 'sofer') {
-                    var name = expense.alocare_tip === 'vehicul' ? 'vehicule[]' : 'soferi[]';
-                    expense.alocari.forEach(function (allocation) {
-                        var id = expense.alocare_tip === 'vehicul' ? allocation.vehicul_id : allocation.sofer_id;
-                        var checkbox = form.querySelector('input[name="' + name + '"][value="' + id + '"]');
-                        if (checkbox) {
-                            checkbox.checked = true;
-                        }
-                    });
-                    form.querySelectorAll('[data-chx-multiselect]').forEach(renderChips);
-                    var distRadio = form.querySelector('input[name="distribuire"][value="' + expense.distribuire + '"]');
-                    if (distRadio) {
-                        distRadio.checked = true;
+            if (expense.sofer_responsabil_id > 0) {
+                form.querySelector('select[name="sofer_responsabil_id"]').value = String(expense.sofer_responsabil_id);
+            }
+
+            var hasVehicul = false;
+            var hasSofer = false;
+            expense.alocari.forEach(function (allocation) {
+                if (allocation.tip === 'vehicul') { hasVehicul = true; }
+                if (allocation.tip === 'sofer') { hasSofer = true; }
+            });
+            // Inregistrarile vechi cu alocare combinata vehicul + sofer se
+            // convertesc la editare: banii raman pe vehicule, iar soferul
+            // trece pe campul informativ "Sofer responsabil".
+            var convertedFromCombined = false;
+            if (hasVehicul && hasSofer) {
+                hasSofer = false;
+                convertedFromCombined = true;
+                var respSelect = form.querySelector('select[name="sofer_responsabil_id"]');
+                if (expense.sofer_responsabil_id <= 0 && respSelect) {
+                    var droppedDriver = expense.alocari.find(function (allocation) { return allocation.tip === 'sofer'; });
+                    if (droppedDriver) {
+                        respSelect.value = String(droppedDriver.sofer_id);
                     }
-                    form.querySelectorAll('.chx-dist-card').forEach(function (card) {
-                        card.classList.toggle('is-active', card.querySelector('input').checked);
-                    });
                 }
             }
+            form.querySelector('input[name="aloc_vehicul"]').checked = hasVehicul;
+            form.querySelector('input[name="aloc_sofer"]').checked = hasSofer;
+            syncToggleGroup(form.querySelector('[data-chx-alloc-group]'));
+
+            expense.alocari.forEach(function (allocation) {
+                if (allocation.tip === 'companie' || (allocation.tip === 'sofer' && convertedFromCombined)) {
+                    return;
+                }
+                var name = allocation.tip === 'vehicul' ? 'vehicule[]' : 'soferi[]';
+                var id = allocation.tip === 'vehicul' ? allocation.vehicul_id : allocation.sofer_id;
+                var checkbox = form.querySelector('input[name="' + name + '"][value="' + id + '"]');
+                if (checkbox) {
+                    checkbox.checked = true;
+                }
+            });
+            form.querySelectorAll('[data-chx-multiselect]').forEach(renderChips);
+
+            var distRadio = form.querySelector('input[name="distribuire"][value="' + expense.distribuire + '"]');
+            if (distRadio) {
+                distRadio.checked = true;
+            }
+            form.querySelectorAll('.chx-dist-card').forEach(function (card) {
+                card.classList.toggle('is-active', card.querySelector('input').checked);
+            });
 
             refreshAllocationUi();
 
             // Sumele manuale se completeaza dupa ce inputurile au fost generate.
-            if (expense.alocare_tip !== 'mixt' && expense.distribuire === 'manual') {
+            if (expense.distribuire === 'manual') {
                 expense.alocari.forEach(function (allocation) {
-                    var id = expense.alocare_tip === 'vehicul' ? allocation.vehicul_id : allocation.sofer_id;
-                    var prefix = expense.alocare_tip === 'vehicul' ? 'suma_vehicul' : 'suma_sofer';
-                    var input = manualList.querySelector('input[name="' + prefix + '[' + id + ']"]');
+                    if (allocation.tip === 'companie') {
+                        return;
+                    }
+                    var name = allocation.tip === 'vehicul'
+                        ? 'suma_vehicul[' + allocation.vehicul_id + ']'
+                        : 'suma_sofer[' + allocation.sofer_id + ']';
+                    var input = manualList.querySelector('input[name="' + name + '"]');
                     if (input) {
                         input.value = allocation.suma;
                     }
@@ -1416,6 +1668,7 @@ foreach ($rows as $row) {
     });
 
     filterTipOptions();
+    refreshDocFields();
     refreshAllocationUi();
 })();
 </script>

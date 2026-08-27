@@ -21,9 +21,40 @@ class ExpenseModel extends BaseModel
     public const ALLOCATION_TYPES = [
         'vehicul' => 'Vehicul',
         'sofer' => 'Șofer',
-        'companie' => 'Companie',
+        // Fara vehicul/sofer, cheltuiala ramane la nivel de firma.
+        'companie' => 'Birou / Administrativ',
         'mixt' => 'Mixt',
     ];
+
+    public const DOCUMENT_TYPES = [
+        'factura' => 'Factură',
+        'bon_fiscal' => 'Bon fiscal',
+        'chitanta' => 'Chitanță',
+        'alt_document' => 'Alt document',
+    ];
+
+    // Aceleasi chei ca in modulele legacy (office/administrative expenses).
+    public const PAYMENT_METHODS = [
+        'cash' => 'Numerar',
+        'card' => 'Card',
+        'transfer_bancar' => 'Transfer bancar',
+        'alte' => 'Altă metodă',
+    ];
+
+    public const PAYMENT_STATUSES = [
+        'platita' => 'Plătită',
+        'neplatita' => 'Neplătită',
+        'partial' => 'Parțial plătită',
+    ];
+
+    public const SOURCES = [
+        'manual' => 'Manual',
+        'spv' => 'SPV',
+        'ocr' => 'OCR',
+        'import' => 'Import',
+    ];
+
+    public const CURRENCIES = ['RON', 'EUR', 'USD', 'HUF'];
 
     public function __construct(PDO $db)
     {
@@ -46,9 +77,68 @@ class ExpenseModel extends BaseModel
             $this->createTables();
         }
 
+        // Coloanele noi trebuie sa existe inainte de importul legacy (care le refera).
+        $this->ensureResponsibleDriverColumn();
+        $this->ensureDocumentColumns();
+
         // Seed + import legacy: interogari WHERE NOT EXISTS, ieftine si idempotente.
         $this->seedOperationalTypes();
         $this->importLegacyData();
+    }
+
+    /**
+     * Extinderea documentului: tip document, descriere, CUI, valori net/TVA
+     * (Total ramane in coloana `valoare`), moneda, plata si sursa inregistrarii.
+     */
+    private function ensureDocumentColumns(): void
+    {
+        try {
+            $column = $this->db->query("SHOW COLUMNS FROM cheltuieli LIKE 'sursa'")->fetch();
+            if (is_array($column)) {
+                return;
+            }
+            $this->db->exec('
+                ALTER TABLE cheltuieli
+                    ADD COLUMN tip_document ENUM("factura", "bon_fiscal", "chitanta", "alt_document") NOT NULL DEFAULT "factura" AFTER tip_id,
+                    ADD COLUMN descriere VARCHAR(255) NULL AFTER furnizor,
+                    ADD COLUMN cui VARCHAR(20) NULL AFTER descriere,
+                    ADD COLUMN valoare_neta DECIMAL(12,2) NULL AFTER valoare,
+                    ADD COLUMN tva DECIMAL(12,2) NULL AFTER valoare_neta,
+                    ADD COLUMN moneda CHAR(3) NOT NULL DEFAULT "RON" AFTER tva,
+                    ADD COLUMN modalitate_plata ENUM("cash", "card", "transfer_bancar", "alte") NULL AFTER moneda,
+                    ADD COLUMN status_plata ENUM("platita", "neplatita", "partial") NULL AFTER modalitate_plata,
+                    ADD COLUMN data_platii DATE NULL AFTER status_plata,
+                    ADD COLUMN scadenta DATE NULL AFTER data_platii,
+                    ADD COLUMN sursa ENUM("manual", "spv", "ocr", "import") NOT NULL DEFAULT "manual" AFTER scadenta,
+                    ADD INDEX idx_cheltuieli_sursa (sursa),
+                    ADD INDEX idx_cheltuieli_tip_document (tip_document)
+            ');
+        } catch (Throwable $exception) {
+            error_log('[ExpenseModel][ensureDocumentColumns] ' . $exception->getMessage());
+        }
+    }
+
+    /**
+     * Soferul responsabil (informativ): cheltuiala ramane alocata integral pe
+     * vehicul/companie, dar pastreaza cine a generat-o (ex. cine a dus masina
+     * la spalatorie). Nu participa la sumele alocate.
+     */
+    private function ensureResponsibleDriverColumn(): void
+    {
+        try {
+            $column = $this->db->query("SHOW COLUMNS FROM cheltuieli LIKE 'sofer_responsabil_id'")->fetch();
+            if (is_array($column)) {
+                return;
+            }
+            $this->db->exec('
+                ALTER TABLE cheltuieli
+                    ADD COLUMN sofer_responsabil_id INT UNSIGNED NULL AFTER beneficiar_id,
+                    ADD INDEX idx_cheltuieli_sofer_resp (sofer_responsabil_id),
+                    ADD CONSTRAINT fk_cheltuieli_sofer_resp FOREIGN KEY (sofer_responsabil_id) REFERENCES soferi(id) ON DELETE SET NULL
+            ');
+        } catch (Throwable $exception) {
+            error_log('[ExpenseModel][ensureResponsibleDriverColumn] ' . $exception->getMessage());
+        }
     }
 
     private function createTables(): void
@@ -206,21 +296,19 @@ class ExpenseModel extends BaseModel
         } catch (Throwable) {
         }
 
-        // Inregistrarile legacy: valoarea = suma neta cand exista, altfel totalul;
-        // detaliile complete raman in observatii, randul original ramane arhivat.
+        // Inregistrarile legacy: `valoare` = totalul cu TVA (sau netul daca totalul
+        // lipseste), net/TVA/plata pe coloanele dedicate; descrierea legacy pe
+        // campul descriere; randul original ramane arhivat.
         try {
             $this->db->exec('
-                INSERT INTO cheltuieli (categorie, tip_id, data_cheltuiala, furnizor, valoare, numar_document, observatii,
+                INSERT INTO cheltuieli (categorie, tip_id, tip_document, data_cheltuiala, furnizor, descriere,
+                                        valoare, valoare_neta, tva, modalitate_plata, numar_document, observatii,
                                         alocare_tip, distribuire, legacy_source, legacy_id, added_by, updated_by, created_at, updated_at)
-                SELECT "administrativa", t.id, e.expense_date, e.supplier,
-                       CASE WHEN e.amount_net > 0 THEN e.amount_net ELSE e.amount_total END,
+                SELECT "administrativa", t.id, "factura", e.expense_date, e.supplier, NULLIF(e.description, ""),
+                       CASE WHEN e.amount_total > 0 THEN e.amount_total ELSE e.amount_net END,
+                       NULLIF(e.amount_net, 0), NULLIF(e.vat_amount, 0), e.payment_method,
                        e.invoice_number,
-                       TRIM(CONCAT_WS("\n",
-                           NULLIF(e.description, ""),
-                           NULLIF(e.notes, ""),
-                           CONCAT("[Migrat din Cheltuieli Birou: net ", e.amount_net, " lei, TVA ", e.vat_amount,
-                                  " lei, total ", e.amount_total, " lei, plată ", e.payment_method, "]")
-                       )),
+                       TRIM(CONCAT_WS("\n", NULLIF(e.notes, ""), "[Migrat din Cheltuieli Birou]")),
                        "companie", "egal", "office", e.id, e.added_by, e.updated_by, e.created_at, e.updated_at
                 FROM office_expenses e
                 INNER JOIN cheltuieli_tipuri t ON t.legacy_source = "office_cat" AND t.legacy_id = e.category_id
@@ -231,17 +319,14 @@ class ExpenseModel extends BaseModel
 
         try {
             $this->db->exec('
-                INSERT INTO cheltuieli (categorie, tip_id, data_cheltuiala, furnizor, valoare, numar_document, observatii,
+                INSERT INTO cheltuieli (categorie, tip_id, tip_document, data_cheltuiala, furnizor, descriere,
+                                        valoare, valoare_neta, tva, modalitate_plata, numar_document, observatii,
                                         alocare_tip, distribuire, legacy_source, legacy_id, added_by, updated_by, created_at, updated_at)
-                SELECT "administrativa", t.id, e.expense_date, e.supplier,
-                       CASE WHEN e.amount_net > 0 THEN e.amount_net ELSE e.amount_total END,
+                SELECT "administrativa", t.id, "factura", e.expense_date, e.supplier, NULLIF(e.description, ""),
+                       CASE WHEN e.amount_total > 0 THEN e.amount_total ELSE e.amount_net END,
+                       NULLIF(e.amount_net, 0), NULLIF(e.vat_amount, 0), e.payment_method,
                        e.invoice_number,
-                       TRIM(CONCAT_WS("\n",
-                           NULLIF(e.description, ""),
-                           NULLIF(e.notes, ""),
-                           CONCAT("[Migrat din Cheltuieli Administrative: net ", e.amount_net, " lei, TVA ", e.vat_amount,
-                                  " lei, total ", e.amount_total, " lei, plată ", e.payment_method, "]")
-                       )),
+                       TRIM(CONCAT_WS("\n", NULLIF(e.notes, ""), "[Migrat din Cheltuieli Administrative]")),
                        "companie", "egal", "administrative", e.id, e.added_by, e.updated_by, e.created_at, e.updated_at
                 FROM administrative_expenses e
                 INNER JOIN cheltuieli_tipuri t ON t.legacy_source = "admin_cat" AND t.legacy_id = e.category_id
@@ -416,6 +501,7 @@ class ExpenseModel extends BaseModel
                 t.nume AS tip_nume,
                 t.slug AS tip_slug,
                 b.nume AS beneficiar_nume,
+                sr.nume AS sofer_responsabil_nume,
                 u.nume AS added_by_name,
                 (SELECT COUNT(*) FROM cheltuieli_documente d WHERE d.cheltuiala_id = e.id) AS document_count,
                 (SELECT d.id FROM cheltuieli_documente d WHERE d.cheltuiala_id = e.id ORDER BY d.id DESC LIMIT 1) AS document_id,
@@ -423,6 +509,7 @@ class ExpenseModel extends BaseModel
             FROM cheltuieli e
             INNER JOIN cheltuieli_tipuri t ON t.id = e.tip_id
             LEFT JOIN configurare_beneficiari_transport b ON b.id = e.beneficiar_id
+            LEFT JOIN soferi sr ON sr.id = e.sofer_responsabil_id
             LEFT JOIN utilizatori u ON u.id = e.added_by
             ' . $whereSql . '
             ORDER BY e.data_cheltuiala DESC, e.id DESC
@@ -451,10 +538,12 @@ class ExpenseModel extends BaseModel
                 e.*,
                 t.nume AS tip_nume,
                 b.nume AS beneficiar_nume,
+                sr.nume AS sofer_responsabil_nume,
                 u.nume AS added_by_name
             FROM cheltuieli e
             INNER JOIN cheltuieli_tipuri t ON t.id = e.tip_id
             LEFT JOIN configurare_beneficiari_transport b ON b.id = e.beneficiar_id
+            LEFT JOIN soferi sr ON sr.id = e.sofer_responsabil_id
             LEFT JOIN utilizatori u ON u.id = e.added_by
             ' . $whereSql . '
             ORDER BY e.data_cheltuiala DESC, e.id DESC
@@ -619,11 +708,15 @@ class ExpenseModel extends BaseModel
         try {
             $stmt = $this->db->prepare('
                 INSERT INTO cheltuieli (
-                    categorie, tip_id, data_cheltuiala, furnizor, valoare, numar_document, observatii,
-                    beneficiar_id, alocare_tip, distribuire, added_by, updated_by, created_at, updated_at
+                    categorie, tip_id, tip_document, data_cheltuiala, furnizor, descriere, cui,
+                    valoare, valoare_neta, tva, moneda, modalitate_plata, status_plata, data_platii, scadenta, sursa,
+                    numar_document, observatii,
+                    beneficiar_id, sofer_responsabil_id, alocare_tip, distribuire, added_by, updated_by, created_at, updated_at
                 ) VALUES (
-                    :categorie, :tip_id, :data_cheltuiala, :furnizor, :valoare, :numar_document, :observatii,
-                    :beneficiar_id, :alocare_tip, :distribuire, :added_by, :updated_by, :created_at, :updated_at
+                    :categorie, :tip_id, :tip_document, :data_cheltuiala, :furnizor, :descriere, :cui,
+                    :valoare, :valoare_neta, :tva, :moneda, :modalitate_plata, :status_plata, :data_platii, :scadenta, :sursa,
+                    :numar_document, :observatii,
+                    :beneficiar_id, :sofer_responsabil_id, :alocare_tip, :distribuire, :added_by, :updated_by, :created_at, :updated_at
                 )
             ');
             $this->bindExpenseStatement($stmt, $data, $userId, $now);
@@ -658,12 +751,24 @@ class ExpenseModel extends BaseModel
                 UPDATE cheltuieli
                 SET categorie = :categorie,
                     tip_id = :tip_id,
+                    tip_document = :tip_document,
                     data_cheltuiala = :data_cheltuiala,
                     furnizor = :furnizor,
+                    descriere = :descriere,
+                    cui = :cui,
                     valoare = :valoare,
+                    valoare_neta = :valoare_neta,
+                    tva = :tva,
+                    moneda = :moneda,
+                    modalitate_plata = :modalitate_plata,
+                    status_plata = :status_plata,
+                    data_platii = :data_platii,
+                    scadenta = :scadenta,
+                    sursa = :sursa,
                     numar_document = :numar_document,
                     observatii = :observatii,
                     beneficiar_id = :beneficiar_id,
+                    sofer_responsabil_id = :sofer_responsabil_id,
                     alocare_tip = :alocare_tip,
                     distribuire = :distribuire,
                     updated_by = :updated_by,
@@ -808,15 +913,40 @@ class ExpenseModel extends BaseModel
 
     private function bindExpenseStatement(PDOStatement $stmt, array $data, ?int $userId, string $now, bool $includeCreated = true): void
     {
+        $tipDocument = (string) ($data['tip_document'] ?? 'factura');
+        if (!isset(self::DOCUMENT_TYPES[$tipDocument])) {
+            $tipDocument = 'factura';
+        }
+        $moneda = strtoupper(trim((string) ($data['moneda'] ?? 'RON')));
+        if (!in_array($moneda, self::CURRENCIES, true)) {
+            $moneda = 'RON';
+        }
+        $sursa = (string) ($data['sursa'] ?? 'manual');
+        if (!isset(self::SOURCES[$sursa])) {
+            $sursa = 'manual';
+        }
+
         $params = [
             ':categorie' => (string) ($data['categorie'] ?? 'administrativa'),
             ':tip_id' => (int) ($data['tip_id'] ?? 0),
+            ':tip_document' => $tipDocument,
             ':data_cheltuiala' => (string) ($data['data_cheltuiala'] ?? date('Y-m-d')),
             ':furnizor' => $this->nullableString($data['furnizor'] ?? null),
+            ':descriere' => $this->nullableString($data['descriere'] ?? null),
+            ':cui' => $this->nullableString($data['cui'] ?? null),
             ':valoare' => round((float) ($data['valoare'] ?? 0), 2),
+            ':valoare_neta' => isset($data['valoare_neta']) && $data['valoare_neta'] !== null && (float) $data['valoare_neta'] > 0 ? round((float) $data['valoare_neta'], 2) : null,
+            ':tva' => isset($data['tva']) && $data['tva'] !== null && (float) $data['tva'] > 0 ? round((float) $data['tva'], 2) : null,
+            ':moneda' => $moneda,
+            ':modalitate_plata' => isset(self::PAYMENT_METHODS[(string) ($data['modalitate_plata'] ?? '')]) ? (string) $data['modalitate_plata'] : null,
+            ':status_plata' => isset(self::PAYMENT_STATUSES[(string) ($data['status_plata'] ?? '')]) ? (string) $data['status_plata'] : null,
+            ':data_platii' => $this->nullableString($data['data_platii'] ?? null),
+            ':scadenta' => $this->nullableString($data['scadenta'] ?? null),
+            ':sursa' => $sursa,
             ':numar_document' => $this->nullableString($data['numar_document'] ?? null),
             ':observatii' => $this->nullableString($data['observatii'] ?? null),
             ':beneficiar_id' => isset($data['beneficiar_id']) && (int) $data['beneficiar_id'] > 0 ? (int) $data['beneficiar_id'] : null,
+            ':sofer_responsabil_id' => isset($data['sofer_responsabil_id']) && (int) $data['sofer_responsabil_id'] > 0 ? (int) $data['sofer_responsabil_id'] : null,
             ':alocare_tip' => (string) ($data['alocare_tip'] ?? 'companie'),
             ':distribuire' => (string) ($data['distribuire'] ?? 'egal'),
             ':updated_by' => $userId,
@@ -883,8 +1013,14 @@ class ExpenseModel extends BaseModel
 
         $soferId = (int) ($filters['sofer_id'] ?? 0);
         if ($soferId > 0) {
-            $conditions[] = 'EXISTS (SELECT 1 FROM cheltuieli_alocari fs WHERE fs.cheltuiala_id = e.id AND fs.sofer_id = :sofer_f)';
+            // Soferul se potriveste fie prin alocare (poarta o parte din cost),
+            // fie ca sofer responsabil (informativ, ex. cine a dus masina la spalat).
+            $conditions[] = '(
+                EXISTS (SELECT 1 FROM cheltuieli_alocari fs WHERE fs.cheltuiala_id = e.id AND fs.sofer_id = :sofer_f)
+                OR e.sofer_responsabil_id = :sofer_resp_f
+            )';
             $params[':sofer_f'] = $soferId;
+            $params[':sofer_resp_f'] = $soferId;
         }
 
         $furnizor = trim((string) ($filters['furnizor'] ?? ''));
@@ -901,6 +1037,7 @@ class ExpenseModel extends BaseModel
                 OR COALESCE(e.furnizor, "") LIKE :q3
                 OR t.nume LIKE :q4
                 OR COALESCE(b.nume, "") LIKE :q5
+                OR COALESCE(e.descriere, "") LIKE :q6
             )';
             $like = '%' . $search . '%';
             $params[':q1'] = $like;
@@ -908,6 +1045,7 @@ class ExpenseModel extends BaseModel
             $params[':q3'] = $like;
             $params[':q4'] = $like;
             $params[':q5'] = $like;
+            $params[':q6'] = $like;
         }
 
         return [

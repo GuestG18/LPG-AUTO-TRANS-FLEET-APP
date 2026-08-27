@@ -505,8 +505,10 @@ class OperationalCostModel extends BaseModel
         $unifiedAvailable = false;
 
         try {
+            // valoare = totalul documentului; valoarea neta (fara TVA) are
+            // prioritate cand a fost completata.
             $stmt = $this->db->prepare(
-                'SELECT COALESCE(SUM(c.valoare), 0) AS total, COUNT(*) AS cnt
+                'SELECT COALESCE(SUM(COALESCE(c.valoare_neta, c.valoare)), 0) AS total, COUNT(*) AS cnt
                    FROM cheltuieli c
                   WHERE c.categorie = "administrativa"
                     AND c.data_cheltuiala BETWEEN :ms AND :me'

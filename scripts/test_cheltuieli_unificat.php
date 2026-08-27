@@ -110,14 +110,17 @@ if ($legacySupported && $categoryId > 0) {
 
     if (count($migrated) === 1) {
         $row = $migrated[0];
-        check('valoarea migrata = suma neta', approx((float) $row['valoare'], 1000.00));
+        check('valoarea migrata = totalul documentului', approx((float) $row['valoare'], 1190.00));
+        check('netul si TVA migrate pe coloanele dedicate', approx((float) $row['valoare_neta'], 1000.00) && approx((float) $row['tva'], 190.00));
+        check('modalitatea de plata migrata', (string) $row['modalitate_plata'] === 'transfer_bancar');
+        check('descrierea legacy migrata pe campul descriere', (string) $row['descriere'] === 'Chirie test');
         check('categoria migrata = administrativa', $row['categorie'] === 'administrativa');
         check('alocarea migrata = companie', $row['alocare_tip'] === 'companie');
-        check('observatiile pastreaza detaliile legacy', str_contains((string) $row['observatii'], 'Migrat din Cheltuieli Birou'));
+        check('observatiile marcheaza migrarea', str_contains((string) $row['observatii'], 'Migrat din Cheltuieli Birou'));
 
         $allocs = $model->getAllocationsForRows($migrated);
         $rowAllocs = $allocs[(int) $row['id']] ?? [];
-        check('alocarea companie acopera 100% din valoare', count($rowAllocs) === 1 && approx((float) $rowAllocs[0]['suma'], 1000.00));
+        check('alocarea companie acopera 100% din total', count($rowAllocs) === 1 && approx((float) $rowAllocs[0]['suma'], 1190.00));
     }
 
     // Rulare repetata -> fara duplicate.
@@ -230,6 +233,48 @@ if (count($vehicles) < 3 || count($drivers) < 1) {
     // Filtru categorie.
     $resAdmin = $model->getPaginatedExpenses(array_merge($filters, ['categorie' => 'administrativa']), 1, 50);
     check('filtrul categorie=administrativa exclude testele operationale', (int) $resAdmin['total_rows'] === 0, 'rows: ' . $resAdmin['total_rows']);
+
+    // Sofer responsabil (informativ): banii raman pe vehicul, dar filtrul pe
+    // sofer gaseste cheltuiala.
+    $respId = $model->createExpense(
+        [
+            'categorie' => 'operationala', 'tip_id' => $opTypeId, 'data_cheltuiala' => '2026-08-13',
+            'furnizor' => 'TEST_CHX_RESP', 'valoare' => 200.00, 'numar_document' => '',
+            'observatii' => '', 'beneficiar_id' => 0, 'sofer_responsabil_id' => $d1,
+            'alocare_tip' => 'vehicul', 'distribuire' => 'egal',
+        ],
+        [['tip_alocare' => 'vehicul', 'vehicul_id' => $v1, 'eticheta' => 'V1', 'suma' => 200.00]],
+        null,
+        null
+    );
+    $respRow = $model->findExpense($respId);
+    check('sofer responsabil: salvat pe cheltuiala', (int) ($respRow['sofer_responsabil_id'] ?? 0) === $d1);
+    $respAllocs = $model->getAllocationsForRows([['id' => $respId]])[$respId] ?? [];
+    check('sofer responsabil: valoarea ramane integral pe vehicul', count($respAllocs) === 1 && approx((float) $respAllocs[0]['suma'], 200.00));
+    $resResp = $model->getPaginatedExpenses(['date_start' => '2026-08-13', 'date_end' => '2026-08-13', 'sofer_id' => $d1, 'furnizor' => 'TEST_CHX_'], 1, 50);
+    check('sofer responsabil: filtrul pe sofer gaseste cheltuiala', (int) $resResp['total_rows'] === 1, 'rows: ' . $resResp['total_rows']);
+    $model->deleteExpense($respId);
+
+    // Campurile noi de document: bon fiscal cu net/TVA/total, moneda si plata.
+    $bonId = $model->createExpense(
+        [
+            'categorie' => 'operationala', 'tip_id' => $opTypeId, 'tip_document' => 'bon_fiscal',
+            'data_cheltuiala' => '2026-08-14', 'furnizor' => 'TEST_CHX_BON', 'descriere' => 'Bon test',
+            'cui' => 'RO123456', 'valoare' => 119.00, 'valoare_neta' => 100.00, 'tva' => 19.00,
+            'moneda' => 'RON', 'modalitate_plata' => 'card', 'sursa' => 'manual',
+            'numar_document' => '008421', 'observatii' => '', 'beneficiar_id' => 0,
+            'alocare_tip' => 'companie', 'distribuire' => 'egal',
+        ],
+        [['tip_alocare' => 'companie', 'eticheta' => 'Companie', 'suma' => 119.00]],
+        null,
+        null
+    );
+    $bon = $model->findExpense($bonId);
+    check('document nou: tip bon fiscal + numar salvate', $bon['tip_document'] === 'bon_fiscal' && $bon['numar_document'] === '008421');
+    check('document nou: total/net/TVA salvate separat', approx((float) $bon['valoare'], 119.00) && approx((float) $bon['valoare_neta'], 100.00) && approx((float) $bon['tva'], 19.00));
+    check('document nou: moneda, plata si sursa', $bon['moneda'] === 'RON' && $bon['modalitate_plata'] === 'card' && $bon['sursa'] === 'manual');
+    check('document nou: descriere si CUI', $bon['descriere'] === 'Bon test' && $bon['cui'] === 'RO123456');
+    $model->deleteExpense($bonId);
 
     echo "\n== 5. Update + delete ==\n";
 

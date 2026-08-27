@@ -98,6 +98,34 @@ CREATE TABLE IF NOT EXISTS cheltuieli_documente (
     CONSTRAINT fk_cheltuieli_documente_uploaded_by FOREIGN KEY (uploaded_by) REFERENCES utilizatori(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 4b. Extinderea documentului: tip document, descriere, CUI, net/TVA (Total
+--     ramane in coloana `valoare`), moneda, plata si sursa inregistrarii.
+--     Idempotent prin information_schema; ruleaza INAINTE de importul legacy.
+SET @doc_cols := (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cheltuieli' AND COLUMN_NAME = 'sursa'
+);
+SET @ddl_doc := IF(@doc_cols = 0,
+    'ALTER TABLE cheltuieli
+        ADD COLUMN tip_document ENUM(''factura'', ''bon_fiscal'', ''chitanta'', ''alt_document'') NOT NULL DEFAULT ''factura'' AFTER tip_id,
+        ADD COLUMN descriere VARCHAR(255) NULL AFTER furnizor,
+        ADD COLUMN cui VARCHAR(20) NULL AFTER descriere,
+        ADD COLUMN valoare_neta DECIMAL(12,2) NULL AFTER valoare,
+        ADD COLUMN tva DECIMAL(12,2) NULL AFTER valoare_neta,
+        ADD COLUMN moneda CHAR(3) NOT NULL DEFAULT ''RON'' AFTER tva,
+        ADD COLUMN modalitate_plata ENUM(''cash'', ''card'', ''transfer_bancar'', ''alte'') NULL AFTER moneda,
+        ADD COLUMN status_plata ENUM(''platita'', ''neplatita'', ''partial'') NULL AFTER modalitate_plata,
+        ADD COLUMN data_platii DATE NULL AFTER status_plata,
+        ADD COLUMN scadenta DATE NULL AFTER data_platii,
+        ADD COLUMN sursa ENUM(''manual'', ''spv'', ''ocr'', ''import'') NOT NULL DEFAULT ''manual'' AFTER scadenta,
+        ADD INDEX idx_cheltuieli_sursa (sursa),
+        ADD INDEX idx_cheltuieli_tip_document (tip_document)',
+    'SELECT 1'
+);
+PREPARE stmt_doc FROM @ddl_doc;
+EXECUTE stmt_doc;
+DEALLOCATE PREPARE stmt_doc;
+
 -- 5. Seed tipuri operationale (nomenclator de pornire)
 INSERT INTO cheltuieli_tipuri (categorie, nume, slug, status, sort_order, created_at, updated_at)
 SELECT seed.categorie, seed.nume, seed.slug, 'activ', seed.sort_order, NOW(), NOW()
@@ -137,37 +165,30 @@ WHERE NOT EXISTS (
     SELECT 1 FROM cheltuieli_tipuri t WHERE t.legacy_source = 'admin_cat' AND t.legacy_id = c.id
 );
 
--- 7. Import cheltuielile legacy. Valoarea preluata este suma neta (fara TVA)
---    cand exista, altfel totalul; detaliile complete (net/TVA/total/metoda de
---    plata) sunt pastrate in observatii, iar randul original ramane in tabela
---    legacy ca arhiva.
-INSERT INTO cheltuieli (categorie, tip_id, data_cheltuiala, furnizor, valoare, numar_document, observatii,
+-- 7. Import cheltuielile legacy. `valoare` = totalul cu TVA (sau netul daca
+--    totalul lipseste); net/TVA/metoda de plata pe coloanele dedicate;
+--    descrierea legacy pe campul descriere. Randul original ramane arhivat.
+INSERT INTO cheltuieli (categorie, tip_id, tip_document, data_cheltuiala, furnizor, descriere,
+                        valoare, valoare_neta, tva, modalitate_plata, numar_document, observatii,
                         alocare_tip, distribuire, legacy_source, legacy_id, added_by, updated_by, created_at, updated_at)
-SELECT 'administrativa', t.id, e.expense_date, e.supplier,
-       CASE WHEN e.amount_net > 0 THEN e.amount_net ELSE e.amount_total END,
+SELECT 'administrativa', t.id, 'factura', e.expense_date, e.supplier, NULLIF(e.description, ''),
+       CASE WHEN e.amount_total > 0 THEN e.amount_total ELSE e.amount_net END,
+       NULLIF(e.amount_net, 0), NULLIF(e.vat_amount, 0), e.payment_method,
        e.invoice_number,
-       TRIM(CONCAT_WS('\n',
-           NULLIF(e.description, ''),
-           NULLIF(e.notes, ''),
-           CONCAT('[Migrat din Cheltuieli Birou: net ', e.amount_net, ' lei, TVA ', e.vat_amount,
-                  ' lei, total ', e.amount_total, ' lei, plată ', e.payment_method, ']')
-       )),
+       TRIM(CONCAT_WS('\n', NULLIF(e.notes, ''), '[Migrat din Cheltuieli Birou]')),
        'companie', 'egal', 'office', e.id, e.added_by, e.updated_by, e.created_at, e.updated_at
 FROM office_expenses e
 INNER JOIN cheltuieli_tipuri t ON t.legacy_source = 'office_cat' AND t.legacy_id = e.category_id
 WHERE NOT EXISTS (SELECT 1 FROM cheltuieli n WHERE n.legacy_source = 'office' AND n.legacy_id = e.id);
 
-INSERT INTO cheltuieli (categorie, tip_id, data_cheltuiala, furnizor, valoare, numar_document, observatii,
+INSERT INTO cheltuieli (categorie, tip_id, tip_document, data_cheltuiala, furnizor, descriere,
+                        valoare, valoare_neta, tva, modalitate_plata, numar_document, observatii,
                         alocare_tip, distribuire, legacy_source, legacy_id, added_by, updated_by, created_at, updated_at)
-SELECT 'administrativa', t.id, e.expense_date, e.supplier,
-       CASE WHEN e.amount_net > 0 THEN e.amount_net ELSE e.amount_total END,
+SELECT 'administrativa', t.id, 'factura', e.expense_date, e.supplier, NULLIF(e.description, ''),
+       CASE WHEN e.amount_total > 0 THEN e.amount_total ELSE e.amount_net END,
+       NULLIF(e.amount_net, 0), NULLIF(e.vat_amount, 0), e.payment_method,
        e.invoice_number,
-       TRIM(CONCAT_WS('\n',
-           NULLIF(e.description, ''),
-           NULLIF(e.notes, ''),
-           CONCAT('[Migrat din Cheltuieli Administrative: net ', e.amount_net, ' lei, TVA ', e.vat_amount,
-                  ' lei, total ', e.amount_total, ' lei, plată ', e.payment_method, ']')
-       )),
+       TRIM(CONCAT_WS('\n', NULLIF(e.notes, ''), '[Migrat din Cheltuieli Administrative]')),
        'companie', 'egal', 'administrative', e.id, e.added_by, e.updated_by, e.created_at, e.updated_at
 FROM administrative_expenses e
 INNER JOIN cheltuieli_tipuri t ON t.legacy_source = 'admin_cat' AND t.legacy_id = e.category_id
@@ -208,3 +229,18 @@ FROM access_template_permissions
 WHERE page_key IN ('cheltuieli_birou', 'cheltuieli_administrative');
 
 DELETE FROM access_template_permissions WHERE page_key IN ('cheltuieli_birou', 'cheltuieli_administrative');
+
+-- 11. Sofer responsabil (informativ): cine a generat cheltuiala, fara sa
+--     preia din valoare (alocarea banilor ramane pe vehicul/companie).
+--     Adaugare idempotenta prin information_schema.
+SET @col_exists := (
+    SELECT COUNT(*) FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cheltuieli' AND COLUMN_NAME = 'sofer_responsabil_id'
+);
+SET @ddl := IF(@col_exists = 0,
+    'ALTER TABLE cheltuieli ADD COLUMN sofer_responsabil_id INT UNSIGNED NULL AFTER beneficiar_id, ADD INDEX idx_cheltuieli_sofer_resp (sofer_responsabil_id), ADD CONSTRAINT fk_cheltuieli_sofer_resp FOREIGN KEY (sofer_responsabil_id) REFERENCES soferi(id) ON DELETE SET NULL',
+    'SELECT 1'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;

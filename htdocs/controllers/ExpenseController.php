@@ -11,7 +11,7 @@ class ExpenseController
 {
     private const PER_PAGE_OPTIONS = [10, 20, 50];
     private const MAX_UPLOAD_SIZE = 10485760; // 10 MB, conform formularului
-    private const ALLOWED_EXTENSIONS = ['pdf', 'jpg', 'jpeg', 'png'];
+    private const ALLOWED_EXTENSIONS = ['pdf', 'xml', 'jpg', 'jpeg', 'png'];
 
     private ExpenseModel $model;
 
@@ -137,14 +137,24 @@ class ExpenseController
         fputcsv($output, [
             '#',
             'Data',
+            'Document',
+            'Furnizor / Comerciant',
+            'CUI/CIF',
+            'Descriere',
             'Categorie',
-            'Tip cheltuiala',
-            'Alocata catre',
+            'Subcategorie',
             'Alocari (detaliu)',
+            'Sofer responsabil',
             'Beneficiar / Client',
-            'Furnizor',
-            'Valoare (lei)',
-            'Nr. document',
+            'Total',
+            'Moneda',
+            'Valoare fara TVA',
+            'TVA',
+            'Modalitate plata',
+            'Status plata',
+            'Data platii',
+            'Scadenta',
+            'Sursa',
             'Observatii',
             'Adaugat de',
         ], ';');
@@ -152,20 +162,35 @@ class ExpenseController
         foreach ($rows as $index => $row) {
             $detail = [];
             foreach ($allocations[(int) ($row['id'] ?? 0)] ?? [] as $allocation) {
-                $detail[] = $this->allocationLabel($allocation) . ': ' . format_number_ro($allocation['suma'] ?? 0, 2) . ' lei';
+                $detail[] = $this->allocationLabel($allocation) . ': ' . format_number_ro($allocation['suma'] ?? 0, 2);
+            }
+
+            $documentLabel = ExpenseModel::DOCUMENT_TYPES[(string) ($row['tip_document'] ?? '')] ?? 'Factură';
+            if (trim((string) ($row['numar_document'] ?? '')) !== '') {
+                $documentLabel .= ' · ' . trim((string) $row['numar_document']);
             }
 
             fputcsv($output, [
                 (string) ($index + 1),
                 !empty($row['data_cheltuiala']) ? format_date_ro((string) $row['data_cheltuiala']) : '',
+                $documentLabel,
+                (string) ($row['furnizor'] ?? ''),
+                (string) ($row['cui'] ?? ''),
+                (string) ($row['descriere'] ?? ''),
                 ExpenseModel::CATEGORIES[(string) ($row['categorie'] ?? '')] ?? (string) ($row['categorie'] ?? ''),
                 (string) ($row['tip_nume'] ?? ''),
-                ExpenseModel::ALLOCATION_TYPES[(string) ($row['alocare_tip'] ?? '')] ?? (string) ($row['alocare_tip'] ?? ''),
                 implode(' | ', $detail),
+                (string) ($row['sofer_responsabil_nume'] ?? ''),
                 (string) ($row['beneficiar_nume'] ?? ''),
-                (string) ($row['furnizor'] ?? ''),
                 format_number_ro($row['valoare'] ?? 0, 2),
-                (string) ($row['numar_document'] ?? ''),
+                (string) ($row['moneda'] ?? 'RON'),
+                ($row['valoare_neta'] ?? null) !== null ? format_number_ro($row['valoare_neta'], 2) : '',
+                ($row['tva'] ?? null) !== null ? format_number_ro($row['tva'], 2) : '',
+                ExpenseModel::PAYMENT_METHODS[(string) ($row['modalitate_plata'] ?? '')] ?? '',
+                ExpenseModel::PAYMENT_STATUSES[(string) ($row['status_plata'] ?? '')] ?? '',
+                !empty($row['data_platii']) ? format_date_ro((string) $row['data_platii']) : '',
+                !empty($row['scadenta']) ? format_date_ro((string) $row['scadenta']) : '',
+                ExpenseModel::SOURCES[(string) ($row['sursa'] ?? 'manual')] ?? 'Manual',
                 (string) ($row['observatii'] ?? ''),
                 (string) ($row['added_by_name'] ?? ''),
             ], ';');
@@ -230,6 +255,12 @@ class ExpenseController
             }
             flash_set('danger', implode(' ', $errors));
             redirect($this->indexUrl());
+        }
+
+        // Sursa originala (SPV/OCR/Import) se pastreaza la editarea manuala.
+        $existing = $this->model->findExpense($id);
+        if ($existing !== null) {
+            $data['sursa'] = (string) ($existing['sursa'] ?? 'manual');
         }
 
         try {
@@ -369,14 +400,58 @@ class ExpenseController
             $errors[] = 'Tipul de cheltuială nu aparține categoriei selectate.';
         }
 
+        $tipDocument = (string) ($input['tip_document'] ?? 'factura');
+        if (!isset(ExpenseModel::DOCUMENT_TYPES[$tipDocument])) {
+            $errors[] = 'Selectează tipul documentului.';
+            $tipDocument = 'factura';
+        }
+
         $valoare = $this->parseMoney($input['valoare'] ?? null) ?? 0.0;
         if ($valoare <= 0) {
-            $errors[] = 'Valoarea trebuie să fie mai mare decât zero.';
+            $errors[] = 'Totalul trebuie să fie mai mare decât zero.';
+        }
+
+        $valoareNeta = $this->parseMoney($input['valoare_neta'] ?? null);
+        $tva = $this->parseMoney($input['tva'] ?? null);
+        if ($valoareNeta !== null && $valoareNeta > 0 && $tva !== null && $tva > 0
+            && abs(($valoareNeta + $tva) - $valoare) > 0.01) {
+            $errors[] = sprintf(
+                'Valoarea fără TVA + TVA (%s lei) diferă de total (%s lei).',
+                format_number_ro($valoareNeta + $tva, 2),
+                format_number_ro($valoare, 2)
+            );
+        }
+
+        $moneda = strtoupper(trim((string) ($input['moneda'] ?? 'RON')));
+        if (!in_array($moneda, ExpenseModel::CURRENCIES, true)) {
+            $moneda = 'RON';
+        }
+
+        $modalitatePlata = (string) ($input['modalitate_plata'] ?? '');
+        if (!isset(ExpenseModel::PAYMENT_METHODS[$modalitatePlata])) {
+            $modalitatePlata = '';
+        }
+
+        // Campurile specifice facturii (status plata, data platii, scadenta)
+        // se pastreaza doar pentru facturi; pentru bon fiscal / chitanta nu au sens.
+        $statusPlata = '';
+        $dataPlatii = null;
+        $scadenta = null;
+        if ($tipDocument === 'factura') {
+            $statusPlata = (string) ($input['status_plata'] ?? '');
+            if (!isset(ExpenseModel::PAYMENT_STATUSES[$statusPlata])) {
+                $statusPlata = '';
+            }
+            $dataPlatii = $this->normalizeDate((string) ($input['data_platii'] ?? ''));
+            if ($statusPlata === 'neplatita') {
+                $dataPlatii = null;
+            }
+            $scadenta = $this->normalizeDate((string) ($input['scadenta'] ?? ''));
         }
 
         $furnizor = trim((string) ($input['furnizor'] ?? ''));
         if ($furnizor === '') {
-            $errors[] = 'Furnizorul este obligatoriu.';
+            $errors[] = 'Furnizorul / comerciantul este obligatoriu.';
         }
 
         $beneficiarId = 0;
@@ -388,6 +463,16 @@ class ExpenseController
             }
         }
 
+        // Soferul responsabil este optional si pur informativ (nu preia din valoare).
+        $soferResponsabilId = (int) ($input['sofer_responsabil_id'] ?? 0);
+        if ($soferResponsabilId > 0) {
+            $driverIds = array_map(static fn(array $row): int => (int) $row['id'], $this->model->getDrivers());
+            if (!in_array($soferResponsabilId, $driverIds, true)) {
+                $errors[] = 'Șoferul responsabil selectat este invalid.';
+                $soferResponsabilId = 0;
+            }
+        }
+
         [$allocations, $alocareTip, $distribuire, $allocationErrors] = $this->collectAllocations($input, $valoare);
         foreach ($allocationErrors as $allocationError) {
             $errors[] = $allocationError;
@@ -396,12 +481,24 @@ class ExpenseController
         $data = [
             'categorie' => $categorie,
             'tip_id' => $tipId,
+            'tip_document' => $tipDocument,
             'data_cheltuiala' => $this->normalizeDate((string) ($input['data_cheltuiala'] ?? '')) ?: date('Y-m-d'),
             'furnizor' => $furnizor,
+            'descriere' => trim((string) ($input['descriere'] ?? '')),
+            'cui' => trim((string) ($input['cui'] ?? '')),
             'valoare' => $valoare,
+            'valoare_neta' => $valoareNeta,
+            'tva' => $tva,
+            'moneda' => $moneda,
+            'modalitate_plata' => $modalitatePlata,
+            'status_plata' => $statusPlata,
+            'data_platii' => $dataPlatii,
+            'scadenta' => $scadenta,
+            'sursa' => 'manual',
             'numar_document' => trim((string) ($input['numar_document'] ?? '')),
             'observatii' => trim((string) ($input['observatii'] ?? '')),
             'beneficiar_id' => $beneficiarId,
+            'sofer_responsabil_id' => $soferResponsabilId,
             'alocare_tip' => $alocareTip,
             'distribuire' => $distribuire,
         ];
@@ -410,16 +507,18 @@ class ExpenseController
     }
 
     /**
-     * Construieste randurile de alocare din formular si valideaza ca suma lor
-     * este exact valoarea cheltuielii (tolerata o diferenta de rotunjire de
-     * maximum 0,01 lei, absorbita in ultimul rand).
+     * Construieste randurile de alocare din formular. Dimensiunile Vehicul /
+     * Sofer se pot combina liber pe aceeasi factura; fara nicio selectie,
+     * cheltuiala ramane nealocata (nivel de firma, tip_alocare=companie in
+     * date). Suma alocarilor trebuie sa fie exact valoarea
+     * cheltuielii (o diferenta de rotunjire de maximum 0,01 lei este
+     * absorbita in ultimul rand).
      *
      * @return array{0:array,1:string,2:string,3:array} [allocations, alocare_tip, distribuire, errors]
      */
     private function collectAllocations(array $input, float $valoare): array
     {
         $errors = [];
-        $mode = (string) ($input['aloc_mode'] ?? 'simplu');
 
         $vehicleLabels = [];
         foreach ($this->model->getVehicles() as $vehicle) {
@@ -430,109 +529,98 @@ class ExpenseController
             $driverLabels[(int) $driver['id']] = (string) $driver['nume'];
         }
 
-        if ($mode === 'mixt') {
-            $allocations = [];
-            $lines = is_array($input['pozitii'] ?? null) ? $input['pozitii'] : [];
-            foreach ($lines as $line) {
-                if (!is_array($line)) {
-                    continue;
-                }
-                $tip = (string) ($line['tip'] ?? '');
-                $suma = $this->parseMoney($line['suma'] ?? null) ?? 0.0;
-                if ($suma <= 0) {
-                    $errors[] = 'Fiecare poziție din factura mixtă trebuie să aibă o sumă mai mare decât zero.';
-                    continue;
-                }
-
-                if ($tip === 'vehicul') {
-                    $vehiculId = (int) ($line['vehicul_id'] ?? 0);
-                    if (!isset($vehicleLabels[$vehiculId])) {
-                        $errors[] = 'Selectează vehiculul pentru fiecare poziție de tip Vehicul.';
-                        continue;
-                    }
-                    $allocations[] = ['tip_alocare' => 'vehicul', 'vehicul_id' => $vehiculId, 'eticheta' => $vehicleLabels[$vehiculId], 'suma' => $suma];
-                } elseif ($tip === 'sofer') {
-                    $soferId = (int) ($line['sofer_id'] ?? 0);
-                    if (!isset($driverLabels[$soferId])) {
-                        $errors[] = 'Selectează șoferul pentru fiecare poziție de tip Șofer.';
-                        continue;
-                    }
-                    $allocations[] = ['tip_alocare' => 'sofer', 'sofer_id' => $soferId, 'eticheta' => $driverLabels[$soferId], 'suma' => $suma];
-                } elseif ($tip === 'companie') {
-                    $allocations[] = ['tip_alocare' => 'companie', 'eticheta' => 'Companie', 'suma' => $suma];
-                } else {
-                    $errors[] = 'Tipul unei poziții din factura mixtă este invalid.';
-                }
-            }
-
-            if ($allocations === []) {
-                $errors[] = 'Adaugă cel puțin o poziție în factura cu alocări multiple.';
-            }
-
-            $allocations = $this->reconcileTotals($allocations, $valoare, $errors);
-
-            return [$allocations, 'mixt', 'manual', $errors];
-        }
-
-        // Modul simplu: o singura dimensiune de alocare.
-        $alocareTip = (string) ($input['alocare_tip'] ?? 'companie');
-        if (!in_array($alocareTip, ['vehicul', 'sofer', 'companie'], true)) {
-            $alocareTip = 'companie';
-        }
+        $dimVehicul = (string) ($input['aloc_vehicul'] ?? '') === '1';
+        $dimSofer = (string) ($input['aloc_sofer'] ?? '') === '1';
         $distribuire = (string) ($input['distribuire'] ?? 'egal') === 'manual' ? 'manual' : 'egal';
 
-        if ($alocareTip === 'companie') {
+        // Alocarea banilor este exclusiva: fie pe vehicule, fie pe soferi.
+        // Pentru a lega un sofer de o cheltuiala a vehiculului exista campul
+        // informativ "Sofer responsabil", care nu imparte valoarea.
+        if ($dimVehicul && $dimSofer) {
+            $errors[] = 'Alocarea se face fie pe vehicule, fie pe șoferi. Folosește câmpul „Șofer responsabil” pentru a lega un șofer de o cheltuială a vehiculului.';
+            return [[], 'companie', 'egal', $errors];
+        }
+
+        // Lista de entitati selectate, in ordinea afisata in formular.
+        $entities = [];
+        $kinds = [];
+
+        if ($dimVehicul) {
+            $ids = [];
+            foreach ((array) ($input['vehicule'] ?? []) as $rawId) {
+                $id = (int) $rawId;
+                if ($id > 0 && isset($vehicleLabels[$id]) && !in_array($id, $ids, true)) {
+                    $ids[] = $id;
+                }
+            }
+            if ($ids === []) {
+                $errors[] = 'Selectează cel puțin un vehicul sau debifează alocarea pe vehicul.';
+            }
+            foreach ($ids as $id) {
+                $entities[] = ['tip_alocare' => 'vehicul', 'vehicul_id' => $id, 'eticheta' => $vehicleLabels[$id]];
+            }
+            $kinds[] = 'vehicul';
+        }
+
+        if ($dimSofer) {
+            $ids = [];
+            foreach ((array) ($input['soferi'] ?? []) as $rawId) {
+                $id = (int) $rawId;
+                if ($id > 0 && isset($driverLabels[$id]) && !in_array($id, $ids, true)) {
+                    $ids[] = $id;
+                }
+            }
+            if ($ids === []) {
+                $errors[] = 'Selectează cel puțin un șofer sau debifează alocarea pe șofer.';
+            }
+            foreach ($ids as $id) {
+                $entities[] = ['tip_alocare' => 'sofer', 'sofer_id' => $id, 'eticheta' => $driverLabels[$id]];
+            }
+            $kinds[] = 'sofer';
+        }
+
+        // Fara vehicul/sofer selectat, cheltuiala este a companiei (100%).
+        if (!$dimVehicul && !$dimSofer) {
             return [[
                 ['tip_alocare' => 'companie', 'eticheta' => 'Companie', 'suma' => round($valoare, 2)],
             ], 'companie', 'egal', $errors];
         }
 
-        $isVehicle = $alocareTip === 'vehicul';
-        $labels = $isVehicle ? $vehicleLabels : $driverLabels;
-        $idsInput = $input[$isVehicle ? 'vehicule' : 'soferi'] ?? [];
-        $ids = [];
-        foreach ((array) $idsInput as $rawId) {
-            $id = (int) $rawId;
-            if ($id > 0 && isset($labels[$id]) && !in_array($id, $ids, true)) {
-                $ids[] = $id;
-            }
+        if ($entities === []) {
+            return [[], $kinds[0] ?? 'companie', $distribuire, $errors];
         }
 
-        if ($ids === []) {
-            $errors[] = $isVehicle ? 'Selectează cel puțin un vehicul.' : 'Selectează cel puțin un șofer.';
-            return [[], $alocareTip, $distribuire, $errors];
-        }
+        $alocareTip = count($kinds) === 1 ? $kinds[0] : 'mixt';
 
         $allocations = [];
-        if (count($ids) === 1 || $distribuire === 'egal') {
+        if (count($entities) === 1 || $distribuire === 'egal') {
             // Impartire egala cu rotunjire: ultimul rand absoarbe diferenta,
             // astfel incat totalul alocat sa fie exact valoarea cheltuielii.
-            $count = count($ids);
+            $count = count($entities);
             $base = floor(($valoare / $count) * 100) / 100;
-            foreach ($ids as $index => $id) {
-                $suma = $index === $count - 1 ? round($valoare - $base * ($count - 1), 2) : $base;
-                $allocations[] = [
-                    'tip_alocare' => $alocareTip,
-                    ($isVehicle ? 'vehicul_id' : 'sofer_id') => $id,
-                    'eticheta' => $labels[$id],
-                    'suma' => $suma,
-                ];
+            foreach ($entities as $index => $entity) {
+                $entity['suma'] = $index === $count - 1 ? round($valoare - $base * ($count - 1), 2) : $base;
+                $allocations[] = $entity;
             }
             $distribuire = 'egal';
         } else {
-            $amounts = (array) ($input[$isVehicle ? 'suma_vehicul' : 'suma_sofer'] ?? []);
-            foreach ($ids as $id) {
-                $suma = $this->parseMoney($amounts[(string) $id] ?? ($amounts[$id] ?? null)) ?? 0.0;
+            $vehicleAmounts = (array) ($input['suma_vehicul'] ?? []);
+            $driverAmounts = (array) ($input['suma_sofer'] ?? []);
+            foreach ($entities as $entity) {
+                if ($entity['tip_alocare'] === 'vehicul') {
+                    $id = (int) $entity['vehicul_id'];
+                    $suma = $this->parseMoney($vehicleAmounts[(string) $id] ?? ($vehicleAmounts[$id] ?? null)) ?? 0.0;
+                } else {
+                    $id = (int) $entity['sofer_id'];
+                    $suma = $this->parseMoney($driverAmounts[(string) $id] ?? ($driverAmounts[$id] ?? null)) ?? 0.0;
+                }
+
                 if ($suma <= 0) {
-                    $errors[] = 'Introdu o sumă mai mare decât zero pentru ' . $labels[$id] . '.';
+                    $errors[] = 'Introdu o sumă mai mare decât zero pentru ' . $entity['eticheta'] . '.';
                     continue;
                 }
-                $allocations[] = [
-                    'tip_alocare' => $alocareTip,
-                    ($isVehicle ? 'vehicul_id' : 'sofer_id') => $id,
-                    'eticheta' => $labels[$id],
-                    'suma' => $suma,
-                ];
+                $entity['suma'] = $suma;
+                $allocations[] = $entity;
             }
             $allocations = $this->reconcileTotals($allocations, $valoare, $errors);
         }
@@ -578,7 +666,7 @@ class ExpenseController
     {
         $tip = (string) ($allocation['tip_alocare'] ?? '');
         if ($tip === 'companie') {
-            return 'Companie';
+            return 'Birou / Administrativ';
         }
         if ($tip === 'vehicul') {
             $label = trim((string) ($allocation['vehicul_nr'] ?? ''));
