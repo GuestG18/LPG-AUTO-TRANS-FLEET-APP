@@ -920,6 +920,18 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                             </div>
                         </div>
 
+                        <div class="col-12 col-md-6 d-none" data-role="field-ruta-plecare">
+                            <label class="form-label" for="race_ruta_plecare">Loc plecare (garaj)</label>
+                            <input type="text" class="form-control" id="race_ruta_plecare" data-role="ruta-plecare" value="" readonly>
+                            <div class="form-text text-muted">Din ruta configurata pentru beneficiar. Nu se editeaza aici.</div>
+                        </div>
+
+                        <div class="col-12 col-md-6 d-none" data-role="field-ruta-intoarcere">
+                            <label class="form-label" for="race_ruta_intoarcere">Loc intoarcere (garaj)</label>
+                            <select class="form-select" id="race_ruta_intoarcere" name="loc_intoarcere" data-role="ruta-intoarcere" data-initial-value="<?= e((string) ($formData['loc_intoarcere'] ?? '')) ?>"></select>
+                            <div class="form-text text-muted">Variantele configurate pe aceasta ruta. Km si pretul urmeaza varianta aleasa.</div>
+                        </div>
+
                         <div class="col-12 col-md-6 <?= $isKmTotalSelected ? '' : 'd-none' ?>" data-role="field-km-totali">
                             <label class="form-label" for="race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
                             <input type="number" class="form-control <?= isset($formErrors['km_totali']) ? 'is-invalid' : '' ?>" id="race_km_totali" name="km_totali" min="0" step="1" value="<?= e((string) ($formData['km_totali'] ?? '')) ?>" data-role="km-totali">

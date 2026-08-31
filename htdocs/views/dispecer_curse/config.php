@@ -149,6 +149,60 @@ $buildRouteVehicleItems = static function (string $vehicleIdsRaw, array $details
 
     return array_values($vehicleItems);
 };
+// Pretul de baza configurat, plus un marcaj cand o schimbare programata din
+// "Administrare tarife" e cea aplicata efectiv la facturare.
+$renderRouteTariffValue = static function (array $rule, string $column): string {
+    $baseValue = (float) ($rule[$column] ?? 0);
+    $html = e(format_number_ro($baseValue, 2));
+
+    $overrides = is_array($rule['tarif_overrides'] ?? null) ? $rule['tarif_overrides'] : [];
+    if (array_key_exists($column, $overrides)) {
+        $html .= '<div class="tcv2-tarif-override" title="Tarif programat din Administrare tarife, activ acum">'
+            . '<i class="bi bi-calendar-event" aria-hidden="true"></i> '
+            . e(format_number_ro((float) $overrides[$column], 2))
+            . '</div>';
+    }
+
+    return $html;
+};
+
+// Capetele de intoarcere ale unei rute, in acelasi buton pliabil ca lista de vehicule,
+// ca sa nu intinda randul pe cate un rand per locatie.
+$renderRoutePointsButton = static function (array $points, string $rowKey): string {
+    $points = array_values(array_filter(array_map('trim', $points), static fn(string $point): bool => $point !== ''));
+    $pointCount = count($points);
+
+    if ($pointCount === 0) {
+        return '<span class="tcv2-vehicles-none" aria-label="Niciun loc de intoarcere">&mdash;</span>';
+    }
+
+    if ($pointCount === 1) {
+        return '<span>' . e($points[0]) . '</span>';
+    }
+
+    $safeRowKey = preg_replace('/[^a-zA-Z0-9_-]+/', '-', $rowKey) ?: uniqid('points_', false);
+    $popoverId = 'dispatcher_points_popover_' . $safeRowKey;
+    $countLabel = $pointCount . ' locatii';
+    $pointsTitle = implode(', ', $points);
+
+    $html = '<div class="dispatcher-vehicle-list" data-dispatcher-vehicle-list>';
+    $html .= '<button type="button" class="dispatcher-vehicle-count-btn" data-dispatcher-vehicle-toggle data-popover-id="' . e($popoverId) . '" aria-expanded="false" aria-controls="' . e($popoverId) . '" aria-label="' . e('Afiseaza ' . $countLabel) . '" title="' . e($pointsTitle) . '">';
+    $html .= '<span>' . e($countLabel) . '</span><i class="bi bi-chevron-down" aria-hidden="true"></i>';
+    $html .= '</button>';
+    $html .= '<div class="dispatcher-vehicle-popover" id="' . e($popoverId) . '" data-dispatcher-vehicle-popover role="dialog" aria-label="Locuri de intoarcere" hidden>';
+    $html .= '<ul class="dispatcher-vehicle-popover-list" role="list">';
+    foreach ($points as $point) {
+        $html .= '<li class="dispatcher-vehicle-popover-item" data-dispatcher-vehicle-item data-vehicle-search="' . e($point) . '">';
+        $html .= '<strong>' . e($point) . '</strong>';
+        $html .= '</li>';
+    }
+    $html .= '</ul>';
+    $html .= '<div class="dispatcher-vehicle-popover-total">' . e('Total ' . $countLabel) . '</div>';
+    $html .= '</div></div>';
+
+    return $html;
+};
+
 $renderRouteVehicleButton = static function (array $vehicleItems, string $rowKey): string {
     $vehicleCount = count($vehicleItems);
     $countLabel = $vehicleCount === 1 ? '1 vehicul' : $vehicleCount . ' vehicule';
@@ -548,6 +602,16 @@ if ($configCreateMode) {
                 <?php endif; ?>
             </button>
         <?php endforeach; ?>
+        <button
+            type="button"
+            class="tcv2-tab-fullscreen"
+            data-config-fullscreen-toggle
+            aria-pressed="false"
+            title="Extinde zona de lucru (Esc pentru iesire)"
+        >
+            <i class="bi bi-arrows-fullscreen" aria-hidden="true" data-role="fullscreen-icon"></i>
+            <span data-role="fullscreen-label">Extinde</span>
+        </button>
     </nav>
 
     <div class="tcv2-workspace">
@@ -565,10 +629,10 @@ if ($configCreateMode) {
             <div class="alert alert-info d-flex align-items-start gap-2 py-2 mb-3" role="status">
                 <i class="bi bi-tags-fill" aria-hidden="true"></i>
                 <div class="small">
-                    <strong>Tarifele comerciale se administreaza acum din &bdquo;Administrare tarife transport&rdquo;.</strong>
-                    Campurile de pret de mai jos sunt afisate doar pentru referinta (read-only), ca sa nu existe
-                    doua surse de adevar pentru acelasi pret. Rutele, locurile, zonele si eligibilitatea vehiculelor
-                    raman configurabile aici.
+                    <strong>Preturile de baza se completeaza aici, la configurarea regulii.</strong>
+                    In &bdquo;Administrare tarife transport&rdquo; programezi <em>schimbarile</em> de pret, cu data de
+                    la care intra in vigoare, si le vezi istoricul. Cat timp o schimbare programata este activa,
+                    ea are prioritate fata de pretul de baza de aici.
                     <a class="alert-link" href="<?= e(build_query_url(['page' => 'tarife_transport'])) ?>">Deschide Administrare tarife</a>
                 </div>
             </div>
@@ -619,12 +683,12 @@ if ($configCreateMode) {
                             <div class="row g-3">
                                 <div class="col-12 col-md-6">
                                     <label class="form-label" for="config_primar_pret_km">Pret/km</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_km']) ? 'is-invalid' : '' ?>" id="config_primar_pret_km" name="pret_km" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($beneficiaryFormData['pret_km'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_km']) ? 'is-invalid' : '' ?>" id="config_primar_pret_km" name="pret_km" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_km'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_km'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_km']) ?></div><?php endif; ?>
                                 </div>
                                 <div class="col-12 col-md-6">
                                     <label class="form-label" for="config_primar_pret_tona">Pret/tona</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona']) ? 'is-invalid' : '' ?>" id="config_primar_pret_tona" name="pret_tona" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($beneficiaryFormData['pret_tona'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona']) ? 'is-invalid' : '' ?>" id="config_primar_pret_tona" name="pret_tona" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_tona'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_tona']) ?></div><?php endif; ?>
                                 </div>
                             </div>
@@ -663,7 +727,7 @@ if ($configCreateMode) {
                             </div>
                         </div>
 
-                        <div class="tcv2-type-tile">
+                        <div class="tcv2-type-tile tcv2-type-tile--wide">
                             <label class="tcv2-type-tile-head">
                                 <input class="form-check-input" type="checkbox" name="tip_transporturi[]" value="compresor" <?= $isCompresorSelected ? 'checked' : '' ?>>
                                 <span class="tcv2-type-tile-title">
@@ -672,30 +736,30 @@ if ($configCreateMode) {
                                 </span>
                             </label>
                             <div class="tcv2-type-tile-body" data-transport-card="compresor" <?= $isCompresorSelected ? '' : 'hidden' ?>>
-                            <div class="row g-3">
-                                <div class="col-12 col-md-4">
-                                    <label class="form-label" for="config_compresor_pret_ora_aspirare">Pret ora aspirare</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_ora_aspirare']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_ora_aspirare" name="pret_ora_aspirare" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($beneficiaryFormData['pret_ora_aspirare'] ?? '')) ?>">
+                            <div class="row g-3 tcv2-field-grid">
+                                <div class="col-12 col-md-4 tcv2-field">
+                                    <label class="form-label tcv2-field-label" for="config_compresor_pret_ora_aspirare">Pret ora aspirare</label>
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_ora_aspirare']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_ora_aspirare" name="pret_ora_aspirare" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_ora_aspirare'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_ora_aspirare'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_ora_aspirare']) ?></div><?php endif; ?>
                                 </div>
-                                <div class="col-12 col-md-4">
-                                    <label class="form-label" for="config_compresor_pret_km_dislocare">Pret km dislocare</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_km_dislocare']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_km_dislocare" name="pret_km_dislocare" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($beneficiaryFormData['pret_km_dislocare'] ?? '')) ?>">
+                                <div class="col-12 col-md-4 tcv2-field">
+                                    <label class="form-label tcv2-field-label" for="config_compresor_pret_km_dislocare">Pret km dislocare</label>
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_km_dislocare']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_km_dislocare" name="pret_km_dislocare" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_km_dislocare'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_km_dislocare'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_km_dislocare']) ?></div><?php endif; ?>
                                 </div>
-                                <div class="col-12 col-md-4">
-                                    <label class="form-label" for="config_compresor_pret_tona_livrata">Pret tona livrata</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_livrata']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_livrata" name="pret_tona_livrata" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($beneficiaryFormData['pret_tona_livrata'] ?? '')) ?>">
+                                <div class="col-12 col-md-4 tcv2-field">
+                                    <label class="form-label tcv2-field-label" for="config_compresor_pret_tona_livrata">Pret tona livrata</label>
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_livrata']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_livrata" name="pret_tona_livrata" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_tona_livrata'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_tona_livrata'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_tona_livrata']) ?></div><?php endif; ?>
                                 </div>
-                                <div class="col-12 col-md-4">
-                                    <label class="form-label" for="config_compresor_pret_tona_aspirata_lichida">Pret tona aspirata lichida</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_aspirata_lichida']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_aspirata_lichida" name="pret_tona_aspirata_lichida" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($beneficiaryFormData['pret_tona_aspirata_lichida'] ?? '')) ?>">
+                                <div class="col-12 col-md-4 tcv2-field">
+                                    <label class="form-label tcv2-field-label" for="config_compresor_pret_tona_aspirata_lichida">Pret tona aspirata lichida</label>
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_aspirata_lichida']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_aspirata_lichida" name="pret_tona_aspirata_lichida" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_tona_aspirata_lichida'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_tona_aspirata_lichida'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_tona_aspirata_lichida']) ?></div><?php endif; ?>
                                 </div>
-                                <div class="col-12 col-md-4">
-                                    <label class="form-label" for="config_compresor_pret_tona_aspirata_gazoasa">Pret tona aspirata gazoasa</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_aspirata_gazoasa']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_aspirata_gazoasa" name="pret_tona_aspirata_gazoasa" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($beneficiaryFormData['pret_tona_aspirata_gazoasa'] ?? '')) ?>">
+                                <div class="col-12 col-md-4 tcv2-field">
+                                    <label class="form-label tcv2-field-label" for="config_compresor_pret_tona_aspirata_gazoasa">Pret tona aspirata gazoasa</label>
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_aspirata_gazoasa']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_aspirata_gazoasa" name="pret_tona_aspirata_gazoasa" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_tona_aspirata_gazoasa'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_tona_aspirata_gazoasa'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_tona_aspirata_gazoasa']) ?></div><?php endif; ?>
                                 </div>
                                 <div class="col-12">
@@ -965,13 +1029,15 @@ if ($configCreateMode) {
 
                                 <div class="col-12 col-md-4">
                                     <label class="form-label" for="config_distribution_only_route_tarif_tona">Pret tona (RON) <span class="text-danger">*</span></label>
-                                    <input type="number" class="form-control <?= isset($distributionOnlyRouteFormErrors['tarif_tona']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_tarif_tona" name="route_tarif_tona" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($distributionOnlyRouteFormData['tarif_tona'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($distributionOnlyRouteFormErrors['tarif_tona']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_tarif_tona" name="route_tarif_tona" min="0" step="0.01" value="<?= e((string) ($distributionOnlyRouteFormData['tarif_tona'] ?? '')) ?>">
+                                    
                                     <?php if (isset($distributionOnlyRouteFormErrors['tarif_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionOnlyRouteFormErrors['tarif_tona']) ?></div><?php endif; ?>
                                 </div>
 
                                 <div class="col-12 col-md-4">
                                     <label class="form-label" for="config_distribution_only_route_cost_extra_km">Pret km (RON) <span class="text-danger">*</span></label>
-                                    <input type="number" class="form-control <?= isset($distributionOnlyRouteFormErrors['cost_extra_km']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_cost_extra_km" name="route_cost_extra_km" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($distributionOnlyRouteFormData['cost_extra_km'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($distributionOnlyRouteFormErrors['cost_extra_km']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_cost_extra_km" name="route_cost_extra_km" min="0" step="0.01" value="<?= e((string) ($distributionOnlyRouteFormData['cost_extra_km'] ?? '')) ?>">
+                                    
                                     <?php if (isset($distributionOnlyRouteFormErrors['cost_extra_km'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionOnlyRouteFormErrors['cost_extra_km']) ?></div><?php endif; ?>
                                 </div>
 
@@ -1168,13 +1234,15 @@ if ($configCreateMode) {
                                 <div class="col-12 tcv2-group-sep">Tarifare</div>
                                 <div class="col-12 col-md-3">
                                     <label class="form-label" for="config_primary_distribution_route_tarif_tona">Pret tona (RON) <span class="text-danger">*</span></label>
-                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['tarif_tona']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_tarif_tona" name="route_tarif_tona" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($primaryDistributionRouteFormData['tarif_tona'] ?? '')) ?>" required>
+                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['tarif_tona']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_tarif_tona" name="route_tarif_tona" min="0" step="0.01" value="<?= e((string) ($primaryDistributionRouteFormData['tarif_tona'] ?? '')) ?>" required>
+                                    
                                     <?php if (isset($primaryDistributionRouteFormErrors['tarif_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['tarif_tona']) ?></div><?php endif; ?>
                                 </div>
 
                                 <div class="col-12 col-md-3">
                                     <label class="form-label" for="config_primary_distribution_route_cost_extra_km">Pret km (RON) <span class="text-danger">*</span></label>
-                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['cost_extra_km']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_cost_extra_km" name="route_cost_extra_km" min="0" step="0.01" readonly data-tariff-managed-elsewhere="1" value="<?= e((string) ($primaryDistributionRouteFormData['cost_extra_km'] ?? '')) ?>" required>
+                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['cost_extra_km']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_cost_extra_km" name="route_cost_extra_km" min="0" step="0.01" value="<?= e((string) ($primaryDistributionRouteFormData['cost_extra_km'] ?? '')) ?>" required>
+                                    
                                     <?php if (isset($primaryDistributionRouteFormErrors['cost_extra_km'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['cost_extra_km']) ?></div><?php endif; ?>
                                 </div>
 
@@ -1285,10 +1353,10 @@ if ($configCreateMode) {
                                             <tr>
                                                 <td><?= e((string) ($routeRule['loc_nume'] ?? '-')) ?></td>
                                                 <td><?= e((string) ($routeRule['zona_nume'] ?? '-')) ?></td>
-                                                <td><?= e(format_number_ro((float) ($routeRule['tarif_tona'] ?? 0), 2)) ?></td>
-                                                <td><?= e(format_number_ro((float) ($routeRule['cost_extra_km'] ?? 0), 2)) ?></td>
+                                                <td><?= $renderRouteTariffValue($routeRule, 'tarif_tona') ?></td>
+                                                <td><?= $renderRouteTariffValue($routeRule, 'cost_extra_km') ?></td>
                                                 <td><?= e((string) ((int) max(0, (int) ($routeRule['km_tarifare'] ?? 0)))) ?></td>
-                                                <td><?= e(format_number_ro((float) ($routeRule['cost_cursa'] ?? 0), 2)) ?></td>
+                                                <td><?= $renderRouteTariffValue($routeRule, 'cost_cursa') ?></td>
                                                 <td><?= !empty($routeRule['aplica_cost_cursa']) ? 'Da' : 'Nu' ?></td>
                                                 <td class="dispatcher-vehicle-cell"><?= $renderRouteVehicleButton($routeVehicleItems, 'primar-distributie-' . $routeId) ?></td>
                                                 <td class="text-end transport-route-actions-cell">
@@ -1350,11 +1418,25 @@ if ($configCreateMode) {
 
                     <div class="transport-distribution-panel transport-distribution-route-panel">
                         <?php if ($isPrimaryRouteEditMode): ?>
-                            <div class="alert alert-info py-2 mb-3">Editezi o ruta Primar existenta. Poti modifica perechea Loc ↔ Zona si Km tarifare.</div>
+                            <div class="alert alert-info py-2 mb-3">Editezi o ruta Primar existenta. Poti modifica <?= ($primaryRouteExtendedPoints ?? false) ? 'punctele traseului' : 'perechea Loc ↔ Zona' ?> si Km tarifare.</div>
                         <?php endif; ?>
 
                         <div class="row g-3 align-items-end transport-distribution-route-grid">
-                            <div class="col-12 tcv2-group-sep">Ruta</div>
+                            <div class="col-12 tcv2-group-sep"><?= ($primaryRouteExtendedPoints ?? false) ? 'Ruta (plecare &rarr; incarcare &rarr; descarcare &rarr; intoarcere)' : 'Ruta' ?></div>
+                            <?php if ($primaryRouteExtendedPoints ?? false): ?>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label" for="config_primary_route_garaj_plecare">Loc plecare <span class="text-danger">*</span></label>
+                                    <select class="form-select <?= isset($primaryRouteFormErrors['garaj_plecare']) ? 'is-invalid' : '' ?>" id="config_primary_route_garaj_plecare" name="route_primar_garaj_plecare" required>
+                                        <option value="">Selecteaza locul de plecare</option>
+                                        <?php foreach (($primaryRoutePointOptions ?? []) as $garageLabel): ?>
+                                            <option value="<?= e((string) $garageLabel) ?>" <?= (string) ($primaryRouteFormData['garaj_plecare'] ?? '') === (string) $garageLabel ? 'selected' : '' ?>>
+                                                <?= e((string) $garageLabel) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <?php if (isset($primaryRouteFormErrors['garaj_plecare'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryRouteFormErrors['garaj_plecare']) ?></div><?php endif; ?>
+                                </div>
+                            <?php endif; ?>
                             <div class="col-12 col-md-6">
                                 <label class="form-label" for="config_primary_route_loc_id">Loc incarcare <span class="text-danger">*</span></label>
                                 <select class="form-select <?= isset($primaryRouteFormErrors['loc_id']) ? 'is-invalid' : '' ?>" id="config_primary_route_loc_id" name="route_primar_loc_id" required>
@@ -1370,7 +1452,7 @@ if ($configCreateMode) {
                             </div>
 
                             <div class="col-12 col-md-6">
-                                <label class="form-label" for="config_primary_route_zona_id">Zona descarcare <span class="text-danger">*</span></label>
+                                <label class="form-label" for="config_primary_route_zona_id"><?= ($primaryRouteExtendedPoints ?? false) ? 'Loc descarcare' : 'Zona descarcare' ?> <span class="text-danger">*</span></label>
                                 <select class="form-select <?= isset($primaryRouteFormErrors['zona_id']) ? 'is-invalid' : '' ?>" id="config_primary_route_zona_id" name="route_primar_zona_id" required>
                                     <option value="">Selecteaza zona de descarcare</option>
                                     <?php foreach (($zones ?? []) as $zone): ?>
@@ -1383,10 +1465,41 @@ if ($configCreateMode) {
                                 <?php if (isset($primaryRouteFormErrors['zona_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryRouteFormErrors['zona_id']) ?></div><?php endif; ?>
                             </div>
 
+                            <?php if ($primaryRouteExtendedPoints ?? false): ?>
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label" for="config_primary_route_garaj_intoarcere_toggle">Loc intoarcere <span class="text-danger">*</span></label>
+                                    <?php
+                                    $selectedReturnPoints = is_array($primaryRouteFormData['garaj_intoarcere'] ?? null)
+                                        ? array_map('strval', $primaryRouteFormData['garaj_intoarcere'])
+                                        : [];
+                                    $selectedReturnPointCount = count($selectedReturnPoints);
+                                    $returnPointsLabel = $selectedReturnPointCount === 0
+                                        ? '-- Selecteaza locurile --'
+                                        : ($selectedReturnPointCount === 1 ? '1 locatie' : $selectedReturnPointCount . ' locatii');
+                                    ?>
+                                    <div class="dropdown vehicle-multiselect-dropdown">
+                                        <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start vehicle-multiselect-toggle <?= isset($primaryRouteFormErrors['garaj_intoarcere']) ? 'is-invalid' : '' ?>" type="button" id="config_primary_route_garaj_intoarcere_toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+                                            <span class="vehicle-multiselect-label" data-default-label="-- Selecteaza locurile --" data-summary-mode="count" data-summary-singular="locatie" data-summary-plural="locatii" title="<?= e(implode(', ', $selectedReturnPoints)) ?>"><?= e($returnPointsLabel) ?></span>
+                                        </button>
+                                        <div class="dropdown-menu w-100 p-2 vehicle-multiselect-menu" aria-labelledby="config_primary_route_garaj_intoarcere_toggle">
+                                            <?php foreach (($primaryRoutePointOptions ?? []) as $garageLabel): ?>
+                                                <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option">
+                                                    <input class="form-check-input m-0" type="checkbox" name="route_primar_garaj_intoarcere[]" value="<?= e((string) $garageLabel) ?>" <?= in_array((string) $garageLabel, $selectedReturnPoints, true) ? 'checked' : '' ?>>
+                                                    <span><?= e((string) $garageLabel) ?></span>
+                                                </label>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                    <div class="form-text">Poti bifa mai multe locuri de intoarcere. Toate folosesc km-ul si pretul acestei rute; pentru alt pret, adauga o ruta separata.</div>
+                                    <?php if (isset($primaryRouteFormErrors['garaj_intoarcere'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryRouteFormErrors['garaj_intoarcere']) ?></div><?php endif; ?>
+                                </div>
+                            <?php endif; ?>
+
                             <div class="col-12 tcv2-group-sep">Tarifare</div>
                             <div class="col-12 col-md-6">
                                 <label class="form-label" for="config_primary_route_km_tarifare">Km tarifare <span class="text-danger">*</span></label>
                                 <input type="number" class="form-control <?= isset($primaryRouteFormErrors['km_tarifare']) ? 'is-invalid' : '' ?>" id="config_primary_route_km_tarifare" name="route_primar_km_tarifare" min="1" step="1" value="<?= e((string) ($primaryRouteFormData['km_tarifare'] ?? '')) ?>" <?= (string) ($primaryRouteFormData['km_agreati_manual'] ?? '0') === '1' ? 'disabled' : 'required' ?>>
+                                <?php if ($primaryRouteExtendedPoints ?? false): ?><div class="form-text">Km pe tot traseul: plecare &rarr; incarcare &rarr; descarcare &rarr; intoarcere.</div><?php endif; ?>
                                 <?php if (isset($primaryRouteFormErrors['km_tarifare'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryRouteFormErrors['km_tarifare']) ?></div><?php endif; ?>
                             </div>
 
@@ -1398,24 +1511,7 @@ if ($configCreateMode) {
                             </div>
 
                             <div class="col-12 tcv2-group-sep">Vehicule si optiuni</div>
-                            <div class="col-12 col-md-6">
-                                <label class="form-label" for="config_primary_route_garage_filter_toggle">Garaj (filtru vehicule)</label>
-                                <div class="dropdown vehicle-multiselect-dropdown" data-garage-filter-menu="config_primary_route_vehicle_ids_toggle">
-                                    <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start vehicle-multiselect-toggle" type="button" id="config_primary_route_garage_filter_toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
-                                        <span data-role="garage-filter-label">Toate garajele</span>
-                                    </button>
-                                    <div class="dropdown-menu w-100 p-2 vehicle-multiselect-menu">
-                                        <?php foreach ($vehicleGarageOptions as $garageKey => $garageLabel): ?>
-                                            <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1">
-                                                <input class="form-check-input m-0" type="checkbox" value="<?= e((string) $garageKey) ?>">
-                                                <span><?= e((string) $garageLabel) ?></span>
-                                            </label>
-                                        <?php endforeach; ?>
-                                    </div>
-                                </div>
-                                <div class="form-text">Optional: alege unul sau mai multe garaje — lista de vehicule arata doar vehiculele din garajele selectate.</div>
-                            </div>
-                            <div class="col-12 col-md-6">
+                            <div class="col-12">
                                 <label class="form-label" for="config_primary_route_vehicle_ids_toggle">Vehicule <span class="text-danger">*</span></label>
                                 <div class="dropdown vehicle-multiselect-dropdown">
                                     <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start vehicle-multiselect-toggle <?= isset($primaryRouteFormErrors['vehicle_ids']) ? 'is-invalid' : '' ?>" type="button" id="config_primary_route_vehicle_ids_toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
@@ -1504,8 +1600,10 @@ if ($configCreateMode) {
                                 <table class="table table-sm align-middle mb-0 transport-config-table">
                                     <thead>
                                         <tr>
+                                            <?php if ($primaryRouteExtendedPoints ?? false): ?><th>Loc plecare</th><?php endif; ?>
                                             <th>Loc incarcare</th>
-                                            <th>Zona descarcare</th>
+                                            <th><?= ($primaryRouteExtendedPoints ?? false) ? 'Loc descarcare' : 'Zona descarcare' ?></th>
+                                            <?php if ($primaryRouteExtendedPoints ?? false): ?><th>Loc intoarcere</th><?php endif; ?>
                                             <th>Km tarifare</th>
                                             <th>Km manual</th>
                                             <th>Cost cursa (RON)</th>
@@ -1517,19 +1615,22 @@ if ($configCreateMode) {
                                     </thead>
                                     <tbody>
                                     <?php if (($primaryRouteRules ?? []) === []): ?>
-                                        <tr><td colspan="9" class="text-center text-muted py-3">Nu exista rute Primar salvate pentru acest beneficiar.</td></tr>
+                                        <tr><td colspan="<?= ($primaryRouteExtendedPoints ?? false) ? '11' : '9' ?>" class="text-center text-muted py-3">Nu exista rute Primar salvate pentru acest beneficiar.</td></tr>
                                     <?php else: ?>
                                         <?php foreach (($primaryRouteRules ?? []) as $primaryRouteRule): ?>
                                             <?php
                                             $primaryRouteId = (int) ($primaryRouteRule['id'] ?? 0);
                                             $primaryRouteVehicleItems = $buildRouteVehicleItems((string) ($primaryRouteRule['vehicle_ids'] ?? ''), $vehicleDetailsById);
+                                            $primaryRouteReturnPoints = array_values(array_filter(array_map('trim', explode(',', (string) ($primaryRouteRule['garaj_intoarcere'] ?? '')))));
                                             ?>
                                             <tr>
+                                                <?php if ($primaryRouteExtendedPoints ?? false): ?><td><?= e(trim((string) ($primaryRouteRule['garaj_plecare'] ?? '')) !== '' ? (string) $primaryRouteRule['garaj_plecare'] : '-') ?></td><?php endif; ?>
                                                 <td><?= e((string) ($primaryRouteRule['loc_nume'] ?? '-')) ?></td>
                                                 <td><?= e((string) ($primaryRouteRule['zona_nume'] ?? '-')) ?></td>
+                                                <?php if ($primaryRouteExtendedPoints ?? false): ?><td class="dispatcher-vehicle-cell"><?= $renderRoutePointsButton($primaryRouteReturnPoints, 'primar-return-' . $primaryRouteId) ?></td><?php endif; ?>
                                                 <td><?= !empty($primaryRouteRule['km_agreati_manual']) ? '-' : e((string) ((int) ($primaryRouteRule['km_tarifare'] ?? 0))) ?></td>
                                                 <td><?= !empty($primaryRouteRule['km_agreati_manual']) ? 'Da' : 'Nu' ?></td>
-                                                <td><?= e(format_number_ro((float) ($primaryRouteRule['cost_cursa'] ?? 0), 2)) ?></td>
+                                                <td><?= $renderRouteTariffValue($primaryRouteRule, 'cost_cursa') ?></td>
                                                 <td><?= !empty($primaryRouteRule['aplica_cost_cursa']) ? 'Da' : 'Nu' ?></td>
                                                 <td class="dispatcher-vehicle-cell"><?= $renderRouteVehicleButton($primaryRouteVehicleItems, 'primar-' . $primaryRouteId) ?></td>
                                                 <td><?= !empty($primaryRouteRule['activ']) ? '<span class="badge transport-status-badge transport-status-active">Activ</span>' : '<span class="badge transport-status-badge transport-status-inactive">Inactiv</span>' ?></td>
@@ -2078,6 +2179,79 @@ if ($configCreateMode) {
     padding: 0 0.2rem;
 }
 
+.tcv2-tarif-override {
+    font-size: 0.75rem;
+    color: #b45309;
+    white-space: nowrap;
+}
+
+.tcv2-tab-fullscreen {
+    margin-left: auto;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #475569;
+    font-size: 0.82rem;
+    padding: 0.35rem 0.7rem;
+    margin-bottom: 0.3rem;
+}
+
+.tcv2-tab-fullscreen:hover {
+    border-color: #cbd5e1;
+    color: #1e293b;
+}
+
+/* Zona de lucru pe tot ecranul, sub bara aplicatiei: raman doar tab-urile si panoul. */
+body.tcv2-fullscreen-open {
+    overflow: hidden;
+}
+
+.tcv2-page.is-fullscreen {
+    position: fixed;
+    top: var(--tcv2-fullscreen-top, 0px);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1030;
+    margin: 0;
+    padding: 0.75rem 1rem 1rem;
+    background: #f8fafc;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.tcv2-page.is-fullscreen .tcv2-header,
+.tcv2-page.is-fullscreen .tcv2-context,
+.tcv2-page.is-fullscreen .tcv2-sidebar {
+    display: none !important;
+}
+
+.tcv2-page.is-fullscreen .tcv2-layout {
+    grid-template-columns: minmax(0, 1fr);
+    /* implicit e align-items: start, care lasa coloana la inaltimea continutului */
+    align-items: stretch;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.tcv2-page.is-fullscreen .tcv2-main {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+}
+
+.tcv2-page.is-fullscreen .tcv2-workspace {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+
 .tcv2-tab {
     display: inline-flex;
     align-items: center;
@@ -2472,6 +2646,25 @@ if ($configCreateMode) {
     grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr));
     gap: 0.75rem;
     align-items: start;
+    container-type: inline-size;
+}
+
+/* Cardul Compresor are 3 tarife pe rand, deci are nevoie de mai mult loc decat
+   celelalte. Cand grila are cel putin doua coloane (2 x 21rem + gap), cardul se
+   intinde pe doua coloane, ca etichetele lungi sa incapa pe un singur rand.
+   Sub acest prag ramane pe o coloana, ca pana acum. */
+@container (min-width: 42.75rem) {
+    .tcv2-type-tile--wide {
+        grid-column: span 2;
+    }
+}
+
+@supports not (container-type: inline-size) {
+    @media (min-width: 992px) {
+        .tcv2-type-tile--wide {
+            grid-column: span 2;
+        }
+    }
 }
 
 .tcv2-tile-link {
@@ -2557,6 +2750,57 @@ if ($configCreateMode) {
 
 .tcv2-type-tile-body[hidden] {
     display: none !important;
+}
+
+/* Campuri de tarif in grila: eticheta rezerva acelasi spatiu vertical (minim
+   2 randuri de text) si creste pana la inaltimea celei mai inalte etichete din
+   rand, astfel incat inputurile de pe acelasi rand sa porneasca de la aceeasi
+   linie, indiferent de lungimea etichetei. */
+.tcv2-field {
+    display: flex;
+    flex-direction: column;
+}
+
+.tcv2-field-label {
+    display: block;
+    line-height: 1.5;
+}
+
+@media (min-width: 768px) {
+    .tcv2-field-label {
+        min-height: 3em;
+        flex: 1 0 auto;
+    }
+}
+
+/* Cand browserul suporta subgrid, etichetele si inputurile se aliniaza pe randuri
+   reale de grila: fiecare camp imprumuta randurile parintelui (eticheta / input /
+   mesaj de eroare), deci inputurile pornesc de la aceeasi linie chiar daca un
+   camp are eticheta pe mai multe randuri sau un mesaj de validare dedesubt. */
+@supports (grid-template-rows: subgrid) {
+    @media (min-width: 768px) {
+        .tcv2-field-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+        }
+
+        .tcv2-field-grid > .tcv2-field {
+            display: grid;
+            grid-template-rows: subgrid;
+            grid-row: span 3;
+            width: auto;
+        }
+
+        .tcv2-field-grid > :not(.tcv2-field) {
+            grid-column: 1 / -1;
+        }
+
+        .tcv2-field-grid .tcv2-field-label {
+            flex: none;
+            align-self: start;
+            min-height: 0;
+        }
+    }
 }
 
 .tcv2-type-tile-note {
@@ -3635,6 +3879,72 @@ document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('.vehicle-multiselect-dropdown').forEach(initVehicleMultiselectDropdown);
 
     // --- V2: tab-uri workspace (beneficiar / catalog / rute per tip transport) ---
+    // --- Zona de lucru pe tot ecranul (pastreaza bara aplicatiei si tab-urile) ---
+    // Expusa in afara blocului, ca sa o poata apela si click-ul pe tab.
+    let setConfigFullscreen = null;
+    const configPageEl = document.querySelector('.tcv2-page');
+    const fullscreenToggleEl = document.querySelector('[data-config-fullscreen-toggle]');
+    if (configPageEl instanceof HTMLElement && fullscreenToggleEl instanceof HTMLElement) {
+        const fullscreenIconEl = fullscreenToggleEl.querySelector('[data-role="fullscreen-icon"]');
+        const fullscreenLabelEl = fullscreenToggleEl.querySelector('[data-role="fullscreen-label"]');
+
+        // Panoul incepe imediat sub bara aplicatiei, care ramane vizibila.
+        const syncFullscreenOffset = function () {
+            const topbarEl = document.querySelector('.topbar');
+            const offset = topbarEl instanceof HTMLElement
+                ? Math.max(0, Math.round(topbarEl.getBoundingClientRect().bottom))
+                : 0;
+            configPageEl.style.setProperty('--tcv2-fullscreen-top', offset + 'px');
+        };
+
+        const setFullscreen = function (enabled) {
+            if (configPageEl.classList.contains('is-fullscreen') === enabled) {
+                return;
+            }
+            configPageEl.classList.toggle('is-fullscreen', enabled);
+            document.body.classList.toggle('tcv2-fullscreen-open', enabled);
+            fullscreenToggleEl.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+            fullscreenToggleEl.title = enabled
+                ? 'Revino la ecranul normal (Esc)'
+                : 'Extinde zona de lucru (Esc pentru iesire)';
+            if (fullscreenIconEl instanceof HTMLElement) {
+                fullscreenIconEl.classList.toggle('bi-arrows-fullscreen', !enabled);
+                fullscreenIconEl.classList.toggle('bi-fullscreen-exit', enabled);
+            }
+            if (fullscreenLabelEl instanceof HTMLElement) {
+                fullscreenLabelEl.textContent = enabled ? 'Restrange' : 'Extinde';
+            }
+            if (enabled) {
+                syncFullscreenOffset();
+            } else {
+                configPageEl.style.removeProperty('--tcv2-fullscreen-top');
+            }
+        };
+
+        setConfigFullscreen = setFullscreen;
+
+        fullscreenToggleEl.addEventListener('click', function () {
+            setFullscreen(!configPageEl.classList.contains('is-fullscreen'));
+        });
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key !== 'Escape' || !configPageEl.classList.contains('is-fullscreen')) {
+                return;
+            }
+            // Esc inchide intai un dropdown/modal deschis, nu modul extins.
+            if (document.querySelector('.modal.show, .dropdown-menu.show')) {
+                return;
+            }
+            setFullscreen(false);
+        });
+
+        window.addEventListener('resize', function () {
+            if (configPageEl.classList.contains('is-fullscreen')) {
+                syncFullscreenOffset();
+            }
+        });
+    }
+
     const configTabButtons = Array.from(document.querySelectorAll('[data-config-tab]'));
     const configTabPanels = Array.from(document.querySelectorAll('[data-config-tab-panel]'));
 
@@ -3661,6 +3971,9 @@ document.addEventListener('DOMContentLoaded', function () {
     configTabButtons.forEach(function (buttonEl) {
         buttonEl.addEventListener('click', function () {
             activateConfigTab(buttonEl.dataset.configTab);
+            if (typeof setConfigFullscreen === 'function') {
+                setConfigFullscreen(true);
+            }
         });
     });
 
@@ -3842,12 +4155,7 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
         const query = searchInput.value.trim().toLocaleLowerCase('ro-RO');
-        const menuToggleId = String(menuEl.getAttribute('aria-labelledby') || '');
-        const garageFilterEl = menuToggleId !== '' ? document.querySelector('[data-garage-filter-menu="' + menuToggleId + '"]') : null;
-        const selectedGarages = garageFilterEl
-            ? Array.from(garageFilterEl.querySelectorAll('input[type="checkbox"]:checked')).map(function (garageInput) { return String(garageInput.value); })
-            : [];
-        menuEl.classList.toggle('is-searching', query !== '' || selectedGarages.length > 0);
+        menuEl.classList.toggle('is-searching', query !== '');
         let visibleCount = 0;
         menuEl.querySelectorAll('[data-vehicle-group]').forEach(function (groupEl) {
             if (!(groupEl instanceof HTMLElement)) {
@@ -3860,8 +4168,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     return;
                 }
                 const optionText = String(optionEl.textContent || '').toLocaleLowerCase('ro-RO');
-                const garageAllowed = selectedGarages.length === 0 || selectedGarages.indexOf(String(optionEl.dataset.vehicleGarage || '')) !== -1;
-                const isVisible = garageAllowed && (query === '' || groupLabelMatches || optionText.includes(query));
+                const isVisible = query === '' || groupLabelMatches || optionText.includes(query);
                 optionEl.hidden = !isVisible;
                 if (isVisible) {
                     groupVisibleCount += 1;
@@ -3937,26 +4244,6 @@ document.addEventListener('DOMContentLoaded', function () {
         const menuSearchInput = closestElement(event.target, '[data-vehicle-menu-search]');
         if (menuSearchInput instanceof HTMLInputElement) {
             filterVehicleMenu(menuSearchInput);
-        }
-    });
-
-    // --- V2.8: filtrul de garaj pentru lista de vehicule ---
-    document.addEventListener('change', function (event) {
-        const garageFilterRoot = closestElement(event.target, '[data-garage-filter-menu]');
-        if (!(garageFilterRoot instanceof HTMLElement) || !(event.target instanceof HTMLInputElement)) {
-            return;
-        }
-        const selectedGarageCount = garageFilterRoot.querySelectorAll('input[type="checkbox"]:checked').length;
-        const garageFilterLabel = garageFilterRoot.querySelector('[data-role="garage-filter-label"]');
-        if (garageFilterLabel instanceof HTMLElement) {
-            garageFilterLabel.textContent = selectedGarageCount === 0
-                ? 'Toate garajele'
-                : (selectedGarageCount === 1 ? '1 garaj selectat' : selectedGarageCount + ' garaje selectate');
-        }
-        const targetToggleId = String(garageFilterRoot.dataset.garageFilterMenu || '');
-        const targetSearchInput = document.querySelector('[aria-labelledby="' + targetToggleId + '"] [data-vehicle-menu-search]');
-        if (targetSearchInput instanceof HTMLInputElement) {
-            filterVehicleMenu(targetSearchInput);
         }
     });
 

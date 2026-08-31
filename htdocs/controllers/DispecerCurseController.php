@@ -2742,6 +2742,15 @@ class DispecerCurseController
             : [];
 
         $distributionBeneficiaryId = (int) ($beneficiaryFormData['id'] ?? 0);
+        // Rutele Primar pe 4 puncte (garaj plecare -> incarcare -> descarcare -> garaj intoarcere)
+        // se activeaza per beneficiar, nu global.
+        $activeTariff = $this->buildActiveTariffResolver($distributionBeneficiaryId);
+        $primaryRouteExtendedPoints = false;
+        if ($distributionBeneficiaryId > 0) {
+            $extendedPointsBeneficiary = $this->model->getTransportBeneficiaryById($distributionBeneficiaryId);
+            $primaryRouteExtendedPoints = $extendedPointsBeneficiary !== null
+                && !empty($extendedPointsBeneficiary['rute_primar_puncte_extinse']);
+        }
         $distributionEnabled = in_array('distributie', $selectedTransportTypes, true);
         $primaryEnabled = in_array('primar', $selectedTransportTypes, true);
         $primaryDistributionEnabled = in_array('primar_distributie', $selectedTransportTypes, true);
@@ -2770,6 +2779,28 @@ class DispecerCurseController
                     self::DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE
                 );
                 $primaryRouteRules = $this->model->getPrimaryRouteRules(false, $distributionBeneficiaryId);
+
+                // Preturile afisate aici trebuie sa fie cele active din Administrare tarife.
+                $routeTariffColumns = [
+                    'tarif_tona' => 'tarif_tona',
+                    'cost_extra_km' => 'cost_extra_km',
+                    'cost_cursa' => 'cost_cursa',
+                ];
+                $distributionOnlyRouteRules = $this->applyActiveTariffsToRouteRules(
+                    $distributionOnlyRouteRules,
+                    $activeTariff,
+                    $routeTariffColumns
+                );
+                $primaryDistributionRouteRules = $this->applyActiveTariffsToRouteRules(
+                    $primaryDistributionRouteRules,
+                    $activeTariff,
+                    $routeTariffColumns
+                );
+                $primaryRouteRules = $this->applyActiveTariffsToRouteRules(
+                    $primaryRouteRules,
+                    $activeTariff,
+                    ['cost_cursa' => 'cost_cursa']
+                );
                 $vehicleDefaultLoadLocationMap = $this->model->getVehicleDefaultLoadLocationMap($distributionBeneficiaryId);
                 $vehicleDefaultDistributionZoneMap = $this->model->getVehicleDefaultDistributionZoneMap($distributionBeneficiaryId);
                 $locationVehicleAssignments = $this->buildLocationVehicleAssignments($vehicles, $vehicleDefaultLoadLocationMap);
@@ -3027,6 +3058,8 @@ class DispecerCurseController
             'route_id' => '',
             'loc_id' => '',
             'zona_id' => '',
+            'garaj_plecare' => '',
+            'garaj_intoarcere' => [],
             'km_tarifare' => '',
             'cost_cursa' => '',
             'aplica_cost_cursa' => '0',
@@ -3042,6 +3075,8 @@ class DispecerCurseController
                     'route_id' => (string) ((int) ($primaryRouteEditRule['id'] ?? 0)),
                     'loc_id' => (string) ((int) ($primaryRouteEditRule['loc_incarcare_id'] ?? 0)),
                     'zona_id' => (string) ((int) ($primaryRouteEditRule['zona_distributie_id'] ?? 0)),
+                    'garaj_plecare' => (string) ($primaryRouteEditRule['garaj_plecare'] ?? ''),
+                    'garaj_intoarcere' => $this->model->normalizeRouteReturnPoints($primaryRouteEditRule['garaj_intoarcere'] ?? ''),
                     'km_tarifare' => !empty($primaryRouteEditRule['km_agreati_manual'])
                         ? ''
                         : (string) ((int) ($primaryRouteEditRule['km_tarifare'] ?? 0)),
@@ -3057,6 +3092,9 @@ class DispecerCurseController
             }
         }
         $primaryRouteFormData = array_merge($defaultPrimaryRouteForm, $primaryRouteFlash['old']);
+        $primaryRouteFormData['garaj_intoarcere'] = $this->model->normalizeRouteReturnPoints(
+            $primaryRouteFormData['garaj_intoarcere'] ?? []
+        );
         $primaryRouteFormData['vehicle_ids'] = is_array($primaryRouteFormData['vehicle_ids'] ?? null)
             ? array_values(array_unique(array_map('strval', $primaryRouteFormData['vehicle_ids'])))
             : [];
@@ -3098,8 +3136,75 @@ class DispecerCurseController
             'beneficiaryFormErrors' => $beneficiaryFlash['errors'],
             'distributionBeneficiaryId' => $distributionBeneficiaryId,
             'distributionEnabled' => $distributionEnabled,
+            'primaryRouteExtendedPoints' => $primaryRouteExtendedPoints,
+            'primaryRoutePointOptions' => $primaryRouteExtendedPoints
+                ? $this->model->getPrimaryRoutePointOptions($distributionBeneficiaryId)
+                : [],
         ]);
     }
+    /**
+     * Preturile rutelor se administreaza versionat in "Administrare tarife transport",
+     * deci coloanele din configurare_rute_* raman pe valoarea veche (deseori 0). Pentru
+     * afisarea read-only din Configurare transport folosim versiunea ACTIVA, cu fallback
+     * pe coloana, ca sa nu arate 0 acolo unde exista de fapt un tarif.
+     */
+    private function buildActiveTariffResolver(int $beneficiaryId): callable
+    {
+        $activeByKey = [];
+
+        if ($beneficiaryId > 0 && class_exists('TransportTariffModel')) {
+            try {
+                $tariffModel = new TransportTariffModel($this->db);
+                foreach ($tariffModel->getVersionsForBeneficiary($beneficiaryId) as $version) {
+                    if ((string) ($version['status'] ?? '') !== 'active') {
+                        continue;
+                    }
+                    $componentKey = (string) ($version['component_key'] ?? '');
+                    if ($componentKey === '') {
+                        continue;
+                    }
+                    $activeByKey[$componentKey . '|' . (int) ($version['route_ref_id'] ?? 0)] = (float) ($version['value'] ?? 0);
+                }
+            } catch (Throwable $exception) {
+                error_log('[DispecerCurseController][active_tariffs] ' . $exception->getMessage());
+            }
+        }
+
+        return static function (string $componentKey, int $routeRefId, $fallback) use ($activeByKey) {
+            $mapKey = $componentKey . '|' . $routeRefId;
+
+            return array_key_exists($mapKey, $activeByKey) ? $activeByKey[$mapKey] : $fallback;
+        };
+    }
+
+    /**
+     * Pretul de baza al rutei ramane cel configurat aici; o schimbare programata din
+     * "Administrare tarife" are insa prioritate la facturare cat timp e activa. Nu
+     * suprascriem valoarea afisata (altfel pretul tastat ar parea ca se pierde), ci o
+     * marcam, ca sa se vada cand baza nu e ce se aplica de fapt.
+     */
+    private function applyActiveTariffsToRouteRules(array $rules, callable $activeTariff, array $componentColumns): array
+    {
+        foreach ($rules as $index => $rule) {
+            $routeId = (int) ($rule['id'] ?? 0);
+            if ($routeId <= 0) {
+                continue;
+            }
+
+            $overrides = [];
+            foreach ($componentColumns as $componentKey => $column) {
+                $baseValue = (float) ($rule[$column] ?? 0);
+                $effectiveValue = (float) $activeTariff($componentKey, $routeId, $baseValue);
+                if (abs($effectiveValue - $baseValue) >= 0.005) {
+                    $overrides[$column] = $effectiveValue;
+                }
+            }
+            $rules[$index]['tarif_overrides'] = $overrides;
+        }
+
+        return $rules;
+    }
+
     private function configStoreDistributionAction(): void
     {
         require_admin_or_403();
@@ -3200,15 +3305,19 @@ class DispecerCurseController
             $errors['zona_id'] = 'Zona de descarcare selectata nu apartine beneficiarului curent.';
         }
 
-        $routeTariff = $this->normalizeDecimal($routeTariffRaw);
-        if ($routeUsesTonTariff && ($routeTariffRaw === '' || $routeTariff === null || $routeTariff < 0)) {
+        // Preturile pe ruta se administreaza din "Administrare tarife transport", deci
+        // campurile de aici sunt read-only si vin GOALE cand se adauga o ruta noua.
+        // Se accepta ca 0 si se completeaza dupa aceea in modulul de tarife; altfel
+        // ruta nu ar putea fi creata deloc. Doar valorile chiar invalide dau eroare.
+        $routeTariff = $routeTariffRaw === '' ? 0.0 : $this->normalizeDecimal($routeTariffRaw);
+        if ($routeUsesTonTariff && ($routeTariff === null || $routeTariff < 0)) {
             $errors['tarif_tona'] = 'Pretul pe tona este invalid.';
         } elseif (!$routeUsesTonTariff) {
             $routeTariff = 0.0;
         }
 
-        $routeExtraKmCost = $this->normalizeDecimal($routeExtraKmCostRaw);
-        if ($routeUsesKmTariff && ($routeExtraKmCostRaw === '' || $routeExtraKmCost === null || $routeExtraKmCost < 0)) {
+        $routeExtraKmCost = $routeExtraKmCostRaw === '' ? 0.0 : $this->normalizeDecimal($routeExtraKmCostRaw);
+        if ($routeUsesKmTariff && ($routeExtraKmCost === null || $routeExtraKmCost < 0)) {
             $errors['cost_extra_km'] = 'Pretul pe km este invalid.';
         } elseif (!$routeUsesKmTariff) {
             $routeExtraKmCost = 0.0;
@@ -3389,6 +3498,15 @@ class DispecerCurseController
         $routeEditId = (int) ($_POST['route_primar_id'] ?? 0);
         $locationId = (int) ($_POST['route_primar_loc_id'] ?? 0);
         $zoneId = (int) ($_POST['route_primar_zona_id'] ?? 0);
+        // Rutele pe 4 puncte sunt disponibile doar beneficiarilor marcati explicit;
+        // pentru restul, garajele trimise in POST sunt ignorate.
+        $extendedPointsEnabled = !empty($beneficiary['rute_primar_puncte_extinse']);
+        $departureGarage = $extendedPointsEnabled ? trim((string) ($_POST['route_primar_garaj_plecare'] ?? '')) : '';
+        // O ruta poate avea mai multe locuri de intoarcere, cu acelasi km si pret.
+        $returnPointsInput = $_POST['route_primar_garaj_intoarcere'] ?? [];
+        $returnPoints = $extendedPointsEnabled
+            ? $this->model->normalizeRouteReturnPoints(is_array($returnPointsInput) ? $returnPointsInput : [$returnPointsInput])
+            : [];
         $kmTariffRaw = trim((string) ($_POST['route_primar_km_tarifare'] ?? ''));
         $routeRideCostRaw = trim((string) ($_POST['route_primar_cost_cursa'] ?? ''));
         $routeApplyRideCost = isset($_POST['route_primar_aplica_cost_cursa'])
@@ -3411,6 +3529,25 @@ class DispecerCurseController
             $errors['zona_id'] = 'Selecteaza zona de descarcare.';
         } elseif (!$this->model->existsDistributionZoneForBeneficiary($zoneId, $beneficiaryId)) {
             $errors['zona_id'] = 'Zona de descarcare selectata nu apartine beneficiarului curent.';
+        }
+
+        if ($extendedPointsEnabled) {
+            $availablePoints = $this->model->getPrimaryRoutePointOptions($beneficiaryId);
+            if ($departureGarage === '') {
+                $errors['garaj_plecare'] = 'Selecteaza locul de plecare.';
+            } elseif (!in_array($departureGarage, $availablePoints, true)) {
+                $errors['garaj_plecare'] = 'Locul de plecare selectat nu mai exista in garaje sau in catalogul beneficiarului.';
+            }
+
+            if ($returnPoints === []) {
+                $errors['garaj_intoarcere'] = 'Selecteaza cel putin un loc de intoarcere.';
+            } else {
+                $unknownReturnPoints = array_values(array_diff($returnPoints, $availablePoints));
+                if ($unknownReturnPoints !== []) {
+                    $errors['garaj_intoarcere'] = 'Locuri de intoarcere care nu mai exista in garaje sau in catalogul beneficiarului: '
+                        . implode(', ', $unknownReturnPoints) . '.';
+                }
+            }
         }
 
         $kmTariffFloat = $manualAgreedKm ? 0.0 : $this->normalizeDecimal($kmTariffRaw);
@@ -3482,16 +3619,27 @@ class DispecerCurseController
                 if ((int) ($pairRule['loc_incarcare_id'] ?? 0) !== $locationId || (int) ($pairRule['zona_distributie_id'] ?? 0) !== $zoneId) {
                     continue;
                 }
+                // Doua rute pe aceeasi pereche pot folosi ACELEASI vehicule daca difera
+                // capetele de traseu (ex. masina se intoarce la garaj vs. ramane parcata
+                // la descarcare, cu alt pret). Restrictia de vehicule ramane doar intre
+                // rutele cu exact aceleasi capete.
+                $pairRuleReturnPoints = $this->model->normalizeRouteReturnPoints($pairRule['garaj_intoarcere'] ?? '');
+                if (
+                    trim((string) ($pairRule['garaj_plecare'] ?? '')) !== $departureGarage
+                    || array_intersect($pairRuleReturnPoints, $returnPoints) === []
+                ) {
+                    continue;
+                }
 
                 $pairRuleVehicleIds = array_filter(array_map('intval', explode(',', (string) ($pairRule['vehicle_ids'] ?? ''))));
                 if ($pairRuleVehicleIds === []) {
-                    $errors['vehicle_ids'] = 'Exista deja o configuratie pentru aceasta combinatie fara restrictie de vehicule (acopera toate vehiculele). Editeaza-o pe aceea sau limiteaza-i vehiculele mai intai.';
+                    $errors['vehicle_ids'] = 'Exista deja o configuratie cu aceleasi capete de traseu si fara restrictie de vehicule (acopera toate vehiculele). Editeaza-o pe aceea sau limiteaza-i vehiculele mai intai.';
                     break;
                 }
 
                 $overlappingVehicleIds = array_values(array_intersect($routeVehicleIds, $pairRuleVehicleIds));
                 if ($overlappingVehicleIds !== []) {
-                    $errors['vehicle_ids'] = 'Vehiculele selectate se suprapun cu o alta configuratie existenta pe aceeasi combinatie Loc ↔ Zona. Fiecare vehicul poate aparea intr-o singura configuratie a perechii.';
+                    $errors['vehicle_ids'] = 'Vehiculele selectate se suprapun cu o alta configuratie existenta pe aceeasi combinatie Loc ↔ Zona si cu aceleasi capete de traseu. Schimba locul de plecare / intoarcere sau vehiculele.';
                     break;
                 }
             }
@@ -3501,6 +3649,8 @@ class DispecerCurseController
             'route_id' => $routeEditId > 0 ? (string) $routeEditId : '',
             'loc_id' => $locationId > 0 ? (string) $locationId : '',
             'zona_id' => $zoneId > 0 ? (string) $zoneId : '',
+            'garaj_plecare' => $departureGarage,
+            'garaj_intoarcere' => $returnPoints,
             'km_tarifare' => $kmTariffRaw,
             'cost_cursa' => $routeRideCostRaw,
             'aplica_cost_cursa' => $routeApplyRideCost ? '1' : '0',
@@ -3526,7 +3676,9 @@ class DispecerCurseController
                     $manualAgreedKm,
                     $routeActive,
                     $routeRideCost,
-                    $routeApplyRideCost
+                    $routeApplyRideCost,
+                    $departureGarage !== '' ? $departureGarage : null,
+                    $returnPoints
                 );
                 if (!$updated) {
                     throw new RuntimeException('Nu s-a putut actualiza configuratia Primar.');
@@ -3547,7 +3699,9 @@ class DispecerCurseController
                     $manualAgreedKm,
                     $routeActive,
                     $routeRideCost,
-                    $routeApplyRideCost
+                    $routeApplyRideCost,
+                    $departureGarage !== '' ? $departureGarage : null,
+                    $returnPoints
                 );
                 try {
                     $this->ensurePrimaryRouteBidirectionalCatalogForPair($beneficiaryId, $locationId, $zoneId);
@@ -5362,6 +5516,8 @@ class DispecerCurseController
         $primaryRouteUsesManualAgreedKm = false;
         $primaryRouteRideCost = 0.0;
         $primaryRouteApplyRideCost = false;
+        $primaryRouteDepartureGarage = '';
+        $primaryRouteReturnGarage = '';
         $hasMatchedPrimaryRouteRule = false;
         $distributionRouteScope = [
             'has_active_rules' => false,
@@ -5409,9 +5565,14 @@ class DispecerCurseController
                         $zoneId,
                         $loadLocation,
                         $zone,
-                        $vehicleId
+                        $vehicleId,
+                        trim((string) ($input['loc_intoarcere'] ?? ''))
                     );
                     if ($primaryRouteRule !== null) {
+                        // Rute pe 4 puncte: punctele de plecare/intoarcere vin din configurare,
+                        // nu din formular, ca sa nu poata devia cursa de la ruta configurata.
+                        $primaryRouteDepartureGarage = trim((string) ($primaryRouteRule['garaj_plecare'] ?? ''));
+                        $primaryRouteReturnGarage = trim((string) ($primaryRouteRule['garaj_intoarcere'] ?? ''));
                         $primaryRouteKmTariff = max(0, (int) ($primaryRouteRule['km_tarifare'] ?? 0));
                         $primaryRouteUsesManualAgreedKm = !empty($primaryRouteRule['km_agreati_manual']);
                         $primaryRouteRideCost = max(0, (float) ($primaryRouteRule['cost_cursa'] ?? 0));
@@ -5841,6 +6002,7 @@ class DispecerCurseController
             'capacitate_transport' => $vehicleTransportCapacity !== null ? (string) $vehicleTransportCapacity : '',
             'loc_incarcare_id' => $loadLocationId !== null ? (string) $loadLocationId : '',
             'loc_plecare' => $departureLocationRaw,
+            'loc_intoarcere' => trim((string) ($input['loc_intoarcere'] ?? '')),
             'loc_aspirare' => $suctionLocationRaw,
             'loc_livrare' => $deliveryLocationRaw,
             'loc_livrare_cursa' => $routeDeliveryLocationRaw,
@@ -5879,7 +6041,12 @@ class DispecerCurseController
             'durata_cursa_minute' => $durationMinutes,
             'capacitate_transport' => $vehicleTransportCapacity,
             'loc_incarcare_id' => $loadLocationId,
-            'loc_plecare' => $isCompressorTransport ? ($departureLocationRaw !== '' ? $departureLocationRaw : null) : null,
+            'loc_plecare' => $isCompressorTransport
+                ? ($departureLocationRaw !== '' ? $departureLocationRaw : null)
+                : ($primaryRouteDepartureGarage !== '' ? $primaryRouteDepartureGarage : null),
+            'loc_intoarcere' => $isCompressorTransport
+                ? null
+                : ($primaryRouteReturnGarage !== '' ? $primaryRouteReturnGarage : null),
             'loc_aspirare' => $isCompressorTransport ? ($suctionLocationRaw !== '' ? $suctionLocationRaw : null) : null,
             'loc_livrare' => $isCompressorTransport ? ($deliveryLocationRaw !== '' ? $deliveryLocationRaw : null) : null,
             'loc_livrare_cursa' => $isCompressorTransport ? ($routeDeliveryLocationRaw !== '' ? $routeDeliveryLocationRaw : null) : null,
@@ -7418,14 +7585,16 @@ class DispecerCurseController
         int $zoneId,
         ?array $loadLocation = null,
         ?array $zone = null,
-        ?int $vehicleId = null
+        ?int $vehicleId = null,
+        ?string $returnPoint = null
     ): ?array {
         $directRule = $this->model->getPrimaryRouteRuleForBeneficiary(
             $beneficiaryId,
             $locationId,
             $zoneId,
             true,
-            $vehicleId
+            $vehicleId,
+            $returnPoint
         );
         if ($directRule !== null) {
             return $directRule;
@@ -7437,7 +7606,8 @@ class DispecerCurseController
                 $zoneId,
                 $locationId,
                 true,
-                $vehicleId
+                $vehicleId,
+                $returnPoint
             );
             if ($reverseRule !== null) {
                 return $reverseRule;

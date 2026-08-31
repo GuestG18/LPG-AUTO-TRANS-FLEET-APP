@@ -38,6 +38,7 @@ class DispecerCurseModel extends BaseModel
         'durata_cursa_minute',
         'loc_incarcare_id',
         'loc_plecare',
+        'loc_intoarcere',
         'loc_aspirare',
         'loc_livrare',
         'loc_livrare_cursa',
@@ -102,6 +103,62 @@ class DispecerCurseModel extends BaseModel
         'service' => 'Reparatii',
         'alte' => 'Alte cheltuieli',
     ];
+
+    /**
+     * Punctele care pot fi capete de traseu pe o ruta Primar: garajele din vehicule
+     * plus locurile / zonele beneficiarului (masina poate ramane parcata la descarcare).
+     * Deduplicare case-insensitive, pentru ca acelasi nume poate fi si garaj si loc.
+     */
+    public function getPrimaryRoutePointOptions(int $beneficiaryId): array
+    {
+        $options = [];
+        foreach ($this->getVehicleGarageOptions(true) as $garage) {
+            $label = trim((string) $garage);
+            if ($label !== '') {
+                $options[mb_strtolower($label)] = $label;
+            }
+        }
+
+        if ($beneficiaryId > 0) {
+            foreach ($this->getLoadLocations(false, $beneficiaryId) as $location) {
+                $label = trim((string) ($location['nume'] ?? ''));
+                if ($label !== '' && !isset($options[mb_strtolower($label)])) {
+                    $options[mb_strtolower($label)] = $label;
+                }
+            }
+            foreach ($this->getDistributionZones(false, $beneficiaryId) as $zone) {
+                $label = trim((string) ($zone['nume'] ?? ''));
+                if ($label !== '' && !isset($options[mb_strtolower($label)])) {
+                    $options[mb_strtolower($label)] = $label;
+                }
+            }
+        }
+
+        ksort($options);
+
+        return array_values($options);
+    }
+
+    /**
+     * Lista de garaje disponibile, derivata din text-ul liber vehicule.garaj.
+     * Aceleasi filtre ca getVehicleOptions(), ca lista din formular si validarea sa coincida.
+     */
+    public function getVehicleGarageOptions(bool $onlyActive = true): array
+    {
+        $sql = "
+            SELECT DISTINCT TRIM(v.garaj) AS garaj
+            FROM vehicule v
+            WHERE v.tip_vehicul NOT IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')
+              AND v.garaj IS NOT NULL
+              AND TRIM(v.garaj) <> ''
+              " . ($onlyActive ? "AND v.status = 'activ'" : "") . "
+            ORDER BY garaj ASC
+        ";
+
+        $stmt = $this->db->query($sql);
+
+        return array_values(array_filter(array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN))));
+    }
 
     public function getVehicleOptions(bool $onlyActive = false): array
     {
@@ -1277,6 +1334,46 @@ class DispecerCurseModel extends BaseModel
         return $map;
     }
 
+    /**
+     * Garajele sunt text liber pe vehicule (vehicule.garaj), deci pastram eticheta ca atare,
+     * doar curatata de spatii. Sirul gol devine NULL.
+     */
+    /**
+     * Locurile de intoarcere ale unei rute: lista, stocata separat prin virgula.
+     * Denumirile vin dintr-un set fix (garaje + catalog), deci nu contin virgule;
+     * orice valoare care ar contine una este ignorata, ca sa nu strice lista.
+     */
+    public function normalizeRouteReturnPoints($returnPoints): array
+    {
+        if (is_string($returnPoints)) {
+            $returnPoints = explode(',', $returnPoints);
+        }
+        if (!is_array($returnPoints)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($returnPoints as $returnPoint) {
+            $label = trim((string) $returnPoint);
+            if ($label === '' || str_contains($label, ',')) {
+                continue;
+            }
+            $label = mb_substr($label, 0, 120);
+            if (!in_array($label, $normalized, true)) {
+                $normalized[] = $label;
+            }
+        }
+
+        return $normalized;
+    }
+
+    private function normalizeRouteGarage(?string $garage): ?string
+    {
+        $normalized = trim((string) $garage);
+
+        return $normalized === '' ? null : mb_substr($normalized, 0, 120);
+    }
+
     public function savePrimaryRouteRule(
         int $beneficiaryId,
         int $locationId,
@@ -1286,7 +1383,9 @@ class DispecerCurseModel extends BaseModel
         bool $manualAgreedKm,
         bool $active,
         float $rideCost = 0.0,
-        bool $applyRideCost = false
+        bool $applyRideCost = false,
+        ?string $departureGarage = null,
+        $returnGarage = null
     ): bool {
         if ($beneficiaryId <= 0 || $locationId <= 0 || $zoneId <= 0 || $kmTariff < 0) {
             return false;
@@ -1301,6 +1400,8 @@ class DispecerCurseModel extends BaseModel
                 beneficiar_id,
                 loc_incarcare_id,
                 zona_distributie_id,
+                garaj_plecare,
+                garaj_intoarcere,
                 km_tarifare,
                 cost_cursa,
                 aplica_cost_cursa,
@@ -1313,6 +1414,8 @@ class DispecerCurseModel extends BaseModel
                 :beneficiar_id,
                 :loc_incarcare_id,
                 :zona_distributie_id,
+                :garaj_plecare,
+                :garaj_intoarcere,
                 :km_tarifare,
                 :cost_cursa,
                 :aplica_cost_cursa,
@@ -1329,6 +1432,11 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':beneficiar_id', $beneficiaryId, PDO::PARAM_INT);
         $stmt->bindValue(':loc_incarcare_id', $locationId, PDO::PARAM_INT);
         $stmt->bindValue(':zona_distributie_id', $zoneId, PDO::PARAM_INT);
+        $normalizedDepartureGarage = $this->normalizeRouteGarage($departureGarage);
+        $normalizedReturnPoints = $this->normalizeRouteReturnPoints($returnGarage);
+        $normalizedReturnGarage = $normalizedReturnPoints === [] ? null : implode(',', $normalizedReturnPoints);
+        $stmt->bindValue(':garaj_plecare', $normalizedDepartureGarage, $normalizedDepartureGarage === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
+        $stmt->bindValue(':garaj_intoarcere', $normalizedReturnGarage, $normalizedReturnGarage === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
         $stmt->bindValue(':km_tarifare', max(0, $kmTariff), PDO::PARAM_INT);
         $stmt->bindValue(':cost_cursa', max(0, $rideCost));
         $stmt->bindValue(':aplica_cost_cursa', $applyRideCost ? 1 : 0, PDO::PARAM_INT);
@@ -1358,6 +1466,8 @@ class DispecerCurseModel extends BaseModel
                 beneficiar_id,
                 loc_incarcare_id,
                 zona_distributie_id,
+                garaj_plecare,
+                garaj_intoarcere,
                 km_tarifare,
                 cost_cursa,
                 aplica_cost_cursa,
@@ -1391,7 +1501,9 @@ class DispecerCurseModel extends BaseModel
         bool $manualAgreedKm,
         bool $active,
         float $rideCost = 0.0,
-        bool $applyRideCost = false
+        bool $applyRideCost = false,
+        ?string $departureGarage = null,
+        $returnGarage = null
     ): bool {
         if ($id <= 0 || $beneficiaryId <= 0 || $locationId <= 0 || $zoneId <= 0 || $kmTariff < 0) {
             return false;
@@ -1406,6 +1518,8 @@ class DispecerCurseModel extends BaseModel
             SET
                 loc_incarcare_id = :loc_incarcare_id,
                 zona_distributie_id = :zona_distributie_id,
+                garaj_plecare = :garaj_plecare,
+                garaj_intoarcere = :garaj_intoarcere,
                 km_tarifare = :km_tarifare,
                 cost_cursa = :cost_cursa,
                 aplica_cost_cursa = :aplica_cost_cursa,
@@ -1423,6 +1537,11 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':beneficiar_id', $beneficiaryId, PDO::PARAM_INT);
         $stmt->bindValue(':loc_incarcare_id', $locationId, PDO::PARAM_INT);
         $stmt->bindValue(':zona_distributie_id', $zoneId, PDO::PARAM_INT);
+        $normalizedDepartureGarage = $this->normalizeRouteGarage($departureGarage);
+        $normalizedReturnPoints = $this->normalizeRouteReturnPoints($returnGarage);
+        $normalizedReturnGarage = $normalizedReturnPoints === [] ? null : implode(',', $normalizedReturnPoints);
+        $stmt->bindValue(':garaj_plecare', $normalizedDepartureGarage, $normalizedDepartureGarage === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
+        $stmt->bindValue(':garaj_intoarcere', $normalizedReturnGarage, $normalizedReturnGarage === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
         $stmt->bindValue(':km_tarifare', max(0, $kmTariff), PDO::PARAM_INT);
         $stmt->bindValue(':cost_cursa', max(0, $rideCost));
         $stmt->bindValue(':aplica_cost_cursa', $applyRideCost ? 1 : 0, PDO::PARAM_INT);
@@ -1443,7 +1562,8 @@ class DispecerCurseModel extends BaseModel
         int $locationId,
         int $zoneId,
         bool $onlyActive = true,
-        ?int $vehicleId = null
+        ?int $vehicleId = null,
+        ?string $returnPoint = null
     ): ?array {
         if ($beneficiaryId <= 0 || $locationId <= 0 || $zoneId <= 0) {
             return null;
@@ -1456,6 +1576,8 @@ class DispecerCurseModel extends BaseModel
                 beneficiar_id,
                 loc_incarcare_id,
                 zona_distributie_id,
+                garaj_plecare,
+                garaj_intoarcere,
                 km_tarifare,
                 cost_cursa,
                 aplica_cost_cursa,
@@ -1484,12 +1606,28 @@ class DispecerCurseModel extends BaseModel
         // (ex. km diferiti pe garaje). Selectie: regula care contine vehiculul >
         // regula fara restrictie de vehicule > fallback istoric doar cand exista o
         // singura regula (compatibilitate cu datele vechi).
+        // Acelasi vehicul poate avea mai multe variante pe aceeasi pereche, care difera
+        // prin capatul de traseu. Cand dispecerul a ales unul, acela decide varianta.
+        $normalizedReturnPoint = trim((string) $returnPoint);
         if ($vehicleId !== null && $vehicleId > 0) {
+            $vehicleRules = [];
             foreach ($rules as $rule) {
                 $ruleVehicleIds = array_filter(array_map('intval', explode(',', (string) ($rule['vehicle_ids'] ?? ''))));
                 if (in_array($vehicleId, $ruleVehicleIds, true)) {
-                    return $rule;
+                    $vehicleRules[] = $rule;
                 }
+            }
+            if ($vehicleRules !== []) {
+                if ($normalizedReturnPoint !== '') {
+                    foreach ($vehicleRules as $rule) {
+                        $ruleReturnPoints = $this->normalizeRouteReturnPoints($rule['garaj_intoarcere'] ?? '');
+                        if (in_array($normalizedReturnPoint, $ruleReturnPoints, true)) {
+                            return $rule;
+                        }
+                    }
+                }
+
+                return $vehicleRules[0];
             }
             foreach ($rules as $rule) {
                 if (trim((string) ($rule['vehicle_ids'] ?? '')) === '') {
@@ -1535,6 +1673,8 @@ class DispecerCurseModel extends BaseModel
                 r.beneficiar_id,
                 r.loc_incarcare_id,
                 r.zona_distributie_id,
+                r.garaj_plecare,
+                r.garaj_intoarcere,
                 r.km_tarifare,
                 r.cost_cursa,
                 r.aplica_cost_cursa,
@@ -1582,6 +1722,8 @@ class DispecerCurseModel extends BaseModel
                     explode(',', (string) ($rule['vehicle_ids'] ?? ''))
                 ),
                 'km_agreati_manual' => !empty($rule['km_agreati_manual']),
+                'garaj_plecare' => trim((string) ($rule['garaj_plecare'] ?? '')),
+                'garaj_intoarcere' => trim((string) ($rule['garaj_intoarcere'] ?? '')),
                 'activ' => !empty($rule['activ']),
             ];
         }
@@ -1913,6 +2055,39 @@ class DispecerCurseModel extends BaseModel
         if ((int) $uniquePairIndexCheckStmt->fetchColumn() > 0) {
             $this->db->exec("ALTER TABLE configurare_rute_primar DROP INDEX uk_config_rute_primar_beneficiar_loc_zona, ADD INDEX idx_config_rute_primar_pereche (beneficiar_id, loc_incarcare_id, zona_distributie_id)");
         }
+
+        // Rute pe 4 puncte (garaj plecare -> incarcare -> descarcare -> garaj intoarcere).
+        // Se folosesc doar de beneficiarii cu rute_primar_puncte_extinse = 1.
+        foreach (['garaj_plecare' => 'zona_distributie_id', 'garaj_intoarcere' => 'garaj_plecare'] as $garageColumn => $afterColumn) {
+            $garageColumnCheckStmt = $this->db->prepare("
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'configurare_rute_primar'
+                  AND COLUMN_NAME = :column_name
+            ");
+            $garageColumnCheckStmt->bindValue(':column_name', $garageColumn, PDO::PARAM_STR);
+            $garageColumnCheckStmt->execute();
+            if ((int) $garageColumnCheckStmt->fetchColumn() === 0) {
+                $this->db->exec("ALTER TABLE configurare_rute_primar ADD COLUMN {$garageColumn} VARCHAR(120) NULL AFTER {$afterColumn}");
+            }
+        }
+
+        // O ruta poate avea mai multe locuri de intoarcere, stocate ca lista separata
+        // prin virgula, deci coloana are nevoie de mai mult spatiu.
+        $returnColumnLengthStmt = $this->db->prepare("
+            SELECT COALESCE(MAX(CHARACTER_MAXIMUM_LENGTH), 0)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'configurare_rute_primar'
+              AND COLUMN_NAME = 'garaj_intoarcere'
+        ");
+        $returnColumnLengthStmt->execute();
+        $returnColumnLength = (int) $returnColumnLengthStmt->fetchColumn();
+        if ($returnColumnLength > 0 && $returnColumnLength < 500) {
+            $this->db->exec("ALTER TABLE configurare_rute_primar MODIFY garaj_intoarcere VARCHAR(500) NULL");
+        }
+
         $this->primaryRouteTableEnsured = true;
     }
 
@@ -2015,6 +2190,7 @@ class DispecerCurseModel extends BaseModel
 
         $columnsToEnsure = [
             'loc_plecare' => "ALTER TABLE curse_dispecer ADD COLUMN loc_plecare VARCHAR(255) NULL AFTER loc_incarcare_id",
+            'loc_intoarcere' => "ALTER TABLE curse_dispecer ADD COLUMN loc_intoarcere VARCHAR(255) NULL AFTER loc_plecare",
             'loc_aspirare' => "ALTER TABLE curse_dispecer ADD COLUMN loc_aspirare VARCHAR(255) NULL AFTER loc_plecare",
             'loc_livrare' => "ALTER TABLE curse_dispecer ADD COLUMN loc_livrare VARCHAR(255) NULL AFTER loc_aspirare",
             'loc_livrare_cursa' => "ALTER TABLE curse_dispecer ADD COLUMN loc_livrare_cursa VARCHAR(255) NULL AFTER loc_livrare",
@@ -2587,6 +2763,16 @@ class DispecerCurseModel extends BaseModel
             ");
         }
 
+
+        $columnCheckStmt->bindValue(':column_name', 'rute_primar_puncte_extinse', PDO::PARAM_STR);
+        $columnCheckStmt->execute();
+        if ((int) $columnCheckStmt->fetchColumn() === 0) {
+            $this->db->exec("
+                ALTER TABLE configurare_beneficiari_transport
+                ADD COLUMN rute_primar_puncte_extinse TINYINT(1) NOT NULL DEFAULT 0 AFTER suporta_compresor
+            ");
+        }
+
         $this->transportBeneficiaryColumnsEnsured = true;
     }
 
@@ -2604,6 +2790,7 @@ class DispecerCurseModel extends BaseModel
                 suporta_distributie,
                 suporta_primar_distributie,
                 suporta_compresor,
+                rute_primar_puncte_extinse,
                 pret_km,
                 pret_tona,
                 pret_distributie_km,
@@ -2637,6 +2824,7 @@ class DispecerCurseModel extends BaseModel
                 suporta_distributie,
                 suporta_primar_distributie,
                 suporta_compresor,
+                rute_primar_puncte_extinse,
                 pret_km,
                 pret_tona,
                 pret_distributie_km,
@@ -2963,6 +3151,7 @@ class DispecerCurseModel extends BaseModel
                 c.durata_cursa_minute,
                 c.status_facturare,
                 c.loc_plecare,
+                c.loc_intoarcere,
                 c.loc_aspirare,
                 c.loc_livrare,
                 c.loc_livrare_cursa,
@@ -3260,6 +3449,7 @@ class DispecerCurseModel extends BaseModel
                 c.driver_id,
                 c.beneficiar_id,
                 c.loc_plecare,
+                c.loc_intoarcere,
                 c.loc_aspirare,
                 c.loc_livrare,
                 c.loc_livrare_cursa,
@@ -3531,6 +3721,7 @@ class DispecerCurseModel extends BaseModel
                 c.data_sfarsit,
                 c.ora_sfarsit,
                 c.loc_plecare,
+                c.loc_intoarcere,
                 c.loc_aspirare,
                 c.loc_livrare,
                 c.loc_livrare_cursa,
@@ -4093,6 +4284,7 @@ class DispecerCurseModel extends BaseModel
                 durata_cursa_minute,
                 loc_incarcare_id,
                 loc_plecare,
+                loc_intoarcere,
                 loc_aspirare,
                 loc_livrare,
                 loc_livrare_cursa,
@@ -4136,6 +4328,7 @@ class DispecerCurseModel extends BaseModel
                 :durata_cursa_minute,
                 :loc_incarcare_id,
                 :loc_plecare,
+                :loc_intoarcere,
                 :loc_aspirare,
                 :loc_livrare,
                 :loc_livrare_cursa,
@@ -4226,6 +4419,7 @@ class DispecerCurseModel extends BaseModel
                 durata_cursa_minute = :durata_cursa_minute,
                 loc_incarcare_id = :loc_incarcare_id,
                 loc_plecare = :loc_plecare,
+                loc_intoarcere = :loc_intoarcere,
                 loc_aspirare = :loc_aspirare,
                 loc_livrare = :loc_livrare,
                 loc_livrare_cursa = :loc_livrare_cursa,
@@ -7611,6 +7805,7 @@ class DispecerCurseModel extends BaseModel
         $this->bindNullableInt($stmt, ':durata_cursa_minute', $data['durata_cursa_minute'] ?? null);
         $this->bindNullableInt($stmt, ':loc_incarcare_id', $data['loc_incarcare_id'] ?? null);
         $this->bindNullableString($stmt, ':loc_plecare', $data['loc_plecare'] ?? null);
+        $this->bindNullableString($stmt, ':loc_intoarcere', $data['loc_intoarcere'] ?? null);
         $this->bindNullableString($stmt, ':loc_aspirare', $data['loc_aspirare'] ?? null);
         $this->bindNullableString($stmt, ':loc_livrare', $data['loc_livrare'] ?? null);
         $this->bindNullableString($stmt, ':loc_livrare_cursa', $data['loc_livrare_cursa'] ?? null);

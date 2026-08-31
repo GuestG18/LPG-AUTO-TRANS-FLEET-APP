@@ -151,15 +151,18 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                 <table class="table table-sm ocr-lines-table mb-0">
                     <thead class="table-light">
                         <tr>
-                            <th style="width:26%">Denumire piesă *</th>
-                            <th style="width:12%">Cod piesă</th>
-                            <th style="width:13%">Tip (coloana din registru)</th>
-                            <th style="width:7%">U.M.</th>
-                            <th style="width:9%" class="text-end">Cantitate</th>
-                            <th style="width:11%" class="text-end">Preț unitar</th>
-                            <th style="width:11%" class="text-end">Valoare</th>
-                            <th style="width:6%">Sursă</th>
-                            <th style="width:5%"></th>
+                            <th style="min-width:12rem">Denumire *</th>
+                            <th style="min-width:6rem">Cod piesă</th>
+                            <th style="min-width:7rem">Tip</th>
+                            <th style="min-width:7.5rem">Tip lucrare</th>
+                            <th style="min-width:8.5rem">Destinație</th>
+                            <th style="min-width:7rem">Vehicul</th>
+                            <th style="min-width:4rem">U.M.</th>
+                            <th style="min-width:4.5rem" class="text-end">Cant.</th>
+                            <th style="min-width:5.5rem" class="text-end">Preț unitar</th>
+                            <th style="min-width:5.5rem" class="text-end">Valoare</th>
+                            <th>Sursă</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody id="ocr-lines-body"></tbody>
@@ -206,6 +209,14 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
     var SAVE_URL = <?= json_encode($saveUrl, JSON_UNESCAPED_SLASHES) ?>;
     var MAX_BYTES = <?= (int) $maxFileBytes ?>;
     var MAX_IMG_BYTES = <?= (int) $maxImageBytes ?>;
+    var VEHICLES = <?= json_encode(array_map(
+        static fn (array $v): array => ['id' => (int) $v['id'], 'nr' => (string) $v['nr_inmatriculare']],
+        $vehicles
+    ), JSON_UNESCAPED_UNICODE) ?>;
+    var TIP_LUCRARE_OPTIONS = <?= json_encode(
+        array_map(null, array_keys(OcrPartsModel::TIP_LUCRARE_OPTIONS), array_values(OcrPartsModel::TIP_LUCRARE_OPTIONS)),
+        JSON_UNESCAPED_UNICODE
+    ) ?>;
     var API_KEY_CONFIGURED = <?= $apiKeyConfigured ? 'true' : 'false' ?>;
     var ALLOWED_EXT = ['pdf', 'jpg', 'jpeg', 'png'];
 
@@ -316,15 +327,30 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
         if (line.linie_sursa) { nameInput.title = 'Linie OCR: ' + line.linie_sursa; }
 
         var codeInput = textInput(line.cod_piesa, 80); codeInput.classList.add('ocr-in-code');
-        var typeSelect = document.createElement('select');
-        typeSelect.className = 'form-select form-select-sm ocr-in-tip';
-        [['inlocuiri', 'Înlocuiri'], ['reparatii', 'Reparații'], ['imbunatatiri', 'Îmbunătățiri']].forEach(function (opt) {
-            var option = document.createElement('option');
-            option.value = opt[0];
-            option.textContent = opt[1];
-            if ((line.tip || 'inlocuiri') === opt[0]) { option.selected = true; }
-            typeSelect.appendChild(option);
+        function makeSelect(className, options, selected) {
+            var select = document.createElement('select');
+            select.className = 'form-select form-select-sm ' + className;
+            options.forEach(function (opt) {
+                var option = document.createElement('option');
+                option.value = opt[0];
+                option.textContent = opt[1];
+                if (String(opt[0]) === String(selected)) { option.selected = true; }
+                select.appendChild(option);
+            });
+            return select;
+        }
+
+        var typeSelect = makeSelect('ocr-in-tip', [['piesa', 'Piesă'], ['manopera', 'Manoperă']], line.tip || 'piesa');
+        var tlSelect = makeSelect('ocr-in-tl', TIP_LUCRARE_OPTIONS, line.tip_lucrare || 'inlocuire');
+        var destSelect = makeSelect('ocr-in-dest', [['vehicul', 'Montează pe vehicul'], ['stoc', 'Trimite în stoc']], line.destinatie || 'vehicul');
+        var vehSelect = makeSelect('ocr-in-veh', [['', '—']].concat(VEHICLES.map(function (v) { return [v.id, v.nr]; })),
+            line.vehicle_id || document.getElementById('f-vehicul').value || '');
+        typeSelect.addEventListener('change', function () {
+            // Manopera nu merge in stoc.
+            if (typeSelect.value === 'manopera') { destSelect.value = 'vehicul'; destSelect.disabled = true; tlSelect.value = 'reparatie'; }
+            else { destSelect.disabled = false; }
         });
+        if ((line.tip || 'piesa') === 'manopera') { destSelect.disabled = true; }
         var umInput = textInput(line.unitate_masura || 'buc', 30); umInput.classList.add('ocr-in-um');
         var qtyInput = numberInput(line.cantitate !== undefined && line.cantitate !== null ? line.cantitate : 1, 'ocr-in-qty');
         var priceInput = numberInput(line.pret_unitar, 'ocr-in-price');
@@ -349,6 +375,9 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
         row.appendChild(cell(nameInput));
         row.appendChild(cell(codeInput));
         row.appendChild(cell(typeSelect));
+        row.appendChild(cell(tlSelect));
+        row.appendChild(cell(destSelect));
+        row.appendChild(cell(vehSelect));
         row.appendChild(cell(umInput));
         row.appendChild(cell(qtyInput));
         row.appendChild(cell(priceInput));
@@ -486,6 +515,9 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                 denumire: name,
                 cod_piesa: row.querySelector('.ocr-in-code').value.trim(),
                 tip: row.querySelector('.ocr-in-tip').value,
+                tip_lucrare: row.querySelector('.ocr-in-tl').value,
+                destinatie: row.querySelector('.ocr-in-dest').value,
+                vehicle_id: row.querySelector('.ocr-in-veh').value,
                 unitate_masura: row.querySelector('.ocr-in-um').value.trim() || 'buc',
                 cantitate: parseFloat(row.querySelector('.ocr-in-qty').value) || 0,
                 pret_unitar: parseFloat(row.querySelector('.ocr-in-price').value) || 0,
