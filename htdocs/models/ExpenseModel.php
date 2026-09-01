@@ -461,6 +461,26 @@ class ExpenseModel extends BaseModel
         ')->fetchAll();
     }
 
+    /**
+     * Numarul total de cheltuieli inregistrate (fara filtre) si intervalul lor
+     * de date - folosit ca hint cand perioada selectata nu contine nimic.
+     *
+     * @return array{count:int,min_date:?string,max_date:?string}
+     */
+    public function getOverallRange(): array
+    {
+        $row = $this->db->query('
+            SELECT COUNT(*) AS cnt, MIN(data_cheltuiala) AS dmin, MAX(data_cheltuiala) AS dmax
+            FROM cheltuieli
+        ')->fetch();
+
+        return [
+            'count' => (int) ($row['cnt'] ?? 0),
+            'min_date' => $row['dmin'] ?? null,
+            'max_date' => $row['dmax'] ?? null,
+        ];
+    }
+
     public function getSuppliers(): array
     {
         $rows = $this->db->query("

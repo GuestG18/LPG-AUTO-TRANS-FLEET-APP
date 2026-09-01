@@ -82,6 +82,7 @@ class ExpenseController
                 'drivers' => $this->model->getDrivers(),
                 'beneficiaries' => $this->model->getBeneficiaries(),
                 'suppliers' => $this->model->getSuppliers(),
+                'overallRange' => $this->model->getOverallRange(),
                 'pagination' => [
                     'page' => $result['page'],
                     'total_pages' => $result['total_pages'],
@@ -111,6 +112,7 @@ class ExpenseController
                 'drivers' => [],
                 'beneficiaries' => [],
                 'suppliers' => [],
+                'overallRange' => ['count' => 0, 'min_date' => null, 'max_date' => null],
                 'pagination' => ['page' => 1, 'total_pages' => 1, 'total_rows' => 0, 'per_page' => $perPage],
                 'perPageOptions' => self::PER_PAGE_OPTIONS,
             ];

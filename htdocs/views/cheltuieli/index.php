@@ -223,6 +223,12 @@ foreach ($rows as $row) {
                     </button>
                     <div class="chx-range-menu" hidden data-chx-range-menu role="dialog" aria-label="Alege perioada">
                         <div class="chx-range-cal">
+                            <div class="chx-range-chips">
+                                <button type="button" data-chx-rpreset="luna_curenta">Luna aceasta</button>
+                                <button type="button" data-chx-rpreset="luna_trecuta">Luna trecută</button>
+                                <button type="button" data-chx-rpreset="3_luni">Ultimele 3 luni</button>
+                                <button type="button" data-chx-rpreset="an_curent">Anul acesta</button>
+                            </div>
                             <div class="chx-range-cal-head">
                                 <button type="button" data-chx-cal-prev aria-label="Luna anterioară"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
                                 <strong data-chx-cal-title></strong>
@@ -374,9 +380,25 @@ foreach ($rows as $row) {
                         </thead>
                         <tbody>
                             <?php if ($rows === []): ?>
+                                <?php
+                                $overallRange = is_array($overallRange ?? null) ? $overallRange : ['count' => 0, 'min_date' => null, 'max_date' => null];
+                                $outsideCount = (int) ($overallRange['count'] ?? 0);
+                                ?>
                                 <tr>
                                     <td colspan="11" class="text-center text-muted py-5">
-                                        Nicio cheltuială în perioada selectată. Ajustează filtrele sau adaugă o cheltuială nouă.
+                                        Nicio cheltuială în perioada selectată.
+                                        <?php if ($outsideCount > 0 && !empty($overallRange['min_date']) && !empty($overallRange['max_date'])): ?>
+                                            <div class="mt-2">
+                                                Există <strong><?= e((string) $outsideCount) ?></strong> cheltuieli înregistrate între
+                                                <?= e(format_date_ro((string) $overallRange['min_date'])) ?> și <?= e(format_date_ro((string) $overallRange['max_date'])) ?>,
+                                                în afara filtrelor curente.
+                                                <a href="<?= e(build_query_url(['page' => 'cheltuieli', 'date_start' => (string) $overallRange['min_date'], 'date_end' => (string) $overallRange['max_date'], 'pp' => (string) $perPage])) ?>">
+                                                    Afișează toate cheltuielile
+                                                </a>
+                                            </div>
+                                        <?php else: ?>
+                                            Ajustează filtrele sau adaugă o cheltuială nouă.
+                                        <?php endif; ?>
                                     </td>
                                 </tr>
                             <?php endif; ?>
@@ -997,7 +1019,23 @@ foreach ($rows as $row) {
 
         btn.addEventListener('click', function () { toggleMenu(); });
         document.addEventListener('click', function (event) {
+            // Click pe o zi din calendar: grila se redeseneaza in handler, iar
+            // butonul apasat ajunge detasat din DOM cand evenimentul urca aici -
+            // range.contains() ar minti ca e click in afara si ar inchide
+            // popup-ul dupa PRIMA zi aleasa. Un target deconectat nu e niciodata
+            // un click real in afara.
+            if (!event.target.isConnected) {
+                return;
+            }
             if (!range.contains(event.target)) {
+                // Selectia neterminata (doar data de inceput aleasa) se aplica
+                // ca zi unica la inchidere - altfel un click pe "Filtreaza" ar
+                // trimite formularul cu perioada veche si ar parea ca nu merge.
+                if (!menu.hidden && start && !end) {
+                    end = start;
+                    applyRange();
+                    return;
+                }
                 toggleMenu(false);
             }
         });
@@ -1008,6 +1046,32 @@ foreach ($rows as $row) {
         range.querySelector('[data-chx-cal-next]').addEventListener('click', function () {
             view = new Date(view.getFullYear(), view.getMonth() + 1, 1);
             renderCal();
+        });
+
+        // Scurtaturi de o singura apasare pentru perioadele uzuale.
+        range.querySelectorAll('[data-chx-rpreset]').forEach(function (preset) {
+            preset.addEventListener('click', function () {
+                var now = new Date();
+                switch (preset.getAttribute('data-chx-rpreset')) {
+                    case 'luna_curenta':
+                        start = new Date(now.getFullYear(), now.getMonth(), 1);
+                        end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                        break;
+                    case 'luna_trecuta':
+                        start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                        end = new Date(now.getFullYear(), now.getMonth(), 0);
+                        break;
+                    case '3_luni':
+                        start = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+                        end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                        break;
+                    case 'an_curent':
+                        start = new Date(now.getFullYear(), 0, 1);
+                        end = new Date(now.getFullYear(), 11, 31);
+                        break;
+                }
+                applyRange();
+            });
         });
 
         updateLabel();
@@ -1180,6 +1244,9 @@ foreach ($rows as $row) {
             }
         });
         document.addEventListener('click', function (event) {
+            if (!event.target.isConnected) {
+                return;
+            }
             if (!wrapper.contains(event.target)) {
                 toggleMenu(false);
             }
@@ -1417,6 +1484,9 @@ foreach ($rows as $row) {
 
         btn.addEventListener('click', function () { toggleMenu(); });
         document.addEventListener('click', function (event) {
+            if (!event.target.isConnected) {
+                return;
+            }
             if (!wrapper.contains(event.target)) {
                 toggleMenu(false);
             }
