@@ -675,10 +675,233 @@ function getFleetIdleRefreshConfig() {
     var config = window.FLEET_IDLE_REFRESH_CONFIG || {};
 
     return {
-        hiddenThresholdMs: getFleetIdleRefreshSetting(config.hiddenThresholdMs, 2 * 60 * 1000),
-        inactiveThresholdMs: getFleetIdleRefreshSetting(config.inactiveThresholdMs, 20 * 60 * 1000),
+        hiddenThresholdMs: getFleetIdleRefreshSetting(config.hiddenThresholdMs, 15 * 60 * 1000),
+        inactiveThresholdMs: getFleetIdleRefreshSetting(config.inactiveThresholdMs, 60 * 60 * 1000),
         refreshDelayMs: getFleetIdleRefreshSetting(config.refreshDelayMs, 1800)
     };
+}
+
+var fleetUnsavedState = {
+    forms: [],
+    fields: [],
+    noticeAt: 0
+};
+
+// Inputurile ascunse au value === defaultValue (mod "default"), asa ca pentru
+// ele pastram separat valoarea initiala; altfel campurile completate de
+// pickere (data/ora, alegeri din modale) nu ar fi vazute ca nesalvate.
+var fleetInitialHiddenValues = new WeakMap();
+
+function isFleetHiddenInput(field) {
+    return field instanceof HTMLInputElement && field.type === 'hidden';
+}
+
+function snapshotFleetHiddenValues(root) {
+    if (!root || typeof root.querySelectorAll !== 'function') {
+        return;
+    }
+
+    root.querySelectorAll('input[type="hidden"]').forEach(function (field) {
+        if (!fleetInitialHiddenValues.has(field)) {
+            fleetInitialHiddenValues.set(field, field.value);
+        }
+    });
+}
+
+function fleetHiddenInputHasUnsavedValue(field) {
+    if (!fleetInitialHiddenValues.has(field)) {
+        return field.value !== '';
+    }
+
+    return field.value !== fleetInitialHiddenValues.get(field);
+}
+
+function fleetIdleRefreshIsIgnored(element) {
+    return !!(element && typeof element.closest === 'function' && element.closest('[data-idle-refresh-ignore]'));
+}
+
+function isFleetTrackedFormField(field) {
+    if (field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) {
+        return true;
+    }
+
+    if (!(field instanceof HTMLInputElement)) {
+        return false;
+    }
+
+    return ['submit', 'reset', 'button', 'image'].indexOf(field.type) === -1;
+}
+
+function fleetSelectHasUnsavedValue(select) {
+    var selected = [];
+    var defaults = [];
+
+    Array.prototype.forEach.call(select.options, function (option) {
+        if (option.selected) {
+            selected.push(option.value);
+        }
+
+        if (option.defaultSelected) {
+            defaults.push(option.value);
+        }
+    });
+
+    if (defaults.length === 0 && !select.multiple && select.options.length > 0) {
+        defaults.push(select.options[0].value);
+    }
+
+    return selected.join('|') !== defaults.join('|');
+}
+
+function fleetFieldHasUnsavedValue(field) {
+    if (!isFleetTrackedFormField(field) || !field.isConnected || field.disabled) {
+        return false;
+    }
+
+    if (fleetIdleRefreshIsIgnored(field)) {
+        return false;
+    }
+
+    if (field instanceof HTMLSelectElement) {
+        return fleetSelectHasUnsavedValue(field);
+    }
+
+    if (field instanceof HTMLInputElement) {
+        if (field.type === 'hidden') {
+            return fleetHiddenInputHasUnsavedValue(field);
+        }
+
+        if (field.type === 'checkbox' || field.type === 'radio') {
+            return field.checked !== field.defaultChecked;
+        }
+
+        if (field.type === 'file') {
+            return !!(field.files && field.files.length > 0);
+        }
+    }
+
+    return field.value !== field.defaultValue;
+}
+
+function fleetFormHasTrackedFields(form) {
+    return Array.prototype.some.call(form.elements || [], isFleetTrackedFormField);
+}
+
+function noteFleetEngagedForm(target) {
+    if (!(target instanceof HTMLElement) || fleetIdleRefreshIsIgnored(target)) {
+        return;
+    }
+
+    var form = target.closest('form');
+
+    if (form instanceof HTMLFormElement) {
+        if (fleetFormHasTrackedFields(form) && fleetUnsavedState.forms.indexOf(form) === -1) {
+            snapshotFleetHiddenValues(form);
+            fleetUnsavedState.forms.push(form);
+        }
+
+        return;
+    }
+
+    if (isFleetTrackedFormField(target) && fleetUnsavedState.fields.indexOf(target) === -1) {
+        fleetUnsavedState.fields.push(target);
+    }
+}
+
+function forgetFleetEngagedForm(form) {
+    var index = fleetUnsavedState.forms.indexOf(form);
+
+    if (index !== -1) {
+        fleetUnsavedState.forms.splice(index, 1);
+    }
+
+    form.querySelectorAll('input[type="hidden"]').forEach(function (field) {
+        fleetInitialHiddenValues.set(field, field.value);
+    });
+}
+
+function fleetHasUnsavedInput() {
+    fleetUnsavedState.forms = fleetUnsavedState.forms.filter(function (form) {
+        return form.isConnected;
+    });
+    fleetUnsavedState.fields = fleetUnsavedState.fields.filter(function (field) {
+        return field.isConnected;
+    });
+
+    var hasDirtyForm = fleetUnsavedState.forms.some(function (form) {
+        if (fleetIdleRefreshIsIgnored(form)) {
+            return false;
+        }
+
+        return Array.prototype.some.call(form.elements, fleetFieldHasUnsavedValue);
+    });
+
+    if (hasDirtyForm) {
+        return true;
+    }
+
+    return fleetUnsavedState.fields.some(fleetFieldHasUnsavedValue);
+}
+
+function showFleetIdleRefreshSkippedNotice() {
+    var now = Date.now();
+
+    if (now - fleetUnsavedState.noticeAt < 30000) {
+        return;
+    }
+
+    fleetUnsavedState.noticeAt = now;
+
+    var existingHint = document.querySelector('[data-fleet-idle-hint]');
+
+    if (existingHint !== null) {
+        existingHint.remove();
+    }
+
+    var hint = document.createElement('div');
+    hint.className = 'fleet-idle-refresh-hint';
+    hint.setAttribute('data-fleet-idle-hint', '1');
+    hint.setAttribute('role', 'status');
+    hint.innerHTML = [
+        '<i class="bi bi-shield-check" aria-hidden="true"></i>',
+        '<span>Reimprospatarea automata a fost oprita: ai date nesalvate in formular.</span>'
+    ].join('');
+
+    document.body.appendChild(hint);
+
+    window.requestAnimationFrame(function () {
+        hint.classList.add('is-visible');
+    });
+
+    window.setTimeout(function () {
+        hint.classList.remove('is-visible');
+        window.setTimeout(function () {
+            hint.remove();
+        }, 250);
+    }, 6000);
+}
+
+function initFleetUnsavedInputTracking() {
+    snapshotFleetHiddenValues(document);
+
+    function noteEngagement(event) {
+        if (event.isTrusted) {
+            noteFleetEngagedForm(event.target);
+        }
+    }
+
+    function forgetEngagement(event) {
+        if (event.target instanceof HTMLFormElement) {
+            forgetFleetEngagedForm(event.target);
+        }
+    }
+
+    document.addEventListener('input', noteEngagement, true);
+    document.addEventListener('change', noteEngagement, true);
+    document.addEventListener('pointerdown', noteEngagement, true);
+    document.addEventListener('keydown', noteEngagement, true);
+    document.addEventListener('submit', forgetEngagement, true);
+    document.addEventListener('reset', forgetEngagement, true);
 }
 
 function fleetIdleRefreshWasJustHandled() {
@@ -727,7 +950,7 @@ function createFleetIdleRefreshOverlay() {
 }
 
 function startFleetIdleRefresh(event) {
-    if (fleetIdleRefreshState.refreshing || fleetIdleRefreshWasJustHandled()) {
+    if (fleetIdleRefreshState.refreshing || fleetIdleRefreshWasJustHandled() || fleetHasUnsavedInput()) {
         return false;
     }
 
@@ -762,6 +985,7 @@ function initFleetIdleRefreshLoader() {
     }
 
     fleetIdleRefreshState.lastActivityAt = Date.now();
+    initFleetUnsavedInputTracking();
 
     function checkFleetIdleReturn(event) {
         var config = getFleetIdleRefreshConfig();
@@ -773,6 +997,13 @@ function initFleetIdleRefreshLoader() {
             hiddenFor >= config.hiddenThresholdMs
             || inactiveFor >= config.inactiveThresholdMs
         ) {
+            if (fleetHasUnsavedInput()) {
+                fleetIdleRefreshState.hiddenAt = null;
+                fleetIdleRefreshState.lastActivityAt = now;
+                showFleetIdleRefreshSkippedNotice();
+                return;
+            }
+
             startFleetIdleRefresh(event);
             return;
         }

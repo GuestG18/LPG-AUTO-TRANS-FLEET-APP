@@ -4,8 +4,14 @@ $expensePromptRaceId = (int) ($expensePromptPayload['race_id'] ?? 0);
 $expensePromptMode = (string) (($expensePromptPayload['mode'] ?? '') === 'updated' ? 'updated' : 'created');
 $expensePromptReturnUrl = (string) ($dispecerReturnUrl ?? ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dispecer_curse'])));
 $expensePromptTitle = $expensePromptMode === 'updated' ? 'Cursa a fost actualizata' : 'Cursa a fost adaugata';
+// Dupa creare, marcam fluxul ca sa stie pagina de editare ca utilizatorul a venit
+// din prompt-ul post-salvare si ca trebuie sa se intoarca la lista dupa cheltuiala.
+$expensePromptEditQuery = ['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $expensePromptRaceId];
+if ($expensePromptMode === 'created') {
+    $expensePromptEditQuery['flux'] = 'cursa_noua';
+}
 $expensePromptEditUrl = $expensePromptRaceId > 0
-    ? build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $expensePromptRaceId]) . '#expense-section'
+    ? build_query_url($expensePromptEditQuery) . '#expense-section'
     : '#';
 ?>
 

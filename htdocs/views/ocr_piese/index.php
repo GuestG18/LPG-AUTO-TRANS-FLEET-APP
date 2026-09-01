@@ -149,6 +149,9 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
     .rp-item-del { border: 0; background: none; color: #adb5bd; padding: .1rem .25rem; cursor: pointer; }
     .rp-item-del:hover { color: #dc3545; }
     .rp-item-del.rp-armed { color: #fff; background: #dc3545; border-radius: .25rem; }
+    .rp-item-table select.rp-veh-missing {
+        border-color: #dc3545 !important; box-shadow: 0 0 0 .12rem rgba(220,53,69,.15);
+    }
     .rp-item-info { color: #adb5bd; }
     .rp-detail-footer {
         display: flex; flex-wrap: wrap; align-items: center; gap: 1.5rem;
@@ -160,6 +163,27 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
         background: #f0f6ff; border: 1px solid #cfe2ff; border-radius: .5rem;
         padding: .45rem .85rem; margin-top: .5rem; font-size: .78rem; color: #495057;
     }
+    /* Banda de potriviri sub randul-factura cand exista o cautare activa:
+       arata direct articolele gasite, fara sa extinzi factura manual. */
+    tr.rp-match-row > td {
+        background: #fffdf3; border-top: 0; padding: .3rem .5rem .55rem 2.6rem; font-size: .78rem;
+    }
+    .rp-match-label { color: #856404; font-weight: 600; margin-right: .35rem; }
+    .rp-match-chip {
+        display: inline-flex; align-items: center; gap: .35rem; margin: .15rem .25rem .15rem 0;
+        padding: .2rem .55rem; border: 1px solid #ffe69c; border-radius: 1rem;
+        background: #fff; cursor: pointer; font-size: .78rem; color: #212529;
+    }
+    .rp-match-chip:hover { border-color: #0d6efd; background: #f0f6ff; }
+    .rp-match-chip .rp-match-cod { color: #6c757d; }
+    .rp-match-chip .rp-match-veh {
+        background: #f8f9fa; border: 1px solid #dee2e6; border-radius: .3rem;
+        padding: 0 .3rem; font-weight: 600; font-size: .72rem;
+    }
+    .rp-match-chip .rp-match-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .rp-match-more { color: #856404; font-size: .78rem; margin-left: .25rem; }
+    @keyframes rp-item-flash-kf { 0% { background: #ffe69c; } 100% { background: transparent; } }
+    tr.rp-item-flash td { animation: rp-item-flash-kf 1.8s ease-out; }
     .rp-expander { border: 1px solid #dee2e6; background: #fff; border-radius: .4rem; width: 1.8rem; height: 1.8rem; line-height: 1; }
     .rp-expander:hover { border-color: #86b7fe; color: #0d6efd; }
     .rp-summary { font-size: .85rem; color: #6c757d; }
@@ -196,6 +220,9 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
 
 <form method="get" action="<?= e(url('index.php')) ?>" id="rp-filter-form">
     <input type="hidden" name="page" value="ocr_piese">
+    <?php if ($perPage !== 10): ?>
+        <input type="hidden" name="pe_pagina" value="<?= (int) $perPage ?>">
+    <?php endif; ?>
     <div class="row g-2 mb-3 align-items-end">
         <div class="col-6 col-lg-2">
             <label class="form-label small mb-1" for="rp-f-vehicul">Vehicul</label>
@@ -235,7 +262,121 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
 
 <div id="rp-error" class="alert alert-danger d-none py-2"></div>
 
+<?php
+// Mod "rezultate cautare": la cautare activa, in loc de facturi extensibile
+// afisam o lista plata - un rand per articol gasit - care scaleaza oricat.
+$searchMode = $filters['q'] !== '';
+$searchRows = [];
+if ($searchMode) {
+    $needle = $filters['q'];
+    foreach ($events as $event) {
+        $matched = array_values(array_filter($event['articole'] ?? [], static function (array $a) use ($needle): bool {
+            foreach ([(string) $a['denumire'], (string) ($a['cod_piesa'] ?? ''), (string) ($a['vehicul'] ?? '')] as $haystack) {
+                if ($haystack !== '' && mb_stripos($haystack, $needle) !== false) {
+                    return true;
+                }
+            }
+            return false;
+        }));
+        if ($matched === []) {
+            // Factura s-a potrivit doar pe antet (furnizor / document / observatii).
+            $searchRows[] = ['event' => $event, 'item' => null];
+        } else {
+            foreach ($matched as $item) {
+                $searchRows[] = ['event' => $event, 'item' => $item];
+            }
+        }
+    }
+}
+?>
+
 <div class="card">
+<?php if ($searchMode): ?>
+    <div class="px-3 pt-2 pb-1 small text-muted border-bottom">
+        <i class="bi bi-search me-1" aria-hidden="true"></i>
+        <strong><?= count(array_filter($searchRows, static fn (array $r): bool => $r['item'] !== null)) ?></strong> articole găsite
+        în <strong><?= count($events) ?></strong> facturi pentru „<?= e($filters['q']) ?>" —
+        click pe un rezultat pentru a deschide factura la articolul respectiv.
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm table-hover rp-table mb-0">
+            <thead>
+                <tr>
+                    <th style="width:9%">Tip</th>
+                    <th style="width:28%">Articol</th>
+                    <th style="width:22%">Factură / Furnizor</th>
+                    <th style="width:11%">Vehicul</th>
+                    <th style="width:9%">Data</th>
+                    <th style="width:10%">Tip lucrare</th>
+                    <th style="width:9%" class="rp-num">Valoare (lei)</th>
+                    <th style="width:2%"></th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($searchRows as $result): ?>
+                <?php
+                $event = $result['event'];
+                $item = $result['item'];
+                $openUrl = build_query_url([
+                    'page' => 'ocr_piese',
+                    'deschide' => (int) $event['id'],
+                    'articol' => $item !== null ? (int) $item['id'] : null,
+                ]);
+                ?>
+                <tr data-open-url="<?= e($openUrl) ?>" role="button" title="Deschide factura la acest articol">
+                    <td class="rp-item-tip">
+                        <?php if ($item === null): ?>
+                            <i class="bi bi-receipt text-secondary me-1" aria-hidden="true"></i>Factură
+                        <?php elseif ($item['tip'] === 'manopera'): ?>
+                            <i class="bi bi-wrench-adjustable text-primary me-1" aria-hidden="true"></i>Manoperă
+                        <?php else: ?>
+                            <i class="bi bi-box-seam text-success me-1" aria-hidden="true"></i>Piesă
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <?php if ($item === null): ?>
+                            <span class="text-muted">(potrivire pe datele facturii)</span>
+                        <?php else: ?>
+                            <?= e((string) $item['denumire']) ?>
+                            <?php if (($item['cod_piesa'] ?? '') !== ''): ?>
+                                <span class="text-muted small">[<?= e((string) $item['cod_piesa']) ?>]</span>
+                            <?php endif; ?>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <div class="fw-semibold"><?= e((string) (($event['document'] ?? '') !== '' ? $event['document'] : '—')) ?></div>
+                        <div class="text-muted small"><?= e((string) ($event['furnizor'] ?? '')) ?></div>
+                    </td>
+                    <td>
+                        <?php if ($item !== null && ($item['vehicul'] ?? '') !== ''): ?>
+                            <span class="rp-plate"><?= e((string) $item['vehicul']) ?></span>
+                        <?php elseif ($item !== null && $item['destinatie'] === 'stoc'): ?>
+                            <span class="badge text-bg-warning text-dark">Stoc</span>
+                        <?php else: ?>
+                            <span class="text-muted">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <td><?= e(format_date_ro($event['data_interventie'] ?? null)) ?></td>
+                    <td>
+                        <?php if ($item !== null): ?>
+                            <?= e($tipOptions[(string) $item['tip_lucrare']] ?? (string) $item['tip_lucrare']) ?>
+                        <?php endif; ?>
+                    </td>
+                    <td class="rp-num fw-semibold">
+                        <?= $item !== null
+                            ? e(format_number_ro((float) $item['cantitate'] * (float) $item['pret_unitar']))
+                            : e(format_number_ro((float) ($event['total_piese'] ?? 0) + (float) ($event['total_manopera'] ?? 0))) ?>
+                    </td>
+                    <td class="text-muted"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if ($searchRows === []): ?>
+                <tr><td colspan="8" class="text-center text-muted py-4">Niciun rezultat pentru „<?= e($filters['q']) ?>".</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+<?php else: ?>
     <div class="table-responsive">
         <table class="table table-hover rp-table mb-0" id="rp-table">
             <thead>
@@ -359,10 +500,11 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
     <?php if ($events === []): ?>
         <div class="text-center text-muted py-5">
             <i class="bi bi-inbox fs-1 d-block mb-2" aria-hidden="true"></i>
-            Nicio înregistrare<?= $filters['q'] !== '' || $filters['vehicle_id'] || $filters['date_from'] !== '' ? ' pentru filtrele curente' : '' ?>.<br>
+            Nicio înregistrare<?= $filters['vehicle_id'] || $filters['date_from'] !== '' ? ' pentru filtrele curente' : '' ?>.<br>
             Adaugă un rând manual sau folosește <strong>Recepție factură (OCR)</strong>.
         </div>
     <?php endif; ?>
+<?php endif; ?>
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 px-3 py-2 border-top">
         <div class="d-flex align-items-center gap-2 small text-muted">
             <span>Afișare</span>
@@ -409,6 +551,7 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
     };
     var SELECTED_VEHICLE = <?= (int) $filters['vehicle_id'] ?>;
     var EXPAND_EVENT = <?= $expandEventId ?>;
+    var EXPAND_ITEM = <?= (int) ($expandItemId ?? 0) ?>;
     var WARRANTY_OPTIONS = <?= json_encode($warrantyOptions) ?>;
     var TIP_LUCRARE = <?= json_encode($tipOptions, JSON_UNESCAPED_UNICODE) ?>;
     var ALL_VEHICLES = <?= json_encode(array_map(
@@ -526,8 +669,15 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
 
     // --- Panoul extins ---
     function getDetailRow(parentTr) {
+        // Banda de potriviri (cautare activa) sta intre parinte si panoul extins.
         var next = parentTr.nextElementSibling;
+        if (next && next.classList.contains('rp-match-row')) { next = next.nextElementSibling; }
         return next && next.classList.contains('rp-detail') ? next : null;
+    }
+
+    function detailAnchor(parentTr) {
+        var next = parentTr.nextElementSibling;
+        return next && next.classList.contains('rp-match-row') ? next : parentTr;
     }
 
     function selInput(options, value, extraClass) {
@@ -652,10 +802,33 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
         if (item.destinatie === 'stoc') { destCell.className = 'rp-dest-stoc'; }
         tr.appendChild(destCell);
 
-        // 11. Vehicul
-        var vehOptions = [['', '—']].concat(st.vehicles.map(function (v) { return [v.id, v.nr]; }));
-        var vehSelect = selInput(vehOptions, item.vehicle_id === null ? '' : item.vehicle_id);
+        // 11. Vehicul — toata flota, cu vehiculele facturii primele; alegerea unui
+        // vehicul care nu e pe factura il asociaza automat (serverul garanteaza).
+        var vehSelect = document.createElement('select');
+        vehSelect.className = 'rp-veh-select';
+        var emptyVehOpt = document.createElement('option');
+        emptyVehOpt.value = '';
+        emptyVehOpt.textContent = '—';
+        vehSelect.appendChild(emptyVehOpt);
+        var onInvoiceIds = st.vehicles.map(function (v) { return v.id; });
+        var groupOn = document.createElement('optgroup');
+        groupOn.label = 'Pe factură';
+        var groupOther = document.createElement('optgroup');
+        groupOther.label = 'Alte vehicule';
+        ALL_VEHICLES.forEach(function (vehicle) {
+            var option = document.createElement('option');
+            option.value = vehicle.id;
+            option.textContent = vehicle.nr;
+            if (String(vehicle.id) === String(item.vehicle_id)) { option.selected = true; }
+            (onInvoiceIds.indexOf(vehicle.id) !== -1 ? groupOn : groupOther).appendChild(option);
+        });
+        if (groupOn.children.length) { vehSelect.appendChild(groupOn); }
+        if (groupOther.children.length) { vehSelect.appendChild(groupOther); }
         if (item.destinatie === 'stoc') { vehSelect.disabled = true; }
+        // Piesa "montata" dar fara vehicul ales: evidentiem campul obligatoriu.
+        if (!isLabor && item.destinatie === 'vehicul' && item.vehicle_id === null) {
+            vehSelect.classList.add('rp-veh-missing');
+        }
         tr.appendChild(td(vehSelect));
 
         // 12. Data montarii / receptiei
@@ -725,22 +898,65 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
         warrantySelect.addEventListener('change', function () { saveField(warrantySelect, 'garantie_luni'); });
         warrantyDateInput.addEventListener('change', function () { saveField(warrantyDateInput, 'garantie_pana_la'); });
         dateRefInput.addEventListener('change', function () { saveField(dateRefInput, 'data_referinta'); });
+        // Destinatia ramane corectabila si dupa salvare, in ambele sensuri, cu
+        // confirmare cand se anuleaza o alocare existenta. Serverul curata
+        // atomic campurile devenite irelevante; aici oglindim starea.
         destSelect.addEventListener('change', function () {
-            saveField(destSelect, 'destinatie', function () {
-                item.destinatie = destSelect.value;
-                if (item.destinatie === 'stoc') {
-                    // Piesele din stoc nu au vehicul; alocarea pe vehicul vine la iesirea din stoc.
-                    vehSelect.value = '';
-                    postForm(URLS.itemUpdate, { item_id: item.id, field: 'vehicle_id', value: '' })
-                        .then(function () { item.vehicle_id = null; renderDetail(parentTr); })
-                        .catch(function (error) { showError(error.message); });
-                } else {
+            var newDest = destSelect.value;
+            if (newDest === item.destinatie) { return; }
+
+            function applyDestinationChange() {
+                saveField(destSelect, 'destinatie', function () {
+                    item.destinatie = newDest;
+                    if (newDest === 'stoc') {
+                        item.vehicle_id = null;
+                        item.km_bord = null;
+                    } else {
+                        item.depozit = '';
+                    }
+                    refreshVehCell(parentTr);
                     renderDetail(parentTr);
-                }
-            });
+                    if (newDest === 'vehicul') {
+                        // Randul ramane in "Stoc / nealocate" pana alege vehiculul:
+                        // ducem operatorul direct la campul obligatoriu.
+                        var detail = getDetailRow(parentTr);
+                        var pending = detail ? detail.querySelector('tr[data-item-id="' + item.id + '"] .rp-veh-select') : null;
+                        if (pending) { pending.focus(); }
+                    }
+                });
+            }
+
+            var message;
+            if (newDest === 'vehicul') {
+                message = 'Articolul este înregistrat momentan în <strong>Stoc</strong>.<br>' +
+                    'Schimbarea destinației va anula intrarea în stoc și va aloca piesa unui vehicul.<br><br>Continui?';
+            } else {
+                var currentVehicle = item.vehicle_id !== null ? vehicleName(item.vehicle_id) : null;
+                message = currentVehicle
+                    ? 'Articolul este alocat momentan vehiculului <strong>' + currentVehicle + '</strong>.<br>' +
+                      'Schimbarea destinației va elimina această alocare și va crea o intrare în stoc.<br><br>Continui?'
+                    : 'Articolul va fi trimis în <strong>Stoc</strong>.<br><br>Continui?';
+            }
+
+            rpDialog('Schimbare destinație', message, [
+                {
+                    label: 'Anulează', cls: 'btn-outline-secondary',
+                    action: function () { destSelect.value = item.destinatie; }
+                },
+                { label: 'Schimbă destinația', cls: 'btn-primary', action: applyDestinationChange }
+            ]);
         });
         vehSelect.addEventListener('change', function () {
-            saveField(vehSelect, 'vehicle_id', function () { renderDetail(parentTr); refreshVehCell(parentTr); });
+            saveField(vehSelect, 'vehicle_id', function () {
+                var chosenId = vehSelect.value !== '' ? parseInt(vehSelect.value, 10) : null;
+                // Vehicul nou pe factura: serverul l-a asociat deja; oglindim in UI.
+                if (chosenId !== null && !st.vehicles.some(function (v) { return v.id === chosenId; })) {
+                    var info = ALL_VEHICLES.filter(function (v) { return v.id === chosenId; })[0];
+                    st.vehicles.push({ id: chosenId, nr: info ? info.nr : '?', tip: '' });
+                }
+                refreshVehCell(parentTr);
+                renderDetail(parentTr);
+            });
         });
         allocInput.addEventListener('change', function () { saveField(allocInput, 'cant_alocata'); });
 
@@ -1041,7 +1257,7 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
             eventState(parentTr).selected = selectVehicleId;
         }
         if (!detail) {
-            parentTr.after(buildDetailRow(parentTr));
+            detailAnchor(parentTr).after(buildDetailRow(parentTr));
             parentTr.classList.add('rp-open');
             expander.className = 'bi bi-chevron-up';
             parentTr.querySelector('.rp-expander').setAttribute('aria-expanded', 'true');
@@ -1374,18 +1590,27 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
         if (event.key === 'Escape') { closeFloatMenu(); closeDialog(); }
     });
 
-    document.getElementById('rp-table').addEventListener('click', function (event) {
-        var menuBtn = event.target.closest('.rp-menu-btn');
-        if (menuBtn) {
-            var parentTr = menuBtn.closest('tr.rp-parent');
-            if (floatMenu) { closeFloatMenu(); } else { openActionMenu(menuBtn, parentTr); }
-            return;
-        }
-        var vehBtn = event.target.closest('.rp-veh-multi-btn');
-        if (vehBtn) {
-            var tr = vehBtn.closest('tr.rp-parent');
-            if (floatMenu) { closeFloatMenu(); } else { openVehicleListMenu(vehBtn, tr); }
-        }
+    // In modul "rezultate cautare" tabelul registru lipseste - protejam initializarea.
+    var registerTable = document.getElementById('rp-table');
+    if (registerTable) {
+        registerTable.addEventListener('click', function (event) {
+            var menuBtn = event.target.closest('.rp-menu-btn');
+            if (menuBtn) {
+                var parentTr = menuBtn.closest('tr.rp-parent');
+                if (floatMenu) { closeFloatMenu(); } else { openActionMenu(menuBtn, parentTr); }
+                return;
+            }
+            var vehBtn = event.target.closest('.rp-veh-multi-btn');
+            if (vehBtn) {
+                var tr = vehBtn.closest('tr.rp-parent');
+                if (floatMenu) { closeFloatMenu(); } else { openVehicleListMenu(vehBtn, tr); }
+            }
+        });
+    }
+
+    // Randurile din lista de rezultate: click -> registru cu factura deschisa la articol.
+    document.querySelectorAll('tr[data-open-url]').forEach(function (row) {
+        row.addEventListener('click', function () { window.location.href = row.dataset.openUrl; });
     });
 
     // --- Adauga factura noua ---
@@ -1399,6 +1624,13 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
 
     // --- Filtre ---
     var filterForm = document.getElementById('rp-filter-form');
+    // Cautarea porneste la Enter, la butonul-lupa (submit nativ) si la
+    // golirea campului cu X-ul nativ (evenimentul "search" in Chrome).
+    var searchInput = document.getElementById('rp-f-q');
+    searchInput.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') { event.preventDefault(); filterForm.submit(); }
+    });
+    searchInput.addEventListener('search', function () { filterForm.submit(); });
     document.getElementById('rp-f-vehicul').addEventListener('change', function () { filterForm.submit(); });
     filterForm.querySelectorAll('input[type="date"]').forEach(function (input) {
         input.addEventListener('change', function () { filterForm.submit(); });
@@ -1410,12 +1642,28 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
         window.location.href = url.toString();
     });
 
-    // Auto-deschide factura ceruta (dupa salvare OCR / adaugare).
+    // Auto-deschide factura ceruta (dupa salvare OCR / adaugare / click pe un
+    // rezultat de cautare); cu &articol= selecteaza tab-ul si evidentiaza randul.
     if (EXPAND_EVENT > 0) {
         var target = document.querySelector('tr.rp-parent[data-event-id="' + EXPAND_EVENT + '"]');
         if (target) {
-            toggleEvent(target, undefined);
+            var openTab;
+            if (EXPAND_ITEM > 0) {
+                var wanted = eventState(target).items.filter(function (item) { return item.id === EXPAND_ITEM; })[0];
+                if (wanted) {
+                    openTab = wanted.vehicle_id !== null && wanted.destinatie !== 'stoc' ? wanted.vehicle_id : STOC_TAB;
+                }
+            }
+            toggleEvent(target, openTab);
             target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if (EXPAND_ITEM > 0) {
+                var detail = getDetailRow(target);
+                var itemRow = detail ? detail.querySelector('tr[data-item-id="' + EXPAND_ITEM + '"]') : null;
+                if (itemRow) {
+                    itemRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    itemRow.classList.add('rp-item-flash');
+                }
+            }
         }
     }
 })();

@@ -2085,6 +2085,11 @@ class DispecerCurseController
         }
 
         $isRefacturareSubmit = (string) ($_POST['submit_intent'] ?? '') === 'refacturare';
+        // Fluxul "cursa tocmai adaugata": dupa salvare trimitem utilizatorul inapoi la lista,
+        // ca sa nu ramana pe formularul de editare si sa scrie peste cursa buna.
+        // Bifa poate fi scoasa cand cursa mai are de primit o cheltuiala sau o refacturare separata.
+        $postCreateFlow = (string) ($_POST['post_create_flow'] ?? '') === '1';
+        $returnToList = $postCreateFlow && (string) ($_POST['return_to_list'] ?? '') === '1';
         [$data, $errors, $old] = $this->validateExpenseInput($_POST);
         [$uploadedDocument, $uploadError] = $this->storeUploadedExpenseDocument($_FILES['document_upload'] ?? null);
         if ($uploadError !== null) {
@@ -2108,9 +2113,11 @@ class DispecerCurseController
             if ($expenseId > 0) {
                 $redirect['expense_id'] = $expenseId;
             }
+            $redirect += $this->postCreateFlowQuery($postCreateFlow, $returnToList);
             redirect(build_query_url($redirect));
         }
 
+        $expenseSaved = false;
         $removeExistingDocuments = isset($_POST['sterge_document']) && (string) $_POST['sterge_document'] === '1';
         $removeExistingRefacturareDocument = isset($_POST['sterge_refacturare_document']) && (string) $_POST['sterge_refacturare_document'] === '1';
 
@@ -2159,6 +2166,7 @@ class DispecerCurseController
             // La modificari de cheltuieli, cursa reintra automat in etapa de facturare.
             $this->model->updateRaceBillingStatus($raceId, self::DEFAULT_BILLING_STATUS, $now, $this->currentUserId());
             $this->resetRaceExpenseStatusIfNotApplicable($raceId, $now, true);
+            $expenseSaved = true;
             if ($isRefacturareSubmit) {
                 flash_set('success', $existingExpense !== null ? 'Refacturarea a fost actualizata.' : 'Refacturarea a fost adaugata.');
             } else {
@@ -2176,7 +2184,14 @@ class DispecerCurseController
             flash_set('danger', 'Nu s-a putut salva cheltuiala.');
         }
 
-        redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
+        if ($returnToList && $expenseSaved) {
+            flash_set('info', 'Te-ai intors la lista dupa cursa #' . $raceId . '. Formularul de mai jos este gol, poti introduce o cursa noua.');
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        $successRedirect = ['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]
+            + $this->postCreateFlowQuery($postCreateFlow, $returnToList);
+        redirect(build_query_url($successRedirect));
     }
 
     private function deleteExpenseAction(): void
@@ -2380,7 +2395,16 @@ class DispecerCurseController
 
         $raceId = (int) ($_POST['race_id'] ?? 0);
         $returnToEdit = trim((string) ($_POST['return_to'] ?? '')) === 'edit';
-        $redirectUrl = $this->buildRefacturareRedirectUrl($raceId, $returnToEdit);
+        // Butonul de refacturare face parte din acelasi formular, deci respecta aceeasi bifa
+        // din fluxul "cursa tocmai adaugata".
+        $postCreateFlow = (string) ($_POST['post_create_flow'] ?? '') === '1';
+        $returnToList = $postCreateFlow && (string) ($_POST['return_to_list'] ?? '') === '1';
+        $redirectUrl = $this->buildRefacturareRedirectUrl(
+            $raceId,
+            $returnToEdit,
+            $this->postCreateFlowQuery($postCreateFlow, $returnToList)
+        );
+        $refacturareSaved = false;
 
         ensure_csrf_or_redirect($redirectUrl);
 
@@ -2466,6 +2490,7 @@ class DispecerCurseController
 
             $this->model->updateRaceBillingStatus($raceId, self::DEFAULT_BILLING_STATUS, $now, $this->currentUserId());
             $this->resetRaceExpenseStatusIfNotApplicable($raceId, $now, true);
+            $refacturareSaved = true;
             flash_set('success', 'Refacturarea a fost adaugata.');
         } catch (PDOException $exception) {
             if ($uploadedRefacturareDocument !== null) {
@@ -2477,13 +2502,39 @@ class DispecerCurseController
             $this->setRefacturareFormFlash($raceId, $returnToEdit, $old, []);
         }
 
+        if ($returnToList && $refacturareSaved) {
+            flash_set('info', 'Te-ai intors la lista dupa cursa #' . $raceId . '. Formularul de mai jos este gol, poti introduce o cursa noua.');
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
         redirect($redirectUrl);
     }
 
-    private function buildRefacturareRedirectUrl(int $raceId, bool $returnToEdit): string
+    /**
+     * Parametrii care tin viu fluxul "cursa tocmai adaugata" pe pagina de editare.
+     * `retur=0` memoreaza faptul ca utilizatorul a debifat intoarcerea la lista,
+     * ca sa nu trebuiasca sa o debifeze din nou pentru fiecare cheltuiala.
+     */
+    private function postCreateFlowQuery(bool $postCreateFlow, bool $returnToList): array
+    {
+        if (!$postCreateFlow) {
+            return [];
+        }
+
+        $query = ['flux' => 'cursa_noua'];
+        if (!$returnToList) {
+            $query['retur'] = '0';
+        }
+
+        return $query;
+    }
+
+    private function buildRefacturareRedirectUrl(int $raceId, bool $returnToEdit, array $extraEditQuery = []): string
     {
         if ($returnToEdit && $raceId > 0) {
-            return build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]);
+            return build_query_url(
+                ['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId] + $extraEditQuery
+            );
         }
 
         $redirectQuery = [
@@ -5566,7 +5617,8 @@ class DispecerCurseController
                         $loadLocation,
                         $zone,
                         $vehicleId,
-                        trim((string) ($input['loc_intoarcere'] ?? ''))
+                        trim((string) ($input['loc_intoarcere'] ?? '')),
+                        trim((string) ($input['loc_plecare_ruta'] ?? ''))
                     );
                     if ($primaryRouteRule !== null) {
                         // Rute pe 4 puncte: punctele de plecare/intoarcere vin din configurare,
@@ -6003,6 +6055,7 @@ class DispecerCurseController
             'loc_incarcare_id' => $loadLocationId !== null ? (string) $loadLocationId : '',
             'loc_plecare' => $departureLocationRaw,
             'loc_intoarcere' => trim((string) ($input['loc_intoarcere'] ?? '')),
+            'loc_plecare_ruta' => trim((string) ($input['loc_plecare_ruta'] ?? '')),
             'loc_aspirare' => $suctionLocationRaw,
             'loc_livrare' => $deliveryLocationRaw,
             'loc_livrare_cursa' => $routeDeliveryLocationRaw,
@@ -7586,7 +7639,8 @@ class DispecerCurseController
         ?array $loadLocation = null,
         ?array $zone = null,
         ?int $vehicleId = null,
-        ?string $returnPoint = null
+        ?string $returnPoint = null,
+        ?string $departurePoint = null
     ): ?array {
         $directRule = $this->model->getPrimaryRouteRuleForBeneficiary(
             $beneficiaryId,
@@ -7594,7 +7648,8 @@ class DispecerCurseController
             $zoneId,
             true,
             $vehicleId,
-            $returnPoint
+            $returnPoint,
+            $departurePoint
         );
         if ($directRule !== null) {
             return $directRule;
@@ -7607,7 +7662,8 @@ class DispecerCurseController
                 $locationId,
                 true,
                 $vehicleId,
-                $returnPoint
+                $returnPoint,
+                $departurePoint
             );
             if ($reverseRule !== null) {
                 return $reverseRule;

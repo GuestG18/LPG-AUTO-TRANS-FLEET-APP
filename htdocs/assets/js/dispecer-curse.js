@@ -367,6 +367,13 @@
         var suctionLiquidTonWrapper = form.querySelector('[data-role="field-tona-aspirata-lichida"]');
         var suctionGasTonWrapper = form.querySelector('[data-role="field-tona-aspirata-gazoasa"]');
 
+        var primaryExtendedBeneficiaries = [];
+        try {
+            primaryExtendedBeneficiaries = JSON.parse(form.getAttribute('data-primary-extended-beneficiaries') || '[]') || [];
+        } catch (error) {
+            primaryExtendedBeneficiaries = [];
+        }
+
         var beneficiaryPricing = {};
         try {
             beneficiaryPricing = JSON.parse(form.getAttribute('data-beneficiary-pricing') || '{}') || {};
@@ -3880,6 +3887,21 @@
                 .filter(function (part) { return part !== ''; });
         }
 
+        function getSelectedDeparturePoint() {
+            if (!(routeDepartureGarageField instanceof HTMLSelectElement)) {
+                return '';
+            }
+
+            var value = String(routeDepartureGarageField.value || '').trim();
+            if (value !== '') {
+                return value;
+            }
+
+            return routeDepartureGarageField.dataset.initialValueApplied
+                ? ''
+                : String(routeDepartureGarageField.dataset.initialValue || '').trim();
+        }
+
         function getSelectedReturnPoint() {
             if (!(routeReturnGarageField instanceof HTMLSelectElement)) {
                 return '';
@@ -3899,30 +3921,43 @@
         }
 
         // Capetele de intoarcere configurate pentru vehiculul selectat, in ordinea regulilor.
-        function collectReturnPointOptions(mapEntry) {
+        function variantCoversSelectedVehicle(variant) {
+            var variantVehicleIds = Array.isArray(variant.vehicle_ids) ? variant.vehicle_ids : [];
+            if (variantVehicleIds.length === 0) {
+                return true;
+            }
+            var vehicleValue = parseInt(String(vehicleField ? (vehicleField.value || '') : '').trim(), 10);
+
+            return Number.isFinite(vehicleValue) && vehicleValue > 0 && variantVehicleIds.some(function (variantVehicleId) {
+                return parseInt(String(variantVehicleId), 10) === vehicleValue;
+            });
+        }
+
+        // Capetele configurate pentru vehiculul selectat. `field` este 'garaj_plecare'
+        // (un singur punct pe varianta) sau 'garaj_intoarcere' (lista).
+        function collectCircuitPointOptions(mapEntry, field) {
             if (!mapEntry || typeof mapEntry !== 'object') {
                 return [];
             }
 
             var variants = Array.isArray(mapEntry.variants) ? mapEntry.variants : [mapEntry];
-            var vehicleValue = parseInt(String(vehicleField ? (vehicleField.value || '') : '').trim(), 10);
             var options = [];
             variants.forEach(function (variant) {
-                var variantVehicleIds = Array.isArray(variant.vehicle_ids) ? variant.vehicle_ids : [];
-                var coversVehicle = variantVehicleIds.length === 0
-                    || (Number.isFinite(vehicleValue) && vehicleValue > 0 && variantVehicleIds.some(function (variantVehicleId) {
-                        return parseInt(String(variantVehicleId), 10) === vehicleValue;
-                    }));
-                if (coversVehicle) {
-                    parseReturnPoints(variant.garaj_intoarcere).forEach(function (returnPoint) {
-                        if (options.indexOf(returnPoint) === -1) {
-                            options.push(returnPoint);
-                        }
-                    });
+                if (!variantCoversSelectedVehicle(variant)) {
+                    return;
                 }
+                parseReturnPoints(variant[field]).forEach(function (point) {
+                    if (options.indexOf(point) === -1) {
+                        options.push(point);
+                    }
+                });
             });
 
             return options;
+        }
+
+        function collectReturnPointOptions(mapEntry) {
+            return collectCircuitPointOptions(mapEntry, 'garaj_intoarcere');
         }
 
         function selectPrimaryRouteVariantForVehicle(mapEntry) {
@@ -3955,11 +3990,28 @@
                 // difera prin capatul de traseu (se intoarce la garaj vs. ramane parcat).
                 // Alegerea dispecerului decide varianta, deci si km / pretul.
                 var chosenReturnPoint = getSelectedReturnPoint();
-                if (chosenReturnPoint !== '') {
-                    for (var chosenIndex = 0; chosenIndex < vehicleVariants.length; chosenIndex += 1) {
-                        if (parseReturnPoints(vehicleVariants[chosenIndex].garaj_intoarcere).indexOf(chosenReturnPoint) !== -1) {
-                            return vehicleVariants[chosenIndex];
-                        }
+                var chosenDeparturePoint = getSelectedDeparturePoint();
+                var matches = vehicleVariants.filter(function (variant) {
+                    if (chosenDeparturePoint !== ''
+                        && parseReturnPoints(variant.garaj_plecare).indexOf(chosenDeparturePoint) === -1) {
+                        return false;
+                    }
+
+                    return chosenReturnPoint === ''
+                        || parseReturnPoints(variant.garaj_intoarcere).indexOf(chosenReturnPoint) !== -1;
+                });
+                if (matches.length > 0) {
+                    return matches[0];
+                }
+
+                // Alegerile nu se potrivesc pe aceeasi varianta: pastram capatul de plecare,
+                // pentru ca lista de intoarcere se recalculeaza oricum dupa el.
+                if (chosenDeparturePoint !== '') {
+                    var departureMatches = vehicleVariants.filter(function (variant) {
+                        return parseReturnPoints(variant.garaj_plecare).indexOf(chosenDeparturePoint) !== -1;
+                    });
+                    if (departureMatches.length > 0) {
+                        return departureMatches[0];
                     }
                 }
 
@@ -4044,6 +4096,7 @@
             var resolvedRule = normalizePrimaryRouteRule(selectPrimaryRouteVariantForVehicle(pairEntry), matchDirection);
             if (resolvedRule) {
                 resolvedRule.returnPointOptions = collectReturnPointOptions(pairEntry);
+                resolvedRule.departurePointOptions = collectCircuitPointOptions(pairEntry, 'garaj_plecare');
             }
 
             return resolvedRule;
@@ -4098,17 +4151,79 @@
 
         // Rute Primar pe 4 puncte: punctele de plecare/intoarcere sunt doar afisate,
         // completate din ruta configurata. Serverul le rescrie oricum din configurare la salvare.
+        // Populeaza un select de capat de traseu, pastrand alegerea curenta daca mai e
+        // valida si aplicand o singura data varianta salvata pe cursa (la editare).
+        function fillCircuitSelect(selectEl, options, fallbackValue) {
+            if (!(selectEl instanceof HTMLSelectElement)) {
+                return;
+            }
+
+            var initialValue = String(selectEl.dataset.initialValue || '').trim();
+            var forcedValue = '';
+            if (
+                initialValue !== ''
+                && !selectEl.dataset.initialValueApplied
+                && options.indexOf(initialValue) !== -1
+            ) {
+                selectEl.dataset.initialValueApplied = '1';
+                forcedValue = initialValue;
+            }
+
+            var previousValue = forcedValue !== '' ? forcedValue : String(selectEl.value || '').trim();
+            var nextValue = options.indexOf(previousValue) !== -1 ? previousValue : String(fallbackValue || '');
+
+            var rendered = Array.prototype.map.call(selectEl.options, function (option) {
+                return String(option.value);
+            });
+            var sameOptions = rendered.length === options.length && rendered.every(function (value, index) {
+                return value === options[index];
+            });
+            if (!sameOptions) {
+                selectEl.innerHTML = '';
+                options.forEach(function (point) {
+                    var option = document.createElement('option');
+                    option.value = point;
+                    option.textContent = point;
+                    selectEl.appendChild(option);
+                });
+            }
+
+            if (String(selectEl.value || '') !== nextValue) {
+                selectEl.value = nextValue;
+            }
+        }
+
         function syncPrimaryRouteCircuitFields(transportType, routeRule) {
-            var showCircuit = isPrimaryTransport(transportType)
-                && !!routeRule
+            // Beneficiarul lucreaza cu rute pe 4 puncte => campurile raman pe ecran de la
+            // inceput, chiar daca ruta nu s-a rezolvat inca (lipsesc Loc incarcare / descarcare
+            // sau vehiculul). Se completeaza singure cand perechea devine completa.
+            var beneficiaryValue = String(beneficiaryField ? (beneficiaryField.value || '') : '').trim();
+            var beneficiaryUsesCircuit = beneficiaryValue !== ''
+                && primaryExtendedBeneficiaries.indexOf(beneficiaryValue) !== -1;
+            var hasResolvedCircuit = !!routeRule
                 && routeRule.active !== false
                 && (String(routeRule.departureGarage || '') !== '' || String(routeRule.returnGarage || '') !== '');
+            var showCircuit = isPrimaryTransport(transportType)
+                && (beneficiaryUsesCircuit || hasResolvedCircuit);
+
+            // Ordinea campurilor urmeaza traseul, nu asezarea implicita.
+            form.classList.toggle('dispatcher-circuit-order', showCircuit);
 
             if (routeDepartureGarageWrapper instanceof HTMLElement) {
                 routeDepartureGarageWrapper.classList.toggle('d-none', !showCircuit);
             }
-            if (routeDepartureGarageField instanceof HTMLInputElement) {
-                routeDepartureGarageField.value = showCircuit ? String(routeRule.departureGarage || '') : '';
+            if (routeDepartureGarageField instanceof HTMLSelectElement) {
+                if (showCircuit && hasResolvedCircuit) {
+                    fillCircuitSelect(
+                        routeDepartureGarageField,
+                        Array.isArray(routeRule.departurePointOptions) && routeRule.departurePointOptions.length > 0
+                            ? routeRule.departurePointOptions
+                            : parseReturnPoints(routeRule.departureGarage),
+                        routeRule.departureGarage
+                    );
+                } else {
+                    routeDepartureGarageField.innerHTML = '';
+                }
             }
 
             if (routeReturnGarageWrapper instanceof HTMLElement) {
@@ -4118,56 +4233,18 @@
                 return;
             }
 
-            if (!showCircuit) {
+            if (!showCircuit || !hasResolvedCircuit) {
                 routeReturnGarageField.innerHTML = '';
                 return;
             }
 
-            var returnOptions = Array.isArray(routeRule.returnPointOptions) && routeRule.returnPointOptions.length > 0
-                ? routeRule.returnPointOptions
-                : parseReturnPoints(routeRule.returnGarage);
-            // La editare, varianta salvata pe cursa are prioritate fata de varianta implicita,
-            // altfel deschiderea unei curse i-ar schimba tacit km-ul si pretul. Se aplica
-            // o singura data, ca sa nu blocheze schimbarea facuta ulterior de dispecer.
-            var initialValue = String(routeReturnGarageField.dataset.initialValue || '').trim();
-            var forcedValue = '';
-            if (
-                initialValue !== ''
-                && !routeReturnGarageField.dataset.initialValueApplied
-                && returnOptions.indexOf(initialValue) !== -1
-            ) {
-                routeReturnGarageField.dataset.initialValueApplied = '1';
-                forcedValue = initialValue;
-            }
-
-            var previousValue = forcedValue !== ''
-                ? forcedValue
-                : String(routeReturnGarageField.value || '').trim();
-            var nextValue = returnOptions.indexOf(previousValue) !== -1
-                ? previousValue
-                : String(routeRule.returnGarage || '');
-
-            var renderedOptions = Array.prototype.map.call(routeReturnGarageField.options, function (option) {
-                return String(option.value);
-            });
-            var sameOptions = renderedOptions.length === returnOptions.length
-                && renderedOptions.every(function (value, index) {
-                    return value === returnOptions[index];
-                });
-
-            if (!sameOptions) {
-                routeReturnGarageField.innerHTML = '';
-                returnOptions.forEach(function (returnPoint) {
-                    var option = document.createElement('option');
-                    option.value = returnPoint;
-                    option.textContent = returnPoint;
-                    routeReturnGarageField.appendChild(option);
-                });
-            }
-
-            if (String(routeReturnGarageField.value || '') !== nextValue) {
-                routeReturnGarageField.value = nextValue;
-            }
+            fillCircuitSelect(
+                routeReturnGarageField,
+                Array.isArray(routeRule.returnPointOptions) && routeRule.returnPointOptions.length > 0
+                    ? routeRule.returnPointOptions
+                    : parseReturnPoints(routeRule.returnGarage),
+                routeRule.returnGarage
+            );
         }
 
         function getPrimaryRouteRule(primaryScope, beneficiaryId, locationId, zoneId) {
@@ -5733,11 +5810,13 @@
                 recalculateTotal();
             });
         }
-        if (routeReturnGarageField instanceof HTMLSelectElement) {
-            routeReturnGarageField.addEventListener('change', function () {
-                recalculateTotal();
-            });
-        }
+        [routeDepartureGarageField, routeReturnGarageField].forEach(function (circuitSelect) {
+            if (circuitSelect instanceof HTMLSelectElement) {
+                circuitSelect.addEventListener('change', function () {
+                    recalculateTotal();
+                });
+            }
+        });
 
         [kmField, kmTotalField, quantityField, zoneField, suctionHoursField, relocationKmField, deliveredTonField, suctionLiquidTonField, suctionGasTonField].forEach(function (field) {
             if (!field) {

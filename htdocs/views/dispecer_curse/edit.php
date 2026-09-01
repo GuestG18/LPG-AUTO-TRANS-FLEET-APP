@@ -7,6 +7,16 @@ $zoneExtraKmJson = json_encode($zoneExtraKmCosts ?? [], JSON_UNESCAPED_UNICODE);
 if (!is_string($zoneExtraKmJson)) {
     $zoneExtraKmJson = '{}';
 }
+$primaryExtendedBeneficiaryIds = [];
+foreach (($beneficiaries ?? []) as $extendedPointsBeneficiary) {
+    if (!empty($extendedPointsBeneficiary['rute_primar_puncte_extinse'])) {
+        $primaryExtendedBeneficiaryIds[] = (string) (int) ($extendedPointsBeneficiary['id'] ?? 0);
+    }
+}
+$primaryExtendedBeneficiaryJson = json_encode($primaryExtendedBeneficiaryIds, JSON_UNESCAPED_UNICODE);
+if (!is_string($primaryExtendedBeneficiaryJson)) {
+    $primaryExtendedBeneficiaryJson = '[]';
+}
 $beneficiaryPricingJson = json_encode($beneficiaryPricing ?? [], JSON_UNESCAPED_UNICODE);
 if (!is_string($beneficiaryPricingJson)) {
     $beneficiaryPricingJson = '{}';
@@ -220,12 +230,41 @@ $focusKey = trim((string) ($_GET['focus'] ?? ''));
 $focusFieldId = (string) ($focusFieldMap[$focusKey] ?? '');
 $focusEndTime = $focusKey === 'end_time';
 $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invoicedRefacturareTotal;
+
+// Flux "cursa tocmai adaugata": utilizatorul a raspuns "Da" la promptul de cheltuieli.
+// In acest caz pagina de editare este doar o oprire scurta, nu un formular de cursa noua.
+$postCreateFlow = trim((string) ($_GET['flux'] ?? '')) === 'cursa_noua';
+// retur=0 = utilizatorul a debifat deja intoarcerea la lista pentru cursa asta.
+$postCreateReturnChecked = trim((string) ($_GET['retur'] ?? '')) !== '0';
+$postCreateFlowQuery = [];
+if ($postCreateFlow) {
+    $postCreateFlowQuery['flux'] = 'cursa_noua';
+    if (!$postCreateReturnChecked) {
+        $postCreateFlowQuery['retur'] = '0';
+    }
+}
 ?>
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
     <h2 class="h4 mb-0">Editeaza cursa</h2>
     <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Inapoi la lista</a>
 </div>
+
+<?php if ($postCreateFlow): ?>
+    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2" role="alert">
+        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+        <div class="flex-grow-1">
+            <strong>Editezi cursa #<?= e((string) $raceId) ?>, care tocmai a fost salvata.</strong>
+            Formularul "Date cursa" de mai jos <u>nu</u> este un formular de cursa noua &ndash; daca scrii in el, modifici cursa salvata.
+            <?php if ($postCreateReturnChecked): ?>
+                Adauga cheltuiala mai jos, iar dupa salvare te intorci automat la lista, unde poti introduce o cursa noua.
+            <?php else: ?>
+                Ai debifat intoarcerea automata la lista, deci ramai pe cursa dupa salvare, ca sa mai poti adauga o cheltuiala sau o refacturare.
+            <?php endif; ?>
+        </div>
+        <a class="btn btn-sm btn-outline-dark" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Adauga o cursa noua</a>
+    </div>
+<?php endif; ?>
 
 <div class="card border-0 shadow-sm mb-3">
     <div class="card-header bg-white">
@@ -239,7 +278,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
               data-zone-extra-km-costs='<?= e($zoneExtraKmJson) ?>'
               data-distribution-route-tariffs='<?= e($distributionRouteTariffMapJson) ?>'
               data-primary-route-km-map='<?= e($primaryRouteKmMapJson) ?>'
-              data-beneficiary-pricing='<?= e($beneficiaryPricingJson) ?>'
+              data-beneficiary-pricing='<?= e($beneficiaryPricingJson) ?>' data-primary-extended-beneficiaries='<?= e($primaryExtendedBeneficiaryJson) ?>'
               data-load-location-tariffs='<?= e($loadLocationTariffJson) ?>'
               data-vehicle-default-load-locations='<?= e($vehicleDefaultLoadLocationJson) ?>'
               data-vehicle-default-distribution-zones='<?= e($vehicleDefaultDistributionZoneJson) ?>'
@@ -280,7 +319,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     </div>
                 <?php endif; ?>
 
-                <div class="col-12 col-md-6 dispatcher-top-field">
+                <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-beneficiar">
                     <label class="form-label" for="edit_race_beneficiar_id">Beneficiar transport <span class="text-danger">*</span></label>
                     <select class="form-select <?= isset($raceFormErrors['beneficiar_id']) ? 'is-invalid' : '' ?>" id="edit_race_beneficiar_id" name="beneficiar_id" required>
                         <option value="">-- Selecteaza --</option>
@@ -298,7 +337,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <?php if (isset($raceFormErrors['beneficiar_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['beneficiar_id']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-top-field">
+                <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-tip-transport">
                     <label class="form-label" for="edit_race_tip_transport">Tip Transport <span class="text-danger">*</span></label>
                     <select class="form-select <?= isset($raceFormErrors['tip_transport']) ? 'is-invalid' : '' ?>" id="edit_race_tip_transport" name="tip_transport" data-role="tip-transport" required>
                         <?php foreach ($transportTypes as $value => $label): ?>
@@ -310,7 +349,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <?php if (isset($raceFormErrors['tip_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tip_transport']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-top-field">
+                <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-vehicul">
                     <label class="form-label" for="edit_race_vehicle_id">Nr. Inmatriculare <span class="text-danger">*</span></label>
                     <select class="form-select <?= isset($raceFormErrors['vehicle_id']) ? 'is-invalid' : '' ?>" id="edit_race_vehicle_id" name="vehicle_id" required>
                         <option value="">-- Selecteaza --</option>
@@ -328,7 +367,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <?php if (isset($raceFormErrors['vehicle_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['vehicle_id']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-top-field">
+                <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-sofer">
                     <label class="form-label" for="edit_race_driver_id">Sofer <span class="text-danger">*</span></label>
                     <select class="form-select <?= isset($raceFormErrors['driver_id']) ? 'is-invalid' : '' ?>" id="edit_race_driver_id" name="driver_id" required>
                         <option value="">-- Selecteaza mai intai vehiculul --</option>
@@ -422,7 +461,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <?php if (isset($raceFormErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_incarcare']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-schedule-field">
+                <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-end-datetime">
                     <label class="form-label" for="edit_race_end_datetime">Data si ora sfarsit <span class="text-danger">*</span></label>
                     <?php
                         $endDateDisplayValue = $formatRaceDateInput($raceFormData['data_sfarsit'] ?? ($raceFormData['data_cursa'] ?? ''));
@@ -604,8 +643,8 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
 
                 <div class="col-12 col-md-6 d-none" data-role="field-ruta-plecare">
                     <label class="form-label" for="edit_race_ruta_plecare">Loc plecare (garaj)</label>
-                    <input type="text" class="form-control" id="edit_race_ruta_plecare" data-role="ruta-plecare" value="" readonly>
-                    <div class="form-text text-muted">Din ruta configurata pentru beneficiar. Nu se editeaza aici.</div>
+                    <select class="form-select" id="edit_race_ruta_plecare" name="loc_plecare_ruta" data-role="ruta-plecare" data-initial-value="<?= e((string) ($raceFormData['loc_plecare'] ?? '')) ?>"></select>
+                    <div class="form-text text-muted">Punctele de plecare configurate pe aceasta ruta. Km si pretul urmeaza varianta aleasa.</div>
                 </div>
 
                 <div class="col-12 col-md-6 d-none" data-role="field-ruta-intoarcere">
@@ -741,7 +780,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                         </form>
                     <?php endif; ?>
                     <?php if ($editingExpense): ?>
-                        <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">Anuleaza editarea</a>
+                        <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(array_merge(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId], $postCreateFlowQuery))) ?>">Anuleaza editarea</a>
                     <?php endif; ?>
                 </div>
             </div>
@@ -756,6 +795,9 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                     <input type="hidden" name="expense_id" value="<?= e((string) ($expenseFormData['expense_id'] ?? '')) ?>">
                     <input type="hidden" name="race_id" value="<?= e((string) $raceId) ?>">
                     <input type="hidden" name="return_to" value="edit">
+<?php if ($postCreateFlow): ?>
+                    <input type="hidden" name="post_create_flow" value="1">
+<?php endif; ?>
 
                     <div class="row g-2 mb-3 align-items-start expense-type-row">
                         <div class="col-12 col-md-6">
@@ -947,7 +989,23 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                         </div>
                     <?php endif; ?>
 
+<?php if ($postCreateFlow): ?>
+                    <div class="expense-submit-row">
+                        <div class="form-check mb-2 expense-return-choice">
+                            <input class="form-check-input" type="checkbox" value="1" id="expense_return_to_list" name="return_to_list" <?= $postCreateReturnChecked ? 'checked' : '' ?>>
+                            <label class="form-check-label" for="expense_return_to_list">
+                                Dupa salvare ma intorc la lista, ca sa adaug o cursa noua.
+                                <span class="d-block text-muted small">
+                                    Debifeaza daca mai ai de adaugat ceva pe cursa #<?= e((string) $raceId) ?>
+                                    (inca o cheltuiala sau o refacturare separata). Se aplica ambelor butoane de salvare.
+                                </span>
+                            </label>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100" name="submit_intent" value="expense"><?= $editingExpense ? 'Actualizeaza cheltuiala' : 'Adauga cheltuiala' ?></button>
+                    </div>
+<?php else: ?>
                     <button type="submit" class="btn btn-primary expense-submit-row" name="submit_intent" value="expense"><?= $editingExpense ? 'Actualizeaza cheltuiala' : 'Adauga cheltuiala' ?></button>
+<?php endif; ?>
                     </div>
                     <div class="border rounded p-3 mb-3 expense-refacturare-panel <?= $expenseRefacturareEnabled ? '' : 'd-none' ?>" data-role="expense-refacturare-fields">
                         <div class="fw-semibold mb-3">Detalii Refacturare</div>
@@ -1182,7 +1240,7 @@ $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invo
                                     </td>
                                     <td class="text-end pe-3">
                                         <div class="d-inline-flex gap-1">
-                                            <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'expense_id' => $expenseId])) ?>">Editeaza</a>
+                                            <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(array_merge(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'expense_id' => $expenseId], $postCreateFlowQuery))) ?>">Editeaza</a>
                                             <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'delete_expense', 'id' => $raceId])) ?>" class="d-inline">
                                                 <?= csrf_field() ?>
                                                 <input type="hidden" name="expense_id" value="<?= e((string) $expenseId) ?>">

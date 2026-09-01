@@ -29,6 +29,16 @@ if (!is_string($zoneExtraKmJson)) {
     $zoneExtraKmJson = '{}';
 }
 
+$primaryExtendedBeneficiaryIds = [];
+foreach (($beneficiaries ?? []) as $extendedPointsBeneficiary) {
+    if (!empty($extendedPointsBeneficiary['rute_primar_puncte_extinse'])) {
+        $primaryExtendedBeneficiaryIds[] = (string) (int) ($extendedPointsBeneficiary['id'] ?? 0);
+    }
+}
+$primaryExtendedBeneficiaryJson = json_encode($primaryExtendedBeneficiaryIds, JSON_UNESCAPED_UNICODE);
+if (!is_string($primaryExtendedBeneficiaryJson)) {
+    $primaryExtendedBeneficiaryJson = '[]';
+}
 $beneficiaryPricingJson = json_encode($beneficiaryPricing ?? [], JSON_UNESCAPED_UNICODE);
 if (!is_string($beneficiaryPricingJson)) {
     $beneficiaryPricingJson = '{}';
@@ -613,7 +623,7 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                         </div>
                     </div>
                 <?php endif; ?>
-                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store'])) ?>" class="dispatcher-race-form" data-zone-tariffs='<?= e($zoneTariffJson) ?>' data-zone-extra-km-costs='<?= e($zoneExtraKmJson) ?>' data-distribution-route-tariffs='<?= e($distributionRouteTariffMapJson) ?>' data-primary-route-km-map='<?= e($primaryRouteKmMapJson) ?>' data-beneficiary-pricing='<?= e($beneficiaryPricingJson) ?>' data-load-location-tariffs='<?= e($loadLocationTariffJson) ?>' data-vehicle-default-load-locations='<?= e($vehicleDefaultLoadLocationJson) ?>' data-vehicle-default-distribution-zones='<?= e($vehicleDefaultDistributionZoneJson) ?>' data-vehicle-garages='<?= e($vehicleGarageJson) ?>' data-load-locations-by-beneficiary='<?= e($loadLocationsByBeneficiaryJson) ?>' data-distribution-zones-by-beneficiary='<?= e($distributionZonesByBeneficiaryJson) ?>' data-vehicle-default-load-locations-by-beneficiary='<?= e($vehicleDefaultLoadLocationByBeneficiaryJson) ?>' data-vehicle-default-distribution-zones-by-beneficiary='<?= e($vehicleDefaultDistributionZoneByBeneficiaryJson) ?>' data-compresor-vehicles-by-beneficiary='<?= e($compressorVehicleByBeneficiaryJson) ?>' data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>' data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>' data-all-drivers='<?= e($allDriversJson) ?>' data-inactive-resource-status-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'inactive_resource_status'])) ?>" data-inactive-approval-mode="<?= (function_exists('can') && can('inactive_approvals', 'review')) ? 'admin' : 'user' ?>" data-inactive-approval-request-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'request_inactive_vehicle_approval'])) ?>" data-inactive-approval-cancel-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'cancel_inactive_vehicle_approval'])) ?>" data-inactive-trip-id="" novalidate>
+                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store'])) ?>" class="dispatcher-race-form" data-zone-tariffs='<?= e($zoneTariffJson) ?>' data-zone-extra-km-costs='<?= e($zoneExtraKmJson) ?>' data-distribution-route-tariffs='<?= e($distributionRouteTariffMapJson) ?>' data-primary-route-km-map='<?= e($primaryRouteKmMapJson) ?>' data-beneficiary-pricing='<?= e($beneficiaryPricingJson) ?>' data-primary-extended-beneficiaries='<?= e($primaryExtendedBeneficiaryJson) ?>' data-load-location-tariffs='<?= e($loadLocationTariffJson) ?>' data-vehicle-default-load-locations='<?= e($vehicleDefaultLoadLocationJson) ?>' data-vehicle-default-distribution-zones='<?= e($vehicleDefaultDistributionZoneJson) ?>' data-vehicle-garages='<?= e($vehicleGarageJson) ?>' data-load-locations-by-beneficiary='<?= e($loadLocationsByBeneficiaryJson) ?>' data-distribution-zones-by-beneficiary='<?= e($distributionZonesByBeneficiaryJson) ?>' data-vehicle-default-load-locations-by-beneficiary='<?= e($vehicleDefaultLoadLocationByBeneficiaryJson) ?>' data-vehicle-default-distribution-zones-by-beneficiary='<?= e($vehicleDefaultDistributionZoneByBeneficiaryJson) ?>' data-compresor-vehicles-by-beneficiary='<?= e($compressorVehicleByBeneficiaryJson) ?>' data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>' data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>' data-all-drivers='<?= e($allDriversJson) ?>' data-inactive-resource-status-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'inactive_resource_status'])) ?>" data-inactive-approval-mode="<?= (function_exists('can') && can('inactive_approvals', 'review')) ? 'admin' : 'user' ?>" data-inactive-approval-request-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'request_inactive_vehicle_approval'])) ?>" data-inactive-approval-cancel-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'cancel_inactive_vehicle_approval'])) ?>" data-inactive-trip-id="" novalidate>
                     <?= csrf_field() ?>
                     <input type="hidden" name="parent_cursa_id" value="<?= e($isResumeMode ? (string) $resumeParentId : '') ?>">
                     <input type="hidden" name="vehicle_config_decision" value="" data-vehicle-config-decision>
@@ -638,7 +648,7 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                             </div>
                         <?php endif; ?>
 
-                        <div class="col-12 col-md-6 dispatcher-top-field">
+                        <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-beneficiar">
                             <label class="form-label" for="race_beneficiar_id">Beneficiar transport <span class="text-danger">*</span></label>
                             <select class="form-select <?= isset($formErrors['beneficiar_id']) ? 'is-invalid' : '' ?>" id="race_beneficiar_id" name="beneficiar_id" required>
                                 <option value="">-- Selecteaza --</option>
@@ -652,7 +662,7 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                             <?php if (isset($formErrors['beneficiar_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['beneficiar_id']) ?></div><?php endif; ?>
                         </div>
 
-                        <div class="col-12 col-md-6 dispatcher-top-field">
+                        <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-tip-transport">
                             <label class="form-label" for="race_tip_transport">Tip Transport <span class="text-danger">*</span></label>
                             <select class="form-select <?= isset($formErrors['tip_transport']) ? 'is-invalid' : '' ?>" id="race_tip_transport" name="tip_transport" data-role="tip-transport" required>
                                 <option value="">-- Selecteaza --</option>
@@ -665,7 +675,7 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                             <?php if (isset($formErrors['tip_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['tip_transport']) ?></div><?php endif; ?>
                         </div>
 
-                        <div class="col-12 col-md-6 dispatcher-top-field">
+                        <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-vehicul">
                             <label class="form-label" for="race_vehicle_id">Nr. Înmatriculare <span class="text-danger">*</span></label>
                             <select class="form-select <?= isset($formErrors['vehicle_id']) ? 'is-invalid' : '' ?>" id="race_vehicle_id" name="vehicle_id" required title="Pentru Primar km/tone: se afiseaza vehicule active cu sofer asociat. Pentru celelalte tipuri: filtrare dupa beneficiar si configurari.">
                                 <option value="">-- Selectează --</option>
@@ -683,7 +693,7 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                             <?php if (isset($formErrors['vehicle_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['vehicle_id']) ?></div><?php endif; ?>
                         </div>
 
-                        <div class="col-12 col-md-6 dispatcher-top-field">
+                        <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-sofer">
                             <label class="form-label" for="race_driver_id">Sofer <span class="text-danger">*</span></label>
                             <select class="form-select <?= isset($formErrors['driver_id']) ? 'is-invalid' : '' ?>" id="race_driver_id" name="driver_id" required title="Soferii se incarca automat dupa vehiculul selectat.">
                                 <option value="">-- Selecteaza mai intai vehiculul --</option>
@@ -762,7 +772,7 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                             <?php if (isset($formErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_incarcare']) ?></div><?php endif; ?>
                         </div>
 
-                        <div class="col-12 col-md-6 dispatcher-schedule-field">
+                        <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-end-datetime">
                             <label class="form-label" for="race_end_datetime">Data si ora sfarsit <span class="text-danger">*</span></label>
                             <?php
                                 $endDateValue = (string) ($formData['data_sfarsit'] ?? ($formData['data_cursa'] ?? ''));
@@ -922,8 +932,8 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
 
                         <div class="col-12 col-md-6 d-none" data-role="field-ruta-plecare">
                             <label class="form-label" for="race_ruta_plecare">Loc plecare (garaj)</label>
-                            <input type="text" class="form-control" id="race_ruta_plecare" data-role="ruta-plecare" value="" readonly>
-                            <div class="form-text text-muted">Din ruta configurata pentru beneficiar. Nu se editeaza aici.</div>
+                            <select class="form-select" id="race_ruta_plecare" name="loc_plecare_ruta" data-role="ruta-plecare" data-initial-value="<?= e((string) ($formData['loc_plecare'] ?? '')) ?>"></select>
+                            <div class="form-text text-muted">Punctele de plecare configurate pe aceasta ruta. Km si pretul urmeaza varianta aleasa.</div>
                         </div>
 
                         <div class="col-12 col-md-6 d-none" data-role="field-ruta-intoarcere">
@@ -1201,8 +1211,10 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                     <col class="col-route">
                     <col class="col-beneficiary">
                     <col class="col-goods-type">
+                    <col class="col-quantity">
                     <col class="col-activity">
                     <col class="col-financial">
+                    <col class="col-expenses">
                     <col class="col-beneficiary">
                     <col class="col-actions">
                 </colgroup>
@@ -1224,8 +1236,10 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                     <th class="col-route">Traseu</th>
                     <th class="col-beneficiary">Beneficiar</th>
                     <th class="col-goods-type">Tip marfă</th>
+                    <th class="col-quantity text-center">Cantitate</th>
                     <th class="col-activity">Activitate</th>
                     <th class="col-financial">Financiar</th>
+                    <th class="col-expenses text-center">Cheltuieli / Refacturare</th>
                     <th class="col-beneficiary">Observatii</th>
                     <th class="col-actions text-center">Actiuni</th>
                 </tr>
@@ -1233,7 +1247,7 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                 <tbody>
                 <?php if ($rows === []): ?>
                     <tr>
-                        <td colspan="15" class="text-center text-muted py-4">Nu există curse înregistrate.</td>
+                        <td colspan="17" class="text-center text-muted py-4">Nu există curse înregistrate.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($rows as $row): ?>
@@ -1417,6 +1431,31 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                         if ($capacityValue !== null && $capacityValue > 0 && $loadedQtyDisplayTon !== null && $loadedQtyDisplayTon > 0) {
                             $loadedPercentValue = max(0.0, min(100.0, ($loadedQtyDisplayTon / $capacityValue) * 100.0));
                         }
+                        // Cantitate: valoarea de referinta a cursei, folosita pentru sortare/filtrare
+                        // rapida din antet. Pentru compresor nu exista cantitate incarcata,
+                        // deci se foloseste cantitatea livrata.
+                        $quantityValue = ($loadedQtyDisplayTon !== null && $loadedQtyDisplayTon > 0) ? (float) $loadedQtyDisplayTon : null;
+                        if ($quantityValue === null && $transportType === 'compresor') {
+                            $quantityValue = $tonaLivrataValue;
+                        }
+                        $quantityLabel = $quantityValue !== null ? format_number_ro($quantityValue, 2) . ' t' : '-';
+                        // Cheltuieli / Refacturare: starea cursei fata de cheltuielile atasate,
+                        // ca eticheta scurta si stabila (se poate filtra direct din antet).
+                        $expenseCountValue = (int) ($row['expense_count'] ?? 0);
+                        $refacturareCountValue = (int) ($row['refacturare_count'] ?? 0);
+                        if ($expenseCountValue <= 0) {
+                            $expenseStateLabel = 'Fara';
+                            $expenseStateBadgeClass = 'dispatcher-expense-badge-none';
+                        } elseif ($refacturareCountValue <= 0) {
+                            $expenseStateLabel = 'Cheltuieli';
+                            $expenseStateBadgeClass = 'dispatcher-expense-badge-expenses';
+                        } elseif ($refacturareCountValue >= $expenseCountValue) {
+                            $expenseStateLabel = 'Refacturare';
+                            $expenseStateBadgeClass = 'dispatcher-expense-badge-reinvoice';
+                        } else {
+                            $expenseStateLabel = 'Cheltuieli/Refacturare';
+                            $expenseStateBadgeClass = 'dispatcher-expense-badge-mixed';
+                        }
                         $activityParts = [];
                         $addActivityPart = static function (array &$parts, string $label, ?string $value): void {
                             $normalized = trim((string) $value);
@@ -1589,6 +1628,11 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                                     <span class="dispatcher-cell-text" title="<?= e($goodsTypeLabel) ?>"><?= e($goodsTypeLabel) ?></span>
                                 </div>
                             </td>
+                            <td class="col-quantity text-center-cell">
+                                <div class="cell-content center">
+                                    <span class="dispatcher-cell-text dispatcher-cell-nowrap" title="<?= e($quantityLabel) ?>"><?= e($quantityLabel) ?></span>
+                                </div>
+                            </td>
                             <td class="col-activity">
                                 <div class="cell-content center dispatcher-summary-cell-content" title="<?= e($activityTitle) ?>">
                                     <?= $renderDispatcherSummaryDetails($activityParts, 'activity-' . (string) $raceId, 'activitate cursa #' . (string) $raceId) ?>
@@ -1597,6 +1641,11 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                             <td class="col-financial">
                                 <div class="cell-content center dispatcher-summary-cell-content" title="<?= e($financialTitle) ?>">
                                     <?= $renderDispatcherSummaryDetails($financialParts, 'financial-' . (string) $raceId, 'financiar cursa #' . (string) $raceId) ?>
+                                </div>
+                            </td>
+                            <td class="col-expenses text-center-cell">
+                                <div class="cell-content center">
+                                    <span class="badge rounded-pill dispatcher-expense-badge <?= e($expenseStateBadgeClass) ?>" title="<?= e($expenseStateLabel) ?>"><?= e($expenseStateLabel) ?></span>
                                 </div>
                             </td>
                             <td class="col-beneficiary">
@@ -2723,8 +2772,10 @@ document.addEventListener('DOMContentLoaded', function () {
         { key: 'route', label: 'Traseu' },
         { key: 'beneficiary', label: 'Beneficiar' },
         { key: 'goods_type', label: 'Tip marfa' },
+        { key: 'quantity', label: 'Cantitate' },
         { key: 'activity', label: 'Activitate' },
         { key: 'financial', label: 'Financiar' },
+        { key: 'expenses', label: 'Cheltuieli / Refacturare' },
         { key: 'observations', label: 'Observatii' },
         { key: 'actions', label: 'Actiuni', required: true }
     ];

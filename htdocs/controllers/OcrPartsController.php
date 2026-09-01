@@ -120,6 +120,7 @@ class OcrPartsController
             'perPage' => $perPage,
             'currentPageNo' => $page,
             'expandEventId' => (int) ($_GET['deschide'] ?? 0),
+            'expandItemId' => (int) ($_GET['articol'] ?? 0),
         ]);
     }
 

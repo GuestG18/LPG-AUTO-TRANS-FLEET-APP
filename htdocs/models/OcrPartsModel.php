@@ -464,13 +464,17 @@ class OcrPartsModel
             $params[':f_to'] = $filters['date_to'];
         }
         if (!empty($filters['q'])) {
-            $where[] = '(r.document LIKE :f_q OR r.furnizor LIKE :f_q OR r.observatii LIKE :f_q
-                OR v.nr_inmatriculare LIKE :f_q
+            // Placeholder-e unice: PDO-ul aplicatiei nu emuleaza prepare-urile.
+            $where[] = '(r.document LIKE :f_q1 OR r.furnizor LIKE :f_q2 OR r.observatii LIKE :f_q3
+                OR v.nr_inmatriculare LIKE :f_q4
                 OR EXISTS (SELECT 1 FROM ocr_reparatii_piese p WHERE p.reparatie_id = r.id
-                           AND (p.denumire LIKE :f_q OR p.cod_piesa LIKE :f_q))
+                           AND (p.denumire LIKE :f_q5 OR p.cod_piesa LIKE :f_q6))
                 OR EXISTS (SELECT 1 FROM ocr_reparatii_manopera m WHERE m.reparatie_id = r.id
-                           AND m.denumire LIKE :f_q))';
-            $params[':f_q'] = '%' . $filters['q'] . '%';
+                           AND m.denumire LIKE :f_q7))';
+            $needle = '%' . $filters['q'] . '%';
+            for ($i = 1; $i <= 7; $i++) {
+                $params[':f_q' . $i] = $needle;
+            }
         }
 
         return [$where === [] ? '1=1' : implode(' AND ', $where), $params];
@@ -939,10 +943,13 @@ class OcrPartsModel
         $where = [];
         $params = [];
 
+        // PDO-ul aplicatiei foloseste prepare-uri native (EMULATE_PREPARES=false),
+        // deci acelasi placeholder NU poate aparea de doua ori - folosim nume unice.
         if (!empty($filters['vehicle_id'])) {
-            $where[] = '(EXISTS (SELECT 1 FROM ocr_reparatii_articole a WHERE a.reparatie_id = r.id AND a.vehicle_id = :f_vehicle)
-                OR EXISTS (SELECT 1 FROM ocr_reparatii_vehicule rv WHERE rv.reparatie_id = r.id AND rv.vehicle_id = :f_vehicle))';
-            $params[':f_vehicle'] = (int) $filters['vehicle_id'];
+            $where[] = '(EXISTS (SELECT 1 FROM ocr_reparatii_articole a WHERE a.reparatie_id = r.id AND a.vehicle_id = :f_vehicle1)
+                OR EXISTS (SELECT 1 FROM ocr_reparatii_vehicule rv WHERE rv.reparatie_id = r.id AND rv.vehicle_id = :f_vehicle2))';
+            $params[':f_vehicle1'] = (int) $filters['vehicle_id'];
+            $params[':f_vehicle2'] = (int) $filters['vehicle_id'];
         }
         if (!empty($filters['date_from'])) {
             $where[] = 'r.data_interventie >= :f_from';
@@ -953,12 +960,15 @@ class OcrPartsModel
             $params[':f_to'] = $filters['date_to'];
         }
         if (!empty($filters['q'])) {
-            $where[] = '(r.document LIKE :f_q OR r.furnizor LIKE :f_q OR r.observatii LIKE :f_q
+            $where[] = '(r.document LIKE :f_q1 OR r.furnizor LIKE :f_q2 OR r.observatii LIKE :f_q3
                 OR EXISTS (SELECT 1 FROM ocr_reparatii_articole a
                            LEFT JOIN vehicule av ON av.id = a.vehicle_id
                            WHERE a.reparatie_id = r.id
-                             AND (a.denumire LIKE :f_q OR a.cod_piesa LIKE :f_q OR av.nr_inmatriculare LIKE :f_q)))';
-            $params[':f_q'] = '%' . $filters['q'] . '%';
+                             AND (a.denumire LIKE :f_q4 OR a.cod_piesa LIKE :f_q5 OR av.nr_inmatriculare LIKE :f_q6)))';
+            $needle = '%' . $filters['q'] . '%';
+            for ($i = 1; $i <= 6; $i++) {
+                $params[':f_q' . $i] = $needle;
+            }
         }
 
         return [$where === [] ? '1=1' : implode(' AND ', $where), $params];
@@ -1264,10 +1274,61 @@ class OcrPartsModel
             return $this->itemWarrantyState($itemId, $value !== '' ? $value : null);
         }
 
-        $normalized = $this->updateChildField('ocr_reparatii_articole', self::ITEM_FIELDS, $itemId, $field, $rawValue);
+        // Corectia destinatiei ramane posibila si dupa salvare, dar cu reguli:
+        // manopera nu poate merge in stoc, iar campurile devenite irelevante se
+        // curata atomic (fara sa atingem garantia/pretul/codul/factura - §11).
+        if ($field === 'destinatie' && trim((string) $rawValue) === 'stoc') {
+            $tipStmt = $this->db->prepare('SELECT tip FROM ocr_reparatii_articole WHERE id = :id');
+            $tipStmt->execute([':id' => $itemId]);
+            if ($tipStmt->fetchColumn() === 'manopera') {
+                throw new InvalidArgumentException('Manopera nu poate fi trimisă în stoc.');
+            }
+        }
 
-        if (in_array($field, ['garantie_luni', 'data_referinta'], true)) {
-            $this->recalcItemWarranty($itemId);
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
+        try {
+            $normalized = $this->updateChildField('ocr_reparatii_articole', self::ITEM_FIELDS, $itemId, $field, $rawValue);
+
+            if ($field === 'destinatie') {
+                if ($normalized === 'stoc') {
+                    // Piesa intra in stoc: alocarea pe vehicul si KM-ul nu mai sunt valabile.
+                    $this->db->prepare(
+                        'UPDATE ocr_reparatii_articole SET vehicle_id = NULL, km_bord = NULL, updated_at = :now WHERE id = :id'
+                    )->execute([':now' => date('Y-m-d H:i:s'), ':id' => $itemId]);
+                } else {
+                    // Piesa iese din stoc: depozitul nu mai este relevant.
+                    $this->db->prepare(
+                        'UPDATE ocr_reparatii_articole SET depozit = NULL, updated_at = :now WHERE id = :id'
+                    )->execute([':now' => date('Y-m-d H:i:s'), ':id' => $itemId]);
+                }
+            }
+
+            // Alocarea pe un vehicul care nu e inca pe factura creeaza automat
+            // asocierea factura<->vehicul (integritate fara pasi manuali - §13).
+            if ($field === 'vehicle_id' && $normalized !== null && (int) $normalized > 0) {
+                $eventId = $this->getItemEventId($itemId);
+                if ($eventId !== null) {
+                    $this->db->prepare(
+                        'INSERT IGNORE INTO ocr_reparatii_vehicule (reparatie_id, vehicle_id, created_at) VALUES (:e, :v, :c)'
+                    )->execute([':e' => $eventId, ':v' => (int) $normalized, ':c' => date('Y-m-d H:i:s')]);
+                }
+            }
+
+            if (in_array($field, ['garantie_luni', 'data_referinta'], true)) {
+                $this->recalcItemWarranty($itemId);
+            }
+
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
+        } catch (Throwable $exception) {
+            if ($ownTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
         }
 
         return $this->itemWarrantyState($itemId, $normalized);

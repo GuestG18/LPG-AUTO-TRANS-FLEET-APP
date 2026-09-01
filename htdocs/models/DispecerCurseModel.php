@@ -1563,7 +1563,8 @@ class DispecerCurseModel extends BaseModel
         int $zoneId,
         bool $onlyActive = true,
         ?int $vehicleId = null,
-        ?string $returnPoint = null
+        ?string $returnPoint = null,
+        ?string $departurePoint = null
     ): ?array {
         if ($beneficiaryId <= 0 || $locationId <= 0 || $zoneId <= 0) {
             return null;
@@ -1609,6 +1610,7 @@ class DispecerCurseModel extends BaseModel
         // Acelasi vehicul poate avea mai multe variante pe aceeasi pereche, care difera
         // prin capatul de traseu. Cand dispecerul a ales unul, acela decide varianta.
         $normalizedReturnPoint = trim((string) $returnPoint);
+        $normalizedDeparturePoint = trim((string) $departurePoint);
         if ($vehicleId !== null && $vehicleId > 0) {
             $vehicleRules = [];
             foreach ($rules as $rule) {
@@ -1618,12 +1620,27 @@ class DispecerCurseModel extends BaseModel
                 }
             }
             if ($vehicleRules !== []) {
-                if ($normalizedReturnPoint !== '') {
+                // Dispecerul poate alege ambele capete; varianta trebuie sa le respecte pe
+                // amandoua, apoi doar plecarea, apoi doar intoarcerea.
+                foreach ([['plecare', 'intoarcere'], ['plecare'], ['intoarcere']] as $criteria) {
+                    $wantsDeparture = in_array('plecare', $criteria, true) && $normalizedDeparturePoint !== '';
+                    $wantsReturn = in_array('intoarcere', $criteria, true) && $normalizedReturnPoint !== '';
+                    if (!$wantsDeparture && !$wantsReturn) {
+                        continue;
+                    }
+
                     foreach ($vehicleRules as $rule) {
-                        $ruleReturnPoints = $this->normalizeRouteReturnPoints($rule['garaj_intoarcere'] ?? '');
-                        if (in_array($normalizedReturnPoint, $ruleReturnPoints, true)) {
-                            return $rule;
+                        if ($wantsDeparture && trim((string) ($rule['garaj_plecare'] ?? '')) !== $normalizedDeparturePoint) {
+                            continue;
                         }
+                        if ($wantsReturn) {
+                            $ruleReturnPoints = $this->normalizeRouteReturnPoints($rule['garaj_intoarcere'] ?? '');
+                            if (!in_array($normalizedReturnPoint, $ruleReturnPoints, true)) {
+                                continue;
+                            }
+                        }
+
+                        return $rule;
                     }
                 }
 
@@ -2882,7 +2899,10 @@ class DispecerCurseModel extends BaseModel
                 zd.nume AS zona_distributie_nume,
                 COALESCE(exp.total_cheltuieli, 0) AS total_cheltuieli,
                 COALESCE(exp.total_refacturare_facturata, 0) AS total_refacturare_facturata,
-                COALESCE(exp.total_refacturare_pending, 0) AS total_refacturare_pending
+                COALESCE(exp.total_refacturare_pending, 0) AS total_refacturare_pending,
+                COALESCE(exp.expense_count, 0) AS expense_count,
+                COALESCE(exp.refacturare_count, 0) AS refacturare_count,
+                COALESCE(exp.refacturare_pending_count, 0) AS refacturare_pending_count
             " . $from . $whereData['where'] . "
             ORDER BY c.data_inceput DESC, c.data_sfarsit DESC, c.id DESC
             " . ($fetchAllRows ? '' : 'LIMIT :limit_rows OFFSET :offset_rows') . "
