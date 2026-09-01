@@ -201,6 +201,10 @@ $statusBadge = static function (?array $review): string {
         </div>
     <?php endif; ?>
 
+    <?php if ($schemaReady && !empty($repricePreview)): ?>
+        <?php include __DIR__ . '/_reprice_banner.php'; ?>
+    <?php endif; ?>
+
     <nav class="tt-tabs" role="tablist" aria-label="Tipuri de transport">
         <?php foreach ($tabs as $key => $label): ?>
             <a class="tt-tab <?= $activeTab === $key ? 'is-active' : '' ?>"

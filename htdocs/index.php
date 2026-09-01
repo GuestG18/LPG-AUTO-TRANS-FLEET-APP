@@ -340,6 +340,7 @@ require_once __DIR__ . '/services/UserAvatarService.php';
 require_once __DIR__ . '/services/FuelPriceIndexService.php';
 require_once __DIR__ . '/services/TransportPricingService.php';
 require_once __DIR__ . '/services/TariffReviewService.php';
+require_once __DIR__ . '/services/TariffRepriceService.php';
 require_once __DIR__ . '/services/CostNormalizationService.php';
 require_once __DIR__ . '/services/CostBreakEvenService.php';
 require_once __DIR__ . '/services/OperationalCostService.php';

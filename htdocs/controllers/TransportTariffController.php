@@ -46,6 +46,9 @@ class TransportTariffController
             case 'save_settings':
                 $this->saveSettingsAction();
                 return;
+            case 'apply_reprice':
+                $this->applyRepriceAction();
+                return;
             case 'preview':
                 $this->previewAction();
                 return;
@@ -144,6 +147,7 @@ class TransportTariffController
             'history' => [],
             'fuel' => null,
             'summary' => [],
+            'repricePreview' => null,
         ];
 
         if ($schemaReady && $selectedId > 0) {
@@ -167,6 +171,20 @@ class TransportTariffController
                     'distributie' => count($data['distributionRoutes']),
                     'primar_distributie' => count($data['pdRoutes']),
                 ]);
+
+            // Post-save reprice preview: shown only to managers, only for a
+            // version of the currently selected beneficiary.
+            $repriceVersionId = (int) ($_GET['reprice_version_id'] ?? 0);
+            if ($repriceVersionId > 0 && $this->canManage()) {
+                try {
+                    $preview = (new TariffRepriceService($this->db))->preview($repriceVersionId);
+                    if ($preview !== null && (int) $preview['version']['beneficiar_id'] === $selectedId) {
+                        $data['repricePreview'] = $preview;
+                    }
+                } catch (Throwable $exception) {
+                    error_log('[TransportTariffController][reprice_preview] ' . $exception->getMessage());
+                }
+            }
         }
 
         render('tarife_transport/index.php', array_merge($data, [
@@ -431,6 +449,10 @@ class TransportTariffController
                     ? sprintf('Tarif programat: %s de la %s.', format_number_ro($value, 4), $this->formatDateRo($validFrom))
                     : sprintf('Tarif activ actualizat: %s de la %s.', format_number_ro($value, 4), $this->formatDateRo($validFrom))
             );
+
+            // Offer the recalculation preview for existing trips from valid_from
+            // onward. Nothing is repriced without the operator's confirmation.
+            $redirect['reprice_version_id'] = (int) $created['version_id'];
         } catch (Throwable $exception) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
@@ -482,6 +504,56 @@ class TransportTariffController
         }
 
         redirect(build_query_url($redirectBase + ['beneficiar_id' => $beneficiaryId, 'tab' => $tab]));
+    }
+
+    /**
+     * Apply the bulk recalculation confirmed from the preview banner.
+     * Reprices every affected trip (invoiced included — explicit business
+     * decision) through the versioned pricing service, per trip date.
+     */
+    private function applyRepriceAction(): void
+    {
+        $this->requireManage();
+
+        $redirectBase = ['page' => 'tarife_transport'];
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url($redirectBase));
+        }
+        ensure_csrf_or_redirect(build_query_url($redirectBase));
+
+        $versionId = (int) ($_POST['tariff_version_id'] ?? 0);
+        $beneficiaryId = (int) ($_POST['beneficiar_id'] ?? 0);
+        $tab = trim((string) ($_POST['tab'] ?? 'primar'));
+        $redirect = $redirectBase + ['beneficiar_id' => $beneficiaryId, 'tab' => $tab];
+
+        try {
+            $result = (new TariffRepriceService($this->db))->apply($versionId, $this->currentUserId());
+        } catch (Throwable $exception) {
+            error_log('[TransportTariffController][apply_reprice] ' . $exception->getMessage());
+            flash_set('danger', 'Recalcularea curselor a esuat si nu s-a modificat nimic: ' . $exception->getMessage());
+            redirect(build_query_url($redirect));
+        }
+
+        if ($result === null) {
+            flash_set('warning', 'Versiunea de tarif nu a fost gasita; nu s-a recalculat nimic.');
+            redirect(build_query_url($redirect));
+        }
+
+        $message = sprintf(
+            'Recalculare finalizata: %d curse actualizate la noul tarif (%d dintre ele erau deja facturate), %d neschimbate.',
+            (int) $result['changed'],
+            (int) $result['invoiced_changed'],
+            (int) $result['unchanged']
+        );
+        if ((int) $result['skipped'] > 0) {
+            $message .= sprintf(' %d curse au fost sarite (tariful nu s-a putut rezolva pentru ele).', (int) $result['skipped']);
+        }
+        if ((int) $result['invoiced_changed'] > 0) {
+            $message .= ' Atentie: valorile din aplicatie pot diferi acum de facturile deja emise.';
+        }
+        flash_set((int) $result['changed'] > 0 ? 'success' : 'info', $message);
+
+        redirect(build_query_url($redirect));
     }
 
     private function saveSettingsAction(): void
