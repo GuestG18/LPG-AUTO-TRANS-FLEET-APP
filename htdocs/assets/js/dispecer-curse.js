@@ -2192,6 +2192,112 @@
 
         var primaryRouteScopeByBeneficiary = buildPrimaryRouteScopeByBeneficiary(primaryRouteRulesByBeneficiary);
 
+        // Index plat al rutelor Primar cu capete de traseu, ca sa se poata filtra in
+        // orice sens: plecarea restrange locurile, si invers.
+        function buildPrimaryCircuitRoutesByBeneficiary(kmMap) {
+            var grouped = {};
+            if (!kmMap || typeof kmMap !== 'object') {
+                return grouped;
+            }
+
+            Object.keys(kmMap).forEach(function (pairKey) {
+                var parts = String(pairKey).split('|');
+                if (parts.length !== 3) {
+                    return;
+                }
+                var beneficiaryId = parts[0];
+                var entry = kmMap[pairKey];
+                var variants = entry && Array.isArray(entry.variants) ? entry.variants : [entry];
+
+                variants.forEach(function (variant) {
+                    if (!variant || typeof variant !== 'object' || variant.activ === false) {
+                        return;
+                    }
+                    var departure = String(variant.garaj_plecare || '').trim();
+                    var returns = parseReturnPoints(variant.garaj_intoarcere);
+                    if (departure === '' && returns.length === 0) {
+                        return;
+                    }
+
+                    (grouped[beneficiaryId] = grouped[beneficiaryId] || []).push({
+                        locationId: parts[1],
+                        zoneId: parts[2],
+                        departure: departure,
+                        returns: returns,
+                        vehicleIds: Array.isArray(variant.vehicle_ids) ? variant.vehicle_ids.map(String) : []
+                    });
+                });
+            });
+
+            return grouped;
+        }
+
+        var primaryCircuitRoutesByBeneficiary = buildPrimaryCircuitRoutesByBeneficiary(primaryRouteKmMap);
+
+        // Rutele care mai sunt posibile dupa selectiile facute. `ignore` scoate din filtru
+        // criteriul pentru care tocmai construim lista (altfel s-ar filtra pe el insusi).
+        function getPrimaryCircuitRoutes(ignore) {
+            var beneficiaryKey = String(beneficiaryField ? (beneficiaryField.value || '') : '').trim();
+            var routes = Object.prototype.hasOwnProperty.call(primaryCircuitRoutesByBeneficiary, beneficiaryKey)
+                ? primaryCircuitRoutesByBeneficiary[beneficiaryKey]
+                : [];
+            var skip = ignore || {};
+            var vehicleValue = String(vehicleField ? (vehicleField.value || '') : '').trim();
+            var locationValue = String(loadLocationField ? (loadLocationField.value || '') : '').trim();
+            var zoneValue = String(zoneField ? (zoneField.value || '') : '').trim();
+            var departureValue = skip.departure ? '' : getSelectedDeparturePoint();
+            var returnValue = skip.ret ? '' : getSelectedReturnPoint();
+
+            return routes.filter(function (route) {
+                if (vehicleValue !== '' && route.vehicleIds.length > 0 && route.vehicleIds.indexOf(vehicleValue) === -1) {
+                    return false;
+                }
+                if (!skip.location && locationValue !== '' && route.locationId !== locationValue) {
+                    return false;
+                }
+                if (!skip.zone && zoneValue !== '' && route.zoneId !== zoneValue) {
+                    return false;
+                }
+                if (departureValue !== '' && route.departure !== departureValue) {
+                    return false;
+                }
+
+                return returnValue === '' || route.returns.indexOf(returnValue) !== -1;
+            });
+        }
+
+        // Daca selectiile curente nu se potrivesc pe nicio ruta (ex. o cursa veche, cu un
+        // loc care nu mai e in nicio ruta), oferim totusi capetele beneficiarului, ca
+        // dispecerul sa poata alege ceva si sa se refiltreze de acolo.
+        function circuitOptionsWithFallback(ignore, field) {
+            var values = collectCircuitValues(getPrimaryCircuitRoutes(ignore), field);
+            if (values.length > 0) {
+                return values;
+            }
+
+            return collectCircuitValues(
+                getPrimaryCircuitRoutes({ location: true, zone: true, departure: true, ret: true }),
+                field
+            );
+        }
+
+        function collectCircuitValues(routes, field) {
+            var values = [];
+            routes.forEach(function (route) {
+                var items = field === 'departure' ? [route.departure] : route.returns;
+                items.forEach(function (item) {
+                    if (item !== '' && values.indexOf(item) === -1) {
+                        values.push(item);
+                    }
+                });
+            });
+            values.sort(function (a, b) {
+                return a.localeCompare(b, 'ro');
+            });
+
+            return values;
+        }
+
         function isTransportSupportedForBeneficiary(beneficiaryId, transportType) {
             var beneficiaryKey = String(beneficiaryId || '').trim();
             if (beneficiaryKey === '' || !Object.prototype.hasOwnProperty.call(beneficiaryPricing, beneficiaryKey)) {
@@ -4213,13 +4319,14 @@
                 routeDepartureGarageWrapper.classList.toggle('d-none', !showCircuit);
             }
             if (routeDepartureGarageField instanceof HTMLSelectElement) {
-                if (showCircuit && hasResolvedCircuit) {
+                if (showCircuit) {
+                    // Lista se construieste din toate rutele beneficiarului care mai sunt
+                    // posibile, deci e plina inca de la alegerea beneficiarului si se
+                    // restrange pe masura ce completezi restul.
                     fillCircuitSelect(
                         routeDepartureGarageField,
-                        Array.isArray(routeRule.departurePointOptions) && routeRule.departurePointOptions.length > 0
-                            ? routeRule.departurePointOptions
-                            : parseReturnPoints(routeRule.departureGarage),
-                        routeRule.departureGarage
+                        circuitOptionsWithFallback({ departure: true }, 'departure'),
+                        hasResolvedCircuit ? routeRule.departureGarage : ''
                     );
                 } else {
                     routeDepartureGarageField.innerHTML = '';
@@ -4233,17 +4340,15 @@
                 return;
             }
 
-            if (!showCircuit || !hasResolvedCircuit) {
+            if (!showCircuit) {
                 routeReturnGarageField.innerHTML = '';
                 return;
             }
 
             fillCircuitSelect(
                 routeReturnGarageField,
-                Array.isArray(routeRule.returnPointOptions) && routeRule.returnPointOptions.length > 0
-                    ? routeRule.returnPointOptions
-                    : parseReturnPoints(routeRule.returnGarage),
-                routeRule.returnGarage
+                circuitOptionsWithFallback({ ret: true }, 'return'),
+                hasResolvedCircuit ? routeRule.returnGarage : ''
             );
         }
 
@@ -4498,8 +4603,32 @@
                     ? primaryRouteScopeByBeneficiary[beneficiaryId]
                     : { hasActiveRules: false, pairMap: {}, locationOptions: [], zoneOptions: [] };
                 var primaryScopedOptions = getScopedPrimaryOptions(primaryScope, selectedLocationValue, selectedZoneValue);
-                rebuildSelectOptions(loadLocationField, primaryScopedOptions.locationOptions, selectedLocationValue, '-- Selecteaza --');
-                rebuildSelectOptions(zoneField, primaryScopedOptions.zoneOptions, selectedZoneValue, '-- Selecteaza --');
+                var primaryLocationOptions = primaryScopedOptions.locationOptions;
+                var primaryZoneOptions = primaryScopedOptions.zoneOptions;
+
+                // Rutarea merge in ambele sensuri: daca s-a ales un capat de traseu,
+                // locurile se restrang la cele care apar pe rutele lui.
+                if (getSelectedDeparturePoint() !== '' || getSelectedReturnPoint() !== '') {
+                    var locationRoutes = getPrimaryCircuitRoutes({ location: true });
+                    var zoneRoutes = getPrimaryCircuitRoutes({ zone: true });
+                    var allowedLocationIds = locationRoutes.map(function (route) { return route.locationId; });
+                    var allowedZoneIds = zoneRoutes.map(function (route) { return route.zoneId; });
+                    if (allowedLocationIds.length > 0) {
+                        primaryLocationOptions = primaryLocationOptions.filter(function (option) {
+                            return allowedLocationIds.indexOf(String(option.value || '')) !== -1
+                                || String(option.value || '') === selectedLocationValue;
+                        });
+                    }
+                    if (allowedZoneIds.length > 0) {
+                        primaryZoneOptions = primaryZoneOptions.filter(function (option) {
+                            return allowedZoneIds.indexOf(String(option.value || '')) !== -1
+                                || String(option.value || '') === selectedZoneValue;
+                        });
+                    }
+                }
+
+                rebuildSelectOptions(loadLocationField, primaryLocationOptions, selectedLocationValue, '-- Selecteaza --');
+                rebuildSelectOptions(zoneField, primaryZoneOptions, selectedZoneValue, '-- Selecteaza --');
                 var selectedPrimaryLocation = String(loadLocationField.value || '');
                 var selectedPrimaryZone = String(zoneField.value || '');
                 var selectedPrimaryRule = getPrimaryRouteRule(
@@ -5813,6 +5942,7 @@
         [routeDepartureGarageField, routeReturnGarageField].forEach(function (circuitSelect) {
             if (circuitSelect instanceof HTMLSelectElement) {
                 circuitSelect.addEventListener('change', function () {
+                    syncScopedLocationZoneOptions();
                     recalculateTotal();
                 });
             }

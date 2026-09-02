@@ -5624,7 +5624,17 @@ class DispecerCurseController
                         // Rute pe 4 puncte: punctele de plecare/intoarcere vin din configurare,
                         // nu din formular, ca sa nu poata devia cursa de la ruta configurata.
                         $primaryRouteDepartureGarage = trim((string) ($primaryRouteRule['garaj_plecare'] ?? ''));
-                        $primaryRouteReturnGarage = trim((string) ($primaryRouteRule['garaj_intoarcere'] ?? ''));
+                        // Ruta poate avea mai multe capete de intoarcere, dar cursa are UNUL
+                        // singur: cel ales de dispecer daca e valid pe ruta, altfel primul.
+                        $primaryRouteReturnPoints = $this->model->normalizeRouteReturnPoints(
+                            $primaryRouteRule['garaj_intoarcere'] ?? ''
+                        );
+                        $chosenReturnPoint = trim((string) ($input['loc_intoarcere'] ?? ''));
+                        if ($chosenReturnPoint !== '' && in_array($chosenReturnPoint, $primaryRouteReturnPoints, true)) {
+                            $primaryRouteReturnGarage = $chosenReturnPoint;
+                        } else {
+                            $primaryRouteReturnGarage = $primaryRouteReturnPoints[0] ?? '';
+                        }
                         $primaryRouteKmTariff = max(0, (int) ($primaryRouteRule['km_tarifare'] ?? 0));
                         $primaryRouteUsesManualAgreedKm = !empty($primaryRouteRule['km_agreati_manual']);
                         $primaryRouteRideCost = max(0, (float) ($primaryRouteRule['cost_cursa'] ?? 0));
