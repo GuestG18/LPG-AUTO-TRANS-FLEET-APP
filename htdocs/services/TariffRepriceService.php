@@ -22,6 +22,15 @@ declare(strict_types=1);
  */
 class TariffRepriceService
 {
+    private const TRIP_COLUMNS = '
+        c.id, c.beneficiar_id, c.tip_transport, c.data_cursa, c.vehicle_id,
+        c.loc_incarcare_id, c.zona_distributie_id,
+        c.cantitate_incarcata, c.km_cursa, c.km_totali, c.ore_aspirare, c.km_dislocare,
+        c.tona_livrata, c.tona_aspirata_lichida, c.tona_aspirata_gazoasa,
+        c.pret_tarifare, c.total_facturare, c.status_facturare,
+        c.cost_km_primar, c.cost_km_distributie, c.cost_km_mixt, c.cost_km_compresor,
+        v.nr_inmatriculare';
+
     private PDO $db;
     private TransportPricingService $pricing;
 
@@ -116,6 +125,62 @@ class TariffRepriceService
             return null;
         }
 
+        return $this->repriceTripRows(
+            $this->loadCandidateTrips($version),
+            $userId,
+            true,
+            'tariff_reprice',
+            ['tariff_version_id' => $versionId, 'component_key' => (string) $version['component_key']]
+        );
+    }
+
+    /**
+     * Trips whose stored price came from a given version (created or repriced
+     * under it). This is the exact rollback set when the version is deleted.
+     *
+     * @return array<int,int>
+     */
+    public function getTripIdsOnVersion(int $versionId): array
+    {
+        $stmt = $this->db->prepare('
+            SELECT id FROM curse_dispecer
+            WHERE tariff_version_id = :id AND deleted_at IS NULL
+            ORDER BY data_cursa ASC, id ASC
+        ');
+        $stmt->execute(['id' => $versionId]);
+
+        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
+    }
+
+    /**
+     * Rollback after a version delete: re-quote the captured trips at their
+     * own dates. The version is already gone, so the quote resolves to the
+     * re-opened predecessor or to the legacy beneficiary configuration —
+     * which is why the version-source requirement is lifted here.
+     *
+     * @param array<int,int> $tripIds captured BEFORE the version was deleted
+     * @return array{changed:int, unchanged:int, skipped:int, invoiced_changed:int}
+     */
+    public function rollbackTripsByIds(array $tripIds, ?int $userId, int $deletedVersionId): array
+    {
+        return $this->repriceTripRows(
+            $this->loadTripsByIds($tripIds),
+            $userId,
+            false,
+            'tariff_version_delete',
+            ['deleted_tariff_version_id' => $deletedVersionId]
+        );
+    }
+
+    /**
+     * Shared reprice loop: quote, compare, update, audit — inside one
+     * transaction (joins the caller's transaction when one is already open).
+     *
+     * @param array<int,array<string,mixed>> $trips
+     * @return array{changed:int, unchanged:int, skipped:int, invoiced_changed:int}
+     */
+    private function repriceTripRows(array $trips, ?int $userId, bool $requireVersionSource, string $sourceTag, array $auditExtra): array
+    {
         $changed = 0;
         $unchanged = 0;
         $skipped = 0;
@@ -139,10 +204,13 @@ class TariffRepriceService
             VALUES (:cursa_id, :action, :performed_by, :performed_at, :details_json)
         ');
 
-        $this->db->beginTransaction();
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
         try {
-            foreach ($this->loadCandidateTrips($version) as $trip) {
-                $quoted = $this->quoteTrip($trip);
+            foreach ($trips as $trip) {
+                $quoted = $this->quoteTrip($trip, $requireVersionSource);
                 if ($quoted === null) {
                     $skipped++;
                     continue;
@@ -186,16 +254,14 @@ class TariffRepriceService
                     $invoicedChanged++;
                 }
 
-                $details = json_encode([
-                    'source' => 'tariff_reprice',
-                    'tariff_version_id' => $versionId,
-                    'component_key' => (string) $version['component_key'],
+                $details = json_encode(array_merge([
+                    'source' => $sourceTag,
                     'old_pret_tarifare' => $oldPrice,
                     'new_pret_tarifare' => $newPrice,
                     'old_total_facturare' => $oldValue,
                     'new_total_facturare' => $newValue,
                     'was_invoiced' => $isInvoiced,
-                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                ], $auditExtra), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                 $audit->bindValue(':cursa_id', (int) $trip['id'], PDO::PARAM_INT);
                 $audit->bindValue(':action', 'updated');
                 if ($userId !== null && $userId > 0) {
@@ -214,9 +280,11 @@ class TariffRepriceService
                 $changed++;
             }
 
-            $this->db->commit();
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
         } catch (Throwable $exception) {
-            if ($this->db->inTransaction()) {
+            if ($ownTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
             throw $exception;
@@ -255,13 +323,7 @@ class TariffRepriceService
     private function loadCandidateTrips(array $version): array
     {
         $sql = '
-            SELECT c.id, c.beneficiar_id, c.tip_transport, c.data_cursa, c.vehicle_id,
-                   c.loc_incarcare_id, c.zona_distributie_id,
-                   c.cantitate_incarcata, c.km_cursa, c.km_totali, c.ore_aspirare, c.km_dislocare,
-                   c.tona_livrata, c.tona_aspirata_lichida, c.tona_aspirata_gazoasa,
-                   c.pret_tarifare, c.total_facturare, c.status_facturare,
-                   c.cost_km_primar, c.cost_km_distributie, c.cost_km_mixt, c.cost_km_compresor,
-                   v.nr_inmatriculare
+            SELECT ' . self::TRIP_COLUMNS . '
             FROM curse_dispecer c
             LEFT JOIN vehicule v ON v.id = c.vehicle_id
             WHERE c.deleted_at IS NULL
@@ -298,14 +360,37 @@ class TariffRepriceService
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
     }
 
+    /** @return array<int,array<string,mixed>> */
+    private function loadTripsByIds(array $tripIds): array
+    {
+        $tripIds = array_values(array_filter(array_map('intval', $tripIds), static fn (int $id): bool => $id > 0));
+        if ($tripIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($tripIds), '?'));
+        $stmt = $this->db->prepare('
+            SELECT ' . self::TRIP_COLUMNS . '
+            FROM curse_dispecer c
+            LEFT JOIN vehicule v ON v.id = c.vehicle_id
+            WHERE c.deleted_at IS NULL AND c.id IN (' . $placeholders . ')
+            ORDER BY c.data_cursa ASC, c.id ASC
+        ');
+        $stmt->execute($tripIds);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
     /**
      * Re-quote one trip at its business date. Mirrors the per-trip
-     * "Recalculeaza tariful" path: a result counts only when at least one
-     * component resolved from a tariff VERSION.
+     * "Recalculeaza tariful" path: by default a result counts only when at
+     * least one component resolved from a tariff VERSION. The rollback path
+     * lifts that requirement, because after a version delete the correct
+     * price may live in the legacy beneficiary configuration.
      *
      * @return array{pret_tarifare:float, total_facturare:float, tariff_version_id:?int, quote:array<string,mixed>}|null
      */
-    private function quoteTrip(array $trip): ?array
+    private function quoteTrip(array $trip, bool $requireVersionSource = true): ?array
     {
         try {
             $quote = $this->pricing->quote([
@@ -333,15 +418,17 @@ class TariffRepriceService
             return null;
         }
 
-        $resolvedFromVersion = false;
-        foreach ((array) ($quote['components'] ?? []) as $component) {
-            if ((string) ($component['source'] ?? '') === 'version') {
-                $resolvedFromVersion = true;
-                break;
+        if ($requireVersionSource) {
+            $resolvedFromVersion = false;
+            foreach ((array) ($quote['components'] ?? []) as $component) {
+                if ((string) ($component['source'] ?? '') === 'version') {
+                    $resolvedFromVersion = true;
+                    break;
+                }
             }
-        }
-        if (!$resolvedFromVersion) {
-            return null;
+            if (!$resolvedFromVersion) {
+                return null;
+            }
         }
 
         return [

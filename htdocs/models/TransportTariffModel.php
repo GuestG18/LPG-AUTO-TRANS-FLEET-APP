@@ -513,6 +513,99 @@ class TransportTariffModel extends BaseModel
         }
     }
 
+    /**
+     * Delete the NEWEST version of a rule (rollback of a mistaken change) and
+     * re-open its predecessor so the previous tariff becomes effective again.
+     *
+     * Only the newest version per rule_signature can be deleted — removing a
+     * middle version would create holes in the validity timeline. Trips keep
+     * their financial values; re-pricing them is the caller's responsibility.
+     *
+     * @return array{version: array<string,mixed>, restored_value: ?float, restored_from: string}
+     */
+    public function deleteVersion(int $versionId): array
+    {
+        $version = $this->getVersionById($versionId);
+        if ($version === null) {
+            throw new RuntimeException('Versiunea de tarif nu exista.');
+        }
+
+        $signature = (string) $version['rule_signature'];
+
+        $newerStmt = $this->db->prepare('
+            SELECT id, valid_from FROM transport_tariff_versions
+            WHERE rule_signature = :sig AND id <> :id AND valid_from >= :vf
+            ORDER BY valid_from DESC LIMIT 1
+        ');
+        $newerStmt->execute(['sig' => $signature, 'id' => $versionId, 'vf' => (string) $version['valid_from']]);
+        $newer = $newerStmt->fetch(PDO::FETCH_ASSOC);
+        if (is_array($newer)) {
+            throw new RuntimeException(
+                'Doar cea mai recenta versiune poate fi stearsa. Sterge intai versiunea valabila de la '
+                . (string) $newer['valid_from'] . '.'
+            );
+        }
+
+        $previousDay = (new DateTimeImmutable((string) $version['valid_from']))->modify('-1 day')->format('Y-m-d');
+        $now = date('Y-m-d H:i:s');
+
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            // Re-open the immediate predecessor (closed at valid_from - 1 day
+            // when this version was created).
+            $predStmt = $this->db->prepare('
+                SELECT id, value FROM transport_tariff_versions
+                WHERE rule_signature = :sig AND id <> :id AND valid_to = :vt
+                ORDER BY valid_from DESC, id DESC LIMIT 1
+            ');
+            $predStmt->execute(['sig' => $signature, 'id' => $versionId, 'vt' => $previousDay]);
+            $predecessor = $predStmt->fetch(PDO::FETCH_ASSOC);
+
+            $restoredValue = null;
+            $restoredFrom = 'legacy';
+            if (is_array($predecessor)) {
+                $reopen = $this->db->prepare('
+                    UPDATE transport_tariff_versions
+                    SET valid_to = NULL, updated_at = :ua
+                    WHERE id = :id
+                ');
+                $reopen->execute(['ua' => $now, 'id' => (int) $predecessor['id']]);
+                $restoredValue = (float) $predecessor['value'];
+                $restoredFrom = 'version';
+            }
+
+            // Trips keep their values but must not point to a vanished version.
+            $unlink = $this->db->prepare('
+                UPDATE curse_dispecer SET tariff_version_id = NULL
+                WHERE tariff_version_id = :id
+            ');
+            $unlink->execute(['id' => $versionId]);
+
+            // The recommendation row (if any) cascades away with the version.
+            $delete = $this->db->prepare('DELETE FROM transport_tariff_versions WHERE id = :id');
+            $delete->execute(['id' => $versionId]);
+
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
+
+            return [
+                'version' => $version,
+                'restored_value' => $restoredValue,
+                'restored_from' => $restoredFrom,
+            ];
+        } catch (Throwable $exception) {
+            if ($ownTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+    }
+
     // -----------------------------------------------------------------
     // History
     // -----------------------------------------------------------------

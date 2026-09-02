@@ -49,6 +49,9 @@ class TransportTariffController
             case 'apply_reprice':
                 $this->applyRepriceAction();
                 return;
+            case 'delete_version':
+                $this->deleteVersionAction();
+                return;
             case 'preview':
                 $this->previewAction();
                 return;
@@ -148,6 +151,7 @@ class TransportTariffController
             'fuel' => null,
             'summary' => [],
             'repricePreview' => null,
+            'deletePrompt' => null,
         ];
 
         if ($schemaReady && $selectedId > 0) {
@@ -183,6 +187,18 @@ class TransportTariffController
                     }
                 } catch (Throwable $exception) {
                     error_log('[TransportTariffController][reprice_preview] ' . $exception->getMessage());
+                }
+            }
+
+            // Delete-version confirmation prompt (rollback of a mistaken change).
+            $deleteVersionId = (int) ($_GET['delete_version_id'] ?? 0);
+            if ($deleteVersionId > 0 && $this->canManage()) {
+                $version = $this->model->getVersionById($deleteVersionId);
+                if (is_array($version) && (int) $version['beneficiar_id'] === $selectedId) {
+                    $data['deletePrompt'] = [
+                        'version' => $version,
+                        'trip_count' => count((new TariffRepriceService($this->db))->getTripIdsOnVersion($deleteVersionId)),
+                    ];
                 }
             }
         }
@@ -552,6 +568,92 @@ class TransportTariffController
             $message .= ' Atentie: valorile din aplicatie pot diferi acum de facturile deja emise.';
         }
         flash_set((int) $result['changed'] > 0 ? 'success' : 'info', $message);
+
+        redirect(build_query_url($redirect));
+    }
+
+    /**
+     * Delete the newest version of a rule (mistake rollback). In one
+     * transaction: the trips priced under that version are captured, the
+     * version is removed (its predecessor re-opens), and the captured trips
+     * are re-quoted at their own dates so they return to the previous tariff.
+     */
+    private function deleteVersionAction(): void
+    {
+        $this->requireManage();
+
+        $redirectBase = ['page' => 'tarife_transport'];
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url($redirectBase));
+        }
+        ensure_csrf_or_redirect(build_query_url($redirectBase));
+
+        $versionId = (int) ($_POST['tariff_version_id'] ?? 0);
+        $beneficiaryId = (int) ($_POST['beneficiar_id'] ?? 0);
+        $tab = trim((string) ($_POST['tab'] ?? 'primar'));
+        $redirect = $redirectBase + ['beneficiar_id' => $beneficiaryId, 'tab' => $tab];
+
+        try {
+            $reprice = new TariffRepriceService($this->db);
+
+            $this->db->beginTransaction();
+
+            // Capture BEFORE the delete: deleteVersion() unlinks tariff_version_id.
+            $tripIds = $reprice->getTripIdsOnVersion($versionId);
+
+            $deleted = $this->model->deleteVersion($versionId);
+            $version = $deleted['version'];
+
+            $this->model->recordHistory([
+                'tariff_version_id' => null,
+                'rule_signature' => (string) $version['rule_signature'],
+                'beneficiar_id' => (int) $version['beneficiar_id'],
+                'transport_type' => (string) $version['transport_type'],
+                'component_key' => (string) $version['component_key'],
+                'route_ref_id' => $version['route_ref_id'],
+                'route_label' => $this->buildRouteLabel(
+                    isset($version['loc_incarcare_id']) ? (int) $version['loc_incarcare_id'] : null,
+                    isset($version['zona_distributie_id']) ? (int) $version['zona_distributie_id'] : null
+                ),
+                'action' => 'deleted',
+                'old_value' => (float) $version['value'],
+                'new_value' => $deleted['restored_value'],
+                'unit' => (string) $version['unit'],
+                'effective_from' => (string) $version['valid_from'],
+                'reason' => $deleted['restored_from'] === 'version'
+                    ? 'Versiune stearsa; tariful anterior a fost reactivat.'
+                    : 'Versiune stearsa; se aplica configurarea de baza a beneficiarului.',
+                'changed_by' => $this->currentUserId(),
+                'changed_by_name' => $this->currentUserName(),
+                'changed_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            $result = $reprice->rollbackTripsByIds($tripIds, $this->currentUserId(), $versionId);
+
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            error_log('[TransportTariffController][delete_version] ' . $exception->getMessage());
+            flash_set('danger', 'Stergerea versiunii a esuat si nu s-a modificat nimic: ' . $exception->getMessage());
+            redirect(build_query_url($redirect));
+        }
+
+        $message = sprintf(
+            'Versiunea a fost stearsa. %s %d curse au fost readuse la tariful anterior%s.',
+            $deleted['restored_from'] === 'version'
+                ? 'Tariful anterior a redevenit activ.'
+                : 'Se aplica din nou configurarea de baza a beneficiarului.',
+            (int) $result['changed'],
+            (int) $result['invoiced_changed'] > 0
+                ? sprintf(' (%d erau facturate)', (int) $result['invoiced_changed'])
+                : ''
+        );
+        if ((int) $result['skipped'] > 0) {
+            $message .= sprintf(' %d curse au fost sarite (tariful nu s-a putut rezolva).', (int) $result['skipped']);
+        }
+        flash_set('success', $message);
 
         redirect(build_query_url($redirect));
     }

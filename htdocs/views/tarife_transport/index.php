@@ -201,6 +201,10 @@ $statusBadge = static function (?array $review): string {
         </div>
     <?php endif; ?>
 
+    <?php if ($schemaReady && !empty($deletePrompt)): ?>
+        <?php include __DIR__ . '/_delete_version_banner.php'; ?>
+    <?php endif; ?>
+
     <?php if ($schemaReady && !empty($repricePreview)): ?>
         <?php include __DIR__ . '/_reprice_banner.php'; ?>
     <?php endif; ?>

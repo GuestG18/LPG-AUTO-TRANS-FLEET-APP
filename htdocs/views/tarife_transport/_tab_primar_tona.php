@@ -61,6 +61,13 @@ $hasVersion = $active !== null;
                     <span class="tt-badge tt-badge-muted"><i class="bi bi-info-circle" aria-hidden="true"></i> Valoare din configurarea legacy</span>
                 <?php else: ?>
                     <span class="tt-badge tt-badge-ok">Activ din <?= e($dateRo((string) $active['valid_from'])) ?></span>
+                    <?php if ($canManage && $scheduled === null): ?>
+                        <a class="tt-btn tt-btn-icon" style="margin-left:6px;"
+                           title="Șterge această versiune și revino la tariful anterior"
+                           href="<?= e(build_query_url(['page' => 'tarife_transport', 'beneficiar_id' => $selectedBeneficiaryId, 'tab' => $activeTab, 'delete_version_id' => (int) $active['id']])) ?>">
+                            <i class="bi bi-trash3" aria-hidden="true"></i>
+                        </a>
+                    <?php endif; ?>
                 <?php endif; ?>
 
                 <?php if ($scheduled !== null): ?>
@@ -70,6 +77,13 @@ $hasVersion = $active !== null;
                             <strong>Tarif programat:</strong>
                             <?= e($money((float) $scheduled['value'], 4)) ?> lei/tonă
                             de la <?= e($dateRo((string) $scheduled['valid_from'])) ?>.
+                            <?php if ($canManage): ?>
+                                <a style="margin-left:6px;"
+                                   title="Șterge versiunea programată"
+                                   href="<?= e(build_query_url(['page' => 'tarife_transport', 'beneficiar_id' => $selectedBeneficiaryId, 'tab' => $activeTab, 'delete_version_id' => (int) $scheduled['id']])) ?>">
+                                    <i class="bi bi-trash3" aria-hidden="true"></i> Șterge
+                                </a>
+                            <?php endif; ?>
                         </div>
                     </div>
                 <?php endif; ?>
