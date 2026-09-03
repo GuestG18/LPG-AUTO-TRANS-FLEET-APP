@@ -843,8 +843,27 @@ if ($configCreateMode) {
             <?php else: ?>
                 <div class="transport-distribution-panel transport-distribution-catalog-panel mt-2">
                     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-                        <h5 class="h6 mb-0">Catalog locatii si zone</h5>
-                        <span class="text-muted small">Completeaza doar locul de incarcare si zona de descarcare.</span>
+                        <?php
+                        // La redenumire aratam doar campul intrarii editate: altfel celalalt camp,
+                        // gol dar marcat cu *, tenteaza sa fie completat si creeaza o intrare noua.
+                        $catalogIsEditing = $catalogEditingLocId > 0 || $catalogEditingZoneId > 0;
+                        $catalogShowLocField = !$catalogIsEditing || $catalogEditingLocId > 0;
+                        $catalogShowZoneField = !$catalogIsEditing || $catalogEditingZoneId > 0;
+                        ?>
+                        <h5 class="h6 mb-0">
+                            <?php if ($catalogEditingLocId > 0 && $catalogEditingZoneId === 0): ?>
+                                Redenumeste locul de incarcare
+                            <?php elseif ($catalogEditingZoneId > 0 && $catalogEditingLocId === 0): ?>
+                                Redenumeste zona de descarcare
+                            <?php else: ?>
+                                Catalog locatii si zone
+                            <?php endif; ?>
+                        </h5>
+                        <span class="text-muted small">
+                            <?= $catalogIsEditing
+                                ? 'Se modifica doar intrarea aleasa.'
+                                : 'Completeaza locul de incarcare, zona de descarcare sau ambele.' ?>
+                        </span>
                     </div>
                     <?php if ($catalogEditingLocId > 0 || $catalogEditingZoneId > 0): ?>
                         <div class="alert alert-info py-2 mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
@@ -867,19 +886,31 @@ if ($configCreateMode) {
                         <?php if (isset($locFormErrors['id'])): ?><div class="col-12"><div class="alert alert-danger py-2 mb-0"><?= e((string) $locFormErrors['id']) ?></div></div><?php endif; ?>
                         <?php if (isset($zoneFormErrors['id'])): ?><div class="col-12"><div class="alert alert-danger py-2 mb-0"><?= e((string) $zoneFormErrors['id']) ?></div></div><?php endif; ?>
 
-                        <div class="col-12 col-xl-6">
-                            <label class="form-label" for="config_loc_nume_panel">Loc incarcare <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control <?= isset($locFormErrors['nume']) ? 'is-invalid' : '' ?>" id="config_loc_nume_panel" name="loc_nume" maxlength="120" value="<?= e((string) ($locFormData['nume'] ?? '')) ?>">
-                            <?php if (isset($locFormErrors['nume'])): ?><div class="invalid-feedback d-block"><?= e((string) $locFormErrors['nume']) ?></div><?php endif; ?>
-                        </div>
-                        <div class="col-12 col-xl-6">
-                            <label class="form-label" for="config_zona_nume_panel">Zona descarcare <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control <?= isset($zoneFormErrors['nume']) ? 'is-invalid' : '' ?>" id="config_zona_nume_panel" name="zona_nume" maxlength="120" value="<?= e((string) ($zoneFormData['nume'] ?? '')) ?>">
-                            <?php if (isset($zoneFormErrors['nume'])): ?><div class="invalid-feedback d-block"><?= e((string) $zoneFormErrors['nume']) ?></div><?php endif; ?>
-                        </div>
+                        <?php if ($catalogShowLocField): ?>
+                            <div class="<?= $catalogIsEditing ? 'col-12' : 'col-12 col-xl-6' ?>">
+                                <label class="form-label" for="config_loc_nume_panel">Loc incarcare <?= $catalogIsEditing ? '' : '<span class="text-muted small">(optional)</span>' ?></label>
+                                <input type="text" class="form-control <?= isset($locFormErrors['nume']) ? 'is-invalid' : '' ?>" id="config_loc_nume_panel" name="loc_nume" maxlength="120" value="<?= e((string) ($locFormData['nume'] ?? '')) ?>">
+                                <?php if (isset($locFormErrors['nume'])): ?><div class="invalid-feedback d-block"><?= e((string) $locFormErrors['nume']) ?></div><?php endif; ?>
+                            </div>
+                        <?php endif; ?>
+                        <?php if ($catalogShowZoneField): ?>
+                            <div class="<?= $catalogIsEditing ? 'col-12' : 'col-12 col-xl-6' ?>">
+                                <label class="form-label" for="config_zona_nume_panel">Zona descarcare <?= $catalogIsEditing ? '' : '<span class="text-muted small">(optional)</span>' ?></label>
+                                <input type="text" class="form-control <?= isset($zoneFormErrors['nume']) ? 'is-invalid' : '' ?>" id="config_zona_nume_panel" name="zona_nume" maxlength="120" value="<?= e((string) ($zoneFormData['nume'] ?? '')) ?>">
+                                <?php if (isset($zoneFormErrors['nume'])): ?><div class="invalid-feedback d-block"><?= e((string) $zoneFormErrors['nume']) ?></div><?php endif; ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
                     <div class="d-flex justify-content-end mt-3 transport-config-inline-actions">
-                        <button type="submit" class="btn btn-primary">Salveaza catalog</button>
+                        <button type="submit" class="btn btn-primary">
+                            <?php if ($catalogEditingLocId > 0 && $catalogEditingZoneId === 0): ?>
+                                Actualizeaza locul
+                            <?php elseif ($catalogEditingZoneId > 0 && $catalogEditingLocId === 0): ?>
+                                Actualizeaza zona
+                            <?php else: ?>
+                                Salveaza catalog
+                            <?php endif; ?>
+                        </button>
                     </div>
                     </form>
                 </div>
@@ -905,7 +936,26 @@ if ($configCreateMode) {
                                             <span class="tcv2-catalog-meta">
                                                 <?php if (empty($catalogLocation['activ'])): ?><span class="tcv2-catalog-inactive" title="Inactiv">inactiv</span><?php endif; ?>
                                                 <span class="tcv2-catalog-count<?= $catalogLocationUsage === 0 ? ' is-zero' : '' ?>" title="Rute care folosesc acest loc"><?= e((string) $catalogLocationUsage) ?> rute</span>
-                                                <i class="bi bi-pencil tcv2-catalog-editicon" aria-hidden="true"></i>
+                                                <a
+                                                    class="tcv2-catalog-action tcv2-catalog-editicon"
+                                                    href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'loc_edit_id' => $catalogLocationId])) ?>"
+                                                    title="Redenumeste locul"
+                                                    aria-label="Redenumeste locul <?= e($catalogLocationName) ?>"
+                                                ><i class="bi bi-pencil" aria-hidden="true"></i></a>
+                                                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_loc'])) ?>" class="d-inline tcv2-catalog-deleteform">
+                                                    <?= csrf_field() ?>
+                                                    <input type="hidden" name="id" value="<?= e((string) $catalogLocationId) ?>">
+                                                    <input type="hidden" name="beneficiar_id" value="<?= e((string) $distributionBeneficiaryId) ?>">
+                                                    <button
+                                                        type="submit"
+                                                        class="tcv2-catalog-action tcv2-catalog-action-danger tcv2-catalog-editicon"
+                                                        title="Sterge locul"
+                                                        aria-label="Sterge locul <?= e($catalogLocationName) ?>"
+                                                        data-confirm="<?= e($catalogLocationUsage > 0
+                                                            ? 'Locul "' . $catalogLocationName . '" este folosit pe ' . $catalogLocationUsage . ' rute. Sigur il stergi?'
+                                                            : 'Sigur doresti sa stergi locul "' . $catalogLocationName . '"?') ?>"
+                                                    ><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                                </form>
                                             </span>
                                         </li>
                                     <?php endforeach; ?>
@@ -929,7 +979,26 @@ if ($configCreateMode) {
                                             <span class="tcv2-catalog-meta">
                                                 <?php if (empty($catalogZone['activ'])): ?><span class="tcv2-catalog-inactive" title="Inactiv">inactiv</span><?php endif; ?>
                                                 <span class="tcv2-catalog-count<?= $catalogZoneUsage === 0 ? ' is-zero' : '' ?>" title="Rute care folosesc aceasta zona"><?= e((string) $catalogZoneUsage) ?> rute</span>
-                                                <i class="bi bi-pencil tcv2-catalog-editicon" aria-hidden="true"></i>
+                                                <a
+                                                    class="tcv2-catalog-action tcv2-catalog-editicon"
+                                                    href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $distributionBeneficiaryId, 'zona_edit_id' => $catalogZoneId])) ?>"
+                                                    title="Redenumeste zona"
+                                                    aria-label="Redenumeste zona <?= e($catalogZoneName) ?>"
+                                                ><i class="bi bi-pencil" aria-hidden="true"></i></a>
+                                                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config_delete_zona'])) ?>" class="d-inline tcv2-catalog-deleteform">
+                                                    <?= csrf_field() ?>
+                                                    <input type="hidden" name="id" value="<?= e((string) $catalogZoneId) ?>">
+                                                    <input type="hidden" name="beneficiar_id" value="<?= e((string) $distributionBeneficiaryId) ?>">
+                                                    <button
+                                                        type="submit"
+                                                        class="tcv2-catalog-action tcv2-catalog-action-danger tcv2-catalog-editicon"
+                                                        title="Sterge zona"
+                                                        aria-label="Sterge zona <?= e($catalogZoneName) ?>"
+                                                        data-confirm="<?= e($catalogZoneUsage > 0
+                                                            ? 'Zona "' . $catalogZoneName . '" este folosita pe ' . $catalogZoneUsage . ' rute. Sigur o stergi?'
+                                                            : 'Sigur doresti sa stergi zona "' . $catalogZoneName . '"?') ?>"
+                                                    ><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                                </form>
                                             </span>
                                         </li>
                                     <?php endforeach; ?>
@@ -2979,11 +3048,56 @@ body.tcv2-fullscreen-open {
     padding: 0.05rem 0.35rem;
 }
 
+/* Butoanele de redenumire / stergere din catalog: apar la hover, dar raman
+   accesibile la navigarea din tastatura si pe ecranele tactile. */
+.tcv2-catalog-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 0.78rem;
+    line-height: 1;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.tcv2-catalog-action:hover {
+    background: #eef2f7;
+    color: #0d6efd;
+}
+
+.tcv2-catalog-action-danger:hover {
+    background: #fff5f5;
+    color: #dc3545;
+}
+
+.tcv2-catalog-deleteform {
+    display: inline-flex;
+}
+
 .tcv2-catalog-editicon {
     color: #94a3b8;
     font-size: 0.78rem;
     opacity: 0;
     transition: opacity 0.12s ease;
+}
+
+.tcv2-catalog-editicon:focus-visible {
+    opacity: 1;
+    outline: 2px solid #0d6efd;
+    outline-offset: 1px;
+}
+
+@media (hover: none) {
+    .tcv2-catalog-editicon {
+        opacity: 1;
+    }
 }
 
 .tcv2-catalog-empty {

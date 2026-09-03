@@ -6240,6 +6240,16 @@ class DispecerCurseModel extends BaseModel
         return $this->existsById('configurare_beneficiari_transport', $id);
     }
 
+    /**
+     * Ruleaza migrarile idempotente de care depind interogarile de dashboard.
+     * Expusa public ca sa poata fi apelata si din Dashboard Analitic V2, care are model propriu.
+     */
+    public function ensureDashboardSchemaReady(): void
+    {
+        $this->ensureExpenseRefacturareColumn();
+        $this->ensureRaceSoftDeleteSchema();
+    }
+
     public function getDashboardAnalyticFilterOptions(): array
     {
         $from = $this->dashboardFromSql();

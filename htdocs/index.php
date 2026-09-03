@@ -313,6 +313,7 @@ require_once __DIR__ . '/models/ApprovalEmailActionModel.php';
 require_once __DIR__ . '/models/VehicleEquipmentInventoryModel.php';
 require_once __DIR__ . '/models/VehicleAuthorizationModel.php';
 require_once __DIR__ . '/models/DispecerCurseModel.php';
+require_once __DIR__ . '/models/DashboardAnaliticV2Model.php';
 require_once __DIR__ . '/models/ProgramareConcediiModel.php';
 require_once __DIR__ . '/models/NotificationRuleModel.php';
 require_once __DIR__ . '/models/StaffAccountancyModel.php';
@@ -352,6 +353,7 @@ require_once __DIR__ . '/models/OcrPartsModel.php';
 require_once __DIR__ . '/controllers/AuthController.php';
 require_once __DIR__ . '/controllers/DashboardController.php';
 require_once __DIR__ . '/controllers/DashboardAnaliticController.php';
+require_once __DIR__ . '/controllers/DashboardAnaliticV2Controller.php';
 require_once __DIR__ . '/controllers/InactiveResourceApprovalController.php';
 require_once __DIR__ . '/controllers/EmailApprovalController.php';
 require_once __DIR__ . '/controllers/ModuleController.php';
@@ -502,6 +504,21 @@ try {
         case 'dashboard_analytic_data':
             require_auth();
             (new DashboardAnaliticController($db))->data();
+            break;
+
+        case 'dashboard_analitic_v2':
+            require_auth();
+            (new DashboardAnaliticV2Controller($db))->index();
+            break;
+
+        case 'dashboard_analytic_v2_data':
+            require_auth();
+            (new DashboardAnaliticV2Controller($db))->data();
+            break;
+
+        case 'dashboard_analytic_v2_entity':
+            require_auth();
+            (new DashboardAnaliticV2Controller($db))->entity();
             break;
 
         case 'profil':

@@ -43,6 +43,11 @@ return [
             'routes' => ['dashboard_analitic', 'dashboard_analytic_data'],
             'actions' => ['view' => ['label' => 'Vizualizare']],
         ],
+        'dashboard_analitic_v2' => [
+            'group' => 'operational', 'label' => 'Dashboard Analitic V2', 'icon' => 'bi-bar-chart-line', 'scope' => 'all',
+            'routes' => ['dashboard_analitic_v2', 'dashboard_analytic_v2_data', 'dashboard_analytic_v2_entity'],
+            'actions' => ['view' => ['label' => 'Vizualizare']],
+        ],
         'harta_flota' => [
             'group' => 'operational', 'label' => 'Harta Flota', 'icon' => 'bi-map', 'scope' => 'all',
             'actions' => ['view' => ['label' => 'Vizualizare']],
