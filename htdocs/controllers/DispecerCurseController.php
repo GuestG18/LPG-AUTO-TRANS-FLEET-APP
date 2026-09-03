@@ -17,12 +17,27 @@ class DispecerCurseController
 
     private const EXPENSE_TYPES = [
         'motorina' => 'Motorina',
-        'taxe_drum' => 'Taxe drum',
+        'taxa_acces' => 'Taxa acces',
+        'port' => 'Port',
+        'trece' => 'Trecere',
         'diurna' => 'Diurna',
         'service' => 'Reparatii',
         'alte' => 'Alte cheltuieli',
+        'taxe_drum' => 'Taxe drum',
     ];
     private const FUEL_EXPENSE_TYPE = 'motorina';
+
+    /**
+     * Taxele de drum: fiecare se inregistreaza pe randul ei, cu locatie, bucati si pret unitar.
+     * Suma nu se scrie manual, ci rezulta din bucati x pret.
+     */
+    private const TOLL_EXPENSE_TYPES = ['taxa_acces', 'port', 'trece'];
+
+    /**
+     * Tipuri scoase din uz: raman doar ca eticheta pentru cheltuielile deja salvate,
+     * nu mai pot fi selectate in formular. "Taxe drum" a fost inlocuit de cele trei taxe separate.
+     */
+    private const RETIRED_EXPENSE_TYPES = ['taxe_drum'];
 
     private const GOODS_TYPES = [
         'butan' => 'Butan',
@@ -73,8 +88,162 @@ class DispecerCurseController
     {
         $types = self::EXPENSE_TYPES;
         unset($types[self::FUEL_EXPENSE_TYPE]);
+        foreach (self::RETIRED_EXPENSE_TYPES as $retiredType) {
+            unset($types[$retiredType]);
+        }
 
         return $types;
+    }
+
+    private function isTollExpenseType(string $type): bool
+    {
+        return in_array($type, self::TOLL_EXPENSE_TYPES, true);
+    }
+
+    /**
+     * Intervalul cursei: cheltuielile si refacturarile ei nu pot iesi din el.
+     * Daca lipseste una dintre date, capatul respectiv ramane liber.
+     *
+     * @return array{min: ?string, max: ?string}
+     */
+    private function raceExpenseDateRange(?array $race): array
+    {
+        if (!is_array($race)) {
+            return ['min' => null, 'max' => null];
+        }
+
+        $start = trim((string) ($race['data_inceput'] ?? ''));
+        if ($start === '') {
+            $start = trim((string) ($race['data_cursa'] ?? ''));
+        }
+        $end = trim((string) ($race['data_sfarsit'] ?? ''));
+        if ($end === '') {
+            $end = $start;
+        }
+
+        $min = $this->isValidDate($start) ? $start : null;
+        $max = $this->isValidDate($end) ? $end : null;
+        if ($min !== null && $max !== null && $max < $min) {
+            [$min, $max] = [$max, $min];
+        }
+
+        return ['min' => $min, 'max' => $max];
+    }
+
+    private function isDateWithinRange(string $date, array $range): bool
+    {
+        $min = $range['min'] ?? null;
+        $max = $range['max'] ?? null;
+
+        if (is_string($min) && $min !== '' && $date < $min) {
+            return false;
+        }
+        if (is_string($max) && $max !== '' && $date > $max) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function formatExpenseDateRangeLabel(array $range): string
+    {
+        $min = is_string($range['min'] ?? null) ? $range['min'] : '';
+        $max = is_string($range['max'] ?? null) ? $range['max'] : '';
+        $format = static function (string $date): string {
+            $timestamp = strtotime($date);
+
+            return $timestamp !== false ? date('d.m.Y', $timestamp) : $date;
+        };
+
+        if ($min !== '' && $max !== '' && $min === $max) {
+            return $format($min);
+        }
+        if ($min !== '' && $max !== '') {
+            return $format($min) . ' - ' . $format($max);
+        }
+        if ($min !== '') {
+            return 'de la ' . $format($min);
+        }
+        if ($max !== '') {
+            return 'pana la ' . $format($max);
+        }
+
+        return '';
+    }
+
+    private function expenseLocationSuggestions(): array
+    {
+        try {
+            return $this->model->getExpenseLocationSuggestions();
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseController][expense_locations] ' . $exception->getMessage());
+
+            return [];
+        }
+    }
+
+    /**
+     * Locatiile propuse la taxele de drum, pe beneficiar: locurile de incarcare si
+     * zonele de distributie configurate pentru el, plus locatiile deja scrise pe
+     * cursele aceluiasi beneficiar. Cheia 0 este lista completa, folosita cat timp
+     * cursa nu are un beneficiar selectat.
+     *
+     * @return array<int, array<int, string>>
+     */
+    private function expenseLocationSuggestionsByBeneficiary(
+        array $loadLocationsByBeneficiary,
+        array $distributionZonesByBeneficiary
+    ): array {
+        $collected = [];
+        $collect = static function (array $groups) use (&$collected): void {
+            foreach ($groups as $beneficiaryId => $rows) {
+                if (!is_array($rows)) {
+                    continue;
+                }
+                foreach ($rows as $row) {
+                    $name = is_array($row) ? trim((string) ($row['nume'] ?? '')) : trim((string) $row);
+                    if ($name === '') {
+                        continue;
+                    }
+                    $collected[(int) $beneficiaryId][] = $name;
+                    $collected[0][] = $name;
+                }
+            }
+        };
+
+        $collect($loadLocationsByBeneficiary);
+        $collect($distributionZonesByBeneficiary);
+
+        try {
+            foreach ($this->model->getExpenseLocationsByBeneficiary() as $beneficiaryId => $names) {
+                foreach ($names as $name) {
+                    $collected[(int) $beneficiaryId][] = (string) $name;
+                }
+            }
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseController][expense_locations_by_beneficiary] ' . $exception->getMessage());
+        }
+
+        $result = [];
+        foreach ($collected as $beneficiaryId => $names) {
+            $unique = [];
+            foreach ($names as $name) {
+                $key = mb_strtolower($name, 'UTF-8');
+                if (!isset($unique[$key])) {
+                    $unique[$key] = $name;
+                }
+            }
+
+            $values = array_values($unique);
+            usort($values, static function (string $a, string $b): int {
+                return strnatcasecmp($a, $b);
+            });
+            $result[(int) $beneficiaryId] = $values;
+        }
+
+        ksort($result);
+
+        return $result;
     }
 
     private function expenseCategories(): array
@@ -1124,26 +1293,8 @@ class DispecerCurseController
         if ($expenseId > 0) {
             $expense = $this->model->getExpenseById($expenseId);
             if ($expense !== null && (int) ($expense['cursa_id'] ?? 0) === $raceId) {
-                $parsedExpenseObservations = $this->splitExpenseObservationsAndRoadTaxDetails((string) ($expense['observatii'] ?? ''));
-                $roadTaxFormValues = $this->buildRoadTaxFormValuesFromDetails($parsedExpenseObservations['road_tax_details']);
-                $refacturareDetails = json_decode((string) ($expense['refacturare_detalii'] ?? ''), true);
-                $refacturareRoadTaxFormValues = is_array($refacturareDetails)
-                    ? $this->buildRoadTaxFormValuesFromDetails($this->normalizeRoadTaxDetailsPayload($refacturareDetails), 'refacturare_')
-                    : [];
                 $expenseBeingEdited = $expense;
-                $expenseFormData = array_merge($expenseFormData, [
-                    'expense_id' => (int) $expense['id'],
-                    'tip_cheltuiala' => (string) ($expense['tip_cheltuiala'] ?? ''),
-                    'categorie_id' => (string) ($expense['categorie_id'] ?? ''),
-                    'refacturare_enabled' => trim((string) ($expense['refacturare_tip_cheltuiala'] ?? '')) !== '' ? '1' : '0',
-                    'refacturare_tip_cheltuiala' => (string) ($expense['refacturare_tip_cheltuiala'] ?? ''),
-                    'refacturare_suma' => (string) ($expense['refacturare_suma'] ?? ''),
-                    'refacturare_data' => (string) ($expense['refacturare_data'] ?? date('Y-m-d')),
-                    'refacturare_observatii' => (string) ($expense['refacturare_observatii'] ?? ''),
-                    'suma' => (string) ($expense['suma'] ?? ''),
-                    'data_cheltuiala' => (string) ($expense['data_cheltuiala'] ?? ''),
-                    'observatii' => $parsedExpenseObservations['plain_observations'],
-                ], $roadTaxFormValues, $refacturareRoadTaxFormValues);
+                $expenseFormData = array_merge($expenseFormData, $this->buildExpenseFormDataFromExpense($expense));
             }
         }
 
@@ -1179,6 +1330,13 @@ class DispecerCurseController
         render('dispecer_curse/edit.php', [
             'pageTitle' => 'Editare cursa',
             'currentPage' => 'dispecer_curse',
+            'tollExpenseTypes' => self::TOLL_EXPENSE_TYPES,
+            'expenseDateRange' => $this->raceExpenseDateRange($race),
+            'expenseLocationSuggestions' => $this->expenseLocationSuggestions(),
+            'expenseLocationSuggestionsByBeneficiary' => $this->expenseLocationSuggestionsByBeneficiary(
+                $loadLocationsByBeneficiary,
+                $distributionZonesByBeneficiary
+            ),
             'incompleteConfirmItems' => $incompleteConfirmItems,
             'race' => $race,
             'raceFormData' => $raceFormData,
@@ -2090,7 +2248,10 @@ class DispecerCurseController
         // Bifa poate fi scoasa cand cursa mai are de primit o cheltuiala sau o refacturare separata.
         $postCreateFlow = (string) ($_POST['post_create_flow'] ?? '') === '1';
         $returnToList = $postCreateFlow && (string) ($_POST['return_to_list'] ?? '') === '1';
-        [$data, $errors, $old] = $this->validateExpenseInput($_POST);
+        [$records, $errors, $old] = $this->validateExpenseSubmission(
+            $_POST,
+            $this->raceExpenseDateRange($this->model->getRaceById($raceId))
+        );
         [$uploadedDocument, $uploadError] = $this->storeUploadedExpenseDocument($_FILES['document_upload'] ?? null);
         if ($uploadError !== null) {
             $errors['document_upload'] = $uploadError;
@@ -2123,55 +2284,73 @@ class DispecerCurseController
 
         try {
             $now = date('Y-m-d H:i:s');
+            // Randurile de cheltuiala si cele de refacturare se salveaza separat:
+            // fiecare tip bifat inseamna o inregistrare proprie pe aceeasi cursa.
+            $expenseRowIds = [];
+            $refacturareRowIds = [];
+
             if ($existingExpense !== null) {
+                $data = $records[0];
                 $data['updated_at'] = $now;
                 $this->model->updateExpense($expenseId, $data);
+                if ((float) $data['suma'] > 0 || $data['refacturare_tip_cheltuiala'] === null) {
+                    $expenseRowIds[] = $expenseId;
+                }
+                if ($data['refacturare_tip_cheltuiala'] !== null) {
+                    $refacturareRowIds[] = $expenseId;
+                }
             } else {
-                $data['cursa_id'] = $raceId;
-                $data['added_by'] = $this->currentUserId();
-                $data['created_at'] = $now;
-                $data['updated_at'] = $now;
-                $expenseId = $this->model->createExpense($data);
+                foreach ($records as $record) {
+                    $record['cursa_id'] = $raceId;
+                    $record['added_by'] = $this->currentUserId();
+                    $record['created_at'] = $now;
+                    $record['updated_at'] = $now;
+                    $newExpenseId = $this->model->createExpense($record);
+                    if ($record['refacturare_tip_cheltuiala'] !== null && (float) $record['suma'] <= 0) {
+                        $refacturareRowIds[] = $newExpenseId;
+                    } else {
+                        $expenseRowIds[] = $newExpenseId;
+                    }
+                }
+                $expenseId = $expenseRowIds[0] ?? ($refacturareRowIds[0] ?? 0);
             }
 
-            if ($removeExistingDocuments || $uploadedDocument !== null) {
+            if ($existingExpense !== null && ($removeExistingDocuments || $uploadedDocument !== null)) {
                 $this->deleteExpenseDocumentsByExpenseId($expenseId);
             }
 
             if ($uploadedDocument !== null) {
-                $this->model->addExpenseDocument([
-                    'cheltuiala_id' => $expenseId,
-                    'file_path' => $uploadedDocument['file_path'],
-                    'original_name' => $uploadedDocument['original_name'],
-                    'mime_type' => $uploadedDocument['mime_type'],
-                    'file_size' => $uploadedDocument['file_size'],
-                    'created_at' => $now,
-                ]);
+                if ($expenseRowIds === []) {
+                    $this->deleteExpensePhysicalFile((string) $uploadedDocument['file_path']);
+                } else {
+                    $this->attachExpenseDocumentToExpenses($uploadedDocument, $expenseRowIds, $now);
+                }
             }
 
-            $refacturareEnabledForSave = $data['refacturare_tip_cheltuiala'] !== null;
-            if (!$refacturareEnabledForSave && $uploadedRefacturareDocument !== null) {
+            if ($refacturareRowIds === [] && $uploadedRefacturareDocument !== null) {
                 $this->deleteExpensePhysicalFile((string) $uploadedRefacturareDocument['file_path']);
                 $uploadedRefacturareDocument = null;
             }
-            $existingRefacturareDocumentPath = $existingExpense !== null ? (string) ($existingExpense['refacturare_document_path'] ?? '') : '';
-            if ((!$refacturareEnabledForSave || $removeExistingRefacturareDocument || $uploadedRefacturareDocument !== null) && $existingRefacturareDocumentPath !== '') {
-                $this->deleteExpensePhysicalFile($existingRefacturareDocumentPath);
-            }
 
-            if (!$refacturareEnabledForSave || $removeExistingRefacturareDocument || $uploadedRefacturareDocument !== null) {
-                $this->model->updateExpenseRefacturareDocument($expenseId, $uploadedRefacturareDocument);
+            if ($existingExpense !== null) {
+                $refacturareEnabledForSave = $refacturareRowIds !== [];
+                $existingRefacturareDocumentPath = (string) ($existingExpense['refacturare_document_path'] ?? '');
+                if ((!$refacturareEnabledForSave || $removeExistingRefacturareDocument || $uploadedRefacturareDocument !== null) && $existingRefacturareDocumentPath !== '') {
+                    $this->deleteExpensePhysicalFile($existingRefacturareDocumentPath);
+                }
+
+                if (!$refacturareEnabledForSave || $removeExistingRefacturareDocument || $uploadedRefacturareDocument !== null) {
+                    $this->model->updateExpenseRefacturareDocument($expenseId, $uploadedRefacturareDocument);
+                }
+            } elseif ($uploadedRefacturareDocument !== null) {
+                $this->attachRefacturareDocumentToExpenses($uploadedRefacturareDocument, $refacturareRowIds);
             }
 
             // La modificari de cheltuieli, cursa reintra automat in etapa de facturare.
             $this->model->updateRaceBillingStatus($raceId, self::DEFAULT_BILLING_STATUS, $now, $this->currentUserId());
             $this->resetRaceExpenseStatusIfNotApplicable($raceId, $now, true);
             $expenseSaved = true;
-            if ($isRefacturareSubmit) {
-                flash_set('success', $existingExpense !== null ? 'Refacturarea a fost actualizata.' : 'Refacturarea a fost adaugata.');
-            } else {
-                flash_set('success', $existingExpense !== null ? 'Cheltuiala a fost actualizata.' : 'Cheltuiala a fost adaugata.');
-            }
+            flash_set('success', $this->buildExpenseSaveMessage($existingExpense !== null, $isRefacturareSubmit, count($expenseRowIds), count($refacturareRowIds)));
         } catch (PDOException $exception) {
             if ($uploadedDocument !== null) {
                 $this->deleteExpensePhysicalFile((string) $uploadedDocument['file_path']);
@@ -2430,35 +2609,21 @@ class DispecerCurseController
             redirect($redirectUrl);
         }
 
-        $refacturareType = trim((string) ($_POST['refacturare_tip_cheltuiala'] ?? ''));
-
         $mappedInput = [
             'expense_id' => '',
             'submit_intent' => 'refacturare',
-            'tip_cheltuiala' => $refacturareType,
             'refacturare_enabled' => '1',
-            'refacturare_tip_cheltuiala' => $refacturareType,
-            'refacturare_suma' => trim((string) ($_POST['refacturare_suma'] ?? '')),
+            'refacturare_tip_cheltuieli' => $_POST['refacturare_tip_cheltuieli'] ?? null,
+            'refacturare_tip_cheltuiala' => $_POST['refacturare_tip_cheltuiala'] ?? '',
+            'refacturare_tip' => $_POST['refacturare_tip'] ?? [],
             'refacturare_data' => trim((string) ($_POST['refacturare_data'] ?? date('Y-m-d'))),
-            'refacturare_observatii' => trim((string) ($_POST['refacturare_observatii'] ?? '')),
-            'suma' => '0.00',
             'data_cheltuiala' => $this->resolveRefacturareAccountingDate($_POST, $returnToEdit),
-            'observatii' => trim((string) ($_POST['refacturare_observatii'] ?? '')),
-            'taxa_acces_bucati' => '',
-            'taxa_acces_pret' => '',
-            'port_bucati' => '',
-            'port_pret' => '',
-            'trece_bucati' => '',
-            'trece_pret' => '',
-            'refacturare_taxa_acces_bucati' => trim((string) ($_POST['refacturare_taxa_acces_bucati'] ?? '')),
-            'refacturare_taxa_acces_pret' => trim((string) ($_POST['refacturare_taxa_acces_pret'] ?? '')),
-            'refacturare_port_bucati' => trim((string) ($_POST['refacturare_port_bucati'] ?? '')),
-            'refacturare_port_pret' => trim((string) ($_POST['refacturare_port_pret'] ?? '')),
-            'refacturare_trece_bucati' => trim((string) ($_POST['refacturare_trece_bucati'] ?? '')),
-            'refacturare_trece_pret' => trim((string) ($_POST['refacturare_trece_pret'] ?? '')),
         ];
 
-        [$data, $errors, $old] = $this->validateExpenseInput($mappedInput);
+        [$records, $errors, $old] = $this->validateExpenseSubmission(
+            $mappedInput,
+            $this->raceExpenseDateRange($this->model->getRaceById($raceId))
+        );
         $old['race_id'] = (string) $raceId;
         $old['refacturare_enabled'] = '1';
         if ($returnToEdit) {
@@ -2479,19 +2644,25 @@ class DispecerCurseController
 
         try {
             $now = date('Y-m-d H:i:s');
-            $data['cursa_id'] = $raceId;
-            $data['created_at'] = $now;
-            $data['updated_at'] = $now;
-            $expenseId = $this->model->createExpense($data);
+            $refacturareRowIds = [];
+            foreach ($records as $record) {
+                $record['cursa_id'] = $raceId;
+                $record['added_by'] = $this->currentUserId();
+                $record['created_at'] = $now;
+                $record['updated_at'] = $now;
+                $refacturareRowIds[] = $this->model->createExpense($record);
+            }
 
             if ($uploadedRefacturareDocument !== null) {
-                $this->model->updateExpenseRefacturareDocument($expenseId, $uploadedRefacturareDocument);
+                $this->attachRefacturareDocumentToExpenses($uploadedRefacturareDocument, $refacturareRowIds);
             }
 
             $this->model->updateRaceBillingStatus($raceId, self::DEFAULT_BILLING_STATUS, $now, $this->currentUserId());
             $this->resetRaceExpenseStatusIfNotApplicable($raceId, $now, true);
             $refacturareSaved = true;
-            flash_set('success', 'Refacturarea a fost adaugata.');
+            flash_set('success', count($refacturareRowIds) > 1
+                ? 'Au fost adaugate ' . count($refacturareRowIds) . ' refacturari separate.'
+                : 'Refacturarea a fost adaugata.');
         } catch (PDOException $exception) {
             if ($uploadedRefacturareDocument !== null) {
                 $this->deleteExpensePhysicalFile((string) $uploadedRefacturareDocument['file_path']);
@@ -2558,14 +2729,17 @@ class DispecerCurseController
         $this->setFormFlash('refacturare_create', $old, $errors);
     }
 
+    /**
+     * Butonul de refacturare nu trimite prin validare si partea de cheltuiala a formularului,
+     * asa ca o pastram separat, ca sa nu piarda utilizatorul ce completase acolo.
+     */
     private function buildEditRefacturareFlashOld(array $old, array $input): array
     {
         return array_merge($old, [
             'expense_id' => trim((string) ($input['expense_id'] ?? '')),
-            'tip_cheltuiala' => trim((string) ($input['tip_cheltuiala'] ?? ($old['tip_cheltuiala'] ?? ''))),
-            'suma' => trim((string) ($input['suma'] ?? '')),
+            'categorie_ids' => $this->normalizeExpenseTypeSelection($input, 'categorie_ids', 'categorie_id'),
+            'tip' => $this->sanitizeExpenseTypeFieldsForFlash(is_array($input['tip'] ?? null) ? $input['tip'] : []),
             'data_cheltuiala' => trim((string) ($input['data_cheltuiala'] ?? date('Y-m-d'))),
-            'observatii' => trim((string) ($input['observatii'] ?? '')),
             'refacturare_enabled' => '1',
         ]);
     }
@@ -4988,18 +5162,12 @@ class DispecerCurseController
             'suma' => '',
             'data_cheltuiala' => date('Y-m-d'),
             'observatii' => '',
-            'taxa_acces_bucati' => '',
-            'taxa_acces_pret' => '',
-            'port_bucati' => '',
-            'port_pret' => '',
-            'trece_bucati' => '',
-            'trece_pret' => '',
-            'refacturare_taxa_acces_bucati' => '',
-            'refacturare_taxa_acces_pret' => '',
-            'refacturare_port_bucati' => '',
-            'refacturare_port_pret' => '',
-            'refacturare_trece_bucati' => '',
-            'refacturare_trece_pret' => '',
+            // Selectii multiple: fiecare tip bifat devine o inregistrare separata.
+            'categorie_ids' => [],
+            'refacturare_tip_cheltuieli' => [],
+            // Campurile per tip: cheie = id categorie (cheltuiala) / cheie legacy (refacturare).
+            'tip' => [],
+            'refacturare_tip' => [],
         ];
     }
 
@@ -5106,7 +5274,7 @@ class DispecerCurseController
         $mapped = [];
         foreach ($errors as $key => $message) {
             $key = (string) $key;
-            if (!preg_match('/^create_expense_items\.(\d+)\.([a-z_]+)$/', $key, $matches)) {
+            if (!preg_match('/^create_expense_items\.(\d+)\.(.+)$/', $key, $matches)) {
                 continue;
             }
 
@@ -5149,80 +5317,68 @@ class DispecerCurseController
                 continue;
             }
 
-            $mappedInput = [
-                'expense_id' => '',
-                'tip_cheltuiala' => trim((string) ($rawItem['tip_cheltuiala'] ?? '')),
-                'categorie_id' => trim((string) ($rawItem['categorie_id'] ?? '')),
-                'refacturare_enabled' => isset($rawItem['refacturare_enabled']) && (string) $rawItem['refacturare_enabled'] === '1' ? '1' : '0',
-                'refacturare_tip_cheltuiala' => trim((string) ($rawItem['refacturare_tip_cheltuiala'] ?? '')),
-                'refacturare_suma' => trim((string) ($rawItem['refacturare_suma'] ?? '')),
-                'refacturare_data' => trim((string) ($rawItem['refacturare_data'] ?? date('Y-m-d'))),
-                'refacturare_observatii' => trim((string) ($rawItem['refacturare_observatii'] ?? '')),
+            $categorySelection = trim((string) ($rawItem['categorie_id'] ?? ''));
+            if ($categorySelection === '') {
+                $categorySelection = trim((string) ($rawItem['tip_cheltuiala'] ?? ''));
+            }
+            $refacturareType = trim((string) ($rawItem['refacturare_tip_cheltuiala'] ?? ''));
+            $refacturareEnabled = isset($rawItem['refacturare_enabled']) && (string) $rawItem['refacturare_enabled'] === '1';
+
+            $itemFields = [
+                'locatie' => trim((string) ($rawItem['locatie'] ?? '')),
+                'bucati' => trim((string) ($rawItem['bucati'] ?? '')),
+                'pret' => trim((string) ($rawItem['pret'] ?? '')),
                 'suma' => trim((string) ($rawItem['suma'] ?? '')),
-                'data_cheltuiala' => trim((string) ($rawItem['data_cheltuiala'] ?? date('Y-m-d'))),
                 'observatii' => trim((string) ($rawItem['observatii'] ?? '')),
-                'taxa_acces_bucati' => trim((string) ($rawItem['taxa_acces_bucati'] ?? '')),
-                'taxa_acces_pret' => trim((string) ($rawItem['taxa_acces_pret'] ?? '')),
-                'port_bucati' => trim((string) ($rawItem['port_bucati'] ?? '')),
-                'port_pret' => trim((string) ($rawItem['port_pret'] ?? '')),
-                'trece_bucati' => trim((string) ($rawItem['trece_bucati'] ?? '')),
-                'trece_pret' => trim((string) ($rawItem['trece_pret'] ?? '')),
-                'refacturare_taxa_acces_bucati' => trim((string) ($rawItem['refacturare_taxa_acces_bucati'] ?? '')),
-                'refacturare_taxa_acces_pret' => trim((string) ($rawItem['refacturare_taxa_acces_pret'] ?? '')),
-                'refacturare_port_bucati' => trim((string) ($rawItem['refacturare_port_bucati'] ?? '')),
-                'refacturare_port_pret' => trim((string) ($rawItem['refacturare_port_pret'] ?? '')),
-                'refacturare_trece_bucati' => trim((string) ($rawItem['refacturare_trece_bucati'] ?? '')),
-                'refacturare_trece_pret' => trim((string) ($rawItem['refacturare_trece_pret'] ?? '')),
+            ];
+            $refacturareItemFields = [
+                'locatie' => trim((string) ($rawItem['refacturare_locatie'] ?? '')),
+                'bucati' => trim((string) ($rawItem['refacturare_bucati'] ?? '')),
+                'pret' => trim((string) ($rawItem['refacturare_pret'] ?? '')),
+                'suma' => trim((string) ($rawItem['refacturare_suma'] ?? '')),
+                'observatii' => trim((string) ($rawItem['refacturare_observatii'] ?? '')),
             ];
 
-            $hasMeaningfulInput = $mappedInput['suma'] !== ''
-                || $mappedInput['observatii'] !== ''
-                || $mappedInput['taxa_acces_bucati'] !== ''
-                || $mappedInput['taxa_acces_pret'] !== ''
-                || $mappedInput['port_bucati'] !== ''
-                || $mappedInput['port_pret'] !== ''
-                || $mappedInput['trece_bucati'] !== ''
-                || $mappedInput['trece_pret'] !== ''
-                || $mappedInput['refacturare_enabled'] === '1'
-                || $mappedInput['refacturare_suma'] !== ''
-                || $mappedInput['refacturare_observatii'] !== ''
-                || $mappedInput['refacturare_taxa_acces_bucati'] !== ''
-                || $mappedInput['refacturare_taxa_acces_pret'] !== ''
-                || $mappedInput['refacturare_port_bucati'] !== ''
-                || $mappedInput['refacturare_port_pret'] !== ''
-                || $mappedInput['refacturare_trece_bucati'] !== ''
-                || $mappedInput['refacturare_trece_pret'] !== ''
-                || $mappedInput['tip_cheltuiala'] !== ''
-                || $mappedInput['categorie_id'] !== '';
+            $mappedInput = [
+                'expense_id' => '',
+                'submit_intent' => 'expense',
+                'data_cheltuiala' => trim((string) ($rawItem['data_cheltuiala'] ?? date('Y-m-d'))),
+                'refacturare_data' => trim((string) ($rawItem['refacturare_data'] ?? date('Y-m-d'))),
+                'refacturare_enabled' => $refacturareEnabled ? '1' : '0',
+                'categorie_ids' => $categorySelection !== '' ? [$categorySelection] : [],
+                'tip' => $categorySelection !== '' ? [$categorySelection => $itemFields] : [],
+                'refacturare_tip_cheltuieli' => $refacturareType !== '' ? [$refacturareType] : [],
+                'refacturare_tip' => $refacturareType !== '' ? [$refacturareType => $refacturareItemFields] : [],
+            ];
+
+            $hasMeaningfulInput = $categorySelection !== ''
+                || $refacturareEnabled
+                || $refacturareType !== ''
+                || implode('', $itemFields) !== ''
+                || implode('', $refacturareItemFields) !== '';
 
             if (!$hasMeaningfulInput) {
                 continue;
             }
 
-            [$expenseData, $expenseErrors, $expenseOld] = $this->validateExpenseInput($mappedInput);
+            [$expenseRecords, $expenseErrors, $expenseOld] = $this->validateExpenseSubmission($mappedInput);
             $normalizedOldItem = [
-                'tip_cheltuiala' => (string) ($expenseOld['tip_cheltuiala'] ?? $mappedInput['tip_cheltuiala']),
-                'categorie_id' => (string) ($expenseOld['categorie_id'] ?? $mappedInput['categorie_id']),
-                'refacturare_enabled' => (string) ($expenseOld['refacturare_enabled'] ?? $mappedInput['refacturare_enabled']),
-                'refacturare_tip_cheltuiala' => (string) ($expenseOld['refacturare_tip_cheltuiala'] ?? $mappedInput['refacturare_tip_cheltuiala']),
-                'suma' => (string) ($expenseOld['suma'] ?? $mappedInput['suma']),
+                'tip_cheltuiala' => (string) ($expenseOld['tip_cheltuiala'] ?? ''),
+                'categorie_id' => $categorySelection,
+                'refacturare_enabled' => $refacturareEnabled ? '1' : '0',
+                'refacturare_tip_cheltuiala' => $refacturareType,
                 'data_cheltuiala' => (string) ($expenseOld['data_cheltuiala'] ?? $mappedInput['data_cheltuiala']),
-                'observatii' => (string) ($expenseOld['observatii'] ?? $mappedInput['observatii']),
-                'refacturare_suma' => (string) ($expenseOld['refacturare_suma'] ?? $mappedInput['refacturare_suma']),
                 'refacturare_data' => (string) ($expenseOld['refacturare_data'] ?? $mappedInput['refacturare_data']),
-                'refacturare_observatii' => (string) ($expenseOld['refacturare_observatii'] ?? $mappedInput['refacturare_observatii']),
-                'taxa_acces_bucati' => (string) ($expenseOld['taxa_acces_bucati'] ?? $mappedInput['taxa_acces_bucati']),
-                'taxa_acces_pret' => (string) ($expenseOld['taxa_acces_pret'] ?? $mappedInput['taxa_acces_pret']),
-                'port_bucati' => (string) ($expenseOld['port_bucati'] ?? $mappedInput['port_bucati']),
-                'port_pret' => (string) ($expenseOld['port_pret'] ?? $mappedInput['port_pret']),
-                'trece_bucati' => (string) ($expenseOld['trece_bucati'] ?? $mappedInput['trece_bucati']),
-                'trece_pret' => (string) ($expenseOld['trece_pret'] ?? $mappedInput['trece_pret']),
-                'refacturare_taxa_acces_bucati' => (string) ($expenseOld['refacturare_taxa_acces_bucati'] ?? $mappedInput['refacturare_taxa_acces_bucati']),
-                'refacturare_taxa_acces_pret' => (string) ($expenseOld['refacturare_taxa_acces_pret'] ?? $mappedInput['refacturare_taxa_acces_pret']),
-                'refacturare_port_bucati' => (string) ($expenseOld['refacturare_port_bucati'] ?? $mappedInput['refacturare_port_bucati']),
-                'refacturare_port_pret' => (string) ($expenseOld['refacturare_port_pret'] ?? $mappedInput['refacturare_port_pret']),
-                'refacturare_trece_bucati' => (string) ($expenseOld['refacturare_trece_bucati'] ?? $mappedInput['refacturare_trece_bucati']),
-                'refacturare_trece_pret' => (string) ($expenseOld['refacturare_trece_pret'] ?? $mappedInput['refacturare_trece_pret']),
+                'locatie' => $itemFields['locatie'],
+                'bucati' => $itemFields['bucati'],
+                'pret' => $itemFields['pret'],
+                'suma' => $itemFields['suma'],
+                'observatii' => $itemFields['observatii'],
+                'refacturare_locatie' => $refacturareItemFields['locatie'],
+                'refacturare_bucati' => $refacturareItemFields['bucati'],
+                'refacturare_pret' => $refacturareItemFields['pret'],
+                'refacturare_suma' => $refacturareItemFields['suma'],
+                'refacturare_observatii' => $refacturareItemFields['observatii'],
             ];
 
             $itemIndex = count($oldItems);
@@ -5232,34 +5388,26 @@ class DispecerCurseController
                 $prefixedErrors['create_expense_items.' . $itemIndex . '.' . $field] = (string) $message;
             }
 
-            if ($expenseErrors === [] && is_array($expenseData) && $expenseData !== []) {
-                $validExpenses[] = $expenseData;
+            if ($expenseErrors === [] && $expenseRecords !== []) {
+                foreach ($expenseRecords as $expenseRecord) {
+                    $validExpenses[] = $expenseRecord;
+                }
             }
         }
 
         if ($oldItems === []) {
             $oldItems[] = array_merge([
                 'tip_cheltuiala' => '',
+                'categorie_id' => '',
                 'refacturare_enabled' => '0',
                 'refacturare_tip_cheltuiala' => '',
-                'refacturare_suma' => '',
                 'refacturare_data' => date('Y-m-d'),
-                'refacturare_observatii' => '',
-                'suma' => '',
                 'data_cheltuiala' => date('Y-m-d'),
+                'locatie' => '',
+                'bucati' => '',
+                'pret' => '',
+                'suma' => '',
                 'observatii' => '',
-                'taxa_acces_bucati' => '',
-                'taxa_acces_pret' => '',
-                'port_bucati' => '',
-                'port_pret' => '',
-                'trece_bucati' => '',
-                'trece_pret' => '',
-                'refacturare_taxa_acces_bucati' => '',
-                'refacturare_taxa_acces_pret' => '',
-                'refacturare_port_bucati' => '',
-                'refacturare_port_pret' => '',
-                'refacturare_trece_bucati' => '',
-                'refacturare_trece_pret' => '',
             ], $defaultItem);
         }
 
@@ -6304,289 +6452,437 @@ class DispecerCurseController
         return $transportType === 'primar_tona';
     }
 
-    private function validateExpenseInput(array $input): array
+    /**
+     * Normalizeaza selectia de tipuri dintr-un selector multiplu.
+     * Accepta si forma veche cu un singur camp, ca sa nu rupem formularele existente.
+     *
+     * @return array<int, string>
+     */
+    private function normalizeExpenseTypeSelection(array $input, string $multiKey, string $singleKey): array
+    {
+        $raw = $input[$multiKey] ?? null;
+        if (!is_array($raw)) {
+            $raw = [];
+        }
+        if ($raw === [] && isset($input[$singleKey]) && !is_array($input[$singleKey])) {
+            $raw = [$input[$singleKey]];
+        }
+
+        $values = [];
+        foreach ($raw as $value) {
+            if (is_array($value)) {
+                continue;
+            }
+            $value = trim((string) $value);
+            if ($value !== '' && !in_array($value, $values, true)) {
+                $values[] = $value;
+            }
+        }
+
+        return $values;
+    }
+
+    /**
+     * Rezolva categoriile bifate in selectorul de cheltuiala.
+     * Cheia rezultatului este id-ul categoriei, ca sa nu se ciocneasca doua categorii
+     * personalizate care se mapeaza amandoua pe tipul legacy "alte".
+     *
+     * @return array<string, array{type:string, category_id:?int}>
+     */
+    private function resolveExpenseCategorySelections(array $selections, array &$errors, string $errorKey): array
+    {
+        $lines = [];
+        foreach ($selections as $selection) {
+            $category = $this->model->resolveExpenseCategorySelection($selection, true);
+            if ($category === null) {
+                $errors[$errorKey] = 'Tipul cheltuielii este invalid sau inactiv.';
+                continue;
+            }
+
+            $type = $this->model->legacyExpenseTypeForCategory($category);
+            if ($type === self::FUEL_EXPENSE_TYPE) {
+                $errors[$errorKey] = 'Motorina se adauga separat din modulul Alimentari.';
+                continue;
+            }
+            if (in_array($type, self::RETIRED_EXPENSE_TYPES, true)) {
+                $errors[$errorKey] = 'Taxe drum nu se mai poate selecta: alege Taxa acces, Port sau Trecere.';
+                continue;
+            }
+
+            $categoryId = (int) ($category['id'] ?? 0);
+            $lines[(string) $categoryId] = [
+                'type' => $type,
+                'category_id' => $categoryId > 0 ? $categoryId : null,
+                'selection' => $selection,
+            ];
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Rezolva tipurile bifate in selectorul de refacturare (chei legacy, lista fixa).
+     *
+     * @return array<string, array{type:string, category_id:?int}>
+     */
+    private function resolveRefacturareTypeSelections(array $selections, array &$errors, string $errorKey): array
+    {
+        $allowed = $this->expenseEntryTypes();
+        $lines = [];
+        foreach ($selections as $selection) {
+            if ($selection === self::FUEL_EXPENSE_TYPE) {
+                $errors[$errorKey] = 'Motorina se adauga separat din modulul Alimentari.';
+                continue;
+            }
+            if (!array_key_exists($selection, $allowed)) {
+                $errors[$errorKey] = 'Tipul pentru refacturare este invalid.';
+                continue;
+            }
+
+            $category = $this->model->resolveExpenseCategorySelection($selection, true);
+            $categoryId = $category !== null ? (int) ($category['id'] ?? 0) : 0;
+            $lines[$selection] = [
+                'type' => $selection,
+                'category_id' => $categoryId > 0 ? $categoryId : null,
+                'selection' => $selection,
+            ];
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Valideaza campurile unui singur tip bifat.
+     * Taxele de drum au locatie / bucati / pret unitar si suma calculata, fara observatii;
+     * restul tipurilor pastreaza suma introdusa manual si observatiile.
+     *
+     * @return array{locatie:?string, bucati:?float, pret_unitar:?float, suma:float, observatii:?string}|null
+     */
+    private function buildExpenseTypeLine(string $type, array $fields, array &$errors, string $errorPrefix): ?array
+    {
+        $typeLabel = self::EXPENSE_TYPES[$type] ?? $type;
+
+        if ($this->isTollExpenseType($type)) {
+            $hasError = false;
+
+            $location = trim((string) ($fields['locatie'] ?? ''));
+            if ($location === '') {
+                $errors[$errorPrefix . 'locatie'] = $typeLabel . ': completeaza locatia.';
+                $hasError = true;
+            } elseif (mb_strlen($location) > 190) {
+                $errors[$errorPrefix . 'locatie'] = $typeLabel . ': locatia este prea lunga (maxim 190 caractere).';
+                $hasError = true;
+            }
+
+            $quantityRaw = trim((string) ($fields['bucati'] ?? ''));
+            $quantity = $quantityRaw === '' ? null : $this->normalizeDecimal($quantityRaw);
+            if ($quantity === null || $quantity <= 0) {
+                $errors[$errorPrefix . 'bucati'] = $typeLabel . ': completeaza un numar de bucati valid (> 0).';
+                $hasError = true;
+            }
+
+            $priceRaw = trim((string) ($fields['pret'] ?? ''));
+            $price = $priceRaw === '' ? null : $this->normalizeDecimal($priceRaw);
+            if ($price === null || $price <= 0) {
+                $errors[$errorPrefix . 'pret'] = $typeLabel . ': completeaza un pret valid (> 0).';
+                $hasError = true;
+            }
+
+            if ($hasError) {
+                return null;
+            }
+
+            return [
+                'locatie' => $location,
+                'bucati' => round((float) $quantity, 2),
+                'pret_unitar' => round((float) $price, 2),
+                'suma' => round((float) $quantity * (float) $price, 2),
+                'observatii' => null,
+            ];
+        }
+
+        $hasError = false;
+
+        $amountRaw = trim((string) ($fields['suma'] ?? ''));
+        $amount = $amountRaw === '' ? null : $this->normalizeDecimal($amountRaw);
+        if ($amount === null || $amount <= 0) {
+            $errors[$errorPrefix . 'suma'] = $typeLabel . ': suma trebuie sa fie mai mare decat 0.';
+            $hasError = true;
+        }
+
+        $observations = trim((string) ($fields['observatii'] ?? ''));
+        if (mb_strlen($observations) > 5000) {
+            $errors[$errorPrefix . 'observatii'] = $typeLabel . ': observatiile sunt prea lungi.';
+            $hasError = true;
+        }
+
+        if ($hasError) {
+            return null;
+        }
+
+        return [
+            'locatie' => null,
+            'bucati' => null,
+            'pret_unitar' => null,
+            'suma' => round((float) $amount, 2),
+            'observatii' => $observations !== '' ? $observations : null,
+        ];
+    }
+
+    /**
+     * Blocul de campuri al unui tip bifat. Cheia normala este id-ul categoriei,
+     * dar acceptam si cheia trimisa de formular (id sau cheie legacy).
+     */
+    private function pickExpenseTypeFields(array $rawFields, string $resolvedKey, string $selectionKey): array
+    {
+        if (is_array($rawFields[$resolvedKey] ?? null)) {
+            return $rawFields[$resolvedKey];
+        }
+        if ($selectionKey !== '' && is_array($rawFields[$selectionKey] ?? null)) {
+            return $rawFields[$selectionKey];
+        }
+
+        return [];
+    }
+
+    /**
+     * @return array<string, array<string, string>>
+     */
+    private function sanitizeExpenseTypeFieldsForFlash(array $raw): array
+    {
+        $allowedFields = ['locatie', 'bucati', 'pret', 'suma', 'observatii'];
+        $clean = [];
+        foreach ($raw as $key => $fields) {
+            if (!is_array($fields)) {
+                continue;
+            }
+
+            $row = [];
+            foreach ($allowedFields as $field) {
+                $value = $fields[$field] ?? '';
+                $row[$field] = is_array($value) ? '' : trim((string) $value);
+            }
+            $clean[(string) $key] = $row;
+        }
+
+        return $clean;
+    }
+
+    private function emptyExpenseRecord(string $expenseDate): array
+    {
+        return [
+            'tip_cheltuiala' => '',
+            'categorie_id' => null,
+            'locatie' => null,
+            'bucati' => null,
+            'pret_unitar' => null,
+            'refacturare_tip_cheltuiala' => null,
+            'refacturare_locatie' => null,
+            'refacturare_bucati' => null,
+            'refacturare_pret_unitar' => null,
+            'refacturare_detalii' => null,
+            'refacturare_suma' => null,
+            'refacturare_data' => null,
+            'refacturare_observatii' => null,
+            'suma' => 0.0,
+            'data_cheltuiala' => $expenseDate,
+            'observatii' => null,
+        ];
+    }
+
+    private function composeExpenseRecord(array $payload, string $expenseDate): array
+    {
+        $record = $this->emptyExpenseRecord($expenseDate);
+        $record['tip_cheltuiala'] = $payload['type'];
+        $record['categorie_id'] = $payload['category_id'];
+        $record['locatie'] = $payload['locatie'];
+        $record['bucati'] = $payload['bucati'];
+        $record['pret_unitar'] = $payload['pret_unitar'];
+        $record['suma'] = $payload['suma'];
+        $record['observatii'] = $payload['observatii'];
+
+        return $record;
+    }
+
+    private function composeRefacturareRecord(array $payload, string $expenseDate, string $refacturareDate): array
+    {
+        $record = $this->emptyExpenseRecord($expenseDate);
+        $record['tip_cheltuiala'] = $payload['type'];
+        $record['categorie_id'] = $payload['category_id'];
+        $record['refacturare_tip_cheltuiala'] = $payload['type'];
+        $record['refacturare_locatie'] = $payload['locatie'];
+        $record['refacturare_bucati'] = $payload['bucati'];
+        $record['refacturare_pret_unitar'] = $payload['pret_unitar'];
+        $record['refacturare_suma'] = $payload['suma'];
+        $record['refacturare_data'] = $refacturareDate !== '' ? $refacturareDate : $expenseDate;
+        $record['refacturare_observatii'] = $payload['observatii'];
+        $record['suma'] = 0.0;
+
+        return $record;
+    }
+
+    /**
+     * La editare ramanem pe o singura inregistrare: partea de cheltuiala si cea de
+     * refacturare stau pe acelasi rand, ca sa putem edita si cheltuielile combinate vechi.
+     */
+    private function composeEditedExpenseRecord(
+        ?array $expensePayload,
+        ?array $refacturarePayload,
+        string $expenseDate,
+        string $refacturareDate
+    ): array {
+        $record = $this->emptyExpenseRecord($expenseDate);
+
+        if ($expensePayload !== null) {
+            $record['tip_cheltuiala'] = $expensePayload['type'];
+            $record['categorie_id'] = $expensePayload['category_id'];
+            $record['locatie'] = $expensePayload['locatie'];
+            $record['bucati'] = $expensePayload['bucati'];
+            $record['pret_unitar'] = $expensePayload['pret_unitar'];
+            $record['suma'] = $expensePayload['suma'];
+            $record['observatii'] = $expensePayload['observatii'];
+        }
+
+        if ($refacturarePayload !== null) {
+            if ($record['tip_cheltuiala'] === '') {
+                $record['tip_cheltuiala'] = $refacturarePayload['type'];
+                $record['categorie_id'] = $refacturarePayload['category_id'];
+            }
+            $record['refacturare_tip_cheltuiala'] = $refacturarePayload['type'];
+            $record['refacturare_locatie'] = $refacturarePayload['locatie'];
+            $record['refacturare_bucati'] = $refacturarePayload['bucati'];
+            $record['refacturare_pret_unitar'] = $refacturarePayload['pret_unitar'];
+            $record['refacturare_suma'] = $refacturarePayload['suma'];
+            $record['refacturare_data'] = $refacturareDate !== '' ? $refacturareDate : $expenseDate;
+            $record['refacturare_observatii'] = $refacturarePayload['observatii'];
+        }
+
+        return $record;
+    }
+
+    /**
+     * Valideaza formularul de cheltuieli / refacturare cu selectie multipla de tipuri.
+     * Fiecare tip bifat devine o inregistrare separata pe aceeasi cursa: doua taxe de drum
+     * bifate impreuna produc doua randuri independente, nu unul agregat.
+     *
+     * @return array{0: array<int, array<string, mixed>>, 1: array<string, string>, 2: array<string, mixed>}
+     */
+    private function validateExpenseSubmission(array $input, array $dateRange = ['min' => null, 'max' => null]): array
     {
         $errors = [];
-        $submitIntent = trim((string) ($input['submit_intent'] ?? 'expense'));
-        $isRefacturareOnlySubmit = $submitIntent === 'refacturare' && (int) ($input['expense_id'] ?? 0) <= 0;
-
-        $categorySelection = trim((string) ($input['categorie_id'] ?? ''));
-        $typeInput = trim((string) ($input['tip_cheltuiala'] ?? ''));
-        if ($categorySelection === '') {
-            $categorySelection = $typeInput;
-        }
-
-        $expenseCategory = null;
-        $categoryId = null;
-        $type = $typeInput;
-        if ($categorySelection === '') {
-            $errors['tip_cheltuiala'] = 'Selecteaza tipul cheltuielii.';
-            $errors['categorie_id'] = 'Selecteaza tipul cheltuielii.';
-        } else {
-            $expenseCategory = $this->model->resolveExpenseCategorySelection($categorySelection, true);
-            if ($expenseCategory !== null) {
-                $categoryId = (int) ($expenseCategory['id'] ?? 0);
-                $type = $this->model->legacyExpenseTypeForCategory($expenseCategory);
-            }
-        }
-
-        if ($type === self::FUEL_EXPENSE_TYPE) {
-            $errors['tip_cheltuiala'] = 'Motorina se adauga separat din modulul Alimentari.';
-            $errors['categorie_id'] = 'Motorina se adauga separat din modulul Alimentari.';
-        } elseif (!array_key_exists($type, self::EXPENSE_TYPES)) {
-            $errors['tip_cheltuiala'] = 'Tipul cheltuielii este invalid.';
-            $errors['categorie_id'] = 'Tipul cheltuielii este invalid.';
-        } elseif ($expenseCategory === null && $type !== '') {
-            $expenseCategory = $this->model->resolveExpenseCategorySelection($type, true);
-            if ($expenseCategory === null) {
-                $errors['tip_cheltuiala'] = 'Tipul cheltuielii este invalid sau inactiv.';
-                $errors['categorie_id'] = 'Tipul cheltuielii este invalid sau inactiv.';
-            } else {
-                $categoryId = (int) ($expenseCategory['id'] ?? 0);
-                $type = $this->model->legacyExpenseTypeForCategory($expenseCategory);
-            }
-        }
-
-        $refacturareEnabled = isset($input['refacturare_enabled']) && (string) $input['refacturare_enabled'] === '1';
-        $refacturareType = trim((string) ($input['refacturare_tip_cheltuiala'] ?? ''));
-        if ($refacturareEnabled && $refacturareType === '') {
-            $errors['refacturare_tip_cheltuiala'] = 'Selecteaza tipul pentru refacturare.';
-        } elseif ($refacturareEnabled && $refacturareType === self::FUEL_EXPENSE_TYPE) {
-            $errors['refacturare_tip_cheltuiala'] = 'Motorina se adauga separat din modulul Alimentari.';
-        } elseif ($refacturareEnabled && !array_key_exists($refacturareType, self::EXPENSE_TYPES)) {
-            $errors['refacturare_tip_cheltuiala'] = 'Tipul pentru refacturare este invalid.';
-        }
-        if (!$refacturareEnabled) {
-            $refacturareType = '';
-        }
-        if ($isRefacturareOnlySubmit && !$refacturareEnabled) {
-            $errors['refacturare_suma'] = 'Bifeaza Refacturare pentru a adauga refacturarea.';
-        }
-
-        $amountRaw = trim((string) ($input['suma'] ?? ''));
-        $amount = $this->normalizeDecimal($amountRaw);
+        $dateRangeLabel = $this->formatExpenseDateRangeLabel($dateRange);
+        $expenseId = (int) ($input['expense_id'] ?? 0);
+        $isEdit = $expenseId > 0;
+        $isRefacturareSubmit = trim((string) ($input['submit_intent'] ?? 'expense')) === 'refacturare';
+        $isRefacturareOnlySubmit = $isRefacturareSubmit && !$isEdit;
 
         $expenseDate = trim((string) ($input['data_cheltuiala'] ?? ''));
         if (!$this->isValidDate($expenseDate)) {
             $errors['data_cheltuiala'] = 'Data cheltuielii este invalida.';
+        } elseif (!$this->isDateWithinRange($expenseDate, $dateRange)) {
+            $errors['data_cheltuiala'] = 'Data cheltuielii trebuie sa fie in intervalul cursei (' . $dateRangeLabel . ').';
         }
 
-        $observations = trim((string) ($input['observatii'] ?? ''));
-        $roadTaxInputRaw = [
-            'taxa_acces_bucati' => trim((string) ($input['taxa_acces_bucati'] ?? '')),
-            'taxa_acces_pret' => trim((string) ($input['taxa_acces_pret'] ?? '')),
-            'port_bucati' => trim((string) ($input['port_bucati'] ?? '')),
-            'port_pret' => trim((string) ($input['port_pret'] ?? '')),
-            'trece_bucati' => trim((string) ($input['trece_bucati'] ?? '')),
-            'trece_pret' => trim((string) ($input['trece_pret'] ?? '')),
-        ];
-
-        $roadTaxDetails = [];
-        $roadTaxTotal = 0.0;
-        $roadTaxLineCount = 0;
-        $roadTaxRows = [
-            'taxa_acces' => ['qty' => 'taxa_acces_bucati', 'price' => 'taxa_acces_pret', 'label' => 'Taxa acces'],
-            'port' => ['qty' => 'port_bucati', 'price' => 'port_pret', 'label' => 'Port'],
-            'trece' => ['qty' => 'trece_bucati', 'price' => 'trece_pret', 'label' => 'Trece'],
-        ];
-
-        foreach ($roadTaxRows as $rowKey => $rowConfig) {
-            $qtyRaw = $roadTaxInputRaw[$rowConfig['qty']];
-            $priceRaw = $roadTaxInputRaw[$rowConfig['price']];
-            $qty = $qtyRaw === '' ? null : $this->normalizeDecimal($qtyRaw);
-            $price = $priceRaw === '' ? null : $this->normalizeDecimal($priceRaw);
-
-            if ($qtyRaw !== '' && ($qty === null || $qty <= 0)) {
-                $errors[$rowConfig['qty']] = $rowConfig['label'] . ': completeaza un numar de bucati valid (> 0).';
-            }
-
-            if ($priceRaw !== '' && ($price === null || $price <= 0)) {
-                $errors[$rowConfig['price']] = $rowConfig['label'] . ': completeaza un pret valid (> 0).';
-            }
-
-            if (($qtyRaw !== '' && $priceRaw === '') || ($qtyRaw === '' && $priceRaw !== '')) {
-                if ($qtyRaw === '') {
-                    $errors[$rowConfig['qty']] = $rowConfig['label'] . ': completeaza numarul de bucati.';
-                }
-                if ($priceRaw === '') {
-                    $errors[$rowConfig['price']] = $rowConfig['label'] . ': completeaza pretul.';
-                }
-            }
-
-            if ($qty !== null && $qty > 0 && $price !== null && $price > 0) {
-                $lineTotal = round($qty * $price, 2);
-                $roadTaxDetails[$rowKey] = [
-                    'bucati' => round($qty, 2),
-                    'pret' => round($price, 2),
-                    'total' => $lineTotal,
-                ];
-                $roadTaxTotal += $lineTotal;
-                $roadTaxLineCount++;
-            }
-        }
-
-        if ($type === 'taxe_drum' && !$isRefacturareOnlySubmit) {
-            if ($roadTaxLineCount === 0) {
-                $errors['suma'] = 'Pentru Taxe drum completeaza cel putin o linie (bucati si pret).';
-            }
-            $amount = $roadTaxTotal;
-            $amountRaw = $roadTaxTotal > 0 ? number_format($roadTaxTotal, 2, '.', '') : '';
-        }
-
-        $refacturareRoadTaxInputRaw = [
-            'refacturare_taxa_acces_bucati' => trim((string) ($input['refacturare_taxa_acces_bucati'] ?? '')),
-            'refacturare_taxa_acces_pret' => trim((string) ($input['refacturare_taxa_acces_pret'] ?? '')),
-            'refacturare_port_bucati' => trim((string) ($input['refacturare_port_bucati'] ?? '')),
-            'refacturare_port_pret' => trim((string) ($input['refacturare_port_pret'] ?? '')),
-            'refacturare_trece_bucati' => trim((string) ($input['refacturare_trece_bucati'] ?? '')),
-            'refacturare_trece_pret' => trim((string) ($input['refacturare_trece_pret'] ?? '')),
-        ];
-        $refacturareRoadTaxDetails = [];
-        $refacturareRoadTaxTotal = 0.0;
-        $refacturareRoadTaxLineCount = 0;
-
-        foreach ($roadTaxRows as $rowKey => $rowConfig) {
-            $qtyField = 'refacturare_' . $rowConfig['qty'];
-            $priceField = 'refacturare_' . $rowConfig['price'];
-            $qtyRaw = $refacturareRoadTaxInputRaw[$qtyField];
-            $priceRaw = $refacturareRoadTaxInputRaw[$priceField];
-            $qty = $qtyRaw === '' ? null : $this->normalizeDecimal($qtyRaw);
-            $price = $priceRaw === '' ? null : $this->normalizeDecimal($priceRaw);
-            $label = 'Refacturare ' . $rowConfig['label'];
-
-            if ($qtyRaw !== '' && ($qty === null || $qty <= 0)) {
-                $errors[$qtyField] = $label . ': completeaza un numar de bucati valid (> 0).';
-            }
-
-            if ($priceRaw !== '' && ($price === null || $price <= 0)) {
-                $errors[$priceField] = $label . ': completeaza un pret valid (> 0).';
-            }
-
-            if (($qtyRaw !== '' && $priceRaw === '') || ($qtyRaw === '' && $priceRaw !== '')) {
-                if ($qtyRaw === '') {
-                    $errors[$qtyField] = $label . ': completeaza numarul de bucati.';
-                }
-                if ($priceRaw === '') {
-                    $errors[$priceField] = $label . ': completeaza pretul.';
-                }
-            }
-
-            if ($qty !== null && $qty > 0 && $price !== null && $price > 0) {
-                $lineTotal = round($qty * $price, 2);
-                $refacturareRoadTaxDetails[$rowKey] = [
-                    'bucati' => round($qty, 2),
-                    'pret' => round($price, 2),
-                    'total' => $lineTotal,
-                ];
-                $refacturareRoadTaxTotal += $lineTotal;
-                $refacturareRoadTaxLineCount++;
-            }
-        }
-
-        if ($refacturareEnabled && $refacturareType === 'taxe_drum' && $refacturareRoadTaxLineCount === 0) {
-            $errors['refacturare_tip_cheltuiala'] = 'Pentru Refacturare Taxe drum completeaza cel putin o linie (bucati si pret).';
-        }
-        if (!$refacturareEnabled || $refacturareType !== 'taxe_drum') {
-            $refacturareRoadTaxDetails = [];
-        }
-
-        $refacturareDetailsJson = null;
-        if ($refacturareRoadTaxDetails !== []) {
-            $encodedRefacturareDetails = json_encode($refacturareRoadTaxDetails, JSON_UNESCAPED_UNICODE);
-            if (is_string($encodedRefacturareDetails) && $encodedRefacturareDetails !== '') {
-                $refacturareDetailsJson = $encodedRefacturareDetails;
-            }
-        }
-
-        $refacturareAmountRaw = trim((string) ($input['refacturare_suma'] ?? ''));
-        $refacturareAmount = $refacturareAmountRaw === '' ? null : $this->normalizeDecimal($refacturareAmountRaw);
-        if ($refacturareEnabled && $refacturareType === 'taxe_drum') {
-            $refacturareAmount = $refacturareRoadTaxTotal;
-            $refacturareAmountRaw = $refacturareRoadTaxTotal > 0 ? number_format($refacturareRoadTaxTotal, 2, '.', '') : '';
-        }
-        if ($refacturareEnabled && ($refacturareAmount === null || $refacturareAmount <= 0)) {
-            $errors['refacturare_suma'] = 'Suma Refacturare trebuie sa fie mai mare decat 0.';
-        }
-
+        $refacturareEnabled = isset($input['refacturare_enabled']) && (string) $input['refacturare_enabled'] === '1';
         $refacturareDate = trim((string) ($input['refacturare_data'] ?? ''));
-        if ($refacturareEnabled && !$this->isValidDate($refacturareDate)) {
+        if (($refacturareEnabled || $isRefacturareOnlySubmit) && !$this->isValidDate($refacturareDate)) {
             $errors['refacturare_data'] = 'Data Refacturare este invalida.';
+        } elseif (($refacturareEnabled || $isRefacturareOnlySubmit) && !$this->isDateWithinRange($refacturareDate, $dateRange)) {
+            $errors['refacturare_data'] = 'Data Refacturare trebuie sa fie in intervalul cursei (' . $dateRangeLabel . ').';
         }
 
-        $refacturareObservations = trim((string) ($input['refacturare_observatii'] ?? ''));
-        if ($refacturareEnabled && $refacturareObservations !== '' && mb_strlen($refacturareObservations) > 5000) {
-            $errors['refacturare_observatii'] = 'Observatiile Refacturare sunt prea lungi.';
+        $categorySelections = $this->normalizeExpenseTypeSelection($input, 'categorie_ids', 'categorie_id');
+        $refacturareSelections = $this->normalizeExpenseTypeSelection($input, 'refacturare_tip_cheltuieli', 'refacturare_tip_cheltuiala');
+
+        $categoryLines = $isRefacturareOnlySubmit
+            ? []
+            : $this->resolveExpenseCategorySelections($categorySelections, $errors, 'categorie_id');
+        $refacturareLines = ($refacturareEnabled || $isRefacturareOnlySubmit)
+            ? $this->resolveRefacturareTypeSelections($refacturareSelections, $errors, 'refacturare_tip_cheltuiala')
+            : [];
+
+        if ($categoryLines === [] && $refacturareLines === [] && !isset($errors['categorie_id']) && !isset($errors['refacturare_tip_cheltuiala'])) {
+            if ($isRefacturareOnlySubmit) {
+                $errors['refacturare_tip_cheltuiala'] = 'Selecteaza cel putin un tip pentru refacturare.';
+            } else {
+                $errors['categorie_id'] = 'Selecteaza cel putin un tip de cheltuiala.';
+            }
+        }
+        if (($refacturareEnabled || $isRefacturareOnlySubmit) && $refacturareLines === [] && !isset($errors['refacturare_tip_cheltuiala'])) {
+            $errors['refacturare_tip_cheltuiala'] = 'Selecteaza cel putin un tip pentru refacturare.';
+        }
+        if ($isEdit && count($categoryLines) > 1) {
+            $errors['categorie_id'] = 'La editarea unei cheltuieli existente poti pastra un singur tip.';
+        }
+        if ($isEdit && count($refacturareLines) > 1) {
+            $errors['refacturare_tip_cheltuiala'] = 'La editarea unei cheltuieli existente poti pastra un singur tip de refacturare.';
         }
 
-        if (!$refacturareEnabled) {
-            $refacturareAmount = null;
-            $refacturareAmountRaw = '';
-            $refacturareDate = '';
-            $refacturareObservations = '';
-        }
+        $rawTypeFields = is_array($input['tip'] ?? null) ? $input['tip'] : [];
+        $rawRefacturareFields = is_array($input['refacturare_tip'] ?? null) ? $input['refacturare_tip'] : [];
 
-        if ($isRefacturareOnlySubmit) {
-            $amount = 0.0;
-            $amountRaw = '0.00';
-            if ($refacturareType !== '') {
-                $type = $refacturareType;
+        $expensePayloads = [];
+        foreach ($categoryLines as $rawKey => $line) {
+            $key = (string) $rawKey;
+            $fields = $this->pickExpenseTypeFields($rawTypeFields, $key, (string) ($line['selection'] ?? ''));
+            $payload = $this->buildExpenseTypeLine($line['type'], $fields, $errors, 'tip.' . $key . '.');
+            if ($payload !== null) {
+                $expensePayloads[] = $payload + ['type' => $line['type'], 'category_id' => $line['category_id']];
             }
         }
 
-        if (!$isRefacturareOnlySubmit && ($amount === null || $amount <= 0) && !isset($errors['suma'])) {
-            $errors['suma'] = 'Suma trebuie sa fie mai mare decat 0.';
-        }
-
-        $storedObservations = $this->buildExpenseObservationsWithRoadTaxDetails(
-            $observations,
-            $type === 'taxe_drum' ? $roadTaxDetails : []
-        );
-        if ($storedObservations !== null && mb_strlen($storedObservations) > 5000) {
-            $errors['observatii'] = 'Observatiile sunt prea lungi.';
+        $refacturarePayloads = [];
+        foreach ($refacturareLines as $rawKey => $line) {
+            $key = (string) $rawKey;
+            $fields = $this->pickExpenseTypeFields($rawRefacturareFields, $key, (string) ($line['selection'] ?? ''));
+            $payload = $this->buildExpenseTypeLine($line['type'], $fields, $errors, 'refacturare_tip.' . $key . '.');
+            if ($payload !== null) {
+                $refacturarePayloads[] = $payload + ['type' => $line['type'], 'category_id' => $line['category_id']];
+            }
         }
 
         $old = [
             'expense_id' => trim((string) ($input['expense_id'] ?? '')),
-            'tip_cheltuiala' => $type,
-            'categorie_id' => $categoryId !== null ? (string) $categoryId : $categorySelection,
-            'refacturare_enabled' => $refacturareEnabled ? '1' : '0',
-            'refacturare_tip_cheltuiala' => $refacturareType,
-            'refacturare_suma' => $refacturareAmountRaw,
-            'refacturare_data' => $refacturareDate !== '' ? $refacturareDate : date('Y-m-d'),
-            'refacturare_observatii' => $refacturareObservations,
-            'suma' => $amountRaw,
+            'tip_cheltuiala' => $expensePayloads !== [] ? (string) $expensePayloads[0]['type'] : '',
+            'categorie_id' => $categorySelections[0] ?? '',
+            'categorie_ids' => $categorySelections,
+            'refacturare_enabled' => ($refacturareEnabled || $isRefacturareOnlySubmit) ? '1' : '0',
+            'refacturare_tip_cheltuiala' => $refacturareSelections[0] ?? '',
+            'refacturare_tip_cheltuieli' => $refacturareSelections,
+            'refacturare_suma' => '',
+            'refacturare_data' => $this->isValidDate($refacturareDate) ? $refacturareDate : date('Y-m-d'),
+            'refacturare_observatii' => '',
+            'suma' => '',
             'data_cheltuiala' => $expenseDate,
-            'observatii' => $observations,
-            'taxa_acces_bucati' => $roadTaxInputRaw['taxa_acces_bucati'],
-            'taxa_acces_pret' => $roadTaxInputRaw['taxa_acces_pret'],
-            'port_bucati' => $roadTaxInputRaw['port_bucati'],
-            'port_pret' => $roadTaxInputRaw['port_pret'],
-            'trece_bucati' => $roadTaxInputRaw['trece_bucati'],
-            'trece_pret' => $roadTaxInputRaw['trece_pret'],
-            'refacturare_taxa_acces_bucati' => $refacturareRoadTaxInputRaw['refacturare_taxa_acces_bucati'],
-            'refacturare_taxa_acces_pret' => $refacturareRoadTaxInputRaw['refacturare_taxa_acces_pret'],
-            'refacturare_port_bucati' => $refacturareRoadTaxInputRaw['refacturare_port_bucati'],
-            'refacturare_port_pret' => $refacturareRoadTaxInputRaw['refacturare_port_pret'],
-            'refacturare_trece_bucati' => $refacturareRoadTaxInputRaw['refacturare_trece_bucati'],
-            'refacturare_trece_pret' => $refacturareRoadTaxInputRaw['refacturare_trece_pret'],
+            'observatii' => '',
+            'tip' => $this->sanitizeExpenseTypeFieldsForFlash($rawTypeFields),
+            'refacturare_tip' => $this->sanitizeExpenseTypeFieldsForFlash($rawRefacturareFields),
         ];
 
         if ($errors !== []) {
             return [[], $errors, $old];
         }
 
-        return [[
-            'tip_cheltuiala' => $type,
-            'categorie_id' => $categoryId,
-            'refacturare_tip_cheltuiala' => $refacturareType !== '' ? $refacturareType : null,
-            'refacturare_detalii' => $refacturareDetailsJson,
-            'refacturare_suma' => $refacturareAmount !== null ? round((float) $refacturareAmount, 2) : null,
-            'refacturare_data' => $refacturareDate !== '' ? $refacturareDate : null,
-            'refacturare_observatii' => $refacturareObservations !== '' ? $refacturareObservations : null,
-            'suma' => round((float) $amount, 2),
-            'data_cheltuiala' => $expenseDate,
-            'observatii' => $storedObservations,
-        ], [], $old];
+        if ($isEdit) {
+            return [[
+                $this->composeEditedExpenseRecord(
+                    $expensePayloads[0] ?? null,
+                    $refacturarePayloads[0] ?? null,
+                    $expenseDate,
+                    $refacturareDate
+                ),
+            ], [], $old];
+        }
+
+        $records = [];
+        foreach ($expensePayloads as $payload) {
+            $records[] = $this->composeExpenseRecord($payload, $expenseDate);
+        }
+        foreach ($refacturarePayloads as $payload) {
+            $records[] = $this->composeRefacturareRecord($payload, $expenseDate, $refacturareDate);
+        }
+
+        return [$records, [], $old];
     }
 
     private function splitExpenseObservationsAndRoadTaxDetails(string $storedObservations): array
@@ -6630,26 +6926,6 @@ class DispecerCurseController
         ];
     }
 
-    private function buildExpenseObservationsWithRoadTaxDetails(string $plainObservations, array $roadTaxDetails): ?string
-    {
-        $plainObservations = trim($plainObservations);
-        if ($roadTaxDetails === []) {
-            return $plainObservations !== '' ? $plainObservations : null;
-        }
-
-        $payload = json_encode($roadTaxDetails, JSON_UNESCAPED_UNICODE);
-        if (!is_string($payload) || $payload === '') {
-            return $plainObservations !== '' ? $plainObservations : null;
-        }
-
-        $value = self::ROAD_TAX_DETAILS_MARKER . $payload;
-        if ($plainObservations !== '') {
-            $value = $plainObservations . "\n\n" . $value;
-        }
-
-        return $value;
-    }
-
     private function normalizeRoadTaxDetailsPayload(array $payload): array
     {
         $result = [];
@@ -6679,41 +6955,6 @@ class DispecerCurseController
         }
 
         return $result;
-    }
-
-    private function buildRoadTaxFormValuesFromDetails(array $details, string $fieldPrefix = ''): array
-    {
-        $values = [
-            $fieldPrefix . 'taxa_acces_bucati' => '',
-            $fieldPrefix . 'taxa_acces_pret' => '',
-            $fieldPrefix . 'port_bucati' => '',
-            $fieldPrefix . 'port_pret' => '',
-            $fieldPrefix . 'trece_bucati' => '',
-            $fieldPrefix . 'trece_pret' => '',
-        ];
-
-        $mapping = [
-            'taxa_acces' => ['qty' => $fieldPrefix . 'taxa_acces_bucati', 'price' => $fieldPrefix . 'taxa_acces_pret'],
-            'port' => ['qty' => $fieldPrefix . 'port_bucati', 'price' => $fieldPrefix . 'port_pret'],
-            'trece' => ['qty' => $fieldPrefix . 'trece_bucati', 'price' => $fieldPrefix . 'trece_pret'],
-        ];
-
-        foreach ($mapping as $rowKey => $fields) {
-            $rowData = $details[$rowKey] ?? null;
-            if (!is_array($rowData)) {
-                continue;
-            }
-
-            if (isset($rowData['bucati']) && is_numeric((string) $rowData['bucati'])) {
-                $values[$fields['qty']] = $this->formatExpenseNumericInput((float) $rowData['bucati']);
-            }
-
-            if (isset($rowData['pret']) && is_numeric((string) $rowData['pret'])) {
-                $values[$fields['price']] = $this->formatExpenseNumericInput((float) $rowData['pret']);
-            }
-        }
-
-        return $values;
     }
 
     private function formatExpenseNumericInput(float $value): string
@@ -7776,6 +8017,165 @@ class DispecerCurseController
         }
 
         return null;
+    }
+
+    private function buildExpenseSaveMessage(bool $isUpdate, bool $isRefacturareSubmit, int $expenseCount, int $refacturareCount): string
+    {
+        if ($isUpdate) {
+            return $isRefacturareSubmit ? 'Refacturarea a fost actualizata.' : 'Cheltuiala a fost actualizata.';
+        }
+
+        $parts = [];
+        if ($expenseCount > 0) {
+            $parts[] = $expenseCount > 1 ? $expenseCount . ' cheltuieli separate' : 'o cheltuiala';
+        }
+        if ($refacturareCount > 0) {
+            $parts[] = $refacturareCount > 1 ? $refacturareCount . ' refacturari separate' : 'o refacturare';
+        }
+        if ($parts === []) {
+            return 'Cheltuiala a fost adaugata.';
+        }
+
+        return 'S-a salvat ' . implode(' si ', $parts) . ' pe cursa.';
+    }
+
+    /**
+     * Acelasi document justificativ pentru mai multe cheltuieli: fiecare rand primeste
+     * propria copie fizica, ca stergerea uneia sa nu lase celelalte fara fisier.
+     */
+    private function attachExpenseDocumentToExpenses(array $document, array $expenseIds, string $now): void
+    {
+        $isFirst = true;
+        foreach ($expenseIds as $expenseId) {
+            $copy = $isFirst ? $document : $this->duplicateExpenseDocumentFile($document);
+            $isFirst = false;
+            if ($copy === null) {
+                continue;
+            }
+
+            $this->model->addExpenseDocument([
+                'cheltuiala_id' => $expenseId,
+                'file_path' => $copy['file_path'],
+                'original_name' => $copy['original_name'],
+                'mime_type' => $copy['mime_type'],
+                'file_size' => $copy['file_size'],
+                'created_at' => $now,
+            ]);
+        }
+    }
+
+    private function attachRefacturareDocumentToExpenses(array $document, array $expenseIds): void
+    {
+        $isFirst = true;
+        foreach ($expenseIds as $expenseId) {
+            $copy = $isFirst ? $document : $this->duplicateExpenseDocumentFile($document);
+            $isFirst = false;
+            if ($copy === null) {
+                continue;
+            }
+
+            $this->model->updateExpenseRefacturareDocument($expenseId, $copy);
+        }
+    }
+
+    private function duplicateExpenseDocumentFile(array $document): ?array
+    {
+        $sourceName = basename((string) ($document['file_path'] ?? ''));
+        if ($sourceName === '') {
+            return null;
+        }
+
+        $uploadDir = BASE_PATH . '/uploads/curse_cheltuieli';
+        $sourcePath = $uploadDir . '/' . $sourceName;
+        if (!is_file($sourcePath)) {
+            return null;
+        }
+
+        try {
+            $targetName = 'cheltuiala_' . date('Ymd_His') . '_' . bin2hex(random_bytes(8));
+        } catch (Throwable) {
+            $targetName = 'cheltuiala_' . date('Ymd_His') . '_' . uniqid('', true);
+        }
+
+        $extension = strtolower(pathinfo($sourceName, PATHINFO_EXTENSION));
+        if ($extension !== '') {
+            $targetName .= '.' . $extension;
+        }
+
+        if (!@copy($sourcePath, $uploadDir . '/' . $targetName)) {
+            return null;
+        }
+
+        return [
+            'file_path' => $targetName,
+            'original_name' => $document['original_name'] ?? $targetName,
+            'mime_type' => $document['mime_type'] ?? null,
+            'file_size' => $document['file_size'] ?? null,
+        ];
+    }
+
+    /**
+     * Prefill-ul formularului cand se editeaza o cheltuiala existenta.
+     * Randurile vechi de tip "Taxe drum" nu se pot mapa pe un singur tip nou,
+     * asa ca raman fara valori pentru locatie / bucati / pret si se reintroduc.
+     */
+    private function buildExpenseFormDataFromExpense(array $expense): array
+    {
+        $parsedObservations = $this->splitExpenseObservationsAndRoadTaxDetails((string) ($expense['observatii'] ?? ''));
+        $categoryId = (string) ($expense['categorie_id'] ?? '');
+        $refacturareType = trim((string) ($expense['refacturare_tip_cheltuiala'] ?? ''));
+
+        $typeFields = [];
+        if ($categoryId !== '') {
+            $typeFields[$categoryId] = [
+                'locatie' => (string) ($expense['locatie'] ?? ''),
+                'bucati' => $this->formatExpenseNumericInput((float) ($expense['bucati'] ?? 0)),
+                'pret' => $this->formatExpenseNumericInput((float) ($expense['pret_unitar'] ?? 0)),
+                'suma' => (string) ($expense['suma'] ?? ''),
+                'observatii' => $parsedObservations['plain_observations'],
+            ];
+            if ((float) ($expense['bucati'] ?? 0) <= 0) {
+                $typeFields[$categoryId]['bucati'] = '';
+            }
+            if ((float) ($expense['pret_unitar'] ?? 0) <= 0) {
+                $typeFields[$categoryId]['pret'] = '';
+            }
+        }
+
+        $refacturareFields = [];
+        if ($refacturareType !== '') {
+            $refacturareFields[$refacturareType] = [
+                'locatie' => (string) ($expense['refacturare_locatie'] ?? ''),
+                'bucati' => $this->formatExpenseNumericInput((float) ($expense['refacturare_bucati'] ?? 0)),
+                'pret' => $this->formatExpenseNumericInput((float) ($expense['refacturare_pret_unitar'] ?? 0)),
+                'suma' => (string) ($expense['refacturare_suma'] ?? ''),
+                'observatii' => (string) ($expense['refacturare_observatii'] ?? ''),
+            ];
+            if ((float) ($expense['refacturare_bucati'] ?? 0) <= 0) {
+                $refacturareFields[$refacturareType]['bucati'] = '';
+            }
+            if ((float) ($expense['refacturare_pret_unitar'] ?? 0) <= 0) {
+                $refacturareFields[$refacturareType]['pret'] = '';
+            }
+        }
+
+        return [
+            'expense_id' => (int) $expense['id'],
+            'tip_cheltuiala' => (string) ($expense['tip_cheltuiala'] ?? ''),
+            'categorie_id' => $categoryId,
+            'categorie_ids' => $categoryId !== '' ? [$categoryId] : [],
+            'refacturare_enabled' => $refacturareType !== '' ? '1' : '0',
+            'refacturare_tip_cheltuiala' => $refacturareType,
+            'refacturare_tip_cheltuieli' => $refacturareType !== '' ? [$refacturareType] : [],
+            'refacturare_suma' => (string) ($expense['refacturare_suma'] ?? ''),
+            'refacturare_data' => (string) ($expense['refacturare_data'] ?? date('Y-m-d')),
+            'refacturare_observatii' => (string) ($expense['refacturare_observatii'] ?? ''),
+            'suma' => (string) ($expense['suma'] ?? ''),
+            'data_cheltuiala' => (string) ($expense['data_cheltuiala'] ?? ''),
+            'observatii' => $parsedObservations['plain_observations'],
+            'tip' => $typeFields,
+            'refacturare_tip' => $refacturareFields,
+        ];
     }
 
     private function storeUploadedExpenseDocument(?array $file): array

@@ -183,11 +183,99 @@ $selectedRefacturareExpenseType = (string) ($expenseFormData['refacturare_tip_ch
 if (!isset($expenseEntryTypes[$selectedRefacturareExpenseType])) {
     $selectedRefacturareExpenseType = '';
 }
-$showRefacturareRoadTaxDetails = $expenseRefacturareEnabled && $selectedRefacturareExpenseType === 'taxe_drum';
 
+// Taxele de drum (Taxa acces / Port / Trecere) se completeaza cu locatie, bucati si pret unitar;
+// restul tipurilor pastreaza suma introdusa manual plus observatii.
+$tollExpenseTypes = is_array($tollExpenseTypes ?? null) ? $tollExpenseTypes : ['taxa_acces', 'port', 'trece'];
+$expenseLocationSuggestions = is_array($expenseLocationSuggestions ?? null) ? $expenseLocationSuggestions : [];
+
+// Locatiile propuse la taxele de drum urmeaza beneficiarul cursei: locurile de incarcare
+// si zonele lui de distributie, plus locatiile deja scrise pe cursele aceluiasi beneficiar.
+$expenseLocationSuggestionsByBeneficiary = is_array($expenseLocationSuggestionsByBeneficiary ?? null)
+    ? $expenseLocationSuggestionsByBeneficiary
+    : [];
+$expenseLocationBeneficiaryId = (int) ($raceFormData['beneficiar_id'] ?? 0);
+$expenseLocationSuggestions = $expenseLocationSuggestionsByBeneficiary[$expenseLocationBeneficiaryId]
+    ?? ($expenseLocationSuggestionsByBeneficiary[0] ?? $expenseLocationSuggestions);
+$expenseLocationSuggestionsJson = json_encode($expenseLocationSuggestionsByBeneficiary, JSON_UNESCAPED_UNICODE);
+if (!is_string($expenseLocationSuggestionsJson)) {
+    $expenseLocationSuggestionsJson = '{}';
+}
+$expenseTypeFieldValues = is_array($expenseFormData['tip'] ?? null) ? $expenseFormData['tip'] : [];
+$refacturareTypeFieldValues = is_array($expenseFormData['refacturare_tip'] ?? null) ? $expenseFormData['refacturare_tip'] : [];
+
+$selectedExpenseCategoryIds = is_array($expenseFormData['categorie_ids'] ?? null)
+    ? array_map('strval', $expenseFormData['categorie_ids'])
+    : [];
+if ($selectedExpenseCategoryIds === [] && $selectedExpenseCategoryId !== '') {
+    $selectedExpenseCategoryIds = [$selectedExpenseCategoryId];
+}
+
+$selectedRefacturareExpenseTypes = is_array($expenseFormData['refacturare_tip_cheltuieli'] ?? null)
+    ? array_map('strval', $expenseFormData['refacturare_tip_cheltuieli'])
+    : [];
+if ($selectedRefacturareExpenseTypes === [] && $selectedRefacturareExpenseType !== '') {
+    $selectedRefacturareExpenseTypes = [$selectedRefacturareExpenseType];
+}
+$selectedRefacturareExpenseTypes = array_values(array_filter(
+    $selectedRefacturareExpenseTypes,
+    static fn (string $type): bool => isset($expenseEntryTypes[$type])
+));
+
+// Cheltuielile si refacturarile stau in intervalul cursei: calendarul nu lasa
+// sa alegi in afara lui, iar valoarea implicita e adusa inauntru.
+$expenseDateRange = is_array($expenseDateRange ?? null) ? $expenseDateRange : ['min' => null, 'max' => null];
+$expenseDateMin = is_string($expenseDateRange['min'] ?? null) ? $expenseDateRange['min'] : '';
+$expenseDateMax = is_string($expenseDateRange['max'] ?? null) ? $expenseDateRange['max'] : '';
+$clampExpenseDate = static function (string $value) use ($expenseDateMin, $expenseDateMax): string {
+    if ($value === '') {
+        return $expenseDateMin !== '' ? $expenseDateMin : $value;
+    }
+    if ($expenseDateMin !== '' && $value < $expenseDateMin) {
+        return $expenseDateMin;
+    }
+    if ($expenseDateMax !== '' && $value > $expenseDateMax) {
+        return $expenseDateMax;
+    }
+
+    return $value;
+};
+$expenseDateRangeHint = '';
+if ($expenseDateMin !== '' || $expenseDateMax !== '') {
+    $formatHintDate = static function (string $date): string {
+        $timestamp = strtotime($date);
+
+        return $timestamp !== false ? date('d.m.Y', $timestamp) : $date;
+    };
+    if ($expenseDateMin !== '' && $expenseDateMax !== '' && $expenseDateMin === $expenseDateMax) {
+        $expenseDateRangeHint = 'Cursa este intr-o singura zi: ' . $formatHintDate($expenseDateMin) . '.';
+    } elseif ($expenseDateMin !== '' && $expenseDateMax !== '') {
+        $expenseDateRangeHint = 'Doar in intervalul cursei: '
+            . $formatHintDate($expenseDateMin) . ' - ' . $formatHintDate($expenseDateMax) . '.';
+    }
+}
+
+$expenseTypeInputType = $editingExpense ? 'radio' : 'checkbox';
+// Cheltuielile vechi salvate pe tipul retras "Taxe drum" nu se pot muta automat
+// pe unul dintre tipurile noi, pentru ca puteau contine mai multe taxe deodata.
+$editingRetiredRoadTaxExpense = $editingExpense
+    && (string) ($expenseFormData['tip_cheltuiala'] ?? '') === 'taxe_drum';
+
+// Randurile de refacturare au suma 0 pe partea de cheltuiala, asa ca sumele lor
+// se numara separat; altfel tabelul ar arata 0 lei pentru o refacturare reala.
 $expensesTotal = 0.0;
+$refacturareTotal = 0.0;
+$refacturarePendingTotal = 0.0;
 foreach ($expenses as $expenseRow) {
     $expensesTotal += (float) ($expenseRow['suma'] ?? 0);
+
+    $rowRefacturare = (float) ($expenseRow['refacturare_suma'] ?? 0);
+    if ($rowRefacturare > 0) {
+        $refacturareTotal += $rowRefacturare;
+        if ((int) ($expenseRow['refacturare_facturata'] ?? 0) !== 1) {
+            $refacturarePendingTotal += $rowRefacturare;
+        }
+    }
 }
 $invoicedRefacturareTotal = (float) ($race['total_refacturare_facturata'] ?? 0);
 $expensesTotal = max(0.0, $expensesTotal - $invoicedRefacturareTotal);
@@ -799,24 +887,182 @@ if ($postCreateFlow) {
                     <input type="hidden" name="post_create_flow" value="1">
 <?php endif; ?>
 
+                    <?php
+                    /**
+                     * Blocul de campuri al unui tip bifat.
+                     * Taxele de drum (Taxa acces / Port / Trecere) au Locatie, Bucati, Pret / buc si
+                     * Total calculat automat, fara Observatii; restul tipurilor pastreaza suma manuala.
+                     */
+                    $renderExpenseTypeBlock = static function (
+                        string $blockKey,
+                        string $blockLabel,
+                        bool $isToll,
+                        string $fieldPrefix,
+                        string $idPrefix,
+                        array $values,
+                        array $errors,
+                        bool $isSelected
+                    ): void {
+                        $errorPrefix = $fieldPrefix . '.' . $blockKey . '.';
+                        $fieldId = static fn (string $field): string => $idPrefix . preg_replace('/[^A-Za-z0-9_]/', '_', $blockKey) . '_' . $field;
+                        $fieldName = static fn (string $field): string => $fieldPrefix . '[' . $blockKey . '][' . $field . ']';
+                        $value = static fn (string $field): string => (string) ($values[$field] ?? '');
+                        $error = static fn (string $field): string => (string) ($errors[$errorPrefix . $field] ?? '');
+                        ?>
+                        <div
+                            class="border rounded p-3 mb-3 expense-type-block <?= $isSelected ? '' : 'd-none' ?>"
+                            data-role="expense-type-block"
+                            data-block-key="<?= e($blockKey) ?>"
+                            data-field-prefix="<?= e($fieldPrefix) ?>"
+                        >
+                            <div class="fw-semibold mb-2"><?= e($blockLabel) ?></div>
+                            <?php if ($isToll): ?>
+                                <div class="row g-2">
+                                    <div class="col-12">
+                                        <label class="form-label mb-1" for="<?= e($fieldId('locatie')) ?>">Locatie <span class="text-danger">*</span></label>
+                                        <input
+                                            type="text"
+                                            class="form-control form-control-sm <?= $error('locatie') !== '' ? 'is-invalid' : '' ?>"
+                                            id="<?= e($fieldId('locatie')) ?>"
+                                            name="<?= e($fieldName('locatie')) ?>"
+                                            list="expense_location_options"
+                                            maxlength="190"
+                                            autocomplete="off"
+                                            placeholder="ex. Port Constanta"
+                                            value="<?= e($value('locatie')) ?>"
+                                        >
+                                        <div class="form-text" data-role="expense-location-hint"></div>
+                                        <?php if ($error('locatie') !== ''): ?><div class="invalid-feedback d-block"><?= e($error('locatie')) ?></div><?php endif; ?>
+                                    </div>
+                                    <div class="col-6 col-lg-4">
+                                        <label class="form-label mb-1" for="<?= e($fieldId('bucati')) ?>">Bucati <span class="text-danger">*</span></label>
+                                        <input
+                                            type="number"
+                                            class="form-control form-control-sm <?= $error('bucati') !== '' ? 'is-invalid' : '' ?>"
+                                            id="<?= e($fieldId('bucati')) ?>"
+                                            name="<?= e($fieldName('bucati')) ?>"
+                                            min="0"
+                                            step="1"
+                                            data-role="expense-line-quantity"
+                                            value="<?= e($value('bucati')) ?>"
+                                        >
+                                        <?php if ($error('bucati') !== ''): ?><div class="invalid-feedback d-block"><?= e($error('bucati')) ?></div><?php endif; ?>
+                                    </div>
+                                    <div class="col-6 col-lg-4">
+                                        <label class="form-label mb-1" for="<?= e($fieldId('pret')) ?>">Pret / buc <span class="text-danger">*</span></label>
+                                        <input
+                                            type="number"
+                                            class="form-control form-control-sm <?= $error('pret') !== '' ? 'is-invalid' : '' ?>"
+                                            id="<?= e($fieldId('pret')) ?>"
+                                            name="<?= e($fieldName('pret')) ?>"
+                                            min="0"
+                                            step="0.01"
+                                            data-role="expense-line-price"
+                                            value="<?= e($value('pret')) ?>"
+                                        >
+                                        <?php if ($error('pret') !== ''): ?><div class="invalid-feedback d-block"><?= e($error('pret')) ?></div><?php endif; ?>
+                                    </div>
+                                    <div class="col-12 col-lg-4">
+                                        <label class="form-label mb-1" for="<?= e($fieldId('total')) ?>">Total</label>
+                                        <input
+                                            type="text"
+                                            class="form-control form-control-sm bg-light"
+                                            id="<?= e($fieldId('total')) ?>"
+                                            data-role="expense-line-total"
+                                            value="0,00"
+                                            readonly
+                                            tabindex="-1"
+                                        >
+                                    </div>
+                                </div>
+                                <div class="form-text mt-2">Totalul se calculeaza automat: bucati x pret / buc.</div>
+                            <?php else: ?>
+                                <div class="mb-2">
+                                    <label class="form-label mb-1" for="<?= e($fieldId('suma')) ?>">Suma <span class="text-danger">*</span></label>
+                                    <input
+                                        type="number"
+                                        class="form-control form-control-sm <?= $error('suma') !== '' ? 'is-invalid' : '' ?>"
+                                        id="<?= e($fieldId('suma')) ?>"
+                                        name="<?= e($fieldName('suma')) ?>"
+                                        min="0.01"
+                                        step="0.01"
+                                        value="<?= e($value('suma')) ?>"
+                                    >
+                                    <?php if ($error('suma') !== ''): ?><div class="invalid-feedback d-block"><?= e($error('suma')) ?></div><?php endif; ?>
+                                </div>
+                                <div>
+                                    <label class="form-label mb-1" for="<?= e($fieldId('observatii')) ?>">Observatii</label>
+                                    <textarea
+                                        class="form-control form-control-sm <?= $error('observatii') !== '' ? 'is-invalid' : '' ?>"
+                                        id="<?= e($fieldId('observatii')) ?>"
+                                        name="<?= e($fieldName('observatii')) ?>"
+                                        rows="2"
+                                    ><?= e($value('observatii')) ?></textarea>
+                                    <?php if ($error('observatii') !== ''): ?><div class="invalid-feedback d-block"><?= e($error('observatii')) ?></div><?php endif; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                        <?php
+                    };
+                    ?>
+
+                    <datalist
+                        id="expense_location_options"
+                        data-role="expense-location-options"
+                        data-by-beneficiary='<?= e($expenseLocationSuggestionsJson) ?>'
+                    >
+                        <?php foreach ($expenseLocationSuggestions as $locationSuggestion): ?>
+                            <option value="<?= e((string) $locationSuggestion) ?>"></option>
+                        <?php endforeach; ?>
+                    </datalist>
+
                     <div class="row g-2 mb-3 align-items-start expense-type-row">
                         <div class="col-12 col-md-6">
                             <label class="form-label" for="expense_tip_cheltuiala">Tip cheltuiala <span class="text-danger">*</span></label>
-                            <select class="form-select <?= (isset($expenseFormErrors['categorie_id']) || isset($expenseFormErrors['tip_cheltuiala'])) ? 'is-invalid' : '' ?>" id="expense_tip_cheltuiala" name="categorie_id" required>
-                                <option value="" <?= $selectedExpenseCategoryId === '' ? 'selected' : '' ?>>-- Selecteaza tipul --</option>
-                                <?php foreach ($expenseCategories as $category): ?>
-                                    <?php $categoryId = (int) ($category['id'] ?? 0); ?>
-                                    <?php if ($categoryId <= 0): continue; endif; ?>
-                                    <option
-                                        value="<?= e((string) $categoryId) ?>"
-                                        data-legacy-key="<?= e((string) ($category['legacy_key'] ?? '')) ?>"
-                                        <?= $selectedExpenseCategoryId === (string) $categoryId ? 'selected' : '' ?>
-                                    >
-                                        <?= e((string) ($category['nume'] ?? '-')) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <div class="form-text">Motorina se introduce separat in modulul Alimentari.</div>
+                            <div class="dropdown" data-role="expense-type-dropdown">
+                                <button
+                                    class="form-select text-start <?= (isset($expenseFormErrors['categorie_id']) || isset($expenseFormErrors['tip_cheltuiala'])) ? 'is-invalid' : '' ?>"
+                                    type="button"
+                                    id="expense_tip_cheltuiala"
+                                    data-bs-toggle="dropdown"
+                                    data-bs-auto-close="outside"
+                                    aria-expanded="false"
+                                >
+                                    <span data-role="expense-type-summary">-- Selecteaza tipurile --</span>
+                                </button>
+                                <div class="dropdown-menu w-100 p-2 expense-type-menu">
+                                    <?php foreach ($expenseCategories as $category): ?>
+                                        <?php
+                                        $categoryId = (int) ($category['id'] ?? 0);
+                                        if ($categoryId <= 0) {
+                                            continue;
+                                        }
+                                        $categoryName = (string) ($category['nume'] ?? '-');
+                                        $categoryChecked = in_array((string) $categoryId, $selectedExpenseCategoryIds, true);
+                                        ?>
+                                        <div class="form-check">
+                                            <input
+                                                class="form-check-input"
+                                                type="<?= e($expenseTypeInputType) ?>"
+                                                name="categorie_ids[]"
+                                                value="<?= e((string) $categoryId) ?>"
+                                                id="expense_type_option_<?= e((string) $categoryId) ?>"
+                                                data-role="expense-type-option"
+                                                data-block-key="<?= e((string) $categoryId) ?>"
+                                                data-label="<?= e($categoryName) ?>"
+                                                <?= $categoryChecked ? 'checked' : '' ?>
+                                            >
+                                            <label class="form-check-label" for="expense_type_option_<?= e((string) $categoryId) ?>"><?= e($categoryName) ?></label>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                            <div class="form-text">
+                                <?= $editingExpense
+                                    ? 'La editarea unei cheltuieli existente poti pastra un singur tip.'
+                                    : 'Poti bifa mai multe tipuri; fiecare se salveaza ca o cheltuiala separata pe aceeasi cursa.' ?>
+                                Motorina se introduce separat in modulul Alimentari.
+                            </div>
                             <?php if (isset($expenseFormErrors['categorie_id']) || isset($expenseFormErrors['tip_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) ($expenseFormErrors['categorie_id'] ?? $expenseFormErrors['tip_cheltuiala'])) ?></div><?php endif; ?>
                         </div>
 
@@ -834,143 +1080,99 @@ if ($postCreateFlow) {
                                 <label class="form-check-label" for="expense_refacturare_enabled">Refacturare</label>
                             </div>
                             <div class="<?= $expenseRefacturareEnabled ? '' : 'd-none' ?>" data-role="expense-refacturare-menu">
-                                <label class="form-label visually-hidden" for="expense_refacturare_tip_cheltuiala">Refacturare</label>
-                                <select
-                                    class="form-select <?= isset($expenseFormErrors['refacturare_tip_cheltuiala']) ? 'is-invalid' : '' ?>"
-                                    id="expense_refacturare_tip_cheltuiala"
-                                    name="refacturare_tip_cheltuiala"
-                                    <?= $expenseRefacturareEnabled ? '' : 'disabled' ?>
-                                >
-                                    <option value="" <?= $selectedRefacturareExpenseType === '' ? 'selected' : '' ?>>-- Selecteaza tipul --</option>
-                                    <?php foreach ($expenseEntryTypes as $value => $label): ?>
-                                        <option value="<?= e((string) $value) ?>" <?= $selectedRefacturareExpenseType === (string) $value ? 'selected' : '' ?>>
-                                            <?= e((string) $label) ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
+                                <div class="dropdown" data-role="expense-refacturare-type-dropdown">
+                                    <button
+                                        class="form-select text-start <?= isset($expenseFormErrors['refacturare_tip_cheltuiala']) ? 'is-invalid' : '' ?>"
+                                        type="button"
+                                        id="expense_refacturare_tip_cheltuiala"
+                                        data-bs-toggle="dropdown"
+                                        data-bs-auto-close="outside"
+                                        aria-expanded="false"
+                                    >
+                                        <span data-role="expense-refacturare-type-summary">-- Selecteaza tipurile --</span>
+                                    </button>
+                                    <div class="dropdown-menu w-100 p-2 expense-type-menu">
+                                        <?php foreach ($expenseEntryTypes as $entryTypeKey => $entryTypeLabel): ?>
+                                            <?php $entryTypeChecked = in_array((string) $entryTypeKey, $selectedRefacturareExpenseTypes, true); ?>
+                                            <div class="form-check">
+                                                <input
+                                                    class="form-check-input"
+                                                    type="<?= e($expenseTypeInputType) ?>"
+                                                    name="refacturare_tip_cheltuieli[]"
+                                                    value="<?= e((string) $entryTypeKey) ?>"
+                                                    id="expense_refacturare_type_option_<?= e((string) $entryTypeKey) ?>"
+                                                    data-role="expense-refacturare-type-option"
+                                                    data-block-key="<?= e((string) $entryTypeKey) ?>"
+                                                    data-label="<?= e((string) $entryTypeLabel) ?>"
+                                                    <?= $entryTypeChecked ? 'checked' : '' ?>
+                                                    <?= $expenseRefacturareEnabled ? '' : 'disabled' ?>
+                                                >
+                                                <label class="form-check-label" for="expense_refacturare_type_option_<?= e((string) $entryTypeKey) ?>"><?= e((string) $entryTypeLabel) ?></label>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
                                 <?php if (isset($expenseFormErrors['refacturare_tip_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_tip_cheltuiala']) ?></div><?php endif; ?>
                             </div>
                         </div>
                     </div>
 
                     <div class="expense-main-panel">
-                    <div class="mb-3 d-none expense-main-field" data-role="expense-road-tax-breakdown">
-                        <label class="form-label mb-2">Detalii Taxe drum</label>
-                        <div class="row g-2 mb-2">
-                            <div class="col-12 col-md-4"><strong>Taxa acces</strong></div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['taxa_acces_bucati']) ? 'is-invalid' : '' ?>"
-                                    id="expense_taxa_acces_bucati"
-                                    name="taxa_acces_bucati"
-                                    min="0"
-                                    step="1"
-                                    placeholder="Bucati"
-                                    value="<?= e((string) ($expenseFormData['taxa_acces_bucati'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['taxa_acces_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['taxa_acces_bucati']) ?></div><?php endif; ?>
-                            </div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['taxa_acces_pret']) ? 'is-invalid' : '' ?>"
-                                    id="expense_taxa_acces_pret"
-                                    name="taxa_acces_pret"
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="Pret / buc"
-                                    value="<?= e((string) ($expenseFormData['taxa_acces_pret'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['taxa_acces_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['taxa_acces_pret']) ?></div><?php endif; ?>
-                            </div>
+                    <?php if ($editingRetiredRoadTaxExpense): ?>
+                        <div class="alert alert-warning expense-main-field">
+                            Aceasta cheltuiala a fost salvata pe vechiul tip <strong>Taxe drum</strong>, care putea contine mai multe taxe deodata.
+                            Alege acum tipul potrivit (Taxa acces, Port sau Trecere) si completeaza locatia, bucatile si pretul.
+                            Daca randul vechi continea mai multe taxe, adauga-le separat.
                         </div>
+                    <?php endif; ?>
 
-                        <div class="row g-2 mb-2">
-                            <div class="col-12 col-md-4"><strong>Port</strong></div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['port_bucati']) ? 'is-invalid' : '' ?>"
-                                    id="expense_port_bucati"
-                                    name="port_bucati"
-                                    min="0"
-                                    step="1"
-                                    placeholder="Bucati"
-                                    value="<?= e((string) ($expenseFormData['port_bucati'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['port_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['port_bucati']) ?></div><?php endif; ?>
-                            </div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['port_pret']) ? 'is-invalid' : '' ?>"
-                                    id="expense_port_pret"
-                                    name="port_pret"
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="Pret / buc"
-                                    value="<?= e((string) ($expenseFormData['port_pret'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['port_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['port_pret']) ?></div><?php endif; ?>
-                            </div>
+                    <div class="expense-main-field" data-role="expense-type-blocks">
+                        <?php foreach ($expenseCategories as $category): ?>
+                            <?php
+                            $categoryId = (int) ($category['id'] ?? 0);
+                            if ($categoryId <= 0) {
+                                continue;
+                            }
+                            $categoryKey = (string) $categoryId;
+                            $categoryLegacyKey = (string) ($category['legacy_key'] ?? '');
+                            $renderExpenseTypeBlock(
+                                $categoryKey,
+                                (string) ($category['nume'] ?? '-'),
+                                in_array($categoryLegacyKey, $tollExpenseTypes, true),
+                                'tip',
+                                'expense_line_',
+                                is_array($expenseTypeFieldValues[$categoryKey] ?? null) ? $expenseTypeFieldValues[$categoryKey] : [],
+                                $expenseFormErrors,
+                                in_array($categoryKey, $selectedExpenseCategoryIds, true)
+                            );
+                            ?>
+                        <?php endforeach; ?>
+                        <div class="text-muted small <?= $selectedExpenseCategoryIds === [] ? '' : 'd-none' ?>" data-role="expense-type-empty">
+                            Alege cel putin un tip de cheltuiala din lista de mai sus.
                         </div>
-
-                        <div class="row g-2">
-                            <div class="col-12 col-md-4"><strong>Trece</strong></div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['trece_bucati']) ? 'is-invalid' : '' ?>"
-                                    id="expense_trece_bucati"
-                                    name="trece_bucati"
-                                    min="0"
-                                    step="1"
-                                    placeholder="Bucati"
-                                    value="<?= e((string) ($expenseFormData['trece_bucati'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['trece_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['trece_bucati']) ?></div><?php endif; ?>
-                            </div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['trece_pret']) ? 'is-invalid' : '' ?>"
-                                    id="expense_trece_pret"
-                                    name="trece_pret"
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="Pret / buc"
-                                    value="<?= e((string) ($expenseFormData['trece_pret'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['trece_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['trece_pret']) ?></div><?php endif; ?>
-                            </div>
-                        </div>
-
-                        <div class="form-text mt-2">Suma se calculeaza automat din: bucati x pret pentru fiecare taxa.</div>
-                    </div>
-
-                    <div class="mb-3 expense-main-field">
-                        <label class="form-label" for="expense_suma">Suma <span class="text-danger">*</span></label>
-                        <input type="number" class="form-control <?= isset($expenseFormErrors['suma']) ? 'is-invalid' : '' ?>" id="expense_suma" name="suma" min="0.01" step="0.01" value="<?= e((string) ($expenseFormData['suma'] ?? '')) ?>" required>
-                        <?php if (isset($expenseFormErrors['suma'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['suma']) ?></div><?php endif; ?>
                     </div>
 
                     <div class="mb-3 expense-main-field">
                         <label class="form-label" for="expense_data_cheltuiala">Data cheltuiala <span class="text-danger">*</span></label>
-                        <input type="date" class="form-control <?= isset($expenseFormErrors['data_cheltuiala']) ? 'is-invalid' : '' ?>" id="expense_data_cheltuiala" name="data_cheltuiala" value="<?= e((string) ($expenseFormData['data_cheltuiala'] ?? '')) ?>" required>
+                        <input
+                            type="date"
+                            class="form-control <?= isset($expenseFormErrors['data_cheltuiala']) ? 'is-invalid' : '' ?>"
+                            id="expense_data_cheltuiala"
+                            name="data_cheltuiala"
+                            data-role="expense-date"
+                            <?= $expenseDateMin !== '' ? 'min="' . e($expenseDateMin) . '"' : '' ?>
+                            <?= $expenseDateMax !== '' ? 'max="' . e($expenseDateMax) . '"' : '' ?>
+                            value="<?= e($clampExpenseDate((string) ($expenseFormData['data_cheltuiala'] ?? ''))) ?>"
+                            required
+                        >
+                        <?php if ($expenseDateRangeHint !== ''): ?><div class="form-text" data-role="expense-date-hint"><?= e($expenseDateRangeHint) ?></div><?php endif; ?>
                         <?php if (isset($expenseFormErrors['data_cheltuiala'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['data_cheltuiala']) ?></div><?php endif; ?>
-                    </div>
-
-                    <div class="mb-3 expense-main-field">
-                        <label class="form-label" for="expense_observatii">Observatii</label>
-                        <textarea class="form-control <?= isset($expenseFormErrors['observatii']) ? 'is-invalid' : '' ?>" id="expense_observatii" name="observatii" rows="3"><?= e((string) ($expenseFormData['observatii'] ?? '')) ?></textarea>
-                        <?php if (isset($expenseFormErrors['observatii'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['observatii']) ?></div><?php endif; ?>
                     </div>
 
                     <div class="mb-3 expense-main-field">
                         <label class="form-label" for="expense_document_upload">Document doveditor (upload)</label>
                         <input type="file" class="form-control <?= isset($expenseFormErrors['document_upload']) ? 'is-invalid' : '' ?>" id="expense_document_upload" name="document_upload" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
-                        <div class="form-text">Formate acceptate: PDF, JPG, PNG, WEBP, DOC, DOCX. Maxim 5 MB.</div>
+                        <div class="form-text">Formate acceptate: PDF, JPG, PNG, WEBP, DOC, DOCX. Maxim 5 MB. Se ataseaza la fiecare cheltuiala salvata acum.</div>
                         <?php if (isset($expenseFormErrors['document_upload'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['document_upload']) ?></div><?php endif; ?>
                     </div>
 
@@ -1010,123 +1212,47 @@ if ($postCreateFlow) {
                     <div class="border rounded p-3 mb-3 expense-refacturare-panel <?= $expenseRefacturareEnabled ? '' : 'd-none' ?>" data-role="expense-refacturare-fields">
                         <div class="fw-semibold mb-3">Detalii Refacturare</div>
 
-                    <div class="mb-3 <?= $showRefacturareRoadTaxDetails ? '' : 'd-none' ?>" data-role="refacturare-road-tax-breakdown">
-                        <label class="form-label mb-2">Detalii Refacturare Taxe drum</label>
-                        <div class="row g-2 mb-2">
-                            <div class="col-12 col-md-4"><strong>Taxa acces</strong></div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_taxa_acces_bucati']) ? 'is-invalid' : '' ?>"
-                                    id="expense_refacturare_taxa_acces_bucati"
-                                    name="refacturare_taxa_acces_bucati"
-                                    min="0"
-                                    step="1"
-                                    placeholder="Bucati"
-                                    value="<?= e((string) ($expenseFormData['refacturare_taxa_acces_bucati'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['refacturare_taxa_acces_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_taxa_acces_bucati']) ?></div><?php endif; ?>
+                        <div data-role="expense-refacturare-type-blocks">
+                            <?php foreach ($expenseEntryTypes as $entryTypeKey => $entryTypeLabel): ?>
+                                <?php
+                                $entryTypeKey = (string) $entryTypeKey;
+                                $renderExpenseTypeBlock(
+                                    $entryTypeKey,
+                                    (string) $entryTypeLabel,
+                                    in_array($entryTypeKey, $tollExpenseTypes, true),
+                                    'refacturare_tip',
+                                    'expense_refacturare_line_',
+                                    is_array($refacturareTypeFieldValues[$entryTypeKey] ?? null) ? $refacturareTypeFieldValues[$entryTypeKey] : [],
+                                    $expenseFormErrors,
+                                    in_array($entryTypeKey, $selectedRefacturareExpenseTypes, true)
+                                );
+                                ?>
+                            <?php endforeach; ?>
+                            <div class="text-muted small <?= $selectedRefacturareExpenseTypes === [] ? '' : 'd-none' ?>" data-role="expense-refacturare-type-empty">
+                                Alege cel putin un tip de refacturare din lista de mai sus.
                             </div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_taxa_acces_pret']) ? 'is-invalid' : '' ?>"
-                                    id="expense_refacturare_taxa_acces_pret"
-                                    name="refacturare_taxa_acces_pret"
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="Pret / buc"
-                                    value="<?= e((string) ($expenseFormData['refacturare_taxa_acces_pret'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['refacturare_taxa_acces_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_taxa_acces_pret']) ?></div><?php endif; ?>
-                            </div>
-                        </div>
-
-                        <div class="row g-2 mb-2">
-                            <div class="col-12 col-md-4"><strong>Port</strong></div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_port_bucati']) ? 'is-invalid' : '' ?>"
-                                    id="expense_refacturare_port_bucati"
-                                    name="refacturare_port_bucati"
-                                    min="0"
-                                    step="1"
-                                    placeholder="Bucati"
-                                    value="<?= e((string) ($expenseFormData['refacturare_port_bucati'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['refacturare_port_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_port_bucati']) ?></div><?php endif; ?>
-                            </div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_port_pret']) ? 'is-invalid' : '' ?>"
-                                    id="expense_refacturare_port_pret"
-                                    name="refacturare_port_pret"
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="Pret / buc"
-                                    value="<?= e((string) ($expenseFormData['refacturare_port_pret'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['refacturare_port_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_port_pret']) ?></div><?php endif; ?>
-                            </div>
-                        </div>
-
-                        <div class="row g-2">
-                            <div class="col-12 col-md-4"><strong>Trece</strong></div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_trece_bucati']) ? 'is-invalid' : '' ?>"
-                                    id="expense_refacturare_trece_bucati"
-                                    name="refacturare_trece_bucati"
-                                    min="0"
-                                    step="1"
-                                    placeholder="Bucati"
-                                    value="<?= e((string) ($expenseFormData['refacturare_trece_bucati'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['refacturare_trece_bucati'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_trece_bucati']) ?></div><?php endif; ?>
-                            </div>
-                            <div class="col-6 col-md-4">
-                                <input
-                                    type="number"
-                                    class="form-control form-control-sm <?= isset($expenseFormErrors['refacturare_trece_pret']) ? 'is-invalid' : '' ?>"
-                                    id="expense_refacturare_trece_pret"
-                                    name="refacturare_trece_pret"
-                                    min="0"
-                                    step="0.01"
-                                    placeholder="Pret / buc"
-                                    value="<?= e((string) ($expenseFormData['refacturare_trece_pret'] ?? '')) ?>"
-                                >
-                                <?php if (isset($expenseFormErrors['refacturare_trece_pret'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_trece_pret']) ?></div><?php endif; ?>
-                            </div>
-                        </div>
-
-                        <div class="form-text mt-2">Suma se calculeaza automat din: bucati x pret pentru fiecare taxa.</div>
-                    </div>
-
-                        <div class="mb-3">
-                            <label class="form-label" for="expense_refacturare_suma">Suma Refacturare <span class="text-danger">*</span></label>
-                            <input type="number" class="form-control <?= isset($expenseFormErrors['refacturare_suma']) ? 'is-invalid' : '' ?>" id="expense_refacturare_suma" name="refacturare_suma" min="0.01" step="0.01" value="<?= e((string) ($expenseFormData['refacturare_suma'] ?? '')) ?>">
-                            <?php if (isset($expenseFormErrors['refacturare_suma'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_suma']) ?></div><?php endif; ?>
                         </div>
 
                         <div class="mb-3">
                             <label class="form-label" for="expense_refacturare_data">Data Refacturare <span class="text-danger">*</span></label>
-                            <input type="date" class="form-control <?= isset($expenseFormErrors['refacturare_data']) ? 'is-invalid' : '' ?>" id="expense_refacturare_data" name="refacturare_data" value="<?= e((string) ($expenseFormData['refacturare_data'] ?? date('Y-m-d'))) ?>">
+                            <input
+                                type="date"
+                                class="form-control <?= isset($expenseFormErrors['refacturare_data']) ? 'is-invalid' : '' ?>"
+                                id="expense_refacturare_data"
+                                name="refacturare_data"
+                                data-role="expense-date"
+                                <?= $expenseDateMin !== '' ? 'min="' . e($expenseDateMin) . '"' : '' ?>
+                                <?= $expenseDateMax !== '' ? 'max="' . e($expenseDateMax) . '"' : '' ?>
+                                value="<?= e($clampExpenseDate((string) ($expenseFormData['refacturare_data'] ?? date('Y-m-d')))) ?>"
+                            >
+                            <?php if ($expenseDateRangeHint !== ''): ?><div class="form-text" data-role="expense-date-hint"><?= e($expenseDateRangeHint) ?></div><?php endif; ?>
                             <?php if (isset($expenseFormErrors['refacturare_data'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_data']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="mb-3">
-                            <label class="form-label" for="expense_refacturare_observatii">Observatii Refacturare</label>
-                            <textarea class="form-control <?= isset($expenseFormErrors['refacturare_observatii']) ? 'is-invalid' : '' ?>" id="expense_refacturare_observatii" name="refacturare_observatii" rows="3"><?= e((string) ($expenseFormData['refacturare_observatii'] ?? '')) ?></textarea>
-                            <?php if (isset($expenseFormErrors['refacturare_observatii'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_observatii']) ?></div><?php endif; ?>
                         </div>
 
                         <div class="mb-3">
                             <label class="form-label" for="expense_refacturare_document_upload">Document Refacturare (upload)</label>
                             <input type="file" class="form-control <?= isset($expenseFormErrors['refacturare_document_upload']) ? 'is-invalid' : '' ?>" id="expense_refacturare_document_upload" name="refacturare_document_upload" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
-                            <div class="form-text">Formate acceptate: PDF, JPG, PNG, WEBP, DOC, DOCX. Maxim 5 MB.</div>
+                            <div class="form-text">Formate acceptate: PDF, JPG, PNG, WEBP, DOC, DOCX. Maxim 5 MB. Se ataseaza la fiecare refacturare salvata acum.</div>
                             <?php if (isset($expenseFormErrors['refacturare_document_upload'])): ?><div class="invalid-feedback d-block"><?= e((string) $expenseFormErrors['refacturare_document_upload']) ?></div><?php endif; ?>
                         </div>
 
@@ -1165,7 +1291,17 @@ if ($postCreateFlow) {
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2">
                 <h3 class="h6 mb-0">Cheltuieli cursa</h3>
-                <div class="small text-muted">Total cheltuieli: <strong><?= e(format_number_ro($expensesTotal, 2)) ?> lei</strong></div>
+                <div class="small text-muted text-end">
+                    <div>Total cheltuieli: <strong><?= e(format_number_ro($expensesTotal, 2)) ?> lei</strong></div>
+                    <?php if ($refacturareTotal > 0): ?>
+                        <div>
+                            Total refacturare: <strong><?= e(format_number_ro($refacturareTotal, 2)) ?> lei</strong>
+                            <?php if ($refacturarePendingTotal > 0 && $refacturarePendingTotal < $refacturareTotal): ?>
+                                <span class="text-warning-emphasis">(nefacturat: <?= e(format_number_ro($refacturarePendingTotal, 2)) ?> lei)</span>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
@@ -1175,6 +1311,7 @@ if ($postCreateFlow) {
                             <th>Data</th>
                             <th>Tip</th>
                             <th>Suma</th>
+                            <th>Refacturare</th>
                             <th>Document</th>
                             <th class="text-end pe-3">Actiuni</th>
                         </tr>
@@ -1182,7 +1319,7 @@ if ($postCreateFlow) {
                         <tbody>
                         <?php if ($expenses === []): ?>
                             <tr>
-                                <td colspan="5" class="text-center text-muted py-4">Nu exista cheltuieli pentru aceasta cursa.</td>
+                                <td colspan="6" class="text-center text-muted py-4">Nu exista cheltuieli pentru aceasta cursa.</td>
                             </tr>
                         <?php else: ?>
                             <?php foreach ($expenses as $expense): ?>
@@ -1199,6 +1336,10 @@ if ($postCreateFlow) {
                                 if ($expenseTypeLabel === '') {
                                     $expenseTypeLabel = (string) ($expenseTypes[(string) ($expense['tip_cheltuiala'] ?? '')] ?? '-');
                                 }
+                                $expenseLocation = trim((string) ($expense['locatie'] ?? ''));
+                                $expenseQuantity = (float) ($expense['bucati'] ?? 0);
+                                $expenseUnitPrice = (float) ($expense['pret_unitar'] ?? 0);
+                                $refacturareLocation = trim((string) ($expense['refacturare_locatie'] ?? ''));
                                 $refacturareTypeKey = (string) ($expense['refacturare_tip_cheltuiala'] ?? '');
                                 $refacturareTypeLabel = (!$refacturareIsInvoiced && $refacturareTypeKey !== '') ? (string) ($expenseTypes[$refacturareTypeKey] ?? '') : '';
                                 $refacturareAmountValue = !$refacturareIsInvoiced ? (float) ($expense['refacturare_suma'] ?? 0) : 0.0;
@@ -1216,13 +1357,40 @@ if ($postCreateFlow) {
                                     <td><?= e(format_date_ro((string) ($expense['data_cheltuiala'] ?? ''))) ?></td>
                                     <td>
                                         <?= e($expenseTypeLabel) ?>
+                                        <?php if ($expenseLocation !== ''): ?>
+                                            <div class="small"><?= e($expenseLocation) ?></div>
+                                        <?php endif; ?>
+                                        <?php if ($expenseQuantity > 0 && $expenseUnitPrice > 0): ?>
+                                            <div class="small text-muted">
+                                                <?= e(format_number_ro($expenseQuantity, 2)) ?> buc x <?= e(format_number_ro($expenseUnitPrice, 2)) ?> lei
+                                            </div>
+                                        <?php endif; ?>
                                         <?php if ($refacturareTypeLabel !== ''): ?>
                                             <div class="small text-muted">
-                                                Refacturare: <?= e($refacturareTypeLabel) ?><?= $refacturareAmountValue > 0 ? ' (' . e(format_number_ro($refacturareAmountValue, 2)) . ' lei)' : ($refacturareDetailsTotal > 0 ? ' (' . e(format_number_ro($refacturareDetailsTotal, 2)) . ' lei)' : '') ?>
+                                                Refacturare: <?= e($refacturareTypeLabel) ?><?= $refacturareLocation !== '' ? ' - ' . e($refacturareLocation) : '' ?>
                                             </div>
                                         <?php endif; ?>
                                     </td>
-                                    <td><?= e(format_number_ro((float) ($expense['suma'] ?? 0), 2)) ?> lei</td>
+                                    <td>
+                                        <?php $expenseAmountValue = (float) ($expense['suma'] ?? 0); ?>
+                                        <?php if ($expenseAmountValue > 0): ?>
+                                            <?= e(format_number_ro($expenseAmountValue, 2)) ?> lei
+                                        <?php else: ?>
+                                            <span class="text-muted">-</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php $rowRefacturareAmount = (float) ($expense['refacturare_suma'] ?? 0); ?>
+                                        <?php if ($rowRefacturareAmount <= 0 && $refacturareDetailsTotal > 0) { $rowRefacturareAmount = $refacturareDetailsTotal; } ?>
+                                        <?php if ($rowRefacturareAmount > 0): ?>
+                                            <?= e(format_number_ro($rowRefacturareAmount, 2)) ?> lei
+                                            <?php if ($refacturareIsInvoiced): ?>
+                                                <span class="badge bg-success-subtle text-success-emphasis">facturat</span>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            <span class="text-muted">-</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td>
                                         <?php if ($docUrl !== null): ?>
                                             <a class="btn btn-sm btn-outline-secondary" href="<?= e($docUrl) ?>" target="_blank" rel="noopener">
@@ -1260,6 +1428,15 @@ if ($postCreateFlow) {
 </div>
 
 <style>
+.expense-type-menu {
+    max-height: 16rem;
+    overflow-y: auto;
+}
+
+.dispatcher-expense-form .dropdown > .form-select {
+    background-color: #fff;
+}
+
 .expense-main-panel,
 .expense-refacturare-panel {
     display: flex;
@@ -1331,233 +1508,399 @@ if ($postCreateFlow) {
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-    var expenseTypeEl = document.getElementById('expense_tip_cheltuiala');
-    var expenseAmountEl = document.getElementById('expense_suma');
-    var roadTaxBoxEl = document.querySelector('[data-role=\"expense-road-tax-breakdown\"]');
-    var expenseFormEl = document.querySelector('[data-role=\"expense-form\"]');
-    var expenseLayoutEl = document.querySelector('[data-role=\"expense-layout\"]');
-    var refacturareToggleEl = document.querySelector('[data-role=\"expense-refacturare-toggle\"]');
-    var refacturareMenuEl = document.querySelector('[data-role=\"expense-refacturare-menu\"]');
-    var refacturareFieldsEl = document.querySelector('[data-role=\"expense-refacturare-fields\"]');
-    var refacturareSelectEl = document.getElementById('expense_refacturare_tip_cheltuiala');
-    var refacturareRoadTaxBoxEl = document.querySelector('[data-role=\"refacturare-road-tax-breakdown\"]');
-    var refacturareAmountEl = document.getElementById('expense_refacturare_suma');
+    var expenseFormEl = document.querySelector('[data-role="expense-form"]');
+    var expenseLayoutEl = document.querySelector('[data-role="expense-layout"]');
+    var refacturareToggleEl = document.querySelector('[data-role="expense-refacturare-toggle"]');
+    var refacturareMenuEl = document.querySelector('[data-role="expense-refacturare-menu"]');
+    var refacturareFieldsEl = document.querySelector('[data-role="expense-refacturare-fields"]');
     var refacturareDateEl = document.getElementById('expense_refacturare_data');
 
-    var getSelectedLegacyKey = function (selectEl) {
-        if (!(selectEl instanceof HTMLSelectElement)) {
-            return '';
-        }
-        var option = selectEl.options[selectEl.selectedIndex] || null;
-        if (option instanceof HTMLOptionElement) {
-            var legacyKey = option.getAttribute('data-legacy-key') || '';
-            if (legacyKey !== '') {
-                return legacyKey;
-            }
-        }
-        return selectEl.value;
-    };
-
-    var syncRefacturareMenu = function () {
-        if (!(refacturareToggleEl instanceof HTMLInputElement) || !(refacturareMenuEl instanceof HTMLElement) || !(refacturareSelectEl instanceof HTMLSelectElement)) {
-            return;
-        }
-
-        var enabled = refacturareToggleEl.checked;
-        if (expenseFormEl instanceof HTMLElement) {
-            expenseFormEl.classList.toggle('has-refacturare', enabled);
-        }
-        if (expenseLayoutEl instanceof HTMLElement) {
-            expenseLayoutEl.classList.toggle('has-refacturare', enabled);
-        }
-        refacturareMenuEl.classList.toggle('d-none', !enabled);
-        if (refacturareFieldsEl instanceof HTMLElement) {
-            refacturareFieldsEl.classList.toggle('d-none', !enabled);
-        }
-        refacturareSelectEl.disabled = !enabled;
-        refacturareSelectEl.required = enabled;
-        if (refacturareAmountEl instanceof HTMLInputElement) {
-            refacturareAmountEl.required = enabled;
-        }
-        if (refacturareDateEl instanceof HTMLInputElement) {
-            refacturareDateEl.required = enabled;
-        }
-        if (refacturareRoadTaxBoxEl instanceof HTMLElement) {
-            refacturareRoadTaxBoxEl.classList.toggle('d-none', !enabled || refacturareSelectEl.value !== 'taxe_drum');
-        }
-    };
-
-    if (refacturareToggleEl instanceof HTMLInputElement) {
-        refacturareToggleEl.addEventListener('change', syncRefacturareMenu);
-        syncRefacturareMenu();
-    }
-    if (refacturareSelectEl instanceof HTMLSelectElement) {
-        refacturareSelectEl.addEventListener('change', syncRefacturareMenu);
-    }
-
-    if (!(expenseTypeEl instanceof HTMLSelectElement) || !(expenseAmountEl instanceof HTMLInputElement) || !(roadTaxBoxEl instanceof HTMLElement)) {
+    if (!(expenseFormEl instanceof HTMLElement)) {
         return;
     }
 
-    var roadTaxFields = [
-        {
-            qty: document.getElementById('expense_taxa_acces_bucati'),
-            price: document.getElementById('expense_taxa_acces_pret')
-        },
-        {
-            qty: document.getElementById('expense_port_bucati'),
-            price: document.getElementById('expense_port_pret')
-        },
-        {
-            qty: document.getElementById('expense_trece_bucati'),
-            price: document.getElementById('expense_trece_pret')
-        }
-    ];
-    var refacturareRoadTaxFields = [
-        {
-            qty: document.getElementById('expense_refacturare_taxa_acces_bucati'),
-            price: document.getElementById('expense_refacturare_taxa_acces_pret')
-        },
-        {
-            qty: document.getElementById('expense_refacturare_port_bucati'),
-            price: document.getElementById('expense_refacturare_port_pret')
-        },
-        {
-            qty: document.getElementById('expense_refacturare_trece_bucati'),
-            price: document.getElementById('expense_refacturare_trece_pret')
-        }
-    ];
-    var initialExpenseAmount = String(expenseAmountEl.value || '');
-
     var parseNumber = function (value) {
-        var normalized = String(value || '').trim().replace(',', '.');
+        var normalized = String(value === null || value === undefined ? '' : value).trim().replace(',', '.');
         if (normalized === '') {
             return null;
         }
         var parsed = Number(normalized);
-        return Number.isFinite(parsed) ? parsed : null;
+        return isFinite(parsed) ? parsed : null;
     };
 
-    var formatAmount = function (value) {
-        return (Math.round(value * 100) / 100).toFixed(2);
+    var formatTotal = function (value) {
+        return (Math.round(value * 100) / 100).toFixed(2).replace('.', ',');
     };
 
-    var calculateRoadTaxTotal = function () {
-        var total = 0;
-        roadTaxFields.forEach(function (field) {
-            if (!(field.qty instanceof HTMLInputElement) || !(field.price instanceof HTMLInputElement)) {
-                return;
-            }
+    // Fiecare bloc de taxa isi calculeaza singur totalul din bucati x pret / buc.
+    var syncBlockTotal = function (block) {
+        var totalEl = block.querySelector('[data-role="expense-line-total"]');
+        if (!(totalEl instanceof HTMLInputElement)) {
+            return;
+        }
 
-            var qty = parseNumber(field.qty.value);
-            var price = parseNumber(field.price.value);
-            if (qty !== null && qty > 0 && price !== null && price > 0) {
-                total += qty * price;
-            }
+        var qtyEl = block.querySelector('[data-role="expense-line-quantity"]');
+        var priceEl = block.querySelector('[data-role="expense-line-price"]');
+        var qty = qtyEl instanceof HTMLInputElement ? parseNumber(qtyEl.value) : null;
+        var price = priceEl instanceof HTMLInputElement ? parseNumber(priceEl.value) : null;
+        var total = (qty !== null && qty > 0 && price !== null && price > 0) ? qty * price : 0;
+        totalEl.value = formatTotal(total);
+    };
+
+    /**
+     * Leaga un selector cu bife de blocurile lui: bifa arata blocul si ii activeaza campurile,
+     * iar campurile ascunse raman dezactivate, ca sa nu ajunga in POST.
+     */
+    var wireTypeSelector = function (optionRole, blocksRole, summaryRole, emptyRole, emptySummary) {
+        var options = Array.prototype.slice.call(expenseFormEl.querySelectorAll('[data-role="' + optionRole + '"]'));
+        var blocksBox = expenseFormEl.querySelector('[data-role="' + blocksRole + '"]');
+        var summaryEl = expenseFormEl.querySelector('[data-role="' + summaryRole + '"]');
+        var emptyEl = expenseFormEl.querySelector('[data-role="' + emptyRole + '"]');
+        if (options.length === 0 || !(blocksBox instanceof HTMLElement)) {
+            return null;
+        }
+
+        var blocks = {};
+        Array.prototype.forEach.call(blocksBox.querySelectorAll('[data-role="expense-type-block"]'), function (block) {
+            blocks[block.getAttribute('data-block-key') || ''] = block;
         });
-        return Math.round(total * 100) / 100;
-    };
 
-    var calculateRefacturareRoadTaxTotal = function () {
-        var total = 0;
-        refacturareRoadTaxFields.forEach(function (field) {
-            if (!(field.qty instanceof HTMLInputElement) || !(field.price instanceof HTMLInputElement)) {
-                return;
+        var isEnabled = true;
+
+        var sync = function (enabled) {
+            if (typeof enabled === 'boolean') {
+                isEnabled = enabled;
             }
 
-            var qty = parseNumber(field.qty.value);
-            var price = parseNumber(field.price.value);
-            if (qty !== null && qty > 0 && price !== null && price > 0) {
-                total += qty * price;
+            var selectedLabels = [];
+            options.forEach(function (option) {
+                if (!(option instanceof HTMLInputElement)) {
+                    return;
+                }
+                option.disabled = !isEnabled;
+
+                var key = option.getAttribute('data-block-key') || '';
+                var block = blocks[key];
+                var active = isEnabled && option.checked;
+                if (active) {
+                    selectedLabels.push(option.getAttribute('data-label') || key);
+                }
+                if (!(block instanceof HTMLElement)) {
+                    return;
+                }
+
+                block.classList.toggle('d-none', !active);
+                Array.prototype.forEach.call(block.querySelectorAll('input, textarea, select'), function (field) {
+                    field.disabled = !active;
+                });
+                if (active) {
+                    syncBlockTotal(block);
+                }
+            });
+
+            if (summaryEl instanceof HTMLElement) {
+                summaryEl.textContent = selectedLabels.length > 0 ? selectedLabels.join(', ') : emptySummary;
+                summaryEl.classList.toggle('text-muted', selectedLabels.length === 0);
             }
+            if (emptyEl instanceof HTMLElement) {
+                emptyEl.classList.toggle('d-none', !isEnabled || selectedLabels.length > 0);
+            }
+        };
+
+        options.forEach(function (option) {
+            option.addEventListener('change', function () {
+                sync();
+            });
         });
-        return Math.round(total * 100) / 100;
+
+        Array.prototype.forEach.call(blocksBox.querySelectorAll('[data-role="expense-line-quantity"], [data-role="expense-line-price"]'), function (field) {
+            field.addEventListener('input', function () {
+                var block = field.closest('[data-role="expense-type-block"]');
+                if (block instanceof HTMLElement) {
+                    syncBlockTotal(block);
+                }
+            });
+        });
+
+        return sync;
     };
 
-    var hasAnyRoadTaxInput = function () {
-        for (var i = 0; i < roadTaxFields.length; i++) {
-            var field = roadTaxFields[i];
-            if (!(field.qty instanceof HTMLInputElement) || !(field.price instanceof HTMLInputElement)) {
-                continue;
-            }
-            if (String(field.qty.value || '').trim() !== '' || String(field.price.value || '').trim() !== '') {
-                return true;
-            }
+    var syncExpenseTypes = wireTypeSelector(
+        'expense-type-option',
+        'expense-type-blocks',
+        'expense-type-summary',
+        'expense-type-empty',
+        '-- Selecteaza tipurile --'
+    );
+    var syncRefacturareTypes = wireTypeSelector(
+        'expense-refacturare-type-option',
+        'expense-refacturare-type-blocks',
+        'expense-refacturare-type-summary',
+        'expense-refacturare-type-empty',
+        '-- Selecteaza tipurile --'
+    );
+
+    var syncRefacturare = function () {
+        var enabled = refacturareToggleEl instanceof HTMLInputElement ? refacturareToggleEl.checked : false;
+
+        expenseFormEl.classList.toggle('has-refacturare', enabled);
+        if (expenseLayoutEl instanceof HTMLElement) {
+            expenseLayoutEl.classList.toggle('has-refacturare', enabled);
         }
-        return false;
-    };
-
-    var hasAnyRefacturareRoadTaxInput = function () {
-        for (var i = 0; i < refacturareRoadTaxFields.length; i++) {
-            var field = refacturareRoadTaxFields[i];
-            if (!(field.qty instanceof HTMLInputElement) || !(field.price instanceof HTMLInputElement)) {
-                continue;
-            }
-            if (String(field.qty.value || '').trim() !== '' || String(field.price.value || '').trim() !== '') {
-                return true;
-            }
+        if (refacturareMenuEl instanceof HTMLElement) {
+            refacturareMenuEl.classList.toggle('d-none', !enabled);
         }
-        return false;
-    };
-
-    var syncExpenseTaxMode = function () {
-        var isRoadTax = getSelectedLegacyKey(expenseTypeEl) === 'taxe_drum';
-        var isRefacturareRoadTax = refacturareToggleEl instanceof HTMLInputElement
-            && refacturareSelectEl instanceof HTMLSelectElement
-            && refacturareToggleEl.checked
-            && refacturareSelectEl.value === 'taxe_drum';
-        roadTaxBoxEl.classList.toggle('d-none', !isRoadTax);
-
-        if (isRoadTax) {
-            var total = calculateRoadTaxTotal();
-            expenseAmountEl.readOnly = true;
-            if (total > 0) {
-                expenseAmountEl.value = formatAmount(total);
-            } else if (hasAnyRoadTaxInput() || initialExpenseAmount === '') {
-                expenseAmountEl.value = '';
-            }
-        } else {
-            expenseAmountEl.readOnly = false;
+        if (refacturareFieldsEl instanceof HTMLElement) {
+            refacturareFieldsEl.classList.toggle('d-none', !enabled);
         }
-
-        if (isRefacturareRoadTax && refacturareAmountEl instanceof HTMLInputElement) {
-            var refacturareTotal = calculateRefacturareRoadTaxTotal();
-            refacturareAmountEl.readOnly = true;
-            if (refacturareTotal > 0) {
-                refacturareAmountEl.value = formatAmount(refacturareTotal);
-            } else if (hasAnyRefacturareRoadTaxInput()) {
-                refacturareAmountEl.value = '';
-            }
-        } else if (refacturareAmountEl instanceof HTMLInputElement) {
-            refacturareAmountEl.readOnly = false;
+        if (refacturareDateEl instanceof HTMLInputElement) {
+            refacturareDateEl.required = enabled;
+        }
+        if (typeof syncRefacturareTypes === 'function') {
+            syncRefacturareTypes(enabled);
         }
     };
 
-    expenseTypeEl.addEventListener('change', syncExpenseTaxMode);
-    roadTaxFields.forEach(function (field) {
-        if (field.qty instanceof HTMLInputElement) {
-            field.qty.addEventListener('input', syncExpenseTaxMode);
-        }
-        if (field.price instanceof HTMLInputElement) {
-            field.price.addEventListener('input', syncExpenseTaxMode);
-        }
-    });
-    refacturareRoadTaxFields.forEach(function (field) {
-        if (field.qty instanceof HTMLInputElement) {
-            field.qty.addEventListener('input', syncExpenseTaxMode);
-        }
-        if (field.price instanceof HTMLInputElement) {
-            field.price.addEventListener('input', syncExpenseTaxMode);
-        }
-    });
     if (refacturareToggleEl instanceof HTMLInputElement) {
-        refacturareToggleEl.addEventListener('change', syncExpenseTaxMode);
-    }
-    if (refacturareSelectEl instanceof HTMLSelectElement) {
-        refacturareSelectEl.addEventListener('change', syncExpenseTaxMode);
+        refacturareToggleEl.addEventListener('change', syncRefacturare);
     }
 
-    syncExpenseTaxMode();
+    // Sugestiile de locatie urmeaza beneficiarul ales pe cursa, fara reincarcarea paginii.
+    var locationDatalistEl = document.getElementById('expense_location_options');
+    var beneficiaryEl = document.getElementById('edit_race_beneficiar_id');
+
+    var locationsByBeneficiary = {};
+    if (locationDatalistEl instanceof HTMLElement) {
+        try {
+            locationsByBeneficiary = JSON.parse(locationDatalistEl.getAttribute('data-by-beneficiary') || '{}') || {};
+        } catch (error) {
+            locationsByBeneficiary = {};
+        }
+    }
+
+    // Lista activa, folosita si de completarea inline din campul de locatie.
+    var activeLocationValues = [];
+
+    /**
+     * Prima locatie care incepe cu textul scris, ca sa o putem completa inline.
+     * Comparatie case-insensitive, dar pastram scrierea corecta din configurare.
+     */
+    var findLocationCompletion = function (typed) {
+        if (typed === '') {
+            return null;
+        }
+
+        var needle = typed.toLowerCase();
+        for (var i = 0; i < activeLocationValues.length; i++) {
+            var candidate = String(activeLocationValues[i]);
+            if (candidate.length > typed.length && candidate.toLowerCase().indexOf(needle) === 0) {
+                return candidate;
+            }
+        }
+
+        return null;
+    };
+
+    // Completarea propusa e selectata la finalul campului: Tab / Enter / sageata dreapta o accepta,
+    // orice alta tastare o inlocuieste, Escape o renunta.
+    var hasPendingCompletion = function (input) {
+        return input.selectionStart !== input.selectionEnd && input.selectionEnd === input.value.length;
+    };
+
+    var acceptCompletion = function (input) {
+        var end = input.value.length;
+        input.setSelectionRange(end, end);
+    };
+
+    var applyInlineCompletion = function (input, event) {
+        if (event && event.isComposing) {
+            return;
+        }
+
+        // La stergere nu completam inapoi, altfel nu s-ar putea sterge niciodata ultima litera.
+        var inputType = (event && event.inputType) ? String(event.inputType) : '';
+        if (inputType.indexOf('delete') === 0 || inputType === 'historyUndo') {
+            return;
+        }
+
+        // Completam doar cand cursorul e la finalul textului scris.
+        if (input.selectionStart !== input.value.length) {
+            return;
+        }
+
+        var typed = input.value;
+        var match = findLocationCompletion(typed);
+        if (match === null) {
+            return;
+        }
+
+        input.value = match;
+        input.setSelectionRange(typed.length, match.length);
+    };
+
+    Array.prototype.forEach.call(expenseFormEl.querySelectorAll('input[list="expense_location_options"]'), function (input) {
+        input.addEventListener('input', function (event) {
+            applyInlineCompletion(input, event);
+        });
+
+        input.addEventListener('keydown', function (event) {
+            if (!hasPendingCompletion(input)) {
+                return;
+            }
+
+            if (event.key === 'Enter') {
+                // Enter accepta sugestia, nu trimite formularul.
+                event.preventDefault();
+                acceptCompletion(input);
+                return;
+            }
+
+            if (event.key === 'ArrowRight' || event.key === 'End') {
+                acceptCompletion(input);
+                return;
+            }
+
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                input.value = input.value.slice(0, input.selectionStart);
+            }
+        });
+
+        input.addEventListener('blur', function () {
+            if (hasPendingCompletion(input)) {
+                acceptCompletion(input);
+            }
+        });
+    });
+
+    var syncLocationSuggestions = function () {
+        if (!(locationDatalistEl instanceof HTMLElement)) {
+            return;
+        }
+
+        var beneficiaryId = beneficiaryEl instanceof HTMLSelectElement ? String(beneficiaryEl.value || '') : '';
+        var beneficiaryLabel = '';
+        if (beneficiaryEl instanceof HTMLSelectElement && beneficiaryEl.selectedIndex >= 0) {
+            var selectedOption = beneficiaryEl.options[beneficiaryEl.selectedIndex];
+            if (selectedOption && selectedOption.value !== '') {
+                beneficiaryLabel = selectedOption.textContent.trim();
+            }
+        }
+
+        var values = locationsByBeneficiary[beneficiaryId];
+        if (!Array.isArray(values) || values.length === 0) {
+            values = Array.isArray(locationsByBeneficiary['0']) ? locationsByBeneficiary['0'] : [];
+            beneficiaryLabel = '';
+        }
+
+        locationDatalistEl.innerHTML = '';
+        values.forEach(function (value) {
+            var option = document.createElement('option');
+            option.value = value;
+            locationDatalistEl.appendChild(option);
+        });
+        activeLocationValues = values;
+
+        var hint = values.length === 0
+            ? 'Nu exista inca locatii salvate. Scrie una noua; va aparea in sugestii data viitoare.'
+            : (beneficiaryLabel !== ''
+                ? values.length + ' locatii pentru ' + beneficiaryLabel + '. Scrie primele litere si apasa Tab, sau sageata jos pentru toata lista.'
+                : values.length + ' locatii disponibile. Alege beneficiarul cursei ca sa le filtram.');
+
+        Array.prototype.forEach.call(expenseFormEl.querySelectorAll('[data-role="expense-location-hint"]'), function (el) {
+            el.textContent = hint;
+        });
+    };
+
+    if (beneficiaryEl instanceof HTMLSelectElement) {
+        beneficiaryEl.addEventListener('change', syncLocationSuggestions);
+    }
+    syncLocationSuggestions();
+
+    // Calendarul cheltuielilor urmeaza intervalul cursei chiar daca schimbi datele cursei
+    // fara sa reincarci pagina. Campurile cursei tin data in format zi/luna/an.
+    var raceStartEl = document.getElementById('edit_race_data_inceput');
+    var raceEndEl = document.getElementById('edit_race_data_sfarsit');
+    var expenseDateEls = Array.prototype.slice.call(expenseFormEl.querySelectorAll('[data-role="expense-date"]'));
+
+    var toIsoDate = function (value) {
+        var raw = String(value || '').trim();
+        if (raw === '') {
+            return '';
+        }
+
+        var roMatch = raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
+        if (roMatch) {
+            return roMatch[3] + '-' + ('0' + roMatch[2]).slice(-2) + '-' + ('0' + roMatch[1]).slice(-2);
+        }
+
+        return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : '';
+    };
+
+    var formatRoDate = function (isoDate) {
+        var parts = String(isoDate || '').split('-');
+        return parts.length === 3 ? parts[2] + '.' + parts[1] + '.' + parts[0] : isoDate;
+    };
+
+    var syncExpenseDateRange = function () {
+        var min = raceStartEl instanceof HTMLInputElement ? toIsoDate(raceStartEl.value) : '';
+        var max = raceEndEl instanceof HTMLInputElement ? toIsoDate(raceEndEl.value) : '';
+        if (min !== '' && max !== '' && max < min) {
+            var swap = min;
+            min = max;
+            max = swap;
+        }
+
+        var hint = '';
+        if (min !== '' && max !== '') {
+            hint = min === max
+                ? 'Cursa este intr-o singura zi: ' + formatRoDate(min) + '.'
+                : 'Doar in intervalul cursei: ' + formatRoDate(min) + ' - ' + formatRoDate(max) + '.';
+        }
+
+        expenseDateEls.forEach(function (input) {
+            if (min !== '') {
+                input.min = min;
+            } else {
+                input.removeAttribute('min');
+            }
+            if (max !== '') {
+                input.max = max;
+            } else {
+                input.removeAttribute('max');
+            }
+
+            // Daca data ramasa in camp a iesit din interval, o aducem inapoi in el.
+            var current = String(input.value || '');
+            if (current === '' && min !== '') {
+                input.value = min;
+            } else if (min !== '' && current !== '' && current < min) {
+                input.value = min;
+            } else if (max !== '' && current !== '' && current > max) {
+                input.value = max;
+            }
+        });
+
+        Array.prototype.forEach.call(document.querySelectorAll('[data-role="expense-date-hint"]'), function (el) {
+            el.textContent = hint;
+            el.classList.toggle('d-none', hint === '');
+        });
+    };
+
+    document.addEventListener('change', function (event) {
+        if (event.target === raceStartEl || event.target === raceEndEl) {
+            syncExpenseDateRange();
+        }
+    });
+    expenseDateEls.forEach(function (input) {
+        input.addEventListener('focus', syncExpenseDateRange);
+    });
+    syncExpenseDateRange();
+
+    if (typeof syncExpenseTypes === 'function') {
+        syncExpenseTypes(true);
+    }
+    syncRefacturare();
 });
 </script>
 

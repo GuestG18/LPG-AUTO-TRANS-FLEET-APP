@@ -28,6 +28,8 @@ class CentralizatorFacturareService
         'port' => 'Port',
         'trece' => 'Trecere',
     ];
+    /** Tipurile de taxe de drum inregistrate ca randuri separate, cu locatie proprie. */
+    private const TOLL_EXPENSE_TYPES = ['taxa_acces', 'port', 'trece'];
     private const DONUT_COLORS = ['#2f7df4', '#10b981', '#f97316', '#8b5cf6', '#06b6d4', '#ef4444', '#64748b'];
 
     public function __construct(private PDO $db)
@@ -684,6 +686,9 @@ class CentralizatorFacturareService
                 e.cursa_id,
                 e.refacturare_tip_cheltuiala,
                 e.tip_cheltuiala,
+                e.locatie,
+                e.refacturare_locatie,
+                e.refacturare_bucati,
                 e.refacturare_detalii,
                 e.refacturare_suma,
                 e.refacturare_data,
@@ -1598,6 +1603,30 @@ class CentralizatorFacturareService
 
     private function accumulateRefacturareGroups(array &$groups, array $expense, float $amount, array &$warnings): void
     {
+        // Modelul curent: fiecare taxa de drum e un rand separat, cu locatia pe el.
+        // Gruparea se face pe tip + locatie, fara sa mai depinda de textul din observatii.
+        $refacturareType = (string) (($expense['refacturare_tip_cheltuiala'] ?? '') ?: ($expense['tip_cheltuiala'] ?? ''));
+        $recordLocation = $this->normalizeObservationLabel(
+            (string) (($expense['refacturare_locatie'] ?? '') ?: ($expense['locatie'] ?? ''))
+        );
+        if ($recordLocation !== '' && in_array($refacturareType, self::TOLL_EXPENSE_TYPES, true)) {
+            $typeLabel = self::ROAD_TAX_LABELS[$refacturareType] ?? $this->expenseTypeLabel($refacturareType);
+            $quantity = max(0.0, (float) ($expense['refacturare_bucati'] ?? 0));
+            $groupKey = $refacturareType . '|' . $this->normalizeGroupKey($recordLocation);
+            $groups[$groupKey] ??= [
+                'key' => $groupKey,
+                'label' => $this->refacturareGroupLabel($refacturareType, $typeLabel, $recordLocation),
+                'type' => $refacturareType,
+                'quantity' => 0.0,
+                'amount' => 0.0,
+            ];
+            $groups[$groupKey]['quantity'] += $quantity > 0 ? $quantity : 1;
+            $groups[$groupKey]['amount'] += $amount;
+
+            return;
+        }
+
+        // Randurile vechi de tip "Taxe drum" tin cele trei taxe intr-un JSON pe acelasi rand.
         $details = json_decode((string) ($expense['refacturare_detalii'] ?? ''), true);
         $hasStructuredDetails = is_array($details) && $details !== [];
         $componentTotal = 0.0;
@@ -2021,6 +2050,9 @@ class CentralizatorFacturareService
     {
         return [
             'motorina' => 'Motorină',
+            'taxa_acces' => 'Taxă acces',
+            'port' => 'Port',
+            'trece' => 'Trecere',
             'taxe_drum' => 'Taxe drum',
             'diurna' => 'Diurnă',
             'service' => 'Service',

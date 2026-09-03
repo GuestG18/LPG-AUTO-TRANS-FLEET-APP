@@ -98,11 +98,19 @@ class DispecerCurseModel extends BaseModel
     ];
 
     private const DEFAULT_EXPENSE_CATEGORIES = [
-        'taxe_drum' => 'Taxe drum',
+        'taxa_acces' => 'Taxa acces',
+        'port' => 'Port',
+        'trece' => 'Trecere',
         'diurna' => 'Diurna',
         'service' => 'Reparatii',
         'alte' => 'Alte cheltuieli',
     ];
+
+    /**
+     * Categorii scoase din uz: raman in baza pentru cheltuielile istorice,
+     * dar nu mai apar in selectoarele din formularul de cheltuieli.
+     */
+    private const RETIRED_EXPENSE_CATEGORIES = ['taxe_drum'];
 
     /**
      * Punctele care pot fi capete de traseu pe o ruta Primar: garajele din vehicule
@@ -2677,8 +2685,48 @@ class DispecerCurseModel extends BaseModel
             $this->db->exec("ALTER TABLE curse_cheltuieli ADD COLUMN added_by INT UNSIGNED NULL AFTER observatii");
         }
 
+        // Taxele de drum se inregistreaza de la 2026-09 ca tipuri separate (Taxa acces / Port / Trecere),
+        // fiecare cu locatia, cantitatea si pretul unitar pe randul propriu.
+        // Coloanele de tip sunt ENUM, deci trebuie sa cunoasca noile valori;
+        // 'taxe_drum' ramane in enum pentru cheltuielile deja salvate.
+        $expenseTypeEnum = "enum('motorina','taxa_acces','port','trece','taxe_drum','diurna','service','alte')";
+        $enumCheck = $this->db->prepare("
+            SELECT COLUMN_TYPE
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_cheltuieli'
+              AND COLUMN_NAME = :column_name
+        ");
+        foreach (['tip_cheltuiala' => 'NOT NULL', 'refacturare_tip_cheltuiala' => 'NULL'] as $enumColumn => $nullability) {
+            $enumCheck->bindValue(':column_name', $enumColumn, PDO::PARAM_STR);
+            $enumCheck->execute();
+            $currentType = (string) ($enumCheck->fetchColumn() ?: '');
+            if ($currentType !== '' && !str_contains($currentType, "'taxa_acces'")) {
+                $this->db->exec(
+                    "ALTER TABLE curse_cheltuieli MODIFY COLUMN " . $enumColumn . ' ' . $expenseTypeEnum . ' ' . $nullability
+                );
+            }
+        }
+
+        $tollColumns = [
+            'locatie' => 'ALTER TABLE curse_cheltuieli ADD COLUMN locatie VARCHAR(190) NULL AFTER categorie_id',
+            'bucati' => 'ALTER TABLE curse_cheltuieli ADD COLUMN bucati DECIMAL(12,2) NULL AFTER locatie',
+            'pret_unitar' => 'ALTER TABLE curse_cheltuieli ADD COLUMN pret_unitar DECIMAL(12,2) NULL AFTER bucati',
+            'refacturare_locatie' => 'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_locatie VARCHAR(190) NULL AFTER refacturare_tip_cheltuiala',
+            'refacturare_bucati' => 'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_bucati DECIMAL(12,2) NULL AFTER refacturare_locatie',
+            'refacturare_pret_unitar' => 'ALTER TABLE curse_cheltuieli ADD COLUMN refacturare_pret_unitar DECIMAL(12,2) NULL AFTER refacturare_bucati',
+        ];
+        foreach ($tollColumns as $columnName => $alterSql) {
+            $expenseColumnCheck->bindValue(':column_name', $columnName, PDO::PARAM_STR);
+            $expenseColumnCheck->execute();
+            if ((int) $expenseColumnCheck->fetchColumn() === 0) {
+                $this->db->exec($alterSql);
+            }
+        }
+
         $this->ensureIndexExists('curse_cheltuieli', 'idx_curse_cheltuieli_categorie', 'ALTER TABLE curse_cheltuieli ADD INDEX idx_curse_cheltuieli_categorie (categorie_id)');
         $this->ensureIndexExists('curse_cheltuieli', 'idx_curse_cheltuieli_added_by', 'ALTER TABLE curse_cheltuieli ADD INDEX idx_curse_cheltuieli_added_by (added_by)');
+        $this->ensureIndexExists('curse_cheltuieli', 'idx_curse_cheltuieli_locatie', 'ALTER TABLE curse_cheltuieli ADD INDEX idx_curse_cheltuieli_locatie (locatie)');
 
         $now = date('Y-m-d H:i:s');
         $defaultStmt = $this->db->prepare("
@@ -2707,6 +2755,18 @@ class DispecerCurseModel extends BaseModel
             WHERE e.categorie_id IS NULL
               AND e.tip_cheltuiala <> 'motorina'
         ");
+
+        // "Taxe drum" nu se mai poate selecta, dar categoria ramane pentru cheltuielile deja salvate.
+        $retireStmt = $this->db->prepare("
+            UPDATE categorii_cheltuieli_curse
+            SET activ = 0, updated_at = :updated_at
+            WHERE legacy_key = :legacy_key AND activ = 1
+        ");
+        foreach (self::RETIRED_EXPENSE_CATEGORIES as $retiredKey) {
+            $retireStmt->bindValue(':updated_at', $now, PDO::PARAM_STR);
+            $retireStmt->bindValue(':legacy_key', $retiredKey, PDO::PARAM_STR);
+            $retireStmt->execute();
+        }
 
         $this->expenseCategorySchemaEnsured = true;
     }
@@ -3451,6 +3511,7 @@ class DispecerCurseModel extends BaseModel
                 c.ora_inceput,
                 c.ora_sfarsit,
                 c.status_facturare,
+                c.created_at,
                 c.updated_at,
                 c.km_cursa,
                 c.km_totali,
@@ -3501,7 +3562,9 @@ class DispecerCurseModel extends BaseModel
             ) exp ON exp.cursa_id = c.id
             WHERE c.deleted_at IS NULL
               AND " . $billingStatusExpr . " = :open_races_billing_status
-            ORDER BY c.data_inceput ASC, c.id ASC
+            -- Implicit: cele mai recent adaugate primele, ca o cursa tocmai introdusa
+            -- sa fie in capul listei. Ordinea se poate schimba din panou.
+            ORDER BY COALESCE(c.created_at, c.data_inceput) DESC, c.id DESC
             LIMIT :limit_rows
         ";
 
@@ -3608,7 +3671,13 @@ class DispecerCurseModel extends BaseModel
                 e.id,
                 e.cursa_id,
                 e.tip_cheltuiala,
+                e.locatie,
+                e.bucati,
+                e.pret_unitar,
                 e.refacturare_tip_cheltuiala,
+                e.refacturare_locatie,
+                e.refacturare_bucati,
+                e.refacturare_pret_unitar,
                 e.refacturare_detalii,
                 e.refacturare_suma,
                 e.refacturare_data,
@@ -3721,7 +3790,13 @@ class DispecerCurseModel extends BaseModel
                 e.id,
                 e.cursa_id,
                 e.tip_cheltuiala,
+                e.locatie,
+                e.bucati,
+                e.pret_unitar,
                 e.refacturare_tip_cheltuiala,
+                e.refacturare_locatie,
+                e.refacturare_bucati,
+                e.refacturare_pret_unitar,
                 e.refacturare_detalii,
                 e.refacturare_suma,
                 e.refacturare_data,
@@ -5201,7 +5276,13 @@ class DispecerCurseModel extends BaseModel
                 cursa_id,
                 tip_cheltuiala,
                 categorie_id,
+                locatie,
+                bucati,
+                pret_unitar,
                 refacturare_tip_cheltuiala,
+                refacturare_locatie,
+                refacturare_bucati,
+                refacturare_pret_unitar,
                 refacturare_detalii,
                 refacturare_suma,
                 refacturare_data,
@@ -5216,7 +5297,13 @@ class DispecerCurseModel extends BaseModel
                 :cursa_id,
                 :tip_cheltuiala,
                 :categorie_id,
+                :locatie,
+                :bucati,
+                :pret_unitar,
                 :refacturare_tip_cheltuiala,
+                :refacturare_locatie,
+                :refacturare_bucati,
+                :refacturare_pret_unitar,
                 :refacturare_detalii,
                 :refacturare_suma,
                 :refacturare_data,
@@ -5234,7 +5321,13 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':cursa_id', (int) $data['cursa_id'], PDO::PARAM_INT);
         $stmt->bindValue(':tip_cheltuiala', (string) $data['tip_cheltuiala']);
         $this->bindNullableInt($stmt, ':categorie_id', $data['categorie_id'] ?? null);
+        $this->bindNullableString($stmt, ':locatie', $data['locatie'] ?? null);
+        $this->bindNullableDecimal($stmt, ':bucati', $data['bucati'] ?? null);
+        $this->bindNullableDecimal($stmt, ':pret_unitar', $data['pret_unitar'] ?? null);
         $this->bindNullableString($stmt, ':refacturare_tip_cheltuiala', $data['refacturare_tip_cheltuiala'] ?? null);
+        $this->bindNullableString($stmt, ':refacturare_locatie', $data['refacturare_locatie'] ?? null);
+        $this->bindNullableDecimal($stmt, ':refacturare_bucati', $data['refacturare_bucati'] ?? null);
+        $this->bindNullableDecimal($stmt, ':refacturare_pret_unitar', $data['refacturare_pret_unitar'] ?? null);
         $this->bindNullableString($stmt, ':refacturare_detalii', $data['refacturare_detalii'] ?? null);
         $this->bindNullableDecimal($stmt, ':refacturare_suma', $data['refacturare_suma'] ?? null);
         $this->bindNullableString($stmt, ':refacturare_data', $data['refacturare_data'] ?? null);
@@ -5259,7 +5352,13 @@ class DispecerCurseModel extends BaseModel
             SET
                 tip_cheltuiala = :tip_cheltuiala,
                 categorie_id = :categorie_id,
+                locatie = :locatie,
+                bucati = :bucati,
+                pret_unitar = :pret_unitar,
                 refacturare_tip_cheltuiala = :refacturare_tip_cheltuiala,
+                refacturare_locatie = :refacturare_locatie,
+                refacturare_bucati = :refacturare_bucati,
+                refacturare_pret_unitar = :refacturare_pret_unitar,
                 refacturare_detalii = :refacturare_detalii,
                 refacturare_suma = :refacturare_suma,
                 refacturare_data = :refacturare_data,
@@ -5274,7 +5373,13 @@ class DispecerCurseModel extends BaseModel
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':tip_cheltuiala', (string) $data['tip_cheltuiala']);
         $this->bindNullableInt($stmt, ':categorie_id', $data['categorie_id'] ?? null);
+        $this->bindNullableString($stmt, ':locatie', $data['locatie'] ?? null);
+        $this->bindNullableDecimal($stmt, ':bucati', $data['bucati'] ?? null);
+        $this->bindNullableDecimal($stmt, ':pret_unitar', $data['pret_unitar'] ?? null);
         $this->bindNullableString($stmt, ':refacturare_tip_cheltuiala', $data['refacturare_tip_cheltuiala'] ?? null);
+        $this->bindNullableString($stmt, ':refacturare_locatie', $data['refacturare_locatie'] ?? null);
+        $this->bindNullableDecimal($stmt, ':refacturare_bucati', $data['refacturare_bucati'] ?? null);
+        $this->bindNullableDecimal($stmt, ':refacturare_pret_unitar', $data['refacturare_pret_unitar'] ?? null);
         $this->bindNullableString($stmt, ':refacturare_detalii', $data['refacturare_detalii'] ?? null);
         $this->bindNullableDecimal($stmt, ':refacturare_suma', $data['refacturare_suma'] ?? null);
         $this->bindNullableString($stmt, ':refacturare_data', $data['refacturare_data'] ?? null);
@@ -5286,6 +5391,82 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':id', $id, PDO::PARAM_INT);
 
         return $stmt->execute();
+    }
+
+    /**
+     * Locatiile deja folosite pe taxele de drum, grupate pe beneficiarul cursei.
+     * Cheia 0 aduna toate locatiile, pentru cazul in care cursa nu are inca beneficiar.
+     *
+     * @return array<int, array<int, string>>
+     */
+    public function getExpenseLocationsByBeneficiary(): array
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $sql = "
+            SELECT c.beneficiar_id AS beneficiar_id, e.locatie AS value
+            FROM curse_cheltuieli e
+            INNER JOIN curse_dispecer c ON c.id = e.cursa_id
+            WHERE e.locatie IS NOT NULL AND e.locatie <> ''
+            UNION ALL
+            SELECT c.beneficiar_id AS beneficiar_id, e.refacturare_locatie AS value
+            FROM curse_cheltuieli e
+            INNER JOIN curse_dispecer c ON c.id = e.cursa_id
+            WHERE e.refacturare_locatie IS NOT NULL AND e.refacturare_locatie <> ''
+        ";
+
+        $grouped = [];
+        foreach ($this->db->query($sql)->fetchAll() as $row) {
+            $value = trim((string) ($row['value'] ?? ''));
+            if ($value === '') {
+                continue;
+            }
+
+            $beneficiaryId = (int) ($row['beneficiar_id'] ?? 0);
+            $grouped[$beneficiaryId][] = $value;
+            $grouped[0][] = $value;
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * Locatiile distincte deja folosite pe taxele de drum, pentru autocomplete.
+     * Deduplicare case-insensitive: pastram prima varianta scrisa de utilizator.
+     */
+    public function getExpenseLocationSuggestions(): array
+    {
+        $this->ensureExpenseCategorySchema();
+
+        $sql = "
+            SELECT locatie AS value FROM curse_cheltuieli WHERE locatie IS NOT NULL AND locatie <> ''
+            UNION ALL
+            SELECT refacturare_locatie AS value FROM curse_cheltuieli WHERE refacturare_locatie IS NOT NULL AND refacturare_locatie <> ''
+        ";
+
+        $rows = $this->db->query($sql)->fetchAll(PDO::FETCH_COLUMN);
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        $unique = [];
+        foreach ($rows as $row) {
+            $value = trim((string) $row);
+            if ($value === '') {
+                continue;
+            }
+            $key = mb_strtolower($value, 'UTF-8');
+            if (!isset($unique[$key])) {
+                $unique[$key] = $value;
+            }
+        }
+
+        $values = array_values($unique);
+        usort($values, static function (string $a, string $b): int {
+            return strnatcasecmp($a, $b);
+        });
+
+        return $values;
     }
 
     public function deleteExpense(int $id): bool

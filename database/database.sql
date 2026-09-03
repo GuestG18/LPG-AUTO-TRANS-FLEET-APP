@@ -1078,7 +1078,10 @@ CREATE TABLE categorii_cheltuieli_curse (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO categorii_cheltuieli_curse (nume, descriere, activ, legacy_key, created_at, updated_at) VALUES
-('Taxe drum', 'Categorie implicita pentru cheltuieli curse.', 1, 'taxe_drum', NOW(), NOW()),
+('Taxe drum', 'Categorie retrasa, pastrata pentru cheltuielile deja salvate.', 0, 'taxe_drum', NOW(), NOW()),
+('Taxa acces', 'Categorie implicita pentru cheltuieli curse.', 1, 'taxa_acces', NOW(), NOW()),
+('Port', 'Categorie implicita pentru cheltuieli curse.', 1, 'port', NOW(), NOW()),
+('Trecere', 'Categorie implicita pentru cheltuieli curse.', 1, 'trece', NOW(), NOW()),
 ('Diurna', 'Categorie implicita pentru cheltuieli curse.', 1, 'diurna', NOW(), NOW()),
 ('Reparatii', 'Categorie implicita pentru cheltuieli curse.', 1, 'service', NOW(), NOW()),
 ('Alte cheltuieli', 'Categorie implicita pentru cheltuieli curse.', 1, 'alte', NOW(), NOW());
@@ -1086,9 +1089,16 @@ INSERT INTO categorii_cheltuieli_curse (nume, descriere, activ, legacy_key, crea
 CREATE TABLE curse_cheltuieli (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     cursa_id INT UNSIGNED NOT NULL,
-    tip_cheltuiala ENUM('motorina', 'taxe_drum', 'diurna', 'service', 'alte') NOT NULL,
+    tip_cheltuiala ENUM('motorina', 'taxa_acces', 'port', 'trece', 'taxe_drum', 'diurna', 'service', 'alte') NOT NULL,
     categorie_id INT UNSIGNED NULL,
-    refacturare_tip_cheltuiala ENUM('motorina', 'taxe_drum', 'diurna', 'service', 'alte') NULL,
+    -- Taxele de drum se inregistreaza pe randuri separate: suma = bucati x pret_unitar.
+    locatie VARCHAR(190) NULL,
+    bucati DECIMAL(12,2) NULL,
+    pret_unitar DECIMAL(12,2) NULL,
+    refacturare_tip_cheltuiala ENUM('motorina', 'taxa_acces', 'port', 'trece', 'taxe_drum', 'diurna', 'service', 'alte') NULL,
+    refacturare_locatie VARCHAR(190) NULL,
+    refacturare_bucati DECIMAL(12,2) NULL,
+    refacturare_pret_unitar DECIMAL(12,2) NULL,
     refacturare_detalii TEXT NULL,
     refacturare_suma DECIMAL(12,2) NULL,
     refacturare_data DATE NULL,
@@ -1105,6 +1115,7 @@ CREATE TABLE curse_cheltuieli (
     updated_at DATETIME NOT NULL,
     INDEX idx_curse_cheltuieli_cursa (cursa_id),
     INDEX idx_curse_cheltuieli_categorie (categorie_id),
+    INDEX idx_curse_cheltuieli_locatie (locatie),
     INDEX idx_curse_cheltuieli_added_by (added_by),
     INDEX idx_curse_cheltuieli_data (data_cheltuiala),
     CONSTRAINT fk_curse_cheltuieli_cursa FOREIGN KEY (cursa_id) REFERENCES curse_dispecer(id) ON DELETE CASCADE,

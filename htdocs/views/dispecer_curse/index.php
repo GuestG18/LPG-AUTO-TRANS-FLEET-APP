@@ -318,6 +318,15 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                 </div>
                 <div class="orx-filters">
                     <div class="orx-select-wrap">
+                        <i class="bi bi-sort-down" aria-hidden="true"></i>
+                        <select class="orx-transport-select" data-orx-sort aria-label="Ordonare curse">
+                            <option value="created_desc">Cele mai nou adăugate</option>
+                            <option value="created_asc">Cele mai vechi adăugate</option>
+                            <option value="start_desc">Data cursei: descrescător</option>
+                            <option value="start_asc">Data cursei: crescător</option>
+                        </select>
+                    </div>
+                    <div class="orx-select-wrap">
                         <i class="bi bi-truck" aria-hidden="true"></i>
                         <select class="orx-transport-select" data-orx-transport aria-label="Filtrare după tip transport">
                             <option value="">Tip transport</option>
@@ -402,6 +411,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                         $openStartDate = trim((string) ($openRace['data_inceput'] ?? ''));
                         $openStartTime = trim((string) ($openRace['ora_inceput'] ?? ''));
                         $openUpdatedAt = trim((string) ($openRace['updated_at'] ?? ''));
+                        $openCreatedAt = trim((string) ($openRace['created_at'] ?? ''));
                         $openExpenseCount = max(0, (int) ($openRace['expense_count'] ?? 0));
                         $openVehiclePhotoUrl = vehicle_image_url((string) ($openRace['poza_stocata'] ?? ''));
                         $openVehiclePhotoAlt = trim((string) ($openRace['poza_original'] ?? ''));
@@ -423,6 +433,9 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                         data-orx-severity-value="<?= e($openSeverity) ?>"
                         data-orx-transport-value="<?= e($openTransportType) ?>"
                         data-orx-plate-value="<?= e($openPlate) ?>"
+                        data-orx-created-value="<?= e($openCreatedAt) ?>"
+                        data-orx-start-value="<?= e($openStartDate) ?>"
+                        data-orx-id-value="<?= e((string) $openRaceId) ?>"
                     >
                         <div class="orx-card-main">
                             <div class="orx-card-avatar <?= $openVehiclePhotoUrl !== null ? 'has-photo' : '' ?>" aria-hidden="true">
@@ -446,6 +459,8 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                     <span><i class="bi bi-building" aria-hidden="true"></i> <?= e($openBeneficiar !== '' ? $openBeneficiar : '-') ?></span>
                                 </div>
                                 <div class="orx-card-meta">
+                                    <span><i class="bi bi-plus-circle" aria-hidden="true"></i> Adăugat: <?= e($openCreatedAt !== '' ? format_datetime_ro($openCreatedAt) : '-') ?></span>
+                                    <span class="orx-meta-sep">|</span>
                                     <span><i class="bi bi-calendar3" aria-hidden="true"></i> Actualizat: <?= e($openUpdatedAt !== '' ? format_datetime_ro($openUpdatedAt) : '-') ?></span>
                                     <span class="orx-meta-sep">|</span>
                                     <span><i class="bi bi-calendar-event" aria-hidden="true"></i> Start: <?= e($openStartDate !== '' ? format_date_ro($openStartDate) : '-') ?></span>
@@ -3176,6 +3191,56 @@ document.addEventListener('DOMContentLoaded', function () {
                 orxPlatesAllEl.indeterminate = selected.length > 0 && selected.length < total;
             }
         };
+
+        var orxSortSelectEl = openRacesModalEl.querySelector('[data-orx-sort]');
+
+        /**
+         * Reordoneaza cardurile in DOM dupa criteriul ales.
+         * Cardurile fara data folosita la sortare raman la coada, ca sa nu sara in fata.
+         */
+        var applyOpenRacesSort = function () {
+            var mode = orxSortSelectEl instanceof HTMLSelectElement ? orxSortSelectEl.value : 'created_desc';
+            var cards = Array.prototype.slice.call(openRacesModalEl.querySelectorAll('[data-open-race-card]'));
+            if (cards.length === 0) {
+                return;
+            }
+
+            var container = cards[0].parentNode;
+            if (!container) {
+                return;
+            }
+
+            var attr = mode.indexOf('start') === 0 ? 'data-orx-start-value' : 'data-orx-created-value';
+            var descending = mode.indexOf('_desc') !== -1;
+
+            cards.sort(function (a, b) {
+                var aValue = String(a.getAttribute(attr) || '');
+                var bValue = String(b.getAttribute(attr) || '');
+                if (aValue === '' && bValue !== '') {
+                    return 1;
+                }
+                if (bValue === '' && aValue !== '') {
+                    return -1;
+                }
+                if (aValue !== bValue) {
+                    return descending ? (aValue < bValue ? 1 : -1) : (aValue > bValue ? 1 : -1);
+                }
+
+                var aId = parseInt(a.getAttribute('data-orx-id-value') || '0', 10);
+                var bId = parseInt(b.getAttribute('data-orx-id-value') || '0', 10);
+                return descending ? bId - aId : aId - bId;
+            });
+
+            cards.forEach(function (cardEl) {
+                container.appendChild(cardEl);
+            });
+        };
+
+        if (orxSortSelectEl instanceof HTMLSelectElement) {
+            orxSortSelectEl.addEventListener('change', function () {
+                applyOpenRacesSort();
+            });
+        }
 
         var applyOpenRacesFilters = function () {
             var transport = orxTransportSelectEl instanceof HTMLSelectElement ? orxTransportSelectEl.value : '';

@@ -323,6 +323,16 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
                                         $historyTaxNotes[] = $taxLabel . ': ' . format_number_ro($qty, 2) . ' × ' . format_number_ro($price, 2);
                                     }
                                 }
+                                // Taxele de drum inregistrate ca randuri separate isi poarta locatia pe rand.
+                                $historyLocation = trim((string) (($historyRow['refacturare_locatie'] ?? '') ?: ($historyRow['locatie'] ?? '')));
+                                if ($historyLocation !== '') {
+                                    $historyPrimaryDetail = $historyLocation;
+                                    $historyQty = (float) (($historyRow['refacturare_bucati'] ?? 0) ?: ($historyRow['bucati'] ?? 0));
+                                    $historyUnitPrice = (float) (($historyRow['refacturare_pret_unitar'] ?? 0) ?: ($historyRow['pret_unitar'] ?? 0));
+                                    if ($historyQty > 0 && $historyUnitPrice > 0) {
+                                        $historyTaxNotes[] = format_number_ro($historyQty, 2) . ' buc × ' . format_number_ro($historyUnitPrice, 2);
+                                    }
+                                }
                                 $historySecondaryDetail = $historyTaxNotes !== []
                                     ? implode(' | ', $historyTaxNotes)
                                     : trim(implode(' ', array_slice($historyObsLines, 1)));
