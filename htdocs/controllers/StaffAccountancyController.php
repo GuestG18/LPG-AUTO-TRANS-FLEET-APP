@@ -41,6 +41,9 @@ class StaffAccountancyController
                 $this->updateStaffAction();
                 return;
             case 'end_activity':
+                if (function_exists('can') && !can('contabilitate_personal', 'end_activity')) {
+                    access_deny_403();
+                }
                 $this->endActivityAction();
                 return;
             case 'delete_staff':
@@ -63,6 +66,18 @@ class StaffAccountancyController
                 ]);
                 return;
         }
+    }
+
+    /**
+     * Punct de intrare pentru incheierea colaborarii declansata din lista Soferi
+     * (?page=soferi&action=end_employment). Dreptul este validat de ModuleController
+     * pe cheia 'soferi.end_employment', deci nu mai cerem acces la Contabilitate Personal.
+     */
+    public function endDriverEmployment(): void
+    {
+        $_POST['source_type'] = 'driver';
+        $_POST['return_to'] = 'soferi';
+        $this->endActivityAction();
     }
 
     public function handleFormerEmployees(string $action): void
@@ -621,8 +636,13 @@ class StaffAccountancyController
 
     private function endActivityAction(): void
     {
-        $this->requirePost('contabilitate_personal');
-        ensure_csrf_or_redirect($this->indexUrl());
+        // Actiunea poate fi declansata si din lista Soferi, unde utilizatorul nu are
+        // neaparat acces la Contabilitate Personal: intoarcerea se face pe pagina de origine.
+        $returnUrl = $this->terminationReturnUrl();
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($returnUrl);
+        }
+        ensure_csrf_or_redirect($returnUrl);
 
         $sourceType = $this->normalizeSourceType((string) ($_POST['source_type'] ?? ''));
         $sourceId = (int) ($_POST['source_id'] ?? 0);

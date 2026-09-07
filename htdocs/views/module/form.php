@@ -1060,8 +1060,12 @@ document.addEventListener('DOMContentLoaded', function () {
                     $originalField = $meta['original_field'] ?? null;
                     $removeField = $meta['remove_field'] ?? null;
                     $previewType = $meta['preview_type'] ?? 'document';
+                    $colClass = trim((string) ($meta['col_class'] ?? 'col-12 col-md-6'));
+                    if ($colClass === '') {
+                        $colClass = 'col-12 col-md-6';
+                    }
                     ?>
-                    <div class="col-12 col-md-6" data-field="<?= e((string) $field) ?>">
+                    <div class="<?= e($colClass) ?>" data-field="<?= e((string) $field) ?>">
                         <label for="<?= e($id) ?>" class="form-label">
                             <?= e($meta['label']) ?>
                             <?php if ($required): ?><span class="text-danger">*</span><?php endif; ?>

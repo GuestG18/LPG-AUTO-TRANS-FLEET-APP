@@ -123,6 +123,7 @@ class DashboardAnaliticV2Model extends BaseModel
 
         $fleet = $this->buildFleetKpis($fleetRow, $usage, $beneficiaries);
         $summary = $this->buildSummary($transportRows, $matrixRows);
+        $distribution = $this->buildDistribution($from, $whereData, $expr, $this->kmThresholds($filters));
         $alerts = $this->buildAlerts($vehicles, $drivers, $beneficiaries, $fleet);
 
         return [
@@ -131,6 +132,7 @@ class DashboardAnaliticV2Model extends BaseModel
             'drivers' => $drivers,
             'beneficiaries' => $beneficiaries,
             'summary' => $summary,
+            'distribution' => $distribution + ['km_thresholds' => $this->kmThresholds($filters)],
             'daily' => $daily,
             'alerts' => $alerts,
             'labels' => [
@@ -165,6 +167,10 @@ class DashboardAnaliticV2Model extends BaseModel
             'drivers' => [],
             'beneficiaries' => [],
             'summary' => $this->buildSummary([], []),
+            'distribution' => [
+                'bands' => [], 'capacities' => [], 'cells' => [], 'trips' => [],
+                'km_thresholds' => $this->kmThresholds($filters),
+            ],
             'daily' => [
                 'labels' => [], 'facturare' => [], 'refacturare' => [], 'cheltuieli' => [],
                 'profit' => [], 'km' => [], 'tone' => [], 'curse' => [],
@@ -182,6 +188,246 @@ class DashboardAnaliticV2Model extends BaseModel
                 'zile_lucratoare' => 0,
             ],
         ];
+    }
+
+    // ------------------------------------------- distributie km x capacitate
+
+    /** Pragurile implicite pentru intervalele de km (limite superioare, exclusive). */
+    private const KM_THRESHOLDS_DEFAULT = [100, 250, 500, 750, 1000];
+
+    /** Cate praguri acceptam, ca sa nu se ajunga la zeci de intervale. */
+    private const KM_THRESHOLDS_MAX = 8;
+
+    /** Cate curse pot fi trimise pentru graficul cu puncte individuale. */
+    private const TRIP_POINTS_LIMIT = 2000;
+
+    /**
+     * Pragurile cerute de utilizator, validate: numere pozitive, crescatoare, fara duplicate.
+     * Orice valoare invalida duce la pragurile implicite, ca graficul sa nu ramana gol.
+     */
+    private function kmThresholds(array $filters): array
+    {
+        $raw = $filters['km_bands'] ?? [];
+        if (!is_array($raw)) {
+            $raw = preg_split('/[,\s]+/', trim((string) $raw)) ?: [];
+        }
+
+        $clean = [];
+        foreach ($raw as $value) {
+            $normalized = str_replace(',', '.', trim((string) $value));
+            if ($normalized === '' || !is_numeric($normalized)) {
+                continue;
+            }
+
+            $number = (int) round((float) $normalized);
+            if ($number > 0) {
+                $clean[$number] = $number;
+            }
+        }
+
+        $clean = array_values($clean);
+        sort($clean);
+
+        if ($clean === []) {
+            return self::KM_THRESHOLDS_DEFAULT;
+        }
+
+        return array_slice($clean, 0, self::KM_THRESHOLDS_MAX);
+    }
+
+    /**
+     * Intervalele derivate din praguri: "Fără km", apoi cate un interval intre
+     * praguri consecutive si unul deschis la final.
+     *
+     * @return array<int,array{key:string,label:string}>
+     */
+    private function kmBandDefinitions(array $thresholds): array
+    {
+        $bands = [['key' => 'fara_km', 'label' => 'Fără km']];
+
+        foreach ($thresholds as $index => $threshold) {
+            $lower = $index === 0 ? 1 : $thresholds[$index - 1];
+            $bands[] = [
+                'key' => 'band_' . $index,
+                'label' => $index === 0
+                    ? 'sub ' . format_number_ro($threshold, 0) . ' km'
+                    : format_number_ro($lower, 0) . ' – ' . format_number_ro($threshold - 1, 0) . ' km',
+            ];
+        }
+
+        $last = $thresholds[count($thresholds) - 1];
+        $bands[] = ['key' => 'band_max', 'label' => 'de la ' . format_number_ro($last, 0) . ' km'];
+
+        return $bands;
+    }
+
+    private function kmBandExpr(array $e, array $thresholds): string
+    {
+        $km = '(' . $e['km_effective'] . ')';
+        $sql = "CASE WHEN {$km} <= 0 THEN 'fara_km'";
+
+        foreach ($thresholds as $index => $threshold) {
+            $sql .= " WHEN {$km} < " . (int) $threshold . " THEN 'band_" . (int) $index . "'";
+        }
+
+        return $sql . " ELSE 'band_max' END";
+    }
+
+    /**
+     * Curse grupate pe interval de km si capacitate de transport, plus punctele
+     * individuale pentru graficul de dispersie. Cursele fara capacitate configurata
+     * nu sunt aruncate, ci grupate separat, ca sa se vada cate sunt.
+     */
+    private function buildDistribution(string $from, array $whereData, array $e, array $thresholds): array
+    {
+        $bandDefinitions = $this->kmBandDefinitions($thresholds);
+
+        $rows = $this->fetchAll("
+            SELECT
+                " . $this->kmBandExpr($e, $thresholds) . " AS km_band,
+                c.capacitate_transport AS capacitate,
+                COUNT(*) AS curse,
+                COALESCE(SUM(" . $e['km_effective'] . "), 0) AS km,
+                COALESCE(SUM(" . $e['tons_delivered'] . "), 0) AS tone,
+                COALESCE(SUM(" . $e['facturare'] . "), 0) AS facturare,
+                COALESCE(SUM(" . $e['cheltuieli'] . "), 0) AS cheltuieli,
+                COALESCE(AVG(" . $e['grad_incarcare_efectiv'] . "), 0) AS grad_incarcare
+            {$from}
+            {$whereData['where']}
+            GROUP BY km_band, c.capacitate_transport
+        ", $whereData['params']);
+
+        $bandsUsed = [];
+        $capacitiesUsed = [];
+        $cells = [];
+
+        foreach ($rows as $row) {
+            $band = (string) ($row['km_band'] ?? 'fara_km');
+            $rawCapacity = $row['capacitate'];
+            $hasCapacity = $rawCapacity !== null && (float) $rawCapacity > 0;
+            $capacityKey = $hasCapacity ? number_format((float) $rawCapacity, 2, '.', '') : 'fara_capacitate';
+
+            $bandsUsed[$band] = true;
+            $capacitiesUsed[$capacityKey] = $hasCapacity ? (float) $rawCapacity : -1.0;
+
+            $facturare = (float) ($row['facturare'] ?? 0);
+            $cheltuieli = (float) ($row['cheltuieli'] ?? 0);
+            $curse = (int) ($row['curse'] ?? 0);
+            $km = max(0.0, (float) ($row['km'] ?? 0));
+            $tone = max(0.0, (float) ($row['tone'] ?? 0));
+
+            // Mai multe randuri pot cadea in aceeasi celula (de exemplu capacitate NULL
+            // si capacitate 0 inseamna amandoua "fara capacitate"), deci acumulam.
+            $cellKey = $band . '|' . $capacityKey;
+            if (!isset($cells[$cellKey])) {
+                $cells[$cellKey] = [
+                    'band' => $band,
+                    'capacitate' => $capacityKey,
+                    'curse' => 0,
+                    'km' => 0.0,
+                    'tone' => 0.0,
+                    'facturare' => 0.0,
+                    'cheltuieli' => 0.0,
+                    'grad_suma' => 0.0,
+                    'grad_curse' => 0,
+                ];
+            }
+
+            $cells[$cellKey]['curse'] += $curse;
+            $cells[$cellKey]['km'] += $km;
+            $cells[$cellKey]['tone'] += $tone;
+            $cells[$cellKey]['facturare'] += $facturare;
+            $cells[$cellKey]['cheltuieli'] += $cheltuieli;
+            if ($hasCapacity) {
+                // media gradului de incarcare se pondereaza cu numarul de curse
+                $cells[$cellKey]['grad_suma'] += ((float) ($row['grad_incarcare'] ?? 0)) * $curse;
+                $cells[$cellKey]['grad_curse'] += $curse;
+            }
+        }
+
+        foreach ($cells as $key => $cell) {
+            $curse = (int) $cell['curse'];
+            $cells[$key] = [
+                'band' => $cell['band'],
+                'capacitate' => $cell['capacitate'],
+                'curse' => $curse,
+                'km' => round((float) $cell['km'], 2),
+                'tone' => round((float) $cell['tone'], 2),
+                'facturare' => round((float) $cell['facturare'], 2),
+                'profit' => round((float) $cell['facturare'] - (float) $cell['cheltuieli'], 2),
+                'grad_incarcare' => $cell['grad_curse'] > 0 ? round($cell['grad_suma'] / $cell['grad_curse'], 2) : 0.0,
+                'km_per_cursa' => $curse > 0 ? round((float) $cell['km'] / $curse, 2) : 0.0,
+                'tone_per_cursa' => $curse > 0 ? round((float) $cell['tone'] / $curse, 2) : 0.0,
+            ];
+        }
+
+        // pastram ordinea logica a intervalelor, nu pe cea din baza de date
+        $bands = [];
+        foreach ($bandDefinitions as $definition) {
+            if (isset($bandsUsed[$definition['key']])) {
+                $bands[] = $definition;
+            }
+        }
+
+        // capacitatile crescator, cu "fara capacitate" la final
+        asort($capacitiesUsed);
+        $capacities = [];
+        foreach ($capacitiesUsed as $key => $value) {
+            if ($key === 'fara_capacitate') {
+                continue;
+            }
+            $capacities[] = ['key' => $key, 'label' => format_number_ro($value, 2) . ' t', 'value' => $value];
+        }
+        if (isset($capacitiesUsed['fara_capacitate'])) {
+            $capacities[] = ['key' => 'fara_capacitate', 'label' => 'Fără capacitate', 'value' => 0.0];
+        }
+
+        return [
+            'bands' => $bands,
+            'capacities' => $capacities,
+            'cells' => array_values($cells),
+            'trips' => $this->fetchTripPoints($from, $whereData, $e),
+        ];
+    }
+
+    /** Puncte individuale (o cursa = un punct) pentru graficul km vs. capacitate. */
+    private function fetchTripPoints(string $from, array $whereData, array $e): array
+    {
+        $limit = self::TRIP_POINTS_LIMIT;
+
+        $rows = $this->fetchAll("
+            SELECT
+                c.data_inceput AS data,
+                COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut') AS vehicul,
+                COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fara beneficiar') AS beneficiar,
+                " . $e['bucket'] . " AS bucket,
+                c.capacitate_transport AS capacitate,
+                (" . $e['km_effective'] . ") AS km,
+                (" . $e['tons_delivered'] . ") AS tone,
+                (" . $e['grad_incarcare_efectiv'] . ") AS grad_incarcare
+            {$from}
+            {$whereData['where']}
+            ORDER BY c.data_inceput DESC, c.id DESC
+            LIMIT {$limit}
+        ", $whereData['params']);
+
+        $points = [];
+        foreach ($rows as $row) {
+            $capacity = $row['capacitate'];
+
+            $points[] = [
+                'data' => (string) ($row['data'] ?? ''),
+                'vehicul' => (string) ($row['vehicul'] ?? ''),
+                'beneficiar' => (string) ($row['beneficiar'] ?? ''),
+                'bucket' => (string) ($row['bucket'] ?? 'necunoscut'),
+                'capacitate' => ($capacity === null || (float) $capacity <= 0) ? null : round((float) $capacity, 2),
+                'km' => round((float) ($row['km'] ?? 0), 2),
+                'tone' => round((float) ($row['tone'] ?? 0), 2),
+                'grad_incarcare' => $row['grad_incarcare'] === null ? null : round((float) $row['grad_incarcare'], 2),
+            ];
+        }
+
+        return $points;
     }
 
     // ------------------------------------------------------ detaliu pe entitate

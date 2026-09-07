@@ -289,6 +289,10 @@ class AccessRightsController
                 if (($meta['admin'] ?? false) === true && $rol !== 'admin') {
                     continue;
                 }
+                // actiunile marcate contabilitate raman pentru admin / contabilitate
+                if (($meta['accountancy'] ?? false) === true && !in_array($rol, ['admin', 'contabilitate'], true)) {
+                    continue;
+                }
                 $granted[$pageKey][(string) $actionKey] = true;
             }
         }

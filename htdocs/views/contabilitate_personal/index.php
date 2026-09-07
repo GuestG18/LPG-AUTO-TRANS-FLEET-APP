@@ -366,6 +366,8 @@ $addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static funct
                         $sourceId = (int) ($row['source_id'] ?? 0);
                         $staffTypeId = (int) ($row['staff_type_id'] ?? 0);
                         $canDelete = $sourceType === 'staff' && (int) ($row['can_delete'] ?? 0) === 1;
+                        // Dreptul granular "Incheiere activitate" din Drepturi de acces.
+                        $canEndActivity = !function_exists('can') || can('contabilitate_personal', 'end_activity');
                         $isTerminated = (string) ($row['employment_status'] ?? 'active') === 'terminated' || !empty($row['termination_effective_date']);
                         $isActive = !$isTerminated;
                         $category = (string) ($row['category'] ?? 'operational');
@@ -444,12 +446,12 @@ $addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static funct
                                             <?php endif; ?>
                                         </li>
                                         <li>
-                                            <?php if ($isActive): ?>
+                                            <?php if ($isActive && $canEndActivity): ?>
                                                 <button type="button" class="dropdown-item accountancy-action-menu-item" data-bs-toggle="modal" data-bs-target="#endActivityModal<?= e($rowId) ?>">
                                                     <i class="bi bi-person-dash" aria-hidden="true"></i>
                                                     <span>Încetează activitatea</span>
                                                 </button>
-                                            <?php else: ?>
+                                            <?php elseif ($isTerminated): ?>
                                                 <button type="button" class="dropdown-item accountancy-action-menu-item" disabled>
                                                     <i class="bi bi-person-dash" aria-hidden="true"></i>
                                                     <span>Activitate încetată</span>
@@ -569,6 +571,7 @@ $addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static funct
                             </div>
                         <?php endif; ?>
 
+                        <?php if ($isActive && $canEndActivity): ?>
                         <div class="modal fade" id="endActivityModal<?= e($rowId) ?>" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-lg">
                                 <div class="modal-content">
@@ -644,6 +647,7 @@ $addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static funct
                                 </div>
                             </div>
                         </div>
+                        <?php endif; ?>
 
                         <div class="modal fade" id="salaryModal<?= e($rowId) ?>" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-lg">

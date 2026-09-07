@@ -1213,6 +1213,8 @@ class DispecerCurseController
             $result = $this->model->createRaceAndSyncVehicleKm($data);
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
             $raceId = (int) ($result['race_id'] ?? 0);
+            // Cursa noua poate prelua cazari introduse inainte de ea (vezi modulul Cazare).
+            $this->rematchAccommodationExpenses();
             $this->persistTariffTraceability($raceId, $data);
             $resourcesForTripApproval = $this->resourcesForTripInactiveApprovalCreation($inactiveResources, $approvalDecision);
             if ($raceId > 0 && $resourcesForTripApproval !== []) {
@@ -1457,6 +1459,8 @@ class DispecerCurseController
             }
 
             $result = $this->model->updateRaceAndSyncVehicleKm($raceId, $data, $this->currentUserId());
+            // Perioada cursei se poate schimba: reevaluam cazarile in asteptare.
+            $this->rematchAccommodationExpenses();
             if ($explicitRecalculation) {
                 $this->persistTariffTraceability($raceId, $data);
             }
@@ -2236,6 +2240,12 @@ class DispecerCurseController
         $existingExpense = null;
         if ($expenseId > 0) {
             $existingExpense = $this->model->getExpenseById($expenseId);
+            // Cheltuielile de cazare sunt intretinute de modulul Cazare (rand-oglinda):
+            // editarea lor aici ar desincroniza cele doua tabele.
+            if ($existingExpense !== null && (int) ($existingExpense['cazare_id'] ?? 0) > 0) {
+                flash_set('warning', 'Cheltuiala de cazare se modifica din pagina Cazare.');
+                redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
+            }
             if ($existingExpense === null || (int) ($existingExpense['cursa_id'] ?? 0) !== $raceId) {
                 flash_set('warning', 'Cheltuiala selectatÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ nu existÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ pentru aceastÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ cursÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢.');
                 redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
@@ -2373,6 +2383,21 @@ class DispecerCurseController
         redirect(build_query_url($successRedirect));
     }
 
+    /**
+     * Reruleaza asocierea cazarilor in asteptare dupa ce o cursa a fost creata sau
+     * modificata. Esecul nu trebuie sa blocheze salvarea cursei.
+     */
+    private function rematchAccommodationExpenses(): void
+    {
+        try {
+            $accommodationModel = new AccommodationExpenseModel($this->db);
+            $accommodationModel->ensureSchema();
+            $accommodationModel->rematchPending();
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][rematch_cazare] ' . $exception->getMessage());
+        }
+    }
+
     private function deleteExpenseAction(): void
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -2396,6 +2421,11 @@ class DispecerCurseController
         $expense = $this->model->getExpenseById($expenseId);
         if ($expense === null || (int) ($expense['cursa_id'] ?? 0) !== $raceId) {
             flash_set('warning', 'Cheltuiala selectatÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ nu existÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ pentru aceastÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ cursÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢.');
+            redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
+        }
+
+        if ((int) ($expense['cazare_id'] ?? 0) > 0) {
+            flash_set('warning', 'Cheltuiala de cazare se sterge din pagina Cazare.');
             redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
         }
 

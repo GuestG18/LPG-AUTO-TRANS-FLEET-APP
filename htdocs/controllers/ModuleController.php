@@ -139,6 +139,9 @@ class ModuleController
             case 'delete':
                 $this->deleteAction($moduleKey, $module);
                 return;
+            case 'end_employment':
+                $this->endDriverEmploymentAction($moduleKey);
+                return;
             case 'show':
                 $this->showAction($moduleKey, $module);
                 return;
@@ -3882,6 +3885,31 @@ class ModuleController
         redirect($this->formerDriverRedirectUrl($record));
     }
 
+    /**
+     * Incheierea colaborarii cu un sofer (demisie / concediere) direct din lista Soferi.
+     *
+     * Logica de business ramane in StaffAccountancyController: aici doar validam
+     * dreptul granular 'soferi.end_employment', ca utilizatorii fara acces la
+     * pagina Contabilitate Personal sa poata primi doar aceasta capabilitate.
+     */
+    private function endDriverEmploymentAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'soferi') {
+            http_response_code(404);
+            render('errors/404.php', [
+                'pageTitle' => 'Actiune inexistenta',
+                'currentPage' => $moduleKey,
+            ]);
+            return;
+        }
+
+        if (function_exists('can') && !can('soferi', 'end_employment')) {
+            access_deny_403();
+        }
+
+        (new StaffAccountancyController($this->db))->endDriverEmployment();
+    }
+
     private function deleteAction(string $moduleKey, array $module): void
     {
         $routePage = $this->moduleRoutePage($moduleKey, $module);
@@ -5102,6 +5130,12 @@ class ModuleController
             )
         ) {
             return 'Structura bazei de date pentru campul Garaj nu este actualizata. Ruleaza scriptul database/update_vehicle_garaj.sql, apoi incearca din nou.';
+        }
+
+        if ($moduleKey === 'vehicule'
+            && str_contains($exceptionMessage, 'an_fabricatie_rezervor')
+        ) {
+            return 'Structura bazei de date pentru campul An fabricatie rezervor nu este actualizata. Ruleaza scriptul database/update_vehicle_an_fabricatie_rezervor.sql, apoi incearca din nou.';
         }
 
         if ($moduleKey === 'vehicule'

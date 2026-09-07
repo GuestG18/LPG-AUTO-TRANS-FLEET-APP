@@ -165,8 +165,9 @@ if (
                 </div>
                 <?php endif; ?>
                 <?php
-                $isDriverNavGroup = in_array($currentRoutePage, ['soferi', 'documente_soferi', 'istoric_activitati_sofer'], true) || $currentPage === 'soferi';
-                $drvShow = $can('soferi') || $can('documente_soferi') || $can('istoric_activitati_sofer');
+                $isDriverNavGroup = in_array($currentRoutePage, ['soferi', 'documente_soferi', 'echipamente_soferi', 'istoric_activitati_sofer'], true)
+                    || in_array($currentPage, ['soferi', 'echipamente_soferi'], true);
+                $drvShow = $can('soferi') || $can('documente_soferi') || $can('echipamente_soferi') || $can('istoric_activitati_sofer');
                 ?>
                 <?php if ($drvShow): ?>
                 <div class="sidebar-nav-group">
@@ -186,6 +187,7 @@ if (
                         <div class="sidebar-submenu">
                             <?php if ($can('soferi')): ?><a class="nav-link <?= $currentRoutePage === 'soferi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'soferi'])) ?>">Lista soferi</a><?php endif; ?>
                             <?php if ($can('documente_soferi')): ?><a class="nav-link <?= $currentRoutePage === 'documente_soferi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'documente_soferi'])) ?>">Documente Soferi</a><?php endif; ?>
+                            <?php if ($can('echipamente_soferi')): ?><a class="nav-link <?= $currentPage === 'echipamente_soferi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'echipamente_soferi'])) ?>">Echipamente &#537;oferi</a><?php endif; ?>
                             <?php if ($can('istoric_activitati_sofer')): ?><a class="nav-link <?= $currentRoutePage === 'istoric_activitati_sofer' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'istoric_activitati_sofer'])) ?>">Istoric Activitati Soferi</a><?php endif; ?>
                         </div>
                     </div>
@@ -193,6 +195,7 @@ if (
                 <?php endif; ?>
                 <?php if ($can('contabilitate_personal')): ?><a class="nav-link <?= $currentPage === 'contabilitate_personal' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'contabilitate_personal'])) ?>"><i class="bi bi-person-badge" aria-hidden="true"></i><span>Contabilitate Personal</span></a><?php endif; ?>
                 <?php if ($can('cheltuieli')): ?><a class="nav-link <?= $currentPage === 'cheltuieli' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cheltuieli'])) ?>"><i class="bi bi-wallet2" aria-hidden="true"></i><span>Cheltuieli</span></a><?php endif; ?>
+                <?php if ($can('cazare')): ?><a class="nav-link <?= $currentPage === 'cazare' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cazare'])) ?>"><i class="bi bi-house-heart" aria-hidden="true"></i><span>Cazare</span></a><?php endif; ?>
                 <?php if ($can('cost_operational')): ?><a class="nav-link <?= $currentPage === 'cost_operational' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cost_operational'])) ?>"><i class="bi bi-graph-up" aria-hidden="true"></i><span>Cost opera&#539;ional / km</span></a><?php endif; ?>
                 <?php
                 $isTireModule = $currentPage === 'mentenanta' && in_array($currentAction, ['tire_stock', 'axis_config'], true);

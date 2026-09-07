@@ -311,6 +311,7 @@ require_once __DIR__ . '/models/DocumentModel.php';
 require_once __DIR__ . '/models/InactiveResourceApprovalModel.php';
 require_once __DIR__ . '/models/ApprovalEmailActionModel.php';
 require_once __DIR__ . '/models/VehicleEquipmentInventoryModel.php';
+require_once __DIR__ . '/models/DriverEquipmentModel.php';
 require_once __DIR__ . '/models/VehicleAuthorizationModel.php';
 require_once __DIR__ . '/models/DispecerCurseModel.php';
 require_once __DIR__ . '/models/DashboardAnaliticV2Model.php';
@@ -326,6 +327,7 @@ require_once __DIR__ . '/models/UserActivityModel.php';
 require_once __DIR__ . '/models/LeasingSchedulerModel.php';
 require_once __DIR__ . '/models/TransportTariffModel.php';
 require_once __DIR__ . '/models/OperationalCostModel.php';
+require_once __DIR__ . '/models/AccommodationExpenseModel.php';
 
 require_once __DIR__ . '/services/EntityStatusService.php';
 require_once __DIR__ . '/services/InactiveResourceStatusService.php';
@@ -358,6 +360,7 @@ require_once __DIR__ . '/controllers/InactiveResourceApprovalController.php';
 require_once __DIR__ . '/controllers/EmailApprovalController.php';
 require_once __DIR__ . '/controllers/ModuleController.php';
 require_once __DIR__ . '/controllers/VehicleEquipmentInventoryController.php';
+require_once __DIR__ . '/controllers/DriverEquipmentController.php';
 require_once __DIR__ . '/controllers/VehicleAuthorizationController.php';
 require_once __DIR__ . '/controllers/ProfileController.php';
 require_once __DIR__ . '/controllers/DispecerCurseController.php';
@@ -370,6 +373,7 @@ require_once __DIR__ . '/controllers/ProgramareConcediiController.php';
 require_once __DIR__ . '/controllers/NotificationRuleController.php';
 require_once __DIR__ . '/controllers/StaffAccountancyController.php';
 require_once __DIR__ . '/controllers/ExpenseController.php';
+require_once __DIR__ . '/controllers/AccommodationExpenseController.php';
 require_once __DIR__ . '/controllers/MaintenanceController.php';
 require_once __DIR__ . '/controllers/TechnicalHealthController.php';
 require_once __DIR__ . '/controllers/DriverActivityHistoryController.php';
@@ -559,6 +563,11 @@ try {
             (new DriverActivityHistoryController($db))->handle($action);
             break;
 
+        case 'echipamente_soferi':
+            require_auth();
+            (new DriverEquipmentController($db))->handle($action);
+            break;
+
         case 'stare_tehnica':
             require_auth();
             (new TechnicalHealthController($db))->handle($action);
@@ -655,6 +664,11 @@ try {
         case 'cheltuieli_administrative':
             require_auth();
             redirect(build_query_url(['page' => 'cheltuieli']));
+            break;
+
+        case 'cazare':
+            require_auth();
+            (new AccommodationExpenseController($db))->handle($action);
             break;
 
         case 'cost_operational':

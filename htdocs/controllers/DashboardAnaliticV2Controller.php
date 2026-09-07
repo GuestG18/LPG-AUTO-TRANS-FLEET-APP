@@ -116,6 +116,8 @@ class DashboardAnaliticV2Controller
             'transport_types' => $this->parseStringList($input['transport_types'] ?? ($input['tip_transport'] ?? '')),
             'transport_capacities' => $this->parseDecimalList($input['transport_capacities'] ?? ($input['capacitate_transport'] ?? '')),
             'statuses' => $this->parseStringList($input['statuses'] ?? ($input['status'] ?? '')),
+            // pragurile intervalelor de km; modelul le valideaza si revine la cele implicite
+            'km_bands' => $this->parseIntList($input['km_bands'] ?? ''),
         ];
     }
 

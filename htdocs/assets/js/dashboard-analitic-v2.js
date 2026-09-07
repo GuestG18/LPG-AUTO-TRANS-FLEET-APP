@@ -172,6 +172,12 @@
         rankMetric: 'profit',
         rankLimit: 10,
         scatterDimension: 'vehicles',
+        capacityView: 'distributie',
+        capacityMetric: 'curse',
+        capacityGrouping: 'clase',
+        kmThresholds: [100, 250, 500, 750, 1000],
+        capacityThresholds: [12, 20],
+        capacityStacked: true,
         compareDimension: 'vehicles',
         compareMetrics: { km_totali: true, tone_livrate: true, profit: true },
         compareSelection: { vehicles: [], drivers: [], beneficiaries: [] },
@@ -247,6 +253,11 @@
                 params.append(name + '[]', input.value);
             });
         });
+
+        // intervalele de km se taie pe server, deci pragurile trebuie trimise
+        if (state.kmThresholds && state.kmThresholds.length) {
+            params.set('km_bands', state.kmThresholds.join(','));
+        }
 
         return params;
     }
@@ -438,6 +449,7 @@
         renderEvolutionChart();
         renderTransportChart();
         renderKmChart();
+        renderCapacityChart();
         renderRankChart();
         renderScatterChart();
         renderCompare();
@@ -868,7 +880,10 @@
         var options = {
             responsive: true,
             maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
+            // Un singur element in tooltip, nu toata coloana: altfel, la 9 metrici
+            // suprapuse, tooltipul devine el insusi zgomot. `intersect: false` pastreaza
+            // tinta usor de nimerit - se ia elementul cel mai apropiat de cursor.
+            interaction: { mode: 'nearest', intersect: false },
             plugins: {
                 legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, padding: 14 } },
                 tooltip: { padding: 10, boxPadding: 4 }
@@ -1160,6 +1175,672 @@
         });
     }
 
+    /*
+     * Clase de capacitate. Capacitatile exacte (7 / 9,5 / 10 / 12 / 18 …) sunt un
+     * continuum, nu categorii: afisate individual dau zeci de bare subtiri, fiecare
+     * cu una-doua curse in spate. Gruparea pe clase reduce zgomotul si pastreaza
+     * intelesul; comutatorul "Toate capacitatile" ramane pentru analiza fina.
+     */
+    var CAPACITY_MISSING = { key: 'fara_capacitate', label: 'Fără capacitate', color: '#94a3b8', fill: '#cbd5e1' };
+
+    /** Clasele derivate din pragurile alese de utilizator (implicit 12 t si 20 t). */
+    function capacityClasses() {
+        var thresholds = state.capacityThresholds;
+        var classes = [];
+
+        thresholds.forEach(function (threshold, index) {
+            classes.push({
+                key: 'clasa_' + index,
+                label: index === 0
+                    ? 'Până în ' + nf2.format(threshold) + ' t'
+                    : nf2.format(thresholds[index - 1]) + ' – ' + nf2.format(threshold) + ' t',
+                max: threshold,
+                color: PALETTE[index % PALETTE.length]
+            });
+        });
+
+        classes.push({
+            key: 'clasa_max',
+            label: 'Peste ' + nf2.format(thresholds[thresholds.length - 1]) + ' t',
+            max: Infinity,
+            color: PALETTE[thresholds.length % PALETTE.length]
+        });
+
+        return classes;
+    }
+
+    function capacityClassFor(value, classes) {
+        for (var i = 0; i < classes.length; i++) {
+            if (value <= classes[i].max) {
+                return classes[i];
+            }
+        }
+        return classes[classes.length - 1];
+    }
+
+    /**
+     * Seriile afisate: fie o clasa de capacitate, fie fiecare capacitate in parte.
+     * Fiecare serie stie ce chei de capacitate acopera, ca sa putem agrega celulele.
+     */
+    function capacitySeries(dist) {
+        var missing = (dist.capacities || []).filter(function (capacity) {
+            return capacity.key === 'fara_capacitate';
+        });
+
+        if (state.capacityGrouping !== 'clase') {
+            return (dist.capacities || []).map(function (capacity, index) {
+                var isMissing = capacity.key === 'fara_capacitate';
+                return {
+                    key: capacity.key,
+                    label: capacity.label,
+                    members: [capacity.key],
+                    color: isMissing ? CAPACITY_MISSING.color : color(index),
+                    fill: isMissing ? CAPACITY_MISSING.fill : color(index)
+                };
+            });
+        }
+
+        var classes = capacityClasses();
+        var used = {};
+
+        (dist.capacities || []).forEach(function (capacity) {
+            if (capacity.key === 'fara_capacitate') {
+                return;
+            }
+            var klass = capacityClassFor(num(capacity.value), classes);
+            if (!used[klass.key]) {
+                used[klass.key] = { key: klass.key, label: klass.label, members: [], color: klass.color, fill: klass.color };
+            }
+            used[klass.key].members.push(capacity.key);
+        });
+
+        var series = classes.filter(function (klass) { return used[klass.key]; })
+            .map(function (klass) { return used[klass.key]; });
+
+        if (missing.length) {
+            series.push({
+                key: CAPACITY_MISSING.key,
+                label: CAPACITY_MISSING.label,
+                members: [CAPACITY_MISSING.key],
+                color: CAPACITY_MISSING.color,
+                fill: CAPACITY_MISSING.fill
+            });
+        }
+
+        return series;
+    }
+
+    /**
+     * Aduna celulele unei serii pentru un interval de km.
+     * Sumele se aduna, procentele se mediaza ponderat cu numarul de curse.
+     */
+    function aggregateCapacityCell(cellsByKey, bandKey, series) {
+        var total = { curse: 0, km: 0, tone: 0, facturare: 0, profit: 0, grad_suma: 0, grad_curse: 0 };
+
+        series.members.forEach(function (member) {
+            var cell = cellsByKey[bandKey + '|' + member];
+            if (!cell) {
+                return;
+            }
+
+            total.curse += num(cell.curse);
+            total.km += num(cell.km);
+            total.tone += num(cell.tone);
+            total.facturare += num(cell.facturare);
+            total.profit += num(cell.profit);
+            if (num(cell.grad_incarcare) > 0) {
+                total.grad_suma += num(cell.grad_incarcare) * num(cell.curse);
+                total.grad_curse += num(cell.curse);
+            }
+        });
+
+        total.grad_incarcare = total.grad_curse > 0 ? total.grad_suma / total.grad_curse : 0;
+        total.km_per_cursa = total.curse > 0 ? total.km / total.curse : 0;
+        total.tone_per_cursa = total.curse > 0 ? total.tone / total.curse : 0;
+
+        return total;
+    }
+
+    /**
+     * Curse pe interval de km x capacitate de transport.
+     * Doua moduri: distributie agregata (bare) si curse individuale (puncte).
+     */
+    function renderCapacityChart() {
+        var canvas = document.getElementById('da2-chart-capacity');
+        if (!canvas) {
+            return;
+        }
+
+        destroyChart('capacity', canvas);
+
+        var dist = state.data.distribution || { bands: [], capacities: [], cells: [], trips: [] };
+        var stackWrap = document.getElementById('da2-capacity-stack-wrap');
+        var metricSeg = $('[data-seg="capacityMetric"]');
+        var isPoints = state.capacityView === 'puncte';
+
+        // controalele care nu au sens in modul puncte
+        if (stackWrap) {
+            stackWrap.hidden = isPoints;
+        }
+        if (metricSeg) {
+            metricSeg.hidden = isPoints;
+        }
+
+        var grupare = state.capacityGrouping === 'clase'
+            ? 'Capacitățile sunt grupate în clase; comută pe „Toate capacitățile” pentru detaliu.'
+            : 'Fiecare capacitate este afișată separat.';
+
+        var explicatii = {
+            distributie: 'Câte curse intră în fiecare interval de km, defalcate pe capacitatea vehiculului. Click pe o serie filtrează pagina. ',
+            capacitate: 'Câte curse are fiecare capacitate, defalcate pe intervalul de km al cursei. Click pe o bară filtrează pagina pe acea capacitate. ',
+            puncte: 'Fiecare punct este o cursă: distanța pe orizontală, capacitatea pe verticală, mărimea = tonele livrate. Click pe o cursă filtrează pagina. '
+        };
+
+        document.getElementById('da2-capacity-note').textContent =
+            (explicatii[state.capacityView] || explicatii.distributie) + grupare;
+
+        renderCapacityStats(dist);
+
+        if (isPoints) {
+            renderCapacityPoints(canvas, dist);
+            return;
+        }
+
+        if (!dist.bands.length) {
+            drawEmpty(canvas, 'Nu există curse în perioada selectată.');
+            return;
+        }
+
+        var metric = state.capacityMetric;
+        var kinds = { curse: 'int', km: 'km', tone: 'tone', grad_incarcare: 'pct' };
+        var isRate = metric === 'grad_incarcare';
+        var stacked = state.capacityStacked && !isRate;
+
+        var byKey = {};
+        dist.cells.forEach(function (cell) {
+            byKey[cell.band + '|' + cell.capacitate] = cell;
+        });
+
+        var series = capacitySeries(dist);
+        var byCapacity = state.capacityView === 'capacitate';
+
+        // matricea capacitate x interval de km; o folosim in ambele orientari
+        var values = series.map(function (item) {
+            return dist.bands.map(function (band) {
+                return aggregateCapacityCell(byKey, band.key, item);
+            });
+        });
+
+        var datasets;
+        var labels;
+
+        if (byCapacity) {
+            // O bara verticala per capacitate, defalcata pe intervalul de km.
+            labels = series.map(function (item) { return item.label; });
+            datasets = dist.bands.map(function (band, bandIndex) {
+                return {
+                    label: band.label,
+                    data: series.map(function (item, seriesIndex) {
+                        var cell = values[seriesIndex][bandIndex];
+                        return isRate && cell.curse === 0 ? null : num(cell[metric]);
+                    }),
+                    backgroundColor: bandColor(bandIndex, dist.bands.length),
+                    borderColor: bandColor(bandIndex, dist.bands.length),
+                    borderWidth: 1,
+                    borderRadius: 4,
+                    bandIndex: bandIndex
+                };
+            });
+        } else {
+            labels = dist.bands.map(function (band) { return band.label; });
+            datasets = series.map(function (item, index) {
+                return {
+                    label: item.label,
+                    data: values[index].map(function (cell) {
+                        // la procente nu desenam bara cand nu exista curse in celula
+                        return isRate && cell.curse === 0 ? null : num(cell[metric]);
+                    }),
+                    backgroundColor: alpha(item.fill, 0.85),
+                    borderColor: item.color,
+                    borderWidth: 1,
+                    borderRadius: 4,
+                    capacityKey: item.key,
+                    seriesIndex: index
+                };
+            });
+        }
+
+        // linie de referinta: media flotei, ca sa se vada imediat cine e peste / sub
+        if (isRate) {
+            var fleetAverage = num((state.data.fleet || {}).grad_incarcare_efectiv);
+            datasets.push({
+                type: 'line',
+                label: 'Media flotei (' + fmt(fleetAverage, 'pct') + ')',
+                data: dist.bands.map(function () { return fleetAverage; }),
+                borderColor: '#0f172a',
+                borderWidth: 2,
+                borderDash: [6, 4],
+                pointRadius: 0,
+                fill: false,
+                isReference: true
+            });
+        }
+
+        charts.capacity = new Chart(canvas, {
+            type: 'bar',
+            data: { labels: labels, datasets: datasets },
+            options: baseOptions({
+                onClick: function (event, elements) {
+                    if (!elements.length) {
+                        return;
+                    }
+
+                    if (byCapacity) {
+                        // in aceasta orientare capacitatea este eticheta de pe axa X
+                        var clicked = series[elements[0].index];
+                        if (clicked) {
+                            filterByCapacity(clicked.key);
+                        }
+                        return;
+                    }
+
+                    var dataset = datasets[elements[0].datasetIndex];
+                    if (dataset && !dataset.isReference) {
+                        filterByCapacity(dataset.capacityKey);
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked: stacked,
+                        title: { display: true, text: byCapacity ? 'Capacitate vehicul' : 'Interval de km pe cursă' }
+                    },
+                    y: {
+                        stacked: stacked,
+                        beginAtZero: true,
+                        max: isRate ? 100 : undefined,
+                        title: { display: true, text: metricLabelForCapacity(metric) },
+                        ticks: { callback: function (value) { return nfInt.format(value); } }
+                    }
+                },
+                plugins: {
+                    legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, padding: 12 } },
+                    tooltip: {
+                        callbacks: {
+                            label: function (context) {
+                                if (context.dataset.isReference) {
+                                    return context.dataset.label;
+                                }
+                                if (context.parsed.y === null || (num(context.parsed.y) === 0 && !isRate)) {
+                                    return null;
+                                }
+
+                                // in orientarea pe capacitate, indicii sunt inversati
+                                var cell = byCapacity
+                                    ? values[context.dataIndex][context.dataset.bandIndex]
+                                    : values[context.dataset.seriesIndex][context.dataIndex];
+                                var text = context.dataset.label + ': ' + fmt(context.parsed.y, kinds[metric]);
+
+                                // cate curse stau in spatele valorii - o medie din 1 cursa nu e o tendinta
+                                if (metric !== 'curse') {
+                                    text += ' · ' + fmt(cell.curse, 'int') + (cell.curse === 1 ? ' cursă' : ' curse');
+                                }
+                                return text;
+                            },
+                            afterBody: function (contexts) {
+                                // totalul coloanei peste care se afla cursorul
+                                var cells;
+                                if (byCapacity) {
+                                    var members = series[contexts[0].dataIndex].members;
+                                    cells = dist.cells.filter(function (cell) {
+                                        return members.indexOf(cell.capacitate) !== -1;
+                                    });
+                                } else {
+                                    var band = dist.bands[contexts[0].dataIndex];
+                                    cells = dist.cells.filter(function (cell) { return cell.band === band.key; });
+                                }
+
+                                var curse = cells.reduce(function (sum, cell) { return sum + num(cell.curse); }, 0);
+
+                                var eticheta = byCapacity ? 'pe capacitate' : 'pe interval';
+
+                                if (isRate) {
+                                    var suma = cells.reduce(function (sum, cell) {
+                                        return sum + num(cell.grad_incarcare) * num(cell.curse);
+                                    }, 0);
+                                    return 'Media ' + eticheta + ': ' + fmt(curse > 0 ? suma / curse : 0, 'pct') +
+                                        ' · ' + fmt(curse, 'int') + ' curse';
+                                }
+
+                                var total = cells.reduce(function (sum, cell) { return sum + num(cell[metric]); }, 0);
+                                return 'Total ' + eticheta + ': ' + fmt(total, kinds[metric]);
+                            }
+                        }
+                    }
+                }
+            })
+        });
+    }
+
+    /** Culoare pentru un interval de km: de la deschis (scurt) la inchis (lung). */
+    var BAND_RAMP = ['#bfdbfe', '#93c5fd', '#60a5fa', '#3b82f6', '#2563eb', '#1d4ed8', '#1e3a8a'];
+
+    function bandColor(index, total) {
+        if (total <= 1) {
+            return BAND_RAMP[BAND_RAMP.length - 1];
+        }
+        var position = Math.round((index / (total - 1)) * (BAND_RAMP.length - 1));
+        return BAND_RAMP[position];
+    }
+
+    // ------------------------------------------------------ praguri configurabile
+
+    var KM_THRESHOLDS_DEFAULT = [100, 250, 500, 750, 1000];
+    var CAPACITY_THRESHOLDS_DEFAULT = [12, 20];
+    var THRESHOLDS_STORAGE_KEY = 'da2.thresholds.v1';
+
+    /** Parseaza o lista scrisa de mana: numere pozitive, crescatoare, fara duplicate. */
+    function parseThresholds(text, maxCount) {
+        var parts = String(text || '').split(/[,;\s]+/).filter(Boolean);
+        var seen = {};
+        var values = [];
+
+        for (var i = 0; i < parts.length; i++) {
+            var normalized = parts[i].replace(',', '.');
+            if (!/^\d+(\.\d+)?$/.test(normalized)) {
+                return null;
+            }
+
+            var value = Number(normalized);
+            if (!isFinite(value) || value <= 0) {
+                return null;
+            }
+            if (!seen[value]) {
+                seen[value] = true;
+                values.push(value);
+            }
+        }
+
+        if (!values.length) {
+            return null;
+        }
+
+        values.sort(function (a, b) { return a - b; });
+
+        return values.slice(0, maxCount || 8);
+    }
+
+    function loadThresholds() {
+        var stored = null;
+        try {
+            stored = JSON.parse(window.localStorage.getItem(THRESHOLDS_STORAGE_KEY) || 'null');
+        } catch (error) {
+            stored = null;
+        }
+
+        state.kmThresholds = (stored && parseThresholds((stored.km || []).join(','), 8)) || KM_THRESHOLDS_DEFAULT.slice();
+        state.capacityThresholds = (stored && parseThresholds((stored.capacitate || []).join(','), 5)) || CAPACITY_THRESHOLDS_DEFAULT.slice();
+    }
+
+    function saveThresholds() {
+        try {
+            window.localStorage.setItem(THRESHOLDS_STORAGE_KEY, JSON.stringify({
+                km: state.kmThresholds,
+                capacitate: state.capacityThresholds
+            }));
+        } catch (error) {
+            // stocarea poate fi blocata; pragurile raman valabile pentru sesiunea curenta
+        }
+    }
+
+    function syncThresholdInputs() {
+        var kmInput = document.getElementById('da2-km-thresholds');
+        var capacityInput = document.getElementById('da2-capacity-thresholds');
+
+        if (kmInput) {
+            kmInput.value = state.kmThresholds.join(', ');
+        }
+        if (capacityInput) {
+            capacityInput.value = state.capacityThresholds.join(', ');
+        }
+
+        var wrapper = document.getElementById('da2-thresholds');
+        if (wrapper) {
+            var isDefault = state.kmThresholds.join(',') === KM_THRESHOLDS_DEFAULT.join(',') &&
+                state.capacityThresholds.join(',') === CAPACITY_THRESHOLDS_DEFAULT.join(',');
+            wrapper.classList.toggle('is-custom', !isDefault);
+        }
+    }
+
+    function showThresholdError(message) {
+        var el = $('[data-thresholds-error]');
+        if (!el) {
+            return;
+        }
+        el.hidden = !message;
+        el.textContent = message || '';
+    }
+
+    function applyThresholds() {
+        var km = parseThresholds(document.getElementById('da2-km-thresholds').value, 8);
+        var capacitate = parseThresholds(document.getElementById('da2-capacity-thresholds').value, 5);
+
+        if (!km) {
+            showThresholdError('Intervalele de km trebuie să fie numere pozitive, separate prin virgulă.');
+            return;
+        }
+        if (!capacitate) {
+            showThresholdError('Clasele de capacitate trebuie să fie numere pozitive, separate prin virgulă.');
+            return;
+        }
+
+        showThresholdError('');
+        state.kmThresholds = km;
+        state.capacityThresholds = capacitate;
+        saveThresholds();
+        syncThresholdInputs();
+        closeThresholdsPanel();
+
+        // intervalele de km se calculeaza pe server, deci reluam datele
+        scheduleReload(0);
+    }
+
+    function resetThresholds() {
+        state.kmThresholds = KM_THRESHOLDS_DEFAULT.slice();
+        state.capacityThresholds = CAPACITY_THRESHOLDS_DEFAULT.slice();
+        saveThresholds();
+        syncThresholdInputs();
+        showThresholdError('');
+        scheduleReload(0);
+    }
+
+    function closeThresholdsPanel() {
+        var panel = $('[data-thresholds-panel]');
+        var toggle = $('[data-thresholds-toggle]');
+        if (panel) {
+            panel.hidden = true;
+        }
+        if (toggle) {
+            toggle.setAttribute('aria-expanded', 'false');
+        }
+    }
+
+    function metricLabelForCapacity(metric) {
+        return { curse: 'Număr de curse', km: 'Km', tone: 'Tone livrate', grad_incarcare: 'Grad de încărcare (%)' }[metric] || metric;
+    }
+
+    function renderCapacityPoints(canvas, dist) {
+        var trips = dist.trips || [];
+        if (!trips.length) {
+            drawEmpty(canvas, 'Nu există curse în perioada selectată.');
+            return;
+        }
+
+        var transportLabels = (state.data.labels || {}).transport_buckets || {};
+        var maxTone = trips.reduce(function (max, trip) { return Math.max(max, num(trip.tone)); }, 0) || 1;
+
+        // Aceeasi grupare si aceleasi culori ca in modul Distributie, ca legenda
+        // si codul de culori sa ramana identice cand comuti intre cele doua.
+        var groups = {};
+        trips.forEach(function (trip) {
+            // cheia trebuie sa fie identica cu cea generata pe server (2 zecimale, punct)
+            var key = trip.capacitate === null ? 'fara_capacitate' : num(trip.capacitate).toFixed(2);
+            if (!groups[key]) {
+                groups[key] = [];
+            }
+            groups[key].push(trip);
+        });
+
+        var datasets = capacitySeries(dist).map(function (item) {
+            var items = [];
+            item.members.forEach(function (member) {
+                items = items.concat(groups[member] || []);
+            });
+
+            return {
+                label: item.label,
+                data: items.map(function (trip) {
+                    return {
+                        x: num(trip.km),
+                        // cursele fara capacitate configurata se aseaza pe linia 0
+                        y: trip.capacitate === null ? 0 : num(trip.capacitate),
+                        r: 5 + (num(trip.tone) / maxTone) * 14,
+                        trip: trip
+                    };
+                }),
+                backgroundColor: alpha(item.fill, 0.6),
+                borderColor: item.color,
+                borderWidth: 1,
+                capacityKey: item.key
+            };
+        }).filter(function (dataset) {
+            return dataset.data.length > 0;
+        });
+
+        charts.capacity = new Chart(canvas, {
+            type: 'bubble',
+            data: { datasets: datasets },
+            options: baseOptions({
+                interaction: { mode: 'nearest', intersect: true },
+                onClick: function (event, elements) {
+                    if (!elements.length) {
+                        return;
+                    }
+                    filterByCapacity(datasets[elements[0].datasetIndex].capacityKey);
+                },
+                scales: {
+                    x: {
+                        title: { display: true, text: 'Km pe cursă' },
+                        ticks: { callback: function (value) { return nfInt.format(value); } }
+                    },
+                    y: {
+                        title: { display: true, text: 'Capacitate vehicul (t)' },
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function (value) {
+                                return value === 0 ? 'fără' : nf2.format(value) + ' t';
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } },
+                    tooltip: {
+                        callbacks: {
+                            label: function (context) {
+                                var trip = context.raw.trip;
+                                return [
+                                    fmtDateRo(trip.data) + ' · ' + trip.vehicul,
+                                    trip.beneficiar + ' · ' + (transportLabels[trip.bucket] || trip.bucket),
+                                    'Km: ' + fmt(trip.km, 'km'),
+                                    'Capacitate: ' + (trip.capacitate === null ? 'neconfigurată' : fmt(trip.capacitate, 'tone')),
+                                    'Tone livrate: ' + fmt(trip.tone, 'tone'),
+                                    'Grad încărcare: ' + (trip.grad_incarcare === null ? '–' : fmt(trip.grad_incarcare, 'pct'))
+                                ];
+                            }
+                        }
+                    }
+                }
+            })
+        });
+    }
+
+    function renderCapacityStats(dist) {
+        var container = document.getElementById('da2-capacity-stats');
+        if (!container) {
+            return;
+        }
+
+        var cells = dist.cells || [];
+        var totalCurse = cells.reduce(function (sum, cell) { return sum + num(cell.curse); }, 0);
+        var faraCapacitate = cells.filter(function (cell) { return cell.capacitate === 'fara_capacitate'; })
+            .reduce(function (sum, cell) { return sum + num(cell.curse); }, 0);
+
+        // intervalul si capacitatea cu cele mai multe curse
+        var bandTotals = {};
+        var capacityTotals = {};
+        cells.forEach(function (cell) {
+            bandTotals[cell.band] = (bandTotals[cell.band] || 0) + num(cell.curse);
+            capacityTotals[cell.capacitate] = (capacityTotals[cell.capacitate] || 0) + num(cell.curse);
+        });
+
+        function topOf(totals, list) {
+            var best = null;
+            list.forEach(function (item) {
+                if (best === null || (totals[item.key] || 0) > (totals[best.key] || 0)) {
+                    best = item;
+                }
+            });
+            return best ? { label: best.label, value: totals[best.key] || 0 } : { label: '–', value: 0 };
+        }
+
+        var topBand = topOf(bandTotals, dist.bands || []);
+        var topCapacity = topOf(capacityTotals, (dist.capacities || []).filter(function (c) {
+            return c.key !== 'fara_capacitate';
+        }));
+
+        var kmMediu = cells.reduce(function (sum, cell) { return sum + num(cell.km); }, 0);
+
+        container.innerHTML = [
+            { label: 'Interval dominant', value: topBand.label + ' (' + fmt(topBand.value, 'int') + ' curse)' },
+            { label: 'Capacitate dominantă', value: topCapacity.label + ' (' + fmt(topCapacity.value, 'int') + ' curse)' },
+            { label: 'Km / cursă în medie', value: fmt(totalCurse > 0 ? kmMediu / totalCurse : 0, 'num') + ' km' },
+            {
+                label: 'Fără capacitate configurată',
+                value: fmt(faraCapacitate, 'int') + ' curse',
+                tone: faraCapacitate > 0 ? 'bad' : 'good'
+            }
+        ].map(function (item) {
+            return '<div class="da2-mini-stat' + (item.tone ? ' da2-mini-' + item.tone : '') + '">' +
+                '<span>' + escapeHtml(item.label) + '</span><strong>' + escapeHtml(item.value) + '</strong></div>';
+        }).join('');
+    }
+
+    /**
+     * Click pe o serie filtreaza pagina pe capacitatile ei.
+     * Cand seriile sunt grupate pe clase, se bifeaza toate capacitatile din clasa.
+     */
+    function filterByCapacity(seriesKey) {
+        if (seriesKey === 'fara_capacitate') {
+            return;
+        }
+
+        var series = capacitySeries(state.data.distribution || { capacities: [] })
+            .filter(function (item) { return item.key === seriesKey; })[0];
+        if (!series) {
+            return;
+        }
+
+        var ms = $('[data-ms][data-name="transport_capacities"]', form);
+        if (!ms) {
+            return;
+        }
+
+        $$('input[type="checkbox"]', ms).forEach(function (input) {
+            input.checked = series.members.indexOf(input.value) !== -1;
+        });
+        scheduleReload(0);
+    }
+
     function renderScatterChart() {
         var canvas = document.getElementById('da2-chart-scatter');
         destroyChart('scatter', canvas);
@@ -1350,7 +2031,6 @@
                 })
             },
             options: baseOptions({
-                interaction: { mode: 'index', intersect: false },
                 scales: scales,
                 plugins: {
                     legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } },
@@ -2292,17 +2972,48 @@
         }
 
         if (action === 'export' && drawer.data) {
-            var trips = drawer.data.trips;
-            var lines = [['Data', 'Tip', 'Vehicul', 'Șofer', 'Beneficiar', 'Rută', 'Km', 'Km nefacturați',
-                'Tone', 'Grad încărcare', 'Puncte client', 'Facturare', 'Refacturare', 'Cheltuieli', 'Profit', 'Status']];
+            var columns = [
+                { key: 'data', label: 'Data', kind: 'date' },
+                { key: 'tip_label', label: 'Tip transport' },
+                { key: 'vehicul', label: 'Vehicul' },
+                { key: 'sofer', label: 'Șofer' },
+                { key: 'beneficiar', label: 'Beneficiar' },
+                { key: 'ruta', label: 'Rută' },
+                { key: 'km', label: 'Km', kind: 'km' },
+                { key: 'km_nefacturati', label: 'Km nefacturați', kind: 'km' },
+                { key: 'tone', label: 'Tone', kind: 'tone' },
+                { key: 'grad_incarcare', label: 'Grad încărcare', kind: 'pct' },
+                { key: 'nr_clienti', label: 'Puncte client', kind: 'int' },
+                { key: 'facturare', label: 'Facturare', kind: 'lei' },
+                { key: 'refacturare', label: 'Refacturare', kind: 'lei' },
+                { key: 'cheltuieli', label: 'Cheltuieli', kind: 'lei' },
+                { key: 'profit', label: 'Profit', kind: 'lei' },
+                { key: 'status_label', label: 'Status' }
+            ];
 
-            trips.forEach(function (trip) {
-                lines.push([trip.data, trip.tip_label, trip.vehicul, trip.sofer, trip.beneficiar, trip.ruta,
-                    trip.km, trip.km_nefacturati, trip.tone, trip.grad_incarcare, trip.nr_clienti,
-                    trip.facturare, trip.refacturare, trip.cheltuieli, trip.profit, trip.status_label]);
+            var lines = [columns.map(function (col) { return csvHeader(col.label, col.kind); })];
+
+            drawer.data.trips.forEach(function (trip) {
+                lines.push(columns.map(function (col) { return csvCell(trip[col.key], col.kind); }));
             });
 
-            downloadCsv('curse_' + drawer.name.replace(/[^\wăâîșțĂÂÎȘȚ -]/gi, '').replace(/\s+/g, '_') + '.csv', lines);
+            // rând de total, ca fișierul să poată fi verificat dintr-o privire
+            var totals = ['TOTAL', '', '', '', '', ''];
+            ['km', 'km_nefacturati', 'tone'].forEach(function (key, index) {
+                var sum = drawer.data.trips.reduce(function (acc, trip) { return acc + num(trip[key]); }, 0);
+                totals.push(csvCell(sum, index === 2 ? 'tone' : 'km'));
+            });
+            totals.push('');
+            totals.push(csvCell(drawer.data.trips.reduce(function (acc, t) { return acc + num(t.nr_clienti); }, 0), 'int'));
+            ['facturare', 'refacturare', 'cheltuieli', 'profit'].forEach(function (key) {
+                totals.push(csvCell(drawer.data.trips.reduce(function (acc, t) { return acc + num(t[key]); }, 0), 'lei'));
+            });
+            totals.push('');
+            lines.push(totals);
+
+            var safeName = drawer.name.replace(/[^0-9A-Za-zăâîșțĂÂÎȘȚ -]/g, '').trim().replace(/\s+/g, '_');
+            downloadCsv('curse_' + (safeName || 'entitate') + '_' +
+                (drawer.data.period.start || '') + '_' + (drawer.data.period.end || '') + '.csv', lines);
         }
     }
 
@@ -2340,15 +3051,79 @@
 
     // ------------------------------------------------------------------ export
 
+    /* --------------------------------------------------------------- export
+     * CSV pentru Excel romanesc:
+     *   - prima linie "sep=;" ii spune Excel-ului separatorul, indiferent de
+     *     setarea regionala a calculatorului (altfel totul intra intr-o coloana);
+     *   - BOM UTF-8, ca diacriticele sa nu apara stricate;
+     *   - numerele cu virgula zecimala si datele ca zz.ll.aaaa, ca sa fie
+     *     recunoscute ca numere si date, nu ca text;
+     *   - ghilimele doar unde chiar e nevoie, ca sa ramana citibil si in Notepad.
+     */
+
+    var CSV_UNITS = { lei: ' (lei)', lei3: ' (lei)', km: ' (km)', tone: ' (t)', pct: ' (%)' };
+
     function csvEscape(value) {
         var text = String(value === null || value === undefined ? '' : value);
-        return '"' + text.replace(/"/g, '""') + '"';
+        if (/[;"\r\n]/.test(text) || text !== text.trim()) {
+            return '"' + text.replace(/"/g, '""') + '"';
+        }
+        return text;
+    }
+
+    /** Valoare numerica pentru CSV: zecimale cu virgula, fara separator de mii. */
+    function csvNumber(value, decimals) {
+        if (value === null || value === undefined || value === '') {
+            return '';
+        }
+        var parsed = Number(value);
+        if (!isFinite(parsed)) {
+            return '';
+        }
+        return parsed.toFixed(decimals === undefined ? 2 : decimals).replace('.', ',');
+    }
+
+    function csvDate(iso) {
+        if (!iso || String(iso).length < 10) {
+            return '';
+        }
+        return String(iso).slice(8, 10) + '.' + String(iso).slice(5, 7) + '.' + String(iso).slice(0, 4);
+    }
+
+    /** Formateaza o valoare dupa tipul coloanei folosit in interfata. */
+    function csvCell(value, kind) {
+        switch (kind) {
+            case 'int': return csvNumber(value, 0);
+            case 'km': return csvNumber(value, 0);
+            case 'lei3': return csvNumber(value, 3);
+            case 'lei':
+            case 'pct':
+            case 'tone':
+            case 'num': return csvNumber(value, 2);
+            case 'date': return csvDate(value);
+            default: return value === null || value === undefined ? '' : String(value);
+        }
+    }
+
+    /** Adauga unitatea in antet, dar nu o dubleaza cand eticheta o contine deja. */
+    function csvHeader(label, kind) {
+        var unit = CSV_UNITS[kind];
+        if (!unit) {
+            return label;
+        }
+
+        var token = unit.replace(/[()\s]/g, '');
+        if (new RegExp('(^|[\\s/])' + token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i').test(label)) {
+            return label;
+        }
+
+        return label + unit;
     }
 
     function downloadCsv(name, lines) {
-        var content = '﻿' + lines.map(function (line) {
+        var content = '﻿' + 'sep=;\r\n' + lines.map(function (line) {
             return line.map(csvEscape).join(';');
-        }).join('\r\n');
+        }).join('\r\n') + '\r\n';
 
         var blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
         var link = document.createElement('a');
@@ -2369,23 +3144,75 @@
         var suffix = (period.start || '') + '_' + (period.end || '');
         var lines = [];
 
+        // antet cu perioada si filtrele active, ca fisierul sa se explice singur
+        lines.push(['Dashboard Analitic - perioada ' + csvDate(period.start) + ' - ' + csvDate(period.end)]);
+        // doar filtrele propriu-zise; perioada e deja pe primul rand
+        var activeChips = $$('#da2-chips .da2-chip[data-chip-name]').map(function (chip) {
+            return chip.textContent.trim();
+        });
+        if (activeChips.length) {
+            lines.push(['Filtre active', activeChips.join(' | ')]);
+        }
+        lines.push([]);
+
         if (state.tab === 'raport') {
             var summary = state.data.summary || {};
+
+            var transportCols = [
+                { key: 'label', label: 'Tip transport' },
+                { key: 'curse', label: 'Curse', kind: 'int' },
+                { key: 'nr_clienti', label: 'Clienți', kind: 'int' },
+                { key: 'km', label: 'Km', kind: 'km' },
+                { key: 'tone', label: 'Tone', kind: 'tone' },
+                { key: 'km_per_cursa', label: 'Km / cursă', kind: 'num' },
+                { key: 'tone_per_cursa', label: 'Tone / cursă', kind: 'num' },
+                { key: 'km_per_client', label: 'Km / client', kind: 'km' },
+                { key: 'tone_per_client', label: 'Tone / client', kind: 'tone' },
+                { key: 'curse_per_client', label: 'Curse / client', kind: 'num' },
+                { key: 'puncte_client', label: 'Puncte livrate', kind: 'int' },
+                { key: 'grad_incarcare', label: 'Grad încărcare', kind: 'pct' },
+                { key: 'facturare', label: 'Facturare', kind: 'lei' },
+                { key: 'profit', label: 'Profit', kind: 'lei' }
+            ];
+
             lines.push(['Medii pe tip de transport']);
-            lines.push(['Tip transport', 'Curse', 'Clienți', 'Km', 'Tone', 'Km/cursă', 'Tone/cursă', 'Km/client', 'Tone/client', 'Curse/client', 'Facturare', 'Profit']);
+            lines.push(transportCols.map(function (col) { return csvHeader(col.label, col.kind); }));
             (summary.transport || []).forEach(function (row) {
-                lines.push([row.label, row.curse, row.nr_clienti, row.km, row.tone, row.km_per_cursa,
-                    row.tone_per_cursa, row.km_per_client, row.tone_per_client, row.curse_per_client, row.facturare, row.profit]);
+                lines.push(transportCols.map(function (col) { return csvCell(row[col.key], col.kind); }));
             });
+
             lines.push([]);
+
+            var clientCols = [
+                { key: 'nume', label: 'Client' },
+                { key: 'curse', label: 'Curse', kind: 'int' },
+                { key: 'km', label: 'Km', kind: 'km' },
+                { key: 'tone', label: 'Tone', kind: 'tone' },
+                { key: 'km_per_cursa', label: 'Km / cursă', kind: 'num' },
+                { key: 'tone_per_cursa', label: 'Tone / cursă', kind: 'num' },
+                { key: 'puncte_client', label: 'Puncte livrate', kind: 'int' },
+                { key: 'km_per_punct', label: 'Km / punct', kind: 'num' },
+                { key: 'tone_per_punct', label: 'Tone / punct', kind: 'num' },
+                { key: 'facturare', label: 'Facturare', kind: 'lei' },
+                { key: 'profit', label: 'Profit', kind: 'lei' }
+            ];
+
             lines.push(['Totaluri pe client']);
-            lines.push(['Client', 'Curse', 'Km', 'Tone', 'Km/cursă', 'Tone/cursă', 'Puncte livrate', 'Facturare', 'Profit']);
+            lines.push(clientCols.map(function (col) { return csvHeader(col.label, col.kind); }));
             (summary.clients || []).forEach(function (client) {
-                var t = client.total;
-                lines.push([client.nume, t.curse, t.km, t.tone, t.km_per_cursa, t.tone_per_cursa, t.puncte_client, t.facturare, t.profit]);
+                lines.push(clientCols.map(function (col) {
+                    return col.key === 'nume' ? client.nume : csvCell(client.total[col.key], col.kind);
+                }));
             });
+
             var media = summary.media_client || {};
-            lines.push(['MEDIA PE CLIENT', media.curse, media.km, media.tone, media.km_per_cursa, media.tone_per_cursa, '', media.facturare, media.profit]);
+            lines.push(clientCols.map(function (col) {
+                if (col.key === 'nume') {
+                    return 'MEDIA PE CLIENT';
+                }
+                return media[col.key] === undefined ? '' : csvCell(media[col.key], col.kind);
+            }));
+
             downloadCsv('raport_sumar_' + suffix + '.csv', lines);
             return;
         }
@@ -2395,12 +3222,21 @@
         var columns = TABLE_COLUMNS[dimension];
         var rows = state.tab === 'comparatie' && selectedRows().length ? selectedRows() : visibleRows(dimension);
 
-        lines.push(columns.map(function (col) { return col.label || metricLabel(col.key); }));
+        lines.push(columns.map(function (col) {
+            return csvHeader(col.label || metricLabel(col.key), col.kind);
+        }));
+
         rows.forEach(function (row) {
             lines.push(columns.map(function (col) {
-                return col.text ? row[col.key] : num(row[col.key]);
+                return col.text ? row[col.key] : csvCell(row[col.key], col.kind);
             }));
         });
+
+        // acelasi rand de total ca in interfata
+        var totals = computeTotals(dimension, rows);
+        lines.push(columns.map(function (col) {
+            return col.text ? 'TOTAL / MEDIE (' + rows.length + ')' : csvCell(totals[col.key], col.kind);
+        }));
 
         downloadCsv(dimension + '_' + suffix + '.csv', lines);
     }
@@ -2619,6 +3455,8 @@
             renderRankChart();
         } else if (key === 'scatterDimension') {
             renderScatterChart();
+        } else if (key === 'capacityView' || key === 'capacityMetric' || key === 'capacityGrouping') {
+            renderCapacityChart();
         } else if (key === 'compareDimension') {
             state.compareSearch = '';
             var searchInput = document.getElementById('da2-compare-search');
@@ -2727,6 +3565,44 @@
         renderEvolutionChart();
     });
 
+    document.getElementById('da2-thresholds').addEventListener('click', function (event) {
+        if (event.target.closest('[data-thresholds-toggle]')) {
+            var panel = $('[data-thresholds-panel]');
+            var willOpen = panel.hidden;
+            panel.hidden = !willOpen;
+            $('[data-thresholds-toggle]').setAttribute('aria-expanded', String(willOpen));
+            return;
+        }
+
+        if (event.target.closest('[data-thresholds-apply]')) {
+            applyThresholds();
+            return;
+        }
+
+        if (event.target.closest('[data-thresholds-reset]')) {
+            resetThresholds();
+        }
+    });
+
+    document.getElementById('da2-thresholds').addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' && event.target.tagName === 'INPUT') {
+            event.preventDefault();
+            applyThresholds();
+        }
+    });
+
+    document.addEventListener('click', function (event) {
+        var wrapper = document.getElementById('da2-thresholds');
+        if (wrapper && !wrapper.contains(event.target)) {
+            closeThresholdsPanel();
+        }
+    });
+
+    document.getElementById('da2-capacity-stacked').addEventListener('change', function (event) {
+        state.capacityStacked = event.target.checked;
+        renderCapacityChart();
+    });
+
     document.getElementById('da2-rank-metric').addEventListener('change', function (event) {
         state.rankMetric = event.target.value;
         renderRankChart();
@@ -2773,6 +3649,7 @@
 
     window.addEventListener('keydown', function (event) {
         if (event.key === 'Escape') {
+            closeThresholdsPanel();
             if (state.drawer) {
                 closeEntityDrawer();
                 return;
@@ -2798,7 +3675,27 @@
 
     // -------------------------------------------------------------------- init
 
+    // Browserul poate restaura starea bifelor la reincarcare, fara sa emita `change`.
+    // Le aducem la starea din JS, ca graficele sa nu contrazica ce arata controalele.
+    function syncCheckboxes() {
+        var pairs = [
+            ['da2-capacity-stacked', state.capacityStacked],
+            ['da2-evolution-cumulative', state.evolutionCumulative],
+            ['da2-auto-refresh', state.autoRefresh]
+        ];
+
+        pairs.forEach(function (pair) {
+            var input = document.getElementById(pair[0]);
+            if (input) {
+                input.checked = pair[1];
+            }
+        });
+    }
+
+    loadThresholds();
+    syncThresholdInputs();
     syncSegments();
+    syncCheckboxes();
     updateMultiSelectSummaries();
     renderChips();
     markActivePreset();

@@ -32,6 +32,9 @@ $technicalModelUrls = [
     'camion' => url('assets/models/technical-health/Ansamblu_edit_v1.glb'),
     'ansamblu' => url('assets/models/technical-health/Ansamblu_edit_v1.glb'),
 ];
+// Modulele three.js se incarca same-origin (root-relative), nu prin APP_URL:
+// importurile ES sunt supuse CORS, iar APP_URL poate indica alt host decat cel curent.
+$threeVendorBase = '/' . ltrim(rtrim(url('assets/vendor/three'), '/'), '/');
 $technicalModelLabels = [
     'cap_tractor' => 'Cap tractor',
     'semiremorca' => 'Semi-remorca',
@@ -589,7 +592,7 @@ $chartAreaPath = $chartArea !== [] ? '44,140 ' . implode(' ', $chartArea) . ' ' 
         <script type="importmap">
         {
             "imports": {
-                "three": "<?= e(absolute_url('assets/vendor/three/three.module.js')) ?>"
+                "three": "<?= e($threeVendorBase . '/three.module.js') ?>"
             }
         }
         </script>
@@ -644,8 +647,8 @@ $chartAreaPath = $chartArea !== [] ? '44,140 ' . implode(' ', $chartArea) . ' ' 
             }
 
             const threeUrl = 'three';
-            const loaderUrl = <?= json_encode(absolute_url('assets/vendor/three/GLTFLoader.js'), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
-            const controlsUrl = <?= json_encode(absolute_url('assets/vendor/three/OrbitControls.js'), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+            const loaderUrl = <?= json_encode($threeVendorBase . '/GLTFLoader.js', JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+            const controlsUrl = <?= json_encode($threeVendorBase . '/OrbitControls.js', JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
 
             Promise.all([import(threeUrl), import(loaderUrl), import(controlsUrl)])
                 .then(([THREE, loaderModule, controlsModule]) => {

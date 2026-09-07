@@ -179,6 +179,7 @@ $baseUrl = build_query_url(['page' => 'drepturi_acces']);
                       <span class="sw sm"><input type="checkbox" class="dax-action" name="perm[<?= e((string) $pageKey) ?>][<?= e((string) $actionKey) ?>]" value="1" <?= $isGranted((string) $pageKey, (string) $actionKey) ? 'checked' : '' ?>><span class="track"></span></span>
                       <span class="cn"><?= e((string) ($meta['label'] ?? $actionKey)) ?><?php
                         if (($meta['admin'] ?? false) === true): ?><span class="tag lock"><i class="bi bi-lock-fill"></i> azi doar admin</span><?php endif;
+                        if (($meta['accountancy'] ?? false) === true): ?><span class="tag lock"><i class="bi bi-lock-fill"></i> implicit contabilitate</span><?php endif;
                         if (($meta['sensitive'] ?? false) === true): ?><span class="tag sens">sensibil</span><?php endif; ?></span>
                     </label>
                   <?php endforeach; ?>

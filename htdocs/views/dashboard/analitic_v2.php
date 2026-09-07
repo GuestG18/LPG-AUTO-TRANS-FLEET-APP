@@ -297,6 +297,62 @@ $pageConfig = [
         <article class="da2-card da2-card-wide">
             <header class="da2-card-head">
                 <div>
+                    <h2>Curse pe distanță și capacitate</h2>
+                    <p class="da2-card-sub" id="da2-capacity-note">
+                        Câte curse intră în fiecare interval de km, defalcate pe capacitatea vehiculului.
+                    </p>
+                </div>
+                <div class="da2-card-tools">
+                    <div class="da2-seg" data-seg="capacityView">
+                        <button type="button" data-value="distributie" class="is-active">Pe distanță</button>
+                        <button type="button" data-value="capacitate">Pe capacitate</button>
+                        <button type="button" data-value="puncte">Curse individuale</button>
+                    </div>
+                    <div class="da2-seg" data-seg="capacityMetric">
+                        <button type="button" data-value="curse" class="is-active">Curse</button>
+                        <button type="button" data-value="km">Km</button>
+                        <button type="button" data-value="tone">Tone</button>
+                        <button type="button" data-value="grad_incarcare">Grad încărcare</button>
+                    </div>
+                    <div class="da2-seg" data-seg="capacityGrouping">
+                        <button type="button" data-value="clase" class="is-active">Clase</button>
+                        <button type="button" data-value="toate">Toate capacitățile</button>
+                    </div>
+                    <label class="da2-check" id="da2-capacity-stack-wrap">
+                        <input type="checkbox" id="da2-capacity-stacked" checked>
+                        <span>Stivuit</span>
+                    </label>
+                    <div class="da2-thresholds" id="da2-thresholds">
+                        <button type="button" class="da2-btn da2-btn-sm" data-thresholds-toggle aria-expanded="false">
+                            <i class="bi bi-sliders" aria-hidden="true"></i><span>Praguri</span>
+                        </button>
+                        <div class="da2-thresholds-panel" data-thresholds-panel hidden>
+                            <label class="da2-thresholds-field">
+                                <span>Intervale de km</span>
+                                <input type="text" id="da2-km-thresholds" inputmode="numeric" autocomplete="off">
+                                <small>Limite superioare, separate prin virgulă. Implicit: 100, 250, 500, 750, 1000</small>
+                            </label>
+                            <label class="da2-thresholds-field">
+                                <span>Clase de capacitate (t)</span>
+                                <input type="text" id="da2-capacity-thresholds" inputmode="numeric" autocomplete="off">
+                                <small>Limitele dintre clase. Implicit: 12, 20</small>
+                            </label>
+                            <p class="da2-thresholds-error" data-thresholds-error hidden></p>
+                            <div class="da2-thresholds-actions">
+                                <button type="button" class="da2-btn da2-btn-sm" data-thresholds-apply>Aplică</button>
+                                <button type="button" class="da2-btn da2-btn-sm da2-btn-ghost" data-thresholds-reset>Revino la implicit</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </header>
+            <div class="da2-chart da2-chart-lg"><canvas id="da2-chart-capacity"></canvas></div>
+            <div class="da2-mini-stats" id="da2-capacity-stats"></div>
+        </article>
+
+        <article class="da2-card da2-card-wide">
+            <header class="da2-card-head">
+                <div>
                     <h2>Km vs. profit</h2>
                     <p class="da2-card-sub">Mărimea bulei = numărul de curse. Click pe o bulă pentru comparație.</p>
                 </div>

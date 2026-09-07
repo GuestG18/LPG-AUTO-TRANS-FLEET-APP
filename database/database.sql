@@ -94,6 +94,7 @@ CREATE TABLE vehicule (
     km_revizie INT UNSIGNED NOT NULL DEFAULT 0,
     serie_sasiu VARCHAR(17) NOT NULL,
     nr_fabricatie VARCHAR(100) NULL,
+    an_fabricatie_rezervor SMALLINT UNSIGNED NULL,
     capacitate_transport DECIMAL(10,2) NULL,
     formula_axelor VARCHAR(20) NULL,
     capacitate_rezervor DECIMAL(10,2) NULL,
@@ -1084,13 +1085,43 @@ INSERT INTO categorii_cheltuieli_curse (nume, descriere, activ, legacy_key, crea
 ('Trecere', 'Categorie implicita pentru cheltuieli curse.', 1, 'trece', NOW(), NOW()),
 ('Diurna', 'Categorie implicita pentru cheltuieli curse.', 1, 'diurna', NOW(), NOW()),
 ('Reparatii', 'Categorie implicita pentru cheltuieli curse.', 1, 'service', NOW(), NOW()),
-('Alte cheltuieli', 'Categorie implicita pentru cheltuieli curse.', 1, 'alte', NOW(), NOW());
+('Alte cheltuieli', 'Categorie implicita pentru cheltuieli curse.', 1, 'alte', NOW(), NOW()),
+('Cazare', 'Cheltuieli de cazare sofer. Se introduc pe pagina Cazare si se asociaza automat la cursa.', 1, NULL, NOW(), NOW());
+
+-- Registrul de cazari: se introduce pe Data / Sofer / Total / Total cu TVA, iar
+-- cursa se determina automat din perioada curselor soferului (vezi pagina Cazare).
+CREATE TABLE cheltuieli_cazare (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    data DATE NOT NULL,
+    sofer_id INT UNSIGNED NOT NULL,
+    total DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    total_cu_tva DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    cursa_id INT UNSIGNED NULL,
+    status ENUM('asociat', 'neasociat', 'ambiguu') NOT NULL DEFAULT 'neasociat',
+    asociere_manuala TINYINT(1) NOT NULL DEFAULT 0,
+    observatii TEXT NULL,
+    created_by INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_cheltuieli_cazare_data (data),
+    INDEX idx_cheltuieli_cazare_sofer (sofer_id),
+    INDEX idx_cheltuieli_cazare_cursa (cursa_id),
+    INDEX idx_cheltuieli_cazare_status (status),
+    INDEX idx_cheltuieli_cazare_sofer_data (sofer_id, data),
+    INDEX idx_cheltuieli_cazare_created_by (created_by),
+    CONSTRAINT fk_cheltuieli_cazare_sofer FOREIGN KEY (sofer_id) REFERENCES soferi(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_cheltuieli_cazare_cursa FOREIGN KEY (cursa_id) REFERENCES curse_dispecer(id) ON DELETE SET NULL,
+    CONSTRAINT fk_cheltuieli_cazare_created_by FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE curse_cheltuieli (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     cursa_id INT UNSIGNED NOT NULL,
     tip_cheltuiala ENUM('motorina', 'taxa_acces', 'port', 'trece', 'taxe_drum', 'diurna', 'service', 'alte') NOT NULL,
     categorie_id INT UNSIGNED NULL,
+    -- Setat doar pe randurile-oglinda generate de modulul Cazare; NU se editeaza
+    -- din Dispecer curse (sursa de adevar este tabelul cheltuieli_cazare).
+    cazare_id INT UNSIGNED NULL,
     -- Taxele de drum se inregistreaza pe randuri separate: suma = bucati x pret_unitar.
     locatie VARCHAR(190) NULL,
     bucati DECIMAL(12,2) NULL,
@@ -1118,6 +1149,8 @@ CREATE TABLE curse_cheltuieli (
     INDEX idx_curse_cheltuieli_locatie (locatie),
     INDEX idx_curse_cheltuieli_added_by (added_by),
     INDEX idx_curse_cheltuieli_data (data_cheltuiala),
+    UNIQUE KEY uk_curse_cheltuieli_cazare (cazare_id),
+    CONSTRAINT fk_curse_cheltuieli_cazare FOREIGN KEY (cazare_id) REFERENCES cheltuieli_cazare(id) ON DELETE CASCADE,
     CONSTRAINT fk_curse_cheltuieli_cursa FOREIGN KEY (cursa_id) REFERENCES curse_dispecer(id) ON DELETE CASCADE,
     CONSTRAINT fk_curse_cheltuieli_categorie FOREIGN KEY (categorie_id) REFERENCES categorii_cheltuieli_curse(id) ON DELETE SET NULL,
     CONSTRAINT fk_curse_cheltuieli_added_by FOREIGN KEY (added_by) REFERENCES utilizatori(id) ON DELETE SET NULL

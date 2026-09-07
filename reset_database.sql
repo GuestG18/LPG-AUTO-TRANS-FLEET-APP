@@ -79,6 +79,7 @@ CREATE TABLE vehicule (
     km_revizie INT UNSIGNED NOT NULL DEFAULT 0,
     serie_sasiu VARCHAR(17) NOT NULL,
     nr_fabricatie VARCHAR(100) NULL,
+    an_fabricatie_rezervor SMALLINT UNSIGNED NULL,
     capacitate_transport DECIMAL(10,2) NULL,
     formula_axelor VARCHAR(20) NULL,
     capacitate_rezervor DECIMAL(10,2) NULL,

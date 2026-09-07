@@ -1,0 +1,1334 @@
+/* ==========================================================================
+   Echipamente șoferi — alocări per șofer + stoc nealocat.
+   Prefix: .des- (driver equipment section)
+   ========================================================================== */
+
+.des-page {
+    --des-border: #e5e9f2;
+    --des-border-soft: #eef1f7;
+    --des-text: #0f172a;
+    --des-muted: #64748b;
+    --des-faint: #94a3b8;
+    --des-blue: #2563eb;
+    --des-blue-soft: #eff4ff;
+    --des-green: #16a34a;
+    --des-green-soft: #ecfdf3;
+    --des-amber: #d97706;
+    --des-amber-soft: #fef6e7;
+    --des-red: #dc2626;
+    --des-red-soft: #fef2f2;
+    --des-surface: #f8fafc;
+    --des-radius: 14px;
+    --des-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 24px -18px rgba(15, 23, 42, .35);
+
+    color: var(--des-text);
+    max-width: var(--content-max-width, 1680px);
+}
+
+.des-page .table > :not(caption) > * > * {
+    background-color: transparent;
+}
+
+/* ------------------------------------------------------- Navigare modul -- */
+
+.des-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    margin-bottom: 1.15rem;
+}
+
+.des-tab {
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 10px;
+    color: #334155;
+    display: inline-flex;
+    font-size: .875rem;
+    font-weight: 600;
+    gap: .5rem;
+    line-height: 1.2;
+    padding: .6rem 1rem;
+    text-decoration: none;
+    transition: background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease;
+}
+
+.des-tab i {
+    color: var(--des-faint);
+    font-size: .95rem;
+}
+
+.des-tab:hover {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+    color: #0f172a;
+}
+
+.des-tab.is-active,
+.des-tab.is-active:hover {
+    background: var(--des-blue);
+    border-color: var(--des-blue);
+    box-shadow: 0 8px 18px -10px rgba(37, 99, 235, .8);
+    color: #fff;
+}
+
+.des-tab.is-active i {
+    color: #fff;
+}
+
+/* ---------------------------------------------------------------- Header -- */
+
+.des-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+
+.des-header h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    margin: 0 0 .25rem;
+}
+
+.des-header p {
+    color: var(--des-muted);
+    font-size: .9rem;
+    margin: 0;
+}
+
+.des-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem;
+}
+
+.des-btn {
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 10px;
+    color: #1e293b;
+    display: inline-flex;
+    font-size: .875rem;
+    font-weight: 600;
+    gap: .45rem;
+    line-height: 1.2;
+    padding: .58rem .9rem;
+    text-decoration: none;
+    transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
+    white-space: nowrap;
+}
+
+.des-btn:hover,
+.des-btn:focus-visible {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+    color: #0f172a;
+}
+
+.des-btn-primary {
+    background: var(--des-blue);
+    border-color: var(--des-blue);
+    box-shadow: 0 8px 18px -10px rgba(37, 99, 235, .8);
+    color: #fff;
+}
+
+.des-btn-primary:hover,
+.des-btn-primary:focus-visible {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+    color: #fff;
+}
+
+.des-btn-sm {
+    border-radius: 9px;
+    font-size: .8125rem;
+    padding: .38rem .7rem;
+}
+
+.des-btn-ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--des-muted);
+}
+
+.des-btn-ghost:hover {
+    background: #f1f5f9;
+    color: #0f172a;
+}
+
+/* ------------------------------------------------------------------ KPI -- */
+
+.des-kpi-grid {
+    display: grid;
+    gap: .875rem;
+    grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+    margin-bottom: 1rem;
+}
+
+/* Cardul cu inelul de acoperire are nevoie de mai mult loc decât restul. */
+@media (min-width: 1200px) {
+    [data-des-page] .des-kpi-grid > .des-kpi:first-child {
+        grid-column: span 2;
+    }
+}
+
+.des-kpi {
+    align-items: flex-start;
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: var(--des-radius);
+    box-shadow: var(--des-shadow);
+    display: flex;
+    gap: .85rem;
+    justify-content: space-between;
+    padding: 1.05rem 1.1rem;
+}
+
+.des-kpi-main {
+    min-width: 0;
+}
+
+/* KPI-ul care duce catre inventar: arata ca un card, se comporta ca un link. */
+a.des-kpi {
+    color: inherit;
+    text-decoration: none;
+}
+
+a.des-kpi:hover {
+    border-color: #cbd5e1;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 14px 28px -20px rgba(15, 23, 42, .5);
+}
+
+a.des-kpi:hover .des-kpi-label {
+    color: var(--des-blue);
+}
+
+.des-kpi-link {
+    align-items: center;
+    color: var(--des-blue);
+    display: inline-flex;
+    font-size: .72rem;
+    font-weight: 600;
+    gap: .25rem;
+    margin-top: .25rem;
+}
+
+.des-kpi-icon {
+    align-items: center;
+    background: var(--des-blue-soft);
+    border-radius: 11px;
+    color: var(--des-blue);
+    display: inline-flex;
+    font-size: 1.15rem;
+    height: 40px;
+    justify-content: center;
+    margin-bottom: .75rem;
+    width: 40px;
+}
+
+.des-kpi-icon.is-green { background: var(--des-green-soft); color: var(--des-green); }
+.des-kpi-icon.is-amber { background: var(--des-amber-soft); color: var(--des-amber); }
+.des-kpi-icon.is-red { background: var(--des-red-soft); color: var(--des-red); }
+.des-kpi-icon.is-violet { background: #f3f0ff; color: #7c3aed; }
+.des-kpi-icon.is-teal { background: #ecfeff; color: #0891b2; }
+
+.des-kpi-value {
+    display: block;
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    line-height: 1.1;
+}
+
+.des-kpi-value small {
+    color: var(--des-faint);
+    font-size: .95rem;
+    font-weight: 600;
+}
+
+.des-kpi-label {
+    color: #334155;
+    display: block;
+    font-size: .875rem;
+    font-weight: 600;
+    margin-top: .3rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.des-kpi-note {
+    color: var(--des-faint);
+    display: block;
+    font-size: .75rem;
+    margin-top: .1rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.des-ring {
+    flex: 0 0 auto;
+    height: 62px;
+    position: relative;
+    width: 62px;
+}
+
+.des-ring span {
+    align-items: center;
+    color: #0f172a;
+    display: flex;
+    font-size: .8rem;
+    font-weight: 700;
+    inset: 0;
+    justify-content: center;
+    position: absolute;
+}
+
+/* -------------------------------------------------------------- Filtre --- */
+
+.des-filters {
+    align-items: flex-end;
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: var(--des-radius);
+    box-shadow: var(--des-shadow);
+    display: grid;
+    gap: .75rem;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    margin-bottom: 1.1rem;
+    padding: 1rem 1.1rem;
+}
+
+.des-search {
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 10px;
+    display: flex;
+    gap: .5rem;
+    padding: 0 .75rem;
+    transition: border-color .15s ease, box-shadow .15s ease;
+    width: 268px;
+}
+
+.des-search:focus-within {
+    border-color: #93b4fb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+}
+
+.des-search i {
+    color: var(--des-faint);
+    font-size: .9rem;
+}
+
+.des-search input {
+    background: transparent;
+    border: 0;
+    color: #0f172a;
+    font-size: .875rem;
+    outline: none;
+    padding: .55rem 0;
+    width: 100%;
+}
+
+.des-filter label {
+    color: #475569;
+    display: block;
+    font-size: .78rem;
+    font-weight: 600;
+    margin-bottom: .35rem;
+}
+
+.des-filter-control {
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 10px;
+    display: flex;
+    gap: .5rem;
+    padding: 0 .65rem;
+    transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.des-filter-control:focus-within {
+    border-color: #93b4fb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+}
+
+.des-filter-control > i {
+    color: var(--des-faint);
+    font-size: .9rem;
+}
+
+.des-filter-control select,
+.des-filter-control input {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    color: #0f172a;
+    font-size: .875rem;
+    font-weight: 500;
+    outline: none;
+    padding: .55rem 0;
+    width: 100%;
+}
+
+.des-filter-reset {
+    align-self: flex-end;
+}
+
+.des-filter-wide {
+    grid-column: span 2;
+}
+
+@media (max-width: 991.98px) {
+    .des-filter-wide { grid-column: auto; }
+}
+
+/* ------------------------------------------------------ Context căutare -- */
+
+.des-search-note {
+    align-items: center;
+    background: var(--des-blue-soft);
+    border: 1px solid #dbe6fe;
+    border-radius: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .65rem;
+    margin-bottom: .9rem;
+    padding: .7rem .95rem;
+}
+
+.des-search-note i {
+    color: var(--des-blue);
+}
+
+.des-search-note span {
+    color: #1e293b;
+    font-size: .85rem;
+    margin-right: auto;
+}
+
+.des-search-note.is-empty {
+    background: var(--des-amber-soft);
+    border-color: #fde8c4;
+}
+
+.des-search-note.is-empty i {
+    color: var(--des-amber);
+}
+
+/* Comutatorul de citire a rezultatelor (obiecte / deținători). */
+.des-view-toggle {
+    align-items: center;
+    background: #fff;
+    border: 1px solid #dbe6fe;
+    border-radius: 10px;
+    display: flex;
+    gap: .15rem;
+    padding: .2rem .25rem .2rem .6rem;
+}
+
+.des-view-toggle-label {
+    color: var(--des-muted);
+    font-size: .75rem;
+    font-weight: 600;
+    margin-right: .2rem;
+}
+
+.des-view-btn {
+    align-items: center;
+    border-radius: 8px;
+    color: #334155;
+    display: inline-flex;
+    font-size: .78rem;
+    font-weight: 600;
+    gap: .35rem;
+    padding: .32rem .6rem;
+    text-decoration: none;
+    transition: background-color .15s ease, color .15s ease;
+}
+
+.des-view-btn i {
+    color: var(--des-faint);
+    font-size: .85rem;
+}
+
+.des-view-btn:hover {
+    background: #f1f5f9;
+    color: #0f172a;
+}
+
+.des-view-btn.is-active,
+.des-view-btn.is-active:hover {
+    background: var(--des-blue);
+    color: #fff;
+}
+
+.des-view-btn.is-active i {
+    color: #fff;
+}
+
+/* ------------------------------------------- Rezultate căutare + paginare - */
+
+.des-table-results {
+    min-width: 1080px;
+}
+
+.des-table-footer {
+    align-items: center;
+    border-top: 1px solid var(--des-border-soft);
+    display: flex;
+    flex-wrap: wrap;
+    gap: .75rem;
+    justify-content: space-between;
+    padding: .75rem 1rem;
+}
+
+.des-results-info {
+    color: var(--des-muted);
+    font-size: .8125rem;
+}
+
+.des-pagination {
+    display: flex;
+    gap: .25rem;
+}
+
+.des-page-btn {
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 8px;
+    color: #334155;
+    display: inline-flex;
+    font-size: .8125rem;
+    font-weight: 600;
+    justify-content: center;
+    min-width: 32px;
+    padding: .3rem .5rem;
+    text-decoration: none;
+}
+
+.des-page-btn:hover {
+    background: #f8fafc;
+    color: #0f172a;
+}
+
+.des-page-btn.is-active,
+.des-page-btn.is-active:hover {
+    background: var(--des-blue);
+    border-color: var(--des-blue);
+    color: #fff;
+}
+
+.des-page-btn.is-disabled {
+    opacity: .45;
+    pointer-events: none;
+}
+
+/* --------------------------------------------------------------- Carduri - */
+
+.des-card {
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: var(--des-radius);
+    box-shadow: var(--des-shadow);
+    overflow: hidden;
+}
+
+.des-section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: .75rem;
+    margin: 1.9rem 0 .9rem;
+}
+
+.des-section-head h2 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    margin: 0 0 .15rem;
+}
+
+.des-section-head p {
+    color: var(--des-muted);
+    font-size: .85rem;
+    margin: 0;
+}
+
+/* --------------------------------------------------------------- Tabele -- */
+
+.des-table-wrap {
+    overflow-x: auto;
+}
+
+.des-table {
+    border-collapse: separate;
+    border-spacing: 0;
+    margin: 0;
+    min-width: 980px;
+    width: 100%;
+}
+
+.des-table thead th {
+    background: #fbfcfe;
+    border-bottom: 1px solid var(--des-border);
+    color: #64748b;
+    font-size: .75rem;
+    font-weight: 600;
+    letter-spacing: .01em;
+    padding: .8rem .8rem;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.des-table tbody td {
+    border-bottom: 1px solid var(--des-border-soft);
+    font-size: .875rem;
+    padding: .85rem .8rem;
+    vertical-align: middle;
+}
+
+.des-table tbody tr:last-child > td {
+    border-bottom: 0;
+}
+
+.des-table .des-col-num {
+    text-align: center;
+    white-space: nowrap;
+}
+
+.des-table .des-col-money {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.des-table .des-col-actions {
+    text-align: right;
+    width: 64px;
+}
+
+.des-driver-row {
+    cursor: pointer;
+    transition: background-color .12s ease;
+}
+
+.des-driver-row:hover {
+    background: #f9fbff;
+}
+
+.des-driver-row.is-open {
+    background: #f7faff;
+}
+
+.des-driver-row.is-open > td {
+    border-bottom-color: transparent;
+}
+
+.des-toggle {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    color: var(--des-faint);
+    display: inline-flex;
+    height: 28px;
+    justify-content: center;
+    padding: 0;
+    transition: transform .18s ease, background-color .15s ease, color .15s ease;
+    width: 28px;
+}
+
+.des-toggle:hover {
+    background: #eef2f9;
+    color: #0f172a;
+}
+
+.des-driver-row.is-open .des-toggle {
+    color: var(--des-blue);
+    transform: rotate(90deg);
+}
+
+.des-driver {
+    align-items: center;
+    display: flex;
+    gap: .7rem;
+    min-width: 200px;
+}
+
+.des-avatar {
+    align-items: center;
+    background: var(--des-blue-soft);
+    border-radius: 50%;
+    color: var(--des-blue);
+    display: inline-flex;
+    flex: 0 0 auto;
+    font-size: .78rem;
+    font-weight: 700;
+    height: 34px;
+    justify-content: center;
+    letter-spacing: .02em;
+    width: 34px;
+}
+
+.des-avatar.is-amber { background: var(--des-amber-soft); color: var(--des-amber); }
+.des-avatar.is-red { background: var(--des-red-soft); color: var(--des-red); }
+.des-avatar.is-muted { background: #f1f5f9; color: #64748b; }
+
+.des-driver-name {
+    color: #0f172a;
+    display: block;
+    font-weight: 600;
+    line-height: 1.25;
+}
+
+.des-driver-meta {
+    color: var(--des-faint);
+    display: block;
+    font-size: .75rem;
+}
+
+/* ------------------------------------------------------- Pills / badges -- */
+
+.des-pill {
+    align-items: center;
+    background: #f1f5f9;
+    border-radius: 999px;
+    color: #334155;
+    display: inline-flex;
+    font-size: .78rem;
+    font-weight: 600;
+    gap: .3rem;
+    justify-content: center;
+    line-height: 1;
+    min-width: 34px;
+    padding: .34rem .6rem;
+    white-space: nowrap;
+}
+
+.des-pill.is-blue { background: var(--des-blue-soft); color: #1d4ed8; }
+.des-pill.is-green { background: var(--des-green-soft); color: #15803d; }
+.des-pill.is-amber { background: var(--des-amber-soft); color: #b45309; }
+.des-pill.is-red { background: var(--des-red-soft); color: #b91c1c; }
+.des-pill.is-muted { background: #f1f5f9; color: #64748b; }
+
+.des-status {
+    align-items: center;
+    display: inline-flex;
+    font-size: .8125rem;
+    font-weight: 600;
+    gap: .45rem;
+    white-space: nowrap;
+}
+
+.des-status::before {
+    background: currentColor;
+    border-radius: 50%;
+    content: "";
+    flex: 0 0 auto;
+    height: 8px;
+    width: 8px;
+}
+
+.des-status.is-success { color: var(--des-green); }
+.des-status.is-warning { color: var(--des-amber); }
+.des-status.is-danger { color: var(--des-red); }
+.des-status.is-muted { color: var(--des-faint); }
+
+.des-badge {
+    border-radius: 999px;
+    display: inline-flex;
+    font-size: .75rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: .32rem .6rem;
+    white-space: nowrap;
+}
+
+.des-badge.is-success { background: var(--des-green-soft); color: #15803d; }
+.des-badge.is-warning { background: var(--des-amber-soft); color: #b45309; }
+.des-badge.is-danger { background: var(--des-red-soft); color: #b91c1c; }
+.des-badge.is-muted { background: #f1f5f9; color: #64748b; }
+.des-badge.is-blue { background: var(--des-blue-soft); color: #1d4ed8; }
+
+/* Evidențierea termenului căutat, în tabele. */
+mark.des-mark {
+    background: #fef08a;
+    border-radius: 3px;
+    color: inherit;
+    padding: 0 .1em;
+}
+
+.des-note {
+    color: var(--des-faint);
+    display: block;
+    font-size: .72rem;
+    margin-top: .2rem;
+}
+
+.des-logic {
+    color: var(--des-muted);
+    font-size: .78rem;
+    white-space: nowrap;
+}
+
+/* ------------------------------------------------- Panou șofer extins ---- */
+
+.des-expand-cell {
+    background: var(--des-surface);
+    border-bottom: 1px solid var(--des-border-soft);
+    padding: 0 !important;
+}
+
+.des-panel {
+    padding: .25rem 1rem 1.25rem;
+}
+
+.des-panel-head {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .75rem;
+    justify-content: space-between;
+    padding: .95rem .35rem 1rem;
+}
+
+.des-panel-title {
+    align-items: center;
+    display: flex;
+    gap: .6rem;
+    min-width: 0;
+}
+
+.des-panel-title i {
+    color: var(--des-faint);
+    font-size: 1.05rem;
+}
+
+.des-panel-title strong {
+    font-size: .975rem;
+    font-weight: 700;
+}
+
+.des-panel-title span {
+    color: var(--des-muted);
+    font-size: .9rem;
+}
+
+.des-chips {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
+}
+
+.des-panel-foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    padding: .85rem .35rem 0;
+}
+
+.des-subgrid {
+    display: grid;
+    gap: .875rem;
+    grid-template-columns: repeat(auto-fit, minmax(555px, 1fr));
+}
+
+/* Cand exista o singura sectiune in panou, ea ocupa toata latimea. */
+.des-subgrid.is-single {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.des-driver-row.is-plain {
+    cursor: default;
+}
+
+.des-driver-row.is-plain:hover {
+    background: transparent;
+}
+
+/* ------------------------------------------------- Secțiuni de echipament -- */
+
+/*
+ * Regulă globală (șoferi + TESA): secțiunile stau una sub alta, fiecare pe
+ * toată lățimea panoului. Nicio grilă pe coloane aici — numărul de categorii
+ * poate crește oricând, iar lista trebuie doar să continue în jos.
+ */
+.des-sections {
+    display: flex;
+    flex-direction: column;
+    gap: .875rem;
+    width: 100%;
+}
+
+.des-sections > .des-section {
+    width: 100%;
+}
+
+.des-section-head {
+    background: transparent;
+    border: 0;
+    /* Chrome centrează implicit conținutul unui <button> cu display:flex. */
+    justify-content: flex-start;
+    text-align: left;
+    width: 100%;
+}
+
+.des-section-head:hover {
+    background: #fbfcfe;
+}
+
+.des-section-chevron {
+    color: var(--des-faint);
+    font-size: .8rem;
+    transition: transform .18s ease;
+}
+
+.des-section.is-collapsed .des-section-chevron {
+    transform: rotate(-90deg);
+}
+
+.des-section.is-collapsed .des-section-head {
+    border-bottom: 0;
+}
+
+.des-section-body {
+    overflow: hidden;
+}
+
+.des-subcard {
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .03);
+    overflow: hidden;
+}
+
+.des-subcard-head {
+    align-items: center;
+    border-bottom: 1px solid var(--des-border-soft);
+    display: flex;
+    gap: .55rem;
+    padding: .8rem 1rem;
+}
+
+.des-subcard-head i {
+    color: var(--des-blue);
+    font-size: 1rem;
+}
+
+.des-subcard-head h3 {
+    font-size: .9rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.des-subtable {
+    border-collapse: separate;
+    border-spacing: 0;
+    margin: 0;
+    min-width: 520px;
+    width: 100%;
+}
+
+.des-subtable thead th {
+    background: #fbfcfe;
+    border-bottom: 1px solid var(--des-border-soft);
+    color: #64748b;
+    font-size: .69rem;
+    font-weight: 600;
+    padding: .55rem .5rem;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.des-subtable tbody td {
+    border-bottom: 1px solid #f4f6fa;
+    font-size: .79rem;
+    padding: .6rem .5rem;
+    vertical-align: middle;
+}
+
+.des-subtable tbody tr:last-child > td {
+    border-bottom: 0;
+}
+
+.des-subtable .des-col-actions {
+    width: 40px;
+}
+
+.des-subtable .des-col-num {
+    width: 52px;
+}
+
+.des-subtable tbody tr.is-flagged {
+    background: #fffdf7;
+}
+
+.des-subtable tbody tr.is-critical {
+    background: #fff8f8;
+}
+
+.des-item-name {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.des-item-icon {
+    align-items: center;
+    background: #f1f5f9;
+    border-radius: 8px;
+    color: #475569;
+    display: inline-flex;
+    height: 28px;
+    justify-content: center;
+    margin-right: .5rem;
+    width: 28px;
+}
+
+.des-item-icon.is-blue { background: var(--des-blue-soft); color: var(--des-blue); }
+
+.des-empty {
+    color: var(--des-faint);
+    font-size: .8125rem;
+    padding: 1.4rem 1rem;
+    text-align: center;
+}
+
+/* ----------------------------------------------------------------- Stoc -- */
+
+.des-stock-grid {
+    display: grid;
+    gap: .875rem;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    margin-bottom: .9rem;
+}
+
+.des-stock-card {
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--des-border);
+    border-radius: var(--des-radius);
+    box-shadow: var(--des-shadow);
+    display: flex;
+    gap: .85rem;
+    padding: 1rem 1.1rem;
+}
+
+.des-stock-card .des-kpi-icon {
+    margin-bottom: 0;
+}
+
+.des-stock-card strong {
+    display: block;
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    line-height: 1.15;
+}
+
+.des-stock-card span {
+    color: #334155;
+    font-size: .83rem;
+    font-weight: 600;
+}
+
+.des-stock-card small {
+    color: var(--des-faint);
+    display: block;
+    font-size: .74rem;
+}
+
+.des-yesno {
+    color: #334155;
+    font-size: .8125rem;
+    font-weight: 600;
+}
+
+.des-yesno.is-no {
+    color: var(--des-faint);
+    font-weight: 500;
+}
+
+/* ------------------------------------------------------------- Dropdown -- */
+
+.des-menu-btn {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    color: var(--des-faint);
+    display: inline-flex;
+    height: 30px;
+    justify-content: center;
+    padding: 0;
+    width: 30px;
+}
+
+.des-menu-btn:hover,
+.des-menu-btn[aria-expanded="true"] {
+    background: #eef2f9;
+    color: #0f172a;
+}
+
+/*
+ * Meniurile de acțiuni sunt mutate la deschidere în <body> (vezi ActionMenu din
+ * assets/js/echipamente-soferi.js), ca să nu mai fie tăiate de containerele cu
+ * overflow ale tabelelor. De aceea stilul trebuie să funcționeze și în afara
+ * paginii: aceleași reguli se aplică și clasei .des-floating-menu.
+ */
+.des-page .dropdown-menu,
+.des-floating-menu {
+    border: 1px solid var(--des-border);
+    border-radius: 12px;
+    box-shadow: 0 18px 40px -20px rgba(15, 23, 42, .45);
+    font-size: .8125rem;
+    min-width: 208px;
+    padding: .35rem;
+}
+
+.des-page .dropdown-item,
+.des-floating-menu .dropdown-item {
+    align-items: center;
+    border-radius: 8px;
+    display: flex;
+    gap: .55rem;
+    padding: .45rem .6rem;
+}
+
+.des-page .dropdown-item i,
+.des-floating-menu .dropdown-item i {
+    color: var(--des-faint);
+    font-size: .9rem;
+}
+
+.des-page .dropdown-item:active,
+.des-floating-menu .dropdown-item:active {
+    background: var(--des-blue);
+}
+
+.des-page .dropdown-item:active i,
+.des-floating-menu .dropdown-item:active i {
+    color: #fff;
+}
+
+.des-page .dropdown-header,
+.des-floating-menu .dropdown-header {
+    color: var(--des-faint);
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .04em;
+    padding: .5rem .6rem .25rem;
+    text-transform: uppercase;
+}
+
+/*
+ * Poziția este calculată în JS din getBoundingClientRect() al butonului „…”:
+ * fixed față de fereastră, deci în afara oricărui overflow, cu deschidere în
+ * sus sau în jos după spațiul disponibil.
+ */
+.des-floating-menu {
+    background: #fff;
+    display: block;
+    margin: 0;
+    position: fixed;
+    z-index: 1080;
+}
+
+.des-floating-menu.is-scrollable {
+    overflow-y: auto;
+}
+
+/* --------------------------------------------------------------- Modale -- */
+
+.des-modal .modal-content {
+    border: 0;
+    border-radius: 16px;
+    overflow: hidden;
+}
+
+.des-modal .modal-header {
+    align-items: flex-start;
+    border-bottom: 1px solid var(--des-border-soft);
+    padding: 1.15rem 1.35rem;
+}
+
+.des-modal .modal-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+}
+
+.des-modal .modal-header p {
+    color: var(--des-muted);
+    font-size: .82rem;
+    margin: .15rem 0 0;
+}
+
+.des-modal .modal-body {
+    padding: 1.2rem 1.35rem;
+}
+
+.des-modal .modal-footer {
+    background: #fbfcfe;
+    border-top: 1px solid var(--des-border-soft);
+    padding: .9rem 1.35rem;
+}
+
+.des-modal .form-label {
+    color: #475569;
+    font-size: .78rem;
+    font-weight: 600;
+    margin-bottom: .3rem;
+}
+
+.des-modal .form-control,
+.des-modal .form-select {
+    border-color: var(--des-border);
+    border-radius: 10px;
+    font-size: .875rem;
+    padding: .55rem .7rem;
+}
+
+.des-modal .form-control:focus,
+.des-modal .form-select:focus {
+    border-color: #93b4fb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+}
+
+.des-callout {
+    border: 1px solid var(--des-border);
+    border-radius: 12px;
+    display: flex;
+    gap: .7rem;
+    padding: .85rem .95rem;
+}
+
+.des-callout i {
+    font-size: 1.1rem;
+    line-height: 1.2;
+}
+
+.des-callout strong {
+    display: block;
+    font-size: .875rem;
+}
+
+.des-callout span {
+    color: var(--des-muted);
+    font-size: .8rem;
+}
+
+.des-callout.is-success {
+    background: var(--des-green-soft);
+    border-color: #bbf7d0;
+}
+
+.des-callout.is-success i,
+.des-callout.is-success strong { color: #15803d; }
+
+.des-callout.is-danger {
+    background: var(--des-red-soft);
+    border-color: #fecaca;
+}
+
+.des-callout.is-danger i,
+.des-callout.is-danger strong { color: #b91c1c; }
+
+.des-callout.is-neutral {
+    background: var(--des-surface);
+}
+
+.des-callout-link {
+    color: var(--des-blue);
+    display: inline-block;
+    font-size: .78rem;
+    font-weight: 600;
+    margin-top: .3rem;
+    text-decoration: none;
+}
+
+.des-callout-link:hover {
+    text-decoration: underline;
+}
+
+.des-summary-line {
+    align-items: center;
+    background: var(--des-surface);
+    border: 1px solid var(--des-border-soft);
+    border-radius: 12px;
+    display: flex;
+    gap: .75rem;
+    padding: .8rem .95rem;
+}
+
+.des-summary-line strong {
+    display: block;
+    font-size: .9rem;
+}
+
+.des-summary-line span {
+    color: var(--des-muted);
+    font-size: .78rem;
+}
+
+/* ------------------------------------------------------------- Registru -- */
+
+.des-log {
+    display: grid;
+    gap: .1rem;
+    padding: .35rem;
+}
+
+.des-log-item {
+    align-items: center;
+    border-radius: 10px;
+    display: flex;
+    gap: .7rem;
+    padding: .55rem .65rem;
+}
+
+.des-log-item:hover {
+    background: var(--des-surface);
+}
+
+.des-log-item small {
+    color: var(--des-faint);
+    font-size: .72rem;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+.des-log-text {
+    font-size: .82rem;
+    min-width: 0;
+}
+
+.des-log-text span {
+    color: var(--des-muted);
+}
+
+/* ----------------------------------------------------------- Responsive -- */
+
+@media (max-width: 991.98px) {
+    .des-header h1 { font-size: 1.5rem; }
+    .des-panel { padding: .25rem .5rem 1rem; }
+    .des-subgrid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 575.98px) {
+    .des-header-actions { width: 100%; }
+    .des-header-actions .des-btn { flex: 1 1 auto; justify-content: center; }
+}

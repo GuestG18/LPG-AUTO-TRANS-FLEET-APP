@@ -2047,8 +2047,8 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                     <?php foreach ($rows as $row): ?>
                         <?php
                         $canEndDriverEmployment = $isDriverList
-                            && function_exists('is_accountancy_user')
-                            && is_accountancy_user()
+                            && function_exists('can')
+                            && can('soferi', 'end_employment')
                             && (string) ($row['employment_status'] ?? 'active') !== 'terminated'
                             && empty($row['data_incetare']);
                         $isCurrentUser = ($moduleKey === 'utilizatori' && (int) ($row['id'] ?? 0) === (int) (current_user()['id'] ?? 0));
@@ -2273,7 +2273,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                             <div class="modal fade" id="<?= e($driverTerminationModalId) ?>" tabindex="-1" aria-hidden="true">
                                 <div class="modal-dialog modal-lg">
                                     <div class="modal-content">
-                                        <form method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'end_activity'])) ?>">
+                                        <form method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'soferi', 'action' => 'end_employment'])) ?>">
                                             <?= csrf_field() ?>
                                             <input type="hidden" name="source_type" value="driver">
                                             <input type="hidden" name="source_id" value="<?= e((string) ((int) ($row['id'] ?? 0))) ?>">

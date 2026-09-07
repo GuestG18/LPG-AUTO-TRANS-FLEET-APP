@@ -208,11 +208,15 @@ return [
         'soferi' => [
             'group' => 'soferi', 'label' => 'Șoferi', 'icon' => 'bi-person-vcard', 'scope' => 'all',
             'actions' => [
-                'view'   => ['label' => 'Vizualizare'],
-                'create' => ['label' => 'Adăugare șofer'],
-                'edit'   => ['label' => 'Editare șofer (+ alocare vehicule)'],
-                'delete' => ['label' => 'Ștergere șofer'],
-                'export' => ['label' => 'Export CSV'],
+                'view'           => ['label' => 'Vizualizare'],
+                'create'         => ['label' => 'Adăugare șofer'],
+                'edit'           => ['label' => 'Editare șofer (+ alocare vehicule)'],
+                'delete'         => ['label' => 'Ștergere șofer'],
+                // Butonul "Încheie colaborarea" din lista de șoferi (demisie / concediere).
+                // Implicit (utilizator neconfigurat) ramane rezervat rolurilor admin /
+                // contabilitate, ca inainte de granularizare.
+                'end_employment' => ['label' => 'Încheiere colaborare (demisie / concediere)', 'accountancy' => true, 'sensitive' => true],
+                'export'         => ['label' => 'Export CSV'],
             ],
         ],
         'documente_soferi' => [
@@ -223,6 +227,16 @@ return [
                 'edit'         => ['label' => 'Editare document'],
                 'delete'       => ['label' => 'Ștergere document'],
                 'manage_types' => ['label' => 'Configurare tipuri documente', 'admin' => true],
+            ],
+        ],
+        'echipamente_soferi' => [
+            'group' => 'soferi', 'label' => 'Echipamente șoferi', 'icon' => 'bi-box-seam', 'scope' => 'all',
+            'actions' => [
+                'view'               => ['label' => 'Vizualizare'],
+                'manage_assignments' => ['label' => 'Predare / returnare / înlocuire echipament'],
+                'manage_stock'       => ['label' => 'Gestionare stoc (intrări, ieșiri, praguri)'],
+                'manage_catalog'     => ['label' => 'Catalog echipamente'],
+                'export'             => ['label' => 'Export CSV'],
             ],
         ],
         'istoric_activitati_sofer' => [
@@ -267,6 +281,19 @@ return [
                 'create' => ['label' => 'Adăugare cheltuială'],
                 'edit'   => ['label' => 'Editare cheltuială'],
                 'delete' => ['label' => 'Ștergere cheltuială'],
+                'export' => ['label' => 'Export CSV'],
+            ],
+        ],
+        // Cazarea se introduce separat (Data / Sofer / Total / Total cu TVA) si se
+        // asociaza automat cursei din Dispecer curse care acopera data respectiva.
+        'cazare' => [
+            'group' => 'contabilitate', 'label' => 'Cazare', 'icon' => 'bi-house-heart', 'scope' => 'accountancy',
+            'actions' => [
+                'view'   => ['label' => 'Vizualizare'],
+                'create' => ['label' => 'Adăugare cazare'],
+                'edit'   => ['label' => 'Editare cazare'],
+                'delete' => ['label' => 'Ștergere cazare'],
+                'link'   => ['label' => 'Asociere manuală la cursă / reverificare'],
                 'export' => ['label' => 'Export CSV'],
             ],
         ],

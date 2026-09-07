@@ -136,6 +136,12 @@ function can(string $pageKey, string $action = 'view'): bool
             if (is_array($meta) && ($meta['admin'] ?? false) === true) {
                 return is_admin();
             }
+            // Actiune rezervata legacy rolurilor admin / contabilitate, chiar daca
+            // pagina in sine este accesibila tuturor (ex. incheierea colaborarii
+            // unui sofer din lista Soferi).
+            if (is_array($meta) && ($meta['accountancy'] ?? false) === true) {
+                return function_exists('is_accountancy_user') ? is_accountancy_user() : is_admin();
+            }
         }
 
         return access_legacy_allows($pageKey);
