@@ -397,10 +397,11 @@ class DispecerCurseController
         $vehicleId = $this->positiveIntFromInput($_GET['vehicle_id'] ?? null);
         $driverId = $this->positiveIntFromInput($_GET['driver_id'] ?? null);
         $tripId = $this->positiveIntFromInput($_GET['trip_id'] ?? null);
+        $referenceDate = $this->resolveInactiveReferenceDate((string) ($_GET['trip_date'] ?? ''), $tripId);
         $normalUserMode = !$this->canReviewInactiveApprovals();
 
         try {
-            $status = $this->inactiveStatusService->getResourcesStatus($vehicleId, $driverId);
+            $status = $this->inactiveStatusService->getResourcesStatus($vehicleId, $driverId, $referenceDate);
             foreach ($status['resources'] as &$resource) {
                 $resourceType = $this->approvalResourceTypeForInactiveResource($resource);
                 $resourceId = (int) ($resource['resource_id'] ?? 0);
@@ -7172,10 +7173,57 @@ class DispecerCurseController
         $driverId = isset($data['driver_id']) ? (int) $data['driver_id'] : 0;
         $status = $this->inactiveStatusService->getResourcesStatus(
             $vehicleId > 0 ? $vehicleId : null,
-            $driverId > 0 ? $driverId : null
+            $driverId > 0 ? $driverId : null,
+            $this->raceDataReferenceDate($data)
         );
 
         return is_array($status['inactive_resources'] ?? null) ? $status['inactive_resources'] : [];
+    }
+
+    /**
+     * Data fata de care se evalueaza disponibilitatea resurselor: data cursei.
+     */
+    private function raceDataReferenceDate(array $data): ?string
+    {
+        foreach (['data_cursa', 'data_inceput', 'data_incarcare', 'data_sfarsit'] as $key) {
+            $normalized = $this->normalizeRaceDate((string) ($data[$key] ?? ''));
+            if ($normalized !== null) {
+                return $normalized;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Rezolva data de referinta pentru verificarea resurselor inactive:
+     * data trimisa din formular, altfel data cursei existente, altfel ziua curenta.
+     */
+    private function resolveInactiveReferenceDate(string $rawDate, ?int $tripId): ?string
+    {
+        $normalized = $this->normalizeRaceDate($rawDate);
+        if ($normalized !== null) {
+            return $normalized;
+        }
+
+        if ($tripId === null || $tripId <= 0) {
+            return null;
+        }
+
+        try {
+            $stmt = $this->db->prepare('SELECT data_cursa, data_inceput FROM curse_dispecer WHERE id = :id LIMIT 1');
+            $stmt->execute(['id' => $tripId]);
+            $row = $stmt->fetch();
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][inactive_reference_date] ' . $exception->getMessage());
+            return null;
+        }
+
+        if (!is_array($row)) {
+            return null;
+        }
+
+        return $this->raceDataReferenceDate($row);
     }
 
     private function resourcesNeedingInactiveApprovalDecision(array $resources, ?int $tripId): array

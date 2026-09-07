@@ -2792,11 +2792,21 @@
         var pendingInactiveSubmit = false;
         var inactiveStatusSequence = 0;
 
+        // Data cursei este referinta pentru verificarea resurselor: un sofer cu
+        // colaborarea incheiata ramane valid pentru cursele din perioada lui de angajare.
+        function getInactiveReferenceDate() {
+            if (startDateField instanceof HTMLInputElement) {
+                return String(startDateField.value || '').trim();
+            }
+
+            return '';
+        }
+
         function getInactiveSelectionSignature() {
             var vehicleId = vehicleField instanceof HTMLSelectElement ? String(vehicleField.value || '').trim() : '';
             var driverId = driverField instanceof HTMLSelectElement ? String(driverField.value || '').trim() : '';
 
-            return [vehicleId, driverId, inactiveTripId].join(':');
+            return [vehicleId, driverId, inactiveTripId, getInactiveReferenceDate()].join(':');
         }
 
         function clearInactiveApprovalDecision() {
@@ -3483,6 +3493,10 @@
             }
             if (inactiveTripId !== '') {
                 url.searchParams.set('trip_id', inactiveTripId);
+            }
+            var referenceDate = getInactiveReferenceDate();
+            if (referenceDate !== '') {
+                url.searchParams.set('trip_date', referenceDate);
             }
 
             return fetch(url.toString(), {
@@ -6044,6 +6058,21 @@
             field.addEventListener('input', syncRaceDurationHint);
             field.addEventListener('change', syncRaceDurationHint);
         });
+
+        // Schimbarea datei cursei poate muta cursa in afara / inauntrul perioadei
+        // de angajare a soferului, deci re-evaluam resursele inactive. Comparam cu
+        // ultima valoare ca sincronizarile de la initializare sa nu deschida modalul.
+        if (startDateField) {
+            var lastInactiveReferenceDate = getInactiveReferenceDate();
+            startDateField.addEventListener('change', function () {
+                var currentReferenceDate = getInactiveReferenceDate();
+                if (currentReferenceDate === lastInactiveReferenceDate) {
+                    return;
+                }
+                lastInactiveReferenceDate = currentReferenceDate;
+                promptInactiveResourcesAfterSelectionChange();
+            });
+        }
 
         form.addEventListener('submit', function (event) {
             var firstInvalidDateTimePicker = null;

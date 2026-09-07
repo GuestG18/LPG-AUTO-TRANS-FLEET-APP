@@ -19,6 +19,8 @@ class InactiveResourceStatusService
         'medical_leave' => ['label' => 'Concediu medical', 'tone' => 'warning', 'icon' => 'bi-prescription2'],
         'leave' => ['label' => 'Concediu', 'tone' => 'success', 'icon' => 'bi-calendar2-check'],
         'manual_inactive' => ['label' => 'Inactiv', 'tone' => 'muted', 'icon' => 'bi-slash-circle'],
+        'terminated' => ['label' => 'Colaborare incheiata', 'tone' => 'danger', 'icon' => 'bi-person-x'],
+        'not_yet_hired' => ['label' => 'Inainte de data angajarii', 'tone' => 'warning', 'icon' => 'bi-person-plus'],
         'other' => ['label' => 'Alt motiv', 'tone' => 'muted', 'icon' => 'bi-exclamation-circle'],
     ];
 
@@ -29,7 +31,11 @@ class InactiveResourceStatusService
         $this->db = $db;
     }
 
-    public function getResourcesStatus(?int $vehicleId, ?int $driverId): array
+    /**
+     * @param string|null $referenceDate Data cursei (Y-m-d) pentru care se evalueaza resursele.
+     *                                   Implicit: ziua curenta.
+     */
+    public function getResourcesStatus(?int $vehicleId, ?int $driverId, ?string $referenceDate = null): array
     {
         $resources = [];
 
@@ -41,7 +47,7 @@ class InactiveResourceStatusService
         }
 
         if ($driverId !== null && $driverId > 0) {
-            $driverStatus = $this->getDriverStatus($driverId);
+            $driverStatus = $this->getDriverStatus($driverId, $referenceDate);
             if ($driverStatus !== null) {
                 $resources[] = $driverStatus;
             }
@@ -115,10 +121,15 @@ class InactiveResourceStatusService
         ]);
     }
 
-    public function getDriverStatus(int $driverId): ?array
+    /**
+     * @param string|null $referenceDate Data cursei (Y-m-d). Perioada de angajare
+     *                                   se evalueaza fata de aceasta data, nu fata de azi.
+     */
+    public function getDriverStatus(int $driverId, ?string $referenceDate = null): ?array
     {
         $stmt = $this->db->prepare("
-            SELECT id, nume, status, employment_status, observatii, created_at, updated_at
+            SELECT id, nume, status, employment_status, observatii, created_at, updated_at,
+                   data_angajare, data_incetare, termination_date
             FROM soferi
             WHERE id = :id
             LIMIT 1
@@ -152,8 +163,34 @@ class InactiveResourceStatusService
             );
         }
 
+        // Perioada de angajare se evalueaza fata de data cursei, nu fata de azi:
+        // o cursa din intervalul [data_angajare, data incetarii] este legitima chiar
+        // daca soferul a fost intre timp concediat / si-a dat demisia.
+        $reference = $this->normalizeDate($referenceDate)
+            ?? (new DateTimeImmutable('today'))->format('Y-m-d');
+        $employmentStart = $this->normalizeDate($driver['data_angajare'] ?? null);
+        $employmentEnd = $this->firstDate($driver['termination_date'] ?? null, $driver['data_incetare'] ?? null);
         $employmentStatus = (string) ($driver['employment_status'] ?? 'active');
-        if ((string) ($driver['status'] ?? 'activ') === 'inactiv' || in_array($employmentStatus, ['temporarily_inactive', 'suspended', 'leave'], true)) {
+        $isTerminated = $employmentStatus === 'terminated' || $employmentEnd !== null;
+
+        if ($employmentStart !== null && $reference < $employmentStart) {
+            $reasons[] = $this->buildReason('not_yet_hired', $employmentStart, self::DRIVER_REASON_DEFINITIONS);
+        }
+
+        if ($isTerminated) {
+            // Statusul 'inactiv' al unui sofer incetat este doar consecinta incetarii,
+            // deci nu il mai raportam separat ca 'manual_inactive'.
+            if ($employmentEnd === null) {
+                // Incetare fara data inregistrata: nu putem delimita perioada, semnalam mereu.
+                $reasons[] = $this->buildReason(
+                    'terminated',
+                    $this->firstDate($driver['updated_at'] ?? null, $driver['created_at'] ?? null),
+                    self::DRIVER_REASON_DEFINITIONS
+                );
+            } elseif ($reference > $employmentEnd) {
+                $reasons[] = $this->buildReason('terminated', $employmentEnd, self::DRIVER_REASON_DEFINITIONS);
+            }
+        } elseif ((string) ($driver['status'] ?? 'activ') === 'inactiv' || in_array($employmentStatus, ['temporarily_inactive', 'suspended', 'leave'], true)) {
             $manualKey = $employmentStatus === 'leave' ? 'leave' : 'manual_inactive';
             $reasons[] = $this->buildReason(
                 $manualKey,
