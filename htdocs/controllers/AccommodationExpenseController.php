@@ -11,6 +11,14 @@ declare(strict_types=1);
 class AccommodationExpenseController
 {
     private const PER_PAGE_OPTIONS = [10, 20, 50, 100];
+    private const MAX_UPLOAD_SIZE = 5242880; // 5 MB, ca la documentele de cheltuiala cursa
+    private const ALLOWED_EXTENSIONS = ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'doc', 'docx'];
+
+    /**
+     * Facturile de cazare stau in acelasi folder ca documentele de cheltuiala cursa,
+     * fiindca randul-oglinda din curse_cheltuieli trimite catre acelasi fisier.
+     */
+    private const UPLOAD_DIR = 'uploads/curse_cheltuieli';
 
     private AccommodationExpenseModel $model;
 
@@ -58,6 +66,13 @@ class AccommodationExpenseController
             case 'rematch':
                 $this->requireAction('link');
                 $this->rematchAction();
+                return;
+            case 'delete_document':
+                $this->requireAction('edit');
+                $this->deleteDocumentAction();
+                return;
+            case 'download_document':
+                $this->downloadDocumentAction();
                 return;
             case 'export':
                 $this->requireAction('export');
@@ -151,16 +166,26 @@ class AccommodationExpenseController
         ensure_csrf_or_redirect($this->returnUrl());
 
         [$data, $errors] = $this->collectFormData();
+        [$uploaded, $uploadError] = $this->storeUploadedDocument($_FILES['document_upload'] ?? null);
+        if ($uploadError !== null) {
+            $errors[] = $uploadError;
+        }
+
         if ($errors !== []) {
+            $this->deletePhysicalFile($uploaded['file_path'] ?? null);
             flash_set('danger', implode(' ', $errors));
             redirect($this->returnUrl());
         }
 
         try {
             $id = $this->model->create($data);
+            if ($uploaded !== null) {
+                $this->model->addDocument($id, $uploaded);
+            }
             $row = $this->model->getById($id);
             flash_set('success', 'Cazarea a fost salvata. ' . $this->associationMessage($row));
         } catch (Throwable $exception) {
+            $this->deletePhysicalFile($uploaded['file_path'] ?? null);
             error_log('[AccommodationExpenseController][store] ' . $exception->getMessage());
             flash_set('danger', 'Nu s-a putut salva cazarea.');
         }
@@ -180,16 +205,26 @@ class AccommodationExpenseController
         }
 
         [$data, $errors] = $this->collectFormData();
+        [$uploaded, $uploadError] = $this->storeUploadedDocument($_FILES['document_upload'] ?? null);
+        if ($uploadError !== null) {
+            $errors[] = $uploadError;
+        }
+
         if ($errors !== []) {
+            $this->deletePhysicalFile($uploaded['file_path'] ?? null);
             flash_set('danger', implode(' ', $errors));
             redirect($this->returnUrl());
         }
 
         try {
             $this->model->update($id, $data);
+            if ($uploaded !== null) {
+                $this->model->addDocument($id, $uploaded);
+            }
             $row = $this->model->getById($id);
             flash_set('success', 'Cazarea a fost actualizata. ' . $this->associationMessage($row));
         } catch (Throwable $exception) {
+            $this->deletePhysicalFile($uploaded['file_path'] ?? null);
             error_log('[AccommodationExpenseController][update] ' . $exception->getMessage());
             flash_set('danger', 'Nu s-a putut actualiza cazarea.');
         }
@@ -209,7 +244,9 @@ class AccommodationExpenseController
         }
 
         try {
-            $this->model->delete($id);
+            foreach ($this->model->delete($id) as $filePath) {
+                $this->deletePhysicalFile($filePath);
+            }
             flash_set('success', 'Cazarea a fost stearsa.');
         } catch (Throwable $exception) {
             error_log('[AccommodationExpenseController][delete] ' . $exception->getMessage());
@@ -264,7 +301,7 @@ class AccommodationExpenseController
         try {
             $this->model->unlink($id);
             $row = $this->model->getById($id);
-            flash_set('success', 'Asocierea a fost anulata. ' . $this->associationMessage($row));
+            flash_set('success', 'Alegerea manuala a fost anulata. ' . $this->associationMessage($row));
         } catch (Throwable $exception) {
             error_log('[AccommodationExpenseController][unlink] ' . $exception->getMessage());
             flash_set('danger', 'Nu s-a putut anula asocierea.');
@@ -291,6 +328,174 @@ class AccommodationExpenseController
         }
 
         redirect($this->returnUrl());
+    }
+
+    // -------------------------------------------------------------------------
+    // Documente (facturi)
+    // -------------------------------------------------------------------------
+
+    private function deleteDocumentAction(): void
+    {
+        $this->requirePost();
+        ensure_csrf_or_redirect($this->returnUrl());
+
+        $documentId = (int) ($_POST['document_id'] ?? 0);
+        if ($documentId <= 0) {
+            flash_set('warning', 'Documentul nu exista.');
+            redirect($this->returnUrl());
+        }
+
+        try {
+            $filePath = $this->model->deleteDocument($documentId);
+            if ($filePath === null) {
+                flash_set('warning', 'Documentul nu exista.');
+            } else {
+                $this->deletePhysicalFile($filePath);
+                flash_set('success', 'Documentul a fost sters.');
+            }
+        } catch (Throwable $exception) {
+            error_log('[AccommodationExpenseController][delete_document] ' . $exception->getMessage());
+            flash_set('danger', 'Nu s-a putut sterge documentul.');
+        }
+
+        redirect($this->returnUrl());
+    }
+
+    /**
+     * Serveste fisierul prin PHP, ca sa nu depindem de accesul direct la folderul
+     * de upload si sa pastram documentul in spatele autentificarii.
+     */
+    private function downloadDocumentAction(): void
+    {
+        $documentId = (int) ($_GET['document_id'] ?? 0);
+        $document = $documentId > 0 ? $this->model->getDocumentById($documentId) : null;
+
+        if ($document === null) {
+            http_response_code(404);
+            render('errors/404.php', [
+                'pageTitle' => 'Document inexistent',
+                'currentPage' => 'cazare',
+            ]);
+            return;
+        }
+
+        $path = BASE_PATH . '/' . self::UPLOAD_DIR . '/' . basename((string) $document['file_path']);
+        if (!is_file($path)) {
+            http_response_code(404);
+            render('errors/404.php', [
+                'pageTitle' => 'Fisier inexistent',
+                'currentPage' => 'cazare',
+            ]);
+            return;
+        }
+
+        $mime = trim((string) ($document['mime_type'] ?? ''));
+        // Documentele se deschid inline (preview in tab nou); descarcarea ramane
+        // la latitudinea browserului.
+        header('Content-Type: ' . ($mime !== '' ? $mime : 'application/octet-stream'));
+        header('Content-Disposition: inline; filename="' . basename((string) $document['original_name']) . '"');
+        header('Content-Length: ' . (string) filesize($path));
+        header('X-Content-Type-Options: nosniff');
+        readfile($path);
+        exit;
+    }
+
+    /**
+     * @return array{0: ?array{file_path: string, original_name: string, mime_type: string, file_size: int}, 1: ?string}
+     */
+    private function storeUploadedDocument(?array $file): array
+    {
+        if (!is_array($file)) {
+            return [null, null];
+        }
+
+        $error = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($error === UPLOAD_ERR_NO_FILE) {
+            return [null, null];
+        }
+        if ($error !== UPLOAD_ERR_OK) {
+            return [null, 'Factura nu a putut fi incarcata.'];
+        }
+
+        $tmpName = (string) ($file['tmp_name'] ?? '');
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            return [null, 'Fisierul incarcat nu este valid.'];
+        }
+
+        $size = (int) ($file['size'] ?? 0);
+        if ($size <= 0 || $size > self::MAX_UPLOAD_SIZE) {
+            return [null, 'Fisierul depaseste limita maxima de 5 MB.'];
+        }
+
+        $originalName = $this->sanitizeUploadedFileName((string) ($file['name'] ?? 'document'));
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        if (!in_array($extension, self::ALLOWED_EXTENSIONS, true)) {
+            return [null, 'Tipul fisierului nu este permis (PDF, JPG, PNG, WEBP, DOC, DOCX).'];
+        }
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mimeType = $finfo !== false ? (string) (finfo_file($finfo, $tmpName) ?: '') : '';
+        if ($finfo !== false) {
+            finfo_close($finfo);
+        }
+
+        $allowedMimeTypes = [
+            'application/pdf',
+            'image/jpeg',
+            'image/png',
+            'image/webp',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/octet-stream',
+            'application/zip',
+        ];
+        if ($mimeType !== '' && !in_array($mimeType, $allowedMimeTypes, true)) {
+            return [null, 'Tipul MIME al fisierului nu este permis.'];
+        }
+
+        $uploadDir = BASE_PATH . '/' . self::UPLOAD_DIR;
+        if (!is_dir($uploadDir) && !mkdir($uploadDir, 0755, true) && !is_dir($uploadDir)) {
+            return [null, 'Nu s-a putut crea folderul de upload.'];
+        }
+
+        try {
+            $storedName = 'cazare_' . date('Ymd_His') . '_' . bin2hex(random_bytes(8));
+        } catch (Throwable) {
+            $storedName = 'cazare_' . date('Ymd_His') . '_' . uniqid('', true);
+        }
+        $storedName .= '.' . $extension;
+
+        if (!move_uploaded_file($tmpName, $uploadDir . '/' . $storedName)) {
+            return [null, 'Fisierul nu a putut fi salvat pe server.'];
+        }
+
+        return [[
+            'file_path' => $storedName,
+            'original_name' => $originalName,
+            'mime_type' => $mimeType !== '' ? $mimeType : 'application/octet-stream',
+            'file_size' => $size,
+        ], null];
+    }
+
+    private function sanitizeUploadedFileName(string $name): string
+    {
+        $name = trim(basename($name));
+        $name = preg_replace('/[^A-Za-z0-9._-]+/', '_', $name) ?: 'document';
+
+        return substr($name, 0, 180);
+    }
+
+    private function deletePhysicalFile(?string $storedFile): void
+    {
+        $storedFile = basename((string) $storedFile);
+        if ($storedFile === '' || $storedFile === '.') {
+            return;
+        }
+
+        $path = BASE_PATH . '/' . self::UPLOAD_DIR . '/' . $storedFile;
+        if (is_file($path)) {
+            @unlink($path);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -322,7 +527,7 @@ class AccommodationExpenseController
         }
 
         fwrite($out, "\xEF\xBB\xBF");
-        fputcsv($out, ['Data', 'Sofer', 'Total', 'Total cu TVA', 'Status', 'Cursa', 'Perioada cursa', 'Vehicul', 'Observatii']);
+        fputcsv($out, ['Data', 'Sofer', 'Total', 'Total cu TVA', 'Status', 'Cursa', 'Perioada cursa', 'Vehicul', 'Factura', 'Observatii']);
 
         foreach ($rows as $row) {
             $period = $row['data_inceput'] !== null
@@ -338,6 +543,7 @@ class AccommodationExpenseController
                 $row['cursa_id'] !== null ? '#' . (int) $row['cursa_id'] : '-',
                 $period,
                 (string) ($row['nr_inmatriculare'] ?? '-'),
+                (string) ($row['documente'] ?? ''),
                 (string) ($row['observatii'] ?? ''),
             ]);
         }

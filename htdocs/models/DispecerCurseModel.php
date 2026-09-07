@@ -2577,6 +2577,14 @@ class DispecerCurseModel extends BaseModel
             ");
         }
 
+        // Coloana este adaugata de modulul Cazare, dar interogarile de aici o
+        // folosesc si cand pagina Cazare nu a fost deschisa inca.
+        $columnCheckStmt->bindValue(':column_name', 'cazare_id', PDO::PARAM_STR);
+        $columnCheckStmt->execute();
+        if ((int) $columnCheckStmt->fetchColumn() === 0) {
+            $this->db->exec('ALTER TABLE curse_cheltuieli ADD COLUMN cazare_id INT UNSIGNED NULL AFTER categorie_id');
+        }
+
         $columnCheckStmt->bindValue(':column_name', 'refacturare_detalii', PDO::PARAM_STR);
         $columnCheckStmt->execute();
         $hasDetailsColumn = (int) $columnCheckStmt->fetchColumn() > 0;
@@ -5562,6 +5570,9 @@ class DispecerCurseModel extends BaseModel
             FROM curse_cheltuieli_documente d
             INNER JOIN curse_cheltuieli e ON e.id = d.cheltuiala_id
             WHERE e.cursa_id = :cursa_id_docs
+              -- Facturile de cazare sunt doar oglindite aici; fisierul fizic apartine
+              -- modulului Cazare, deci nu il stergem odata cu cursa.
+              AND e.cazare_id IS NULL
             UNION ALL
             SELECT 0 AS id, e.refacturare_document_path AS file_path
             FROM curse_cheltuieli e

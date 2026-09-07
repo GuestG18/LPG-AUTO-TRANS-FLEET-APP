@@ -92,3 +92,18 @@ SET @sql := IF(@has_cazare_fk = 0,
     'ALTER TABLE curse_cheltuieli ADD CONSTRAINT fk_curse_cheltuieli_cazare FOREIGN KEY (cazare_id) REFERENCES cheltuieli_cazare(id) ON DELETE CASCADE',
     'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- 4. Facturile de cazare. Fisierele stau in uploads/curse_cheltuieli, acelasi folder
+--    ca documentele de cheltuiala cursa, ca randul-oglinda sa trimita catre acelasi
+--    fisier fara sa il duplicam pe disc.
+CREATE TABLE IF NOT EXISTS cheltuieli_cazare_documente (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    cazare_id INT UNSIGNED NOT NULL,
+    file_path VARCHAR(255) NOT NULL,
+    original_name VARCHAR(255) NOT NULL,
+    mime_type VARCHAR(150) NULL,
+    file_size INT UNSIGNED NOT NULL,
+    created_at DATETIME NOT NULL,
+    INDEX idx_cheltuieli_cazare_doc_cazare (cazare_id),
+    CONSTRAINT fk_cheltuieli_cazare_doc_cazare FOREIGN KEY (cazare_id) REFERENCES cheltuieli_cazare(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

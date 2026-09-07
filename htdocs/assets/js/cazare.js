@@ -30,6 +30,64 @@
         }
     }
 
+    /**
+     * Listeaza facturile deja atasate, cu link de vizualizare si buton de stergere.
+     * La adaugare lista este goala si zona ramane ascunsa.
+     */
+    function renderDocuments(raw) {
+        var wrap = form ? form.querySelector('[data-cazare-docs-wrap]') : null;
+        var list = form ? form.querySelector('[data-cazare-docs]') : null;
+        if (!wrap || !list) {
+            return;
+        }
+
+        var documents = [];
+        try {
+            documents = raw ? JSON.parse(raw) : [];
+        } catch (error) {
+            documents = [];
+        }
+
+        list.textContent = '';
+        if (!documents.length) {
+            wrap.classList.add('d-none');
+            return;
+        }
+
+        documents.forEach(function (doc) {
+            var row = document.createElement('div');
+            row.className = 'd-flex align-items-center gap-2';
+
+            var link = document.createElement('a');
+            link.className = 'cazare-doc-link flex-grow-1 text-truncate';
+            link.href = doc.url;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.textContent = doc.nume;
+
+            var remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'btn btn-sm btn-outline-danger';
+            remove.title = 'Șterge factura';
+            remove.textContent = '×';
+            remove.addEventListener('click', function () {
+                var docForm = document.getElementById('cazareDeleteDocForm');
+                var docInput = document.getElementById('cazareDeleteDocId');
+                if (!docForm || !docInput) {
+                    return;
+                }
+                docInput.value = String(doc.id);
+                docForm.submit();
+            });
+
+            row.appendChild(link);
+            row.appendChild(remove);
+            list.appendChild(row);
+        });
+
+        wrap.classList.remove('d-none');
+    }
+
     function applyMode(trigger) {
         if (!form) {
             return;
@@ -37,6 +95,10 @@
 
         var title = form.querySelector('[data-cazare-title]');
         var isEdit = trigger != null && trigger.hasAttribute('data-cazare-edit');
+        var fileInput = form.querySelector('input[type="file"]');
+        if (fileInput) {
+            fileInput.value = '';
+        }
 
         if (isEdit) {
             form.setAttribute('action', urls.update || form.getAttribute('action'));
@@ -49,6 +111,7 @@
             setValue('total', trigger.getAttribute('data-total'));
             setValue('total_cu_tva', trigger.getAttribute('data-total-tva'));
             setValue('observatii', trigger.getAttribute('data-observatii'));
+            renderDocuments(trigger.getAttribute('data-documente'));
             return;
         }
 
@@ -59,6 +122,7 @@
         ['id', 'data', 'sofer_id', 'total', 'total_cu_tva', 'observatii'].forEach(function (name) {
             setValue(name, '');
         });
+        renderDocuments(null);
     }
 
     document.addEventListener('click', function (event) {

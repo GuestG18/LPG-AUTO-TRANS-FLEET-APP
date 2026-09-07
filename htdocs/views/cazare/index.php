@@ -183,6 +183,7 @@ $raceLabel = static function (array $race): string {
                     <th>Șofer</th>
                     <th class="text-end">Total</th>
                     <th class="text-end">Total cu TVA</th>
+                    <th>Factură</th>
                     <th>Cursă asociată</th>
                     <th>Status</th>
                     <th class="text-end">Acțiuni</th>
@@ -191,13 +192,14 @@ $raceLabel = static function (array $race): string {
             <tbody>
             <?php if ($rows === []): ?>
                 <tr>
-                    <td colspan="7" class="text-center text-secondary py-4">Nu există înregistrări de cazare pentru filtrele selectate.</td>
+                    <td colspan="8" class="text-center text-secondary py-4">Nu există înregistrări de cazare pentru filtrele selectate.</td>
                 </tr>
             <?php endif; ?>
             <?php foreach ($rows as $row): ?>
                 <?php
                 $status = (string) $row['status'];
                 $candidates = is_array($row['candidati'] ?? null) ? $row['candidati'] : [];
+                $documents = is_array($row['documente'] ?? null) ? $row['documente'] : [];
                 $rowId = (int) $row['id'];
                 ?>
                 <tr>
@@ -210,6 +212,26 @@ $raceLabel = static function (array $race): string {
                     </td>
                     <td class="text-end"><?= e($money($row['total'])) ?></td>
                     <td class="text-end fw-semibold"><?= e($money($row['total_cu_tva'])) ?></td>
+                    <td>
+                        <?php if ($documents === []): ?>
+                            <span class="text-secondary small">—</span>
+                        <?php else: ?>
+                            <div class="d-flex flex-column gap-1">
+                                <?php foreach ($documents as $document): ?>
+                                    <a
+                                        class="cazare-doc-link"
+                                        href="<?= e(build_query_url(['page' => 'cazare', 'action' => 'download_document', 'document_id' => (int) $document['id']])) ?>"
+                                        target="_blank"
+                                        rel="noopener"
+                                        title="<?= e((string) $document['original_name']) ?>"
+                                    >
+                                        <i class="bi bi-paperclip" aria-hidden="true"></i>
+                                        <span><?= e(mb_strimwidth((string) $document['original_name'], 0, 26, '…')) ?></span>
+                                    </a>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
+                    </td>
                     <td>
                         <?php if ($status === 'asociat' && $row['cursa_id'] !== null): ?>
                             <a class="text-decoration-none" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => (int) $row['cursa_id']])) ?>">
@@ -246,11 +268,13 @@ $raceLabel = static function (array $race): string {
                     </td>
                     <td><?= $statusBadge($status) ?></td>
                     <td class="text-end text-nowrap">
-                        <?php if ($canLink && $status === 'asociat'): ?>
+                        <?php /* Doar alegerea manuala poate fi anulata: pentru randurile potrivite
+                                 automat, motorul ar reasocia imediat aceeasi cursa. */ ?>
+                        <?php if ($canLink && $status === 'asociat' && (int) $row['asociere_manuala'] === 1): ?>
                             <form method="post" action="<?= e(build_query_url(['page' => 'cazare', 'action' => 'unlink'])) ?>" class="d-inline">
                                 <?= csrf_field() ?>
                                 <input type="hidden" name="id" value="<?= $rowId ?>">
-                                <button type="submit" class="btn btn-sm btn-outline-secondary" title="Anulează asocierea">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary" title="Anulează alegerea manuală a cursei">
                                     <i class="bi bi-link-45deg" aria-hidden="true"></i>
                                 </button>
                             </form>
@@ -268,6 +292,11 @@ $raceLabel = static function (array $race): string {
                                 data-total="<?= e(number_format((float) $row['total'], 2, '.', '')) ?>"
                                 data-total-tva="<?= e(number_format((float) $row['total_cu_tva'], 2, '.', '')) ?>"
                                 data-observatii="<?= e((string) ($row['observatii'] ?? '')) ?>"
+                                data-documente="<?= e(json_encode(array_map(static fn(array $d): array => [
+                                    'id' => (int) $d['id'],
+                                    'nume' => (string) $d['original_name'],
+                                    'url' => build_query_url(['page' => 'cazare', 'action' => 'download_document', 'document_id' => (int) $d['id']]),
+                                ], $documents), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>"
                                 title="Editează"
                             >
                                 <i class="bi bi-pencil" aria-hidden="true"></i>
@@ -308,7 +337,7 @@ $raceLabel = static function (array $race): string {
 <?php if ($canCreate || $canEdit): ?>
 <div class="modal fade" id="cazareFormModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
-        <form class="modal-content" method="post" action="<?= e(build_query_url(['page' => 'cazare', 'action' => 'store'])) ?>" data-cazare-form>
+        <form class="modal-content" method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'cazare', 'action' => 'store'])) ?>" data-cazare-form>
             <?= csrf_field() ?>
             <input type="hidden" name="id" value="" data-cazare-field="id">
             <div class="modal-header">
@@ -349,6 +378,22 @@ $raceLabel = static function (array $race): string {
                         <div class="form-text">Această sumă intră ca și cost pe cursă.</div>
                     </div>
                     <div class="col-12">
+                        <label class="form-label" for="cazareDocument">Factură</label>
+                        <input
+                            type="file"
+                            class="form-control"
+                            id="cazareDocument"
+                            name="document_upload"
+                            accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"
+                        >
+                        <div class="form-text">PDF, JPG, PNG, WEBP, DOC sau DOCX. Maxim 5 MB. Factura apare și pe cursa asociată.</div>
+                        <!-- Documentele deja atasate, populate din butonul de editare. -->
+                        <div class="mt-2 d-none" data-cazare-docs-wrap>
+                            <div class="form-label small mb-1">Facturi atașate</div>
+                            <div class="d-flex flex-column gap-1" data-cazare-docs></div>
+                        </div>
+                    </div>
+                    <div class="col-12">
                         <label class="form-label" for="cazareObservatii">Observații</label>
                         <textarea class="form-control" id="cazareObservatii" name="observatii" rows="2" data-cazare-field="observatii"></textarea>
                     </div>
@@ -361,6 +406,15 @@ $raceLabel = static function (array $race): string {
         </form>
     </div>
 </div>
+<?php endif; ?>
+
+<?php if ($canEdit): ?>
+<!-- Stergerea unui document nu poate sta in formularul principal (formularele nu se
+     pot imbrica), deci butoanele din modal submit-eaza acest formular separat. -->
+<form method="post" action="<?= e(build_query_url(['page' => 'cazare', 'action' => 'delete_document'])) ?>" class="d-none" id="cazareDeleteDocForm">
+    <?= csrf_field() ?>
+    <input type="hidden" name="document_id" value="" id="cazareDeleteDocId">
+</form>
 <?php endif; ?>
 
 <?php if ($canDelete): ?>

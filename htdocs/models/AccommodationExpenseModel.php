@@ -74,6 +74,23 @@ class AccommodationExpenseModel extends BaseModel
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
+        // Facturile de cazare stau in acelasi folder fizic ca documentele de cheltuiala
+        // de cursa (uploads/curse_cheltuieli), ca randul-oglinda sa poata trimite catre
+        // acelasi fisier fara sa duplicam continutul pe disc.
+        $this->db->exec("
+            CREATE TABLE IF NOT EXISTS cheltuieli_cazare_documente (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                cazare_id INT UNSIGNED NOT NULL,
+                file_path VARCHAR(255) NOT NULL,
+                original_name VARCHAR(255) NOT NULL,
+                mime_type VARCHAR(150) NULL,
+                file_size INT UNSIGNED NOT NULL,
+                created_at DATETIME NOT NULL,
+                INDEX idx_cheltuieli_cazare_doc_cazare (cazare_id),
+                CONSTRAINT fk_cheltuieli_cazare_doc_cazare FOREIGN KEY (cazare_id) REFERENCES cheltuieli_cazare(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
         $this->ensureMirrorColumn();
         $this->ensureCategory();
 
@@ -397,6 +414,148 @@ class AccommodationExpenseModel extends BaseModel
         $stmt->bindValue(':updated_at', $now, PDO::PARAM_STR);
         $stmt->bindValue(':id', $existingId, PDO::PARAM_INT);
         $stmt->execute();
+
+        $this->syncMirrorDocuments($id);
+    }
+
+    /**
+     * Oglindeste facturile cazarii pe randul din curse_cheltuieli, ca sa fie
+     * vizibile si din Dispecer curse / Istoric cheltuieli curse.
+     *
+     * Randurile se rescriu integral (sunt doar o proiectie), iar fisierele fizice
+     * NU se sterg aici: ele apartin cazarii, nu cheltuielii de cursa.
+     */
+    private function syncMirrorDocuments(int $id): void
+    {
+        $mirrorId = $this->findMirrorExpenseId($id);
+        if ($mirrorId === null) {
+            return;
+        }
+
+        $stmt = $this->db->prepare('DELETE FROM curse_cheltuieli_documente WHERE cheltuiala_id = :cheltuiala_id');
+        $stmt->bindValue(':cheltuiala_id', $mirrorId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $documents = $this->getDocuments($id);
+        if ($documents === []) {
+            return;
+        }
+
+        $insert = $this->db->prepare("
+            INSERT INTO curse_cheltuieli_documente (cheltuiala_id, file_path, original_name, mime_type, file_size, created_at)
+            VALUES (:cheltuiala_id, :file_path, :original_name, :mime_type, :file_size, :created_at)
+        ");
+
+        foreach ($documents as $document) {
+            $insert->bindValue(':cheltuiala_id', $mirrorId, PDO::PARAM_INT);
+            $insert->bindValue(':file_path', (string) $document['file_path'], PDO::PARAM_STR);
+            $insert->bindValue(':original_name', (string) $document['original_name'], PDO::PARAM_STR);
+            $insert->bindValue(':mime_type', (string) ($document['mime_type'] ?? 'application/octet-stream'), PDO::PARAM_STR);
+            $insert->bindValue(':file_size', (int) $document['file_size'], PDO::PARAM_INT);
+            $insert->bindValue(':created_at', (string) $document['created_at'], PDO::PARAM_STR);
+            $insert->execute();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Documente (facturi de cazare)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @param array{file_path: string, original_name: string, mime_type: ?string, file_size: int} $document
+     */
+    public function addDocument(int $id, array $document): int
+    {
+        $stmt = $this->db->prepare("
+            INSERT INTO cheltuieli_cazare_documente (cazare_id, file_path, original_name, mime_type, file_size, created_at)
+            VALUES (:cazare_id, :file_path, :original_name, :mime_type, :file_size, :created_at)
+        ");
+        $stmt->bindValue(':cazare_id', $id, PDO::PARAM_INT);
+        $stmt->bindValue(':file_path', $document['file_path'], PDO::PARAM_STR);
+        $stmt->bindValue(':original_name', $document['original_name'], PDO::PARAM_STR);
+        $stmt->bindValue(':mime_type', $document['mime_type'] ?? 'application/octet-stream', PDO::PARAM_STR);
+        $stmt->bindValue(':file_size', $document['file_size'], PDO::PARAM_INT);
+        $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        $stmt->execute();
+
+        $documentId = (int) $this->db->lastInsertId();
+        $this->syncMirrorDocuments($id);
+
+        return $documentId;
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function getDocuments(int $id): array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM cheltuieli_cazare_documente WHERE cazare_id = :cazare_id ORDER BY id ASC');
+        $stmt->bindValue(':cazare_id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * Documentele pentru un set de cazari, grupate pe cazare_id (evita N+1 in listare).
+     *
+     * @param array<int, int> $ids
+     * @return array<int, array<int, array<string, mixed>>>
+     */
+    public function getDocumentsForRows(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if ($ids === []) {
+            return [];
+        }
+
+        $placeholders = [];
+        foreach ($ids as $index => $value) {
+            $placeholders[':id' . $index] = $value;
+        }
+
+        $stmt = $this->db->prepare(
+            'SELECT * FROM cheltuieli_cazare_documente WHERE cazare_id IN (' . implode(', ', array_keys($placeholders)) . ') ORDER BY id ASC'
+        );
+        foreach ($placeholders as $placeholder => $value) {
+            $stmt->bindValue($placeholder, $value, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        $grouped = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $document) {
+            $grouped[(int) $document['cazare_id']][] = $document;
+        }
+
+        return $grouped;
+    }
+
+    public function getDocumentById(int $documentId): ?array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM cheltuieli_cazare_documente WHERE id = :id LIMIT 1');
+        $stmt->bindValue(':id', $documentId, PDO::PARAM_INT);
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : $row;
+    }
+
+    /**
+     * Sterge inregistrarea documentului si intoarce numele fisierului fizic,
+     * ca sa poata fi sters de controller.
+     */
+    public function deleteDocument(int $documentId): ?string
+    {
+        $document = $this->getDocumentById($documentId);
+        if ($document === null) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare('DELETE FROM cheltuieli_cazare_documente WHERE id = :id');
+        $stmt->bindValue(':id', $documentId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $this->syncMirrorDocuments((int) $document['cazare_id']);
+
+        return (string) $document['file_path'];
     }
 
     private function buildMirrorNotes(array $row): string
@@ -509,16 +668,29 @@ class AccommodationExpenseModel extends BaseModel
         return true;
     }
 
-    public function delete(int $id): bool
+    /**
+     * Sterge cazarea si intoarce fisierele fizice ramase fara referinta,
+     * ca sa fie sterse de pe disc de catre controller.
+     *
+     * @return array<int, string>
+     */
+    public function delete(int $id): array
     {
+        $files = [];
+        foreach ($this->getDocuments($id) as $document) {
+            $files[] = (string) $document['file_path'];
+        }
+
         // Randul-oglinda pleaca prin FK ON DELETE CASCADE, dar il stergem explicit
         // ca sa nu depindem de migrarea constrangerii pe instalari mai vechi.
+        // Stergerea lui duce cu ea si documentele oglindite (FK pe cheltuiala_id).
         $this->deleteMirrorExpense($id);
 
         $stmt = $this->db->prepare('DELETE FROM cheltuieli_cazare WHERE id = :id');
         $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
 
-        return $stmt->execute();
+        return $files;
     }
 
     public function getById(int $id): ?array
@@ -594,11 +766,14 @@ class AccommodationExpenseModel extends BaseModel
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
+        $documents = $this->getDocumentsForRows(array_map(static fn(array $row): int => (int) $row['id'], $rows));
+
         // Pentru randurile ambigue afisam lista de curse candidate direct in tabel.
         foreach ($rows as $index => $row) {
             $rows[$index]['candidati'] = (string) $row['status'] === 'ambiguu'
                 ? $this->findMatchingRaces((int) $row['sofer_id'], (string) $row['data'])
                 : [];
+            $rows[$index]['documente'] = $documents[(int) $row['id']] ?? [];
         }
 
         return [
@@ -662,7 +837,12 @@ class AccommodationExpenseModel extends BaseModel
                 c.data_inceput,
                 c.data_sfarsit,
                 v.nr_inmatriculare,
-                z.observatii
+                z.observatii,
+                (
+                    SELECT GROUP_CONCAT(d.original_name ORDER BY d.id SEPARATOR ' | ')
+                    FROM cheltuieli_cazare_documente d
+                    WHERE d.cazare_id = z.id
+                ) AS documente
             FROM cheltuieli_cazare z
             INNER JOIN soferi s ON s.id = z.sofer_id
             LEFT JOIN curse_dispecer c ON c.id = z.cursa_id AND c.deleted_at IS NULL

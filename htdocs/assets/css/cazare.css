@@ -41,3 +41,20 @@
 .cazare-table td form {
     margin-bottom: 0;
 }
+
+/* Link catre factura atasata: compact, cu trunchiere pe randuri inguste. */
+.cazare-doc-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.82rem;
+    text-decoration: none;
+    max-width: 16rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cazare-doc-link:hover {
+    text-decoration: underline;
+}
