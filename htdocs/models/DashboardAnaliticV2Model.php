@@ -1021,8 +1021,15 @@ class DashboardAnaliticV2Model extends BaseModel
         $refacturare = (float) ($row['refacturare'] ?? 0);
         $cheltuieli = (float) ($row['cheltuieli'] ?? 0);
         $profit = $facturare - $cheltuieli;
-        // Identic cu V1: raportarile pe km folosesc km facturati, cu fallback pe km totali.
-        $kmBase = $kmBilled > 0 ? $kmBilled : $km;
+        /*
+         * Raportarile pe km (venit / cost / profit pe km) se impart la km PARCURSI,
+         * nu la km facturati: motorina si uzura se consuma pe toti kilometrii, inclusiv
+         * pe cei nefacturati, iar impartirea la km facturati readucea practic tariful.
+         *
+         * DIFERENTA INTENTIONATA FATA DE V1, care imparte la km facturati. Restul
+         * metricilor raman identice cu pagina live.
+         */
+        $kmBase = $km > 0 ? $km : $kmBilled;
         $puncte = (int) ($row['puncte_client'] ?? 0);
 
         return [

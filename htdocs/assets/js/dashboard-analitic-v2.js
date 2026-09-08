@@ -551,7 +551,7 @@
                     stats: [
                         { label: 'Refacturare de încasat', value: fmt(f.refacturare, 'lei') },
                         { label: 'Total de încasat', value: fmt(f.total_incasare, 'lei') },
-                        { label: 'Venit / km', value: fmt(f.venit_km, 'lei3') },
+                        { label: 'Venit / km', value: fmt(f.venit_km, 'lei3'), hint: 'raportat la km parcurși, nu la km facturați: costurile se produc pe toți kilometrii' },
                         { label: 'Venit / tonă', value: fmt(f.venit_tona, 'lei') },
                         { label: 'Facturare / cursă', value: fmt(num(f.curse) > 0 ? num(f.facturare) / num(f.curse) : 0, 'lei') }
                     ],
@@ -574,7 +574,7 @@
                     intro: 'Cheltuielile atribuite curselor. Refacturările deja emise pe factură se scad, ca să nu fie numărate și ca venit, și ca și cost.',
                     formula: 'SUM(cheltuieli cursă) − SUM(refacturări facturate), minim 0 pe cursă',
                     stats: [
-                        { label: 'Cost / km', value: fmt(f.cost_km, 'lei3') },
+                        { label: 'Cost / km', value: fmt(f.cost_km, 'lei3'), hint: 'raportat la km parcurși, nu la km facturați: costurile se produc pe toți kilometrii' },
                         { label: 'Cheltuieli / cursă', value: fmt(num(f.curse) > 0 ? num(f.cheltuieli) / num(f.curse) : 0, 'lei') },
                         { label: 'Pondere din facturare', value: fmt(num(f.facturare) > 0 ? (num(f.cheltuieli) / num(f.facturare)) * 100 : 0, 'pct') }
                     ],
@@ -596,10 +596,10 @@
                 tone: num(f.profit) >= 0 ? 'good' : 'bad',
                 detail: {
                     intro: 'Ce rămâne din facturare după cheltuieli. Refacturările încă neîncasate nu intră în profit, ci sunt urmărite separat.',
-                    formula: 'Profit = Facturare − Cheltuieli',
+                    formula: 'Profit = Facturare − Cheltuieli · Profit / km = Profit ÷ km parcurși',
                     stats: [
                         { label: 'Marjă', value: fmt(f.marja_percent, 'pct') },
-                        { label: 'Profit / km', value: fmt(f.profit_km, 'lei3') },
+                        { label: 'Profit / km', value: fmt(f.profit_km, 'lei3'), hint: 'raportat la km parcurși, nu la km facturați: costurile se produc pe toți kilometrii' },
                         { label: 'Profit / tonă', value: fmt(f.profit_tona, 'lei') },
                         { label: 'Profit / cursă', value: fmt(num(f.curse) > 0 ? num(f.profit) / num(f.curse) : 0, 'lei') }
                     ],
@@ -2535,7 +2535,8 @@
             totals[key] = rows.reduce(function (sum, row) { return sum + num(row[key]); }, 0);
         });
 
-        var kmBase = totals.km_facturati > 0 ? totals.km_facturati : totals.km_totali;
+        // Aceeasi baza ca in model: km parcursi, nu km facturati.
+        var kmBase = totals.km_totali > 0 ? totals.km_totali : totals.km_facturati;
         totals.venit_km = kmBase > 0 ? totals.facturare / kmBase : 0;
         totals.cost_km = kmBase > 0 ? totals.cheltuieli / kmBase : 0;
         totals.profit_km = kmBase > 0 ? totals.profit / kmBase : 0;
