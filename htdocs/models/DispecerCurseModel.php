@@ -3501,12 +3501,19 @@ class DispecerCurseModel extends BaseModel
      * (buildRaceMissingInformation) pentru a nu duplica regulile de business in SQL.
      * O singura interogare — fara N+1.
      */
-    public function getOpenRacesOverview(int $limit = 25): array
+    /**
+     * Cursele deschise pentru panoul "curse cu informatii lipsa". Cu $vehicleId,
+     * lista se restrange la un singur vehicul: asa foloseste pagina de editare
+     * acelasi panou ca lista, fara sa arate si cursele celorlalte masini.
+     */
+    public function getOpenRacesOverview(int $limit = 25, ?int $vehicleId = null): array
     {
         $this->ensureRaceExpenseStatusColumn();
         $this->ensureRaceSoftDeleteSchema();
 
-        $limit = max(1, min(500, $limit));
+        // Popup-ul nu mai pagineaza: derularea trebuie sa poata ajunge la toate
+        // cursele incomplete, nu la o felie arbitrara.
+        $limit = max(1, min(5000, $limit));
         $billingStatusExpr = $this->defaultBillingStatusExpression();
 
         $listSql = "
@@ -3570,6 +3577,7 @@ class DispecerCurseModel extends BaseModel
             ) exp ON exp.cursa_id = c.id
             WHERE c.deleted_at IS NULL
               AND " . $billingStatusExpr . " = :open_races_billing_status
+            " . ($vehicleId !== null && $vehicleId > 0 ? ' AND c.vehicle_id = :vehicle_id' : '') . "
             -- Implicit: cele mai recent adaugate primele, ca o cursa tocmai introdusa
             -- sa fie in capul listei. Ordinea se poate schimba din panou.
             ORDER BY COALESCE(c.created_at, c.data_inceput) DESC, c.id DESC
@@ -3578,6 +3586,9 @@ class DispecerCurseModel extends BaseModel
 
         $listStmt = $this->db->prepare($listSql);
         $listStmt->bindValue(':open_races_billing_status', self::DEFAULT_BILLING_STATUS, PDO::PARAM_STR);
+        if ($vehicleId !== null && $vehicleId > 0) {
+            $listStmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+        }
         $listStmt->bindValue(':limit_rows', $limit, PDO::PARAM_INT);
         $listStmt->execute();
 
@@ -4361,6 +4372,340 @@ class DispecerCurseModel extends BaseModel
 
         $duplicateId = (int) $stmt->fetchColumn();
         return $duplicateId > 0 ? $duplicateId : null;
+    }
+
+    /**
+     * Suprapunere de interval pe acelasi vehicul: un camion nu poate fi in doua
+     * curse in acelasi timp. Este verificarea care prinde duplicatele reintroduse
+     * cu mici diferente (ora, km, tonaj) — amprenta exacta din duplicate_key le
+     * rateaza pentru ca orice caracter schimbat produce alt hash.
+     *
+     * Se compara doar curse care au ora de inceput completata: fara ora, intervalul
+     * ar acoperi toata ziua si ar bloca al doilea drum legitim din aceeasi zi.
+     * Cursele fara ora de sfarsit (in desfasurare) se inchid la finalul zilei lor.
+     * Capetele care se ating (o cursa incepe exact cand se termina cealalta) NU
+     * sunt suprapunere — asa se leaga segmentele de reluare a cursei.
+     */
+    public function findOverlappingRace(array $data, ?int $excludeRaceId = null): ?array
+    {
+        $this->ensureRaceSoftDeleteSchema();
+
+        $vehicleId = (int) ($data['vehicle_id'] ?? 0);
+        $startDate = $this->normalizeRaceIntervalDate($data['data_inceput'] ?? ($data['data_cursa'] ?? null));
+        $startTime = $this->normalizeRaceIntervalTime($data['ora_inceput'] ?? null);
+        if ($vehicleId <= 0 || $startDate === null || $startTime === null) {
+            return null;
+        }
+
+        $endDate = $this->normalizeRaceIntervalDate($data['data_sfarsit'] ?? null) ?? $startDate;
+        $endTime = $this->normalizeRaceIntervalTime($data['ora_sfarsit'] ?? null) ?? '23:59:59';
+
+        $newStart = $startDate . ' ' . $startTime;
+        $newEnd = $endDate . ' ' . $endTime;
+        if ($newEnd <= $newStart) {
+            return null;
+        }
+
+        $sql = "
+            SELECT
+                c.id,
+                c.data_inceput,
+                c.ora_inceput,
+                c.data_sfarsit,
+                c.ora_sfarsit,
+                v.nr_inmatriculare,
+                COALESCE(s.nume, '') AS sofer_nume
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            WHERE c.deleted_at IS NULL
+              AND c.vehicle_id = :vehicle_id
+              AND c.ora_inceput IS NOT NULL
+              AND TIMESTAMP(c.data_inceput, c.ora_inceput) < :new_end
+              AND TIMESTAMP(c.data_sfarsit, COALESCE(c.ora_sfarsit, '23:59:59')) > :new_start
+            " . ($excludeRaceId !== null && $excludeRaceId > 0 ? ' AND c.id <> :exclude_id' : '') . "
+            ORDER BY c.data_inceput ASC, c.ora_inceput ASC, c.id ASC
+            LIMIT 1
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+        $stmt->bindValue(':new_start', $newStart, PDO::PARAM_STR);
+        $stmt->bindValue(':new_end', $newEnd, PDO::PARAM_STR);
+        if ($excludeRaceId !== null && $excludeRaceId > 0) {
+            $stmt->bindValue(':exclude_id', $excludeRaceId, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        $row = $stmt->fetch();
+
+        return is_array($row) ? $row : null;
+    }
+
+    /**
+     * Curse asemanatoare: acelasi vehicul, aceeasi zi de inceput, acelasi beneficiar
+     * si acelasi loc de incarcare. Al doilea drum pe aceeasi ruta in aceeasi zi este
+     * legitim, deci rezultatul este doar un avertisment care cere confirmare — nu un
+     * blocaj ca in cazul suprapunerii de interval.
+     */
+    public function findSimilarRaces(array $data, ?int $excludeRaceId = null, int $limit = 5): array
+    {
+        $this->ensureRaceSoftDeleteSchema();
+
+        $vehicleId = (int) ($data['vehicle_id'] ?? 0);
+        $beneficiaryId = (int) ($data['beneficiar_id'] ?? 0);
+        $loadLocationId = (int) ($data['loc_incarcare_id'] ?? 0);
+        $startDate = $this->normalizeRaceIntervalDate($data['data_inceput'] ?? ($data['data_cursa'] ?? null));
+        if ($vehicleId <= 0 || $beneficiaryId <= 0 || $loadLocationId <= 0 || $startDate === null) {
+            return [];
+        }
+
+        $limit = max(1, min(20, $limit));
+        $sql = "
+            SELECT
+                c.id,
+                c.data_inceput,
+                c.ora_inceput,
+                c.ora_sfarsit,
+                c.km_cursa,
+                c.cantitate_incarcata,
+                c.total_facturare,
+                v.nr_inmatriculare,
+                COALESCE(s.nume, '') AS sofer_nume,
+                COALESCE(li.nume, '') AS loc_incarcare_nume
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
+            WHERE c.deleted_at IS NULL
+              AND c.vehicle_id = :vehicle_id
+              AND c.beneficiar_id = :beneficiar_id
+              AND c.loc_incarcare_id = :loc_incarcare_id
+              AND c.data_inceput = :data_inceput
+            " . ($excludeRaceId !== null && $excludeRaceId > 0 ? ' AND c.id <> :exclude_id' : '') . "
+            ORDER BY c.ora_inceput IS NULL, c.ora_inceput ASC, c.id ASC
+            LIMIT {$limit}
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+        $stmt->bindValue(':beneficiar_id', $beneficiaryId, PDO::PARAM_INT);
+        $stmt->bindValue(':loc_incarcare_id', $loadLocationId, PDO::PARAM_INT);
+        $stmt->bindValue(':data_inceput', $startDate, PDO::PARAM_STR);
+        if ($excludeRaceId !== null && $excludeRaceId > 0) {
+            $stmt->bindValue(':exclude_id', $excludeRaceId, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        return $stmt->fetchAll() ?: [];
+    }
+
+
+    /**
+     * Tot istoricul de curse al unui vehicul, pentru panoul "curse deja
+     * inregistrate" de langa formular. Fara fereastra de timp: orice limita
+     * (ziua, luna) lasa afara exact cursa dubla introdusa peste marginea ei.
+     * Lista vine ordonata descrescator, deci cele recente sunt primele.
+     */
+    public function getVehicleRaces(int $vehicleId, ?int $excludeRaceId = null, int $limit = 500): array
+    {
+        $this->ensureRaceSoftDeleteSchema();
+
+        if ($vehicleId <= 0) {
+            return [];
+        }
+
+        $limit = max(1, min(1000, $limit));
+        $sql = "
+            SELECT
+                c.id,
+                c.data_inceput,
+                c.ora_inceput,
+                c.data_sfarsit,
+                c.ora_sfarsit,
+                c.tip_transport,
+                c.beneficiar_id,
+                c.loc_incarcare_id,
+                c.zona_distributie_id,
+                c.km_cursa,
+                c.cantitate_incarcata,
+                c.total_facturare,
+                c.created_at,
+                v.nr_inmatriculare,
+                COALESCE(s.nume, '') AS sofer_nume,
+                COALESCE(bt.nume, '') AS beneficiar_nume,
+                COALESCE(li.nume, '') AS loc_incarcare_nume,
+                COALESCE(zd.nume, '') AS zona_distributie_nume
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+            LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
+            LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
+            WHERE c.deleted_at IS NULL
+              AND c.vehicle_id = :vehicle_id
+            " . ($excludeRaceId !== null && $excludeRaceId > 0 ? ' AND c.id <> :exclude_id' : '') . "
+            ORDER BY c.data_inceput DESC, c.ora_inceput IS NULL, c.ora_inceput DESC, c.id DESC
+            LIMIT {$limit}
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+        if ($excludeRaceId !== null && $excludeRaceId > 0) {
+            $stmt->bindValue(':exclude_id', $excludeRaceId, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        return $stmt->fetchAll() ?: [];
+    }
+
+    /**
+     * Cate curse are vehiculul in total: panoul afiseaza cel mult `limit` randuri,
+     * dar operatorul trebuie sa vada daca lista este trunchiata.
+     */
+    public function countVehicleRaces(int $vehicleId, ?int $excludeRaceId = null): int
+    {
+        $this->ensureRaceSoftDeleteSchema();
+
+        if ($vehicleId <= 0) {
+            return 0;
+        }
+
+        $sql = "
+            SELECT COUNT(*)
+            FROM curse_dispecer c
+            WHERE c.deleted_at IS NULL
+              AND c.vehicle_id = :vehicle_id
+            " . ($excludeRaceId !== null && $excludeRaceId > 0 ? ' AND c.id <> :exclude_id' : '');
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+        if ($excludeRaceId !== null && $excludeRaceId > 0) {
+            $stmt->bindValue(':exclude_id', $excludeRaceId, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Cursele salvate dupa un moment dat — folosite pentru semnalul "curse noi"
+     * din Desfasurator: in timp ce un operator completeaza formularul, un coleg
+     * poate salva exact cursa pe care o introduce si el.
+     */
+    public function getRacesCreatedAfter(string $since, int $limit = 20): array
+    {
+        $this->ensureRaceSoftDeleteSchema();
+        $this->ensureRaceCreatedByColumn();
+
+        $since = trim($since);
+        if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $since) !== 1) {
+            return [];
+        }
+
+        $limit = max(1, min(50, $limit));
+        $sql = "
+            SELECT
+                c.id,
+                c.data_inceput,
+                c.ora_inceput,
+                c.data_sfarsit,
+                c.ora_sfarsit,
+                c.tip_transport,
+                c.km_cursa,
+                c.cantitate_incarcata,
+                c.total_facturare,
+                c.created_at,
+                v.nr_inmatriculare,
+                COALESCE(s.nume, '') AS sofer_nume,
+                COALESCE(bt.nume, '') AS beneficiar_nume,
+                COALESCE(li.nume, '') AS loc_incarcare_nume,
+                COALESCE(zd.nume, '') AS zona_distributie_nume,
+                COALESCE(uc.nume, '') AS creat_de_nume
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+            LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
+            LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
+            LEFT JOIN utilizatori uc ON uc.id = c.created_by
+            WHERE c.deleted_at IS NULL
+              AND c.created_at > :since
+            ORDER BY c.created_at DESC, c.id DESC
+            LIMIT {$limit}
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':since', $since, PDO::PARAM_STR);
+        $stmt->execute();
+
+        return $stmt->fetchAll() ?: [];
+    }
+
+    /**
+     * Spune daca editarea muta cursa in timp sau pe alt vehicul. Regula de
+     * suprapunere se aplica la editare doar cand raspunsul este true: altfel o
+     * cursa veche care se suprapunea deja nu ar mai putea fi corectata la niciun
+     * camp, iar blocajul ar transforma o problema de date intr-un impas.
+     */
+    public function raceIntervalChanged(?array $existingRace, array $data): bool
+    {
+        if (!is_array($existingRace)) {
+            return true;
+        }
+
+        if ((int) ($existingRace['vehicle_id'] ?? 0) !== (int) ($data['vehicle_id'] ?? 0)) {
+            return true;
+        }
+
+        $intervalFields = [
+            'data_inceput' => 10,
+            'data_sfarsit' => 10,
+            'ora_inceput' => 5,
+            'ora_sfarsit' => 5,
+        ];
+        foreach ($intervalFields as $field => $length) {
+            $before = substr(trim((string) ($existingRace[$field] ?? '')), 0, $length);
+            $after = substr(trim((string) ($data[$field] ?? '')), 0, $length);
+            if ($before !== $after) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function normalizeRaceIntervalDate(mixed $value): ?string
+    {
+        $value = trim((string) ($value ?? ''));
+        if ($value === '') {
+            return null;
+        }
+
+        $value = substr($value, 0, 10);
+
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) === 1 ? $value : null;
+    }
+
+    private function normalizeRaceIntervalTime(mixed $value): ?string
+    {
+        $value = trim((string) ($value ?? ''));
+        if ($value === '') {
+            return null;
+        }
+
+        if (preg_match('/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/', $value, $matches) !== 1) {
+            return null;
+        }
+
+        $hours = (int) $matches[1];
+        $minutes = (int) $matches[2];
+        $seconds = isset($matches[3]) ? (int) $matches[3] : 0;
+        if ($hours > 23 || $minutes > 59 || $seconds > 59) {
+            return null;
+        }
+
+        return sprintf('%02d:%02d:%02d', $hours, $minutes, $seconds);
     }
 
     public function createRace(array $data): int

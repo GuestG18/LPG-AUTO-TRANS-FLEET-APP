@@ -21388,305 +21388,322 @@ button.dispatcher-datetime-picker-title:focus-visible {
     gap: 0.875rem;
 }
 
-.orx-card {
-    border: 1px solid #e5e7eb;
-    border-radius: 14px;
-    background: #fff;
-    padding: 1rem 1.125rem;
-}
-
-.orx-card-main {
-    display: flex;
-    align-items: flex-start;
-    gap: 1rem;
-}
-
-.orx-card-avatar {
-    width: 72px;
-    height: 56px;
-    border-radius: 10px;
-    background: #eff6ff;
-    color: #2563eb;
+/* Randuri compacte de tip tabel pentru popup-ul "curse cu informatii lipsa".
+   Patru coloane: cursa, detalii, lipsuri (cu derulare proprie) si actiunea. */
+.orx-search {
+    position: relative;
     display: flex;
     align-items: center;
-    justify-content: center;
-    font-size: 1.6rem;
-    overflow: hidden;
-    flex-shrink: 0;
+    flex: 1 1 220px;
+    min-width: 200px;
 }
 
-.orx-card-avatar.has-photo img {
+.orx-search i {
+    position: absolute;
+    left: 0.75rem;
+    color: #9ca3af;
+    font-size: 0.9rem;
+    pointer-events: none;
+}
+
+.orx-search input {
     width: 100%;
-    height: 100%;
-    object-fit: cover;
+    padding: 0.5rem 0.75rem 0.5rem 2.25rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    font-size: 0.875rem;
+    background: #fff;
+    color: #111827;
 }
 
-.orx-card-info { min-width: 220px; flex: 0 1 auto; }
-
-.orx-card-title {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    flex-wrap: wrap;
+.orx-search input:focus {
+    outline: none;
+    border-color: #93c5fd;
+    box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.12);
 }
 
-.orx-card-title strong { font-size: 1.05rem; color: #111827; }
-
-.orx-badge {
-    display: inline-flex;
+.orx-list-head,
+.orx-row {
+    display: grid;
+    grid-template-columns: minmax(210px, 1.1fr) minmax(150px, 0.85fr) minmax(230px, 1.15fr) auto;
+    gap: 1rem;
     align-items: center;
-    gap: 0.35rem;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    padding: 0.2rem 0.625rem;
 }
 
-.orx-badge i { font-size: 0.45rem; }
-.orx-badge-critical { background: color-mix(in srgb, var(--orx-severity-critical) 14%, #fff); color: var(--orx-severity-critical); }
-.orx-badge-important { background: color-mix(in srgb, var(--orx-severity-important) 22%, #fff); color: #b45309; }
-.orx-badge-minor { background: color-mix(in srgb, var(--orx-severity-minor) 16%, #fff); color: var(--orx-severity-minor); }
-
-.orx-card-meta {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.45rem;
+.orx-list-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 0.5rem 0.875rem;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
     color: #6b7280;
-    font-size: 0.85rem;
-    margin-top: 0.3rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
 }
 
-.orx-card-meta i { font-size: 0.85rem; }
-.orx-meta-sep { color: #d1d5db; }
+.orx-list-head .orx-col-action {
+    text-align: right;
+}
 
-.orx-card-actions {
+.orx-row {
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    background: #fff;
+    padding: 0.75rem 0.875rem;
+}
+
+.orx-row:hover {
+    border-color: #d1d5db;
+    box-shadow: 0 1px 3px rgba(17, 24, 39, 0.06);
+}
+
+/* Randul cursei deschise in pagina de editare: accent lateral discret + eticheta,
+   ca operatorul sa distinga imediat cursa la care lucreaza de restul listei.
+   Culoarea nu concureaza cu severitatile, care traiesc in cutia de lipsuri. */
+.orx-row.is-current {
+    border-color: #c7d2fe;
+    background: #f5f7ff;
+    box-shadow: inset 3px 0 0 #4f46e5;
+}
+
+.orx-row.is-current:hover {
+    border-color: #a5b4fc;
+}
+
+.orx-row.is-current .orx-row-icon {
+    background: #e0e7ff;
+    color: #4338ca;
+}
+
+.orx-current-tag {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    background: #e0e7ff;
+    color: #4338ca;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    vertical-align: middle;
+}
+
+/* --- Coloana "Cursa": iconita + doua randuri compacte de identificare --- */
+.orx-row-trip {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    margin-left: auto;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+    min-width: 0;
 }
 
-.orx-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.45rem;
-    border-radius: 10px;
-    font-size: 0.9rem;
-    font-weight: 600;
-    padding: 0.5rem 1rem;
-    text-decoration: none;
-    white-space: nowrap;
-}
-
-.orx-btn-outline {
-    border: 1px solid #e5e7eb;
-    color: #374151;
-    background: #fff;
-}
-
-.orx-btn-outline:hover { background: #f9fafb; color: #111827; }
-
-.orx-btn-primary {
-    border: 1px solid #2563eb;
-    background: #2563eb;
-    color: #fff;
-}
-
-.orx-btn-primary:hover { background: #1d4ed8; color: #fff; }
-
-.orx-summary {
-    border-radius: 12px;
-    padding: 0.625rem 0.875rem;
-    min-width: 220px;
-    font-size: 0.85rem;
-}
-
-.orx-summary-critical { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; }
-.orx-summary-important { background: #fffbeb; border: 1px solid #fde68a; color: #b45309; }
-.orx-summary-minor { background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; }
-
-.orx-summary-title {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-weight: 700;
-    margin-bottom: 0.25rem;
-}
-
-.orx-summary-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-}
-
-.orx-summary-list li {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    padding: 0.1rem 0;
-}
-
-.orx-summary-list li i { font-size: 0.4rem; }
-.orx-summary-more { font-style: italic; opacity: 0.8; }
-
-.orx-expand {
-    width: 44px;
-    height: 40px;
-    border: 1px solid #e5e7eb;
-    border-radius: 10px;
-    background: #fff;
-    color: #374151;
+.orx-row-icon {
+    flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
-    flex-shrink: 0;
-}
-
-.orx-expand:hover { background: #f9fafb; }
-
-.orx-card-details {
-    margin-top: 1rem;
-    border-top: 1px solid #f3f4f6;
-    padding-top: 1rem;
-}
-
-.orx-details-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-    gap: 1rem;
-}
-
-.orx-need {
-    border-radius: 12px;
-    padding: 0.875rem 1rem;
-}
-
-.orx-need-critical { background: #fef2f2; border: 1px solid #fecaca; }
-.orx-need-important { background: #fffbeb; border: 1px solid #fde68a; }
-.orx-need-minor { background: #eff6ff; border: 1px solid #bfdbfe; }
-
-.orx-need-head {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: #b91c1c;
-    margin-bottom: 0.2rem;
-}
-
-.orx-need-important .orx-need-head { color: #b45309; }
-.orx-need-minor .orx-need-head { color: #1d4ed8; }
-
-.orx-need-intro {
-    color: #6b7280;
-    font-size: 0.85rem;
-    margin: 0 0 0.625rem;
-}
-
-.orx-need-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.625rem;
-    background: #fff;
-    border: 1px solid #f1f5f9;
+    width: 42px;
+    height: 42px;
     border-radius: 10px;
-    padding: 0.625rem 0.75rem;
-    margin-bottom: 0.55rem;
+    background: #eff6ff;
+    color: #2563eb;
+    font-size: 1.15rem;
 }
 
-.orx-need-item:last-child { margin-bottom: 0; }
-
-.orx-need-item-icon {
-    color: #6b7280;
-    font-size: 1rem;
-    margin-top: 0.15rem;
+.orx-row-trip-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
 }
 
-.orx-need-item-body { flex: 1 1 auto; min-width: 0; }
+.orx-row-plate {
+    color: #111827;
+    font-size: 0.95rem;
+    line-height: 1.25;
+}
 
-.orx-need-item-title {
+.orx-row-driver {
+    color: #4b5563;
+    font-size: 0.85rem;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.orx-row-when {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    color: #111827;
-    font-size: 0.9rem;
-}
-
-.orx-chip {
-    display: inline-flex;
-    border-radius: 999px;
-    font-size: 0.7rem;
-    font-weight: 700;
-    padding: 0.12rem 0.55rem;
-}
-
-.orx-chip-critical { background: #fee2e2; color: #dc2626; }
-.orx-chip-important { background: #fef3c7; color: #b45309; }
-.orx-chip-minor { background: #dbeafe; color: #2563eb; }
-
-.orx-need-item-expl {
+    gap: 0.3rem;
     color: #6b7280;
     font-size: 0.8rem;
-    margin-top: 0.15rem;
+    line-height: 1.3;
 }
 
-.orx-goto {
+.orx-row-when i {
+    font-size: 0.8rem;
+    color: #9ca3af;
+}
+
+.orx-row-when i + i {
+    margin-left: 0.35rem;
+}
+
+/* --- Coloana "Detalii": tip transport + beneficiar --- */
+.orx-row-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
+    color: #4b5563;
+    font-size: 0.85rem;
+}
+
+.orx-row-details span {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.orx-row-details i {
+    flex: 0 0 auto;
+    color: #9ca3af;
+    font-size: 0.85rem;
+}
+
+/* --- Coloana "Informatii lipsa": inaltime fixa, derulare verticala proprie --- */
+.orx-row-missing {
+    border-radius: 10px;
+    border: 1px solid #fde68a;
+    background: #fffbeb;
+    padding: 0.5rem 0.625rem;
+    max-height: 84px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-width: 0;
+}
+
+.orx-missing-critical {
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.orx-missing-minor {
+    border-color: #bfdbfe;
+    background: #eff6ff;
+}
+
+.orx-missing-head {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #b45309;
+    margin-bottom: 0.25rem;
+}
+
+.orx-missing-critical .orx-missing-head { color: var(--orx-severity-critical); }
+.orx-missing-minor .orx-missing-head { color: var(--orx-severity-minor); }
+
+.orx-missing-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.orx-missing-item {
+    position: relative;
+    padding-left: 0.75rem;
+    font-size: 0.82rem;
+    line-height: 1.35;
+}
+
+.orx-missing-item::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.5rem;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: currentColor;
+    color: #f59e0b;
+}
+
+.orx-missing-item-critical::before { color: var(--orx-severity-critical); }
+.orx-missing-item-minor::before { color: var(--orx-severity-minor); }
+
+.orx-missing-item a {
+    color: #374151;
+    text-decoration: none;
+    border-bottom: 1px dotted #9ca3af;
+}
+
+.orx-missing-item a:hover,
+.orx-missing-item a:focus {
+    color: #1d4ed8;
+    border-bottom-color: #1d4ed8;
+}
+
+.orx-row-missing::-webkit-scrollbar { width: 6px; }
+.orx-row-missing::-webkit-scrollbar-thumb {
+    background: rgba(107, 114, 128, 0.35);
+    border-radius: 3px;
+}
+
+/* --- Coloana "Actiune": o singura actiune per rand --- */
+.orx-row-action {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.orx-open-btn {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    align-self: center;
+    padding: 0.5rem 0.875rem;
     border: 1px solid #bfdbfe;
+    border-radius: 10px;
     background: #eff6ff;
     color: #1d4ed8;
-    border-radius: 9px;
-    font-size: 0.8rem;
+    font-size: 0.85rem;
     font-weight: 600;
-    padding: 0.4rem 0.75rem;
     text-decoration: none;
     white-space: nowrap;
-    flex-shrink: 0;
 }
 
-.orx-goto:hover { background: #dbeafe; color: #1e40af; }
-
-.orx-context {
-    border: 1px solid #e5e7eb;
-    border-radius: 12px;
-    background: #f9fafb;
-    padding: 0.875rem 1rem;
+.orx-open-btn:hover {
+    background: #dbeafe;
+    color: #1e40af;
 }
 
-.orx-context-head {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    color: #374151;
-    margin-bottom: 0.625rem;
-}
+.orx-open-chevron { font-size: 0.75rem; }
 
-.orx-context-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.75rem 1rem;
-    margin: 0;
-}
+@media (max-width: 992px) {
+    .orx-list-head {
+        display: none;
+    }
 
-.orx-context-cell dt {
-    color: #6b7280;
-    font-size: 0.78rem;
-    font-weight: 500;
-}
+    .orx-row {
+        grid-template-columns: 1fr;
+        gap: 0.625rem;
+    }
 
-.orx-context-cell dd {
-    margin: 0.1rem 0 0;
-    color: #111827;
-    font-weight: 700;
-    font-size: 0.9rem;
-    word-break: break-word;
+    .orx-row-action {
+        justify-content: flex-start;
+    }
 }
 
 .orx-empty {
@@ -21733,10 +21750,6 @@ button.dispatcher-datetime-picker-title:focus-visible {
 .orx-footer-close:hover { background: #f9fafb; }
 
 @media (max-width: 1100px) {
-    .orx-card-main { flex-wrap: wrap; }
-    .orx-card-actions { margin-left: 0; justify-content: flex-start; }
-    .orx-details-grid { grid-template-columns: 1fr; }
-    .orx-context-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .orx-filters { margin-left: 0; }
 }
 

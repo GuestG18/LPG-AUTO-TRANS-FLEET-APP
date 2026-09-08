@@ -149,9 +149,20 @@ function redirect(string $location): void
     exit;
 }
 
-function flash_set(string $type, string $message): void
+/**
+ * Mesaj flash, optional cu un link catre inregistrarea la care se refera
+ * (de exemplu cursa care blocheaza salvarea). Linkul se transmite structurat,
+ * nu ca HTML in mesaj: sablonul il scrie escapat.
+ *
+ * @param array{url: string, label: string}|null $link
+ */
+function flash_set(string $type, string $message, ?array $link = null): void
 {
-    $_SESSION['_flash_messages'][$type][] = $message;
+    $url = trim((string) ($link['url'] ?? ''));
+    $label = trim((string) ($link['label'] ?? ''));
+    $_SESSION['_flash_messages'][$type][] = $url !== '' && $label !== ''
+        ? ['message' => $message, 'url' => $url, 'label' => $label]
+        : $message;
 }
 
 function flash_messages(): array

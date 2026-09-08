@@ -277,8 +277,14 @@ if (
             <main class="p-4">
                 <?php foreach ($alerts as $type => $messages): ?>
                     <?php foreach ((array) $messages as $message): ?>
+                        <?php $alertLinkUrl = is_array($message) ? (string) ($message['url'] ?? '') : ''; ?>
+                        <?php $alertLinkLabel = is_array($message) ? (string) ($message['label'] ?? '') : ''; ?>
+                        <?php $alertText = is_array($message) ? (string) ($message['message'] ?? '') : (string) $message; ?>
                         <div class="alert alert-<?= e($type) ?> alert-dismissible fade show" role="alert">
-                            <?= e($message) ?>
+                            <?= e($alertText) ?>
+                            <?php if ($alertLinkUrl !== '' && $alertLinkLabel !== ''): ?>
+                                <a class="alert-link ms-1" href="<?= e($alertLinkUrl) ?>"><?= e($alertLinkLabel) ?></a>
+                            <?php endif; ?>
                             <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="&Icirc;nchide"></button>
                         </div>
                     <?php endforeach; ?>
@@ -288,8 +294,14 @@ if (
         <div class="auth-container">
             <?php foreach ($alerts as $type => $messages): ?>
                 <?php foreach ((array) $messages as $message): ?>
+                    <?php $alertLinkUrl = is_array($message) ? (string) ($message['url'] ?? '') : ''; ?>
+                    <?php $alertLinkLabel = is_array($message) ? (string) ($message['label'] ?? '') : ''; ?>
+                    <?php $alertText = is_array($message) ? (string) ($message['message'] ?? '') : (string) $message; ?>
                     <div class="alert alert-<?= e($type) ?> alert-dismissible fade show" role="alert">
-                        <?= e($message) ?>
+                        <?= e($alertText) ?>
+                        <?php if ($alertLinkUrl !== '' && $alertLinkLabel !== ''): ?>
+                        <a class="alert-link ms-1" href="<?= e($alertLinkUrl) ?>"><?= e($alertLinkLabel) ?></a>
+                        <?php endif; ?>
                         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="&Icirc;nchide"></button>
                     </div>
                 <?php endforeach; ?>

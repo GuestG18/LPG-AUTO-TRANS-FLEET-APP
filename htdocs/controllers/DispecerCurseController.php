@@ -261,6 +261,12 @@ class DispecerCurseController
             case 'inactive_resource_status':
                 $this->inactiveResourceStatusAction();
                 return;
+            case 'trip_conflict_check':
+                $this->tripConflictCheckAction();
+                return;
+            case 'races_activity':
+                $this->racesActivityAction();
+                return;
             case 'request_inactive_vehicle_approval':
                 $this->requestInactiveVehicleApprovalAction();
                 return;
@@ -390,6 +396,136 @@ class DispecerCurseController
             'currentPage' => '',
         ]);
         exit;
+    }
+
+    /**
+     * Verificare pre-salvare a conflictelor de cursa, apelata din formular prin AJAX.
+     * Raspunsul separa cele doua reguli: suprapunerea de interval pe acelasi vehicul
+     * (blocanta) si cursele asemanatoare din aceeasi zi (doar confirmare).
+     */
+    private function tripConflictCheckAction(): void
+    {
+        $probe = [
+            'vehicle_id' => $this->positiveIntFromInput($_GET['vehicle_id'] ?? null) ?? 0,
+            'beneficiar_id' => $this->positiveIntFromInput($_GET['beneficiar_id'] ?? null) ?? 0,
+            'loc_incarcare_id' => $this->positiveIntFromInput($_GET['loc_incarcare_id'] ?? null) ?? 0,
+            'data_inceput' => $this->normalizeRaceDate((string) ($_GET['data_inceput'] ?? '')),
+            'data_sfarsit' => $this->normalizeRaceDate((string) ($_GET['data_sfarsit'] ?? '')),
+            'ora_inceput' => $this->normalizeTime((string) ($_GET['ora_inceput'] ?? '')),
+            'ora_sfarsit' => $this->normalizeTime((string) ($_GET['ora_sfarsit'] ?? '')),
+        ];
+        $excludeRaceId = $this->positiveIntFromInput($_GET['trip_id'] ?? null);
+        $existingRace = $excludeRaceId !== null ? $this->model->getRaceById($excludeRaceId) : null;
+
+        try {
+            // Aceeasi politica ca la salvare: editarea unei curse care se suprapunea
+            // deja nu este blocata cat timp intervalul si vehiculul raman aceleasi.
+            $overlappingRace = $this->model->raceIntervalChanged($existingRace, $probe)
+                ? $this->model->findOverlappingRace($probe, $excludeRaceId)
+                : null;
+            $similarRaces = $overlappingRace === null
+                ? $this->model->findSimilarRaces($probe, $excludeRaceId)
+                : [];
+
+            $this->sendJson([
+                'success' => true,
+                'has_overlap' => $overlappingRace !== null,
+                'overlap_message' => $overlappingRace !== null
+                    ? $this->buildOverlappingRaceMessage($overlappingRace)
+                    : '',
+                'overlap_race_id' => $overlappingRace !== null ? (int) $overlappingRace['id'] : 0,
+                'overlap_url' => $overlappingRace !== null
+                    ? $this->raceEditUrl((int) $overlappingRace['id'])
+                    : '',
+                'similar_count' => count($similarRaces),
+                'similar_message' => $similarRaces !== []
+                    ? $this->buildSimilarRacesMessage($similarRaces)
+                    : '',
+                'similar_items' => array_map(
+                    fn(array $race): array => [
+                        'id' => (int) ($race['id'] ?? 0),
+                        'label' => $this->describeRaceForConflict($race),
+                        'url' => $this->raceEditUrl((int) ($race['id'] ?? 0)),
+                    ],
+                    $similarRaces
+                ),
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][trip_conflict_check] ' . $exception->getMessage());
+            $this->sendJson([
+                'success' => false,
+                'message' => 'Nu s-a putut verifica suprapunerea cu alte curse.',
+            ], 500);
+        }
+    }
+
+    /**
+     * Sondaj pentru panourile din Desfasurator: cursele vehiculului in ziua aleasa
+     * (context, ca operatorul sa vada ce exista deja) si cursele salvate de cand
+     * este deschisa pagina (ca sa observe ce a intrat intre timp).
+     */
+    private function racesActivityAction(): void
+    {
+        $vehicleId = $this->positiveIntFromInput($_GET['vehicle_id'] ?? null) ?? 0;
+        $excludeRaceId = $this->positiveIntFromInput($_GET['trip_id'] ?? null);
+        $since = trim((string) ($_GET['since'] ?? ''));
+
+        try {
+            // Fara fereastra de timp: raspunsul contine tot istoricul vehiculului,
+            // iar marcajele "ziua aleasa" / "Seamana" se calculeaza in pagina, pe
+            // masura ce operatorul completeaza — fara alta cerere catre server.
+            $vehicleRaces = $vehicleId > 0 ? $this->model->getVehicleRaces($vehicleId, $excludeRaceId) : [];
+            $vehicleRacesTotal = $vehicleId > 0 ? $this->model->countVehicleRaces($vehicleId, $excludeRaceId) : 0;
+            $newRaces = $since !== '' ? $this->model->getRacesCreatedAfter($since) : [];
+
+            $this->sendJson([
+                'success' => true,
+                'server_time' => date('Y-m-d H:i:s'),
+                'vehicle_races' => array_map(
+                    fn(array $race): array => $this->raceActivityPayload($race),
+                    $vehicleRaces
+                ),
+                'vehicle_races_total' => $vehicleRacesTotal,
+                'vehicle_races_truncated' => $vehicleRacesTotal > count($vehicleRaces),
+                'new_races' => array_map(fn(array $race): array => $this->raceActivityPayload($race), $newRaces),
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][races_activity] ' . $exception->getMessage());
+            $this->sendJson([
+                'success' => false,
+                'message' => 'Nu s-au putut incarca cursele inregistrate.',
+            ], 500);
+        }
+    }
+
+    private function raceActivityPayload(array $race): array
+    {
+        $raceId = (int) ($race['id'] ?? 0);
+        $transportType = (string) ($race['tip_transport'] ?? '');
+        $raceDate = substr(trim((string) ($race['data_inceput'] ?? '')), 0, 10);
+        $route = array_values(array_filter([
+            trim((string) ($race['loc_incarcare_nume'] ?? '')),
+            trim((string) ($race['zona_distributie_nume'] ?? '')),
+        ], static fn(string $part): bool => $part !== ''));
+
+        return [
+            'id' => $raceId,
+            'url' => $this->raceEditUrl($raceId),
+            'plate' => trim((string) ($race['nr_inmatriculare'] ?? '')),
+            'date' => $raceDate,
+            'date_label' => $this->formatShortDate($raceDate),
+            'beneficiar_id' => (int) ($race['beneficiar_id'] ?? 0),
+            'loc_incarcare_id' => (int) ($race['loc_incarcare_id'] ?? 0),
+            'interval' => $this->formatRaceInterval($race),
+            'driver' => trim((string) ($race['sofer_nume'] ?? '')),
+            'beneficiary' => trim((string) ($race['beneficiar_nume'] ?? '')),
+            'transport' => self::TRANSPORT_TYPES[$transportType] ?? $transportType,
+            'route' => implode(' - ', $route),
+            'km' => trim((string) ($race['km_cursa'] ?? '')),
+            'quantity' => trim((string) ($race['cantitate_incarcata'] ?? '')),
+            'total' => trim((string) ($race['total_facturare'] ?? '')),
+            'created_by' => trim((string) ($race['creat_de_nume'] ?? '')),
+        ];
     }
 
     private function inactiveResourceStatusAction(): void
@@ -661,7 +797,7 @@ class DispecerCurseController
             $distributionRouteTariffMap = $this->model->getDistributionRouteTariffMap(true);
             $primaryRouteKmMap = $this->model->getPrimaryRouteKmMap(true);
             $beneficiaryPricing = $this->buildBeneficiaryPricingMap($beneficiaries);
-            $openRacesOverview = $this->buildOpenRacesOverviewData($this->model->getOpenRacesOverview(250));
+            $openRacesOverview = $this->buildOpenRacesOverviewData($this->model->getOpenRacesOverview(2000));
             [$resumeParents, $resumeChildren] = $this->getResumeLinksForRows($result['rows']);
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][index] ' . $exception->getMessage());
@@ -1176,6 +1312,9 @@ class DispecerCurseController
             redirect(build_query_url(['page' => 'dispecer_curse']));
         }
 
+        // Confirmare explicita pentru curse asemanatoare (vezi findSimilarRaces).
+        $confirmSimilar = trim((string) ($_POST['confirm_similar'] ?? '')) === '1';
+
         // Informatii lipsa (ne-blocante): cerem confirmare explicita inainte de salvare.
         $confirmIncomplete = trim((string) ($_POST['confirm_incomplete'] ?? '')) === '1';
         if ($softErrors !== [] && !$confirmIncomplete) {
@@ -1205,11 +1344,32 @@ class DispecerCurseController
         try {
             $duplicateRaceId = $this->model->findDuplicateRaceId($data);
             if ($duplicateRaceId !== null) {
-                flash_set('warning', $this->buildDuplicateRaceMessage($duplicateRaceId));
+                flash_set(
+                    'warning',
+                    $this->buildDuplicateRaceMessage($duplicateRaceId),
+                    $this->raceFlashLink($duplicateRaceId)
+                );
                 $this->setPostCreateExpensePrompt(0);
                 $this->setFormFlash('race_create', $old, []);
                 redirect(build_query_url(['page' => 'dispecer_curse']));
             }
+
+            // Acelasi vehicul nu poate fi in doua curse simultan: blocaj, fara ocolire.
+            $overlappingRace = $this->model->findOverlappingRace($data);
+            if ($overlappingRace !== null) {
+                flash_set(
+                    'danger',
+                    $this->buildOverlappingRaceMessage($overlappingRace),
+                    $this->raceFlashLink((int) $overlappingRace['id'])
+                );
+                $this->setPostCreateExpensePrompt(0);
+                $this->setFormFlash('race_create', $old, []);
+                redirect(build_query_url(['page' => 'dispecer_curse']));
+            }
+
+            // Curse asemanatoare: al doilea drum pe aceeasi ruta este legitim, deci
+            // doar semnalam. Confirmarea vine din modalul formularului (confirm_similar).
+            $similarRaces = $confirmSimilar ? [] : $this->model->findSimilarRaces($data);
 
             $result = $this->model->createRaceAndSyncVehicleKm($data);
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
@@ -1250,6 +1410,9 @@ class DispecerCurseController
                     ? 'Cursa #' . $raceId . ' a fost adaugata ca o continuare a cursei #' . $parentCursaId . '.'
                     : 'Cursa a fost adaugata cu succes.'
             );
+            if ($similarRaces !== []) {
+                flash_set('warning', 'Verifica sa nu fie o cursa dubla: ' . $this->buildSimilarRacesMessage($similarRaces));
+            }
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][store] ' . $exception->getMessage());
             flash_set(
@@ -1341,6 +1504,18 @@ class DispecerCurseController
                 $distributionZonesByBeneficiary
             ),
             'incompleteConfirmItems' => $incompleteConfirmItems,
+            // Acelasi panou "curse cu informatii lipsa" ca in lista, restrans la
+            // vehiculul cursei editate: operatorul completeaza lipsurile masinii
+            // pe care lucreaza, fara sa iasa din pagina.
+            'openRacesOverview' => $this->buildOpenRacesOverviewData(
+                $this->model->getOpenRacesOverview(2000, (int) ($race['vehicle_id'] ?? 0))
+            ),
+            'openRacesPanelLabel' => 'Curse cu informatii lipsa pentru '
+                . trim((string) ($race['nr_inmatriculare'] ?? 'acest vehicul')),
+            'openRacesPanelIntro' => 'Doar cursele acestui vehicul. Completeaza-le fara sa parasesti cursa pe care o editezi.',
+            // Randul cursei editate se evidentiaza in panou, ca operatorul sa vada
+            // imediat pe care dintre cursele vehiculului lucreaza.
+            'openRacesPanelCurrentRaceId' => $raceId,
             'race' => $race,
             'raceFormData' => $raceFormData,
             'raceFormErrors' => $raceFlash['errors'],
@@ -1412,6 +1587,7 @@ class DispecerCurseController
         }
 
         // Informatii lipsa (ne-blocante): cerem confirmare explicita inainte de salvare.
+        $confirmSimilar = trim((string) ($_POST['confirm_similar'] ?? '')) === '1';
         $confirmIncomplete = trim((string) ($_POST['confirm_incomplete'] ?? '')) === '1';
         if ($softErrors !== [] && !$confirmIncomplete) {
             $_SESSION['_dispecer_incomplete_confirm_race_edit_' . $raceId] = array_values($softErrors);
@@ -1454,10 +1630,32 @@ class DispecerCurseController
         try {
             $duplicateRaceId = $this->model->findDuplicateRaceId($data, $raceId);
             if ($duplicateRaceId !== null) {
-                flash_set('warning', $this->buildDuplicateRaceMessage($duplicateRaceId));
+                flash_set(
+                    'warning',
+                    $this->buildDuplicateRaceMessage($duplicateRaceId),
+                    $this->raceFlashLink($duplicateRaceId)
+                );
                 $this->setFormFlash('race_edit_' . $raceId, $old, []);
                 redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
             }
+
+            // Acelasi vehicul nu poate fi in doua curse simultan: blocaj, fara ocolire.
+            // La editare verificam doar daca intervalul sau vehiculul se schimba, ca o
+            // cursa care se suprapunea deja sa poata fi corectata la celelalte campuri.
+            $overlappingRace = $this->model->raceIntervalChanged($existingRace, $data)
+                ? $this->model->findOverlappingRace($data, $raceId)
+                : null;
+            if ($overlappingRace !== null) {
+                flash_set(
+                    'danger',
+                    $this->buildOverlappingRaceMessage($overlappingRace),
+                    $this->raceFlashLink((int) $overlappingRace['id'])
+                );
+                $this->setFormFlash('race_edit_' . $raceId, $old, []);
+                redirect(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]));
+            }
+
+            $similarRaces = $confirmSimilar ? [] : $this->model->findSimilarRaces($data, $raceId);
 
             $result = $this->model->updateRaceAndSyncVehicleKm($raceId, $data, $this->currentUserId());
             // Perioada cursei se poate schimba: reevaluam cazarile in asteptare.
@@ -1495,6 +1693,9 @@ class DispecerCurseController
                 $this->setPostCreateExpensePrompt(0);
             }
             flash_set('success', 'Cursa a fost actualizatÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢.');
+            if ($similarRaces !== []) {
+                flash_set('warning', 'Verifica sa nu fie o cursa dubla: ' . $this->buildSimilarRacesMessage($similarRaces));
+            }
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][update] ' . $exception->getMessage());
             flash_set(
@@ -2223,6 +2424,9 @@ class DispecerCurseController
         };
     }
 
+    /** Ancora sectiunii de cheltuieli/refacturari din pagina de editare a cursei. */
+    private const EXPENSE_SECTION_ANCHOR = '#expense-section';
+
     private function saveExpenseAction(): void
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -2286,7 +2490,7 @@ class DispecerCurseController
                 $redirect['expense_id'] = $expenseId;
             }
             $redirect += $this->postCreateFlowQuery($postCreateFlow, $returnToList);
-            redirect(build_query_url($redirect));
+            redirect(build_query_url($redirect) . self::EXPENSE_SECTION_ANCHOR);
         }
 
         $expenseSaved = false;
@@ -2381,7 +2585,7 @@ class DispecerCurseController
 
         $successRedirect = ['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId]
             + $this->postCreateFlowQuery($postCreateFlow, $returnToList);
-        redirect(build_query_url($successRedirect));
+        redirect(build_query_url($successRedirect) . self::EXPENSE_SECTION_ANCHOR);
     }
 
     /**
@@ -2604,6 +2808,7 @@ class DispecerCurseController
         }
 
         $raceId = (int) ($_POST['race_id'] ?? 0);
+        $expenseId = (int) ($_POST['expense_id'] ?? 0);
         $returnToEdit = trim((string) ($_POST['return_to'] ?? '')) === 'edit';
         // Butonul de refacturare face parte din acelasi formular, deci respecta aceeasi bifa
         // din fluxul "cursa tocmai adaugata".
@@ -2640,8 +2845,23 @@ class DispecerCurseController
             redirect($redirectUrl);
         }
 
+        // Refacturarea editata: randul existent se actualizeaza, nu se dubleaza.
+        // Randurile-oglinda ale modulului Cazare raman in grija acelui modul.
+        $existingRefacturare = null;
+        if ($expenseId > 0) {
+            $existingRefacturare = $this->model->getExpenseById($expenseId);
+            if ($existingRefacturare !== null && (int) ($existingRefacturare['cazare_id'] ?? 0) > 0) {
+                flash_set('warning', 'Cheltuiala de cazare se modifica din pagina Cazare.');
+                redirect($redirectUrl);
+            }
+            if ($existingRefacturare === null || (int) ($existingRefacturare['cursa_id'] ?? 0) !== $raceId) {
+                flash_set('warning', 'Refacturarea selectata nu exista pentru aceasta cursa.');
+                redirect($redirectUrl);
+            }
+        }
+
         $mappedInput = [
-            'expense_id' => '',
+            'expense_id' => $expenseId > 0 ? (string) $expenseId : '',
             'submit_intent' => 'refacturare',
             'refacturare_enabled' => '1',
             'refacturare_tip_cheltuieli' => $_POST['refacturare_tip_cheltuieli'] ?? null,
@@ -2676,12 +2896,19 @@ class DispecerCurseController
         try {
             $now = date('Y-m-d H:i:s');
             $refacturareRowIds = [];
-            foreach ($records as $record) {
-                $record['cursa_id'] = $raceId;
-                $record['added_by'] = $this->currentUserId();
-                $record['created_at'] = $now;
+            if ($existingRefacturare !== null) {
+                $record = $records[0];
                 $record['updated_at'] = $now;
-                $refacturareRowIds[] = $this->model->createExpense($record);
+                $this->model->updateExpense($expenseId, $record);
+                $refacturareRowIds[] = $expenseId;
+            } else {
+                foreach ($records as $record) {
+                    $record['cursa_id'] = $raceId;
+                    $record['added_by'] = $this->currentUserId();
+                    $record['created_at'] = $now;
+                    $record['updated_at'] = $now;
+                    $refacturareRowIds[] = $this->model->createExpense($record);
+                }
             }
 
             if ($uploadedRefacturareDocument !== null) {
@@ -2691,9 +2918,13 @@ class DispecerCurseController
             $this->model->updateRaceBillingStatus($raceId, self::DEFAULT_BILLING_STATUS, $now, $this->currentUserId());
             $this->resetRaceExpenseStatusIfNotApplicable($raceId, $now, true);
             $refacturareSaved = true;
-            flash_set('success', count($refacturareRowIds) > 1
-                ? 'Au fost adaugate ' . count($refacturareRowIds) . ' refacturari separate.'
-                : 'Refacturarea a fost adaugata.');
+            if ($existingRefacturare !== null) {
+                flash_set('success', 'Refacturarea a fost actualizata.');
+            } else {
+                flash_set('success', count($refacturareRowIds) > 1
+                    ? 'Au fost adaugate ' . count($refacturareRowIds) . ' refacturari separate.'
+                    : 'Refacturarea a fost adaugata.');
+            }
         } catch (PDOException $exception) {
             if ($uploadedRefacturareDocument !== null) {
                 $this->deleteExpensePhysicalFile((string) $uploadedRefacturareDocument['file_path']);
@@ -2736,7 +2967,7 @@ class DispecerCurseController
         if ($returnToEdit && $raceId > 0) {
             return build_query_url(
                 ['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId] + $extraEditQuery
-            );
+            ) . self::EXPENSE_SECTION_ANCHOR;
         }
 
         $redirectQuery = [
@@ -8737,6 +8968,97 @@ class DispecerCurseController
         }
 
         return function_exists('is_admin') && is_admin();
+    }
+
+    /**
+     * Interval scurt, citibil: "10.10.2026 00:16-08:00" sau, daca traverseaza zile,
+     * "10.10.2026 22:00 - 11.10.2026 06:00". Cursele fara ora de sfarsit sunt "in curs".
+     */
+    private function formatRaceInterval(array $race): string
+    {
+        $startDate = trim((string) ($race['data_inceput'] ?? ''));
+        $endDate = trim((string) ($race['data_sfarsit'] ?? $startDate));
+        $startTime = substr(trim((string) ($race['ora_inceput'] ?? '')), 0, 5);
+        $endTime = substr(trim((string) ($race['ora_sfarsit'] ?? '')), 0, 5);
+
+        $formatDate = static function (string $date): string {
+            $parts = explode('-', substr($date, 0, 10));
+
+            return count($parts) === 3 ? $parts[2] . '.' . $parts[1] . '.' . $parts[0] : $date;
+        };
+
+        $start = $formatDate($startDate) . ($startTime !== '' ? ' ' . $startTime : '');
+        if ($endTime === '') {
+            return $start . ' (fara ora de sfarsit)';
+        }
+
+        return $endDate !== '' && $endDate !== $startDate
+            ? $start . ' - ' . $formatDate($endDate) . ' ' . $endTime
+            : $start . '-' . $endTime;
+    }
+
+    private function describeRaceForConflict(array $race): string
+    {
+        $parts = ['#' . (int) ($race['id'] ?? 0), $this->formatRaceInterval($race)];
+
+        $driver = trim((string) ($race['sofer_nume'] ?? ''));
+        if ($driver !== '') {
+            $parts[] = $driver;
+        }
+
+        $km = trim((string) ($race['km_cursa'] ?? ''));
+        if ($km !== '') {
+            $parts[] = $km . ' km';
+        }
+
+        return implode(', ', $parts);
+    }
+
+    private function formatShortDate(string $date): string
+    {
+        $parts = explode('-', substr($date, 0, 10));
+
+        return count($parts) === 3 ? $parts[2] . '.' . $parts[1] . '.' . $parts[0] : $date;
+    }
+
+    private function raceEditUrl(int $raceId): string
+    {
+        return $raceId > 0
+            ? build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])
+            : '';
+    }
+
+    /** Linkul atasat mesajului flash, ca operatorul sa ajunga direct la cursa in cauza. */
+    private function raceFlashLink(int $raceId): ?array
+    {
+        $url = $this->raceEditUrl($raceId);
+
+        return $url === '' ? null : ['url' => $url, 'label' => 'Deschide cursa #' . $raceId];
+    }
+
+    private function buildOverlappingRaceMessage(array $overlappingRace): string
+    {
+        $plate = trim((string) ($overlappingRace['nr_inmatriculare'] ?? ''));
+
+        return 'Vehiculul' . ($plate !== '' ? ' ' . $plate : '') . ' este deja pe cursa #'
+            . (int) ($overlappingRace['id'] ?? 0) . ' in acest interval (' . $this->formatRaceInterval($overlappingRace)
+            . '). Acelasi vehicul nu poate fi in doua curse in acelasi timp — verifica daca nu este aceeasi cursa introdusa a doua oara.';
+    }
+
+    private function buildSimilarRacesMessage(array $similarRaces): string
+    {
+        if ($similarRaces === []) {
+            return '';
+        }
+
+        $descriptions = array_map(fn(array $race): string => $this->describeRaceForConflict($race), $similarRaces);
+        $first = $similarRaces[0];
+        $location = trim((string) ($first['loc_incarcare_nume'] ?? ''));
+
+        return 'Mai exista ' . count($similarRaces) . ' '
+            . (count($similarRaces) === 1 ? 'cursa' : 'curse')
+            . ' in aceeasi zi, cu acelasi vehicul, acelasi beneficiar si acelasi loc de incarcare'
+            . ($location !== '' ? ' (' . $location . ')' : '') . ': ' . implode('; ', $descriptions) . '.';
     }
 
     private function buildDuplicateRaceMessage(?int $duplicateRaceId = null): string

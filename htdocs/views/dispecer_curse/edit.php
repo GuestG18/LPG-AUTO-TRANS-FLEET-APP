@@ -167,6 +167,11 @@ $existingRefacturareDoc = is_array($expenseBeingEdited) ? (string) ($expenseBein
 $existingRefacturareDocName = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['refacturare_document_original_name'] ?? '') : '';
 $existingRefacturareDocUrl = $existingRefacturareDoc !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($existingRefacturareDoc)) : null;
 $expenseRefacturareEnabled = (string) ($expenseFormData['refacturare_enabled'] ?? '0') === '1';
+$expenseIsPureRefacturare = is_array($expenseBeingEdited)
+    && trim((string) ($expenseBeingEdited['refacturare_tip_cheltuiala'] ?? '')) !== ''
+    && (float) ($expenseBeingEdited['suma'] ?? 0) <= 0;
+// Cu un singur panou nu mai avem nevoie de grila pe doua coloane.
+$expenseTwoColumnLayout = $expenseRefacturareEnabled && !$expenseIsPureRefacturare;
 $expenseCategories = is_array($expenseCategories ?? null) ? $expenseCategories : [];
 $expenseEntryTypes = is_array($expenseEntryTypes ?? null) ? $expenseEntryTypes : (array) ($expenseTypes ?? []);
 unset($expenseEntryTypes['motorina']);
@@ -314,9 +319,16 @@ $focusFieldMap = [
     'liquid_tons' => 'edit_race_tona_aspirata_lichida',
     'gas_tons' => 'edit_race_tona_aspirata_gazoasa',
 ];
-$focusKey = trim((string) ($_GET['focus'] ?? ''));
-$focusFieldId = (string) ($focusFieldMap[$focusKey] ?? '');
-$focusEndTime = $focusKey === 'end_time';
+$focusKeys = array_values(array_unique(array_filter(
+    array_map('trim', explode(',', (string) ($_GET['focus'] ?? '')))
+)));
+$focusFieldIds = array_values(array_unique(array_filter(array_map(
+    static fn (string $key): string => (string) ($focusFieldMap[$key] ?? ''),
+    $focusKeys
+))));
+// Primul camp ramane cel spre care derulam; restul sunt doar evidentiate.
+$focusFieldId = (string) ($focusFieldIds[0] ?? '');
+$focusEndTime = in_array('end_time', $focusKeys, true);
 $displayTotalFacturare = (float) ($raceFormData['total_facturare'] ?? 0) + $invoicedRefacturareTotal;
 
 // Flux "cursa tocmai adaugata": utilizatorul a raspuns "Da" la promptul de cheltuieli.
@@ -354,6 +366,75 @@ if ($postCreateFlow) {
     </div>
 <?php endif; ?>
 
+<?php include __DIR__ . '/_open_races_panel.php'; ?>
+<?php /*
+ * Panoul este partajat cu lista, unde fiecare lipsa este un link catre cursa.
+ * Pe pagina de editare, linkurile care duc la cursa deschisa chiar acum ar
+ * reincarca pagina si ar pierde ce a completat operatorul fara sa salveze, asa
+ * ca le tratam in pagina: inchidem panoul si ducem cursorul pe campul cerut.
+ * Linkurile catre alte curse raman navigari normale.
+ */ ?>
+<script>
+(function () {
+    var currentRaceId = <?= json_encode((string) $raceId) ?>;
+    var focusFieldMap = <?= json_encode($focusFieldMap, JSON_UNESCAPED_UNICODE) ?>;
+    var panelEl = document.querySelector('[data-open-races-panel]');
+    if (!panelEl) { return; }
+
+    var revealField = function (targetEl) {
+        targetEl.classList.add('dispatcher-field-deep-focus');
+        var topOffset = 112;
+        var targetTop = targetEl.getBoundingClientRect().top + window.pageYOffset - topOffset;
+        window.scrollTo({ top: Math.max(0, Math.round(targetTop)), behavior: 'smooth' });
+        try {
+            targetEl.focus({ preventScroll: true });
+        } catch (error) {
+            targetEl.focus();
+        }
+    };
+
+    panelEl.addEventListener('click', function (event) {
+        var link = event.target.closest('a[href*="action=edit"]');
+        if (!link) { return; }
+
+        var href = link.getAttribute('href') || '';
+        var linkedId = (href.match(/[?&]id=(\d+)/) || [])[1];
+        if (linkedId !== currentRaceId) {
+            return;
+        }
+
+        event.preventDefault();
+
+        // focus poate purta mai multe chei ("Deschide cursa" trimite toate
+        // lipsurile din tab-ul activ): le evidentiem pe toate, derulam la prima.
+        var rawFocus = (href.match(/[?&]focus=([^&#]+)/) || [])[1] || '';
+        var hash = (href.match(/#([\w-]+)/) || [])[1] || '';
+        var targets = decodeURIComponent(rawFocus)
+            .split(',')
+            .map(function (key) { return key.trim(); })
+            .filter(function (key) { return key !== '' && focusFieldMap[key]; })
+            .map(function (key) { return document.getElementById(focusFieldMap[key]); })
+            .filter(function (el) { return el instanceof HTMLElement; });
+
+        if (targets.length === 0 && hash !== '') {
+            var hashEl = document.getElementById(hash);
+            if (hashEl) { targets = [hashEl]; }
+        }
+
+        var closeEl = panelEl.querySelector('[data-open-races-close]');
+        if (closeEl) { closeEl.click(); }
+
+        if (targets.length > 0) {
+            targets.slice(1).forEach(function (el) {
+                el.classList.add('dispatcher-field-deep-focus');
+            });
+            window.setTimeout(function () { revealField(targets[0]); }, 150);
+        }
+    });
+})();
+</script>
+
+
 <div class="card border-0 shadow-sm mb-3">
     <div class="card-header bg-white">
         <h3 class="h6 mb-0">Date cursa</h3>
@@ -384,11 +465,14 @@ if ($postCreateFlow) {
               data-inactive-approval-request-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'request_inactive_vehicle_approval'])) ?>"
               data-inactive-approval-cancel-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'cancel_inactive_vehicle_approval'])) ?>"
               data-inactive-trip-id="<?= e((string) $raceId) ?>"
+              data-races-activity-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'races_activity'])) ?>" data-races-activity-since="<?= e(date('Y-m-d H:i:s')) ?>"
+              data-trip-conflict-check-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'trip_conflict_check'])) ?>"
               novalidate>
             <?= csrf_field() ?>
             <input type="hidden" name="inactive_approval_decision" value="<?= e((string) ($raceFormData['inactive_approval_decision'] ?? '')) ?>" data-inactive-approval-decision>
             <input type="hidden" name="inactive_approval_signature" value="" data-inactive-approval-signature>
             <input type="hidden" name="confirm_incomplete" value="">
+            <input type="hidden" name="confirm_similar" value="" data-trip-similar-confirm-flag>
             <datalist id="edit_race_time_options">
                 <?php for ($hour = 0; $hour < 24; $hour++): ?>
                     <?php foreach (['00', '15', '30', '45'] as $minute): ?>
@@ -851,11 +935,17 @@ if ($postCreateFlow) {
     </div>
 </div>
 
-<div class="row g-3 align-items-start dispatcher-expense-layout <?= $expenseRefacturareEnabled ? 'has-refacturare' : '' ?>" data-role="expense-layout">
+<div class="row g-3 align-items-start dispatcher-expense-layout <?= $expenseTwoColumnLayout ? 'has-refacturare' : '' ?>" data-role="expense-layout">
     <div class="col-12 col-xl-5 dispatcher-expense-form-column" id="expense-section">
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
-                <h3 class="h6 mb-0"><?= $editingExpense ? 'Editeaza cheltuiala' : 'Adauga cheltuiala' ?></h3>
+                <h3 class="h6 mb-0"><?php
+                    if ($expenseIsPureRefacturare) {
+                        echo 'Editeaza refacturarea';
+                    } else {
+                        echo $editingExpense ? 'Editeaza cheltuiala' : 'Adauga cheltuiala';
+                    }
+                ?></h3>
                 <div class="d-flex flex-wrap align-items-center gap-2">
                     <?php if (!$raceHasExpenses): ?>
                         <span class="badge <?= e($raceExpenseStatusBadgeClass) ?>"><?= e($raceExpenseStatusLabel) ?></span>
@@ -876,7 +966,7 @@ if ($postCreateFlow) {
                 <form method="post"
                       action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'save_expense', 'id' => $raceId])) ?>"
                       enctype="multipart/form-data"
-                      class="dispatcher-expense-form <?= $expenseRefacturareEnabled ? 'has-refacturare' : '' ?>"
+                      class="dispatcher-expense-form <?= $expenseTwoColumnLayout ? 'has-refacturare' : '' ?>"
                       data-role="expense-form"
                       novalidate>
                     <?= csrf_field() ?>
@@ -1017,7 +1107,7 @@ if ($postCreateFlow) {
                     </datalist>
 
                     <div class="row g-2 mb-3 align-items-start expense-type-row">
-                        <div class="col-12 col-md-6">
+                        <div class="col-12 col-md-6<?= $expenseIsPureRefacturare ? ' d-none' : '' ?>">
                             <label class="form-label" for="expense_tip_cheltuiala">Tip cheltuiala <span class="text-danger">*</span></label>
                             <div class="dropdown" data-role="expense-type-dropdown">
                                 <button
@@ -1067,18 +1157,23 @@ if ($postCreateFlow) {
                         </div>
 
                         <div class="col-12 col-md-6">
-                            <div class="form-check mb-2">
-                                <input
-                                    class="form-check-input"
-                                    type="checkbox"
-                                    value="1"
-                                    id="expense_refacturare_enabled"
-                                    name="refacturare_enabled"
-                                    data-role="expense-refacturare-toggle"
-                                    <?= $expenseRefacturareEnabled ? 'checked' : '' ?>
-                                >
-                                <label class="form-check-label" for="expense_refacturare_enabled">Refacturare</label>
-                            </div>
+                            <?php if ($expenseIsPureRefacturare): ?>
+                                <input type="hidden" name="refacturare_enabled" value="1">
+                                <div class="fw-semibold mb-2">Tip refacturare <span class="text-danger">*</span></div>
+                            <?php else: ?>
+                                <div class="form-check mb-2">
+                                    <input
+                                        class="form-check-input"
+                                        type="checkbox"
+                                        value="1"
+                                        id="expense_refacturare_enabled"
+                                        name="refacturare_enabled"
+                                        data-role="expense-refacturare-toggle"
+                                        <?= $expenseRefacturareEnabled ? 'checked' : '' ?>
+                                    >
+                                    <label class="form-check-label" for="expense_refacturare_enabled">Refacturare</label>
+                                </div>
+                            <?php endif; ?>
                             <div class="<?= $expenseRefacturareEnabled ? '' : 'd-none' ?>" data-role="expense-refacturare-menu">
                                 <div class="dropdown" data-role="expense-refacturare-type-dropdown">
                                     <button
@@ -1117,7 +1212,7 @@ if ($postCreateFlow) {
                         </div>
                     </div>
 
-                    <div class="expense-main-panel">
+                    <div class="expense-main-panel<?= $expenseIsPureRefacturare ? ' d-none' : '' ?>">
                     <?php if ($editingRetiredRoadTaxExpense): ?>
                         <div class="alert alert-warning expense-main-field">
                             Aceasta cheltuiala a fost salvata pe vechiul tip <strong>Taxe drum</strong>, care putea contine mai multe taxe deodata.
@@ -1408,7 +1503,7 @@ if ($postCreateFlow) {
                                     </td>
                                     <td class="text-end pe-3">
                                         <div class="d-inline-flex gap-1">
-                                            <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(array_merge(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'expense_id' => $expenseId], $postCreateFlowQuery))) ?>">Editeaza</a>
+                                            <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(array_merge(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'expense_id' => $expenseId], $postCreateFlowQuery)) . '#expense-section') ?>">Editeaza</a>
                                             <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'delete_expense', 'id' => $raceId])) ?>" class="d-inline">
                                                 <?= csrf_field() ?>
                                                 <input type="hidden" name="expense_id" value="<?= e((string) $expenseId) ?>">
@@ -1511,6 +1606,9 @@ document.addEventListener('DOMContentLoaded', function () {
     var expenseFormEl = document.querySelector('[data-role="expense-form"]');
     var expenseLayoutEl = document.querySelector('[data-role="expense-layout"]');
     var refacturareToggleEl = document.querySelector('[data-role="expense-refacturare-toggle"]');
+    // La editarea unei refacturari pure nu exista bifa: valoarea vine dintr-un camp
+    // ascuns, iar formularul ramane pe o singura coloana.
+    var refacturarePureEdit = <?= $expenseIsPureRefacturare ? 'true' : 'false' ?>;
     var refacturareMenuEl = document.querySelector('[data-role="expense-refacturare-menu"]');
     var refacturareFieldsEl = document.querySelector('[data-role="expense-refacturare-fields"]');
     var refacturareDateEl = document.getElementById('expense_refacturare_data');
@@ -1641,11 +1739,13 @@ document.addEventListener('DOMContentLoaded', function () {
     );
 
     var syncRefacturare = function () {
-        var enabled = refacturareToggleEl instanceof HTMLInputElement ? refacturareToggleEl.checked : false;
+        var enabled = refacturarePureEdit
+            || (refacturareToggleEl instanceof HTMLInputElement ? refacturareToggleEl.checked : false);
+        var twoColumns = enabled && !refacturarePureEdit;
 
-        expenseFormEl.classList.toggle('has-refacturare', enabled);
+        expenseFormEl.classList.toggle('has-refacturare', twoColumns);
         if (expenseLayoutEl instanceof HTMLElement) {
-            expenseLayoutEl.classList.toggle('has-refacturare', enabled);
+            expenseLayoutEl.classList.toggle('has-refacturare', twoColumns);
         }
         if (refacturareMenuEl instanceof HTMLElement) {
             refacturareMenuEl.classList.toggle('d-none', !enabled);
@@ -1946,7 +2046,9 @@ document.addEventListener('DOMContentLoaded', function () {
     </script>
 <?php endif; ?>
 
+<?php include __DIR__ . '/_race_day_panel.php'; ?>
 <?php include __DIR__ . '/_inactive_resource_modal.php'; ?>
+<?php include __DIR__ . '/_trip_conflict_modal.php'; ?>
 
 <?php $incompleteConfirmItems = is_array($incompleteConfirmItems ?? null) ? array_values(array_filter(array_map('strval', $incompleteConfirmItems))) : []; ?>
 <?php if ($incompleteConfirmItems !== []): ?>
@@ -2006,13 +2108,22 @@ document.addEventListener('DOMContentLoaded', function () {
 <?php if ($focusFieldId !== ''): ?>
 <script>
 (function () {
+    var focusFieldIds = <?= json_encode($focusFieldIds) ?>;
+
     var focusTargetField = function () {
-        var targetEl = document.getElementById(<?= json_encode($focusFieldId) ?>);
+        // Evidentiem toate campurile cerute si derulam la primul dintre ele.
+        var highlighted = focusFieldIds
+            .map(function (fieldId) { return document.getElementById(fieldId); })
+            .filter(function (el) { return el instanceof HTMLElement; });
+
+        highlighted.forEach(function (el) {
+            el.classList.add('dispatcher-field-deep-focus');
+        });
+
+        var targetEl = highlighted[0];
         if (!(targetEl instanceof HTMLElement)) {
             return;
         }
-
-        targetEl.classList.add('dispatcher-field-deep-focus');
 
         var alignTargetField = function () {
             var topOffset = 112;

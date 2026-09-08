@@ -6074,6 +6074,533 @@
             });
         }
 
+
+        // Reguli de cursa dubla, verificate inainte de trimiterea formularului
+        // (actiunea trip_conflict_check). Regulile sunt aplicate si pe server la
+        // salvare — verificarea de aici doar scuteste operatorul de un drum inutil.
+        var conflictCheckUrl = String(form.getAttribute('data-trip-conflict-check-url') || '').trim();
+        var similarConfirmFlagField = form.querySelector('[data-trip-similar-confirm-flag]');
+        var overlapModalEl = document.querySelector('[data-trip-overlap-modal]');
+        var similarModalEl = document.querySelector('[data-trip-similar-modal]');
+        var checkedConflictSignature = null;
+
+        function conflictFieldValue(field) {
+            return field !== null && field !== undefined && typeof field.value === 'string'
+                ? String(field.value).trim()
+                : '';
+        }
+
+        // Semnatura campurilor care influenteaza verificarea: cat timp nu se schimba,
+        // nu re-interogam serverul si nu reafisam modalul la fiecare re-trimitere.
+        function conflictSignature() {
+            return [
+                conflictFieldValue(vehicleField),
+                conflictFieldValue(beneficiaryField),
+                conflictFieldValue(loadLocationField),
+                conflictFieldValue(startDateField),
+                conflictFieldValue(startTimeField),
+                conflictFieldValue(endDateField),
+                conflictFieldValue(endTimeField)
+            ].join('|');
+        }
+
+        function submitRaceFormAfterConflictCheck() {
+            checkedConflictSignature = conflictSignature();
+            if (typeof form.requestSubmit === 'function') {
+                form.requestSubmit();
+                return;
+            }
+
+            form.submit();
+        }
+
+        function requestTripConflictStatus() {
+            var vehicleId = conflictFieldValue(vehicleField);
+            var startDate = conflictFieldValue(startDateField);
+            if (conflictCheckUrl === '' || vehicleId === '' || startDate === '') {
+                return Promise.resolve(null);
+            }
+
+            var url = new URL(conflictCheckUrl, window.location.origin);
+            url.searchParams.set('vehicle_id', vehicleId);
+            url.searchParams.set('data_inceput', startDate);
+            [
+                ['beneficiar_id', conflictFieldValue(beneficiaryField)],
+                ['loc_incarcare_id', conflictFieldValue(loadLocationField)],
+                ['data_sfarsit', conflictFieldValue(endDateField)],
+                ['ora_inceput', conflictFieldValue(startTimeField)],
+                ['ora_sfarsit', conflictFieldValue(endTimeField)],
+                ['trip_id', inactiveTripId]
+            ].forEach(function (pair) {
+                if (pair[1] !== '') {
+                    url.searchParams.set(pair[0], pair[1]);
+                }
+            });
+
+            return fetch(url.toString(), {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error('Trip conflict check request failed.');
+                }
+
+                return response.json();
+            });
+        }
+
+        function showOverlapBlockModal(message, raceId, raceUrl) {
+            var text = String(message || 'Vehiculul este deja pe o cursa in acest interval.');
+            var messageBox = overlapModalEl instanceof HTMLElement
+                ? overlapModalEl.querySelector('[data-trip-overlap-message]')
+                : null;
+            if (messageBox !== null) {
+                messageBox.textContent = text;
+            }
+
+            // Linkul catre cursa care blocheaza: operatorul vede despre ce cursa
+            // este vorba, nu doar ca este blocat.
+            var linkBox = overlapModalEl instanceof HTMLElement
+                ? overlapModalEl.querySelector('[data-trip-overlap-link]')
+                : null;
+            if (linkBox !== null) {
+                var url = String(raceUrl || '');
+                if (url !== '') {
+                    linkBox.setAttribute('href', url);
+                    linkBox.textContent = 'Deschide cursa #' + String(raceId || '');
+                    linkBox.classList.remove('d-none');
+                } else {
+                    linkBox.classList.add('d-none');
+                }
+            }
+
+            if (overlapModalEl instanceof HTMLElement && typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                bootstrap.Modal.getOrCreateInstance(overlapModalEl).show();
+                return;
+            }
+
+            alert(text);
+        }
+
+        // Returneaza true daca modalul de confirmare a fost afisat. Daca nu poate fi
+        // afisat, lasam salvarea sa continue: serverul semnaleaza oricum cursele
+        // asemanatoare dupa salvare, deci operatorul nu ramane fara informatie.
+        function showSimilarConfirmModal(items) {
+            if (!(similarModalEl instanceof HTMLElement) || typeof bootstrap === 'undefined' || !bootstrap.Modal) {
+                return false;
+            }
+
+            var list = similarModalEl.querySelector('[data-trip-similar-list]');
+            if (list !== null) {
+                list.textContent = '';
+                (items || []).forEach(function (item) {
+                    var entry = document.createElement('li');
+                    var url = String((item && item.url) || '');
+                    var label = String((item && item.label) || item || '');
+                    if (url !== '') {
+                        var link = document.createElement('a');
+                        link.setAttribute('href', url);
+                        link.setAttribute('target', '_blank');
+                        link.setAttribute('rel', 'noopener');
+                        link.textContent = label;
+                        entry.appendChild(link);
+                    } else {
+                        entry.textContent = label;
+                    }
+                    list.appendChild(entry);
+                });
+            }
+
+            bootstrap.Modal.getOrCreateInstance(similarModalEl).show();
+
+            return true;
+        }
+
+        if (similarModalEl instanceof HTMLElement) {
+            var similarConfirmButton = similarModalEl.querySelector('[data-trip-similar-confirm]');
+            if (similarConfirmButton !== null) {
+                similarConfirmButton.addEventListener('click', function () {
+                    if (similarConfirmFlagField !== null) {
+                        similarConfirmFlagField.value = '1';
+                    }
+                    if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                        bootstrap.Modal.getOrCreateInstance(similarModalEl).hide();
+                    }
+                    submitRaceFormAfterConflictCheck();
+                });
+            }
+        }
+
+
+        // Panourile din Desfasurator: ce exista deja pentru vehiculul si ziua alese,
+        // respectiv ce s-a mai salvat de cand este deschisa pagina. Amandoua raspund
+        // aceleiasi intrebari a operatorului: "am introdus deja cursa asta?".
+        var activityUrl = String(form.getAttribute('data-races-activity-url') || '').trim();
+        var activitySince = String(form.getAttribute('data-races-activity-since') || '').trim();
+        var dayPanel = document.querySelector('[data-race-day-panel]');
+        var newPanelBox = document.querySelector('[data-race-new-panel]');
+        var newPanelToggle = document.querySelector('[data-race-new-toggle]');
+        var lastVehicleSignature = null;
+        var vehicleRaces = [];
+        var vehicleRacesTotal = 0;
+        var similarOnlyToggle = dayPanel instanceof HTMLElement
+            ? dayPanel.querySelector('[data-race-day-similar-only]')
+            : null;
+
+        // Numarul de inmatriculare din selector, pentru cazul in care ziua nu are
+        // nicio cursa si nu avem de unde sa-l citim din raspuns.
+        function selectedVehicleLabel() {
+            if (!(vehicleField instanceof HTMLSelectElement) || vehicleField.selectedIndex < 0) {
+                return '';
+            }
+
+            var text = String(vehicleField.options[vehicleField.selectedIndex].text || '').trim();
+            var separator = text.indexOf(' - ');
+
+            return separator > 0 ? text.slice(0, separator).trim() : text;
+        }
+
+        function textCell(value, alignEnd) {
+            var cell = document.createElement('td');
+            cell.textContent = String(value || '') !== '' ? String(value) : '-';
+            if (alignEnd) {
+                cell.className = 'text-end';
+            }
+            return cell;
+        }
+
+        function raceLink(race, label) {
+            var link = document.createElement('a');
+            link.setAttribute('href', String(race.url || '#'));
+            link.setAttribute('target', '_blank');
+            link.setAttribute('rel', 'noopener');
+            link.textContent = label;
+            return link;
+        }
+
+        // "Seamana" = acelasi beneficiar si acelasi loc de incarcare ca al cursei in
+        // lucru: combinatia care se repeta cand aceeasi cursa este introdusa a doua
+        // oara, la cateva zile distanta si cu alte ore sau km.
+        function raceLooksSimilar(race) {
+            var draftBeneficiary = conflictFieldValue(beneficiaryField);
+            var draftLoadLocation = conflictFieldValue(loadLocationField);
+            if (draftBeneficiary === '') {
+                return false;
+            }
+
+            return String(race.beneficiar_id || '') === draftBeneficiary
+                && String(race.loc_incarcare_id || '0') === String(draftLoadLocation || '0');
+        }
+
+        function similarOnlyActive() {
+            return similarOnlyToggle instanceof HTMLInputElement && similarOnlyToggle.checked;
+        }
+
+        function currentSelectedDate() {
+            var value = conflictFieldValue(startDateField);
+            var parts = value.split('/');
+
+            return parts.length === 3 ? parts[2] + '-' + parts[1] + '-' + parts[0] : '';
+        }
+
+        // hasSelection separa "nu s-a ales inca vehiculul" (panoul nu are ce spune,
+        // deci sta ascuns) de "am cautat si nu exista nimic" (mesaj explicit, altfel
+        // operatorul nu stie daca verificarea a rulat).
+        function renderDayRaces(races, contextLabel, hasSelection) {
+            if (!(dayPanel instanceof HTMLElement)) {
+                return;
+            }
+
+            var rows = dayPanel.querySelector('[data-race-day-rows]');
+            var countBox = dayPanel.querySelector('[data-race-day-count]');
+            var contextBox = dayPanel.querySelector('[data-race-day-context]');
+            var tableBox = dayPanel.querySelector('[data-race-day-table]');
+            var emptyBox = dayPanel.querySelector('[data-race-day-empty]');
+            var emptyText = dayPanel.querySelector('[data-race-day-empty-text]');
+            var footerBox = dayPanel.querySelector('[data-race-day-footer]');
+            if (rows === null) {
+                return;
+            }
+
+            var toggle = function (element, visible) {
+                if (element instanceof HTMLElement) {
+                    element.classList.toggle('d-none', !visible);
+                }
+            };
+
+            // Filtrul poate goli o lista care are randuri: mesajul difera.
+            if (similarOnlyActive() && races && races.length > 0 && races.filter(raceLooksSimilar).length === 0) {
+                races = [];
+            }
+
+            if (!races || races.length === 0) {
+                rows.textContent = '';
+                if (!hasSelection) {
+                    dayPanel.classList.add('d-none');
+                    return;
+                }
+
+                if (emptyText !== null) {
+                    emptyText.textContent = similarOnlyActive()
+                        ? 'Nicio cursa asemanatoare cu cea pe care o introduci. Debifeaza filtrul ca sa vezi tot istoricul.'
+                        : 'Acest vehicul nu are nicio cursa inregistrata.';
+                }
+                if (countBox !== null) {
+                    countBox.textContent = '0';
+                }
+                if (contextBox !== null) {
+                    contextBox.textContent = contextLabel;
+                }
+                var emptySimilarBox = dayPanel.querySelector('[data-race-day-similar-count]');
+                if (emptySimilarBox instanceof HTMLElement) {
+                    emptySimilarBox.classList.add('d-none');
+                }
+                toggle(tableBox, false);
+                toggle(footerBox, false);
+                toggle(emptyBox, true);
+                dayPanel.classList.remove('d-none');
+                return;
+            }
+
+            toggle(tableBox, true);
+            toggle(footerBox, true);
+            toggle(emptyBox, false);
+            rows.textContent = '';
+            var selectedDate = currentSelectedDate();
+            var similarCount = races.filter(raceLooksSimilar).length;
+            var similarOnly = similarOnlyToggle instanceof HTMLInputElement && similarOnlyToggle.checked;
+            var visibleRaces = similarOnly ? races.filter(raceLooksSimilar) : races;
+
+            visibleRaces.forEach(function (race) {
+                var isSimilar = raceLooksSimilar(race);
+                var isSelectedDay = selectedDate !== '' && String(race.date || '') === selectedDate;
+                var row = document.createElement('tr');
+                if (isSimilar) {
+                    row.className = 'table-warning';
+                } else if (isSelectedDay) {
+                    row.className = 'table-light';
+                }
+
+                var dateCell = document.createElement('td');
+                dateCell.className = 'text-nowrap';
+                dateCell.textContent = String(race.date_label || '');
+                if (isSelectedDay) {
+                    var dayTag = document.createElement('span');
+                    dayTag.className = 'badge bg-secondary ms-1';
+                    dayTag.textContent = 'ziua aleasa';
+                    dateCell.appendChild(dayTag);
+                }
+                row.appendChild(dateCell);
+
+                var idCell = document.createElement('td');
+                idCell.appendChild(raceLink(race, '#' + race.id));
+                if (isSimilar) {
+                    var similarTag = document.createElement('span');
+                    similarTag.className = 'badge bg-warning text-dark ms-1';
+                    similarTag.textContent = 'Seamana';
+                    idCell.appendChild(similarTag);
+                }
+                row.appendChild(idCell);
+                row.appendChild(textCell(race.interval));
+                row.appendChild(textCell(race.transport));
+                row.appendChild(textCell(race.route));
+                row.appendChild(textCell(race.driver));
+                row.appendChild(textCell(race.km, true));
+                row.appendChild(textCell(race.quantity, true));
+                var actionCell = document.createElement('td');
+                actionCell.className = 'text-end';
+                var openLink = raceLink(race, 'Deschide');
+                openLink.className = 'btn btn-sm btn-outline-secondary';
+                actionCell.appendChild(openLink);
+                row.appendChild(actionCell);
+                rows.appendChild(row);
+            });
+
+            if (countBox !== null) {
+                countBox.textContent = similarOnly
+                    ? visibleRaces.length + ' / ' + races.length
+                    : String(races.length);
+            }
+            if (contextBox !== null) {
+                contextBox.textContent = contextLabel;
+            }
+            var filterWrap = dayPanel.querySelector('[data-race-day-filter-wrap]');
+            if (filterWrap instanceof HTMLElement) {
+                filterWrap.classList.toggle('d-none', similarCount === 0 && !similarOnly);
+            }
+            var truncatedBox = dayPanel.querySelector('[data-race-day-truncated]');
+            if (truncatedBox instanceof HTMLElement) {
+                var isTruncated = vehicleRacesTotal > races.length;
+                truncatedBox.textContent = isTruncated
+                    ? 'Se afiseaza cele mai recente ' + races.length + ' din ' + vehicleRacesTotal + ' curse ale vehiculului.'
+                    : '';
+                truncatedBox.classList.toggle('d-none', !isTruncated);
+            }
+            var similarBox = dayPanel.querySelector('[data-race-day-similar-count]');
+            if (similarBox instanceof HTMLElement) {
+                similarBox.textContent = similarCount === 1
+                    ? '1 cursa asemanatoare'
+                    : similarCount + ' curse asemanatoare';
+                similarBox.classList.toggle('d-none', similarCount === 0);
+            }
+            dayPanel.classList.remove('d-none');
+        }
+
+        function renderNewRaces(races) {
+            if (!(newPanelBox instanceof HTMLElement) || !(newPanelToggle instanceof HTMLElement)) {
+                return;
+            }
+
+            var list = newPanelBox.querySelector('[data-race-new-list]');
+            var countBox = newPanelToggle.querySelector('[data-race-new-count]');
+            var labelBox = newPanelToggle.querySelector('[data-race-new-label]');
+            if (!races || races.length === 0) {
+                newPanelToggle.classList.add('d-none');
+                newPanelToggle.classList.remove('d-inline-flex');
+                newPanelBox.classList.add('d-none');
+                return;
+            }
+
+            if (list !== null) {
+                list.textContent = '';
+                races.forEach(function (race) {
+                    var entry = document.createElement('li');
+                    entry.appendChild(raceLink(race, '#' + race.id + ' ' + race.plate + ', ' + race.interval));
+                    var details = [race.route, race.driver, race.created_by ? 'adaugata de ' + race.created_by : '']
+                        .filter(function (part) { return String(part || '') !== ''; })
+                        .join(' - ');
+                    if (details !== '') {
+                        entry.appendChild(document.createTextNode(' - ' + details));
+                    }
+                    list.appendChild(entry);
+                });
+            }
+
+            if (countBox !== null) {
+                countBox.textContent = String(races.length);
+            }
+            if (labelBox !== null) {
+                labelBox.textContent = races.length === 1 ? 'cursa noua' : 'curse noi';
+            }
+            newPanelToggle.classList.remove('d-none');
+            newPanelToggle.classList.add('d-inline-flex');
+        }
+
+        if (newPanelToggle instanceof HTMLElement && newPanelBox instanceof HTMLElement) {
+            newPanelToggle.addEventListener('click', function () {
+                var isHidden = newPanelBox.classList.toggle('d-none');
+                newPanelToggle.setAttribute('aria-expanded', isHidden ? 'false' : 'true');
+            });
+        }
+
+        function renderVehicleRacesFromCache() {
+            if (!(dayPanel instanceof HTMLElement)) {
+                return;
+            }
+
+            if (conflictFieldValue(vehicleField) === '') {
+                renderDayRaces([], '', false);
+                return;
+            }
+
+            var plate = (vehicleRaces[0] && vehicleRaces[0].plate) || selectedVehicleLabel();
+            var context = (plate !== '' ? plate + ' - ' : '') + 'tot istoricul';
+            renderDayRaces(vehicleRaces, context, true);
+        }
+
+        if (similarOnlyToggle instanceof HTMLInputElement) {
+            similarOnlyToggle.addEventListener('change', renderVehicleRacesFromCache);
+        }
+
+        function refreshRacesActivity() {
+            if (activityUrl === '') {
+                return;
+            }
+
+            var vehicleId = conflictFieldValue(vehicleField);
+            var wantsDayRaces = dayPanel instanceof HTMLElement && vehicleId !== '';
+            var wantsNewRaces = newPanelToggle instanceof HTMLElement && activitySince !== '';
+            if (!wantsDayRaces && !wantsNewRaces) {
+                renderDayRaces([], '', false);
+                return;
+            }
+
+            var url = new URL(activityUrl, window.location.origin);
+            if (wantsDayRaces) {
+                url.searchParams.set('vehicle_id', vehicleId);
+                if (inactiveTripId !== '') {
+                    url.searchParams.set('trip_id', inactiveTripId);
+                }
+            }
+            if (wantsNewRaces) {
+                url.searchParams.set('since', activitySince);
+            }
+
+            fetch(url.toString(), {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error('Races activity request failed.');
+                }
+
+                return response.json();
+            }).then(function (result) {
+                if (!result || result.success !== true) {
+                    return;
+                }
+
+                if (wantsDayRaces) {
+                    vehicleRaces = result.vehicle_races || [];
+                    vehicleRacesTotal = Number(result.vehicle_races_total || vehicleRaces.length);
+                    renderVehicleRacesFromCache();
+                } else {
+                    vehicleRaces = [];
+                    vehicleRacesTotal = 0;
+                    renderDayRaces([], '', false);
+                }
+
+                if (wantsNewRaces) {
+                    renderNewRaces(result.new_races);
+                }
+            }).catch(function () {
+                // Panourile sunt informative: daca sondajul cade, formularul ramane
+                // functional si regulile de salvare lucreaza oricum pe server.
+            });
+        }
+
+        // Istoricul se cere din nou doar cand se schimba vehiculul. Data,
+        // beneficiarul si locul schimba doar marcajele, deci se re-randeaza local.
+        function refreshDayRacesIfSelectionChanged() {
+            var signature = conflictFieldValue(vehicleField);
+            if (signature === lastVehicleSignature) {
+                renderVehicleRacesFromCache();
+                return;
+            }
+            lastVehicleSignature = signature;
+            vehicleRaces = [];
+            vehicleRacesTotal = 0;
+            refreshRacesActivity();
+        }
+
+        [vehicleField, startDateField, beneficiaryField, loadLocationField].forEach(function (field) {
+            if (field !== null && typeof field.addEventListener === 'function') {
+                field.addEventListener('change', refreshDayRacesIfSelectionChanged);
+            }
+        });
+
+        if (activityUrl !== '') {
+            refreshDayRacesIfSelectionChanged();
+            // Sondaj rar: semnaleaza cursele salvate de colegi cat timp formularul
+            // este deschis, fara sa incarce serverul.
+            window.setInterval(refreshRacesActivity, 30000);
+            window.addEventListener('focus', refreshRacesActivity);
+        }
+
         form.addEventListener('submit', function (event) {
             var firstInvalidDateTimePicker = null;
             dateTimePickers.forEach(function (dateTimePicker) {
@@ -6098,6 +6625,40 @@
             });
             normalizeTimeFieldValue(startTimeField);
             normalizeTimeFieldValue(endTimeField);
+
+            // Verificarea de cursa dubla ruleaza inaintea celei de resurse inactive:
+            // daca intervalul se suprapune, nu are rost sa cerem si aprobari.
+            if (conflictCheckUrl !== '' && checkedConflictSignature !== conflictSignature()) {
+                event.preventDefault();
+                event.stopPropagation();
+                if (typeof event.stopImmediatePropagation === 'function') {
+                    event.stopImmediatePropagation();
+                }
+
+                requestTripConflictStatus().then(function (result) {
+                    if (result === null || result.success !== true) {
+                        submitRaceFormAfterConflictCheck();
+                        return;
+                    }
+
+                    if (result.has_overlap === true) {
+                        showOverlapBlockModal(result.overlap_message, result.overlap_race_id, result.overlap_url);
+                        return;
+                    }
+
+                    if (Number(result.similar_count || 0) > 0 && showSimilarConfirmModal(result.similar_items)) {
+                        return;
+                    }
+
+                    submitRaceFormAfterConflictCheck();
+                }).catch(function () {
+                    // Daca verificarea nu raspunde, salvarea continua: regulile sunt
+                    // aplicate oricum pe server inainte de scrierea in baza.
+                    submitRaceFormAfterConflictCheck();
+                });
+
+                return;
+            }
 
             if (form.dataset.inactiveApprovalBypass === '1') {
                 delete form.dataset.inactiveApprovalBypass;
