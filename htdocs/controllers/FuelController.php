@@ -3,6 +3,12 @@ declare(strict_types=1);
 
 class FuelController
 {
+    // Bonuri fiscale pentru alimentari manuale — aceleasi limite ca la
+    // documentele de cheltuiala cursa / cazare.
+    private const RECEIPT_UPLOAD_DIR = 'uploads/carburanti';
+    private const RECEIPT_MAX_SIZE = 5242880; // 5 MB
+    private const RECEIPT_ALLOWED_EXTENSIONS = ['pdf', 'jpg', 'jpeg', 'png', 'webp'];
+
     private FuelModel $model;
 
     public function __construct(PDO $db)
@@ -28,6 +34,15 @@ class FuelController
                 return;
             case 'set_odometer':
                 $this->setOdometerAction();
+                return;
+            case 'add_manual':
+                $this->addManualAction();
+                return;
+            case 'delete_manual':
+                $this->deleteManualAction();
+                return;
+            case 'receipt':
+                $this->receiptAction();
                 return;
             case 'set_t0':
                 $this->setT0Action();
@@ -187,6 +202,221 @@ class FuelController
         }
 
         redirect($this->safeReturnUrl($_POST['return_url'] ?? null));
+    }
+
+    /**
+     * Adauga o alimentare platita in numerar (bon fiscal), care nu exista in
+     * CardOil. Reutilizeaza permisiunea carburanti.set_full, la fel ca T0.
+     */
+    private function addManualAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'carburanti']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'carburanti']));
+        $this->requireFullManagement();
+
+        $returnUrl = $this->safeReturnUrl($_POST['return_url'] ?? null);
+
+        [$receipt, $receiptError] = $this->storeUploadedReceipt($_FILES['receipt'] ?? null);
+        if ($receiptError !== null) {
+            flash_set('warning', $receiptError . ' Alimentarea nu a fost salvată — încearcă din nou.');
+            redirect($returnUrl);
+        }
+
+        try {
+            $result = $this->model->createManualFillup([
+                'vehicle_registration' => (string) ($_POST['vehicle_registration'] ?? ''),
+                'fillup_datetime' => (string) ($_POST['fillup_datetime'] ?? ''),
+                'fuel_type' => (string) ($_POST['fuel_type'] ?? ''),
+                'quantity_liters' => $this->parseDecimal((string) ($_POST['quantity_liters'] ?? '')),
+                'total_value' => $this->parseDecimal((string) ($_POST['total_value'] ?? '')),
+                'odometer_km' => (int) str_replace([' ', '.', ','], '', trim((string) ($_POST['odometer_km'] ?? '0'))),
+                'station_name' => (string) ($_POST['station_name'] ?? ''),
+                'driver_name' => (string) ($_POST['driver_name'] ?? ''),
+                'note' => (string) ($_POST['note'] ?? ''),
+                'is_full' => (int) ($_POST['is_full'] ?? 0) === 1,
+                'receipt' => $receipt,
+            ], $this->currentUserId());
+
+            if (!$result['ok'] && $receipt !== null) {
+                // Validarea a respins alimentarea: nu lasam fisierul orfan.
+                $this->deletePhysicalReceipt((string) $receipt['file_path']);
+            }
+            if (!empty($result['replaced_receipt_path'])) {
+                $this->deletePhysicalReceipt((string) $result['replaced_receipt_path']);
+            }
+
+            flash_set($result['ok'] ? 'success' : 'warning', $result['message']);
+        } catch (Throwable $exception) {
+            error_log('[FuelController][add_manual] ' . $exception->getMessage());
+            if ($receipt !== null) {
+                $this->deletePhysicalReceipt((string) $receipt['file_path']);
+            }
+            flash_set('danger', 'A aparut o eroare la adaugarea alimentarii manuale.');
+        }
+
+        redirect($returnUrl);
+    }
+
+    /** Sterge o alimentare manuala (randurile CardOil nu pot fi sterse). */
+    private function deleteManualAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'carburanti']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'carburanti']));
+        $this->requireFullManagement();
+
+        $returnUrl = $this->safeReturnUrl($_POST['return_url'] ?? null);
+        $fillupId = (int) ($_POST['fillup_id'] ?? 0);
+
+        if ($fillupId <= 0) {
+            flash_set('warning', 'Alimentarea selectata nu este valida.');
+            redirect($returnUrl);
+        }
+
+        try {
+            $result = $this->model->deleteManualFillup($fillupId);
+            if ($result['ok'] && !empty($result['receipt_path'])) {
+                $this->deletePhysicalReceipt((string) $result['receipt_path']);
+            }
+            flash_set($result['ok'] ? 'success' : 'warning', $result['message']);
+        } catch (Throwable $exception) {
+            error_log('[FuelController][delete_manual] ' . $exception->getMessage());
+            flash_set('danger', 'A aparut o eroare la stergerea alimentarii manuale.');
+        }
+
+        redirect($returnUrl);
+    }
+
+    /**
+     * Serveste bonul fiscal prin PHP (inline, in tab nou), ca fisierul sa
+     * ramana in spatele autentificarii — aceeasi conventie ca la Cazare.
+     */
+    private function receiptAction(): void
+    {
+        $fillupId = (int) ($_GET['fillup_id'] ?? 0);
+        $receipt = $fillupId > 0 ? $this->model->getFillupReceipt($fillupId) : null;
+
+        $path = $receipt !== null
+            ? BASE_PATH . '/' . self::RECEIPT_UPLOAD_DIR . '/' . basename((string) $receipt['file_path'])
+            : '';
+
+        if ($receipt === null || !is_file($path)) {
+            http_response_code(404);
+            render('errors/404.php', [
+                'pageTitle' => 'Bon inexistent',
+                'currentPage' => 'carburanti',
+            ]);
+            return;
+        }
+
+        header('Content-Type: ' . (string) $receipt['mime_type']);
+        header('Content-Disposition: inline; filename="' . basename((string) $receipt['original_name']) . '"');
+        header('Content-Length: ' . (string) filesize($path));
+        header('X-Content-Type-Options: nosniff');
+        readfile($path);
+        exit;
+    }
+
+    /**
+     * @return array{0: ?array{file_path: string, original_name: string, mime_type: string}, 1: ?string}
+     */
+    private function storeUploadedReceipt(?array $file): array
+    {
+        if (!is_array($file)) {
+            return [null, null];
+        }
+
+        $error = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($error === UPLOAD_ERR_NO_FILE) {
+            return [null, null];
+        }
+        if ($error !== UPLOAD_ERR_OK) {
+            return [null, 'Bonul fiscal nu a putut fi incarcat.'];
+        }
+
+        $tmpName = (string) ($file['tmp_name'] ?? '');
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            return [null, 'Fisierul incarcat nu este valid.'];
+        }
+
+        $size = (int) ($file['size'] ?? 0);
+        if ($size <= 0 || $size > self::RECEIPT_MAX_SIZE) {
+            return [null, 'Fisierul depaseste limita maxima de 5 MB.'];
+        }
+
+        $originalName = trim(basename((string) ($file['name'] ?? 'bon-fiscal')));
+        $originalName = substr(preg_replace('/[^A-Za-z0-9._-]+/', '_', $originalName) ?: 'bon-fiscal', 0, 180);
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        if (!in_array($extension, self::RECEIPT_ALLOWED_EXTENSIONS, true)) {
+            return [null, 'Tipul fisierului nu este permis (PDF, JPG, PNG, WEBP).'];
+        }
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mimeType = $finfo !== false ? (string) (finfo_file($finfo, $tmpName) ?: '') : '';
+        if ($finfo !== false) {
+            finfo_close($finfo);
+        }
+        $allowedMimeTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+        if ($mimeType !== '' && !in_array($mimeType, $allowedMimeTypes, true)) {
+            return [null, 'Tipul MIME al fisierului nu este permis.'];
+        }
+
+        $uploadDir = BASE_PATH . '/' . self::RECEIPT_UPLOAD_DIR;
+        if (!is_dir($uploadDir) && !mkdir($uploadDir, 0755, true) && !is_dir($uploadDir)) {
+            return [null, 'Nu s-a putut crea folderul de upload.'];
+        }
+
+        try {
+            $storedName = 'bon_' . date('Ymd_His') . '_' . bin2hex(random_bytes(8));
+        } catch (Throwable) {
+            $storedName = 'bon_' . date('Ymd_His') . '_' . uniqid('', true);
+        }
+        $storedName .= '.' . $extension;
+
+        if (!move_uploaded_file($tmpName, $uploadDir . '/' . $storedName)) {
+            return [null, 'Fisierul nu a putut fi salvat pe server.'];
+        }
+
+        return [[
+            'file_path' => $storedName,
+            'original_name' => $originalName,
+            'mime_type' => $mimeType !== '' ? $mimeType : 'application/octet-stream',
+        ], null];
+    }
+
+    private function deletePhysicalReceipt(string $storedFile): void
+    {
+        $storedFile = basename($storedFile);
+        if ($storedFile === '' || $storedFile === '.') {
+            return;
+        }
+
+        $path = BASE_PATH . '/' . self::RECEIPT_UPLOAD_DIR . '/' . $storedFile;
+        if (is_file($path)) {
+            @unlink($path);
+        }
+    }
+
+    /** Accepta atat "123,45" cat si "123.45" (si "1.234,56"). */
+    private function parseDecimal(string $value): float
+    {
+        $value = str_replace(' ', '', trim($value));
+        if ($value === '') {
+            return 0.0;
+        }
+
+        if (str_contains($value, ',')) {
+            // Format romanesc: punctul e separator de mii, virgula de zecimale.
+            $value = str_replace('.', '', $value);
+            $value = str_replace(',', '.', $value);
+        }
+
+        return (float) $value;
     }
 
     /**

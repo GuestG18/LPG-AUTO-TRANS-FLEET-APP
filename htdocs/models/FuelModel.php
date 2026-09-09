@@ -96,6 +96,15 @@ class FuelModel extends BaseModel
             $this->db->exec("ALTER TABLE fuel_fillups ADD COLUMN source_type ENUM('api','manual','test','demo') NOT NULL DEFAULT 'api' AFTER raw_payload");
         }
 
+        // Bonul fiscal atasat unei alimentari manuale (plata numerar).
+        // Fisierul sta in uploads/carburanti si e servit prin controller,
+        // in spatele autentificarii (aceeasi conventie ca la Cazare).
+        if (!$this->columnExists('fuel_fillups', 'receipt_path')) {
+            $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN receipt_path VARCHAR(200) NULL DEFAULT NULL AFTER source_type');
+            $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN receipt_original_name VARCHAR(180) NULL DEFAULT NULL AFTER receipt_path');
+            $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN receipt_mime VARCHAR(100) NULL DEFAULT NULL AFTER receipt_original_name');
+        }
+
         // Mecanismul FULL / T0: decizia operatorului este pastrata separat de
         // valoarea efectiva folosita in calcule, ca sa nu poata fi suprascrisa
         // de sincronizarea CardOil (API-ul nu furnizeaza informatia de plin).
@@ -853,6 +862,209 @@ class FuelModel extends BaseModel
         }
 
         return ['inserted' => $inserted, 'updated' => $updated];
+    }
+
+    /**
+     * Alimentare introdusa manual (ex. bon fiscal platit numerar, in afara
+     * cardului CardOil). Randul primeste source_type='manual', deci:
+     *   - sincronizarile CardOil nu il pot suprascrie (garantie in upsert);
+     *   - nu influenteaza monitorizarea tarifelor (FuelPriceIndexService
+     *     foloseste exclusiv source_type='api').
+     * api_id este derivat determinist din campurile de business, ca un
+     * dublu-submit al formularului sa actualizeze acelasi rand, nu sa dubleze.
+     */
+    public function createManualFillup(array $input, ?int $userId = null): array
+    {
+        $this->ensureSchema();
+
+        $vehicle = $this->normalizeRegistration((string) ($input['vehicle_registration'] ?? ''));
+        if ($vehicle === '') {
+            return ['ok' => false, 'message' => 'Selectează vehiculul pentru alimentarea manuală.'];
+        }
+
+        $fuelType = (string) ($input['fuel_type'] ?? '');
+        if (!in_array($fuelType, ['motorina', 'adblue'], true)) {
+            return ['ok' => false, 'message' => 'Tipul de carburant trebuie să fie Motorină sau AdBlue.'];
+        }
+
+        $quantity = (float) ($input['quantity_liters'] ?? 0);
+        if ($quantity <= 0.0 || $quantity > 3000.0) {
+            return ['ok' => false, 'message' => 'Cantitatea trebuie să fie între 0 și 3.000 litri.'];
+        }
+
+        $totalValue = (float) ($input['total_value'] ?? 0);
+        if ($totalValue < 0.0 || $totalValue > 100000.0) {
+            return ['ok' => false, 'message' => 'Valoarea totală nu este plauzibilă.'];
+        }
+
+        $datetimeRaw = trim((string) ($input['fillup_datetime'] ?? ''));
+        $datetime = null;
+        foreach (['Y-m-d\TH:i', 'Y-m-d\TH:i:s', 'Y-m-d H:i', 'Y-m-d H:i:s'] as $format) {
+            $parsed = DateTimeImmutable::createFromFormat($format, $datetimeRaw);
+            if ($parsed instanceof DateTimeImmutable) {
+                $datetime = $parsed;
+                break;
+            }
+        }
+        if ($datetime === null) {
+            return ['ok' => false, 'message' => 'Data și ora alimentării nu sunt valide.'];
+        }
+        if ($datetime > new DateTimeImmutable('+1 hour')) {
+            return ['ok' => false, 'message' => 'Data alimentării nu poate fi în viitor.'];
+        }
+
+        $odometerKm = (int) ($input['odometer_km'] ?? 0);
+        if ($odometerKm < 0 || $odometerKm > 5000000) {
+            return ['ok' => false, 'message' => 'Kilometrajul trebuie să fie între 0 și 5.000.000 km.'];
+        }
+
+        $station = trim((string) ($input['station_name'] ?? ''));
+        $driver = trim((string) ($input['driver_name'] ?? ''));
+        $note = trim((string) ($input['note'] ?? ''));
+        $isFull = !empty($input['is_full']);
+
+        $fingerprint = substr(sha1(implode('|', [
+            $this->vehicleKey($vehicle),
+            $datetime->format('Y-m-d H:i'),
+            $fuelType,
+            number_format($quantity, 2, '.', ''),
+        ])), 0, 12);
+        $apiId = 'manual-' . $this->vehicleKey($vehicle) . '-' . $datetime->format('YmdHi') . '-' . $fuelType . '-' . $fingerprint;
+
+        $result = $this->upsertFillups([[
+            'api_id' => $apiId,
+            'vehicle_registration' => $vehicle,
+            'driver_name' => $driver !== '' ? $driver : null,
+            'fuel_type' => $fuelType,
+            'quantity_liters' => round($quantity, 2),
+            'odometer_km' => $odometerKm,
+            'total_value' => round($totalValue, 2),
+            'station_name' => $station !== '' ? $station : 'Plată numerar',
+            'fillup_datetime' => $datetime->format('Y-m-d H:i:s'),
+            'is_full' => $isFull ? 1 : 0,
+            'is_full_manual' => $isFull ? 1 : 0,
+            'source_type' => 'manual',
+            'raw_payload' => [
+                'source' => 'manual',
+                'payment' => 'numerar',
+                'created_by_user_id' => $userId,
+                'note' => $note !== '' ? $note : null,
+            ],
+        ]]);
+
+        // Bonul fiscal atasat: pastram bonul existent daca nu s-a incarcat
+        // unul nou; la inlocuire raportam vechiul fisier pentru stergere fizica.
+        $replacedReceiptPath = null;
+        $receipt = isset($input['receipt']) && is_array($input['receipt']) ? $input['receipt'] : null;
+        if ($receipt !== null && trim((string) ($receipt['file_path'] ?? '')) !== '') {
+            $oldStmt = $this->db->prepare('SELECT receipt_path FROM fuel_fillups WHERE api_id = :api_id LIMIT 1');
+            $oldStmt->bindValue(':api_id', $apiId);
+            $oldStmt->execute();
+            $oldPath = trim((string) ($oldStmt->fetchColumn() ?: ''));
+            if ($oldPath !== '' && $oldPath !== (string) $receipt['file_path']) {
+                $replacedReceiptPath = $oldPath;
+            }
+
+            $receiptStmt = $this->db->prepare('
+                UPDATE fuel_fillups
+                SET receipt_path = :receipt_path,
+                    receipt_original_name = :receipt_original_name,
+                    receipt_mime = :receipt_mime,
+                    updated_at = :updated_at
+                WHERE api_id = :api_id
+            ');
+            $receiptStmt->bindValue(':receipt_path', (string) $receipt['file_path']);
+            $this->bindNullableString($receiptStmt, ':receipt_original_name', isset($receipt['original_name']) ? (string) $receipt['original_name'] : null);
+            $this->bindNullableString($receiptStmt, ':receipt_mime', isset($receipt['mime_type']) ? (string) $receipt['mime_type'] : null);
+            $receiptStmt->bindValue(':updated_at', date('Y-m-d H:i:s'));
+            $receiptStmt->bindValue(':api_id', $apiId);
+            $receiptStmt->execute();
+        }
+
+        // Alimentarea manuala intra in acelasi flux ca cele din API:
+        // asocierea automata cu cursa din ziua respectiva.
+        $day = $datetime->format('Y-m-d');
+        $this->refreshAutomaticAssociations($day, $day);
+
+        $updatedExisting = (int) ($result['updated'] ?? 0) > 0;
+
+        return [
+            'ok' => true,
+            'replaced_receipt_path' => $replacedReceiptPath,
+            'message' => $updatedExisting
+                ? 'Alimentarea manuală exista deja (aceleași date) și a fost actualizată.'
+                : sprintf(
+                    'Alimentarea manuală a fost adăugată: %s, %s L %s, %s.',
+                    $vehicle,
+                    number_format($quantity, 2, ',', '.'),
+                    $fuelType === 'adblue' ? 'AdBlue' : 'motorină',
+                    $datetime->format('d.m.Y H:i')
+                ),
+        ];
+    }
+
+    /** Bonul fiscal al unei alimentari, pentru servirea autentificata a fisierului. */
+    public function getFillupReceipt(int $fillupId): ?array
+    {
+        $this->ensureSchema();
+
+        $stmt = $this->db->prepare('
+            SELECT receipt_path, receipt_original_name, receipt_mime
+            FROM fuel_fillups
+            WHERE id = :id
+            LIMIT 1
+        ');
+        $stmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $stmt->execute();
+        $row = $stmt->fetch();
+
+        if (!$row || trim((string) ($row['receipt_path'] ?? '')) === '') {
+            return null;
+        }
+
+        return [
+            'file_path' => (string) $row['receipt_path'],
+            'original_name' => trim((string) ($row['receipt_original_name'] ?? '')) !== '' ? (string) $row['receipt_original_name'] : 'bon-fiscal',
+            'mime_type' => trim((string) ($row['receipt_mime'] ?? '')) !== '' ? (string) $row['receipt_mime'] : 'application/octet-stream',
+        ];
+    }
+
+    /**
+     * Sterge o alimentare introdusa manual. Randurile venite din CardOil
+     * (source_type='api') nu pot fi sterse pe aceasta cale — la urmatorul
+     * sync ar reaparea oricum, iar istoricul API trebuie sa ramana intact.
+     */
+    public function deleteManualFillup(int $fillupId): array
+    {
+        $this->ensureSchema();
+
+        $stmt = $this->db->prepare('SELECT * FROM fuel_fillups WHERE id = :id LIMIT 1');
+        $stmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $stmt->execute();
+        $row = $stmt->fetch();
+
+        if (!$row) {
+            return ['ok' => false, 'message' => 'Alimentarea nu a fost găsită.'];
+        }
+
+        if ((string) ($row['source_type'] ?? 'api') !== 'manual') {
+            return ['ok' => false, 'message' => 'Doar alimentările introduse manual pot fi șterse. Rândurile din CardOil rămân sub controlul sincronizării.'];
+        }
+
+        // fuel_trip_links si fuel_month_t0 au FK cu ON DELETE CASCADE.
+        $deleteStmt = $this->db->prepare('DELETE FROM fuel_fillups WHERE id = :id');
+        $deleteStmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $deleteStmt->execute();
+
+        return [
+            'ok' => true,
+            'receipt_path' => trim((string) ($row['receipt_path'] ?? '')) !== '' ? (string) $row['receipt_path'] : null,
+            'message' => sprintf(
+                'Alimentarea manuală din %s (%s) a fost ștearsă.',
+                (string) ($row['fillup_datetime'] ?? ''),
+                (string) ($row['vehicle_registration'] ?? '')
+            ),
+        ];
     }
 
     public function refreshAutomaticAssociations(?string $dateFrom = null, ?string $dateTo = null): array

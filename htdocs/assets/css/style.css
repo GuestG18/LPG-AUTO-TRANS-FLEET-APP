@@ -16758,6 +16758,21 @@ button.dispatcher-datetime-picker-title:focus-visible {
     background: #fef3c7;
 }
 
+.fuel-pill-cash {
+    color: #0f766e;
+    background: #ccfbf1;
+}
+
+.fuel-icon-btn-danger {
+    border-color: #fecaca;
+    color: #dc2626;
+}
+
+.fuel-icon-btn-danger:hover {
+    color: #ffffff;
+    background: #dc2626;
+}
+
 .fuel-icon-btn {
     width: 30px;
     height: 30px;

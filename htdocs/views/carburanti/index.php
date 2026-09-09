@@ -215,7 +215,7 @@ $associationLabel = static function (array $row): string {
 
     return '<span class="fuel-pill ' . $badgeClass . '">Cursa #' . e((string) $tripId) . '</span>';
 };
-$renderFillupRows = static function (array $rows, bool $compact = false) use ($formatDateTime, $formatLiters, $formatKm, $formatCurrency, $fuelTypeLabel, $associationLabel, $currentUrl): void {
+$renderFillupRows = static function (array $rows, bool $compact = false) use ($formatDateTime, $formatLiters, $formatKm, $formatCurrency, $fuelTypeLabel, $associationLabel, $currentUrl, $canManageFull): void {
     if ($rows === []) {
         $colspan = $compact ? 5 : 11;
         echo '<tr><td colspan="' . $colspan . '" class="text-center text-muted py-4">Nu exista alimentari pentru filtrele selectate.</td></tr>';
@@ -224,9 +224,15 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
 
     foreach ($rows as $row) {
         $tripId = (int) ($row['trip_id'] ?? 0);
+        $isManualRow = (string) ($row['source_type'] ?? 'api') === 'manual';
         ?>
         <tr>
-            <td><?= e($formatDateTime((string) ($row['fillup_datetime'] ?? ''))) ?></td>
+            <td>
+                <?= e($formatDateTime((string) ($row['fillup_datetime'] ?? ''))) ?>
+                <?php if ($isManualRow): ?>
+                    <span class="fuel-pill fuel-pill-cash" title="Alimentare introdusă manual (ex. plată numerar) — nu vine din CardOil">numerar</span>
+                <?php endif; ?>
+            </td>
             <td class="fw-semibold"><?= e((string) ($row['vehicle_registration'] ?? '-')) ?></td>
             <?php if (!$compact): ?>
                 <td><?= e(trim((string) ($row['driver_name'] ?? '')) !== '' ? (string) $row['driver_name'] : '-') ?></td>
@@ -303,6 +309,29 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
                             title="Asociaza manual"
                         >
                             <i class="bi bi-link-45deg" aria-hidden="true"></i>
+                        </button>
+                    <?php endif; ?>
+                    <?php if ($isManualRow && trim((string) ($row['receipt_path'] ?? '')) !== ''): ?>
+                        <a
+                            class="fuel-icon-btn"
+                            href="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'receipt', 'fillup_id' => (int) ($row['id'] ?? 0)])) ?>"
+                            target="_blank"
+                            rel="noopener"
+                            title="Deschide bonul fiscal"
+                        >
+                            <i class="bi bi-receipt" aria-hidden="true"></i>
+                        </a>
+                    <?php endif; ?>
+                    <?php if ($isManualRow && $canManageFull): ?>
+                        <button
+                            type="button"
+                            class="fuel-icon-btn fuel-icon-btn-danger"
+                            data-fuel-delete-open
+                            data-fillup-id="<?= e((string) ((int) ($row['id'] ?? 0))) ?>"
+                            data-fillup-label="<?= e($formatDateTime((string) ($row['fillup_datetime'] ?? '')) . ' · ' . (string) ($row['vehicle_registration'] ?? '-') . ' · ' . $formatLiters((float) ($row['quantity_liters'] ?? 0))) ?>"
+                            title="Șterge alimentarea manuală"
+                        >
+                            <i class="bi bi-trash" aria-hidden="true"></i>
                         </button>
                     <?php endif; ?>
                 </div>
@@ -631,6 +660,12 @@ $donutStyle = static function (array $items): string {
             <h1>Carburanți</h1>
             <p>Monitorizare alimentări, consumuri și analiză pe vehicul și tip transport</p>
         </div>
+        <?php if ($canManageFull): ?>
+            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#fuelAddManualModal">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i>
+                Adaugă alimentare
+            </button>
+        <?php endif; ?>
     </div>
 
     <form class="fuel-filter-card" method="get" action="<?= e(url('index.php')) ?>">
@@ -1653,6 +1688,118 @@ $donutStyle = static function (array $items): string {
 </div>
 <?php endif; ?>
 
+<?php if ($canManageFull): ?>
+<div class="modal fade" id="fuelAddManualModal" tabindex="-1" aria-labelledby="fuelAddManualModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <form class="modal-content" method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'add_manual'])) ?>">
+            <?= csrf_field() ?>
+            <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+            <div class="modal-header">
+                <h5 class="modal-title" id="fuelAddManualModalTitle">Adaugă alimentare manuală</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+            </div>
+            <div class="modal-body">
+                <p class="fuel-modal-subtitle">
+                    Pentru alimentări plătite în afara cardului CardOil (numerar, bon fiscal).
+                    Rândul este marcat <span class="fuel-pill fuel-pill-cash">numerar</span>, este protejat la sincronizări
+                    și nu influențează monitorizarea tarifelor CardOil.
+                </p>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label" for="fuelManualVehicle">Vehicul *</label>
+                        <select class="form-select" id="fuelManualVehicle" name="vehicle_registration" required>
+                            <option value="">Selectează vehiculul</option>
+                            <?php foreach ($vehicleOptions as $vehicleOption): ?>
+                                <?php $vehicleValue = (string) ($vehicleOption['vehicle_registration'] ?? ''); ?>
+                                <option value="<?= e($vehicleValue) ?>"><?= e($vehicleValue) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="fuelManualDatetime">Data și ora *</label>
+                        <input type="datetime-local" class="form-control" id="fuelManualDatetime" name="fillup_datetime" value="<?= e(date('Y-m-d\TH:i')) ?>" max="<?= e(date('Y-m-d\TH:i')) ?>" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="fuelManualFuelType">Tip carburant *</label>
+                        <select class="form-select" id="fuelManualFuelType" name="fuel_type" required>
+                            <option value="motorina">Motorină</option>
+                            <option value="adblue">AdBlue</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="fuelManualQuantity">Cantitate (L) *</label>
+                        <input type="text" class="form-control" id="fuelManualQuantity" name="quantity_liters" inputmode="decimal" placeholder="ex. 10,5" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="fuelManualValue">Valoare totală (lei, cu TVA) *</label>
+                        <input type="text" class="form-control" id="fuelManualValue" name="total_value" inputmode="decimal" placeholder="ex. 52,50" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="fuelManualOdometer">Odometru (km)</label>
+                        <input type="text" class="form-control" id="fuelManualOdometer" name="odometer_km" inputmode="numeric" placeholder="opțional">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="fuelManualStation">Stație</label>
+                        <input type="text" class="form-control" id="fuelManualStation" name="station_name" placeholder="implicit: Plată numerar">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="fuelManualDriver">Șofer</label>
+                        <input type="text" class="form-control" id="fuelManualDriver" name="driver_name" placeholder="opțional">
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label" for="fuelManualNote">Notă (nr. bon, motiv)</label>
+                        <input type="text" class="form-control" id="fuelManualNote" name="note" placeholder="ex. bon fiscal 123 / card refuzat">
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="fuelManualIsFull" name="is_full" value="1">
+                            <label class="form-check-label" for="fuelManualIsFull">Alimentare Full (rezervor plin)</label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="fuelManualReceipt">Bon fiscal (poză sau PDF)</label>
+                        <input type="file" class="form-control" id="fuelManualReceipt" name="receipt" accept=".pdf,.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp,application/pdf">
+                        <small class="text-muted">Opțional, maximum 5 MB. Bonul se poate deschide ulterior din tabelul de alimentări.</small>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-plus-lg" aria-hidden="true"></i>
+                    Adaugă alimentarea
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal fade" id="fuelDeleteManualModal" tabindex="-1" aria-labelledby="fuelDeleteManualModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form class="modal-content" method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'delete_manual'])) ?>">
+            <?= csrf_field() ?>
+            <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+            <input type="hidden" name="fillup_id" id="fuelDeleteFillupId" value="">
+            <div class="modal-header">
+                <h5 class="modal-title" id="fuelDeleteManualModalTitle">Șterge alimentarea manuală</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+            </div>
+            <div class="modal-body">
+                <p class="fuel-modal-subtitle" id="fuelDeleteFillupLabel">Alimentare manuală</p>
+                <p class="mb-0 text-muted">Ștergerea este definitivă și elimină și asocierea cu cursa, împreună cu bonul fiscal atașat. Doar alimentările introduse manual pot fi șterse — rândurile din CardOil rămân intacte.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
+                <button type="submit" class="btn btn-danger">
+                    <i class="bi bi-trash" aria-hidden="true"></i>
+                    Șterge definitiv
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
+
 <div class="modal fade" id="fuelLinkModal" tabindex="-1" aria-labelledby="fuelLinkModalTitle" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <form class="modal-content" method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'link_fillup'])) ?>">
@@ -2147,6 +2294,22 @@ document.addEventListener('DOMContentLoaded', function () {
                 // Butonul de revenire la API apare doar cand exista o corectie manuala.
                 odoResetBtn.hidden = button.getAttribute('data-odo-manual') !== '1';
                 odoModal.show();
+            });
+        });
+    }
+
+    // Modalul de confirmare pentru stergerea alimentarilor manuale.
+    // (window.confirm este blocat in browserul embedded, deci folosim modal.)
+    var deleteModalElement = document.getElementById('fuelDeleteManualModal');
+    if (deleteModalElement && window.bootstrap) {
+        var deleteModal = new bootstrap.Modal(deleteModalElement);
+        var deleteFillupId = document.getElementById('fuelDeleteFillupId');
+        var deleteFillupLabel = document.getElementById('fuelDeleteFillupLabel');
+        document.querySelectorAll('[data-fuel-delete-open]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                deleteFillupId.value = button.getAttribute('data-fillup-id') || '';
+                deleteFillupLabel.textContent = button.getAttribute('data-fillup-label') || 'Alimentare manuală';
+                deleteModal.show();
             });
         });
     }
