@@ -236,6 +236,7 @@ class FuelController
                 'station_name' => (string) ($_POST['station_name'] ?? ''),
                 'driver_name' => (string) ($_POST['driver_name'] ?? ''),
                 'note' => (string) ($_POST['note'] ?? ''),
+                'payment_method' => (string) ($_POST['payment_method'] ?? 'numerar'),
                 'is_full' => (int) ($_POST['is_full'] ?? 0) === 1,
                 'receipt' => $receipt,
             ], $this->currentUserId());

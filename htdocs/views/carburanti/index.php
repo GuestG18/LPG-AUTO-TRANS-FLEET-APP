@@ -230,7 +230,14 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
             <td>
                 <?= e($formatDateTime((string) ($row['fillup_datetime'] ?? ''))) ?>
                 <?php if ($isManualRow): ?>
-                    <span class="fuel-pill fuel-pill-cash" title="Alimentare introdusă manual (ex. plată numerar) — nu vine din CardOil">numerar</span>
+                    <?php
+                    $manualPaymentLabel = match ((string) ($row['payment_method'] ?? '')) {
+                        'card_personal' => 'card pers.',
+                        'altul' => 'manuală',
+                        default => 'numerar',
+                    };
+                    ?>
+                    <span class="fuel-pill fuel-pill-cash" title="Alimentare introdusă manual, plătită în afara cardului CardOil"><?= e($manualPaymentLabel) ?></span>
                 <?php endif; ?>
             </td>
             <td class="fw-semibold"><?= e((string) ($row['vehicle_registration'] ?? '-')) ?></td>
@@ -1700,8 +1707,8 @@ $donutStyle = static function (array $items): string {
             </div>
             <div class="modal-body">
                 <p class="fuel-modal-subtitle">
-                    Pentru alimentări plătite în afara cardului CardOil (numerar, bon fiscal).
-                    Rândul este marcat <span class="fuel-pill fuel-pill-cash">numerar</span>, este protejat la sincronizări
+                    Pentru alimentări plătite în afara cardului CardOil (numerar, card personal etc.).
+                    Rândul primește o etichetă cu modul de plată, este protejat la sincronizări
                     și nu influențează monitorizarea tarifelor CardOil.
                 </p>
                 <div class="row g-3">
@@ -1735,12 +1742,20 @@ $donutStyle = static function (array $items): string {
                         <input type="text" class="form-control" id="fuelManualValue" name="total_value" inputmode="decimal" placeholder="ex. 52,50" required>
                     </div>
                     <div class="col-md-4">
+                        <label class="form-label" for="fuelManualPayment">Mod de plată *</label>
+                        <select class="form-select" id="fuelManualPayment" name="payment_method" required>
+                            <option value="numerar">Numerar</option>
+                            <option value="card_personal">Card personal (șofer)</option>
+                            <option value="altul">Altul</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
                         <label class="form-label" for="fuelManualOdometer">Odometru (km)</label>
                         <input type="text" class="form-control" id="fuelManualOdometer" name="odometer_km" inputmode="numeric" placeholder="opțional">
                     </div>
                     <div class="col-md-4">
                         <label class="form-label" for="fuelManualStation">Stație</label>
-                        <input type="text" class="form-control" id="fuelManualStation" name="station_name" placeholder="implicit: Plată numerar">
+                        <input type="text" class="form-control" id="fuelManualStation" name="station_name" placeholder="implicit: după modul de plată">
                     </div>
                     <div class="col-md-4">
                         <label class="form-label" for="fuelManualDriver">Șofer</label>

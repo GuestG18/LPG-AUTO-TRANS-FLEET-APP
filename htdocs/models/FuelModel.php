@@ -105,6 +105,12 @@ class FuelModel extends BaseModel
             $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN receipt_mime VARCHAR(100) NULL DEFAULT NULL AFTER receipt_original_name');
         }
 
+        // Modul de plata al unei alimentari manuale (numerar, card personal
+        // al soferului etc.). NULL pentru randurile din CardOil.
+        if (!$this->columnExists('fuel_fillups', 'payment_method')) {
+            $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN payment_method VARCHAR(30) NULL DEFAULT NULL AFTER receipt_mime');
+        }
+
         // Mecanismul FULL / T0: decizia operatorului este pastrata separat de
         // valoarea efectiva folosita in calcule, ca sa nu poata fi suprascrisa
         // de sincronizarea CardOil (API-ul nu furnizeaza informatia de plin).
@@ -923,6 +929,16 @@ class FuelModel extends BaseModel
         $note = trim((string) ($input['note'] ?? ''));
         $isFull = !empty($input['is_full']);
 
+        $paymentMethod = (string) ($input['payment_method'] ?? 'numerar');
+        if (!in_array($paymentMethod, ['numerar', 'card_personal', 'altul'], true)) {
+            $paymentMethod = 'numerar';
+        }
+        $paymentLabel = match ($paymentMethod) {
+            'card_personal' => 'Plată card personal',
+            'altul' => 'Plată în afara CardOil',
+            default => 'Plată numerar',
+        };
+
         $fingerprint = substr(sha1(implode('|', [
             $this->vehicleKey($vehicle),
             $datetime->format('Y-m-d H:i'),
@@ -939,18 +955,25 @@ class FuelModel extends BaseModel
             'quantity_liters' => round($quantity, 2),
             'odometer_km' => $odometerKm,
             'total_value' => round($totalValue, 2),
-            'station_name' => $station !== '' ? $station : 'Plată numerar',
+            'station_name' => $station !== '' ? $station : $paymentLabel,
             'fillup_datetime' => $datetime->format('Y-m-d H:i:s'),
             'is_full' => $isFull ? 1 : 0,
             'is_full_manual' => $isFull ? 1 : 0,
             'source_type' => 'manual',
             'raw_payload' => [
                 'source' => 'manual',
-                'payment' => 'numerar',
+                'payment' => $paymentMethod,
                 'created_by_user_id' => $userId,
                 'note' => $note !== '' ? $note : null,
             ],
         ]]);
+
+        // Modul de plata sta in coloana proprie, ca tabelele sa il poata afisa
+        // fara sa parseze raw_payload.
+        $paymentStmt = $this->db->prepare('UPDATE fuel_fillups SET payment_method = :payment_method WHERE api_id = :api_id');
+        $paymentStmt->bindValue(':payment_method', $paymentMethod);
+        $paymentStmt->bindValue(':api_id', $apiId);
+        $paymentStmt->execute();
 
         // Bonul fiscal atasat: pastram bonul existent daca nu s-a incarcat
         // unul nou; la inlocuire raportam vechiul fisier pentru stergere fizica.
