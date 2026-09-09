@@ -76,7 +76,7 @@
         km_exces: { label: 'Km în exces', kind: 'km', better: 'low' },
         tone_livrate: { label: 'Tone livrate', kind: 'tone', better: 'high' },
         facturare: { label: 'Facturare', kind: 'lei', better: 'high' },
-        refacturare: { label: 'Refacturare de încasat', kind: 'lei', better: 'high' },
+        refacturare: { label: 'Refacturări nefacturate', kind: 'lei', better: 'low' },
         cheltuieli: { label: 'Cheltuieli', kind: 'lei', better: 'low' },
         profit: { label: 'Profit', kind: 'lei', better: 'high' },
         marja_percent: { label: 'Marjă %', kind: 'pct', better: 'high' },
@@ -124,7 +124,7 @@
 
     var EVOLUTION_METRICS = ['facturare', 'refacturare', 'cheltuieli', 'profit', 'km', 'tone', 'curse'];
     var EVOLUTION_LABELS = {
-        facturare: 'Facturare', refacturare: 'Refacturare', cheltuieli: 'Cheltuieli',
+        facturare: 'Facturare', refacturare: 'Refacturări nefacturate', cheltuieli: 'Cheltuieli',
         profit: 'Profit', km: 'Km', tone: 'Tone', curse: 'Curse'
     };
     var EVOLUTION_KINDS = {
@@ -544,13 +544,11 @@
                 icon: 'bi-receipt',
                 name: 'Facturare',
                 value: fmt(f.facturare, 'lei'),
-                note: 'Refacturare de încasat: ' + fmt(f.refacturare, 'lei'),
+                note: 'Doar sume facturate · ' + fmt(f.venit_km, 'lei3') + ' / km',
                 detail: {
-                    intro: 'Suma facturată beneficiarilor pentru cursele din perioadă, la care se adaugă refacturările deja emise pe factură.',
+                    intro: 'Suma facturată beneficiarilor pentru cursele din perioadă, la care se adaugă refacturările deja emise pe factură. Refacturările încă nefacturate nu intră aici — sunt bani neîncasați și apar la Cheltuieli.',
                     formula: 'SUM(total facturare cursă) + SUM(refacturări marcate ca facturate)',
                     stats: [
-                        { label: 'Refacturare de încasat', value: fmt(f.refacturare, 'lei') },
-                        { label: 'Total de încasat', value: fmt(f.total_incasare, 'lei') },
                         { label: 'Venit / km', value: fmt(f.venit_km, 'lei3'), hint: 'raportat la km parcurși, nu la km facturați: costurile se produc pe toți kilometrii' },
                         { label: 'Venit / tonă', value: fmt(f.venit_tona, 'lei') },
                         { label: 'Facturare / cursă', value: fmt(num(f.curse) > 0 ? num(f.facturare) / num(f.curse) : 0, 'lei') }
@@ -569,11 +567,29 @@
                 icon: 'bi-cash-stack',
                 name: 'Cheltuieli',
                 value: fmt(f.cheltuieli, 'lei'),
-                note: 'Cost / km: ' + fmt(f.cost_km, 'lei3'),
+                note: 'Include ' + fmt(f.refacturare, 'lei') + ' refacturări nefacturate · Cost / km: ' + fmt(f.cost_km, 'lei3'),
                 detail: {
-                    intro: 'Cheltuielile atribuite curselor. Refacturările deja emise pe factură se scad, ca să nu fie numărate și ca venit, și ca și cost.',
-                    formula: 'SUM(cheltuieli cursă) − SUM(refacturări facturate), minim 0 pe cursă',
+                    intro: 'Cheltuielile reprezintă costurile suportate pentru curse. Refacturările nefacturate rămân evidențiate în cheltuieli până când sunt facturate clientului. După facturare, acestea nu mai sunt considerate costuri nerecuperate: suma trece la Facturare, iar efectul net asupra profitului devine zero.',
+                    formula: 'Cheltuieli proprii (suma de pe linie) + Refacturări introduse fără sumă proprie · Pe liniile care au și sumă, și refacturare, se numără o singură dată',
                     stats: [
+                        { label: 'Cheltuieli proprii', value: fmt(f.cheltuieli_proprii, 'lei'), hint: 'costuri cu sumă completată pe linia de cheltuială' },
+                        {
+                            label: '+ Refacturări fără sumă proprie',
+                            value: fmt(f.refacturare_fara_cost, 'lei'),
+                            hint: 'linii introduse doar ca refacturare, cu câmpul „Sumă” lăsat 0 — banii au fost totuși cheltuiți, deci se adaugă la total'
+                        },
+                        { label: '= Total cheltuieli', value: fmt(f.cheltuieli, 'lei') },
+                        {
+                            label: 'Refacturări nefacturate',
+                            value: fmt(f.refacturare, 'lei'),
+                            hint: 'tot ce urmează a fi facturat clientului și nu a fost încă. Este integral conținut în totalul de mai sus.'
+                        },
+                        {
+                            label: 'din care, pe linii cu sumă proprie',
+                            value: fmt(f.refacturare_in_cheltuieli, 'lei'),
+                            hint: 'refacturări bifate pe o linie care are deja sumă — nu se adună a doua oară'
+                        },
+                        { label: 'Nerecuperat / facturare', value: fmt(num(f.facturare) > 0 ? (num(f.refacturare) / num(f.facturare)) * 100 : 0, 'pct'), hint: 'cât din facturarea perioadei reprezintă bani avansați și nerecuperați încă' },
                         { label: 'Cost / km', value: fmt(f.cost_km, 'lei3'), hint: 'raportat la km parcurși, nu la km facturați: costurile se produc pe toți kilometrii' },
                         { label: 'Cheltuieli / cursă', value: fmt(num(f.curse) > 0 ? num(f.cheltuieli) / num(f.curse) : 0, 'lei') },
                         { label: 'Pondere din facturare', value: fmt(num(f.facturare) > 0 ? (num(f.cheltuieli) / num(f.facturare)) * 100 : 0, 'pct') }
@@ -2716,7 +2732,7 @@
             { label: 'Grad de încărcare', value: fmt(entity.grad_incarcare, 'pct'), meter: num(entity.grad_incarcare) },
             { label: 'Grad de folosință', value: fmt(entity.grad_folosinta, 'pct'), meter: num(entity.grad_folosinta) },
             { label: 'Zile active', value: fmt(entity.zile_active, 'int') + ' / ' + fmt(entity.zile_disponibile, 'int') },
-            { label: 'Refacturare de încasat', value: fmt(entity.refacturare, 'lei') },
+            { label: 'Refacturări nefacturate', value: fmt(entity.refacturare, 'lei') },
             { label: 'Puncte client livrate', value: fmt(entity.puncte_client, 'int') }
         ];
     }
@@ -2986,7 +3002,7 @@
                 { key: 'grad_incarcare', label: 'Grad încărcare', kind: 'pct' },
                 { key: 'nr_clienti', label: 'Puncte client', kind: 'int' },
                 { key: 'facturare', label: 'Facturare', kind: 'lei' },
-                { key: 'refacturare', label: 'Refacturare', kind: 'lei' },
+                { key: 'refacturare', label: 'Refact. nefacturată', kind: 'lei' },
                 { key: 'cheltuieli', label: 'Cheltuieli', kind: 'lei' },
                 { key: 'profit', label: 'Profit', kind: 'lei' },
                 { key: 'status_label', label: 'Status' }

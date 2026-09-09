@@ -776,6 +776,16 @@ class DashboardAnaliticV2Model extends BaseModel
             'facturare' => "(COALESCE(c.total_facturare, 0) + COALESCE(exp.total_refacturare_facturata, 0))",
             'refacturare' => "COALESCE(exp.total_refacturare_pending, 0)",
             'cheltuieli' => "COALESCE(exp.total_cheltuieli, 0)",
+            /*
+             * Defalcarea refacturarilor nefacturate, calculata pe cursa din aceeasi
+             * subinterogare `exp` (fara interogare noua):
+             *   - partea acoperita de un cost inregistrat pe cursa => este DEJA in `cheltuieli`
+             *   - partea fara cost inregistrat (randuri cu suma = 0) => NU apare in `cheltuieli`
+             * Suma celor doua da exact `refacturare`.
+             */
+            'cheltuieli_proprii' => "COALESCE(exp.total_cheltuieli_proprii, 0)",
+            'refacturare_fara_cost' => "COALESCE(exp.total_refacturare_fara_cost, 0)",
+            'refacturare_in_cheltuieli' => "GREATEST(0, COALESCE(exp.total_refacturare_pending, 0) - COALESCE(exp.total_refacturare_fara_cost, 0))",
             'bucket' => "
                 CASE
                     WHEN c.tip_transport IN ('primar', 'primar_tona', 'primar_km') THEN 'primar'
@@ -804,6 +814,9 @@ class DashboardAnaliticV2Model extends BaseModel
             COALESCE(SUM(" . $e['tons_delivered'] . "), 0) AS tone_livrate,
             COALESCE(SUM(" . $e['facturare'] . "), 0) AS facturare,
             COALESCE(SUM(" . $e['refacturare'] . "), 0) AS refacturare,
+            COALESCE(SUM(" . $e['refacturare_in_cheltuieli'] . "), 0) AS refacturare_in_cheltuieli,
+            COALESCE(SUM(" . $e['refacturare_fara_cost'] . "), 0) AS refacturare_fara_cost,
+            COALESCE(SUM(" . $e['cheltuieli_proprii'] . "), 0) AS cheltuieli_proprii,
             COALESCE(SUM(" . $e['cheltuieli'] . "), 0) AS cheltuieli,
             COALESCE(SUM(" . $e['puncte_client'] . "), 0) AS puncte_client,
             COALESCE(AVG(" . $e['grad_incarcare'] . "), 0) AS grad_incarcare_mediu,
@@ -1045,6 +1058,10 @@ class DashboardAnaliticV2Model extends BaseModel
             'tone_livrate' => round($tone, 2),
             'facturare' => round($facturare, 2),
             'refacturare' => round($refacturare, 2),
+            // din care este deja numarat in `cheltuieli` si cat nu are cost inregistrat pe cursa
+            'cheltuieli_proprii' => round((float) ($row['cheltuieli_proprii'] ?? 0), 2),
+            'refacturare_in_cheltuieli' => round((float) ($row['refacturare_in_cheltuieli'] ?? 0), 2),
+            'refacturare_fara_cost' => round((float) ($row['refacturare_fara_cost'] ?? 0), 2),
             'cheltuieli' => round($cheltuieli, 2),
             'profit' => round($profit, 2),
             'venit_km' => $kmBase > 0 ? round($facturare / $kmBase, 4) : 0.0,
@@ -1089,7 +1106,18 @@ class DashboardAnaliticV2Model extends BaseModel
         $vehiculeActive = (int) ($usage['vehicule_active'] ?? 0);
         $zileDisponibile = $vehiculeActive * $zileLucratoare;
 
-        $fleet['total_incasare'] = round($fleet['facturare'] + $fleet['refacturare'], 2);
+        /*
+         * Refacturarile NEfacturate nu apartin Facturarii: sunt bani avansati de firma
+         * si nerecuperati inca, deci se raporteaza la Cheltuieli.
+         *
+         * `cheltuieli` numara banii chiar scosi: `suma` acolo unde este completata,
+         * `refacturare_suma` pe randurile introduse doar ca refacturare (suma = 0).
+         * Cele doua coloane nu se aduna pe acelasi rand - ar dubla acelasi cost.
+         *
+         * Cand o refacturare devine facturata, costul RAMANE in cheltuieli (banii chiar
+         * au fost cheltuiti), iar suma recuperata intra in Facturare. Efectul net asupra
+         * profitului este zero, cum si trebuie.
+         */
         $fleet['tone_primar'] = round((float) ($row['tone_primar'] ?? 0), 2);
         $fleet['tone_distributie'] = round((float) ($row['tone_distributie'] ?? 0), 2);
         $fleet['nr_vehicule'] = (int) ($row['nr_vehicule'] ?? 0);
@@ -1503,15 +1531,25 @@ class DashboardAnaliticV2Model extends BaseModel
             LEFT JOIN (
                 SELECT
                     cursa_id,
-                    GREATEST(
-                        0,
-                        SUM(COALESCE(suma, 0)) - SUM(
-                            CASE WHEN COALESCE(refacturare_facturata, 0) = 1 THEN COALESCE(refacturare_suma, 0) ELSE 0 END
-                        )
-                    ) AS total_cheltuieli,
+                    /*
+                     * Banii scosi efectiv de firma pe fiecare linie de cheltuiala.
+                     * O linie poate fi introdusa in doua feluri:
+                     *   - cost propriu in `suma` (cu sau fara bifa de refacturare);
+                     *   - doar refacturare, cu `suma` = 0 - atunci costul este in
+                     *     `refacturare_suma`, altfel banii aceia nu ar aparea nicaieri.
+                     * Nu se aduna cele doua coloane: pe randurile unde `suma` este
+                     * completata, refacturarea priveste acelasi cost.
+                     */
+                    SUM(CASE WHEN COALESCE(suma, 0) > 0 THEN suma ELSE COALESCE(refacturare_suma, 0) END) AS total_cheltuieli,
+                    SUM(CASE WHEN COALESCE(suma, 0) > 0 THEN suma ELSE 0 END) AS total_cheltuieli_proprii,
                     SUM(COALESCE(refacturare_suma, 0)) AS total_refacturare,
                     SUM(CASE WHEN COALESCE(refacturare_facturata, 0) = 1 THEN COALESCE(refacturare_suma, 0) ELSE 0 END) AS total_refacturare_facturata,
-                    SUM(CASE WHEN COALESCE(refacturare_facturata, 0) = 1 THEN 0 ELSE COALESCE(refacturare_suma, 0) END) AS total_refacturare_pending
+                    SUM(CASE WHEN COALESCE(refacturare_facturata, 0) = 1 THEN 0 ELSE COALESCE(refacturare_suma, 0) END) AS total_refacturare_pending,
+                    /* partea din refacturarile nefacturate care NU are cost propriu: ea mareste totalul */
+                    SUM(CASE
+                            WHEN COALESCE(refacturare_facturata, 0) = 0 AND COALESCE(suma, 0) = 0
+                            THEN COALESCE(refacturare_suma, 0) ELSE 0
+                        END) AS total_refacturare_fara_cost
                 FROM curse_cheltuieli
                 GROUP BY cursa_id
             ) exp ON exp.cursa_id = c.id
