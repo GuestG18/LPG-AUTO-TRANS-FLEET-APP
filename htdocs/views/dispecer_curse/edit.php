@@ -192,19 +192,20 @@ if (!isset($expenseEntryTypes[$selectedRefacturareExpenseType])) {
 // Taxele de drum (Taxa acces / Port / Trecere) se completeaza cu locatie, bucati si pret unitar;
 // restul tipurilor pastreaza suma introdusa manual plus observatii.
 $tollExpenseTypes = is_array($tollExpenseTypes ?? null) ? $tollExpenseTypes : ['taxa_acces', 'port', 'trece'];
-$expenseLocationSuggestions = is_array($expenseLocationSuggestions ?? null) ? $expenseLocationSuggestions : [];
 
-// Locatiile propuse la taxele de drum urmeaza beneficiarul cursei: locurile de incarcare
-// si zonele lui de distributie, plus locatiile deja scrise pe cursele aceluiasi beneficiar.
-$expenseLocationSuggestionsByBeneficiary = is_array($expenseLocationSuggestionsByBeneficiary ?? null)
-    ? $expenseLocationSuggestionsByBeneficiary
+// Locatiile propuse la taxele de drum se invata din cursele anterioare: lista e cea
+// scrisa de operatori, nu cea din Configurare transport, si vine insotita de ultimul
+// pret unitar folosit la fiecare locatie, ca sa poata fi completat automat.
+$expenseLocationMemory = is_array($expenseLocationMemory ?? null) ? $expenseLocationMemory : [];
+$expenseLocationSuggestions = is_array($expenseLocationMemory['locations'] ?? null)
+    ? $expenseLocationMemory['locations']
     : [];
-$expenseLocationBeneficiaryId = (int) ($raceFormData['beneficiar_id'] ?? 0);
-$expenseLocationSuggestions = $expenseLocationSuggestionsByBeneficiary[$expenseLocationBeneficiaryId]
-    ?? ($expenseLocationSuggestionsByBeneficiary[0] ?? $expenseLocationSuggestions);
-$expenseLocationSuggestionsJson = json_encode($expenseLocationSuggestionsByBeneficiary, JSON_UNESCAPED_UNICODE);
-if (!is_string($expenseLocationSuggestionsJson)) {
-    $expenseLocationSuggestionsJson = '{}';
+$expenseLocationPrices = is_array($expenseLocationMemory['prices'] ?? null)
+    ? $expenseLocationMemory['prices']
+    : [];
+$expenseLocationPricesJson = json_encode($expenseLocationPrices, JSON_UNESCAPED_UNICODE);
+if (!is_string($expenseLocationPricesJson)) {
+    $expenseLocationPricesJson = '{}';
 }
 $expenseTypeFieldValues = is_array($expenseFormData['tip'] ?? null) ? $expenseFormData['tip'] : [];
 $refacturareTypeFieldValues = is_array($expenseFormData['refacturare_tip'] ?? null) ? $expenseFormData['refacturare_tip'] : [];
@@ -986,13 +987,17 @@ if ($postCreateFlow) {
                     $renderExpenseTypeBlock = static function (
                         string $blockKey,
                         string $blockLabel,
-                        bool $isToll,
+                        string $tollType,
                         string $fieldPrefix,
                         string $idPrefix,
                         array $values,
                         array $errors,
                         bool $isSelected
                     ): void {
+                        // Cheia legacy a taxei ajunge in DOM: dupa ea cauta autocomplete-ul
+                        // ultimul pret folosit la locatia scrisa (aceeasi localitate poate
+                        // avea preturi diferite ca Trecere fata de Port).
+                        $isToll = $tollType !== '';
                         $errorPrefix = $fieldPrefix . '.' . $blockKey . '.';
                         $fieldId = static fn (string $field): string => $idPrefix . preg_replace('/[^A-Za-z0-9_]/', '_', $blockKey) . '_' . $field;
                         $fieldName = static fn (string $field): string => $fieldPrefix . '[' . $blockKey . '][' . $field . ']';
@@ -1004,6 +1009,7 @@ if ($postCreateFlow) {
                             data-role="expense-type-block"
                             data-block-key="<?= e($blockKey) ?>"
                             data-field-prefix="<?= e($fieldPrefix) ?>"
+                            data-toll-type="<?= e($tollType) ?>"
                         >
                             <div class="fw-semibold mb-2"><?= e($blockLabel) ?></div>
                             <?php if ($isToll): ?>
@@ -1099,7 +1105,7 @@ if ($postCreateFlow) {
                     <datalist
                         id="expense_location_options"
                         data-role="expense-location-options"
-                        data-by-beneficiary='<?= e($expenseLocationSuggestionsJson) ?>'
+                        data-prices='<?= e($expenseLocationPricesJson) ?>'
                     >
                         <?php foreach ($expenseLocationSuggestions as $locationSuggestion): ?>
                             <option value="<?= e((string) $locationSuggestion) ?>"></option>
@@ -1233,7 +1239,7 @@ if ($postCreateFlow) {
                             $renderExpenseTypeBlock(
                                 $categoryKey,
                                 (string) ($category['nume'] ?? '-'),
-                                in_array($categoryLegacyKey, $tollExpenseTypes, true),
+                                in_array($categoryLegacyKey, $tollExpenseTypes, true) ? $categoryLegacyKey : '',
                                 'tip',
                                 'expense_line_',
                                 is_array($expenseTypeFieldValues[$categoryKey] ?? null) ? $expenseTypeFieldValues[$categoryKey] : [],
@@ -1314,7 +1320,7 @@ if ($postCreateFlow) {
                                 $renderExpenseTypeBlock(
                                     $entryTypeKey,
                                     (string) $entryTypeLabel,
-                                    in_array($entryTypeKey, $tollExpenseTypes, true),
+                                    in_array($entryTypeKey, $tollExpenseTypes, true) ? $entryTypeKey : '',
                                     'refacturare_tip',
                                     'expense_refacturare_line_',
                                     is_array($refacturareTypeFieldValues[$entryTypeKey] ?? null) ? $refacturareTypeFieldValues[$entryTypeKey] : [],
@@ -1765,21 +1771,30 @@ document.addEventListener('DOMContentLoaded', function () {
         refacturareToggleEl.addEventListener('change', syncRefacturare);
     }
 
-    // Sugestiile de locatie urmeaza beneficiarul ales pe cursa, fara reincarcarea paginii.
+    // Sugestiile de locatie se invata din cursele anterioare: aceeasi lista pentru toti
+    // beneficiarii, pentru ca o taxa costa la fel indiferent de clientul cursei.
     var locationDatalistEl = document.getElementById('expense_location_options');
-    var beneficiaryEl = document.getElementById('edit_race_beneficiar_id');
 
-    var locationsByBeneficiary = {};
+    // locatie (litere mici) -> { label, by_type: { taxa_acces|port|trece: {pret, data} }, last: {pret, data, tip} }
+    var locationPrices = {};
     if (locationDatalistEl instanceof HTMLElement) {
         try {
-            locationsByBeneficiary = JSON.parse(locationDatalistEl.getAttribute('data-by-beneficiary') || '{}') || {};
+            locationPrices = JSON.parse(locationDatalistEl.getAttribute('data-prices') || '{}') || {};
         } catch (error) {
-            locationsByBeneficiary = {};
+            locationPrices = {};
         }
     }
 
-    // Lista activa, folosita si de completarea inline din campul de locatie.
+    // Lista activa, folosita de completarea inline din campul de locatie.
     var activeLocationValues = [];
+    if (locationDatalistEl instanceof HTMLElement) {
+        Array.prototype.forEach.call(locationDatalistEl.querySelectorAll('option'), function (option) {
+            var value = String(option.value || '').trim();
+            if (value !== '') {
+                activeLocationValues.push(value);
+            }
+        });
+    }
 
     /**
      * Prima locatie care incepe cu textul scris, ca sa o putem completa inline.
@@ -1810,6 +1825,10 @@ document.addEventListener('DOMContentLoaded', function () {
     var acceptCompletion = function (input) {
         var end = input.value.length;
         input.setSelectionRange(end, end);
+        // Tab / Enter / sageata nu declanseaza mereu "change", asa ca aducem pretul aici.
+        if (typeof applyLocationPrice === 'function') {
+            applyLocationPrice(input, true);
+        }
     };
 
     var applyInlineCompletion = function (input, event) {
@@ -1873,49 +1892,113 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     });
 
-    var syncLocationSuggestions = function () {
-        if (!(locationDatalistEl instanceof HTMLElement)) {
+    var formatMemoryDate = function (isoDate) {
+        var parts = String(isoDate || '').split('-');
+        return parts.length === 3 ? parts[2] + '.' + parts[1] + '.' + parts[0] : '';
+    };
+
+    var formatMemoryPrice = function (value) {
+        return (Math.round(Number(value) * 100) / 100).toFixed(2).replace('.', ',');
+    };
+
+    var setLocationHint = function (input, text) {
+        var block = input.closest('[data-role="expense-type-block"]');
+        var hintEl = block instanceof HTMLElement
+            ? block.querySelector('[data-role="expense-location-hint"]')
+            : null;
+        if (hintEl instanceof HTMLElement) {
+            hintEl.textContent = text;
+        }
+    };
+
+    var defaultLocationHint = activeLocationValues.length === 0
+        ? 'Nu exista inca locatii salvate. Scrie una noua; data viitoare apare in sugestii impreuna cu pretul.'
+        : activeLocationValues.length + ' locatii invatate din cursele anterioare. Scrie primele litere si apasa Tab, sau sageata jos pentru toata lista.';
+
+    /**
+     * Ultimul pret folosit la locatia scrisa. Cautam intai pe tipul taxei din bloc
+     * (aceeasi localitate poate fi si Trecere si Port), apoi pe ultima intrare a locatiei.
+     */
+    var findLocationPrice = function (locationValue, tollType) {
+        var entry = locationPrices[String(locationValue || '').trim().toLowerCase()];
+        if (!entry || typeof entry !== 'object') {
+            return null;
+        }
+
+        var byType = entry.by_type && typeof entry.by_type === 'object' ? entry.by_type : {};
+        var match = (tollType && byType[tollType]) ? byType[tollType] : entry.last;
+        if (!match || !(Number(match.pret) > 0)) {
+            return null;
+        }
+
+        return { pret: Number(match.pret), data: match.data || null };
+    };
+
+    /**
+     * Dupa ce locatia a fost acceptata, aducem pretul invatat. Nu suprascriem niciodata
+     * o valoare deja scrisa de operator; in cazul acela doar spunem ce pret stiam.
+     */
+    var applyLocationPrice = function (input, fillIfEmpty) {
+        var block = input.closest('[data-role="expense-type-block"]');
+        if (!(block instanceof HTMLElement)) {
             return;
         }
 
-        var beneficiaryId = beneficiaryEl instanceof HTMLSelectElement ? String(beneficiaryEl.value || '') : '';
-        var beneficiaryLabel = '';
-        if (beneficiaryEl instanceof HTMLSelectElement && beneficiaryEl.selectedIndex >= 0) {
-            var selectedOption = beneficiaryEl.options[beneficiaryEl.selectedIndex];
-            if (selectedOption && selectedOption.value !== '') {
-                beneficiaryLabel = selectedOption.textContent.trim();
-            }
+        var locationValue = String(input.value || '').trim();
+        if (locationValue === '') {
+            setLocationHint(input, defaultLocationHint);
+            return;
         }
 
-        var values = locationsByBeneficiary[beneficiaryId];
-        if (!Array.isArray(values) || values.length === 0) {
-            values = Array.isArray(locationsByBeneficiary['0']) ? locationsByBeneficiary['0'] : [];
-            beneficiaryLabel = '';
+        var known = findLocationPrice(locationValue, block.getAttribute('data-toll-type') || '');
+        if (known === null) {
+            setLocationHint(input, 'Locatie noua: pretul pe care il scrii acum va fi propus data viitoare.');
+            return;
         }
 
-        locationDatalistEl.innerHTML = '';
-        values.forEach(function (value) {
-            var option = document.createElement('option');
-            option.value = value;
-            locationDatalistEl.appendChild(option);
-        });
-        activeLocationValues = values;
+        var priceEl = block.querySelector('[data-role="expense-line-price"]');
+        var dateLabel = formatMemoryDate(known.data);
+        var suffix = dateLabel !== '' ? ' (ultima oara pe ' + dateLabel + ')' : '';
+        var filledMessage = 'Pret completat automat: ' + formatMemoryPrice(known.pret) + ' lei / buc' + suffix + '. Poti sa il modifici.';
+        var locationKey = locationValue.toLowerCase();
 
-        var hint = values.length === 0
-            ? 'Nu exista inca locatii salvate. Scrie una noua; va aparea in sugestii data viitoare.'
-            : (beneficiaryLabel !== ''
-                ? values.length + ' locatii pentru ' + beneficiaryLabel + '. Scrie primele litere si apasa Tab, sau sageata jos pentru toata lista.'
-                : values.length + ' locatii disponibile. Alege beneficiarul cursei ca sa le filtram.');
+        if (fillIfEmpty !== false && priceEl instanceof HTMLInputElement && String(priceEl.value || '').trim() === '') {
+            priceEl.value = String(known.pret);
+            block.setAttribute('data-auto-price-for', locationKey);
+            syncBlockTotal(block);
+            setLocationHint(input, filledMessage);
+            return;
+        }
 
-        Array.prototype.forEach.call(expenseFormEl.querySelectorAll('[data-role="expense-location-hint"]'), function (el) {
-            el.textContent = hint;
-        });
+        // Acceptarea sugestiei si evenimentul "change" ne cheama de doua ori pentru
+        // aceeasi locatie: a doua oara pretul e deja pus de noi, deci pastram mesajul
+        // care spune ca a fost completat automat. Daca operatorul l-a schimbat intre timp,
+        // valorile nu mai coincid si revenim la simpla informare.
+        var alreadyAutoFilled = priceEl instanceof HTMLInputElement
+            && block.getAttribute('data-auto-price-for') === locationKey
+            && parseNumber(priceEl.value) === known.pret;
+
+        setLocationHint(
+            input,
+            alreadyAutoFilled
+                ? filledMessage
+                : 'Ultimul pret folosit aici: ' + formatMemoryPrice(known.pret) + ' lei / buc' + suffix + '.'
+        );
     };
 
-    if (beneficiaryEl instanceof HTMLSelectElement) {
-        beneficiaryEl.addEventListener('change', syncLocationSuggestions);
-    }
-    syncLocationSuggestions();
+    Array.prototype.forEach.call(expenseFormEl.querySelectorAll('input[list="expense_location_options"]'), function (input) {
+        input.addEventListener('change', function () {
+            applyLocationPrice(input, true);
+        });
+
+        // La incarcarea paginii doar spunem ce pret stim: un formular reafisat dupa o
+        // eroare de validare nu trebuie sa isi schimbe singur valorile.
+        if (String(input.value || '').trim() === '') {
+            setLocationHint(input, defaultLocationHint);
+        } else {
+            applyLocationPrice(input, false);
+        }
+    });
 
     // Calendarul cheltuielilor urmeaza intervalul cursei chiar daca schimbi datele cursei
     // fara sa reincarci pagina. Campurile cursei tin data in format zi/luna/an.

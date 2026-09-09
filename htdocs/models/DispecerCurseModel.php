@@ -5747,79 +5747,59 @@ class DispecerCurseModel extends BaseModel
     }
 
     /**
-     * Locatiile deja folosite pe taxele de drum, grupate pe beneficiarul cursei.
-     * Cheia 0 aduna toate locatiile, pentru cazul in care cursa nu are inca beneficiar.
+     * Istoricul locatiilor scrise pe taxele de drum, folosit de autocomplete.
+     * Randurile vin in ordine cronologica, asa ca cine citeste lista poate lasa
+     * ultima intrare sa o suprascrie pe cea veche: pretul propus e mereu ultimul folosit.
+     * Aduna deopotriva partea de cheltuiala si partea de refacturare.
      *
-     * @return array<int, array<int, string>>
+     * @return array<int, array{tip: string, locatie: string, pret: ?float, data: ?string}>
      */
-    public function getExpenseLocationsByBeneficiary(): array
+    public function getExpenseLocationHistory(): array
     {
         $this->ensureExpenseCategorySchema();
 
         $sql = "
-            SELECT c.beneficiar_id AS beneficiar_id, e.locatie AS value
-            FROM curse_cheltuieli e
-            INNER JOIN curse_dispecer c ON c.id = e.cursa_id
-            WHERE e.locatie IS NOT NULL AND e.locatie <> ''
-            UNION ALL
-            SELECT c.beneficiar_id AS beneficiar_id, e.refacturare_locatie AS value
-            FROM curse_cheltuieli e
-            INNER JOIN curse_dispecer c ON c.id = e.cursa_id
-            WHERE e.refacturare_locatie IS NOT NULL AND e.refacturare_locatie <> ''
+            SELECT tip, locatie, pret, ultima_data, sursa_id FROM (
+                SELECT
+                    e.tip_cheltuiala AS tip,
+                    e.locatie AS locatie,
+                    e.pret_unitar AS pret,
+                    e.data_cheltuiala AS ultima_data,
+                    e.id AS sursa_id
+                FROM curse_cheltuieli e
+                WHERE e.locatie IS NOT NULL AND e.locatie <> ''
+                UNION ALL
+                SELECT
+                    e.refacturare_tip_cheltuiala AS tip,
+                    e.refacturare_locatie AS locatie,
+                    e.refacturare_pret_unitar AS pret,
+                    COALESCE(e.refacturare_data, e.data_cheltuiala) AS ultima_data,
+                    e.id AS sursa_id
+                FROM curse_cheltuieli e
+                WHERE e.refacturare_locatie IS NOT NULL AND e.refacturare_locatie <> ''
+            ) istoric
+            ORDER BY ultima_data ASC, sursa_id ASC
         ";
 
-        $grouped = [];
+        $rows = [];
         foreach ($this->db->query($sql)->fetchAll() as $row) {
-            $value = trim((string) ($row['value'] ?? ''));
-            if ($value === '') {
+            $location = trim((string) ($row['locatie'] ?? ''));
+            if ($location === '') {
                 continue;
             }
 
-            $beneficiaryId = (int) ($row['beneficiar_id'] ?? 0);
-            $grouped[$beneficiaryId][] = $value;
-            $grouped[0][] = $value;
+            $price = $row['pret'] ?? null;
+            $date = trim((string) ($row['ultima_data'] ?? ''));
+
+            $rows[] = [
+                'tip' => trim((string) ($row['tip'] ?? '')),
+                'locatie' => $location,
+                'pret' => ($price === null || $price === '') ? null : (float) $price,
+                'data' => $date !== '' ? $date : null,
+            ];
         }
 
-        return $grouped;
-    }
-
-    /**
-     * Locatiile distincte deja folosite pe taxele de drum, pentru autocomplete.
-     * Deduplicare case-insensitive: pastram prima varianta scrisa de utilizator.
-     */
-    public function getExpenseLocationSuggestions(): array
-    {
-        $this->ensureExpenseCategorySchema();
-
-        $sql = "
-            SELECT locatie AS value FROM curse_cheltuieli WHERE locatie IS NOT NULL AND locatie <> ''
-            UNION ALL
-            SELECT refacturare_locatie AS value FROM curse_cheltuieli WHERE refacturare_locatie IS NOT NULL AND refacturare_locatie <> ''
-        ";
-
-        $rows = $this->db->query($sql)->fetchAll(PDO::FETCH_COLUMN);
-        if (!is_array($rows)) {
-            return [];
-        }
-
-        $unique = [];
-        foreach ($rows as $row) {
-            $value = trim((string) $row);
-            if ($value === '') {
-                continue;
-            }
-            $key = mb_strtolower($value, 'UTF-8');
-            if (!isset($unique[$key])) {
-                $unique[$key] = $value;
-            }
-        }
-
-        $values = array_values($unique);
-        usort($values, static function (string $a, string $b): int {
-            return strnatcasecmp($a, $b);
-        });
-
-        return $values;
+        return $rows;
     }
 
     public function deleteExpense(int $id): bool

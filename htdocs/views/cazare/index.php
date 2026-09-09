@@ -70,6 +70,14 @@ $raceLabel = static function (array $race): string {
         </p>
     </div>
     <div class="d-flex flex-wrap gap-2">
+        <?php if ($canCreate): ?>
+            <form method="post" action="<?= e(build_query_url(['page' => 'cazare', 'action' => 'import_sheet'])) ?>" class="d-inline">
+                <?= csrf_field() ?>
+                <button type="submit" class="btn btn-outline-secondary btn-sm">
+                    <i class="bi bi-cloud-download" aria-hidden="true"></i> Importă din Sheet
+                </button>
+            </form>
+        <?php endif; ?>
         <?php if ($canLink): ?>
             <form method="post" action="<?= e(build_query_url(['page' => 'cazare', 'action' => 'rematch'])) ?>" class="d-inline">
                 <?= csrf_field() ?>

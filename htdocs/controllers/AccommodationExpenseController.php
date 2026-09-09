@@ -21,9 +21,11 @@ class AccommodationExpenseController
     private const UPLOAD_DIR = 'uploads/curse_cheltuieli';
 
     private AccommodationExpenseModel $model;
+    private PDO $db;
 
     public function __construct(PDO $db)
     {
+        $this->db = $db;
         $this->model = new AccommodationExpenseModel($db);
     }
 
@@ -66,6 +68,10 @@ class AccommodationExpenseController
             case 'rematch':
                 $this->requireAction('link');
                 $this->rematchAction();
+                return;
+            case 'import_sheet':
+                $this->requireAction('create');
+                $this->importSheetAction();
                 return;
             case 'delete_document':
                 $this->requireAction('edit');
@@ -325,6 +331,43 @@ class AccommodationExpenseController
         } catch (Throwable $exception) {
             error_log('[AccommodationExpenseController][rematch] ' . $exception->getMessage());
             flash_set('danger', 'Reverificarea asocierilor a esuat.');
+        }
+
+        redirect($this->returnUrl());
+    }
+
+    /**
+     * Import cazari din Google Sheet prin worker-ul Cloudflare.
+     * Reimportul repetat este sigur: randurile deja existente sunt sarite.
+     */
+    private function importSheetAction(): void
+    {
+        $this->requirePost();
+        ensure_csrf_or_redirect($this->returnUrl());
+
+        require_once BASE_PATH . '/services/CazariSheetImportService.php';
+
+        try {
+            $service = new CazariSheetImportService($this->db, $this->model);
+            $result = $service->import($this->currentUserId());
+
+            $message = sprintf(
+                'Import finalizat: %d cazari importate, %d deja existente.',
+                $result['imported'],
+                $result['skipped']
+            );
+
+            if ($result['errors'] !== []) {
+                flash_set(
+                    $result['imported'] > 0 ? 'warning' : 'danger',
+                    $message . ' Probleme: ' . implode(' ', array_slice($result['errors'], 0, 5))
+                );
+            } else {
+                flash_set('success', $message);
+            }
+        } catch (Throwable $exception) {
+            error_log('[AccommodationExpenseController][import_sheet] ' . $exception->getMessage());
+            flash_set('danger', 'Importul din Sheet a esuat: ' . $exception->getMessage());
         }
 
         redirect($this->returnUrl());

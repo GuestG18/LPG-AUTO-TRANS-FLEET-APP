@@ -171,79 +171,65 @@ class DispecerCurseController
         return '';
     }
 
-    private function expenseLocationSuggestions(): array
+    /**
+     * Memoria locatiilor de taxa drum: lista pentru autocomplete plus ultimul pret
+     * folosit la fiecare locatie. Nu mai luam nimic din Configurare transport -
+     * lista se invata singura din ce a scris operatorul pe cursele anterioare.
+     *
+     * Pretul se tine pe perechea locatie + tip taxa (aceeasi localitate poate fi
+     * si Trecere si Port, cu preturi diferite), cu o valoare de rezerva luata din
+     * ultima intrare a locatiei indiferent de tip.
+     *
+     * @return array{locations: array<int, string>, prices: array<string, array{label: string, by_type: array<string, array{pret: float, data: ?string}>, last: ?array{pret: float, data: ?string, tip: string}}>}
+     */
+    private function expenseLocationMemory(): array
     {
         try {
-            return $this->model->getExpenseLocationSuggestions();
+            $history = $this->model->getExpenseLocationHistory();
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][expense_locations] ' . $exception->getMessage());
 
-            return [];
-        }
-    }
-
-    /**
-     * Locatiile propuse la taxele de drum, pe beneficiar: locurile de incarcare si
-     * zonele de distributie configurate pentru el, plus locatiile deja scrise pe
-     * cursele aceluiasi beneficiar. Cheia 0 este lista completa, folosita cat timp
-     * cursa nu are un beneficiar selectat.
-     *
-     * @return array<int, array<int, string>>
-     */
-    private function expenseLocationSuggestionsByBeneficiary(
-        array $loadLocationsByBeneficiary,
-        array $distributionZonesByBeneficiary
-    ): array {
-        $collected = [];
-        $collect = static function (array $groups) use (&$collected): void {
-            foreach ($groups as $beneficiaryId => $rows) {
-                if (!is_array($rows)) {
-                    continue;
-                }
-                foreach ($rows as $row) {
-                    $name = is_array($row) ? trim((string) ($row['nume'] ?? '')) : trim((string) $row);
-                    if ($name === '') {
-                        continue;
-                    }
-                    $collected[(int) $beneficiaryId][] = $name;
-                    $collected[0][] = $name;
-                }
-            }
-        };
-
-        $collect($loadLocationsByBeneficiary);
-        $collect($distributionZonesByBeneficiary);
-
-        try {
-            foreach ($this->model->getExpenseLocationsByBeneficiary() as $beneficiaryId => $names) {
-                foreach ($names as $name) {
-                    $collected[(int) $beneficiaryId][] = (string) $name;
-                }
-            }
-        } catch (PDOException $exception) {
-            error_log('[DispecerCurseController][expense_locations_by_beneficiary] ' . $exception->getMessage());
+            return ['locations' => [], 'prices' => []];
         }
 
-        $result = [];
-        foreach ($collected as $beneficiaryId => $names) {
-            $unique = [];
-            foreach ($names as $name) {
-                $key = mb_strtolower($name, 'UTF-8');
-                if (!isset($unique[$key])) {
-                    $unique[$key] = $name;
-                }
+        // Randurile vin cronologic, deci ultima scriere a unei locatii o inlocuieste
+        // pe cea veche: pretul propus e cel folosit cel mai recent, nu cel mai frecvent.
+        $memory = [];
+        foreach ($history as $entry) {
+            $location = trim((string) ($entry['locatie'] ?? ''));
+            if ($location === '') {
+                continue;
             }
 
-            $values = array_values($unique);
-            usort($values, static function (string $a, string $b): int {
-                return strnatcasecmp($a, $b);
-            });
-            $result[(int) $beneficiaryId] = $values;
+            $key = mb_strtolower($location, 'UTF-8');
+            if (!isset($memory[$key])) {
+                $memory[$key] = ['label' => $location, 'by_type' => [], 'last' => null];
+            }
+
+            $price = $entry['pret'] ?? null;
+            if ($price === null || (float) $price <= 0) {
+                continue;
+            }
+
+            $price = round((float) $price, 2);
+            $date = isset($entry['data']) && $entry['data'] !== null ? (string) $entry['data'] : null;
+            $type = trim((string) ($entry['tip'] ?? ''));
+
+            if ($type !== '') {
+                $memory[$key]['by_type'][$type] = ['pret' => $price, 'data' => $date];
+            }
+            $memory[$key]['last'] = ['pret' => $price, 'data' => $date, 'tip' => $type];
         }
 
-        ksort($result);
+        $locations = [];
+        foreach ($memory as $entry) {
+            $locations[] = (string) $entry['label'];
+        }
+        usort($locations, static function (string $a, string $b): int {
+            return strnatcasecmp($a, $b);
+        });
 
-        return $result;
+        return ['locations' => $locations, 'prices' => $memory];
     }
 
     private function expenseCategories(): array
@@ -1498,11 +1484,7 @@ class DispecerCurseController
             'currentPage' => 'dispecer_curse',
             'tollExpenseTypes' => self::TOLL_EXPENSE_TYPES,
             'expenseDateRange' => $this->raceExpenseDateRange($race),
-            'expenseLocationSuggestions' => $this->expenseLocationSuggestions(),
-            'expenseLocationSuggestionsByBeneficiary' => $this->expenseLocationSuggestionsByBeneficiary(
-                $loadLocationsByBeneficiary,
-                $distributionZonesByBeneficiary
-            ),
+            'expenseLocationMemory' => $this->expenseLocationMemory(),
             'incompleteConfirmItems' => $incompleteConfirmItems,
             // Acelasi panou "curse cu informatii lipsa" ca in lista, restrans la
             // vehiculul cursei editate: operatorul completeaza lipsurile masinii
