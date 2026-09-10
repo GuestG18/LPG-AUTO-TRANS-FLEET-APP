@@ -2453,6 +2453,49 @@
             });
         }
 
+        // Expus pentru banda "Curse in desfasurare (GPS live)": combinatiile
+        // beneficiar + tip transport in care vehiculul dat este configurat in
+        // Configurare Transport — exact aceeasi logica folosita la construirea
+        // listei de vehicule din formular, ca precompletarea sa nu propuna
+        // niciodata o combinatie invalida.
+        window.dispecerVehicleCombos = function (vehicleId) {
+            var target = String(vehicleId || '').trim();
+            var combos = [];
+            if (target === '' || !(beneficiaryField instanceof HTMLSelectElement) || !(tipField instanceof HTMLSelectElement)) {
+                return combos;
+            }
+
+            var transportTypeValues = [];
+            Array.prototype.forEach.call(tipField.options, function (option) {
+                var value = String(option.value || '').trim();
+                if (value !== '') {
+                    transportTypeValues.push(value);
+                }
+            });
+
+            Array.prototype.forEach.call(beneficiaryField.options, function (option) {
+                var beneficiaryId = String(option.value || '').trim();
+                if (beneficiaryId === '') {
+                    return;
+                }
+                transportTypeValues.forEach(function (transportType) {
+                    var eligible = getEligibleVehicleOptions(beneficiaryId, transportType);
+                    var hasVehicle = eligible.some(function (candidate) {
+                        return String(candidate.value || '').trim() === target && !candidate.disabled;
+                    });
+                    if (hasVehicle) {
+                        combos.push({
+                            beneficiar_id: beneficiaryId,
+                            beneficiar_label: String(option.textContent || '').trim(),
+                            tip_transport: transportType
+                        });
+                    }
+                });
+            });
+
+            return combos;
+        };
+
         function rebuildVehicleSelectOptions(options, selectedValue, placeholderLabel) {
             if (!(vehicleField instanceof HTMLSelectElement)) {
                 return;

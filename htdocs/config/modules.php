@@ -217,6 +217,35 @@ return [
                     'autoutilitara' => 'Autoutilitara',
                 ],
             ],
+            // Numara ansamblul cap tractor + semiremorca cuplata ca o singura unitate de
+            // flota: semiremorca cuplata activ este ascunsa (apare pe randul capului tractor,
+            // in coloana "Cuplat cu"), iar statusul unitatii tine cont de ambele jumatati.
+            'unitate_flota' => [
+                'label' => 'Unitate de flota',
+                'type' => 'select',
+                'options' => [
+                    'toate' => 'Ansambluri (semiremorca cuplata ascunsa)',
+                    'active' => 'Ansambluri active',
+                    'inactive' => 'Ansambluri inactive',
+                ],
+                'custom_conditions' => [
+                    'toate' => [
+                        'sql' => "NOT EXISTS (SELECT 1 FROM vehicule_cuplaje vcu WHERE vcu.activ = 1 AND vcu.semiremorca_id = t.id)",
+                    ],
+                    'active' => [
+                        'sql' => "NOT EXISTS (SELECT 1 FROM vehicule_cuplaje vcu WHERE vcu.activ = 1 AND vcu.semiremorca_id = t.id)"
+                            . " AND t.status = 'activ'"
+                            . " AND NOT EXISTS (SELECT 1 FROM vehicule_cuplaje vca INNER JOIN vehicule vsa ON vsa.id = vca.semiremorca_id"
+                            . " WHERE vca.activ = 1 AND vca.tractor_id = t.id AND vsa.status <> 'activ')",
+                    ],
+                    'inactive' => [
+                        'sql' => "NOT EXISTS (SELECT 1 FROM vehicule_cuplaje vcu WHERE vcu.activ = 1 AND vcu.semiremorca_id = t.id)"
+                            . " AND (t.status <> 'activ'"
+                            . " OR EXISTS (SELECT 1 FROM vehicule_cuplaje vca INNER JOIN vehicule vsa ON vsa.id = vca.semiremorca_id"
+                            . " WHERE vca.activ = 1 AND vca.tractor_id = t.id AND vsa.status <> 'activ'))",
+                    ],
+                ],
+            ],
         ],
         'unique_fields' => [
             ['field' => 'nr_inmatriculare', 'column' => 'nr_inmatriculare'],

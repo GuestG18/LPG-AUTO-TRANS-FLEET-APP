@@ -304,3 +304,397 @@
         }
     });
 })();
+
+/* ------------------------------------------------------------------
+   Vehicule eligibile — popover "N vehicule" pe tabelele de rute.
+   Comportament identic cu Configurare transport: toggle, pozitionare
+   in viewport, cautare, inchidere pe Escape / click in afara,
+   repozitionare la scroll si resize.
+   ------------------------------------------------------------------ */
+(function () {
+    'use strict';
+
+    var activeState = null;
+
+    var closestElement = function (target, selector) {
+        return target instanceof Element ? target.closest(selector) : null;
+    };
+
+    var positionPopover = function (triggerEl, layerEl) {
+        var margin = 12;
+        var viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+        var viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+        var width = Math.min(Math.max(220, 304), Math.max(220, viewportWidth - margin * 2));
+        var maxHeight = Math.min(460, Math.max(180, viewportHeight - margin * 2));
+
+        layerEl.style.width = width + 'px';
+        layerEl.style.maxHeight = maxHeight + 'px';
+
+        var triggerRect = triggerEl.getBoundingClientRect();
+        var layerRect = layerEl.getBoundingClientRect();
+        var layerHeight = Math.min(layerRect.height || layerEl.scrollHeight || maxHeight, maxHeight);
+        var left = triggerRect.left;
+
+        if (left + width > viewportWidth - margin) {
+            left = triggerRect.right - width;
+        }
+        left = Math.max(margin, Math.min(left, viewportWidth - margin - width));
+
+        var top = triggerRect.bottom + 8;
+        var topIfAbove = triggerRect.top - layerHeight - 8;
+        if (top + layerHeight > viewportHeight - margin && topIfAbove >= margin) {
+            top = topIfAbove;
+        } else if (top + layerHeight > viewportHeight - margin) {
+            top = Math.max(margin, viewportHeight - margin - layerHeight);
+        }
+
+        layerEl.style.left = Math.round(left) + 'px';
+        layerEl.style.top = Math.round(top) + 'px';
+    };
+
+    var resetSearch = function (popoverEl) {
+        var searchInput = popoverEl.querySelector('[data-dispatcher-vehicle-search]');
+        if (searchInput instanceof HTMLInputElement) {
+            searchInput.value = '';
+        }
+        popoverEl.querySelectorAll('[data-dispatcher-vehicle-item]').forEach(function (itemEl) {
+            itemEl.hidden = false;
+        });
+        var emptyEl = popoverEl.querySelector('[data-dispatcher-vehicle-empty]');
+        if (emptyEl instanceof HTMLElement) {
+            emptyEl.hidden = true;
+        }
+    };
+
+    var filterPopover = function (popoverEl) {
+        var searchInput = popoverEl.querySelector('[data-dispatcher-vehicle-search]');
+        var query = searchInput instanceof HTMLInputElement
+            ? searchInput.value.trim().toLocaleLowerCase('ro-RO')
+            : '';
+        var visibleCount = 0;
+
+        popoverEl.querySelectorAll('[data-dispatcher-vehicle-item]').forEach(function (itemEl) {
+            var searchText = String(itemEl.dataset.vehicleSearch || itemEl.textContent || '').toLocaleLowerCase('ro-RO');
+            var isVisible = query === '' || searchText.indexOf(query) !== -1;
+            itemEl.hidden = !isVisible;
+            if (isVisible) {
+                visibleCount += 1;
+            }
+        });
+
+        var emptyEl = popoverEl.querySelector('[data-dispatcher-vehicle-empty]');
+        if (emptyEl instanceof HTMLElement) {
+            emptyEl.hidden = visibleCount > 0;
+        }
+    };
+
+    var closePopover = function (restoreFocus) {
+        if (activeState === null) {
+            return;
+        }
+        var previous = activeState;
+        activeState = null;
+        previous.button.setAttribute('aria-expanded', 'false');
+        previous.button.classList.remove('is-open');
+        var iconEl = previous.button.querySelector('i');
+        if (iconEl instanceof HTMLElement) {
+            iconEl.classList.remove('bi-chevron-up');
+            iconEl.classList.add('bi-chevron-down');
+        }
+        resetSearch(previous.popover);
+        previous.popover.hidden = true;
+        previous.popover.style.left = '';
+        previous.popover.style.top = '';
+        previous.popover.style.visibility = '';
+        if (restoreFocus) {
+            previous.button.focus({ preventScroll: true });
+        }
+    };
+
+    var openPopover = function (buttonEl) {
+        var popoverId = String(buttonEl.dataset.popoverId || '');
+        var popoverEl = popoverId !== '' ? document.getElementById(popoverId) : null;
+        if (!(popoverEl instanceof HTMLElement)) {
+            return;
+        }
+
+        closePopover(false);
+
+        activeState = { button: buttonEl, popover: popoverEl };
+        buttonEl.setAttribute('aria-expanded', 'true');
+        buttonEl.classList.add('is-open');
+        var iconEl = buttonEl.querySelector('i');
+        if (iconEl instanceof HTMLElement) {
+            iconEl.classList.remove('bi-chevron-down');
+            iconEl.classList.add('bi-chevron-up');
+        }
+
+        resetSearch(popoverEl);
+        popoverEl.style.visibility = 'hidden';
+        popoverEl.hidden = false;
+        positionPopover(buttonEl, popoverEl);
+        popoverEl.style.visibility = '';
+
+        var searchInput = popoverEl.querySelector('[data-dispatcher-vehicle-search]');
+        if (searchInput instanceof HTMLInputElement) {
+            searchInput.focus({ preventScroll: true });
+        }
+    };
+
+    document.addEventListener('click', function (event) {
+        var vehicleButton = closestElement(event.target, '[data-dispatcher-vehicle-toggle]');
+        if (vehicleButton instanceof HTMLButtonElement) {
+            event.preventDefault();
+            if (activeState !== null && activeState.button === vehicleButton) {
+                closePopover(false);
+                return;
+            }
+            openPopover(vehicleButton);
+            return;
+        }
+
+        if (closestElement(event.target, '[data-dispatcher-vehicle-popover]') === null) {
+            closePopover(false);
+        }
+    });
+
+    document.addEventListener('input', function (event) {
+        var searchInput = closestElement(event.target, '[data-dispatcher-vehicle-search]');
+        if (!(searchInput instanceof HTMLInputElement)) {
+            return;
+        }
+        var popoverEl = searchInput.closest('[data-dispatcher-vehicle-popover]');
+        if (popoverEl instanceof HTMLElement) {
+            filterPopover(popoverEl);
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && activeState !== null) {
+            event.preventDefault();
+            closePopover(true);
+            return;
+        }
+        var vehicleButton = closestElement(event.target, '[data-dispatcher-vehicle-toggle]');
+        if (vehicleButton instanceof HTMLButtonElement && event.key === 'ArrowDown') {
+            event.preventDefault();
+            openPopover(vehicleButton);
+        }
+    });
+
+    var reposition = function () {
+        if (activeState !== null) {
+            positionPopover(activeState.button, activeState.popover);
+        }
+    };
+    document.addEventListener('scroll', reposition, true);
+    window.addEventListener('resize', reposition);
+})();
+
+/* ------------------------------------------------------------------
+   Editare multipla de tarife ("Editeaza toate" / tarifele unui rand).
+   Deschide #tt-bulk-modal, populat din data-components (JSON) de pe
+   butonul [data-tt-bulk-edit]. Campurile goale raman neschimbate.
+   ------------------------------------------------------------------ */
+(function () {
+    'use strict';
+
+    var bulkModal = document.getElementById('tt-bulk-modal');
+    if (!bulkModal) {
+        return;
+    }
+
+    var rowsBody = document.getElementById('tt-bulk-rows');
+    var bfTransport = document.getElementById('tt-bf-transport');
+    var bfRoute = document.getElementById('tt-bf-route');
+    var bfValidFrom = document.getElementById('tt-bf-valid-from');
+    var bfSubtitle = document.getElementById('tt-bulk-subtitle');
+    var bulkForm = document.getElementById('tt-bulk-form');
+    var lastFocused = null;
+
+    var TRANSPORT_LABELS = {
+        primar: 'Primar km',
+        primar_tona: 'Primar tone',
+        distributie: 'Distribuție',
+        primar_distributie: 'P+D (Primar + Distribuție)',
+        compresor: 'Compresor'
+    };
+
+    var parseNumber = function (raw) {
+        if (raw === null || raw === undefined) {
+            return null;
+        }
+        var text = String(raw).trim().replace(/\s+/g, '').replace(',', '.');
+        if (text === '' || isNaN(Number(text))) {
+            return null;
+        }
+        return Number(text);
+    };
+
+    var formatRo = function (value) {
+        if (value === null || value === undefined || isNaN(value)) {
+            return '—';
+        }
+        return Number(value).toLocaleString('ro-RO', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    };
+
+    var openBulkModal = function () {
+        lastFocused = document.activeElement;
+        bulkModal.hidden = false;
+        document.body.style.overflow = 'hidden';
+        var firstField = rowsBody ? rowsBody.querySelector('input[name="bulk_value[]"]') : null;
+        if (firstField) {
+            window.setTimeout(function () { firstField.focus(); }, 40);
+        }
+    };
+
+    var closeBulkModal = function () {
+        if (bulkModal.hidden) {
+            return;
+        }
+        bulkModal.hidden = true;
+        document.body.style.overflow = '';
+        if (lastFocused && typeof lastFocused.focus === 'function') {
+            lastFocused.focus();
+        }
+    };
+
+    var buildRow = function (item) {
+        var tr = document.createElement('tr');
+
+        var tdLabel = document.createElement('td');
+        tdLabel.textContent = String(item.label || item.component || '');
+        var hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'bulk_component[]';
+        hidden.value = String(item.component || '');
+        tdLabel.appendChild(hidden);
+        tr.appendChild(tdLabel);
+
+        var tdUnit = document.createElement('td');
+        tdUnit.className = 'tt-dash';
+        tdUnit.textContent = String(item.unit || '');
+        tr.appendChild(tdUnit);
+
+        var tdCurrent = document.createElement('td');
+        tdCurrent.className = 'tt-num';
+        var strong = document.createElement('strong');
+        strong.textContent = formatRo(parseNumber(item.current));
+        tdCurrent.appendChild(strong);
+        tr.appendChild(tdCurrent);
+
+        var tdInput = document.createElement('td');
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.inputMode = 'decimal';
+        input.name = 'bulk_value[]';
+        input.autocomplete = 'off';
+        input.placeholder = 'neschimbat';
+        input.style.width = '110px';
+        tdInput.appendChild(input);
+        tr.appendChild(tdInput);
+
+        return tr;
+    };
+
+    document.addEventListener('click', function (event) {
+        var trigger = event.target.closest('[data-tt-bulk-edit]');
+        if (trigger) {
+            event.preventDefault();
+
+            var components = [];
+            try {
+                components = JSON.parse(trigger.getAttribute('data-components') || '[]');
+            } catch (err) {
+                components = [];
+            }
+            if (!Array.isArray(components) || components.length === 0) {
+                return;
+            }
+
+            if (rowsBody) {
+                rowsBody.innerHTML = '';
+                components.forEach(function (item) {
+                    rowsBody.appendChild(buildRow(item));
+                });
+            }
+
+            var transport = String(trigger.getAttribute('data-transport') || '');
+            if (bfTransport) { bfTransport.value = transport; }
+            if (bfRoute) { bfRoute.value = String(trigger.getAttribute('data-route-id') || '0'); }
+            if (bfSubtitle) {
+                var context = String(trigger.getAttribute('data-context') || '');
+                var transportLabel = TRANSPORT_LABELS[transport] || transport;
+                bfSubtitle.textContent = context !== '' ? transportLabel + ' · ' + context : transportLabel;
+            }
+
+            openBulkModal();
+            return;
+        }
+
+        if (!bulkModal.hidden) {
+            if (event.target.closest('[data-tt-close]') && event.target.closest('#tt-bulk-modal')) {
+                event.preventDefault();
+                closeBulkModal();
+                return;
+            }
+            if (event.target === bulkModal) {
+                closeBulkModal();
+                return;
+            }
+        }
+
+        var dateShortcut = event.target.closest('[data-tt-bulk-date]');
+        if (dateShortcut && bfValidFrom) {
+            event.preventDefault();
+            bfValidFrom.value = dateShortcut.getAttribute('data-tt-bulk-date');
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && !bulkModal.hidden) {
+            closeBulkModal();
+        }
+    });
+
+    if (bulkForm) {
+        bulkForm.addEventListener('submit', function (event) {
+            var inputs = rowsBody ? rowsBody.querySelectorAll('input[name="bulk_value[]"]') : [];
+            var filled = 0;
+            var invalid = null;
+
+            Array.prototype.forEach.call(inputs, function (input) {
+                var raw = String(input.value || '').trim();
+                if (raw === '') {
+                    return;
+                }
+                var parsed = parseNumber(raw);
+                if (parsed === null || parsed < 0) {
+                    invalid = invalid || input;
+                    return;
+                }
+                filled += 1;
+            });
+
+            if (invalid) {
+                event.preventDefault();
+                window.alert('Una dintre valorile introduse nu este un număr valid (≥ 0).');
+                invalid.focus();
+                return;
+            }
+            if (filled === 0) {
+                event.preventDefault();
+                window.alert('Completează cel puțin o valoare — câmpurile goale rămân neschimbate.');
+                return;
+            }
+            if (bfValidFrom && !bfValidFrom.value) {
+                event.preventDefault();
+                window.alert('Alege data de la care intră în vigoare tarifele.');
+                bfValidFrom.focus();
+            }
+        });
+    }
+})();

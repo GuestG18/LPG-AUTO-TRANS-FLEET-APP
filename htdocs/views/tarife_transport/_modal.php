@@ -90,6 +90,15 @@ $nextMonthIso = (new DateTimeImmutable('first day of next month'))->format('Y-m-
                 </div>
 
                 <div class="tt-field">
+                    <label for="tt-f-valid-to">Valabil până la (opțional)</label>
+                    <input type="date" name="valid_to" id="tt-f-valid-to" min="1900-01-01">
+                    <small>
+                        Lasă gol pentru valabilitate nelimitată. Cu o dată de sfârșit, tariful se aplică
+                        <strong>doar în interval</strong>, iar după acesta <strong>tariful anterior redevine activ automat</strong>.
+                    </small>
+                </div>
+
+                <div class="tt-field">
                     <label for="tt-f-fuel-weight">Sensibilitate la combustibil (opțional)</label>
                     <input type="text" inputmode="decimal" name="fuel_weight" id="tt-f-fuel-weight" placeholder="0 = fără influență · 1 = expunere totală" autocomplete="off">
                     <small>
@@ -109,7 +118,7 @@ $nextMonthIso = (new DateTimeImmutable('first day of next month'))->format('Y-m-
                     <div>
                         Se creează o <strong>versiune nouă</strong>. Versiunea curentă se închide cu o zi
                         înainte de data aleasă și rămâne în istoric.
-                        <strong>Cursele deja salvate nu se modifică.</strong>
+                        După salvare ți se va propune <strong>recalcularea curselor existente</strong> din perioada de valabilitate.
                     </div>
                 </div>
             </div>
@@ -121,6 +130,83 @@ $nextMonthIso = (new DateTimeImmutable('first day of next month'))->format('Y-m-
         </form>
     </div>
 </div>
+
+<?php if ($canManage): ?>
+<div class="tt-modal-backdrop" id="tt-bulk-modal" hidden>
+    <div class="tt-modal" role="dialog" aria-modal="true" aria-labelledby="tt-bulk-title">
+        <form method="post" action="<?= e(build_query_url(['page' => 'tarife_transport', 'action' => 'store_versions_bulk'])) ?>" id="tt-bulk-form">
+            <?= csrf_field() ?>
+            <input type="hidden" name="beneficiar_id" value="<?= (int) $selectedBeneficiaryId ?>">
+            <input type="hidden" name="transport_type" id="tt-bf-transport">
+            <input type="hidden" name="route_ref_id" id="tt-bf-route">
+
+            <div class="tt-modal-head">
+                <div>
+                    <h5 id="tt-bulk-title">Modifică mai multe tarife</h5>
+                    <p id="tt-bulk-subtitle">—</p>
+                </div>
+                <button type="button" class="tt-modal-close" data-tt-close aria-label="Închide">&times;</button>
+            </div>
+
+            <div class="tt-modal-body">
+                <div class="tt-table-wrap" style="margin-bottom:14px;">
+                    <table class="tt-table">
+                        <thead>
+                            <tr>
+                                <th>Componentă</th>
+                                <th>Unitate</th>
+                                <th class="tt-num">Tarif actual</th>
+                                <th>Valoare nouă</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tt-bulk-rows"></tbody>
+                    </table>
+                </div>
+                <p class="tt-price-note" style="margin:0 0 14px;">
+                    Completează doar componentele pe care vrei să le modifici —
+                    <strong>câmpurile lăsate goale rămân neschimbate</strong>. Un tarif 0 dezactivează componenta.
+                </p>
+
+                <div class="tt-field-row">
+                    <div class="tt-field">
+                        <label for="tt-bf-valid-from">Valabil de la <span style="color:#ef4444">*</span></label>
+                        <input type="date" name="valid_from" id="tt-bf-valid-from" required value="<?= e($todayIso) ?>" min="1900-01-01">
+                        <small>
+                            <button type="button" class="tt-btn tt-btn-sm" style="height:24px;padding:0 8px;" data-tt-bulk-date="<?= e($todayIso) ?>">Azi</button>
+                            <button type="button" class="tt-btn tt-btn-sm" style="height:24px;padding:0 8px;" data-tt-bulk-date="<?= e($tomorrowIso) ?>">Mâine</button>
+                            <button type="button" class="tt-btn tt-btn-sm" style="height:24px;padding:0 8px;" data-tt-bulk-date="<?= e($nextMonthIso) ?>">Luna viitoare</button>
+                        </small>
+                    </div>
+                    <div class="tt-field">
+                        <label for="tt-bf-valid-to">Valabil până la (opțional)</label>
+                        <input type="date" name="valid_to" id="tt-bf-valid-to" min="1900-01-01">
+                        <small>Gol = nelimitat. Cu dată de sfârșit, după interval tarifele anterioare redevin active automat.</small>
+                    </div>
+                </div>
+
+                <div class="tt-field">
+                    <label for="tt-bf-reason">Motiv modificare</label>
+                    <input type="text" name="reason" id="tt-bf-reason" maxlength="255" placeholder="ex: renegociere contract" autocomplete="off">
+                </div>
+
+                <div class="tt-inline-alert is-info" style="margin:0;">
+                    <i class="bi bi-shield-check" aria-hidden="true"></i>
+                    <div>
+                        Toate tarifele completate se salvează <strong>împreună, cu aceeași dată</strong> —
+                        se creează câte o versiune nouă pentru fiecare (totul sau nimic, în caz de eroare nu se schimbă nimic).
+                        După salvare ți se va propune <strong>recalcularea curselor existente</strong> din perioadă.
+                    </div>
+                </div>
+            </div>
+
+            <div class="tt-modal-foot">
+                <button type="button" class="tt-btn" data-tt-close>Anulează</button>
+                <button type="submit" class="tt-btn tt-btn-primary">Confirmă tarifele</button>
+            </div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
 
 <?php if ($canManage): ?>
 <div class="tt-modal-backdrop" id="tt-settings-modal" hidden>

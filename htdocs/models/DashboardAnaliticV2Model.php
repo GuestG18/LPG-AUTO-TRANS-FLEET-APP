@@ -397,7 +397,7 @@ class DashboardAnaliticV2Model extends BaseModel
 
         $rows = $this->fetchAll("
             SELECT
-                c.data_inceput AS data,
+                " . $this->reportingDateExpr() . " AS data,
                 COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut') AS vehicul,
                 COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fara beneficiar') AS beneficiar,
                 " . $e['bucket'] . " AS bucket,
@@ -407,7 +407,7 @@ class DashboardAnaliticV2Model extends BaseModel
                 (" . $e['grad_incarcare_efectiv'] . ") AS grad_incarcare
             {$from}
             {$whereData['where']}
-            ORDER BY c.data_inceput DESC, c.id DESC
+            ORDER BY " . $this->reportingDateExpr() . " DESC, c.id DESC
             LIMIT {$limit}
         ", $whereData['params']);
 
@@ -481,8 +481,8 @@ class DashboardAnaliticV2Model extends BaseModel
                 COUNT(DISTINCT c.vehicle_id) AS nr_vehicule,
                 COUNT(DISTINCT c.driver_id) AS nr_soferi,
                 COUNT(DISTINCT c.beneficiar_id) AS nr_beneficiari,
-                MIN(c.data_inceput) AS prima_cursa,
-                MAX(c.data_inceput) AS ultima_cursa
+                MIN(" . $this->reportingDateExpr() . ") AS prima_cursa,
+                MAX(" . $this->reportingDateExpr() . ") AS ultima_cursa
             {$from}
             {$whereData['where']}
         ", $whereData['params']);
@@ -597,6 +597,7 @@ class DashboardAnaliticV2Model extends BaseModel
                 c.id,
                 c.data_inceput,
                 c.data_sfarsit,
+                " . $this->reportingDateExpr() . " AS data_raportare,
                 c.tip_transport,
                 c.status_facturare,
                 c.capacitate_transport,
@@ -616,7 +617,7 @@ class DashboardAnaliticV2Model extends BaseModel
                 (" . $expr['grad_incarcare_efectiv'] . ") AS grad_incarcare
             {$from}
             {$whereData['where']}
-            ORDER BY c.data_inceput DESC, c.id DESC
+            ORDER BY " . $this->reportingDateExpr() . " DESC, c.id DESC
             LIMIT 500
         ", $whereData['params']);
 
@@ -627,7 +628,8 @@ class DashboardAnaliticV2Model extends BaseModel
 
             $trips[] = [
                 'id' => (int) ($row['id'] ?? 0),
-                'data' => (string) ($row['data_inceput'] ?? ''),
+                'data' => (string) ($row['data_raportare'] ?? ''),
+                'data_inceput' => (string) ($row['data_inceput'] ?? ''),
                 'data_sfarsit' => (string) ($row['data_sfarsit'] ?? ''),
                 'tip_transport' => (string) ($row['tip_transport'] ?? ''),
                 'tip_label' => self::TRANSPORT_TYPE_LABELS[(string) ($row['tip_transport'] ?? '')] ?? (string) ($row['tip_transport'] ?? ''),
@@ -846,7 +848,7 @@ class DashboardAnaliticV2Model extends BaseModel
     {
         $rows = $this->fetchAll("
             SELECT
-                c.data_inceput AS zi,
+                " . $this->reportingDateExpr() . " AS zi,
                 COALESCE(SUM(" . $e['facturare'] . "), 0) AS facturare,
                 COALESCE(SUM(" . $e['refacturare'] . "), 0) AS refacturare,
                 COALESCE(SUM(" . $e['cheltuieli'] . "), 0) AS cheltuieli,
@@ -855,8 +857,8 @@ class DashboardAnaliticV2Model extends BaseModel
                 COUNT(*) AS curse
             {$from}
             {$whereData['where']}
-            GROUP BY c.data_inceput
-            ORDER BY c.data_inceput ASC
+            GROUP BY zi
+            ORDER BY zi ASC
         ", $whereData['params']);
 
         $series = [
@@ -1556,18 +1558,31 @@ class DashboardAnaliticV2Model extends BaseModel
         ";
     }
 
+    /**
+     * Data la care cursa este raportata in dashboard: data la care s-a INCHIS.
+     *
+     * O cursa inceputa pe 31 iulie si incheiata pe 2 august apartine lunii august,
+     * indiferent de tipul de transport. Fallback pe data de inceput, apoi pe data
+     * cursei, ca sa nu dispara cursele inca neinchise.
+     */
+    private function reportingDateExpr(): string
+    {
+        return 'COALESCE(c.data_sfarsit, c.data_inceput, c.data_cursa)';
+    }
+
     private function buildWhere(array $filters): array
     {
         $where = ['c.deleted_at IS NULL'];
         $params = [];
+        $ziRaportare = $this->reportingDateExpr();
 
         if (($filters['date_start'] ?? null) !== null && $filters['date_start'] !== '') {
-            $where[] = 'c.data_inceput >= :dash_date_start';
+            $where[] = $ziRaportare . ' >= :dash_date_start';
             $params[':dash_date_start'] = (string) $filters['date_start'];
         }
 
         if (($filters['date_end'] ?? null) !== null && $filters['date_end'] !== '') {
-            $where[] = 'c.data_inceput <= :dash_date_end';
+            $where[] = $ziRaportare . ' <= :dash_date_end';
             $params[':dash_date_end'] = (string) $filters['date_end'];
         }
 

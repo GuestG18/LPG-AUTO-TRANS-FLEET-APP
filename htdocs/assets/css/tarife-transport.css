@@ -665,3 +665,142 @@
     .tt-tab { padding: 13px 14px; font-size: 13px; }
     .tt-price-value { font-size: 22px; }
 }
+
+/* ------------------------------------------------------------------
+   Vehicule eligibile — butonul "N vehicule" cu popover, identic cu
+   tabelele de rute din Configurare transport (aceleasi clase).
+   ------------------------------------------------------------------ */
+.dispatcher-vehicle-list {
+    display: inline-flex;
+    align-items: center;
+}
+
+.dispatcher-vehicle-count-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #ffffff;
+    border-radius: 6px;
+    line-height: 1;
+    min-width: 7.2rem;
+    height: 2.15rem;
+    gap: 0.42rem;
+    padding: 0 0.72rem;
+    border: 1px solid #0d6efd;
+    color: #0d6efd;
+    font-size: 0.86rem;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.dispatcher-vehicle-count-btn:hover,
+.dispatcher-vehicle-count-btn:focus-visible {
+    background: #f8fbff;
+    border-color: #0b5ed7;
+    color: #0b5ed7;
+}
+
+.dispatcher-vehicle-count-btn:focus-visible {
+    outline: 3px solid rgba(13, 110, 253, 0.18);
+    outline-offset: 2px;
+}
+
+.dispatcher-vehicle-popover {
+    position: fixed;
+    z-index: 3060;
+    background: #ffffff;
+    border: 1px solid #dfe6f0;
+    border-radius: 8px;
+    box-shadow: 0 18px 44px rgba(15, 23, 42, 0.16);
+    width: min(304px, calc(100vw - 24px));
+    max-height: min(460px, calc(100vh - 24px));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.dispatcher-vehicle-popover[hidden] {
+    display: none !important;
+}
+
+.dispatcher-vehicle-search {
+    position: relative;
+    padding: 0.72rem 0.78rem 0.52rem;
+}
+
+.dispatcher-vehicle-search i {
+    position: absolute;
+    left: 1.08rem;
+    top: 50%;
+    transform: translateY(-45%);
+    color: #475569;
+    font-size: 0.95rem;
+    pointer-events: none;
+}
+
+.dispatcher-vehicle-search-input {
+    width: 100%;
+    height: 2.25rem;
+    padding: 0 0.75rem 0 2.05rem;
+    border: 1px solid #d8e0eb;
+    border-radius: 6px;
+    color: #0f172a;
+    font-size: 0.84rem;
+    outline: none;
+}
+
+.dispatcher-vehicle-search-input:focus {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.14);
+}
+
+.dispatcher-vehicle-popover-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0;
+    padding: 0.28rem 0.9rem 0.62rem;
+    list-style: none;
+    overflow-y: auto;
+}
+
+.dispatcher-vehicle-popover-item {
+    display: flex;
+    align-items: baseline;
+    gap: 0.32rem;
+    padding: 0.26rem 0;
+    color: #334155;
+    font-size: 0.83rem;
+    line-height: 1.32;
+    white-space: nowrap;
+}
+
+.dispatcher-vehicle-popover-item strong {
+    color: #0f172a;
+    font-weight: 800;
+}
+
+.dispatcher-vehicle-separator {
+    color: #64748b;
+}
+
+.dispatcher-vehicle-detail {
+    color: #334155;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dispatcher-vehicle-popover-empty {
+    padding: 1rem 0.9rem 1.15rem;
+    color: #64748b;
+    font-size: 0.84rem;
+}
+
+.dispatcher-vehicle-popover-total {
+    flex: 0 0 auto;
+    border-top: 1px solid #e5ebf4;
+    padding: 0.62rem 0.9rem;
+    color: #0d6efd;
+    font-size: 0.84rem;
+    font-weight: 800;
+}

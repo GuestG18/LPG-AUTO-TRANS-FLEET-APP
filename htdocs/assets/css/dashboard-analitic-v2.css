@@ -59,6 +59,19 @@
     color: var(--da2-text);
 }
 
+/* precizarea regulii de incadrare in perioada */
+.da2-period-note {
+    display: inline-block;
+    margin-left: 4px;
+    padding: 1px 8px;
+    border: 1px solid var(--da2-border);
+    border-radius: 999px;
+    background: var(--da2-surface);
+    color: var(--da2-muted);
+    font-size: 0.7rem;
+    cursor: help;
+}
+
 .da2-hero-actions {
     display: flex;
     flex-wrap: wrap;

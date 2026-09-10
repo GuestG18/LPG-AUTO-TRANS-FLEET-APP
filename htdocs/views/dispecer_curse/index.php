@@ -269,6 +269,8 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
 
 <?php include __DIR__ . '/_open_races_panel.php'; ?>
 
+<?php include __DIR__ . '/_live_gps_panel.php'; ?>
+
 <?php
 $resumeParentId = (int) ($formData['parent_cursa_id'] ?? 0);
 $isResumeMode = $resumeParentId > 0;

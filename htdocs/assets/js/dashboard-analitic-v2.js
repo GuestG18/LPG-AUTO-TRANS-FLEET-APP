@@ -469,7 +469,8 @@
             ' · ' + num(fleet.curse) + ' curse' +
             ' · ' + num(fleet.nr_vehicule) + ' vehicule' +
             ' · ' + num(fleet.nr_soferi) + ' șoferi' +
-            ' · ' + num(fleet.nr_beneficiari) + ' beneficiari';
+            ' · ' + num(fleet.nr_beneficiari) + ' beneficiari' +
+            ' <span class="da2-period-note" title="O cursă intră în perioadă după ziua în care s-a închis, indiferent de tipul de transport. O cursă începută pe 31 iulie și încheiată pe 2 august apare în august.">curse închise în perioadă</span>';
     }
 
     function meterHtml(percent, tone) {
@@ -521,8 +522,8 @@
                 value: fmt(f.curse, 'int'),
                 note: fmt(f.curse_per_zi_activa, 'num') + ' curse / zi activă · ' + fmt(f.zile_active, 'int') + ' zile active',
                 detail: {
-                    intro: 'Câte curse au fost înregistrate în perioada selectată, după aplicarea filtrelor. Cursele șterse nu sunt numărate.',
-                    formula: 'COUNT(curse) cu data de început în intervalul filtrat',
+                    intro: 'Câte curse au fost înregistrate în perioada selectată, după aplicarea filtrelor. O cursă aparține perioadei în care s-a închis, nu celei în care a început — o cursă de pe 31 iulie încheiată pe 2 august intră în august. Cursele șterse nu sunt numărate.',
+                    formula: 'COUNT(curse) cu data de închidere în intervalul filtrat',
                     stats: [
                         { label: 'Zile-vehicul active', value: fmt(f.zile_active, 'int') },
                         { label: 'Curse / zi activă', value: fmt(f.curse_per_zi_activa, 'num') },
@@ -2776,7 +2777,7 @@
 
         // nu repetăm coloana entității pe care tocmai am deschis-o
         var columns = [
-            { key: 'data', label: 'Data' },
+            { key: 'data', label: 'Data închiderii' },
             { key: 'tip_label', label: 'Tip' },
             { key: 'vehicul', label: 'Vehicul', skip: type === 'vehicul' },
             { key: 'sofer', label: 'Șofer', skip: type === 'sofer' },
@@ -2800,7 +2801,11 @@
             '<tbody>' + trips.map(function (trip) {
                 return '<tr>' + columns.map(function (col) {
                     if (col.key === 'data') {
-                        return '<td>' + escapeHtml(fmtDateRo(trip.data)) + '</td>';
+                        // cursele care traversează zile: arătăm și ziua de start, ca să se vadă de ce apar aici
+                        var start = trip.data_inceput && trip.data_inceput !== trip.data
+                            ? '<span class="da2-cell-sub">start ' + escapeHtml(fmtDateRo(trip.data_inceput)) + '</span>'
+                            : '';
+                        return '<td>' + escapeHtml(fmtDateRo(trip.data)) + start + '</td>';
                     }
                     if (col.key === 'status_label') {
                         return '<td><span class="da2-status da2-status-' + escapeHtml(trip.status) + '">' +
@@ -2990,7 +2995,7 @@
 
         if (action === 'export' && drawer.data) {
             var columns = [
-                { key: 'data', label: 'Data', kind: 'date' },
+                { key: 'data', label: 'Data închiderii', kind: 'date' },
                 { key: 'tip_label', label: 'Tip transport' },
                 { key: 'vehicul', label: 'Vehicul' },
                 { key: 'sofer', label: 'Șofer' },

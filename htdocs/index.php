@@ -367,6 +367,7 @@ require_once __DIR__ . '/controllers/DispecerCurseController.php';
 require_once __DIR__ . '/controllers/FleetMapController.php';
 require_once __DIR__ . '/controllers/DispecerSasSandboxController.php';
 require_once __DIR__ . '/controllers/SasDashboardSandboxController.php';
+require_once __DIR__ . '/controllers/KmPierdutiController.php';
 require_once __DIR__ . '/controllers/CourseExpenseHistoryController.php';
 require_once __DIR__ . '/controllers/CentralizatorFacturareController.php';
 require_once __DIR__ . '/controllers/ProgramareConcediiController.php';
@@ -611,6 +612,11 @@ try {
         case 'sas_dashboard_sandbox':
             require_auth();
             (new SasDashboardSandboxController($db))->handle($action);
+            break;
+
+        case 'km_pierduti':
+            require_auth();
+            (new KmPierdutiController($db))->handle($action);
             break;
 
         case 'tarife_transport':

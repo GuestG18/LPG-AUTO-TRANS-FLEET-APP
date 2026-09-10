@@ -60,6 +60,10 @@ return [
             'group' => 'operational', 'label' => 'Sandbox Dashboard Flota', 'icon' => 'bi-activity', 'scope' => 'all',
             'actions' => ['view' => ['label' => 'Vizualizare']],
         ],
+        'km_pierduti' => [
+            'group' => 'operational', 'label' => 'Km pierduti', 'icon' => 'bi-graph-down-arrow', 'scope' => 'all',
+            'actions' => ['view' => ['label' => 'Vizualizare']],
+        ],
         'inactive_approvals' => [
             'group' => 'operational', 'label' => 'Solicitari aprobare inactive', 'icon' => 'bi-shield-exclamation', 'scope' => 'all',
             'actions' => [

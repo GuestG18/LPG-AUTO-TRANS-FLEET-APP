@@ -102,25 +102,57 @@ $dateTimeRo = static function (?string $value): string {
     }
 };
 
-/** Render eligible-vehicle chips from the stored CSV. */
-$vehicleChips = static function (?string $csv, int $limit = 2) use ($vehiclePlates): string {
+/**
+ * Eligible vehicles as the "N vehicule" popover button — the same widget
+ * (classes + data attributes) as the route tables in Configurare transport,
+ * so both pages read identically. Empty CSV keeps its meaning: every vehicle.
+ */
+$vehicleChipCounter = 0;
+$vehicleChips = static function (?string $csv) use ($vehiclePlates, &$vehicleChipCounter): string {
     $csv = trim((string) $csv);
-    if ($csv === '') {
-        return '<span class="tt-chip tt-chip-more">Toate vehiculele</span>';
-    }
-    $ids = array_values(array_filter(array_map('intval', explode(',', $csv))));
+    $ids = $csv === '' ? [] : array_values(array_filter(array_map('intval', explode(',', $csv))));
     if ($ids === []) {
         return '<span class="tt-chip tt-chip-more">Toate vehiculele</span>';
     }
-    $html = '';
-    foreach (array_slice($ids, 0, $limit) as $id) {
-        $plate = $vehiclePlates[$id] ?? ('#' . $id);
-        $html .= '<span class="tt-chip">' . e($plate) . '</span>';
+
+    $count = count($ids);
+    $countLabel = $count === 1 ? '1 vehicul' : $count . ' vehicule';
+    $vehicleChipCounter++;
+    $popoverId = 'tt_vehicle_popover_' . $vehicleChipCounter;
+
+    $plates = [];
+    foreach ($ids as $id) {
+        $info = $vehiclePlates[$id] ?? null;
+        $plates[] = is_array($info) ? (string) ($info['plate'] ?? ('#' . $id)) : ('#' . $id);
     }
-    $rest = count($ids) - $limit;
-    if ($rest > 0) {
-        $html .= '<span class="tt-chip tt-chip-more">+' . $rest . '</span>';
+
+    $html = '<div class="dispatcher-vehicle-list" data-dispatcher-vehicle-list>';
+    $html .= '<button type="button" class="dispatcher-vehicle-count-btn" data-dispatcher-vehicle-toggle'
+        . ' data-popover-id="' . e($popoverId) . '" aria-expanded="false" aria-controls="' . e($popoverId) . '"'
+        . ' aria-label="' . e('Afișează ' . $countLabel) . '" title="' . e(implode(', ', $plates)) . '">';
+    $html .= '<span>' . e($countLabel) . '</span><i class="bi bi-chevron-down" aria-hidden="true"></i>';
+    $html .= '</button>';
+    $html .= '<div class="dispatcher-vehicle-popover" id="' . e($popoverId) . '" data-dispatcher-vehicle-popover role="dialog" aria-label="Vehicule eligibile" hidden>';
+    $html .= '<div class="dispatcher-vehicle-search"><i class="bi bi-search" aria-hidden="true"></i>'
+        . '<input type="search" class="dispatcher-vehicle-search-input" data-dispatcher-vehicle-search placeholder="Caută vehicul..." aria-label="Caută vehicul"></div>';
+    $html .= '<ul class="dispatcher-vehicle-popover-list" role="list">';
+    foreach ($ids as $id) {
+        $info = $vehiclePlates[$id] ?? null;
+        $plate = is_array($info) ? (string) ($info['plate'] ?? ('#' . $id)) : ('#' . $id);
+        $detail = is_array($info) ? trim((string) ($info['detail'] ?? '')) : '';
+        $html .= '<li class="dispatcher-vehicle-popover-item" data-dispatcher-vehicle-item data-vehicle-search="' . e(trim($plate . ' ' . $detail)) . '">';
+        $html .= '<strong>' . e($plate !== '' ? $plate : '-') . '</strong>';
+        if ($detail !== '') {
+            $html .= '<span class="dispatcher-vehicle-separator" aria-hidden="true">&mdash;</span>'
+                . '<span class="dispatcher-vehicle-detail">' . e($detail) . '</span>';
+        }
+        $html .= '</li>';
     }
+    $html .= '</ul>';
+    $html .= '<div class="dispatcher-vehicle-popover-empty" data-dispatcher-vehicle-empty hidden>Niciun vehicul găsit.</div>';
+    $html .= '<div class="dispatcher-vehicle-popover-total">' . e('Total ' . $countLabel) . '</div>';
+    $html .= '</div></div>';
+
     return $html;
 };
 

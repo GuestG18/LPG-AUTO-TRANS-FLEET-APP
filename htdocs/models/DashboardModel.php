@@ -179,31 +179,24 @@ class DashboardModel extends BaseModel
         $inactiveRows = [];
         $inactive = 0;
 
-        foreach ($vehicles as $vehicle) {
-            $vehicleId = (int) ($vehicle['id'] ?? 0);
-            if ($vehicleId <= 0) {
-                continue;
+        $units = $this->groupVehiclesIntoFleetUnits($vehicles);
+
+        foreach ($units as $unit) {
+            $unitReasons = [];
+            foreach ($unit as $member) {
+                $memberId = (int) ($member['id'] ?? 0);
+                if ($memberId <= 0) {
+                    continue;
+                }
+
+                foreach ($this->buildVehicleReasons($member, $repairReasons, $documentIssues) as $reason) {
+                    $reason['vehicle_id'] = $memberId;
+                    $reason['vehicle_plate'] = (string) ($member['nr_inmatriculare'] ?? '');
+                    $unitReasons[] = $reason;
+                }
             }
 
-            $reasons = [];
-            if ((string) ($vehicle['status'] ?? 'activ') === 'inactiv') {
-                $reasons[] = $this->buildReason('manual_inactive', $this->firstDate($vehicle['updated_at'] ?? null, $vehicle['created_at'] ?? null), self::VEHICLE_REASON_DEFINITIONS);
-            }
-            if (isset($repairReasons[$vehicleId])) {
-                $reasons[] = $this->buildReason('repair', $repairReasons[$vehicleId], self::VEHICLE_REASON_DEFINITIONS);
-            }
-            if (isset($documentIssues['expired'][$vehicleId])) {
-                $reasons[] = $this->buildReason('expired_documents', $documentIssues['expired'][$vehicleId], self::VEHICLE_REASON_DEFINITIONS);
-            }
-            if (isset($documentIssues['missing'][$vehicleId])) {
-                $reasons[] = $this->buildReason(
-                    'missing_documents',
-                    $this->firstDate($documentIssues['missing'][$vehicleId], $vehicle['updated_at'] ?? null, $vehicle['created_at'] ?? null),
-                    self::VEHICLE_REASON_DEFINITIONS
-                );
-            }
-
-            $primaryReason = $this->pickPrimaryReason($reasons, self::VEHICLE_REASON_PRIORITY);
+            $primaryReason = $this->pickPrimaryReason($unitReasons, self::VEHICLE_REASON_PRIORITY);
             if ($primaryReason === null) {
                 continue;
             }
@@ -215,22 +208,44 @@ class DashboardModel extends BaseModel
             }
             $reasonCounts[$reasonKey]['count']++;
 
+            $reasonVehicleId = (int) ($primaryReason['vehicle_id'] ?? 0);
+            $primaryVehicle = $unit[0];
+            foreach ($unit as $member) {
+                if ((int) ($member['id'] ?? 0) === $reasonVehicleId) {
+                    $primaryVehicle = $member;
+                    break;
+                }
+            }
+
+            $rowDate = $this->firstDate(
+                $primaryReason['date'] ?? null,
+                $primaryVehicle['updated_at'] ?? null,
+                $primaryVehicle['created_at'] ?? null
+            );
+
             $inactiveRows[] = [
-                'id' => $vehicleId,
-                'nr_inmatriculare' => (string) ($vehicle['nr_inmatriculare'] ?? ''),
-                'marca' => (string) ($vehicle['marca'] ?? ''),
-                'model' => (string) ($vehicle['model'] ?? ''),
+                'id' => (int) ($primaryVehicle['id'] ?? 0),
+                'nr_inmatriculare' => $this->buildFleetUnitLabel($unit),
+                'members' => array_map(static fn(array $member): array => [
+                    'id' => (int) ($member['id'] ?? 0),
+                    'nr_inmatriculare' => (string) ($member['nr_inmatriculare'] ?? ''),
+                    'tip_vehicul' => (string) ($member['tip_vehicul'] ?? ''),
+                ], $unit),
+                'reason_vehicle_id' => $reasonVehicleId,
+                'reason_vehicle' => (string) ($primaryReason['vehicle_plate'] ?? ''),
+                'marca' => (string) ($primaryVehicle['marca'] ?? ''),
+                'model' => (string) ($primaryVehicle['model'] ?? ''),
                 'reason_key' => $reasonKey,
                 'reason' => $primaryReason['label'],
                 'reason_icon' => $primaryReason['icon'],
                 'reason_tone' => $primaryReason['tone'],
-                'date' => $this->firstDate($primaryReason['date'] ?? null, $vehicle['updated_at'] ?? null, $vehicle['created_at'] ?? null),
-                'sort_date' => $this->firstDate($primaryReason['date'] ?? null, $vehicle['updated_at'] ?? null, $vehicle['created_at'] ?? null) ?? '0000-00-00',
+                'date' => $rowDate,
+                'sort_date' => $rowDate ?? '0000-00-00',
             ];
         }
 
         $this->sortInactiveRows($inactiveRows, self::VEHICLE_REASON_PRIORITY);
-        $total = count($vehicles);
+        $total = count($units);
 
         return [
             'total' => $total,
@@ -239,6 +254,148 @@ class DashboardModel extends BaseModel
             'reasons' => array_values($reasonCounts),
             'inactive_rows' => array_slice($inactiveRows, 0, 5),
         ];
+    }
+
+    /**
+     * Motivele de inactivitate pentru un singur vehicul, inainte de agregarea pe ansamblu.
+     */
+    private function buildVehicleReasons(array $vehicle, array $repairReasons, array $documentIssues): array
+    {
+        $vehicleId = (int) ($vehicle['id'] ?? 0);
+        $reasons = [];
+
+        if ((string) ($vehicle['status'] ?? 'activ') === 'inactiv') {
+            $reasons[] = $this->buildReason('manual_inactive', $this->firstDate($vehicle['updated_at'] ?? null, $vehicle['created_at'] ?? null), self::VEHICLE_REASON_DEFINITIONS);
+        }
+        if (isset($repairReasons[$vehicleId])) {
+            $reasons[] = $this->buildReason('repair', $repairReasons[$vehicleId], self::VEHICLE_REASON_DEFINITIONS);
+        }
+        if (isset($documentIssues['expired'][$vehicleId])) {
+            $reasons[] = $this->buildReason('expired_documents', $documentIssues['expired'][$vehicleId], self::VEHICLE_REASON_DEFINITIONS);
+        }
+        if (isset($documentIssues['missing'][$vehicleId])) {
+            $reasons[] = $this->buildReason(
+                'missing_documents',
+                $this->firstDate($documentIssues['missing'][$vehicleId], $vehicle['updated_at'] ?? null, $vehicle['created_at'] ?? null),
+                self::VEHICLE_REASON_DEFINITIONS
+            );
+        }
+
+        return $reasons;
+    }
+
+    /**
+     * Grupeaza vehiculele in unitati de flota: un cap tractor cuplat activ cu o
+     * semiremorca formeaza o singura unitate, restul raman individuale.
+     *
+     * @return array<int, array<int, array>>
+     */
+    private function groupVehiclesIntoFleetUnits(array $vehicles): array
+    {
+        $vehiclesById = [];
+        foreach ($vehicles as $vehicle) {
+            $vehicleId = (int) ($vehicle['id'] ?? 0);
+            if ($vehicleId > 0) {
+                $vehiclesById[$vehicleId] = $vehicle;
+            }
+        }
+
+        $trailerByTractor = [];
+        $tractorByTrailer = [];
+        foreach ($this->getActiveCouplingPairs(array_keys($vehiclesById)) as $pair) {
+            $tractorId = $pair['tractor_id'];
+            $trailerId = $pair['semiremorca_id'];
+
+            if (isset($trailerByTractor[$tractorId]) || isset($tractorByTrailer[$trailerId])) {
+                continue;
+            }
+
+            $trailerByTractor[$tractorId] = $trailerId;
+            $tractorByTrailer[$trailerId] = $tractorId;
+        }
+
+        $units = [];
+        $consumed = [];
+
+        foreach ($vehicles as $vehicle) {
+            $vehicleId = (int) ($vehicle['id'] ?? 0);
+            if ($vehicleId <= 0) {
+                $units[] = [$vehicle];
+                continue;
+            }
+            if (isset($consumed[$vehicleId])) {
+                continue;
+            }
+
+            $tractorId = $tractorByTrailer[$vehicleId] ?? $vehicleId;
+            $trailerId = $trailerByTractor[$tractorId] ?? null;
+
+            if ($trailerId === null || !isset($vehiclesById[$tractorId], $vehiclesById[$trailerId])) {
+                $consumed[$vehicleId] = true;
+                $units[] = [$vehicle];
+                continue;
+            }
+
+            $consumed[$tractorId] = true;
+            $consumed[$trailerId] = true;
+            $units[] = [$vehiclesById[$tractorId], $vehiclesById[$trailerId]];
+        }
+
+        return $units;
+    }
+
+    /**
+     * Cuplajele active in care ambii membri fac parte din setul filtrat.
+     *
+     * @return array<int, array{tractor_id: int, semiremorca_id: int}>
+     */
+    private function getActiveCouplingPairs(array $vehicleIds): array
+    {
+        $vehicleIds = $this->positiveIds($vehicleIds);
+        if ($vehicleIds === [] || !$this->tableExists('vehicule_cuplaje')) {
+            return [];
+        }
+
+        $params = [];
+        $tractorCondition = $this->inCondition('vc.tractor_id', $vehicleIds, $params, 'coupling_tractor');
+        $trailerCondition = $this->inCondition('vc.semiremorca_id', $vehicleIds, $params, 'coupling_trailer');
+
+        $sql = "
+            SELECT vc.tractor_id, vc.semiremorca_id
+            FROM vehicule_cuplaje vc
+            WHERE vc.activ = 1
+              AND {$tractorCondition}
+              AND {$trailerCondition}
+            ORDER BY vc.id ASC
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        $this->bindAll($stmt, $params);
+        $stmt->execute();
+
+        $pairs = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $tractorId = (int) ($row['tractor_id'] ?? 0);
+            $trailerId = (int) ($row['semiremorca_id'] ?? 0);
+            if ($tractorId > 0 && $trailerId > 0 && $tractorId !== $trailerId) {
+                $pairs[] = ['tractor_id' => $tractorId, 'semiremorca_id' => $trailerId];
+            }
+        }
+
+        return $pairs;
+    }
+
+    private function buildFleetUnitLabel(array $unit): string
+    {
+        $plates = [];
+        foreach ($unit as $member) {
+            $plate = trim((string) ($member['nr_inmatriculare'] ?? ''));
+            if ($plate !== '') {
+                $plates[] = $plate;
+            }
+        }
+
+        return $plates === [] ? '' : implode(' + ', $plates);
     }
 
     public function getDriverDashboardStatus(array $filters = []): array

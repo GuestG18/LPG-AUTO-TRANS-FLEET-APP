@@ -166,15 +166,25 @@ foreach ($distributionRoutes as $route) {
                             <td><i class="bi <?= !empty($route['activ']) ? 'bi-check-circle-fill tt-status-dot is-on' : 'bi-dash-circle tt-status-dot is-off' ?>" aria-hidden="true"></i></td>
                             <td class="tt-col-actions">
                                 <span class="tt-actions">
-                                    <?php if ($canManage && $usesTon): ?>
+                                    <?php if ($canManage && $usesTon && $usesKm): ?>
+                                        <?php $rowComponents = [
+                                            ['component' => 'tarif_tona', 'label' => 'Tarif tonă', 'unit' => 'lei / tonă', 'current' => (string) $tonValue],
+                                            ['component' => 'cost_extra_km', 'label' => 'Tarif km', 'unit' => 'lei / km', 'current' => (string) $kmValue],
+                                        ]; ?>
+                                        <button type="button" class="tt-btn tt-btn-icon" title="Editează tarifele rutei (tonă + km)"
+                                                data-tt-bulk-edit data-transport="distributie"
+                                                data-route-id="<?= $routeId ?>" data-context="<?= e($routeLabel) ?>"
+                                                data-components="<?= e(json_encode($rowComponents, JSON_UNESCAPED_UNICODE)) ?>">
+                                            <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                        </button>
+                                    <?php elseif ($canManage && $usesTon): ?>
                                         <button type="button" class="tt-btn tt-btn-icon" title="Editează tarif tonă"
                                                 data-tt-edit data-component="tarif_tona" data-transport="distributie"
                                                 data-route-id="<?= $routeId ?>" data-label="Tarif tonă" data-unit="lei/tona"
                                                 data-current="<?= e((string) $tonValue) ?>" data-context="<?= e($routeLabel) ?>">
                                             <i class="bi bi-box-seam" aria-hidden="true"></i>
                                         </button>
-                                    <?php endif; ?>
-                                    <?php if ($canManage && $usesKm): ?>
+                                    <?php elseif ($canManage && $usesKm): ?>
                                         <button type="button" class="tt-btn tt-btn-icon" title="Editează tarif km"
                                                 data-tt-edit data-component="cost_extra_km" data-transport="distributie"
                                                 data-route-id="<?= $routeId ?>" data-label="Tarif km" data-unit="lei/km"

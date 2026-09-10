@@ -151,23 +151,16 @@
                             <td class="tt-col-actions">
                                 <span class="tt-actions">
                                     <?php if ($canManage): ?>
-                                        <button type="button" class="tt-btn tt-btn-icon" title="Editează tarif tonă"
-                                                data-tt-edit data-component="tarif_tona" data-transport="primar_distributie"
-                                                data-route-id="<?= $routeId ?>" data-label="Tarif tonă" data-unit="lei/tona"
-                                                data-current="<?= e((string) $tonValue) ?>" data-context="<?= e($routeLabel) ?>">
-                                            <i class="bi bi-box-seam" aria-hidden="true"></i>
-                                        </button>
-                                        <button type="button" class="tt-btn tt-btn-icon" title="Editează tarif km"
-                                                data-tt-edit data-component="cost_extra_km" data-transport="primar_distributie"
-                                                data-route-id="<?= $routeId ?>" data-label="Tarif km" data-unit="lei/km"
-                                                data-current="<?= e((string) $kmValue) ?>" data-context="<?= e($routeLabel) ?>">
-                                            <i class="bi bi-signpost" aria-hidden="true"></i>
-                                        </button>
-                                        <button type="button" class="tt-btn tt-btn-icon" title="Editează cost / cursă"
-                                                data-tt-edit data-component="cost_cursa" data-transport="primar_distributie"
-                                                data-route-id="<?= $routeId ?>" data-label="Cost / cursă" data-unit="lei/cursa"
-                                                data-current="<?= e((string) $costValue) ?>" data-context="<?= e($routeLabel) ?>">
-                                            <i class="bi bi-cash-coin" aria-hidden="true"></i>
+                                        <?php $rowComponents = [
+                                            ['component' => 'tarif_tona', 'label' => 'Tarif tonă', 'unit' => 'lei / tonă', 'current' => (string) $tonValue],
+                                            ['component' => 'cost_extra_km', 'label' => 'Tarif km', 'unit' => 'lei / km', 'current' => (string) $kmValue],
+                                            ['component' => 'cost_cursa', 'label' => 'Cost / cursă', 'unit' => 'lei / cursă', 'current' => (string) $costValue],
+                                        ]; ?>
+                                        <button type="button" class="tt-btn tt-btn-icon" title="Editează tarifele rutei (tonă + km + cost/cursă)"
+                                                data-tt-bulk-edit data-transport="primar_distributie"
+                                                data-route-id="<?= $routeId ?>" data-context="<?= e($routeLabel) ?>"
+                                                data-components="<?= e(json_encode($rowComponents, JSON_UNESCAPED_UNICODE)) ?>">
+                                            <i class="bi bi-pencil-square" aria-hidden="true"></i>
                                         </button>
                                     <?php endif; ?>
                                     <a class="tt-btn tt-btn-icon" title="Deschide în Configurare transport"

@@ -36,11 +36,6 @@ $approvalDriverRows = is_array($approvalSummary['drivers'] ?? null) ? $approvalS
 $approvalTotal = (int) ($approvalSummary['total'] ?? ((int) ($approvalCounts['vehicle'] ?? 0) + (int) ($approvalCounts['driver'] ?? 0) + (int) ($approvalCounts['repair'] ?? 0)));
 $dashboardReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dashboard']));
 
-$vehicleDetailsUrl = build_query_url([
-    'page' => 'vehicule',
-    'status' => 'inactiv',
-    'q' => $selectedVehicleSearch,
-]);
 $driverDetailsUrl = build_query_url([
     'page' => 'soferi',
     'status' => 'inactiv',
@@ -58,6 +53,45 @@ $maintenanceDetailsUrl = build_query_url([
     'date_to' => $dateEnd,
     'vehicle_id' => $selectedVehicleId,
 ]);
+
+// Contoarele din card numara unitati de flota (ansamblul cap tractor + semiremorca = 1),
+// asa ca lista deschisa la click foloseste acelasi criteriu prin filtrul unitate_flota.
+$vehicleUnitUrl = static function (string $unit) use ($selectedVehicleId, $selectedVehicleCategory, $selectedVehicleSearch): string {
+    $vehicleTypes = match ($selectedVehicleCategory) {
+        'grele' => ['camion', 'cap_tractor', 'semiremorca_primar', 'semiremorca_distributie'],
+        'usoare' => ['autovehicul', 'autoutilitara'],
+        default => null,
+    };
+
+    // Cu un singur vehicul selectat nu exista ce grupa, iar filtrul de ansamblu ar
+    // ascunde chiar semiremorca aleasa - se filtreaza direct pe statusul randului.
+    if ($selectedVehicleId !== null) {
+        return build_query_url([
+            'page' => 'vehicule',
+            'status' => match ($unit) {
+                'active' => 'activ',
+                'inactive' => 'inactiv',
+                default => null,
+            },
+            'q' => $selectedVehicleSearch,
+        ]);
+    }
+
+    return build_query_url([
+        'page' => 'vehicule',
+        'unitate_flota' => $unit,
+        'tip_vehicul' => $vehicleTypes,
+        'q' => $selectedVehicleSearch,
+    ]);
+};
+$driverStatusUrl = static fn(?string $status): string => build_query_url([
+    'page' => 'soferi',
+    'status' => $status,
+    'q' => $selectedVehicleSearch,
+]);
+// Legaturile "Vezi detalii" / "Vezi toate" afiseaza acelasi numar ca badge-ul de inactive,
+// deci trebuie sa deschida exact aceeasi lista ca si contorul Inactive.
+$vehicleDetailsUrl = $vehicleUnitUrl('inactive');
 
 $formatCurrency = static fn(mixed $value): string => format_number_ro((float) $value, 2) . ' lei';
 $formatLiters = static function (mixed $value): string {
@@ -308,18 +342,18 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
             </header>
 
             <div class="dashboard-stat-row">
-                <div class="dashboard-stat">
+                <a class="dashboard-stat" href="<?= e($vehicleUnitUrl('toate')) ?>" title="Vezi toate unitatile de flota">
                     <span>Total vehicule</span>
                     <strong class="is-blue"><?= e((string) ((int) ($vehicleStatus['total'] ?? 0))) ?></strong>
-                </div>
-                <div class="dashboard-stat">
+                </a>
+                <a class="dashboard-stat" href="<?= e($vehicleUnitUrl('active')) ?>" title="Vezi unitatile active">
                     <span>Active</span>
                     <strong class="is-green"><?= e((string) ((int) ($vehicleStatus['active'] ?? 0))) ?></strong>
-                </div>
-                <div class="dashboard-stat">
+                </a>
+                <a class="dashboard-stat" href="<?= e($vehicleUnitUrl('inactive')) ?>" title="Vezi unitatile inactive">
                     <span>Inactive</span>
                     <strong class="is-red"><?= e((string) ((int) ($vehicleStatus['inactive'] ?? 0))) ?></strong>
-                </div>
+                </a>
             </div>
 
             <div class="dashboard-reason-section">
@@ -361,18 +395,18 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
             </header>
 
             <div class="dashboard-stat-row">
-                <div class="dashboard-stat">
+                <a class="dashboard-stat" href="<?= e($driverStatusUrl(null)) ?>" title="Vezi toti soferii">
                     <span>Total șoferi</span>
                     <strong class="is-blue"><?= e((string) ((int) ($driverStatus['total'] ?? 0))) ?></strong>
-                </div>
-                <div class="dashboard-stat">
+                </a>
+                <a class="dashboard-stat" href="<?= e($driverStatusUrl('activ')) ?>" title="Vezi soferii activi">
                     <span>Activi</span>
                     <strong class="is-green"><?= e((string) ((int) ($driverStatus['active'] ?? 0))) ?></strong>
-                </div>
-                <div class="dashboard-stat">
+                </a>
+                <a class="dashboard-stat" href="<?= e($driverStatusUrl('inactiv')) ?>" title="Vezi soferii inactivi">
                     <span>Inactivi</span>
                     <strong class="is-red"><?= e((string) ((int) ($driverStatus['inactive'] ?? 0))) ?></strong>
-                </div>
+                </a>
             </div>
 
             <div class="dashboard-reason-section">
@@ -598,12 +632,23 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                             $vehicleId = (int) ($row['id'] ?? 0);
                             $plate = (string) ($row['nr_inmatriculare'] ?? '');
                             $menuId = 'dashboard_vehicle_actions_' . $vehicleId;
+                            $unitMembers = is_array($row['members'] ?? null) && ($row['members'] !== [])
+                                ? $row['members']
+                                : [['id' => $vehicleId, 'nr_inmatriculare' => $plate]];
+                            $reasonPlate = (string) ($row['reason_vehicle'] ?? '');
                             ?>
                             <tr>
                                 <td>
-                                    <span class="dashboard-vehicle-pill">
-                                        <i class="bi bi-truck-front" aria-hidden="true"></i>
-                                        <strong><?= e($plate) ?></strong>
+                                    <span class="dashboard-vehicle-assembly">
+                                        <?php foreach ($unitMembers as $memberIndex => $member): ?>
+                                            <?php if ($memberIndex > 0): ?>
+                                                <span class="dashboard-vehicle-assembly-plus" aria-hidden="true">+</span>
+                                            <?php endif; ?>
+                                            <span class="dashboard-vehicle-pill">
+                                                <i class="bi <?= e(str_starts_with((string) ($member['tip_vehicul'] ?? ''), 'semiremorca') ? 'bi-truck-flatbed' : 'bi-truck-front') ?>" aria-hidden="true"></i>
+                                                <strong><?= e((string) ($member['nr_inmatriculare'] ?? '')) ?></strong>
+                                            </span>
+                                        <?php endforeach; ?>
                                     </span>
                                 </td>
                                 <td>
@@ -611,6 +656,9 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                                         <i class="bi <?= e((string) ($row['reason_icon'] ?? 'bi-circle')) ?>" aria-hidden="true"></i>
                                         <?= e((string) ($row['reason'] ?? 'Alt motiv')) ?>
                                     </span>
+                                    <?php if (count($unitMembers) > 1 && $reasonPlate !== ''): ?>
+                                        <small class="dashboard-table-reason-source">de la <?= e($reasonPlate) ?></small>
+                                    <?php endif; ?>
                                 </td>
                                 <td><?= e($formatDate($row['date'] ?? '')) ?></td>
                                 <td><span class="dashboard-status-badge"><i class="bi bi-circle-fill" aria-hidden="true"></i> Inactiv</span></td>
@@ -620,8 +668,18 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                                             <i class="bi bi-three-dots" aria-hidden="true"></i>
                                         </button>
                                         <ul class="dropdown-menu dropdown-menu-end dashboard-action-menu" aria-labelledby="<?= e($menuId) ?>">
-                                            <li><a class="dropdown-item" href="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $vehicleId])) ?>">Vezi detalii</a></li>
-                                            <li><a class="dropdown-item" href="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'edit', 'id' => $vehicleId])) ?>">Editează</a></li>
+                                            <?php foreach ($unitMembers as $memberIndex => $member): ?>
+                                                <?php
+                                                $memberId = (int) ($member['id'] ?? 0);
+                                                $memberPlate = (string) ($member['nr_inmatriculare'] ?? '');
+                                                $memberSuffix = count($unitMembers) > 1 ? ' ' . $memberPlate : '';
+                                                ?>
+                                                <?php if ($memberIndex > 0): ?>
+                                                    <li><hr class="dropdown-divider"></li>
+                                                <?php endif; ?>
+                                                <li><a class="dropdown-item" href="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $memberId])) ?>">Vezi detalii<?= e($memberSuffix) ?></a></li>
+                                                <li><a class="dropdown-item" href="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'edit', 'id' => $memberId])) ?>">Editează<?= e($memberSuffix) ?></a></li>
+                                            <?php endforeach; ?>
                                         </ul>
                                     </div>
                                 </td>

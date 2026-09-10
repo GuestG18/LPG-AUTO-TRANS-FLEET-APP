@@ -62,11 +62,34 @@ foreach ($components as $key => $meta) {
     <?php endif; ?>
 <?php endforeach; ?>
 
+<?php
+$bulkComponents = [];
+foreach ($resolved as $key => $entry) {
+    $bulkComponents[] = [
+        'component' => $key,
+        'label' => (string) $entry['meta']['label'],
+        'unit' => (string) $entry['meta']['unit'],
+        'current' => (string) $entry['value'],
+    ];
+}
+?>
 <section class="tt-card">
     <div class="tt-card-head">
         <h2 class="tt-card-title">Structură — <small>Tarife Compresor (componente independente)</small></h2>
-        <span class="tt-badge <?= $activeCount > 0 ? 'tt-badge-ok' : 'tt-badge-muted' ?>">
-            <?= $activeCount ?> din 5 componente active
+        <span style="display:inline-flex;align-items:center;gap:10px;">
+            <?php if ($canManage): ?>
+                <button type="button" class="tt-btn tt-btn-sm"
+                        data-tt-bulk-edit
+                        data-transport="compresor"
+                        data-route-id="0"
+                        data-context="Tarife Compresor la nivel de beneficiar — modifici doar ce completezi"
+                        data-components="<?= e(json_encode($bulkComponents, JSON_UNESCAPED_UNICODE)) ?>">
+                    <i class="bi bi-pencil-square" aria-hidden="true"></i> Editează toate tarifele
+                </button>
+            <?php endif; ?>
+            <span class="tt-badge <?= $activeCount > 0 ? 'tt-badge-ok' : 'tt-badge-muted' ?>">
+                <?= $activeCount ?> din 5 componente active
+            </span>
         </span>
     </div>
 

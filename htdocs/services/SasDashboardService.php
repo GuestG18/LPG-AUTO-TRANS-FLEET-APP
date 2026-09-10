@@ -68,28 +68,42 @@ class SasDashboardService
     }
 
     /**
+     * Lista vehiculelor din flota SAS cu maparea la vehiculul local (pentru
+     * rapoarte care au nevoie de carId + id local, ex. "Km pierduti").
+     * Cache de 10 min via FleetLivePositionService (structura flotei se schimba rar).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getFleetVehicles(): array
+    {
+        $hierarchy = $this->positions->getFleetHierarchy();
+        return is_array($hierarchy['cars'] ?? null) ? $hierarchy['cars'] : [];
+    }
+
+    /**
+     * Doar km reali GPS pentru un vehicul pe interval (pentru raportul "Km
+     * pierduti", incarcat esalonat per vehicul). Refoloseste getVehicleRange
+     * (cache pe disc), returnand doar campurile relevante.
+     */
+    public function getVehicleKm(int $carId, ?string $startDate = null, ?string $endDate = null): array
+    {
+        $range = $this->getVehicleRange($carId, $startDate, $endDate);
+        return [
+            'sas_vehicle_id' => $carId,
+            'total_km' => $range['total_km'] ?? null,
+            'can_fuel_l' => $range['can_fuel_l'] ?? null,
+            'odometer_km' => $range['odometer_km'] ?? null,
+        ];
+    }
+
+    /**
      * Snapshot complet pentru dashboard: vehicule clasificate, KPI-uri si
      * feedul de evenimente de miscare.
      */
     public function getSnapshot(): array
     {
         $payload = $this->positions->getLivePositions();
-        $vehicles = [];
-        foreach ((array) $payload['positions'] as $position) {
-            if (is_array($position)) {
-                $vehicles[] = $this->classify($position);
-            }
-        }
-
-        // Ordinea implicita: in miscare primele, apoi dupa prospetimea raportarii.
-        usort($vehicles, static function (array $a, array $b): int {
-            $rank = ['moving' => 0, 'idle' => 1, 'parked' => 2, 'offline' => 3];
-            $byStatus = ($rank[$a['status']] ?? 9) <=> ($rank[$b['status']] ?? 9);
-            if ($byStatus !== 0) {
-                return $byStatus;
-            }
-            return ($a['age_seconds'] ?? PHP_INT_MAX) <=> ($b['age_seconds'] ?? PHP_INT_MAX);
-        });
+        $vehicles = $this->classifyPositions($payload);
 
         $feed = $this->updateMovementFeed($vehicles);
         $this->attachDayStats($vehicles);
@@ -106,6 +120,51 @@ class SasDashboardService
                 'error' => $payload['error'],
             ],
         ];
+    }
+
+    /**
+     * Varianta usoara a snapshotului, pentru alte pagini (ex. banda "curse in
+     * desfasurare" din Dispecer curse): doar pozitiile clasificate, fara
+     * statistici de zi, feed sau poze — nu face niciun apel travelsheet, doar
+     * currentpositions prin cache-ul partajat de 20s.
+     */
+    public function getLiveOverview(): array
+    {
+        $payload = $this->positions->getLivePositions();
+
+        return [
+            'vehicles' => $this->classifyPositions($payload),
+            'fetched_at' => $payload['fetched_at'],
+            'from_cache' => (bool) $payload['from_cache'],
+            'error' => $payload['error'],
+        ];
+    }
+
+    /**
+     * Clasifica si ordoneaza pozitiile dintr-un payload FleetLivePositionService:
+     * in miscare primele, apoi dupa prospetimea raportarii.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function classifyPositions(array $payload): array
+    {
+        $vehicles = [];
+        foreach ((array) ($payload['positions'] ?? []) as $position) {
+            if (is_array($position)) {
+                $vehicles[] = $this->classify($position);
+            }
+        }
+
+        usort($vehicles, static function (array $a, array $b): int {
+            $rank = ['moving' => 0, 'idle' => 1, 'parked' => 2, 'offline' => 3];
+            $byStatus = ($rank[$a['status']] ?? 9) <=> ($rank[$b['status']] ?? 9);
+            if ($byStatus !== 0) {
+                return $byStatus;
+            }
+            return ($a['age_seconds'] ?? PHP_INT_MAX) <=> ($b['age_seconds'] ?? PHP_INT_MAX);
+        });
+
+        return $vehicles;
     }
 
     /**

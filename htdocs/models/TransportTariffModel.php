@@ -381,6 +381,8 @@ class TransportTariffModel extends BaseModel
             ? (int) $payload['route_ref_id']
             : null;
         $validFrom = trim((string) ($payload['valid_from'] ?? ''));
+        $validTo = trim((string) ($payload['valid_to'] ?? ''));
+        $validTo = $validTo !== '' ? $validTo : null;
         $value = (float) ($payload['value'] ?? 0);
 
         if ($beneficiaryId <= 0) {
@@ -391,6 +393,9 @@ class TransportTariffModel extends BaseModel
         }
         if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $validFrom) !== 1) {
             throw new RuntimeException('Data de intrare in vigoare este invalida.');
+        }
+        if ($validTo !== null && (preg_match('/^\d{4}-\d{2}-\d{2}$/', $validTo) !== 1 || $validTo < $validFrom)) {
+            throw new RuntimeException('Data de sfarsit a intervalului este invalida (trebuie sa fie >= data de start).');
         }
         if ($value < 0) {
             throw new RuntimeException('Valoarea tarifului nu poate fi negativa.');
@@ -406,22 +411,45 @@ class TransportTariffModel extends BaseModel
         }
 
         try {
-            // A version starting on/after the new effective date would overlap.
-            $conflictStmt = $this->db->prepare('
-                SELECT id, valid_from FROM transport_tariff_versions
-                WHERE rule_signature = :sig AND valid_from >= :vf
-                ORDER BY valid_from ASC LIMIT 1
+            // Same-start correction: a new version starting exactly on the
+            // start date of the NEWEST existing version REPLACES it (the old
+            // one is removed, its predecessor re-opens, then the flow below
+            // closes/splits the timeline as usual).
+            $replacedVersionId = null;
+            $sameStartStmt = $this->db->prepare('
+                SELECT id FROM transport_tariff_versions
+                WHERE rule_signature = :sig AND valid_from = :vf
+                LIMIT 1
             ');
-            $conflictStmt->execute(['sig' => $signature, 'vf' => $validFrom]);
-            $conflict = $conflictStmt->fetch(PDO::FETCH_ASSOC);
-            if (is_array($conflict)) {
-                throw new RuntimeException(
-                    'Exista deja o versiune de tarif valabila de la ' . (string) $conflict['valid_from']
-                    . '. Sterge sau modifica intai versiunea programata.'
-                );
+            $sameStartStmt->execute(['sig' => $signature, 'vf' => $validFrom]);
+            $sameStart = $sameStartStmt->fetch(PDO::FETCH_ASSOC);
+            if (is_array($sameStart)) {
+                // deleteVersion() enforces "newest only" and throws otherwise.
+                $this->deleteVersion((int) $sameStart['id']);
+                $replacedVersionId = (int) $sameStart['id'];
             }
 
-            // Close the version currently covering the new effective date.
+            // The next version after the new start bounds what we may cover:
+            // an open-ended version cannot run into it, and a closed interval
+            // must end strictly before it starts.
+            $nextStmt = $this->db->prepare('
+                SELECT id, valid_from FROM transport_tariff_versions
+                WHERE rule_signature = :sig AND valid_from > :vf
+                ORDER BY valid_from ASC LIMIT 1
+            ');
+            $nextStmt->execute(['sig' => $signature, 'vf' => $validFrom]);
+            $next = $nextStmt->fetch(PDO::FETCH_ASSOC);
+            if (is_array($next)) {
+                $nextFrom = (string) $next['valid_from'];
+                if ($validTo === null || $validTo >= $nextFrom) {
+                    throw new RuntimeException(
+                        'Exista deja o versiune de tarif valabila de la ' . $nextFrom
+                        . '. Seteaza "Valabil pana la" inainte de aceasta data sau sterge intai versiunea respectiva.'
+                    );
+                }
+            }
+
+            // Close (or split) the version currently covering the new start.
             $currentStmt = $this->db->prepare('
                 SELECT * FROM transport_tariff_versions
                 WHERE rule_signature = :sig
@@ -434,15 +462,11 @@ class TransportTariffModel extends BaseModel
 
             $previousId = null;
             $previousValue = null;
+            $continuation = null;
             if (is_array($current)) {
                 $previousId = (int) $current['id'];
                 $previousValue = (float) $current['value'];
-
-                if ((string) $current['valid_from'] === $validFrom) {
-                    throw new RuntimeException(
-                        'Exista deja o versiune care incepe exact la ' . $validFrom . '.'
-                    );
-                }
+                $currentValidTo = $current['valid_to'] !== null ? (string) $current['valid_to'] : null;
 
                 $closeStmt = $this->db->prepare('
                     UPDATE transport_tariff_versions
@@ -450,6 +474,17 @@ class TransportTariffModel extends BaseModel
                     WHERE id = :id
                 ');
                 $closeStmt->execute(['vt' => $previousDay, 'ua' => $now, 'id' => $previousId]);
+
+                // A closed interval carved out of a longer period: the old
+                // tariff resumes automatically after the interval ends.
+                if ($validTo !== null && ($currentValidTo === null || $currentValidTo > $validTo)) {
+                    $continuation = [
+                        'value' => $previousValue,
+                        'valid_from' => (new DateTimeImmutable($validTo))->modify('+1 day')->format('Y-m-d'),
+                        'valid_to' => $currentValidTo,
+                        'source_version' => $current,
+                    ];
+                }
             }
 
             $component = self::COMPONENTS[$componentKey];
@@ -468,7 +503,7 @@ class TransportTariffModel extends BaseModel
                 ) VALUES (
                     :rule_signature, :beneficiar_id, :transport_type, :component_key, :unit,
                     :route_scope, :route_ref_id, :loc_incarcare_id, :zona_distributie_id,
-                    :value, :valid_from, NULL, :fuel_weight,
+                    :value, :valid_from, :valid_to, :fuel_weight,
                     :reference_fuel_price, :reference_captured_at,
                     "manual", :reason, :created_by, :created_at, :updated_at
                 )
@@ -485,6 +520,7 @@ class TransportTariffModel extends BaseModel
                 'zona_distributie_id' => $payload['zona_distributie_id'] ?? null,
                 'value' => $value,
                 'valid_from' => $validFrom,
+                'valid_to' => $validTo,
                 'fuel_weight' => $payload['fuel_weight'] ?? null,
                 'reference_fuel_price' => $payload['reference_fuel_price'] ?? null,
                 'reference_captured_at' => $payload['reference_captured_at'] ?? null,
@@ -496,6 +532,34 @@ class TransportTariffModel extends BaseModel
 
             $versionId = (int) $this->db->lastInsertId();
 
+            // Automatic resumption of the previous tariff after a closed interval.
+            $continuationId = null;
+            if ($continuation !== null) {
+                $source = (array) $continuation['source_version'];
+                $insert->execute([
+                    'rule_signature' => $signature,
+                    'beneficiar_id' => $beneficiaryId,
+                    'transport_type' => $transportType,
+                    'component_key' => $componentKey,
+                    'unit' => (string) $component['unit'],
+                    'route_scope' => (string) ($source['route_scope'] ?? ($payload['route_scope'] ?? 'none')),
+                    'route_ref_id' => $routeRefId,
+                    'loc_incarcare_id' => $source['loc_incarcare_id'] ?? ($payload['loc_incarcare_id'] ?? null),
+                    'zona_distributie_id' => $source['zona_distributie_id'] ?? ($payload['zona_distributie_id'] ?? null),
+                    'value' => (float) $continuation['value'],
+                    'valid_from' => (string) $continuation['valid_from'],
+                    'valid_to' => $continuation['valid_to'],
+                    'fuel_weight' => $source['fuel_weight'] ?? null,
+                    'reference_fuel_price' => $source['reference_fuel_price'] ?? null,
+                    'reference_captured_at' => $source['reference_captured_at'] ?? null,
+                    'reason' => 'Continuare automata a tarifului anterior dupa intervalul inchis la ' . $validTo . '.',
+                    'created_by' => $payload['created_by'] ?? null,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+                $continuationId = (int) $this->db->lastInsertId();
+            }
+
             if ($ownTransaction) {
                 $this->db->commit();
             }
@@ -504,6 +568,10 @@ class TransportTariffModel extends BaseModel
                 'version_id' => $versionId,
                 'previous_id' => $previousId,
                 'previous_value' => $previousValue,
+                'continuation_id' => $continuationId,
+                'continuation_from' => $continuation !== null ? (string) $continuation['valid_from'] : null,
+                'continuation_to' => $continuation !== null ? $continuation['valid_to'] : null,
+                'replaced_version_id' => $replacedVersionId,
             ];
         } catch (Throwable $exception) {
             if ($ownTransaction && $this->db->inTransaction()) {
@@ -568,12 +636,34 @@ class TransportTariffModel extends BaseModel
             $restoredValue = null;
             $restoredFrom = 'legacy';
             if (is_array($predecessor)) {
+                // Restore the predecessor's ORIGINAL intended end date (from
+                // its creation history), not blanket NULL: a predecessor that
+                // was itself a closed interval must stay closed.
+                $intendedStmt = $this->db->prepare("
+                    SELECT effective_to FROM transport_tariff_history
+                    WHERE tariff_version_id = :id AND action IN ('created','scheduled')
+                    ORDER BY id DESC LIMIT 1
+                ");
+                $intendedStmt->execute(['id' => (int) $predecessor['id']]);
+                $intendedRow = $intendedStmt->fetch(PDO::FETCH_ASSOC);
+                $intendedTo = is_array($intendedRow) && $intendedRow['effective_to'] !== null
+                    ? (string) $intendedRow['effective_to']
+                    : null;
+
                 $reopen = $this->db->prepare('
                     UPDATE transport_tariff_versions
-                    SET valid_to = NULL, updated_at = :ua
+                    SET valid_to = :vt, updated_at = :ua
                     WHERE id = :id
                 ');
-                $reopen->execute(['ua' => $now, 'id' => (int) $predecessor['id']]);
+                if ($intendedTo !== null) {
+                    $reopen->bindValue(':vt', $intendedTo);
+                } else {
+                    $reopen->bindValue(':vt', null, PDO::PARAM_NULL);
+                }
+                $reopen->bindValue(':ua', $now);
+                $reopen->bindValue(':id', (int) $predecessor['id'], PDO::PARAM_INT);
+                $reopen->execute();
+
                 $restoredValue = (float) $predecessor['value'];
                 $restoredFrom = 'version';
             }
@@ -895,11 +985,20 @@ class TransportTariffModel extends BaseModel
     }
 
     /** @return array<int,string> vehicle id => plate */
+    /**
+     * id => {plate, detail} for every vehicle. `detail` (marca + model) feeds
+     * the eligible-vehicles popover on the route tables.
+     *
+     * @return array<int,array{plate:string, detail:string}>
+     */
     public function getVehiclePlateMap(): array
     {
         $map = [];
-        foreach ($this->db->query('SELECT id, nr_inmatriculare FROM vehicule')->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
-            $map[(int) $row['id']] = trim((string) $row['nr_inmatriculare']);
+        foreach ($this->db->query('SELECT id, nr_inmatriculare, marca, model FROM vehicule')->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $map[(int) $row['id']] = [
+                'plate' => trim((string) $row['nr_inmatriculare']),
+                'detail' => trim(trim((string) ($row['marca'] ?? '')) . ' ' . trim((string) ($row['model'] ?? ''))),
+            ];
         }
 
         return $map;

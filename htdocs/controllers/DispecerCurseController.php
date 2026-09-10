@@ -253,6 +253,9 @@ class DispecerCurseController
             case 'races_activity':
                 $this->racesActivityAction();
                 return;
+            case 'live_gps':
+                $this->liveGpsAction();
+                return;
             case 'request_inactive_vehicle_approval':
                 $this->requestInactiveVehicleApprovalAction();
                 return;
@@ -482,6 +485,162 @@ class DispecerCurseController
                 'message' => 'Nu s-au putut incarca cursele inregistrate.',
             ], 500);
         }
+    }
+
+    /**
+     * JSON pentru banda "Curse in desfasurare (GPS live)" de pe lista de curse:
+     * vehiculele active acum conform SAS (in miscare sau oprite de putin timp),
+     * fiecare legat de cursa deschisa din aplicatie daca exista una recenta.
+     * Doar citire; refoloseste cache-ul SAS partajat (min. 20s intre interogari).
+     */
+    private function liveGpsAction(): void
+    {
+        try {
+            $service = new SasDashboardService($this->db);
+            if (!$service->credentialsAvailable()) {
+                $this->sendJson(['success' => true, 'credentials' => false, 'vehicles' => []]);
+                return;
+            }
+
+            $overview = $service->getLiveOverview();
+            // "In desfasurare" pentru dispecerat: in miscare acum sau oprit de
+            // putin timp (incarcare/descarcare); parcatele si offline nu apar.
+            $active = array_values(array_filter(
+                $overview['vehicles'],
+                static fn (array $vehicle): bool => in_array($vehicle['status'] ?? '', ['moving', 'idle'], true)
+            ));
+
+            $localIds = array_values(array_unique(array_filter(array_map(
+                static fn (array $vehicle): int => (int) ($vehicle['local_vehicle_id'] ?? 0),
+                $active
+            ))));
+            $openRaces = $this->ongoingRacesByVehicleId($localIds);
+            $latestRaces = $this->latestRacesByVehicleId($localIds);
+
+            $rows = [];
+            foreach ($active as $vehicle) {
+                $localId = (int) ($vehicle['local_vehicle_id'] ?? 0);
+                $race = $openRaces[$localId] ?? null;
+                // Sablon de precompletare pentru "adauga": ultima cursa a
+                // vehiculului da beneficiarul/tipul/soferul cu care lucreaza de obicei.
+                $latest = $race === null ? ($latestRaces[$localId] ?? null) : null;
+                $rows[] = [
+                    'plate' => (string) ($vehicle['registration'] ?? ''),
+                    'vehicle_label' => $vehicle['local_label'] ?? null,
+                    'local_vehicle_id' => $localId > 0 ? $localId : null,
+                    'driver' => $race['sofer_nume'] ?? null ?: ($vehicle['driver'] ?? null),
+                    'status' => (string) $vehicle['status'],
+                    'speed' => is_numeric($vehicle['speed'] ?? null) ? (int) round((float) $vehicle['speed']) : null,
+                    'place' => $vehicle['place'] ?? null,
+                    'age_seconds' => $vehicle['age_seconds'] ?? null,
+                    'race' => $race !== null ? [
+                        'id' => (int) $race['id'],
+                        'url' => $this->raceEditUrl((int) $race['id']),
+                        'tip_transport' => self::TRANSPORT_TYPES[(string) $race['tip_transport']] ?? (string) $race['tip_transport'],
+                        'data_inceput' => (string) ($race['data_inceput'] ?? ''),
+                        'beneficiar' => $race['beneficiar_nume'] ?? null,
+                    ] : null,
+                    'prefill' => $latest !== null ? [
+                        'beneficiar_id' => (int) ($latest['beneficiar_id'] ?? 0) ?: null,
+                        'tip_transport' => (string) ($latest['tip_transport'] ?? '') ?: null,
+                        'driver_id' => (int) ($latest['driver_id'] ?? 0) ?: null,
+                    ] : null,
+                ];
+            }
+
+            $this->sendJson([
+                'success' => true,
+                'credentials' => true,
+                'fetched_at' => $overview['fetched_at'],
+                'error' => $overview['error'],
+                'vehicles' => $rows,
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][live_gps] ' . $exception->getMessage());
+            $this->sendJson([
+                'success' => false,
+                'message' => 'Pozitiile GPS nu au putut fi incarcate.',
+            ], 502);
+        }
+    }
+
+    /**
+     * Cursa "in desfasurare" per vehicul: cea mai recenta cursa nestearsa
+     * inceputa in ultimele 3 zile si fara ora de sfarsit completata (sau cu
+     * sfarsitul azi/in viitor). Fereastra scurta evita legarea de curse vechi
+     * ramase deschise din lipsa de completare.
+     *
+     * @param array<int, int> $vehicleIds
+     * @return array<int, array<string, mixed>> vehicle_id -> cursa
+     */
+    private function ongoingRacesByVehicleId(array $vehicleIds): array
+    {
+        $vehicleIds = array_values(array_filter(array_map('intval', $vehicleIds), static fn (int $id): bool => $id > 0));
+        if ($vehicleIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($vehicleIds), '?'));
+        $statement = $this->db->prepare(
+            "SELECT c.id, c.vehicle_id, c.tip_transport, c.data_inceput,
+                    COALESCE(s.nume, '') AS sofer_nume,
+                    COALESCE(bt.nume, '') AS beneficiar_nume
+             FROM curse_dispecer c
+             LEFT JOIN soferi s ON s.id = c.driver_id
+             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+             WHERE c.deleted_at IS NULL
+               AND c.vehicle_id IN ($placeholders)
+               AND c.data_inceput >= DATE_SUB(CURDATE(), INTERVAL 3 DAY)
+               AND c.data_inceput <= CURDATE()
+               AND (c.ora_sfarsit IS NULL OR c.data_sfarsit IS NULL OR c.data_sfarsit >= CURDATE())
+             ORDER BY c.data_inceput DESC, c.id DESC"
+        );
+        $statement->execute($vehicleIds);
+
+        $byVehicle = [];
+        foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $race) {
+            $vehicleId = (int) $race['vehicle_id'];
+            if (!isset($byVehicle[$vehicleId])) {
+                $byVehicle[$vehicleId] = $race;
+            }
+        }
+
+        return $byVehicle;
+    }
+
+    /**
+     * Cea mai recenta cursa (indiferent de vechime) per vehicul — folosita ca
+     * sablon de precompletare cand vehiculul circula fara cursa deschisa.
+     *
+     * @param array<int, int> $vehicleIds
+     * @return array<int, array<string, mixed>> vehicle_id -> cursa
+     */
+    private function latestRacesByVehicleId(array $vehicleIds): array
+    {
+        $vehicleIds = array_values(array_filter(array_map('intval', $vehicleIds), static fn (int $id): bool => $id > 0));
+        if ($vehicleIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($vehicleIds), '?'));
+        $statement = $this->db->prepare(
+            "SELECT c.vehicle_id, c.tip_transport, c.beneficiar_id, c.driver_id
+             FROM curse_dispecer c
+             WHERE c.deleted_at IS NULL
+               AND c.vehicle_id IN ($placeholders)
+             ORDER BY c.data_inceput DESC, c.id DESC"
+        );
+        $statement->execute($vehicleIds);
+
+        $byVehicle = [];
+        foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $race) {
+            $vehicleId = (int) $race['vehicle_id'];
+            if (!isset($byVehicle[$vehicleId])) {
+                $byVehicle[$vehicleId] = $race;
+            }
+        }
+
+        return $byVehicle;
     }
 
     private function raceActivityPayload(array $race): array

@@ -17985,7 +17985,21 @@ button.dispatcher-datetime-picker-title:focus-visible {
     min-height: 58px;
     padding: 0 10px;
     border-right: 1px solid rgba(100, 116, 139, 0.22);
+    border-radius: 10px;
     text-align: center;
+    text-decoration: none;
+    transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+a.dashboard-stat:hover,
+a.dashboard-stat:focus-visible {
+    background: rgba(255, 255, 255, 0.65);
+    transform: translateY(-1px);
+    text-decoration: none;
+}
+
+a.dashboard-stat:hover span {
+    text-decoration: underline;
 }
 
 .dashboard-stat:last-child {
@@ -18496,6 +18510,27 @@ button.dispatcher-datetime-picker-title:focus-visible {
 
 .dashboard-vehicle-pill i {
     color: #071735;
+}
+
+.dashboard-vehicle-assembly {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-width: 100%;
+}
+
+.dashboard-vehicle-assembly-plus {
+    color: #5a6b85;
+    font-weight: 900;
+}
+
+.dashboard-table-reason-source {
+    display: block;
+    margin-top: 3px;
+    color: #5a6b85;
+    font-size: 11px;
+    font-weight: 700;
 }
 
 .dashboard-driver-cell {
