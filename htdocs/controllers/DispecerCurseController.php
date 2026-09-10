@@ -2086,6 +2086,18 @@ class DispecerCurseController
                 'loc_livrare',
                 'loc_livrare_cursa',
             ];
+
+            // Exceptie: pe rutele Primar cu puncte extinse, garajul de plecare este
+            // comandat de selectul `loc_plecare_ruta`, iar inputul `loc_plecare` este
+            // dezactivat de formular (deci absent din POST). Absenta lui inseamna aici
+            // "condus de alt camp", nu "neatins": pastrarea valorii stocate ar anula
+            // schimbarea garajului facuta de dispecer.
+            if (array_key_exists('loc_plecare_ruta', $post)) {
+                $preserveWhenNotPosted = array_values(
+                    array_diff($preserveWhenNotPosted, ['loc_plecare'])
+                );
+            }
+
             foreach ($preserveWhenNotPosted as $field) {
                 if (!array_key_exists($field, $post)) {
                     $data[$field] = $existing[$field] ?? null;
