@@ -236,11 +236,18 @@ $hasVersion = $active !== null;
     foreach ($primaryRoutes as $modalRoute) {
         $modalRouteId = (int) $modalRoute['id'];
         $modalVersion = $activeVersion('cost_cursa', $modalRouteId);
+        $modalLabel = ($extendedRoutes && trim((string) ($modalRoute['garaj_plecare'] ?? '')) !== ''
+                ? (string) $modalRoute['garaj_plecare'] . ' → ' : '')
+            . (string) $modalRoute['loc_nume'] . ' → ' . (string) $modalRoute['zona_nume'];
+        // Locul de întoarcere — același widget ca în tabelul de rute.
+        $modalLabelHtml = '<strong>' . e($modalLabel) . '</strong>';
+        if ($extendedRoutes && trim((string) ($modalRoute['garaj_intoarcere'] ?? '')) !== '') {
+            $modalLabelHtml .= ' → ' . $routePointsCell($modalRoute['garaj_intoarcere'] ?? null);
+        }
         $routesModal['rows'][] = [
             'route_id' => $modalRouteId,
-            'label' => ($extendedRoutes && trim((string) ($modalRoute['garaj_plecare'] ?? '')) !== ''
-                    ? (string) $modalRoute['garaj_plecare'] . ' → ' : '')
-                . (string) $modalRoute['loc_nume'] . ' → ' . (string) $modalRoute['zona_nume'],
+            'label' => $modalLabel,
+            'label_html' => $modalLabelHtml,
             'values' => [
                 'cost_cursa' => [
                     'current' => $modalVersion !== null ? (float) $modalVersion['value'] : (float) ($modalRoute['cost_cursa'] ?? 0),

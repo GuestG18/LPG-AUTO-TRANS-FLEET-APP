@@ -16,6 +16,7 @@ $vehicleOptions = $fuelData['vehicle_options'] ?? [];
 $comparison = is_array($fuelData['comparison'] ?? null) ? $fuelData['comparison'] : null;
 $vehicleComparison = is_array($fuelData['vehicle_comparison'] ?? null) ? $fuelData['vehicle_comparison'] : [];
 $vehicleDailyCharts = is_array($fuelData['vehicle_daily_charts'] ?? null) ? $fuelData['vehicle_daily_charts'] : [];
+$priceEvolution = is_array($fuelData['price_evolution'] ?? null) ? $fuelData['price_evolution'] : [];
 $selectedVehicles = is_array($filters['vehicles'] ?? null) ? array_values(array_filter(array_map('strval', $filters['vehicles']), static fn (string $v): bool => trim($v) !== '')) : [];
 $seriesPalette = ['#1d6cff', '#f59e0b', '#22c55e', '#8b5cf6', '#ef4444', '#0891b2'];
 $compare = is_array($compare ?? null) ? $compare : [
@@ -346,6 +347,98 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
         </tr>
         <?php
     }
+};
+$renderPriceChart = static function (array $series, string $lineColor) use ($filters): string {
+    $points = is_array($series['points'] ?? null) ? array_values($series['points']) : [];
+    if ($points === []) {
+        return '<div class="fuel-empty-chart">Nu există prețuri CardOil în perioada selectată.</div>';
+    }
+
+    $values = array_map(static fn (array $point): float => (float) ($point['value'] ?? 0), $points);
+    $minValue = min($values);
+    $maxValue = max($values);
+    $span = $maxValue - $minValue;
+    // Scara stransa: variatiile de cativa bani trebuie sa fie vizibile.
+    if ($span < 0.2) {
+        $center = ($minValue + $maxValue) / 2;
+        $minValue = $center - 0.1;
+        $maxValue = $center + 0.1;
+        $span = 0.2;
+    }
+    $yMin = max(0.0, $minValue - ($span * 0.15));
+    $yMax = $maxValue + ($span * 0.15);
+    $ySpan = max(0.0001, $yMax - $yMin);
+
+    $width = 760;
+    $height = 220;
+    $left = 56;
+    $right = 16;
+    $top = 14;
+    $bottom = 30;
+    $plotWidth = $width - $left - $right;
+    $plotHeight = $height - $top - $bottom;
+
+    $startTs = strtotime((string) ($filters['date_from'] ?? '') . ' 00:00:00') ?: 0;
+    $endTs = strtotime((string) ($filters['date_to'] ?? '') . ' 23:59:59') ?: ($startTs + 86400);
+    $tsSpan = max(1, $endTs - $startTs);
+
+    $xFor = static function (string $date) use ($startTs, $tsSpan, $left, $plotWidth): float {
+        $ts = strtotime($date . ' 12:00:00') ?: $startTs;
+        $ratio = min(1.0, max(0.0, ($ts - $startTs) / $tsSpan));
+        return $left + ($ratio * $plotWidth);
+    };
+    $yFor = static function (float $value) use ($yMin, $ySpan, $top, $plotHeight): float {
+        return $top + ($plotHeight - ((($value - $yMin) / $ySpan) * $plotHeight));
+    };
+
+    $grid = '';
+    for ($i = 0; $i <= 4; $i++) {
+        $value = $yMin + (($yMax - $yMin) / 4) * $i;
+        $y = round($yFor($value), 2);
+        $grid .= '<line x1="' . $left . '" y1="' . $y . '" x2="' . ($width - $right) . '" y2="' . $y . '" class="fuel-chart-gridline"/>';
+        $grid .= '<text x="8" y="' . ($y + 4) . '" class="fuel-chart-axis">' . e(format_number_ro($value, 2)) . '</text>';
+    }
+
+    $averageLine = '';
+    $avg = (float) ($series['avg'] ?? 0);
+    if ($avg > 0 && $avg >= $yMin && $avg <= $yMax) {
+        $avgY = round($yFor($avg), 2);
+        $averageLine = '<line x1="' . $left . '" y1="' . $avgY . '" x2="' . ($width - $right) . '" y2="' . $avgY . '" class="fuel-chart-average"/>';
+    }
+
+    $svgPoints = [];
+    $dots = '';
+    foreach ($points as $point) {
+        $x = round($xFor((string) ($point['date'] ?? '')), 2);
+        $y = round($yFor((float) ($point['value'] ?? 0)), 2);
+        $svgPoints[] = $x . ',' . $y;
+        $dots .= '<circle cx="' . $x . '" cy="' . $y . '" r="3.5" style="fill: ' . e($lineColor) . ';">'
+            . '<title>' . e((string) ($point['label'] ?? '') . ': ' . format_number_ro((float) ($point['value'] ?? 0), 4) . ' lei/L · ' . format_number_ro((float) ($point['liters'] ?? 0), 0) . ' L') . '</title>'
+            . '</circle>';
+    }
+
+    $line = count($svgPoints) > 1
+        ? '<polyline points="' . e(implode(' ', $svgPoints)) . '" class="fuel-chart-series" style="stroke: ' . e($lineColor) . ';"/>'
+        : '';
+
+    $labels = '';
+    $count = count($points);
+    $labelEvery = max(1, (int) ceil($count / 6));
+    foreach ($points as $index => $point) {
+        if ($index % $labelEvery !== 0 && $index !== $count - 1) {
+            continue;
+        }
+        $x = round($xFor((string) ($point['date'] ?? '')), 2);
+        $labels .= '<text x="' . $x . '" y="' . ($height - 8) . '" text-anchor="middle" class="fuel-chart-axis">' . e((string) ($point['label'] ?? '')) . '</text>';
+    }
+
+    return '<svg class="fuel-price-chart" viewBox="0 0 ' . $width . ' ' . $height . '" role="img" aria-label="Evolutie pret">'
+        . $grid
+        . $averageLine
+        . $line
+        . $dots
+        . $labels
+        . '</svg>';
 };
 $renderLineChart = static function (array $chart): string {
     $points = $chart['points'] ?? [];
@@ -1065,6 +1158,38 @@ $donutStyle = static function (array $items): string {
                         <?php endif; ?>
                     </article>
                 </div>
+
+                <article class="fuel-card fuel-price-card">
+                    <div class="fuel-card-header">
+                        <h2>Evoluție preț carburant (lei/L)</h2>
+                        <span class="fuel-select-chip">Prețuri CardOil · medie zilnică ponderată cu litrii</span>
+                    </div>
+                    <div class="fuel-price-grid">
+                        <?php
+                        $priceSections = [
+                            ['key' => 'motorina', 'title' => 'Motorină', 'color' => '#1d6cff'],
+                            ['key' => 'adblue', 'title' => 'AdBlue', 'color' => '#0891b2'],
+                        ];
+                        ?>
+                        <?php foreach ($priceSections as $section): ?>
+                            <?php $priceSeries = is_array($priceEvolution[$section['key']] ?? null) ? $priceEvolution[$section['key']] : ['points' => []]; ?>
+                            <div class="fuel-price-panel">
+                                <div class="fuel-price-panel-header">
+                                    <strong><span class="fuel-dot" style="background: <?= e((string) $section['color']) ?>"></span> <?= e((string) $section['title']) ?></strong>
+                                    <?php if (($priceSeries['points'] ?? []) !== []): ?>
+                                        <div class="fuel-price-stats">
+                                            <span>Ultimul: <strong><?= e(format_number_ro((float) ($priceSeries['latest'] ?? 0), 2)) ?></strong></span>
+                                            <span>Min: <?= e(format_number_ro((float) ($priceSeries['min'] ?? 0), 2)) ?></span>
+                                            <span>Max: <?= e(format_number_ro((float) ($priceSeries['max'] ?? 0), 2)) ?></span>
+                                            <span>Medie: <?= e(format_number_ro((float) ($priceSeries['avg'] ?? 0), 2)) ?></span>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                                <?= $renderPriceChart($priceSeries, (string) $section['color']) ?>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </article>
 
                 <div class="fuel-table-split">
                     <article class="fuel-card">

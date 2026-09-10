@@ -1537,6 +1537,90 @@ class FuelModel extends BaseModel
         return $vehicles;
     }
 
+    /**
+     * Evolutia pretului unitar (lei/L) pe zile, pentru motorina si AdBlue.
+     *
+     * Media zilnica este ponderata cu litrii alimentati. Se folosesc DOAR
+     * randurile source_type='api' cu unit_price valid — pretul CardOil este
+     * autoritar; bonurile manuale (numerar/card personal) au pret de pompa
+     * si ar distorsiona curba (aceeasi regula ca in FuelPriceIndexService).
+     */
+    public function getPriceEvolution(array $filters): array
+    {
+        $this->ensureSchema();
+
+        $fuelTypeFilter = trim((string) ($filters['fuel_type'] ?? ''));
+        $result = [];
+
+        foreach (['motorina', 'adblue'] as $type) {
+            $series = [
+                'points' => [],
+                'latest' => 0.0,
+                'min' => 0.0,
+                'max' => 0.0,
+                'avg' => 0.0,
+            ];
+
+            if ($fuelTypeFilter !== '' && $fuelTypeFilter !== $type) {
+                $result[$type] = $series;
+                continue;
+            }
+
+            $typeFilters = $filters;
+            $typeFilters['fuel_type'] = $type;
+            $where = $this->buildFillupWhere($typeFilters, 'price_' . $type, false);
+
+            $stmt = $this->db->prepare("
+                SELECT
+                    DATE(f.fillup_datetime) AS day_key,
+                    SUM(f.unit_price * f.quantity_liters) / SUM(f.quantity_liters) AS price,
+                    SUM(f.quantity_liters) AS liters
+                FROM fuel_fillups f
+                " . $where['where'] . "
+                  AND f.source_type = 'api'
+                  AND f.unit_price IS NOT NULL
+                  AND f.unit_price > 0
+                  AND f.quantity_liters > 0
+                GROUP BY DATE(f.fillup_datetime)
+                ORDER BY day_key ASC
+            ");
+            $this->bindParams($stmt, $where['params']);
+            $stmt->execute();
+
+            $weightedSum = 0.0;
+            $totalLiters = 0.0;
+            foreach ($stmt->fetchAll() as $row) {
+                $dayKey = (string) ($row['day_key'] ?? '');
+                $price = round((float) ($row['price'] ?? 0), 4);
+                $liters = (float) ($row['liters'] ?? 0);
+                if ($dayKey === '' || $price <= 0.0) {
+                    continue;
+                }
+
+                $series['points'][] = [
+                    'date' => $dayKey,
+                    'label' => (new DateTimeImmutable($dayKey))->format('d.m'),
+                    'value' => $price,
+                    'liters' => round($liters, 2),
+                ];
+                $weightedSum += $price * $liters;
+                $totalLiters += $liters;
+            }
+
+            if ($series['points'] !== []) {
+                $values = array_map(static fn (array $point): float => (float) $point['value'], $series['points']);
+                $series['latest'] = (float) end($values);
+                $series['min'] = min($values);
+                $series['max'] = max($values);
+                $series['avg'] = $totalLiters > 0 ? round($weightedSum / $totalLiters, 4) : 0.0;
+            }
+
+            $result[$type] = $series;
+        }
+
+        return $result;
+    }
+
     public function getComparisonData(array $filtersA, array $filtersB): array
     {
         $this->ensureSchema();

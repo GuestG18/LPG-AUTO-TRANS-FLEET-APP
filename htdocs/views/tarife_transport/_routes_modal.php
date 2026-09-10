@@ -55,7 +55,11 @@ $rmNextMonthIso = (new DateTimeImmutable('first day of next month'))->format('Y-
                         <tbody>
                             <?php foreach ($routesModal['rows'] as $rmRow): ?>
                                 <tr>
-                                    <td style="white-space:normal;min-width:150px;"><strong><?= e((string) $rmRow['label']) ?></strong></td>
+                                    <td style="white-space:normal;min-width:150px;">
+                                        <?= isset($rmRow['label_html'])
+                                            ? $rmRow['label_html']
+                                            : '<strong>' . e((string) $rmRow['label']) . '</strong>' ?>
+                                    </td>
                                     <?php foreach ($routesModal['columns'] as $rmColumn): ?>
                                         <?php $rmCell = $rmRow['values'][$rmColumn['key']] ?? null; ?>
                                         <td style="min-width:150px;">

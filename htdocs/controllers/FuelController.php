@@ -72,6 +72,7 @@ class FuelController
             $data['comparison'] = $this->model->getComparisonData($compare['filters_a'], $compare['filters_b']);
             $data['vehicle_comparison'] = $this->model->getConsumptionByVehicle($filters);
             $data['vehicle_daily_charts'] = $this->model->getVehicleDailyCharts($filters);
+            $data['price_evolution'] = $this->model->getPriceEvolution($filters);
         } catch (Throwable $exception) {
             error_log('[FuelController][index] ' . $exception->getMessage());
             flash_set('danger', 'Nu s-au putut incarca datele pentru carburanti.');
@@ -100,6 +101,7 @@ class FuelController
                 'comparison' => null,
                 'vehicle_comparison' => [],
                 'vehicle_daily_charts' => [],
+                'price_evolution' => [],
             ];
         }
 
