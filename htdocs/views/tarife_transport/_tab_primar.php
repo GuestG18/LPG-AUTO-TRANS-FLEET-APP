@@ -119,17 +119,32 @@ $hasVersion = $active !== null;
 <section class="tt-card">
     <div class="tt-card-head">
         <h2 class="tt-card-title">Rute configurate pentru Primar km</h2>
-        <a class="tt-btn tt-btn-sm" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $selectedBeneficiaryId])) ?>">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Rută nouă
-        </a>
+        <span style="display:inline-flex;align-items:center;gap:8px;">
+            <?php if ($canManage && $primaryRoutes !== []): ?>
+                <button type="button" class="tt-btn tt-btn-sm" data-tt-routes-open>
+                    <i class="bi bi-pencil-square" aria-hidden="true"></i> Modifică tarif
+                </button>
+            <?php endif; ?>
+            <a class="tt-btn tt-btn-sm" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'config', 'beneficiar_edit_id' => $selectedBeneficiaryId])) ?>">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> Rută nouă
+            </a>
+        </span>
     </div>
 
+    <?php $extendedRoutes = !empty($beneficiary['rute_primar_puncte_extinse']); ?>
     <div class="tt-table-wrap">
         <table class="tt-table">
             <thead>
                 <tr>
-                    <th>Loc încărcare</th>
-                    <th>Zonă descărcare</th>
+                    <?php if ($extendedRoutes): ?>
+                        <th>Loc plecare</th>
+                        <th>Loc încărcare</th>
+                        <th>Loc descărcare</th>
+                        <th>Loc întoarcere</th>
+                    <?php else: ?>
+                        <th>Loc încărcare</th>
+                        <th>Zonă descărcare</th>
+                    <?php endif; ?>
                     <th>Km tarifare (agreat)</th>
                     <th>Cost / cursă (override)</th>
                     <th>Aplică cost cursă</th>
@@ -140,7 +155,7 @@ $hasVersion = $active !== null;
             </thead>
             <tbody>
                 <?php if ($primaryRoutes === []): ?>
-                    <tr><td colspan="8" class="tt-empty-cell">
+                    <tr><td colspan="<?= $extendedRoutes ? 10 : 8 ?>" class="tt-empty-cell">
                         Nu există încă rute Primar configurate pentru acest beneficiar.
                     </td></tr>
                 <?php else: ?>
@@ -154,8 +169,15 @@ $hasVersion = $active !== null;
                         $applies = !empty($route['aplica_cost_cursa']) && $overrideValue > 0;
                         ?>
                         <tr>
-                            <td><?= e((string) $route['loc_nume']) ?></td>
-                            <td><?= e((string) $route['zona_nume']) ?></td>
+                            <?php if ($extendedRoutes): ?>
+                                <td><?= trim((string) ($route['garaj_plecare'] ?? '')) !== '' ? e((string) $route['garaj_plecare']) : '<span class="tt-dash">–</span>' ?></td>
+                                <td><?= e((string) $route['loc_nume']) ?></td>
+                                <td><?= e((string) $route['zona_nume']) ?></td>
+                                <td><?= $routePointsCell($route['garaj_intoarcere'] ?? null) ?></td>
+                            <?php else: ?>
+                                <td><?= e((string) $route['loc_nume']) ?></td>
+                                <td><?= e((string) $route['zona_nume']) ?></td>
+                            <?php endif; ?>
                             <td class="tt-num">
                                 <?php if (!empty($route['km_agreati_manual'])): ?>
                                     <span class="tt-badge tt-badge-muted">Manual în cursă</span>
@@ -203,6 +225,33 @@ $hasVersion = $active !== null;
             </tbody>
         </table>
     </div>
+
+    <?php
+    $routesModal = [
+        'transport' => 'primar',
+        'title' => 'Modifică tarife — Rute Primar km (cost / cursă)',
+        'columns' => [['key' => 'cost_cursa', 'label' => 'Cost / cursă', 'unit' => 'lei/cursă']],
+        'rows' => [],
+    ];
+    foreach ($primaryRoutes as $modalRoute) {
+        $modalRouteId = (int) $modalRoute['id'];
+        $modalVersion = $activeVersion('cost_cursa', $modalRouteId);
+        $routesModal['rows'][] = [
+            'route_id' => $modalRouteId,
+            'label' => ($extendedRoutes && trim((string) ($modalRoute['garaj_plecare'] ?? '')) !== ''
+                    ? (string) $modalRoute['garaj_plecare'] . ' → ' : '')
+                . (string) $modalRoute['loc_nume'] . ' → ' . (string) $modalRoute['zona_nume'],
+            'values' => [
+                'cost_cursa' => [
+                    'current' => $modalVersion !== null ? (float) $modalVersion['value'] : (float) ($modalRoute['cost_cursa'] ?? 0),
+                    'period' => $versionPeriod($modalVersion),
+                    'enabled' => true,
+                ],
+            ],
+        ];
+    }
+    include __DIR__ . '/_routes_modal.php';
+    ?>
 
     <div class="tt-note-strip">
         <i class="bi bi-info-circle-fill" aria-hidden="true"></i>

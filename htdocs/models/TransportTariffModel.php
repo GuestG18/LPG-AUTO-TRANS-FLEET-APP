@@ -424,8 +424,11 @@ class TransportTariffModel extends BaseModel
             $sameStartStmt->execute(['sig' => $signature, 'vf' => $validFrom]);
             $sameStart = $sameStartStmt->fetch(PDO::FETCH_ASSOC);
             if (is_array($sameStart)) {
-                // deleteVersion() enforces "newest only" and throws otherwise.
-                $this->deleteVersion((int) $sameStart['id']);
+                // In-place correction: the replaced version may sit in the
+                // middle of the timeline (e.g. a closed interval followed by
+                // its continuation) — the checks below re-validate the
+                // resulting timeline against the successor.
+                $this->deleteVersion((int) $sameStart['id'], true);
                 $replacedVersionId = (int) $sameStart['id'];
             }
 
@@ -446,6 +449,53 @@ class TransportTariffModel extends BaseModel
                         'Exista deja o versiune de tarif valabila de la ' . $nextFrom
                         . '. Seteaza "Valabil pana la" inainte de aceasta data sau sterge intai versiunea respectiva.'
                     );
+                }
+            }
+
+            // First versioning of this component: preserve the current legacy
+            // value as a MIGRATION BASELINE, so a later delete of the new
+            // version has a real predecessor to fall back to (otherwise the
+            // legacy sync would have overwritten the only copy of it).
+            $anyStmt = $this->db->prepare('SELECT COUNT(*) FROM transport_tariff_versions WHERE rule_signature = :sig');
+            $anyStmt->execute(['sig' => $signature]);
+            $baselineValue = null;
+            if ((int) $anyStmt->fetchColumn() === 0 && $validFrom > self::MIGRATION_BASELINE) {
+                $baselineValue = $this->readLegacyValue(
+                    $beneficiaryId,
+                    $componentKey,
+                    $routeRefId,
+                    (string) ($payload['route_scope'] ?? 'none')
+                );
+                if ($baselineValue !== null) {
+                    $component = self::COMPONENTS[$componentKey];
+                    $baselineInsert = $this->db->prepare('
+                        INSERT INTO transport_tariff_versions (
+                            rule_signature, beneficiar_id, transport_type, component_key, unit,
+                            route_scope, route_ref_id, loc_incarcare_id, zona_distributie_id,
+                            value, valid_from, valid_to, source, reason, created_at, updated_at
+                        ) VALUES (
+                            :sig, :b, :tt, :ck, :unit, :rs, :rr, :loc, :zona,
+                            :val, :vf, :vt, "migration",
+                            "Baseline creat automat din configurarea existenta la prima versionare.",
+                            :ca, :ua
+                        )
+                    ');
+                    $baselineInsert->execute([
+                        'sig' => $signature,
+                        'b' => $beneficiaryId,
+                        'tt' => (string) ($payload['transport_type'] ?? ($component['transport_type'] ?? 'primar')),
+                        'ck' => $componentKey,
+                        'unit' => (string) $component['unit'],
+                        'rs' => (string) ($payload['route_scope'] ?? 'none'),
+                        'rr' => $routeRefId,
+                        'loc' => $payload['loc_incarcare_id'] ?? null,
+                        'zona' => $payload['zona_distributie_id'] ?? null,
+                        'val' => $baselineValue,
+                        'vf' => self::MIGRATION_BASELINE,
+                        'vt' => $previousDay,
+                        'ca' => $now,
+                        'ua' => $now,
+                    ]);
                 }
             }
 
@@ -483,6 +533,17 @@ class TransportTariffModel extends BaseModel
                         'valid_from' => (new DateTimeImmutable($validTo))->modify('+1 day')->format('Y-m-d'),
                         'valid_to' => $currentValidTo,
                         'source_version' => $current,
+                    ];
+                }
+            } elseif ($baselineValue !== null) {
+                // The auto-created baseline plays the predecessor role.
+                $previousValue = (float) $baselineValue;
+                if ($validTo !== null) {
+                    $continuation = [
+                        'value' => $previousValue,
+                        'valid_from' => (new DateTimeImmutable($validTo))->modify('+1 day')->format('Y-m-d'),
+                        'valid_to' => null,
+                        'source_version' => [],
                     ];
                 }
             }
@@ -534,6 +595,18 @@ class TransportTariffModel extends BaseModel
 
             // Automatic resumption of the previous tariff after a closed interval.
             $continuationId = null;
+            if ($continuation !== null) {
+                // Never duplicate an existing successor (e.g. correcting a
+                // middle interval whose continuation already exists).
+                $dupStmt = $this->db->prepare('
+                    SELECT COUNT(*) FROM transport_tariff_versions
+                    WHERE rule_signature = :sig AND valid_from = :vf
+                ');
+                $dupStmt->execute(['sig' => $signature, 'vf' => (string) $continuation['valid_from']]);
+                if ((int) $dupStmt->fetchColumn() > 0) {
+                    $continuation = null;
+                }
+            }
             if ($continuation !== null) {
                 $source = (array) $continuation['source_version'];
                 $insert->execute([
@@ -591,7 +664,7 @@ class TransportTariffModel extends BaseModel
      *
      * @return array{version: array<string,mixed>, restored_value: ?float, restored_from: string}
      */
-    public function deleteVersion(int $versionId): array
+    public function deleteVersion(int $versionId, bool $allowMiddle = false): array
     {
         $version = $this->getVersionById($versionId);
         if ($version === null) {
@@ -600,18 +673,23 @@ class TransportTariffModel extends BaseModel
 
         $signature = (string) $version['rule_signature'];
 
-        $newerStmt = $this->db->prepare('
-            SELECT id, valid_from FROM transport_tariff_versions
-            WHERE rule_signature = :sig AND id <> :id AND valid_from >= :vf
-            ORDER BY valid_from DESC LIMIT 1
-        ');
-        $newerStmt->execute(['sig' => $signature, 'id' => $versionId, 'vf' => (string) $version['valid_from']]);
-        $newer = $newerStmt->fetch(PDO::FETCH_ASSOC);
-        if (is_array($newer)) {
-            throw new RuntimeException(
-                'Doar cea mai recenta versiune poate fi stearsa. Sterge intai versiunea valabila de la '
-                . (string) $newer['valid_from'] . '.'
-            );
+        // Public deletes accept only the NEWEST version of a timeline (no
+        // holes). The same-start correction flow may replace a MIDDLE version
+        // in place — createVersion re-validates the timeline right after.
+        if (!$allowMiddle) {
+            $newerStmt = $this->db->prepare('
+                SELECT id, valid_from FROM transport_tariff_versions
+                WHERE rule_signature = :sig AND id <> :id AND valid_from >= :vf
+                ORDER BY valid_from DESC LIMIT 1
+            ');
+            $newerStmt->execute(['sig' => $signature, 'id' => $versionId, 'vf' => (string) $version['valid_from']]);
+            $newer = $newerStmt->fetch(PDO::FETCH_ASSOC);
+            if (is_array($newer)) {
+                throw new RuntimeException(
+                    'Doar cea mai recenta versiune poate fi stearsa. Sterge intai versiunea valabila de la '
+                    . (string) $newer['valid_from'] . '.'
+                );
+            }
         }
 
         $previousDay = (new DateTimeImmutable((string) $version['valid_from']))->modify('-1 day')->format('Y-m-d');
@@ -694,6 +772,140 @@ class TransportTariffModel extends BaseModel
             }
             throw $exception;
         }
+    }
+
+    /**
+     * Current value of a component in the LEGACY configuration tables —
+     * used to seed the automatic migration baseline at first versioning.
+     */
+    private function readLegacyValue(int $beneficiaryId, string $componentKey, ?int $routeRefId, string $routeScope): ?float
+    {
+        try {
+            if ($routeRefId === null || $routeRefId <= 0) {
+                $allowed = [
+                    'pret_km', 'pret_tona',
+                    'pret_ora_aspirare', 'pret_km_dislocare', 'pret_tona_livrata',
+                    'pret_tona_aspirata_lichida', 'pret_tona_aspirata_gazoasa',
+                ];
+                if (!in_array($componentKey, $allowed, true)) {
+                    return null;
+                }
+                $stmt = $this->db->prepare('SELECT ' . $componentKey . ' FROM configurare_beneficiari_transport WHERE id = :id');
+                $stmt->execute(['id' => $beneficiaryId]);
+            } else {
+                if (!in_array($componentKey, ['tarif_tona', 'cost_extra_km', 'cost_cursa'], true)) {
+                    return null;
+                }
+                $table = ($componentKey === 'cost_cursa' && $routeScope === 'primar')
+                    ? 'configurare_rute_primar'
+                    : 'configurare_rute_distributie';
+                $stmt = $this->db->prepare('SELECT ' . $componentKey . ' FROM ' . $table . ' WHERE id = :id AND beneficiar_id = :b');
+                $stmt->execute(['id' => $routeRefId, 'b' => $beneficiaryId]);
+            }
+
+            $value = $stmt->fetchColumn();
+
+            return $value !== false && $value !== null ? (float) $value : null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Push the EFFECTIVE tariff values (per today, or a given date) back into
+     * the legacy configuration tables that Dispecer curse and Configurare
+     * transport still read: configurare_beneficiari_transport (beneficiary
+     * rates) and configurare_rute_primar / configurare_rute_distributie
+     * (route rates). Only components with a version covering the date are
+     * written — fields never versioned keep their legacy value.
+     *
+     * Consequence by design: once a component is managed here, "Administrare
+     * tarife" is the source of truth — a manual edit of the same field in
+     * Configurare transport is overwritten at the next sync.
+     *
+     * @return int number of UPDATE statements executed
+     */
+    public function syncLegacyValues(int $beneficiaryId, ?string $date = null): int
+    {
+        if ($beneficiaryId <= 0 || !$this->schemaReady()) {
+            return 0;
+        }
+        $date = $date ?? date('Y-m-d');
+
+        $stmt = $this->db->prepare('
+            SELECT rule_signature, component_key, route_scope, route_ref_id, value
+            FROM transport_tariff_versions
+            WHERE beneficiar_id = :b
+              AND valid_from <= :d1
+              AND (valid_to IS NULL OR valid_to >= :d2)
+            ORDER BY valid_from ASC, id ASC
+        ');
+        $stmt->execute(['b' => $beneficiaryId, 'd1' => $date, 'd2' => $date]);
+
+        // Last row per signature wins (latest valid_from covering the date).
+        $effective = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $effective[(string) $row['rule_signature']] = $row;
+        }
+        if ($effective === []) {
+            return 0;
+        }
+
+        $beneficiaryColumns = [
+            'pret_km', 'pret_tona',
+            'pret_ora_aspirare', 'pret_km_dislocare', 'pret_tona_livrata',
+            'pret_tona_aspirata_lichida', 'pret_tona_aspirata_gazoasa',
+        ];
+        $routeColumns = ['tarif_tona', 'cost_extra_km', 'cost_cursa'];
+
+        $updates = 0;
+        $beneficiarySet = [];
+        foreach ($effective as $row) {
+            $componentKey = (string) $row['component_key'];
+            $routeRefId = (int) ($row['route_ref_id'] ?? 0);
+            $value = (float) $row['value'];
+
+            if ($routeRefId <= 0 && in_array($componentKey, $beneficiaryColumns, true)) {
+                $beneficiarySet[$componentKey] = $value;
+                continue;
+            }
+
+            if ($routeRefId > 0 && in_array($componentKey, $routeColumns, true)) {
+                $table = ($componentKey === 'cost_cursa' && (string) $row['route_scope'] === 'primar')
+                    ? 'configurare_rute_primar'
+                    : 'configurare_rute_distributie';
+                $update = $this->db->prepare('
+                    UPDATE ' . $table . '
+                    SET ' . $componentKey . ' = :v, updated_at = :ua
+                    WHERE id = :id AND beneficiar_id = :b
+                ');
+                $update->execute([
+                    'v' => number_format($value, 2, '.', ''),
+                    'ua' => date('Y-m-d H:i:s'),
+                    'id' => $routeRefId,
+                    'b' => $beneficiaryId,
+                ]);
+                $updates += $update->rowCount() > 0 ? 1 : 0;
+            }
+        }
+
+        if ($beneficiarySet !== []) {
+            $assignments = [];
+            $params = ['b' => $beneficiaryId, 'ua' => date('Y-m-d H:i:s')];
+            foreach ($beneficiarySet as $column => $value) {
+                $assignments[] = $column . ' = :v_' . $column;
+                $params['v_' . $column] = number_format($value, 2, '.', '');
+            }
+            $update = $this->db->prepare('
+                UPDATE configurare_beneficiari_transport
+                SET ' . implode(', ', $assignments) . ', updated_at = :ua
+                WHERE id = :b
+            ');
+            $update->execute($params);
+            $updates += $update->rowCount() > 0 ? 1 : 0;
+        }
+
+        return $updates;
     }
 
     // -----------------------------------------------------------------

@@ -156,6 +156,56 @@ $vehicleChips = static function (?string $csv) use ($vehiclePlates, &$vehicleChi
     return $html;
 };
 
+/**
+ * "Loc întoarcere" cell for 4-point Primar routes (beneficiaries with
+ * rute_primar_puncte_extinse): plain text for a single point, the same
+ * popover widget as the vehicle lists for several return points.
+ */
+$routePointsCell = static function (?string $csv) use (&$vehicleChipCounter): string {
+    $points = array_values(array_filter(array_map('trim', explode(',', (string) $csv))));
+    if ($points === []) {
+        return '<span class="tt-dash">–</span>';
+    }
+    if (count($points) === 1) {
+        return e($points[0]);
+    }
+
+    $vehicleChipCounter++;
+    $popoverId = 'tt_route_points_' . $vehicleChipCounter;
+    $countLabel = count($points) . ' locații';
+
+    $html = '<div class="dispatcher-vehicle-list" data-dispatcher-vehicle-list>';
+    $html .= '<button type="button" class="dispatcher-vehicle-count-btn" data-dispatcher-vehicle-toggle'
+        . ' data-popover-id="' . e($popoverId) . '" aria-expanded="false" aria-controls="' . e($popoverId) . '"'
+        . ' aria-label="' . e('Afișează locurile de întoarcere') . '" title="' . e(implode(', ', $points)) . '">';
+    $html .= '<span>' . e($countLabel) . '</span><i class="bi bi-chevron-down" aria-hidden="true"></i>';
+    $html .= '</button>';
+    $html .= '<div class="dispatcher-vehicle-popover" id="' . e($popoverId) . '" data-dispatcher-vehicle-popover role="dialog" aria-label="Locuri de întoarcere" hidden>';
+    $html .= '<ul class="dispatcher-vehicle-popover-list" role="list">';
+    foreach ($points as $point) {
+        $html .= '<li class="dispatcher-vehicle-popover-item" data-dispatcher-vehicle-item data-vehicle-search="' . e($point) . '">';
+        $html .= '<strong>' . e($point) . '</strong>';
+        $html .= '</li>';
+    }
+    $html .= '</ul>';
+    $html .= '<div class="dispatcher-vehicle-popover-total">' . e('Total ' . $countLabel) . '</div>';
+    $html .= '</div></div>';
+
+    return $html;
+};
+
+/** Human validity period of a version, for the "Modifică tarif" route form. */
+$versionPeriod = static function (?array $version) use ($dateRo): string {
+    if ($version === null) {
+        return 'din configurare (fără versiune)';
+    }
+    $to = isset($version['valid_to']) && $version['valid_to'] !== null && $version['valid_to'] !== ''
+        ? $dateRo((string) $version['valid_to'])
+        : 'nelimitat';
+
+    return $dateRo((string) $version['valid_from']) . ' – ' . $to;
+};
+
 $tabUrl = static fn (string $tab): string => build_query_url([
     'page' => 'tarife_transport',
     'beneficiar_id' => $selectedBeneficiaryId,

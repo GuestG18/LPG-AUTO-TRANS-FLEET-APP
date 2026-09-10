@@ -82,6 +82,11 @@ foreach ($distributionRoutes as $route) {
 <section class="tt-card">
     <div class="tt-card-head">
         <h2 class="tt-card-title">Rute configurate pentru Distribuție</h2>
+        <?php if ($canManage && $distributionRoutes !== []): ?>
+            <button type="button" class="tt-btn tt-btn-sm" data-tt-routes-open>
+                <i class="bi bi-pencil-square" aria-hidden="true"></i> Modifică tarif
+            </button>
+        <?php endif; ?>
     </div>
 
     <div class="tt-table-wrap">
@@ -204,6 +209,41 @@ foreach ($distributionRoutes as $route) {
             </tbody>
         </table>
     </div>
+
+    <?php
+    $routesModal = [
+        'transport' => 'distributie',
+        'title' => 'Modifică tarife — Rute Distribuție',
+        'columns' => [
+            ['key' => 'tarif_tona', 'label' => 'Tarif tonă', 'unit' => 'lei/t'],
+            ['key' => 'cost_extra_km', 'label' => 'Tarif km', 'unit' => 'lei/km'],
+        ],
+        'rows' => [],
+    ];
+    foreach ($distributionRoutes as $modalRoute) {
+        $modalRouteId = (int) $modalRoute['id'];
+        $modalMode = (string) ($modalRoute['tarif_mod'] ?? 'tona_km');
+        $modalTonVersion = $activeVersion('tarif_tona', $modalRouteId);
+        $modalKmVersion = $activeVersion('cost_extra_km', $modalRouteId);
+        $routesModal['rows'][] = [
+            'route_id' => $modalRouteId,
+            'label' => (string) $modalRoute['loc_nume'] . ' → ' . (string) $modalRoute['zona_nume'],
+            'values' => [
+                'tarif_tona' => [
+                    'current' => $modalTonVersion !== null ? (float) $modalTonVersion['value'] : (float) ($modalRoute['tarif_tona'] ?? 0),
+                    'period' => $versionPeriod($modalTonVersion),
+                    'enabled' => in_array($modalMode, ['tona', 'tona_km'], true),
+                ],
+                'cost_extra_km' => [
+                    'current' => $modalKmVersion !== null ? (float) $modalKmVersion['value'] : (float) ($modalRoute['cost_extra_km'] ?? 0),
+                    'period' => $versionPeriod($modalKmVersion),
+                    'enabled' => in_array($modalMode, ['km', 'tona_km'], true),
+                ],
+            ],
+        ];
+    }
+    include __DIR__ . '/_routes_modal.php';
+    ?>
 
     <div class="tt-note-strip">
         <i class="bi bi-info-circle-fill" aria-hidden="true"></i>

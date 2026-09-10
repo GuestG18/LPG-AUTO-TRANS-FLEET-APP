@@ -65,6 +65,11 @@
 <section class="tt-card">
     <div class="tt-card-head">
         <h2 class="tt-card-title">Rute configurate pentru P+D</h2>
+        <?php if ($canManage && $pdRoutes !== []): ?>
+            <button type="button" class="tt-btn tt-btn-sm" data-tt-routes-open>
+                <i class="bi bi-pencil-square" aria-hidden="true"></i> Modifică tarif
+            </button>
+        <?php endif; ?>
     </div>
 
     <div class="tt-table-wrap">
@@ -183,6 +188,47 @@
             <strong>complet</strong> ambele componente (tonaj și km).
         </span>
     </div>
+
+    <?php
+    $routesModal = [
+        'transport' => 'primar_distributie',
+        'title' => 'Modifică tarife — Rute P+D',
+        'columns' => [
+            ['key' => 'tarif_tona', 'label' => 'Tarif tonă', 'unit' => 'lei/t'],
+            ['key' => 'cost_extra_km', 'label' => 'Tarif km', 'unit' => 'lei/km'],
+            ['key' => 'cost_cursa', 'label' => 'Cost / cursă', 'unit' => 'lei/cursă'],
+        ],
+        'rows' => [],
+    ];
+    foreach ($pdRoutes as $modalRoute) {
+        $modalRouteId = (int) $modalRoute['id'];
+        $modalTonVersion = $activeVersion('tarif_tona', $modalRouteId);
+        $modalKmVersion = $activeVersion('cost_extra_km', $modalRouteId);
+        $modalCostVersion = $activeVersion('cost_cursa', $modalRouteId);
+        $routesModal['rows'][] = [
+            'route_id' => $modalRouteId,
+            'label' => (string) $modalRoute['loc_nume'] . ' → ' . (string) $modalRoute['zona_nume'],
+            'values' => [
+                'tarif_tona' => [
+                    'current' => $modalTonVersion !== null ? (float) $modalTonVersion['value'] : (float) ($modalRoute['tarif_tona'] ?? 0),
+                    'period' => $versionPeriod($modalTonVersion),
+                    'enabled' => true,
+                ],
+                'cost_extra_km' => [
+                    'current' => $modalKmVersion !== null ? (float) $modalKmVersion['value'] : (float) ($modalRoute['cost_extra_km'] ?? 0),
+                    'period' => $versionPeriod($modalKmVersion),
+                    'enabled' => true,
+                ],
+                'cost_cursa' => [
+                    'current' => $modalCostVersion !== null ? (float) $modalCostVersion['value'] : (float) ($modalRoute['cost_cursa'] ?? 0),
+                    'period' => $versionPeriod($modalCostVersion),
+                    'enabled' => true,
+                ],
+            ],
+        ];
+    }
+    include __DIR__ . '/_routes_modal.php';
+    ?>
 </section>
 
 <section class="tt-card tt-logic">

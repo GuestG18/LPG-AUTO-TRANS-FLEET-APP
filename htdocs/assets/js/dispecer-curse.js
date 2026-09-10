@@ -7014,3 +7014,136 @@
         });
     });
 })();
+
+/* ------------------------------------------------------------------
+   Previzualizare tarifara VERSIONATA in formularul "Adauga cursa".
+   Calculul local din pagina foloseste tarifele "de azi" (legacy);
+   dupa ce utilizatorul alege beneficiarul, tipul si DATA cursei,
+   cerem serverului cotatia autoritara (tariful valabil LA DATA CURSEI,
+   inclusiv intervale inchise) si suprascriem previzualizarea.
+   ------------------------------------------------------------------ */
+(function () {
+    'use strict';
+
+    var createForm = document.querySelector('form.dispatcher-race-form[action*="action=store"]');
+    if (!createForm) {
+        return;
+    }
+
+    var PREVIEW_URL = 'index.php?page=tarife_transport&action=preview';
+    var debounceTimer = null;
+    var requestSeq = 0;
+
+    var fieldValue = function (name) {
+        var el = createForm.querySelector('[name="' + name + '"]');
+        return el ? String(el.value || '').trim() : '';
+    };
+
+    var parseNumeric = function (raw) {
+        var text = String(raw || '').trim().replace(',', '.');
+        var match = text.match(/-?\d+(?:\.\d+)?/);
+        return match ? Number(match[0]) : 0;
+    };
+
+    /** dd/mm/yyyy (sau yyyy-mm-dd) -> yyyy-mm-dd */
+    var toIsoDate = function (raw) {
+        var text = String(raw || '').trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+            return text;
+        }
+        var match = text.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
+        if (!match) {
+            return '';
+        }
+        return match[3] + '-' + ('0' + match[2]).slice(-2) + '-' + ('0' + match[1]).slice(-2);
+    };
+
+    var formatRo = function (value, decimals) {
+        return Number(value || 0).toLocaleString('ro-RO', {
+            minimumFractionDigits: decimals,
+            maximumFractionDigits: decimals
+        });
+    };
+
+    var setPreview = function (role, text) {
+        var el = createForm.querySelector('[data-role="' + role + '"]');
+        if (el) {
+            el.textContent = text;
+            el.title = 'Conform tarifului valabil la data cursei (inclusiv intervale de pret)';
+        }
+    };
+
+    var refresh = function () {
+        var beneficiaryId = fieldValue('beneficiar_id');
+        var transportType = fieldValue('tip_transport');
+        var tripDate = toIsoDate(fieldValue('data_inceput'));
+        if (beneficiaryId === '' || transportType === '' || tripDate === '') {
+            return;
+        }
+
+        var params = new URLSearchParams();
+        params.set('beneficiar_id', beneficiaryId);
+        params.set('tip_transport', transportType);
+        params.set('data_cursa', tripDate);
+        params.set('vehicle_id', fieldValue('vehicle_id'));
+        params.set('loc_incarcare_id', fieldValue('loc_incarcare_id'));
+        params.set('zona_distributie_id', fieldValue('zona_distributie_id'));
+        params.set('cantitate_incarcata', String(parseNumeric(fieldValue('cantitate_incarcata'))));
+        params.set('km_cursa', String(parseNumeric(fieldValue('km_cursa'))));
+        params.set('km_totali', String(parseNumeric(fieldValue('km_totali'))));
+        params.set('ore_aspirare', String(parseNumeric(fieldValue('ore_aspirare'))));
+        params.set('km_dislocare', String(parseNumeric(fieldValue('km_dislocare'))));
+        params.set('tona_livrata', String(parseNumeric(fieldValue('tona_livrata'))));
+        params.set('tona_aspirata_lichida', String(parseNumeric(fieldValue('tona_aspirata_lichida'))));
+        params.set('tona_aspirata_gazoasa', String(parseNumeric(fieldValue('tona_aspirata_gazoasa'))));
+
+        var seq = ++requestSeq;
+        fetch(PREVIEW_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: params.toString(),
+            credentials: 'same-origin'
+        }).then(function (response) {
+            return response.ok ? response.json() : null;
+        }).then(function (payload) {
+            if (seq !== requestSeq || !payload || !payload.ok || !payload.quote || !payload.quote.ok) {
+                return;
+            }
+
+            var quote = payload.quote;
+            var total = Number(quote.total_facturare || 0);
+            var price = Number(quote.pret_tarifare || 0);
+            var kmCursa = parseNumeric(fieldValue('km_cursa'));
+            var kmTotali = parseNumeric(fieldValue('km_totali'));
+            var kmDislocare = parseNumeric(fieldValue('km_dislocare'));
+
+            setPreview('total-preview', formatRo(total, 2) + ' lei');
+
+            if ((transportType === 'primar' || transportType === 'primar_tona') && kmCursa > 0) {
+                setPreview('cost-km-primar-preview', formatRo(total / kmCursa, 2) + ' lei/km');
+                setPreview('cost-km-mixt-preview', formatRo(total / kmCursa, 2) + ' lei/km');
+            } else if (transportType === 'distributie' && kmCursa > 0) {
+                setPreview('cost-km-distributie-preview', formatRo(total / kmCursa, 2) + ' lei/km');
+                setPreview('cost-km-mixt-preview', formatRo(total / kmCursa, 2) + ' lei/km');
+            } else if (transportType === 'primar_distributie' && kmTotali > 0) {
+                setPreview('cost-km-mixt-preview', formatRo(total / kmTotali, 2) + ' lei/km');
+            } else if (transportType === 'compresor' && kmDislocare > 0) {
+                setPreview('cost-km-compresor-preview', formatRo(total / kmDislocare, 2) + ' lei/km');
+            }
+        }).catch(function () {
+            // pastram calculul local daca serverul nu raspunde
+        });
+    };
+
+    createForm.addEventListener('input', function () {
+        window.clearTimeout(debounceTimer);
+        debounceTimer = window.setTimeout(refresh, 450);
+    });
+    createForm.addEventListener('change', function () {
+        window.clearTimeout(debounceTimer);
+        debounceTimer = window.setTimeout(refresh, 250);
+    });
+})();

@@ -50,12 +50,13 @@ class TariffRepriceService
      *   old_total: float, new_total: float
      * }|null null when the version does not exist.
      */
-    public function preview(int $versionId): ?array
+    public function preview(int|array $versionIds): ?array
     {
-        $version = $this->loadVersion($versionId);
-        if ($version === null) {
+        $versions = $this->loadVersions($versionIds);
+        if ($versions === []) {
             return null;
         }
+        $version = $versions[0];
 
         $rows = [];
         $changed = 0;
@@ -65,7 +66,7 @@ class TariffRepriceService
         $oldTotal = 0.0;
         $newTotal = 0.0;
 
-        foreach ($this->loadCandidateTrips($version) as $trip) {
+        foreach ($this->loadCandidateTripsForVersions($versions) as $trip) {
             $quoted = $this->quoteTrip($trip);
             if ($quoted === null) {
                 $skipped++;
@@ -102,6 +103,8 @@ class TariffRepriceService
 
         return [
             'version' => $version,
+            'version_ids' => array_map(static fn (array $v): int => (int) $v['id'], $versions),
+            'versions_count' => count($versions),
             'rows' => $rows,
             'changed' => $changed,
             'unchanged' => $unchanged,
@@ -118,19 +121,19 @@ class TariffRepriceService
      *
      * @return array{changed:int, unchanged:int, skipped:int, invoiced_changed:int}|null
      */
-    public function apply(int $versionId, ?int $userId): ?array
+    public function apply(int|array $versionIds, ?int $userId): ?array
     {
-        $version = $this->loadVersion($versionId);
-        if ($version === null) {
+        $versions = $this->loadVersions($versionIds);
+        if ($versions === []) {
             return null;
         }
 
         return $this->repriceTripRows(
-            $this->loadCandidateTrips($version),
+            $this->loadCandidateTripsForVersions($versions),
             $userId,
             true,
             'tariff_reprice',
-            ['tariff_version_id' => $versionId, 'component_key' => (string) $version['component_key']]
+            ['tariff_version_ids' => array_map(static fn (array $v): int => (int) $v['id'], $versions)]
         );
     }
 
@@ -312,6 +315,45 @@ class TariffRepriceService
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
         return is_array($row) ? $row : null;
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    private function loadVersions(int|array $versionIds): array
+    {
+        $ids = array_values(array_unique(array_filter(
+            array_map('intval', is_array($versionIds) ? $versionIds : [$versionIds]),
+            static fn (int $id): bool => $id > 0
+        )));
+
+        $versions = [];
+        foreach ($ids as $id) {
+            $version = $this->loadVersion($id);
+            if ($version !== null) {
+                $versions[] = $version;
+            }
+        }
+
+        return $versions;
+    }
+
+    /**
+     * Union of candidate trips across several versions (one bulk save can
+     * touch multiple routes), de-duplicated by trip id.
+     *
+     * @param array<int,array<string,mixed>> $versions
+     * @return array<int,array<string,mixed>>
+     */
+    private function loadCandidateTripsForVersions(array $versions): array
+    {
+        $byId = [];
+        foreach ($versions as $version) {
+            foreach ($this->loadCandidateTrips($version) as $trip) {
+                $byId[(int) $trip['id']] = $trip;
+            }
+        }
+        ksort($byId);
+
+        return array_values($byId);
     }
 
     /**

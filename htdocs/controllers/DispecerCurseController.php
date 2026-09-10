@@ -237,6 +237,26 @@ class DispecerCurseController
         return $this->model->getExpenseCategories(true);
     }
 
+    /**
+     * Before pricing a trip, align the legacy config (read by the pricing
+     * engine and by Configurare transport) with today's effective tariff
+     * versions — covers scheduled activations and interval boundaries even
+     * when nobody opened "Administrare tarife" that day. Best-effort.
+     */
+    private function syncTariffLegacyValues(): void
+    {
+        $beneficiaryId = (int) ($_POST['beneficiar_id'] ?? 0);
+        if ($beneficiaryId <= 0 || !class_exists('TransportTariffModel')) {
+            return;
+        }
+
+        try {
+            (new TransportTariffModel($this->db))->syncLegacyValues($beneficiaryId);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][tariff_legacy_sync] ' . $exception->getMessage());
+        }
+    }
+
     public function handle(string $action): void
     {
         switch ($action) {
@@ -263,12 +283,14 @@ class DispecerCurseController
                 $this->cancelInactiveVehicleApprovalAction();
                 return;
             case 'store':
+                $this->syncTariffLegacyValues();
                 $this->storeAction();
                 return;
             case 'edit':
                 $this->editAction();
                 return;
             case 'update':
+                $this->syncTariffLegacyValues();
                 $this->updateAction();
                 return;
             case 'delete':
@@ -1901,6 +1923,26 @@ class DispecerCurseController
 
             $data['pret_tarifare'] = round((float) ($quote['pret_tarifare'] ?? 0), 2);
             $data['total_facturare'] = round((float) ($quote['total_facturare'] ?? 0), 2);
+
+            // Keep the per-type cost/km snapshot consistent with the
+            // versioned total (otherwise it would show the legacy rate).
+            $versionedTotal = (float) $data['total_facturare'];
+            $versionedType = (string) ($data['tip_transport'] ?? '');
+            $kmCursa = (float) ($data['km_cursa'] ?? 0);
+            $kmTotali = (float) ($data['km_totali'] ?? 0);
+            $kmDislocare = (float) ($data['km_dislocare'] ?? 0);
+            if (($versionedType === 'primar' || $versionedType === 'primar_tona') && $kmCursa > 0) {
+                $data['cost_km_primar'] = round($versionedTotal / $kmCursa, 2);
+                $data['cost_km_mixt'] = $data['cost_km_primar'];
+            } elseif ($versionedType === 'distributie' && $kmCursa > 0) {
+                $data['cost_km_distributie'] = round($versionedTotal / $kmCursa, 2);
+                $data['cost_km_mixt'] = $data['cost_km_distributie'];
+            } elseif ($versionedType === 'primar_distributie' && $kmTotali > 0) {
+                $data['cost_km_mixt'] = round($versionedTotal / $kmTotali, 2);
+            } elseif ($versionedType === 'compresor' && $kmDislocare > 0) {
+                $data['cost_km_compresor'] = round($versionedTotal / $kmDislocare, 2);
+            }
+
             $data['__tariff_version_id'] = $quote['tariff_version_id'] ?? null;
             $encoded = json_encode($quote, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             $data['__tariff_breakdown'] = is_string($encoded) ? $encoded : null;

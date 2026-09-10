@@ -18,7 +18,10 @@ $rpSkipped = (int) $repricePreview['skipped'];
 $rpOld = (float) $repricePreview['old_total'];
 $rpNew = (float) $repricePreview['new_total'];
 $rpDelta = $rpNew - $rpOld;
-$rpLabel = TransportTariffModel::componentLabel((string) $rpVersion['component_key']);
+$rpVersionIds = array_map('intval', (array) ($repricePreview['version_ids'] ?? [(int) $rpVersion['id']]));
+$rpLabel = count($rpVersionIds) > 1
+    ? count($rpVersionIds) . ' componente tarifare'
+    : TransportTariffModel::componentLabel((string) $rpVersion['component_key']);
 $rpFrom = (string) $rpVersion['valid_from'];
 try {
     $rpFrom = (new DateTimeImmutable($rpFrom))->format('d.m.Y');
@@ -92,7 +95,7 @@ $rpDismissUrl = build_query_url([
             <a class="tt-btn tt-btn-sm" href="<?= e($rpDismissUrl) ?>">Nu recalcula</a>
             <form method="post" action="<?= e(build_query_url(['page' => 'tarife_transport', 'action' => 'apply_reprice'])) ?>">
                 <?= csrf_field() ?>
-                <input type="hidden" name="tariff_version_id" value="<?= (int) $rpVersion['id'] ?>">
+                <input type="hidden" name="tariff_version_id" value="<?= e(implode(',', $rpVersionIds)) ?>">
                 <input type="hidden" name="beneficiar_id" value="<?= (int) $selectedBeneficiaryId ?>">
                 <input type="hidden" name="tab" value="<?= e($activeTab) ?>">
                 <button type="submit" class="tt-btn tt-btn-sm tt-btn-primary">

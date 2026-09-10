@@ -698,3 +698,193 @@
         });
     }
 })();
+
+/* ------------------------------------------------------------------
+   "Modifica tarif" — formular pe toate rutele unui tip de transport.
+   Modalul e randat server-side per tab (#tt-routes-modal); aici doar
+   deschidere/inchidere, scurtaturi de data si validare la submit.
+   ------------------------------------------------------------------ */
+(function () {
+    'use strict';
+
+    var routesModal = document.getElementById('tt-routes-modal');
+    if (!routesModal) {
+        return;
+    }
+
+    var routesForm = document.getElementById('tt-routes-form');
+    var validFromInput = document.getElementById('tt-rf-valid-from');
+    var lastFocused = null;
+
+    var parseNumber = function (raw) {
+        if (raw === null || raw === undefined) {
+            return null;
+        }
+        var text = String(raw).trim().replace(/\s+/g, '').replace(',', '.');
+        if (text === '' || isNaN(Number(text))) {
+            return null;
+        }
+        return Number(text);
+    };
+
+    var openModal = function () {
+        lastFocused = document.activeElement;
+        routesModal.hidden = false;
+        document.body.style.overflow = 'hidden';
+        var firstInput = routesModal.querySelector('input[name="bulk_value[]"]');
+        if (firstInput) {
+            window.setTimeout(function () { firstInput.focus(); }, 40);
+        }
+    };
+
+    var closeModal = function () {
+        if (routesModal.hidden) {
+            return;
+        }
+        routesModal.hidden = true;
+        document.body.style.overflow = '';
+        if (lastFocused && typeof lastFocused.focus === 'function') {
+            lastFocused.focus();
+        }
+    };
+
+    document.addEventListener('click', function (event) {
+        if (event.target.closest('[data-tt-routes-open]')) {
+            event.preventDefault();
+            openModal();
+            return;
+        }
+
+        if (!routesModal.hidden) {
+            if (event.target.closest('[data-tt-close]') && event.target.closest('#tt-routes-modal')) {
+                event.preventDefault();
+                closeModal();
+                return;
+            }
+            if (event.target === routesModal) {
+                closeModal();
+                return;
+            }
+        }
+
+        var dateShortcut = event.target.closest('[data-tt-routes-date]');
+        if (dateShortcut && validFromInput) {
+            event.preventDefault();
+            validFromInput.value = dateShortcut.getAttribute('data-tt-routes-date');
+        }
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && !routesModal.hidden) {
+            closeModal();
+        }
+    });
+
+    if (routesForm) {
+        routesForm.addEventListener('submit', function (event) {
+            var inputs = routesForm.querySelectorAll('input[name="bulk_value[]"]');
+            var filled = 0;
+            var invalid = null;
+
+            Array.prototype.forEach.call(inputs, function (input) {
+                var raw = String(input.value || '').trim();
+                if (raw === '') {
+                    return;
+                }
+                var parsed = parseNumber(raw);
+                if (parsed === null || parsed < 0) {
+                    invalid = invalid || input;
+                    return;
+                }
+                filled += 1;
+            });
+
+            if (invalid) {
+                event.preventDefault();
+                window.alert('Unul dintre prețurile introduse nu este un număr valid (≥ 0).');
+                invalid.focus();
+                return;
+            }
+            if (filled === 0) {
+                event.preventDefault();
+                window.alert('Completează cel puțin un preț nou — câmpurile goale rămân neschimbate.');
+                return;
+            }
+            if (validFromInput && !validFromInput.value) {
+                event.preventDefault();
+                window.alert('Alege data de la care intră în vigoare prețurile.');
+                validFromInput.focus();
+            }
+        });
+    }
+})();
+
+/* ------------------------------------------------------------------
+   Deschidere automata a dialogului de editare cand pagina e accesata
+   din Istoric modificari (?edit_component=...&edit_route=...).
+   Fallback: butonul de editare multipla al randului, apoi formularul
+   pe toate rutele.
+   ------------------------------------------------------------------ */
+(function () {
+    'use strict';
+
+    var params = new URLSearchParams(window.location.search);
+    var component = params.get('edit_component');
+    if (!component) {
+        return;
+    }
+    var routeId = params.get('edit_route') || '0';
+
+    /**
+     * Cand venim de pe un rand din Istoric, precompletam formularul cu
+     * datele ACELEI versiuni (valoare + perioada), nu cu starea curenta —
+     * astfel salvarea o inlocuieste exact pe perioada ei.
+     */
+    var prefillFromHistory = function () {
+        var editValue = params.get('edit_value');
+        var editFrom = params.get('edit_from');
+        var editTo = params.get('edit_to');
+
+        var valueInput = document.getElementById('tt-f-value');
+        if (valueInput && editValue !== null && editValue !== '') {
+            valueInput.value = String(parseFloat(editValue));
+            valueInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        var fromInput = document.getElementById('tt-f-valid-from');
+        if (fromInput && editFrom) {
+            fromInput.value = editFrom;
+        }
+        var toInput = document.getElementById('tt-f-valid-to');
+        if (toInput && editTo !== null) {
+            toInput.value = editTo;
+        }
+    };
+
+    var openTarget = function () {
+        var exact = document.querySelector(
+            '[data-tt-edit][data-component="' + component + '"][data-route-id="' + routeId + '"]'
+        );
+        if (exact) {
+            exact.click();
+            window.setTimeout(prefillFromHistory, 60);
+            return;
+        }
+        var bulk = document.querySelector('[data-tt-bulk-edit][data-route-id="' + routeId + '"]');
+        if (bulk) {
+            bulk.click();
+            return;
+        }
+        var routesOpen = document.querySelector('[data-tt-routes-open]');
+        if (routesOpen) {
+            routesOpen.click();
+        }
+    };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () {
+            window.setTimeout(openTarget, 120);
+        });
+    } else {
+        window.setTimeout(openTarget, 120);
+    }
+})();

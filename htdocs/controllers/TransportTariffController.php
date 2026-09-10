@@ -113,6 +113,16 @@ class TransportTariffController
         return function_exists('is_admin') && is_admin();
     }
 
+    /** Best-effort legacy sync — never breaks the main flow. */
+    private function syncLegacy(int $beneficiaryId): void
+    {
+        try {
+            $this->model->syncLegacyValues($beneficiaryId);
+        } catch (Throwable $exception) {
+            error_log('[TransportTariffController][legacy_sync] ' . $exception->getMessage());
+        }
+    }
+
     // -----------------------------------------------------------------
     // Page
     // -----------------------------------------------------------------
@@ -165,6 +175,11 @@ class TransportTariffController
                 error_log('[TransportTariffController][evaluate] ' . $exception->getMessage());
             }
 
+            // Keep the legacy config (Configurare transport / Dispecer curse)
+            // aligned with today's effective versions — also picks up versions
+            // that became active by schedule and intervals that just ended.
+            $this->syncLegacy($selectedId);
+
             $data['versions'] = $this->model->getVersionsForBeneficiary($selectedId);
             $data['reviews'] = $this->model->getReviewsForBeneficiary($selectedId);
             $data['primaryRoutes'] = $this->model->getPrimaryRoutes($selectedId);
@@ -179,12 +194,16 @@ class TransportTariffController
                     'primar_distributie' => count($data['pdRoutes']),
                 ]);
 
-            // Post-save reprice preview: shown only to managers, only for a
-            // version of the currently selected beneficiary.
-            $repriceVersionId = (int) ($_GET['reprice_version_id'] ?? 0);
-            if ($repriceVersionId > 0 && $this->canManage()) {
+            // Post-save reprice preview: shown only to managers, only for
+            // versions of the currently selected beneficiary. Accepts a
+            // comma-separated id list (multi-route bulk saves).
+            $repriceVersionIds = array_values(array_filter(array_map(
+                'intval',
+                explode(',', (string) ($_GET['reprice_version_id'] ?? ''))
+            ), static fn (int $id): bool => $id > 0));
+            if ($repriceVersionIds !== [] && $this->canManage()) {
                 try {
-                    $preview = (new TariffRepriceService($this->db))->preview($repriceVersionId);
+                    $preview = (new TariffRepriceService($this->db))->preview($repriceVersionIds);
                     if ($preview !== null && (int) $preview['version']['beneficiar_id'] === $selectedId) {
                         $data['repricePreview'] = $preview;
                     }
@@ -218,13 +237,50 @@ class TransportTariffController
 
         $selectedId = (int) ($_GET['beneficiar_id'] ?? 0);
         $beneficiaries = $this->model->getBeneficiaries(false);
+        $history = $this->model->getHistory($selectedId > 0 ? $selectedId : null, 200);
+
+        // Which referenced versions still exist, and which of them are the
+        // NEWEST of their timeline (the only ones the delete flow accepts).
+        $versionIds = array_values(array_unique(array_filter(array_map(
+            static fn (array $row): int => (int) ($row['tariff_version_id'] ?? 0),
+            $history
+        ))));
+        $existingVersions = [];
+        $deletableVersions = [];
+        if ($versionIds !== []) {
+            $placeholders = implode(',', array_fill(0, count($versionIds), '?'));
+            $stmt = $this->db->prepare('
+                SELECT v.id, v.value, v.valid_from, v.valid_to,
+                       NOT EXISTS (
+                           SELECT 1 FROM transport_tariff_versions n
+                           WHERE n.rule_signature = v.rule_signature
+                             AND (n.valid_from > v.valid_from
+                                  OR (n.valid_from = v.valid_from AND n.id > v.id))
+                       ) AS is_newest
+                FROM transport_tariff_versions v
+                WHERE v.id IN (' . $placeholders . ')
+            ');
+            $stmt->execute($versionIds);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $existingVersions[(int) $row['id']] = [
+                    'value' => (float) $row['value'],
+                    'valid_from' => (string) $row['valid_from'],
+                    'valid_to' => $row['valid_to'] !== null ? (string) $row['valid_to'] : '',
+                ];
+                if ((int) $row['is_newest'] === 1) {
+                    $deletableVersions[(int) $row['id']] = true;
+                }
+            }
+        }
 
         render('tarife_transport/istoric.php', [
             'pageTitle' => 'Istoric modificări tarife',
             'currentPage' => 'tarife_transport',
             'beneficiaries' => $beneficiaries,
             'selectedBeneficiaryId' => $selectedId,
-            'history' => $this->model->getHistory($selectedId > 0 ? $selectedId : null, 200),
+            'history' => $history,
+            'existingVersions' => $existingVersions,
+            'deletableVersions' => $deletableVersions,
             'canManage' => $this->canManage(),
         ]);
     }
@@ -508,6 +564,8 @@ class TransportTariffController
             }
             flash_set('success', $message);
 
+            $this->syncLegacy($beneficiaryId);
+
             // Offer the recalculation preview for existing trips from valid_from
             // onward. Nothing is repriced without the operator's confirmation.
             $redirect['reprice_version_id'] = (int) $created['version_id'];
@@ -579,13 +637,16 @@ class TransportTariffController
         }
         ensure_csrf_or_redirect(build_query_url($redirectBase));
 
-        $versionId = (int) ($_POST['tariff_version_id'] ?? 0);
+        $versionIds = array_values(array_filter(array_map(
+            'intval',
+            explode(',', (string) ($_POST['tariff_version_id'] ?? ''))
+        ), static fn (int $id): bool => $id > 0));
         $beneficiaryId = (int) ($_POST['beneficiar_id'] ?? 0);
         $tab = trim((string) ($_POST['tab'] ?? 'primar'));
         $redirect = $redirectBase + ['beneficiar_id' => $beneficiaryId, 'tab' => $tab];
 
         try {
-            $result = (new TariffRepriceService($this->db))->apply($versionId, $this->currentUserId());
+            $result = (new TariffRepriceService($this->db))->apply($versionIds, $this->currentUserId());
         } catch (Throwable $exception) {
             error_log('[TransportTariffController][apply_reprice] ' . $exception->getMessage());
             flash_set('danger', 'Recalcularea curselor a esuat si nu s-a modificat nimic: ' . $exception->getMessage());
@@ -638,6 +699,7 @@ class TransportTariffController
         $reason = trim((string) ($_POST['reason'] ?? ''));
         $componentKeys = (array) ($_POST['bulk_component'] ?? []);
         $rawValues = (array) ($_POST['bulk_value'] ?? []);
+        $rowRouteIds = (array) ($_POST['bulk_route'] ?? []);
 
         $redirect = $redirectBase + [
             'beneficiar_id' => $beneficiaryId,
@@ -685,11 +747,17 @@ class TransportTariffController
             $zoneId = null;
             $componentRouteId = 0;
             if ($componentMeta['level'] === 'route') {
-                if ($routeRefId <= 0) {
+                // Per-row route id (multi-route form) with fallback to the
+                // form-level route (single-route bulk dialog).
+                $rowRouteId = (int) ($rowRouteIds[$index] ?? 0);
+                if ($rowRouteId <= 0) {
+                    $rowRouteId = $routeRefId;
+                }
+                if ($rowRouteId <= 0) {
                     $errors[] = 'Componenta "' . TransportTariffModel::componentLabel($componentKey) . '" necesită o rută validă.';
                     continue;
                 }
-                $route = $this->loadRouteForComponent($componentKey, $transportType, $routeRefId, $beneficiaryId);
+                $route = $this->loadRouteForComponent($componentKey, $transportType, $rowRouteId, $beneficiaryId);
                 if ($route === null) {
                     $errors[] = 'Ruta selectată nu aparține beneficiarului curent.';
                     continue;
@@ -697,7 +765,7 @@ class TransportTariffController
                 $routeScope = (string) $route['scope'];
                 $locId = (int) $route['loc_incarcare_id'];
                 $zoneId = (int) $route['zona_distributie_id'];
-                $componentRouteId = $routeRefId;
+                $componentRouteId = $rowRouteId;
             }
 
             $changes[] = [
@@ -802,17 +870,21 @@ class TransportTariffController
 
             $this->db->commit();
 
+            $isScheduled = $validFrom > date('Y-m-d');
             flash_set('success', sprintf(
-                '%d tarife %s de la %s%s.',
-                count($createdIds),
-                $validFrom > date('Y-m-d') ? 'programate' : 'actualizate',
+                '%s de la %s%s.',
+                count($createdIds) === 1
+                    ? ($isScheduled ? 'Un tarif programat' : 'Un tarif actualizat')
+                    : count($createdIds) . ($isScheduled ? ' tarife programate' : ' tarife actualizate'),
                 $this->formatDateRo($validFrom),
                 $validTo !== '' ? ' până la ' . $this->formatDateRo($validTo) . ' (apoi tarifele anterioare redevin active)' : ''
             ));
 
-            // One preview covers them all: the re-quote at trip date resolves
-            // every component saved above (same beneficiary/type/route scope).
-            $redirect['reprice_version_id'] = $createdIds[0];
+            $this->syncLegacy($beneficiaryId);
+
+            // One preview covers them all: candidate trips are unioned across
+            // every created version, then re-quoted at their own dates.
+            $redirect['reprice_version_id'] = implode(',', $createdIds);
         } catch (Throwable $exception) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
@@ -883,6 +955,8 @@ class TransportTariffController
             $result = $reprice->rollbackTripsByIds($tripIds, $this->currentUserId(), $versionId);
 
             $this->db->commit();
+
+            $this->syncLegacy($beneficiaryId > 0 ? $beneficiaryId : (int) $version['beneficiar_id']);
         } catch (Throwable $exception) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();

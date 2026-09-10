@@ -41,8 +41,21 @@ $actionBadge = static function (string $action): string {
         'superseded' => '<span class="tt-badge tt-badge-muted">Înlocuit</span>',
         'dismissed' => '<span class="tt-badge tt-badge-muted">Amânat</span>',
         'reviewed' => '<span class="tt-badge tt-badge-ok">Revizuit</span>',
+        'deleted' => '<span class="tt-badge tt-badge-warn">Șters</span>',
         default => '<span class="tt-badge tt-badge-muted">' . e($action) . '</span>',
     };
+};
+
+/** "01.08.2026 – 31.08.2026" pentru intervale, "din 01.08.2026" pentru nelimitat. */
+$periodLabel = static function (?string $from, ?string $to) use ($dateRo): string {
+    if ($from === null || $from === '') {
+        return '—';
+    }
+    if ($to !== null && $to !== '') {
+        return $dateRo($from) . ' – ' . $dateRo($to);
+    }
+
+    return 'din ' . $dateRo($from);
 };
 ?>
 <div class="tt-page">
@@ -90,16 +103,17 @@ $actionBadge = static function (string $action): string {
                         <th>Rută</th>
                         <th>Valoare veche</th>
                         <th>Valoare nouă</th>
-                        <th>Valabil de la</th>
+                        <th>Perioadă valabilitate</th>
                         <th>Referință motorină</th>
                         <th>Variație obs.</th>
                         <th>Autor</th>
                         <th>Motiv</th>
+                        <?php if ($canManage): ?><th class="tt-col-actions">Acțiuni</th><?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if ($history === []): ?>
-                        <tr><td colspan="12" class="tt-empty-cell">
+                        <tr><td colspan="<?= $canManage ? 13 : 12 ?>" class="tt-empty-cell">
                             Nu există modificări de tarif înregistrate<?= $selectedBeneficiaryId > 0 ? ' pentru acest beneficiar' : '' ?>.
                         </td></tr>
                     <?php else: ?>
@@ -117,7 +131,7 @@ $actionBadge = static function (string $action): string {
                                 <td><?= $entry['route_label'] ? e((string) $entry['route_label']) : '<span class="tt-dash">—</span>' ?></td>
                                 <td class="tt-num"><?= $old !== null ? e(format_number_ro($old, 4)) : '<span class="tt-dash">—</span>' ?></td>
                                 <td class="tt-num"><strong><?= $new !== null ? e(format_number_ro($new, 4)) : '—' ?></strong> <?= e((string) $entry['unit']) ?></td>
-                                <td><?= e($dateRo($entry['effective_from'] ?? null)) ?></td>
+                                <td><?= e($periodLabel($entry['effective_from'] ?? null, $entry['effective_to'] ?? null)) ?></td>
                                 <td class="tt-num">
                                     <?= $entry['reference_fuel_price'] !== null
                                         ? e(format_number_ro((float) $entry['reference_fuel_price'], 4)) . ' lei/L'
@@ -134,6 +148,47 @@ $actionBadge = static function (string $action): string {
                                 <td style="white-space:normal;max-width:240px;">
                                     <?= $entry['reason'] ? e((string) $entry['reason']) : '<span class="tt-dash">—</span>' ?>
                                 </td>
+                                <?php if ($canManage): ?>
+                                    <td class="tt-col-actions">
+                                        <?php
+                                        $entryVersionId = (int) ($entry['tariff_version_id'] ?? 0);
+                                        $entryBeneficiaryId = (int) ($entry['beneficiar_id'] ?? 0);
+                                        $entryTab = (string) $entry['transport_type'];
+                                        $versionExists = $entryVersionId > 0 && !empty($existingVersions[$entryVersionId]);
+                                        ?>
+                                        <?php if ($versionExists): ?>
+                                            <?php $versionDetails = $existingVersions[$entryVersionId]; ?>
+                                            <span class="tt-actions">
+                                                <a class="tt-btn tt-btn-icon" title="Corectează acest tarif (versiune nouă pe aceeași perioadă îl înlocuiește)"
+                                                   href="<?= e(build_query_url([
+                                                       'page' => 'tarife_transport',
+                                                       'beneficiar_id' => $entryBeneficiaryId,
+                                                       'tab' => $entryTab,
+                                                       'edit_component' => (string) $entry['component_key'],
+                                                       'edit_route' => (int) ($entry['route_ref_id'] ?? 0),
+                                                       'edit_value' => (string) $versionDetails['value'],
+                                                       'edit_from' => $versionDetails['valid_from'],
+                                                       'edit_to' => $versionDetails['valid_to'],
+                                                   ])) ?>">
+                                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                                </a>
+                                                <?php if (!empty($deletableVersions[$entryVersionId])): ?>
+                                                    <a class="tt-btn tt-btn-icon" title="Șterge versiunea și revino la tariful anterior (cu recalcularea curselor)"
+                                                       href="<?= e(build_query_url([
+                                                           'page' => 'tarife_transport',
+                                                           'beneficiar_id' => $entryBeneficiaryId,
+                                                           'tab' => $entryTab,
+                                                           'delete_version_id' => $entryVersionId,
+                                                       ])) ?>">
+                                                        <i class="bi bi-trash3" aria-hidden="true"></i>
+                                                    </a>
+                                                <?php endif; ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="tt-dash" title="Versiunea nu mai există (ștearsă sau doar notă de istoric)">—</span>
+                                        <?php endif; ?>
+                                    </td>
+                                <?php endif; ?>
                             </tr>
                         <?php endforeach; ?>
                     <?php endif; ?>
