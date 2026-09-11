@@ -24,7 +24,7 @@ class TariffRepriceService
 {
     private const TRIP_COLUMNS = '
         c.id, c.beneficiar_id, c.tip_transport, c.data_cursa, c.vehicle_id,
-        c.loc_incarcare_id, c.zona_distributie_id,
+        c.loc_incarcare_id, c.zona_distributie_id, c.loc_plecare, c.loc_intoarcere,
         c.cantitate_incarcata, c.km_cursa, c.km_totali, c.ore_aspirare, c.km_dislocare,
         c.tona_livrata, c.tona_aspirata_lichida, c.tona_aspirata_gazoasa,
         c.pret_tarifare, c.total_facturare, c.status_facturare,
@@ -442,6 +442,8 @@ class TariffRepriceService
                 'vehicle_id' => (int) ($trip['vehicle_id'] ?? 0),
                 'loc_incarcare_id' => (int) ($trip['loc_incarcare_id'] ?? 0),
                 'zona_distributie_id' => (int) ($trip['zona_distributie_id'] ?? 0),
+                'loc_plecare' => (string) ($trip['loc_plecare'] ?? ''),
+                'loc_intoarcere' => (string) ($trip['loc_intoarcere'] ?? ''),
                 'cantitate_incarcata' => (float) ($trip['cantitate_incarcata'] ?? 0),
                 'km_cursa' => (float) ($trip['km_cursa'] ?? 0),
                 'km_totali' => (float) ($trip['km_totali'] ?? 0),

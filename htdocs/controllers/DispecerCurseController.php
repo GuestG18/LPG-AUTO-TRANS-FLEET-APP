@@ -1895,6 +1895,8 @@ class DispecerCurseController
                 'vehicle_id' => (int) ($data['vehicle_id'] ?? 0),
                 'loc_incarcare_id' => (int) ($data['loc_incarcare_id'] ?? 0),
                 'zona_distributie_id' => (int) ($data['zona_distributie_id'] ?? 0),
+                'loc_plecare' => (string) ($data['loc_plecare'] ?? ''),
+                'loc_intoarcere' => (string) ($data['loc_intoarcere'] ?? ''),
                 'cantitate_incarcata' => (float) ($data['cantitate_incarcata'] ?? 0),
                 'km_cursa' => (float) ($data['km_cursa'] ?? 0),
                 'km_totali' => (float) ($data['km_totali'] ?? 0),

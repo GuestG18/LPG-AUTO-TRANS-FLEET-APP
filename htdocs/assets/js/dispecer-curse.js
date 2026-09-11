@@ -7088,6 +7088,8 @@
         params.set('vehicle_id', fieldValue('vehicle_id'));
         params.set('loc_incarcare_id', fieldValue('loc_incarcare_id'));
         params.set('zona_distributie_id', fieldValue('zona_distributie_id'));
+        params.set('loc_plecare', fieldValue('loc_plecare_ruta') || fieldValue('loc_plecare'));
+        params.set('loc_intoarcere', fieldValue('loc_intoarcere'));
         params.set('cantitate_incarcata', String(parseNumeric(fieldValue('cantitate_incarcata'))));
         params.set('km_cursa', String(parseNumeric(fieldValue('km_cursa'))));
         params.set('km_totali', String(parseNumeric(fieldValue('km_totali'))));

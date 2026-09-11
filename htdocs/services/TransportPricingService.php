@@ -516,7 +516,7 @@ class TransportPricingService
         );
 
         return $rate['value'] > 0
-            ? ['value' => $rate['value'], 'version_id' => $rate['version_id']]
+            ? ['value' => $rate['value'], 'version_id' => $rate['version_id'], 'source' => $rate['source']]
             : null;
     }
 
@@ -537,7 +537,11 @@ class TransportPricingService
             'quantity_unit' => 'cursă',
             'amount' => round($override['value'], 2),
             'version_id' => $override['version_id'],
-            'source' => 'override',
+            // The fixed price still REPLACES the calculation, but its
+            // provenance must survive: a cost/cursă resolved from a tariff
+            // VERSION has to be recognizable by the reprice/recalculation
+            // flows (they only touch trips priced from versions).
+            'source' => ($override['version_id'] ?? null) !== null ? 'version' : 'override',
         ];
         $result['notes'][] = 'Cost / cursă activ: înlocuiește complet calculul normal.';
 
@@ -631,7 +635,55 @@ class TransportPricingService
         ]);
         $rules = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
+        // Multi-garaj / rute pe 4 puncte: aceeasi pereche Loc<->Zona poate avea
+        // mai multe reguli, diferentiate prin garajul de plecare si punctele de
+        // intoarcere. Cursa stocheaza alegerea (loc_plecare / loc_intoarcere) —
+        // fara acest filtru, cotatia ar nimeri regula gresita (si pretul gresit).
+        $rules = $this->filterRulesByGarages(
+            $rules,
+            trim((string) ($trip['loc_plecare'] ?? '')),
+            trim((string) ($trip['loc_intoarcere'] ?? ''))
+        );
+
         return $this->pickRuleForVehicle($rules, $vehicleId, true);
+    }
+
+    /**
+     * Narrow sibling rules by the trip's stored departure garage and return
+     * point. Each filter applies only when it still leaves at least one rule,
+     * so trips saved before the 4-point feature keep the old behaviour.
+     *
+     * @param array<int,array<string,mixed>> $rules
+     * @return array<int,array<string,mixed>>
+     */
+    private function filterRulesByGarages(array $rules, string $departure, string $return): array
+    {
+        $normalize = static fn (string $value): string => mb_strtolower(trim($value));
+
+        if ($departure !== '' && count($rules) > 1) {
+            $matched = array_values(array_filter($rules, static function (array $rule) use ($normalize, $departure): bool {
+                return $normalize((string) ($rule['garaj_plecare'] ?? '')) === $normalize($departure);
+            }));
+            if ($matched !== []) {
+                $rules = $matched;
+            }
+        }
+
+        if ($return !== '' && count($rules) > 1) {
+            $matched = array_values(array_filter($rules, static function (array $rule) use ($normalize, $return): bool {
+                foreach (explode(',', (string) ($rule['garaj_intoarcere'] ?? '')) as $point) {
+                    if ($normalize($point) === $normalize($return)) {
+                        return true;
+                    }
+                }
+                return false;
+            }));
+            if ($matched !== []) {
+                $rules = $matched;
+            }
+        }
+
+        return $rules;
     }
 
     private function resolveDistributionRoute(array $trip, int $beneficiaryId, string $scope): ?array

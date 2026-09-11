@@ -1030,6 +1030,8 @@ class TransportTariffController
             'vehicle_id' => (int) ($input['vehicle_id'] ?? 0),
             'loc_incarcare_id' => (int) ($input['loc_incarcare_id'] ?? 0),
             'zona_distributie_id' => (int) ($input['zona_distributie_id'] ?? 0),
+            'loc_plecare' => trim((string) ($input['loc_plecare'] ?? '')),
+            'loc_intoarcere' => trim((string) ($input['loc_intoarcere'] ?? '')),
             'cantitate_incarcata' => (float) ($input['cantitate_incarcata'] ?? 0),
             'km_cursa' => (float) ($input['km_cursa'] ?? 0),
             'km_totali' => (float) ($input['km_totali'] ?? 0),
