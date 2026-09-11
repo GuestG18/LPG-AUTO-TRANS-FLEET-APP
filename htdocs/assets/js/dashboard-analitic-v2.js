@@ -78,6 +78,8 @@
         facturare: { label: 'Facturare', kind: 'lei', better: 'high' },
         refacturare: { label: 'Refacturări nefacturate', kind: 'lei', better: 'low' },
         cheltuieli: { label: 'Cheltuieli', kind: 'lei', better: 'low' },
+        carburant: { label: 'Carburant', kind: 'lei', better: 'low' },
+        carburant_litri: { label: 'Litri carburant', kind: 'num', better: 'low' },
         profit: { label: 'Profit', kind: 'lei', better: 'high' },
         marja_percent: { label: 'Marjă %', kind: 'pct', better: 'high' },
         venit_km: { label: 'Venit / km', kind: 'lei3', better: 'high' },
@@ -112,7 +114,7 @@
 
     var RANK_METRICS = [
         'profit', 'facturare', 'cheltuieli', 'marja_percent', 'km_totali', 'tone_livrate',
-        'curse', 'profit_km', 'venit_km', 'cost_km', 'km_per_cursa', 'tone_per_cursa',
+        'curse', 'carburant', 'profit_km', 'venit_km', 'cost_km', 'km_per_cursa', 'tone_per_cursa',
         'grad_incarcare', 'grad_folosinta', 'km_nefacturati_percent'
     ];
 
@@ -568,16 +570,22 @@
                 icon: 'bi-cash-stack',
                 name: 'Cheltuieli',
                 value: fmt(f.cheltuieli, 'lei'),
-                note: 'Include ' + fmt(f.refacturare, 'lei') + ' refacturări nefacturate · Cost / km: ' + fmt(f.cost_km, 'lei3'),
+                note: 'Include ' + fmt(f.carburant, 'lei') + ' carburant · Cost / km: ' + fmt(f.cost_km, 'lei3'),
                 detail: {
-                    intro: 'Cheltuielile reprezintă costurile suportate pentru curse. Refacturările nefacturate rămân evidențiate în cheltuieli până când sunt facturate clientului. După facturare, acestea nu mai sunt considerate costuri nerecuperate: suma trece la Facturare, iar efectul net asupra profitului devine zero.',
-                    formula: 'Cheltuieli proprii (suma de pe linie) + Refacturări introduse fără sumă proprie · Pe liniile care au și sumă, și refacturare, se numără o singură dată',
+                    intro: 'Cheltuielile reprezintă costurile suportate pentru curse: ce s-a înregistrat pe cursă, plus alimentările asociate cursei în modulul Carburanți. Refacturările nefacturate rămân evidențiate în cheltuieli până când sunt facturate clientului. După facturare, suma trece la Facturare, iar efectul net asupra profitului devine zero.',
+                    formula: 'Cheltuieli proprii (suma de pe linie) + Refacturări introduse fără sumă proprie + Carburant asociat cursei · Pe liniile care au și sumă, și refacturare, se numără o singură dată',
                     stats: [
                         { label: 'Cheltuieli proprii', value: fmt(f.cheltuieli_proprii, 'lei'), hint: 'costuri cu sumă completată pe linia de cheltuială' },
                         {
                             label: '+ Refacturări fără sumă proprie',
                             value: fmt(f.refacturare_fara_cost, 'lei'),
                             hint: 'linii introduse doar ca refacturare, cu câmpul „Sumă” lăsat 0 — banii au fost totuși cheltuiți, deci se adaugă la total'
+                        },
+                        {
+                            label: '+ Carburant (motorină + AdBlue)',
+                            value: fmt(f.carburant, 'lei'),
+                            hint: 'alimentările asociate curselor în modulul Carburanți: ' + fmt(f.carburant_alimentari, 'int') +
+                                ' alimentări, ' + fmt(f.carburant_litri, 'num') + ' litri. Intră doar cele legate de o cursă — restul nu pot fi atribuite unui vehicul și unui beneficiar anume.'
                         },
                         { label: '= Total cheltuieli', value: fmt(f.cheltuieli, 'lei') },
                         {
@@ -2437,6 +2445,7 @@
             { key: 'facturare', kind: 'lei' },
             { key: 'refacturare', kind: 'lei' },
             { key: 'cheltuieli', kind: 'lei' },
+            { key: 'carburant', kind: 'lei' },
             { key: 'profit', kind: 'lei', tone: 'sign' },
             { key: 'marja_percent', kind: 'pct', tone: 'sign' },
             { key: 'venit_km', kind: 'lei3' },
@@ -2455,6 +2464,7 @@
             { key: 'facturare', kind: 'lei' },
             { key: 'refacturare', kind: 'lei' },
             { key: 'cheltuieli', kind: 'lei' },
+            { key: 'carburant', kind: 'lei' },
             { key: 'profit', kind: 'lei', tone: 'sign' },
             { key: 'profit_km', kind: 'lei3', tone: 'sign' },
             { key: 'km_per_cursa', kind: 'num' },
@@ -2471,6 +2481,7 @@
             { key: 'facturare', kind: 'lei' },
             { key: 'refacturare', kind: 'lei' },
             { key: 'cheltuieli', kind: 'lei' },
+            { key: 'carburant', kind: 'lei' },
             { key: 'profit', kind: 'lei', tone: 'sign' },
             { key: 'marja_percent', kind: 'pct', tone: 'sign' },
             { key: 'venit_km', kind: 'lei3' },
@@ -2544,7 +2555,7 @@
         var totals = {};
         var sumKeys = [
             'curse', 'km_totali', 'km_facturati', 'km_nefacturati', 'km_primar', 'km_distributie',
-            'tone_livrate', 'facturare', 'refacturare', 'cheltuieli', 'profit', 'puncte_client',
+            'tone_livrate', 'facturare', 'refacturare', 'cheltuieli', 'carburant', 'carburant_litri', 'profit', 'puncte_client',
             'zile_active', 'nr_vehicule', 'nr_soferi'
         ];
 

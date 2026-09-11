@@ -124,7 +124,7 @@ class DashboardAnaliticV2Model extends BaseModel
         $fleet = $this->buildFleetKpis($fleetRow, $usage, $beneficiaries);
         $summary = $this->buildSummary($transportRows, $matrixRows);
         $distribution = $this->buildDistribution($from, $whereData, $expr, $this->kmThresholds($filters));
-        $alerts = $this->buildAlerts($vehicles, $drivers, $beneficiaries, $fleet);
+        $alerts = $this->buildAlerts($vehicles, $drivers, $beneficiaries, $fleet, $filters);
 
         return [
             'fleet' => $fleet,
@@ -777,7 +777,14 @@ class DashboardAnaliticV2Model extends BaseModel
             'grad_incarcare_efectiv' => $gradIncarcareEfectiv,
             'facturare' => "(COALESCE(c.total_facturare, 0) + COALESCE(exp.total_refacturare_facturata, 0))",
             'refacturare' => "COALESCE(exp.total_refacturare_pending, 0)",
-            'cheltuieli' => "COALESCE(exp.total_cheltuieli, 0)",
+            // Cheltuiala totala a cursei: ce s-a inregistrat pe cursa + carburantul
+            // asociat ei in modulul Carburanti.
+            'cheltuieli' => $this->hasFuelModule()
+                ? "(COALESCE(exp.total_cheltuieli, 0) + COALESCE(fuel.total_carburant, 0))"
+                : "COALESCE(exp.total_cheltuieli, 0)",
+            'carburant' => $this->hasFuelModule() ? "COALESCE(fuel.total_carburant, 0)" : "0",
+            'carburant_litri' => $this->hasFuelModule() ? "COALESCE(fuel.litri_carburant, 0)" : "0",
+            'carburant_alimentari' => $this->hasFuelModule() ? "COALESCE(fuel.nr_alimentari, 0)" : "0",
             /*
              * Defalcarea refacturarilor nefacturate, calculata pe cursa din aceeasi
              * subinterogare `exp` (fara interogare noua):
@@ -819,6 +826,9 @@ class DashboardAnaliticV2Model extends BaseModel
             COALESCE(SUM(" . $e['refacturare_in_cheltuieli'] . "), 0) AS refacturare_in_cheltuieli,
             COALESCE(SUM(" . $e['refacturare_fara_cost'] . "), 0) AS refacturare_fara_cost,
             COALESCE(SUM(" . $e['cheltuieli_proprii'] . "), 0) AS cheltuieli_proprii,
+            COALESCE(SUM(" . $e['carburant'] . "), 0) AS carburant,
+            COALESCE(SUM(" . $e['carburant_litri'] . "), 0) AS carburant_litri,
+            COALESCE(SUM(" . $e['carburant_alimentari'] . "), 0) AS carburant_alimentari,
             COALESCE(SUM(" . $e['cheltuieli'] . "), 0) AS cheltuieli,
             COALESCE(SUM(" . $e['puncte_client'] . "), 0) AS puncte_client,
             COALESCE(AVG(" . $e['grad_incarcare'] . "), 0) AS grad_incarcare_mediu,
@@ -1062,6 +1072,9 @@ class DashboardAnaliticV2Model extends BaseModel
             'refacturare' => round($refacturare, 2),
             // din care este deja numarat in `cheltuieli` si cat nu are cost inregistrat pe cursa
             'cheltuieli_proprii' => round((float) ($row['cheltuieli_proprii'] ?? 0), 2),
+            'carburant' => round((float) ($row['carburant'] ?? 0), 2),
+            'carburant_litri' => round((float) ($row['carburant_litri'] ?? 0), 2),
+            'carburant_alimentari' => (int) ($row['carburant_alimentari'] ?? 0),
             'refacturare_in_cheltuieli' => round((float) ($row['refacturare_in_cheltuieli'] ?? 0), 2),
             'refacturare_fara_cost' => round((float) ($row['refacturare_fara_cost'] ?? 0), 2),
             'cheltuieli' => round($cheltuieli, 2),
@@ -1317,7 +1330,7 @@ class DashboardAnaliticV2Model extends BaseModel
         ];
     }
 
-    private function buildAlerts(array $vehicles, array $drivers, array $beneficiaries, array $fleet): array
+    private function buildAlerts(array $vehicles, array $drivers, array $beneficiaries, array $fleet, array $filters = []): array
     {
         $alerts = [];
 
@@ -1372,11 +1385,68 @@ class DashboardAnaliticV2Model extends BaseModel
             }
         }
 
+        // Cursele care au si alimentare asociata, si o linie de carburant introdusa
+        // manual: ambele intra in cheltuieli, deci suma poate fi umflata. Nu stergem
+        // nimic automat - sumele difera de obicei - dar semnalam cazul.
+        foreach ($this->findFuelOverlaps($filters) as $overlap) {
+            $alerts[] = $this->alert(
+                'warning',
+                'cursa',
+                'Cursa ' . $overlap['cursa_id'] . ' (' . $overlap['zi'] . ')',
+                'Are și alimentare asociată (' . format_number_ro((float) $overlap['carburant'], 2)
+                    . ' lei), și carburant introdus manual pe cursă - verifică dacă nu e aceeași cheltuială',
+                (float) $overlap['manual'],
+                'lei'
+            );
+        }
+
         if (($fleet['grad_folosinta'] ?? 0) > 0 && $fleet['grad_folosinta'] < 50) {
             $alerts[] = $this->alert('info', 'flota', 'Flota', 'Grad de folosinta al flotei sub 50%', $fleet['grad_folosinta'], '%');
         }
 
         return $alerts;
+    }
+
+    /**
+     * Cursele din perioada care au si alimentare asociata, si carburant introdus
+     * manual pe cursa - candidate la dubla numarare.
+     *
+     * @return array<int,array{cursa_id:int,zi:string,carburant:float,manual:float}>
+     */
+    private function findFuelOverlaps(array $filters): array
+    {
+        if (!$this->hasFuelModule()) {
+            return [];
+        }
+
+        $whereData = $this->buildWhere($filters);
+
+        try {
+            return $this->fetchAll("
+                SELECT
+                    c.id AS cursa_id,
+                    " . $this->reportingDateExpr() . " AS zi,
+                    COALESCE(fuel.total_carburant, 0) AS carburant,
+                    (
+                        SELECT COALESCE(SUM(
+                            CASE WHEN COALESCE(ce.suma, 0) > 0 THEN ce.suma ELSE COALESCE(ce.refacturare_suma, 0) END
+                        ), 0)
+                        FROM curse_cheltuieli ce
+                        WHERE ce.cursa_id = c.id AND ce.tip_cheltuiala IN ('motorina', 'adblue')
+                    ) AS manual
+                " . $this->fromSql() . "
+                {$whereData['where']}
+                  AND COALESCE(fuel.total_carburant, 0) > 0
+                  AND EXISTS (
+                        SELECT 1 FROM curse_cheltuieli ce2
+                        WHERE ce2.cursa_id = c.id AND ce2.tip_cheltuiala IN ('motorina', 'adblue')
+                  )
+                ORDER BY zi ASC
+            ", $whereData['params']);
+        } catch (Throwable $exception) {
+            error_log('[DashboardAnaliticV2Model][findFuelOverlaps] ' . $exception->getMessage());
+            return [];
+        }
     }
 
     private function alert(string $severity, string $type, string $target, string $message, float $value, string $unit): array
@@ -1523,6 +1593,62 @@ class DashboardAnaliticV2Model extends BaseModel
 
     // ------------------------------------------------------------------- infra
 
+    /**
+     * Modulul Carburanti poate lipsi pe un mediu (instalare partiala), asa ca
+     * verificam o singura data daca tabelele exista inainte sa le folosim.
+     */
+    private function hasFuelModule(): bool
+    {
+        static $exista = null;
+        if ($exista !== null) {
+            return $exista;
+        }
+
+        try {
+            $stmt = $this->db->query("
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME IN ('fuel_fillups', 'fuel_trip_links')
+            ");
+            $exista = (int) $stmt->fetchColumn() === 2;
+        } catch (Throwable $exception) {
+            error_log('[DashboardAnaliticV2Model][hasFuelModule] ' . $exception->getMessage());
+            $exista = false;
+        }
+
+        return $exista;
+    }
+
+    /**
+     * Carburantul consumat pe cursa, din asocierea facuta in modulul Carburanti.
+     *
+     * Se aduc DOAR alimentarile legate de o cursa (`fuel_trip_links`), pentru ca
+     * numai acelea pot fi atribuite unui vehicul, sofer si beneficiar anume.
+     * O alimentare nu poate fi legata de doua curse, deci valoarea nu se dubleaza.
+     */
+    private function fuelJoinSql(): string
+    {
+        if (!$this->hasFuelModule()) {
+            return '';
+        }
+
+        return "
+            LEFT JOIN (
+                SELECT
+                    l.trip_id,
+                    SUM(COALESCE(f.total_value, 0)) AS total_carburant,
+                    SUM(COALESCE(f.quantity_liters, 0)) AS litri_carburant,
+                    COUNT(*) AS nr_alimentari
+                FROM fuel_trip_links l
+                INNER JOIN fuel_fillups f ON f.id = l.fillup_id
+                WHERE f.fuel_type IN ('motorina', 'adblue')
+                  AND f.source_type NOT IN ('test', 'demo')
+                  AND COALESCE(f.quantity_liters, 0) > 0
+                GROUP BY l.trip_id
+            ) fuel ON fuel.trip_id = c.id
+        ";
+    }
+
     private function fromSql(): string
     {
         return "
@@ -1555,7 +1681,7 @@ class DashboardAnaliticV2Model extends BaseModel
                 FROM curse_cheltuieli
                 GROUP BY cursa_id
             ) exp ON exp.cursa_id = c.id
-        ";
+        " . $this->fuelJoinSql();
     }
 
     /**
