@@ -120,6 +120,13 @@ $totalPages = (int) ($pagination['total_pages'] ?? 1);
 $fromRow = $totalRows > 0 ? (($currentPage - 1) * $perPage + 1) : 0;
 $toRow = min($totalRows, $currentPage * $perPage);
 
+// Carburantul vine din modulul Carburanti (fuel_fillups), nu din tabela `cheltuieli`:
+// intra in KPI-uri, dar nu are randuri in lista de mai jos.
+$carburant = is_array($summary['carburant'] ?? null) ? $summary['carburant'] : [];
+$carburantTotal = (float) ($carburant['total'] ?? 0);
+$carburantCount = (int) ($carburant['count'] ?? 0);
+$carburantPeTip = is_array($carburant['pe_tip'] ?? null) ? $carburant['pe_tip'] : [];
+
 $alocare = is_array($summary['alocare'] ?? null) ? $summary['alocare'] : ['vehicul' => 0, 'sofer' => 0, 'companie' => 0];
 $alocareTotal = (float) ($summary['alocare_total'] ?? 0);
 $topTipuri = is_array($summary['top_tipuri'] ?? null) ? $summary['top_tipuri'] : [];
@@ -339,7 +346,13 @@ foreach ($rows as $row) {
                     <div>
                         <div class="chx-kpi-label">Total cheltuieli</div>
                         <div class="chx-kpi-value"><?= e($money($summary['total'] ?? 0)) ?></div>
-                        <div class="chx-kpi-note">în perioada selectată</div>
+                        <div class="chx-kpi-note">
+                            <?php if ($carburantTotal > 0): ?>
+                                include <?= e($money($carburantTotal)) ?> carburant
+                            <?php else: ?>
+                                în perioada selectată
+                            <?php endif; ?>
+                        </div>
                     </div>
                 </div>
                 <div class="chx-kpi">
@@ -355,10 +368,36 @@ foreach ($rows as $row) {
                     <div>
                         <div class="chx-kpi-label">Operaționale</div>
                         <div class="chx-kpi-value"><?= e($money($summary['operationala'] ?? 0)) ?></div>
-                        <div class="chx-kpi-note"><?= e(format_number_ro((float) ($summary['procent_operationala'] ?? 0), 1)) ?>% din total</div>
+                        <div class="chx-kpi-note">
+                            <?= e(format_number_ro((float) ($summary['procent_operationala'] ?? 0), 1)) ?>% din total
+                            <?php if ($carburantCount > 0): ?>
+                                · <?= e((string) $carburantCount) ?> alimentări
+                            <?php endif; ?>
+                        </div>
                     </div>
                 </div>
             </div>
+
+            <?php if ($carburantTotal > 0): ?>
+                <div class="chx-fuel-note mb-3">
+                    <i class="bi bi-fuel-pump" aria-hidden="true"></i>
+                    <div>
+                        <strong><?= e($money($carburantTotal)) ?></strong> carburant din
+                        <strong><?= e((string) $carburantCount) ?></strong> alimentări sunt incluse în totalurile de mai sus
+                        <?php
+                        $bucati = [];
+                        foreach ($carburantPeTip as $tipCarburant) {
+                            $bucati[] = e((string) $tipCarburant['nume']) . ' ' . e($money((float) $tipCarburant['total']));
+                        }
+                        echo $bucati === [] ? '.' : '(' . implode(' · ', $bucati) . ').';
+                        ?>
+                        Alimentările se gestionează în modulul Carburanți, deci nu apar ca rânduri în tabelul de mai jos.
+                    </div>
+                    <a class="btn btn-sm btn-outline-secondary chx-fuel-note-link" href="<?= e(build_query_url(['page' => 'carburanti'])) ?>">
+                        Deschide Carburanți
+                    </a>
+                </div>
+            <?php endif; ?>
 
             <section class="chx-table-card">
                 <div class="table-responsive">

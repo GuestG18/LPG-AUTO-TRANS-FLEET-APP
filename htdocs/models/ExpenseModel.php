@@ -628,6 +628,168 @@ class ExpenseModel extends BaseModel
      * defalcarea pe categorii); distributia pe alocare si topul tipurilor
      * respecta toate filtrele active.
      */
+    /**
+     * Carburantul consumat in perioada, din modulul Carburanti (`fuel_fillups`).
+     *
+     * Alimentarile NU sunt inregistrari din tabela `cheltuieli`: vin sincronizate din
+     * CardOil si raman in proprietatea modulului Carburanti. Aici sunt doar insumate,
+     * ca sa intre in KPI-urile paginii - sunt cheltuiala operationala a firmei.
+     *
+     * Se numara doar randurile `source_type = 'api'`, acelasi criteriu ca in
+     * Cost operational/km, ca sa nu intre alimentarile de test / demo.
+     * Valoarea este `total_value`, adica totalul platit CU TVA, consistent cu
+     * coloana `valoare` a cheltuielilor manuale.
+     *
+     * @return array{total:float,count:int,pe_tip:array<string,array{nume:string,total:float,count:int,litri:float}>,aplicabil:bool}
+     */
+    public function getFuelSummary(array $filters): array
+    {
+        $gol = ['total' => 0.0, 'count' => 0, 'pe_tip' => [], 'aplicabil' => false];
+
+        // Filtre pe care alimentarile nu le pot satisface: atunci carburantul nu
+        // face parte din rezultat, ca sa nu apara un total care ignora filtrul.
+        if (trim((string) ($filters['categorie'] ?? '')) === 'administrativa') {
+            return $gol;
+        }
+        if ((int) ($filters['beneficiar_id'] ?? 0) > 0) {
+            return $gol;
+        }
+        // Numele soferilor din CardOil nu se potrivesc cu `soferi.nume`, deci un
+        // filtru pe sofer nu poate selecta alimentari.
+        if ((int) ($filters['sofer_id'] ?? 0) > 0) {
+            return $gol;
+        }
+        // Alimentarea apartine unui vehicul; la filtrarea pe sofer/companie nu se aplica.
+        $alocare = trim((string) ($filters['alocare'] ?? ''));
+        if ($alocare !== '' && $alocare !== 'vehicul') {
+            return $gol;
+        }
+
+        $tipuri = $this->getFuelExpenseTypes();
+        if ($tipuri === []) {
+            return $gol;
+        }
+
+        // Filtrul de subcategorie: acceptam doar tipurile Motorina / AdBlue.
+        $tipId = (int) ($filters['tip_id'] ?? 0);
+        $fuelTypesWanted = array_keys($tipuri);
+        if ($tipId > 0) {
+            $fuelTypesWanted = [];
+            foreach ($tipuri as $fuelType => $tip) {
+                if ((int) $tip['id'] === $tipId) {
+                    $fuelTypesWanted[] = $fuelType;
+                }
+            }
+            if ($fuelTypesWanted === []) {
+                return $gol;
+            }
+        }
+
+        $conditions = ["f.source_type = 'api'", 'f.quantity_liters > 0'];
+        $params = [];
+
+        $placeholders = [];
+        foreach ($fuelTypesWanted as $index => $fuelType) {
+            $key = ':fuel_type_' . $index;
+            $placeholders[] = $key;
+            $params[$key] = $fuelType;
+        }
+        $conditions[] = 'f.fuel_type IN (' . implode(', ', $placeholders) . ')';
+
+        $dateStart = trim((string) ($filters['date_start'] ?? ''));
+        if ($dateStart !== '') {
+            $conditions[] = 'f.fillup_datetime >= :fuel_date_start';
+            $params[':fuel_date_start'] = $dateStart . ' 00:00:00';
+        }
+
+        $dateEnd = trim((string) ($filters['date_end'] ?? ''));
+        if ($dateEnd !== '') {
+            $conditions[] = 'f.fillup_datetime <= :fuel_date_end';
+            $params[':fuel_date_end'] = $dateEnd . ' 23:59:59';
+        }
+
+        // Vehiculul se potriveste pe numarul de inmatriculare normalizat (fara spatii),
+        // acelasi criteriu ca in OperationalCostModel::getFuelPeriodCosts().
+        $vehiculId = (int) ($filters['vehicul_id'] ?? 0);
+        if ($vehiculId > 0) {
+            $conditions[] = 'REPLACE(UPPER(f.vehicle_registration), " ", "") = (
+                SELECT REPLACE(UPPER(v.nr_inmatriculare), " ", "") FROM vehicule v WHERE v.id = :fuel_vehicul
+            )';
+            $params[':fuel_vehicul'] = $vehiculId;
+        }
+
+        // Furnizorul cheltuielilor manuale corespunde statiei de alimentare.
+        $furnizor = trim((string) ($filters['furnizor'] ?? ''));
+        if ($furnizor !== '') {
+            $conditions[] = 'COALESCE(f.station_name, "") LIKE :fuel_furnizor';
+            $params[':fuel_furnizor'] = '%' . $furnizor . '%';
+        }
+
+        $search = trim((string) ($filters['q'] ?? ''));
+        if ($search !== '') {
+            $conditions[] = '(COALESCE(f.station_name, "") LIKE :fuel_q1 OR COALESCE(f.vehicle_registration, "") LIKE :fuel_q2)';
+            $params[':fuel_q1'] = '%' . $search . '%';
+            $params[':fuel_q2'] = '%' . $search . '%';
+        }
+
+        try {
+            $stmt = $this->db->prepare('
+                SELECT f.fuel_type,
+                       COUNT(*) AS cnt,
+                       COALESCE(SUM(f.total_value), 0) AS total,
+                       COALESCE(SUM(f.quantity_liters), 0) AS litri
+                FROM fuel_fillups f
+                WHERE ' . implode(' AND ', $conditions) . '
+                GROUP BY f.fuel_type
+            ');
+            $this->bindParams($stmt, $params);
+            $stmt->execute();
+            $rows = $stmt->fetchAll();
+        } catch (Throwable $exception) {
+            // Modulul Carburanti nu este instalat pe acest mediu.
+            error_log('[ExpenseModel][getFuelSummary] ' . $exception->getMessage());
+            return $gol;
+        }
+
+        $total = 0.0;
+        $count = 0;
+        $peTip = [];
+        foreach ($rows as $row) {
+            $fuelType = (string) $row['fuel_type'];
+            $valoare = (float) $row['total'];
+            $total += $valoare;
+            $count += (int) $row['cnt'];
+            $peTip[$fuelType] = [
+                'nume' => (string) ($tipuri[$fuelType]['nume'] ?? ucfirst($fuelType)),
+                'total' => $valoare,
+                'count' => (int) $row['cnt'],
+                'litri' => (float) $row['litri'],
+            ];
+        }
+
+        return ['total' => $total, 'count' => $count, 'pe_tip' => $peTip, 'aplicabil' => true];
+    }
+
+    /**
+     * Tipurile din nomenclator care corespund carburantului, dupa slug.
+     *
+     * @return array<string,array{id:int,nume:string}> cheie: valoarea din fuel_fillups.fuel_type
+     */
+    private function getFuelExpenseTypes(): array
+    {
+        $stmt = $this->db->query("
+            SELECT id, nume, slug FROM cheltuieli_tipuri
+            WHERE slug IN ('motorina', 'adblue') AND categorie = 'operationala'
+        ");
+
+        $map = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $map[(string) $row['slug']] = ['id' => (int) $row['id'], 'nume' => (string) $row['nume']];
+        }
+
+        return $map;
+    }
+
     public function getSummary(array $filters): array
     {
         // Defalcarea pe categorii, fara filtrul de categorie.
@@ -686,11 +848,38 @@ class ExpenseModel extends BaseModel
         $this->bindParams($stmt, $paramsAll);
         $stmt->execute();
 
+        $tipuriBrute = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $tipuriBrute[] = ['nume' => (string) $row['nume'], 'total' => (float) $row['total']];
+        }
+
+        /*
+         * Carburantul din modulul Carburanti: nu are randuri in `cheltuieli`, dar este
+         * cheltuiala operationala a firmei, deci intra in KPI-uri. Se adauga la total,
+         * la categoria operationala, la alocarea pe vehicul (fiecare alimentare
+         * apartine unui vehicul) si concureaza in topul tipurilor.
+         */
+        $fuel = $this->getFuelSummary($filters);
+        if ($fuel['total'] > 0) {
+            $byCategory['operationala'] += $fuel['total'];
+            $grandTotal += $fuel['total'];
+            $byAllocation['vehicul'] += $fuel['total'];
+
+            // `count*` numara documentele din lista de mai jos, care nu contine
+            // alimentari - numarul lor se afiseaza separat, in nota KPI-ului.
+
+            foreach ($fuel['pe_tip'] as $tip) {
+                $tipuriBrute[] = ['nume' => (string) $tip['nume'], 'total' => (float) $tip['total']];
+            }
+        }
+
+        usort($tipuriBrute, static fn(array $a, array $b): int => $b['total'] <=> $a['total']);
+
         $topTypes = [];
         $othersTotal = 0.0;
-        foreach ($stmt->fetchAll() as $index => $row) {
+        foreach ($tipuriBrute as $index => $row) {
             if ($index < 4) {
-                $topTypes[] = ['nume' => (string) $row['nume'], 'total' => (float) $row['total']];
+                $topTypes[] = $row;
             } else {
                 $othersTotal += (float) $row['total'];
             }
@@ -711,6 +900,7 @@ class ExpenseModel extends BaseModel
             'alocare' => $byAllocation,
             'alocare_total' => array_sum($byAllocation),
             'top_tipuri' => $topTypes,
+            'carburant' => $fuel,
         ];
     }
 

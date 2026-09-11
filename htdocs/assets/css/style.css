@@ -22160,6 +22160,46 @@ body.dispatcher-races-header-pinned .dispatcher-open-races-alert-container {
     color: #94a3b8;
 }
 
+/* Banda care explica de ce KPI-ul include carburantul, dar lista nu il contine */
+.chx-fuel-note {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.7rem 0.95rem;
+    background: #fffaf2;
+    border: 1px solid #f5dfbe;
+    border-radius: 0.85rem;
+    color: #7c5314;
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+.chx-fuel-note > i {
+    font-size: 1.1rem;
+    flex: none;
+}
+
+.chx-fuel-note strong {
+    font-weight: 600;
+}
+
+.chx-fuel-note-link {
+    margin-left: auto;
+    flex: none;
+    white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+    .chx-fuel-note {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .chx-fuel-note-link {
+        margin-left: 0;
+    }
+}
+
 /* Tabelul */
 .chx-table-card {
     background: #fff;
