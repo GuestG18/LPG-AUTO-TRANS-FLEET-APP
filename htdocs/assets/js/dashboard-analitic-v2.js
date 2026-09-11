@@ -78,7 +78,7 @@
         facturare: { label: 'Facturare', kind: 'lei', better: 'high' },
         refacturare: { label: 'Refacturări nefacturate', kind: 'lei', better: 'low' },
         cheltuieli: { label: 'Cheltuieli', kind: 'lei', better: 'low' },
-        carburant: { label: 'Carburant', kind: 'lei', better: 'low' },
+        carburant: { label: 'Carburant CardOil', kind: 'lei', better: 'low' },
         carburant_litri: { label: 'Litri carburant', kind: 'num', better: 'low' },
         profit: { label: 'Profit', kind: 'lei', better: 'high' },
         marja_percent: { label: 'Marjă %', kind: 'pct', better: 'high' },
@@ -570,10 +570,10 @@
                 icon: 'bi-cash-stack',
                 name: 'Cheltuieli',
                 value: fmt(f.cheltuieli, 'lei'),
-                note: 'Include ' + fmt(f.carburant, 'lei') + ' carburant · Cost / km: ' + fmt(f.cost_km, 'lei3'),
+                note: 'Include ' + fmt(f.carburant, 'lei') + ' carburant CardOil · Cost / km: ' + fmt(f.cost_km, 'lei3'),
                 detail: {
-                    intro: 'Cheltuielile reprezintă costurile suportate pentru curse: ce s-a înregistrat pe cursă, plus alimentările asociate cursei în modulul Carburanți. Refacturările nefacturate rămân evidențiate în cheltuieli până când sunt facturate clientului. După facturare, suma trece la Facturare, iar efectul net asupra profitului devine zero.',
-                    formula: 'Cheltuieli proprii (suma de pe linie) + Refacturări introduse fără sumă proprie + Carburant asociat cursei · Pe liniile care au și sumă, și refacturare, se numără o singură dată',
+                    intro: 'Cheltuielile reprezintă costurile efectiv asociate curselor: ce s-a înregistrat pe cursă, plus alimentările CardOil făcute cu același vehicul în intervalul cursei. Nu se estimează consum și nu se redistribuie carburant între curse. Refacturările nefacturate rămân evidențiate în cheltuieli până când sunt facturate clientului. După facturare, suma trece la Facturare, iar efectul net asupra profitului devine zero.',
+                    formula: 'Cheltuieli proprii (suma de pe linie) + Refacturări introduse fără sumă proprie + Carburant CardOil din intervalul cursei · Pe liniile care au și sumă, și refacturare, se numără o singură dată',
                     stats: [
                         { label: 'Cheltuieli proprii', value: fmt(f.cheltuieli_proprii, 'lei'), hint: 'costuri cu sumă completată pe linia de cheltuială' },
                         {
@@ -582,12 +582,19 @@
                             hint: 'linii introduse doar ca refacturare, cu câmpul „Sumă” lăsat 0 — banii au fost totuși cheltuiți, deci se adaugă la total'
                         },
                         {
-                            label: '+ Carburant (motorină + AdBlue)',
+                            label: '+ Carburant CardOil (motorină + AdBlue)',
                             value: fmt(f.carburant, 'lei'),
-                            hint: 'alimentările asociate curselor în modulul Carburanți: ' + fmt(f.carburant_alimentari, 'int') +
-                                ' alimentări, ' + fmt(f.carburant_litri, 'num') + ' litri. Intră doar cele legate de o cursă — restul nu pot fi atribuite unui vehicul și unui beneficiar anume.'
+                            hint: 'alimentările făcute cu vehiculul cursei, cu data între începutul și sfârșitul cursei (ambele zile incluse): ' +
+                                fmt(f.carburant_litri, 'num') + ' litri. Dacă în intervalul unei curse nu există nicio alimentare, carburantul ei este 0 — nu se caută alimentare înainte sau după.'
                         },
                         { label: '= Total cheltuieli', value: fmt(f.cheltuieli, 'lei') },
+                        {
+                            label: 'Alimentări în afara oricărei curse',
+                            value: fmt(f.carburant_nealocat, 'lei'),
+                            hint: 'alimentat în perioadă ' + fmt(f.carburant_perioada, 'lei') + ', din care ' + fmt(f.carburant_acoperire, 'pct') +
+                                ' cade în intervalul unei curse. Restul — ' + fmt(f.carburant_nealocat_alimentari, 'num') +
+                                ' alimentări în zile fără cursă înregistrată — apare doar aici, la nivel de perioadă: nu se repartizează pe curse.'
+                        },
                         {
                             label: 'Refacturări nefacturate',
                             value: fmt(f.refacturare, 'lei'),
@@ -2733,6 +2740,7 @@
             { label: 'Tone livrate', value: fmt(entity.tone_livrate, 'tone') },
             { label: 'Facturare', value: fmt(entity.facturare, 'lei') },
             { label: 'Cheltuieli', value: fmt(entity.cheltuieli, 'lei') },
+            { label: 'din care carburant CardOil', value: fmt(entity.carburant, 'lei') },
             { label: 'Profit', value: fmt(entity.profit, 'lei'), tone: num(entity.profit) < 0 ? 'bad' : 'good' },
             { label: 'Marjă', value: fmt(entity.marja_percent, 'pct') },
             { label: 'Profit / km', value: fmt(entity.profit_km, 'lei3') },
@@ -2781,6 +2789,51 @@
             '</tbody></table>';
     }
 
+    /**
+     * Defalcarea unei curse, exact in ordinea ceruta: venit, cheltuieli asociate
+     * (carburantul CardOil separat de restul categoriilor), total, rezultat.
+     * Carburant 0 este o stare valida - se afiseaza ca atare, nu ca date lipsa.
+     */
+    function tripBreakdownHtml(trip, span) {
+        var lines = [];
+
+        lines.push(breakdownRow('Venit cursă', trip.facturare, 'head'));
+        lines.push(breakdownRow('Cheltuieli asociate', null, 'head'));
+
+        var fuelNote = num(trip.carburant) > 0
+            ? num(trip.carburant_alimentari) + ' alimentare' + (num(trip.carburant_alimentari) === 1 ? '' : 'ri') +
+                ' · ' + fmt(trip.carburant_litri, 'num') + ' litri, în intervalul ' +
+                fmtDateRo(trip.data_inceput) + ' – ' + fmtDateRo(trip.data_sfarsit || trip.data_inceput)
+            : 'Nicio alimentare CardOil în intervalul cursei.';
+        lines.push(breakdownRow('Carburant CardOil', trip.carburant, 'sub', fuelNote));
+
+        var detail = trip.cheltuieli_detaliu || [];
+        if (detail.length) {
+            detail.forEach(function (line) {
+                lines.push(breakdownRow(line.label, line.suma, 'sub'));
+            });
+        } else if (num(trip.cheltuieli_altele) > 0) {
+            lines.push(breakdownRow('Alte cheltuieli', trip.cheltuieli_altele, 'sub'));
+        } else {
+            lines.push(breakdownRow('Alte categorii de cheltuieli', 0, 'sub', 'Nicio cheltuială înregistrată pe cursă.'));
+        }
+
+        lines.push(breakdownRow('Total cheltuieli', trip.cheltuieli, 'total'));
+        lines.push(breakdownRow('Rezultat cursă', trip.profit, 'result'));
+
+        return '<tr class="da2-trip-detail" data-trip-detail="' + escapeHtml(String(trip.id)) + '" hidden>' +
+            '<td colspan="' + span + '"><div class="da2-trip-breakdown">' + lines.join('') + '</div></td></tr>';
+    }
+
+    function breakdownRow(label, value, kind, note) {
+        return '<div class="da2-bd-row da2-bd-' + kind + '">' +
+            '<span class="da2-bd-label">' + escapeHtml(label) +
+                (note ? '<em class="da2-bd-note">' + escapeHtml(note) + '</em>' : '') + '</span>' +
+            '<span class="da2-bd-value' + (kind === 'result' ? (num(value) < 0 ? ' da2-neg' : ' da2-pos') : '') + '">' +
+                (value === null ? '' : escapeHtml(fmt(value, 'lei'))) + '</span>' +
+            '</div>';
+    }
+
     function tripsTable(trips, type) {
         if (!trips.length) {
             return '<p class="da2-empty">Nu există curse în perioada selectată.</p>';
@@ -2800,6 +2853,7 @@
             { key: 'grad_incarcare', label: 'Încărcare', kind: 'pct' },
             { key: 'nr_clienti', label: 'Puncte', kind: 'int' },
             { key: 'facturare', label: 'Facturare', kind: 'lei' },
+            { key: 'carburant', label: 'Carburant CardOil', kind: 'lei' },
             { key: 'cheltuieli', label: 'Cheltuieli', kind: 'lei' },
             { key: 'profit', label: 'Profit', kind: 'lei', tone: true },
             { key: 'status_label', label: 'Status' }
@@ -2810,7 +2864,9 @@
                 return '<th class="' + (col.kind ? 'da2-num' : '') + '">' + escapeHtml(col.label) + '</th>';
             }).join('') + '</tr></thead>' +
             '<tbody>' + trips.map(function (trip) {
-                return '<tr>' + columns.map(function (col) {
+                return '<tr class="da2-trip-row" data-trip-toggle="' + escapeHtml(String(trip.id)) +
+                    '" tabindex="0" role="button" aria-expanded="false" title="Vezi defalcarea cursei">' +
+                    columns.map(function (col) {
                     if (col.key === 'data') {
                         // cursele care traversează zile: arătăm și ziua de start, ca să se vadă de ce apar aici
                         var start = trip.data_inceput && trip.data_inceput !== trip.data
@@ -2830,7 +2886,7 @@
                     }
                     var classes = 'da2-num' + (col.tone ? (num(trip[col.key]) < 0 ? ' da2-neg' : ' da2-pos') : '');
                     return '<td class="' + classes + '">' + escapeHtml(fmt(trip[col.key], col.kind)) + '</td>';
-                }).join('') + '</tr>';
+                }).join('') + '</tr>' + tripBreakdownHtml(trip, columns.length);
             }).join('') + '</tbody></table>';
     }
 
@@ -3019,6 +3075,7 @@
                 { key: 'nr_clienti', label: 'Puncte client', kind: 'int' },
                 { key: 'facturare', label: 'Facturare', kind: 'lei' },
                 { key: 'refacturare', label: 'Refact. nefacturată', kind: 'lei' },
+                { key: 'carburant', label: 'Carburant CardOil', kind: 'lei' },
                 { key: 'cheltuieli', label: 'Cheltuieli', kind: 'lei' },
                 { key: 'profit', label: 'Profit', kind: 'lei' },
                 { key: 'status_label', label: 'Status' }
@@ -3694,6 +3751,17 @@
         }
     });
 
+    function toggleTripBreakdown(row) {
+        var detail = row.parentNode.querySelector('[data-trip-detail="' + row.getAttribute('data-trip-toggle') + '"]');
+        if (!detail) {
+            return;
+        }
+        var open = detail.hidden;
+        detail.hidden = !open;
+        row.classList.toggle('da2-trip-open', open);
+        row.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
     document.getElementById('da2-drawer').addEventListener('click', function (event) {
         if (event.target.closest('[data-drawer-close]')) {
             closeEntityDrawer();
@@ -3703,6 +3771,23 @@
         var action = event.target.closest('[data-drawer-action]');
         if (action) {
             runDrawerAction(action.getAttribute('data-drawer-action'));
+            return;
+        }
+
+        var tripRow = event.target.closest('[data-trip-toggle]');
+        if (tripRow) {
+            toggleTripBreakdown(tripRow);
+        }
+    });
+
+    document.getElementById('da2-drawer').addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter' && event.key !== ' ') {
+            return;
+        }
+        var tripRow = event.target.closest('[data-trip-toggle]');
+        if (tripRow) {
+            event.preventDefault();
+            toggleTripBreakdown(tripRow);
         }
     });
 

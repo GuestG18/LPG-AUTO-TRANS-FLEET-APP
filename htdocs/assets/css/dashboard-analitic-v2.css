@@ -1810,3 +1810,60 @@
         break-inside: avoid;
     }
 }
+
+/* ---------------------------------------- defalcarea unei curse (sertar entitate) */
+.da2-trip-row { cursor: pointer; }
+.da2-trip-row:hover > td { background: var(--da2-hover, rgba(13, 110, 253, .05)); }
+.da2-trip-row:focus-visible { outline: 2px solid var(--da2-accent, #0d6efd); outline-offset: -2px; }
+.da2-trip-row.da2-trip-open > td { background: rgba(13, 110, 253, .08); }
+
+.da2-trip-detail > td { padding: 0 !important; background: rgba(15, 23, 42, .03); }
+
+.da2-trip-breakdown {
+    display: grid;
+    gap: 2px;
+    max-width: 560px;
+    padding: 14px 18px;
+}
+
+.da2-bd-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 4px 0;
+}
+
+.da2-bd-label { display: flex; flex-direction: column; }
+
+.da2-bd-note {
+    font-size: .74rem;
+    font-style: normal;
+    color: var(--da2-muted, #6c757d);
+}
+
+.da2-bd-value { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.da2-bd-head { font-weight: 600; }
+.da2-bd-head + .da2-bd-sub { padding-top: 2px; }
+
+.da2-bd-sub .da2-bd-label { padding-left: 18px; position: relative; }
+.da2-bd-sub .da2-bd-label::before {
+    content: '–';
+    position: absolute;
+    left: 4px;
+    color: var(--da2-muted, #6c757d);
+}
+
+.da2-bd-total {
+    margin-top: 4px;
+    padding-top: 8px;
+    border-top: 1px solid var(--da2-border, #dee2e6);
+    font-weight: 600;
+}
+
+.da2-bd-result {
+    padding-top: 6px;
+    border-top: 2px solid var(--da2-border, #dee2e6);
+    font-weight: 700;
+}
