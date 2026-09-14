@@ -80,6 +80,7 @@
         cheltuieli: { label: 'Cheltuieli', kind: 'lei', better: 'low' },
         carburant: { label: 'Carburant CardOil', kind: 'lei', better: 'low' },
         carburant_litri: { label: 'Litri carburant', kind: 'num', better: 'low' },
+        pierdere_t0: { label: 'Pierdere T0', kind: 'lei', better: 'low' },
         profit: { label: 'Profit', kind: 'lei', better: 'high' },
         marja_percent: { label: 'Marjă %', kind: 'pct', better: 'high' },
         venit_km: { label: 'Venit / km', kind: 'lei3', better: 'high' },
@@ -570,10 +571,11 @@
                 icon: 'bi-cash-stack',
                 name: 'Cheltuieli',
                 value: fmt(f.cheltuieli, 'lei'),
-                note: 'Include ' + fmt(f.carburant, 'lei') + ' carburant CardOil · Cost / km: ' + fmt(f.cost_km, 'lei3'),
+                note: 'Include ' + fmt(f.carburant, 'lei') + ' carburant CardOil și ' + fmt(f.pierdere_t0, 'lei') +
+                    ' pierdere T0 · Cost / km: ' + fmt(f.cost_km, 'lei3'),
                 detail: {
-                    intro: 'Cheltuielile reprezintă costurile efectiv asociate curselor: ce s-a înregistrat pe cursă, plus alimentările CardOil făcute cu același vehicul în intervalul cursei. Nu se estimează consum și nu se redistribuie carburant între curse. Refacturările nefacturate rămân evidențiate în cheltuieli până când sunt facturate clientului. După facturare, suma trece la Facturare, iar efectul net asupra profitului devine zero.',
-                    formula: 'Cheltuieli proprii (suma de pe linie) + Refacturări introduse fără sumă proprie + Carburant CardOil din intervalul cursei · Pe liniile care au și sumă, și refacturare, se numără o singură dată',
+                    intro: 'Cheltuielile reprezintă costurile efectiv asociate curselor: ce s-a înregistrat pe cursă, plus alimentările CardOil făcute cu același vehicul în intervalul cursei. Nu se estimează consum și nu se redistribuie carburant între curse. Separat de curse intră și pierderea T0 — plinurile de referință de la începutul lunii, care nu aparțin niciunei curse. Refacturările nefacturate rămân evidențiate în cheltuieli până când sunt facturate clientului. După facturare, suma trece la Facturare, iar efectul net asupra profitului devine zero.',
+                    formula: 'Cheltuieli proprii (suma de pe linie) + Refacturări introduse fără sumă proprie + Carburant CardOil din intervalul cursei + Pierdere T0 · Pe liniile care au și sumă, și refacturare, se numără o singură dată',
                     stats: [
                         { label: 'Cheltuieli proprii', value: fmt(f.cheltuieli_proprii, 'lei'), hint: 'costuri cu sumă completată pe linia de cheltuială' },
                         {
@@ -587,13 +589,21 @@
                             hint: 'alimentările făcute cu vehiculul cursei, cu data între începutul și sfârșitul cursei (ambele zile incluse): ' +
                                 fmt(f.carburant_litri, 'num') + ' litri. Dacă în intervalul unei curse nu există nicio alimentare, carburantul ei este 0 — nu se caută alimentare înainte sau după.'
                         },
+                        {
+                            label: '+ Pierdere T0 (început de lună)',
+                            value: fmt(f.pierdere_t0, 'lei'),
+                            hint: 'plinurile de referință de la începutul lunii — ' + fmt(f.pierdere_t0_alimentari, 'num') +
+                                ' alimentări. Litrii lor refac ce s-a consumat ÎNAINTE de lună, deci nu aparțin niciunei curse; ' +
+                                'pentru prima lună din aplicație nu există perioadă anterioară căreia să le atribui, așa că rămân pierdere. ' +
+                                'Se numără pe vehicul, o singură dată pe lună — nu se împart pe șoferi sau pe clienți.'
+                        },
                         { label: '= Total cheltuieli', value: fmt(f.cheltuieli, 'lei') },
                         {
                             label: 'Alimentări în afara oricărei curse',
                             value: fmt(f.carburant_nealocat, 'lei'),
                             hint: 'alimentat în perioadă ' + fmt(f.carburant_perioada, 'lei') + ', din care ' + fmt(f.carburant_acoperire, 'pct') +
                                 ' cade în intervalul unei curse. Restul — ' + fmt(f.carburant_nealocat_alimentari, 'num') +
-                                ' alimentări în zile fără cursă înregistrată — apare doar aici, la nivel de perioadă: nu se repartizează pe curse.'
+                                ' alimentări în zile fără cursă înregistrată — apare doar aici, la nivel de perioadă: nu se repartizează pe curse. ' + 'Alimentările T0 sunt numărate separat, la linia de mai sus.'
                         },
                         {
                             label: 'Refacturări nefacturate',
@@ -2453,6 +2463,7 @@
             { key: 'refacturare', kind: 'lei' },
             { key: 'cheltuieli', kind: 'lei' },
             { key: 'carburant', kind: 'lei' },
+            { key: 'pierdere_t0', kind: 'lei' },
             { key: 'profit', kind: 'lei', tone: 'sign' },
             { key: 'marja_percent', kind: 'pct', tone: 'sign' },
             { key: 'venit_km', kind: 'lei3' },
@@ -2562,7 +2573,7 @@
         var totals = {};
         var sumKeys = [
             'curse', 'km_totali', 'km_facturati', 'km_nefacturati', 'km_primar', 'km_distributie',
-            'tone_livrate', 'facturare', 'refacturare', 'cheltuieli', 'carburant', 'carburant_litri', 'profit', 'puncte_client',
+            'tone_livrate', 'facturare', 'refacturare', 'cheltuieli', 'carburant', 'carburant_litri', 'pierdere_t0', 'profit', 'puncte_client',
             'zile_active', 'nr_vehicule', 'nr_soferi'
         ];
 
@@ -2741,6 +2752,7 @@
             { label: 'Facturare', value: fmt(entity.facturare, 'lei') },
             { label: 'Cheltuieli', value: fmt(entity.cheltuieli, 'lei') },
             { label: 'din care carburant CardOil', value: fmt(entity.carburant, 'lei') },
+            { label: 'din care pierdere T0', value: fmt(entity.pierdere_t0, 'lei') },
             { label: 'Profit', value: fmt(entity.profit, 'lei'), tone: num(entity.profit) < 0 ? 'bad' : 'good' },
             { label: 'Marjă', value: fmt(entity.marja_percent, 'pct') },
             { label: 'Profit / km', value: fmt(entity.profit_km, 'lei3') },
