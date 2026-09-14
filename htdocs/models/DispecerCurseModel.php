@@ -3749,15 +3749,19 @@ class DispecerCurseModel extends BaseModel
 
         $stmt = $this->db->prepare("
             SELECT
+                v.id,
                 v.nr_inmatriculare,
-                MIN(v.marca) AS marca,
-                MIN(v.model) AS model,
-                COUNT(DISTINCT c.id) AS race_count
-            FROM curse_dispecer c
-            INNER JOIN vehicule v ON v.id = c.vehicle_id
+                v.marca,
+                v.model,
+                v.capacitate_transport
+            FROM vehicule v
             WHERE COALESCE(TRIM(v.nr_inmatriculare), '') <> ''
-              AND c.deleted_at IS NULL
-            GROUP BY v.nr_inmatriculare
+              AND EXISTS (
+                  SELECT 1
+                  FROM curse_dispecer c
+                  WHERE c.vehicle_id = v.id
+                    AND c.deleted_at IS NULL
+              )
             ORDER BY v.nr_inmatriculare ASC
         ");
         $stmt->execute();
@@ -3921,9 +3925,15 @@ class DispecerCurseModel extends BaseModel
             $params[':' . $prefix . '_data_end'] = (string) $filters['data_end'];
         }
 
-        if (($filters['nr_inmatriculare'] ?? '') !== '') {
-            $where[] = 'v.nr_inmatriculare = :' . $prefix . '_plate';
-            $params[':' . $prefix . '_plate'] = (string) $filters['nr_inmatriculare'];
+        $vehicleIds = array_values(array_filter(array_map('intval', (array) ($filters['vehicle_ids'] ?? [])), static fn (int $id): bool => $id > 0));
+        if ($vehicleIds !== []) {
+            $vehiclePlaceholders = [];
+            foreach ($vehicleIds as $index => $vehicleId) {
+                $placeholder = ':' . $prefix . '_vehicle_' . $index;
+                $vehiclePlaceholders[] = $placeholder;
+                $params[$placeholder] = $vehicleId;
+            }
+            $where[] = 'c.vehicle_id IN (' . implode(', ', $vehiclePlaceholders) . ')';
         }
 
         if ((int) ($filters['beneficiar_id'] ?? 0) > 0) {

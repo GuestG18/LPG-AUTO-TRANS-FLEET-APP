@@ -9943,6 +9943,96 @@ button.dispatcher-datetime-picker-title:focus-visible {
     cursor: pointer;
 }
 
+/* Grupe de capacitate in selectorul de vehicule (Configurare transport, Refacturari). */
+.tcv2-vehicle-menu-search {
+    margin-bottom: 0.45rem;
+}
+
+.tcv2-vehicle-group[hidden] {
+    display: none !important;
+}
+
+.tcv2-vehicle-group + .tcv2-vehicle-group {
+    margin-top: 0.35rem;
+}
+
+.tcv2-vehicle-group-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.35rem 0.55rem;
+    margin: 0;
+    background: #f1f5f9;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.76rem;
+    font-weight: 800;
+    color: #334155;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.tcv2-vehicle-group-head:hover {
+    background: #e8eef5;
+}
+
+.tcv2-vehicle-group-count {
+    margin-left: auto;
+    color: #64748b;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.tcv2-vehicle-group .vehicle-multiselect-option {
+    padding-left: 1.5rem !important;
+}
+
+.tcv2-vehicle-group-chevron {
+    margin-left: 0.3rem;
+    font-size: 0.72rem;
+    color: #64748b;
+    transition: transform 0.12s ease;
+}
+
+.tcv2-vehicle-group.is-collapsed .tcv2-vehicle-group-chevron {
+    transform: rotate(-90deg);
+}
+
+.vehicle-multiselect-menu:not(.is-searching) .tcv2-vehicle-group.is-collapsed .vehicle-multiselect-option {
+    display: none !important;
+}
+
+/* Aceeasi sageata ca la .form-select, ca selectorul sa arate ca restul filtrelor. */
+.refacturare-filter-field .vehicle-multiselect-toggle {
+    height: 46px;
+    min-height: 46px;
+    padding-right: 2.25rem;
+    border-color: #cfd8e6;
+    border-radius: 6px;
+    color: #334155;
+    font-weight: 400;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    background-size: 16px 12px;
+}
+
+.refacturare-filter-field .vehicle-multiselect-toggle::after {
+    display: none;
+}
+
+.refacturare-filter-field .vehicle-multiselect-toggle:hover,
+.refacturare-filter-field .vehicle-multiselect-toggle:focus,
+.refacturare-filter-field .vehicle-multiselect-toggle.show {
+    background-color: #ffffff;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+}
+
+.refacturare-filter-field .vehicle-multiselect-menu {
+    max-height: 340px;
+}
+
 .maintenance-stock-details {
     border: 1px solid #dbe3ee;
     border-radius: 0.6rem;

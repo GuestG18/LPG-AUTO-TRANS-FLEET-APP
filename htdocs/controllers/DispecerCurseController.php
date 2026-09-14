@@ -2921,7 +2921,7 @@ class DispecerCurseController
         return [
             'data_start' => $currentMonthStart->modify('-1 month')->format('Y-m-01'),
             'data_end' => $currentMonthStart->modify('-1 day')->format('Y-m-d'),
-            'nr_inmatriculare' => '',
+            'vehicle_ids' => [],
             'beneficiar_id' => '',
             'tip_refacturare' => '',
             'status_factura' => '',
@@ -2948,10 +2948,10 @@ class DispecerCurseController
             [$startDate, $endDate] = [$endDate, $startDate];
         }
 
-        $plate = trim((string) ($_GET['nr_inmatriculare'] ?? ''));
-        if (mb_strlen($plate) > 40) {
-            $plate = mb_substr($plate, 0, 40);
-        }
+        $vehicleIds = array_slice(array_values(array_unique(array_filter(
+            array_map('intval', is_array($_GET['vehicle_ids'] ?? null) ? $_GET['vehicle_ids'] : []),
+            static fn (int $id): bool => $id > 0
+        ))), 0, 300);
 
         $beneficiaryId = (int) ($_GET['beneficiar_id'] ?? 0);
 
@@ -2978,7 +2978,7 @@ class DispecerCurseController
         return [
             'data_start' => $startDate,
             'data_end' => $endDate,
-            'nr_inmatriculare' => $plate,
+            'vehicle_ids' => $vehicleIds,
             'beneficiar_id' => $beneficiaryId > 0 ? (string) $beneficiaryId : '',
             'tip_refacturare' => $type,
             'status_factura' => $status,

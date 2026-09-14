@@ -6,6 +6,40 @@ $summary = is_array($refacturareSummary ?? null) ? $refacturareSummary : [];
 $pagination = is_array($pagination ?? null) ? $pagination : [];
 $plateOptions = is_array($plateOptions ?? null) ? $plateOptions : [];
 $beneficiaryOptions = is_array($beneficiaryOptions ?? null) ? $beneficiaryOptions : [];
+
+// Vehiculele grupate dupa capacitate, ca in selectorul din Configurare transport.
+$selectedVehicleIds = array_map('intval', (array) ($filters['vehicle_ids'] ?? []));
+$vehicleLabelById = [];
+$vehicleCapacityGroups = [];
+foreach ($plateOptions as $plateOption) {
+    $vehicleOptionId = (int) ($plateOption['id'] ?? 0);
+    if ($vehicleOptionId <= 0) {
+        continue;
+    }
+    $vehicleName = trim((string) (($plateOption['marca'] ?? '') . ' ' . ($plateOption['model'] ?? '')));
+    $vehicleLabelById[$vehicleOptionId] = trim((string) ($plateOption['nr_inmatriculare'] ?? '')) . ($vehicleName !== '' ? ' - ' . $vehicleName : '');
+
+    $capacityValue = (float) ($plateOption['capacitate_transport'] ?? 0);
+    $capacityKey = $capacityValue > 0 ? number_format($capacityValue, 2, '.', '') : 'fara';
+    if (!isset($vehicleCapacityGroups[$capacityKey])) {
+        $vehicleCapacityGroups[$capacityKey] = [
+            'label' => $capacityValue > 0
+                ? rtrim(rtrim(number_format($capacityValue, 2, '.', ''), '0'), '.') . ' tone'
+                : 'Fără capacitate',
+            'capacity' => $capacityValue,
+            'vehicles' => [],
+        ];
+    }
+    $vehicleCapacityGroups[$capacityKey]['vehicles'][] = $plateOption;
+}
+uasort($vehicleCapacityGroups, static fn (array $a, array $b): int => $b['capacity'] <=> $a['capacity']);
+
+$selectedVehicleIds = array_values(array_filter($selectedVehicleIds, static fn (int $id): bool => isset($vehicleLabelById[$id])));
+$selectedVehicleLabel = match (count($selectedVehicleIds)) {
+    0 => 'Toate vehiculele',
+    1 => $vehicleLabelById[$selectedVehicleIds[0]],
+    default => count($selectedVehicleIds) . ' vehicule selectate',
+};
 $expenseEntryTypes = is_array($expenseEntryTypes ?? null) ? $expenseEntryTypes : (array) ($expenseTypes ?? []);
 unset($expenseEntryTypes['motorina']);
 $refacturareTypeLabels = [
@@ -175,23 +209,43 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
             </div>
 
             <div class="refacturare-filter-field">
-                <label class="form-label" for="ref_filter_plate">Nr. înmatriculare</label>
-                <select class="form-select" id="ref_filter_plate" name="nr_inmatriculare">
-                    <option value="">Toate numerele</option>
-                    <?php foreach ($plateOptions as $plateOption): ?>
-                        <?php
-                            $plate = trim((string) ($plateOption['nr_inmatriculare'] ?? ''));
-                            if ($plate === '') {
-                                continue;
-                            }
-                            $vehicleName = trim((string) (($plateOption['marca'] ?? '') . ' ' . ($plateOption['model'] ?? '')));
-                        ?>
-                        <option value="<?= e($plate) ?>" <?= (string) ($filters['nr_inmatriculare'] ?? '') === $plate ? 'selected' : '' ?>>
-                            <?= e($plate . ($vehicleName !== '' ? ' - ' . $vehicleName : '')) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <div class="refacturare-field-help">Lista se actualizează automat din cursele disponibile</div>
+                <label class="form-label" for="ref_filter_vehicles_toggle">Vehicule</label>
+                <div class="dropdown vehicle-multiselect-dropdown" data-ref-vehicle-dropdown>
+                    <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start vehicle-multiselect-toggle" type="button" id="ref_filter_vehicles_toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+                        <span class="vehicle-multiselect-label" data-ref-vehicle-label><?= e($selectedVehicleLabel) ?></span>
+                    </button>
+                    <div class="dropdown-menu w-100 p-2 vehicle-multiselect-menu" aria-labelledby="ref_filter_vehicles_toggle">
+                        <div class="tcv2-vehicle-menu-search"><input type="search" class="form-control form-control-sm" data-vehicle-menu-search placeholder="Caută vehicul..." aria-label="Caută vehicul"></div>
+                        <div class="tcv2-vehicle-menu-empty text-muted small px-2 py-1" hidden>Niciun vehicul găsit.</div>
+                        <?php foreach ($vehicleCapacityGroups as $capacityGroup): ?>
+                            <?php
+                                $capacityGroupHasSelection = false;
+                                foreach ($capacityGroup['vehicles'] as $capacityGroupOption) {
+                                    if (in_array((int) ($capacityGroupOption['id'] ?? 0), $selectedVehicleIds, true)) {
+                                        $capacityGroupHasSelection = true;
+                                        break;
+                                    }
+                                }
+                            ?>
+                            <div class="tcv2-vehicle-group<?= $capacityGroupHasSelection ? '' : ' is-collapsed' ?>" data-vehicle-group data-group-label="<?= e(mb_strtolower((string) $capacityGroup['label'])) ?>">
+                                <div class="tcv2-vehicle-group-head" data-vehicle-group-head>
+                                    <input class="form-check-input m-0" type="checkbox" data-vehicle-group-toggle aria-label="Selectează toate vehiculele: <?= e((string) $capacityGroup['label']) ?>">
+                                    <span><?= e((string) $capacityGroup['label']) ?></span>
+                                    <span class="tcv2-vehicle-group-count"><?= e((string) count($capacityGroup['vehicles'])) ?></span>
+                                    <i class="bi bi-chevron-down tcv2-vehicle-group-chevron" aria-hidden="true"></i>
+                                </div>
+                                <?php foreach ($capacityGroup['vehicles'] as $vehicleOption): ?>
+                                    <?php $vehicleOptionId = (int) ($vehicleOption['id'] ?? 0); ?>
+                                    <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option">
+                                        <input class="form-check-input m-0" type="checkbox" name="vehicle_ids[]" value="<?= e((string) $vehicleOptionId) ?>" <?= in_array($vehicleOptionId, $selectedVehicleIds, true) ? 'checked' : '' ?>>
+                                        <span><?= e($vehicleLabelById[$vehicleOptionId] ?? '') ?></span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+                <div class="refacturare-field-help">Poți alege mai multe vehicule sau o capacitate întreagă</div>
             </div>
 
             <div class="refacturare-filter-field">
@@ -551,7 +605,9 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
             <form method="get" class="refacturare-page-size-form">
                 <?php foreach (array_merge($filterBase, ['p' => 1]) as $key => $value): ?>
                     <?php if ($key === 'per_page'): continue; endif; ?>
-                    <input type="hidden" name="<?= e((string) $key) ?>" value="<?= e((string) $value) ?>">
+                    <?php foreach ((is_array($value) ? $value : [$value]) as $hiddenValue): ?>
+                        <input type="hidden" name="<?= e((string) $key . (is_array($value) ? '[]' : '')) ?>" value="<?= e((string) $hiddenValue) ?>">
+                    <?php endforeach; ?>
                 <?php endforeach; ?>
                 <label for="ref_per_page">Afișează</label>
                 <select class="form-select form-select-sm" id="ref_per_page" name="per_page" onchange="this.form.submit()">
@@ -607,6 +663,109 @@ document.addEventListener('DOMContentLoaded', function () {
     formEl.querySelectorAll('select, input[type="date"]').forEach(function (controlEl) {
         controlEl.addEventListener('change', submitFilters);
     });
+
+    /*
+     * Selector de vehicule (acelasi comportament ca in Configurare transport): cautare,
+     * grupe de capacitate pliabile si bifarea unei grupe intregi. Filtrul se aplica la
+     * inchiderea listei, doar daca selectia s-a schimbat.
+     */
+    var vehicleDropdownEl = formEl.querySelector('[data-ref-vehicle-dropdown]');
+    if (vehicleDropdownEl instanceof HTMLElement) {
+        var vehicleMenuEl = vehicleDropdownEl.querySelector('.vehicle-multiselect-menu');
+        var vehicleLabelEl = vehicleDropdownEl.querySelector('[data-ref-vehicle-label]');
+        var vehicleSearchEl = vehicleDropdownEl.querySelector('[data-vehicle-menu-search]');
+        var vehicleChecks = Array.prototype.slice.call(vehicleDropdownEl.querySelectorAll('input[name="vehicle_ids[]"]'));
+
+        var vehicleSelectionKey = function () {
+            return vehicleChecks.filter(function (el) { return el.checked; }).map(function (el) { return el.value; }).join(',');
+        };
+        var initialVehicleSelection = vehicleSelectionKey();
+
+        var refreshGroupToggle = function (groupEl) {
+            var toggleEl = groupEl.querySelector('[data-vehicle-group-toggle]');
+            var inputs = Array.prototype.slice.call(groupEl.querySelectorAll('input[name="vehicle_ids[]"]'));
+            var checkedCount = inputs.filter(function (el) { return el.checked; }).length;
+            toggleEl.checked = inputs.length > 0 && checkedCount === inputs.length;
+            toggleEl.indeterminate = checkedCount > 0 && checkedCount < inputs.length;
+        };
+
+        var refreshVehicleLabel = function () {
+            var selected = vehicleChecks.filter(function (el) { return el.checked; });
+            if (selected.length === 0) {
+                vehicleLabelEl.textContent = 'Toate vehiculele';
+            } else if (selected.length === 1) {
+                vehicleLabelEl.textContent = selected[0].closest('label').querySelector('span').textContent.trim();
+            } else {
+                vehicleLabelEl.textContent = selected.length + ' vehicule selectate';
+            }
+            vehicleDropdownEl.querySelectorAll('[data-vehicle-group]').forEach(refreshGroupToggle);
+        };
+
+        var filterVehicleMenu = function () {
+            var query = vehicleSearchEl.value.trim().toLocaleLowerCase('ro-RO');
+            vehicleMenuEl.classList.toggle('is-searching', query !== '');
+            var visibleCount = 0;
+            vehicleMenuEl.querySelectorAll('[data-vehicle-group]').forEach(function (groupEl) {
+                var groupLabelMatches = query !== '' && String(groupEl.getAttribute('data-group-label') || '').indexOf(query) !== -1;
+                var groupVisible = 0;
+                groupEl.querySelectorAll('.vehicle-multiselect-option').forEach(function (optionEl) {
+                    var isVisible = query === '' || groupLabelMatches || optionEl.textContent.toLocaleLowerCase('ro-RO').indexOf(query) !== -1;
+                    optionEl.hidden = !isVisible;
+                    if (isVisible) {
+                        groupVisible += 1;
+                    }
+                });
+                groupEl.hidden = groupVisible === 0;
+                visibleCount += groupVisible;
+            });
+            vehicleMenuEl.querySelector('.tcv2-vehicle-menu-empty').hidden = visibleCount > 0;
+        };
+
+        vehicleDropdownEl.addEventListener('change', function (event) {
+            var target = event.target;
+            if (!(target instanceof HTMLInputElement)) {
+                return;
+            }
+            if (target.hasAttribute('data-vehicle-group-toggle')) {
+                target.closest('[data-vehicle-group]').querySelectorAll('input[name="vehicle_ids[]"]').forEach(function (inputEl) {
+                    if (!inputEl.closest('[hidden]')) {
+                        inputEl.checked = target.checked;
+                    }
+                });
+            }
+            refreshVehicleLabel();
+        });
+
+        vehicleDropdownEl.addEventListener('click', function (event) {
+            var headEl = event.target instanceof Element ? event.target.closest('[data-vehicle-group-head]') : null;
+            if (headEl && !(event.target instanceof HTMLInputElement)) {
+                headEl.closest('[data-vehicle-group]').classList.toggle('is-collapsed');
+            }
+        });
+
+        vehicleSearchEl.addEventListener('input', filterVehicleMenu);
+        vehicleSearchEl.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+            }
+        });
+
+        vehicleDropdownEl.addEventListener('shown.bs.dropdown', function () {
+            vehicleSearchEl.focus({ preventScroll: true });
+        });
+
+        vehicleDropdownEl.addEventListener('hidden.bs.dropdown', function () {
+            if (vehicleSearchEl.value !== '') {
+                vehicleSearchEl.value = '';
+                filterVehicleMenu();
+            }
+            if (vehicleSelectionKey() !== initialVehicleSelection) {
+                submitFilters();
+            }
+        });
+
+        refreshVehicleLabel();
+    }
 
     if (searchInputEl instanceof HTMLInputElement) {
         searchInputEl.addEventListener('input', function () {
