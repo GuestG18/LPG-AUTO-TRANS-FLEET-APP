@@ -572,7 +572,7 @@
                 note: 'Include ' + fmt(f.carburant, 'lei') + ' carburant · Cost / km: ' + fmt(f.cost_km, 'lei3'),
                 detail: {
                     intro: 'Cheltuielile reprezintă costurile înregistrate pe curse, plus carburantul fiecărei curse: km parcurși din Dispecer înmulțiți cu prețul motorinei de la alimentare. Refacturările nefacturate rămân evidențiate în cheltuieli până când sunt facturate clientului. După facturare, suma trece la Facturare, iar efectul net asupra profitului devine zero.',
-                    formula: 'Cheltuieli proprii (suma de pe linie) + Refacturări introduse fără sumă proprie + Carburant (km parcurși × preț motorină la alimentare) · Pe liniile care au și sumă, și refacturare, se numără o singură dată',
+                    formula: 'Cheltuieli proprii (suma de pe linie) + Refacturări introduse fără sumă proprie + Carburant (km parcurși × consum L/100 km ÷ 100 × preț motorină la alimentare) · Pe liniile care au și sumă, și refacturare, se numără o singură dată',
                     stats: [
                         { label: 'Cheltuieli proprii', value: fmt(f.cheltuieli_proprii, 'lei'), hint: 'costuri cu sumă completată pe linia de cheltuială' },
                         {
@@ -581,9 +581,9 @@
                             hint: 'linii introduse doar ca refacturare, cu câmpul „Sumă” lăsat 0 — banii au fost totuși cheltuiți, deci se adaugă la total'
                         },
                         {
-                            label: '+ Carburant (km × preț motorină)',
+                            label: '+ Carburant (km × consum × preț motorină)',
                             value: fmt(f.carburant, 'lei'),
-                            hint: 'pe fiecare cursă din Dispecer: km parcurși × prețul pe litru al motorinei din ziua alimentării asociate cursei în Carburanți. ' +
+                            hint: 'pe fiecare cursă din Dispecer: km parcurși × consumul vehiculului în luna cursei (L/100 km, ca în Carburanți; media flotei dacă vehiculul nu are consum) ÷ 100 × prețul pe litru al motorinei din ziua alimentării asociate cursei. ' +
                                 'Km parcurși în perioadă: ' + fmt(f.km_totali, 'km') + '. Cursele fără alimentare asociată au carburant 0.'
                         },
                         { label: '= Total cheltuieli', value: fmt(f.cheltuieli, 'lei') },
@@ -2792,7 +2792,8 @@
         lines.push(breakdownRow('Cheltuieli asociate', null, 'head'));
 
         var fuelNote = trip.data_pret_motorina
-            ? fmt(trip.km, 'km') + ' × ' + fmt(trip.pret_motorina, 'lei3') + '/L (alimentare asociată din ' + fmtDateRo(trip.data_pret_motorina) + ')'
+            ? fmt(trip.km, 'km') + ' × ' + fmt(trip.consum_l100, 'num') + ' L/100 km × ' + fmt(trip.pret_motorina, 'lei3') +
+                '/L (alimentare asociată din ' + fmtDateRo(trip.data_pret_motorina) + ')'
             : 'Nicio alimentare cu motorină asociată cursei în Carburanți.';
         lines.push(breakdownRow('Carburant', trip.carburant, 'sub', fuelNote));
 
@@ -3065,6 +3066,7 @@
                 { key: 'facturare', label: 'Facturare', kind: 'lei' },
                 { key: 'refacturare', label: 'Refact. nefacturată', kind: 'lei' },
                 { key: 'carburant', label: 'Carburant', kind: 'lei' },
+                { key: 'consum_l100', label: 'Consum (L/100 km)', kind: 'num' },
                 { key: 'pret_motorina', label: 'Preț motorină (lei/L)', kind: 'lei3' },
                 { key: 'data_pret_motorina', label: 'Data alimentării' },
                 { key: 'cheltuieli', label: 'Cheltuieli', kind: 'lei' },

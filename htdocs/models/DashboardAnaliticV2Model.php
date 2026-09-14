@@ -109,7 +109,7 @@ class DashboardAnaliticV2Model extends BaseModel
         $period = $this->resolvePeriod($filters);
         $from = $this->fromSql();
         $whereData = $this->buildWhere($filters);
-        $expr = $this->metricExpressions();
+        $expr = $this->metricExpressions($period);
 
         $usage = $this->calculateUsage($filters, $period);
 
@@ -457,7 +457,7 @@ class DashboardAnaliticV2Model extends BaseModel
         }
 
         $from = $this->fromSql();
-        $expr = $this->metricExpressions();
+        $expr = $this->metricExpressions($this->resolvePeriod($filters));
         $whereData = $this->buildWhere($filters);
 
         // restrangem la entitatea ceruta; id 0 inseamna "fara sofer" / "fara beneficiar"
@@ -616,6 +616,7 @@ class DashboardAnaliticV2Model extends BaseModel
                 (" . $expr['refacturare'] . ") AS refacturare,
                 (" . $expr['cheltuieli'] . ") AS cheltuieli,
                 (" . $expr['carburant'] . ") AS carburant,
+                (" . $expr['consum_l100'] . ") AS consum_l100,
                 (" . $expr['pret_motorina'] . ") AS pret_motorina,
                 (" . $expr['data_pret_motorina'] . ") AS data_pret_motorina,
                 (" . $expr['grad_incarcare_efectiv'] . ") AS grad_incarcare
@@ -653,6 +654,7 @@ class DashboardAnaliticV2Model extends BaseModel
                 'refacturare' => round((float) ($row['refacturare'] ?? 0), 2),
                 'cheltuieli' => round($cheltuieli, 2),
                 'carburant' => round($carburant, 2),
+                'consum_l100' => round((float) ($row['consum_l100'] ?? 0), 2),
                 'pret_motorina' => round((float) ($row['pret_motorina'] ?? 0), 4),
                 'data_pret_motorina' => (string) ($row['data_pret_motorina'] ?? ''),
                 // restul cheltuielilor cursei, ca defalcarea sa se poata citi direct
@@ -733,11 +735,98 @@ class DashboardAnaliticV2Model extends BaseModel
         return $trips;
     }
 
+    /** @var array<string,string> Expresia SQL a consumului, per perioada rezolvata. */
+    private array $consumptionSqlCache = [];
+
+    /**
+     * Consumul de motorina (L/100 km) al vehiculului cursei, in luna in care a inceput
+     * cursa - exact cifra din pagina Carburanti pentru vehiculul si luna respectiva
+     * (FuelModel::getConsumptionByVehicle, doar citire). Daca vehiculul nu are consum
+     * calculat in luna aceea, se foloseste media flotei din aceeasi luna; fara date
+     * deloc, consumul este 0.
+     *
+     * Rezultatul este o expresie CASE cu valori literale, calculata o singura data pe
+     * perioada, ca sa poata fi folosita in toate agregarile fara interogari in plus.
+     */
+    private function consumptionSql(array $period): string
+    {
+        $cheie = $period['start']->format('Y-m') . '|' . $period['end']->format('Y-m');
+        if (isset($this->consumptionSqlCache[$cheie])) {
+            return $this->consumptionSqlCache[$cheie];
+        }
+
+        if (!class_exists('FuelModel')) {
+            require_once __DIR__ . '/FuelModel.php';
+        }
+        $fuel = new FuelModel($this->db);
+
+        $peVehicul = [];
+        $flota = [];
+        // O luna in plus la inceput: cursele raportate in perioada pot incepe inainte.
+        $luna = $period['start']->modify('first day of this month')->modify('-1 month')->setTime(0, 0);
+        $ultima = $period['end']->modify('first day of this month')->setTime(0, 0);
+        while ($luna <= $ultima) {
+            $cheieLuna = $luna->format('Y-m');
+            try {
+                $randuri = $fuel->getConsumptionByVehicle([
+                    'date_from' => $luna->format('Y-m-d'),
+                    'date_to' => $luna->modify('last day of this month')->format('Y-m-d'),
+                    'vehicle' => '',
+                    'vehicles' => [],
+                    'transport_group' => '',
+                    'fuel_type' => '',
+                    'brand' => '',
+                ]);
+            } catch (Throwable $exception) {
+                error_log('[DashboardAnaliticV2Model][consumptionSql] ' . $exception->getMessage());
+                $randuri = [];
+            }
+
+            $kmLuna = 0.0;
+            $litriLuna = 0.0;
+            foreach ($randuri as $rand) {
+                $consum = (float) ($rand['consum_motorina'] ?? 0);
+                $km = (float) ($rand['km'] ?? 0);
+                if ($consum <= 0.0 || $km <= 0.0) {
+                    continue;
+                }
+                $vehicul = str_replace(' ', '', strtoupper((string) ($rand['vehicle_registration'] ?? '')));
+                $peVehicul[$cheieLuna . '|' . $vehicul] = $consum;
+                $kmLuna += $km;
+                $litriLuna += $consum * $km / 100;
+            }
+            if ($kmLuna > 0.0) {
+                $flota[$cheieLuna] = $litriLuna / $kmLuna * 100;
+            }
+            $luna = $luna->modify('+1 month');
+        }
+
+        $lunaCursa = "DATE_FORMAT(c.data_inceput, '%Y-%m')";
+        $sql = '0';
+        if ($flota !== []) {
+            $ramuri = [];
+            foreach ($flota as $cheieLuna => $consum) {
+                $ramuri[] = 'WHEN ' . $this->db->quote($cheieLuna) . ' THEN ' . sprintf('%.4F', $consum);
+            }
+            $sql = "CASE {$lunaCursa} " . implode(' ', $ramuri) . ' ELSE 0 END';
+        }
+        if ($peVehicul !== []) {
+            $ramuri = [];
+            foreach ($peVehicul as $cheieVehicul => $consum) {
+                $ramuri[] = 'WHEN ' . $this->db->quote($cheieVehicul) . ' THEN ' . sprintf('%.4F', $consum);
+            }
+            $sql = "CASE CONCAT({$lunaCursa}, '|', REPLACE(UPPER(v.nr_inmatriculare), ' ', '')) "
+                . implode(' ', $ramuri) . " ELSE {$sql} END";
+        }
+
+        return $this->consumptionSqlCache[$cheie] = $sql;
+    }
+
     // --------------------------------------------------------- expresii metrice
     // Copiate 1:1 din DispecerCurseModel::getDashboardAnalyticData(), ca sa
     // garantam ca V2 raporteaza exact aceleasi valori ca pagina live.
 
-    private function metricExpressions(): array
+    private function metricExpressions(array $period): array
     {
         $kmEffective = "
             CASE
@@ -751,7 +840,10 @@ class DashboardAnaliticV2Model extends BaseModel
          * asociate cursei in modulul Carburanti (fuel_trip_links). Daca sunt mai multe
          * alimentari cu motorina asociate, media ponderata cu litrii. Fara alimentare
          * asociata, pretul si carburantul cursei sunt 0.
-         * Carburantul cursei = km parcursi (Dispecer) x acest pret.
+         *
+         * Carburantul cursei = km parcursi (Dispecer) x consum L/100 km / 100 x pret.
+         * Fara consum, km x pret ar insemna 1 litru pe km - de ~3 ori mai mult decat
+         * consuma real un camion.
          */
         $motorinaAsociata = "
             FROM fuel_trip_links l
@@ -763,7 +855,8 @@ class DashboardAnaliticV2Model extends BaseModel
               AND f.quantity_liters > 0
         ";
         $pretMotorina = "COALESCE((SELECT SUM(f.unit_price * f.quantity_liters) / SUM(f.quantity_liters) {$motorinaAsociata}), 0)";
-        $carburant = "(({$kmEffective}) * {$pretMotorina})";
+        $consum = '(' . $this->consumptionSql($period) . ')';
+        $carburant = "(({$kmEffective}) * {$consum} / 100 * {$pretMotorina})";
 
         $kmBilled = "
             CASE
@@ -875,9 +968,10 @@ class DashboardAnaliticV2Model extends BaseModel
             'facturare' => "(COALESCE(c.total_facturare, 0) + COALESCE(exp.total_refacturare_facturata, 0))",
             'refacturare' => "COALESCE(exp.total_refacturare_pending, 0)",
             // Cheltuiala totala a cursei: ce s-a inregistrat pe cursa + carburantul
-            // calculat din km parcursi x pretul motorinei la alimentare.
+            // calculat din km parcursi x consum x pretul motorinei la alimentare.
             'cheltuieli' => "(COALESCE(exp.total_cheltuieli, 0) + {$carburant})",
             'carburant' => $carburant,
+            'consum_l100' => $consum,
             'pret_motorina' => $pretMotorina,
             'data_pret_motorina' => "(SELECT DATE(MIN(f.fillup_datetime)) {$motorinaAsociata})",
             /*
