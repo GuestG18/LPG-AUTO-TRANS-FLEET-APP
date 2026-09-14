@@ -506,7 +506,7 @@ $pageConfig = [
             <header class="da2-card-head">
                 <div>
                     <h2>Performanță șoferi</h2>
-                    <p class="da2-card-sub">Click pe rând deschide detaliul complet. Click pe antet sortează, iar butonul din dreptul numelui (sau Ctrl + click) adaugă în comparație. Cheltuielile de aici nu includ pierderea T0: un plin de referință de la începutul lunii aparține vehiculului, nu poate fi împărțit pe șoferi.</p>
+                    <p class="da2-card-sub">Click pe rând deschide detaliul complet. Click pe antet sortează, iar butonul din dreptul numelui (sau Ctrl + click) adaugă în comparație.</p>
                 </div>
                 <div class="da2-card-tools">
                     <div class="da2-ms-search da2-ms-search-inline">
@@ -524,7 +524,7 @@ $pageConfig = [
             <header class="da2-card-head">
                 <div>
                     <h2>Performanță beneficiari</h2>
-                    <p class="da2-card-sub">Click pe rând deschide detaliul complet. Click pe antet sortează, iar butonul din dreptul numelui (sau Ctrl + click) adaugă în comparație. Cheltuielile de aici nu includ pierderea T0: un plin de referință de la începutul lunii aparține vehiculului, nu poate fi împărțit pe clienți.</p>
+                    <p class="da2-card-sub">Click pe rând deschide detaliul complet. Click pe antet sortează, iar butonul din dreptul numelui (sau Ctrl + click) adaugă în comparație.</p>
                 </div>
                 <div class="da2-card-tools">
                     <div class="da2-ms-search da2-ms-search-inline">
