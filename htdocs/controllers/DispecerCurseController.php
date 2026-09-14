@@ -342,6 +342,9 @@ class DispecerCurseController
             case 'toggle_refacturare_facturata':
                 $this->toggleRefacturareInvoicedAction();
                 return;
+            case 'bulk_refacturari':
+                $this->bulkRefacturariAction();
+                return;
             case 'config_store_distributie':
                 $this->configStoreDistributionAction();
                 return;
@@ -2864,6 +2867,7 @@ class DispecerCurseController
         $direction = $this->normalizeSortDirection((string) ($_GET['dir'] ?? 'desc'));
 
         $plateOptions = [];
+        $beneficiaryOptions = [];
         $refacturareResult = [
             'rows' => [],
             'summary' => [
@@ -2883,6 +2887,7 @@ class DispecerCurseController
         ];
         try {
             $plateOptions = $this->model->getRefacturarePlateOptions();
+            $beneficiaryOptions = $this->model->getRefacturareBeneficiaryOptions();
             $refacturareResult = $this->model->getRefacturareHistory($filters, $sort, $direction, $page, $perPage);
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][refacturari] ' . $exception->getMessage());
@@ -2893,6 +2898,7 @@ class DispecerCurseController
             'pageTitle' => 'Refacturări curse',
             'currentPage' => 'dispecer_curse',
             'plateOptions' => $plateOptions,
+            'beneficiaryOptions' => $beneficiaryOptions,
             'filters' => $filters,
             'defaultFilters' => $this->defaultRefacturareFilters(),
             'refacturareRows' => $refacturareResult['rows'],
@@ -2916,6 +2922,7 @@ class DispecerCurseController
             'data_start' => $currentMonthStart->modify('-1 month')->format('Y-m-01'),
             'data_end' => $currentMonthStart->modify('-1 day')->format('Y-m-d'),
             'nr_inmatriculare' => '',
+            'beneficiar_id' => '',
             'tip_refacturare' => '',
             'status_factura' => '',
             'document' => '',
@@ -2946,6 +2953,8 @@ class DispecerCurseController
             $plate = mb_substr($plate, 0, 40);
         }
 
+        $beneficiaryId = (int) ($_GET['beneficiar_id'] ?? 0);
+
         $type = trim((string) ($_GET['tip_refacturare'] ?? ''));
         if ($type !== '' && !array_key_exists($type, $allowedTypes)) {
             $type = '';
@@ -2970,6 +2979,7 @@ class DispecerCurseController
             'data_start' => $startDate,
             'data_end' => $endDate,
             'nr_inmatriculare' => $plate,
+            'beneficiar_id' => $beneficiaryId > 0 ? (string) $beneficiaryId : '',
             'tip_refacturare' => $type,
             'status_factura' => $status,
             'document' => $document,
@@ -3277,6 +3287,97 @@ class DispecerCurseController
         }
 
         $this->redirectToSafeDispecerUrl($returnUrl !== '' ? $returnUrl : $redirectUrl);
+    }
+
+    /**
+     * Actiuni pe mai multe refacturari selectate din lista: marcare "Factura emisa",
+     * readucere "In asteptare" sau atasarea aceluiasi document la toate.
+     */
+    private function bulkRefacturariAction(): void
+    {
+        $listUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'refacturari']);
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($listUrl);
+        }
+
+        $returnUrl = trim((string) ($_POST['return_url'] ?? ''));
+        $backUrl = $returnUrl !== '' ? $returnUrl : $listUrl;
+        ensure_csrf_or_redirect($listUrl);
+
+        $expenseIds = array_values(array_unique(array_filter(
+            array_map('intval', (array) ($_POST['expense_ids'] ?? [])),
+            static fn (int $id): bool => $id > 0
+        )));
+        $expenseIds = array_slice($expenseIds, 0, 500);
+        if ($expenseIds === []) {
+            flash_set('warning', 'Selectează cel puțin o refacturare.');
+            $this->redirectToSafeDispecerUrl($backUrl);
+        }
+
+        $bulkAction = (string) ($_POST['bulk_action'] ?? '');
+
+        try {
+            if ($bulkAction === 'invoiced' || $bulkAction === 'pending') {
+                $isInvoiced = $bulkAction === 'invoiced';
+                $changed = $this->model->updateRefacturareInvoicedStatusBulk($expenseIds, $isInvoiced);
+                $unchanged = count($expenseIds) - $changed;
+                $message = $isInvoiced
+                    ? $changed . ' ' . ($changed === 1 ? 'refacturare marcată' : 'refacturări marcate') . ' „Factura emisă”.'
+                    : $changed . ' ' . ($changed === 1 ? 'refacturare readusă' : 'refacturări readuse') . ' în „În așteptare”.';
+                if ($unchanged > 0) {
+                    $message .= ' ' . $unchanged . ' ' . ($unchanged === 1 ? 'era deja' : 'erau deja') . ' în această stare.';
+                }
+                flash_set($changed > 0 ? 'success' : 'info', $message);
+                $this->redirectToSafeDispecerUrl($backUrl);
+            }
+
+            if ($bulkAction === 'attach') {
+                [$document, $uploadError] = $this->storeUploadedExpenseDocument($_FILES['bulk_document'] ?? null);
+                if ($uploadError !== null) {
+                    flash_set('danger', $uploadError);
+                    $this->redirectToSafeDispecerUrl($backUrl);
+                }
+                if ($document === null) {
+                    flash_set('warning', 'Alege documentul de refacturare care trebuie atașat.');
+                    $this->redirectToSafeDispecerUrl($backUrl);
+                }
+
+                // Documentele deja atasate nu se inlocuiesc de aici; inlocuirea ramane in editarea cursei.
+                $targetIds = [];
+                foreach ($expenseIds as $expenseId) {
+                    $expense = $this->model->getExpenseById($expenseId);
+                    if ($expense === null
+                        || (float) ($expense['refacturare_suma'] ?? 0) <= 0
+                        || trim((string) ($expense['refacturare_document_path'] ?? '')) !== '') {
+                        continue;
+                    }
+                    $targetIds[] = $expenseId;
+                }
+
+                if ($targetIds === []) {
+                    $this->deleteExpensePhysicalFile((string) $document['file_path']);
+                    flash_set('warning', 'Toate refacturările selectate au deja document atașat.');
+                    $this->redirectToSafeDispecerUrl($backUrl);
+                }
+
+                $this->attachRefacturareDocumentToExpenses($document, $targetIds);
+                $attached = count($targetIds);
+                $skipped = count($expenseIds) - $attached;
+                $message = 'Documentul a fost atașat la ' . $attached . ' ' . ($attached === 1 ? 'refacturare' : 'refacturări') . '.';
+                if ($skipped > 0) {
+                    $message .= ' ' . $skipped . ' ' . ($skipped === 1 ? 'avea deja document și a fost sărită' : 'aveau deja document și au fost sărite') . '.';
+                }
+                flash_set('success', $message);
+                $this->redirectToSafeDispecerUrl($backUrl);
+            }
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseController][bulk_refacturari] ' . $exception->getMessage());
+            flash_set('danger', 'Nu s-au putut actualiza refacturările selectate.');
+            $this->redirectToSafeDispecerUrl($backUrl);
+        }
+
+        flash_set('warning', 'Acțiunea aleasă nu este validă.');
+        $this->redirectToSafeDispecerUrl($backUrl);
     }
 
     private function configAction(bool $isSandbox = false): void

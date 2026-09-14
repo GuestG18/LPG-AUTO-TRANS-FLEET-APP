@@ -9021,6 +9021,7 @@ button.dispatcher-datetime-picker-title:focus-visible {
 }
 
 .refacturare-filter-actions {
+    grid-column: 1 / -1;
     display: flex;
     align-self: end;
     align-items: end;
@@ -9091,12 +9092,116 @@ button.dispatcher-datetime-picker-title:focus-visible {
     border-spacing: 0;
 }
 
+.refacturare-table .ref-col-select {
+    width: 44px;
+}
+
 .refacturare-table .ref-col-date {
-    width: 8%;
+    width: 9%;
 }
 
 .refacturare-table .ref-col-race {
-    width: 29%;
+    width: 25%;
+}
+
+.refacturare-table > :not(caption) > * > .refacturare-select-cell {
+    padding-right: 0.2rem;
+    text-align: center;
+}
+
+.refacturare-select-cell .form-check-input {
+    width: 1.1rem;
+    height: 1.1rem;
+    margin: 0;
+    cursor: pointer;
+}
+
+.refacturare-table tbody tr.is-selected td {
+    background: #eef5ff;
+}
+
+.refacturare-bulk-bar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.7rem 1rem;
+    padding: 0.7rem 1.05rem;
+    border-bottom: 1px solid #bfdbfe;
+    background: #eff6ff;
+}
+
+.refacturare-bulk-bar.is-refreshing {
+    opacity: 0.72;
+    pointer-events: none;
+}
+
+.refacturare-bulk-summary {
+    display: flex;
+    align-items: baseline;
+    gap: 0.7rem;
+    color: #1e3a8a;
+}
+
+.refacturare-bulk-summary strong {
+    font-weight: 850;
+}
+
+.refacturare-bulk-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.refacturare-bulk-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid #cfd8e6;
+    background: #ffffff;
+    font-weight: 750;
+}
+
+.refacturare-bulk-btn.is-invoice { color: #15803d; border-color: #86efac; }
+.refacturare-bulk-btn.is-invoice:hover { color: #14532d; background: #dcfce7; }
+.refacturare-bulk-btn.is-revert { color: #b45309; border-color: #fcd34d; }
+.refacturare-bulk-btn.is-revert:hover { color: #7c2d12; background: #fef3c7; }
+.refacturare-bulk-btn.is-attach { color: #1d4ed8; border-color: #93c5fd; }
+.refacturare-bulk-btn.is-attach:hover { color: #1e3a8a; background: #dbeafe; }
+.refacturare-bulk-btn.is-clear { color: #475569; }
+
+.refacturare-doc-state {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    width: max-content;
+    margin-top: 0.4rem;
+    font-size: 0.76rem;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.refacturare-doc-state.has-document { color: #1d4ed8; }
+.refacturare-doc-state.has-document:hover { text-decoration: underline; }
+.refacturare-doc-state.is-missing { color: #dc2626; }
+
+.refacturare-missing-doc-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    color: #dc2626;
+    text-decoration: none;
+}
+
+.refacturare-missing-doc-link strong {
+    color: #dc2626 !important;
+}
+
+.refacturare-missing-doc-link:hover {
+    text-decoration: underline;
 }
 
 .refacturare-table .ref-col-type {
@@ -9414,6 +9519,10 @@ button.dispatcher-datetime-picker-title:focus-visible {
 
     .refacturare-filter-form {
         grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .refacturare-filter-actions {
+        grid-column: auto;
     }
 }
 

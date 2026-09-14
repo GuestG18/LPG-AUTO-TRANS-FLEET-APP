@@ -5,6 +5,7 @@ $defaultFilters = is_array($defaultFilters ?? null) ? $defaultFilters : [];
 $summary = is_array($refacturareSummary ?? null) ? $refacturareSummary : [];
 $pagination = is_array($pagination ?? null) ? $pagination : [];
 $plateOptions = is_array($plateOptions ?? null) ? $plateOptions : [];
+$beneficiaryOptions = is_array($beneficiaryOptions ?? null) ? $beneficiaryOptions : [];
 $expenseEntryTypes = is_array($expenseEntryTypes ?? null) ? $expenseEntryTypes : (array) ($expenseTypes ?? []);
 unset($expenseEntryTypes['motorina']);
 $refacturareTypeLabels = [
@@ -194,6 +195,19 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
             </div>
 
             <div class="refacturare-filter-field">
+                <label class="form-label" for="ref_filter_beneficiary">Beneficiar</label>
+                <select class="form-select" id="ref_filter_beneficiary" name="beneficiar_id">
+                    <option value="">Toți beneficiarii</option>
+                    <?php foreach ($beneficiaryOptions as $beneficiaryOption): ?>
+                        <?php $beneficiaryOptionId = (string) ((int) ($beneficiaryOption['id'] ?? 0)); ?>
+                        <option value="<?= e($beneficiaryOptionId) ?>" <?= (string) ($filters['beneficiar_id'] ?? '') === $beneficiaryOptionId ? 'selected' : '' ?>>
+                            <?= e((string) ($beneficiaryOption['nume'] ?? '')) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <div class="refacturare-filter-field">
                 <label class="form-label" for="ref_filter_type">Tip refacturare</label>
                 <select class="form-select" id="ref_filter_type" name="tip_refacturare">
                     <option value="">Toate tipurile</option>
@@ -247,12 +261,55 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
                 Întrări: <strong><?= e((string) ((int) ($summary['total_count'] ?? 0))) ?></strong>
                 <span aria-hidden="true">|</span>
                 Total listat: <strong><?= e($formatMoney($summary['total_amount'] ?? 0)) ?></strong>
+                <?php $missingDocumentCount = (int) ($summary['missing_document_count'] ?? 0); ?>
+                <?php if ($missingDocumentCount > 0 && (string) ($filters['document'] ?? '') !== 'fara_document'): ?>
+                    <span aria-hidden="true">|</span>
+                    <a class="refacturare-missing-doc-link" href="<?= e(build_query_url(array_merge($filterBase, ['document' => 'fara_document', 'p' => 1]))) ?>">
+                        <i class="bi bi-paperclip" aria-hidden="true"></i>
+                        Fără document: <strong><?= e((string) $missingDocumentCount) ?></strong>
+                    </a>
+                <?php endif; ?>
             </div>
         </header>
+
+        <form
+            method="post"
+            action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'bulk_refacturari'])) ?>"
+            enctype="multipart/form-data"
+            id="ref_bulk_form"
+            class="refacturare-bulk-bar"
+            data-refacturare-bulk-form
+            hidden
+        >
+            <?= csrf_field() ?>
+            <input type="hidden" name="return_url" value="<?= e($returnUrl) ?>">
+            <input type="hidden" name="bulk_action" value="" data-bulk-action-input>
+            <input type="file" name="bulk_document" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx" data-bulk-document-input hidden>
+
+            <div class="refacturare-bulk-summary">
+                <strong data-bulk-count>0 selectate</strong>
+                <span data-bulk-amount>0,00 lei</span>
+            </div>
+            <div class="refacturare-bulk-buttons">
+                <button type="button" class="btn btn-sm refacturare-bulk-btn is-invoice" data-bulk-action="invoiced">
+                    <i class="bi bi-check-circle" aria-hidden="true"></i> Marchează „Factura emisă”
+                </button>
+                <button type="button" class="btn btn-sm refacturare-bulk-btn is-revert" data-bulk-action="pending">
+                    <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Readu în „În așteptare”
+                </button>
+                <button type="button" class="btn btn-sm refacturare-bulk-btn is-attach" data-bulk-action="attach">
+                    <i class="bi bi-paperclip" aria-hidden="true"></i> Atașează document
+                </button>
+                <button type="button" class="btn btn-sm refacturare-bulk-btn is-clear" data-bulk-clear>
+                    Anulează selecția
+                </button>
+            </div>
+        </form>
 
         <div class="refacturare-table-wrap">
             <table class="table refacturare-table mb-0">
                 <colgroup>
+                    <col class="ref-col-select">
                     <col class="ref-col-date">
                     <col class="ref-col-race">
                     <col class="ref-col-type">
@@ -263,6 +320,9 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
                 </colgroup>
                 <thead>
                     <tr>
+                        <th class="refacturare-select-cell">
+                            <input class="form-check-input" type="checkbox" data-bulk-select-all aria-label="Selectează toate refacturările de pe pagină" <?= $historyRows === [] ? 'disabled' : '' ?>>
+                        </th>
                         <th>
                             <a class="refacturare-sort-link" href="<?= e($sortUrl('date')) ?>">
                                 Data <i class="bi <?= e($sortIcon('date')) ?>" aria-hidden="true"></i>
@@ -287,7 +347,7 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
                 <tbody>
                     <?php if ($historyRows === []): ?>
                         <tr>
-                            <td colspan="7" class="refacturare-empty-row">Nu există refacturări înregistrate pentru filtrele aplicate.</td>
+                            <td colspan="8" class="refacturare-empty-row">Nu există refacturări înregistrate pentru filtrele aplicate.</td>
                         </tr>
                     <?php else: ?>
                         <?php foreach ($historyRows as $historyRow): ?>
@@ -355,8 +415,25 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
                                     }
                                 }
                                 $metadataLine = implode(' • ', $metadataParts);
+                                $historyDocPath = trim((string) ($historyRow['refacturare_document_path'] ?? ''));
+                                $historyDocName = trim((string) ($historyRow['refacturare_document_original_name'] ?? ''));
+                                $historyDocUrl = $historyDocPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($historyDocPath)) : null;
                             ?>
-                            <tr>
+                            <tr data-bulk-row>
+                                <td class="refacturare-select-cell">
+                                    <input
+                                        class="form-check-input"
+                                        type="checkbox"
+                                        form="ref_bulk_form"
+                                        name="expense_ids[]"
+                                        value="<?= e((string) $historyExpenseId) ?>"
+                                        data-bulk-select
+                                        data-amount="<?= e((string) $historyAmount) ?>"
+                                        data-invoiced="<?= $historyIsInvoiced ? '1' : '0' ?>"
+                                        data-has-document="<?= $historyDocUrl !== null ? '1' : '0' ?>"
+                                        aria-label="Selectează refacturarea #<?= e((string) $historyExpenseId) ?>"
+                                    >
+                                </td>
                                 <td>
                                     <div class="refacturare-date-main"><?= e(format_date_ro($historyDate)) ?></div>
                                     <?php if ($historyCreatedAt !== ''): ?>
@@ -384,6 +461,15 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
                                         <span class="refacturare-status-badge is-invoiced">Factura emisă</span>
                                     <?php else: ?>
                                         <span class="refacturare-status-badge is-pending">În așteptare</span>
+                                    <?php endif; ?>
+                                    <?php if ($historyDocUrl !== null): ?>
+                                        <a class="refacturare-doc-state has-document" href="<?= e($historyDocUrl) ?>" target="_blank" rel="noopener" title="<?= e($historyDocName !== '' ? $historyDocName : 'Document refacturare') ?>">
+                                            <i class="bi bi-paperclip" aria-hidden="true"></i> Document atașat
+                                        </a>
+                                    <?php else: ?>
+                                        <span class="refacturare-doc-state is-missing">
+                                            <i class="bi bi-exclamation-circle" aria-hidden="true"></i> Fără document
+                                        </span>
                                     <?php endif; ?>
                                 </td>
                                 <td class="refacturare-actions-cell text-end">
@@ -535,6 +621,124 @@ document.addEventListener('DOMContentLoaded', function () {
                 submitFilters();
             }
         });
+    }
+
+    /*
+     * Selectie multipla: bara de actiuni apare doar cand exista randuri bifate.
+     * Actiunea aleasa merge intr-un camp ascuns, nu in butonul de submit, pentru ca
+     * butoanele dezactivate la trimitere nu isi mai trimit valoarea.
+     */
+    var bulkFormEl = document.querySelector('[data-refacturare-bulk-form]');
+    if (bulkFormEl instanceof HTMLFormElement) {
+        var rowChecks = Array.prototype.slice.call(document.querySelectorAll('[data-bulk-select]'));
+        var selectAllEl = document.querySelector('[data-bulk-select-all]');
+        var actionInputEl = bulkFormEl.querySelector('[data-bulk-action-input]');
+        var documentInputEl = bulkFormEl.querySelector('[data-bulk-document-input]');
+        var countEl = bulkFormEl.querySelector('[data-bulk-count]');
+        var amountEl = bulkFormEl.querySelector('[data-bulk-amount]');
+        var moneyFormatter = new Intl.NumberFormat('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+        var selectedChecks = function () {
+            return rowChecks.filter(function (checkEl) { return checkEl.checked; });
+        };
+
+        var refreshBulkBar = function () {
+            var selected = selectedChecks();
+            var total = selected.reduce(function (sum, checkEl) {
+                return sum + (parseFloat(checkEl.getAttribute('data-amount') || '0') || 0);
+            }, 0);
+
+            bulkFormEl.hidden = selected.length === 0;
+            countEl.textContent = selected.length + (selected.length === 1 ? ' selectată' : ' selectate');
+            amountEl.textContent = moneyFormatter.format(total) + ' lei';
+
+            var countBy = function (attr, value) {
+                return selected.filter(function (checkEl) { return checkEl.getAttribute(attr) === value; }).length;
+            };
+            bulkFormEl.querySelector('[data-bulk-action="invoiced"]').disabled = countBy('data-invoiced', '0') === 0;
+            bulkFormEl.querySelector('[data-bulk-action="pending"]').disabled = countBy('data-invoiced', '1') === 0;
+            bulkFormEl.querySelector('[data-bulk-action="attach"]').disabled = countBy('data-has-document', '0') === 0;
+
+            rowChecks.forEach(function (checkEl) {
+                var rowEl = checkEl.closest('[data-bulk-row]');
+                if (rowEl) {
+                    rowEl.classList.toggle('is-selected', checkEl.checked);
+                }
+            });
+
+            if (selectAllEl instanceof HTMLInputElement) {
+                selectAllEl.checked = rowChecks.length > 0 && selected.length === rowChecks.length;
+                selectAllEl.indeterminate = selected.length > 0 && selected.length < rowChecks.length;
+            }
+        };
+
+        var submitBulk = function (action) {
+            actionInputEl.value = action;
+            bulkFormEl.classList.add('is-refreshing');
+            bulkFormEl.submit();
+        };
+
+        rowChecks.forEach(function (checkEl) {
+            checkEl.addEventListener('change', refreshBulkBar);
+        });
+
+        if (selectAllEl instanceof HTMLInputElement) {
+            selectAllEl.addEventListener('change', function () {
+                rowChecks.forEach(function (checkEl) { checkEl.checked = selectAllEl.checked; });
+                refreshBulkBar();
+            });
+        }
+
+        bulkFormEl.querySelector('[data-bulk-clear]').addEventListener('click', function () {
+            rowChecks.forEach(function (checkEl) { checkEl.checked = false; });
+            refreshBulkBar();
+        });
+
+        bulkFormEl.querySelectorAll('[data-bulk-action]').forEach(function (buttonEl) {
+            buttonEl.addEventListener('click', function () {
+                var action = buttonEl.getAttribute('data-bulk-action');
+                var selected = selectedChecks();
+
+                if (action === 'attach') {
+                    documentInputEl.value = '';
+                    documentInputEl.click();
+                    return;
+                }
+
+                var targetCount = selected.filter(function (checkEl) {
+                    return checkEl.getAttribute('data-invoiced') === (action === 'invoiced' ? '0' : '1');
+                }).length;
+                var message = action === 'invoiced'
+                    ? 'Marchezi „Factura emisă” pentru ' + targetCount + ' refacturări?'
+                    : 'Readuci ' + targetCount + ' refacturări în „În așteptare”?';
+                var missingDocs = selected.filter(function (checkEl) { return checkEl.getAttribute('data-has-document') === '0'; }).length;
+                if (action === 'invoiced' && missingDocs > 0) {
+                    message += '\n\nAtenție: ' + missingDocs + ' dintre ele nu au încă documentul de refacturare atașat.';
+                }
+
+                if (window.confirm(message)) {
+                    submitBulk(action);
+                }
+            });
+        });
+
+        documentInputEl.addEventListener('change', function () {
+            if (!documentInputEl.files || documentInputEl.files.length === 0) {
+                return;
+            }
+            var targetCount = selectedChecks().filter(function (checkEl) {
+                return checkEl.getAttribute('data-has-document') === '0';
+            }).length;
+            var message = 'Atașezi „' + documentInputEl.files[0].name + '” la ' + targetCount + ' refacturări fără document?'
+                + '\nRefacturările care au deja document nu se modifică.';
+            if (window.confirm(message)) {
+                submitBulk('attach');
+            } else {
+                documentInputEl.value = '';
+            }
+        });
+
+        refreshBulkBar();
     }
 
     /*

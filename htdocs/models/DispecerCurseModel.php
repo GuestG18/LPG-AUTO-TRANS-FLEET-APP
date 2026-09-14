@@ -3765,6 +3765,27 @@ class DispecerCurseModel extends BaseModel
         return $stmt->fetchAll();
     }
 
+    /** Beneficiarii care apar pe curse (inclusiv cei inactivi), ca istoricul vechi sa ramana filtrabil. */
+    public function getRefacturareBeneficiaryOptions(): array
+    {
+        $this->ensureRaceSoftDeleteSchema();
+
+        $stmt = $this->db->prepare("
+            SELECT bt.id, bt.nume
+            FROM configurare_beneficiari_transport bt
+            WHERE EXISTS (
+                SELECT 1
+                FROM curse_dispecer c
+                WHERE c.beneficiar_id = bt.id
+                  AND c.deleted_at IS NULL
+            )
+            ORDER BY bt.nume ASC
+        ");
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
     public function getRefacturareHistory(array $filters, string $sort, string $direction, int $page, int $perPage): array
     {
         $this->ensureRaceCompressorLocationColumns();
@@ -3783,7 +3804,8 @@ class DispecerCurseModel extends BaseModel
                 SUM(CASE WHEN COALESCE(e.refacturare_facturata, 0) = 0 THEN 1 ELSE 0 END) AS pending_count,
                 COALESCE(SUM(CASE WHEN COALESCE(e.refacturare_facturata, 0) = 0 THEN COALESCE(e.refacturare_suma, 0) ELSE 0 END), 0) AS pending_amount,
                 SUM(CASE WHEN COALESCE(e.refacturare_facturata, 0) = 1 THEN 1 ELSE 0 END) AS invoiced_count,
-                COALESCE(SUM(CASE WHEN COALESCE(e.refacturare_facturata, 0) = 1 THEN COALESCE(e.refacturare_suma, 0) ELSE 0 END), 0) AS invoiced_amount
+                COALESCE(SUM(CASE WHEN COALESCE(e.refacturare_facturata, 0) = 1 THEN COALESCE(e.refacturare_suma, 0) ELSE 0 END), 0) AS invoiced_amount,
+                SUM(CASE WHEN COALESCE(TRIM(e.refacturare_document_path), '') = '' THEN 1 ELSE 0 END) AS missing_document_count
             " . $mainSql['from'] . $mainSql['where'] . "
         ");
         $this->bindParams($summaryStmt, $mainSql['params']);
@@ -3867,6 +3889,7 @@ class DispecerCurseModel extends BaseModel
                 'pending_amount' => round((float) ($summaryRow['pending_amount'] ?? 0), 2),
                 'invoiced_count' => (int) ($summaryRow['invoiced_count'] ?? 0),
                 'invoiced_amount' => round((float) ($summaryRow['invoiced_amount'] ?? 0), 2),
+                'missing_document_count' => (int) ($summaryRow['missing_document_count'] ?? 0),
             ],
             'pagination' => [
                 'page' => $page,
@@ -3901,6 +3924,11 @@ class DispecerCurseModel extends BaseModel
         if (($filters['nr_inmatriculare'] ?? '') !== '') {
             $where[] = 'v.nr_inmatriculare = :' . $prefix . '_plate';
             $params[':' . $prefix . '_plate'] = (string) $filters['nr_inmatriculare'];
+        }
+
+        if ((int) ($filters['beneficiar_id'] ?? 0) > 0) {
+            $where[] = 'c.beneficiar_id = :' . $prefix . '_beneficiary';
+            $params[':' . $prefix . '_beneficiary'] = (int) $filters['beneficiar_id'];
         }
 
         if (($filters['tip_refacturare'] ?? '') !== '') {
@@ -4346,6 +4374,53 @@ class DispecerCurseModel extends BaseModel
         $stmt->bindValue(':id', $expenseId, PDO::PARAM_INT);
 
         return $stmt->execute();
+    }
+
+    /**
+     * Schimba statusul facturarii pentru mai multe refacturari deodata. Randurile aflate
+     * deja in starea ceruta nu sunt atinse, ca data marcarii initiale sa ramana corecta.
+     *
+     * @param int[] $expenseIds
+     * @return int numarul de randuri modificate efectiv
+     */
+    public function updateRefacturareInvoicedStatusBulk(array $expenseIds, bool $isInvoiced): int
+    {
+        $this->ensureExpenseRefacturareColumn();
+
+        $expenseIds = array_values(array_unique(array_filter(array_map('intval', $expenseIds), static fn (int $id): bool => $id > 0)));
+        if ($expenseIds === []) {
+            return 0;
+        }
+
+        $idPlaceholders = [];
+        foreach ($expenseIds as $index => $expenseId) {
+            $idPlaceholders[':bulk_id_' . $index] = $expenseId;
+        }
+
+        $stmt = $this->db->prepare("
+            UPDATE curse_cheltuieli
+            SET
+                refacturare_facturata = :is_invoiced,
+                refacturare_facturata_at = :invoiced_at,
+                updated_at = :updated_at
+            WHERE id IN (" . implode(', ', array_keys($idPlaceholders)) . ")
+              AND COALESCE(refacturare_suma, 0) > 0
+              AND COALESCE(refacturare_facturata, 0) <> :current_state
+        ");
+        $stmt->bindValue(':is_invoiced', $isInvoiced ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(':current_state', $isInvoiced ? 1 : 0, PDO::PARAM_INT);
+        if ($isInvoiced) {
+            $stmt->bindValue(':invoiced_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        } else {
+            $stmt->bindValue(':invoiced_at', null, PDO::PARAM_NULL);
+        }
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        foreach ($idPlaceholders as $placeholder => $expenseId) {
+            $stmt->bindValue($placeholder, $expenseId, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+
+        return $stmt->rowCount();
     }
 
     public function findDuplicateRaceId(array $data, ?int $excludeRaceId = null): ?int
