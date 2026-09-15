@@ -236,35 +236,92 @@ $renderRefundToggle = static function (string $targetId, string $label): string 
         . '<i class="bi bi-chevron-down" aria-hidden="true"></i></button>';
 };
 
-/* Panoul: "Refacturări · N înregistrări", Descriere | Valoare RON, apoi "Total refacturări". */
-$renderRefundPanel = static function (array $lines, string $title) use ($fmtSmart, $fmtMoney): string {
+/*
+ * Panoul refacturarilor unui rand de facturare. Primul nivel este un sumar grupat pe
+ * Tip + Denumire; fiecare grup se desfasoara (tinta proprie, "<idBase>-g<n>") pana
+ * la inregistrarile lui. Gruparea este doar de afisare: totalurile vin din
+ * inregistrarile brute, iar liniile au fost deja atribuite randului de facturare.
+ */
+$renderRefundPanel = static function (array $lines, string $title, string $idBase) use ($fmtSmart, $fmtMoney): string {
     $total = 0.0;
-    $rows = '';
+    $expenseIds = [];
+    $groups = [];
     foreach ($lines as $line) {
         $amount = (float) ($line['amount'] ?? 0);
-        $total += $amount;
+        $quantity = (float) ($line['quantity'] ?? 0);
         $typeLabel = trim((string) ($line['type_label'] ?? ''));
         $name = trim((string) ($line['name'] ?? ''));
-        $description = $typeLabel !== '' && $name !== '' ? $typeLabel . ' · ' . $name : $typeLabel . $name;
-        $quantity = (float) ($line['quantity'] ?? 0);
-        if ($quantity > 1) {
-            /* Bucatile raman vizibile cand sunt mai multe (ex. treceri): "2 buc × 133,00". */
-            $description .= ' · ' . $fmtSmart($quantity, 2) . ' buc × ' . $fmtMoney($line['unit_price'] ?? 0);
-        }
-        $rows .= '<tr><td>' . e($description !== '' ? $description : '-') . '</td>'
-            . '<td class="is-number">' . e($fmtMoney($amount)) . '</td></tr>';
+        $total += $amount;
+        $expenseIds[(int) ($line['expense_id'] ?? 0)] = true;
+
+        $groupKey = mb_strtolower($typeLabel, 'UTF-8') . '|' . mb_strtolower($name, 'UTF-8');
+        $groups[$groupKey] ??= ['type_label' => $typeLabel, 'name' => $name, 'total' => 0.0, 'prices' => [], 'lines' => []];
+        $groups[$groupKey]['total'] += $amount;
+        $groups[$groupKey]['lines'][] = $line;
+        /*
+         * Cantitatea x valoarea unitara, adunate pe valori unitare identice, in ordinea
+         * aparitiei: "3 × 198,00" sau "1 × 22,00 + 1 × 18,00" - niciodata o medie.
+         */
+        $unitPrice = round((float) ($line['unit_price'] ?? $amount), 2);
+        $priceKey = number_format($unitPrice, 2, '.', '');
+        $groups[$groupKey]['prices'][$priceKey] ??= ['unit_price' => $unitPrice, 'quantity' => 0.0];
+        $groups[$groupKey]['prices'][$priceKey]['quantity'] += $quantity > 0 ? $quantity : 1.0;
     }
-    $count = count($lines);
+
+    $groupCount = count($groups);
+    $recordCount = count($expenseIds);
+    $counter = $groupCount . ($groupCount === 1 ? ' grup' : ' grupuri')
+        . ' • ' . $recordCount . ($recordCount === 1 ? ' înregistrare' : ' înregistrări');
+
+    $rows = '';
+    $index = 0;
+    foreach ($groups as $group) {
+        $index++;
+        $groupId = $idBase . '-g' . $index;
+        $quantityParts = [];
+        foreach ($group['prices'] as $price) {
+            $quantityParts[] = $fmtSmart($price['quantity'], 2) . ' × ' . $fmtMoney($price['unit_price']);
+        }
+        $typeCell = $group['type_label'] !== '' ? $group['type_label'] : '-';
+        $nameCell = $group['name'] !== '' ? $group['name'] : '-';
+
+        $records = '';
+        foreach ($group['lines'] as $line) {
+            $lineQuantity = (float) ($line['quantity'] ?? 0);
+            $records .= '<tr>'
+                . '<td>' . e((string) ($line['date_label'] ?? '-')) . '</td>'
+                . '<td>' . e($typeCell) . '</td>'
+                . '<td>' . e($nameCell) . '</td>'
+                . '<td class="cf-vehicle-cell">' . e((string) ($line['vehicle_label'] ?? '-')) . '</td>'
+                . '<td class="is-number">' . e($fmtSmart($lineQuantity > 0 ? $lineQuantity : 1, 2)) . '</td>'
+                . '<td class="is-number">' . e($fmtMoney($line['amount'] ?? 0)) . '</td>'
+                . '</tr>';
+        }
+
+        $rows .= '<tr class="cf-vehicle-parent" data-vehicle-row>'
+            . '<td class="cf-expand-cell"><button class="cf-expand-btn" type="button" aria-expanded="false" aria-controls="' . e($groupId) . '"'
+            . ' aria-label="' . e('Înregistrări ' . $typeCell . ' ' . $nameCell) . '" data-vehicle-toggle><i class="bi bi-chevron-right" aria-hidden="true"></i></button></td>'
+            . '<td>' . e($typeCell) . '</td>'
+            . '<td>' . e($nameCell) . '</td>'
+            . '<td>' . e(implode(' + ', $quantityParts)) . '</td>'
+            . '<td class="is-number">' . e($fmtMoney($group['total'])) . '</td>'
+            . '</tr>'
+            . '<tr class="cf-vehicle-detail-row" id="' . e($groupId) . '" hidden><td colspan="5" class="cf-trip-detail-cell">'
+            . '<div class="cf-refund-records"><table class="cf-table">'
+            . '<thead><tr><th>Data</th><th>Tip</th><th>Denumire</th><th>Nr. înmatriculare</th><th class="is-number">buc</th><th class="is-number">Valoare total</th></tr></thead>'
+            . '<tbody>' . $records . '</tbody>'
+            . '</table></div></td></tr>';
+    }
 
     return '<div class="cf-refund-panel">'
         . '<div class="cf-refund-panel-head">'
         . '<span class="cf-refund-title"><i class="bi bi-receipt-cutoff" aria-hidden="true"></i> ' . e($title) . '</span>'
-        . '<span class="cf-refund-count">' . e($count . ($count === 1 ? ' înregistrare' : ' înregistrări')) . '</span>'
+        . '<span class="cf-refund-count">' . e($counter) . '</span>'
         . '</div>'
         . '<table class="cf-table">'
-        . '<thead><tr><th>Descriere</th><th class="is-number">Valoare RON</th></tr></thead>'
+        . '<thead><tr><th class="cf-expand-th"></th><th>Tip</th><th>Denumire</th><th>Cantitate × Valoare unitară</th><th class="is-number">Total</th></tr></thead>'
         . '<tbody>' . $rows . '</tbody>'
-        . '<tfoot><tr><td>Total refacturări</td><td class="is-number">' . e($fmtMoney($total)) . '</td></tr></tfoot>'
+        . '<tfoot><tr><td></td><td colspan="3">Total refacturări</td><td class="is-number">' . e($fmtMoney($total)) . '</td></tr></tfoot>'
         . '</table></div>';
 };
 
@@ -371,7 +428,7 @@ $renderTypeRoutes = static function (string $type, array $routes, string $groupB
         /* Refacturarile randului: sectiune proprie, direct sub rand, pe toata latimea tabelului. */
         if ($routeRefunds !== []) {
             $html .= '<tr class="cf-vehicle-detail-row cf-refund-detail-row" id="' . e($refundsId) . '" hidden>'
-                . '<td colspan="6" class="cf-trip-detail-cell">' . $renderRefundPanel($routeRefunds, 'Refacturări') . '</td></tr>';
+                . '<td colspan="6" class="cf-trip-detail-cell">' . $renderRefundPanel($routeRefunds, 'Refacturări', $refundsId) . '</td></tr>';
         }
     }
 
@@ -406,7 +463,7 @@ $renderTypeRoutes = static function (string $type, array $routes, string $groupB
             . '<td class="cf-expand-cell">' . ($leftoverRefunds !== [] ? $renderRefundToggle($leftoverId, 'Refacturări curse din alte luni') : '') . '</td></tr>';
         if ($leftoverRefunds !== []) {
             $html .= '<tr class="cf-vehicle-detail-row cf-refund-detail-row" id="' . e($leftoverId) . '" hidden>'
-                . '<td colspan="6" class="cf-trip-detail-cell">' . $renderRefundPanel($leftoverRefunds, 'Refacturări curse din alte luni') . '</td></tr>';
+                . '<td colspan="6" class="cf-trip-detail-cell">' . $renderRefundPanel($leftoverRefunds, 'Refacturări curse din alte luni', $leftoverId) . '</td></tr>';
         }
     }
 
@@ -1183,7 +1240,16 @@ $refDefaultExpanded = true;
 .cf-activity-summary .cf-refund-panel .cf-table { min-width: 0; }
 .cf-activity-summary .cf-refund-panel .cf-table th,
 .cf-activity-summary .cf-refund-panel .cf-table td { padding: 7px 12px; }
-.cf-refund-panel .cf-table td:first-child { white-space: normal; }
+.cf-refund-panel .cf-table td:not(.is-number):not(.cf-expand-cell) { white-space: normal; }
+/* Inregistrarile unui grup: tabel imbricat pe latimea grupului, usor separat vizual. */
+.cf-refund-records {
+    margin: 4px 10px 8px 44px;
+    overflow-x: auto;
+    border: 1px solid var(--cf-border);
+    border-radius: 7px;
+    background: #fff;
+}
+.cf-refund-records .cf-table tbody tr:last-child > td { border-bottom: 0; }
 .cf-refund-panel tfoot td {
     border-bottom: 0;
     background: #fbfcff;

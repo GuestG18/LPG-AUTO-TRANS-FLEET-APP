@@ -1945,6 +1945,7 @@ class CentralizatorFacturareService
             'cursa_id' => $tripId,
             'trip_type' => (string) ($expense['tip_transport'] ?? ''),
             'race_no' => $this->formatRaceNumber($tripId, $tripDate),
+            'vehicle_label' => trim((string) ($expense['nr_inmatriculare'] ?? '')) !== '' ? (string) $expense['nr_inmatriculare'] : 'Vehicul nealocat',
             'sort_date' => $date,
             'date_label' => $this->formatDateLabel($date),
         ];
