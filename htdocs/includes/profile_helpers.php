@@ -243,3 +243,82 @@ function profile_avatar_markup(array $avatar, string $extraClass = '', ?string $
 
     return '<span class="' . e($stackClass) . '">' . $base . $badge . '</span>';
 }
+
+/**
+ * Ordinea personalizata a meniului lateral: {"top": [chei], "groups": {grup: [chei]}}.
+ * Tinuta in sesiune dupa prima citire; invalidata la salvare.
+ *
+ * @return array{top: list<string>, groups: array<string, list<string>>}
+ */
+function current_user_sidebar_order(): array
+{
+    $empty = ['top' => [], 'groups' => []];
+    $userId = (int) (current_user()['id'] ?? 0);
+    if ($userId <= 0) {
+        return $empty;
+    }
+
+    if (!array_key_exists('sidebar_order', $_SESSION['auth_user'] ?? [])) {
+        $raw = null;
+        try {
+            $stmt = get_pdo()->prepare('SELECT sidebar_order FROM utilizatori WHERE id = :id LIMIT 1');
+            $stmt->execute([':id' => $userId]);
+            $raw = $stmt->fetchColumn();
+        } catch (Throwable $exception) {
+            // Coloana lipseste inainte de migrare: meniul ramane in ordinea implicita.
+            error_log('[sidebar_order] ' . $exception->getMessage());
+        }
+        $_SESSION['auth_user']['sidebar_order'] = is_string($raw) ? $raw : null;
+    }
+
+    $decoded = json_decode((string) ($_SESSION['auth_user']['sidebar_order'] ?? ''), true);
+
+    return normalize_sidebar_order(is_array($decoded) ? $decoded : []);
+}
+
+/**
+ * @param array<mixed> $data
+ * @return array{top: list<string>, groups: array<string, list<string>>}
+ */
+function normalize_sidebar_order(array $data): array
+{
+    $cleanKeys = static function ($keys): array {
+        $out = [];
+        foreach ((array) $keys as $key) {
+            if (is_string($key) && preg_match('/^[a-z0-9_:-]{1,80}$/', $key) && !in_array($key, $out, true)) {
+                $out[] = $key;
+            }
+            if (count($out) >= 200) {
+                break;
+            }
+        }
+        return $out;
+    };
+
+    $groups = [];
+    foreach ((array) ($data['groups'] ?? []) as $group => $keys) {
+        if (is_string($group) && preg_match('/^[a-z0-9_:-]{1,80}$/', $group)) {
+            $groups[$group] = $cleanKeys($keys);
+        }
+    }
+
+    return ['top' => $cleanKeys($data['top'] ?? []), 'groups' => $groups];
+}
+
+/**
+ * Atribute pentru un element din meniu: cheia pentru drag & drop si pozitia salvata
+ * (CSS `order`, ca meniul sa apara direct in ordinea utilizatorului, fara salt vizual).
+ * Elementele noi, care nu exista in ordinea salvata, raman la final in ordinea implicita.
+ *
+ * @param list<string> $savedKeys
+ */
+function sidebar_order_attrs(string $key, array $savedKeys): string
+{
+    $attrs = ' data-nav-key="' . e($key) . '"';
+    if ($savedKeys !== []) {
+        $index = array_search($key, $savedKeys, true);
+        $attrs .= ' style="order:' . (is_int($index) ? $index : 5000) . '"';
+    }
+
+    return $attrs;
+}

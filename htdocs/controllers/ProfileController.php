@@ -167,6 +167,34 @@ class ProfileController
         redirect(url('index.php?page=profil'));
     }
 
+    /**
+     * Salveaza ordinea personalizata a meniului lateral (drag & drop).
+     * Body JSON: {csrf, order: {top: [...], groups: {...}} | null}; null revine la ordinea implicita.
+     */
+    public function saveSidebarOrder(): void
+    {
+        $body = $this->jsonBody();
+        if (!verify_csrf_token((string) ($body['csrf'] ?? ''))) {
+            $this->json(['ok' => false, 'error' => 'Token CSRF invalid. Reincarca pagina.'], 403);
+        }
+
+        $id = (int) current_user()['id'];
+        $order = is_array($body['order'] ?? null) ? normalize_sidebar_order($body['order']) : null;
+        $value = ($order === null || ($order['top'] === [] && $order['groups'] === []))
+            ? null
+            : json_encode($order, JSON_UNESCAPED_UNICODE);
+
+        try {
+            $this->userModel->updateProfile($id, ['sidebar_order' => $value]);
+        } catch (Throwable $exception) {
+            error_log('[profile][sidebar_order] ' . $exception->getMessage());
+            $this->json(['ok' => false, 'error' => 'Nu s-a putut salva ordinea meniului.'], 500);
+        }
+
+        $_SESSION['auth_user']['sidebar_order'] = $value;
+        $this->json(['ok' => true]);
+    }
+
     /** @return array<string,mixed> */
     private function jsonBody(): array
     {

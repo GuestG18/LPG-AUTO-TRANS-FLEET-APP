@@ -543,6 +543,8 @@ try {
                 $profileController->avatarUpload();
             } elseif ($action === 'avatar_emoji' && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 $profileController->avatarEmoji();
+            } elseif ($action === 'sidebar_order' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                $profileController->saveSidebarOrder();
             } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'actualizeaza') {
                 $profileController->actualizeaza();
             } else {

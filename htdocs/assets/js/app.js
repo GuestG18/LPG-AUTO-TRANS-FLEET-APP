@@ -430,6 +430,232 @@ function filterFleetSidebarSearchGroup(group, query) {
     return groupMatches;
 }
 
+// Rearanjarea meniului lateral prin drag & drop. Ordinea salvata vine din server
+// ca CSS `order` (fara salt vizual la incarcare); aici o aplicam si in DOM, ca
+// tastatura si cautarea sa urmeze aceeasi ordine.
+var fleetSidebarSortableUrl = 'https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js';
+var fleetSidebarSortablePromise = null;
+
+function fleetSidebarReorderIsActive() {
+    return document.body.classList.contains('sidebar-reordering');
+}
+
+function loadFleetSidebarSortable() {
+    if (window.Sortable) {
+        return Promise.resolve(window.Sortable);
+    }
+    if (!fleetSidebarSortablePromise) {
+        fleetSidebarSortablePromise = new Promise(function (resolve, reject) {
+            var script = document.createElement('script');
+            script.src = fleetSidebarSortableUrl;
+            script.onload = function () { resolve(window.Sortable); };
+            script.onerror = function () {
+                fleetSidebarSortablePromise = null;
+                reject(new Error('Sortable load failed'));
+            };
+            document.head.appendChild(script);
+        });
+    }
+    return fleetSidebarSortablePromise;
+}
+
+function getFleetSidebarOrderedItems(container) {
+    return Array.prototype.slice.call(container.children).filter(function (item) {
+        return item instanceof HTMLElement && item.hasAttribute('data-nav-key');
+    });
+}
+
+function sortFleetSidebarContainer(container, readRank) {
+    var items = getFleetSidebarOrderedItems(container);
+    if (items.length < 2) {
+        return;
+    }
+    var anchor = items[items.length - 1].nextSibling;
+    items
+        .map(function (item, index) { return { item: item, rank: readRank(item), index: index }; })
+        .sort(function (a, b) { return a.rank - b.rank || a.index - b.index; })
+        .forEach(function (entry) { container.insertBefore(entry.item, anchor); });
+}
+
+function getFleetSidebarContainers(nav) {
+    return [nav].concat(Array.prototype.slice.call(nav.querySelectorAll('.sidebar-submenu')));
+}
+
+function initFleetSidebarReorder() {
+    var nav = document.querySelector('[data-sidebar-nav]');
+    var toggle = document.querySelector('[data-sidebar-reorder-toggle]');
+    var bar = document.querySelector('[data-sidebar-reorder-bar]');
+
+    if (!(nav instanceof HTMLElement)) {
+        return;
+    }
+
+    // Retinem ordinea implicita (din header.php) pentru "Ordine implicita",
+    // apoi mutam fizic elementele in ordinea salvata si renuntam la CSS `order`.
+    getFleetSidebarContainers(nav).forEach(function (container) {
+        getFleetSidebarOrderedItems(container).forEach(function (item, index) {
+            item.setAttribute('data-nav-default-index', String(index));
+        });
+        sortFleetSidebarContainer(container, function (item) {
+            var rank = parseInt(item.style.order, 10);
+            return isNaN(rank) ? 0 : rank;
+        });
+        getFleetSidebarOrderedItems(container).forEach(function (item) {
+            item.style.removeProperty('order');
+        });
+    });
+
+    if (!(toggle instanceof HTMLButtonElement) || !(bar instanceof HTMLElement)) {
+        return;
+    }
+
+    var statusEl = bar.querySelector('[data-sidebar-reorder-status]');
+    var resetButton = bar.querySelector('[data-sidebar-reorder-reset]');
+    var doneButton = bar.querySelector('[data-sidebar-reorder-done]');
+    var searchInput = document.querySelector('[data-sidebar-search-input]');
+    var sortables = [];
+    var statusTimer = null;
+
+    function setStatus(text, isError) {
+        if (!(statusEl instanceof HTMLElement)) {
+            return;
+        }
+        window.clearTimeout(statusTimer);
+        statusEl.textContent = text;
+        statusEl.classList.toggle('is-error', !!isError);
+        if (text && !isError) {
+            statusTimer = window.setTimeout(function () { statusEl.textContent = ''; }, 2000);
+        }
+    }
+
+    function collectOrder() {
+        var keysOf = function (container) {
+            return getFleetSidebarOrderedItems(container).map(function (item) {
+                return item.getAttribute('data-nav-key');
+            });
+        };
+        var groups = {};
+        getFleetSidebarOrderedItems(nav).forEach(function (item) {
+            var submenu = item.querySelector('.sidebar-submenu');
+            if (item.classList.contains('sidebar-nav-group') && submenu) {
+                groups[item.getAttribute('data-nav-key')] = keysOf(submenu);
+            }
+        });
+        return { top: keysOf(nav), groups: groups };
+    }
+
+    function save(order) {
+        setStatus('Se salvează…', false);
+        return fetch(toggle.getAttribute('data-save-url'), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ csrf: toggle.getAttribute('data-csrf'), order: order })
+        })
+            .then(function (response) {
+                return response.json().catch(function () { return {}; }).then(function (data) {
+                    if (!response.ok || !data.ok) {
+                        throw new Error(data.error || 'Nu s-a putut salva ordinea meniului.');
+                    }
+                    setStatus('Salvat', false);
+                });
+            })
+            .catch(function (error) {
+                setStatus(error.message || 'Nu s-a putut salva ordinea meniului.', true);
+            });
+    }
+
+    function enter() {
+        if (searchInput instanceof HTMLInputElement && searchInput.value !== '') {
+            searchInput.value = '';
+            searchInput.dispatchEvent(new Event('input'));
+        }
+
+        document.body.classList.add('sidebar-reordering');
+        nav.classList.add('is-reordering');
+        toggle.setAttribute('aria-pressed', 'true');
+        toggle.classList.add('active');
+        bar.hidden = false;
+        if (searchInput instanceof HTMLInputElement) {
+            searchInput.disabled = true;
+        }
+        setStatus('', false);
+
+        loadFleetSidebarSortable().then(function (Sortable) {
+            if (!fleetSidebarReorderIsActive()) {
+                return;
+            }
+            sortables = getFleetSidebarContainers(nav).map(function (container, index) {
+                return Sortable.create(container, {
+                    group: 'fleet-sidebar-' + index,
+                    draggable: '[data-nav-key]',
+                    animation: 150,
+                    forceFallback: true,
+                    fallbackOnBody: true,
+                    ghostClass: 'sidebar-reorder-ghost',
+                    chosenClass: 'sidebar-reorder-chosen',
+                    onEnd: function (event) {
+                        if (event.oldIndex !== event.newIndex) {
+                            save(collectOrder());
+                        }
+                    }
+                });
+            });
+        }).catch(function () {
+            setStatus('Nu s-a putut încărca modulul de drag & drop.', true);
+        });
+    }
+
+    function exit() {
+        sortables.forEach(function (sortable) { sortable.destroy(); });
+        sortables = [];
+        document.body.classList.remove('sidebar-reordering');
+        nav.classList.remove('is-reordering');
+        toggle.setAttribute('aria-pressed', 'false');
+        toggle.classList.remove('active');
+        bar.hidden = true;
+        if (searchInput instanceof HTMLInputElement) {
+            searchInput.disabled = false;
+        }
+    }
+
+    // In modul de rearanjare un click pe pagina nu navigheaza (grupurile se pot deschide in continuare).
+    nav.addEventListener('click', function (event) {
+        if (fleetSidebarReorderIsActive() && event.target.closest('a.nav-link')) {
+            event.preventDefault();
+        }
+    }, true);
+
+    toggle.addEventListener('click', function () {
+        if (fleetSidebarReorderIsActive()) {
+            exit();
+        } else {
+            enter();
+        }
+    });
+
+    if (doneButton instanceof HTMLButtonElement) {
+        doneButton.addEventListener('click', exit);
+    }
+
+    if (resetButton instanceof HTMLButtonElement) {
+        resetButton.addEventListener('click', function () {
+            getFleetSidebarContainers(nav).forEach(function (container) {
+                sortFleetSidebarContainer(container, function (item) {
+                    return parseInt(item.getAttribute('data-nav-default-index'), 10) || 0;
+                });
+            });
+            save(null);
+        });
+    }
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && fleetSidebarReorderIsActive()) {
+            exit();
+        }
+    });
+}
+
 function initFleetSidebarSearch() {
     var search = document.querySelector('[data-sidebar-search]');
     var nav = document.querySelector('[data-sidebar-nav]');
@@ -2531,6 +2757,11 @@ document.addEventListener('DOMContentLoaded', function () {
     var sidebar = document.querySelector('.sidebar');
     if (sidebar instanceof HTMLElement) {
         sidebar.addEventListener('mouseleave', function () {
+            // In modul de rearanjare meniul ramane deschis pana la "Gata".
+            if (fleetSidebarReorderIsActive()) {
+                return;
+            }
+
             if (fleetSidebarIsPeeking()) {
                 closeFleetSidebarPeek();
             }
@@ -2561,13 +2792,14 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        if (event.clientX > fleetSidebarPeekWidth + 24) {
+        if (event.clientX > fleetSidebarPeekWidth + 24 && !fleetSidebarReorderIsActive()) {
             closeFleetSidebarPeek();
         }
     }, { passive: true });
 
     syncFleetSidebarToggleState();
     initFleetSidebarSearch();
+    initFleetSidebarReorder();
     initDashboardOperationalCostCard();
     initDashboardApprovalTabs();
     initGlobalApprovalDrawer();
