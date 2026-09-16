@@ -1714,6 +1714,218 @@ function initOperatorActivity() {
     document.addEventListener('visibilitychange', onVisibilityMaybeChanged);
 }
 
+// "Taxe de refacturat lipsa" din panoul de aprobari: admin (tab Operatori, toate cursele)
+// si operator (tab Taxe lipsa, doar cursele lui). Numaratorul din tab se incarca la
+// deschiderea paginii; lista se reimprospateaza cat timp sectiunea e vizibila.
+function initMissingFees() {
+    var section = document.querySelector('[data-missing-fees]');
+    if (!(section instanceof HTMLElement)) {
+        return;
+    }
+
+    var url = section.getAttribute('data-missing-fees-url') || '';
+    var dismissUrl = section.getAttribute('data-missing-fees-dismiss-url') || '';
+    var csrf = section.getAttribute('data-missing-fees-csrf') || '';
+    var groupByOperator = section.getAttribute('data-missing-fees-scope') === 'all';
+    var list = section.querySelector('[data-missing-fees-list]');
+    var totalLabel = section.querySelector('[data-missing-fees-total]');
+    var tabPanel = section.closest('[data-dashboard-approval-panel]');
+    var drawer = section.closest('[data-global-approval-drawer]');
+    if (url === '' || !(list instanceof HTMLElement)) {
+        return;
+    }
+
+    var REFRESH_MS = 60000;
+    var requestSeq = 0;
+
+    function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) {
+            node.className = className;
+        }
+        if (text !== undefined && text !== null) {
+            node.textContent = String(text);
+        }
+        return node;
+    }
+
+    function formatDate(iso) {
+        var parts = String(iso || '').split('-');
+        return parts.length === 3 ? parts[2] + '.' + parts[1] + '.' + parts[0] : String(iso || '');
+    }
+
+    function formatAmount(value) {
+        var number = Number(value);
+        return number.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' lei';
+    }
+
+    function isVisible() {
+        var drawerOpen = !(drawer instanceof HTMLElement) || drawer.classList.contains('is-open');
+        var panelShown = !(tabPanel instanceof HTMLElement) || !tabPanel.hidden;
+        return drawerOpen && panelShown && document.visibilityState !== 'hidden';
+    }
+
+    function setCount(count) {
+        document.querySelectorAll('[data-missing-fees-count]').forEach(function (badge) {
+            badge.textContent = ' (' + count + ')';
+            badge.hidden = count <= 0;
+        });
+        if (totalLabel instanceof HTMLElement) {
+            totalLabel.textContent = count === 1 ? '1 taxa' : count + ' taxe';
+            totalLabel.classList.toggle('has-items', count > 0);
+        }
+    }
+
+    function dismiss(row, item, button) {
+        button.disabled = true;
+        var body = new FormData();
+        body.append('_token', csrf);
+        body.append('race_id', String(row.race_id));
+        body.append('fee_type', row.fee_type);
+
+        fetch(dismissUrl, {
+            method: 'POST',
+            body: body,
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        })
+            .then(function (response) {
+                return response.json().then(function (payload) {
+                    if (!response.ok || !payload || payload.success !== true) {
+                        throw new Error((payload && payload.message) || 'Nu am putut salva marcajul.');
+                    }
+                });
+            })
+            .then(load)
+            .catch(function (error) {
+                button.disabled = false;
+                var message = item.querySelector('.missing-fee-error') || item.appendChild(el('span', 'missing-fee-error'));
+                message.textContent = error && error.message ? error.message : 'Nu am putut salva marcajul.';
+            });
+    }
+
+    function renderItem(row) {
+        var item = el('article', 'missing-fee-item');
+
+        var top = el('div', 'missing-fee-top');
+        top.appendChild(el('span', 'missing-fee-chip', row.fee_label));
+        if (row.typical_amount) {
+            top.appendChild(el('span', 'missing-fee-amount', 'uzual ' + formatAmount(row.typical_amount)));
+        }
+        top.appendChild(el('span', 'missing-fee-date', formatDate(row.date)));
+        item.appendChild(top);
+
+        var title = el('a', 'missing-fee-title', '#' + row.race_id + (row.plate ? ' · ' + row.plate : ''));
+        title.href = row.url;
+        item.appendChild(title);
+        item.appendChild(el('span', 'missing-fee-route', row.route + ' · ' + row.transport));
+        item.appendChild(el('span', 'missing-fee-evidence', row.evidence));
+
+        var actions = el('div', 'missing-fee-actions');
+        var add = el('a', 'missing-fee-add', 'Adauga refacturare');
+        add.href = row.url;
+        actions.appendChild(add);
+        var skip = el('button', 'missing-fee-dismiss', 'Nu se aplica');
+        skip.type = 'button';
+        skip.addEventListener('click', function () {
+            dismiss(row, item, skip);
+        });
+        actions.appendChild(skip);
+        item.appendChild(actions);
+
+        return item;
+    }
+
+    function render(data) {
+        var rows = Array.isArray(data.rows) ? data.rows : [];
+        setCount(rows.length);
+        list.textContent = '';
+
+        if (rows.length === 0) {
+            list.appendChild(el('div', 'missing-fees-empty', 'Nicio taxa de refacturat lipsa. Totul e in regula.'));
+            return;
+        }
+
+        if (!groupByOperator) {
+            rows.forEach(function (row) {
+                list.appendChild(renderItem(row));
+            });
+            return;
+        }
+
+        var groups = {};
+        var order = [];
+        rows.forEach(function (row) {
+            var key = String(row.user_id);
+            if (!groups[key]) {
+                groups[key] = { name: row.user_name, rows: [] };
+                order.push(key);
+            }
+            groups[key].rows.push(row);
+        });
+        order.forEach(function (key) {
+            var group = el('div', 'missing-fees-group');
+            group.appendChild(el('h4', '', groups[key].name + ' (' + groups[key].rows.length + ')'));
+            groups[key].rows.forEach(function (row) {
+                group.appendChild(renderItem(row));
+            });
+            list.appendChild(group);
+        });
+    }
+
+    function load() {
+        var seq = ++requestSeq;
+        fetch(url, {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        })
+            .then(function (response) {
+                return response.json().then(function (payload) {
+                    if (!response.ok || !payload || payload.success !== true) {
+                        throw new Error((payload && payload.message) || 'Eroare la incarcare.');
+                    }
+                    return payload.missing_fees || {};
+                });
+            })
+            .then(function (data) {
+                if (seq === requestSeq) {
+                    render(data);
+                }
+            })
+            .catch(function (error) {
+                if (seq !== requestSeq) {
+                    return;
+                }
+                list.textContent = '';
+                list.appendChild(el('div', 'missing-fees-empty is-error', error && error.message ? error.message : 'Eroare la incarcare.'));
+            });
+    }
+
+    // O incarcare la deschiderea paginii, ca numaratorul din tab sa fie vizibil fara click.
+    load();
+
+    var lastVisible = false;
+    function onVisibilityMaybeChanged() {
+        var visible = isVisible();
+        if (visible && !lastVisible) {
+            load();
+        }
+        lastVisible = visible;
+    }
+    if (tabPanel instanceof HTMLElement) {
+        new MutationObserver(onVisibilityMaybeChanged).observe(tabPanel, { attributes: true, attributeFilter: ['hidden'] });
+    }
+    if (drawer instanceof HTMLElement) {
+        new MutationObserver(onVisibilityMaybeChanged).observe(drawer, { attributes: true, attributeFilter: ['class'] });
+    }
+    document.addEventListener('visibilitychange', onVisibilityMaybeChanged);
+    window.setInterval(function () {
+        if (isVisible()) {
+            load();
+        }
+    }, REFRESH_MS);
+}
+
 function parseApprovalCount(element) {
     if (!(element instanceof HTMLElement)) {
         return 0;
@@ -2360,6 +2572,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initDashboardApprovalTabs();
     initGlobalApprovalDrawer();
     initOperatorActivity();
+    initMissingFees();
     initApprovalReviewActions();
     initApprovalRequestStateSync();
     initUserApprovalCancellation();

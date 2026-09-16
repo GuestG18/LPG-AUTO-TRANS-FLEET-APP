@@ -38,6 +38,14 @@ class InactiveResourceApprovalController
                 $this->operatorActivityAction();
                 return;
 
+            case 'missing_fees':
+                $this->missingFeesAction();
+                return;
+
+            case 'dismiss_missing_fee':
+                $this->dismissMissingFeeAction();
+                return;
+
             default:
                 http_response_code(404);
                 render('errors/404.php', [
@@ -207,6 +215,58 @@ class InactiveResourceApprovalController
                 'success' => false,
                 'message' => 'Activitatea operatorilor nu a putut fi incarcata.',
             ], 500);
+        }
+    }
+
+    /**
+     * Taxe de refacturat care probabil lipsesc (taxa acces, port, trecere).
+     * Adminul vede toate cursele; operatorul doar cursele adaugate de el.
+     */
+    private function missingFeesAction(): void
+    {
+        try {
+            $model = new ReinvoiceFeeExpectationModel(get_pdo());
+            $this->sendJson([
+                'success' => true,
+                'scope' => $this->canReview() ? 'all' : 'own',
+                'missing_fees' => $model->getMissingFees($this->canReview() ? null : (int) ($this->currentUserId() ?? 0)),
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[InactiveResourceApprovalController][missing_fees] ' . $exception->getMessage());
+            $this->sendJson([
+                'success' => false,
+                'message' => 'Taxele lipsa nu au putut fi incarcate.',
+            ], 500);
+        }
+    }
+
+    /**
+     * "Nu se aplica": operatorul confirma ca o cursa nu are taxa asteptata.
+     */
+    private function dismissMissingFeeAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf_token($_POST['_token'] ?? null)) {
+            $this->sendJson(['success' => false, 'message' => 'Cerere invalida. Reincarca pagina.'], 400);
+        }
+
+        $raceId = (int) ($_POST['race_id'] ?? 0);
+        $feeType = trim((string) ($_POST['fee_type'] ?? ''));
+
+        try {
+            $model = new ReinvoiceFeeExpectationModel(get_pdo());
+            $creator = $model->getRaceCreator($raceId);
+            if ($creator === null) {
+                $this->sendJson(['success' => false, 'message' => 'Cursa nu a fost gasita.'], 404);
+            }
+            if (!$this->canReview() && $creator !== (int) ($this->currentUserId() ?? 0)) {
+                $this->sendJson(['success' => false, 'message' => 'Poti marca doar cursele adaugate de tine.'], 403);
+            }
+
+            $ok = $model->dismiss($raceId, $feeType, $this->currentUserId());
+            $this->sendJson(['success' => $ok, 'message' => $ok ? 'Marcat ca nu se aplica.' : 'Tip de taxa invalid.'], $ok ? 200 : 422);
+        } catch (Throwable $exception) {
+            error_log('[InactiveResourceApprovalController][dismiss_missing_fee] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'message' => 'Nu am putut salva marcajul.'], 500);
         }
     }
 

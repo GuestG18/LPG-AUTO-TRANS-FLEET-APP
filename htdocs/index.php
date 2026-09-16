@@ -315,6 +315,7 @@ require_once __DIR__ . '/models/DriverEquipmentModel.php';
 require_once __DIR__ . '/models/VehicleAuthorizationModel.php';
 require_once __DIR__ . '/models/DispecerCurseModel.php';
 require_once __DIR__ . '/models/OperatorActivityModel.php';
+require_once __DIR__ . '/models/ReinvoiceFeeExpectationModel.php';
 require_once __DIR__ . '/models/DashboardAnaliticV2Model.php';
 require_once __DIR__ . '/models/ProgramareConcediiModel.php';
 require_once __DIR__ . '/models/NotificationRuleModel.php';
@@ -359,6 +360,7 @@ require_once __DIR__ . '/controllers/DashboardController.php';
 require_once __DIR__ . '/controllers/DashboardAnaliticController.php';
 require_once __DIR__ . '/controllers/DashboardAnaliticV2Controller.php';
 require_once __DIR__ . '/controllers/InactiveResourceApprovalController.php';
+require_once __DIR__ . '/controllers/ReinvoiceFeeRulesController.php';
 require_once __DIR__ . '/controllers/EmailApprovalController.php';
 require_once __DIR__ . '/controllers/ModuleController.php';
 require_once __DIR__ . '/controllers/VehicleEquipmentInventoryController.php';
@@ -672,6 +674,11 @@ try {
         case 'cheltuieli_administrative':
             require_auth();
             redirect(build_query_url(['page' => 'cheltuieli']));
+            break;
+
+        case 'reguli_taxe_refacturare':
+            require_auth();
+            (new ReinvoiceFeeRulesController($db))->handle($action);
             break;
 
         case 'cazare':

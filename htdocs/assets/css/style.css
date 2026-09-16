@@ -24094,3 +24094,217 @@ a.chx-legend-line:hover .chx-legend-name {
     font-size: 11px;
     line-height: 1.4;
 }
+
+
+/* Panoul de aprobari: "Taxe de refacturat lipsa" (tab Operatori pentru admin, Taxe lipsa pentru operator). */
+.missing-fees-tab-count {
+    color: #b45309;
+}
+
+.missing-fees {
+    display: grid;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid #fcd34d;
+    border-radius: 8px;
+    background: #fffbeb;
+}
+
+.missing-fees-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.missing-fees-header h3 {
+    margin: 0;
+    color: #78350f;
+    font-size: 14px;
+    font-weight: 900;
+}
+
+.missing-fees-header span {
+    padding: 2px 8px;
+    border-radius: 999px;
+    color: #15803d;
+    background: #dcfce7;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.missing-fees-header span.has-items {
+    color: #92400e;
+    background: #fde68a;
+}
+
+.missing-fees-intro {
+    margin: 0;
+    color: #92400e;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.missing-fees-list,
+.missing-fees-group {
+    display: grid;
+    gap: 8px;
+}
+
+.missing-fees-group h4 {
+    margin: 4px 0 0;
+    color: #071735;
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.missing-fees-empty {
+    padding: 10px;
+    border-radius: 6px;
+    color: #15803d;
+    background: #ffffff;
+    font-size: 12px;
+    font-weight: 800;
+    text-align: center;
+}
+
+.missing-fees-empty.is-error {
+    color: #b91c1c;
+}
+
+.missing-fee-item {
+    display: grid;
+    gap: 3px;
+    padding: 10px;
+    border: 1px solid #fde68a;
+    border-radius: 7px;
+    background: #ffffff;
+    font-size: 12px;
+}
+
+.missing-fee-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.missing-fee-chip {
+    padding: 1px 8px;
+    border-radius: 999px;
+    color: #ffffff;
+    background: #d97706;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.missing-fee-amount {
+    color: #92400e;
+    font-weight: 800;
+}
+
+.missing-fee-date {
+    margin-left: auto;
+    color: #52678b;
+    font-weight: 800;
+}
+
+.missing-fee-title {
+    color: #071735;
+    font-size: 13px;
+    font-weight: 900;
+    text-decoration: none;
+}
+
+.missing-fee-title:hover {
+    color: #0d6efd;
+    text-decoration: underline;
+}
+
+.missing-fee-route {
+    color: #334155;
+    font-weight: 700;
+}
+
+.missing-fee-evidence {
+    color: #52678b;
+    font-size: 11px;
+}
+
+.missing-fee-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 5px;
+}
+
+.missing-fee-add,
+.missing-fee-dismiss {
+    display: inline-flex;
+    flex: 1 1 0;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 900;
+    text-decoration: none;
+}
+
+.missing-fee-add {
+    border: 1px solid #0d6efd;
+    color: #ffffff;
+    background: #0d6efd;
+}
+
+.missing-fee-add:hover {
+    color: #ffffff;
+    background: #0a58ca;
+}
+
+.missing-fee-dismiss {
+    border: 1px solid #cbd5e1;
+    color: #334155;
+    background: #ffffff;
+}
+
+.missing-fee-dismiss:hover:not(:disabled) {
+    background: #f1f5f9;
+}
+
+.missing-fee-error {
+    color: #b91c1c;
+    font-weight: 800;
+}
+
+/* Pagina "Reguli taxe refacturare". */
+.fee-rules-table tr.is-inactive td {
+    color: #94a3b8;
+}
+
+.fee-rule-chip {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    color: #92400e;
+    background: #fef3c7;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.fee-rule-share {
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+}
+
+.fee-rule-share.is-good {
+    color: #15803d;
+}
+
+.fee-rule-share.is-low {
+    color: #b45309;
+}
+
+.missing-fees-intro a {
+    color: #92400e;
+    font-weight: 900;
+}

@@ -319,6 +319,8 @@ $focusFieldMap = [
     'delivered_quantity' => 'edit_race_tona_livrata',
     'liquid_tons' => 'edit_race_tona_aspirata_lichida',
     'gas_tons' => 'edit_race_tona_aspirata_gazoasa',
+    // Din panoul de aprobari, "Taxe lipsa": duce direct la bifa Refacturare din formularul de cheltuieli.
+    'refacturare' => 'expense_refacturare_enabled',
 ];
 $focusKeys = array_values(array_unique(array_filter(
     array_map('trim', explode(',', (string) ($_GET['focus'] ?? '')))

@@ -213,7 +213,7 @@ $statusIcons = [
                 </button>
             <?php endforeach; ?>
             <?php if ($drawerIsAdmin): ?>
-                <?php // Tab-ul Operatori nu are numarator de solicitari: continutul se incarca live din JSON. ?>
+                <?php // Tab-ul Operatori se incarca live din JSON; numaratorul arata taxele de refacturat lipsa. ?>
                 <button
                     class="dashboard-approval-tab"
                     type="button"
@@ -223,7 +223,19 @@ $statusIcons = [
                     aria-selected="false"
                     data-dashboard-approval-tab="operators"
                 >
-                    <span data-approval-tab-label>Operatori</span>
+                    <span data-approval-tab-label>Operatori</span><span class="missing-fees-tab-count" data-missing-fees-count hidden></span>
+                </button>
+            <?php else: ?>
+                <button
+                    class="dashboard-approval-tab"
+                    type="button"
+                    role="tab"
+                    id="global-approval-tab-fees"
+                    aria-controls="global-approval-panel-fees"
+                    aria-selected="false"
+                    data-dashboard-approval-tab="fees"
+                >
+                    <span data-approval-tab-label>Taxe lipsa</span><span class="missing-fees-tab-count" data-missing-fees-count hidden></span>
                 </button>
             <?php endif; ?>
         </div>
@@ -419,6 +431,29 @@ $statusIcons = [
                 data-operator-activity-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'operator_activity'])) ?>"
                 hidden
             >
+                <?php /* Taxele lipsa nu depind de ziua aleasa: sunt sus, ca lista de lucru. */ ?>
+                <section
+                    class="missing-fees"
+                    data-missing-fees
+                    data-missing-fees-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'missing_fees'])) ?>"
+                    data-missing-fees-dismiss-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'dismiss_missing_fee'])) ?>"
+                    data-missing-fees-csrf="<?= e(csrf_token()) ?>"
+                    data-missing-fees-scope="<?= $drawerIsAdmin ? 'all' : 'own' ?>"
+                >
+                    <header class="missing-fees-header">
+                        <h3><i class="bi bi-receipt" aria-hidden="true"></i> Taxe de refacturat lipsa</h3>
+                        <span data-missing-fees-total>-</span>
+                    </header>
+                    <p class="missing-fees-intro">
+                        Curse recente (inclusiv cele programate) care, dupa regulile din „Reguli taxe refacturare”, trebuie sa aiba o taxa
+                        (ex. Taxa acces la Lugoj, Port la Giurgiu). Adauga refacturarea sau marcheaza „Nu se aplica”.
+                        <?php if (function_exists('can') && can('reguli_taxe_refacturare')): ?>
+                            <a href="<?= e(build_query_url(['page' => 'reguli_taxe_refacturare'])) ?>">Vezi regulile</a>
+                        <?php endif; ?>
+                    </p>
+                    <div class="missing-fees-list" data-missing-fees-list aria-live="polite"></div>
+                </section>
+
                 <div class="operator-activity-toolbar">
                     <button class="operator-activity-nav" type="button" data-operator-activity-shift="-1" aria-label="Ziua anterioara">
                         <i class="bi bi-chevron-left" aria-hidden="true"></i>
@@ -455,6 +490,37 @@ $statusIcons = [
                     <strong>Inca deschise</strong> = din cursele adaugate in ziua respectiva.
                     <span data-operator-activity-overall></span>
                 </p>
+            </div>
+        <?php else: ?>
+            <div
+                class="dashboard-approval-tab-panel"
+                role="tabpanel"
+                id="global-approval-panel-fees"
+                aria-labelledby="global-approval-tab-fees"
+                data-dashboard-approval-panel="fees"
+                hidden
+            >
+                <section
+                    class="missing-fees"
+                    data-missing-fees
+                    data-missing-fees-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'missing_fees'])) ?>"
+                    data-missing-fees-dismiss-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'dismiss_missing_fee'])) ?>"
+                    data-missing-fees-csrf="<?= e(csrf_token()) ?>"
+                    data-missing-fees-scope="<?= $drawerIsAdmin ? 'all' : 'own' ?>"
+                >
+                    <header class="missing-fees-header">
+                        <h3><i class="bi bi-receipt" aria-hidden="true"></i> Taxe de refacturat lipsa</h3>
+                        <span data-missing-fees-total>-</span>
+                    </header>
+                    <p class="missing-fees-intro">
+                        Curse recente (inclusiv cele programate) care, dupa regulile din „Reguli taxe refacturare”, trebuie sa aiba o taxa
+                        (ex. Taxa acces la Lugoj, Port la Giurgiu). Adauga refacturarea sau marcheaza „Nu se aplica”.
+                        <?php if (function_exists('can') && can('reguli_taxe_refacturare')): ?>
+                            <a href="<?= e(build_query_url(['page' => 'reguli_taxe_refacturare'])) ?>">Vezi regulile</a>
+                        <?php endif; ?>
+                    </p>
+                    <div class="missing-fees-list" data-missing-fees-list aria-live="polite"></div>
+                </section>
             </div>
         <?php endif; ?>
 

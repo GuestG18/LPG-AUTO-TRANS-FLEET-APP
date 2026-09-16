@@ -88,6 +88,15 @@ return [
                 'config'            => ['label' => 'Configurare (locații, zone, rute, catalog, beneficiari)', 'admin' => true],
             ],
         ],
+        // Pe ce rute se cere taxa acces / port / trecere; alimenteaza avertizarile
+        // "Taxe de refacturat lipsa" din panoul de aprobari.
+        'reguli_taxe_refacturare' => [
+            'group' => 'operational', 'label' => 'Reguli taxe refacturare', 'icon' => 'bi-signpost-split', 'scope' => 'all',
+            'actions' => [
+                'view'   => ['label' => 'Vizualizare reguli'],
+                'manage' => ['label' => 'Adăugare / editare / ștergere reguli', 'admin' => true],
+            ],
+        ],
         'carburanti' => [
             'group' => 'operational', 'label' => 'Carburanți', 'icon' => 'bi-fuel-pump', 'scope' => 'all',
             'actions' => [
