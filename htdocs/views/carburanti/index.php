@@ -601,77 +601,6 @@ $renderLineChart = static function (array $chart): string {
         . $labels
         . '</svg>';
 };
-$renderMultiSeriesChart = static function (array $seriesList): string {
-    $count = 0;
-    foreach ($seriesList as $series) {
-        $count = max($count, count((array) ($series['points'] ?? [])));
-    }
-    if ($count === 0) {
-        return '<div class="fuel-empty-chart">Nu exista date pentru grafic.</div>';
-    }
-
-    $values = [10.0];
-    foreach ($seriesList as $series) {
-        foreach ((array) ($series['points'] ?? []) as $point) {
-            $values[] = (float) ($point['value'] ?? 0);
-        }
-    }
-    $maxValue = ceil(max($values) / 10) * 10;
-    $width = 760;
-    $height = 270;
-    $left = 44;
-    $right = 16;
-    $top = 18;
-    $bottom = 38;
-    $plotWidth = $width - $left - $right;
-    $plotHeight = $height - $top - $bottom;
-    $step = $count > 1 ? $plotWidth / ($count - 1) : $plotWidth;
-
-    $grid = '';
-    for ($i = 0; $i <= 5; $i++) {
-        $value = ($maxValue / 5) * $i;
-        $y = $top + ($plotHeight - (($value / $maxValue) * $plotHeight));
-        $grid .= '<line x1="' . $left . '" y1="' . round($y, 2) . '" x2="' . ($width - $right) . '" y2="' . round($y, 2) . '" class="fuel-chart-gridline"/>';
-        $grid .= '<text x="8" y="' . (round($y, 2) + 4) . '" class="fuel-chart-axis">' . e((string) round($value)) . '</text>';
-    }
-
-    $lines = '';
-    $labelPoints = [];
-    foreach ($seriesList as $series) {
-        $points = array_values((array) ($series['points'] ?? []));
-        if ($labelPoints === [] && $points !== []) {
-            $labelPoints = $points;
-        }
-        if ($points === []) {
-            continue;
-        }
-
-        $svgPoints = [];
-        foreach ($points as $index => $point) {
-            $x = $left + ($step * $index);
-            $value = max(0.0, (float) ($point['value'] ?? 0));
-            $y = $top + ($plotHeight - (($value / $maxValue) * $plotHeight));
-            $svgPoints[] = round($x, 2) . ',' . round($y, 2);
-        }
-        $lines .= '<polyline points="' . e(implode(' ', $svgPoints)) . '" class="fuel-chart-series" style="stroke: ' . e((string) ($series['color'] ?? '#1d6cff')) . ';"/>';
-    }
-
-    $labels = '';
-    $labelEvery = max(1, (int) ceil($count / 6));
-    foreach ($labelPoints as $index => $point) {
-        if ($index % $labelEvery !== 0 && $index !== $count - 1) {
-            continue;
-        }
-        $x = $left + ($step * $index);
-        $labels .= '<text x="' . round($x, 2) . '" y="' . ($height - 8) . '" text-anchor="middle" class="fuel-chart-axis">' . e((string) ($point['label'] ?? '')) . '</text>';
-    }
-
-    return '<svg class="fuel-line-chart" viewBox="0 0 ' . $width . ' ' . $height . '" role="img" aria-label="Comparatie consum vehicule selectate">'
-        . $grid
-        . $lines
-        . $labels
-        . '</svg>';
-};
 $fleetAverageL100 = static function (array $rows): float {
     $liters = 0.0;
     $km = 0.0;
@@ -686,51 +615,6 @@ $fleetAverageL100 = static function (array $rows): float {
     }
 
     return $km > 0 ? round(($liters / $km) * 100, 2) : 0.0;
-};
-$renderVehicleBars = static function (array $rows, float $fleetAverage): string {
-    $bars = [];
-    foreach ($rows as $row) {
-        if ((float) ($row['consum_motorina'] ?? 0) > 0) {
-            $bars[] = $row;
-        }
-    }
-    $bars = array_slice($bars, 0, 15);
-    if ($bars === []) {
-        return '<div class="fuel-empty-chart">Nu exista vehicule cu consum calculabil (necesita km din odometru sau curse asociate).</div>';
-    }
-
-    $maxValue = $fleetAverage;
-    foreach ($bars as $row) {
-        $maxValue = max($maxValue, (float) $row['consum_motorina']);
-    }
-    $maxValue = max(10.0, ceil($maxValue / 5) * 5);
-
-    $rowHeight = 30;
-    $top = 12;
-    $bottom = 8;
-    $left = 118;
-    $right = 74;
-    $width = 760;
-    $height = $top + (count($bars) * $rowHeight) + $bottom;
-    $plotWidth = $width - $left - $right;
-
-    $svg = '';
-    foreach ($bars as $index => $row) {
-        $value = (float) $row['consum_motorina'];
-        $y = $top + ($index * $rowHeight);
-        $barWidth = max(2.0, ($value / $maxValue) * $plotWidth);
-        $class = $fleetAverage > 0 && $value > $fleetAverage ? 'fuel-vbar is-above' : 'fuel-vbar is-below';
-        $svg .= '<text x="' . ($left - 10) . '" y="' . round($y + ($rowHeight / 2) + 4, 2) . '" text-anchor="end" class="fuel-chart-axis">' . e((string) ($row['vehicle_registration'] ?? '-')) . '</text>';
-        $svg .= '<rect x="' . $left . '" y="' . round($y + 5, 2) . '" width="' . round($barWidth, 2) . '" height="' . ($rowHeight - 10) . '" rx="4" class="' . $class . '"/>';
-        $svg .= '<text x="' . round($left + $barWidth + 8, 2) . '" y="' . round($y + ($rowHeight / 2) + 4, 2) . '" class="fuel-chart-axis fuel-vbar-value">' . e(format_number_ro($value, 2)) . '</text>';
-    }
-
-    if ($fleetAverage > 0) {
-        $avgX = $left + (($fleetAverage / $maxValue) * $plotWidth);
-        $svg .= '<line x1="' . round($avgX, 2) . '" y1="' . ($top - 4) . '" x2="' . round($avgX, 2) . '" y2="' . ($height - $bottom) . '" class="fuel-chart-average"/>';
-    }
-
-    return '<svg class="fuel-vehicle-bars" viewBox="0 0 ' . $width . ' ' . $height . '" role="img" aria-label="Comparatie consum pe vehicul">' . $svg . '</svg>';
 };
 $compareBadge = static function (?float $percent, string $better): string {
     if ($percent === null) {
@@ -1494,55 +1378,116 @@ $donutStyle = static function (array $items): string {
             <section class="tab-pane fade" id="fuel-compare" role="tabpanel" aria-labelledby="fuel-compare-tab" tabindex="0">
                 <?php
                 $fleetAvg = $fleetAverageL100($vehicleComparison);
-                $vehicleSeries = [];
-                foreach ($vehicleDailyCharts as $chartIndex => $chartData) {
-                    $vehicleSeries[] = [
-                        'label' => (string) ($chartData['vehicle'] ?? '-'),
-                        'color' => $seriesPalette[$chartIndex % count($seriesPalette)],
-                        'average' => (float) ($chartData['average'] ?? 0),
-                        'points' => (array) (($chartData['chart'] ?? [])['points'] ?? []),
+
+                // Widgetul de comparatie este randat client-side cu Chart.js, la fel ca
+                // in Dashboard Analitic V2: serverul trimite doar randurile agregate.
+                $compareRows = [];
+                foreach ($vehicleComparison as $row) {
+                    $rowLiters = (float) ($row['motorina'] ?? 0) + (float) ($row['adblue'] ?? 0);
+                    $compareRows[] = [
+                        'nume' => (string) ($row['vehicle_registration'] ?? '-'),
+                        'alimentari' => (int) ($row['fillup_count'] ?? 0),
+                        'motorina' => round((float) ($row['motorina'] ?? 0), 2),
+                        'adblue' => round((float) ($row['adblue'] ?? 0), 2),
+                        'km' => round((float) ($row['km'] ?? 0), 2),
+                        'consum_motorina' => round((float) ($row['consum_motorina'] ?? 0), 2),
+                        'consum_adblue' => round((float) ($row['consum_adblue'] ?? 0), 2),
+                        'cost' => round((float) ($row['total_value'] ?? 0), 2),
+                        'cost_km' => round((float) ($row['cost_per_km'] ?? 0), 3),
+                        'pret_mediu' => $rowLiters > 0 ? round((float) ($row['total_value'] ?? 0) / $rowLiters, 3) : 0.0,
+                        'km_source' => (string) ($row['km_source'] ?? ''),
                     ];
                 }
+
+                // Seriile zilnice exista doar pentru vehiculele alese in filtrul paginii.
+                $compareDaily = [];
+                foreach ($vehicleDailyCharts as $chartData) {
+                    $dailyPoints = (array) (($chartData['chart'] ?? [])['points'] ?? []);
+                    $compareDaily[] = [
+                        'nume' => (string) ($chartData['vehicle'] ?? '-'),
+                        'average' => round((float) ($chartData['average'] ?? 0), 2),
+                        'labels' => array_map(static fn (array $point): string => (string) ($point['label'] ?? ''), $dailyPoints),
+                        'values' => array_map(static fn (array $point): float => round((float) ($point['value'] ?? 0), 2), $dailyPoints),
+                    ];
+                }
+
+                $fuelCompareConfig = [
+                    'rows' => $compareRows,
+                    'daily' => $compareDaily,
+                    'fleetAvg' => $fleetAvg,
+                    'period' => (string) ($filters['period'] ?? ''),
+                    'preselected' => $selectedVehicles,
+                ];
                 ?>
-                <?php if (count($vehicleSeries) >= 2): ?>
-                    <article class="fuel-card fuel-selected-compare-card">
-                        <div class="fuel-card-header">
-                            <h2>Comparație vehicule selectate — Consum mediu Motorină (L/100 km)</h2>
-                            <span class="fuel-select-chip"><?= e((string) ($filters['period'] ?? '')) ?></span>
-                        </div>
-                        <?= $renderMultiSeriesChart($vehicleSeries) ?>
-                        <div class="fuel-chart-legend">
-                            <?php foreach ($vehicleSeries as $series): ?>
-                                <span>
-                                    <i class="legend-line" style="border-top-color: <?= e((string) $series['color']) ?>;"></i>
-                                    <?= e((string) $series['label']) ?>
-                                    <?php if ((float) $series['average'] > 0): ?>
-                                        (medie: <?= e(format_number_ro((float) $series['average'], 2)) ?>)
-                                    <?php endif; ?>
-                                </span>
-                            <?php endforeach; ?>
-                        </div>
-                        <?php if (count($selectedVehicles) > count($vehicleSeries)): ?>
-                            <p class="fuel-compare-hint">Graficul afișează primele <?= e((string) count($vehicleSeries)) ?> vehicule selectate.</p>
-                        <?php endif; ?>
-                    </article>
-                <?php endif; ?>
-                <div class="fuel-vehicle-compare-grid">
-                    <article class="fuel-card">
-                        <div class="fuel-card-header">
-                            <h2>Comparație consum pe vehicul (L/100 km)</h2>
-                            <?php if ($fleetAvg > 0): ?>
-                                <span class="fuel-select-chip">Medie flotă: <?= e(format_number_ro($fleetAvg, 2)) ?> L/100 km</span>
-                            <?php endif; ?>
-                        </div>
-                        <?= $renderVehicleBars($vehicleComparison, $fleetAvg) ?>
-                        <div class="fuel-chart-legend">
-                            <span><i class="legend-swatch legend-swatch-above"></i> Peste media flotei</span>
-                            <span><i class="legend-swatch legend-swatch-below"></i> Sub media flotei</span>
-                            <span><i class="legend-dashed"></i> Medie flotă</span>
+                <link rel="stylesheet" href="<?= e(url('assets/css/dashboard-analitic-v2.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/dashboard-analitic-v2.css'))) ?>">
+
+                <div class="da2 fuel-compare-da2" id="fuelCompareRoot">
+                    <script type="application/json" id="fuelCompareConfig"><?= json_encode($fuelCompareConfig, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>
+
+                    <article class="da2-card">
+                        <header class="da2-card-head">
+                            <div>
+                                <h2>Comparație vehicule</h2>
+                                <p class="da2-card-sub">Bifează vehiculele și metricile de comparat<?= $fleetAvg > 0 ? ' · medie flotă ' . e(format_number_ro($fleetAvg, 2)) . ' L/100 km' : '' ?>.</p>
+                            </div>
+                            <div class="da2-card-tools">
+                                <div class="da2-seg" data-fuel-seg="view">
+                                    <button type="button" data-value="bars" class="is-active">Bare</button>
+                                    <button type="button" data-value="evolution">Evoluție</button>
+                                </div>
+                                <button type="button" class="da2-btn da2-btn-sm" id="fuelCompareTop">Adaugă top 5</button>
+                                <button type="button" class="da2-btn da2-btn-sm da2-btn-ghost" id="fuelCompareClear">Golește</button>
+                            </div>
+                        </header>
+
+                        <div class="da2-compare-grid">
+                            <div class="da2-compare-picker">
+                                <div class="da2-ms-search da2-ms-search-inline">
+                                    <i class="bi bi-search" aria-hidden="true"></i>
+                                    <input type="search" id="fuelCompareSearch" placeholder="Caută vehicul…" autocomplete="off">
+                                </div>
+                                <div class="da2-compare-list" id="fuelCompareList"></div>
+                            </div>
+                            <div class="da2-compare-main">
+                                <div class="da2-metric-toggles" id="fuelCompareMetrics"></div>
+                                <div class="da2-chart da2-chart-lg"><canvas id="fuelCompareChart"></canvas></div>
+                                <p class="da2-card-sub" id="fuelCompareNote"></p>
+                            </div>
                         </div>
                     </article>
 
+                    <div class="da2-grid-2">
+                        <article class="da2-card">
+                            <header class="da2-card-head">
+                                <div>
+                                    <h2>Profil normalizat</h2>
+                                    <p class="da2-card-sub">Fiecare axă este scalată 0–100 față de cea mai mare valoare din selecție.</p>
+                                </div>
+                            </header>
+                            <div class="da2-chart da2-chart-lg"><canvas id="fuelCompareRadar"></canvas></div>
+                        </article>
+
+                        <article class="da2-card">
+                            <header class="da2-card-head">
+                                <div>
+                                    <h2>Structura alimentărilor</h2>
+                                    <p class="da2-card-sub">Litri de motorină și AdBlue, pentru vehiculele selectate.</p>
+                                </div>
+                            </header>
+                            <div class="da2-chart da2-chart-lg"><canvas id="fuelCompareMix"></canvas></div>
+                        </article>
+                    </div>
+
+                    <article class="da2-card">
+                        <header class="da2-card-head">
+                            <div>
+                                <h2>Tabel comparativ</h2>
+                                <p class="da2-card-sub">Δ este diferența față de media vehiculelor selectate.</p>
+                            </div>
+                        </header>
+                        <div class="da2-table-wrap"><table class="da2-table" id="fuelCompareTable"></table></div>
+                    </article>
+                </div>
                     <article class="fuel-card">
                         <div class="fuel-card-header">
                             <h2><?= count($selectedVehicles) >= 2 ? 'Vehicule selectate' : 'Toate vehiculele' ?> <span class="fuel-count-badge"><?= e((string) count($vehicleComparison)) ?></span></h2>
@@ -1598,7 +1543,6 @@ $donutStyle = static function (array $items): string {
                         </div>
                         <p class="fuel-compare-hint">Click pe antetul unei coloane pentru sortare. Vehiculele fără km (odometru sau curse asociate) nu au consum mediu calculabil.</p>
                     </article>
-                </div>
 
                 <article class="fuel-card fuel-compare-form-card">
                     <div class="fuel-card-header">
@@ -2803,3 +2747,6 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 });
 </script>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="<?= e(url('assets/js/carburanti-compare.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/carburanti-compare.js'))) ?>"></script>

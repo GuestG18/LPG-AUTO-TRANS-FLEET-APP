@@ -3757,8 +3757,23 @@ class DispecerCurseModel extends BaseModel
                 v.nr_inmatriculare,
                 v.marca,
                 v.model,
-                v.capacitate_transport
+                -- Capul tractor nu are capacitate proprie: o preia de la semiremorca cuplata activ.
+                CASE
+                    WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(NULLIF(s.capacitate_transport, 0), v.capacitate_transport)
+                    ELSE v.capacitate_transport
+                END AS capacitate_transport
             FROM vehicule v
+            LEFT JOIN (
+                SELECT vc1.tractor_id, vc1.semiremorca_id
+                FROM vehicule_cuplaje vc1
+                INNER JOIN (
+                    SELECT tractor_id, MAX(id) AS max_id
+                    FROM vehicule_cuplaje
+                    WHERE activ = 1
+                    GROUP BY tractor_id
+                ) latest ON latest.max_id = vc1.id
+            ) vc ON vc.tractor_id = v.id
+            LEFT JOIN vehicule s ON s.id = vc.semiremorca_id
             WHERE COALESCE(TRIM(v.nr_inmatriculare), '') <> ''
               AND EXISTS (
                   SELECT 1
@@ -3969,9 +3984,12 @@ class DispecerCurseModel extends BaseModel
                 OR REPLACE(COALESCE(e.refacturare_detalii, ''), '_', ' ') LIKE :" . $prefix . "_search_ref_details_readable
                 OR COALESCE(e.observatii, '') LIKE :" . $prefix . "_search_obs
                 OR COALESCE(cc.nume, '') LIKE :" . $prefix . "_search_category
-                OR COALESCE(e.refacturare_tip_cheltuiala, '') LIKE :" . $prefix . "_search_type
+                OR REPLACE(COALESCE(e.refacturare_tip_cheltuiala, e.tip_cheltuiala, ''), '_', ' ') LIKE :" . $prefix . "_search_type
+                OR COALESCE(NULLIF(TRIM(e.refacturare_locatie), ''), e.locatie, '') LIKE :" . $prefix . "_search_location
             )";
+            // Taxele de drum isi afiseaza locatia in coloana "Motiv / detalii", deci trebuie cautata si ea.
             $searchValue = '%' . (string) $filters['q'] . '%';
+            $params[':' . $prefix . '_search_location'] = $searchValue;
             $params[':' . $prefix . '_search_ref_obs'] = $searchValue;
             $params[':' . $prefix . '_search_ref_details'] = $searchValue;
             $params[':' . $prefix . '_search_ref_details_readable'] = $searchValue;

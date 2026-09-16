@@ -16563,10 +16563,6 @@ button.dispatcher-datetime-picker-title:focus-visible {
     flex: 0 0 auto;
 }
 
-.fuel-selected-compare-card {
-    margin-bottom: 1rem;
-}
-
 .fuel-chart-series {
     fill: none;
     stroke-width: 3;
@@ -16631,37 +16627,6 @@ button.dispatcher-datetime-picker-title:focus-visible {
     }
 }
 
-.fuel-vehicle-compare-grid {
-    display: grid;
-    grid-template-columns: minmax(340px, .9fr) minmax(420px, 1.25fr);
-    gap: 1rem;
-    align-items: start;
-    margin-bottom: 1rem;
-}
-
-.fuel-vehicle-bars {
-    width: 100%;
-    display: block;
-}
-
-.fuel-vbar.is-above { fill: #ef4444; }
-.fuel-vbar.is-below { fill: #22c55e; }
-
-.fuel-vbar-value {
-    font-weight: 800;
-    fill: #334155;
-}
-
-.legend-swatch {
-    width: 14px;
-    height: 14px;
-    border-radius: 4px;
-    display: inline-block;
-}
-
-.legend-swatch-above { background: #ef4444; }
-.legend-swatch-below { background: #22c55e; }
-
 .fuel-consum-value {
     font-weight: 850;
 }
@@ -16677,12 +16642,6 @@ button.dispatcher-datetime-picker-title:focus-visible {
 .fuel-vehicle-table thead th i {
     font-size: .68rem;
     color: #94a3b8;
-}
-
-@media (max-width: 1100px) {
-    .fuel-vehicle-compare-grid {
-        grid-template-columns: 1fr;
-    }
 }
 
 @media (max-width: 1100px) {
