@@ -701,15 +701,20 @@ document.addEventListener('DOMContentLoaded', function () {
             vehicleDropdownEl.querySelectorAll('[data-vehicle-group]').forEach(refreshGroupToggle);
         };
 
+        // Spatiile si cratimele se ignora, ca "285 NET" sa gaseasca si "B285NET" / "B-285-NET".
+        var normalizeVehicleSearch = function (value) {
+            return String(value || '').toLocaleLowerCase('ro-RO').replace(/[\s \-]+/g, '');
+        };
+
         var filterVehicleMenu = function () {
-            var query = vehicleSearchEl.value.trim().toLocaleLowerCase('ro-RO');
+            var query = normalizeVehicleSearch(vehicleSearchEl.value);
             vehicleMenuEl.classList.toggle('is-searching', query !== '');
             var visibleCount = 0;
             vehicleMenuEl.querySelectorAll('[data-vehicle-group]').forEach(function (groupEl) {
-                var groupLabelMatches = query !== '' && String(groupEl.getAttribute('data-group-label') || '').indexOf(query) !== -1;
+                var groupLabelMatches = query !== '' && normalizeVehicleSearch(groupEl.getAttribute('data-group-label')).indexOf(query) !== -1;
                 var groupVisible = 0;
                 groupEl.querySelectorAll('.vehicle-multiselect-option').forEach(function (optionEl) {
-                    var isVisible = query === '' || groupLabelMatches || optionEl.textContent.toLocaleLowerCase('ro-RO').indexOf(query) !== -1;
+                    var isVisible = query === '' || groupLabelMatches || normalizeVehicleSearch(optionEl.textContent).indexOf(query) !== -1;
                     optionEl.hidden = !isVisible;
                     if (isVisible) {
                         groupVisible += 1;

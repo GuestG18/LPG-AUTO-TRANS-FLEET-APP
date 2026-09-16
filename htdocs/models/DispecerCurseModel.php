@@ -1805,7 +1805,7 @@ class DispecerCurseModel extends BaseModel
                 activ TINYINT(1) NOT NULL DEFAULT 1,
                 created_at DATETIME NOT NULL,
                 updated_at DATETIME NOT NULL,
-                UNIQUE KEY uk_config_rute_beneficiar_loc_zona_scope (beneficiar_id, loc_incarcare_id, zona_distributie_id, transport_scope),
+                INDEX idx_config_rute_distributie_pereche (beneficiar_id, loc_incarcare_id, zona_distributie_id, transport_scope),
                 INDEX idx_config_rute_beneficiar (beneficiar_id),
                 INDEX idx_config_rute_loc (loc_incarcare_id),
                 INDEX idx_config_rute_zona (zona_distributie_id),
@@ -1933,20 +1933,24 @@ class DispecerCurseModel extends BaseModel
         ");
         $scopedUniqueIndexCheckStmt->execute();
         $hasScopedUniqueIndex = (int) $scopedUniqueIndexCheckStmt->fetchColumn() > 0;
-        if (!$hasScopedUniqueIndex) {
-            $this->db->exec("
-                DELETE duplicate_rule
-                FROM configurare_rute_distributie duplicate_rule
-                INNER JOIN configurare_rute_distributie newer_rule
-                    ON newer_rule.beneficiar_id = duplicate_rule.beneficiar_id
-                   AND newer_rule.loc_incarcare_id = duplicate_rule.loc_incarcare_id
-                   AND newer_rule.zona_distributie_id = duplicate_rule.zona_distributie_id
-                   AND newer_rule.transport_scope = duplicate_rule.transport_scope
-                   AND newer_rule.id > duplicate_rule.id
-            ");
+        // Aceeasi pereche Loc-Zona poate avea mai multe reguli (pret diferit pe alte
+        // vehicule), ca la Rute Primar. Unicitatea e inlocuita de un index simplu, iar
+        // nesuprapunerea vehiculelor este verificata in controller la salvare.
+        if ($hasScopedUniqueIndex) {
+            $this->db->exec("ALTER TABLE configurare_rute_distributie DROP INDEX uk_config_rute_beneficiar_loc_zona_scope");
+        }
+        $pairIndexCheckStmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'configurare_rute_distributie'
+              AND INDEX_NAME = 'idx_config_rute_distributie_pereche'
+        ");
+        $pairIndexCheckStmt->execute();
+        if ((int) $pairIndexCheckStmt->fetchColumn() === 0) {
             $this->db->exec("
                 ALTER TABLE configurare_rute_distributie
-                ADD UNIQUE KEY uk_config_rute_beneficiar_loc_zona_scope (beneficiar_id, loc_incarcare_id, zona_distributie_id, transport_scope)
+                ADD INDEX idx_config_rute_distributie_pereche (beneficiar_id, loc_incarcare_id, zona_distributie_id, transport_scope)
             ");
         }
         $this->distributionRouteTableEnsured = true;

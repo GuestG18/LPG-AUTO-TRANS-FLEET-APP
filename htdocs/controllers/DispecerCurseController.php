@@ -1170,6 +1170,21 @@ class DispecerCurseController
                 return;
             }
 
+            // La Distributie o pereche Loc-Zona poate avea mai multe reguli cu preturi diferite
+            // pe vehicule disjuncte. Adaugarea pe toate ar suprapune vehiculul, iar alegerea
+            // pretului nu se poate ghici — adminul alege regula din Configurare Transport.
+            if (!$isPrimary) {
+                $rulesPerPair = [];
+                foreach ($matchedRules as $rule) {
+                    $pairKey = (int) ($rule['loc_incarcare_id'] ?? 0) . '|' . (int) ($rule['zona_distributie_id'] ?? 0);
+                    $rulesPerPair[$pairKey] = ($rulesPerPair[$pairKey] ?? 0) + 1;
+                }
+                if (max($rulesPerPair) > 1) {
+                    flash_set('warning', 'Ruta are mai multe configuratii cu preturi diferite; vehiculul a fost folosit doar pentru aceasta cursa. Adauga-l pe configuratia potrivita din Configurare Transport.');
+                    return;
+                }
+            }
+
             $table = $isPrimary ? 'configurare_rute_primar' : 'configurare_rute_distributie';
             $updatedRules = 0;
             foreach ($matchedRules as $rule) {
@@ -4174,6 +4189,33 @@ class DispecerCurseController
                 ) !== $routeScope
             ) {
                 $errors['route_id'] = 'Configuratia selectata apartine altui panel de tarifare.';
+            }
+        }
+
+        // Aceeasi pereche Loc-Zona poate exista pe mai multe reguli (ex. pret diferit
+        // pentru alte vehicule), dar vehiculele NU au voie sa se suprapuna intre reguli
+        // din acelasi panel — altfel tariful cursei ar fi ambiguu.
+        if ($errors === [] && $routeVehicleIds !== []) {
+            foreach ($this->model->getDistributionRouteRules(false, $beneficiaryId, $routeScope) as $pairRule) {
+                $pairRuleId = (int) ($pairRule['id'] ?? 0);
+                if ($pairRuleId <= 0 || $pairRuleId === $routeEditId) {
+                    continue;
+                }
+                if ((int) ($pairRule['loc_incarcare_id'] ?? 0) !== $locationId || (int) ($pairRule['zona_distributie_id'] ?? 0) !== $zoneId) {
+                    continue;
+                }
+
+                $pairRuleVehicleIds = $this->parseDistributionRouteVehicleIds((string) ($pairRule['vehicle_ids'] ?? ''));
+                if ($pairRuleVehicleIds === []) {
+                    $errors['vehicle_ids'] = 'Exista deja o configuratie pe aceasta combinatie Loc incarcare -> Zona descarcare fara restrictie de vehicule (acopera toate vehiculele). Editeaza-o pe aceea sau limiteaza-i vehiculele mai intai.';
+                    break;
+                }
+
+                $overlappingVehicleIds = array_values(array_intersect($routeVehicleIds, $pairRuleVehicleIds));
+                if ($overlappingVehicleIds !== []) {
+                    $errors['vehicle_ids'] = 'Vehiculele selectate se suprapun cu o alta configuratie existenta pe aceeasi combinatie Loc incarcare -> Zona descarcare (' . count($overlappingVehicleIds) . ' vehicule comune). Pentru un pret diferit pe aceeasi ruta alege alte vehicule sau editeaza configuratia existenta.';
+                    break;
+                }
             }
         }
 

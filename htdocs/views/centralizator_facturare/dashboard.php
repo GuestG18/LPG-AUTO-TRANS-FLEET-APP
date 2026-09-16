@@ -22,6 +22,8 @@ $refGroups = (array) ($refacturari['summary_groups'] ?? []);
 $refTypeGroups = (array) ($refacturari['type_groups'] ?? []);
 $refRows = (array) ($refacturari['rows'] ?? []);
 $refPagination = (array) ($refacturari['pagination'] ?? []);
+$tariffEvolution = (array) ($report['tariff_evolution']['rows'] ?? []);
+$tariffShowBeneficiary = count(array_unique(array_column($tariffEvolution, 'beneficiary'))) > 1;
 $generatedAt = (string) ($report['generated_at'] ?? date('Y-m-d H:i:s'));
 $mode = (string) ($filters['tip_activitate'] ?? '');
 
@@ -838,6 +840,7 @@ $refDefaultExpanded = true;
         "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3 ref"
         "activity activity activity activity activity activity ref"
         "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
+        "tariffs tariffs tariffs tariffs tariffs tariffs tariffs"
         "refTable refTable refTable refTable refTable refTable refTable";
     gap: 14px;
     padding: 14px;
@@ -854,6 +857,7 @@ $refDefaultExpanded = true;
         "primaryTable primaryTable primaryTable distribution distribution distribution ref"
         "distTable distTable distTable distTable distTable distTable ref"
         "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
+        "tariffs tariffs tariffs tariffs tariffs tariffs tariffs"
         "refTable refTable refTable refTable refTable refTable refTable";
 }
 .cf-main-grid.mode-primar {
@@ -861,6 +865,7 @@ $refDefaultExpanded = true;
         "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3 ref"
         "primaryTable primaryTable primaryTable primaryTable primaryTable primaryTable ref"
         "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
+        "tariffs tariffs tariffs tariffs tariffs tariffs tariffs"
         "refTable refTable refTable refTable refTable refTable refTable";
 }
 .cf-main-grid.mode-primar-tona,
@@ -868,6 +873,7 @@ $refDefaultExpanded = true;
     grid-template-areas:
         "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3 ref"
         "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
+        "tariffs tariffs tariffs tariffs tariffs tariffs tariffs"
         "refTable refTable refTable refTable refTable refTable refTable";
 }
 .cf-main-grid.mode-distributie {
@@ -876,6 +882,7 @@ $refDefaultExpanded = true;
         "distribution distribution distribution distribution distribution distribution ref"
         "distTable distTable distTable distTable distTable distTable ref"
         "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
+        "tariffs tariffs tariffs tariffs tariffs tariffs tariffs"
         "refTable refTable refTable refTable refTable refTable refTable";
 }
 .cf-card,
@@ -1064,6 +1071,61 @@ $refDefaultExpanded = true;
 .cf-distribution-table { grid-area: distTable; }
 .cf-vehicle-detail { grid-area: vehicleDetail; }
 .cf-refact-table { grid-area: refTable; }
+/* Primar - pe rute: aceeasi ruta poate aparea o data per tarif facturat. */
+.cf-primary-row.is-continuation > td:not(.cf-expand-cell):first-of-type { color: #51617f; }
+.cf-route-continuation { margin-right: 4px; color: #93a3bd; font-weight: 900; }
+.cf-route-split-badge {
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: #fff4e5;
+    color: #b45309;
+    font-size: 11px;
+    font-weight: 800;
+    white-space: nowrap;
+}
+.cf-route-period { margin-left: 8px; color: #51617f; font-size: 11px; font-weight: 700; white-space: nowrap; }
+/* Sub cifra, nu langa ea: altfel insigna ar impinge pretul si ar strica alinierea coloanei. */
+.cf-rate-flag {
+    display: block;
+    width: fit-content;
+    margin: 3px 0 0 auto;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: #eaf2ff;
+    color: #1d4ed8;
+    font-size: 10px;
+    font-weight: 800;
+    white-space: nowrap;
+}
+.cf-tariff-why { padding: 10px 12px; }
+.cf-tariff-why-alert {
+    margin: 0 0 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #fff4e5;
+    color: #92400e;
+    font-size: 12px;
+    font-weight: 700;
+}
+.cf-tariff-why-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px 18px;
+    margin: 0;
+}
+.cf-tariff-why-grid dt { color: #51617f; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .02em; }
+.cf-tariff-why-grid dd { margin: 2px 0 0; color: #1f2d45; font-size: 13px; font-weight: 700; }
+.cf-tariff-why-muted { color: #51617f; font-size: 11px; font-weight: 600; }
+.cf-tariff-why-empty { margin: 0; color: #51617f; font-size: 12px; font-weight: 600; }
+/* Evolutia tarifelor: tarifele in vigoare pentru luna, cu valoarea pe care au inlocuit-o. */
+.cf-tariff-evolution { grid-area: tariffs; }
+.cf-tariff-evolution .cf-table { min-width: 760px; }
+.cf-tariff-delta { margin-left: 6px; font-size: 11px; font-weight: 900; }
+.cf-tariff-delta.is-up { color: #059669; }
+.cf-tariff-delta.is-down { color: #dc2626; }
+.cf-tariff-meta { color: #51617f; font-size: 12px; font-weight: 700; }
+.cf-tariff-scope { margin-left: 6px; color: #51617f; font-size: 11px; font-weight: 700; }
 /* Cardurile generale se pot desfasura: defalcarea totalului pe tipuri de transport. */
 .cf-kpi-toggle {
     margin-top: 10px;
@@ -1757,6 +1819,7 @@ $refDefaultExpanded = true;
             "ref ref ref ref ref ref"
             "activity activity activity activity activity activity"
             "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
+            "tariffs tariffs tariffs tariffs tariffs tariffs"
             "refTable refTable refTable refTable refTable refTable";
     }
     .cf-main-grid.mode-primar-distributie {
@@ -1766,6 +1829,7 @@ $refDefaultExpanded = true;
             "primaryTable primaryTable primaryTable distribution distribution distribution"
             "distTable distTable distTable distTable distTable distTable"
             "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
+            "tariffs tariffs tariffs tariffs tariffs tariffs"
             "refTable refTable refTable refTable refTable refTable";
     }
     .cf-main-grid.mode-primar {
@@ -1774,6 +1838,7 @@ $refDefaultExpanded = true;
             "ref ref ref ref ref ref"
             "primaryTable primaryTable primaryTable primaryTable primaryTable primaryTable"
             "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
+            "tariffs tariffs tariffs tariffs tariffs tariffs"
             "refTable refTable refTable refTable refTable refTable";
     }
     .cf-main-grid.mode-primar-tona,
@@ -1782,6 +1847,7 @@ $refDefaultExpanded = true;
             "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3"
             "ref ref ref ref ref ref"
             "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
+            "tariffs tariffs tariffs tariffs tariffs tariffs"
             "refTable refTable refTable refTable refTable refTable";
     }
     .cf-main-grid.mode-distributie {
@@ -1791,6 +1857,7 @@ $refDefaultExpanded = true;
             "distribution distribution distribution distribution distribution distribution"
             "distTable distTable distTable distTable distTable distTable"
             "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
+            "tariffs tariffs tariffs tariffs tariffs tariffs"
             "refTable refTable refTable refTable refTable refTable";
     }
 }
@@ -2266,22 +2333,104 @@ $refDefaultExpanded = true;
             <?php endif; ?>
 
             <?php if (!empty($visibility['primary_routes'])): ?>
+                <?php
+                /*
+                 * O rută apare pe câte un rând per tarif chiar facturat: dacă tariful
+                 * s-a schimbat în mijlocul lunii, vezi separat câte curse au mers pe
+                 * vechiul preț și câte pe cel nou. Rândul se desfășoară cu explicația
+                 * schimbării, adusă din Administrare tarife.
+                 */
+                $fmtPercentSigned = static function ($value): string {
+                    $value = (float) $value;
+
+                    return ($value > 0 ? '+' : '') . number_format($value, 2, ',', '.') . '%';
+                };
+                /* Preturile la combustibil se citesc cu 4 zecimale, ca in Administrare tarife. */
+                $fmtFuelPrice = static fn ($value): string => $fmt(is_numeric($value) ? (float) $value : 0.0, 4);
+                ?>
                 <section class="cf-panel cf-primary-table">
                     <h2>Detalii Primar km - pe rute</h2>
                     <div class="cf-table-wrap">
                         <table class="cf-table">
-                            <thead><tr><th>Rută</th><th class="is-number">Curse</th><th class="is-number">Km parcurși</th><th class="is-number">Preț / km (RON)</th><th class="is-number">Valoare (RON)</th></tr></thead>
+                            <thead><tr><th class="cf-expand-th"></th><th>Rută</th><th class="is-number">Curse</th><th class="is-number">Km parcurși</th><th class="is-number">Preț / km (RON)</th><th class="is-number">Valoare (RON)</th></tr></thead>
                             <tbody>
-                            <?php foreach ($primaryRoutes as $route): ?>
-                                <tr>
-                                    <td><?= e((string) ($route['route_short'] ?? '-')) ?> (<?= e((string) ($route['route_label'] ?? '-')) ?>)</td>
+                            <?php foreach ($primaryRoutes as $index => $route): ?>
+                                <?php
+                                $tariff = is_array($route['tariff'] ?? null) ? $route['tariff'] : null;
+                                $isSplit = (int) ($route['route_rate_count'] ?? 1) > 1;
+                                $isContinuation = $isSplit && empty($route['is_route_first']);
+                                $detailId = 'cf-primary-tariff-' . $index;
+                                $label = (string) ($route['route_short'] ?? '-') . ' la ' . (string) ($route['rate_label'] ?? '-') . ' lei/km';
+                                ?>
+                                <tr class="cf-primary-row<?= $isSplit ? ' is-split' : '' ?><?= $isContinuation ? ' is-continuation' : '' ?>">
+                                    <td class="cf-expand-cell">
+                                        <button class="cf-expand-btn" type="button" aria-expanded="false" aria-controls="<?= e($detailId) ?>" aria-label="Detalii tarif <?= e($label) ?>" data-vehicle-toggle><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                                    </td>
+                                    <td>
+                                        <?php if ($isContinuation): ?>
+                                            <span class="cf-route-continuation" aria-hidden="true">↳</span>
+                                        <?php endif; ?>
+                                        <?= e((string) ($route['route_short'] ?? '-')) ?> (<?= e((string) ($route['route_label'] ?? '-')) ?>)
+                                        <?php if ($isSplit && !empty($route['is_route_first'])): ?>
+                                            <span class="cf-route-split-badge"><?= e((string) $route['route_rate_count']) ?> tarife în perioadă</span>
+                                        <?php endif; ?>
+                                        <?php if ($isSplit): ?>
+                                            <span class="cf-route-period"><?= e((string) ($route['period_label'] ?? '-')) ?></span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="is-number"><?= e($fmtSmart($route['trips'] ?? 0, 0)) ?></td>
                                     <td class="is-number"><?= e($fmtKm($route['km'] ?? 0)) ?></td>
-                                    <td class="is-number"><?= e((string) ($route['rate_label'] ?? '-')) ?></td>
+                                    <td class="is-number">
+                                        <?= e((string) ($route['rate_label'] ?? '-')) ?>
+                                        <?php if ($tariff !== null && !empty($tariff['changed_in_period'])): ?>
+                                            <span class="cf-rate-flag" title="Tarif intrat în vigoare în luna raportului">nou din <?= e((string) $tariff['valid_from_label']) ?></span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="is-number"><?= e($fmtMoney($route['value'] ?? 0)) ?></td>
                                 </tr>
+                                <tr class="cf-vehicle-detail-row" id="<?= e($detailId) ?>" hidden>
+                                    <td colspan="6" class="cf-trip-detail-cell">
+                                        <div class="cf-tariff-why">
+                                            <?php if ($tariff !== null): ?>
+                                                <?php if (!empty($tariff['changed_in_period'])): ?>
+                                                    <p class="cf-tariff-why-alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Tariful s-a schimbat în interiorul lunii raportate, de la <?= e((string) $tariff['valid_from_label']) ?>. De aceea ruta apare pe mai multe rânduri.</p>
+                                                <?php endif; ?>
+                                                <dl class="cf-tariff-why-grid">
+                                                    <div><dt>Tarif aplicat</dt><dd><?= e($fmtMoney($tariff['value'] ?? 0)) ?> <?= e((string) ($tariff['unit'] ?? '')) ?> <span class="cf-tariff-why-muted">(<?= e((string) ($tariff['component_label'] ?? '')) ?>)</span></dd></div>
+                                                    <div><dt>În vigoare</dt><dd><?= e((string) ($tariff['valid_from_label'] ?? '-')) ?> → <?= e((string) ($tariff['valid_to_label'] ?? 'în continuare')) ?></dd></div>
+                                                    <?php if ($tariff['previous_value'] !== null): ?>
+                                                        <div><dt>Tarif anterior</dt><dd><?= e($fmtMoney($tariff['previous_value'])) ?> <?= e((string) ($tariff['unit'] ?? '')) ?><?php if ($tariff['delta_percent'] !== null): ?> <span class="cf-tariff-delta <?= ((float) $tariff['delta_percent']) >= 0 ? 'is-up' : 'is-down' ?>"><?= e($fmtPercentSigned($tariff['delta_percent'])) ?></span><?php endif; ?></dd></div>
+                                                    <?php endif; ?>
+                                                    <div><dt>Curse la acest tarif</dt><dd><?= e($fmtSmart($route['trips'] ?? 0, 0)) ?> · <?= e((string) ($route['period_label'] ?? '-')) ?></dd></div>
+                                                    <?php if (($tariff['changed_by'] ?? '') !== '' || ($tariff['changed_at_label'] ?? '') !== ''): ?>
+                                                        <div><dt>Operat de</dt><dd><?= e((string) ($tariff['changed_by'] ?? '-')) ?><?php if (($tariff['changed_at_label'] ?? '') !== ''): ?> · <?= e((string) $tariff['changed_at_label']) ?><?php endif; ?></dd></div>
+                                                    <?php endif; ?>
+                                                    <?php if (($tariff['fuel']['variation_percent'] ?? null) !== null): ?>
+                                                        <div><dt>Variație combustibil</dt><dd>
+                                                            <span class="cf-tariff-delta <?= ((float) $tariff['fuel']['variation_percent']) >= 0 ? 'is-up' : 'is-down' ?>"><?= e($fmtPercentSigned($tariff['fuel']['variation_percent'])) ?></span>
+                                                            <?php if (($tariff['fuel']['reference_price'] ?? null) !== null && ($tariff['fuel']['observed_price'] ?? null) !== null): ?>
+                                                                <span class="cf-tariff-why-muted">referință <?= e($fmtFuelPrice($tariff['fuel']['reference_price'])) ?> → observat <?= e($fmtFuelPrice($tariff['fuel']['observed_price'])) ?> lei/L</span>
+                                                            <?php endif; ?>
+                                                            <?php if (($tariff['fuel']['liters'] ?? null) !== null): ?>
+                                                                <span class="cf-tariff-why-muted">· <?= e($fmtSmart($tariff['fuel']['liters'], 2)) ?> L analizați</span>
+                                                            <?php endif; ?>
+                                                            <?php if (($tariff['fuel']['period_start'] ?? null) !== null): ?>
+                                                                <span class="cf-tariff-why-muted">· <?= e((string) $tariff['fuel']['period_start']) ?> - <?= e((string) ($tariff['fuel']['period_end'] ?? $tariff['fuel']['period_start'])) ?></span>
+                                                            <?php endif; ?>
+                                                        </dd></div>
+                                                    <?php endif; ?>
+                                                    <?php if (($tariff['reason'] ?? '') !== ''): ?>
+                                                        <div><dt>Motiv</dt><dd><?= e((string) $tariff['reason']) ?></dd></div>
+                                                    <?php endif; ?>
+                                                </dl>
+                                            <?php else: ?>
+                                                <p class="cf-tariff-why-empty">Curse facturate la <?= e((string) ($route['rate_label'] ?? '-')) ?> lei/km în perioada <?= e((string) ($route['period_label'] ?? '-')) ?>. Nu am găsit o versiune de tarif cu această valoare în Administrare tarife pentru beneficiarul selectat.</p>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                </tr>
                             <?php endforeach; ?>
-                            <tr class="cf-total-row"><td>TOTAL</td><td class="is-number"><?= e($fmtSmart($primaryTotals['trips'] ?? 0, 0)) ?></td><td class="is-number"><?= e($fmtKm($primaryTotals['km'] ?? 0)) ?></td><td class="is-number">-</td><td class="is-number"><?= e($fmtMoney($primaryTotals['value'] ?? 0)) ?></td></tr>
+                            <tr class="cf-total-row"><td class="cf-expand-cell"></td><td>TOTAL</td><td class="is-number"><?= e($fmtSmart($primaryTotals['trips'] ?? 0, 0)) ?></td><td class="is-number"><?= e($fmtKm($primaryTotals['km'] ?? 0)) ?></td><td class="is-number">-</td><td class="is-number"><?= e($fmtMoney($primaryTotals['value'] ?? 0)) ?></td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2472,6 +2621,87 @@ $refDefaultExpanded = true;
                     <?php if (($vehicles['warnings'] ?? []) !== []): ?><p class="cf-warning"><?= e((string) reset($vehicles['warnings'])) ?></p><?php endif; ?>
                 </section>
             <?php endif; ?>
+
+            <?php
+            /*
+             * Evolutia tarifelor: ce tarif se aplica lunii raportului, ce valoare a
+             * inlocuit si cine a operat schimbarea in Administrare tarife. Panoul se
+             * randeaza mereu, ca zona "tariffs" din grid sa nu ramana goala.
+             */
+            $tariffDate = static function (?string $value): string {
+                $value = trim((string) $value);
+                if ($value === '') {
+                    return '-';
+                }
+                $timestamp = strtotime($value);
+
+                return $timestamp !== false ? date('d.m.Y', $timestamp) : $value;
+            };
+            ?>
+            <section class="cf-panel cf-tariff-evolution">
+                <h2>Evoluție tarife (Administrare tarife) <i class="bi bi-info-circle" aria-hidden="true"></i></h2>
+                <?php if ($tariffEvolution === []): ?>
+                    <div class="cf-empty">Nu există tarife versionate pentru luna și filtrele selectate.</div>
+                <?php else: ?>
+                    <div class="cf-table-wrap">
+                        <table class="cf-table">
+                            <thead>
+                            <tr>
+                                <?php if ($tariffShowBeneficiary): ?><th>Beneficiar</th><?php endif; ?>
+                                <th>Tarif</th>
+                                <th>Rută</th>
+                                <th class="is-number">Valoare</th>
+                                <th class="is-number">Valoare anterioară</th>
+                                <th class="is-number">Valabil din</th>
+                                <th class="is-number">Până la</th>
+                                <th>Modificat în Administrare tarife</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <?php foreach ($tariffEvolution as $tariffRow): ?>
+                                <?php
+                                $previousValue = $tariffRow['previous_value'] ?? null;
+                                $deltaPercent = $previousValue !== null && (float) $previousValue > 0
+                                    ? ((((float) $tariffRow['value']) - (float) $previousValue) / (float) $previousValue) * 100
+                                    : null;
+                                $changedBy = trim((string) ($tariffRow['changed_by'] ?? ''));
+                                $changedAt = trim((string) ($tariffRow['changed_at'] ?? ''));
+                                $fuelVariation = $tariffRow['fuel_variation'] ?? null;
+                                ?>
+                                <tr>
+                                    <?php if ($tariffShowBeneficiary): ?><td><?= e((string) ($tariffRow['beneficiary'] ?? '-')) ?></td><?php endif; ?>
+                                    <td>
+                                        <?= e((string) ($tariffRow['component_label'] ?? '-')) ?>
+                                        <span class="cf-tariff-scope"><?= e((string) ($tariffRow['transport_label'] ?? '')) ?></span>
+                                    </td>
+                                    <td><?= e((string) ($tariffRow['route_label'] ?? '-')) ?></td>
+                                    <td class="is-number"><?= e($fmtMoney($tariffRow['value'] ?? 0) . ' ' . (string) ($tariffRow['unit'] ?? '')) ?></td>
+                                    <td class="is-number">
+                                        <?php if ($previousValue === null): ?>
+                                            <span class="cf-dim">primul tarif</span>
+                                        <?php else: ?>
+                                            <?= e($fmtMoney($previousValue)) ?>
+                                            <?php if ($deltaPercent !== null): ?>
+                                                <span class="cf-tariff-delta <?= $deltaPercent >= 0 ? 'is-up' : 'is-down' ?>"><?= e(($deltaPercent >= 0 ? '+' : '') . $fmt($deltaPercent, 2) . '%') ?></span>
+                                            <?php endif; ?>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="is-number"><?= e($tariffDate((string) ($tariffRow['valid_from'] ?? ''))) ?></td>
+                                    <td class="is-number"><?= ($tariffRow['valid_to'] ?? null) !== null ? e($tariffDate((string) $tariffRow['valid_to'])) : '<span class="cf-dim">în vigoare</span>' ?></td>
+                                    <td class="cf-tariff-meta">
+                                        <?= $changedBy !== '' || $changedAt !== '' ? e(trim($changedBy . ($changedAt !== '' ? ' · ' . $tariffDate($changedAt) : ''))) : '<span class="cf-dim">-</span>' ?>
+                                        <?php if ($fuelVariation !== null): ?>
+                                            <span class="cf-tariff-scope" title="Variația prețului la combustibil la momentul modificării"><?= e(($fuelVariation >= 0 ? '+' : '') . $fmt($fuelVariation, 2) . '% combustibil') ?></span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="cf-note">Tarifele în vigoare pentru luna raportului, cu valoarea pe care au înlocuit-o. Modificările se operează în Administrare tarife.</p>
+                <?php endif; ?>
+            </section>
 
             <section class="cf-panel cf-refact-table" id="cf_ref_table">
                 <?php

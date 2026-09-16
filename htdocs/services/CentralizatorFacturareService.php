@@ -38,8 +38,31 @@ class CentralizatorFacturareService
     /** Tipurile de taxe de drum inregistrate ca randuri separate, cu locatie proprie. */
     private const TOLL_EXPENSE_TYPES = ['taxa_acces', 'port', 'trece'];
     private const DONUT_COLORS = ['#2f7df4', '#10b981', '#f97316', '#8b5cf6', '#06b6d4', '#ef4444', '#64748b'];
+    /*
+     * Capul tractor nu are capacitate proprie: o preia de la semiremorca cuplata
+     * activ (aceeasi regula ca in Dispecer curse). Daca nu e cuplat, ramane pe
+     * valoarea de pe vehicul.
+     */
+    private const VEHICLE_CAPACITY_SQL = "CASE
+                    WHEN v.tip_vehicul = 'cap_tractor' AND vcs.capacitate_transport > 0 THEN vcs.capacitate_transport
+                    ELSE v.capacitate_transport
+                END";
+    private const ACTIVE_TRAILER_JOIN_SQL = "LEFT JOIN (
+                SELECT vc1.tractor_id, vc1.semiremorca_id
+                FROM vehicule_cuplaje vc1
+                INNER JOIN (
+                    SELECT tractor_id, MAX(id) AS max_id
+                    FROM vehicule_cuplaje
+                    WHERE activ = 1
+                    GROUP BY tractor_id
+                ) vcl ON vcl.max_id = vc1.id
+            ) vca ON vca.tractor_id = v.id
+            LEFT JOIN vehicule vcs ON vcs.id = vca.semiremorca_id";
 
     private ?TransportPricingService $pricing = null;
+    private ?TransportTariffModel $tariffs = null;
+    /** @var array<string,array<int,array<int,array<string,mixed>>>> */
+    private array $kmTariffCache = [];
 
     public function __construct(private PDO $db)
     {
@@ -79,6 +102,7 @@ class CentralizatorFacturareService
             'vehicles' => $core['vehicles'],
             'refacturari' => $core['refacturari'],
             'visibility' => $this->buildVisibility($filters, $core),
+            'tariff_evolution' => $this->buildTariffEvolution($filters, $core),
             'lookups' => $this->buildLookups($filters),
             'warnings' => array_values(array_unique(array_filter(array_merge(
                 $core['distribution']['warnings'] ?? [],
@@ -601,62 +625,325 @@ class CentralizatorFacturareService
         }
 
         $warnings = [];
-        $groups = [];
+        $groups = [];        /* ruta x tarif aplicat - randurile din tabel */
+        $routeTotals = [];   /* agregat pe ruta - pentru donut si pentru eticheta de grup */
+        $beneficiaries = [];
         foreach ($rows as $row) {
             if (!in_array((string) ($row['tip_transport'] ?? ''), $types, true)) {
                 continue;
             }
-            $key = ((int) ($row['loc_incarcare_id'] ?? 0)) . ':' . ((int) ($row['zona_distributie_id'] ?? 0));
-            $groups[$key] ??= [
-                'key' => $key,
+            $routeKey = ((int) ($row['loc_incarcare_id'] ?? 0)) . ':' . ((int) ($row['zona_distributie_id'] ?? 0));
+            $km = $this->rowKm($row);
+            $value = $this->primaryRouteValue($row, $warnings);
+            $rate = $this->primaryRouteRate($row, $value, $km);
+            $date = (string) (($row['data_inceput'] ?? null) ?: ($row['data_cursa'] ?? ''));
+            $beneficiaryId = (int) ($row['beneficiar_id'] ?? 0);
+            if ($beneficiaryId > 0) {
+                $beneficiaries[$beneficiaryId] = $beneficiaryId;
+            }
+
+            $routeTotals[$routeKey] ??= [
+                'key' => $routeKey,
                 'route_label' => $this->routeLabel($row),
                 'route_short' => $this->routeShort($row),
                 'trips' => 0,
                 'km' => 0.0,
                 'value' => 0.0,
-                'rates' => [],
+                'rate_count' => 0,
+            ];
+            $routeTotals[$routeKey]['trips']++;
+            $routeTotals[$routeKey]['km'] += $km;
+            $routeTotals[$routeKey]['value'] += $value;
+
+            /*
+             * Randul din tabel e perechea ruta + tarif chiar facturat. Cand tariful
+             * se schimba in mijlocul lunii (Administrare tarife), aceeasi ruta apare
+             * o data pe tariful vechi si o data pe cel nou, fiecare cu numarul lui
+             * de curse - in loc de un singur rand cu "tarife multiple".
+             */
+            $rateKey = $rate !== null ? $this->rateKey($rate) : 'rate_necunoscut';
+            $key = $routeKey . '#' . $rateKey;
+            $groups[$key] ??= [
+                'key' => $key,
+                'route_key' => $routeKey,
+                'route_label' => $routeTotals[$routeKey]['route_label'],
+                'route_short' => $routeTotals[$routeKey]['route_short'],
+                'beneficiary_id' => $beneficiaryId,
+                'rate' => $rate,
+                'trips' => 0,
+                'km' => 0.0,
+                'value' => 0.0,
+                'date_start' => $date,
+                'date_end' => $date,
+                'version_ids' => [],
                 'share_percent' => 0.0,
             ];
-            $km = $this->rowKm($row);
-            $value = $this->primaryRouteValue($row, $warnings);
-            $rate = $this->primaryRouteRate($row, $value, $km);
             $groups[$key]['trips']++;
             $groups[$key]['km'] += $km;
             $groups[$key]['value'] += $value;
-            if ($rate !== null) {
-                $groups[$key]['rates'][$this->rateKey($rate)] = $rate;
+            if ($date !== '') {
+                if ($groups[$key]['date_start'] === '' || $date < $groups[$key]['date_start']) {
+                    $groups[$key]['date_start'] = $date;
+                }
+                if ($date > $groups[$key]['date_end']) {
+                    $groups[$key]['date_end'] = $date;
+                }
+            }
+            $versionId = (int) ($row['tariff_version_id'] ?? 0);
+            if ($versionId > 0) {
+                $groups[$key]['version_ids'][$versionId] = $versionId;
             }
         }
 
         $totalTrips = array_sum(array_column($groups, 'trips'));
+        $tariffVersions = $this->kmTariffVersions(array_values($beneficiaries));
+
         foreach ($groups as &$group) {
-            $rates = array_values($group['rates']);
-            sort($rates, SORT_NUMERIC);
             $group['km'] = round((float) $group['km'], 2);
             $group['value'] = round((float) $group['value'], 2);
             $group['share_percent'] = $totalTrips > 0 ? round(((int) $group['trips'] / $totalTrips) * 100, 2) : 0.0;
-            $group['rate_label'] = count($rates) === 1 ? $this->formatNumber($rates[0], 2) : (count($rates) > 1 ? 'tarife multiple' : '-');
-            unset($group['rates']);
+            $group['rate_label'] = $group['rate'] !== null ? $this->formatNumber((float) $group['rate'], 2) : '-';
+            $group['period_label'] = $this->formatDateRangeLabel((string) $group['date_start'], (string) $group['date_end']);
+            /* De ce s-a facturat la tariful asta: versiunea din Administrare tarife. */
+            $group['tariff'] = $this->matchKmTariffVersion($tariffVersions, $group, $filters);
+            $group['version_ids'] = array_values($group['version_ids']);
         }
         unset($group);
 
+        /* Cate tarife distincte a avut fiecare ruta in perioada. */
+        foreach ($groups as $group) {
+            $routeTotals[(string) $group['route_key']]['rate_count']++;
+        }
+        foreach ($routeTotals as &$routeTotal) {
+            $routeTotal['km'] = round((float) $routeTotal['km'], 2);
+            $routeTotal['value'] = round((float) $routeTotal['value'], 2);
+        }
+        unset($routeTotal);
+
+        /* Rutele in ordinea volumului; in interiorul unei rute, tarifele cronologic. */
         $routes = array_values($groups);
-        usort($routes, static fn (array $a, array $b): int => ((int) $b['trips'] <=> (int) $a['trips']) ?: strcmp((string) $a['route_label'], (string) $b['route_label']));
-        foreach ($routes as $index => &$route) {
-            $route['color'] = self::DONUT_COLORS[$index % count(self::DONUT_COLORS)];
+        usort($routes, static function (array $a, array $b) use ($routeTotals): int {
+            $aTrips = (int) ($routeTotals[$a['route_key']]['trips'] ?? 0);
+            $bTrips = (int) ($routeTotals[$b['route_key']]['trips'] ?? 0);
+
+            return ($bTrips <=> $aTrips)
+                ?: strcmp((string) $a['route_label'], (string) $b['route_label'])
+                ?: strcmp((string) $a['date_start'], (string) $b['date_start'])
+                ?: ((float) $a['rate'] <=> (float) $b['rate']);
+        });
+
+        $routeColors = [];
+        $seenRoute = [];
+        foreach ($routes as &$route) {
+            $routeKey = (string) $route['route_key'];
+            $routeColors[$routeKey] ??= self::DONUT_COLORS[count($routeColors) % count(self::DONUT_COLORS)];
+            $route['color'] = $routeColors[$routeKey];
+            $route['route_rate_count'] = (int) ($routeTotals[$routeKey]['rate_count'] ?? 1);
+            /* Prima aparitie a rutei poarta eticheta; urmatoarele sunt continuari ale aceleiasi rute. */
+            $route['is_route_first'] = !isset($seenRoute[$routeKey]);
+            $seenRoute[$routeKey] = true;
         }
         unset($route);
 
+        $chartRows = array_values($routeTotals);
+        usort($chartRows, static fn (array $a, array $b): int => ((int) $b['trips'] <=> (int) $a['trips']) ?: strcmp((string) $a['route_label'], (string) $b['route_label']));
+        foreach ($chartRows as &$chartRow) {
+            $chartRow['color'] = $routeColors[(string) $chartRow['key']] ?? self::DONUT_COLORS[0];
+        }
+        unset($chartRow);
+
+        $splitRoutes = count(array_filter($routeTotals, static fn (array $total): bool => (int) $total['rate_count'] > 1));
+        if ($splitRoutes > 0) {
+            $warnings[] = $splitRoutes === 1
+                ? 'O rută a fost facturată la mai multe tarife în perioada raportului; este afișată pe câte un rând per tarif.'
+                : $splitRoutes . ' rute au fost facturate la mai multe tarife în perioada raportului; sunt afișate pe câte un rând per tarif.';
+        }
+
         return [
             'routes' => $routes,
+            'route_totals' => $chartRows,
             'totals' => [
                 'trips' => $totalTrips,
                 'km' => round(array_sum(array_column($routes, 'km')), 2),
                 'value' => round(array_sum(array_column($routes, 'value')), 2),
             ],
-            'chart' => $this->buildDonutChart($routes, 'trips'),
+            'chart' => $this->buildDonutChart($chartRows, 'trips'),
             'warnings' => array_values(array_unique($warnings)),
         ];
+    }
+
+    /*
+     * Versiunile de tarif pe km (pret_km la Primar, cost_extra_km la P+D) ale
+     * beneficiarilor din raport, fiecare cu valoarea pe care a inlocuit-o si cu
+     * randul de istoric care explica schimbarea (cine, cand, variatia de
+     * combustibil). Se foloseste doar pentru explicatii - nu intra in calcule.
+     *
+     * @return array<int,array<int,array<string,mixed>>> indexat pe beneficiar
+     */
+    private function kmTariffVersions(array $beneficiaryIds): array
+    {
+        $beneficiaryIds = array_values(array_unique(array_filter(array_map('intval', $beneficiaryIds))));
+        if ($beneficiaryIds === []) {
+            return [];
+        }
+        sort($beneficiaryIds);
+        $cacheKey = implode(',', $beneficiaryIds);
+        if (isset($this->kmTariffCache[$cacheKey])) {
+            return $this->kmTariffCache[$cacheKey];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($beneficiaryIds), '?'));
+        $sql = "
+            SELECT
+                v.id,
+                v.beneficiar_id,
+                v.rule_signature,
+                v.transport_type,
+                v.component_key,
+                v.unit,
+                v.value,
+                v.valid_from,
+                v.valid_to,
+                (
+                    SELECT p.value FROM transport_tariff_versions p
+                    WHERE p.rule_signature = v.rule_signature AND p.valid_from < v.valid_from
+                    ORDER BY p.valid_from DESC, p.id DESC LIMIT 1
+                ) AS previous_value,
+                h.old_value,
+                h.route_label,
+                h.reason,
+                h.changed_by_name,
+                h.changed_at,
+                h.reference_fuel_price,
+                h.observed_fuel_price,
+                h.fuel_variation_percent,
+                h.fuel_liters_analysed,
+                h.fuel_period_start,
+                h.fuel_period_end
+            FROM transport_tariff_versions v
+            LEFT JOIN transport_tariff_history h ON h.id = (
+                SELECT h2.id FROM transport_tariff_history h2
+                WHERE h2.tariff_version_id = v.id
+                ORDER BY h2.id DESC LIMIT 1
+            )
+            WHERE v.beneficiar_id IN ({$placeholders}) AND v.unit = 'lei/km'
+            ORDER BY v.valid_from DESC, v.id DESC
+        ";
+
+        $map = [];
+        try {
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($beneficiaryIds);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $map[(int) $row['beneficiar_id']][] = $row;
+            }
+        } catch (Throwable $exception) {
+            error_log('[CentralizatorFacturareService][km_tariffs] ' . $exception->getMessage());
+            $map = [];
+        }
+
+        $this->kmTariffCache[$cacheKey] = $map;
+
+        return $map;
+    }
+
+    /*
+     * Leaga un tarif facturat de versiunea care l-a produs: aceeasi valoare, in
+     * vigoare peste zilele curselor din grup. Nu ne bazam pe tariff_version_id de
+     * pe cursa, fiindca la P+D acela e componenta pe tona, nu cea pe km.
+     */
+    private function matchKmTariffVersion(array $tariffVersions, array $group, array $filters): ?array
+    {
+        $rate = $group['rate'];
+        if ($rate === null) {
+            return null;
+        }
+        $candidates = $tariffVersions[(int) $group['beneficiary_id']] ?? [];
+        if ($candidates === []) {
+            return null;
+        }
+
+        $dateStart = (string) $group['date_start'];
+        $dateEnd = (string) $group['date_end'];
+        $versionIds = (array) $group['version_ids'];
+        $best = null;
+        $bestScore = -1;
+        foreach ($candidates as $candidate) {
+            if (abs((float) $candidate['value'] - (float) $rate) > 0.005) {
+                continue;
+            }
+            $validFrom = (string) $candidate['valid_from'];
+            $validTo = $candidate['valid_to'] !== null ? (string) $candidate['valid_to'] : null;
+            if ($dateEnd !== '' && $validFrom > $dateEnd) {
+                continue;
+            }
+            if ($validTo !== null && $dateStart !== '' && $validTo < $dateStart) {
+                continue;
+            }
+            /* Versiunea marcata chiar pe cursa are prioritate, apoi cea mai recenta care se potriveste. */
+            $score = in_array((int) $candidate['id'], $versionIds, true) ? 2 : 1;
+            if ($score > $bestScore || ($score === $bestScore && $best !== null && $validFrom > (string) $best['valid_from'])) {
+                $best = $candidate;
+                $bestScore = $score;
+            }
+        }
+        if ($best === null) {
+            return null;
+        }
+
+        $previous = $best['previous_value'] !== null
+            ? (float) $best['previous_value']
+            : ($best['old_value'] !== null ? (float) $best['old_value'] : null);
+        $current = (float) $best['value'];
+        $validFrom = (string) $best['valid_from'];
+        $monthStart = (string) ($filters['date_start'] ?? '');
+        $monthEnd = (string) ($filters['date_end'] ?? '');
+
+        return [
+            'version_id' => (int) $best['id'],
+            'component_key' => (string) $best['component_key'],
+            'component_label' => class_exists('TransportTariffModel')
+                ? (TransportTariffModel::COMPONENTS[(string) $best['component_key']]['label'] ?? (string) $best['component_key'])
+                : (string) $best['component_key'],
+            'unit' => (string) $best['unit'],
+            'value' => round($current, 4),
+            'previous_value' => $previous !== null ? round($previous, 4) : null,
+            'delta_percent' => ($previous !== null && $previous > 0) ? round((($current - $previous) / $previous) * 100, 2) : null,
+            'valid_from' => $validFrom,
+            'valid_to' => $best['valid_to'] !== null ? (string) $best['valid_to'] : null,
+            'valid_from_label' => $this->formatDateLabel($validFrom),
+            'valid_to_label' => $best['valid_to'] !== null ? $this->formatDateLabel((string) $best['valid_to']) : null,
+            'route_label' => trim((string) ($best['route_label'] ?? '')),
+            'reason' => trim((string) ($best['reason'] ?? '')),
+            'changed_by' => trim((string) ($best['changed_by_name'] ?? '')),
+            'changed_at' => (string) ($best['changed_at'] ?? ''),
+            'changed_at_label' => trim((string) ($best['changed_at'] ?? '')) !== '' ? $this->formatDateLabel((string) $best['changed_at']) : '',
+            /* Schimbarea a picat chiar in luna raportata: de aici vin randurile duble pe aceeasi ruta. */
+            'changed_in_period' => $monthStart !== '' && $monthEnd !== '' && $validFrom >= $monthStart && $validFrom <= $monthEnd,
+            'fuel' => [
+                'variation_percent' => $best['fuel_variation_percent'] !== null ? round((float) $best['fuel_variation_percent'], 4) : null,
+                'reference_price' => $best['reference_fuel_price'] !== null ? round((float) $best['reference_fuel_price'], 4) : null,
+                'observed_price' => $best['observed_fuel_price'] !== null ? round((float) $best['observed_fuel_price'], 4) : null,
+                'liters' => $best['fuel_liters_analysed'] !== null ? round((float) $best['fuel_liters_analysed'], 2) : null,
+                'period_start' => $best['fuel_period_start'] !== null ? $this->formatDateLabel((string) $best['fuel_period_start']) : null,
+                'period_end' => $best['fuel_period_end'] !== null ? $this->formatDateLabel((string) $best['fuel_period_end']) : null,
+            ],
+        ];
+    }
+
+    /* Intervalul de zile in care s-a facturat la un tarif: "01.09.2026 - 15.09.2026". */
+    private function formatDateRangeLabel(string $start, string $end): string
+    {
+        $startLabel = $start !== '' ? $this->formatDateLabel($start) : '';
+        $endLabel = $end !== '' ? $this->formatDateLabel($end) : '';
+        if ($startLabel === '' && $endLabel === '') {
+            return '-';
+        }
+        if ($startLabel === '' || $endLabel === '' || $startLabel === $endLabel) {
+            return $startLabel !== '' ? $startLabel : $endLabel;
+        }
+
+        return $startLabel . ' - ' . $endLabel;
     }
 
     private function buildVehicleSection(array $rows, array $filters): array
@@ -826,6 +1113,7 @@ class CentralizatorFacturareService
                 c.tona_aspirata_gazoasa,
                 c.ore_aspirare,
                 c.pret_tarifare,
+                c.tariff_version_id,
                 c.total_facturare,
                 c.cost_km_primar,
                 c.cost_km_distributie,
@@ -835,12 +1123,13 @@ class CentralizatorFacturareService
                 zd.nume AS zona_distributie_nume,
                 bt.nume AS beneficiar_nume,
                 v.nr_inmatriculare,
-                v.capacitate_transport AS vehicle_capacitate_transport
+                " . self::VEHICLE_CAPACITY_SQL . " AS vehicle_capacitate_transport
             FROM curse_dispecer c
             LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
             LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             LEFT JOIN vehicule v ON v.id = c.vehicle_id
+            " . self::ACTIVE_TRAILER_JOIN_SQL . "
             " . $where['where'] . "
             ORDER BY COALESCE(c.data_inceput, c.data_cursa) ASC, c.id ASC
         ";
@@ -895,13 +1184,14 @@ class CentralizatorFacturareService
                 zd.nume AS zona_distributie_nume,
                 bt.nume AS beneficiar_nume,
                 v.nr_inmatriculare,
-                v.capacitate_transport AS vehicle_capacitate_transport
+                " . self::VEHICLE_CAPACITY_SQL . " AS vehicle_capacitate_transport
             FROM curse_cheltuieli e
             INNER JOIN curse_dispecer c ON c.id = e.cursa_id
             LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
             LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             LEFT JOIN vehicule v ON v.id = c.vehicle_id
+            " . self::ACTIVE_TRAILER_JOIN_SQL . "
             " . $where['where'] . "
             ORDER BY COALESCE(e.refacturare_data, e.data_cheltuiala) DESC, e.id DESC
         ";
@@ -1215,9 +1505,10 @@ class CentralizatorFacturareService
         $lookupFilters = array_merge($filters, ['vehicle_id' => 0]);
         $where = $this->buildTripWhere($lookupFilters, $this->typesForMode((string) $filters['tip_activitate']), 'vehicle');
         $sql = "
-            SELECT DISTINCT v.id, v.nr_inmatriculare, v.capacitate_transport
+            SELECT DISTINCT v.id, v.nr_inmatriculare, " . self::VEHICLE_CAPACITY_SQL . " AS capacitate_transport
             FROM curse_dispecer c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
+            " . self::ACTIVE_TRAILER_JOIN_SQL . "
             " . $where['where'] . "
             ORDER BY v.nr_inmatriculare ASC
         ";
@@ -1245,6 +1536,120 @@ class CentralizatorFacturareService
      * altfel pagina "generala" ar afisa detalii de distributie sau de primar
      * fara ca utilizatorul sa fi cerut acel tip.
      */
+    /*
+     * Evolutia tarifelor din Administrare tarife pentru beneficiarii cu curse in luna:
+     * versiunile in vigoare in luna raportului, fiecare cu valoarea pe care a inlocuit-o,
+     * de cand se aplica si cine a operat modificarea. Doar citire - nu recalculeaza nimic.
+     */
+    private function buildTariffEvolution(array $filters, array $core): array
+    {
+        if (!class_exists('TransportTariffModel')) {
+            return ['rows' => []];
+        }
+
+        $beneficiaries = [];
+        foreach ((array) ($core['trip_rows'] ?? []) as $row) {
+            $beneficiaryId = (int) ($row['beneficiar_id'] ?? 0);
+            if ($beneficiaryId > 0) {
+                $beneficiaries[$beneficiaryId] = trim((string) ($row['beneficiar_nume'] ?? '')) !== ''
+                    ? (string) $row['beneficiar_nume']
+                    : ('Beneficiar #' . $beneficiaryId);
+            }
+        }
+        if ($beneficiaries === []) {
+            return ['rows' => []];
+        }
+
+        $mode = (string) $filters['tip_activitate'];
+        $monthStart = (string) $filters['date_start'];
+        $monthEnd = (string) $filters['date_end'];
+        $rows = [];
+
+        try {
+            $this->tariffs ??= new TransportTariffModel($this->db);
+            foreach ($beneficiaries as $beneficiaryId => $beneficiaryName) {
+                /* Istoricul aduce autorul si variatia de combustibil, legate prin id-ul versiunii. */
+                $history = [];
+                foreach ($this->tariffs->getHistory($beneficiaryId, 300) as $entry) {
+                    $versionId = (int) ($entry['tariff_version_id'] ?? 0);
+                    if ($versionId > 0 && !isset($history[$versionId])) {
+                        $history[$versionId] = $entry;
+                    }
+                }
+
+                /* Versiunile aceleiasi reguli, in ordine, ca sa stim ce valoare a inlocuit fiecare. */
+                $bySignature = [];
+                foreach ($this->tariffs->getVersionsForBeneficiary($beneficiaryId, $monthEnd) as $version) {
+                    $bySignature[(string) $version['rule_signature']][] = $version;
+                }
+                foreach ($bySignature as &$signatureVersions) {
+                    usort($signatureVersions, static fn (array $a, array $b): int => strcmp((string) $a['valid_from'], (string) $b['valid_from']));
+                }
+                unset($signatureVersions);
+
+                foreach ($bySignature as $signatureVersions) {
+                    foreach ($signatureVersions as $index => $version) {
+                        $validFrom = (string) $version['valid_from'];
+                        $validTo = $version['valid_to'] !== null ? (string) $version['valid_to'] : null;
+                        /* In vigoare in luna raportului: intervalul versiunii se suprapune peste luna. */
+                        if ($validFrom > $monthEnd || ($validTo !== null && $validTo < $monthStart)) {
+                            continue;
+                        }
+                        $transportType = (string) ($version['transport_type'] ?? '');
+                        if ($mode !== '' && $transportType !== '' && $transportType !== $mode) {
+                            continue;
+                        }
+
+                        $componentKey = (string) $version['component_key'];
+                        $component = TransportTariffModel::COMPONENTS[$componentKey] ?? [];
+                        $previous = $index > 0 ? $signatureVersions[$index - 1] : null;
+                        $entry = $history[(int) $version['id']] ?? [];
+                        $fuel = $entry['fuel_variation_percent'] ?? null;
+
+                        $rows[] = [
+                            'beneficiary' => $beneficiaryName,
+                            'component_label' => (string) ($component['label'] ?? $componentKey),
+                            'transport_label' => TransportTariffModel::TRANSPORT_TYPES[$transportType] ?? $transportType,
+                            'route_label' => $this->tariffRouteLabel($version, $entry),
+                            'unit' => (string) ($version['unit'] ?? ($component['unit'] ?? '')),
+                            'value' => round((float) $version['value'], 4),
+                            'previous_value' => $previous !== null ? round((float) $previous['value'], 4) : null,
+                            'valid_from' => $validFrom,
+                            'valid_to' => $validTo,
+                            'changed_by' => trim((string) ($entry['changed_by_name'] ?? ($entry['user_nume'] ?? ''))),
+                            'changed_at' => (string) ($entry['changed_at'] ?? ''),
+                            'fuel_variation' => $fuel !== null ? round((float) $fuel, 4) : null,
+                        ];
+                    }
+                }
+            }
+        } catch (Throwable $exception) {
+            error_log('[CentralizatorFacturareService][tariff_evolution] ' . $exception->getMessage());
+
+            return ['rows' => []];
+        }
+
+        usort($rows, static fn (array $a, array $b): int => strcmp((string) $a['beneficiary'], (string) $b['beneficiary'])
+            ?: strcmp((string) $a['component_label'], (string) $b['component_label'])
+            ?: strcmp((string) $a['route_label'], (string) $b['route_label'])
+            ?: strcmp((string) $b['valid_from'], (string) $a['valid_from']));
+
+        return ['rows' => $rows];
+    }
+
+    /* Ruta unei versiuni de tarif: perechea din configurare, altfel eticheta din istoric. */
+    private function tariffRouteLabel(array $version, array $historyEntry): string
+    {
+        $loc = trim((string) ($version['loc_nume'] ?? ''));
+        $zone = trim((string) ($version['zona_nume'] ?? ''));
+        if ($loc !== '' || $zone !== '') {
+            return ($loc !== '' ? $loc : '?') . ' → ' . ($zone !== '' ? $zone : '?');
+        }
+        $label = trim((string) ($historyEntry['route_label'] ?? ''));
+
+        return $label !== '' ? $label : 'Toate rutele';
+    }
+
     private function buildVisibility(array $filters, array $core): array
     {
         $mode = (string) $filters['tip_activitate'];
@@ -2070,17 +2475,19 @@ class CentralizatorFacturareService
         return $this->rowValue($row);
     }
 
+    /*
+     * Tariful chiar aplicat pe cursa: valoare / km facturati. Snapshot-ul salvat
+     * cost_km_primar ramane doar rezerva - poate fi invechit fata de valoarea
+     * facturata, daca tariful s-a schimbat intre timp in Administrare tarife.
+     */
     private function primaryRouteRate(array $row, float $value, float $km): ?float
     {
-        $saved = max(0.0, (float) ($row['cost_km_primar'] ?? 0));
-        if ($saved > 0) {
-            return round($saved, 4);
-        }
         if ($km > 0 && $value > 0) {
             return round($value / $km, 4);
         }
+        $saved = max(0.0, (float) ($row['cost_km_primar'] ?? 0));
 
-        return null;
+        return $saved > 0 ? round($saved, 4) : null;
     }
 
     private function normalizedLoadedTons(array $row): float

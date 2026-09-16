@@ -349,14 +349,21 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
     }
 };
 $renderPriceChart = static function (array $series, string $lineColor) use ($filters): string {
+    static $chartSeq = 0;
+
     $points = is_array($series['points'] ?? null) ? array_values($series['points']) : [];
     if ($points === []) {
         return '<div class="fuel-empty-chart">Nu există prețuri CardOil în perioada selectată.</div>';
     }
 
+    $chartSeq++;
+    $gradientId = 'fuelPriceFill' . $chartSeq;
+
     $values = array_map(static fn (array $point): float => (float) ($point['value'] ?? 0), $points);
     $minValue = min($values);
     $maxValue = max($values);
+    $minIndex = (int) array_search($minValue, $values, true);
+    $maxIndex = (int) array_search($maxValue, $values, true);
     $span = $maxValue - $minValue;
     // Scara stransa: variatiile de cativa bani trebuie sa fie vizibile.
     if ($span < 0.2) {
@@ -377,6 +384,7 @@ $renderPriceChart = static function (array $series, string $lineColor) use ($fil
     $bottom = 30;
     $plotWidth = $width - $left - $right;
     $plotHeight = $height - $top - $bottom;
+    $baseY = $top + $plotHeight;
 
     $startTs = strtotime((string) ($filters['date_from'] ?? '') . ' 00:00:00') ?: 0;
     $endTs = strtotime((string) ($filters['date_to'] ?? '') . ' 23:59:59') ?: ($startTs + 86400);
@@ -403,23 +411,81 @@ $renderPriceChart = static function (array $series, string $lineColor) use ($fil
     $avg = (float) ($series['avg'] ?? 0);
     if ($avg > 0 && $avg >= $yMin && $avg <= $yMax) {
         $avgY = round($yFor($avg), 2);
-        $averageLine = '<line x1="' . $left . '" y1="' . $avgY . '" x2="' . ($width - $right) . '" y2="' . $avgY . '" class="fuel-chart-average"/>';
+        $averageLine = '<line x1="' . $left . '" y1="' . $avgY . '" x2="' . ($width - $right) . '" y2="' . $avgY . '" class="fuel-chart-average"/>'
+            . '<text x="' . ($width - $right) . '" y="' . ($avgY - 5) . '" text-anchor="end" class="fuel-chart-axis fuel-price-avg-tag">medie ' . e(format_number_ro($avg, 3)) . '</text>';
     }
 
+    // Datele punctelor ajung si in JS: tooltip, crosshair si navigare cu tastatura.
     $svgPoints = [];
-    $dots = '';
-    foreach ($points as $point) {
-        $x = round($xFor((string) ($point['date'] ?? '')), 2);
-        $y = round($yFor((float) ($point['value'] ?? 0)), 2);
+    $payload = [];
+    $previousValue = null;
+    foreach ($points as $index => $point) {
+        $date = (string) ($point['date'] ?? '');
+        $value = (float) ($point['value'] ?? 0);
+        $liters = (float) ($point['liters'] ?? 0);
+        $x = round($xFor($date), 2);
+        $y = round($yFor($value), 2);
         $svgPoints[] = $x . ',' . $y;
-        $dots .= '<circle cx="' . $x . '" cy="' . $y . '" r="3.5" style="fill: ' . e($lineColor) . ';">'
-            . '<title>' . e((string) ($point['label'] ?? '') . ': ' . format_number_ro((float) ($point['value'] ?? 0), 4) . ' lei/L · ' . format_number_ro((float) ($point['liters'] ?? 0), 0) . ' L') . '</title>'
-            . '</circle>';
+
+        $deltaText = '';
+        if ($previousValue !== null && $previousValue > 0) {
+            $delta = $value - $previousValue;
+            $sign = $delta > 0 ? '+' : ($delta < 0 ? '-' : '±');
+            $deltaText = $sign . format_number_ro(abs($delta), 3) . ' lei ('
+                . $sign . format_number_ro(abs($delta) / $previousValue * 100, 2) . '%) față de ziua anterioară';
+        }
+        $vsAvgText = '';
+        if ($avg > 0) {
+            $diff = $value - $avg;
+            $sign = $diff > 0 ? '+' : ($diff < 0 ? '-' : '±');
+            $vsAvgText = $sign . format_number_ro(abs($diff), 3) . ' lei față de medie';
+        }
+
+        $payload[] = [
+            'x' => $x,
+            'y' => $y,
+            'label' => (string) ($point['label'] ?? ''),
+            'full' => $date !== '' ? (new DateTimeImmutable($date))->format('d.m.Y') : '',
+            'value' => format_number_ro($value, 4) . ' lei/L',
+            'liters' => format_number_ro($liters, 0) . ' L alimentați',
+            'delta' => $deltaText,
+            'vsAvg' => $vsAvgText,
+            'kind' => $index === $minIndex ? 'min' : ($index === $maxIndex ? 'max' : ''),
+        ];
+        $previousValue = $value;
     }
 
-    $line = count($svgPoints) > 1
-        ? '<polyline points="' . e(implode(' ', $svgPoints)) . '" class="fuel-chart-series" style="stroke: ' . e($lineColor) . ';"/>'
-        : '';
+    $area = '';
+    $line = '';
+    if (count($svgPoints) > 1) {
+        $firstX = explode(',', $svgPoints[0])[0];
+        $lastX = explode(',', $svgPoints[count($svgPoints) - 1])[0];
+        $area = '<polygon class="fuel-price-area" fill="url(#' . $gradientId . ')" points="'
+            . e($firstX . ',' . $baseY . ' ' . implode(' ', $svgPoints) . ' ' . $lastX . ',' . $baseY)
+            . '"/>';
+        $line = '<polyline points="' . e(implode(' ', $svgPoints)) . '" class="fuel-chart-series" style="stroke: ' . e($lineColor) . ';"/>';
+    }
+
+    $dots = '';
+    foreach ($payload as $point) {
+        $dots .= '<circle cx="' . $point['x'] . '" cy="' . $point['y'] . '" r="3.5" class="fuel-price-dot" style="fill: ' . e($lineColor) . ';"/>';
+    }
+
+    // Marcajele de minim si maxim raman vizibile si fara hover.
+    $extremes = '';
+    if ($minIndex !== $maxIndex) {
+        foreach (['min' => $minIndex, 'max' => $maxIndex] as $kind => $index) {
+            if (!isset($payload[$index])) {
+                continue;
+            }
+            $point = $payload[$index];
+            $labelX = min(max((float) $point['x'], $left + 30), $width - $right - 30);
+            $labelY = $kind === 'max' ? max($top + 11, (float) $point['y'] - 13) : min($baseY - 4, (float) $point['y'] + 19);
+            $extremes .= '<circle cx="' . $point['x'] . '" cy="' . $point['y'] . '" r="6" class="fuel-price-extreme is-' . $kind . '" style="stroke: ' . e($lineColor) . ';"/>'
+                . '<text x="' . round($labelX, 2) . '" y="' . round($labelY, 2) . '" text-anchor="middle" class="fuel-price-extreme-label is-' . $kind . '">'
+                . e(($kind === 'max' ? 'max ' : 'min ') . format_number_ro((float) $values[$index], 3) . ' · ' . $point['label']) . '</text>';
+        }
+    }
 
     $labels = '';
     $count = count($points);
@@ -432,13 +498,47 @@ $renderPriceChart = static function (array $series, string $lineColor) use ($fil
         $labels .= '<text x="' . $x . '" y="' . ($height - 8) . '" text-anchor="middle" class="fuel-chart-axis">' . e((string) ($point['label'] ?? '')) . '</text>';
     }
 
-    return '<svg class="fuel-price-chart" viewBox="0 0 ' . $width . ' ' . $height . '" role="img" aria-label="Evolutie pret">'
+    $hover = '<g class="fuel-price-hover" aria-hidden="true">'
+        . '<line class="fuel-price-crosshair" x1="0" y1="' . $top . '" x2="0" y2="' . $baseY . '"/>'
+        . '<circle class="fuel-price-focus" cx="0" cy="0" r="6" style="stroke: ' . e($lineColor) . ';"/>'
+        . '</g>';
+
+    $hitbox = '<rect class="fuel-price-hitbox" x="' . $left . '" y="' . $top . '" width="' . $plotWidth . '" height="' . $plotHeight . '"/>';
+
+    $ariaLabel = 'Evoluție preț carburant. Minim ' . format_number_ro((float) $values[$minIndex], 3) . ' lei/L pe '
+        . (string) ($points[$minIndex]['label'] ?? '') . ', maxim ' . format_number_ro((float) $values[$maxIndex], 3) . ' lei/L pe '
+        . (string) ($points[$maxIndex]['label'] ?? '') . '.';
+
+    $svg = '<svg class="fuel-price-chart" viewBox="0 0 ' . $width . ' ' . $height . '" aria-hidden="true" focusable="false">'
+        . '<defs><linearGradient id="' . $gradientId . '" x1="0" y1="0" x2="0" y2="1">'
+        . '<stop offset="0%" stop-color="' . e($lineColor) . '" stop-opacity="0.26"/>'
+        . '<stop offset="100%" stop-color="' . e($lineColor) . '" stop-opacity="0"/>'
+        . '</linearGradient></defs>'
         . $grid
         . $averageLine
+        . $area
         . $line
         . $dots
+        . $extremes
         . $labels
+        . $hover
+        . $hitbox
         . '</svg>';
+
+    $json = json_encode([
+        'width' => $width,
+        'left' => $left,
+        'right' => $right,
+        'points' => $payload,
+        'minIndex' => $minIndex,
+        'maxIndex' => $maxIndex,
+    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+
+    return '<div class="fuel-price-chart-wrap" data-fuel-price-chart tabindex="0" role="img" aria-label="' . e($ariaLabel) . '">'
+        . $svg
+        . '<div class="fuel-price-tooltip" role="status" aria-live="polite" hidden></div>'
+        . '<script type="application/json" data-fuel-price-data>' . $json . '</script>'
+        . '</div>';
 };
 $renderLineChart = static function (array $chart): string {
     $points = $chart['points'] ?? [];
@@ -1172,15 +1272,34 @@ $donutStyle = static function (array $items): string {
                         ];
                         ?>
                         <?php foreach ($priceSections as $section): ?>
-                            <?php $priceSeries = is_array($priceEvolution[$section['key']] ?? null) ? $priceEvolution[$section['key']] : ['points' => []]; ?>
+                            <?php
+                            $priceSeries = is_array($priceEvolution[$section['key']] ?? null) ? $priceEvolution[$section['key']] : ['points' => []];
+                            // Data la care s-a atins minimul / maximul, ca sa fie vizibila direct in antet.
+                            $pricePoints = is_array($priceSeries['points'] ?? null) ? array_values($priceSeries['points']) : [];
+                            $priceMinLabel = '';
+                            $priceMaxLabel = '';
+                            if ($pricePoints !== []) {
+                                $priceValues = array_map(static fn (array $p): float => (float) ($p['value'] ?? 0), $pricePoints);
+                                $priceMinLabel = (string) ($pricePoints[(int) array_search(min($priceValues), $priceValues, true)]['label'] ?? '');
+                                $priceMaxLabel = (string) ($pricePoints[(int) array_search(max($priceValues), $priceValues, true)]['label'] ?? '');
+                            }
+                            ?>
                             <div class="fuel-price-panel">
                                 <div class="fuel-price-panel-header">
                                     <strong><span class="fuel-dot" style="background: <?= e((string) $section['color']) ?>"></span> <?= e((string) $section['title']) ?></strong>
-                                    <?php if (($priceSeries['points'] ?? []) !== []): ?>
+                                    <?php if ($pricePoints !== []): ?>
                                         <div class="fuel-price-stats">
                                             <span>Ultimul: <strong><?= e(format_number_ro((float) ($priceSeries['latest'] ?? 0), 2)) ?></strong></span>
-                                            <span>Min: <?= e(format_number_ro((float) ($priceSeries['min'] ?? 0), 2)) ?></span>
-                                            <span>Max: <?= e(format_number_ro((float) ($priceSeries['max'] ?? 0), 2)) ?></span>
+                                            <button type="button" class="fuel-price-jump is-min" data-fuel-price-jump="min" title="Arată pe grafic ziua cu prețul minim">
+                                                <i class="bi bi-arrow-down-short" aria-hidden="true"></i>
+                                                Min: <strong><?= e(format_number_ro((float) ($priceSeries['min'] ?? 0), 2)) ?></strong>
+                                                <?php if ($priceMinLabel !== ''): ?><em><?= e($priceMinLabel) ?></em><?php endif; ?>
+                                            </button>
+                                            <button type="button" class="fuel-price-jump is-max" data-fuel-price-jump="max" title="Arată pe grafic ziua cu prețul maxim">
+                                                <i class="bi bi-arrow-up-short" aria-hidden="true"></i>
+                                                Max: <strong><?= e(format_number_ro((float) ($priceSeries['max'] ?? 0), 2)) ?></strong>
+                                                <?php if ($priceMaxLabel !== ''): ?><em><?= e($priceMaxLabel) ?></em><?php endif; ?>
+                                            </button>
                                             <span>Medie: <?= e(format_number_ro((float) ($priceSeries['avg'] ?? 0), 2)) ?></span>
                                         </div>
                                     <?php endif; ?>
@@ -2453,5 +2572,234 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
     }
+});
+</script>
+
+<script>
+// Grafic interactiv "Evolutie pret carburant": crosshair, tooltip pe zi,
+// navigare cu sageti si sarituri directe la minimul / maximul perioadei.
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-fuel-price-chart]').forEach(function (wrap) {
+        var dataNode = wrap.querySelector('[data-fuel-price-data]');
+        var svg = wrap.querySelector('svg');
+        var tooltip = wrap.querySelector('.fuel-price-tooltip');
+        if (!dataNode || !svg || !tooltip) {
+            return;
+        }
+
+        var chart;
+        try {
+            chart = JSON.parse(dataNode.textContent || '{}');
+        } catch (error) {
+            return;
+        }
+        var points = chart.points || [];
+        if (!points.length) {
+            return;
+        }
+
+        var hoverGroup = svg.querySelector('.fuel-price-hover');
+        var crosshair = svg.querySelector('.fuel-price-crosshair');
+        var focusDot = svg.querySelector('.fuel-price-focus');
+        var panel = wrap.closest('.fuel-price-panel') || wrap;
+        var activeIndex = -1;
+        // Selectia facuta din butoanele Min/Max ramane fixata pana la urmatoarea
+        // interactiune cu graficul (altfel blur-ul de dupa click ar inchide tooltipul).
+        var pinned = false;
+
+        function addLine(parent, text, className) {
+            if (!text) {
+                return;
+            }
+            var row = document.createElement('div');
+            row.className = className;
+            row.textContent = text;
+            parent.appendChild(row);
+        }
+
+        function buildTooltip(point) {
+            tooltip.textContent = '';
+
+            var head = document.createElement('div');
+            head.className = 'fuel-tip-date';
+            head.textContent = point.full || point.label || '';
+            if (point.kind) {
+                var badge = document.createElement('span');
+                badge.className = 'fuel-tip-badge is-' + point.kind;
+                badge.textContent = point.kind === 'max' ? 'maxim perioadă' : 'minim perioadă';
+                head.appendChild(badge);
+            }
+            tooltip.appendChild(head);
+
+            addLine(tooltip, point.value, 'fuel-tip-value');
+            addLine(tooltip, point.liters, 'fuel-tip-meta');
+
+            if (point.delta) {
+                var deltaRow = document.createElement('div');
+                deltaRow.className = 'fuel-tip-meta fuel-tip-delta';
+                if (point.delta.charAt(0) === '+') {
+                    deltaRow.classList.add('is-up');
+                } else if (point.delta.charAt(0) === '-') {
+                    deltaRow.classList.add('is-down');
+                }
+                deltaRow.textContent = point.delta;
+                tooltip.appendChild(deltaRow);
+            }
+
+            addLine(tooltip, point.vsAvg, 'fuel-tip-meta');
+        }
+
+        function placeTooltip(point) {
+            var svgRect = svg.getBoundingClientRect();
+            var wrapRect = wrap.getBoundingClientRect();
+            var scale = svgRect.width / (chart.width || 760);
+            var x = (svgRect.left - wrapRect.left) + (point.x * scale);
+            var y = (svgRect.top - wrapRect.top) + (point.y * scale);
+
+            tooltip.hidden = false;
+            var tipWidth = tooltip.offsetWidth;
+            var tipHeight = tooltip.offsetHeight;
+            var half = tipWidth / 2;
+            var clampedX = Math.min(Math.max(x, half + 4), Math.max(half + 4, wrapRect.width - half - 4));
+
+            // Daca punctul e prea sus, tooltipul trece sub linie ca sa nu iasa din card.
+            tooltip.classList.toggle('is-below', (y - tipHeight - 16) < 0);
+            tooltip.style.left = clampedX + 'px';
+            tooltip.style.top = y + 'px';
+        }
+
+        function activate(index) {
+            if (index < 0 || index >= points.length) {
+                return;
+            }
+            var point = points[index];
+            activeIndex = index;
+
+            if (crosshair) {
+                crosshair.setAttribute('x1', point.x);
+                crosshair.setAttribute('x2', point.x);
+            }
+            if (focusDot) {
+                focusDot.setAttribute('cx', point.x);
+                focusDot.setAttribute('cy', point.y);
+            }
+            if (hoverGroup) {
+                hoverGroup.classList.add('is-active');
+            }
+
+            buildTooltip(point);
+            placeTooltip(point);
+        }
+
+        function deactivate(force) {
+            if (pinned && force !== true) {
+                return;
+            }
+            pinned = false;
+            activeIndex = -1;
+            if (hoverGroup) {
+                hoverGroup.classList.remove('is-active');
+            }
+            tooltip.hidden = true;
+            tooltip.classList.remove('is-below');
+        }
+
+        function nearestIndex(clientX) {
+            var svgRect = svg.getBoundingClientRect();
+            if (!svgRect.width) {
+                return -1;
+            }
+            var viewX = ((clientX - svgRect.left) / svgRect.width) * (chart.width || 760);
+            var best = 0;
+            var bestDistance = Infinity;
+            for (var i = 0; i < points.length; i++) {
+                var distance = Math.abs(points[i].x - viewX);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    best = i;
+                }
+            }
+            return best;
+        }
+
+        svg.addEventListener('mousemove', function (event) {
+            pinned = false;
+            var index = nearestIndex(event.clientX);
+            if (index !== activeIndex) {
+                activate(index);
+            }
+        });
+        svg.addEventListener('mouseleave', function () {
+            deactivate(true);
+        });
+
+        svg.addEventListener('touchstart', function (event) {
+            if (event.touches.length) {
+                pinned = false;
+                activate(nearestIndex(event.touches[0].clientX));
+            }
+        }, { passive: true });
+        svg.addEventListener('touchmove', function (event) {
+            if (event.touches.length) {
+                activate(nearestIndex(event.touches[0].clientX));
+            }
+        }, { passive: true });
+
+        // Focusul sta pe wrapper (div): Chrome nu focuseaza fiabil elementele SVG la click.
+        svg.addEventListener('mousedown', function (event) {
+            event.preventDefault();
+            wrap.focus({ preventScroll: true });
+        });
+
+        wrap.addEventListener('keydown', function (event) {
+            var index = activeIndex;
+            if (event.key === 'ArrowRight') {
+                index = index < 0 ? 0 : Math.min(points.length - 1, index + 1);
+            } else if (event.key === 'ArrowLeft') {
+                index = index < 0 ? points.length - 1 : Math.max(0, index - 1);
+            } else if (event.key === 'Home') {
+                index = 0;
+            } else if (event.key === 'End') {
+                index = points.length - 1;
+            } else if (event.key === 'Escape') {
+                deactivate(true);
+                return;
+            } else {
+                return;
+            }
+            event.preventDefault();
+            pinned = false;
+            activate(index);
+        });
+        wrap.addEventListener('blur', function () {
+            deactivate(false);
+        });
+
+        panel.querySelectorAll('[data-fuel-price-jump]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                var kind = button.getAttribute('data-fuel-price-jump');
+                var index = kind === 'max' ? chart.maxIndex : chart.minIndex;
+                if (typeof index !== 'number') {
+                    return;
+                }
+                pinned = true;
+                activate(index);
+                wrap.focus({ preventScroll: true });
+            });
+        });
+
+        // Un click in afara panoului inchide selectia fixata din butoane.
+        document.addEventListener('click', function (event) {
+            if (pinned && !panel.contains(event.target)) {
+                deactivate(true);
+            }
+        });
+
+        window.addEventListener('resize', function () {
+            if (activeIndex >= 0) {
+                placeTooltip(points[activeIndex]);
+            }
+        });
+    });
 });
 </script>

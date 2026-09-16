@@ -233,15 +233,23 @@ class CentralizatorFacturareController
         }
         fputcsv($out, [], ';');
 
+        /* Un rand per ruta x tarif facturat, cu perioada si cu schimbarea care l-a produs. */
         fputcsv($out, ['Primar routes'], ';');
-        fputcsv($out, ['Rută', 'Curse', 'Km parcurși', 'Preț/km', 'Valoare RON'], ';');
+        fputcsv($out, ['Rută', 'Curse', 'Km parcurși', 'Preț/km', 'Valoare RON', 'Perioadă curse', 'Tarif în vigoare din', 'Tarif anterior', 'Variație %', 'Modificat de', 'Variație combustibil %'], ';');
         foreach ((array) ($report['primary_routes']['routes'] ?? []) as $route) {
+            $tariff = is_array($route['tariff'] ?? null) ? $route['tariff'] : [];
             fputcsv($out, [
                 (string) ($route['route_label'] ?? ''),
                 (string) ($route['trips'] ?? 0),
                 (string) ($route['km'] ?? 0),
                 (string) ($route['rate_label'] ?? ''),
                 (string) ($route['value'] ?? 0),
+                (string) ($route['period_label'] ?? ''),
+                (string) ($tariff['valid_from_label'] ?? ''),
+                ($tariff['previous_value'] ?? null) !== null ? (string) $tariff['previous_value'] : '',
+                ($tariff['delta_percent'] ?? null) !== null ? (string) $tariff['delta_percent'] : '',
+                (string) ($tariff['changed_by'] ?? ''),
+                ($tariff['fuel']['variation_percent'] ?? null) !== null ? (string) $tariff['fuel']['variation_percent'] : '',
             ], ';');
         }
         fputcsv($out, [], ';');

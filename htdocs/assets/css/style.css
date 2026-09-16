@@ -8925,6 +8925,11 @@ button.dispatcher-datetime-picker-title:focus-visible {
     overflow: hidden;
 }
 
+/* Panoul de filtre nu taie meniul de vehicule pe rezolutii mici / zoom. */
+.refacturare-filter-panel {
+    overflow: visible;
+}
+
 .refacturare-panel-header {
     min-height: 58px;
     display: flex;
@@ -9929,6 +9934,11 @@ button.dispatcher-datetime-picker-title:focus-visible {
     overflow-y: auto;
 }
 
+/* .d-flex (display:flex !important) ar anula atributul hidden setat de cautare. */
+.vehicle-multiselect-option[hidden] {
+    display: none !important;
+}
+
 .vehicle-multiselect-option {
     border-radius: 0.45rem;
     cursor: pointer;
@@ -10030,7 +10040,7 @@ button.dispatcher-datetime-picker-title:focus-visible {
 }
 
 .refacturare-filter-field .vehicle-multiselect-menu {
-    max-height: 340px;
+    max-height: min(340px, 55vh);
 }
 
 .maintenance-stock-details {
@@ -23566,4 +23576,201 @@ a.chx-legend-line:hover .chx-legend-name {
     border-color: #2563eb;
     color: #2563eb;
     background: #eff4ff;
+}
+
+/* --- Grafic interactiv evolutie pret carburant --- */
+.fuel-price-chart-wrap {
+    position: relative;
+}
+
+.fuel-price-chart {
+    overflow: visible;
+}
+
+.fuel-price-chart-wrap:focus {
+    outline: none;
+}
+
+.fuel-price-chart-wrap:focus-visible {
+    outline: 2px solid #1d6cff;
+    outline-offset: 3px;
+    border-radius: 10px;
+}
+
+.fuel-price-hitbox {
+    fill: transparent;
+    cursor: crosshair;
+}
+
+.fuel-price-dot,
+.fuel-price-area,
+.fuel-price-extreme,
+.fuel-price-extreme-label,
+.fuel-price-hover {
+    pointer-events: none;
+}
+
+.fuel-price-avg-tag {
+    font-size: 10px;
+    font-weight: 700;
+    fill: #94a3b8;
+}
+
+.fuel-price-extreme {
+    fill: #fff;
+    stroke-width: 2.5;
+}
+
+.fuel-price-extreme-label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .01em;
+}
+
+.fuel-price-extreme-label.is-max {
+    fill: #b91c1c;
+}
+
+.fuel-price-extreme-label.is-min {
+    fill: #15803d;
+}
+
+.fuel-price-hover {
+    opacity: 0;
+    transition: opacity .12s ease;
+}
+
+.fuel-price-hover.is-active {
+    opacity: 1;
+}
+
+.fuel-price-crosshair {
+    stroke: #94a3b8;
+    stroke-width: 1;
+    stroke-dasharray: 4 4;
+}
+
+.fuel-price-focus {
+    fill: #fff;
+    stroke-width: 3;
+}
+
+.fuel-price-tooltip {
+    position: absolute;
+    z-index: 5;
+    min-width: 168px;
+    padding: .55rem .7rem;
+    border-radius: 10px;
+    background: #0f172a;
+    color: #e2e8f0;
+    font-size: .74rem;
+    font-weight: 650;
+    line-height: 1.35;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, .28);
+    transform: translate(-50%, calc(-100% - 14px));
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.fuel-price-tooltip.is-below {
+    transform: translate(-50%, 14px);
+}
+
+.fuel-price-tooltip[hidden] {
+    display: none;
+}
+
+.fuel-tip-date {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    color: #94a3b8;
+    font-size: .7rem;
+    font-weight: 700;
+    margin-bottom: .15rem;
+}
+
+.fuel-tip-badge {
+    padding: .05rem .35rem;
+    border-radius: 999px;
+    font-size: .62rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .02em;
+}
+
+.fuel-tip-badge.is-max {
+    background: #7f1d1d;
+    color: #fecaca;
+}
+
+.fuel-tip-badge.is-min {
+    background: #14532d;
+    color: #bbf7d0;
+}
+
+.fuel-tip-value {
+    color: #fff;
+    font-size: .95rem;
+    font-weight: 820;
+}
+
+.fuel-tip-meta {
+    color: #cbd5e1;
+    font-size: .7rem;
+    font-weight: 650;
+}
+
+.fuel-tip-delta.is-up {
+    color: #fca5a5;
+}
+
+.fuel-tip-delta.is-down {
+    color: #86efac;
+}
+
+.fuel-price-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: .2rem;
+    padding: .1rem .45rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    background: #f8fafc;
+    color: #64748b;
+    font-size: .74rem;
+    font-weight: 720;
+    line-height: 1.5;
+    cursor: pointer;
+    transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.fuel-price-jump strong {
+    color: #0f172a;
+    font-size: .78rem;
+}
+
+.fuel-price-jump em {
+    font-style: normal;
+    color: #94a3b8;
+    font-size: .7rem;
+}
+
+.fuel-price-jump i {
+    font-size: .95rem;
+    line-height: 1;
+}
+
+.fuel-price-jump.is-min:hover,
+.fuel-price-jump.is-min:focus-visible {
+    background: #dcfce7;
+    border-color: #86efac;
+    color: #15803d;
+}
+
+.fuel-price-jump.is-max:hover,
+.fuel-price-jump.is-max:focus-visible {
+    background: #fee2e2;
+    border-color: #fca5a5;
+    color: #b91c1c;
 }
