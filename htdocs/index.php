@@ -314,6 +314,7 @@ require_once __DIR__ . '/models/VehicleEquipmentInventoryModel.php';
 require_once __DIR__ . '/models/DriverEquipmentModel.php';
 require_once __DIR__ . '/models/VehicleAuthorizationModel.php';
 require_once __DIR__ . '/models/DispecerCurseModel.php';
+require_once __DIR__ . '/models/OperatorActivityModel.php';
 require_once __DIR__ . '/models/DashboardAnaliticV2Model.php';
 require_once __DIR__ . '/models/ProgramareConcediiModel.php';
 require_once __DIR__ . '/models/NotificationRuleModel.php';
@@ -331,6 +332,7 @@ require_once __DIR__ . '/models/AccommodationExpenseModel.php';
 
 require_once __DIR__ . '/services/EntityStatusService.php';
 require_once __DIR__ . '/services/InactiveResourceStatusService.php';
+require_once __DIR__ . '/services/RaceCompletenessService.php';
 require_once __DIR__ . '/services/CentralizatorFacturareService.php';
 require_once __DIR__ . '/services/EmailService.php';
 require_once __DIR__ . '/services/CardOilApiClient.php';

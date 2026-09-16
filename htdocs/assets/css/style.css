@@ -23791,3 +23791,306 @@ a.chx-legend-line:hover .chx-legend-name {
     border-color: #fca5a5;
     color: #b91c1c;
 }
+
+/* Panoul de aprobari: tab-ul "Operatori" (activitate Dispecer curse pe zi). */
+/* Panoul e flex pe coloana cu overflow: fara flex-shrink 0, multe carduri striveau
+   bara de tab-uri la 2px si tab-urile disparea. Bara ramane lipita sus la derulare. */
+.fleet-approval-drawer-panel > * {
+    flex-shrink: 0;
+}
+
+.fleet-approval-drawer .dashboard-approval-tabs {
+    position: sticky;
+    top: -18px;
+    z-index: 3;
+    box-shadow: 0 6px 12px rgba(15, 23, 42, 0.06);
+    grid-template-columns: none;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: column;
+}
+
+.fleet-approval-drawer .dashboard-approval-tab {
+    padding: 0 4px;
+    font-size: 12px;
+}
+
+.fleet-approval-drawer-panel:has(.operator-activity:not([hidden])) .dashboard-approval-all-link {
+    display: none;
+}
+
+.operator-activity-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.operator-activity-nav {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid #d7e1ef;
+    border-radius: 6px;
+    color: #334155;
+    background: #ffffff;
+}
+
+.operator-activity-nav:hover {
+    color: #0d6efd;
+    background: #eaf2ff;
+}
+
+.operator-activity-date {
+    width: auto;
+    min-width: 0;
+    font-weight: 800;
+}
+
+.operator-activity-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    color: #15803d;
+    font-size: 11px;
+    font-weight: 900;
+    white-space: nowrap;
+}
+
+.operator-activity-live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #22c55e;
+    animation: operator-activity-pulse 1.8s ease-in-out infinite;
+}
+
+.operator-activity-live.is-paused {
+    color: #52678b;
+}
+
+.operator-activity-live.is-paused .operator-activity-live-dot {
+    background: #94a3b8;
+    animation: none;
+}
+
+.operator-activity-live.is-error {
+    color: #b91c1c;
+    white-space: normal;
+}
+
+.operator-activity-live.is-error .operator-activity-live-dot {
+    background: #dc2626;
+    animation: none;
+}
+
+@keyframes operator-activity-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.45); }
+    50% { box-shadow: 0 0 0 5px rgba(34, 197, 94, 0); }
+}
+
+.operator-activity-totals {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.operator-activity-total {
+    display: grid;
+    gap: 2px;
+    padding: 10px;
+    border: 1px solid #d7e1ef;
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.operator-activity-total span {
+    color: #52678b;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.operator-activity-total strong {
+    color: #0d6efd;
+    font-size: 22px;
+    font-weight: 900;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+
+.operator-activity-total.is-closed strong {
+    color: #15803d;
+}
+
+.operator-activity-total.is-open strong {
+    color: #b45309;
+}
+
+.operator-activity-total strong.is-changed {
+    animation: operator-activity-flash 1.6s ease-out;
+}
+
+@keyframes operator-activity-flash {
+    0% { background: #fef08a; }
+    100% { background: transparent; }
+}
+
+.operator-activity-list {
+    display: grid;
+    gap: 10px;
+}
+
+.operator-activity-card {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid #d7e1ef;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+}
+
+.operator-activity-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.operator-activity-avatar {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    color: #1e3a8a;
+    background: #dbeafe;
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.operator-activity-who {
+    display: grid;
+    min-width: 0;
+}
+
+.operator-activity-who h3 {
+    margin: 0;
+    color: #071735;
+    font-size: 14px;
+    font-weight: 900;
+    overflow-wrap: anywhere;
+}
+
+.operator-activity-who span {
+    color: #52678b;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.operator-activity-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.operator-activity-stat {
+    display: grid;
+    gap: 1px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: #f1f5f9;
+    text-align: center;
+}
+
+.operator-activity-stat strong {
+    font-size: 18px;
+    font-weight: 900;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+
+.operator-activity-stat span {
+    color: #52678b;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.operator-activity-stat.is-opened strong { color: #0d6efd; }
+.operator-activity-stat.is-closed strong { color: #15803d; }
+.operator-activity-stat.is-neutral strong { color: #64748b; }
+
+.operator-activity-stat.is-open {
+    background: #fef3c7;
+}
+
+.operator-activity-stat.is-open strong {
+    color: #b45309;
+}
+
+.operator-activity-races {
+    border-top: 1px solid #e4ebf5;
+    padding-top: 7px;
+}
+
+.operator-activity-races summary {
+    width: fit-content;
+    color: #0d6efd;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.operator-activity-races.is-open summary {
+    color: #b45309;
+}
+
+.operator-activity-races ul {
+    display: grid;
+    gap: 6px;
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.operator-activity-races li {
+    display: grid;
+    gap: 1px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: #f8fafc;
+    font-size: 12px;
+}
+
+.operator-activity-races li a {
+    color: #071735;
+    font-weight: 900;
+    text-decoration: none;
+}
+
+.operator-activity-races li a:hover {
+    color: #0d6efd;
+    text-decoration: underline;
+}
+
+.operator-activity-race-meta {
+    color: #52678b;
+    font-weight: 700;
+}
+
+.operator-activity-race-missing {
+    color: #b45309;
+    font-weight: 800;
+    overflow-wrap: anywhere;
+}
+
+.operator-activity-note {
+    margin: 0;
+    color: #52678b;
+    font-size: 11px;
+    line-height: 1.4;
+}

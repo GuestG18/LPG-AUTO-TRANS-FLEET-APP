@@ -3520,7 +3520,36 @@ class DispecerCurseModel extends BaseModel
         $limit = max(1, min(5000, $limit));
         $billingStatusExpr = $this->defaultBillingStatusExpression();
 
-        $listSql = "
+        $listSql = $this->raceCompletenessSelectSql() . "
+            WHERE c.deleted_at IS NULL
+              AND " . $billingStatusExpr . " = :open_races_billing_status
+            " . ($vehicleId !== null && $vehicleId > 0 ? ' AND c.vehicle_id = :vehicle_id' : '') . "
+            -- Implicit: cele mai recent adaugate primele, ca o cursa tocmai introdusa
+            -- sa fie in capul listei. Ordinea se poate schimba din panou.
+            ORDER BY COALESCE(c.created_at, c.data_inceput) DESC, c.id DESC
+            LIMIT :limit_rows
+        ";
+
+        $listStmt = $this->db->prepare($listSql);
+        $listStmt->bindValue(':open_races_billing_status', self::DEFAULT_BILLING_STATUS, PDO::PARAM_STR);
+        if ($vehicleId !== null && $vehicleId > 0) {
+            $listStmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+        }
+        $listStmt->bindValue(':limit_rows', $limit, PDO::PARAM_INT);
+        $listStmt->execute();
+
+        return [
+            'rows' => $listStmt->fetchAll(),
+        ];
+    }
+
+    /**
+     * SELECT-ul comun cu toate coloanele necesare regulilor de completitudine
+     * (RaceCompletenessService). Fara WHERE: fiecare apelant isi pune filtrele.
+     */
+    private function raceCompletenessSelectSql(): string
+    {
+        return "
             SELECT
                 c.id,
                 c.tip_transport,
@@ -3579,26 +3608,23 @@ class DispecerCurseModel extends BaseModel
                 FROM curse_cheltuieli
                 GROUP BY cursa_id
             ) exp ON exp.cursa_id = c.id
-            WHERE c.deleted_at IS NULL
-              AND " . $billingStatusExpr . " = :open_races_billing_status
-            " . ($vehicleId !== null && $vehicleId > 0 ? ' AND c.vehicle_id = :vehicle_id' : '') . "
-            -- Implicit: cele mai recent adaugate primele, ca o cursa tocmai introdusa
-            -- sa fie in capul listei. Ordinea se poate schimba din panou.
-            ORDER BY COALESCE(c.created_at, c.data_inceput) DESC, c.id DESC
-            LIMIT :limit_rows
         ";
+    }
 
-        $listStmt = $this->db->prepare($listSql);
-        $listStmt->bindValue(':open_races_billing_status', self::DEFAULT_BILLING_STATUS, PDO::PARAM_STR);
-        if ($vehicleId !== null && $vehicleId > 0) {
-            $listStmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
-        }
-        $listStmt->bindValue(':limit_rows', $limit, PDO::PARAM_INT);
-        $listStmt->execute();
+    /**
+     * Toate cursele active (nesterse), cu coloanele necesare verificarii de completitudine.
+     * Folosit de urmarirea activitatii operatorilor pentru a detecta cursele inchise.
+     */
+    public function getActiveRacesForCompleteness(): array
+    {
+        $this->ensureRaceExpenseStatusColumn();
+        $this->ensureRaceSoftDeleteSchema();
 
-        return [
-            'rows' => $listStmt->fetchAll(),
-        ];
+        $stmt = $this->db->query($this->raceCompletenessSelectSql() . "
+            WHERE c.deleted_at IS NULL
+        ");
+
+        return $stmt->fetchAll();
     }
 
     public function getRaceById(int $id): ?array

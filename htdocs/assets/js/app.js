@@ -1452,6 +1452,268 @@ function initGlobalApprovalDrawer() {
     });
 }
 
+// Tab-ul "Operatori" din panoul de aprobari: curse adaugate / inchise pe zi, per operator.
+// Se actualizeaza la 30 de secunde doar cat timp panoul e deschis pe acest tab.
+function initOperatorActivity() {
+    var panel = document.querySelector('[data-operator-activity]');
+    if (!(panel instanceof HTMLElement)) {
+        return;
+    }
+
+    var url = panel.getAttribute('data-operator-activity-url') || '';
+    var drawer = panel.closest('[data-global-approval-drawer]');
+    var dateInput = panel.querySelector('[data-operator-activity-date]');
+    var list = panel.querySelector('[data-operator-activity-list]');
+    var statusBox = panel.querySelector('[data-operator-activity-status]');
+    var statusText = panel.querySelector('[data-operator-activity-status-text]');
+    var overall = panel.querySelector('[data-operator-activity-overall]');
+    if (url === '' || !(dateInput instanceof HTMLInputElement) || !(list instanceof HTMLElement)) {
+        return;
+    }
+
+    var REFRESH_MS = 30000;
+    var timer = null;
+    var requestSeq = 0;
+    var previousTotals = null;
+    var previousDate = '';
+
+    function isoDate(date) {
+        var month = String(date.getMonth() + 1).padStart(2, '0');
+        var day = String(date.getDate()).padStart(2, '0');
+        return date.getFullYear() + '-' + month + '-' + day;
+    }
+
+    function isVisible() {
+        var drawerOpen = !(drawer instanceof HTMLElement) || drawer.classList.contains('is-open');
+        return drawerOpen && !panel.hidden && document.visibilityState !== 'hidden';
+    }
+
+    function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) {
+            node.className = className;
+        }
+        if (text !== undefined && text !== null) {
+            node.textContent = String(text);
+        }
+        return node;
+    }
+
+    function initials(name) {
+        var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+        if (parts.length === 0) {
+            return '?';
+        }
+        return (parts[0].charAt(0) + (parts.length > 1 ? parts[parts.length - 1].charAt(0) : '')).toUpperCase();
+    }
+
+    function setStatus(text, state) {
+        if (statusText instanceof HTMLElement) {
+            statusText.textContent = text;
+        }
+        if (statusBox instanceof HTMLElement) {
+            statusBox.classList.toggle('is-error', state === 'error');
+            statusBox.classList.toggle('is-paused', state === 'paused');
+        }
+    }
+
+    function raceList(title, races, tone) {
+        var details = el('details', 'operator-activity-races is-' + tone);
+        details.appendChild(el('summary', '', title + ' (' + races.length + ')'));
+        var ul = el('ul');
+        races.forEach(function (race) {
+            var li = el('li');
+            var link = el('a', '', '#' + race.id + (race.plate ? ' · ' + race.plate : ''));
+            link.href = race.url;
+            li.appendChild(link);
+            li.appendChild(el('span', 'operator-activity-race-meta', [race.type, race.time].filter(Boolean).join(' · ')));
+            if (race.missing_count > 0) {
+                var shown = race.missing_labels || [];
+                var extra = race.missing_count - shown.length;
+                li.appendChild(el('span', 'operator-activity-race-missing', 'Lipsesc: ' + shown.join(', ') + (extra > 0 ? ' +' + extra : '')));
+            }
+            ul.appendChild(li);
+        });
+        details.appendChild(ul);
+        return details;
+    }
+
+    function stat(label, value, tone) {
+        var box = el('div', 'operator-activity-stat is-' + tone);
+        box.appendChild(el('strong', '', value));
+        box.appendChild(el('span', '', label));
+        return box;
+    }
+
+    function render(activity) {
+        var totals = activity.totals || {};
+        var sameDay = previousDate === activity.date;
+        ['opened', 'closed', 'still_open'].forEach(function (key) {
+            var target = panel.querySelector('[data-operator-activity-total="' + key + '"]');
+            if (!(target instanceof HTMLElement)) {
+                return;
+            }
+            var value = Number(totals[key] || 0);
+            target.textContent = String(value);
+            // Evidentiaza scurt un total care s-a schimbat de la ultima actualizare.
+            if (sameDay && previousTotals && Number(previousTotals[key] || 0) !== value) {
+                target.classList.remove('is-changed');
+                void target.offsetWidth;
+                target.classList.add('is-changed');
+            }
+        });
+        previousTotals = totals;
+        previousDate = activity.date;
+
+        if (overall instanceof HTMLElement) {
+            overall.textContent = 'In total, ' + Number(totals.open_overall || 0) + ' curse active au inca informatii lipsa.';
+        }
+
+        // Pastreaza listele deschise de admin intre actualizari.
+        var openLists = {};
+        list.querySelectorAll('details[open]').forEach(function (node) {
+            openLists[node.getAttribute('data-key') || ''] = true;
+        });
+
+        list.textContent = '';
+        var operators = Array.isArray(activity.operators) ? activity.operators : [];
+        if (operators.length === 0) {
+            list.appendChild(el('div', 'dashboard-approval-empty', activity.is_today
+                ? 'Nicio cursa adaugata sau inchisa astazi.'
+                : 'Nicio cursa adaugata sau inchisa in aceasta zi.'));
+            return;
+        }
+
+        operators.forEach(function (operator) {
+            var card = el('article', 'operator-activity-card');
+            var head = el('div', 'operator-activity-card-head');
+            head.appendChild(el('span', 'operator-activity-avatar', initials(operator.name)));
+            var who = el('div', 'operator-activity-who');
+            who.appendChild(el('h3', '', operator.name));
+            if (operator.last_activity) {
+                who.appendChild(el('span', '', 'Ultima activitate ' + String(operator.last_activity).slice(11, 16)));
+            }
+            head.appendChild(who);
+            card.appendChild(head);
+
+            var stats = el('div', 'operator-activity-stats');
+            stats.appendChild(stat('Adaugate', operator.opened, 'opened'));
+            stats.appendChild(stat('Inchise', operator.closed, 'closed'));
+            stats.appendChild(stat('Inca deschise', operator.still_open, operator.still_open > 0 ? 'open' : 'neutral'));
+            card.appendChild(stats);
+
+            [
+                ['open', 'Curse inca deschise', operator.open_races || []],
+                ['closed', 'Curse inchise', operator.closed_races || []]
+            ].forEach(function (group) {
+                if (group[2].length === 0) {
+                    return;
+                }
+                var details = raceList(group[1], group[2], group[0]);
+                var key = operator.user_id + ':' + group[0];
+                details.setAttribute('data-key', key);
+                details.open = !!openLists[key];
+                card.appendChild(details);
+            });
+
+            list.appendChild(card);
+        });
+    }
+
+    function load() {
+        var seq = ++requestSeq;
+        var date = dateInput.value || isoDate(new Date());
+        var requestUrl = url + (url.indexOf('?') === -1 ? '?' : '&') + 'date=' + encodeURIComponent(date);
+        setStatus('Se actualizeaza...', 'loading');
+
+        fetch(requestUrl, {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        })
+            .then(function (response) {
+                return response.json().then(function (payload) {
+                    if (!response.ok || !payload || payload.success !== true) {
+                        throw new Error((payload && payload.message) || 'Eroare la incarcare.');
+                    }
+                    return payload.activity;
+                });
+            })
+            .then(function (activity) {
+                if (seq !== requestSeq) {
+                    return;
+                }
+                render(activity);
+                var time = String(activity.generated_at || '').slice(11, 19);
+                setStatus(activity.is_today ? 'Live · ' + time : 'Actualizat ' + time, activity.is_today ? 'live' : 'paused');
+            })
+            .catch(function (error) {
+                if (seq !== requestSeq) {
+                    return;
+                }
+                setStatus(error && error.message ? error.message : 'Eroare la incarcare.', 'error');
+            });
+    }
+
+    function stop() {
+        if (timer !== null) {
+            window.clearInterval(timer);
+            timer = null;
+        }
+    }
+
+    function schedule() {
+        stop();
+        if (!isVisible()) {
+            return;
+        }
+        load();
+        timer = window.setInterval(function () {
+            if (!isVisible()) {
+                stop();
+                return;
+            }
+            // Zilele trecute nu se mai schimba; se reimprospateaza doar ziua curenta.
+            if (dateInput.value === isoDate(new Date())) {
+                load();
+            }
+        }, REFRESH_MS);
+    }
+
+    function shiftDate(days) {
+        var base = dateInput.value ? new Date(dateInput.value + 'T12:00:00') : new Date();
+        base.setDate(base.getDate() + days);
+        var next = isoDate(base);
+        if (next > isoDate(new Date())) {
+            return;
+        }
+        dateInput.value = next;
+        schedule();
+    }
+
+    panel.querySelectorAll('[data-operator-activity-shift]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            shiftDate(parseInt(button.getAttribute('data-operator-activity-shift') || '0', 10));
+        });
+    });
+    dateInput.max = isoDate(new Date());
+    dateInput.addEventListener('change', schedule);
+
+    // Porneste/opreste actualizarea la schimbarea tab-ului si la deschiderea panoului.
+    var lastVisible = false;
+    function onVisibilityMaybeChanged() {
+        var visible = isVisible();
+        if (visible !== lastVisible) {
+            lastVisible = visible;
+            schedule();
+        }
+    }
+    new MutationObserver(onVisibilityMaybeChanged).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+    if (drawer instanceof HTMLElement) {
+        new MutationObserver(onVisibilityMaybeChanged).observe(drawer, { attributes: true, attributeFilter: ['class'] });
+    }
+    document.addEventListener('visibilitychange', onVisibilityMaybeChanged);
+}
+
 function parseApprovalCount(element) {
     if (!(element instanceof HTMLElement)) {
         return 0;
@@ -2097,6 +2359,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initDashboardOperationalCostCard();
     initDashboardApprovalTabs();
     initGlobalApprovalDrawer();
+    initOperatorActivity();
     initApprovalReviewActions();
     initApprovalRequestStateSync();
     initUserApprovalCancellation();

@@ -212,6 +212,20 @@ $statusIcons = [
                     <span data-approval-tab-label><?= e((string) $tab['label']) ?></span> (<span data-approval-tab-count="<?= e($tabKey) ?>"><?= e((string) ((int) $tab['count'])) ?></span>)
                 </button>
             <?php endforeach; ?>
+            <?php if ($drawerIsAdmin): ?>
+                <?php // Tab-ul Operatori nu are numarator de solicitari: continutul se incarca live din JSON. ?>
+                <button
+                    class="dashboard-approval-tab"
+                    type="button"
+                    role="tab"
+                    id="global-approval-tab-operators"
+                    aria-controls="global-approval-panel-operators"
+                    aria-selected="false"
+                    data-dashboard-approval-tab="operators"
+                >
+                    <span data-approval-tab-label>Operatori</span>
+                </button>
+            <?php endif; ?>
         </div>
 
         <?php foreach ($approvalTabs as $tabKey => $tab): ?>
@@ -393,6 +407,56 @@ $statusIcons = [
                 <?php endif; ?>
             </div>
         <?php endforeach; ?>
+
+        <?php if ($drawerIsAdmin): ?>
+            <div
+                class="dashboard-approval-tab-panel operator-activity"
+                role="tabpanel"
+                id="global-approval-panel-operators"
+                aria-labelledby="global-approval-tab-operators"
+                data-dashboard-approval-panel="operators"
+                data-operator-activity
+                data-operator-activity-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'operator_activity'])) ?>"
+                hidden
+            >
+                <div class="operator-activity-toolbar">
+                    <button class="operator-activity-nav" type="button" data-operator-activity-shift="-1" aria-label="Ziua anterioara">
+                        <i class="bi bi-chevron-left" aria-hidden="true"></i>
+                    </button>
+                    <input class="form-control form-control-sm operator-activity-date" type="date" value="<?= e(date('Y-m-d')) ?>" max="<?= e(date('Y-m-d')) ?>" data-operator-activity-date aria-label="Ziua afisata">
+                    <button class="operator-activity-nav" type="button" data-operator-activity-shift="1" aria-label="Ziua urmatoare">
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                    </button>
+                    <span class="operator-activity-live" data-operator-activity-status>
+                        <span class="operator-activity-live-dot" aria-hidden="true"></span>
+                        <span data-operator-activity-status-text>Se incarca...</span>
+                    </span>
+                </div>
+
+                <div class="operator-activity-totals">
+                    <div class="operator-activity-total">
+                        <span>Adaugate</span>
+                        <strong data-operator-activity-total="opened">-</strong>
+                    </div>
+                    <div class="operator-activity-total is-closed">
+                        <span>Inchise</span>
+                        <strong data-operator-activity-total="closed">-</strong>
+                    </div>
+                    <div class="operator-activity-total is-open">
+                        <span>Inca deschise</span>
+                        <strong data-operator-activity-total="still_open">-</strong>
+                    </div>
+                </div>
+
+                <div class="operator-activity-list" data-operator-activity-list aria-live="polite"></div>
+
+                <p class="operator-activity-note">
+                    <strong>Inchisa</strong> = cursa are toate detaliile completate (aceleasi reguli ca panoul „curse cu informatii lipsa”).
+                    <strong>Inca deschise</strong> = din cursele adaugate in ziua respectiva.
+                    <span data-operator-activity-overall></span>
+                </p>
+            </div>
+        <?php endif; ?>
 
         <a class="dashboard-approval-all-link" href="<?= e(build_query_url(['page' => 'inactive_approvals'])) ?>">
             <span><?= e($drawerAllLabel) ?></span>

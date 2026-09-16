@@ -34,6 +34,10 @@ class InactiveResourceApprovalController
                 $this->reopenAction();
                 return;
 
+            case 'operator_activity':
+                $this->operatorActivityAction();
+                return;
+
             default:
                 http_response_code(404);
                 render('errors/404.php', [
@@ -173,6 +177,37 @@ class InactiveResourceApprovalController
 
         flash_set($ok ? 'success' : 'warning', $message);
         $this->redirectAfterAction();
+    }
+
+    /**
+     * JSON pentru tab-ul "Operatori" din panoul de aprobari: curse adaugate si
+     * inchise pe zi, per operator. Apelat periodic din panou (actualizare live).
+     */
+    private function operatorActivityAction(): void
+    {
+        $this->requireReviewAccess();
+
+        $date = trim((string) ($_GET['date'] ?? ''));
+        $parsed = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+        if ($parsed === false || $parsed->format('Y-m-d') !== $date) {
+            $date = date('Y-m-d');
+        }
+
+        try {
+            $db = get_pdo();
+            $activityModel = new OperatorActivityModel($db);
+            $incomplete = $activityModel->reconcile(new DispecerCurseModel($db));
+            $this->sendJson([
+                'success' => true,
+                'activity' => $activityModel->getDailyActivity($date, $incomplete),
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[InactiveResourceApprovalController][operator_activity] ' . $exception->getMessage());
+            $this->sendJson([
+                'success' => false,
+                'message' => 'Activitatea operatorilor nu a putut fi incarcata.',
+            ], 500);
+        }
     }
 
     private function resolveFilters(): array
