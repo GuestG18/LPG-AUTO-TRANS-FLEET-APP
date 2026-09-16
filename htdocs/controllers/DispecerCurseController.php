@@ -320,6 +320,9 @@ class DispecerCurseController
             case 'refacturari':
                 $this->refacturariAction();
                 return;
+            case 'refacturari_export':
+                $this->exportRefacturariAction();
+                return;
             case 'curse_sterse':
                 $this->requireDeletedRacesAdminAccess();
                 $this->deletedRacesAction();
@@ -2927,6 +2930,160 @@ class DispecerCurseController
             'formData' => $formData,
             'formErrors' => $formFlash['errors'],
         ]);
+    }
+
+    /** Export CSV cu exact filtrele si sortarea aplicate in pagina Refacturari (fara paginare). */
+    private function exportRefacturariAction(): void
+    {
+        $expenseEntryTypes = $this->expenseEntryTypes();
+        $filters = $this->collectRefacturareFilters($expenseEntryTypes);
+        $sort = $this->normalizeRefacturareSort((string) ($_GET['sort'] ?? 'date'));
+        $direction = $this->normalizeSortDirection((string) ($_GET['dir'] ?? 'desc'));
+
+        try {
+            $rows = $this->model->getRefacturareExportRows($filters, $sort, $direction);
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseController][refacturari_export] ' . $exception->getMessage());
+            flash_set('danger', 'Exportul refacturărilor a eșuat.');
+            redirect(build_query_url(array_merge(['page' => 'dispecer_curse', 'action' => 'refacturari'], $filters)));
+            return;
+        }
+
+        $typeLabels = array_merge(self::EXPENSE_TYPES, [
+            'taxe_drum' => 'Taxe drum',
+            'diurna' => 'Diurnă',
+            'service' => 'Reparații',
+            'alte' => 'Alte cheltuieli',
+        ]);
+        $money = static fn (float $value): string => number_format($value, 2, ',', '.');
+
+        $filename = 'refacturari_' . str_replace('-', '', $filters['data_start']) . '_' . str_replace('-', '', $filters['data_end']) . '.csv';
+        header('Content-Type: text/csv; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+
+        $out = fopen('php://output', 'wb');
+        if ($out === false) {
+            return;
+        }
+
+        fwrite($out, "\xEF\xBB\xBF");
+        fputcsv($out, [
+            'Data refacturare', 'Cursa', 'Nr. înmatriculare', 'Vehicul', 'Șofer', 'Beneficiar', 'Rută', 'Plecare',
+            'Tip', 'Motiv / detalii', 'Detalii suplimentare', 'Suma (lei)', 'Status factură', 'Marcat facturat la', 'Document',
+        ]);
+
+        $totalAmount = 0.0;
+        foreach ($rows as $row) {
+            $typeKey = trim((string) ($row['refacturare_tip_cheltuiala'] ?? ''));
+            if ($typeKey === '') {
+                $typeKey = trim((string) ($row['tip_cheltuiala'] ?? ''));
+            }
+
+            [$primaryDetail, $secondaryDetail] = $this->describeRefacturareExportDetails($row);
+            $amount = (float) ($row['refacturare_suma'] ?? 0);
+            $totalAmount += $amount;
+            $date = trim((string) ($row['refacturare_data'] ?? '')) ?: trim((string) ($row['data_cheltuiala'] ?? ''));
+            $departureDate = trim((string) ($row['data_inceput'] ?? '')) ?: trim((string) ($row['data_cursa'] ?? ''));
+            $departureTime = substr(trim((string) ($row['ora_inceput'] ?? '')), 0, 5);
+            $isInvoiced = (int) ($row['refacturare_facturata'] ?? 0) === 1;
+            $invoicedAt = trim((string) ($row['refacturare_facturata_at'] ?? ''));
+
+            fputcsv($out, [
+                $date !== '' ? format_date_ro($date) : '',
+                '#' . (int) ($row['cursa_id'] ?? 0),
+                trim((string) ($row['nr_inmatriculare'] ?? '')),
+                trim((string) (($row['marca'] ?? '') . ' ' . ($row['model'] ?? ''))),
+                trim((string) ($row['sofer_nume'] ?? '')),
+                trim((string) ($row['beneficiar_nume'] ?? '')),
+                $this->describeRefacturareExportRoute($row),
+                $departureDate !== '' ? trim(format_date_ro($departureDate) . ' ' . $departureTime) : '',
+                (string) ($typeLabels[$typeKey] ?? $typeKey),
+                $primaryDetail,
+                $secondaryDetail,
+                $money($amount),
+                $isInvoiced ? 'Factura emisă' : 'În așteptare',
+                $isInvoiced && $invoicedAt !== '' ? format_datetime_ro($invoicedAt) : '',
+                trim((string) ($row['refacturare_document_path'] ?? '')) !== ''
+                    ? (trim((string) ($row['refacturare_document_original_name'] ?? '')) ?: 'Da')
+                    : 'Fără document',
+            ]);
+        }
+
+        fputcsv($out, []);
+        fputcsv($out, ['TOTAL', count($rows) . ' refacturări', '', '', '', '', '', '', '', '', '', $money($totalAmount), '', '', '']);
+
+        fclose($out);
+        exit;
+    }
+
+    /**
+     * Aceleasi doua randuri ca in coloana "Motiv / detalii" din pagina:
+     * locatia (taxe de drum) sau prima linie din observatii, apoi cantitate x pret.
+     *
+     * @return array{0: string, 1: string}
+     */
+    private function describeRefacturareExportDetails(array $row): array
+    {
+        $observations = trim((string) ($row['refacturare_observatii'] ?? ''));
+        if ($observations === '') {
+            $observations = trim((string) ($row['observatii'] ?? ''));
+        }
+        $lines = preg_split('/\R/u', $observations) ?: [];
+        $primary = trim((string) ($lines[0] ?? ''));
+
+        $taxNotes = [];
+        $taxDetails = json_decode((string) ($row['refacturare_detalii'] ?? ''), true);
+        if (is_array($taxDetails)) {
+            foreach (['taxa_acces' => 'Taxa acces', 'port' => 'Port', 'trece' => 'Trece'] as $taxKey => $taxLabel) {
+                $taxRow = $taxDetails[$taxKey] ?? null;
+                if (!is_array($taxRow)) {
+                    continue;
+                }
+                $qty = is_numeric((string) ($taxRow['bucati'] ?? null)) ? (float) $taxRow['bucati'] : 0.0;
+                $price = is_numeric((string) ($taxRow['pret'] ?? null)) ? (float) $taxRow['pret'] : 0.0;
+                if ($qty > 0 && $price > 0) {
+                    $taxNotes[] = $taxLabel . ': ' . format_number_ro($qty, 2) . ' × ' . format_number_ro($price, 2);
+                }
+            }
+        }
+
+        $location = trim((string) (($row['refacturare_locatie'] ?? '') ?: ($row['locatie'] ?? '')));
+        if ($location !== '') {
+            $primary = $location;
+            $qty = (float) (($row['refacturare_bucati'] ?? 0) ?: ($row['bucati'] ?? 0));
+            $unitPrice = (float) (($row['refacturare_pret_unitar'] ?? 0) ?: ($row['pret_unitar'] ?? 0));
+            if ($qty > 0 && $unitPrice > 0) {
+                $taxNotes[] = format_number_ro($qty, 2) . ' buc × ' . format_number_ro($unitPrice, 2);
+            }
+        }
+
+        $secondary = $taxNotes !== [] ? implode(' | ', $taxNotes) : trim(implode(' ', array_slice($lines, 1)));
+
+        return [$primary, $secondary];
+    }
+
+    private function describeRefacturareExportRoute(array $row): string
+    {
+        $pick = static function (array $keys) use ($row): string {
+            foreach ($keys as $key) {
+                $value = trim((string) ($row[$key] ?? ''));
+                if ($value !== '') {
+                    return $value;
+                }
+            }
+
+            return '';
+        };
+        $start = $pick(['loc_plecare', 'loc_incarcare_nume', 'loc_aspirare']);
+        $end = $pick(['loc_livrare', 'zona_distributie_nume', 'loc_livrare_cursa']);
+
+        if ($start !== '' && $end !== '' && mb_strtolower($start) !== mb_strtolower($end)) {
+            return $start . ' - ' . $end;
+        }
+
+        return $start !== '' ? $start : $end;
     }
 
     private function defaultRefacturareFilters(): array

@@ -3816,7 +3816,6 @@ class DispecerCurseModel extends BaseModel
 
         $page = max(1, $page);
         $perPage = max(5, min(100, $perPage));
-        $direction = strtolower($direction) === 'asc' ? 'ASC' : 'DESC';
 
         $mainSql = $this->buildRefacturareHistoryMainSql($filters, 'refhist');
 
@@ -3840,17 +3839,65 @@ class DispecerCurseModel extends BaseModel
         $page = min($page, $totalPages);
         $offset = ($page - 1) * $perPage;
 
-        $sortMap = [
-            'date' => 'COALESCE(e.refacturare_data, e.data_cheltuiala)',
-            'race' => 'v.nr_inmatriculare',
-            'type' => 'COALESCE(e.refacturare_tip_cheltuiala, e.tip_cheltuiala)',
-            'amount' => 'COALESCE(e.refacturare_suma, 0)',
-            'status' => 'COALESCE(e.refacturare_facturata, 0)',
-        ];
-        $orderColumn = $sortMap[$sort] ?? $sortMap['date'];
-
         $dataSql = "
-            SELECT
+            SELECT " . $this->refacturareHistoryColumnsSql() . "
+            " . $mainSql['from'] . $mainSql['where'] . "
+            ORDER BY " . $this->refacturareHistoryOrderSql($sort, $direction) . "
+            LIMIT :limit_rows OFFSET :offset_rows
+        ";
+
+        $dataStmt = $this->db->prepare($dataSql);
+        $this->bindParams($dataStmt, $mainSql['params']);
+        $dataStmt->bindValue(':limit_rows', $perPage, PDO::PARAM_INT);
+        $dataStmt->bindValue(':offset_rows', $offset, PDO::PARAM_INT);
+        $dataStmt->execute();
+
+        return [
+            'rows' => $dataStmt->fetchAll(),
+            'summary' => [
+                'total_count' => $totalRows,
+                'total_amount' => round((float) ($summaryRow['total_amount'] ?? 0), 2),
+                'pending_count' => (int) ($summaryRow['pending_count'] ?? 0),
+                'pending_amount' => round((float) ($summaryRow['pending_amount'] ?? 0), 2),
+                'invoiced_count' => (int) ($summaryRow['invoiced_count'] ?? 0),
+                'invoiced_amount' => round((float) ($summaryRow['invoiced_amount'] ?? 0), 2),
+                'missing_document_count' => (int) ($summaryRow['missing_document_count'] ?? 0),
+            ],
+            'pagination' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'total_rows' => $totalRows,
+                'total_pages' => $totalPages,
+            ],
+        ];
+    }
+
+    /**
+     * Toate refacturarile care corespund filtrelor, fara paginare, in ordinea din pagina.
+     * Plafonul protejeaza serverul la un interval de date foarte larg.
+     */
+    public function getRefacturareExportRows(array $filters, string $sort, string $direction, int $limit = 20000): array
+    {
+        $this->ensureRaceCompressorLocationColumns();
+        $this->ensureExpenseRefacturareColumn();
+
+        $mainSql = $this->buildRefacturareHistoryMainSql($filters, 'refexp');
+        $stmt = $this->db->prepare("
+            SELECT " . $this->refacturareHistoryColumnsSql() . "
+            " . $mainSql['from'] . $mainSql['where'] . "
+            ORDER BY " . $this->refacturareHistoryOrderSql($sort, $direction) . "
+            LIMIT :limit_rows
+        ");
+        $this->bindParams($stmt, $mainSql['params']);
+        $stmt->bindValue(':limit_rows', max(1, $limit), PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    private function refacturareHistoryColumnsSql(): string
+    {
+        return "
                 e.id,
                 e.cursa_id,
                 e.tip_cheltuiala,
@@ -3892,35 +3939,21 @@ class DispecerCurseModel extends BaseModel
                 li.nume AS loc_incarcare_nume,
                 zd.nume AS zona_distributie_nume,
                 cc.nume AS categorie_nume
-            " . $mainSql['from'] . $mainSql['where'] . "
-            ORDER BY " . $orderColumn . " " . $direction . ", e.id " . $direction . "
-            LIMIT :limit_rows OFFSET :offset_rows
         ";
+    }
 
-        $dataStmt = $this->db->prepare($dataSql);
-        $this->bindParams($dataStmt, $mainSql['params']);
-        $dataStmt->bindValue(':limit_rows', $perPage, PDO::PARAM_INT);
-        $dataStmt->bindValue(':offset_rows', $offset, PDO::PARAM_INT);
-        $dataStmt->execute();
-
-        return [
-            'rows' => $dataStmt->fetchAll(),
-            'summary' => [
-                'total_count' => $totalRows,
-                'total_amount' => round((float) ($summaryRow['total_amount'] ?? 0), 2),
-                'pending_count' => (int) ($summaryRow['pending_count'] ?? 0),
-                'pending_amount' => round((float) ($summaryRow['pending_amount'] ?? 0), 2),
-                'invoiced_count' => (int) ($summaryRow['invoiced_count'] ?? 0),
-                'invoiced_amount' => round((float) ($summaryRow['invoiced_amount'] ?? 0), 2),
-                'missing_document_count' => (int) ($summaryRow['missing_document_count'] ?? 0),
-            ],
-            'pagination' => [
-                'page' => $page,
-                'per_page' => $perPage,
-                'total_rows' => $totalRows,
-                'total_pages' => $totalPages,
-            ],
+    private function refacturareHistoryOrderSql(string $sort, string $direction): string
+    {
+        $direction = strtolower($direction) === 'asc' ? 'ASC' : 'DESC';
+        $sortMap = [
+            'date' => 'COALESCE(e.refacturare_data, e.data_cheltuiala)',
+            'race' => 'v.nr_inmatriculare',
+            'type' => 'COALESCE(e.refacturare_tip_cheltuiala, e.tip_cheltuiala)',
+            'amount' => 'COALESCE(e.refacturare_suma, 0)',
+            'status' => 'COALESCE(e.refacturare_facturata, 0)',
         ];
+
+        return ($sortMap[$sort] ?? $sortMap['date']) . ' ' . $direction . ', e.id ' . $direction;
     }
 
     private function buildRefacturareHistoryMainSql(array $filters, string $prefix): array

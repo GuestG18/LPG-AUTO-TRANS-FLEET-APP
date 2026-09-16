@@ -9028,6 +9028,8 @@ button.dispatcher-datetime-picker-title:focus-visible {
 .refacturare-filter-actions {
     grid-column: 1 / -1;
     display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
     align-self: end;
     align-items: end;
     justify-content: flex-end;
@@ -9054,6 +9056,62 @@ button.dispatcher-datetime-picker-title:focus-visible {
     color: #0f172a;
     border-color: #64748b;
     background: #f8fafc;
+}
+
+/* Perioada: panou cu lista de luni + acces la calendarul de interval personalizat. */
+.ref-period-picker {
+    position: relative;
+}
+
+.ref-period-panel {
+    position: absolute;
+    z-index: 1060;
+    top: calc(100% + 6px);
+    left: 0;
+    width: max(100%, 260px);
+    max-width: calc(100vw - 32px);
+    padding: 0.85rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+}
+
+.ref-period-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.7rem 0;
+    color: #94a3b8;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+}
+
+.ref-period-divider::before,
+.ref-period-divider::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid #e2e8f0;
+}
+
+.ref-period-custom-btn {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid #bfdbfe;
+    border-radius: 6px;
+    color: #1d4ed8;
+    background: #ffffff;
+    font-weight: 700;
+}
+
+.ref-period-custom-btn:hover,
+.ref-period-custom-btn:focus-visible {
+    color: #1e40af;
+    border-color: #93c5fd;
+    background: #eff6ff;
 }
 
 .refacturare-filter-form.is-refreshing {

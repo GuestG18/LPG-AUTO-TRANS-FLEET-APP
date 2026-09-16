@@ -55,6 +55,40 @@ foreach ($expenseEntryTypes as $typeKey => $typeLabel) {
 }
 $expenseEntryTypes = $refacturareFilterTypes;
 
+// Campul unic "Perioada": un panou cu lista de luni (se aplica la alegere) si, separat,
+// calendar pentru un interval personalizat. Eticheta: "Septembrie 2026" pentru o luna
+// intreaga, altfel "01.09.2026 – 15.09.2026".
+$monthNamesRo = [1 => 'Ianuarie', 2 => 'Februarie', 3 => 'Martie', 4 => 'Aprilie', 5 => 'Mai', 6 => 'Iunie',
+    7 => 'Iulie', 8 => 'August', 9 => 'Septembrie', 10 => 'Octombrie', 11 => 'Noiembrie', 12 => 'Decembrie'];
+$periodStart = (string) ($filters['data_start'] ?? ($defaultFilters['data_start'] ?? ''));
+$periodEnd = (string) ($filters['data_end'] ?? ($defaultFilters['data_end'] ?? ''));
+$periodLabel = '';
+$selectedPeriodMonth = '';
+try {
+    $periodStartDate = new DateTimeImmutable($periodStart);
+    $periodEndDate = new DateTimeImmutable($periodEnd);
+    if ($periodStartDate->format('j') === '1'
+        && $periodEndDate->format('Y-m-d') === $periodStartDate->modify('last day of this month')->format('Y-m-d')) {
+        $selectedPeriodMonth = $periodStartDate->format('Y-m');
+        $periodLabel = $monthNamesRo[(int) $periodStartDate->format('n')] . ' ' . $periodStartDate->format('Y');
+    } else {
+        $periodLabel = $periodStartDate->format('d.m.Y') . ' – ' . $periodEndDate->format('d.m.Y');
+    }
+} catch (Throwable) {
+    $periodLabel = '';
+}
+
+// Ultimii 3 ani pana la luna curenta, grupati pe an (cea mai recenta prima).
+$periodMonthGroups = [];
+$periodMonthCursor = new DateTimeImmutable('first day of this month');
+for ($monthIndex = 0; $monthIndex < 36; $monthIndex++) {
+    $periodMonthGroups[$periodMonthCursor->format('Y')][] = [
+        'value' => $periodMonthCursor->format('Y-m'),
+        'label' => $monthNamesRo[(int) $periodMonthCursor->format('n')] . ' ' . $periodMonthCursor->format('Y'),
+    ];
+    $periodMonthCursor = $periodMonthCursor->modify('-1 month');
+}
+
 $currentSort = (string) ($sort ?? 'date');
 $currentDirection = (string) ($direction ?? 'desc');
 $currentPageIndex = max(1, (int) ($pagination['page'] ?? 1));
@@ -199,13 +233,35 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
             <input type="hidden" name="dir" value="<?= e($currentDirection) ?>">
 
             <div class="refacturare-filter-field">
-                <label class="form-label" for="ref_filter_data_start">Data de la</label>
-                <input class="form-control" type="date" id="ref_filter_data_start" name="data_start" value="<?= e((string) ($filters['data_start'] ?? ($defaultFilters['data_start'] ?? ''))) ?>">
-            </div>
-
-            <div class="refacturare-filter-field">
-                <label class="form-label" for="ref_filter_data_end">Data până la</label>
-                <input class="form-control" type="date" id="ref_filter_data_end" name="data_end" value="<?= e((string) ($filters['data_end'] ?? ($defaultFilters['data_end'] ?? ''))) ?>">
+                <label class="form-label" for="ref_period_display">Perioadă</label>
+                <div class="ref-period-picker" data-ref-period-picker>
+                    <div class="fuel-date-input">
+                        <input type="text" class="form-control" id="ref_period_display" value="<?= e($periodLabel) ?>" placeholder="Alege perioada" readonly aria-haspopup="dialog" aria-expanded="false">
+                        <i class="bi bi-calendar3" aria-hidden="true"></i>
+                    </div>
+                    <div class="ref-period-panel" data-ref-period-panel role="dialog" aria-label="Alege perioada" hidden>
+                        <label class="form-label" for="ref_period_month">Lună</label>
+                        <select class="form-select" id="ref_period_month" data-ref-period-month>
+                            <?php if ($selectedPeriodMonth === ''): ?>
+                                <option value="" selected>Interval personalizat</option>
+                            <?php endif; ?>
+                            <?php foreach ($periodMonthGroups as $periodYear => $periodMonths): ?>
+                                <optgroup label="<?= e((string) $periodYear) ?>">
+                                    <?php foreach ($periodMonths as $periodMonth): ?>
+                                        <option value="<?= e($periodMonth['value']) ?>" <?= $periodMonth['value'] === $selectedPeriodMonth ? 'selected' : '' ?>><?= e($periodMonth['label']) ?></option>
+                                    <?php endforeach; ?>
+                                </optgroup>
+                            <?php endforeach; ?>
+                        </select>
+                        <div class="ref-period-divider"><span>sau</span></div>
+                        <button type="button" class="btn ref-period-custom-btn" data-ref-period-custom>
+                            <i class="bi bi-calendar-range" aria-hidden="true"></i>
+                            <span>Interval personalizat…</span>
+                        </button>
+                    </div>
+                </div>
+                <input type="hidden" name="data_start" id="ref_filter_data_start" value="<?= e($periodStart) ?>">
+                <input type="hidden" name="data_end" id="ref_filter_data_end" value="<?= e($periodEnd) ?>">
             </div>
 
             <div class="refacturare-filter-field">
@@ -300,6 +356,19 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
             </div>
 
             <div class="refacturare-filter-actions">
+                <?php
+                    $exportQuery = array_merge($filterBase, ['action' => 'refacturari_export']);
+                    unset($exportQuery['per_page']);
+                ?>
+                <a
+                    class="btn refacturare-reset-btn refacturare-export-btn<?= $totalRows === 0 ? ' disabled' : '' ?>"
+                    href="<?= e(build_query_url($exportQuery)) ?>"
+                    title="Descarcă toate refacturările care corespund filtrelor (toate paginile)"
+                    <?= $totalRows === 0 ? 'aria-disabled="true" tabindex="-1"' : '' ?>
+                >
+                    <i class="bi bi-file-earmark-spreadsheet" aria-hidden="true"></i>
+                    <span>Export CSV (<?= e((string) $totalRows) ?>)</span>
+                </a>
                 <a class="btn refacturare-reset-btn" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'refacturari'])) ?>">
                     <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
                     <span>Resetează</span>
@@ -641,6 +710,9 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
     </section>
 </div>
 
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/l10n/ro.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     var formEl = document.querySelector('[data-refacturare-filter-form]');
@@ -660,9 +732,117 @@ document.addEventListener('DOMContentLoaded', function () {
         formEl.submit();
     };
 
-    formEl.querySelectorAll('select, input[type="date"]').forEach(function (controlEl) {
+    formEl.querySelectorAll('select:not([data-ref-period-month])').forEach(function (controlEl) {
         controlEl.addEventListener('change', submitFilters);
     });
+
+    /*
+     * Campul "Perioada": click deschide un panou cu lista de luni; alegerea unei luni
+     * incarca direct luna respectiva. Calendarul (flatpickr) se deschide doar din
+     * "Interval personalizat", pentru intervale care nu sunt o luna intreaga.
+     */
+    var periodPickerEl = formEl.querySelector('[data-ref-period-picker]');
+    var periodDisplay = document.getElementById('ref_period_display');
+    var dateFromInput = document.getElementById('ref_filter_data_start');
+    var dateToInput = document.getElementById('ref_filter_data_end');
+    if (periodPickerEl && periodDisplay && dateFromInput && dateToInput) {
+        var periodPanelEl = periodPickerEl.querySelector('[data-ref-period-panel]');
+        var periodMonthEl = periodPickerEl.querySelector('[data-ref-period-month]');
+        var periodCustomBtn = periodPickerEl.querySelector('[data-ref-period-custom]');
+
+        var toIso = function (d) {
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        };
+        var applyRange = function (newFrom, newTo) {
+            if (newFrom === dateFromInput.value && newTo === dateToInput.value) {
+                periodDisplay.value = periodDisplay.defaultValue;
+                return; // aceeasi perioada: nu reincarca
+            }
+            dateFromInput.value = newFrom;
+            dateToInput.value = newTo;
+            submitFilters();
+        };
+        var setPanelOpen = function (isOpen) {
+            periodPanelEl.hidden = !isOpen;
+            periodDisplay.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+            if (isOpen) {
+                periodMonthEl.focus({ preventScroll: true });
+            }
+        };
+
+        periodDisplay.addEventListener('click', function () {
+            setPanelOpen(periodPanelEl.hidden);
+        });
+        periodDisplay.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+                event.preventDefault();
+                setPanelOpen(true);
+            }
+        });
+        document.addEventListener('click', function (event) {
+            if (!periodPanelEl.hidden && !periodPickerEl.contains(event.target)) {
+                setPanelOpen(false);
+            }
+        });
+        periodPickerEl.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && !periodPanelEl.hidden) {
+                setPanelOpen(false);
+                periodDisplay.focus();
+            }
+        });
+
+        periodMonthEl.addEventListener('change', function () {
+            var parts = periodMonthEl.value.split('-');
+            if (parts.length !== 2) {
+                return;
+            }
+            var year = parseInt(parts[0], 10);
+            var month = parseInt(parts[1], 10);
+            periodDisplay.value = periodMonthEl.options[periodMonthEl.selectedIndex].text;
+            setPanelOpen(false);
+            applyRange(toIso(new Date(year, month - 1, 1)), toIso(new Date(year, month, 0)));
+        });
+
+        if (window.flatpickr) {
+            var rangePicker = flatpickr(periodDisplay, {
+                mode: 'range',
+                clickOpens: false,
+                locale: window.flatpickr.l10ns && window.flatpickr.l10ns.ro ? 'ro' : 'default',
+                dateFormat: 'Y-m-d',
+                defaultDate: dateFromInput.value && dateToInput.value ? [dateFromInput.value, dateToInput.value] : [],
+                onClose: function (selectedDates) {
+                    if (selectedDates.length === 2) {
+                        applyRange(toIso(selectedDates[0]), toIso(selectedDates[1]));
+                    } else {
+                        periodDisplay.value = periodDisplay.defaultValue;
+                    }
+                }
+            });
+            // flatpickr isi scrie propriul format; readucem eticheta generata de server.
+            periodDisplay.value = periodDisplay.defaultValue;
+
+            periodCustomBtn.addEventListener('click', function (event) {
+                event.stopPropagation();
+                setPanelOpen(false);
+                rangePicker.open();
+            });
+        } else {
+            // Fara CDN: intervalul personalizat foloseste doua calendare native in panou.
+            periodCustomBtn.addEventListener('click', function () {
+                periodCustomBtn.hidden = true;
+                [dateFromInput, dateToInput].forEach(function (input) {
+                    input.type = 'date';
+                    input.classList.add('form-control', 'mt-2');
+                    periodPanelEl.appendChild(input);
+                    input.addEventListener('change', function () {
+                        if (dateFromInput.value && dateToInput.value && dateFromInput.value <= dateToInput.value) {
+                            submitFilters();
+                        }
+                    });
+                });
+            });
+        }
+    }
 
     /*
      * Selector de vehicule (acelasi comportament ca in Configurare transport): cautare,
