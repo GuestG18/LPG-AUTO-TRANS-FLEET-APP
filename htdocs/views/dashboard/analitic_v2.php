@@ -194,6 +194,56 @@ $pageConfig = [
         </div>
     </form>
 
+    <?php
+    // Pornim cererea de date imediat ce filtrele exista in DOM, in paralel cu descarcarea
+    // Chart.js si a scriptului paginii. Nu folosim <link rel="preload" as="fetch">: URL-ul
+    // depinde de pragurile de km din localStorage, iar preload-ul trebuie sa se potriveasca
+    // exact (inclusiv modul de credentiale). load() refoloseste raspunsul doar daca URL-ul
+    // calculat de el e identic; altfel anuleaza cererea si face una noua.
+    ?>
+    <script>
+    (function () {
+        try {
+            var form = document.getElementById('da2-filters');
+            var params = new URLSearchParams();
+            params.set('page', 'dashboard_analytic_v2_data');
+            var start = document.getElementById('da2-date-start').value;
+            var end = document.getElementById('da2-date-end').value;
+            if (start) { params.set('date_start', start); }
+            if (end) { params.set('date_end', end); }
+            Array.prototype.forEach.call(form.querySelectorAll('[data-ms]'), function (ms) {
+                var name = ms.getAttribute('data-name');
+                Array.prototype.forEach.call(ms.querySelectorAll('input[type="checkbox"]:checked'), function (input) {
+                    params.append(name + '[]', input.value);
+                });
+            });
+            var km = [100, 250, 500, 750, 1000];
+            try {
+                var stored = JSON.parse(window.localStorage.getItem('da2.thresholds.v1') || 'null');
+                if (stored && Array.isArray(stored.km) && stored.km.length) {
+                    km = stored.km;
+                }
+            } catch (e) {}
+            params.set('km_bands', km.join(','));
+
+            var config = JSON.parse(document.getElementById('da2-config').textContent);
+            var url = new URL(config.endpoint || window.location.pathname, window.location.origin);
+            url.search = params.toString();
+
+            var controller = new AbortController();
+            var promise = fetch(url.toString(), {
+                signal: controller.signal,
+                headers: { Accept: 'application/json' },
+                credentials: 'same-origin'
+            });
+            promise.catch(function () {});
+            window.__da2Prefetch = { url: url.toString(), controller: controller, promise: promise };
+        } catch (error) {
+            window.__da2Prefetch = null;
+        }
+    }());
+    </script>
+
     <div class="da2-alert da2-alert-error" id="da2-error" hidden></div>
 
     <div class="da2-loading" id="da2-loading" hidden>
@@ -595,5 +645,6 @@ $pageConfig = [
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-<script src="<?= e(url('assets/js/dashboard-analitic-v2.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dashboard-analitic-v2.js'))) ?>"></script>
+<?php // defer: nu blocheaza parsarea footer-ului; ordinea Chart.js -> script pagina se pastreaza. ?>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" defer></script>
+<script src="<?= e(url('assets/js/dashboard-analitic-v2.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dashboard-analitic-v2.js'))) ?>" defer></script>

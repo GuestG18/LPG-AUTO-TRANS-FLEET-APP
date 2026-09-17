@@ -191,7 +191,7 @@ class CentralizatorFacturareController
         fputcsv($out, [], ';');
 
         fputcsv($out, ['Activity by vehicle'], ';');
-        fputcsv($out, ['Vehicul', 'Capacitate', 'Nr. curse', 'Primar km', 'Primar valoare', 'Primar tone', 'Distribuție tone', 'P+D km', 'P+D tone', 'Compresor activ.', 'Total valoare'], ';');
+        fputcsv($out, ['Vehicul', 'Capacitate', 'Nr. curse', 'Primar km', 'Primar valoare', 'Primar tone', 'Distribuție tone', 'Distribuție km facturați', 'P+D km', 'P+D tone', 'Compresor activ.', 'Total valoare'], ';');
         foreach ((array) ($report['vehicles']['rows'] ?? []) as $row) {
             fputcsv($out, [
                 (string) ($row['nr_inmatriculare'] ?? ''),
@@ -201,6 +201,7 @@ class CentralizatorFacturareController
                 (string) ($row['primar']['value'] ?? 0),
                 (string) ($row['primar_tona']['tone'] ?? 0),
                 (string) ($row['distributie']['tone'] ?? 0),
+                (string) ($row['distributie']['km'] ?? 0),
                 (string) ($row['primar_distributie']['km'] ?? 0),
                 (string) ($row['primar_distributie']['tone'] ?? 0),
                 (string) ($row['compresor']['activity'] ?? 0),
@@ -224,7 +225,7 @@ class CentralizatorFacturareController
                     (string) ($detailRow['cargo_label'] ?? ''),
                     (string) ($detailRow['km'] ?? 0),
                     (string) ($detailRow['tone'] ?? 0),
-                    (string) ($detailRow['tariff'] ?? ''),
+                    (string) (($detailRow['tariff_label'] ?? '') !== '' ? $detailRow['tariff_label'] : ($detailRow['tariff'] ?? '')),
                     (string) ($detailRow['tariff_class'] ?? ''),
                     (string) ($detailRow['compressor_activity_label'] ?? ''),
                     (string) ($detailRow['value'] ?? 0),
@@ -255,14 +256,18 @@ class CentralizatorFacturareController
         fputcsv($out, [], ';');
 
         fputcsv($out, ['Distribution cargo/tariff'], ';');
-        $bucketHeaders = array_map(static fn (array $bucket): string => (string) ($bucket['label'] ?? ''), (array) ($report['distribution']['tariff_buckets'] ?? []));
-        fputcsv($out, array_merge(['Tip marfă'], $bucketHeaders, ['Total tone', '% din total']), ';');
+        /* Coloanele pe pret poarta cantitatea principala din configurare: km sau tone. */
+        $distMetric = (string) ($report['distribution']['billing']['metric'] ?? 'tone');
+        $distUnit = $distMetric === 'km' ? 'km' : 'tone';
+        $bucketHeaders = array_map(static fn (array $bucket): string => trim((string) ($bucket['label'] ?? '') . ' ' . (string) ($bucket['rate_label'] ?? '')) . ' (' . $distUnit . ')', (array) ($report['distribution']['tariff_buckets'] ?? []));
+        fputcsv($out, array_merge(['Tip marfă'], $bucketHeaders, ['Total tone', 'Total km facturați', '% din total']), ';');
         foreach ((array) ($report['distribution']['cargo_by_tariff'] ?? []) as $row) {
             $line = [(string) ($row['label'] ?? '')];
             foreach ((array) ($report['distribution']['tariff_buckets'] ?? []) as $bucket) {
                 $line[] = (string) (($row['buckets'][$bucket['key'] ?? ''] ?? 0));
             }
             $line[] = (string) ($row['total_tone'] ?? 0);
+            $line[] = (string) ($row['total_km'] ?? 0);
             $line[] = (string) ($row['percent'] ?? 0);
             fputcsv($out, $line, ';');
         }

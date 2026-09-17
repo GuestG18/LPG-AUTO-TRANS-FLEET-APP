@@ -1652,6 +1652,14 @@ $refDefaultExpanded = true;
     padding: 0 14px 0 8px;
     border-right: 1px solid var(--cf-border);
 }
+/* Cantitatea care nu intra in pret (tone la facturarea pe km si invers). */
+.cf-dist-secondary {
+    display: block;
+    margin-top: 6px;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 700;
+}
 .cf-label {
     font-size: 12px;
     font-weight: 900;
@@ -2292,34 +2300,59 @@ $refDefaultExpanded = true;
             <?php if (!empty($visibility['distribution'])): ?>
                 <section class="cf-panel cf-distribution-summary">
                     <h2>Distribuție - Rezumat <i class="bi bi-info-circle" aria-hidden="true"></i></h2>
-                    <?php if ((float) ($distribution['total_tone'] ?? 0) <= 0): ?>
+                    <?php
+                    /*
+                     * Rezumatul urmeaza cum e facturata distributia in Configurare transport
+                     * (billing): pe km -> totalul si split-ul pe km; pe tona -> ca inainte;
+                     * unitati diferite in filtru (ex. mai multi beneficiari) -> split pe valoare.
+                     */
+                    $distBilling = (array) ($distribution['billing'] ?? []);
+                    $distMetric = (string) ($distBilling['metric'] ?? 'tone');
+                    $distShareBasis = (string) ($distBilling['share_basis'] ?? 'tone');
+                    $distUsesKm = !empty($distBilling['uses_km']);
+                    $distRateUnit = (string) ($distBilling['rate_unit_label'] ?? '');
+                    $distMetricFmt = $distMetric === 'km' ? $fmtKm : $fmtTone;
+                    $distBucketQty = static function (array $bucket) use ($distShareBasis, $distUsesKm, $fmtSmart, $fmtMoney): string {
+                        return match ($distShareBasis) {
+                            'km' => $fmtSmart($bucket['km'] ?? 0, 0) . ' km',
+                            'tone' => $fmtSmart($bucket['tone'] ?? 0, 2) . ' t' . ($distUsesKm ? ' · ' . $fmtSmart($bucket['km'] ?? 0, 0) . ' km' : ''),
+                            default => $fmtMoney($bucket['value'] ?? 0) . ' RON',
+                        };
+                    };
+                    ?>
+                    <?php if ((int) ($distribution['total_trips'] ?? 0) <= 0): ?>
                         <div class="cf-empty">Nu există activitate de distribuție pentru filtrul curent.</div>
                     <?php else: ?>
                     <div class="cf-dist-grid">
                         <div class="cf-dist-total">
-                            <span class="cf-label">Total tone</span>
-                            <strong class="cf-big"><?= e($fmtTone($distribution['total_tone'] ?? 0)) ?></strong>
+                            <span class="cf-label"><?= $distMetric === 'km' ? 'Total km facturați' : 'Total tone' ?></span>
+                            <strong class="cf-big"><?= e($distMetricFmt($distribution['total_' . $distMetric] ?? 0)) ?></strong>
+                            <?php if ($distMetric === 'km'): ?>
+                                <span class="cf-dist-secondary"><?= e($fmtTone($distribution['total_tone'] ?? 0)) ?> transportate</span>
+                            <?php elseif ($distUsesKm): ?>
+                                <span class="cf-dist-secondary"><?= e($fmtKm($distribution['total_km'] ?? 0)) ?> facturați pe km</span>
+                            <?php endif; ?>
                             <div class="cf-cargo-list">
                                 <?php foreach ((array) ($distribution['cargo_totals'] ?? []) as $cargo): ?>
                                     <div class="cf-cargo-row">
-                                        <div><span><?= e((string) ($cargo['label'] ?? '-')) ?></span><strong><?= e($fmtTone($cargo['tone'] ?? 0)) ?></strong></div>
+                                        <div><span><?= e((string) ($cargo['label'] ?? '-')) ?></span><strong><?= e($distMetricFmt($cargo[$distMetric] ?? 0)) ?></strong></div>
                                         <em><?= e($fmtPercent($cargo['percent'] ?? 0)) ?></em>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
                         </div>
                         <div>
-                            <div class="cf-label">Split preț (RON/tonă)</div>
+                            <div class="cf-label">Split preț<?= $distRateUnit !== '' ? ' (' . e($distRateUnit) . ')' : ($distShareBasis === 'value' ? ' (pe valoare)' : '') ?></div>
                             <div class="cf-bucket-list">
                                 <?php foreach ((array) ($distribution['tariff_buckets'] ?? []) as $bucket): ?>
                                     <div class="cf-bucket-item">
                                         <div class="cf-bucket-top">
                                             <span class="cf-bucket-name"><span class="cf-dot" style="--dot: <?= e((string) ($bucket['color'] ?? '#2f7df4')) ?>"></span><?= e((string) ($bucket['label'] ?? '-')) ?></span>
-                                            <span class="cf-bucket-tone"><?= e($fmtSmart($bucket['tone'] ?? 0, 2)) ?> t</span>
+                                            <span class="cf-bucket-tone"><?= e($distBucketQty($bucket)) ?></span>
                                         </div>
                                         <span class="cf-share-bar is-wide" style="--share: <?= e($sharePercent($bucket['percent'] ?? 0)) ?>%; --dot: <?= e((string) ($bucket['color'] ?? '#2f7df4')) ?>"><i></i></span>
                                         <div class="cf-bucket-bottom">
-                                            <strong class="cf-bucket-rate"><?= ($bucket['tariff'] ?? null) !== null ? e($fmtSmart($bucket['tariff'], 2)) . ' RON/t' : '-' ?></strong>
+                                            <strong class="cf-bucket-rate"><?= ($bucket['rate_label'] ?? '') !== '' ? e((string) $bucket['rate_label']) : '-' ?></strong>
                                             <span class="cf-bucket-percent"><?= e($fmtPercent($bucket['percent'] ?? 0)) ?></span>
                                         </div>
                                     </div>
@@ -2438,6 +2471,15 @@ $refDefaultExpanded = true;
             <?php endif; ?>
 
             <?php if (!empty($visibility['distribution_matrix'])): ?>
+                <?php
+                /* Coloanele de pret arata cantitatea principala (km sau tone); km facturati apar separat cand exista si tone. */
+                $matrixBilling = (array) ($distribution['billing'] ?? []);
+                $matrixMetric = (string) ($matrixBilling['metric'] ?? 'tone');
+                $matrixUnit = $matrixMetric === 'km' ? 'km' : 'tone';
+                $matrixDecimals = $matrixMetric === 'km' ? 0 : 2;
+                $matrixExtraKm = $matrixMetric !== 'km' && !empty($matrixBilling['uses_km']);
+                $matrixBuckets = (array) ($distribution['tariff_buckets'] ?? []);
+                ?>
                 <section class="cf-panel cf-distribution-table">
                     <h2>Detalii Distribuție - pe marfă și preț</h2>
                     <div class="cf-table-wrap">
@@ -2445,33 +2487,37 @@ $refDefaultExpanded = true;
                             <thead>
                             <tr>
                                 <th>Tip marfă</th>
-                                <?php foreach ((array) ($distribution['tariff_buckets'] ?? []) as $bucket): ?><th class="is-number"><?= e((string) ($bucket['label'] ?? '-')) ?> (tone)</th><?php endforeach; ?>
-                                <th class="is-number">Total tone</th><th class="is-number">% din total</th>
+                                <?php foreach ($matrixBuckets as $bucket): ?><th class="is-number"><?= e((string) ($bucket['label'] ?? '-')) ?><?php if (($bucket['rate_label'] ?? '') !== '' && str_starts_with((string) ($bucket['label'] ?? ''), 'Preț')): ?> · <?= e((string) $bucket['rate_label']) ?><?php endif; ?> (<?= e($matrixUnit) ?>)</th><?php endforeach; ?>
+                                <th class="is-number">Total <?= e($matrixUnit) ?></th>
+                                <?php if ($matrixMetric === 'km'): ?><th class="is-number">Total tone</th><?php elseif ($matrixExtraKm): ?><th class="is-number">Total km</th><?php endif; ?>
+                                <th class="is-number">% din total</th>
                             </tr>
                             </thead>
                             <tbody>
                             <?php if (($distribution['cargo_by_tariff'] ?? []) === []): ?>
-                                <tr><td colspan="<?= e((string) (3 + count((array) ($distribution['tariff_buckets'] ?? [])))) ?>"><div class="cf-empty">Nu există tonaj de distribuție pentru filtrul curent.</div></td></tr>
+                                <tr><td colspan="<?= e((string) (4 + count($matrixBuckets))) ?>"><div class="cf-empty">Nu există activitate de distribuție pentru filtrul curent.</div></td></tr>
                             <?php endif; ?>
                             <?php foreach ((array) ($distribution['cargo_by_tariff'] ?? []) as $row): ?>
                                 <tr>
                                     <td><?= e((string) ($row['label'] ?? '-')) ?></td>
-                                    <?php foreach ((array) ($distribution['tariff_buckets'] ?? []) as $bucket): ?>
+                                    <?php foreach ($matrixBuckets as $bucket): ?>
                                         <?php $bucketKey = (string) ($bucket['key'] ?? ''); ?>
-                                        <td class="is-number"><?= e($fmtPlain($row['buckets'][$bucketKey] ?? 0, 2)) ?></td>
+                                        <td class="is-number"><?= e($fmtPlain($row['buckets'][$bucketKey] ?? 0, $matrixDecimals)) ?></td>
                                     <?php endforeach; ?>
-                                    <td class="is-number"><?= e($fmtSmart($row['total_tone'] ?? 0, 2)) ?></td>
+                                    <td class="is-number"><?= e($fmtSmart($row['total_' . $matrixMetric] ?? 0, $matrixDecimals)) ?></td>
+                                    <?php if ($matrixMetric === 'km'): ?><td class="is-number"><?= e($fmtSmart($row['total_tone'] ?? 0, 2)) ?></td><?php elseif ($matrixExtraKm): ?><td class="is-number"><?= e($fmtSmart($row['total_km'] ?? 0, 0)) ?></td><?php endif; ?>
                                     <td class="is-number"><?= e($fmtPercent($row['percent'] ?? 0)) ?></td>
                                 </tr>
                             <?php endforeach; ?>
                             <tr class="cf-total-row">
                                 <td>TOTAL</td>
-                                <?php foreach ((array) ($distribution['tariff_buckets'] ?? []) as $bucket): ?>
+                                <?php foreach ($matrixBuckets as $bucket): ?>
                                     <?php $bucketKey = (string) ($bucket['key'] ?? ''); ?>
-                                    <td class="is-number"><?= e($fmtPlain($distribution['matrix_totals']['buckets'][$bucketKey] ?? 0, 2)) ?></td>
+                                    <td class="is-number"><?= e($fmtPlain($distribution['matrix_totals']['buckets'][$bucketKey] ?? 0, $matrixDecimals)) ?></td>
                                 <?php endforeach; ?>
-                                <td class="is-number"><?= e($fmtSmart($distribution['matrix_totals']['total_tone'] ?? 0, 2)) ?></td>
-                                <td class="is-number"><?= (float) ($distribution['matrix_totals']['total_tone'] ?? 0) > 0 ? '100%' : '0%' ?></td>
+                                <td class="is-number"><?= e($fmtSmart($distribution['matrix_totals']['total_' . $matrixMetric] ?? 0, $matrixDecimals)) ?></td>
+                                <?php if ($matrixMetric === 'km'): ?><td class="is-number"><?= e($fmtSmart($distribution['matrix_totals']['total_tone'] ?? 0, 2)) ?></td><?php elseif ($matrixExtraKm): ?><td class="is-number"><?= e($fmtSmart($distribution['matrix_totals']['total_km'] ?? 0, 0)) ?></td><?php endif; ?>
+                                <td class="is-number"><?= (float) ($distribution['matrix_totals']['percent'] ?? 0) > 0 ? '100%' : '0%' ?></td>
                             </tr>
                             </tbody>
                         </table>

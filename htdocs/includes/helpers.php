@@ -211,6 +211,18 @@ function render(string $view, array $data = []): void
     require BASE_PATH . '/views/layout/footer.php';
     $content = (string) ob_get_clean();
 
+    // Paginile mari (ex. Dispecer curse, cateva MB de HTML) se trimit comprimate.
+    // ob_gzhandler negociaza singur Accept-Encoding; sarim daca raspunsul e deja
+    // comprimat sau daca render() e capturat intr-un buffer al apelantului.
+    if (
+        !headers_sent()
+        && extension_loaded('zlib')
+        && !filter_var(ini_get('zlib.output_compression'), FILTER_VALIDATE_BOOLEAN)
+        && ob_get_level() <= 1
+    ) {
+        ob_start('ob_gzhandler');
+    }
+
     // Final pass to correct legacy mojibake in static template strings.
     echo normalize_romanian_text($content);
 }

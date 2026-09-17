@@ -411,7 +411,6 @@
         if (requestController) {
             requestController.abort();
         }
-        requestController = new AbortController();
 
         setLoading(true);
         showError('');
@@ -419,11 +418,26 @@
         var url = new URL(config.endpoint || window.location.pathname, window.location.origin);
         url.search = params.toString();
 
-        fetch(url.toString(), {
-            signal: requestController.signal,
-            headers: { Accept: 'application/json' },
-            credentials: 'same-origin'
-        }).then(function (response) {
+        // Prima incarcare poate prelua cererea pornita inline din view (vezi analitic_v2.php).
+        var prefetch = window.__da2Prefetch;
+        window.__da2Prefetch = null;
+        var request;
+        if (prefetch && prefetch.url === url.toString()) {
+            requestController = prefetch.controller;
+            request = prefetch.promise;
+        } else {
+            if (prefetch) {
+                prefetch.controller.abort();
+            }
+            requestController = new AbortController();
+            request = fetch(url.toString(), {
+                signal: requestController.signal,
+                headers: { Accept: 'application/json' },
+                credentials: 'same-origin'
+            });
+        }
+
+        request.then(function (response) {
             return response.json().then(function (payload) {
                 return { ok: response.ok, payload: payload };
             });

@@ -4979,40 +4979,6 @@ button.dispatcher-datetime-picker-title:focus-visible {
     -webkit-overflow-scrolling: touch;
 }
 
-.dispatcher-middle-scroll-indicator {
-    position: fixed;
-    z-index: 3000;
-    width: 34px;
-    height: 34px;
-    pointer-events: none;
-    border: 2px solid #2563eb;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.92);
-    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.2);
-    transform: translate(-50%, -50%);
-}
-
-.dispatcher-middle-scroll-indicator::before,
-.dispatcher-middle-scroll-indicator::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    border-radius: 999px;
-    background: #2563eb;
-    transform: translate(-50%, -50%);
-}
-
-.dispatcher-middle-scroll-indicator::before {
-    width: 18px;
-    height: 2px;
-}
-
-.dispatcher-middle-scroll-indicator::after {
-    width: 2px;
-    height: 18px;
-}
-
 .dispatcher-races-table,
 .curse-table {
     --dispatcher-plate-width: 145px;
@@ -5212,6 +5178,11 @@ button.dispatcher-datetime-picker-title:focus-visible {
 .dispatcher-races-table-wrap {
     overflow-x: auto;
     overflow-y: visible;
+}
+
+/* Randurile peste limita afisata ("Afiseaza inca 50") nu intra in layout deloc. */
+.dispatcher-races-table tbody tr.race-row-beyond-limit {
+    display: none !important;
 }
 
 .dispatcher-races-table thead th {

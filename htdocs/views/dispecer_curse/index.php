@@ -185,30 +185,27 @@ $renderDispatcherSummaryDetails = static function (array $parts, string $rowKey,
 
     $popoverId = 'dispatcher_summary_popover_' . $safeRowKey;
     $titleParts = [];
+    $popoverItems = [];
     foreach ($items as $item) {
         $titleParts[] = trim((string) $item['label'] . ': ' . (string) $item['value']);
+        $popoverItem = [
+            'l' => $item['label'] !== '' ? $item['label'] : '-',
+            'v' => $item['value'] !== '' ? $item['value'] : '-',
+        ];
+        if (!empty($item['is_total'])) {
+            $popoverItem['t'] = 1;
+        }
+        $popoverItems[] = $popoverItem;
     }
     $title = implode(' | ', $titleParts);
-    $totalLabel = 'Total ' . $countLabel;
 
+    // Popover-ul nu se mai randeaza in HTML (4 per rand x sute de curse umflau pagina
+    // cu MB si mii de noduri DOM); se construieste in JS la primul click din data-summary-items.
     $html = '<div class="dispatcher-summary-list" data-dispatcher-summary-list>';
-    $html .= '<button type="button" class="dispatcher-summary-count-btn" data-dispatcher-summary-toggle data-popover-id="' . e($popoverId) . '" aria-haspopup="dialog" aria-expanded="false" aria-controls="' . e($popoverId) . '" aria-label="' . e('Afiseaza ' . $countLabel . ' ' . $summaryLabel) . '" title="' . e($title) . '">';
+    $html .= '<button type="button" class="dispatcher-summary-count-btn" data-dispatcher-summary-toggle data-popover-id="' . e($popoverId) . '" data-summary-label="' . e('Detalii ' . $summaryLabel) . '" data-summary-items="' . e((string) json_encode($popoverItems, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '" aria-haspopup="dialog" aria-expanded="false" aria-controls="' . e($popoverId) . '" aria-label="' . e('Afiseaza ' . $countLabel . ' ' . $summaryLabel) . '" title="' . e($title) . '">';
     $html .= '<span>' . e($countLabel) . '</span><i class="bi bi-chevron-down" aria-hidden="true"></i>';
     $html .= '</button>';
-    $html .= '<div class="dispatcher-summary-popover" id="' . e($popoverId) . '" data-dispatcher-summary-popover role="dialog" aria-label="' . e('Detalii ' . $summaryLabel) . '" tabindex="-1" hidden>';
-    $html .= '<ul class="dispatcher-summary-popover-list" role="list">';
-
-    foreach ($items as $item) {
-        $valueClass = !empty($item['is_total']) ? ' dispatcher-summary-value-total' : '';
-        $html .= '<li class="dispatcher-summary-popover-item" role="listitem">';
-        $html .= '<strong>' . e((string) ($item['label'] !== '' ? $item['label'] : '-')) . '</strong>';
-        $html .= '<span class="' . trim('dispatcher-summary-value' . $valueClass) . '">' . e((string) ($item['value'] !== '' ? $item['value'] : '-')) . '</span>';
-        $html .= '</li>';
-    }
-
-    $html .= '</ul>';
-    $html .= '<div class="dispatcher-summary-popover-total">' . e($totalLabel) . '</div>';
-    $html .= '</div></div>';
+    $html .= '</div>';
 
     return $html;
 };
@@ -954,7 +951,7 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                         <td colspan="17" class="text-center text-muted py-4">Nu există curse înregistrate.</td>
                     </tr>
                 <?php else: ?>
-                    <?php foreach ($rows as $row): ?>
+                    <?php foreach ($rows as $rowIndex => $row): ?>
                         <?php
                         $raceId = (int) ($row['id'] ?? 0);
                         $transportType = (string) ($row['tip_transport'] ?? '');
@@ -1251,7 +1248,7 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                         $rowMissingSeverity = $showMissingSeverityHighlight ? ($openRaceSeverityByRaceId[$raceId] ?? '') : '';
                         $rowSeverityClass = $rowMissingSeverity !== '' ? ' race-severity-' . $rowMissingSeverity : '';
                         ?>
-                        <tr class="<?= e($billingStatusRowClass . $rowSeverityClass) ?>" data-billing-status="<?= e($billingStatus) ?>"<?= $rowMissingSeverity !== '' ? ' data-missing-severity="' . e($rowMissingSeverity) . '"' : '' ?>>
+                        <tr class="<?= e($billingStatusRowClass . $rowSeverityClass . ($rowIndex >= 50 ? ' race-row-beyond-limit' : '')) ?>" data-billing-status="<?= e($billingStatus) ?>"<?= $rowMissingSeverity !== '' ? ' data-missing-severity="' . e($rowMissingSeverity) . '"' : '' ?>>
                             <td class="col-plate">
                                 <div class="cell-content">
                                     <div class="vehicle-wrap">
@@ -1561,7 +1558,14 @@ document.addEventListener('DOMContentLoaded', function () {
             const stickyTableObserver = new ResizeObserver(scheduleStickyHeaderSync);
             stickyTableObserver.observe(racesTableEl);
             stickyTableObserver.observe(racesTableWrapEl);
+            // Deschiderea/inchiderea panoului de filtre muta tabelul fara scroll sau resize;
+            // observam si body-ul ca antetul fix sa-si recalculeze pozitia imediat.
+            stickyTableObserver.observe(document.body);
             racesTableEl.dispatcherStickyTableObserver = stickyTableObserver;
+        }
+
+        if (filterToggleEl instanceof HTMLButtonElement) {
+            filterToggleEl.addEventListener('click', scheduleStickyHeaderSync);
         }
 
         if (typeof MutationObserver !== 'undefined') {
@@ -1606,6 +1610,66 @@ document.addEventListener('DOMContentLoaded', function () {
                 const raw = (titledEl && titledEl.getAttribute('title')) || cellEl.textContent || '';
                 return raw.replace(/\s+/g, ' ').trim();
             };
+
+            // Afisam doar primele N randuri (dupa filtre si sortare). Fiecare rand are ~80 de
+            // noduri DOM; cu sute de curse vizibile orice schimbare de layout in formularul de
+            // sus recalcula tot tabelul si click-urile raspundeau in secunde (INP).
+            const ROW_WINDOW_STEP = 50;
+            let rowWindowLimit = ROW_WINDOW_STEP;
+            const rowWindowEl = document.createElement('div');
+            rowWindowEl.className = 'dispatcher-row-window d-flex flex-wrap align-items-center justify-content-center gap-2 py-2 border-top';
+            rowWindowEl.hidden = true;
+            const rowWindowInfoEl = document.createElement('small');
+            rowWindowInfoEl.className = 'text-muted';
+            const rowWindowMoreEl = document.createElement('button');
+            rowWindowMoreEl.type = 'button';
+            rowWindowMoreEl.className = 'btn btn-sm btn-outline-secondary';
+            const rowWindowAllEl = document.createElement('button');
+            rowWindowAllEl.type = 'button';
+            rowWindowAllEl.className = 'btn btn-sm btn-outline-secondary';
+            rowWindowEl.appendChild(rowWindowInfoEl);
+            rowWindowEl.appendChild(rowWindowMoreEl);
+            rowWindowEl.appendChild(rowWindowAllEl);
+            (racesTableEl.closest('.dispatcher-races-table-wrap') || racesTableEl).insertAdjacentElement('afterend', rowWindowEl);
+
+            const applyRowWindow = function () {
+                let matchingCount = 0;
+                getDataRows().forEach(function (rowEl) {
+                    if (rowEl.classList.contains('d-none')) {
+                        rowEl.classList.remove('race-row-beyond-limit');
+                        return;
+                    }
+                    matchingCount++;
+                    const beyondLimit = matchingCount > rowWindowLimit;
+                    if (rowEl.classList.contains('race-row-beyond-limit') !== beyondLimit) {
+                        rowEl.classList.toggle('race-row-beyond-limit', beyondLimit);
+                    }
+                    if (beyondLimit) {
+                        const checkboxEl = rowEl.querySelector('.bulk-race-checkbox');
+                        if (checkboxEl instanceof HTMLInputElement && checkboxEl.checked) {
+                            checkboxEl.checked = false;
+                            checkboxEl.dispatchEvent(new Event('change'));
+                        }
+                    }
+                });
+
+                const shownCount = Math.min(matchingCount, rowWindowLimit);
+                const remaining = matchingCount - shownCount;
+                rowWindowEl.hidden = remaining <= 0;
+                rowWindowInfoEl.textContent = 'Afișate ' + shownCount + ' din ' + matchingCount + ' curse';
+                rowWindowMoreEl.textContent = 'Afișează încă ' + Math.min(ROW_WINDOW_STEP, remaining);
+                rowWindowAllEl.textContent = 'Afișează toate (' + matchingCount + ')';
+                racesTableEl.dispatchEvent(new CustomEvent('dispatcher:rows-shown'));
+            };
+
+            rowWindowMoreEl.addEventListener('click', function () {
+                rowWindowLimit += ROW_WINDOW_STEP;
+                applyRowWindow();
+            });
+            rowWindowAllEl.addEventListener('click', function () {
+                rowWindowLimit = Infinity;
+                applyRowWindow();
+            });
 
             const parseDateValue = function (text) {
                 const m = text.match(/(\d{2})[.\/-](\d{2})[.\/-](\d{4})(?:[ T]?(\d{2}):(\d{2}))?/);
@@ -1704,6 +1768,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         racesBodyEl.appendChild(entry.rowEl);
                     });
 
+                applyRowWindow();
                 updateHeadIndicators();
             };
 
@@ -1728,6 +1793,8 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                     }
                 });
+                rowWindowLimit = ROW_WINDOW_STEP;
+                applyRowWindow();
                 updateHeadIndicators();
             };
 
@@ -2102,9 +2169,18 @@ document.addEventListener('DOMContentLoaded', function () {
                 });
             }
 
+            applyRowWindow();
             updateHeadIndicators();
         }
     }
+
+    // "Selecteaza toate" bifeaza doar cursele afisate: randurile ascunse de filtre sau
+    // peste limita de afisare nu trebuie sa ajunga, nevazute, in stergerea in bloc.
+    const isRaceCheckboxShown = function (checkboxEl) {
+        const rowEl = checkboxEl.closest('tr');
+        return !(rowEl instanceof HTMLTableRowElement)
+            || !(rowEl.classList.contains('d-none') || rowEl.classList.contains('race-row-beyond-limit'));
+    };
 
     const refreshBulkDeleteState = function () {
         if (!(bulkDeleteBtnEl instanceof HTMLButtonElement)) {
@@ -2121,21 +2197,23 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        if (raceCheckboxEls.length === 0) {
+        const shownCount = raceCheckboxEls.filter(isRaceCheckboxShown).length;
+        if (shownCount === 0) {
             selectAllEl.checked = false;
             selectAllEl.indeterminate = false;
             selectAllEl.disabled = true;
             return;
         }
 
-        selectAllEl.checked = selectedCount === raceCheckboxEls.length;
-        selectAllEl.indeterminate = selectedCount > 0 && selectedCount < raceCheckboxEls.length;
+        selectAllEl.disabled = false;
+        selectAllEl.checked = selectedCount === shownCount;
+        selectAllEl.indeterminate = selectedCount > 0 && selectedCount < shownCount;
     };
 
     if (selectAllEl instanceof HTMLInputElement) {
         selectAllEl.addEventListener('change', function () {
             raceCheckboxEls.forEach(function (checkboxEl) {
-                if (!(checkboxEl instanceof HTMLInputElement)) {
+                if (!(checkboxEl instanceof HTMLInputElement) || !isRaceCheckboxShown(checkboxEl)) {
                     return;
                 }
 
@@ -2149,6 +2227,9 @@ document.addEventListener('DOMContentLoaded', function () {
     raceCheckboxEls.forEach(function (checkboxEl) {
         checkboxEl.addEventListener('change', refreshBulkDeleteState);
     });
+    if (racesTableEl instanceof HTMLTableElement) {
+        racesTableEl.addEventListener('dispatcher:rows-shown', refreshBulkDeleteState);
+    }
 
     refreshBulkDeleteState();
 
@@ -2221,6 +2302,59 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     };
 
+    // Popover-ele de sumar vin din server doar ca data-summary-items (JSON) pe buton;
+    // elementul se creeaza la prima deschidere, langa buton, cu aceeasi structura ca inainte.
+    var buildSummaryPopover = function (buttonEl, popoverId) {
+        var items;
+        try {
+            items = JSON.parse(String(buttonEl.dataset.summaryItems || '[]'));
+        } catch (error) {
+            return null;
+        }
+        if (!Array.isArray(items) || items.length === 0) {
+            return null;
+        }
+
+        var popoverEl = document.createElement('div');
+        popoverEl.className = 'dispatcher-summary-popover';
+        popoverEl.id = popoverId;
+        popoverEl.setAttribute('data-dispatcher-summary-popover', '');
+        popoverEl.setAttribute('role', 'dialog');
+        popoverEl.setAttribute('aria-label', String(buttonEl.dataset.summaryLabel || 'Detalii'));
+        popoverEl.tabIndex = -1;
+        popoverEl.hidden = true;
+
+        var listEl = document.createElement('ul');
+        listEl.className = 'dispatcher-summary-popover-list';
+        listEl.setAttribute('role', 'list');
+        items.forEach(function (item) {
+            var itemEl = document.createElement('li');
+            itemEl.className = 'dispatcher-summary-popover-item';
+            itemEl.setAttribute('role', 'listitem');
+
+            var labelEl = document.createElement('strong');
+            labelEl.textContent = String(item && item.l != null ? item.l : '-');
+
+            var valueEl = document.createElement('span');
+            valueEl.className = 'dispatcher-summary-value' + (item && item.t ? ' dispatcher-summary-value-total' : '');
+            valueEl.textContent = String(item && item.v != null ? item.v : '-');
+
+            itemEl.appendChild(labelEl);
+            itemEl.appendChild(valueEl);
+            listEl.appendChild(itemEl);
+        });
+
+        var totalEl = document.createElement('div');
+        totalEl.className = 'dispatcher-summary-popover-total';
+        totalEl.textContent = 'Total ' + (items.length === 1 ? '1 detaliu' : items.length + ' detalii');
+
+        popoverEl.appendChild(listEl);
+        popoverEl.appendChild(totalEl);
+        buttonEl.insertAdjacentElement('afterend', popoverEl);
+
+        return popoverEl;
+    };
+
     var openSummaryPopover = function (buttonEl) {
         if (!(buttonEl instanceof HTMLButtonElement) || buttonEl.disabled) {
             return;
@@ -2228,6 +2362,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
         var popoverId = String(buttonEl.dataset.popoverId || '');
         var popoverEl = popoverId !== '' ? document.getElementById(popoverId) : null;
+        if (!(popoverEl instanceof HTMLElement) && popoverId !== '') {
+            popoverEl = buildSummaryPopover(buttonEl, popoverId);
+        }
         if (!(popoverEl instanceof HTMLElement)) {
             return;
         }
@@ -2592,24 +2729,41 @@ document.addEventListener('DOMContentLoaded', function () {
         return elementsByKey;
     };
 
-    var reorderDispatcherColumnContainer = function (containerEl, order) {
-        var elementsByKey = getDispatcherColumnElements(containerEl);
-        order.forEach(function (columnKey) {
-            if (elementsByKey[columnKey]) {
-                containerEl.appendChild(elementsByKey[columnKey]);
-            }
+    var reorderDispatcherColumnContainer = function (containerEl, order, elementsByKey) {
+        // Mutam celulele doar daca ordinea difera: la incarcare, cu ordinea implicita,
+        // asta evita mii de appendChild (rand x coloane) si reflow-ul aferent.
+        var expectedEls = order.map(function (columnKey) {
+            return elementsByKey[columnKey];
+        }).filter(Boolean);
+        var alreadyOrdered = expectedEls.every(function (el, index) {
+            return index === 0 || expectedEls[index - 1].nextElementSibling === el;
+        });
+        if (alreadyOrdered) {
+            return;
+        }
+
+        expectedEls.forEach(function (el) {
+            containerEl.appendChild(el);
         });
     };
 
-    var setDispatcherColumnVisibility = function (containerEl) {
-        var elementsByKey = getDispatcherColumnElements(containerEl);
+    var setDispatcherColumnVisibility = function (elementsByKey) {
         defaultDispatcherColumnOrder.forEach(function (columnKey) {
             if (!elementsByKey[columnKey]) {
                 return;
             }
 
-            elementsByKey[columnKey].style.display = dispatcherColumnState.visible[columnKey] === false ? 'none' : '';
+            var display = dispatcherColumnState.visible[columnKey] === false ? 'none' : '';
+            if (elementsByKey[columnKey].style.display !== display) {
+                elementsByKey[columnKey].style.display = display;
+            }
         });
+    };
+
+    var applyDispatcherColumnContainer = function (containerEl) {
+        var elementsByKey = getDispatcherColumnElements(containerEl);
+        reorderDispatcherColumnContainer(containerEl, dispatcherColumnState.order, elementsByKey);
+        setDispatcherColumnVisibility(elementsByKey);
     };
 
     function applyDispatcherColumnState() {
@@ -2620,12 +2774,10 @@ document.addEventListener('DOMContentLoaded', function () {
         var colgroupEl = columnTableEl.querySelector('colgroup');
         var headerRowEl = columnTableEl.querySelector('thead tr');
         if (colgroupEl instanceof HTMLElement) {
-            reorderDispatcherColumnContainer(colgroupEl, dispatcherColumnState.order);
-            setDispatcherColumnVisibility(colgroupEl);
+            applyDispatcherColumnContainer(colgroupEl);
         }
         if (headerRowEl instanceof HTMLTableRowElement) {
-            reorderDispatcherColumnContainer(headerRowEl, dispatcherColumnState.order);
-            setDispatcherColumnVisibility(headerRowEl);
+            applyDispatcherColumnContainer(headerRowEl);
         }
 
         Array.prototype.slice.call(columnTableEl.querySelectorAll('tbody tr')).forEach(function (rowEl) {
@@ -2633,8 +2785,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            reorderDispatcherColumnContainer(rowEl, dispatcherColumnState.order);
-            setDispatcherColumnVisibility(rowEl);
+            applyDispatcherColumnContainer(rowEl);
         });
 
         var visibleColumnCount = defaultDispatcherColumns.filter(function (column) {
