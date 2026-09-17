@@ -114,8 +114,13 @@
     var RANK_METRICS = [
         'profit', 'facturare', 'cheltuieli', 'marja_percent', 'km_totali', 'tone_livrate',
         'curse', 'carburant', 'profit_km', 'venit_km', 'cost_km', 'km_per_cursa', 'tone_per_cursa',
-        'grad_incarcare', 'grad_folosinta', 'km_nefacturati_percent'
+        'km_per_punct', 'tone_per_punct', 'grad_incarcare', 'grad_folosinta', 'km_nefacturati_percent'
     ];
+
+    var RANK_METRIC_BREAKDOWN = {
+        km_per_punct: ['puncte_client', 'km_totali'],
+        tone_per_punct: ['puncte_client', 'tone_livrate']
+    };
 
     var COMPARE_METRICS = [
         'curse', 'km_totali', 'tone_livrate', 'facturare', 'cheltuieli', 'profit',
@@ -170,8 +175,11 @@
         evolutionMetrics: { facturare: true, cheltuieli: true, profit: true },
         distributionMetric: 'curse',
         rankDimension: 'vehicles',
-        rankMetric: 'profit',
+        // ordinea conteaza: prima metrica bifata da ordinea clasamentului
+        rankMetrics: ['profit'],
         rankLimit: 10,
+        rankOrientation: 'horizontal',
+        rankShowValues: false,
         scatterDimension: 'vehicles',
         capacityView: 'distributie',
         capacityMetric: 'curse',
@@ -1133,48 +1141,322 @@
         }).join('');
     }
 
-    function renderRankChart() {
-        var select = document.getElementById('da2-rank-metric');
-        if (!select.options.length) {
-            select.innerHTML = RANK_METRICS.map(function (key) {
-                return '<option value="' + key + '"' + (key === state.rankMetric ? ' selected' : '') + '>' +
-                    escapeHtml(metricLabel(key)) + '</option>';
-            }).join('');
+    /*
+     * Metricile din clasament pot avea unitati diferite (lei, %, km…). Pe acelasi
+     * grafic incap doar doua axe de valori lizibile, deci limitam selectia la doua
+     * unitati; optiunile cu o a treia unitate sunt dezactivate.
+     */
+    function rankMetricKinds() {
+        var kinds = [];
+        state.rankMetrics.forEach(function (key) {
+            var kind = metricKind(key);
+            if (kinds.indexOf(kind) === -1) {
+                kinds.push(kind);
+            }
+        });
+        return kinds;
+    }
+
+    /** Culori fixe unde exista (facturare albastru, cheltuieli rosu…), fara dubluri in selectie. */
+    function rankMetricColor(key) {
+        if (SERIES_COLORS[key]) {
+            return SERIES_COLORS[key];
         }
+        var used = state.rankMetrics.map(function (other) { return SERIES_COLORS[other]; }).filter(Boolean);
+        var free = PALETTE.filter(function (hex) { return used.indexOf(hex) === -1; });
+        var position = state.rankMetrics.filter(function (other) { return !SERIES_COLORS[other]; }).indexOf(key);
+        return free[Math.max(0, position) % free.length];
+    }
+
+    function renderRankMetricPicker() {
+        var ms = document.getElementById('da2-rank-metrics');
+        var kinds = rankMetricKinds();
+
+        $('[data-ms-list]', ms).innerHTML = RANK_METRICS.map(function (key) {
+            var checked = state.rankMetrics.indexOf(key) !== -1;
+            var disabled = !checked && kinds.length >= 2 && kinds.indexOf(metricKind(key)) === -1;
+            var position = state.rankMetrics.indexOf(key);
+            return '<label class="da2-ms-option' + (disabled ? ' is-disabled' : '') + '"' +
+                (disabled ? ' title="Sunt deja selectate două unități de măsură"' : '') + '>' +
+                '<input type="checkbox" data-rank-metric="' + key + '"' + (checked ? ' checked' : '') +
+                (disabled ? ' disabled' : '') + '>' +
+                '<span>' + escapeHtml(metricLabel(key)) + '</span>' +
+                (checked ? '<span class="da2-metric-dot" style="--chip-color:' + rankMetricColor(key, position) + '"></span>' : '') +
+                '</label>';
+        }).join('');
+
+        var labels = state.rankMetrics.map(metricLabel);
+        $('[data-ms-value]', ms).textContent = labels.length > 2 ? labels.length + ' metrici' : labels.join(', ');
+        $('[data-ms-value]', ms).title = labels.join(', ');
+    }
+
+    var nf1 = new Intl.NumberFormat('ro-RO', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
+    var UNIT_SUFFIX = { lei: ' lei', km: ' km', tone: ' t' };
+
+    /** Eticheta de pe bara: fara zecimale inutile; tooltipul pastreaza valoarea exacta. */
+    function barLabelShort(key, value) {
+        var kind = metricKind(key);
+        if (kind === 'pct') {
+            return nf1.format(value) + '%';
+        }
+        if (kind === 'lei3') {
+            return nf2.format(value);
+        }
+        var whole = Math.abs(value) >= 100 || kind === 'int' || kind === 'lei' || kind === 'km';
+        var text = whole ? nfInt.format(Math.round(value)) : nf1.format(value);
+        return text + (UNIT_SUFFIX[kind] || '');
+    }
+
+    /** Varianta compacta (12,5k / 1,2M) cand bara e prea ingusta pentru valoarea intreaga. */
+    function barLabelCompact(key, value) {
+        var abs = Math.abs(value);
+        if (abs >= 1000000) {
+            return nf1.format(value / 1000000) + 'M';
+        }
+        if (abs >= 1000) {
+            return nf1.format(value / 1000) + 'k';
+        }
+        return barLabelShort(key, value).replace(/ (lei|km|t)$/, '');
+    }
+
+    /** Rotunjire in sus la un sfert de ordin de marime: 3.945 -> 4.000, 114 -> 125, 0,37 -> 0,4. */
+    function niceCeil(value) {
+        if (value <= 0) {
+            return 0;
+        }
+        var step = Math.pow(10, Math.floor(Math.log10(value))) / 4;
+        return Math.ceil(value / step - 1e-9) * step;
+    }
+
+    function roundedRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+    }
+
+    /*
+     * Valorile de pe bare: text orizontal, pe o "pastila" alba, la capatul barei.
+     * Pe verticala, daca valoarea intreaga nu incape pe latimea barei, trecem la
+     * forma compacta; textul se roteste doar daca nici aceea nu incape.
+     * Pozitia e tinuta in zona graficului, deci nu intra peste numele de pe axa.
+     */
+    function rankValueLabels(metrics, horizontal) {
+        return {
+            id: 'rankValues',
+            afterDatasetsDraw: function (chart) {
+                if (!state.rankShowValues) {
+                    return;
+                }
+                var ctx = chart.ctx;
+                var area = chart.chartArea;
+                var card = document.getElementById('da2-rank-card');
+                var fullscreen = document.fullscreenElement === card || card.classList.contains('is-expanded');
+                var fontSize = fullscreen ? 13 : (metrics.length === 1 ? 12 : 11);
+                var padX = 5;
+                var boxH = fontSize + 6;
+                var gap = 4;
+
+                ctx.save();
+                ctx.font = '600 ' + fontSize + 'px ' + Chart.defaults.font.family;
+                ctx.textBaseline = 'middle';
+                ctx.textAlign = 'center';
+
+                chart.data.datasets.forEach(function (dataset, datasetIndex) {
+                    if (!chart.isDatasetVisible(datasetIndex)) {
+                        return;
+                    }
+                    var key = metrics[datasetIndex];
+                    chart.getDatasetMeta(datasetIndex).data.forEach(function (bar, index) {
+                        var value = num(dataset.data[index]);
+                        var negative = value < 0;
+                        var text = barLabelShort(key, value);
+                        var textW = ctx.measureText(text).width;
+                        var rotate = false;
+
+                        // latimea disponibila = bara + spatiul dintre bare (barPercentage 0,9;
+                        // la o singura metrica si categoryPercentage 0,8)
+                        var slot = metrics.length === 1 ? bar.width / 0.72 : bar.width / 0.9;
+                        if (!horizontal && textW + padX * 2 > slot - 2) {
+                            text = barLabelCompact(key, value);
+                            textW = ctx.measureText(text).width;
+                            rotate = textW + padX * 2 > slot - 2;
+                        }
+
+                        var boxW = textW + padX * 2;
+                        var cx;
+                        var cy;
+                        var along = rotate ? boxW : (horizontal ? boxW : boxH);
+
+                        if (horizontal) {
+                            cy = bar.y;
+                            cx = negative ? bar.x - gap - along / 2 : bar.x + gap + along / 2;
+                            cx = Math.min(Math.max(cx, area.left + along / 2), area.right - along / 2);
+                        } else {
+                            cx = bar.x;
+                            cy = negative ? bar.y + gap + along / 2 : bar.y - gap - along / 2;
+                            cy = Math.min(Math.max(cy, area.top + along / 2), area.bottom - along / 2);
+                        }
+
+                        ctx.save();
+                        ctx.translate(cx, cy);
+                        if (rotate) {
+                            ctx.rotate(-Math.PI / 2);
+                        }
+                        roundedRect(ctx, -boxW / 2, -boxH / 2, boxW, boxH, 4);
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+                        ctx.fill();
+                        ctx.strokeStyle = negative ? 'rgba(239, 68, 68, 0.45)' : 'rgba(148, 163, 184, 0.55)';
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+                        ctx.fillStyle = negative ? '#b91c1c' : '#0f172a';
+                        ctx.fillText(text, 0, 1);
+                        ctx.restore();
+                    });
+                });
+                ctx.restore();
+            }
+        };
+    }
+
+    function renderRankChart() {
+        renderRankMetricPicker();
 
         var canvas = document.getElementById('da2-chart-rank');
         destroyChart('rank', canvas);
 
-        var rows = sortRows(rowsFor(state.rankDimension), state.rankMetric, 'desc');
+        var metrics = state.rankMetrics;
+        // Doar entitatile cu valoare pentru cel putin o metrica bifata: un vehicul
+        // fara puncte client, de exemplu, nu are ce cauta in clasamentul pe km / punct.
+        var rows = sortRows(rowsFor(state.rankDimension).filter(function (row) {
+            return metrics.some(function (key) { return num(row[key]) !== 0; });
+        }), metrics[0], 'desc');
         if (state.rankLimit > 0) {
             rows = rows.slice(0, state.rankLimit);
         }
+
+        var wrap = canvas.parentNode;
+        wrap.style.height = '';
 
         if (!rows.length) {
             drawEmpty(canvas, 'Nu există date în perioada selectată.');
             return;
         }
 
-        var metric = state.rankMetric;
-        var horizontal = rows.length > 8;
+        var single = metrics.length === 1;
+        var kinds = rankMetricKinds();
+        var horizontal = state.rankOrientation !== 'vertical';
+        var valueAxis = horizontal ? 'x' : 'y';
+        var categoryAxis = horizontal ? 'y' : 'x';
+
+        // La "Toate" inaltimea fixa nu ajunge: Chart.js ar sari peste etichete si
+        // barele ar deveni linii. Crestem cardul cu numarul de randuri si de metrici.
+        if (horizontal) {
+            // cu valori pe bare fiecare bara are nevoie de inaltimea etichetei
+            var rowHeight = 14 + (state.rankShowValues ? 20 : 10) * metrics.length;
+            var needed = rows.length * rowHeight + (single ? 50 : 80) + (kinds.length > 1 ? 30 : 0);
+            // 360px = .da2-chart-lg; clientHeight e 0 cand tabul e ascuns, deci nu ne bazam pe el
+            if (needed > 360) {
+                wrap.style.height = needed + 'px';
+            }
+        } else if (rows.length > 10) {
+            // pe verticala numele se rotesc si fura din inaltimea barelor
+            wrap.style.height = '460px';
+        }
+
         // Axa de categorii primeste indexul ca valoare, deci formatarea numerica
         // trebuie pusa doar pe axa de valori, altfel apar 0,1,2… in loc de nume.
-        var valueTicks = { ticks: { callback: function (value) { return nfInt.format(value); } } };
-        var scales = horizontal ? { x: valueTicks, y: {} } : { x: {}, y: valueTicks };
+        var scales = {};
+        scales[categoryAxis] = { ticks: { autoSkip: false } };
+        kinds.forEach(function (kind, index) {
+            var id = index === 0 ? valueAxis : valueAxis + '2';
+            var axis = {
+                axis: valueAxis,
+                position: horizontal ? (index === 0 ? 'bottom' : 'top') : (index === 0 ? 'left' : 'right'),
+                ticks: { callback: function (value) { return kind === 'pct' ? nfInt.format(value) + '%' : nfInt.format(value); } }
+            };
+            if (kinds.length > 1) {
+                axis.title = {
+                    display: true,
+                    text: metrics.filter(function (key) { return metricKind(key) === kind; }).map(metricLabel).join(', ')
+                };
+            }
+            if (index > 0) {
+                axis.grid = { drawOnChartArea: false };
+            }
+            scales[id] = axis;
+        });
+
+        var datasets = metrics.map(function (key, index) {
+            var base = rankMetricColor(key, index);
+            var axisIndex = kinds.indexOf(metricKind(key));
+            var dataset = {
+                label: metricLabel(key),
+                data: rows.map(function (row) { return num(row[key]); }),
+                backgroundColor: single
+                    ? rows.map(function (row) { return num(row[key]) < 0 ? '#ef4444' : '#2563eb'; })
+                    : base,
+                borderRadius: 6,
+                maxBarThickness: 42
+            };
+            dataset[valueAxis + 'AxisID'] = axisIndex === 0 ? valueAxis : valueAxis + '2';
+            return dataset;
+        });
+
+        /*
+         * Limitele axelor de valori le calculam noi:
+         *  - cu doua unitati, zeroul trebuie sa cada in acelasi loc pe ambele axe,
+         *    altfel barele negative ale unei metrici pleaca din alt punct decat restul;
+         *  - cu valori pe bare, lasam loc la capete ca eticheta sa ramana in grafic
+         *    si sa nu calce peste numele vehiculelor.
+         */
+        var room = state.rankShowValues ? (horizontal ? 1.25 : 1.14) : 1.04;
+        var bounds = kinds.map(function (kind) {
+            var min = 0;
+            var max = 0;
+            metrics.forEach(function (key) {
+                if (metricKind(key) !== kind) {
+                    return;
+                }
+                rows.forEach(function (row) {
+                    var value = num(row[key]);
+                    min = Math.min(min, value);
+                    max = Math.max(max, value);
+                });
+            });
+            return { min: -niceCeil(-min * room), max: niceCeil(max * room) };
+        });
+        // partea negativa comuna (ca fractie din lungimea axei)
+        var negShare = bounds.reduce(function (share, b) {
+            var span = b.max - b.min;
+            return span > 0 ? Math.max(share, -b.min / span) : share;
+        }, 0);
+        kinds.forEach(function (kind, index) {
+            var b = bounds[index];
+            var axis = scales[index === 0 ? valueAxis : valueAxis + '2'];
+            if (b.max === b.min) {
+                return;
+            }
+            if (negShare > 0 && negShare < 1 && kinds.length > 1) {
+                // extindem capatul "scurt" astfel incat -min / (max - min) = negShare
+                var fromMax = b.max * negShare / (1 - negShare);
+                var fromMin = -b.min * (1 - negShare) / negShare;
+                b.min = -Math.max(-b.min, fromMax);
+                b.max = Math.max(b.max, fromMin);
+            }
+            axis.min = b.min;
+            axis.max = b.max;
+        });
 
         charts.rank = new Chart(canvas, {
             type: 'bar',
+            plugins: [rankValueLabels(metrics, horizontal)],
             data: {
                 labels: rows.map(function (row) { return row.nume; }),
-                datasets: [{
-                    label: metricLabel(metric),
-                    data: rows.map(function (row) { return num(row[metric]); }),
-                    backgroundColor: rows.map(function (row) {
-                        return num(row[metric]) < 0 ? '#ef4444' : '#2563eb';
-                    }),
-                    borderRadius: 6,
-                    maxBarThickness: 42
-                }]
+                datasets: datasets
             },
             options: baseOptions({
                 indexAxis: horizontal ? 'y' : 'x',
@@ -1186,11 +1468,25 @@
                 },
                 scales: scales,
                 plugins: {
-                    legend: { display: false },
+                    legend: single
+                        ? { display: false }
+                        : { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, padding: 14 } },
                     tooltip: {
+                        padding: 10,
+                        boxPadding: 4,
                         callbacks: {
                             label: function (context) {
-                                return metricLabel(metric) + ': ' + fmtMetric(metric, context.parsed[horizontal ? 'x' : 'y']);
+                                var key = metrics[context.datasetIndex];
+                                var lines = [metricLabel(key) + ': ' + fmtMetric(key, context.parsed[valueAxis])];
+                                // mediile pe punct client nu spun nimic fara numitor: aratam din ce s-au impartit
+                                var parts = RANK_METRIC_BREAKDOWN[key];
+                                if (parts) {
+                                    var row = rows[context.dataIndex];
+                                    parts.forEach(function (part) {
+                                        lines.push('   ' + metricLabel(part) + ': ' + fmtMetric(part, row[part]));
+                                    });
+                                }
+                                return lines;
                             }
                         }
                     }
@@ -3507,11 +3803,7 @@
         }
 
         if (type === 'rank') {
-            state.rankMetric = button.getAttribute('data-metric');
-            var select = document.getElementById('da2-rank-metric');
-            if (select) {
-                select.value = state.rankMetric;
-            }
+            state.rankMetrics = [button.getAttribute('data-metric')];
             activateTabByName('general');
             renderRankChart();
             document.getElementById('da2-chart-rank').scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -3534,7 +3826,7 @@
             renderEvolutionChart();
         } else if (key === 'distributionMetric') {
             renderTransportChart();
-        } else if (key === 'rankDimension') {
+        } else if (key === 'rankDimension' || key === 'rankOrientation') {
             renderRankChart();
         } else if (key === 'scatterDimension') {
             renderScatterChart();
@@ -3686,8 +3978,80 @@
         renderCapacityChart();
     });
 
-    document.getElementById('da2-rank-metric').addEventListener('change', function (event) {
-        state.rankMetric = event.target.value;
+    document.getElementById('da2-rank-metrics').addEventListener('change', function (event) {
+        var key = event.target.getAttribute('data-rank-metric');
+        if (!key) {
+            return;
+        }
+        var position = state.rankMetrics.indexOf(key);
+        if (event.target.checked && position === -1) {
+            state.rankMetrics.push(key);
+        } else if (!event.target.checked && position !== -1) {
+            // cel putin o metrica ramane bifata, altfel clasamentul nu are dupa ce ordona
+            if (state.rankMetrics.length === 1) {
+                event.target.checked = true;
+                return;
+            }
+            state.rankMetrics.splice(position, 1);
+        }
+        renderRankChart();
+    });
+
+    function rankCardExpanded() {
+        var card = document.getElementById('da2-rank-card');
+        return document.fullscreenElement === card || card.classList.contains('is-expanded');
+    }
+
+    function onRankExpandChange() {
+        var active = rankCardExpanded();
+        $('#da2-rank-fullscreen i').className = 'bi ' + (active ? 'bi-fullscreen-exit' : 'bi-arrows-fullscreen');
+        $('#da2-rank-fullscreen').title = active ? 'Ieși din ecran complet' : 'Ecran complet';
+        document.body.classList.toggle('da2-no-scroll', document.getElementById('da2-rank-card').classList.contains('is-expanded'));
+        // redesenam ca etichetele sa treaca la fontul mai mare / inapoi
+        if (state.data) {
+            renderRankChart();
+        }
+    }
+
+    function setRankCardExpanded(expand) {
+        var card = document.getElementById('da2-rank-card');
+        if (!expand) {
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            }
+            if (card.classList.contains('is-expanded')) {
+                card.classList.remove('is-expanded');
+                onRankExpandChange();
+            }
+            return;
+        }
+
+        var fallback = function () {
+            card.classList.add('is-expanded');
+            onRankExpandChange();
+        };
+        if (!card.requestFullscreen) {
+            fallback();
+            return;
+        }
+        try {
+            var request = card.requestFullscreen();
+            if (request && request.catch) {
+                request.catch(fallback);
+            }
+        } catch (error) {
+            fallback();
+        }
+    }
+
+    document.getElementById('da2-rank-fullscreen').addEventListener('click', function () {
+        setRankCardExpanded(!rankCardExpanded());
+    });
+
+    document.addEventListener('fullscreenchange', onRankExpandChange);
+
+    document.getElementById('da2-rank-values').addEventListener('change', function (event) {
+        state.rankShowValues = event.target.checked;
         renderRankChart();
     });
 
@@ -3733,6 +4097,10 @@
     window.addEventListener('keydown', function (event) {
         if (event.key === 'Escape') {
             closeThresholdsPanel();
+            if (document.getElementById('da2-rank-card').classList.contains('is-expanded')) {
+                setRankCardExpanded(false);
+                return;
+            }
             if (state.drawer) {
                 closeEntityDrawer();
                 return;

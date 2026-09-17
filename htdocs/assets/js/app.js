@@ -1672,7 +1672,9 @@ function initGlobalApprovalDrawer() {
         }
 
         var target = event.target instanceof Element ? event.target : null;
-        if (target && !drawer.contains(target)) {
+        // Un buton redesenat chiar in handler-ul lui (ex. cardurile de treceri refacturate)
+        // nu mai e in pagina cand ajunge aici; nu e un click in afara panoului.
+        if (target && target.isConnected && !drawer.contains(target)) {
             setOpen(false);
         }
     });
@@ -1951,6 +1953,20 @@ function initMissingFees() {
 
     var url = section.getAttribute('data-missing-fees-url') || '';
     var dismissUrl = section.getAttribute('data-missing-fees-dismiss-url') || '';
+    var notBoughtUrl = section.getAttribute('data-fee-purchase-not-bought-url') || '';
+    var attachUrl = section.getAttribute('data-fee-purchase-attach-url') || '';
+    var noInvoiceUrl = section.getAttribute('data-fee-purchase-no-invoice-url') || '';
+    // Bara "Treceri refacturate" e lipita jos in tab, in afara sectiunii taxelor lipsa.
+    var purchaseRoot = section.closest('[data-dashboard-approval-panel]') || section;
+    var purchaseList = purchaseRoot.querySelector('[data-fee-purchase-list]');
+    var purchasePanel = purchaseRoot.querySelector('[data-fee-purchase-panel]');
+    var purchaseToggle = purchaseRoot.querySelector('[data-fee-purchase-toggle]');
+    var purchaseCount = purchaseRoot.querySelector('[data-fee-purchase-count]');
+    // Pasul deschis pe o trecere (expense_id => 'bought' | 'yes' | 'no'); cat timp e deschis,
+    // reimprospatarea nu redeseneaza lista, ca fisierul ales sa nu se piarda.
+    var purchaseForms = {};
+    var missingCount = 0;
+    var purchasePending = 0;
     var csrf = section.getAttribute('data-missing-fees-csrf') || '';
     var groupByOperator = section.getAttribute('data-missing-fees-scope') === 'all';
     var list = section.querySelector('[data-missing-fees-list]');
@@ -1992,10 +2008,14 @@ function initMissingFees() {
     }
 
     function setCount(count) {
+        missingCount = count;
+        // Numaratorul din tab: taxe lipsa + treceri refacturate la care nu s-a raspuns inca.
+        var tabCount = count + purchasePending;
         document.querySelectorAll('[data-missing-fees-count]').forEach(function (badge) {
-            badge.textContent = ' (' + count + ')';
-            badge.hidden = count <= 0;
+            badge.textContent = ' (' + tabCount + ')';
+            badge.hidden = tabCount <= 0;
         });
+        setApprovalExtraCount(tabCount);
         if (totalLabel instanceof HTMLElement) {
             totalLabel.textContent = count === 1 ? '1 taxa' : count + ' taxe';
             totalLabel.classList.toggle('has-items', count > 0);
@@ -2028,6 +2048,239 @@ function initMissingFees() {
                 var message = item.querySelector('.missing-fee-error') || item.appendChild(el('span', 'missing-fee-error'));
                 message.textContent = error && error.message ? error.message : 'Nu am putut salva marcajul.';
             });
+    }
+
+    function postForm(targetUrl, body) {
+        body.append('_token', csrf);
+        return fetch(targetUrl, {
+            method: 'POST',
+            body: body,
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        }).then(function (response) {
+            return response.json().catch(function () {
+                return null;
+            }).then(function (payload) {
+                if (!response.ok || !payload || payload.success !== true) {
+                    throw new Error((payload && payload.message) || 'Nu am putut salva.');
+                }
+                return payload;
+            });
+        });
+    }
+
+    function showItemError(item, error) {
+        var message = item.querySelector('.missing-fee-error') || item.appendChild(el('span', 'missing-fee-error'));
+        message.textContent = error && error.message ? error.message : 'Nu am putut salva.';
+    }
+
+    function closePurchaseForm(row) {
+        delete purchaseForms[row.expense_id];
+        load();
+    }
+
+    function purchaseButton(className, text, onClick) {
+        var button = el('button', className, text);
+        button.type = 'button';
+        button.addEventListener('click', onClick);
+        return button;
+    }
+
+    function openPurchaseStep(row, item, mode) {
+        purchaseForms[row.expense_id] = mode;
+        item.replaceWith(renderPurchaseItem(row));
+    }
+
+    // Pasul 2 dupa "Da": factura se ataseaza sau nu e cazul.
+    function renderBoughtStep(row, item) {
+        var step = el('div', 'fee-purchase-form');
+        step.appendChild(el('span', 'fee-purchase-question', 'Taxa cumparata. Factura?'));
+        var actions = el('div', 'missing-fee-actions');
+        actions.appendChild(purchaseButton('missing-fee-add', 'Ataseaza factura', function () {
+            openPurchaseStep(row, item, 'yes');
+        }));
+        var noInvoice = purchaseButton('missing-fee-dismiss', 'Nu e cazul', function () {
+            var body = new FormData();
+            body.append('expense_id', String(row.expense_id));
+            noInvoice.disabled = true;
+            postForm(noInvoiceUrl, body)
+                .then(function () {
+                    closePurchaseForm(row);
+                })
+                .catch(function (error) {
+                    noInvoice.disabled = false;
+                    showItemError(item, error);
+                });
+        });
+        actions.appendChild(noInvoice);
+        step.appendChild(actions);
+        return step;
+    }
+
+    function renderPurchaseForm(row, item) {
+        var mode = purchaseForms[row.expense_id];
+        if (mode === 'bought') {
+            return renderBoughtStep(row, item);
+        }
+        var form = el('form', 'fee-purchase-form');
+        var actions = el('div', 'missing-fee-actions');
+        var input;
+
+        if (mode === 'yes') {
+            form.appendChild(el('label', 'fee-purchase-label', 'Factura pentru ' + String(row.fee_label).toLowerCase() + ' (PDF, imagine, max 5 MB)'));
+            input = el('input', 'form-control form-control-sm');
+            input.type = 'file';
+            input.name = 'invoice';
+            input.accept = '.pdf,.jpg,.jpeg,.png,.webp,.doc,.docx';
+            input.required = true;
+        } else {
+            form.appendChild(el('label', 'fee-purchase-label', 'De ce nu a fost cumparata? (optional)'));
+            input = el('input', 'form-control form-control-sm');
+            input.type = 'text';
+            input.name = 'reason';
+            input.maxLength = 255;
+            input.value = row.reason || '';
+            input.placeholder = 'ex. se plateste la iesire, soferul nu a primit bon';
+        }
+        form.appendChild(input);
+
+        var save = el('button', 'missing-fee-add', mode === 'yes' ? 'Salveaza factura' : 'Salveaza');
+        save.type = 'submit';
+        actions.appendChild(save);
+        actions.appendChild(purchaseButton('missing-fee-dismiss', 'Renunta', function () {
+            closePurchaseForm(row);
+        }));
+        form.appendChild(actions);
+
+        form.addEventListener('submit', function (event) {
+            event.preventDefault();
+            var body = new FormData();
+            body.append('expense_id', String(row.expense_id));
+            if (mode === 'yes') {
+                if (!input.files || input.files.length === 0) {
+                    showItemError(item, new Error('Alege fisierul facturii.'));
+                    return;
+                }
+                body.append('invoice', input.files[0]);
+            } else {
+                body.append('reason', input.value);
+            }
+            save.disabled = true;
+            postForm(mode === 'yes' ? attachUrl : notBoughtUrl, body)
+                .then(function () {
+                    closePurchaseForm(row);
+                })
+                .catch(function (error) {
+                    save.disabled = false;
+                    showItemError(item, error);
+                });
+        });
+
+        return form;
+    }
+
+    function renderPurchaseItem(row) {
+        var item = el('article', 'missing-fee-item fee-purchase-item' + (row.not_bought ? ' is-not-bought' : ''));
+
+        var top = el('div', 'missing-fee-top');
+        top.appendChild(el('span', 'missing-fee-chip', row.fee_label));
+        if (row.amount) {
+            top.appendChild(el('span', 'missing-fee-amount', 'refacturat ' + formatAmount(row.amount)));
+        }
+        top.appendChild(el('span', 'missing-fee-date', formatDate(row.date)));
+        item.appendChild(top);
+
+        var title = el('a', 'missing-fee-title', '#' + row.race_id + (row.plate ? ' · ' + row.plate : ''));
+        title.href = row.url;
+        item.appendChild(title);
+        item.appendChild(el('span', 'missing-fee-route', row.route + ' · ' + row.transport));
+        if (groupByOperator) {
+            item.appendChild(el('span', 'missing-fee-evidence', 'Cursa adaugata de ' + row.user_name));
+        }
+
+        if (row.not_bought) {
+            var when = String(row.marked_at || '').split(' ');
+            item.appendChild(el('span', 'fee-purchase-status',
+                'Necumparata' + (row.marked_by ? ' · marcat de ' + row.marked_by : '')
+                + (when[0] ? ' · ' + formatDate(when[0]) + (when[1] ? ' ' + when[1].slice(0, 5) : '') : '')));
+            if (row.reason) {
+                item.appendChild(el('span', 'fee-purchase-reason', 'Motiv: ' + row.reason));
+            }
+        }
+
+        if (purchaseForms[row.expense_id]) {
+            item.appendChild(renderPurchaseForm(row, item));
+            return item;
+        }
+
+        var actions = el('div', 'missing-fee-actions');
+        if (row.not_bought) {
+            actions.appendChild(purchaseButton('missing-fee-add', 'Am cumparat-o', function () {
+                openPurchaseStep(row, item, 'bought');
+            }));
+            actions.appendChild(purchaseButton('missing-fee-dismiss', 'Schimba motivul', function () {
+                openPurchaseStep(row, item, 'no');
+            }));
+        } else {
+            item.appendChild(el('span', 'fee-purchase-question', 'A fost cumparata taxa?'));
+            actions.appendChild(purchaseButton('missing-fee-add', 'Da', function () {
+                openPurchaseStep(row, item, 'bought');
+            }));
+            actions.appendChild(purchaseButton('missing-fee-dismiss', 'Nu', function () {
+                openPurchaseStep(row, item, 'no');
+            }));
+        }
+        item.appendChild(actions);
+
+        return item;
+    }
+
+    function renderPurchases(data) {
+        var rows = Array.isArray(data.rows) ? data.rows : [];
+        var pending = rows.filter(function (row) {
+            return !row.not_bought;
+        }).length;
+        purchasePending = pending;
+        setCount(missingCount);
+
+        if (purchaseCount instanceof HTMLElement) {
+            var notBought = rows.length - pending;
+            purchaseCount.textContent = pending + ' de confirmat' + (notBought > 0 ? ' · ' + notBought + ' necumparate' : '');
+            purchaseCount.classList.toggle('has-items', pending > 0);
+        }
+        if (!(purchaseList instanceof HTMLElement) || Object.keys(purchaseForms).length > 0) {
+            return;
+        }
+
+        purchaseList.textContent = '';
+        if (rows.length === 0) {
+            purchaseList.appendChild(el('div', 'missing-fees-empty', 'Nicio trecere refacturata fara factura.'));
+            return;
+        }
+        rows.forEach(function (row) {
+            purchaseList.appendChild(renderPurchaseItem(row));
+        });
+    }
+
+    // Tab-ul Operatori: lista taxelor lipsa e pliata; numaratorul ramane vizibil in antet.
+    var feesToggle = section.querySelector('[data-missing-fees-toggle]');
+    var feesBody = section.querySelector('[data-missing-fees-body]');
+    if (feesToggle instanceof HTMLElement && feesBody instanceof HTMLElement) {
+        feesToggle.addEventListener('click', function () {
+            var open = feesBody.hidden;
+            feesBody.hidden = !open;
+            feesToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            feesToggle.classList.toggle('is-open', open);
+        });
+    }
+
+    if (purchaseToggle instanceof HTMLElement && purchasePanel instanceof HTMLElement) {
+        purchaseToggle.addEventListener('click', function () {
+            var open = purchasePanel.hidden;
+            purchasePanel.hidden = !open;
+            purchaseToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            purchaseToggle.classList.toggle('is-open', open);
+        });
     }
 
     function renderItem(row) {
@@ -2110,12 +2363,13 @@ function initMissingFees() {
                     if (!response.ok || !payload || payload.success !== true) {
                         throw new Error((payload && payload.message) || 'Eroare la incarcare.');
                     }
-                    return payload.missing_fees || {};
+                    return payload;
                 });
             })
-            .then(function (data) {
+            .then(function (payload) {
                 if (seq === requestSeq) {
-                    render(data);
+                    render(payload.missing_fees || {});
+                    renderPurchases(payload.purchase_checks || {});
                 }
             })
             .catch(function (error) {
@@ -2172,6 +2426,22 @@ function setApprovalCount(element, value) {
     if (element.hasAttribute('data-approval-total-badge')) {
         element.hidden = nextValue <= 0;
     }
+}
+
+// Taxele de refacturat (tab Operatori / Taxe lipsa) se numara in browser; se adauga peste
+// totalul aprobarilor din badge-ul panoului si din antet. Ajustarea e relativa, ca sa se
+// compuna cu decrementarile de la aprobare / respingere.
+var approvalExtraCount = 0;
+
+function setApprovalExtraCount(value) {
+    var delta = value - approvalExtraCount;
+    approvalExtraCount = value;
+    if (delta === 0) {
+        return;
+    }
+    document.querySelectorAll('[data-approval-total-count], [data-approval-total-badge]').forEach(function (element) {
+        setApprovalCount(element, parseApprovalCount(element) + delta);
+    });
 }
 
 function decrementApprovalCounter(selector, root) {
@@ -2537,7 +2807,7 @@ function syncApprovalCountersFromSummary(summary) {
     var total = parseInt(summary.total, 10);
     if (Number.isFinite(total)) {
         document.querySelectorAll('[data-approval-total-count], [data-approval-total-badge]').forEach(function (element) {
-            setApprovalCount(element, total);
+            setApprovalCount(element, total + approvalExtraCount);
         });
     }
 }

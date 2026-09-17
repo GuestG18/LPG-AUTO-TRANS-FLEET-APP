@@ -20589,6 +20589,12 @@ a.dashboard-stat:hover span {
 }
 
 @media (max-width: 575.98px) {
+    .fee-purchase {
+        bottom: -14px;
+        margin: auto -14px -14px;
+        padding: 10px 14px 14px;
+    }
+
     :root {
         --fleet-approval-drawer-gutter: 6px;
         --fleet-approval-drawer-width: calc(100vw - 50px);
@@ -24138,6 +24144,39 @@ a.chx-legend-line:hover .chx-legend-name {
     background: #fde68a;
 }
 
+.missing-fees-toggle {
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    text-align: left;
+}
+
+.missing-fees-title {
+    flex: 1 1 auto;
+    color: #78350f;
+    font-size: 14px;
+    font-weight: 900;
+}
+
+.missing-fees-arrow {
+    color: #92400e;
+    transition: transform 0.2s ease;
+}
+
+.missing-fees-toggle.is-open .missing-fees-arrow {
+    transform: rotate(180deg);
+}
+
+.missing-fees-body {
+    display: grid;
+    gap: 8px;
+}
+
+.missing-fees-body[hidden] {
+    display: none;
+}
+
 .missing-fees-intro {
     margin: 0;
     color: #92400e;
@@ -24274,6 +24313,131 @@ a.chx-legend-line:hover .chx-legend-name {
 .missing-fee-error {
     color: #b91c1c;
     font-weight: 800;
+}
+
+/* "Treceri refacturate - confirma achizitia": bara lipita jos in tab; lista se deschide in sus. */
+/* Tab-ul umple inaltimea panoului, ca bara sa stea jos si cand continutul e scurt. */
+.fleet-approval-drawer-panel > .dashboard-approval-tab-panel:not([hidden]):has(> .fee-purchase) {
+    display: flex;
+    flex: 1 0 auto;
+    flex-direction: column;
+}
+
+.fee-purchase {
+    position: sticky;
+    bottom: -18px;
+    z-index: 3;
+    display: grid;
+    gap: 8px;
+    margin: auto -18px -18px;
+    padding: 10px 18px 18px;
+    border-top: 1px solid #fcd34d;
+    background: #fffbeb;
+    box-shadow: 0 -8px 16px rgba(15, 23, 42, 0.08);
+}
+
+.fee-purchase-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 36px;
+    padding: 6px 10px;
+    border: 1px solid #fcd34d;
+    border-radius: 7px;
+    color: #92400e;
+    background: #ffffff;
+    font-size: 12px;
+    font-weight: 900;
+    text-align: left;
+}
+
+.fee-purchase-toggle:hover {
+    background: #fffbeb;
+}
+
+.fee-purchase-arrow {
+    transition: transform 0.2s ease;
+}
+
+.fee-purchase-toggle.is-open .fee-purchase-arrow {
+    transform: rotate(180deg);
+}
+
+.fee-purchase-count {
+    white-space: nowrap;
+    margin-left: auto;
+    padding: 1px 8px;
+    border-radius: 999px;
+    color: #52678b;
+    background: #f1f5f9;
+    font-size: 11px;
+}
+
+.fee-purchase-count.has-items {
+    color: #92400e;
+    background: #fde68a;
+}
+
+.fee-purchase-panel {
+    display: grid;
+    gap: 8px;
+    max-height: 55vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.fee-purchase-panel[hidden] {
+    display: none;
+}
+
+.fee-purchase-intro {
+    margin: 0;
+    color: #92400e;
+    font-size: 11px;
+}
+
+.fee-purchase-list {
+    display: grid;
+    gap: 8px;
+}
+
+.fee-purchase-item.is-not-bought {
+    border-color: #fca5a5;
+}
+
+.fee-purchase-question {
+    margin-top: 4px;
+    color: #071735;
+    font-weight: 900;
+}
+
+.fee-purchase-status {
+    margin-top: 2px;
+    color: #b91c1c;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.fee-purchase-reason {
+    color: #7f1d1d;
+    font-size: 11px;
+}
+
+.fee-purchase-form {
+    display: grid;
+    gap: 5px;
+    margin-top: 5px;
+}
+
+.fee-purchase-label {
+    color: #334155;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+button.missing-fee-add:disabled {
+    opacity: 0.6;
 }
 
 /* Pagina "Reguli taxe refacturare". */

@@ -871,40 +871,20 @@ if ($postCreateFlow) {
                 </div>
 
                 <?php
-                // Recalculare comerciala EXPLICITA.
-                // Editarea unei curse nu mai reevalueaza tacit valorile financiare;
-                // operatorul trebuie sa ceara explicit recalcularea, iar cursele
-                // facturate raman imutabile.
+                // Valorile comerciale se recalculeaza la salvare; cursele facturate raman imutabile.
                 $raceIsInvoiced = (string) ($raceFormData['status_facturare'] ?? '') === 'facturat';
                 ?>
-                <div class="col-12" data-role="tariff-recalc-block">
-                    <input type="hidden" name="recalculate_tariff" id="edit_recalculate_tariff" value="0">
-                    <?php if ($raceIsInvoiced): ?>
+                <?php if ($raceIsInvoiced): ?>
+                    <div class="col-12" data-role="tariff-recalc-block">
                         <div class="alert alert-secondary py-2 mb-0 small d-flex align-items-start gap-2">
                             <i class="bi bi-lock-fill" aria-hidden="true"></i>
                             <div>
                                 Cursa este <strong>facturata</strong>. Valorile comerciale sunt imutabile
-                                si nu pot fi recalculate.
+                                si nu se recalculeaza la salvare.
                             </div>
                         </div>
-                    <?php else: ?>
-                        <div class="alert alert-light border py-2 mb-0 small d-flex align-items-start gap-2 flex-wrap">
-                            <i class="bi bi-shield-check text-primary" aria-hidden="true"></i>
-                            <div class="flex-grow-1">
-                                La salvare, <strong>valorile comerciale stocate raman neschimbate</strong>.
-                                Foloseste butonul alaturat daca vrei sa reevaluezi tariful conform
-                                <strong>datei cursei</strong>.
-                            </div>
-                            <button type="button" class="btn btn-sm btn-outline-primary"
-                                    id="edit_recalculate_tariff_btn"
-                                    data-race-total="<?= e((string) ($raceFormData['total_facturare'] ?? 0)) ?>"
-                                    data-race-price="<?= e((string) ($raceFormData['pret_tarifare'] ?? 0)) ?>"
-                                    data-preview-url="<?= e(build_query_url(['page' => 'tarife_transport', 'action' => 'preview'])) ?>">
-                                <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Recalculeaza tariful
-                            </button>
-                        </div>
-                    <?php endif; ?>
-                </div>
+                    </div>
+                <?php endif; ?>
 
                 <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-primar-field">
                     <label class="form-label">Cost/km Primar</label>
@@ -2187,7 +2167,6 @@ document.addEventListener('DOMContentLoaded', function () {
     </script>
 <?php endif; ?>
 
-<script src="<?= e(url('assets/js/tariff-recalc.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/tariff-recalc.js'))) ?>" defer></script>
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
 
 <?php if ($focusFieldId !== ''): ?>

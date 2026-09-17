@@ -270,7 +270,7 @@ $pageConfig = [
             </article>
         </div>
 
-        <article class="da2-card da2-card-wide">
+        <article class="da2-card da2-card-wide" id="da2-rank-card">
             <header class="da2-card-head">
                 <div>
                     <h2>Clasament</h2>
@@ -282,13 +282,39 @@ $pageConfig = [
                         <button type="button" data-value="drivers">Șoferi</button>
                         <button type="button" data-value="beneficiaries">Beneficiari</button>
                     </div>
-                    <select class="da2-select" id="da2-rank-metric"></select>
+                    <div class="da2-seg" data-seg="rankOrientation">
+                        <button type="button" data-value="horizontal" class="is-active" title="Bare orizontale">
+                            <i class="bi bi-bar-chart-steps" aria-hidden="true"></i> Orizontal
+                        </button>
+                        <button type="button" data-value="vertical" title="Bare verticale">
+                            <i class="bi bi-bar-chart" aria-hidden="true"></i> Vertical
+                        </button>
+                    </div>
+                    <label class="da2-check">
+                        <input type="checkbox" id="da2-rank-values">
+                        <span>Valori pe bare</span>
+                    </label>
+                    <div class="da2-ms da2-ms-right" data-ms id="da2-rank-metrics">
+                        <button type="button" class="da2-ms-toggle" data-ms-toggle aria-expanded="false">
+                            <i class="bi bi-bar-chart" aria-hidden="true"></i>
+                            <span class="da2-ms-label">Metrici</span>
+                            <span class="da2-ms-value" data-ms-value>Profit</span>
+                            <i class="bi bi-chevron-down da2-ms-caret" aria-hidden="true"></i>
+                        </button>
+                        <div class="da2-ms-panel" data-ms-panel hidden>
+                            <p class="da2-ms-hint">Ordonat după prima metrică bifată. Maxim două unități de măsură.</p>
+                            <div class="da2-ms-list" data-ms-list></div>
+                        </div>
+                    </div>
                     <select class="da2-select da2-select-sm" id="da2-rank-limit">
                         <option value="5">Top 5</option>
                         <option value="10" selected>Top 10</option>
                         <option value="15">Top 15</option>
                         <option value="0">Toate</option>
                     </select>
+                    <button type="button" class="da2-btn da2-btn-sm" id="da2-rank-fullscreen" title="Ecran complet">
+                        <i class="bi bi-arrows-fullscreen" aria-hidden="true"></i>
+                    </button>
                 </div>
             </header>
             <div class="da2-chart da2-chart-lg"><canvas id="da2-chart-rank"></canvas></div>

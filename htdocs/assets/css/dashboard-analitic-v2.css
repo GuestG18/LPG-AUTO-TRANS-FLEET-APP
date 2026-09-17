@@ -383,6 +383,36 @@
     accent-color: var(--da2-accent);
 }
 
+.da2-ms-option.is-disabled {
+    opacity: .45;
+    cursor: not-allowed;
+}
+
+.da2-ms-option .da2-metric-dot {
+    margin-left: auto;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--chip-color);
+}
+
+.da2-ms-right .da2-ms-value {
+    max-width: 170px;
+}
+
+.da2-ms-right .da2-ms-panel {
+    left: auto;
+    right: 0;
+}
+
+.da2-ms-hint {
+    margin: 0;
+    padding: 2px 4px 7px;
+    border-bottom: 1px solid var(--da2-border);
+    font-size: 0.72rem;
+    color: var(--da2-muted);
+}
+
 .da2-ms-empty,
 .da2-empty {
     color: var(--da2-faint);
@@ -1124,6 +1154,31 @@
 
 .da2-chart-lg {
     height: 360px;
+}
+
+/* Clasament pe ecran complet: graficul ia tot spatiul ramas sub antet */
+#da2-rank-card:fullscreen,
+#da2-rank-card.is-expanded {
+    display: flex;
+    flex-direction: column;
+    padding: 20px 24px;
+    background: var(--da2-surface);
+    overflow: auto;
+}
+
+/* rezerva cand browserul nu permite Fullscreen API (ex. iframe-uri, browsere integrate) */
+#da2-rank-card.is-expanded {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    border-radius: 0;
+    margin: 0;
+}
+
+#da2-rank-card:fullscreen .da2-chart,
+#da2-rank-card.is-expanded .da2-chart {
+    flex: 1 0 auto;
+    min-height: calc(100vh - 120px);
 }
 
 .da2-chart-empty {

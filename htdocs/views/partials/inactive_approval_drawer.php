@@ -174,9 +174,8 @@ $statusIcons = [
         data-global-approval-toggle
     >
         <i class="bi bi-chevron-left" aria-hidden="true"></i>
-        <?php if ($approvalTotal > 0): ?>
-            <span class="fleet-approval-drawer-count" data-approval-total-badge><?= e((string) $approvalTotal) ?></span>
-        <?php endif; ?>
+        <?php // Mereu randat: taxele lipsa (incarcate din JSON) se adauga la numarator si cand nu sunt aprobari. ?>
+        <span class="fleet-approval-drawer-count" data-approval-total-badge<?= $approvalTotal > 0 ? '' : ' hidden' ?>><?= e((string) $approvalTotal) ?></span>
     </button>
 
     <aside class="dashboard-approval-panel fleet-approval-drawer-panel" id="globalApprovalDrawerPanel" aria-labelledby="global-approval-title">
@@ -437,21 +436,28 @@ $statusIcons = [
                     data-missing-fees
                     data-missing-fees-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'missing_fees'])) ?>"
                     data-missing-fees-dismiss-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'dismiss_missing_fee'])) ?>"
+                    data-fee-purchase-not-bought-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'fee_not_bought'])) ?>"
+                    data-fee-purchase-attach-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'fee_attach_invoice'])) ?>"
+                    data-fee-purchase-no-invoice-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'fee_no_invoice_needed'])) ?>"
                     data-missing-fees-csrf="<?= e(csrf_token()) ?>"
                     data-missing-fees-scope="<?= $drawerIsAdmin ? 'all' : 'own' ?>"
                 >
-                    <header class="missing-fees-header">
-                        <h3><i class="bi bi-receipt" aria-hidden="true"></i> Taxe de refacturat lipsa</h3>
+                    <?php /* Pliat implicit, ca activitatea pe zi sa se vada fara derulare. */ ?>
+                    <button class="missing-fees-header missing-fees-toggle" type="button" data-missing-fees-toggle aria-expanded="false">
+                        <strong class="missing-fees-title"><i class="bi bi-receipt" aria-hidden="true"></i> Taxe de refacturat lipsa</strong>
                         <span data-missing-fees-total>-</span>
-                    </header>
-                    <p class="missing-fees-intro">
-                        Curse recente (inclusiv cele programate) care, dupa regulile din „Reguli taxe refacturare”, trebuie sa aiba o taxa
-                        (ex. Taxa acces la Lugoj, Port la Giurgiu). Adauga refacturarea sau marcheaza „Nu se aplica”.
-                        <?php if (function_exists('can') && can('reguli_taxe_refacturare')): ?>
-                            <a href="<?= e(build_query_url(['page' => 'reguli_taxe_refacturare'])) ?>">Vezi regulile</a>
-                        <?php endif; ?>
-                    </p>
-                    <div class="missing-fees-list" data-missing-fees-list aria-live="polite"></div>
+                        <i class="bi bi-chevron-down missing-fees-arrow" aria-hidden="true"></i>
+                    </button>
+                    <div class="missing-fees-body" data-missing-fees-body hidden>
+                        <p class="missing-fees-intro">
+                            Curse recente (inclusiv cele programate) care, dupa regulile din „Reguli taxe refacturare”, trebuie sa aiba o taxa
+                            (ex. Taxa acces la Lugoj, Port la Giurgiu). Adauga refacturarea sau marcheaza „Nu se aplica”.
+                            <?php if (function_exists('can') && can('reguli_taxe_refacturare')): ?>
+                                <a href="<?= e(build_query_url(['page' => 'reguli_taxe_refacturare'])) ?>">Vezi regulile</a>
+                            <?php endif; ?>
+                        </p>
+                        <div class="missing-fees-list" data-missing-fees-list aria-live="polite"></div>
+                    </div>
                 </section>
 
                 <div class="operator-activity-toolbar">
@@ -490,6 +496,22 @@ $statusIcons = [
                     <strong>Inca deschise</strong> = din cursele adaugate in ziua respectiva.
                     <span data-operator-activity-overall></span>
                 </p>
+
+                <?php /* Lipit jos in tab: refacturarea trecerii e adaugata - a fost cumparata taxa? Se deschide in sus. */ ?>
+                <div class="fee-purchase" data-fee-purchase>
+                    <div class="fee-purchase-panel" data-fee-purchase-panel hidden>
+                        <p class="fee-purchase-intro">
+                            Treceri cu refacturarea adaugata, dar fara factura. A fost cumparata taxa?
+                            <strong>Da</strong> = ataseaza factura sau „Nu e cazul”. <strong>Nu</strong> = ramane aici, vizibila operatorului si adminului.
+                        </p>
+                        <div class="fee-purchase-list" data-fee-purchase-list aria-live="polite"></div>
+                    </div>
+                    <button class="fee-purchase-toggle" type="button" data-fee-purchase-toggle aria-expanded="false">
+                        <i class="bi bi-chevron-up fee-purchase-arrow" aria-hidden="true"></i>
+                        <span>Treceri refacturate - confirma achizitia</span>
+                        <span class="fee-purchase-count" data-fee-purchase-count>-</span>
+                    </button>
+                </div>
             </div>
         <?php else: ?>
             <div
@@ -505,6 +527,9 @@ $statusIcons = [
                     data-missing-fees
                     data-missing-fees-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'missing_fees'])) ?>"
                     data-missing-fees-dismiss-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'dismiss_missing_fee'])) ?>"
+                    data-fee-purchase-not-bought-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'fee_not_bought'])) ?>"
+                    data-fee-purchase-attach-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'fee_attach_invoice'])) ?>"
+                    data-fee-purchase-no-invoice-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'fee_no_invoice_needed'])) ?>"
                     data-missing-fees-csrf="<?= e(csrf_token()) ?>"
                     data-missing-fees-scope="<?= $drawerIsAdmin ? 'all' : 'own' ?>"
                 >
@@ -521,6 +546,22 @@ $statusIcons = [
                     </p>
                     <div class="missing-fees-list" data-missing-fees-list aria-live="polite"></div>
                 </section>
+
+                <?php /* Lipit jos in tab: refacturarea trecerii e adaugata - a fost cumparata taxa? Se deschide in sus. */ ?>
+                <div class="fee-purchase" data-fee-purchase>
+                    <div class="fee-purchase-panel" data-fee-purchase-panel hidden>
+                        <p class="fee-purchase-intro">
+                            Treceri cu refacturarea adaugata, dar fara factura. A fost cumparata taxa?
+                            <strong>Da</strong> = ataseaza factura sau „Nu e cazul”. <strong>Nu</strong> = ramane aici, vizibila operatorului si adminului.
+                        </p>
+                        <div class="fee-purchase-list" data-fee-purchase-list aria-live="polite"></div>
+                    </div>
+                    <button class="fee-purchase-toggle" type="button" data-fee-purchase-toggle aria-expanded="false">
+                        <i class="bi bi-chevron-up fee-purchase-arrow" aria-hidden="true"></i>
+                        <span>Treceri refacturate - confirma achizitia</span>
+                        <span class="fee-purchase-count" data-fee-purchase-count>-</span>
+                    </button>
+                </div>
             </div>
         <?php endif; ?>
 

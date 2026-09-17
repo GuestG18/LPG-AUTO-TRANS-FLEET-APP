@@ -14,6 +14,11 @@ declare(strict_types=1);
  * Cursele recente care se potrivesc unei reguli active si nu au taxa sunt aratate
  * operatorului in panoul de aprobari. Semnalarile pot fi ignorate per cursa si tip
  * ("Nu se aplica").
+ *
+ * Dupa ce refacturarea unei treceri a fost adaugata, operatorul confirma daca taxa a
+ * fost cumparata: "Da" -> "Ataseaza factura" (documentul refacturarii) sau "Nu e cazul"
+ * (cumparata, fara factura; iese din lista); "Nu" lasa trecerea in lista, vizibila
+ * operatorului si adminului, cu motivul notat.
  */
 class ReinvoiceFeeExpectationModel extends BaseModel
 {
@@ -48,6 +53,11 @@ class ReinvoiceFeeExpectationModel extends BaseModel
     /** Sugestie pe loc de descarcare (orice loc de incarcare): minim 5 curse, minim 90%. */
     private const ZONE_MIN_TRIPS = 5;
     private const ZONE_MIN_SHARE = 0.9;
+    /**
+     * Confirmarea achizitiei porneste de la refacturarile adaugate incepand cu aceasta zi;
+     * cele vechi (aproape toate fara document) ar ingropa lista.
+     */
+    private const PURCHASE_CHECK_FROM = '2026-09-17 00:00:00';
 
     private bool $schemaEnsured = false;
 
@@ -66,6 +76,18 @@ class ReinvoiceFeeExpectationModel extends BaseModel
                 PRIMARY KEY (cursa_id, tip_cheltuiala),
                 CONSTRAINT fk_taxe_ignorate_cursa FOREIGN KEY (cursa_id) REFERENCES curse_dispecer(id) ON DELETE CASCADE,
                 CONSTRAINT fk_taxe_ignorate_user FOREIGN KEY (ignorata_de) REFERENCES utilizatori(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        $this->db->exec("
+            CREATE TABLE IF NOT EXISTS curse_taxe_refacturare_achizitie (
+                cheltuiala_id INT UNSIGNED NOT NULL PRIMARY KEY,
+                status ENUM('necumparata', 'fara_factura') NOT NULL,
+                motiv VARCHAR(255) NULL,
+                marcata_de INT UNSIGNED NULL,
+                marcata_la DATETIME NOT NULL,
+                CONSTRAINT fk_taxe_achizitie_cheltuiala FOREIGN KEY (cheltuiala_id) REFERENCES curse_cheltuieli(id) ON DELETE CASCADE,
+                CONSTRAINT fk_taxe_achizitie_user FOREIGN KEY (marcata_de) REFERENCES utilizatori(id) ON DELETE SET NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
@@ -379,6 +401,132 @@ class ReinvoiceFeeExpectationModel extends BaseModel
         ");
 
         return $stmt->execute([$raceId, $feeType, $userId, date('Y-m-d H:i:s')]);
+    }
+
+    /**
+     * Trecerile refacturate (taxa acces, port, trecere, taxe drum) fara factura atasata.
+     * Cu $createdBy, doar cursele adaugate de acel utilizator.
+     */
+    public function getPurchaseChecks(?int $createdBy = null): array
+    {
+        $this->ensureSchema();
+
+        $typePlaceholders = implode(',', array_fill(0, count(self::FEE_TYPES), '?'));
+        $params = array_merge(array_keys(self::FEE_TYPES), [self::PURCHASE_CHECK_FROM]);
+        $ownFilter = '';
+        if ($createdBy !== null) {
+            $ownFilter = 'AND c.created_by = ?';
+            $params[] = $createdBy;
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT ch.id AS expense_id, ch.cursa_id, ch.refacturare_tip_cheltuiala AS fee_type,
+                   COALESCE(NULLIF(ch.refacturare_suma, 0), ch.suma) AS amount,
+                   COALESCE(ch.refacturare_data, c.data_inceput) AS fee_date,
+                   c.tip_transport, c.created_by,
+                   COALESCE(v.nr_inmatriculare, '') AS nr_inmatriculare,
+                   COALESCE(li.nume, '') AS loc_incarcare_nume,
+                   COALESCE(zd.nume, '') AS zona_nume,
+                   COALESCE(u.nume, '') AS user_name,
+                   n.status = 'necumparata' AS not_bought,
+                   n.motiv, n.marcata_la, COALESCE(nu.nume, '') AS marcata_de_nume
+            FROM curse_cheltuieli ch
+            INNER JOIN curse_dispecer c ON c.id = ch.cursa_id AND c.deleted_at IS NULL
+            LEFT JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
+            LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
+            LEFT JOIN utilizatori u ON u.id = c.created_by
+            LEFT JOIN curse_taxe_refacturare_achizitie n ON n.cheltuiala_id = ch.id
+            LEFT JOIN utilizatori nu ON nu.id = n.marcata_de
+            WHERE ch.refacturare_tip_cheltuiala IN ({$typePlaceholders})
+              AND COALESCE(ch.refacturare_document_path, '') = ''
+              AND NOT EXISTS (SELECT 1 FROM curse_cheltuieli_documente d WHERE d.cheltuiala_id = ch.id)
+              AND COALESCE(n.status, '') <> 'fara_factura'
+              AND ch.created_at >= ?
+              {$ownFilter}
+            ORDER BY not_bought ASC, fee_date DESC, ch.id DESC
+        ");
+        $stmt->execute($params);
+
+        $rows = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $type = (string) $row['fee_type'];
+            $loading = (string) $row['loc_incarcare_nume'];
+            $unloading = (string) $row['zona_nume'];
+            $notBought = (bool) $row['not_bought'];
+            $rows[] = [
+                'expense_id' => (int) $row['expense_id'],
+                'race_id' => (int) $row['cursa_id'],
+                'fee_type' => $type,
+                'fee_label' => self::FEE_TYPES[$type] ?? $type,
+                'amount' => $row['amount'] !== null ? (float) $row['amount'] : null,
+                'date' => (string) $row['fee_date'],
+                'plate' => (string) $row['nr_inmatriculare'],
+                'route' => $loading !== '' ? $loading . ' → ' . $unloading : $unloading,
+                'transport' => self::TRANSPORT_TYPES[(string) $row['tip_transport']] ?? (string) $row['tip_transport'],
+                'user_id' => (int) ($row['created_by'] ?? 0),
+                'user_name' => (string) $row['user_name'] !== '' ? (string) $row['user_name'] : 'Utilizator necunoscut',
+                'not_bought' => $notBought,
+                'reason' => $notBought && $row['motiv'] !== null ? (string) $row['motiv'] : null,
+                'marked_by' => $notBought ? (string) $row['marcata_de_nume'] : null,
+                'marked_at' => $notBought ? (string) $row['marcata_la'] : null,
+                'url' => build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => (int) $row['cursa_id'], 'focus' => 'refacturare']),
+            ];
+        }
+
+        return ['count' => count($rows), 'rows' => $rows];
+    }
+
+    /** "Nu a fost cumparata": trecerea ramane in lista, cu motivul notat. */
+    public function markNotBought(int $expenseId, string $reason, ?int $userId): bool
+    {
+        return $this->markPurchase($expenseId, 'necumparata', $reason, $userId);
+    }
+
+    /** "Cumparata - Nu e cazul" (fara factura): trecerea iese din lista. */
+    public function markNoInvoiceNeeded(int $expenseId, ?int $userId): bool
+    {
+        return $this->markPurchase($expenseId, 'fara_factura', '', $userId);
+    }
+
+    private function markPurchase(int $expenseId, string $status, string $reason, ?int $userId): bool
+    {
+        $this->ensureSchema();
+        $reason = mb_substr(trim($reason), 0, 255);
+
+        $stmt = $this->db->prepare("
+            INSERT INTO curse_taxe_refacturare_achizitie (cheltuiala_id, status, motiv, marcata_de, marcata_la)
+            VALUES (?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE status = VALUES(status), motiv = VALUES(motiv), marcata_de = VALUES(marcata_de), marcata_la = VALUES(marcata_la)
+        ");
+
+        return $stmt->execute([$expenseId, $status, $reason !== '' ? $reason : null, $userId, date('Y-m-d H:i:s')]);
+    }
+
+    /** Factura atasata: marcajul "necumparata" nu mai are sens. */
+    public function clearNotBought(int $expenseId): void
+    {
+        $this->ensureSchema();
+        $this->db->prepare('DELETE FROM curse_taxe_refacturare_achizitie WHERE cheltuiala_id = ?')->execute([$expenseId]);
+    }
+
+    /**
+     * Refacturarea de trecere cu autorul cursei, pentru verificarea dreptului.
+     * Null daca nu e o refacturare de trecere pe o cursa activa.
+     */
+    public function getPurchaseExpense(int $expenseId): ?array
+    {
+        $typePlaceholders = implode(',', array_fill(0, count(self::FEE_TYPES), '?'));
+        $stmt = $this->db->prepare("
+            SELECT ch.id, ch.cursa_id, ch.refacturare_document_path, c.created_by
+            FROM curse_cheltuieli ch
+            INNER JOIN curse_dispecer c ON c.id = ch.cursa_id AND c.deleted_at IS NULL
+            WHERE ch.id = ? AND ch.refacturare_tip_cheltuiala IN ({$typePlaceholders})
+        ");
+        $stmt->execute(array_merge([$expenseId], array_keys(self::FEE_TYPES)));
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
     }
 
     public function getRaceCreator(int $raceId): ?int

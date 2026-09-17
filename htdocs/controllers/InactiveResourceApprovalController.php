@@ -46,6 +46,18 @@ class InactiveResourceApprovalController
                 $this->dismissMissingFeeAction();
                 return;
 
+            case 'fee_not_bought':
+                $this->feeNotBoughtAction();
+                return;
+
+            case 'fee_no_invoice_needed':
+                $this->feeNoInvoiceNeededAction();
+                return;
+
+            case 'fee_attach_invoice':
+                $this->feeAttachInvoiceAction();
+                return;
+
             default:
                 http_response_code(404);
                 render('errors/404.php', [
@@ -226,10 +238,12 @@ class InactiveResourceApprovalController
     {
         try {
             $model = new ReinvoiceFeeExpectationModel(get_pdo());
+            $ownerFilter = $this->canReview() ? null : (int) ($this->currentUserId() ?? 0);
             $this->sendJson([
                 'success' => true,
                 'scope' => $this->canReview() ? 'all' : 'own',
-                'missing_fees' => $model->getMissingFees($this->canReview() ? null : (int) ($this->currentUserId() ?? 0)),
+                'missing_fees' => $model->getMissingFees($ownerFilter),
+                'purchase_checks' => $model->getPurchaseChecks($ownerFilter),
             ]);
         } catch (Throwable $exception) {
             error_log('[InactiveResourceApprovalController][missing_fees] ' . $exception->getMessage());
@@ -268,6 +282,150 @@ class InactiveResourceApprovalController
             error_log('[InactiveResourceApprovalController][dismiss_missing_fee] ' . $exception->getMessage());
             $this->sendJson(['success' => false, 'message' => 'Nu am putut salva marcajul.'], 500);
         }
+    }
+
+    /**
+     * Trecere refacturata, dar taxa nu a fost cumparata: ramane in lista cu motivul.
+     */
+    private function feeNotBoughtAction(): void
+    {
+        [$model, $expense] = $this->resolvePurchaseExpense();
+        $ok = $model->markNotBought((int) $expense['id'], (string) ($_POST['reason'] ?? ''), $this->currentUserId());
+        $this->sendJson(['success' => $ok, 'message' => $ok ? 'Marcat ca necumparata.' : 'Nu am putut salva marcajul.'], $ok ? 200 : 500);
+    }
+
+    /**
+     * Taxa a fost cumparata, dar factura nu e cazul: trecerea iese din lista.
+     */
+    private function feeNoInvoiceNeededAction(): void
+    {
+        [$model, $expense] = $this->resolvePurchaseExpense();
+        $ok = $model->markNoInvoiceNeeded((int) $expense['id'], $this->currentUserId());
+        $this->sendJson(['success' => $ok, 'message' => $ok ? 'Marcat: cumparata, fara factura.' : 'Nu am putut salva marcajul.'], $ok ? 200 : 500);
+    }
+
+    /**
+     * Taxa a fost cumparata: factura devine documentul refacturarii.
+     */
+    private function feeAttachInvoiceAction(): void
+    {
+        [$model, $expense] = $this->resolvePurchaseExpense();
+        if (trim((string) ($expense['refacturare_document_path'] ?? '')) !== '') {
+            $this->sendJson(['success' => false, 'message' => 'Refacturarea are deja un document atasat.'], 409);
+        }
+
+        [$document, $error] = $this->storeFeeInvoice($_FILES['invoice'] ?? null);
+        if ($document === null) {
+            $this->sendJson(['success' => false, 'message' => $error ?? 'Alege fisierul facturii.'], 422);
+        }
+
+        try {
+            $db = get_pdo();
+            (new DispecerCurseModel($db))->updateExpenseRefacturareDocument((int) $expense['id'], $document);
+            $model->clearNotBought((int) $expense['id']);
+        } catch (Throwable $exception) {
+            @unlink(BASE_PATH . '/uploads/curse_cheltuieli/' . $document['file_path']);
+            error_log('[InactiveResourceApprovalController][fee_attach_invoice] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'message' => 'Factura nu a putut fi salvata.'], 500);
+        }
+
+        $this->sendJson(['success' => true, 'message' => 'Factura a fost atasata.']);
+    }
+
+    /**
+     * POST + CSRF + refacturarea de trecere; operatorul poate lucra doar pe cursele lui.
+     *
+     * @return array{0: ReinvoiceFeeExpectationModel, 1: array}
+     */
+    private function resolvePurchaseExpense(): array
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf_token($_POST['_token'] ?? null)) {
+            $this->sendJson(['success' => false, 'message' => 'Cerere invalida. Reincarca pagina.'], 400);
+        }
+
+        try {
+            $model = new ReinvoiceFeeExpectationModel(get_pdo());
+            $expense = $model->getPurchaseExpense((int) ($_POST['expense_id'] ?? 0));
+        } catch (Throwable $exception) {
+            error_log('[InactiveResourceApprovalController][fee_purchase] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'message' => 'Nu am putut incarca refacturarea.'], 500);
+        }
+
+        if ($expense === null) {
+            $this->sendJson(['success' => false, 'message' => 'Refacturarea nu a fost gasita.'], 404);
+        }
+        if (!$this->canReview() && (int) $expense['created_by'] !== (int) ($this->currentUserId() ?? 0)) {
+            $this->sendJson(['success' => false, 'message' => 'Poti modifica doar cursele adaugate de tine.'], 403);
+        }
+
+        return [$model, $expense];
+    }
+
+    /** Aceleasi reguli ca documentele de cheltuieli din Dispecer curse (5 MB, PDF / imagine / Word). */
+    private function storeFeeInvoice(?array $file): array
+    {
+        $error = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($file === null || $error === UPLOAD_ERR_NO_FILE) {
+            return [null, 'Alege fisierul facturii.'];
+        }
+        if ($error !== UPLOAD_ERR_OK) {
+            return [null, $error === UPLOAD_ERR_INI_SIZE || $error === UPLOAD_ERR_FORM_SIZE
+                ? 'Fisierul depaseste limita permisa.'
+                : 'Fisierul nu a putut fi incarcat.'];
+        }
+
+        $tmpName = (string) ($file['tmp_name'] ?? '');
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            return [null, 'Fisierul incarcat nu este valid.'];
+        }
+
+        $size = (int) ($file['size'] ?? 0);
+        if ($size <= 0 || $size > 5 * 1024 * 1024) {
+            return [null, 'Fisierul depaseste limita maxima de 5 MB.'];
+        }
+
+        $originalName = preg_replace('/[^A-Za-z0-9._-]/', '', preg_replace('/\s+/', '_', trim((string) ($file['name'] ?? ''))) ?? '') ?? '';
+        if ($originalName === '' || $originalName === '.' || $originalName === '..') {
+            $originalName = 'factura';
+        }
+        $originalName = substr($originalName, 0, 255);
+
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        if (!in_array($extension, ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'doc', 'docx'], true)) {
+            return [null, 'Tipul fisierului nu este permis (PDF, imagine sau Word).'];
+        }
+
+        $mimeType = (string) (finfo_file(finfo_open(FILEINFO_MIME_TYPE), $tmpName) ?: '');
+        $allowedMimeTypes = [
+            'application/pdf',
+            'image/jpeg',
+            'image/png',
+            'image/webp',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/octet-stream',
+            'application/zip',
+        ];
+        if ($mimeType !== '' && !in_array($mimeType, $allowedMimeTypes, true)) {
+            return [null, 'Tipul fisierului nu este permis (PDF, imagine sau Word).'];
+        }
+
+        $uploadDir = BASE_PATH . '/uploads/curse_cheltuieli';
+        if (!is_dir($uploadDir) && !mkdir($uploadDir, 0755, true) && !is_dir($uploadDir)) {
+            return [null, 'Nu s-a putut crea folderul de upload pentru cheltuieli.'];
+        }
+
+        $storedName = 'cheltuiala_' . date('Ymd_His') . '_' . bin2hex(random_bytes(8)) . '.' . $extension;
+        if (!move_uploaded_file($tmpName, $uploadDir . '/' . $storedName)) {
+            return [null, 'Fisierul nu a putut fi salvat pe server.'];
+        }
+
+        return [[
+            'file_path' => $storedName,
+            'original_name' => $originalName,
+            'mime_type' => $mimeType !== '' ? $mimeType : 'application/octet-stream',
+            'file_size' => $size,
+        ], null];
     }
 
     private function resolveFilters(): array

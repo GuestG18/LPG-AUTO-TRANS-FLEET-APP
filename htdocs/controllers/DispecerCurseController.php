@@ -1643,14 +1643,12 @@ class DispecerCurseController
 
         // Editarea nu este o rescriere oarba: campurile care nu au ajuns in POST
         // (inputuri dezactivate/ascunse/inexistente) pastreaza valoarea stocata, iar
-        // valorile financiare se recalculeaza doar cand se schimba un camp de tarifare.
+        // valorile financiare se recalculeaza (exceptie: cursele facturate).
         $data = $this->mergeRaceUpdateData($data, $raceBeforeUpdate, $_POST);
 
-        // Recalcularea comerciala se face DOAR la cererea explicita a operatorului
-        // si niciodata pentru o cursa deja facturata. Tariful se rezolva dupa data cursei.
-        $explicitRecalculation = trim((string) ($_POST['recalculate_tariff'] ?? '')) === '1'
-            && (string) ($raceBeforeUpdate['status_facturare'] ?? '') !== 'facturat';
-        if ($explicitRecalculation) {
+        // Recalcularea comerciala ruleaza la fiecare salvare, niciodata pentru o cursa
+        // deja facturata. Tariful se rezolva dupa data cursei.
+        if ((string) ($raceBeforeUpdate['status_facturare'] ?? '') !== 'facturat') {
             $data = $this->applyVersionedPricing($data);
         }
 
@@ -1920,8 +1918,8 @@ class DispecerCurseController
      *  - ore_functionare este derivat explicit din ore_aspirare pentru Compresor; pentru
      *    celelalte tipuri valoarea istorica nu se atinge cat timp tipul nu se schimba;
      *  - data_cursa si capacitate_transport (snapshot istoric) nu se rescriu la o simpla salvare;
-     *  - pret_tarifare / total_facturare / cost_km_* se recalculeaza doar daca s-a schimbat un
-     *    camp de tarifare, si niciodata pentru curse deja facturate.
+     *  - pret_tarifare / total_facturare / cost_km_* se recalculeaza la fiecare salvare,
+     *    niciodata pentru curse deja facturate.
      */
     private function mergeRaceUpdateData(array $data, ?array $existing, array $post): array
     {
@@ -2007,8 +2005,8 @@ class DispecerCurseController
             $data['capacitate_transport'] = $existing['capacitate_transport'];
         }
 
-        // 6) Recalcularea financiara ruleaza doar cand s-a schimbat un camp de tarifare
-        //    si cursa nu este deja facturata.
+        // 6) Valorile financiare se recalculeaza la fiecare salvare (validarea le-a calculat
+        //    deja din datele trimise), cu exceptia curselor deja facturate.
         $canonical = static function ($value): ?string {
             if ($value === null) {
                 return null;
@@ -2030,21 +2028,19 @@ class DispecerCurseController
 
         $isInvoiced = (string) ($existing['status_facturare'] ?? '') === 'facturat';
 
-        // NOU (modul Administrare tarife transport):
-        // Editarea unei curse NU mai reevalueaza tacit valorile comerciale.
-        // Recalcularea se face doar la cerere explicita a operatorului
-        // (`recalculate_tariff=1`) si niciodata pentru o cursa facturata.
-        $recalculationRequested = trim((string) ($post['recalculate_tariff'] ?? '')) === '1';
-
-        if ($pricingChanged && !$isInvoiced && !$recalculationRequested) {
+        // Plasa de siguranta: daca nu se mai gaseste niciun tarif valid (total recalculat 0),
+        // nu stergem un total existent; operatorul corecteaza tariful si salveaza din nou.
+        $recalculatedTotal = round((float) ($data['total_facturare'] ?? 0), 2);
+        $existingTotal = round((float) ($existing['total_facturare'] ?? 0), 2);
+        $lostTariff = !$isInvoiced && $recalculatedTotal <= 0 && $existingTotal > 0;
+        if ($lostTariff) {
             flash_set(
-                'info',
-                'Datele operationale au fost actualizate. Valorile comerciale au ramas neschimbate; '
-                . 'foloseste actiunea "Recalculeaza tariful" daca vrei sa le reevaluezi.'
+                'warning',
+                'Nu s-a gasit un tarif valid pentru datele cursei: valorile comerciale existente au fost pastrate.'
             );
         }
 
-        if ($isInvoiced || !$recalculationRequested) {
+        if ($isInvoiced || $lostTariff) {
             foreach (['pret_tarifare', 'total_facturare', 'cost_km_primar', 'cost_km_distributie', 'cost_km_mixt', 'cost_km_compresor'] as $field) {
                 $data[$field] = round((float) ($existing[$field] ?? 0), 2);
             }
