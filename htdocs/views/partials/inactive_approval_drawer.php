@@ -502,7 +502,7 @@ $statusIcons = [
                     <div class="fee-purchase-panel" data-fee-purchase-panel hidden>
                         <p class="fee-purchase-intro">
                             Treceri cu refacturarea adaugata, dar fara factura. A fost cumparata taxa?
-                            <strong>Da</strong> = ataseaza factura sau „Nu e cazul”. <strong>Nu</strong> = ramane aici, vizibila operatorului si adminului.
+                            <strong>Da</strong> = ataseaza factura sau „Nu e cazul”. <strong>Nu</strong> = ramane aici, vizibila tuturor operatorilor si adminului.
                         </p>
                         <div class="fee-purchase-list" data-fee-purchase-list aria-live="polite"></div>
                     </div>
@@ -552,7 +552,7 @@ $statusIcons = [
                     <div class="fee-purchase-panel" data-fee-purchase-panel hidden>
                         <p class="fee-purchase-intro">
                             Treceri cu refacturarea adaugata, dar fara factura. A fost cumparata taxa?
-                            <strong>Da</strong> = ataseaza factura sau „Nu e cazul”. <strong>Nu</strong> = ramane aici, vizibila operatorului si adminului.
+                            <strong>Da</strong> = ataseaza factura sau „Nu e cazul”. <strong>Nu</strong> = ramane aici, vizibila tuturor operatorilor si adminului.
                         </p>
                         <div class="fee-purchase-list" data-fee-purchase-list aria-live="polite"></div>
                     </div>

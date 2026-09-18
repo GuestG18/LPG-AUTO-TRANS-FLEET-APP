@@ -2194,9 +2194,8 @@ function initMissingFees() {
         title.href = row.url;
         item.appendChild(title);
         item.appendChild(el('span', 'missing-fee-route', row.route + ' · ' + row.transport));
-        if (groupByOperator) {
-            item.appendChild(el('span', 'missing-fee-evidence', 'Cursa adaugata de ' + row.user_name));
-        }
+        // Lista e aceeasi pentru toti: se arata mereu cine a adaugat cursa.
+        item.appendChild(el('span', 'missing-fee-evidence', 'Cursa adaugata de ' + row.user_name));
 
         if (row.not_bought) {
             var when = String(row.marked_at || '').split(' ');

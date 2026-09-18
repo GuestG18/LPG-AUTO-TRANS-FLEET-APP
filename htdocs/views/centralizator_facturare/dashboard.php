@@ -854,6 +854,7 @@ $refDefaultExpanded = true;
 .cf-main-grid.mode-primar-distributie {
     grid-template-areas:
         "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3 ref"
+        "activity activity activity activity activity activity ref"
         "primaryTable primaryTable primaryTable distribution distribution distribution ref"
         "distTable distTable distTable distTable distTable distTable ref"
         "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
@@ -863,6 +864,7 @@ $refDefaultExpanded = true;
 .cf-main-grid.mode-primar {
     grid-template-areas:
         "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3 ref"
+        "activity activity activity activity activity activity ref"
         "primaryTable primaryTable primaryTable primaryTable primaryTable primaryTable ref"
         "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
         "tariffs tariffs tariffs tariffs tariffs tariffs tariffs"
@@ -872,6 +874,7 @@ $refDefaultExpanded = true;
 .cf-main-grid.mode-compresor {
     grid-template-areas:
         "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3 ref"
+        "activity activity activity activity activity activity ref"
         "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
         "tariffs tariffs tariffs tariffs tariffs tariffs tariffs"
         "refTable refTable refTable refTable refTable refTable refTable";
@@ -879,6 +882,7 @@ $refDefaultExpanded = true;
 .cf-main-grid.mode-distributie {
     grid-template-areas:
         "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3 ref"
+        "activity activity activity activity activity activity ref"
         "distribution distribution distribution distribution distribution distribution ref"
         "distTable distTable distTable distTable distTable distTable ref"
         "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
@@ -1834,6 +1838,7 @@ $refDefaultExpanded = true;
         grid-template-areas:
             "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3"
             "ref ref ref ref ref ref"
+            "activity activity activity activity activity activity"
             "primaryTable primaryTable primaryTable distribution distribution distribution"
             "distTable distTable distTable distTable distTable distTable"
             "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
@@ -1844,6 +1849,7 @@ $refDefaultExpanded = true;
         grid-template-areas:
             "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3"
             "ref ref ref ref ref ref"
+            "activity activity activity activity activity activity"
             "primaryTable primaryTable primaryTable primaryTable primaryTable primaryTable"
             "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
             "tariffs tariffs tariffs tariffs tariffs tariffs"
@@ -1854,6 +1860,7 @@ $refDefaultExpanded = true;
         grid-template-areas:
             "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3"
             "ref ref ref ref ref ref"
+            "activity activity activity activity activity activity"
             "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
             "tariffs tariffs tariffs tariffs tariffs tariffs"
             "refTable refTable refTable refTable refTable refTable";
@@ -1862,6 +1869,7 @@ $refDefaultExpanded = true;
         grid-template-areas:
             "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3"
             "ref ref ref ref ref ref"
+            "activity activity activity activity activity activity"
             "distribution distribution distribution distribution distribution distribution"
             "distTable distTable distTable distTable distTable distTable"
             "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
@@ -2248,13 +2256,26 @@ $refDefaultExpanded = true;
             </article>
 
             <?php if (!empty($visibility['activity_summary'])): ?>
+                <?php
+                /*
+                 * La filtrare panoul arata doar tipurile care au ceva in setul filtrat
+                 * (curse sau refacturari pe curse din alte luni); fara filtre raman toate.
+                 */
+                $activityFiltered = $activeFilters !== [] || !$isAllBeneficiaries;
+                $activityVisibleRows = $activityFiltered
+                    ? array_values(array_filter($activityRows, static fn (array $row): bool => (int) ($row['trips'] ?? 0) > 0 || (array) ($row['refund_leftovers'] ?? []) !== []))
+                    : $activityRows;
+                ?>
                 <section class="cf-panel cf-activity-summary">
                     <h2>Activități pe tipuri de transport <i class="bi bi-info-circle" aria-hidden="true"></i></h2>
                     <div class="cf-table-wrap">
                         <table class="cf-table">
                             <thead><tr><th class="cf-expand-th"></th><th>Tip transport</th><th class="is-number">Curse</th><th class="is-number">Km</th><th class="is-number">Tone/Activ.</th><th class="is-number">% din total curse</th></tr></thead>
                             <tbody>
-                            <?php foreach ($activityRows as $row): ?>
+                            <?php if ($activityVisibleRows === []): ?>
+                                <tr><td colspan="6"><div class="cf-empty">Nu există curse pentru filtrul curent.</div></td></tr>
+                            <?php endif; ?>
+                            <?php foreach ($activityVisibleRows as $row): ?>
                                 <?php
                                 $metricTone = (float) ($row['tone'] ?? 0) > 0 ? $fmtSmart($row['tone'], 2) . ' t' : ((float) ($row['activity'] ?? 0) > 0 ? $fmtSmart($row['activity'], 2) . ' ' . (string) ($row['activity_unit'] ?? '') : '-');
                                 $typeKey = (string) ($row['key'] ?? '');

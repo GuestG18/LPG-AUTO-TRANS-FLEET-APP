@@ -1840,7 +1840,8 @@ class CentralizatorFacturareService
         $mode = (string) $filters['tip_activitate'];
 
         return [
-            'activity_summary' => $mode === '',
+            /* Panoul pe tipuri apare si la filtrare: datele lui vin deja restranse de filtre. */
+            'activity_summary' => true,
             'primary_routes' => in_array($mode, ['primar', 'primar_distributie'], true),
             'distribution' => in_array($mode, ['distributie', 'primar_distributie'], true),
             'distribution_matrix' => in_array($mode, ['distributie', 'primar_distributie'], true),

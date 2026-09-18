@@ -405,7 +405,8 @@ class ReinvoiceFeeExpectationModel extends BaseModel
 
     /**
      * Trecerile refacturate (taxa acces, port, trecere, taxe drum) fara factura atasata.
-     * Cu $createdBy, doar cursele adaugate de acel utilizator.
+     * Implicit toate cursele: orice operator poate confirma orice trecere. Cu $createdBy,
+     * doar cursele adaugate de acel utilizator.
      */
     public function getPurchaseChecks(?int $createdBy = null): array
     {

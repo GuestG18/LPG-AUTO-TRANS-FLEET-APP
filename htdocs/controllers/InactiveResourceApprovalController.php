@@ -243,7 +243,9 @@ class InactiveResourceApprovalController
                 'success' => true,
                 'scope' => $this->canReview() ? 'all' : 'own',
                 'missing_fees' => $model->getMissingFees($ownerFilter),
-                'purchase_checks' => $model->getPurchaseChecks($ownerFilter),
+                // Trecerile de confirmat se vad de toti operatorii, nu doar de cel care a adaugat cursa:
+                // factura ajunge la cine e disponibil.
+                'purchase_checks' => $model->getPurchaseChecks(),
             ]);
         } catch (Throwable $exception) {
             error_log('[InactiveResourceApprovalController][missing_fees] ' . $exception->getMessage());
@@ -333,7 +335,8 @@ class InactiveResourceApprovalController
     }
 
     /**
-     * POST + CSRF + refacturarea de trecere; operatorul poate lucra doar pe cursele lui.
+     * POST + CSRF + refacturarea de trecere. Orice utilizator autentificat poate confirma
+     * o trecere, pe orice cursa (vezi purchase_checks).
      *
      * @return array{0: ReinvoiceFeeExpectationModel, 1: array}
      */
@@ -353,9 +356,6 @@ class InactiveResourceApprovalController
 
         if ($expense === null) {
             $this->sendJson(['success' => false, 'message' => 'Refacturarea nu a fost gasita.'], 404);
-        }
-        if (!$this->canReview() && (int) $expense['created_by'] !== (int) ($this->currentUserId() ?? 0)) {
-            $this->sendJson(['success' => false, 'message' => 'Poti modifica doar cursele adaugate de tine.'], 403);
         }
 
         return [$model, $expense];
