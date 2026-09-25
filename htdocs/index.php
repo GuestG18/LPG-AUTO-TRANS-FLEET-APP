@@ -329,6 +329,7 @@ require_once __DIR__ . '/models/MaintenanceModel.php';
 require_once __DIR__ . '/models/TechnicalHealthModel.php';
 require_once __DIR__ . '/models/DriverActivityHistoryModel.php';
 require_once __DIR__ . '/models/FuelModel.php';
+require_once __DIR__ . '/models/FuelKmCheckModel.php';
 require_once __DIR__ . '/models/UserActivityModel.php';
 require_once __DIR__ . '/models/LeasingSchedulerModel.php';
 require_once __DIR__ . '/models/TransportTariffModel.php';

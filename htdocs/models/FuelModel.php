@@ -1955,11 +1955,23 @@ class FuelModel extends BaseModel
     private function getKpiSummary(array $filters): array
     {
         $where = $this->buildFillupWhere($filters, 'kpi', true);
+        // Vehicule usoare = autoturisme / autoutilitare (ca in paginile Vehicule Usoare / Grele).
+        // Tot ce nu se potriveste pe o placuta usoara (inclusiv placute necunoscute) intra la grele.
+        $lightExpr = "EXISTS (
+            SELECT 1 FROM vehicule lv
+            WHERE lv.tip_vehicul IN ('autovehicul', 'autoturism', 'autoutilitara')
+              AND REPLACE(UPPER(lv.nr_inmatriculare), ' ', '') = REPLACE(UPPER(f.vehicle_registration), ' ', '')
+        )";
         $stmt = $this->db->prepare("
             SELECT
                 COALESCE(SUM(CASE WHEN f.fuel_type = 'motorina' THEN f.quantity_liters ELSE 0 END), 0) AS motorina_liters,
                 COALESCE(SUM(CASE WHEN f.fuel_type = 'adblue' THEN f.quantity_liters ELSE 0 END), 0) AS adblue_liters,
-                COALESCE(SUM(f.total_value), 0) AS total_value
+                COALESCE(SUM(f.total_value), 0) AS total_value,
+                COALESCE(SUM(CASE WHEN {$lightExpr} THEN f.total_value ELSE 0 END), 0) AS light_value,
+                COALESCE(SUM(CASE WHEN {$lightExpr} THEN f.quantity_liters ELSE 0 END), 0) AS light_liters,
+                COALESCE(SUM(CASE WHEN {$lightExpr} THEN 1 ELSE 0 END), 0) AS light_fillups,
+                COALESCE(SUM(f.quantity_liters), 0) AS total_liters,
+                COUNT(*) AS total_fillups
             FROM fuel_fillups f
             LEFT JOIN fuel_trip_links l ON l.fillup_id = f.id
             LEFT JOIN curse_dispecer c ON c.id = l.trip_id
@@ -1990,6 +2002,12 @@ class FuelModel extends BaseModel
             'motorina_avg_l100' => $km > 0 ? round(($motorinaForAverage / $km) * 100, 2) : 0.0,
             'adblue_percent' => $motorina > 0 ? round(($adblue / $motorina) * 100, 2) : 0.0,
             'total_value' => round((float) ($row['total_value'] ?? 0), 2),
+            'light_value' => round((float) ($row['light_value'] ?? 0), 2),
+            'light_liters' => round((float) ($row['light_liters'] ?? 0), 2),
+            'light_fillups' => (int) ($row['light_fillups'] ?? 0),
+            'heavy_value' => round((float) ($row['total_value'] ?? 0) - (float) ($row['light_value'] ?? 0), 2),
+            'heavy_liters' => round((float) ($row['total_liters'] ?? 0) - (float) ($row['light_liters'] ?? 0), 2),
+            'heavy_fillups' => (int) ($row['total_fillups'] ?? 0) - (int) ($row['light_fillups'] ?? 0),
             'linked_km' => round($km, 2),
             'consumption_liters' => round($motorinaForAverage, 2),
             'consumption_km_source' => $kmSource,

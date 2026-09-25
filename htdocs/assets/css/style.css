@@ -16225,6 +16225,226 @@ tr:hover .diurna-edit-btn,
     margin-bottom: .85rem;
 }
 
+/* Carburanti - Verificare km (GPS/CAN) */
+.fuel-kmcheck-sub {
+    margin: .25rem 0 0;
+    max-width: 900px;
+    color: #64748b;
+    font-size: .85rem;
+}
+
+.fuel-kmcheck-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: .6rem;
+    margin-bottom: .9rem;
+}
+
+.fuel-kmcheck-stat {
+    display: flex;
+    flex-direction: column;
+    gap: .1rem;
+    padding: .55rem .8rem;
+    background: #f8fafc;
+    border: 1px solid #dfe7f2;
+    border-radius: 8px;
+    font-size: .8rem;
+    color: #64748b;
+}
+
+.fuel-kmcheck-stat strong {
+    font-size: 1rem;
+    color: #0f172a;
+}
+
+.fuel-kmcheck-stat small {
+    font-weight: 400;
+    color: #64748b;
+}
+
+.fuel-kmcheck-stat.is-ok strong { color: #15803d; }
+.fuel-kmcheck-stat.is-warn strong { color: #b45309; }
+.fuel-kmcheck-stat.is-bad strong { color: #b91c1c; }
+
+.fuel-kmcheck-howto {
+    margin: .35rem 0 0;
+    padding-left: 1.1rem;
+    max-width: 980px;
+    color: #475569;
+    font-size: .85rem;
+}
+
+.fuel-kmcheck-table thead tr.fuel-kmcheck-groups th {
+    border-bottom: 0;
+    padding-bottom: 0;
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    color: #64748b;
+}
+
+.fuel-kmcheck-table thead th small {
+    font-weight: 400;
+    color: #64748b;
+}
+
+.fuel-kmcheck-calib {
+    margin-bottom: .9rem;
+    padding: .6rem .85rem;
+    background: #f8fafc;
+    border: 1px solid #dfe7f2;
+    border-radius: 8px;
+}
+
+.fuel-kmcheck-calib > summary {
+    cursor: pointer;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.fuel-kmcheck-calib > summary .fuel-kmcheck-muted {
+    font-weight: 400;
+}
+
+.fuel-kmcheck-calib-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: .6rem;
+    margin: .6rem 0;
+}
+
+.fuel-kmcheck-calib-form label {
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+    font-size: .78rem;
+    font-weight: 600;
+    color: #475569;
+    min-width: 150px;
+}
+
+.fuel-kmcheck-calib-form .fuel-kmcheck-calib-note {
+    flex: 1;
+    min-width: 180px;
+}
+
+.fuel-kmcheck-calib-table {
+    margin: 0;
+    font-size: .85rem;
+    background: #ffffff;
+}
+
+.fuel-kmcheck-table td {
+    vertical-align: top;
+    white-space: nowrap;
+}
+
+.fuel-kmcheck-muted {
+    color: #94a3b8;
+}
+
+.fuel-kmcheck-badge {
+    display: inline-block;
+    padding: .1rem .45rem;
+    border-radius: 999px;
+    font-weight: 600;
+}
+
+.fuel-kmcheck-badge.is-ok { background: #dcfce7; color: #166534; }
+.fuel-kmcheck-badge.is-warn { background: #fef3c7; color: #92400e; }
+.fuel-kmcheck-badge.is-bad { background: #fee2e2; color: #991b1b; }
+
+.fuel-kmcheck-row-bad > td:first-child { box-shadow: inset 3px 0 0 #dc2626; }
+.fuel-kmcheck-row-warn > td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
+
+/* Cost carburant pe categorie de vehicul (grele / usoare) */
+.fuel-split {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    margin-bottom: .85rem;
+}
+
+.fuel-split-card {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: .8rem 1.1rem;
+    background: #ffffff;
+    border: 1px solid #dfe7f2;
+    border-left: 4px solid var(--fuel-split-accent, #2563eb);
+    border-radius: 8px;
+    box-shadow: 0 8px 18px rgba(15, 23, 42, .045);
+}
+
+.fuel-split-blue { --fuel-split-accent: #2563eb; }
+.fuel-split-purple { --fuel-split-accent: #9333ea; }
+
+.fuel-split-card > .bi {
+    font-size: 1.5rem;
+    color: var(--fuel-split-accent);
+}
+
+.fuel-split-main {
+    display: flex;
+    flex-direction: column;
+    gap: .1rem;
+    flex: 1;
+    min-width: 0;
+}
+
+.fuel-split-main span {
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.fuel-split-main span small,
+.fuel-split-main > small,
+.fuel-split-share small {
+    font-weight: 400;
+    color: #64748b;
+    font-size: .8rem;
+}
+
+.fuel-split-main strong {
+    font-size: 1.25rem;
+    color: #0f172a;
+}
+
+.fuel-split-share {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: .15rem;
+    min-width: 110px;
+}
+
+.fuel-split-share strong {
+    font-size: 1.1rem;
+    color: var(--fuel-split-accent);
+}
+
+.fuel-split-bar {
+    width: 100%;
+    height: 6px;
+    background: #eef2f7;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.fuel-split-bar span {
+    display: block;
+    height: 100%;
+    background: var(--fuel-split-accent);
+}
+
+@media (max-width: 768px) {
+    .fuel-split {
+        grid-template-columns: 1fr;
+    }
+}
+
 .fuel-kpi-card {
     min-height: 132px;
     display: flex;

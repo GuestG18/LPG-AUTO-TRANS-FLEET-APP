@@ -26,13 +26,48 @@ class SasFleetClient
 
     public function __construct()
     {
-        $this->username = trim((string) (getenv('SAS_API_USERNAME') ?: ''));
-        $this->password = trim((string) (getenv('SAS_API_PASSWORD') ?: ''));
-        $this->culture = trim((string) (getenv('SAS_API_CULTURE') ?: 'ro-RO'));
-        $this->loginServiceUrl = rtrim(trim((string) (getenv('SAS_API_LOGIN_SERVICE_URL')
+        $this->username = trim((string) (self::env('SAS_API_USERNAME') ?: ''));
+        $this->password = trim((string) (self::env('SAS_API_PASSWORD') ?: ''));
+        $this->culture = trim((string) (self::env('SAS_API_CULTURE') ?: 'ro-RO'));
+        $this->loginServiceUrl = rtrim(trim((string) (self::env('SAS_API_LOGIN_SERVICE_URL')
             ?: 'https://fleetlogin-webapp.azurewebsites.net/LoginService.svc')), '/');
-        $this->configuredHost = trim((string) (getenv('SAS_API_HOST') ?: ''));
-        $this->timeoutSeconds = max(3, min(60, (int) (getenv('SAS_API_TIMEOUT') ?: 15)));
+        $this->configuredHost = trim((string) (self::env('SAS_API_HOST') ?: ''));
+        $this->timeoutSeconds = max(3, min(60, (int) (self::env('SAS_API_TIMEOUT') ?: 15)));
+    }
+
+    /**
+     * $_ENV / $_SERVER inainte de getenv(): pe Apache Windows (thread-uri intr-un
+     * singur proces) getenv() nu e thread-safe, iar cererile paralele (ex. tabul
+     * „Verificare km") primeau uneori credentiale goale. Dotenv le scrie in toate trei.
+     */
+    private static function env(string $key): string|false
+    {
+        $value = $_ENV[$key] ?? $_SERVER[$key] ?? null;
+        if (is_scalar($value)) {
+            return (string) $value;
+        }
+        $value = getenv($key);
+        if ($value !== false && $value !== '') {
+            return $value;
+        }
+
+        // Dotenv (immutabil) nu scrie in $_ENV cand getenv() arata deja variabila,
+        // iar getenv() o poate pierde intre timp: ultima sursa e chiar fisierul .env.
+        static $fileValues = null;
+        if ($fileValues === null) {
+            $fileValues = [];
+            $envFile = dirname(__DIR__, 2) . '/.env';
+            if (class_exists(\Dotenv\Dotenv::class) && is_file($envFile)) {
+                try {
+                    $fileValues = \Dotenv\Dotenv::parse((string) file_get_contents($envFile));
+                } catch (Throwable) {
+                    $fileValues = [];
+                }
+            }
+        }
+        $value = $fileValues[$key] ?? null;
+
+        return is_scalar($value) ? (string) $value : false;
     }
 
     public function credentialsAvailable(): bool

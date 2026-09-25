@@ -175,6 +175,7 @@ class DashboardAnaliticV2Model extends BaseModel
         return [
             'fleet' => $fleet,
             'vehicles' => $vehicles,
+            'light_vehicles' => $this->getLightVehicleCosts($period),
             'drivers' => $drivers,
             'beneficiaries' => $beneficiaries,
             'summary' => $summary,
@@ -210,6 +211,7 @@ class DashboardAnaliticV2Model extends BaseModel
         return [
             'fleet' => $this->buildFleetKpis([], $emptyUsage, []),
             'vehicles' => [],
+            'light_vehicles' => ['rows' => [], 'totals' => [], 'error' => null],
             'drivers' => [],
             'beneficiaries' => [],
             'summary' => $this->buildSummary([], []),
@@ -1976,6 +1978,160 @@ class DashboardAnaliticV2Model extends BaseModel
         ];
     }
 
+    // ---------------------------------------------------------- vehicule usoare
+
+    /**
+     * Costurile vehiculelor usoare (autoturisme, autoutilitare) in perioada.
+     *
+     * Vehiculele usoare nu fac curse, deci nu apar in restul dashboard-ului, care
+     * e construit pe curse. Aici se aduna costurile lor reale, direct din surse,
+     * fara legatura cu cursele si fara filtrele de cursa (doar perioada):
+     *  - carburant: fuel_fillups pe numar de inmatriculare normalizat, toate
+     *    tipurile, total_value CU TVA (ca restul dashboard-ului);
+     *  - cheltuieli: alocarile pe vehicul din modulul Cheltuieli (suma alocata);
+     *  - mentenanta: revizii + reparatii, cu aceleasi excluderi ca modelul de cost/km.
+     * Registrul de piese OCR NU se aduna: e un registru paralel cu mentenanta.
+     * Sunt incluse si vehiculele inactive - pot avea costuri in perioada.
+     */
+    private function getLightVehicleCosts(array $period): array
+    {
+        $empty = ['rows' => [], 'totals' => [], 'error' => null];
+
+        try {
+            $vehicles = $this->fetchAll(
+                "SELECT id, nr_inmatriculare, marca, model, tip_vehicul, status, capacitate_rezervor
+                   FROM vehicule
+                  WHERE tip_vehicul IN ('autovehicul', 'autoturism', 'autoutilitara')
+                  ORDER BY nr_inmatriculare",
+                []
+            );
+            if ($vehicles === []) {
+                return $empty;
+            }
+
+            $start = $period['start']->format('Y-m-d');
+            $end = $period['end']->format('Y-m-d');
+
+            $rows = [];
+            $byPlate = [];
+            foreach ($vehicles as $vehicle) {
+                $id = (int) $vehicle['id'];
+                $plate = (string) $vehicle['nr_inmatriculare'];
+                $rows[$id] = [
+                    'vehicle_id' => $id,
+                    'vehicul' => $plate,
+                    'marca_model' => trim((string) ($vehicle['marca'] ?? '') . ' ' . (string) ($vehicle['model'] ?? '')),
+                    'tip_vehicul' => (string) $vehicle['tip_vehicul'],
+                    'status' => (string) ($vehicle['status'] ?? ''),
+                    'carburant' => 0.0,
+                    'litri' => 0.0,
+                    'alimentari' => 0,
+                    'alimentari_peste_rezervor' => 0,
+                    'cheltuieli' => 0.0,
+                    'cheltuieli_nr' => 0,
+                    'mentenanta' => 0.0,
+                    'mentenanta_nr' => 0,
+                    'total' => 0.0,
+                ];
+                $byPlate[strtoupper(str_replace(' ', '', $plate))] = [
+                    'id' => $id,
+                    // o alimentare peste capacitatea rezervorului e aproape sigur pe alt vehicul
+                    'rezervor' => (float) ($vehicle['capacitate_rezervor'] ?? 0),
+                ];
+            }
+
+            if ($this->tableExists('fuel_fillups')) {
+                $fuelRows = $this->fetchAll(
+                    "SELECT REPLACE(UPPER(f.vehicle_registration), ' ', '') AS reg_key,
+                            f.quantity_liters, f.total_value
+                       FROM fuel_fillups f
+                      WHERE f.source_type NOT IN ('test', 'demo')
+                        AND f.quantity_liters > 0
+                        AND f.fillup_datetime >= :light_fuel_start
+                        AND f.fillup_datetime <= :light_fuel_end",
+                    [':light_fuel_start' => $start . ' 00:00:00', ':light_fuel_end' => $end . ' 23:59:59']
+                );
+                foreach ($fuelRows as $fuel) {
+                    $match = $byPlate[(string) $fuel['reg_key']] ?? null;
+                    if ($match === null) {
+                        continue;
+                    }
+                    $row = &$rows[$match['id']];
+                    $liters = (float) $fuel['quantity_liters'];
+                    $row['carburant'] += (float) $fuel['total_value'];
+                    $row['litri'] += $liters;
+                    $row['alimentari']++;
+                    if ($match['rezervor'] > 0 && $liters > $match['rezervor']) {
+                        $row['alimentari_peste_rezervor']++;
+                    }
+                    unset($row);
+                }
+            }
+
+            if ($this->tableExists('cheltuieli_alocari')) {
+                $expenseRows = $this->fetchAll(
+                    "SELECT a.vehicul_id, COUNT(DISTINCT a.cheltuiala_id) AS nr, COALESCE(SUM(a.suma), 0) AS total
+                       FROM cheltuieli_alocari a
+                       INNER JOIN cheltuieli ch ON ch.id = a.cheltuiala_id
+                      WHERE a.tip_alocare = 'vehicul'
+                        AND ch.data_cheltuiala BETWEEN :light_exp_start AND :light_exp_end
+                      GROUP BY a.vehicul_id",
+                    [':light_exp_start' => $start, ':light_exp_end' => $end]
+                );
+                foreach ($expenseRows as $expense) {
+                    $id = (int) $expense['vehicul_id'];
+                    if (isset($rows[$id])) {
+                        $rows[$id]['cheltuieli'] = (float) $expense['total'];
+                        $rows[$id]['cheltuieli_nr'] = (int) $expense['nr'];
+                    }
+                }
+            }
+
+            if ($this->tableExists('mentenanta')) {
+                $maintenanceRows = $this->fetchAll(
+                    "SELECT m.vehicle_id, COUNT(*) AS nr, COALESCE(SUM(m.cost), 0) AS total
+                       FROM mentenanta m
+                      WHERE m.tip_interventie NOT LIKE 'Anvelopa - %'
+                        AND (m.status_interventie IS NULL OR m.status_interventie <> 'anulata')
+                        AND m.data_interventie BETWEEN :light_mnt_start AND :light_mnt_end
+                      GROUP BY m.vehicle_id",
+                    [':light_mnt_start' => $start, ':light_mnt_end' => $end]
+                );
+                foreach ($maintenanceRows as $maintenance) {
+                    $id = (int) $maintenance['vehicle_id'];
+                    if (isset($rows[$id])) {
+                        $rows[$id]['mentenanta'] = (float) $maintenance['total'];
+                        $rows[$id]['mentenanta_nr'] = (int) $maintenance['nr'];
+                    }
+                }
+            }
+
+            $totals = ['carburant' => 0.0, 'litri' => 0.0, 'alimentari' => 0, 'cheltuieli' => 0.0, 'mentenanta' => 0.0, 'total' => 0.0, 'vehicule' => count($rows), 'vehicule_cu_cost' => 0];
+            foreach ($rows as &$row) {
+                $row['total'] = $row['carburant'] + $row['cheltuieli'] + $row['mentenanta'];
+                foreach (['carburant', 'litri', 'cheltuieli', 'mentenanta', 'total'] as $key) {
+                    $row[$key] = round($row[$key], 2);
+                    $totals[$key] += $row[$key];
+                }
+                $totals['alimentari'] += $row['alimentari'];
+                if ($row['total'] > 0) {
+                    $totals['vehicule_cu_cost']++;
+                }
+            }
+            unset($row);
+
+            $rows = array_values($rows);
+            usort($rows, static fn (array $a, array $b): int => $b['total'] <=> $a['total'] ?: strcmp($a['vehicul'], $b['vehicul']));
+
+            return ['rows' => $rows, 'totals' => array_map(static fn ($v) => is_float($v) ? round($v, 2) : $v, $totals), 'error' => null];
+        } catch (Throwable $exception) {
+            // Tabul de vehicule usoare nu trebuie sa blocheze restul dashboard-ului.
+            error_log('[DashboardAnaliticV2Model][light_vehicles] ' . $exception->getMessage());
+
+            return ['rows' => [], 'totals' => [], 'error' => 'Nu s-au putut calcula costurile vehiculelor ușoare.'];
+        }
+    }
+
     private function countWeekdays(DateTimeImmutable $start, DateTimeImmutable $end): int
     {
         if ($end < $start) {
@@ -2085,6 +2241,18 @@ class DashboardAnaliticV2Model extends BaseModel
         }
 
         return self::$segmentsAvailable;
+    }
+
+    /** Modulele optionale (Carburanti, Cheltuieli, Mentenanta) pot lipsi pe unele instalari. */
+    private function tableExists(string $table): bool
+    {
+        $stmt = $this->db->prepare(
+            "SELECT COUNT(*) FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name"
+        );
+        $stmt->execute([':table_name' => $table]);
+
+        return ((int) $stmt->fetchColumn()) > 0;
     }
 
     /**

@@ -480,7 +480,81 @@
         renderEntityTable('vehicles');
         renderEntityTable('drivers');
         renderEntityTable('beneficiaries');
+        renderLightVehicles();
         renderAlerts();
+    }
+
+    // ------------------------------------------------------- vehicule usoare
+
+    function renderLightVehicles() {
+        var data = state.data.light_vehicles || {};
+        var rows = data.rows || [];
+        var totals = data.totals || {};
+        var stats = document.getElementById('da2-light-stats');
+        var table = document.getElementById('da2-light-table');
+        if (!stats || !table) {
+            return;
+        }
+
+        if (data.error) {
+            stats.innerHTML = '';
+            table.innerHTML = '<tbody><tr><td class="da2-empty">' + escapeHtml(data.error) + '</td></tr></tbody>';
+            return;
+        }
+
+        stats.innerHTML = [
+            { label: 'Cost total', value: fmt(totals.total, 'lei') },
+            { label: 'Carburant', value: fmt(totals.carburant, 'lei') + ' · ' + fmt(totals.litri) + ' L' },
+            { label: 'Cheltuieli alocate', value: fmt(totals.cheltuieli, 'lei') },
+            { label: 'Mentenanță', value: fmt(totals.mentenanta, 'lei') },
+            { label: 'Vehicule cu costuri', value: fmt(totals.vehicule_cu_cost, 'int') + ' din ' + fmt(totals.vehicule, 'int') }
+        ].map(function (item) {
+            return '<div class="da2-mini-stat"><span>' + escapeHtml(item.label) + '</span><strong>' + escapeHtml(item.value) + '</strong></div>';
+        }).join('');
+
+        if (!rows.length) {
+            table.innerHTML = '<tbody><tr><td class="da2-empty">Nu există vehicule ușoare înregistrate.</td></tr></tbody>';
+            return;
+        }
+
+        var typeLabels = { autovehicul: 'Autoturism', autoturism: 'Autoturism', autoutilitara: 'Autoutilitară' };
+        function money(value) {
+            return num(value) > 0 ? escapeHtml(fmt(value, 'lei')) : '<span class="da2-cell-empty">–</span>';
+        }
+        function count(value, word) {
+            return num(value) > 0 ? ' <small class="da2-cell-empty">(' + fmt(value, 'int') + ' ' + word + ')</small>' : '';
+        }
+
+        var head = '<thead><tr><th>Vehicul</th><th>Tip</th><th class="da2-num">Carburant</th><th class="da2-num">Litri</th>' +
+            '<th class="da2-num">Cheltuieli alocate</th><th class="da2-num">Mentenanță</th><th class="da2-num">Total</th></tr></thead>';
+
+        var body = rows.map(function (row) {
+            var warn = num(row.alimentari_peste_rezervor) > 0
+                ? ' <i class="bi bi-exclamation-triangle-fill da2-neg" title="' +
+                    escapeHtml(fmt(row.alimentari_peste_rezervor, 'int') + ' alimentări peste capacitatea rezervorului: probabil sunt ale altui vehicul (verifică în Carburanți)') +
+                    '" aria-hidden="true"></i>'
+                : '';
+            var inactive = row.status && row.status !== 'activ' ? ' <small class="da2-cell-empty">(inactiv)</small>' : '';
+            return '<tr>' +
+                '<td><strong>' + escapeHtml(row.vehicul) + '</strong>' + inactive +
+                    (row.marca_model ? '<br><small class="da2-cell-empty">' + escapeHtml(row.marca_model) + '</small>' : '') + '</td>' +
+                '<td>' + escapeHtml(typeLabels[row.tip_vehicul] || row.tip_vehicul || '-') + '</td>' +
+                '<td class="da2-num">' + money(row.carburant) + count(row.alimentari, 'alim.') + warn + '</td>' +
+                '<td class="da2-num">' + (num(row.litri) > 0 ? escapeHtml(fmt(row.litri)) : '<span class="da2-cell-empty">–</span>') + '</td>' +
+                '<td class="da2-num">' + money(row.cheltuieli) + count(row.cheltuieli_nr, 'doc.') + '</td>' +
+                '<td class="da2-num">' + money(row.mentenanta) + count(row.mentenanta_nr, 'interv.') + '</td>' +
+                '<td class="da2-num"><strong>' + money(row.total) + '</strong></td>' +
+                '</tr>';
+        }).join('');
+
+        var foot = '<tfoot><tr><th colspan="2">TOTAL (' + fmt(rows.length, 'int') + ')</th>' +
+            '<td class="da2-num">' + escapeHtml(fmt(totals.carburant, 'lei')) + '</td>' +
+            '<td class="da2-num">' + escapeHtml(fmt(totals.litri)) + '</td>' +
+            '<td class="da2-num">' + escapeHtml(fmt(totals.cheltuieli, 'lei')) + '</td>' +
+            '<td class="da2-num">' + escapeHtml(fmt(totals.mentenanta, 'lei')) + '</td>' +
+            '<td class="da2-num">' + escapeHtml(fmt(totals.total, 'lei')) + '</td></tr></tfoot>';
+
+        table.innerHTML = head + '<tbody>' + body + '</tbody>' + foot;
     }
 
     function renderPeriod() {

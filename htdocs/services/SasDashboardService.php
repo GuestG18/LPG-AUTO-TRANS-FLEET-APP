@@ -38,6 +38,8 @@ class SasDashboardService
     private const L100_MIN = 4.0;
     private const L100_MAX = 120.0;
     private const L100_MIN_KM = 5.0;
+    // Fereastra in jurul orei de pe bon in care se cauta cresterea de nivel din rezervor.
+    private const FILL_WINDOW_MINUTES = 60;
     // Map matching (traseul "lipit" de drum) prin Valhalla public (FOSSGIS).
     // Nota: serverele OSRM publice NU merg pentru asta — accepta doar ~10
     // coordonate per cerere si blocheaza temporar IP-ul la rafale de cereri
@@ -94,6 +96,135 @@ class SasDashboardService
             'can_fuel_l' => $range['can_fuel_l'] ?? null,
             'odometer_km' => $range['odometer_km'] ?? null,
         ];
+    }
+
+    /**
+     * Datele GPS / CAN pentru verificarea unei alimentari (pagina Carburanti).
+     *
+     * - km GPS si motorina CAN consumata intre alimentarea precedenta si aceasta
+     *   (travelsheet pe intervalul exact) - se compara cu diferenta de odometru
+     *   declarata de sofer la pompa; odometrul GPS (kmIndex) NU e calibrat pe
+     *   bord (diferente de zeci de mii de km), deci se compara doar diferentele;
+     * - nivelul rezervorului (sonda / CAN) inainte si dupa alimentare, din
+     *   evenimentele de la +/- FILL_WINDOW_MINUTES: cea mai mare crestere intre
+     *   doua citiri valide = litrii intrati efectiv in rezervor.
+     *
+     * Orele SAS si cele CardOil sunt amandoua ora locala.
+     */
+    public function getFillupTelemetry(int $carId, ?string $previousDatetime, string $fillupDatetime): array
+    {
+        $fillupTs = strtotime($fillupDatetime);
+        if ($carId <= 0 || $fillupTs === false) {
+            throw new InvalidArgumentException('Parametri invalizi pentru verificarea alimentarii.');
+        }
+
+        $this->restoreSasSession();
+
+        $result = [
+            'gps_km' => null,
+            // Momentele reale inregistrate de GPS in interval: prima si ultima miscare.
+            'gps_first_at' => null,
+            'gps_last_at' => null,
+            'gps_segments' => 0,
+            'can_fuel_l' => null,
+            'has_can' => false,
+            'gps_odometer_km' => null,
+            'fuel_level_before' => null,
+            'fuel_level_after' => null,
+            'fuel_detected_l' => null,
+        ];
+
+        $previousTs = $previousDatetime !== null ? strtotime($previousDatetime) : false;
+        if ($previousTs !== false && $previousTs < $fillupTs) {
+            $sheet = $this->client->getTravelSheet(
+                $carId,
+                date('Y-m-d\TH:i:s', $previousTs),
+                date('Y-m-d\TH:i:s', $fillupTs),
+                $fillupTs < strtotime('today')
+            );
+            $result['gps_km'] = is_numeric($sheet['totalDistance'] ?? null) ? round((float) $sheet['totalDistance'], 1) : null;
+            foreach ((array) ($sheet['segments'] ?? []) as $segment) {
+                if (!is_array($segment) || !is_numeric($segment['distance'] ?? null) || (float) $segment['distance'] <= 0) {
+                    continue;
+                }
+                $start = $this->toStringOrNull($segment['dateStart'] ?? null);
+                $end = $this->toStringOrNull($segment['dateEnd'] ?? null);
+                $result['gps_first_at'] ??= $start !== null ? str_replace('T', ' ', $start) : null;
+                $result['gps_last_at'] = $end !== null ? str_replace('T', ' ', $end) : $result['gps_last_at'];
+                $result['gps_segments']++;
+            }
+            $result['has_can'] = !empty($sheet['hasCANInfo']);
+            $result['can_fuel_l'] = $result['has_can'] && is_numeric($sheet['CANFuelUsed'] ?? null)
+                ? round((float) $sheet['CANFuelUsed'], 1)
+                : null;
+            $odometer = $this->lastKmIndex($sheet);
+            $result['gps_odometer_km'] = $odometer !== null ? (int) round($odometer) : null;
+        }
+
+        $window = self::FILL_WINDOW_MINUTES * 60;
+        $events = $this->client->getCarEvents(
+            $carId,
+            date('Y-m-d\TH:i:s', $fillupTs - $window),
+            date('Y-m-d\TH:i:s', $fillupTs + $window)
+        );
+        $this->persistSasSession();
+
+        // Cea mai mare crestere de nivel: minimul de pana atunci -> citirea curenta.
+        $lowest = null;
+        $bestRise = 0.0;
+        foreach ($events as $event) {
+            if (empty($event['isFuelLevelValid']) || !is_numeric($event['fuelLevel'] ?? null)) {
+                continue;
+            }
+            $level = (float) $event['fuelLevel'];
+            if ($lowest === null || $level < $lowest) {
+                $lowest = $level;
+            }
+            if ($level - $lowest > $bestRise) {
+                $bestRise = $level - $lowest;
+                $result['fuel_level_before'] = round($lowest, 1);
+                $result['fuel_level_after'] = round($level, 1);
+            }
+        }
+        if ($result['fuel_level_before'] !== null) {
+            $result['fuel_detected_l'] = round($bestRise, 1);
+        } elseif ($lowest !== null) {
+            // Sonda a raportat, dar nu s-a vazut nicio crestere de nivel.
+            $result['fuel_detected_l'] = 0.0;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Km GPS parcursi intre doua momente (ordinea nu conteaza). Folosit la
+     * odometrul calibrat: citirea de pe bord + km GPS de la citire la alimentare.
+     * Un interval de cateva luni raspunde in cateva secunde.
+     */
+    public function getGpsDistance(int $carId, string $from, string $to): ?float
+    {
+        $fromTs = strtotime($from);
+        $toTs = strtotime($to);
+        if ($carId <= 0 || $fromTs === false || $toTs === false) {
+            throw new InvalidArgumentException('Parametri invalizi pentru distanta GPS.');
+        }
+        if ($fromTs > $toTs) {
+            [$fromTs, $toTs] = [$toTs, $fromTs];
+        }
+        if ($fromTs === $toTs) {
+            return 0.0;
+        }
+
+        $this->restoreSasSession();
+        $sheet = $this->client->getTravelSheet(
+            $carId,
+            date('Y-m-d\TH:i:s', $fromTs),
+            date('Y-m-d\TH:i:s', $toTs),
+            $toTs < strtotime('today')
+        );
+        $this->persistSasSession();
+
+        return is_numeric($sheet['totalDistance'] ?? null) ? round((float) $sheet['totalDistance'], 1) : null;
     }
 
     /**

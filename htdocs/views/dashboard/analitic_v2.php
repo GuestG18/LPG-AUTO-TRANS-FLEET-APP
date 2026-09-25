@@ -275,6 +275,7 @@ $pageConfig = [
         <button type="button" class="da2-tab" data-tab="comparatie" role="tab"><i class="bi bi-bar-chart-steps" aria-hidden="true"></i>Comparație</button>
         <button type="button" class="da2-tab" data-tab="raport" role="tab"><i class="bi bi-clipboard-data" aria-hidden="true"></i>Raport sumar</button>
         <button type="button" class="da2-tab" data-tab="vehicule" role="tab"><i class="bi bi-truck" aria-hidden="true"></i>Vehicule</button>
+        <button type="button" class="da2-tab" data-tab="vehicule_usoare" role="tab"><i class="bi bi-car-front" aria-hidden="true"></i>Vehicule ușoare</button>
         <button type="button" class="da2-tab" data-tab="soferi" role="tab"><i class="bi bi-person-badge" aria-hidden="true"></i>Șoferi</button>
         <button type="button" class="da2-tab" data-tab="beneficiari" role="tab"><i class="bi bi-building" aria-hidden="true"></i>Beneficiari</button>
         <button type="button" class="da2-tab" data-tab="alerte" role="tab"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>Alerte<span class="da2-tab-badge" id="da2-alerts-count" hidden>0</span></button>
@@ -588,6 +589,19 @@ $pageConfig = [
                 </div>
             </header>
             <div class="da2-table-wrap"><table class="da2-table" data-table="vehicles"></table></div>
+        </article>
+    </section>
+
+    <section class="da2-panel" data-panel="vehicule_usoare">
+        <article class="da2-card da2-card-wide">
+            <header class="da2-card-head">
+                <div>
+                    <h2>Costuri vehicule ușoare</h2>
+                    <p class="da2-card-sub">Autoturisme și autoutilitare. Nu fac curse, deci nu intră în restul dashboard-ului; aici sunt costurile lor reale din perioadă: carburant (CardOil, cu TVA), cheltuieli alocate pe vehicul și mentenanță. Se aplică doar perioada, nu și filtrele de cursă.</p>
+                </div>
+            </header>
+            <div class="da2-mini-stats" id="da2-light-stats"></div>
+            <div class="da2-table-wrap"><table class="da2-table" id="da2-light-table"></table></div>
         </article>
     </section>
 

@@ -9,10 +9,21 @@ class FuelController
     private const RECEIPT_MAX_SIZE = 5242880; // 5 MB
     private const RECEIPT_ALLOWED_EXTENSIONS = ['pdf', 'jpg', 'jpeg', 'png', 'webp'];
 
+    /** Sursele acceptate pentru o citire de odometru de incredere. */
+    public const KM_CALIBRATION_SOURCES = [
+        'bord_foto' => 'Bord (poză)',
+        'service' => 'Service',
+        'itp' => 'ITP',
+        'tahograf' => 'Tahograf',
+        'alta' => 'Altă sursă',
+    ];
+
     private FuelModel $model;
+    private PDO $db;
 
     public function __construct(PDO $db)
     {
+        $this->db = $db;
         $this->model = new FuelModel($db);
     }
 
@@ -58,6 +69,15 @@ class FuelController
                 return;
             case 'purge_excluded':
                 $this->purgeExcludedAction();
+                return;
+            case 'km_check_fetch':
+                $this->kmCheckFetchAction();
+                return;
+            case 'km_calibration_save':
+                $this->kmCalibrationSaveAction();
+                return;
+            case 'km_calibration_delete':
+                $this->kmCalibrationDeleteAction();
                 return;
             default:
                 http_response_code(404);
@@ -114,7 +134,28 @@ class FuelController
             ];
         }
 
+        // Separat de restul datelor: o problema aici nu trebuie sa goleasca pagina.
+        try {
+            $kmCheckRows = (new FuelKmCheckModel($this->db))->getRows(
+                (string) $filters['date_from'],
+                (string) $filters['date_to'],
+                (array) ($filters['vehicles'] ?? [])
+            );
+        } catch (Throwable $exception) {
+            error_log('[FuelController][km_check] ' . $exception->getMessage());
+            $kmCheckRows = [];
+        }
+
+        try {
+            $kmCalibrations = (new FuelKmCheckModel($this->db))->getCalibrations();
+        } catch (Throwable $exception) {
+            $kmCalibrations = [];
+        }
+
         render('carburanti/index.php', [
+            'kmCheckRows' => $kmCheckRows,
+            'kmCalibrations' => $kmCalibrations,
+            'kmCalibrationSources' => self::KM_CALIBRATION_SOURCES,
             'pageTitle' => 'Carburanti',
             'currentPage' => 'carburanti',
             'filters' => $filters,
@@ -198,6 +239,140 @@ class FuelController
         $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
 
         return $date !== false && $date->format('Y-m-d') === $value ? $value : null;
+    }
+
+    /**
+     * JSON: completeaza din SAS (GPS + CAN) verificarea unei alimentari si o
+     * salveaza. Apelat esalonat din tabul „Verificare km", cate o alimentare.
+     */
+    private function kmCheckFetchAction(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store');
+
+        $fillupId = (int) ($_GET['fillup_id'] ?? 0);
+        $checkModel = new FuelKmCheckModel($this->db);
+        $fillup = $fillupId > 0 ? $checkModel->getFillup($fillupId) : null;
+        if ($fillup === null) {
+            http_response_code(404);
+            echo json_encode(['ok' => false, 'error' => 'Alimentarea nu exista.']);
+            exit;
+        }
+        $fillup['calibration'] = $checkModel->calibrationFor((string) $fillup['plate_key'], (string) $fillup['fillup_datetime']);
+
+        $service = new SasDashboardService($this->db);
+        $carId = null;
+        try {
+            if (!$service->credentialsAvailable()) {
+                throw new RuntimeException('Datele de acces SAS nu sunt configurate.');
+            }
+            foreach ($service->getFleetVehicles() as $car) {
+                $plate = strtoupper(str_replace(' ', '', (string) ($car['registration'] ?? '')));
+                if ($plate !== '' && $plate === (string) $fillup['plate_key']) {
+                    $carId = (int) ($car['sas_vehicle_id'] ?? 0) ?: null;
+                    break;
+                }
+            }
+
+            if ($carId === null) {
+                $row = $checkModel->saveTelemetry($fillup, null, 'no_gps');
+            } else {
+                $telemetry = $service->getFillupTelemetry(
+                    $carId,
+                    $fillup['prev_datetime'] !== null ? (string) $fillup['prev_datetime'] : null,
+                    (string) $fillup['fillup_datetime']
+                );
+                // Odometrul GPS calibrat: citirea de incredere + km GPS de la ea pana la alimentare.
+                if (is_array($fillup['calibration'])) {
+                    $telemetry['calibration_id'] = (int) $fillup['calibration']['id'];
+                    $telemetry['gps_km_since_calibration'] = $service->getGpsDistance(
+                        $carId,
+                        (string) $fillup['calibration']['reading_datetime'],
+                        (string) $fillup['fillup_datetime']
+                    );
+                }
+                $row = $checkModel->saveTelemetry($fillup, $carId, 'ok', $telemetry);
+            }
+            echo json_encode(['ok' => true, 'row' => $row], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $exception) {
+            error_log('[FuelController][km_check_fetch] ' . $exception->getMessage());
+            $row = $checkModel->saveTelemetry($fillup, $carId, 'error', [], 'SAS indisponibil: ' . $exception->getMessage());
+            echo json_encode(['ok' => false, 'row' => $row, 'error' => 'Datele SAS nu au putut fi citite.'], JSON_UNESCAPED_UNICODE);
+        }
+        exit;
+    }
+
+    /** Citire de incredere a odometrului (bord / service / ITP / tahograf) pentru calibrarea GPS. */
+    private function kmCalibrationSaveAction(): void
+    {
+        $returnUrl = $this->kmCheckReturnUrl();
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($returnUrl);
+        }
+        ensure_csrf_or_redirect($returnUrl);
+        $this->requireFullManagement();
+
+        $registration = trim((string) ($_POST['vehicle_registration'] ?? ''));
+        $readingKm = (int) str_replace([' ', '.', ','], '', trim((string) ($_POST['reading_km'] ?? '')));
+        $rawDatetime = trim((string) ($_POST['reading_datetime'] ?? ''));
+        $datetime = DateTimeImmutable::createFromFormat('Y-m-d\TH:i', $rawDatetime) ?: null;
+        $sources = self::KM_CALIBRATION_SOURCES;
+        $source = (string) ($_POST['source'] ?? '');
+
+        if ($registration === '' || $readingKm <= 0 || $datetime === null || !isset($sources[$source])) {
+            flash_set('warning', 'Completeaza vehiculul, km de pe bord, data si ora citirii si sursa.');
+            redirect($returnUrl);
+        }
+        if ($datetime > new DateTimeImmutable()) {
+            flash_set('warning', 'Citirea nu poate fi din viitor.');
+            redirect($returnUrl);
+        }
+
+        try {
+            (new FuelKmCheckModel($this->db))->addCalibration(
+                $registration,
+                $readingKm,
+                $datetime->format('Y-m-d H:i:00'),
+                $source,
+                trim((string) ($_POST['note'] ?? '')),
+                $this->currentUserId()
+            );
+            flash_set('success', 'Citirea de odometru a fost salvata. Alimentarile vehiculului se recalculeaza la deschiderea tabului.');
+        } catch (Throwable $exception) {
+            error_log('[FuelController][km_calibration_save] ' . $exception->getMessage());
+            flash_set('danger', 'Citirea nu a putut fi salvata.');
+        }
+        redirect($returnUrl);
+    }
+
+    private function kmCalibrationDeleteAction(): void
+    {
+        $returnUrl = $this->kmCheckReturnUrl();
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($returnUrl);
+        }
+        ensure_csrf_or_redirect($returnUrl);
+        $this->requireFullManagement();
+
+        try {
+            if ((new FuelKmCheckModel($this->db))->deleteCalibration((int) ($_POST['calibration_id'] ?? 0))) {
+                flash_set('success', 'Citirea de odometru a fost stearsa.');
+            } else {
+                flash_set('warning', 'Citirea nu mai exista.');
+            }
+        } catch (Throwable $exception) {
+            error_log('[FuelController][km_calibration_delete] ' . $exception->getMessage());
+            flash_set('danger', 'Citirea nu a putut fi stearsa.');
+        }
+        redirect($returnUrl);
+    }
+
+    /** Dupa salvare revii pe tabul de verificare, cu aceleasi filtre. */
+    private function kmCheckReturnUrl(): string
+    {
+        $url = $this->safeReturnUrl($_POST['return_url'] ?? null);
+
+        return strtok($url, '#') . '#fuel-kmcheck';
     }
 
     /** JSON: ce s-ar sterge pentru vehiculele excluse, de la date_from. */

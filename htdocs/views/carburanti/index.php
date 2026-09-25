@@ -250,7 +250,7 @@ $associationLabel = static function (array $row): string {
 };
 $renderFillupRows = static function (array $rows, bool $compact = false) use ($formatDateTime, $formatLiters, $formatKm, $formatCurrency, $fuelTypeLabel, $associationLabel, $currentUrl, $canManageFull): void {
     if ($rows === []) {
-        $colspan = $compact ? 5 : 11;
+        $colspan = $compact ? 6 : 11;
         echo '<tr><td colspan="' . $colspan . '" class="text-center text-muted py-4">Nu exista alimentari pentru filtrele selectate.</td></tr>';
         return;
     }
@@ -280,6 +280,9 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
             <?php endif; ?>
             <td><?= e($fuelTypeLabel((string) ($row['fuel_type'] ?? ''))) ?></td>
             <td><?= e($formatLiters((float) ($row['quantity_liters'] ?? 0))) ?></td>
+            <?php if ($compact): ?>
+                <td><?= e($formatCurrency((float) ($row['total_value'] ?? 0))) ?></td>
+            <?php endif; ?>
             <?php if (!$compact): ?>
                 <td>
                     <?php
@@ -1070,6 +1073,31 @@ $donutStyle = static function (array $items): string {
             <i class="bi bi-cash-coin" aria-hidden="true"></i>
         </article>
     </div>
+    <?php
+    $fuelSplitTotal = (float) ($kpis['total_value'] ?? 0);
+    $fuelSplitGroups = [
+        ['label' => 'Vehicule grele', 'hint' => 'Camioane, capete tractor', 'icon' => 'bi-truck', 'accent' => 'blue', 'value' => (float) ($kpis['heavy_value'] ?? 0), 'liters' => (float) ($kpis['heavy_liters'] ?? 0), 'fillups' => (int) ($kpis['heavy_fillups'] ?? 0)],
+        ['label' => 'Vehicule ușoare', 'hint' => 'Autoturisme, autoutilitare', 'icon' => 'bi-car-front', 'accent' => 'purple', 'value' => (float) ($kpis['light_value'] ?? 0), 'liters' => (float) ($kpis['light_liters'] ?? 0), 'fillups' => (int) ($kpis['light_fillups'] ?? 0)],
+    ];
+    ?>
+    <div class="fuel-split" aria-label="Cost carburant pe categorie de vehicul">
+        <?php foreach ($fuelSplitGroups as $group): ?>
+            <?php $share = $fuelSplitTotal > 0 ? $group['value'] / $fuelSplitTotal * 100 : 0.0; ?>
+            <article class="fuel-split-card fuel-split-<?= e($group['accent']) ?>">
+                <i class="bi <?= e($group['icon']) ?>" aria-hidden="true"></i>
+                <div class="fuel-split-main">
+                    <span><?= e($group['label']) ?> <small><?= e($group['hint']) ?></small></span>
+                    <strong><?= e($formatCurrency($group['value'])) ?></strong>
+                    <small><?= e($formatLiters($group['liters'])) ?> · <?= e(format_number_ro((float) $group['fillups'], 0)) ?> alimentări</small>
+                </div>
+                <div class="fuel-split-share">
+                    <strong><?= e(format_number_ro($share, 1)) ?>%</strong>
+                    <small>din cost total</small>
+                    <div class="fuel-split-bar"><span style="width: <?= e(number_format(min(100.0, max(0.0, $share)), 1, '.', '')) ?>%"></span></div>
+                </div>
+            </article>
+        <?php endforeach; ?>
+    </div>
     <?php endif; ?>
 
     <div class="fuel-tabs">
@@ -1081,6 +1109,7 @@ $donutStyle = static function (array $items): string {
             <li class="nav-item" role="presentation"><button class="nav-link" id="fuel-norm-tab" data-bs-toggle="tab" data-bs-target="#fuel-norm" type="button" role="tab">Consum normat</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" id="fuel-compare-tab" data-bs-toggle="tab" data-bs-target="#fuel-compare" type="button" role="tab">Comparație</button></li>
             <li class="nav-item" role="presentation"><button class="nav-link" id="fuel-reports-tab" data-bs-toggle="tab" data-bs-target="#fuel-reports" type="button" role="tab">Rapoarte</button></li>
+            <li class="nav-item" role="presentation"><button class="nav-link" id="fuel-kmcheck-tab" data-bs-toggle="tab" data-bs-target="#fuel-kmcheck" type="button" role="tab">Verificare km (GPS/CAN)</button></li>
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="fuel-unassociated-tab" data-bs-toggle="tab" data-bs-target="#fuel-unassociated" type="button" role="tab">
                     Alimentări neasociate
@@ -1256,7 +1285,7 @@ $donutStyle = static function (array $items): string {
                                 <tbody><?php $renderFillupRows($latestFillups); ?></tbody>
                             </table>
                         </div>
-                        <a class="fuel-card-link" href="#fuel-fillups" data-bs-toggle="tab" data-bs-target="#fuel-fillups">Vezi toate alimentările <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+                        <a class="fuel-card-link" href="#fuel-fillups" data-fuel-tab-link="fuel-fillups-tab">Vezi toate alimentările <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
                     </article>
 
                     <article class="fuel-card">
@@ -1271,13 +1300,14 @@ $donutStyle = static function (array $items): string {
                                         <th>Vehicul</th>
                                         <th>Tip carburant</th>
                                         <th>Cantitate</th>
+                                        <th>Valoare</th>
                                         <th>Acțiuni</th>
                                     </tr>
                                 </thead>
                                 <tbody><?php $renderFillupRows(array_slice($unassociatedFillups, 0, 4), true); ?></tbody>
                             </table>
                         </div>
-                        <a class="fuel-card-link" href="#fuel-unassociated" data-bs-toggle="tab" data-bs-target="#fuel-unassociated">Vezi toate alimentările neasociate <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+                        <a class="fuel-card-link" href="#fuel-unassociated" data-fuel-tab-link="fuel-unassociated-tab">Vezi toate alimentările neasociate <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
                     </article>
                 </div>
             </section>
@@ -1741,6 +1771,111 @@ $donutStyle = static function (array $items): string {
                 <?php endif; ?>
             </section>
 
+            <section class="tab-pane fade" id="fuel-kmcheck" role="tabpanel" aria-labelledby="fuel-kmcheck-tab" tabindex="0">
+                <article class="fuel-card">
+                    <div class="fuel-card-header">
+                        <div>
+                            <h2>Verificare km și litri cu GPS / CAN</h2>
+                            <ul class="fuel-kmcheck-howto">
+                                <li><strong>Km:</strong> cât arată odometrul tastat de șofer că a mers camionul de la alimentarea precedentă, față de cât a înregistrat GPS-ul în același interval (între orele celor două bonuri).</li>
+                                <li><strong>Litri:</strong> litrii de pe bon, față de cât a crescut nivelul în rezervor (sonda) la alimentare.</li>
+                                <li><strong>Diferență</strong> = declarat minus măsurat. Minus = șoferul a declarat mai puțini km / pe bon sunt mai puțini litri decât au intrat. Verde = în toleranță, galben = de urmărit, roșu = de verificat.</li>
+                            </ul>
+                        </div>
+                        <div class="fuel-kmcheck-tools">
+                            <label class="form-check form-switch mb-0">
+                                <input class="form-check-input" type="checkbox" data-kmcheck-only-issues>
+                                <span class="form-check-label">Doar diferențe</span>
+                            </label>
+                        </div>
+                    </div>
+                    <details class="fuel-kmcheck-calib">
+                        <summary>
+                            <i class="bi bi-speedometer2" aria-hidden="true"></i>
+                            Opțional: odometru GPS absolut
+                            <span class="fuel-kmcheck-muted">— nu e necesar pentru verificarea de mai jos (<?= e((string) count($kmCalibrations ?? [])) ?> citiri de pe bord)</span>
+                        </summary>
+                        <p class="fuel-kmcheck-sub">
+                            Introdu km de pe bord citiți sigur (poză cu bordul, service, ITP, tahograf) și ora citirii. Odometrul GPS la fiecare alimentare = această citire + km GPS parcurși de atunci.
+                            Se folosește cea mai recentă citire dinaintea alimentării; o citire nouă (ex. lunar) ține eroarea GPS mică.
+                        </p>
+                        <?php if ($canManageFull): ?>
+                            <form method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'km_calibration_save'])) ?>" class="fuel-kmcheck-calib-form">
+                                <?= csrf_field() ?>
+                                <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+                                <label>Vehicul
+                                    <select name="vehicle_registration" class="form-select form-select-sm" required>
+                                        <option value="">Alege…</option>
+                                        <?php foreach ($vehicleOptions as $vehicle): ?>
+                                            <?php $calibPlate = (string) ($vehicle['vehicle_registration'] ?? ''); ?>
+                                            <?php if ($calibPlate !== ''): ?>
+                                                <option value="<?= e($calibPlate) ?>"><?= e($calibPlate) ?></option>
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </label>
+                                <label>Km pe bord
+                                    <input type="text" name="reading_km" class="form-control form-control-sm" inputmode="numeric" placeholder="ex. 1337545" required>
+                                </label>
+                                <label>Data și ora citirii
+                                    <input type="datetime-local" name="reading_datetime" class="form-control form-control-sm" max="<?= e(date('Y-m-d\TH:i')) ?>" required>
+                                </label>
+                                <label>Sursa
+                                    <select name="source" class="form-select form-select-sm" required>
+                                        <?php foreach (($kmCalibrationSources ?? []) as $sourceKey => $sourceLabel): ?>
+                                            <option value="<?= e($sourceKey) ?>"><?= e($sourceLabel) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </label>
+                                <label class="fuel-kmcheck-calib-note">Notă
+                                    <input type="text" name="note" class="form-control form-control-sm" maxlength="255" placeholder="opțional">
+                                </label>
+                                <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă citirea</button>
+                            </form>
+                        <?php endif; ?>
+                        <?php if (!empty($kmCalibrations)): ?>
+                            <div class="table-responsive">
+                                <table class="table table-sm fuel-kmcheck-calib-table">
+                                    <thead><tr><th>Vehicul</th><th class="text-end">Km pe bord</th><th>Data citirii</th><th>Sursa</th><th>Notă</th><th></th></tr></thead>
+                                    <tbody>
+                                        <?php foreach ($kmCalibrations as $calibration): ?>
+                                            <tr>
+                                                <td class="fw-semibold"><?= e((string) $calibration['vehicle_registration']) ?></td>
+                                                <td class="text-end"><?= e(format_number_ro((float) $calibration['reading_km'], 0)) ?></td>
+                                                <td><?= e(date('d.m.Y H:i', strtotime((string) $calibration['reading_datetime']))) ?></td>
+                                                <td><?= e((string) (($kmCalibrationSources ?? [])[$calibration['source']] ?? $calibration['source'])) ?></td>
+                                                <td><?= e((string) ($calibration['note'] ?? '')) ?></td>
+                                                <td class="text-end">
+                                                    <?php if ($canManageFull): ?>
+                                                        <form method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'km_calibration_delete'])) ?>">
+                                                            <?= csrf_field() ?>
+                                                            <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+                                                            <input type="hidden" name="calibration_id" value="<?= e((string) (int) $calibration['id']) ?>">
+                                                            <button type="submit" class="btn btn-link btn-sm text-danger p-0" title="Șterge citirea"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                                        </form>
+                                                    <?php endif; ?>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        <?php endif; ?>
+                    </details>
+                    <div class="fuel-kmcheck-summary" data-kmcheck-summary></div>
+                    <div class="table-responsive">
+                        <table class="table fuel-table fuel-kmcheck-table">
+                            <thead data-kmcheck-head></thead>
+                            <tbody data-kmcheck-body></tbody>
+                        </table>
+                    </div>
+                    <script type="application/json" data-kmcheck-config><?= json_encode([
+                        'endpoint' => build_query_url(['page' => 'carburanti', 'action' => 'km_check_fetch']),
+                        'rows' => $kmCheckRows ?? [],
+                    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>
+                </article>
+            </section>
+
             <section class="tab-pane fade" id="fuel-reports" role="tabpanel" aria-labelledby="fuel-reports-tab" tabindex="0">
                 <article class="fuel-card">
                     <div class="fuel-card-header"><h2>Rapoarte și sincronizări</h2></div>
@@ -1789,6 +1924,7 @@ $donutStyle = static function (array $items): string {
                                     <th>Vehicul</th>
                                     <th>Tip carburant</th>
                                     <th>Cantitate</th>
+                                    <th>Valoare</th>
                                     <th>Acțiuni</th>
                                 </tr>
                             </thead>
@@ -2675,6 +2811,20 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // Linkurile din carduri stau in afara #fuelTabs, iar Bootstrap Tab nu functioneaza
+    // pe declansatoare din afara listei de taburi: activam butonul real al tabului.
+    document.querySelectorAll('[data-fuel-tab-link]').forEach(function (link) {
+        link.addEventListener('click', function (event) {
+            var tabButton = document.getElementById(link.getAttribute('data-fuel-tab-link'));
+            if (!tabButton || !window.bootstrap) {
+                return;
+            }
+            event.preventDefault();
+            bootstrap.Tab.getOrCreateInstance(tabButton).show();
+            tabButton.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    });
+
     if (window.bootstrap && new URLSearchParams(window.location.search).has('compare_mode')) {
         var compareTabButton = document.getElementById('fuel-compare-tab');
         if (compareTabButton) {
@@ -2987,3 +3137,4 @@ document.addEventListener('DOMContentLoaded', function () {
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script src="<?= e(url('assets/js/carburanti-compare.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/carburanti-compare.js'))) ?>"></script>
+<script src="<?= e(url('assets/js/fuel-km-check.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/fuel-km-check.js'))) ?>"></script>
