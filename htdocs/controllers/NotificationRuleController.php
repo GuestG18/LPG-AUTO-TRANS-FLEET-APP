@@ -21,6 +21,7 @@ class NotificationRuleController
         'vehicle' => 'Vehicul',
         'driver' => 'Sofer',
         'repair' => 'Reparatie',
+        'diurna' => 'Diurna',
     ];
 
     public const APPROVAL_EVENT = 'inactive_approval_pending';

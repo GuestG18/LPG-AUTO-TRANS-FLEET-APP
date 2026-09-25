@@ -10,10 +10,12 @@ $baseQuery = [
     'zona_distributie_id' => $filters['zona_distributie_id'] ?? '',
     'data_start' => $filters['data_start'] ?? '',
     'data_end' => $filters['data_end'] ?? '',
+    'ids' => $filters['ids'] ?? '',
+    'ids_label' => $filters['ids_label'] ?? '',
 ];
 $currentListUrl = build_query_url($baseQuery);
 $hasActiveFilters = $search !== '';
-foreach (['tip_transport', 'vehicle_id', 'loc_incarcare_id', 'beneficiar_id', 'zona_distributie_id', 'data_start', 'data_end'] as $filterKey) {
+foreach (['tip_transport', 'vehicle_id', 'loc_incarcare_id', 'beneficiar_id', 'zona_distributie_id', 'data_start', 'data_end', 'ids'] as $filterKey) {
     if (trim((string) ($filters[$filterKey] ?? '')) !== '') {
         $hasActiveFilters = true;
         break;
@@ -269,43 +271,18 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
 <?php include __DIR__ . '/_live_gps_panel.php'; ?>
 
 <?php
-$resumeParentId = (int) ($formData['parent_cursa_id'] ?? 0);
-$isResumeMode = $resumeParentId > 0;
-$resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSource : null;
+// Reluarea cursei se face in formularul cursei, pe pagina de editare: meniul
+// "Reia cursa" duce acolo (vezi resume_id in DispecerCurseController).
 ?>
 <div class="row g-3 align-items-start">
     <div class="col-12">
         <div class="card border-0 shadow-sm" id="add-race-form">
             <div class="card-header bg-white">
-                <h3 class="h6 mb-0"><?= $isResumeMode ? 'Adaugă Cursă — continuare a cursei #' . e((string) $resumeParentId) : 'Adaugă Cursă' ?></h3>
+                <h3 class="h6 mb-0">Adaugă Cursă</h3>
             </div>
             <div class="card-body">
-                <?php if ($isResumeMode): ?>
-                    <div class="alert alert-info d-flex align-items-start gap-2" role="alert">
-                        <i class="bi bi-arrow-repeat mt-1" aria-hidden="true"></i>
-                        <div>
-                            <strong>Reluare cursă #<?= e((string) $resumeParentId) ?></strong>
-                            <?php if ($resumeSourceRow !== null): ?>
-                                <?php
-                                $resumeSrcVehicle = trim((string) ($resumeSourceRow['nr_inmatriculare'] ?? ''));
-                                $resumeSrcDriver = trim((string) ($resumeSourceRow['sofer_nume'] ?? ''));
-                                $resumeSrcEndDate = trim((string) ($resumeSourceRow['data_sfarsit'] ?? ''));
-                                $resumeSrcEndTime = substr(trim((string) ($resumeSourceRow['ora_sfarsit'] ?? '')), 0, 5);
-                                ?>
-                                <div class="small">
-                                    Segment anterior: <?= e($resumeSrcVehicle !== '' ? $resumeSrcVehicle : 'vehicul -') ?>,
-                                    șofer <?= e($resumeSrcDriver !== '' ? $resumeSrcDriver : '-') ?>,
-                                    încheiat la <?= e($resumeSrcEndDate !== '' ? format_date_ro($resumeSrcEndDate) : '-') ?><?= e($resumeSrcEndTime !== '' ? ' ' . $resumeSrcEndTime : '') ?>.
-                                </div>
-                            <?php endif; ?>
-                            <div class="small">Segmentul nou este o înregistrare separată: poți schimba șoferul sau vehiculul, iar calculele (tarife, costuri/km) se aplică vehiculului și șoferului din acest segment. Km, cantitățile și orele se introduc doar pentru acest segment.</div>
-                            <a class="small" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Renunță la reluare</a>
-                        </div>
-                    </div>
-                <?php endif; ?>
-                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store'])) ?>" class="dispatcher-race-form" data-zone-tariffs='<?= e($zoneTariffJson) ?>' data-zone-extra-km-costs='<?= e($zoneExtraKmJson) ?>' data-distribution-route-tariffs='<?= e($distributionRouteTariffMapJson) ?>' data-primary-route-km-map='<?= e($primaryRouteKmMapJson) ?>' data-beneficiary-pricing='<?= e($beneficiaryPricingJson) ?>' data-primary-extended-beneficiaries='<?= e($primaryExtendedBeneficiaryJson) ?>' data-load-location-tariffs='<?= e($loadLocationTariffJson) ?>' data-vehicle-default-load-locations='<?= e($vehicleDefaultLoadLocationJson) ?>' data-vehicle-default-distribution-zones='<?= e($vehicleDefaultDistributionZoneJson) ?>' data-vehicle-garages='<?= e($vehicleGarageJson) ?>' data-load-locations-by-beneficiary='<?= e($loadLocationsByBeneficiaryJson) ?>' data-distribution-zones-by-beneficiary='<?= e($distributionZonesByBeneficiaryJson) ?>' data-vehicle-default-load-locations-by-beneficiary='<?= e($vehicleDefaultLoadLocationByBeneficiaryJson) ?>' data-vehicle-default-distribution-zones-by-beneficiary='<?= e($vehicleDefaultDistributionZoneByBeneficiaryJson) ?>' data-compresor-vehicles-by-beneficiary='<?= e($compressorVehicleByBeneficiaryJson) ?>' data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>' data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>' data-all-drivers='<?= e($allDriversJson) ?>' data-inactive-resource-status-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'inactive_resource_status'])) ?>" data-inactive-approval-mode="<?= (function_exists('can') && can('inactive_approvals', 'review')) ? 'admin' : 'user' ?>" data-inactive-approval-request-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'request_inactive_vehicle_approval'])) ?>" data-inactive-approval-cancel-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'cancel_inactive_vehicle_approval'])) ?>" data-inactive-trip-id="" data-races-activity-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'races_activity'])) ?>" data-races-activity-since="<?= e(date('Y-m-d H:i:s')) ?>" data-trip-conflict-check-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'trip_conflict_check'])) ?>" novalidate>
+                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store'])) ?>" class="dispatcher-race-form" <?php include __DIR__ . '/_race_form_attrs.php'; ?> data-inactive-trip-id="" novalidate>
                     <?= csrf_field() ?>
-                    <input type="hidden" name="parent_cursa_id" value="<?= e($isResumeMode ? (string) $resumeParentId : '') ?>">
                     <input type="hidden" name="vehicle_config_decision" value="" data-vehicle-config-decision>
                     <input type="hidden" name="inactive_approval_decision" value="<?= e((string) ($formData['inactive_approval_decision'] ?? '')) ?>" data-inactive-approval-decision>
                     <input type="hidden" name="inactive_approval_signature" value="" data-inactive-approval-signature>
@@ -320,375 +297,14 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                     </datalist>
 
                     <div class="row g-3">
-                        <?php if (isset($formErrors['inactive_resources'])): ?>
-                            <div class="col-12">
-                                <div class="alert alert-warning d-flex align-items-center gap-2 mb-0" role="alert">
-                                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
-                                    <span><?= e((string) $formErrors['inactive_resources']) ?></span>
-                                </div>
-                            </div>
-                        <?php endif; ?>
-
-                        <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-beneficiar">
-                            <label class="form-label" for="race_beneficiar_id">Beneficiar transport <span class="text-danger">*</span></label>
-                            <select class="form-select <?= isset($formErrors['beneficiar_id']) ? 'is-invalid' : '' ?>" id="race_beneficiar_id" name="beneficiar_id" required>
-                                <option value="">-- Selecteaza --</option>
-                                <?php foreach ($beneficiaries as $beneficiary): ?>
-                                    <?php $beneficiaryId = (int) ($beneficiary['id'] ?? 0); ?>
-                                    <option value="<?= e((string) $beneficiaryId) ?>" <?= (string) ($formData['beneficiar_id'] ?? '') === (string) $beneficiaryId ? 'selected' : '' ?>>
-                                        <?= e((string) ($beneficiary['nume'] ?? '-')) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <?php if (isset($formErrors['beneficiar_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['beneficiar_id']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-tip-transport">
-                            <label class="form-label" for="race_tip_transport">Tip Transport <span class="text-danger">*</span></label>
-                            <select class="form-select <?= isset($formErrors['tip_transport']) ? 'is-invalid' : '' ?>" id="race_tip_transport" name="tip_transport" data-role="tip-transport" required>
-                                <option value="">-- Selecteaza --</option>
-                                <?php foreach ($transportTypes as $value => $label): ?>
-                                    <option value="<?= e((string) $value) ?>" <?= (string) ($formData['tip_transport'] ?? '') === (string) $value ? 'selected' : '' ?>>
-                                        <?= e((string) $label) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <?php if (isset($formErrors['tip_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['tip_transport']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-vehicul">
-                            <label class="form-label" for="race_vehicle_id">Nr. Înmatriculare <span class="text-danger">*</span></label>
-                            <select class="form-select <?= isset($formErrors['vehicle_id']) ? 'is-invalid' : '' ?>" id="race_vehicle_id" name="vehicle_id" required title="Pentru Primar km/tone: se afiseaza vehicule active cu sofer asociat. Pentru celelalte tipuri: filtrare dupa beneficiar si configurari.">
-                                <option value="">-- Selectează --</option>
-                                <?php foreach (($raceVehicles ?? []) as $vehicle): ?>
-                                    <?php $vehicleId = (int) ($vehicle['id'] ?? 0); ?>
-                                    <option
-                                        value="<?= e((string) $vehicleId) ?>"
-                                        data-capacitate-transport="<?= e((string) ($vehicle['capacitate_transport'] ?? '')) ?>"
-                                        <?= (string) ($formData['vehicle_id'] ?? '') === (string) $vehicleId ? 'selected' : '' ?>
-                                    >
-                                        <?= e((string) ($vehicle['nr_inmatriculare'] ?? '-')) ?> - <?= e((string) ($vehicle['marca'] ?? '')) ?> <?= e((string) ($vehicle['model'] ?? '')) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <?php if (isset($formErrors['vehicle_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['vehicle_id']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-sofer">
-                            <label class="form-label" for="race_driver_id">Sofer <span class="text-danger">*</span></label>
-                            <select class="form-select <?= isset($formErrors['driver_id']) ? 'is-invalid' : '' ?>" id="race_driver_id" name="driver_id" required title="Soferii se incarca automat dupa vehiculul selectat.">
-                                <option value="">-- Selecteaza mai intai vehiculul --</option>
-                                <?php
-                                    $selectedVehicleForDriver = (int) ($formData['vehicle_id'] ?? 0);
-                                    $selectedDriverId = (string) ($formData['driver_id'] ?? '');
-                                    $driverOptions = $selectedVehicleForDriver > 0
-                                        ? (array) ($driversByVehicle[$selectedVehicleForDriver] ?? [])
-                                        : [];
-                                ?>
-                                <?php foreach ($driverOptions as $driver): ?>
-                                    <?php $driverId = (int) ($driver['id'] ?? 0); ?>
-                                    <?php if ($driverId <= 0) { continue; } ?>
-                                    <option value="<?= e((string) $driverId) ?>" <?= $selectedDriverId === (string) $driverId ? 'selected' : '' ?>>
-                                        <?= e((string) ($driver['nume'] ?? '-')) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <?php if (isset($formErrors['driver_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['driver_id']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-start-datetime">
-                            <label class="form-label" for="race_start_datetime">Data si ora inceput <span class="text-danger">*</span></label>
-                            <?php
-                                $startDateValue = (string) ($formData['data_inceput'] ?? ($formData['data_cursa'] ?? ''));
-                                $startDateDisplayValue = $formatRaceDateForDisplay($startDateValue);
-                                $startDateTimeDisplayValue = trim($startDateDisplayValue . ($formStartTimeValue !== '' ? ' ' . $formStartTimeValue : ''));
-                                $startDateTimeHasError = isset($formErrors['data_inceput']) || isset($formErrors['ora_inceput']);
-                            ?>
-                            <div class="dispatcher-datetime-field" data-role="start-datetime-field">
-                                <div class="input-group dispatcher-datetime-input-group">
-                                    <input
-                                        type="text"
-                                        class="form-control <?= $startDateTimeHasError ? 'is-invalid' : '' ?>"
-                                        id="race_start_datetime"
-                                        value="<?= e($startDateTimeDisplayValue) ?>"
-                                        placeholder="dd/mm/yyyy HH:mm"
-                                        inputmode="numeric"
-                                        autocomplete="off"
-                                        maxlength="16"
-                                        data-role="start-datetime-display"
-                                        aria-label="Data si ora inceput"
-                                    >
-                                    <button type="button" class="btn btn-outline-secondary" data-role="start-datetime-toggle" aria-label="Deschide calendarul si ora de inceput" aria-expanded="false">
-                                        <i class="bi bi-calendar3" aria-hidden="true"></i>
-                                    </button>
-                                </div>
-                                <div class="dispatcher-datetime-popover" data-role="start-datetime-popover" hidden></div>
-                                <input
-                                    type="hidden"
-                                    data-role="race-date-ro"
-                                    id="race_data_inceput"
-                                    name="data_inceput"
-                                    value="<?= e($startDateDisplayValue) ?>"
-                                    required
-                                >
-                                <input
-                                    type="hidden"
-                                    id="race_ora_inceput"
-                                    name="ora_inceput"
-                                    value="<?= e($formStartTimeValue) ?>"
-                                    data-role="ora-inceput"
-                                >
-                            </div>
-                            <?php if (isset($formErrors['data_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_inceput']) ?></div><?php endif; ?>
-                            <?php if (isset($formErrors['ora_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['ora_inceput']) ?></div><?php endif; ?>
-                        </div>
-                        <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-data-incarcare">
-                            <label class="form-label" for="race_data_incarcare">Data incarcare</label>
-                            <?php $loadingDateValue = (string) ($formData['data_incarcare'] ?? ''); ?>
-                            <div class="input-group fleet-date-field">
-                                <input type="text" class="form-control js-date-display-input <?= isset($formErrors['data_incarcare']) ? 'is-invalid' : '' ?>" id="race_data_incarcare" name="data_incarcare" value="<?= e($formatRaceDateForDisplay($loadingDateValue)) ?>" placeholder="dd/mm/yyyy" inputmode="numeric" maxlength="10" autocomplete="off" data-date-picker-id="race_data_incarcare_picker">
-                                <button type="button" class="btn btn-outline-secondary js-date-picker-button" data-date-picker-target="race_data_incarcare_picker" aria-label="Deschide calendarul pentru data incarcarii"><i class="bi bi-calendar3" aria-hidden="true"></i></button>
-                                <input type="date" id="race_data_incarcare_picker" class="fleet-date-picker-native" value="<?= e($loadingDateValue) ?>" tabindex="-1" aria-hidden="true">
-                            </div>
-                            <?php if (isset($formErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_incarcare']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-end-datetime">
-                            <label class="form-label" for="race_end_datetime">Data si ora sfarsit <span class="text-danger">*</span></label>
-                            <?php
-                                $endDateValue = (string) ($formData['data_sfarsit'] ?? ($formData['data_cursa'] ?? ''));
-                                $endDateDisplayValue = $formatRaceDateForDisplay($endDateValue);
-                                $endDateTimeDisplayValue = trim($endDateDisplayValue . ($formEndTimeValue !== '' ? ' ' . $formEndTimeValue : ''));
-                                $endDateTimeHasError = isset($formErrors['data_sfarsit']) || isset($formErrors['ora_sfarsit']);
-                            ?>
-                            <div class="dispatcher-datetime-field" data-role="end-datetime-field">
-                                <div class="input-group dispatcher-datetime-input-group">
-                                    <input
-                                        type="text"
-                                        class="form-control <?= $endDateTimeHasError ? 'is-invalid' : '' ?>"
-                                        id="race_end_datetime"
-                                        value="<?= e($endDateTimeDisplayValue) ?>"
-                                        placeholder="dd/mm/yyyy HH:mm"
-                                        inputmode="numeric"
-                                        autocomplete="off"
-                                        maxlength="16"
-                                        data-role="end-datetime-display"
-                                        aria-label="Data si ora sfarsit"
-                                        title="<?= e($formDurationPreviewText) ?>"
-                                    >
-                                    <button type="button" class="btn btn-outline-secondary" data-role="end-datetime-toggle" aria-label="Deschide calendarul si ora de sfarsit" aria-expanded="false">
-                                        <i class="bi bi-calendar3" aria-hidden="true"></i>
-                                    </button>
-                                </div>
-                                <div class="dispatcher-datetime-popover" data-role="end-datetime-popover" hidden></div>
-                                <input
-                                    type="hidden"
-                                    data-role="race-date-ro"
-                                    id="race_data_sfarsit"
-                                    name="data_sfarsit"
-                                    value="<?= e($endDateDisplayValue) ?>"
-                                    required
-                                >
-                                <input
-                                    type="hidden"
-                                    id="race_ora_sfarsit"
-                                    name="ora_sfarsit"
-                                    value="<?= e($formEndTimeValue) ?>"
-                                    data-role="ora-sfarsit"
-                                    title="<?= e($formDurationPreviewText) ?>"
-                                >
-                            </div>
-                            <?php if (isset($formErrors['data_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['data_sfarsit']) ?></div><?php endif; ?>
-                            <?php if (isset($formErrors['ora_sfarsit'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['ora_sfarsit']) ?></div><?php endif; ?>
-                            <div class="form-text d-none dispatcher-hover-note" data-role="durata-cursa-hint" data-default-text="<?= e($formDurationPreviewText) ?>"><?= e($formDurationPreviewText) ?></div>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-primary-grid-field" data-role="field-loc-incarcare">
-                            <label class="form-label" for="race_loc_incarcare_id">Loc Încărcare <span class="text-danger">*</span></label>
-                            <select class="form-select <?= isset($formErrors['loc_incarcare_id']) ? 'is-invalid' : '' ?>" id="race_loc_incarcare_id" name="loc_incarcare_id" required title="Selecteaza locul de incarcare pentru cursa.">
-                                <option value="">-- Selectează --</option>
-                                <?php foreach ($loadLocations as $location): ?>
-                                    <?php $locationId = (int) ($location['id'] ?? 0); ?>
-                                    <option value="<?= e((string) $locationId) ?>" <?= (string) ($formData['loc_incarcare_id'] ?? '') === (string) $locationId ? 'selected' : '' ?>>
-                                        <?= e((string) ($location['nume'] ?? '-')) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <?php if (isset($formErrors['loc_incarcare_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['loc_incarcare_id']) ?></div><?php endif; ?>
-                            <div class="form-text text-muted d-none dispatcher-hover-note" data-role="distributie-note-loc">
-                                Pentru Distributie / Primar+Distributie: regula de ruta are prioritate pe perechile configurate bidirectional (Loc ? Zona). Daca nu exista pereche, se aplica fallback loc/zona/beneficiar.
-                            </div>
-                            <div class="form-text text-muted d-none dispatcher-hover-note" data-role="primar-note-loc">
-                                Pentru Primar km / Primar tone: sunt afisate doar locurile din Setari Primar, iar Km efectuati este luat automat din perechea Loc ? Zona.
-                            </div>
-                        </div>
-
-                        <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-plecare">
-                            <label class="form-label" for="race_loc_plecare">Loc plecare <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control <?= isset($formErrors['loc_plecare']) ? 'is-invalid' : '' ?>" id="race_loc_plecare" name="loc_plecare" value="<?= e((string) ($formData['loc_plecare'] ?? '')) ?>" data-role="loc-plecare">
-                            <?php if (isset($formErrors['loc_plecare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['loc_plecare']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-aspirare">
-                            <label class="form-label" for="race_loc_aspirare">Loc aspirare <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control <?= isset($formErrors['loc_aspirare']) ? 'is-invalid' : '' ?>" id="race_loc_aspirare" name="loc_aspirare" value="<?= e((string) ($formData['loc_aspirare'] ?? '')) ?>" data-role="loc-aspirare">
-                            <?php if (isset($formErrors['loc_aspirare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['loc_aspirare']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-livrare">
-                            <label class="form-label" for="race_loc_livrare">Loc livrare <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control <?= isset($formErrors['loc_livrare']) ? 'is-invalid' : '' ?>" id="race_loc_livrare" name="loc_livrare" value="<?= e((string) ($formData['loc_livrare'] ?? '')) ?>" data-role="loc-livrare">
-                            <?php if (isset($formErrors['loc_livrare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['loc_livrare']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-livrare-cursa">
-                            <label class="form-label" for="race_loc_livrare_cursa">Loc inchidere cursa <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control <?= isset($formErrors['loc_livrare_cursa']) ? 'is-invalid' : '' ?>" id="race_loc_livrare_cursa" name="loc_livrare_cursa" value="<?= e((string) ($formData['loc_livrare_cursa'] ?? '')) ?>" data-role="loc-livrare-cursa">
-                            <?php if (isset($formErrors['loc_livrare_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['loc_livrare_cursa']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-primary-grid-field dispatcher-compressor-grid-field dispatcher-compressor-metric-field" data-role="field-tip-marfa">
-                            <label class="form-label" for="race_tip_marfa">Tip marfa <span class="text-danger">*</span></label>
-                            <div class="dropdown transport-multiselect-dropdown goods-multiselect-dropdown" data-role="goods-type-dropdown">
-                                <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start transport-multiselect-toggle <?= isset($formErrors['tip_marfa']) ? 'is-invalid' : '' ?>" type="button" id="race_tip_marfa" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" title="Poti selecta unul sau mai multe tipuri de marfa.">
-                                    <span class="goods-multiselect-label" data-default-label="-- Selecteaza --"><?= e($selectedGoodsTypeButtonLabel) ?></span>
-                                </button>
-                                <div class="dropdown-menu w-100 transport-multiselect-menu p-2" aria-labelledby="race_tip_marfa">
-                                    <?php foreach (($goodsTypeOptions ?? []) as $goodsTypeKey => $goodsTypeLabel): ?>
-                                        <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 transport-multiselect-option">
-                                            <input class="form-check-input m-0" type="checkbox" name="tip_marfa[]" value="<?= e((string) $goodsTypeKey) ?>" <?= in_array((string) $goodsTypeKey, $selectedGoodsTypeKeys, true) ? 'checked' : '' ?>>
-                                            <span><?= e((string) $goodsTypeLabel) ?></span>
-                                        </label>
-                                    <?php endforeach; ?>
-                                </div>
-                            </div>
-                            <?php if (isset($formErrors['tip_marfa'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['tip_marfa']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-primary-grid-field" data-role="field-cantitate">
-                            <label class="form-label" for="race_cantitate_incarcata">Cantitate Încărcată</label>
-                            <input type="number" class="form-control <?= isset($formErrors['cantitate_incarcata']) ? 'is-invalid' : '' ?>" id="race_cantitate_incarcata" name="cantitate_incarcata" step="0.01" min="0" value="<?= e((string) ($formData['cantitate_incarcata'] ?? '')) ?>" data-role="cantitate" title="Valoarea introdusa este folosita direct in calcule, fara conversie automata.">
-                            <?php if (isset($formErrors['cantitate_incarcata'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['cantitate_incarcata']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-primary-grid-field" data-role="field-capacitate-transport">
-                            <label class="form-label" for="race_capacitate_transport">Capacitate transport</label>
-                            <input type="number" class="form-control <?= isset($formErrors['capacitate_transport']) ? 'is-invalid' : '' ?>" id="race_capacitate_transport" name="capacitate_transport" step="0.01" min="0" value="<?= e((string) ($formData['capacitate_transport'] ?? '')) ?>" data-role="capacitate-transport" readonly title="Se completeaza automat din fisa vehiculului.">
-                            <?php if (isset($formErrors['capacitate_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['capacitate_transport']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6" data-role="field-km">
-                            <label class="form-label" for="race_km_cursa" data-role="km-label" data-default-label="Km efectuati" data-primary-km-label="Km agreati"><?= $isAgreedKmNamingSelected ? 'Km agreati' : 'Km efectuati' ?></label>
-                            <input type="number" class="form-control <?= isset($formErrors['km_cursa']) ? 'is-invalid' : '' ?>" id="race_km_cursa" name="km_cursa" min="0" step="1" value="<?= e((string) ($formData['km_cursa'] ?? '')) ?>" data-role="km">
-                            <?php if (isset($formErrors['km_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['km_cursa']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="field-nr-clienti">
-                            <label class="form-label" for="race_nr_clienti">Nr. Clienți</label>
-                            <input type="number" class="form-control <?= isset($formErrors['nr_clienti']) ? 'is-invalid' : '' ?>" id="race_nr_clienti" name="nr_clienti" min="0" step="1" value="<?= e((string) ($formData['nr_clienti'] ?? '')) ?>">
-                            <?php if (isset($formErrors['nr_clienti'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['nr_clienti']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6" data-role="field-zona">
-                            <label class="form-label" for="race_zona_distributie_id" data-role="zona-label" data-default-label="Zona distributie" data-primary-label="Zona descarcare" data-primary-km-label="Loc descarcare">Zona distributie</label>
-                            <select class="form-select <?= isset($formErrors['zona_distributie_id']) ? 'is-invalid' : '' ?>" id="race_zona_distributie_id" name="zona_distributie_id" data-role="zona" title="Selecteaza zona de distributie/descarcare pentru ruta.">
-                                <option value="">-- Selectează --</option>
-                                <?php foreach ($distributionZones as $zone): ?>
-                                    <?php $zoneId = (int) ($zone['id'] ?? 0); ?>
-                                    <?php $zoneExtraKmCost = (float) ($zone['cost_extra_km'] ?? 0); ?>
-                                    <option value="<?= e((string) $zoneId) ?>" <?= (string) ($formData['zona_distributie_id'] ?? '') === (string) $zoneId ? 'selected' : '' ?>>
-                                        <?= e((string) ($zone['nume'] ?? '-')) ?>
-                                        (tarif zonă: <?= e(format_number_ro((float) ($zone['tarif_distributie'] ?? 0), 2)) ?> lei<?php if ($zoneExtraKmCost > 0): ?>, extra km: <?= e(format_number_ro($zoneExtraKmCost, 2)) ?> lei/km<?php endif; ?>)
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <?php if (isset($formErrors['zona_distributie_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['zona_distributie_id']) ?></div><?php endif; ?>
-                            <div class="form-text text-muted d-none dispatcher-hover-note" data-role="distributie-note-zone">
-                                Prioritate calcul: regula de ruta (Loc ? Zona), apoi regulile loc/zona, apoi fallback beneficiar. Distributie = Cantitate × Tariful activ; Primar+Distributie = Cantitate × Tariful activ + Km × Cost extra/km activ.
-                            </div>
-                            <div class="form-text text-muted d-none dispatcher-hover-note" data-role="primar-note-zone">
-                                Pentru Primar km / Primar tone, selectia Loc ? Zona este filtrata din Setari Primar si se aplica bidirectional.
-                            </div>
-                        </div>
-
-                        <div class="col-12 col-md-6 d-none" data-role="field-ruta-plecare">
-                            <label class="form-label" for="race_ruta_plecare">Loc plecare (garaj)</label>
-                            <select class="form-select" id="race_ruta_plecare" name="loc_plecare_ruta" data-role="ruta-plecare" data-initial-value="<?= e((string) ($formData['loc_plecare'] ?? '')) ?>"></select>
-                            <div class="form-text text-muted">Punctele de plecare configurate pe aceasta ruta. Km si pretul urmeaza varianta aleasa.</div>
-                        </div>
-
-                        <div class="col-12 col-md-6 d-none" data-role="field-ruta-intoarcere">
-                            <label class="form-label" for="race_ruta_intoarcere">Loc intoarcere (garaj)</label>
-                            <select class="form-select" id="race_ruta_intoarcere" name="loc_intoarcere" data-role="ruta-intoarcere" data-initial-value="<?= e((string) ($formData['loc_intoarcere'] ?? '')) ?>"></select>
-                            <div class="form-text text-muted">Variantele configurate pe aceasta ruta. Km si pretul urmeaza varianta aleasa.</div>
-                        </div>
-
-                        <div class="col-12 col-md-6 <?= $isKmTotalSelected ? '' : 'd-none' ?>" data-role="field-km-totali">
-                            <label class="form-label" for="race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
-                            <input type="number" class="form-control <?= isset($formErrors['km_totali']) ? 'is-invalid' : '' ?>" id="race_km_totali" name="km_totali" min="0" step="1" value="<?= e((string) ($formData['km_totali'] ?? '')) ?>" data-role="km-totali">
-                            <?php if (isset($formErrors['km_totali'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['km_totali']) ?></div><?php endif; ?>
-                            <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Cost/km Distributie (calcul): Km distributie = Km efectuati - Km agreati; Cost/km Distributie = Cost distributie (Pret tona x tone) / Km distributie.</div>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-ore-aspirare">
-                            <label class="form-label" for="race_ore_aspirare">Ore aspirare</label>
-                            <input type="text" class="form-control <?= isset($formErrors['ore_aspirare']) ? 'is-invalid' : '' ?>" id="race_ore_aspirare" name="ore_aspirare" value="<?= e((string) ($formData['ore_aspirare'] ?? '')) ?>" data-role="ore-aspirare" placeholder="ex: 2h sau 2" title="1h = 40 km echivalenti pentru scaderea Km revizie.">
-                            <?php if (isset($formErrors['ore_aspirare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['ore_aspirare']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-metric-field" data-role="field-tona-aspirata-lichida">
-                            <label class="form-label" for="race_tona_aspirata_lichida">Tona lichida aspirata</label>
-                            <input type="number" class="form-control <?= isset($formErrors['tona_aspirata_lichida']) ? 'is-invalid' : '' ?>" id="race_tona_aspirata_lichida" name="tona_aspirata_lichida" step="0.01" min="0" value="<?= e((string) ($formData['tona_aspirata_lichida'] ?? '')) ?>" data-role="tona-aspirata-lichida">
-                            <?php if (isset($formErrors['tona_aspirata_lichida'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['tona_aspirata_lichida']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-metric-field" data-role="field-tona-aspirata-gazoasa">
-                            <label class="form-label" for="race_tona_aspirata_gazoasa">Tona gazoasa aspirata</label>
-                            <input type="number" class="form-control <?= isset($formErrors['tona_aspirata_gazoasa']) ? 'is-invalid' : '' ?>" id="race_tona_aspirata_gazoasa" name="tona_aspirata_gazoasa" step="0.01" min="0" value="<?= e((string) ($formData['tona_aspirata_gazoasa'] ?? '')) ?>" data-role="tona-aspirata-gazoasa">
-                            <?php if (isset($formErrors['tona_aspirata_gazoasa'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['tona_aspirata_gazoasa']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-tona-livrata">
-                            <label class="form-label" for="race_tona_livrata">Cantitate livrata (tone)</label>
-                            <input type="number" class="form-control <?= isset($formErrors['tona_livrata']) ? 'is-invalid' : '' ?>" id="race_tona_livrata" name="tona_livrata" step="0.01" min="0" value="<?= e((string) ($formData['tona_livrata'] ?? '')) ?>" data-role="tona-livrata">
-                            <?php if (isset($formErrors['tona_livrata'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['tona_livrata']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-km-dislocare">
-                            <label class="form-label" for="race_km_dislocare">Km efectuati</label>
-                            <input type="number" class="form-control <?= isset($formErrors['km_dislocare']) ? 'is-invalid' : '' ?>" id="race_km_dislocare" name="km_dislocare" step="0.01" min="0" value="<?= e((string) ($formData['km_dislocare'] ?? '')) ?>" data-role="km-dislocare">
-                            <?php if (isset($formErrors['km_dislocare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['km_dislocare']) ?></div><?php endif; ?>
-                        </div>
-
-                        <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="preview-total-field">
-                            <label class="form-label">Total Facturare (estimare)</label>
-                            <div class="dispatcher-total-preview" data-role="total-preview">0,00 lei</div>
-                        </div>
-
-                        <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-primar-field">
-                            <label class="form-label">Cost/km Primar</label>
-                            <div class="dispatcher-total-preview" data-role="cost-km-primar-preview">0,00 lei/km</div>
-                        </div>
-
-                        <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-distributie-field">
-                            <label class="form-label">Cost/km Distribu?ie</label>
-                            <div class="dispatcher-total-preview" data-role="cost-km-distributie-preview">0,00 lei/km</div>
-                        </div>
-
-                        <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-mixt-field">
-                            <label class="form-label">Cost/km Mixt</label>
-                            <div class="dispatcher-total-preview" data-role="cost-km-mixt-preview">0,00 lei/km</div>
-                        </div>
-
-                        <?php /* Statusul de facturare nu se mai alege la creare: orice cursa noua intra automat "in curs de facturare". Se schimba doar din Centralizator Facturare. */ ?>
-
-                        <div class="col-12">
-                            <label class="form-label" for="race_observatii">Observații</label>
-                            <textarea class="form-control <?= isset($formErrors['observatii']) ? 'is-invalid' : '' ?>" id="race_observatii" name="observatii" rows="3"><?= e((string) ($formData['observatii'] ?? '')) ?></textarea>
-                            <?php if (isset($formErrors['observatii'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['observatii']) ?></div><?php endif; ?>
-                        </div>
+                        <?php
+                        // Campurile cursei stau intr-un partial comun: acelasi formular
+                        // este folosit si pentru fazele unei curse reluate.
+                        $fieldPrefix = 'race';
+                        $fieldMode = 'trip';
+                        include __DIR__ . '/_race_form_fields.php';
+                        ?>
                     </div>
-
                     <div class="mt-3">
                         <button type="submit" class="btn btn-primary">Adaugă Cursă</button>
                     </div>
@@ -722,6 +338,10 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                 <form method="get" class="row g-3 align-items-end">
                     <input type="hidden" name="page" value="dispecer_curse">
                     <input type="hidden" name="action" value="index">
+                    <?php if ((string) ($filters['ids'] ?? '') !== ''): ?>
+                        <input type="hidden" name="ids" value="<?= e((string) $filters['ids']) ?>">
+                        <input type="hidden" name="ids_label" value="<?= e((string) ($filters['ids_label'] ?? '')) ?>">
+                    <?php endif; ?>
 
                     <div class="col-12 col-xl-4">
                         <label class="form-label" for="filter_q">Căutare</label>
@@ -814,6 +434,25 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
 </div>
 
 <?php include __DIR__ . '/_race_day_panel.php'; ?>
+
+<?php if ((string) ($filters['ids'] ?? '') !== ''): ?>
+    <?php
+    $requestedRaceCount = count(explode(',', (string) $filters['ids']));
+    $shownRaceCount = (int) ($pagination['total_rows'] ?? 0);
+    $raceListLabel = trim((string) ($filters['ids_label'] ?? ''));
+    ?>
+    <div class="alert alert-info d-flex justify-content-between align-items-center gap-2 flex-wrap mt-3 mb-0">
+        <span>
+            <i class="bi bi-funnel-fill" aria-hidden="true"></i>
+            Afisezi <?= $raceListLabel !== '' ? e($raceListLabel) : 'o selectie de curse' ?>:
+            <strong><?= e((string) $shownRaceCount) ?></strong> din <?= e((string) $requestedRaceCount) ?> curse.
+            <?php if ($shownRaceCount < $requestedRaceCount): ?>
+                Restul nu mai sunt in Desfasurator (deja trimise la facturare sau sterse).
+            <?php endif; ?>
+        </span>
+        <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Arata toate cursele</a>
+    </div>
+<?php endif; ?>
 
 <div class="card border-0 shadow-sm mt-3 dispatcher-races-card">
     <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2 flex-wrap dispatcher-races-card-header">
@@ -951,6 +590,7 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                         <td colspan="17" class="text-center text-muted py-4">Nu există curse înregistrate.</td>
                     </tr>
                 <?php else: ?>
+                    <?php $canEditDiurna = !function_exists('can') || can('dispecer_curse', 'edit'); ?>
                     <?php foreach ($rows as $rowIndex => $row): ?>
                         <?php
                         $raceId = (int) ($row['id'] ?? 0);
@@ -1054,9 +694,83 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                             $durationMinutes = max(0, (int) $durationMinutesRaw);
                         }
                         $durationLabel = $formatDurationLabel($durationMinutes);
-                        $diurnaValue = '-';
-                        if ($durationMinutes !== null) {
-                            $diurnaValue = (string) intdiv($durationMinutes, 12 * 60);
+                        // Diurna se calculeaza din Data si ora inceput / sfarsit (regula in
+                        // dispatcher_diurna_for_interval). Lipsa unei date sau un interval
+                        // inversat se afiseaza ca atare, nu ca 0 diurne.
+                        $diurnaResult = dispatcher_diurna_for_interval($row);
+                        $diurnaDays = (int) ($diurnaResult['diurne'] ?? 0);
+                        // Soferii care nu primesc diurna (Contabilitate Personal): zilele
+                        // raman afisate, dar marcate ca neplatite.
+                        $diurnaPolicy = DriverDiurnaModel::policyAt(
+                            (array) (($diurnaHistoryByDriver ?? [])[(int) ($row['driver_id'] ?? 0)] ?? []),
+                            (string) ($row['data_inceput'] ?? '')
+                        );
+                        $diurnaNotPaid = $diurnaPolicy['status'] === DriverDiurnaModel::STATUS_NONE;
+                        if ($diurnaResult['status'] === 'ok' && $diurnaNotPaid) {
+                            $diurnaValue = $diurnaDays . ' (fara diurna)';
+                            $diurnaTitle = 'Soferul nu primeste diurna (stabilit in Contabilitate Personal); zilele nu se platesc.';
+                        } elseif ($diurnaResult['status'] === 'ok') {
+                            $diurnaValue = (string) $diurnaDays;
+                            $diurnaTitle = '';
+                        } elseif ($diurnaResult['status'] === 'invalid') {
+                            $diurnaValue = 'Interval invalid';
+                            $diurnaTitle = 'Data si ora sfarsit este inaintea datei si orei de inceput.';
+                        } else {
+                            $diurnaValue = '-';
+                            $diurnaTitle = 'Lipseste data sau ora de inceput / sfarsit.';
+                        }
+                        // Cursa reluata cu alt sofer: diurnele se impart intre soferii
+                        // segmentelor, dupa timpul petrecut de fiecare pe drum.
+                        $rowSegments = (array) (($raceSegments ?? [])[$raceId] ?? []);
+                        $diurnaSplitTitle = count($rowSegments) > 1 && $diurnaResult['status'] === 'ok'
+                            ? dispatcher_diurna_summary($diurnaDays, $rowSegments)
+                            : '';
+                        if ($diurnaSplitTitle !== '') {
+                            $diurnaTitle = 'Diurne pe soferi - ' . $diurnaSplitTitle;
+                        }
+                        // Modificare de diurna aprobata de admin / cerere in asteptare
+                        // (tab-ul "Diurne" din panoul de aprobari).
+                        $diurnaAdjustment = is_array($row['diurna_ajustare'] ?? null) ? $row['diurna_ajustare'] : null;
+                        $diurnaPendingRequest = is_array($row['diurna_cerere'] ?? null) ? $row['diurna_cerere'] : null;
+                        $diurnaAdjustmentNote = '';
+                        if (!empty($diurnaResult['ajustat']) && $diurnaAdjustment !== null) {
+                            $diurnaAdjustmentNote = 'Modificat manual: regula calculeaza ' . (int) $diurnaResult['calculat']
+                                . ', aprobat ' . $diurnaDays
+                                . ($diurnaAdjustment['reviewed_by_name'] !== '' ? ' de ' . $diurnaAdjustment['reviewed_by_name'] : '')
+                                . ($diurnaAdjustment['motiv'] !== '' ? '. Motiv: ' . $diurnaAdjustment['motiv'] : '') . '.';
+                        } elseif (!empty($diurnaResult['ajustare_expirata']) && $diurnaAdjustment !== null) {
+                            $diurnaAdjustmentNote = 'Modificarea aprobata (' . $diurnaAdjustment['calculat'] . ' → ' . $diurnaAdjustment['solicitat']
+                                . ') nu se mai aplica: intervalul cursei s-a schimbat si regula calculeaza acum ' . $diurnaDays . '.';
+                        }
+                        if ($diurnaAdjustmentNote !== '') {
+                            $diurnaTitle = $diurnaTitle !== '' ? $diurnaTitle . '. ' . $diurnaAdjustmentNote : $diurnaAdjustmentNote;
+                        }
+                        $diurnaCanRequest = $diurnaResult['status'] === 'ok' && $canEditDiurna;
+                        // Randul cursei reluate rezuma fazele: toti soferii si toate
+                        // vehiculele care au lucrat pe ea, in ordinea fazelor.
+                        $rowPlateLabel = trim((string) ($row['nr_inmatriculare'] ?? ''));
+                        if (count($rowSegments) > 1) {
+                            $segmentDriverNames = [];
+                            $segmentPlates = [];
+                            foreach ($rowSegments as $rowSegment) {
+                                $segmentDriverName = trim((string) ($rowSegment['sofer_nume'] ?? ''));
+                                if ($segmentDriverName !== '') {
+                                    $segmentDriverNames[$segmentDriverName] = $segmentDriverName;
+                                }
+                                $segmentPlate = trim((string) ($rowSegment['nr_inmatriculare'] ?? ''));
+                                if ($segmentPlate !== '') {
+                                    $segmentPlates[$segmentPlate] = $segmentPlate;
+                                }
+                            }
+                            if ($segmentDriverNames !== []) {
+                                $driverName = implode(', ', $segmentDriverNames);
+                            }
+                            if ($segmentPlates !== []) {
+                                $rowPlateLabel = implode(', ', $segmentPlates);
+                            }
+                        }
+                        if ($rowPlateLabel === '') {
+                            $rowPlateLabel = '-';
                         }
                         $billingStatus = (string) ($row['status_facturare'] ?? 'in_curs_facturare');
                         if (!isset(($billingStatuses ?? [])[$billingStatus])) {
@@ -1122,6 +836,12 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                         }
                         $oreAspirareValue = $toPositiveFloat($row['ore_aspirare'] ?? null);
                         $tonaLivrataValue = $toPositiveFloat($row['tona_livrata'] ?? null);
+                        // Pe cursa, tonele livrate se salveaza doar la Compresor; la celelalte
+                        // tipuri raman pe faze, deci randul cursei le aduna de acolo.
+                        if ($transportType !== 'compresor' && count($rowSegments) > 1) {
+                            $segmentTotalsForRow = DispecerCurseModel::sumSegmentTotals($rowSegments);
+                            $tonaLivrataValue = $toPositiveFloat($segmentTotalsForRow['tona_livrata'] ?? null) ?? $tonaLivrataValue;
+                        }
                         $tonaLichidaValue = $toPositiveFloat($row['tona_aspirata_lichida'] ?? null);
                         $tonaGazoasaValue = $toPositiveFloat($row['tona_aspirata_gazoasa'] ?? null);
                         $kmDislocareValue = $toPositiveFloat($row['km_dislocare'] ?? null);
@@ -1248,10 +968,23 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                         $rowMissingSeverity = $showMissingSeverityHighlight ? ($openRaceSeverityByRaceId[$raceId] ?? '') : '';
                         $rowSeverityClass = $rowMissingSeverity !== '' ? ' race-severity-' . $rowMissingSeverity : '';
                         ?>
-                        <tr class="<?= e($billingStatusRowClass . $rowSeverityClass . ($rowIndex >= 50 ? ' race-row-beyond-limit' : '')) ?>" data-billing-status="<?= e($billingStatus) ?>"<?= $rowMissingSeverity !== '' ? ' data-missing-severity="' . e($rowMissingSeverity) . '"' : '' ?>>
+                        <tr class="<?= e($billingStatusRowClass . $rowSeverityClass . ($rowIndex >= 50 ? ' race-row-beyond-limit' : '')) ?>" data-race-id="<?= e((string) $raceId) ?>" data-billing-status="<?= e($billingStatus) ?>"<?= $rowMissingSeverity !== '' ? ' data-missing-severity="' . e($rowMissingSeverity) . '"' : '' ?>>
                             <td class="col-plate">
                                 <div class="cell-content">
-                                    <div class="vehicle-wrap">
+                                    <div class="vehicle-wrap<?= count($rowSegments) > 1 ? ' has-segments' : '' ?>">
+                                        <?php if (count($rowSegments) > 1): ?>
+                                            <button
+                                                type="button"
+                                                class="dispatcher-segments-toggle"
+                                                data-segments-toggle="<?= e((string) $raceId) ?>"
+                                                aria-expanded="false"
+                                                aria-controls="race-segments-<?= e((string) $raceId) ?>"
+                                                title="<?= e(dispatcher_segments_summary($rowSegments)) ?>"
+                                            >
+                                                <i class="bi bi-chevron-right dispatcher-segments-toggle-icon" aria-hidden="true"></i>
+                                                <span class="visually-hidden">Arata cum s-a desfasurat cursa #<?= e((string) $raceId) ?></span>
+                                            </button>
+                                        <?php endif; ?>
                                         <label class="vehicle-main mb-0" for="bulk-race-id-<?= e((string) $raceId) ?>">
                                             <input
                                                 type="checkbox"
@@ -1262,20 +995,13 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                                                 form="bulk-race-delete-form"
                                                 aria-label="Selecteaza cursa ID <?= e((string) $raceId) ?>"
                                             >
-                                            <strong class="dispatcher-cell-text dispatcher-cell-nowrap dispatcher-plate-value vehicle-cell nr-auto-cell"><?= e((string) ($row['nr_inmatriculare'] ?? '-')) ?></strong>
+                                            <strong class="dispatcher-cell-text dispatcher-cell-nowrap dispatcher-plate-value vehicle-cell nr-auto-cell"<?= count($rowSegments) > 1 ? ' title="' . e($rowPlateLabel) . '"' : '' ?>><?= e($rowPlateLabel) ?></strong>
                                         </label>
-                                        <?php $rowParentId = (int) (($resumeParents ?? [])[$raceId] ?? 0); ?>
-                                        <?php $rowChildIds = (array) (($resumeChildren ?? [])[$raceId] ?? []); ?>
-                                        <?php if ($rowParentId > 0): ?>
-                                            <a class="badge bg-info text-dark text-decoration-none" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $rowParentId])) ?>" title="Această cursă este un segment care continuă cursa #<?= e((string) $rowParentId) ?>.">
-                                                <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Continuare #<?= e((string) $rowParentId) ?>
-                                            </a>
+                                        <?php if (count($rowSegments) > 1): ?>
+                                            <button type="button" class="badge bg-info text-dark border-0 dispatcher-segments-badge" data-segments-toggle="<?= e((string) $raceId) ?>" aria-controls="race-segments-<?= e((string) $raceId) ?>" title="<?= e(dispatcher_segments_summary($rowSegments)) ?>">
+                                                <i class="bi bi-signpost-split" aria-hidden="true"></i> <?= e((string) count($rowSegments)) ?> segmente
+                                            </button>
                                         <?php endif; ?>
-                                        <?php foreach ($rowChildIds as $rowChildId): ?>
-                                            <a class="badge bg-secondary text-decoration-none" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => (int) $rowChildId])) ?>" title="Cursa a fost continuată de segmentul #<?= e((string) $rowChildId) ?>.">
-                                                <i class="bi bi-signpost-split" aria-hidden="true"></i> Continuată de #<?= e((string) $rowChildId) ?>
-                                            </a>
-                                        <?php endforeach; ?>
                                     </div>
                                 </div>
                             </td>
@@ -1310,8 +1036,35 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                                 </div>
                             </td>
                             <td class="col-diurna text-center-cell">
-                                <div class="cell-content center">
-                                    <span class="dispatcher-cell-text dispatcher-cell-nowrap"><?= e($diurnaValue) ?></span>
+                                <div class="cell-content center"<?= $diurnaTitle !== '' ? ' title="' . e($diurnaTitle) . '"' : '' ?> data-cell-value="<?= e($diurnaValue) ?>">
+                                    <span class="dispatcher-cell-text dispatcher-cell-nowrap<?= $diurnaResult['status'] === 'invalid' ? ' text-danger' : '' ?>"><?= e($diurnaValue) ?></span>
+                                    <?php if ($diurnaSplitTitle !== ''): ?>
+                                        <i class="bi bi-people small text-muted ms-1" aria-hidden="true"></i>
+                                        <span class="visually-hidden"><?= e('Diurne pe soferi: ' . $diurnaSplitTitle) ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($diurnaResult['ajustat'])): ?>
+                                        <span class="diurna-adjusted-badge" aria-hidden="true"><i class="bi bi-pencil-fill"></i></span>
+                                        <span class="visually-hidden"><?= e($diurnaAdjustmentNote) ?></span>
+                                    <?php endif; ?>
+                                    <?php if ($diurnaPendingRequest !== null): ?>
+                                        <span class="diurna-pending-badge" data-diurna-pending title="<?= e('Cerere in asteptare: ' . $diurnaPendingRequest['solicitat'] . ' diurne (' . ($diurnaPendingRequest['requested_by_name'] ?: '-') . ')') ?>">
+                                            <i class="bi bi-hourglass-split" aria-hidden="true"></i><?= e((string) $diurnaPendingRequest['solicitat']) ?>
+                                        </span>
+                                    <?php endif; ?>
+                                    <?php if ($diurnaCanRequest): ?>
+                                        <button
+                                            type="button"
+                                            class="diurna-edit-btn"
+                                            data-diurna-edit
+                                            data-trip-id="<?= e((string) $raceId) ?>"
+                                            data-current="<?= e((string) $diurnaDays) ?>"
+                                            data-computed="<?= e((string) (int) ($diurnaResult['calculat'] ?? $diurnaDays)) ?>"
+                                            data-driver="<?= e(trim((string) ($row['sofer_nume'] ?? ''))) ?>"
+                                            data-pending="<?= $diurnaPendingRequest !== null ? e((string) $diurnaPendingRequest['solicitat'] . '|' . ($diurnaPendingRequest['requested_by_name'] ?: '-')) : '' ?>"
+                                            title="Modifica diurnele"
+                                            aria-label="<?= e('Modifica diurnele cursei #' . $raceId) ?>"
+                                        ><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                    <?php endif; ?>
                                 </div>
                             </td>
                             <td class="col-route">
@@ -1372,12 +1125,12 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                                         </button>
                                         <div class="dispatcher-race-actions-menu" id="dispatcher_race_actions_<?= e((string) $raceId) ?>" data-dispatcher-race-actions-menu role="menu" hidden>
                                             <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">Editează</a>
-                                            <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'resume_id' => $raceId]) . '#add-race-form') ?>" title="Creează o cursă nouă, legată de aceasta, cu posibilitatea de a schimba șoferul sau vehiculul.">Reia cursa (segment nou)</a>
+                                            <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'faza' => 'noua']) . '#race-form') ?>" title="Deschide formularul cursei pregătit pentru o fază nouă (alt șofer / alt vehicul). Cursa rămâne una singură, fără tarif suplimentar.">Reia cursa</a>
                                             <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'delete'])) ?>" class="dispatcher-race-actions-form" role="none">
                                                 <?= csrf_field() ?>
                                                 <input type="hidden" name="id" value="<?= e((string) $raceId) ?>">
                                                 <input type="hidden" name="return_url" value="<?= e($currentListUrl) ?>">
-                                                <button type="submit" class="dispatcher-race-actions-item dispatcher-race-actions-danger" role="menuitem" data-confirm="Ștergi cursa #<?= e((string) $raceId) ?>? Cursa va fi mutată în Curse șterse și va putea fi restaurată ulterior.">
+                                                <button type="submit" class="dispatcher-race-actions-item dispatcher-race-actions-danger" role="menuitem" data-confirm="Ștergi cursa #<?= e((string) $raceId) ?><?= count($rowSegments) > 1 ? ' si cele ' . e((string) count($rowSegments)) . ' faze ale ei' : '' ?>? Cursa va fi mutată în Curse șterse și va putea fi restaurată ulterior<?= count($rowSegments) > 1 ? ', cu tot cu faze' : '' ?>.">
                                                     Șterge
                                                 </button>
                                             </form>
@@ -1386,6 +1139,19 @@ $resumeSourceRow = isset($resumeSource) && is_array($resumeSource) ? $resumeSour
                                 </div>
                             </td>
                         </tr>
+                        <?php
+                        // Cursele oprite si reluate se desfac sub rand: fiecare faza este
+                        // un rand pe aceleasi coloane. Randurile de faza sunt marcate cu
+                        // clasa `dispatcher-segment-line`, ca sortarea si filtrele sa le sara.
+                        if (count($rowSegments) > 1) {
+                            $inlineRaceId = $raceId;
+                            $inlineRace = $row;
+                            $inlineSegments = $rowSegments;
+                            $inlineLoadLocations = (array) ($loadLocations ?? []);
+                            $inlineZones = (array) ($distributionZones ?? []);
+                            include __DIR__ . '/_race_segments_row.php';
+                        }
+                        ?>
                     <?php endforeach; ?>
                 <?php endif; ?>
                 </tbody>
@@ -1597,14 +1363,96 @@ document.addEventListener('DOMContentLoaded', function () {
 
             const getDataRows = function () {
                 return Array.from(racesBodyEl.querySelectorAll('tr')).filter(function (rowEl) {
-                    return rowEl.querySelector('td[colspan]') === null;
+                    return rowEl.querySelector('td[colspan]') === null
+                        && !rowEl.classList.contains('dispatcher-segment-line');
                 });
             };
+
+            // --- Desfacerea curselor reluate din pauza ---
+            // Sageata din capatul randului arata segmentele cursei intr-un rand-copil.
+            // Randul-copil are un singur td (cu colspan), deci sortarea si filtrele il
+            // ignora; aici il tinem lipit de cursa lui si cu aceeasi vizibilitate.
+            // Randurile de faze sunt fixe (vin din PHP, nu se adauga din JS), deci le
+            // indexam O DATA pe cursa. Cautarea lor cu querySelectorAll pentru fiecare
+            // rand costa ~640 ms pe 355 de curse (~27k noduri in tabel) si se relua la
+            // fiecare sortare, filtrare si extindere a ferestrei de randuri.
+            const segmentRowsByRaceId = new Map();
+            Array.prototype.forEach.call(
+                racesBodyEl.querySelectorAll('tr.dispatcher-segment-line[data-segments-for]'),
+                function (segmentRowEl) {
+                    const key = segmentRowEl.getAttribute('data-segments-for');
+                    const bucket = segmentRowsByRaceId.get(key);
+                    if (bucket) {
+                        bucket.push(segmentRowEl);
+                    } else {
+                        segmentRowsByRaceId.set(key, [segmentRowEl]);
+                    }
+                }
+            );
+
+            const getSegmentRows = function (raceId) {
+                if (!raceId || segmentRowsByRaceId.size === 0) {
+                    return [];
+                }
+                return segmentRowsByRaceId.get(String(raceId)) || [];
+            };
+
+            const syncSegmentsRowState = function (rowEl) {
+                if (segmentRowsByRaceId.size === 0) {
+                    return;
+                }
+                const segmentRows = getSegmentRows(rowEl.getAttribute('data-race-id'));
+                if (segmentRows.length === 0) {
+                    return;
+                }
+                const parentHidden = rowEl.classList.contains('d-none') || rowEl.classList.contains('race-row-beyond-limit');
+                segmentRows.forEach(function (segmentRowEl) {
+                    segmentRowEl.classList.toggle('d-none', parentHidden);
+                });
+            };
+
+            const setSegmentsExpanded = function (raceId, expanded) {
+                const segmentRows = getSegmentRows(raceId);
+                if (segmentRows.length === 0) {
+                    return;
+                }
+                segmentRows.forEach(function (segmentRowEl) {
+                    segmentRowEl.hidden = !expanded;
+                });
+                Array.prototype.forEach.call(
+                    racesBodyEl.querySelectorAll('[data-segments-toggle="' + raceId + '"]'),
+                    function (toggleEl) {
+                        if (toggleEl.hasAttribute('aria-expanded')) {
+                            toggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+                        }
+                        toggleEl.classList.toggle('is-expanded', expanded);
+                    }
+                );
+            };
+
+            racesBodyEl.addEventListener('click', function (event) {
+                const toggleEl = event.target instanceof Element
+                    ? event.target.closest('[data-segments-toggle]')
+                    : null;
+                if (toggleEl === null) {
+                    return;
+                }
+                event.preventDefault();
+                const raceId = toggleEl.getAttribute('data-segments-toggle');
+                const segmentRows = getSegmentRows(raceId);
+                setSegmentsExpanded(raceId, segmentRows.length > 0 && segmentRows[0].hidden);
+            });
 
             const getCellValue = function (rowEl, columnIndex) {
                 const cellEl = rowEl.cells[columnIndex];
                 if (!cellEl) {
                     return '';
+                }
+                // data-cell-value: valoarea exacta a celulei, cand tooltip-ul explica
+                // altceva (de exemplu impartirea diurnelor pe soferi).
+                const valueEl = cellEl.querySelector('[data-cell-value]');
+                if (valueEl) {
+                    return (valueEl.getAttribute('data-cell-value') || '').replace(/\s+/g, ' ').trim();
                 }
                 const titledEl = cellEl.querySelector('[title]');
                 const raw = (titledEl && titledEl.getAttribute('title')) || cellEl.textContent || '';
@@ -1637,6 +1485,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 getDataRows().forEach(function (rowEl) {
                     if (rowEl.classList.contains('d-none')) {
                         rowEl.classList.remove('race-row-beyond-limit');
+                        syncSegmentsRowState(rowEl);
                         return;
                     }
                     matchingCount++;
@@ -1644,6 +1493,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (rowEl.classList.contains('race-row-beyond-limit') !== beyondLimit) {
                         rowEl.classList.toggle('race-row-beyond-limit', beyondLimit);
                     }
+                    syncSegmentsRowState(rowEl);
                     if (beyondLimit) {
                         const checkboxEl = rowEl.querySelector('.bulk-race-checkbox');
                         if (checkboxEl instanceof HTMLInputElement && checkboxEl.checked) {
@@ -1766,6 +1616,12 @@ document.addEventListener('DOMContentLoaded', function () {
                     })
                     .forEach(function (entry) {
                         racesBodyEl.appendChild(entry.rowEl);
+                        if (segmentRowsByRaceId.size === 0) {
+                            return;
+                        }
+                        getSegmentRows(entry.rowEl.getAttribute('data-race-id')).forEach(function (segmentRowEl) {
+                            racesBodyEl.appendChild(segmentRowEl);
+                        });
                     });
 
                 applyRowWindow();
@@ -1785,6 +1641,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                     });
                     rowEl.classList.toggle('d-none', !visible);
+                    syncSegmentsRowState(rowEl);
                     if (!visible) {
                         const checkboxEl = rowEl.querySelector('.bulk-race-checkbox');
                         if (checkboxEl instanceof HTMLInputElement && checkboxEl.checked) {
@@ -2977,6 +2834,7 @@ document.addEventListener('DOMContentLoaded', function () {
 </div>
 
 <?php include __DIR__ . '/_inactive_resource_modal.php'; ?>
+<?php include __DIR__ . '/_diurna_change_modal.php'; ?>
 <?php include __DIR__ . '/_trip_conflict_modal.php'; ?>
 
 <?php if (!empty($maintenancePopupMessages)): ?>
@@ -3072,3 +2930,4 @@ document.addEventListener('DOMContentLoaded', function () {
 <?php endif; ?>
 
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
+<script src="<?= e(url('assets/js/dispecer-diurna.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-diurna.js'))) ?>"></script>

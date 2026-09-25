@@ -471,6 +471,7 @@ def resource_type_label(resource_type: str) -> str:
         "vehicle": "Vehicul",
         "driver": "Sofer",
         "repair": "Reparatie",
+        "diurna": "Diurna",
     }.get(resource_type, resource_type)
 
 
@@ -620,6 +621,13 @@ def append_row(rows: list[tuple[str, str]], label: str, value: Any) -> None:
 def approval_scope_message(approval: dict[str, Any], primary_label: str, problem: str) -> str:
     resource_type = clean(approval.get("resource_type"))
     trip_id = int(approval.get("trip_id") or 0)
+    if resource_type == "diurna":
+        snapshot = diurna_snapshot(approval)
+        return (
+            f"Prin aprobare, cursa #{trip_id} va avea {snapshot.get('solicitat', '-')} diurne "
+            f"in loc de {snapshot.get('curent', '-')} (regula calculeaza {snapshot.get('calculat', '-')}). "
+            "La respingere ramane valoarea actuala."
+        )
     resource_text = "soferului" if resource_type == "driver" else "vehiculului"
     request_resource_text = "soferul" if resource_type == "driver" else "vehiculul"
     target = f"{resource_text} {primary_label}".strip()
@@ -633,7 +641,46 @@ def approval_scope_message(approval: dict[str, Any], primary_label: str, problem
     )
 
 
+def diurna_snapshot(approval: dict[str, Any]) -> dict[str, Any]:
+    try:
+        snapshot = json.loads(approval.get("snapshot_json") or "{}")
+    except (TypeError, ValueError):
+        snapshot = {}
+    return snapshot if isinstance(snapshot, dict) else {}
+
+
+def build_diurna_approval_context(approval: dict[str, Any]) -> dict[str, Any]:
+    """Cerere de modificare a diurnelor unei curse (Dispecer curse)."""
+    snapshot = diurna_snapshot(approval)
+    primary_label = first_non_empty(snapshot.get("sofer"), approval.get("trip_driver_label"), approval.get("resource_label"))
+    problem = f"Diurne: {snapshot.get('curent', '-')} -> {snapshot.get('solicitat', '-')}"
+
+    rows: list[tuple[str, str]] = []
+    append_row(rows, "Solicitare pentru", operation_title(approval))
+    append_row(rows, "Diurne calculate", snapshot.get("calculat"))
+    append_row(rows, "Diurne actuale", snapshot.get("curent"))
+    append_row(rows, "Diurne solicitate", snapshot.get("solicitat"))
+    append_row(rows, "Motiv", snapshot.get("motiv"))
+    append_row(rows, "Interval cursa", snapshot.get("interval"))
+    append_row(rows, "Beneficiar", approval.get("trip_beneficiary_name"))
+    append_row(rows, "Vehicul cursa", approval.get("trip_vehicle_label"))
+    append_row(rows, "Sofer cursa", approval.get("trip_driver_label"))
+    append_row(rows, "Ruta", route_label(approval))
+    append_row(rows, "Solicitat de", approval.get("requested_by_name"))
+    append_row(rows, "Solicitat la", format_datetime_compact(approval.get("requested_at")))
+
+    return {
+        "primary_label": primary_label,
+        "problem": problem,
+        "operation": operation_title(approval),
+        "rows": rows,
+        "scope": approval_scope_message(approval, primary_label, problem),
+    }
+
+
 def build_approval_context(approval: dict[str, Any], documents: list[dict[str, Any]]) -> dict[str, Any]:
+    if clean(approval.get("resource_type")) == "diurna":
+        return build_diurna_approval_context(approval)
     primary_label = first_non_empty(approval.get("resource_label"), resource_type_label(clean(approval.get("resource_type"))))
     problem = document_problem(documents, clean(approval.get("inactive_reason_label")) or "Alt motiv")
     use_date = usage_date(approval)

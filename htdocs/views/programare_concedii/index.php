@@ -180,26 +180,26 @@ if ($calendarTitleRo === '') {
                                 </div>
 
                                 <div class="col-12 col-md-6 col-lg-2">
-                                    <label class="form-label" for="availability_rule_capacity">Capacitate (tone)</label>
+                                    <label class="form-label" for="availability_rule_capacity">Categorie capacitate</label>
                                     <select
-                                        class="form-select <?= isset($availabilityRuleFormErrors['capacitate_transport']) ? 'is-invalid' : '' ?>"
+                                        class="form-select <?= isset($availabilityRuleFormErrors['categorie_capacitate_id']) ? 'is-invalid' : '' ?>"
                                         id="availability_rule_capacity"
-                                        name="capacitate_transport"
+                                        name="categorie_capacitate_id"
                                     >
-                                        <option value="">Toate capacitatile</option>
+                                        <option value="">Toate categoriile</option>
                                         <?php foreach ((array) ($availabilityRuleOptions['capacities'] ?? []) as $capacityOption): ?>
                                             <?php
                                             $capacityCategory = (string) ($capacityOption['categorie_vehicul'] ?? '');
-                                            $capacityValue = (string) ($capacityOption['capacitate_transport'] ?? '');
-                                            if ($capacityValue === '') {
+                                            $capacityCategoryId = (string) ((int) ($capacityOption['categorie_capacitate_id'] ?? 0));
+                                            if ($capacityCategoryId === '0') {
                                                 continue;
                                             }
-                                            $capacityLabel = rtrim(rtrim($capacityValue, '0'), '.') . ' t';
-                                            $capacitySelected = (string) ($availabilityRuleFormData['capacitate_transport'] ?? '') === $capacityValue
+                                            $capacityLabel = (string) ($capacityOption['categorie_capacitate'] ?? '');
+                                            $capacitySelected = (string) ($availabilityRuleFormData['categorie_capacitate_id'] ?? '') === $capacityCategoryId
                                                 && (string) ($availabilityRuleFormData['categorie_vehicul'] ?? '') === $capacityCategory;
                                             ?>
                                             <option
-                                                value="<?= e($capacityValue) ?>"
+                                                value="<?= e($capacityCategoryId) ?>"
                                                 data-category="<?= e($capacityCategory) ?>"
                                                 <?= $capacitySelected ? 'selected' : '' ?>
                                             >
@@ -207,7 +207,8 @@ if ($calendarTitleRo === '') {
                                             </option>
                                         <?php endforeach; ?>
                                     </select>
-                                    <?php if (isset($availabilityRuleFormErrors['capacitate_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $availabilityRuleFormErrors['capacitate_transport']) ?></div><?php endif; ?>
+                                    <div class="form-text">Grupare, nu capacitate tehnica: regula ramane valabila si dupa o corectie de capacitate reala.</div>
+                                    <?php if (isset($availabilityRuleFormErrors['categorie_capacitate_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $availabilityRuleFormErrors['categorie_capacitate_id']) ?></div><?php endif; ?>
                                 </div>
 
                                 <div class="col-12 col-md-6 col-lg-2">
@@ -258,13 +259,23 @@ if ($calendarTitleRo === '') {
                                 <tr>
                                     <th>Garaj / locatie</th>
                                     <th>Activitate</th>
-                                    <th>Capacitate</th>
+                                    <th>Categorie capacitate</th>
                                     <th>Minim disponibili</th>
                                     <th>Status</th>
                                     <th>Actiuni</th>
                                 </tr>
                                 </thead>
                                 <tbody>
+                                <?php
+                                // id categorie -> nume, pentru randurile din tabelul de reguli
+                                $availabilityCapacityCategoryNames = [];
+                                foreach ((array) ($availabilityRuleOptions['capacities'] ?? []) as $capacityOption) {
+                                    $optionId = (int) ($capacityOption['categorie_capacitate_id'] ?? 0);
+                                    if ($optionId > 0) {
+                                        $availabilityCapacityCategoryNames[$optionId] = (string) ($capacityOption['categorie_capacitate'] ?? '');
+                                    }
+                                }
+                                ?>
                                 <?php if (($availabilityRules ?? []) === []): ?>
                                     <tr>
                                         <td colspan="6" class="text-center py-4 text-muted">Nu exista reguli configurate.</td>
@@ -275,10 +286,20 @@ if ($calendarTitleRo === '') {
                                         $ruleId = (int) ($rule['id'] ?? 0);
                                         $ruleCategory = (string) ($rule['categorie_vehicul'] ?? '');
                                         $ruleCategoryLabel = $availabilityRuleCategories[$ruleCategory] ?? $ruleCategory;
+                                        /*
+                                         * Regulile noi tin o categorie de capacitate; cele scrise
+                                         * inainte de separare inca tin o capacitate numerica si sunt
+                                         * afisate ca atare pana sunt rescrise.
+                                         */
+                                        $ruleCapacityCategoryId = (int) ($rule['categorie_capacitate_id'] ?? 0);
                                         $ruleCapacity = $rule['capacitate_transport'] ?? null;
-                                        $ruleCapacityLabel = $ruleCapacity === null || (string) $ruleCapacity === ''
-                                            ? 'Toate'
-                                            : rtrim(rtrim((string) $ruleCapacity, '0'), '.') . ' t';
+                                        if ($ruleCapacityCategoryId > 0) {
+                                            $ruleCapacityLabel = (string) ($availabilityCapacityCategoryNames[$ruleCapacityCategoryId] ?? ('#' . $ruleCapacityCategoryId));
+                                        } elseif ($ruleCapacity === null || (string) $ruleCapacity === '') {
+                                            $ruleCapacityLabel = 'Toate';
+                                        } else {
+                                            $ruleCapacityLabel = rtrim(rtrim((string) $ruleCapacity, '0'), '.') . ' t (regula veche)';
+                                        }
                                         $ruleActive = (int) ($rule['activ'] ?? 0) === 1;
                                         ?>
                                         <tr>

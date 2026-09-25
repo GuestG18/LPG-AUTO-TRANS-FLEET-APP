@@ -80,6 +80,7 @@ class ExpenseModel extends BaseModel
         // Coloanele noi trebuie sa existe inainte de importul legacy (care le refera).
         $this->ensureResponsibleDriverColumn();
         $this->ensureDocumentColumns();
+        $this->ensureSupplierDirectory();
 
         // Seed + import legacy: interogari WHERE NOT EXISTS, ieftine si idempotente.
         $this->seedOperationalTypes();
@@ -479,6 +480,297 @@ class ExpenseModel extends BaseModel
             'min_date' => $row['dmin'] ?? null,
             'max_date' => $row['dmax'] ?? null,
         ];
+    }
+
+    // ------------------------------------------------------- agenda furnizori
+
+    /** Cotele de TVA recunoscute; o cota derivata se rotunjeste la cea mai apropiata. */
+    private const VAT_RATES = [0.0, 5.0, 9.0, 11.0, 19.0, 21.0];
+
+    /**
+     * Agenda de furnizori: detaliile unei firme (CUI, cota TVA, subcategorie,
+     * tip document, plata) se salveaza la prima cheltuiala completa si se
+     * folosesc la autocompletarea formularului. Cheia este CUI-ul normalizat
+     * (fara RO/spatii), deci variantele de nume cu acelasi CUI se unesc.
+     */
+    private function ensureSupplierDirectory(): void
+    {
+        try {
+            $this->db->query('SELECT 1 FROM cheltuieli_furnizori LIMIT 1');
+            return;
+        } catch (Throwable) {
+            // tabela lipseste: se creeaza si se populeaza din istoric
+        }
+
+        try {
+            $this->db->exec("
+                CREATE TABLE IF NOT EXISTS cheltuieli_furnizori (
+                    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    nume VARCHAR(190) NOT NULL,
+                    nume_normalizat VARCHAR(190) NOT NULL,
+                    cui VARCHAR(20) DEFAULT NULL,
+                    cui_normalizat VARCHAR(20) DEFAULT NULL,
+                    cota_tva DECIMAL(5,2) DEFAULT NULL,
+                    categorie ENUM('administrativa','operationala') DEFAULT NULL,
+                    tip_id INT UNSIGNED DEFAULT NULL,
+                    tip_document ENUM('factura','bon_fiscal','chitanta','alt_document') DEFAULT NULL,
+                    modalitate_plata ENUM('cash','card','transfer_bancar','alte') DEFAULT NULL,
+                    moneda CHAR(3) DEFAULT NULL,
+                    nr_utilizari INT UNSIGNED NOT NULL DEFAULT 0,
+                    ultima_utilizare DATE DEFAULT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_cheltuieli_furnizori_cui (cui_normalizat),
+                    KEY idx_cheltuieli_furnizori_nume (nume_normalizat)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            ");
+            $this->seedSupplierDirectory();
+        } catch (Throwable $exception) {
+            error_log('[ExpenseModel][ensureSupplierDirectory] ' . $exception->getMessage());
+        }
+    }
+
+    /**
+     * Populare initiala din cheltuielile existente. Numele si CUI-ul afisat
+     * sunt variantele cele mai frecvente pentru acelasi CUI (ex. "RE" vs
+     * "REGISTRUL AUTO ROMAN"), restul detaliilor vin de la cea mai recenta.
+     */
+    private function seedSupplierDirectory(): void
+    {
+        $rows = $this->db->query("
+            SELECT furnizor, cui, valoare, valoare_neta, tva, moneda, categorie, tip_id,
+                   tip_document, modalitate_plata, data_cheltuiala
+            FROM cheltuieli
+            WHERE COALESCE(TRIM(furnizor), '') <> ''
+            ORDER BY data_cheltuiala ASC, id ASC
+        ")->fetchAll();
+
+        // Numararea merge de la cea mai noua cheltuiala: la egalitate (arsort e
+        // stabil) castiga ortografia folosita cel mai recent.
+        $names = [];
+        $cuis = [];
+        foreach (array_reverse($rows) as $row) {
+            $key = $this->supplierKey((string) $row['furnizor'], (string) ($row['cui'] ?? ''));
+            if ($key === null) {
+                continue;
+            }
+            $name = trim(preg_replace('/\s+/u', ' ', (string) $row['furnizor']));
+            $names[$key][$name] = ($names[$key][$name] ?? 0) + 1;
+            $cui = strtoupper(str_replace(' ', '', trim((string) ($row['cui'] ?? ''))));
+            if ($cui !== '') {
+                $cuis[$key][$cui] = ($cuis[$key][$cui] ?? 0) + 1;
+            }
+        }
+
+        foreach ($rows as $row) {
+            $key = $this->supplierKey((string) $row['furnizor'], (string) ($row['cui'] ?? ''));
+            if ($key === null) {
+                continue;
+            }
+            arsort($names[$key]);
+            $row['furnizor'] = (string) array_key_first($names[$key]);
+            if (!empty($cuis[$key])) {
+                arsort($cuis[$key]);
+                $row['cui'] = (string) array_key_first($cuis[$key]);
+            }
+            $this->rememberSupplier($row, true);
+        }
+    }
+
+    /** Cheia de unificare: "cui:<cifre>" sau "nume:<NUME NORMALIZAT>". */
+    private function supplierKey(string $name, string $cui): ?string
+    {
+        $cuiNorm = $this->normalizeCui($cui);
+        if ($cuiNorm !== null) {
+            return 'cui:' . $cuiNorm;
+        }
+        $nameNorm = $this->normalizeSupplierName($name);
+        return $nameNorm !== null ? 'nume:' . $nameNorm : null;
+    }
+
+    private function normalizeCui(?string $cui): ?string
+    {
+        $value = strtoupper(preg_replace('/[\s.\-]+/', '', (string) $cui));
+        $value = preg_replace('/^RO/', '', $value);
+        return preg_match('/^\d{2,10}$/', $value) ? $value : null;
+    }
+
+    private function normalizeSupplierName(?string $name): ?string
+    {
+        $value = mb_strtoupper(trim(preg_replace('/\s+/u', ' ', (string) $name)), 'UTF-8');
+        // "..", "-" si alte valori fara litere/cifre nu sunt furnizori reali.
+        return preg_match('/[\p{L}\p{N}]{2,}/u', $value) ? mb_substr($value, 0, 190) : null;
+    }
+
+    /** Cota TVA din net + TVA (sau net + total), rotunjita la o cota standard. */
+    private function deriveVatRate(array $data): ?float
+    {
+        $net = isset($data['valoare_neta']) && $data['valoare_neta'] !== null ? (float) $data['valoare_neta'] : 0.0;
+        if ($net <= 0) {
+            return null;
+        }
+        $vat = isset($data['tva']) && $data['tva'] !== null
+            ? (float) $data['tva']
+            : (float) ($data['valoare'] ?? 0) - $net;
+        if ($vat < 0) {
+            return null;
+        }
+        $rate = $vat / $net * 100;
+        foreach (self::VAT_RATES as $standard) {
+            if (abs($rate - $standard) <= 0.6) {
+                return $standard;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Salveaza/actualizeaza firma in agenda. La prima aparitie se preiau
+     * toate detaliile; ulterior se completeaza doar ce lipseste (CUI)
+     * si se actualizeaza preferintele cu ultima cheltuiala salvata.
+     */
+    private function rememberSupplier(array $data, bool $countUse): void
+    {
+        $name = trim(preg_replace('/\s+/u', ' ', (string) ($data['furnizor'] ?? '')));
+        $nameNorm = $this->normalizeSupplierName($name);
+        if ($nameNorm === null) {
+            return;
+        }
+        $cuiRaw = strtoupper(str_replace(' ', '', trim((string) ($data['cui'] ?? ''))));
+        $cuiNorm = $this->normalizeCui($cuiRaw);
+
+        $existing = null;
+        if ($cuiNorm !== null) {
+            $stmt = $this->db->prepare('SELECT * FROM cheltuieli_furnizori WHERE cui_normalizat = :cui LIMIT 1');
+            $stmt->execute([':cui' => $cuiNorm]);
+            $existing = $stmt->fetch() ?: null;
+        }
+        if ($existing === null) {
+            // Acelasi nume fara CUI salvat (sau cu acelasi CUI) -> aceeasi firma.
+            $stmt = $this->db->prepare('
+                SELECT * FROM cheltuieli_furnizori
+                WHERE nume_normalizat = :nume
+                ORDER BY cui_normalizat IS NULL DESC, id ASC
+                LIMIT 1
+            ');
+            $stmt->execute([':nume' => $nameNorm]);
+            $candidate = $stmt->fetch() ?: null;
+            if ($candidate !== null && ($candidate['cui_normalizat'] === null || $cuiNorm === null)) {
+                $existing = $candidate;
+            }
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $rate = $this->deriveVatRate($data);
+        $date = !empty($data['data_cheltuiala']) ? (string) $data['data_cheltuiala'] : null;
+        $moneda = strtoupper(trim((string) ($data['moneda'] ?? ''))) ?: null;
+        $tipId = (int) ($data['tip_id'] ?? 0) > 0 ? (int) $data['tip_id'] : null;
+
+        if ($existing === null) {
+            $stmt = $this->db->prepare('
+                INSERT INTO cheltuieli_furnizori (
+                    nume, nume_normalizat, cui, cui_normalizat, cota_tva, categorie, tip_id, tip_document,
+                    modalitate_plata, moneda, nr_utilizari, ultima_utilizare, created_at, updated_at
+                ) VALUES (
+                    :nume, :nume_normalizat, :cui, :cui_normalizat, :cota_tva, :categorie, :tip_id, :tip_document,
+                    :modalitate_plata, :moneda, :nr_utilizari, :ultima_utilizare, :created_at, :updated_at
+                )
+            ');
+            $stmt->execute([
+                ':nume' => mb_substr($name, 0, 190),
+                ':nume_normalizat' => $nameNorm,
+                ':cui' => $cuiNorm !== null ? mb_substr($cuiRaw, 0, 20) : null,
+                ':cui_normalizat' => $cuiNorm,
+                ':cota_tva' => $rate,
+                ':categorie' => $this->nullableString($data['categorie'] ?? null),
+                ':tip_id' => $tipId,
+                ':tip_document' => $this->nullableString($data['tip_document'] ?? null),
+                ':modalitate_plata' => $this->nullableString($data['modalitate_plata'] ?? null),
+                ':moneda' => $moneda,
+                ':nr_utilizari' => $countUse ? 1 : 0,
+                ':ultima_utilizare' => $date,
+                ':created_at' => $now,
+                ':updated_at' => $now,
+            ]);
+            return;
+        }
+
+        $stmt = $this->db->prepare('
+            UPDATE cheltuieli_furnizori
+            SET cui = COALESCE(cui, :cui),
+                cui_normalizat = COALESCE(cui_normalizat, :cui_normalizat),
+                cota_tva = COALESCE(:cota_tva, cota_tva),
+                categorie = COALESCE(:categorie, categorie),
+                tip_id = COALESCE(:tip_id, tip_id),
+                tip_document = COALESCE(:tip_document, tip_document),
+                modalitate_plata = COALESCE(:modalitate_plata, modalitate_plata),
+                moneda = COALESCE(:moneda, moneda),
+                nr_utilizari = nr_utilizari + :increment,
+                ultima_utilizare = CASE
+                    WHEN ultima_utilizare IS NULL OR ultima_utilizare < :data_cmp THEN COALESCE(:data_set, ultima_utilizare)
+                    ELSE ultima_utilizare
+                END,
+                updated_at = :updated_at
+            WHERE id = :id
+        ');
+        $stmt->execute([
+            ':cui' => $cuiNorm !== null ? mb_substr($cuiRaw, 0, 20) : null,
+            ':cui_normalizat' => $cuiNorm,
+            ':cota_tva' => $rate,
+            ':categorie' => $this->nullableString($data['categorie'] ?? null),
+            ':tip_id' => $tipId,
+            ':tip_document' => $this->nullableString($data['tip_document'] ?? null),
+            ':modalitate_plata' => $this->nullableString($data['modalitate_plata'] ?? null),
+            ':moneda' => $moneda,
+            ':increment' => $countUse ? 1 : 0,
+            ':data_cmp' => $date ?? '1970-01-01',
+            ':data_set' => $date,
+            ':updated_at' => $now,
+            ':id' => (int) $existing['id'],
+        ]);
+    }
+
+    /** Agenda e auxiliara: o eroare aici nu trebuie sa blocheze salvarea cheltuielii. */
+    private function rememberSupplierSafely(array $data, bool $countUse): void
+    {
+        try {
+            $this->rememberSupplier($data, $countUse);
+        } catch (Throwable $exception) {
+            error_log('[ExpenseModel][rememberSupplier] ' . $exception->getMessage());
+        }
+    }
+
+    /** Agenda pentru autocompletarea din formular (cele mai folosite primele). */
+    public function getSupplierDirectory(): array
+    {
+        try {
+            $rows = $this->db->query('
+                SELECT f.id, f.nume, f.cui, f.cota_tva, f.categorie, f.tip_id, f.tip_document,
+                       f.modalitate_plata, f.moneda, f.nr_utilizari, f.ultima_utilizare, t.nume AS tip_nume
+                FROM cheltuieli_furnizori f
+                LEFT JOIN cheltuieli_tipuri t ON t.id = f.tip_id
+                ORDER BY f.nr_utilizari DESC, f.nume ASC
+                LIMIT 1000
+            ')->fetchAll();
+        } catch (Throwable $exception) {
+            error_log('[ExpenseModel][getSupplierDirectory] ' . $exception->getMessage());
+            return [];
+        }
+
+        return array_map(static fn(array $row): array => [
+            'id' => (int) $row['id'],
+            'nume' => (string) $row['nume'],
+            'cui' => (string) ($row['cui'] ?? ''),
+            'cota_tva' => $row['cota_tva'] !== null ? (float) $row['cota_tva'] : null,
+            'categorie' => (string) ($row['categorie'] ?? ''),
+            'tip_id' => (int) ($row['tip_id'] ?? 0),
+            'tip_nume' => (string) ($row['tip_nume'] ?? ''),
+            'tip_document' => (string) ($row['tip_document'] ?? ''),
+            'modalitate_plata' => (string) ($row['modalitate_plata'] ?? ''),
+            'moneda' => (string) ($row['moneda'] ?? ''),
+            'nr_utilizari' => (int) $row['nr_utilizari'],
+        ], $rows);
     }
 
     public function getSuppliers(): array
@@ -940,6 +1232,7 @@ class ExpenseModel extends BaseModel
             }
 
             $this->db->commit();
+            $this->rememberSupplierSafely($data, true);
             return $expenseId;
         } catch (Throwable $exception) {
             $this->db->rollBack();
@@ -1000,6 +1293,7 @@ class ExpenseModel extends BaseModel
             }
 
             $this->db->commit();
+            $this->rememberSupplierSafely($data, false);
             return true;
         } catch (Throwable $exception) {
             $this->db->rollBack();

@@ -9,13 +9,26 @@ declare(strict_types=1);
  * modelul, ca la introducerea manuala), descarcare factura din Drive prin
  * GET /download (fisierele sunt private) si atasare ca document.
  *
- * Dedup: un rand se considera deja importat daca exista o cazare cu aceeasi
- * data + sofer + total_cu_tva. Reimportul repetat nu creeaza duplicate.
+ * Dedup: fiecare rand din sheet are o identitate stabila (sursa_import), salvata pe
+ * cazarea creata, cu index UNIQUE in baza:
+ *   - "drive:<fileId>" din linkul facturii (nu se schimba daca randul e editat/mutat);
+ *   - "fp:<hash>" din data + sofer + total cu TVA, pentru randurile fara link.
+ *
+ * Reguli (importul doar ADAUGA; corecturile se fac in aplicatie):
+ *   - sursa exista deja            -> sarit (se reincearca doar factura lipsa);
+ *   - sursa a fost stearsa in app  -> ignorat, nu se readuce;
+ *   - exista o cazare fara sursa cu aceeasi data + sofer + total cu TVA
+ *     (introdusa manual sau importata inainte de sursa_import) -> o revendica;
+ *   - altfel                       -> cazare noua.
+ *
+ * Butonul din pagina si cron-ul pot rula in acelasi timp: un GET_LOCK MySQL le
+ * serializeaza, iar indexul UNIQUE ramane plasa de siguranta.
  */
 class CazariSheetImportService
 {
     private const UPLOAD_DIR = 'uploads/curse_cheltuieli';
     private const MAX_DOWNLOAD_SIZE = 5242880; // 5 MB, ca la upload-ul manual
+    private const LOCK_NAME = 'cazari_sheet_import';
 
     private PDO $db;
     private AccommodationExpenseModel $model;
@@ -31,7 +44,7 @@ class CazariSheetImportService
     }
 
     /**
-     * @return array{imported: int, skipped: int, errors: array<int, string>}
+     * @return array{imported: int, skipped: int, ignored: int, linked: int, invoices: int, errors: array<int, string>}
      */
     public function import(?int $createdBy): array
     {
@@ -39,40 +52,103 @@ class CazariSheetImportService
             throw new RuntimeException('CAZARI_API_URL / CAZARI_API_TOKEN lipsesc din .env.');
         }
 
-        $rows = $this->fetchRows();
+        $lock = $this->db->prepare('SELECT GET_LOCK(:name, 0)');
+        $lock->bindValue(':name', self::LOCK_NAME, PDO::PARAM_STR);
+        $lock->execute();
+        if ((int) $lock->fetchColumn() !== 1) {
+            throw new RuntimeException('Un alt import din Sheet este deja in desfasurare. Reincearca in cateva momente.');
+        }
+
+        try {
+            return $this->importRows($this->fetchRows(), $createdBy);
+        } finally {
+            $release = $this->db->prepare('SELECT RELEASE_LOCK(:name)');
+            $release->bindValue(':name', self::LOCK_NAME, PDO::PARAM_STR);
+            $release->execute();
+        }
+    }
+
+    /** Mesajul scurt afisat in pagina si scris in logul cron-ului. */
+    public static function summarize(array $result): string
+    {
+        $message = sprintf(
+            'Import finalizat: %d cazari importate, %d deja existente.',
+            $result['imported'],
+            $result['skipped'] + $result['linked']
+        );
+        if ($result['ignored'] > 0) {
+            $message .= sprintf(' %d sterse din aplicatie (nu se reimporta).', $result['ignored']);
+        }
+        if ($result['invoices'] > 0) {
+            $message .= sprintf(' %d facturi recuperate.', $result['invoices']);
+        }
+
+        return $message;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @return array{imported: int, skipped: int, ignored: int, linked: int, invoices: int, errors: array<int, string>}
+     */
+    private function importRows(array $rows, ?int $createdBy): array
+    {
         $drivers = $this->driverIndex();
 
-        $imported = 0;
-        $skipped = 0;
-        $errors = [];
+        $result = ['imported' => 0, 'skipped' => 0, 'ignored' => 0, 'linked' => 0, 'invoices' => 0, 'errors' => []];
 
         foreach ($rows as $i => $row) {
             $line = $i + 2; // randul din sheet (header pe randul 1)
+            $fileId = $this->extractDriveFileId((string) ($row['documentUrl'] ?? ''));
+            $source = $this->sourceKey($row, $fileId);
+
+            // Stearsa din aplicatie dupa import: ramane stearsa.
+            if ($this->model->isImportSourceIgnored($source)) {
+                $result['ignored']++;
+                continue;
+            }
+
+            // Deja importata: nu atingem datele (pot fi corectate in aplicatie),
+            // doar reincercam factura daca descarcarea ei a esuat.
+            $existing = $this->model->findByImportSource($source);
+            if ($existing !== null) {
+                if ($existing['factura_import_pending'] === 1 && $fileId !== null) {
+                    $this->retryInvoice($existing['id'], $fileId, $line, $result);
+                }
+                $result['skipped']++;
+                continue;
+            }
 
             $date = $this->parseDate((string) ($row['data'] ?? ''));
             if ($date === null) {
-                $errors[] = "Rand {$line}: data invalida (" . (string) ($row['data'] ?? '') . ').';
+                $result['errors'][] = "Rand {$line}: data invalida (" . (string) ($row['data'] ?? '') . ').';
                 continue;
             }
 
             $driverId = $this->matchDriver((string) ($row['sofer'] ?? ''), $drivers);
             if ($driverId === null) {
-                $errors[] = "Rand {$line}: soferul \"" . (string) ($row['sofer'] ?? '') . '" nu exista in aplicatie.';
+                $result['errors'][] = "Rand {$line}: soferul \"" . (string) ($row['sofer'] ?? '') . '" nu exista in aplicatie.';
                 continue;
             }
 
             $total = $this->parseDecimal($row['cost'] ?? null);
             $totalWithVat = $this->parseDecimal($row['costTva'] ?? null);
             if ($totalWithVat === null || $totalWithVat <= 0) {
-                $errors[] = "Rand {$line}: totalul cu TVA lipseste sau este invalid.";
+                $result['errors'][] = "Rand {$line}: totalul cu TVA lipseste sau este invalid.";
                 continue;
             }
             if ($total === null || $total < 0) {
                 $total = 0.0;
             }
 
-            if ($this->alreadyImported($date, $driverId, $totalWithVat)) {
-                $skipped++;
+            // Cazare existenta fara sursa (manuala sau din importurile vechi): o legam
+            // de randul din sheet in loc sa cream un duplicat.
+            $unclaimedId = $this->model->findUnclaimedMatch($date, $driverId, $totalWithVat);
+            if ($unclaimedId !== null) {
+                $this->model->setImportSource($unclaimedId, $source);
+                if ($fileId !== null && $this->model->getDocuments($unclaimedId) === []) {
+                    $this->retryInvoice($unclaimedId, $fileId, $line, $result);
+                }
+                $result['linked']++;
                 continue;
             }
 
@@ -84,31 +160,87 @@ class CazariSheetImportService
                     'total_cu_tva' => $totalWithVat,
                     'observatii' => 'Import Google Sheet' .
                         (($row['documentLabel'] ?? '') !== '' ? ' - ' . (string) $row['documentLabel'] : ''),
+                    'sursa_import' => $source,
                     'created_by' => $createdBy,
                 ]);
+            } catch (PDOException $exception) {
+                // 23000 = incalcare UNIQUE: randul a fost importat intre timp.
+                if ((string) $exception->getCode() === '23000') {
+                    $result['skipped']++;
+                } else {
+                    $result['errors'][] = "Rand {$line}: nu s-a putut salva (" . $exception->getMessage() . ').';
+                }
+                continue;
             } catch (Throwable $exception) {
-                $errors[] = "Rand {$line}: nu s-a putut salva (" . $exception->getMessage() . ').';
+                $result['errors'][] = "Rand {$line}: nu s-a putut salva (" . $exception->getMessage() . ').';
                 continue;
             }
 
-            $fileId = $this->extractDriveFileId((string) ($row['documentUrl'] ?? ''));
-            if ($fileId !== null) {
-                try {
-                    $document = $this->downloadInvoice($fileId);
-                    if ($document !== null) {
-                        $this->model->addDocument($id, $document);
-                    }
-                } catch (Throwable $exception) {
-                    // Randul ramane valid si fara factura; semnalam doar problema.
-                    $errors[] = "Rand {$line}: cazarea a fost importata, dar factura nu s-a putut descarca ("
-                        . $exception->getMessage() . ').';
-                }
-            }
+            $result['imported']++;
 
-            $imported++;
+            if ($fileId !== null && !$this->attachInvoice($id, $fileId, $line, $result['errors'])) {
+                $this->model->setInvoicePending($id, true);
+            }
         }
 
-        return ['imported' => $imported, 'skipped' => $skipped, 'errors' => $errors];
+        return $result;
+    }
+
+    /**
+     * Identitatea stabila a randului din sheet. Linkul facturii (fisier Drive unic)
+     * nu se schimba cand randul e corectat, sortat sau mutat.
+     */
+    private function sourceKey(array $row, ?string $fileId): string
+    {
+        if ($fileId !== null) {
+            return 'drive:' . $fileId;
+        }
+
+        $date = $this->parseDate((string) ($row['data'] ?? '')) ?? trim((string) ($row['data'] ?? ''));
+        $total = $this->parseDecimal($row['costTva'] ?? null);
+
+        return 'fp:' . sha1(implode('|', [
+            $date,
+            $this->normalizeName((string) ($row['sofer'] ?? '')),
+            $total !== null ? number_format($total, 2, '.', '') : '',
+        ]));
+    }
+
+    /** Reincercare factura pentru o cazare deja existenta. */
+    private function retryInvoice(int $id, string $fileId, int $line, array &$result): void
+    {
+        // Factura atasata intre timp manual: nu mai e nimic de facut.
+        if ($this->model->getDocuments($id) !== []) {
+            $this->model->setInvoicePending($id, false);
+            return;
+        }
+
+        if ($this->attachInvoice($id, $fileId, $line, $result['errors'])) {
+            $this->model->setInvoicePending($id, false);
+            $result['invoices']++;
+        } else {
+            $this->model->setInvoicePending($id, true);
+        }
+    }
+
+    /** @param array<int, string> $errors */
+    private function attachInvoice(int $id, string $fileId, int $line, array &$errors): bool
+    {
+        try {
+            $document = $this->downloadInvoice($fileId);
+            if ($document === null) {
+                $errors[] = "Rand {$line}: factura descarcata este goala; se reincearca la urmatorul import.";
+                return false;
+            }
+            $this->model->addDocument($id, $document);
+
+            return true;
+        } catch (Throwable $exception) {
+            // Cazarea ramane valida si fara factura; se reincearca la urmatorul import.
+            $errors[] = "Rand {$line}: factura nu s-a putut descarca (" . $exception->getMessage() . '); se reincearca la urmatorul import.';
+
+            return false;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -332,23 +464,5 @@ class CazariSheetImportService
         }
 
         return null;
-    }
-
-    private function alreadyImported(string $date, int $driverId, float $totalWithVat): bool
-    {
-        $stmt = $this->db->prepare("
-            SELECT id
-            FROM cheltuieli_cazare
-            WHERE data = :data
-              AND sofer_id = :sofer_id
-              AND ABS(total_cu_tva - :total_cu_tva) < 0.01
-            LIMIT 1
-        ");
-        $stmt->bindValue(':data', $date, PDO::PARAM_STR);
-        $stmt->bindValue(':sofer_id', $driverId, PDO::PARAM_INT);
-        $stmt->bindValue(':total_cu_tva', number_format($totalWithVat, 2, '.', ''), PDO::PARAM_STR);
-        $stmt->execute();
-
-        return $stmt->fetchColumn() !== false;
     }
 }

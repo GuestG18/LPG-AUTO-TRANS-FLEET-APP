@@ -100,6 +100,12 @@ $exportParams = array_merge($baseParams, [
 .uact .dot-create{background:#16a34a}.uact .dot-update{background:#2563eb}.uact .dot-delete{background:#dc2626}
 .uact .dot-login{background:#7c3aed}.uact .dot-restore{background:#0891b2}.uact .dot-status{background:#d97706}
 .uact .mod{font-size:.72rem;color:#64748b;border:1px solid #dde5ef;border-radius:6px;padding:2px 8px;font-weight:600}
+.uact .row.has-link{cursor:pointer;transition:background .12s}
+.uact .row.has-link:hover{background:#f5f9ff}
+.uact .row.has-link:hover .desc{color:var(--pri)}
+.uact .golink{margin-left:auto;font-size:.76rem;font-weight:600;color:var(--pri);text-decoration:none;display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:6px}
+.uact .golink:hover{background:#dbeafe;text-decoration:none}
+.uact .gone{margin-left:auto;font-size:.72rem;color:#94a3b8;display:inline-flex;align-items:center;gap:4px}
 .uact .desc{font-size:.86rem;color:#334155;margin-top:5px}
 .uact .expand{font-size:.78rem;color:var(--pri);cursor:pointer;margin-top:7px;display:inline-flex;align-items:center;gap:5px;user-select:none;font-weight:600}
 .uact .expand i{transition:transform .15s}
@@ -262,7 +268,8 @@ $exportParams = array_merge($baseParams, [
           $timePart = strlen($ts) >= 16 ? substr($ts, 11, 5) : '';
           $rowId = 'ud' . (int) ($row['record_id'] ?? 0) . '_' . substr(md5($ts . $key . $uid), 0, 6);
           ?>
-          <div class="row">
+          <?php $link = (string) ($row['link'] ?? ''); ?>
+          <div class="row<?= $link !== '' ? ' has-link' : '' ?>"<?= $link !== '' ? ' data-href="' . e($link) . '"' : '' ?>>
             <div class="time"><?= e($timePart) ?></div>
             <div class="rail"><span class="dot dot-<?= e($meta['cls']) ?>"></span></div>
             <div>
@@ -271,6 +278,11 @@ $exportParams = array_merge($baseParams, [
                 <span class="uname"><?= e((string) $row['user_name']) ?></span>
                 <span class="abadge a-<?= e($meta['cls']) ?>"><i class="bi <?= e($meta['icon']) ?>"></i><?= e($meta['label']) ?></span>
                 <span class="mod"><?= e((string) $row['module_label']) ?></span>
+                <?php if ($link !== ''): ?>
+                  <a class="golink" href="<?= e($link) ?>"><?= e((string) ($row['link_label'] ?? 'Deschide')) ?> <i class="bi bi-box-arrow-up-right"></i></a>
+                <?php elseif ((int) ($row['record_id'] ?? 0) > 0): ?>
+                  <span class="gone" title="Înregistrarea nu mai există în aplicație"><i class="bi bi-slash-circle"></i> Înregistrare ștearsă</span>
+                <?php endif; ?>
               </div>
               <div class="desc"><?= e((string) $row['description']) ?></div>
               <?php if ($changes !== []): ?>
@@ -345,6 +357,18 @@ $exportParams = array_merge($baseParams, [
 
 <script>
 (function () {
+  document.querySelectorAll('.uact .row.has-link').forEach(function (row) {
+    row.addEventListener('click', function (ev) {
+      // Nu interceptam: toggle-ul de diferente, tabelul de diferente, linkurile si selectarea de text.
+      if (ev.target.closest('.expand, .diff, a')) return;
+      var sel = window.getSelection ? String(window.getSelection()) : '';
+      if (sel !== '') return;
+      var href = row.getAttribute('data-href');
+      if (!href) return;
+      if (ev.ctrlKey || ev.metaKey || ev.button === 1) { window.open(href, '_blank'); return; }
+      window.location.href = href;
+    });
+  });
   document.querySelectorAll('.uact .expand').forEach(function (el) {
     el.addEventListener('click', function () {
       var d = document.getElementById(el.getAttribute('data-target'));

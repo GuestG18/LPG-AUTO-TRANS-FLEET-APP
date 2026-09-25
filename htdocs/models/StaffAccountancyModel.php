@@ -32,6 +32,7 @@ class StaffAccountancyModel extends BaseModel
         parent::__construct($db);
         $this->ensureEmploymentLifecycleSchema();
         $this->ensureEmploymentContractRequirements();
+        $this->ensureMonthlyAccountingSchema();
     }
 
     public function getSummary(): array
@@ -86,6 +87,33 @@ class StaffAccountancyModel extends BaseModel
             'total_pages' => $totalPages,
             'page' => $page,
         ];
+    }
+
+    /**
+     * Cati angajati are fiecare stare a documentelor, cu toate filtrele aplicate in
+     * afara de filtrul pe documente (pentru legenda / filtrul de deasupra tabelului).
+     *
+     * @return array<string, int>
+     */
+    public function countStaffByDocumentStatus(array $filters): array
+    {
+        $filters['document_status'] = '';
+        [$whereSql, $params] = $this->buildStaffWhere($filters);
+        $stmt = $this->db->prepare('
+            SELECT staff.document_status, COUNT(*) AS total
+            FROM (' . $this->baseStaffUnionSql() . ') staff
+            ' . $whereSql . '
+            GROUP BY staff.document_status
+        ');
+        $this->bindParams($stmt, $params);
+        $stmt->execute();
+
+        $counts = ['valid' => 0, 'expira_curand' => 0, 'expirat' => 0, 'fara_documente' => 0];
+        foreach ($stmt->fetchAll() as $row) {
+            $counts[(string) $row['document_status']] = (int) $row['total'];
+        }
+
+        return $counts;
     }
 
     public function getAllStaffForExport(array $filters, string $sort, string $direction): array
@@ -557,6 +585,103 @@ class StaffAccountancyModel extends BaseModel
         return $ok;
     }
 
+    /** Vehiculele tractoare/autoutilitare active, pentru asocierea unui sofer colaborator. */
+    public function getVehicleOptions(): array
+    {
+        return $this->db->query("
+            SELECT id, nr_inmatriculare
+            FROM vehicule
+            WHERE status = 'activ'
+              AND tip_vehicul NOT IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')
+            ORDER BY nr_inmatriculare ASC
+        ")->fetchAll();
+    }
+
+    /**
+     * Creeaza un sofer colaborator (neangajat al firmei) direct in `soferi`, cu vehiculele asociate,
+     * astfel incat sa apara in selectorul de soferi din Dispecer curse.
+     */
+    public function createCollaboratorDriver(array $data, array $vehicleIds, ?int $userId): int
+    {
+        $this->ensureDriverVehicleAssignmentsSchema();
+
+        $vehicleIds = array_values(array_unique(array_filter(array_map('intval', $vehicleIds), static fn (int $id): bool => $id > 0)));
+        $startDate = $data['data_angajare'] ?: date('Y-m-d');
+        $salary = $data['salariu'];
+        $now = date('Y-m-d H:i:s');
+
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $stmt = $this->db->prepare("
+                INSERT INTO soferi (
+                    nume, telefon, salariu, vehicle_id, data_angajare, permis_expira_la,
+                    status, tip_colaborare, observatii, created_at, updated_at
+                ) VALUES (
+                    :nume, :telefon, :salariu, :vehicle_id, :data_angajare, '9999-12-31',
+                    'activ', 'colaborator', :observatii, :created_at, :updated_at
+                )
+            ");
+            $this->bindParams($stmt, [
+                ':nume' => $data['nume'],
+                ':telefon' => $data['telefon'],
+                ':salariu' => $salary,
+                ':vehicle_id' => $vehicleIds[0] ?? null,
+                ':data_angajare' => $startDate,
+                ':observatii' => $data['observatii'] !== '' ? $data['observatii'] : null,
+                ':created_at' => $now,
+                ':updated_at' => $now,
+            ]);
+            $stmt->execute();
+            $driverId = (int) $this->db->lastInsertId();
+
+            $assign = $this->db->prepare('
+                INSERT INTO soferi_vehicule (driver_id, vehicle_id, is_primary, created_at, updated_at)
+                VALUES (:driver_id, :vehicle_id, :is_primary, :created_at, :updated_at)
+            ');
+            foreach ($vehicleIds as $index => $vehicleId) {
+                $this->bindParams($assign, [
+                    ':driver_id' => $driverId,
+                    ':vehicle_id' => $vehicleId,
+                    ':is_primary' => $index === 0 ? 1 : 0,
+                    ':created_at' => $now,
+                    ':updated_at' => $now,
+                ]);
+                $assign->execute();
+            }
+
+            $driverType = $this->findDriverStaffType();
+            $this->createEmploymentPeriod('driver', $driverId, [
+                'personnel_type' => 'operational',
+                'staff_type_id' => $driverType !== null ? (int) ($driverType['id'] ?? 0) : null,
+                'function_name' => 'Șofer colaborator',
+                'salary' => $salary,
+                'hire_date' => $startDate,
+                'status' => 'active',
+                'rehire_eligible' => 1,
+            ], $userId);
+
+            if ($salary !== null) {
+                $this->createSalaryHistory('driver', $driverId, null, (float) $salary, $startDate, $userId, 'Remuneratie initiala colaborator.');
+            }
+
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->commit();
+            }
+
+            return $driverId;
+        } catch (Throwable $exception) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
     public function endEmployment(string $subjectType, int $subjectId, array $termination, ?int $userId): bool
     {
         $endDate = (string) ($termination['termination_date'] ?? '');
@@ -584,37 +709,125 @@ class StaffAccountancyModel extends BaseModel
         return $this->terminateSubject($subjectType, $subjectId, $existing, $termination, $userId);
     }
 
+    /**
+     * Schimbarea de salariu inchide perioada anterioara si deschide una noua de la
+     * $effectiveDate (salary_history = perioade valid_from; valid_to = urmatoarea
+     * modificare - 1 zi). Lunile de dinainte isi pastreaza salariul lor.
+     *
+     * Salariul "curent" din fisa (soferi.salariu / staff_members.salariu) se schimba doar
+     * cand modificarea e cea mai recenta: o corectie retroactiva (ex. pentru mai) nu
+     * rescrie salariul de acum, stabilit deja din iulie.
+     */
     public function updateSalary(string $subjectType, int $subjectId, float $salary, string $effectiveDate, ?string $notes, ?int $userId): bool
     {
-        if ($subjectType === 'driver') {
-            $existing = $this->findDriver($subjectId);
-            if ($existing === null) {
-                return false;
-            }
-
-            $previous = $existing['salariu'] !== null ? (float) $existing['salariu'] : null;
-            $stmt = $this->db->prepare('UPDATE soferi SET salariu = :salariu, updated_at = :updated_at WHERE id = :id');
-        } else {
-            $existing = $this->findDirectStaff($subjectId);
-            if ($existing === null) {
-                return false;
-            }
-
-            $previous = $existing['salariu'] !== null ? (float) $existing['salariu'] : null;
-            $stmt = $this->db->prepare('UPDATE staff_members SET salariu = :salariu, updated_by = :updated_by, updated_at = :updated_at WHERE id = :id');
-            $stmt->bindValue(':updated_by', $userId, $userId !== null ? PDO::PARAM_INT : PDO::PARAM_NULL);
+        $existing = $subjectType === 'driver' ? $this->findDriver($subjectId) : $this->findDirectStaff($subjectId);
+        if ($existing === null) {
+            return false;
         }
 
-        $stmt->bindValue(':salariu', (string) $salary);
-        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
-        $stmt->bindValue(':id', $subjectId, PDO::PARAM_INT);
-        $ok = $stmt->execute();
+        $currentSalary = $existing['salariu'] !== null ? (float) $existing['salariu'] : null;
+        $history = [];
+        $this->appendSalaryHistory($history, $subjectType, [$subjectId]);
+        $history = $history[$subjectType . '-' . $subjectId] ?? [];
+        $latestEffective = $history !== [] ? (string) $history[0]['effective_date'] : null;
+        $isLatest = $latestEffective === null || $effectiveDate >= $latestEffective;
 
-        if ($ok) {
+        $dayBefore = (new DateTimeImmutable($effectiveDate))->modify('-1 day')->format('Y-m-d');
+        $previous = self::salaryAt($history, $currentSalary, null, $dayBefore)['amount'];
+
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            if ($isLatest) {
+                if ($subjectType === 'driver') {
+                    $stmt = $this->db->prepare('UPDATE soferi SET salariu = :salariu, updated_at = :updated_at WHERE id = :id');
+                } else {
+                    $stmt = $this->db->prepare('UPDATE staff_members SET salariu = :salariu, updated_by = :updated_by, updated_at = :updated_at WHERE id = :id');
+                    $stmt->bindValue(':updated_by', $userId, $userId !== null ? PDO::PARAM_INT : PDO::PARAM_NULL);
+                }
+                $stmt->bindValue(':salariu', (string) $salary);
+                $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+                $stmt->bindValue(':id', $subjectId, PDO::PARAM_INT);
+                $stmt->execute();
+            }
+
             $this->createSalaryHistory($subjectType, $subjectId, $previous, $salary, $effectiveDate, $userId, $notes);
+
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->commit();
+            }
+        } catch (Throwable $exception) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
         }
 
-        return $ok;
+        return true;
+    }
+
+    /**
+     * Salariul contractual valabil la o data, din istoricul ordonat descrescator
+     * (effective_date DESC, id DESC: la aceeasi data castiga ultima inregistrare).
+     *
+     * Fara nicio modificare inregistrata, salariul din fisa e singurul cunoscut si se
+     * considera valabil de la angajare. Inainte de prima modificare se foloseste
+     * "salariul anterior" notat pe ea; daca lipseste, salariul e necunoscut.
+     *
+     * @return array{amount: ?float, source: string, since: ?string}
+     */
+    public static function salaryAt(array $historyDesc, ?float $currentSalary, ?string $hireDate, string $date): array
+    {
+        if ($hireDate !== null && $hireDate !== '' && $date < substr($hireDate, 0, 10)) {
+            return ['amount' => null, 'source' => 'neangajat', 'since' => null];
+        }
+
+        foreach ($historyDesc as $row) {
+            if ((string) $row['effective_date'] <= $date) {
+                return ['amount' => (float) $row['current_salary'], 'source' => 'istoric', 'since' => (string) $row['effective_date']];
+            }
+        }
+
+        if ($historyDesc === []) {
+            return ['amount' => $currentSalary, 'source' => $currentSalary !== null ? 'curent' : 'necunoscut', 'since' => $hireDate];
+        }
+
+        $oldest = $historyDesc[count($historyDesc) - 1];
+        return $oldest['previous_salary'] !== null
+            ? ['amount' => (float) $oldest['previous_salary'], 'source' => 'istoric', 'since' => $hireDate]
+            : ['amount' => null, 'source' => 'necunoscut', 'since' => null];
+    }
+
+    /**
+     * Istoricul ca perioade de valabilitate [valid_from, valid_to], cea mai noua prima.
+     * Doua modificari cu aceeasi data nu se suprapun: ramane ultima introdusa.
+     */
+    public static function salaryPeriods(array $historyDesc): array
+    {
+        $periods = [];
+        $nextFrom = null;
+        $seenDates = [];
+        foreach ($historyDesc as $row) {
+            $from = (string) $row['effective_date'];
+            if (isset($seenDates[$from])) {
+                continue;
+            }
+            $seenDates[$from] = true;
+            $periods[] = [
+                'salary' => (float) $row['current_salary'],
+                'valid_from' => $from,
+                'valid_to' => $nextFrom !== null ? (new DateTimeImmutable($nextFrom))->modify('-1 day')->format('Y-m-d') : null,
+                'updated_by_name' => $row['updated_by_name'] ?? null,
+                'notes' => $row['notes'] ?? null,
+                'created_at' => $row['created_at'] ?? null,
+            ];
+            $nextFrom = $from;
+        }
+
+        return $periods;
     }
 
     public function getFormerSummary(): array
@@ -1125,6 +1338,450 @@ class StaffAccountancyModel extends BaseModel
         return $this->findDirectStaff($sourceId) !== null;
     }
 
+    // ------------------------------------------------------------------
+    // Luna contabila: regim de lucru, pontaj lunar, cost salarial, CO read-only
+    // ------------------------------------------------------------------
+
+    public const WORK_REGIMES = [
+        '5_zile' => '5 zile / săptămână',
+        '6_zile' => '6 zile / săptămână',
+        'luni_vineri' => 'Luni - Vineri',
+        'personalizat' => 'Personalizat',
+    ];
+
+    /** Tipurile din Programare concedii, asa cum apar in Contabilitate Personal. */
+    public const LEAVE_TYPES = [
+        'odihna' => ['code' => 'CO', 'label' => 'Concediu de odihnă'],
+        'medical' => ['code' => 'CM', 'label' => 'Concediu medical'],
+        'personal' => ['code' => 'CP', 'label' => 'Concediu personal'],
+        'fara_plata' => ['code' => 'FP', 'label' => 'Concediu fără plată'],
+    ];
+
+    public static function workRegimeLabel(?string $regime, ?string $details = null): ?string
+    {
+        $regime = (string) $regime;
+        if ($regime === '' || !isset(self::WORK_REGIMES[$regime])) {
+            return null;
+        }
+        $details = trim((string) $details);
+
+        return $regime === 'personalizat' && $details !== '' ? $details : self::WORK_REGIMES[$regime];
+    }
+
+    public function findSubject(string $sourceType, int $sourceId): ?array
+    {
+        return $this->findSubjectInUnion($sourceType, $sourceId);
+    }
+
+    public function updateWorkRegime(string $sourceType, int $sourceId, ?string $regime, ?string $details, ?int $userId): bool
+    {
+        if ($regime !== null && !isset(self::WORK_REGIMES[$regime])) {
+            throw new InvalidArgumentException('Regimul de lucru este invalid.');
+        }
+
+        $details = $regime === 'personalizat' && $details !== null && trim($details) !== '' ? mb_substr(trim($details), 0, 120) : null;
+        if ($sourceType === 'driver') {
+            $stmt = $this->db->prepare('UPDATE soferi SET regim_lucru = :regim, regim_lucru_detalii = :detalii, updated_at = :updated_at WHERE id = :id');
+        } else {
+            $stmt = $this->db->prepare('UPDATE staff_members SET regim_lucru = :regim, regim_lucru_detalii = :detalii, updated_by = :updated_by, updated_at = :updated_at WHERE id = :id');
+            $stmt->bindValue(':updated_by', $userId, $userId !== null ? PDO::PARAM_INT : PDO::PARAM_NULL);
+        }
+        $stmt->bindValue(':regim', $regime, $regime !== null ? PDO::PARAM_STR : PDO::PARAM_NULL);
+        $stmt->bindValue(':detalii', $details, $details !== null ? PDO::PARAM_STR : PDO::PARAM_NULL);
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'));
+        $stmt->bindValue(':id', $sourceId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->rowCount() > 0 || $this->subjectExists($sourceType, $sourceId);
+    }
+
+    /**
+     * Costul salarial al lunii = suma inregistrarilor lunare existente. Nu se deduce
+     * din salariile curente: fara inregistrari, costul lunii este "in asteptare".
+     */
+    public function getMonthCostSummary(string $period): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT
+                COUNT(*) AS record_count,
+                SUM(CASE WHEN cost_total IS NOT NULL THEN 1 ELSE 0 END) AS paid_count,
+                SUM(CASE WHEN status = 'finalizat' THEN 1 ELSE 0 END) AS finalized_count,
+                SUM(cost_total) AS total_cost
+            FROM personal_luna
+            WHERE perioada = :perioada
+        ");
+        $stmt->execute([':perioada' => $period]);
+        $row = $stmt->fetch() ?: [];
+
+        return [
+            'record_count' => (int) ($row['record_count'] ?? 0),
+            'paid_count' => (int) ($row['paid_count'] ?? 0),
+            'finalized_count' => (int) ($row['finalized_count'] ?? 0),
+            'total_cost' => ($row['total_cost'] ?? null) !== null ? (float) $row['total_cost'] : null,
+        ];
+    }
+
+    /**
+     * Costul salarial al lunii cand calculul fiscal este dezactivat: suma salariilor
+     * configurate valabile in luna (din istoricul salarial, ca lunile trecute sa-si
+     * pastreze salariul), pentru toti cei angajati in acea luna.
+     *
+     * @return array{total: float, count: int}
+     */
+    public function getConfiguredSalaryCost(string $monthStart, string $monthEnd): array
+    {
+        $stmt = $this->db->prepare('
+            SELECT staff.source_type, staff.source_id, staff.salariu, staff.data_angajare
+            FROM (' . $this->baseStaffUnionSql() . ') staff
+            WHERE (staff.data_angajare IS NULL OR staff.data_angajare <= :month_end)
+              AND (staff.termination_effective_date IS NULL OR staff.termination_effective_date >= :month_start)
+        ');
+        $stmt->execute([':month_end' => $monthEnd, ':month_start' => $monthStart]);
+        $rows = $stmt->fetchAll();
+        $history = $this->getSalaryHistoryForRows($rows);
+
+        $total = 0.0;
+        $count = 0;
+        foreach ($rows as $row) {
+            $key = $row['source_type'] . '-' . (int) $row['source_id'];
+            $hire = !empty($row['data_angajare']) ? substr((string) $row['data_angajare'], 0, 10) : null;
+            $salary = self::salaryAt($history[$key] ?? [], $row['salariu'] !== null ? (float) $row['salariu'] : null, $hire, $monthEnd)['amount'];
+            if ($salary !== null) {
+                $total += $salary;
+                $count++;
+            }
+        }
+
+        return ['total' => $total, 'count' => $count];
+    }
+
+    /** Inregistrarile lunare ale randurilor afisate, dintr-o singura interogare. */
+    public function getMonthlyRecordsForRows(array $rows, string $period): array
+    {
+        $pairs = [];
+        foreach ($rows as $row) {
+            $type = (string) ($row['source_type'] ?? '');
+            $id = (int) ($row['source_id'] ?? 0);
+            if (in_array($type, ['driver', 'staff'], true) && $id > 0) {
+                $pairs[$type][] = $id;
+            }
+        }
+        if ($pairs === []) {
+            return [];
+        }
+
+        $conditions = [];
+        $params = [$period];
+        foreach ($pairs as $type => $ids) {
+            $ids = array_values(array_unique($ids));
+            $conditions[] = '(subject_type = ? AND subject_id IN (' . implode(',', array_fill(0, count($ids), '?')) . '))';
+            $params[] = $type;
+            array_push($params, ...$ids);
+        }
+
+        $stmt = $this->db->prepare('SELECT * FROM personal_luna WHERE perioada = ? AND (' . implode(' OR ', $conditions) . ')');
+        $stmt->execute($params);
+
+        $records = [];
+        foreach ($stmt->fetchAll() as $record) {
+            $records[$record['subject_type'] . '-' . (int) $record['subject_id']] = $record;
+        }
+
+        return $records;
+    }
+
+    public function findMonthlyRecord(string $sourceType, int $sourceId, string $period): ?array
+    {
+        $stmt = $this->db->prepare('
+            SELECT pl.*, uf.nume AS finalized_by_name, uu.nume AS updated_by_name
+            FROM personal_luna pl
+            LEFT JOIN utilizatori uf ON uf.id = pl.finalized_by
+            LEFT JOIN utilizatori uu ON uu.id = pl.updated_by
+            WHERE pl.subject_type = :subject_type AND pl.subject_id = :subject_id AND pl.perioada = :perioada
+            LIMIT 1
+        ');
+        $stmt->execute([':subject_type' => $sourceType, ':subject_id' => $sourceId, ':perioada' => $period]);
+        $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    /**
+     * Salveaza pontajul lunar si componentele costului (ciorna). Costul este suma
+     * componentelor introduse: baza + sporuri + alte ajustari - retineri. Nu se aplica
+     * nicio formula de calcul salarial (ex. proportional cu zilele lucrate).
+     */
+    public function saveMonthlyRecord(string $sourceType, int $sourceId, string $period, array $data, ?int $userId): void
+    {
+        $existing = $this->findMonthlyRecord($sourceType, $sourceId, $period);
+        if ($existing !== null && (string) $existing['status'] === 'finalizat') {
+            throw new InvalidArgumentException('Luna este finalizată și nu mai poate fi modificată.');
+        }
+
+        $base = $data['salariu_baza'];
+        $cost = $base === null ? null : round(
+            (float) $base + (float) ($data['sporuri'] ?? 0) + (float) ($data['alte_ajustari'] ?? 0) - (float) ($data['retineri'] ?? 0),
+            2
+        );
+
+        $now = date('Y-m-d H:i:s');
+        $stmt = $this->db->prepare('
+            INSERT INTO personal_luna (
+                subject_type, driver_id, staff_member_id, subject_id, perioada,
+                zile_lucrate, zile_co, zile_cm, zile_absente,
+                salariu_baza, sporuri, retineri, alte_ajustari, cost_total, observatii,
+                status, created_by, updated_by, created_at, updated_at
+            ) VALUES (
+                :subject_type, :driver_id, :staff_member_id, :subject_id, :perioada,
+                :zile_lucrate, :zile_co, :zile_cm, :zile_absente,
+                :salariu_baza, :sporuri, :retineri, :alte_ajustari, :cost_total, :observatii,
+                "ciorna", :created_by, :updated_by, :created_at, :updated_at
+            )
+            ON DUPLICATE KEY UPDATE
+                zile_lucrate = VALUES(zile_lucrate),
+                zile_co = VALUES(zile_co),
+                zile_cm = VALUES(zile_cm),
+                zile_absente = VALUES(zile_absente),
+                salariu_baza = VALUES(salariu_baza),
+                sporuri = VALUES(sporuri),
+                retineri = VALUES(retineri),
+                alte_ajustari = VALUES(alte_ajustari),
+                cost_total = VALUES(cost_total),
+                observatii = VALUES(observatii),
+                updated_by = VALUES(updated_by),
+                updated_at = VALUES(updated_at)
+        ');
+
+        $nullableNumber = static fn (mixed $value): ?string => $value === null ? null : (string) $value;
+        $this->bindParams($stmt, [
+            ':subject_type' => $sourceType,
+            ':driver_id' => $sourceType === 'driver' ? $sourceId : null,
+            ':staff_member_id' => $sourceType === 'staff' ? $sourceId : null,
+            ':subject_id' => $sourceId,
+            ':perioada' => $period,
+            ':zile_lucrate' => $nullableNumber($data['zile_lucrate'] ?? null),
+            // CO/CM-ul soferilor vine din Programare concedii: nu se dubleaza aici.
+            ':zile_co' => $sourceType === 'staff' ? $nullableNumber($data['zile_co'] ?? null) : null,
+            ':zile_cm' => $sourceType === 'staff' ? $nullableNumber($data['zile_cm'] ?? null) : null,
+            ':zile_absente' => $nullableNumber($data['zile_absente'] ?? null),
+            ':salariu_baza' => $nullableNumber($base),
+            ':sporuri' => $nullableNumber($data['sporuri'] ?? null),
+            ':retineri' => $nullableNumber($data['retineri'] ?? null),
+            ':alte_ajustari' => $nullableNumber($data['alte_ajustari'] ?? null),
+            ':cost_total' => $nullableNumber($cost),
+            ':observatii' => ($data['observatii'] ?? null) !== null && trim((string) $data['observatii']) !== '' ? trim((string) $data['observatii']) : null,
+            ':created_by' => $userId,
+            ':updated_by' => $userId,
+            ':created_at' => $now,
+            ':updated_at' => $now,
+        ]);
+        $stmt->execute();
+    }
+
+    /**
+     * Finalizarea ingheata luna: pe langa valorile introduse, se salveaza regimul de
+     * lucru, zilele lucratoare RO si zilele CO/CM din Programare concedii de acum.
+     */
+    public function finalizeMonthlyRecord(string $sourceType, int $sourceId, string $period, array $snapshot, ?int $userId): void
+    {
+        $record = $this->findMonthlyRecord($sourceType, $sourceId, $period);
+        if ($record === null) {
+            throw new InvalidArgumentException('Înregistrează mai întâi luna (zile lucrate și salariu de bază).');
+        }
+        if ((string) $record['status'] === 'finalizat') {
+            throw new InvalidArgumentException('Luna este deja finalizată.');
+        }
+        if ($record['zile_lucrate'] === null || $record['salariu_baza'] === null) {
+            throw new InvalidArgumentException('Completează zilele lucrate și salariul de bază înainte de finalizare.');
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $stmt = $this->db->prepare("
+            UPDATE personal_luna
+            SET status = 'finalizat',
+                snapshot_regim_lucru = :regim,
+                snapshot_zile_lucratoare_ro = :zile_ro,
+                snapshot_zile_co_planificare = :zile_co,
+                snapshot_zile_cm_planificare = :zile_cm,
+                finalized_at = :finalized_at,
+                finalized_by = :finalized_by,
+                updated_by = :updated_by,
+                updated_at = :updated_at
+            WHERE id = :id AND status = 'ciorna'
+        ");
+        $this->bindParams($stmt, [
+            ':regim' => $snapshot['regim_lucru'] ?? null,
+            ':zile_ro' => $snapshot['zile_lucratoare_ro'] ?? null,
+            ':zile_co' => isset($snapshot['zile_co']) ? (string) $snapshot['zile_co'] : null,
+            ':zile_cm' => isset($snapshot['zile_cm']) ? (string) $snapshot['zile_cm'] : null,
+            ':finalized_at' => $now,
+            ':finalized_by' => $userId,
+            ':updated_by' => $userId,
+            ':updated_at' => $now,
+            ':id' => (int) $record['id'],
+        ]);
+        $stmt->execute();
+    }
+
+    public function reopenMonthlyRecord(string $sourceType, int $sourceId, string $period, ?int $userId): bool
+    {
+        $stmt = $this->db->prepare("
+            UPDATE personal_luna
+            SET status = 'ciorna',
+                snapshot_regim_lucru = NULL,
+                snapshot_zile_lucratoare_ro = NULL,
+                snapshot_zile_co_planificare = NULL,
+                snapshot_zile_cm_planificare = NULL,
+                finalized_at = NULL,
+                finalized_by = NULL,
+                updated_by = :updated_by,
+                updated_at = :updated_at
+            WHERE subject_type = :subject_type AND subject_id = :subject_id AND perioada = :perioada AND status = 'finalizat'
+        ");
+        $this->bindParams($stmt, [
+            ':updated_by' => $userId,
+            ':updated_at' => date('Y-m-d H:i:s'),
+            ':subject_type' => $sourceType,
+            ':subject_id' => $sourceId,
+            ':perioada' => $period,
+        ]);
+        $stmt->execute();
+
+        return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Concediile APROBATE din Programare concedii care ating intervalul, pe sofer.
+     * Doar citire: aprobarea (cu verificarea inlocuitorilor si a acoperirii flotei)
+     * ramane exclusiv in modulul Programare concedii.
+     *
+     * @return array<int, array<int, array<string, mixed>>>
+     */
+    public function getApprovedLeavesForDrivers(array $driverIds, string $start, string $end): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $driverIds), static fn (int $id): bool => $id > 0)));
+        if ($ids === [] || !$this->tableExists('concedii')) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $this->db->prepare("
+            SELECT c.id, c.driver_id, c.tip_concediu, c.data_inceput, c.data_sfarsit, c.status, c.note,
+                   r.nume AS inlocuitor_nume
+            FROM concedii c
+            LEFT JOIN soferi r ON r.id = c.inlocuitor_id
+            WHERE c.status = 'aprobat'
+              AND c.data_inceput <= ?
+              AND c.data_sfarsit >= ?
+              AND c.driver_id IN ($placeholders)
+            ORDER BY c.data_inceput ASC, c.id ASC
+        ");
+        $stmt->execute(array_merge([$end, $start], $ids));
+
+        $grouped = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $grouped[(int) $row['driver_id']][] = $row;
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * Zilele de concediu din luna, zi cu zi, si totalurile pe tip (zile calendaristice).
+     *
+     * @return array{days: array<string, array<string, mixed>>, totals: array<string, int>}
+     */
+    public static function leaveDaysInMonth(array $leaves, string $monthStart, string $monthEnd): array
+    {
+        $days = [];
+        $totals = ['CO' => 0, 'CM' => 0, 'CP' => 0, 'FP' => 0];
+        foreach ($leaves as $leave) {
+            $type = self::LEAVE_TYPES[(string) ($leave['tip_concediu'] ?? '')] ?? ['code' => 'CP', 'label' => 'Concediu'];
+            $from = max((string) $leave['data_inceput'], $monthStart);
+            $to = min((string) $leave['data_sfarsit'], $monthEnd);
+            for ($day = new DateTimeImmutable($from); $day->format('Y-m-d') <= $to; $day = $day->modify('+1 day')) {
+                $iso = $day->format('Y-m-d');
+                if (isset($days[$iso])) {
+                    continue;
+                }
+                $days[$iso] = [
+                    'code' => $type['code'],
+                    'label' => $type['label'],
+                    'from' => (string) $leave['data_inceput'],
+                    'to' => (string) $leave['data_sfarsit'],
+                    'replacement' => $leave['inlocuitor_nume'] ?? null,
+                ];
+                $totals[$type['code']]++;
+            }
+        }
+
+        return ['days' => $days, 'totals' => $totals];
+    }
+
+    /**
+     * Migrarea oficiala: database/migrations/2026_09_23_000001_contabilitate_personal_calendar_luna.sql.
+     * Aici doar tinem pagina in picioare pe o baza inca nemigrata.
+     */
+    private function ensureMonthlyAccountingSchema(): void
+    {
+        static $ensured = false;
+        if ($ensured) {
+            return;
+        }
+
+        foreach (['soferi' => 'tip_colaborare', 'staff_members' => 'status'] as $table => $after) {
+            if ($this->tableExists($table) && !$this->columnExists($table, 'regim_lucru')) {
+                $this->execSchemaChangeIgnoringDuplicateColumn("ALTER TABLE {$table} ADD COLUMN regim_lucru VARCHAR(20) NULL AFTER {$after}");
+            }
+            if ($this->tableExists($table) && !$this->columnExists($table, 'regim_lucru_detalii')) {
+                $this->execSchemaChangeIgnoringDuplicateColumn("ALTER TABLE {$table} ADD COLUMN regim_lucru_detalii VARCHAR(120) NULL AFTER regim_lucru");
+            }
+        }
+
+        if (!$this->tableExists('personal_luna')) {
+            $this->db->exec("
+                CREATE TABLE IF NOT EXISTS personal_luna (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    subject_type ENUM('driver','staff') NOT NULL,
+                    driver_id INT UNSIGNED NULL,
+                    staff_member_id INT UNSIGNED NULL,
+                    subject_id INT UNSIGNED NOT NULL,
+                    perioada DATE NOT NULL,
+                    zile_lucrate DECIMAL(4,1) NULL,
+                    zile_co DECIMAL(4,1) NULL,
+                    zile_cm DECIMAL(4,1) NULL,
+                    zile_absente DECIMAL(4,1) NULL,
+                    salariu_baza DECIMAL(10,2) NULL,
+                    sporuri DECIMAL(10,2) NULL,
+                    retineri DECIMAL(10,2) NULL,
+                    alte_ajustari DECIMAL(10,2) NULL,
+                    cost_total DECIMAL(10,2) NULL,
+                    observatii TEXT NULL,
+                    status ENUM('ciorna','finalizat') NOT NULL DEFAULT 'ciorna',
+                    snapshot_regim_lucru VARCHAR(160) NULL,
+                    snapshot_zile_lucratoare_ro TINYINT UNSIGNED NULL,
+                    snapshot_zile_co_planificare DECIMAL(4,1) NULL,
+                    snapshot_zile_cm_planificare DECIMAL(4,1) NULL,
+                    finalized_at DATETIME NULL,
+                    finalized_by INT UNSIGNED NULL,
+                    created_by INT UNSIGNED NULL,
+                    updated_by INT UNSIGNED NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    UNIQUE KEY uk_personal_luna_subject_perioada (subject_type, subject_id, perioada),
+                    KEY idx_personal_luna_perioada (perioada),
+                    CONSTRAINT fk_personal_luna_driver FOREIGN KEY (driver_id) REFERENCES soferi(id) ON DELETE CASCADE,
+                    CONSTRAINT fk_personal_luna_staff FOREIGN KEY (staff_member_id) REFERENCES staff_members(id) ON DELETE CASCADE,
+                    CONSTRAINT fk_personal_luna_finalized_by FOREIGN KEY (finalized_by) REFERENCES utilizatori(id) ON DELETE SET NULL,
+                    CONSTRAINT fk_personal_luna_created_by FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL,
+                    CONSTRAINT fk_personal_luna_updated_by FOREIGN KEY (updated_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            ");
+        }
+
+        $ensured = true;
+    }
+
     private function baseStaffUnionSql(): string
     {
         $driverDocumentStatus = '
@@ -1180,7 +1837,10 @@ class StaffAccountancyModel extends BaseModel
                 s.poza_original AS poza_original,
                 s.poza_stocata AS poza_stocata,
                 NULL AS email,
-                "Șofer" AS functie,
+                CASE WHEN s.tip_colaborare = "colaborator" THEN "Șofer colaborator" ELSE "Șofer" END AS functie,
+                s.tip_colaborare AS tip_colaborare,
+                s.regim_lucru AS regim_lucru,
+                s.regim_lucru_detalii AS regim_lucru_detalii,
                 s.salariu AS salariu,
                 COALESCE(s.data_angajare, DATE(s.created_at)) AS data_angajare,
                 s.data_incetare AS data_incetare,
@@ -1235,6 +1895,9 @@ class StaffAccountancyModel extends BaseModel
                 NULL AS poza_stocata,
                 sm.email AS email,
                 sm.functie AS functie,
+                "angajat" AS tip_colaborare,
+                sm.regim_lucru AS regim_lucru,
+                sm.regim_lucru_detalii AS regim_lucru_detalii,
                 sm.salariu AS salariu,
                 COALESCE(sm.data_angajare, DATE(sm.created_at)) AS data_angajare,
                 sm.data_incetare AS data_incetare,
@@ -1323,6 +1986,35 @@ class StaffAccountancyModel extends BaseModel
         if ($salaryMax !== null) {
             $conditions[] = 'COALESCE(staff.salariu, 0) <= :salary_max';
             $params[':salary_max'] = $salaryMax;
+        }
+
+        // Stadiul calculului salarial al lunii selectate (payroll_monthly).
+        $monthStatus = trim((string) ($filters['luna_status'] ?? ''));
+        $monthPeriod = (string) ($filters['perioada'] ?? '');
+        $calcStatuses = ['neconfigurat', 'necesita_verificare', 'eroare', 'calculat', 'de_verificat'];
+        if ($monthPeriod !== '' && ($monthStatus === 'lipsa' || $monthStatus === 'confirmat' || $monthStatus === 'necesita_recalculare' || in_array($monthStatus, $calcStatuses, true))) {
+            $monthExists = 'SELECT 1 FROM payroll_monthly pm
+                WHERE pm.subject_type = staff.source_type COLLATE utf8mb4_unicode_ci
+                  AND pm.subject_id = staff.source_id
+                  AND pm.perioada = :luna_perioada';
+            $params[':luna_perioada'] = $monthPeriod;
+            if ($monthStatus === 'lipsa') {
+                $conditions[] = 'NOT EXISTS (' . $monthExists . ')';
+            } elseif ($monthStatus === 'confirmat' || $monthStatus === 'necesita_recalculare') {
+                $conditions[] = 'EXISTS (' . $monthExists . ' AND pm.confirmation_status = :luna_status)';
+                $params[':luna_status'] = $monthStatus;
+            } else {
+                $conditions[] = 'EXISTS (' . $monthExists . ' AND pm.calculation_status = :luna_status AND pm.confirmation_status = "neconfirmat")';
+                $params[':luna_status'] = $monthStatus;
+            }
+        }
+
+        $regime = trim((string) ($filters['regim'] ?? ''));
+        if ($regime === 'nesetat') {
+            $conditions[] = 'COALESCE(staff.regim_lucru, "") = ""';
+        } elseif (isset(self::WORK_REGIMES[$regime])) {
+            $conditions[] = 'staff.regim_lucru = :regim';
+            $params[':regim'] = $regime;
         }
 
         $documentStatus = trim((string) ($filters['document_status'] ?? ''));
@@ -1770,6 +2462,11 @@ class StaffAccountancyModel extends BaseModel
 
         if ($this->tableExists('soferi') && !$this->columnExists('soferi', 'data_incetare')) {
             $this->execSchemaChangeIgnoringDuplicateColumn('ALTER TABLE soferi ADD COLUMN data_incetare DATE NULL AFTER data_angajare');
+        }
+
+        // Soferii colaboratori (neangajati) stau tot in `soferi`, ca sa poata fi alesi in Dispecer curse.
+        if ($this->tableExists('soferi') && !$this->columnExists('soferi', 'tip_colaborare')) {
+            $this->execSchemaChangeIgnoringDuplicateColumn("ALTER TABLE soferi ADD COLUMN tip_colaborare ENUM('angajat','colaborator') NOT NULL DEFAULT 'angajat' AFTER status");
         }
 
         if ($this->tableExists('staff_members') && !$this->columnExists('staff_members', 'data_incetare')) {

@@ -373,27 +373,19 @@ foreach (($vehicles ?? []) as $garageVehicle) {
 }
 ksort($vehicleGarageOptions);
 
-// V2.7: vehiculele grupate dupa capacitatea de transport, pentru dropdown-urile de selectie
-$vehicleCapacityGroups = [];
-foreach (($vehicles ?? []) as $capacityGroupVehicle) {
-    $capacityGroupVehicleId = (int) ($capacityGroupVehicle['id'] ?? 0);
-    if ($capacityGroupVehicleId <= 0) {
-        continue;
-    }
-    $vehicleCapacityValue = (float) ($capacityGroupVehicle['capacitate_transport'] ?? 0);
-    $vehicleCapacityKey = $vehicleCapacityValue > 0 ? number_format($vehicleCapacityValue, 2, '.', '') : 'fara';
-    if (!isset($vehicleCapacityGroups[$vehicleCapacityKey])) {
-        $vehicleCapacityGroups[$vehicleCapacityKey] = [
-            'label' => $vehicleCapacityValue > 0
-                ? rtrim(rtrim(number_format($vehicleCapacityValue, 2, '.', ''), '0'), '.') . ' tone'
-                : 'Fara capacitate',
-            'capacity' => $vehicleCapacityValue,
-            'vehicles' => [],
-        ];
-    }
-    $vehicleCapacityGroups[$vehicleCapacityKey]['vehicles'][] = $capacityGroupVehicle;
-}
-uasort($vehicleCapacityGroups, static fn(array $a, array $b): int => $b['capacity'] <=> $a['capacity']);
+/*
+ * V2.7 / 2026-09-18: vehiculele grupate dupa CATEGORIA de capacitate.
+ *
+ * Inainte gruparea se facea direct pe `capacitate_transport`, ceea ce obliga la
+ * falsificarea capacitatii tehnice ca sa iasa grupe comode. Acum eticheta de grup
+ * vine din catalogul `vehicule_categorii_capacitate`, iar capacitatea reala este
+ * doar afisata langa fiecare vehicul. Selectia intoarce tot ID-uri de vehicul,
+ * deci configurarile existente raman valide.
+ *
+ * Gruparea este construita de build_vehicle_capacity_groups() (includes/vehicle_capacity_groups.php),
+ * folosita si de celelalte selectoare de vehicule din aplicatie.
+ */
+$vehicleCapacityGroups = build_vehicle_capacity_groups($vehicles ?? []);
 $configTabVisibility = [
     'beneficiar' => true,
     'catalog' => $isCatalogSelected,
@@ -799,10 +791,13 @@ if ($configCreateMode) {
                                                         $vehicleId = (int) ($vehicle['id'] ?? 0);
                                                         $vehicleLabel = trim((string) ($vehicle['nr_inmatriculare'] ?? '-')) . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? ''));
                                                         $vehiclePlate = trim((string) ($vehicle['nr_inmatriculare'] ?? ''));
+                                                        // Capacitatea REALA, afisata informativ. Nu are legatura cu eticheta grupei.
+                                                        $vehicleRealCapacity = vehicle_capacity_format_tons($vehicle['capacitate_transport'] ?? null);
                                                         ?>
                                                         <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option" data-vehicle-garage="<?= e(mb_strtolower(trim((string) ($vehicle['garaj'] ?? '')))) ?>">
                                                             <input class="form-check-input m-0" type="checkbox" name="compresor_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" data-vehicle-plate="<?= e($vehiclePlate) ?>" <?= in_array((string) $vehicleId, $compresorSelectedVehicleIds, true) ? 'checked' : '' ?>>
                                                             <span><?= e($vehicleLabel) ?></span>
+                                                            <?php if ($vehicleRealCapacity !== null): ?><span class="tcv2-vehicle-capacity text-muted small ms-auto"><?= e($vehicleRealCapacity) ?></span><?php endif; ?>
                                                         </label>
                                                     <?php endforeach; ?>
                                                 </div>
@@ -1140,9 +1135,13 @@ if ($configCreateMode) {
                                                     <?php foreach ($capacityGroup['vehicles'] as $vehicle): ?>
                                                         <?php $vehicleId = (int) ($vehicle['id'] ?? 0); ?>
                                                         <?php $vehicleLabel = trim((string) ($vehicle['nr_inmatriculare'] ?? '-')) . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? '')); ?>
+                                                        <?php $vehiclePlate = trim((string) ($vehicle['nr_inmatriculare'] ?? '')); ?>
+                                                        <?php // Capacitatea REALA, afisata informativ; eticheta grupei este categoria. ?>
+                                                        <?php $vehicleRealCapacity = vehicle_capacity_format_tons($vehicle['capacitate_transport'] ?? null); ?>
                                                         <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option" data-vehicle-garage="<?= e(mb_strtolower(trim((string) ($vehicle['garaj'] ?? '')))) ?>">
-                                                            <input class="form-check-input m-0" type="checkbox" name="route_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" <?= in_array((string) $vehicleId, $distributionOnlyRouteSelectedVehicleIds, true) ? 'checked' : '' ?>>
+                                                            <input class="form-check-input m-0" type="checkbox" name="route_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" data-vehicle-plate="<?= e($vehiclePlate) ?>" <?= in_array((string) $vehicleId, $distributionOnlyRouteSelectedVehicleIds, true) ? 'checked' : '' ?>>
                                                             <span><?= e(trim($vehicleLabel)) ?></span>
+                                                            <?php if ($vehicleRealCapacity !== null): ?><span class="tcv2-vehicle-capacity text-muted small ms-auto"><?= e($vehicleRealCapacity) ?></span><?php endif; ?>
                                                         </label>
                                                     <?php endforeach; ?>
                                                 </div>
@@ -1358,9 +1357,13 @@ if ($configCreateMode) {
                                                     <?php foreach ($capacityGroup['vehicles'] as $vehicle): ?>
                                                         <?php $vehicleId = (int) ($vehicle['id'] ?? 0); ?>
                                                         <?php $vehicleLabel = trim((string) ($vehicle['nr_inmatriculare'] ?? '-')) . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? '')); ?>
+                                                        <?php $vehiclePlate = trim((string) ($vehicle['nr_inmatriculare'] ?? '')); ?>
+                                                        <?php // Capacitatea REALA, afisata informativ; eticheta grupei este categoria. ?>
+                                                        <?php $vehicleRealCapacity = vehicle_capacity_format_tons($vehicle['capacitate_transport'] ?? null); ?>
                                                         <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option" data-vehicle-garage="<?= e(mb_strtolower(trim((string) ($vehicle['garaj'] ?? '')))) ?>">
-                                                            <input class="form-check-input m-0" type="checkbox" name="route_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" <?= in_array((string) $vehicleId, $primaryDistributionRouteSelectedVehicleIds, true) ? 'checked' : '' ?>>
+                                                            <input class="form-check-input m-0" type="checkbox" name="route_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" data-vehicle-plate="<?= e($vehiclePlate) ?>" <?= in_array((string) $vehicleId, $primaryDistributionRouteSelectedVehicleIds, true) ? 'checked' : '' ?>>
                                                             <span><?= e(trim($vehicleLabel)) ?></span>
+                                                            <?php if ($vehicleRealCapacity !== null): ?><span class="tcv2-vehicle-capacity text-muted small ms-auto"><?= e($vehicleRealCapacity) ?></span><?php endif; ?>
                                                         </label>
                                                     <?php endforeach; ?>
                                                 </div>
@@ -1609,9 +1612,13 @@ if ($configCreateMode) {
                                                 <?php foreach ($capacityGroup['vehicles'] as $vehicle): ?>
                                                     <?php $vehicleId = (int) ($vehicle['id'] ?? 0); ?>
                                                     <?php $vehicleLabel = trim((string) ($vehicle['nr_inmatriculare'] ?? '-')) . ' - ' . trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? '')); ?>
+                                                    <?php $vehiclePlate = trim((string) ($vehicle['nr_inmatriculare'] ?? '')); ?>
+                                                    <?php // Capacitatea REALA, afisata informativ; eticheta grupei este categoria. ?>
+                                                    <?php $vehicleRealCapacity = vehicle_capacity_format_tons($vehicle['capacitate_transport'] ?? null); ?>
                                                     <label class="dropdown-item d-flex align-items-center gap-2 px-2 py-1 vehicle-multiselect-option" data-vehicle-garage="<?= e(mb_strtolower(trim((string) ($vehicle['garaj'] ?? '')))) ?>">
-                                                        <input class="form-check-input m-0" type="checkbox" name="route_primar_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" <?= in_array((string) $vehicleId, $primaryRouteSelectedVehicleIds, true) ? 'checked' : '' ?>>
+                                                        <input class="form-check-input m-0" type="checkbox" name="route_primar_vehicle_ids[]" value="<?= e((string) $vehicleId) ?>" data-vehicle-plate="<?= e($vehiclePlate) ?>" <?= in_array((string) $vehicleId, $primaryRouteSelectedVehicleIds, true) ? 'checked' : '' ?>>
                                                         <span><?= e(trim($vehicleLabel)) ?></span>
+                                                        <?php if ($vehicleRealCapacity !== null): ?><span class="tcv2-vehicle-capacity text-muted small ms-auto"><?= e($vehicleRealCapacity) ?></span><?php endif; ?>
                                                     </label>
                                                 <?php endforeach; ?>
                                             </div>

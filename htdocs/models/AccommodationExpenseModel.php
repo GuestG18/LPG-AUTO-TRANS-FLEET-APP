@@ -92,9 +92,48 @@ class AccommodationExpenseModel extends BaseModel
         ");
 
         $this->ensureMirrorColumn();
+        $this->ensureImportSchema();
         $this->ensureCategory();
 
         $ensured = true;
+    }
+
+    /**
+     * Coloanele si tabela de care are nevoie importul automat din Google Sheet.
+     *
+     *   sursa_import             identitatea randului din sheet ("drive:<fileId>" sau
+     *                            "fp:<hash>"); UNIQUE, deci baza refuza al doilea insert.
+     *   factura_import_pending   factura nu s-a putut descarca la import; se reincearca.
+     *   cheltuieli_cazare_import_ignorate
+     *                            sursele importate si sterse ulterior din aplicatie:
+     *                            importul nu le mai readuce.
+     */
+    private function ensureImportSchema(): void
+    {
+        $columns = $this->db->query("
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'cheltuieli_cazare'
+              AND COLUMN_NAME IN ('sursa_import', 'factura_import_pending')
+        ")->fetchAll(PDO::FETCH_COLUMN) ?: [];
+
+        if (!in_array('sursa_import', $columns, true)) {
+            $this->db->exec('ALTER TABLE cheltuieli_cazare ADD COLUMN sursa_import VARCHAR(100) NULL AFTER observatii, ADD UNIQUE KEY uk_cheltuieli_cazare_sursa_import (sursa_import)');
+        }
+        if (!in_array('factura_import_pending', $columns, true)) {
+            $this->db->exec('ALTER TABLE cheltuieli_cazare ADD COLUMN factura_import_pending TINYINT(1) NOT NULL DEFAULT 0 AFTER sursa_import');
+        }
+
+        $this->db->exec("
+            CREATE TABLE IF NOT EXISTS cheltuieli_cazare_import_ignorate (
+                sursa_import VARCHAR(100) NOT NULL PRIMARY KEY,
+                data DATE NULL,
+                sofer_id INT UNSIGNED NULL,
+                total_cu_tva DECIMAL(12,2) NULL,
+                sters_la DATETIME NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
     }
 
     private function ensureMirrorColumn(): void
@@ -593,7 +632,7 @@ class AccommodationExpenseModel extends BaseModel
     // -------------------------------------------------------------------------
 
     /**
-     * @param array{data: string, sofer_id: int, total: float, total_cu_tva: float, observatii: ?string, created_by: ?int} $data
+     * @param array{data: string, sofer_id: int, total: float, total_cu_tva: float, observatii: ?string, created_by: ?int, sursa_import?: ?string} $data
      */
     public function create(array $data): int
     {
@@ -601,10 +640,10 @@ class AccommodationExpenseModel extends BaseModel
         $stmt = $this->db->prepare("
             INSERT INTO cheltuieli_cazare (
                 data, sofer_id, total, total_cu_tva, cursa_id, status,
-                asociere_manuala, observatii, created_by, created_at, updated_at
+                asociere_manuala, observatii, sursa_import, created_by, created_at, updated_at
             ) VALUES (
                 :data, :sofer_id, :total, :total_cu_tva, NULL, 'neasociat',
-                0, :observatii, :created_by, :created_at, :updated_at
+                0, :observatii, :sursa_import, :created_by, :created_at, :updated_at
             )
         ");
         $stmt->bindValue(':data', $data['data'], PDO::PARAM_STR);
@@ -612,6 +651,7 @@ class AccommodationExpenseModel extends BaseModel
         $stmt->bindValue(':total', number_format((float) $data['total'], 2, '.', ''), PDO::PARAM_STR);
         $stmt->bindValue(':total_cu_tva', number_format((float) $data['total_cu_tva'], 2, '.', ''), PDO::PARAM_STR);
         $this->bindNullableText($stmt, ':observatii', $data['observatii'] ?? null);
+        $this->bindNullableText($stmt, ':sursa_import', $data['sursa_import'] ?? null);
         if (($data['created_by'] ?? null) === null) {
             $stmt->bindValue(':created_by', null, PDO::PARAM_NULL);
         } else {
@@ -681,6 +721,18 @@ class AccommodationExpenseModel extends BaseModel
             $files[] = (string) $document['file_path'];
         }
 
+        // O cazare venita din Google Sheet si stearsa aici nu trebuie readusa de
+        // urmatorul import automat: ii tinem minte sursa.
+        $stmt = $this->db->prepare("
+            INSERT IGNORE INTO cheltuieli_cazare_import_ignorate (sursa_import, data, sofer_id, total_cu_tva, sters_la)
+            SELECT sursa_import, data, sofer_id, total_cu_tva, :sters_la
+            FROM cheltuieli_cazare
+            WHERE id = :id AND sursa_import IS NOT NULL
+        ");
+        $stmt->bindValue(':sters_la', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+
         // Randul-oglinda pleaca prin FK ON DELETE CASCADE, dar il stergem explicit
         // ca sa nu depindem de migrarea constrangerii pe instalari mai vechi.
         // Stergerea lui duce cu ea si documentele oglindite (FK pe cheltuiala_id).
@@ -691,6 +743,72 @@ class AccommodationExpenseModel extends BaseModel
         $stmt->execute();
 
         return $files;
+    }
+
+    // -------------------------------------------------------------------------
+    // Import Google Sheet
+    // -------------------------------------------------------------------------
+
+    public function isImportSourceIgnored(string $source): bool
+    {
+        $stmt = $this->db->prepare('SELECT 1 FROM cheltuieli_cazare_import_ignorate WHERE sursa_import = :sursa LIMIT 1');
+        $stmt->bindValue(':sursa', $source, PDO::PARAM_STR);
+        $stmt->execute();
+
+        return $stmt->fetchColumn() !== false;
+    }
+
+    /** @return array{id: int, factura_import_pending: int}|null */
+    public function findByImportSource(string $source): ?array
+    {
+        $stmt = $this->db->prepare('SELECT id, factura_import_pending FROM cheltuieli_cazare WHERE sursa_import = :sursa LIMIT 1');
+        $stmt->bindValue(':sursa', $source, PDO::PARAM_STR);
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : ['id' => (int) $row['id'], 'factura_import_pending' => (int) $row['factura_import_pending']];
+    }
+
+    /**
+     * Cazare fara sursa (introdusa manual sau importata inainte sa existe
+     * sursa_import) care corespunde unui rand din sheet: aceeasi data, sofer si
+     * total cu TVA. Importul o revendica in loc sa creeze un duplicat.
+     */
+    public function findUnclaimedMatch(string $date, int $driverId, float $totalWithVat): ?int
+    {
+        $stmt = $this->db->prepare("
+            SELECT id
+            FROM cheltuieli_cazare
+            WHERE data = :data
+              AND sofer_id = :sofer_id
+              AND ABS(total_cu_tva - :total_cu_tva) < 0.01
+              AND sursa_import IS NULL
+            ORDER BY id ASC
+            LIMIT 1
+        ");
+        $stmt->bindValue(':data', $date, PDO::PARAM_STR);
+        $stmt->bindValue(':sofer_id', $driverId, PDO::PARAM_INT);
+        $stmt->bindValue(':total_cu_tva', number_format($totalWithVat, 2, '.', ''), PDO::PARAM_STR);
+        $stmt->execute();
+        $id = $stmt->fetchColumn();
+
+        return $id === false ? null : (int) $id;
+    }
+
+    public function setImportSource(int $id, string $source): void
+    {
+        $stmt = $this->db->prepare('UPDATE cheltuieli_cazare SET sursa_import = :sursa WHERE id = :id AND sursa_import IS NULL');
+        $stmt->bindValue(':sursa', $source, PDO::PARAM_STR);
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+    }
+
+    public function setInvoicePending(int $id, bool $pending): void
+    {
+        $stmt = $this->db->prepare('UPDATE cheltuieli_cazare SET factura_import_pending = :pending WHERE id = :id');
+        $stmt->bindValue(':pending', $pending ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
     }
 
     public function getById(int $id): ?array

@@ -606,7 +606,7 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
                 ?>
                 <label class="notification-wide" data-approval-only hidden>
                     <span>Tip resursa (gol = toate)</span>
-                    <select class="form-select" name="approval_resource_types[]" multiple size="3">
+                    <select class="form-select" name="approval_resource_types[]" multiple size="4">
                         <?php foreach (($approvalResourceLabels ?? []) as $value => $label): ?>
                             <option value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedApprovalTypes, true) ? 'selected' : '' ?>><?= e((string) $label) ?></option>
                         <?php endforeach; ?>

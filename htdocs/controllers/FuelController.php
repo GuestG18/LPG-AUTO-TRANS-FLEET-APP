@@ -50,6 +50,15 @@ class FuelController
             case 'clear_t0':
                 $this->clearT0Action();
                 return;
+            case 'vehicle_selection':
+                $this->vehicleSelectionAction();
+                return;
+            case 'purge_preview':
+                $this->purgePreviewAction();
+                return;
+            case 'purge_excluded':
+                $this->purgeExcludedAction();
+                return;
             default:
                 http_response_code(404);
                 render('errors/404.php', [
@@ -113,7 +122,143 @@ class FuelController
             'transportLabels' => $this->model->getTransportLabels(),
             'fuelData' => $data,
             'canManageFull' => $this->canManageFull(),
+            'excludedVehicles' => $this->safeExcludedVehicles(),
         ]);
+    }
+
+    /** @return array<string,string> */
+    private function safeExcludedVehicles(): array
+    {
+        try {
+            return $this->model->getExcludedVehicles();
+        } catch (Throwable $exception) {
+            error_log('[FuelController][excluded_vehicles] ' . $exception->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Formularul "Vehicule sincronizate": vehiculele debifate nu mai sunt
+     * importate din CardOil. Lista e comuna pentru toti utilizatorii.
+     * POST: all[] = vehiculele afisate in formular, included[] = cele bifate.
+     */
+    private function vehicleSelectionAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'carburanti']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'carburanti']));
+        $this->requireFullManagement();
+        $returnUrl = $this->safeReturnUrl($_POST['return_url'] ?? null);
+
+        $keyOf = static fn (string $value): string => str_replace(' ', '', strtoupper(trim($value)));
+        $included = [];
+        foreach ((array) ($_POST['included'] ?? []) as $value) {
+            $included[$keyOf((string) $value)] = true;
+        }
+
+        try {
+            $excluded = [];
+            $shown = [];
+            foreach ((array) ($_POST['all'] ?? []) as $value) {
+                $value = trim((string) $value);
+                $shown[$keyOf($value)] = true;
+                if ($value !== '' && !isset($included[$keyOf($value)])) {
+                    $excluded[$keyOf($value)] = $value;
+                }
+            }
+            // Excluderile pentru numere care nu au aparut in formular raman neatinse.
+            foreach ($this->model->getExcludedVehicles() as $key => $registration) {
+                if (!isset($shown[$key])) {
+                    $excluded[$key] = $registration;
+                }
+            }
+
+            $this->model->saveExcludedVehicles(array_values($excluded), $this->currentUserId());
+            flash_set('success', $excluded === []
+                ? 'Se sincronizeaza alimentarile pentru toate vehiculele.'
+                : 'Selectia a fost salvata. Alimentarile pentru ' . (count($excluded) === 1 ? '1 vehicul' : count($excluded) . ' vehicule')
+                    . ' nu vor mai fi importate din CardOil.');
+        } catch (Throwable $exception) {
+            error_log('[FuelController][vehicle_selection] ' . $exception->getMessage());
+            flash_set('danger', 'Selectia vehiculelor nu a putut fi salvata.');
+        }
+
+        redirect($returnUrl);
+    }
+
+    /** Data de la care se curata datele vehiculelor excluse (implicit 1 iulie 2026). */
+    private function purgeDateFrom(mixed $value): ?string
+    {
+        $value = trim((string) ($value ?? ''));
+        if ($value === '') {
+            return '2026-07-01';
+        }
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+
+        return $date !== false && $date->format('Y-m-d') === $value ? $value : null;
+    }
+
+    /** JSON: ce s-ar sterge pentru vehiculele excluse, de la date_from. */
+    private function purgePreviewAction(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store');
+        if (!$this->canManageFull()) {
+            http_response_code(403);
+            echo json_encode(['ok' => false, 'error' => 'Nu ai dreptul la aceasta operatiune.']);
+            exit;
+        }
+
+        $dateFrom = $this->purgeDateFrom($_GET['date_from'] ?? null);
+        if ($dateFrom === null) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => 'Data invalida.']);
+            exit;
+        }
+
+        try {
+            $rows = $this->model->previewExcludedFillups($dateFrom);
+            echo json_encode(['ok' => true, 'date_from' => $dateFrom, 'rows' => $rows], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $exception) {
+            error_log('[FuelController][purge_preview] ' . $exception->getMessage());
+            http_response_code(500);
+            echo json_encode(['ok' => false, 'error' => 'Previzualizarea nu a putut fi incarcata.']);
+        }
+        exit;
+    }
+
+    private function purgeExcludedAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'carburanti']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'carburanti']));
+        $this->requireFullManagement();
+        $returnUrl = $this->safeReturnUrl($_POST['return_url'] ?? null);
+
+        $dateFrom = $this->purgeDateFrom($_POST['date_from'] ?? null);
+        if ($dateFrom === null || (string) ($_POST['confirm'] ?? '') !== '1') {
+            flash_set('warning', 'Bifeaza confirmarea si alege o data valida pentru stergere.');
+            redirect($returnUrl);
+        }
+
+        try {
+            $deleted = $this->model->deleteExcludedFillups($dateFrom);
+            error_log(sprintf('[FuelController][purge_excluded] user=%d date_from=%s deleted=%d',
+                (int) $this->currentUserId(), $dateFrom, $deleted));
+            flash_set('success', $deleted > 0
+                ? 'Au fost sterse ' . $deleted . ' alimentari CardOil ale vehiculelor excluse, incepand cu '
+                    . date('d.m.Y', strtotime($dateFrom)) . '.'
+                : 'Nu exista alimentari de sters pentru vehiculele excluse.');
+        } catch (Throwable $exception) {
+            error_log('[FuelController][purge_excluded] ' . $exception->getMessage());
+            flash_set('danger', 'Alimentarile nu au putut fi sterse.');
+        }
+
+        redirect($returnUrl);
     }
 
     private function syncNowAction(): void

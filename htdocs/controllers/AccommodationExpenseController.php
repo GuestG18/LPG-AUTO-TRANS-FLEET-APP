@@ -57,6 +57,10 @@ class AccommodationExpenseController
                 $this->requireAction('delete');
                 $this->deleteAction();
                 return;
+            case 'bulk_delete':
+                $this->requireAction('delete');
+                $this->bulkDeleteAction();
+                return;
             case 'link':
                 $this->requireAction('link');
                 $this->linkAction();
@@ -262,6 +266,63 @@ class AccommodationExpenseController
         redirect($this->returnUrl());
     }
 
+    /**
+     * Stergere multipla din bifele tabelului. Totul intr-o singura tranzactie:
+     * fie pleaca toate cazarile selectate (cu randurile-oglinda de pe curse),
+     * fie niciuna. Fisierele fizice se sterg doar dupa commit.
+     */
+    private function bulkDeleteAction(): void
+    {
+        $this->requirePost();
+        ensure_csrf_or_redirect($this->returnUrl());
+
+        $rawIds = $_POST['ids'] ?? [];
+        $ids = array_values(array_unique(array_filter(
+            array_map('intval', is_array($rawIds) ? $rawIds : []),
+            static fn(int $id): bool => $id > 0
+        )));
+
+        if ($ids === []) {
+            flash_set('warning', 'Nu ai selectat nicio cazare.');
+            redirect($this->returnUrl());
+        }
+
+        $files = [];
+        $deleted = 0;
+
+        try {
+            $this->db->beginTransaction();
+            foreach ($ids as $id) {
+                if ($this->model->getById($id) === null) {
+                    continue;
+                }
+                array_push($files, ...$this->model->delete($id));
+                $deleted++;
+            }
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            error_log('[AccommodationExpenseController][bulk_delete] ' . $exception->getMessage());
+            flash_set('danger', 'Nu s-au putut sterge cazarile selectate. Nicio inregistrare nu a fost stearsa.');
+            redirect($this->returnUrl());
+        }
+
+        foreach ($files as $filePath) {
+            $this->deletePhysicalFile($filePath);
+        }
+
+        $skipped = count($ids) - $deleted;
+        flash_set(
+            $deleted > 0 ? 'success' : 'warning',
+            sprintf('%d cazari au fost sterse.', $deleted)
+                . ($skipped > 0 ? sprintf(' %d nu mai existau.', $skipped) : '')
+        );
+
+        redirect($this->returnUrl());
+    }
+
     // -------------------------------------------------------------------------
     // Asociere
     // -------------------------------------------------------------------------
@@ -351,11 +412,7 @@ class AccommodationExpenseController
             $service = new CazariSheetImportService($this->db, $this->model);
             $result = $service->import($this->currentUserId());
 
-            $message = sprintf(
-                'Import finalizat: %d cazari importate, %d deja existente.',
-                $result['imported'],
-                $result['skipped']
-            );
+            $message = CazariSheetImportService::summarize($result);
 
             if ($result['errors'] !== []) {
                 flash_set(

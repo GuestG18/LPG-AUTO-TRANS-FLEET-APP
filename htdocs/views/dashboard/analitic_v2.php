@@ -97,6 +97,7 @@ foreach ((array) ($filterOptions['transport_types'] ?? []) as $row) {
     }
 }
 
+// Capacitatea REALA din snapshot-ul cursei (filtru numeric, ca pana acum).
 $capacityOptions = [];
 foreach ((array) ($filterOptions['transport_capacities'] ?? []) as $row) {
     $raw = $row['capacitate_transport'] ?? null;
@@ -104,6 +105,18 @@ foreach ((array) ($filterOptions['transport_capacities'] ?? []) as $row) {
         $capacityOptions[] = [
             'value' => number_format((float) $raw, 2, '.', ''),
             'label' => format_number_ro((float) $raw, 2) . ' t',
+        ];
+    }
+}
+
+// Categoria de capacitate a vehiculului: filtru de GRUPARE, nu de calcul.
+$capacityCategoryOptions = [];
+foreach ((array) ($filterOptions['capacity_categories'] ?? []) as $row) {
+    $categoryId = (int) ($row['id'] ?? 0);
+    if ($categoryId > 0) {
+        $capacityCategoryOptions[] = [
+            'value' => (string) $categoryId,
+            'label' => (string) ($row['nume'] ?? ''),
         ];
     }
 }
@@ -182,7 +195,8 @@ $pageConfig = [
             <?php $multiSelect('driver_ids', 'Șoferi', 'bi-person-badge', $driverOptions, (array) ($filters['driver_ids'] ?? [])); ?>
             <?php $multiSelect('beneficiary_ids', 'Beneficiari', 'bi-building', $beneficiaryOptions, (array) ($filters['beneficiary_ids'] ?? [])); ?>
             <?php $multiSelect('transport_types', 'Tip transport', 'bi-diagram-3', $transportOptions, (array) ($filters['transport_types'] ?? [])); ?>
-            <?php $multiSelect('transport_capacities', 'Capacitate', 'bi-box-seam', $capacityOptions, (array) ($filters['transport_capacities'] ?? [])); ?>
+            <?php $multiSelect('transport_capacities', 'Capacitate reală', 'bi-box-seam', $capacityOptions, (array) ($filters['transport_capacities'] ?? [])); ?>
+            <?php $multiSelect('capacity_categories', 'Categorie capacitate', 'bi-tags', $capacityCategoryOptions, (array) ($filters['capacity_categories'] ?? [])); ?>
             <?php $multiSelect('statuses', 'Status facturare', 'bi-receipt', $statusOptions, (array) ($filters['statuses'] ?? [])); ?>
         </div>
 

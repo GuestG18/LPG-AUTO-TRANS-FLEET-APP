@@ -167,6 +167,16 @@ return [
                 'tires'    => ['label' => 'Anvelope & configurație axe'],
             ],
         ],
+        // Etichetele dupa care se grupeaza vehiculele in selectoare.
+        // ATENTIE: categoria este DOAR o grupare. Capacitatea tehnica reala
+        // sta in fisa vehiculului si nu se modifica de aici.
+        'categorii_capacitate' => [
+            'group' => 'vehicule', 'label' => 'Categorii capacitate', 'icon' => 'bi-tags', 'scope' => 'admin',
+            'actions' => [
+                'view'   => ['label' => 'Vizualizare categorii & raport verificare'],
+                'manage' => ['label' => 'Adăugare / editare / ștergere categorii', 'admin' => true],
+            ],
+        ],
         'documente' => [
             'group' => 'vehicule', 'label' => 'Documente vehicule', 'icon' => 'bi-file-earmark-text', 'scope' => 'all',
             'actions' => [
@@ -256,6 +266,10 @@ return [
             'group' => 'soferi', 'label' => 'Istoric activități șofer', 'icon' => 'bi-clock-history', 'scope' => 'all',
             'actions' => [
                 'view'        => ['label' => 'Vizualizare'],
+                // Fara acest drept pagina arata doar datele operationale: salariul,
+                // diurna in lei, costul total, valoarea curselor si profitul sunt
+                // scoase din carduri, grafice, tabele si exporturi.
+                'view_financial' => ['label' => 'Date financiare (salariu, valoare curse, profit, cost total)', 'admin' => true, 'sensitive' => true],
                 'export_excel'=> ['label' => 'Export Excel'],
                 'export_pdf'  => ['label' => 'Export PDF'],
             ],
@@ -268,6 +282,11 @@ return [
                 'view'         => ['label' => 'Vizualizare listă personal'],
                 'manage_staff' => ['label' => 'Adăugare / editare personal'],
                 'salaries'     => ['label' => 'Salarii & istoric salarial', 'sensitive' => true],
+                // Calcul salarial lunar (BRUT/NET, contributii, cost firma).
+                'payroll_calculate' => ['label' => 'Calcul salarii (profil, sporuri/rețineri, calculează luna)', 'sensitive' => true],
+                'payroll_confirm'   => ['label' => 'Confirmare contabilă a calculului salarial', 'sensitive' => true],
+                'payroll_reopen'    => ['label' => 'Redeschidere calcul salarial confirmat', 'admin' => true, 'sensitive' => true],
+                'payroll_config'    => ['label' => 'Configurare salarii și contribuții (reguli fiscale)', 'admin' => true, 'sensitive' => true],
                 'documents'    => ['label' => 'Documente angajați'],
                 'config_types' => ['label' => 'Configurare tipuri & documente obligatorii'],
                 'end_activity' => ['label' => 'Încheiere activitate'],

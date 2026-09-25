@@ -400,82 +400,113 @@ foreach ($rows as $row) {
             <?php endif; ?>
 
             <section class="chx-table-card">
-                <div class="table-responsive">
-                    <table class="table align-middle mb-0 chx-table">
-                        <thead>
-                            <tr>
-                                <th>Data</th>
-                                <th>Document</th>
-                                <th>Furnizor / Comerciant</th>
-                                <th>Descriere</th>
-                                <th>Categorie</th>
-                                <th>Subcategorie</th>
-                                <th>Alocare</th>
-                                <th class="text-end">Total</th>
-                                <th>Modalitate plată</th>
-                                <th>Sursă</th>
-                                <th class="text-center">Acțiuni</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if ($rows === []): ?>
-                                <?php
-                                $overallRange = is_array($overallRange ?? null) ? $overallRange : ['count' => 0, 'min_date' => null, 'max_date' => null];
-                                $outsideCount = (int) ($overallRange['count'] ?? 0);
-                                ?>
-                                <tr>
-                                    <td colspan="11" class="text-center text-muted py-5">
-                                        Nicio cheltuială în perioada selectată.
-                                        <?php if ($outsideCount > 0 && !empty($overallRange['min_date']) && !empty($overallRange['max_date'])): ?>
-                                            <div class="mt-2">
-                                                Există <strong><?= e((string) $outsideCount) ?></strong> cheltuieli înregistrate între
-                                                <?= e(format_date_ro((string) $overallRange['min_date'])) ?> și <?= e(format_date_ro((string) $overallRange['max_date'])) ?>,
-                                                în afara filtrelor curente.
-                                                <a href="<?= e(build_query_url(['page' => 'cheltuieli', 'date_start' => (string) $overallRange['min_date'], 'date_end' => (string) $overallRange['max_date'], 'pp' => (string) $perPage])) ?>">
-                                                    Afișează toate cheltuielile
-                                                </a>
-                                            </div>
-                                        <?php else: ?>
-                                            Ajustează filtrele sau adaugă o cheltuială nouă.
-                                        <?php endif; ?>
-                                    </td>
-                                </tr>
+                <?php
+                // Lista de cheltuieli: randuri pe grila CSS, grupate pe zi (lista vine
+                // sortata dupa data desc). Click pe rand deschide panoul de detalii.
+                $weekdays = [1 => 'Luni', 2 => 'Marți', 3 => 'Miercuri', 4 => 'Joi', 5 => 'Vineri', 6 => 'Sâmbătă', 7 => 'Duminică'];
+                $dayGroups = [];
+                foreach ($rows as $row) {
+                    $dayKey = (string) ($row['data_cheltuiala'] ?? '');
+                    if (!isset($dayGroups[$dayKey])) {
+                        $dayGroups[$dayKey] = ['rows' => [], 'total' => 0.0];
+                    }
+                    $dayGroups[$dayKey]['rows'][] = $row;
+                    if (strtoupper(trim((string) ($row['moneda'] ?? 'RON'))) === 'RON') {
+                        $dayGroups[$dayKey]['total'] += (float) ($row['valoare'] ?? 0);
+                    }
+                }
+                ?>
+                <?php if ($rows !== []): ?>
+                    <div class="chx-list-head" aria-hidden="true">
+                        <span>Furnizor / Document</span>
+                        <span>Descriere / Subcategorie</span>
+                        <span>Alocare</span>
+                        <span class="text-end">Total</span>
+                        <span></span>
+                    </div>
+                <?php endif; ?>
+                <div class="chx-list" role="list">
+                    <?php if ($rows === []): ?>
+                        <?php
+                        $overallRange = is_array($overallRange ?? null) ? $overallRange : ['count' => 0, 'min_date' => null, 'max_date' => null];
+                        $outsideCount = (int) ($overallRange['count'] ?? 0);
+                        ?>
+                        <div class="chx-list-empty">
+                            <i class="bi bi-receipt" aria-hidden="true"></i>
+                            <div>Nicio cheltuială în perioada selectată.</div>
+                            <?php if ($outsideCount > 0 && !empty($overallRange['min_date']) && !empty($overallRange['max_date'])): ?>
+                                <div class="mt-2">
+                                    Există <strong><?= e((string) $outsideCount) ?></strong> cheltuieli înregistrate între
+                                    <?= e(format_date_ro((string) $overallRange['min_date'])) ?> și <?= e(format_date_ro((string) $overallRange['max_date'])) ?>,
+                                    în afara filtrelor curente.
+                                    <a href="<?= e(build_query_url(['page' => 'cheltuieli', 'date_start' => (string) $overallRange['min_date'], 'date_end' => (string) $overallRange['max_date'], 'pp' => (string) $perPage])) ?>">
+                                        Afișează toate cheltuielile
+                                    </a>
+                                </div>
+                            <?php else: ?>
+                                <div class="mt-1">Ajustează filtrele sau adaugă o cheltuială nouă.</div>
                             <?php endif; ?>
-                            <?php foreach ($rows as $row): ?>
-                                <?php
-                                $rowId = (int) ($row['id'] ?? 0);
-                                $rowAllocations = $allocationsByExpense[$rowId] ?? [];
-                                $isMulti = count($rowAllocations) > 1;
-                                $moneda = strtoupper(trim((string) ($row['moneda'] ?? 'RON')));
-                                $totalText = format_number_ro((float) ($row['valoare'] ?? 0), 2) . ' ' . ($moneda === 'RON' ? 'lei' : $moneda);
-                                ?>
-                                <tr>
-                                    <td class="text-nowrap"><?= e($date($row['data_cheltuiala'] ?? null)) ?></td>
-                                    <td class="text-nowrap">
-                                        <?php if ((int) ($row['document_count'] ?? 0) > 0): ?>
-                                            <a class="chx-doc-link" href="<?= e(build_query_url(['page' => 'cheltuieli', 'action' => 'download_document', 'document_id' => (string) ($row['document_id'] ?? 0)])) ?>" title="Descarcă: <?= e($show($row['document_original_name'] ?? null)) ?>">
-                                                <i class="bi bi-paperclip" aria-hidden="true"></i> <?= e($documentLabel($row)) ?>
-                                            </a>
-                                        <?php else: ?>
-                                            <?= e($documentLabel($row)) ?>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <?= e($show($row['furnizor'] ?? null)) ?>
-                                        <?php if (trim((string) ($row['cui'] ?? '')) !== ''): ?>
-                                            <div class="chx-cell-sub"><?= e((string) $row['cui']) ?></div>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td class="chx-cell-desc"><?= e($show($row['descriere'] ?? null)) ?></td>
-                                    <td>
-                                        <?php if ((string) ($row['categorie'] ?? '') === 'operationala'): ?>
-                                            <span class="chx-badge is-operational">Operațională</span>
-                                        <?php else: ?>
-                                            <span class="chx-badge is-administrative">Administrativă</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td><?= e($show($row['tip_nume'] ?? null)) ?></td>
-                                    <td>
+                        </div>
+                    <?php endif; ?>
+                    <?php foreach ($dayGroups as $dayKey => $group): ?>
+                        <?php
+                        $dayTs = $dayKey !== '' ? strtotime($dayKey) : false;
+                        $dayCount = count($group['rows']);
+                        ?>
+                        <div class="chx-day" role="presentation">
+                            <span class="chx-day-date">
+                                <i class="bi bi-calendar3" aria-hidden="true"></i>
+                                <?php if ($dayTs !== false): ?>
+                                    <strong><?= e($weekdays[(int) date('N', $dayTs)]) ?></strong>, <?= e($date($dayKey)) ?>
+                                <?php else: ?>
+                                    <strong>Fără dată</strong>
+                                <?php endif; ?>
+                            </span>
+                            <span class="chx-day-sum">
+                                <?= e((string) $dayCount) ?> <?= $dayCount === 1 ? 'cheltuială' : 'cheltuieli' ?>
+                                · <strong><?= e($money($group['total'])) ?></strong>
+                            </span>
+                        </div>
+                        <?php foreach ($group['rows'] as $row): ?>
+                            <?php
+                            $rowId = (int) ($row['id'] ?? 0);
+                            $rowAllocations = $allocationsByExpense[$rowId] ?? [];
+                            $isMulti = count($rowAllocations) > 1;
+                            $moneda = strtoupper(trim((string) ($row['moneda'] ?? 'RON')));
+                            $totalText = format_number_ro((float) ($row['valoare'] ?? 0), 2) . ' ' . ($moneda === 'RON' ? 'lei' : $moneda);
+                            $isOperational = (string) ($row['categorie'] ?? '') === 'operationala';
+                            $sursa = (string) ($row['sursa'] ?? 'manual');
+                            $hasDocument = (int) ($row['document_count'] ?? 0) > 0;
+                            $documentUrl = build_query_url(['page' => 'cheltuieli', 'action' => 'download_document', 'document_id' => (string) ($row['document_id'] ?? 0)]);
+                            $paymentLabel = ExpenseModel::PAYMENT_METHODS[(string) ($row['modalitate_plata'] ?? '')] ?? '';
+                            $statusKey = (string) ($row['status_plata'] ?? '');
+                            $itemId = 'chxItem' . $rowId;
+                            ?>
+                            <article class="chx-item <?= $isOperational ? 'is-operational' : 'is-administrative' ?>" id="<?= e($itemId) ?>" role="listitem">
+                                <div class="chx-item-main" data-chx-expand tabindex="0" role="button" aria-expanded="false" aria-controls="<?= e($itemId) ?>Panel">
+                                    <div class="chx-col-supplier">
+                                        <strong class="chx-supplier" title="<?= e($show($row['furnizor'] ?? null)) ?>"><?= e($show($row['furnizor'] ?? null)) ?></strong>
+                                        <span class="chx-meta">
+                                            <?php if ($hasDocument): ?>
+                                                <a class="chx-doc-link" href="<?= e($documentUrl) ?>" title="Descarcă: <?= e($show($row['document_original_name'] ?? null)) ?>">
+                                                    <i class="bi bi-paperclip" aria-hidden="true"></i><?= e($documentLabel($row)) ?>
+                                                </a>
+                                            <?php else: ?>
+                                                <span><?= e($documentLabel($row)) ?></span>
+                                            <?php endif; ?>
+                                            <?php if ($sursa !== 'manual'): ?>
+                                                <span class="chx-src is-<?= e($sursa) ?>"><?= e(ExpenseModel::SOURCES[$sursa] ?? 'Manual') ?></span>
+                                            <?php endif; ?>
+                                        </span>
+                                    </div>
+                                    <div class="chx-col-desc">
+                                        <span class="chx-desc" title="<?= e($show($row['descriere'] ?? null)) ?>"><?= e($show($row['descriere'] ?? null)) ?></span>
+                                        <span class="chx-type">
+                                            <span class="chx-type-dot" aria-hidden="true"></span>
+                                            <?= e($show($row['tip_nume'] ?? null)) ?>
+                                        </span>
+                                    </div>
+                                    <div class="chx-col-alloc">
                                         <?php if ($rowAllocations === []): ?>
                                             <span class="text-muted">-</span>
                                         <?php elseif (!$isMulti): ?>
@@ -488,37 +519,26 @@ foreach ($rows as $row) {
                                                 </span>
                                             </span>
                                         <?php else: ?>
-                                            <button type="button" class="chx-multi-toggle" data-chx-toggle-detail="chxDetail<?= e((string) $rowId) ?>">
+                                            <span class="chx-multi-toggle">
                                                 <i class="bi bi-diagram-3" aria-hidden="true"></i>
                                                 <?= e((string) count($rowAllocations)) ?> alocări
-                                                <i class="bi bi-chevron-down" aria-hidden="true"></i>
-                                            </button>
+                                            </span>
                                         <?php endif; ?>
-                                        <?php if (trim((string) ($row['beneficiar_nume'] ?? '')) !== ''): ?>
-                                            <div class="chx-resp-driver" title="Beneficiar / Client">
-                                                <i class="bi bi-person-badge" aria-hidden="true"></i> <?= e((string) $row['beneficiar_nume']) ?>
-                                            </div>
+                                    </div>
+                                    <div class="chx-col-total">
+                                        <strong><?= e($totalText) ?></strong>
+                                        <?php if ($paymentLabel !== ''): ?>
+                                            <span class="chx-meta"><?= e($paymentLabel) ?></span>
                                         <?php endif; ?>
-                                        <?php if (trim((string) ($row['sofer_responsabil_nume'] ?? '')) !== ''): ?>
-                                            <div class="chx-resp-driver" title="Șofer responsabil (informativ)">
-                                                <i class="bi bi-person-check" aria-hidden="true"></i> <?= e((string) $row['sofer_responsabil_nume']) ?>
-                                            </div>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td class="text-end text-nowrap fw-semibold"><?= e($totalText) ?></td>
-                                    <td class="text-nowrap"><?= e(ExpenseModel::PAYMENT_METHODS[(string) ($row['modalitate_plata'] ?? '')] ?? '-') ?></td>
-                                    <td>
-                                        <span class="chx-src is-<?= e((string) ($row['sursa'] ?? 'manual')) ?>"><?= e(ExpenseModel::SOURCES[(string) ($row['sursa'] ?? 'manual')] ?? 'Manual') ?></span>
-                                    </td>
-                                    <td class="text-center">
+                                    </div>
+                                    <div class="chx-col-actions">
+                                        <span class="chx-chevron" aria-hidden="true"><i class="bi bi-chevron-down"></i></span>
                                         <div class="dropdown">
                                             <button type="button" class="chx-actions-btn" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Acțiuni">
                                                 <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
                                             </button>
                                             <ul class="dropdown-menu dropdown-menu-end">
-                                                <?php if ($isMulti): ?>
-                                                    <li><button type="button" class="dropdown-item" data-chx-toggle-detail="chxDetail<?= e((string) $rowId) ?>"><i class="bi bi-eye me-2" aria-hidden="true"></i>Vezi alocările</button></li>
-                                                <?php endif; ?>
+                                                <li><button type="button" class="dropdown-item" data-chx-toggle-detail="<?= e($itemId) ?>"><i class="bi bi-eye me-2" aria-hidden="true"></i>Vezi detalii</button></li>
                                                 <?php if ($canEdit): ?>
                                                     <li><button type="button" class="dropdown-item" data-chx-edit="<?= e((string) $rowId) ?>"><i class="bi bi-pencil me-2" aria-hidden="true"></i>Editează</button></li>
                                                 <?php endif; ?>
@@ -533,30 +553,96 @@ foreach ($rows as $row) {
                                                 <?php endif; ?>
                                             </ul>
                                         </div>
-                                    </td>
-                                </tr>
-                                <?php if ($isMulti): ?>
-                                    <tr class="chx-detail-row" id="chxDetail<?= e((string) $rowId) ?>" hidden>
-                                        <td colspan="11">
-                                            <div class="chx-detail-box">
-                                                <div class="chx-detail-title">Alocările cheltuielii (<?= e($money($row['valoare'] ?? 0)) ?> în total)</div>
-                                                <div class="chx-detail-grid">
-                                                    <?php foreach ($rowAllocations as $allocation): ?>
-                                                        <?php $badge = $allocationBadge($allocation); ?>
-                                                        <div class="chx-detail-item">
-                                                            <i class="bi <?= e($badge['icon']) ?>" aria-hidden="true"></i>
-                                                            <span><?= e($badge['label']) ?><?= $badge['sub'] !== '' ? ' · ' . e($badge['sub']) : '' ?></span>
-                                                            <strong><?= e($badge['suma']) ?></strong>
-                                                        </div>
-                                                    <?php endforeach; ?>
+                                    </div>
+                                </div>
+
+                                <div class="chx-item-panel" id="<?= e($itemId) ?>Panel">
+                                    <div class="chx-item-panel-inner">
+                                        <div class="chx-panel-body">
+                                            <dl class="chx-facts">
+                                                <div>
+                                                    <dt>Categorie</dt>
+                                                    <dd>
+                                                        <span class="chx-badge <?= $isOperational ? 'is-operational' : 'is-administrative' ?>"><?= $isOperational ? 'Operațională' : 'Administrativă' ?></span>
+                                                    </dd>
                                                 </div>
+                                                <div><dt>Subcategorie</dt><dd><?= e($show($row['tip_nume'] ?? null)) ?></dd></div>
+                                                <div>
+                                                    <dt>Document</dt>
+                                                    <dd>
+                                                        <?php if ($hasDocument): ?>
+                                                            <a class="chx-doc-link" href="<?= e($documentUrl) ?>"><i class="bi bi-download" aria-hidden="true"></i> <?= e($documentLabel($row)) ?></a>
+                                                        <?php else: ?>
+                                                            <?= e($documentLabel($row)) ?> <span class="text-muted">(fără fișier)</span>
+                                                        <?php endif; ?>
+                                                    </dd>
+                                                </div>
+                                                <div><dt>CUI furnizor</dt><dd><?= e($show($row['cui'] ?? null)) ?></dd></div>
+                                                <div><dt>Modalitate plată</dt><dd><?= e($paymentLabel !== '' ? $paymentLabel : '-') ?></dd></div>
+                                                <div>
+                                                    <dt>Status plată</dt>
+                                                    <dd>
+                                                        <?php if (isset(ExpenseModel::PAYMENT_STATUSES[$statusKey])): ?>
+                                                            <span class="chx-pay is-<?= e($statusKey) ?>"><?= e(ExpenseModel::PAYMENT_STATUSES[$statusKey]) ?></span>
+                                                        <?php else: ?>
+                                                            -
+                                                        <?php endif; ?>
+                                                        <?php if (!empty($row['data_platii'])): ?><small class="text-muted">· plătită <?= e($date($row['data_platii'])) ?></small><?php endif; ?>
+                                                        <?php if (!empty($row['scadenta'])): ?><small class="text-muted">· scadență <?= e($date($row['scadenta'])) ?></small><?php endif; ?>
+                                                    </dd>
+                                                </div>
+                                                <?php if (($row['valoare_neta'] ?? null) !== null || ($row['tva'] ?? null) !== null): ?>
+                                                    <div>
+                                                        <dt>Net / TVA</dt>
+                                                        <dd>
+                                                            <?= e(format_number_ro((float) ($row['valoare_neta'] ?? 0), 2)) ?> + <?= e(format_number_ro((float) ($row['tva'] ?? 0), 2)) ?> <?= e($moneda === 'RON' ? 'lei' : $moneda) ?>
+                                                        </dd>
+                                                    </div>
+                                                <?php endif; ?>
+                                                <div><dt>Sursă</dt><dd><span class="chx-src is-<?= e($sursa) ?>"><?= e(ExpenseModel::SOURCES[$sursa] ?? 'Manual') ?></span></dd></div>
+                                                <?php if (trim((string) ($row['beneficiar_nume'] ?? '')) !== ''): ?>
+                                                    <div><dt>Beneficiar / Client</dt><dd><i class="bi bi-person-badge text-muted" aria-hidden="true"></i> <?= e((string) $row['beneficiar_nume']) ?></dd></div>
+                                                <?php endif; ?>
+                                                <?php if (trim((string) ($row['sofer_responsabil_nume'] ?? '')) !== ''): ?>
+                                                    <div><dt>Șofer responsabil</dt><dd><i class="bi bi-person-check text-success" aria-hidden="true"></i> <?= e((string) $row['sofer_responsabil_nume']) ?></dd></div>
+                                                <?php endif; ?>
+                                                <div class="is-wide"><dt>Descriere</dt><dd><?= e($show($row['descriere'] ?? null)) ?></dd></div>
+                                                <?php if (trim((string) ($row['observatii'] ?? '')) !== ''): ?>
+                                                    <div class="is-wide"><dt>Observații</dt><dd><?= nl2br(e((string) $row['observatii'])) ?></dd></div>
+                                                <?php endif; ?>
+                                            </dl>
+
+                                            <div class="chx-panel-alloc">
+                                                <div class="chx-detail-title">
+                                                    <?= $rowAllocations === [] ? 'Fără alocări' : 'Alocare (' . e((string) count($rowAllocations)) . ')' ?>
+                                                </div>
+                                                <?php foreach ($rowAllocations as $allocation): ?>
+                                                    <?php
+                                                    $badge = $allocationBadge($allocation);
+                                                    $share = (float) ($row['valoare'] ?? 0) > 0 ? ((float) ($allocation['suma'] ?? 0) / (float) $row['valoare']) * 100 : 0;
+                                                    ?>
+                                                    <div class="chx-alloc-line">
+                                                        <i class="bi <?= e($badge['icon']) ?>" aria-hidden="true"></i>
+                                                        <span class="chx-alloc-name">
+                                                            <strong><?= e($badge['label']) ?></strong>
+                                                            <?php if ($badge['sub'] !== ''): ?><small><?= e($badge['sub']) ?></small><?php endif; ?>
+                                                        </span>
+                                                        <span class="chx-alloc-sum"><?= e($badge['suma']) ?></span>
+                                                        <span class="chx-alloc-bar" aria-hidden="true"><span style="width: <?= e(str_replace(',', '.', (string) round(min(100, max(0, $share)), 1))) ?>%"></span></span>
+                                                    </div>
+                                                <?php endforeach; ?>
+                                                <?php if ($canEdit): ?>
+                                                    <button type="button" class="btn btn-sm btn-outline-primary mt-2" data-chx-edit="<?= e((string) $rowId) ?>">
+                                                        <i class="bi bi-pencil" aria-hidden="true"></i> Editează cheltuiala
+                                                    </button>
+                                                <?php endif; ?>
                                             </div>
-                                        </td>
-                                    </tr>
-                                <?php endif; ?>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </article>
+                        <?php endforeach; ?>
+                    <?php endforeach; ?>
                 </div>
 
                 <div class="chx-table-footer">
@@ -710,16 +796,27 @@ foreach ($rows as $row) {
                         </div>
                         <div class="col-12 col-md-6 col-lg-3">
                             <label class="chx-form-label">Furnizor / Comerciant <span class="chx-req">*</span></label>
-                            <div class="input-group">
-                                <input type="text" class="form-control" name="furnizor" placeholder="Caută furnizor" list="chxSupplierList" required>
-                                <button type="button" class="btn btn-outline-primary" title="Furnizor nou: scrie direct numele în câmp" data-chx-new-supplier>
-                                    <i class="bi bi-plus" aria-hidden="true"></i>
-                                </button>
+                            <div class="chx-sup" data-chx-sup>
+                                <div class="input-group">
+                                    <input type="text" class="form-control" name="furnizor" placeholder="Caută furnizor sau CUI" autocomplete="off" required
+                                           role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="chxSupMenu" data-chx-sup-input>
+                                    <button type="button" class="btn btn-outline-primary" title="Furnizor nou: scrie direct numele în câmp" data-chx-new-supplier>
+                                        <i class="bi bi-plus" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <div class="chx-sup-menu" id="chxSupMenu" role="listbox" hidden data-chx-sup-menu></div>
                             </div>
                         </div>
                         <div class="col-12 col-md-6 col-lg-3">
                             <label class="chx-form-label">CUI/CIF <span class="text-muted fw-normal">(opțional)</span></label>
-                            <input type="text" class="form-control" name="cui" placeholder="RO12345678" maxlength="20">
+                            <input type="text" class="form-control" name="cui" placeholder="RO12345678" maxlength="20" autocomplete="off" data-chx-cui>
+                        </div>
+                        <div class="col-12" data-chx-sup-hint hidden>
+                            <div class="chx-sup-hint">
+                                <i class="bi bi-magic" aria-hidden="true"></i>
+                                <span data-chx-sup-hint-text></span>
+                                <button type="button" class="chx-sup-hint-undo" data-chx-sup-forget>Nu calcula TVA</button>
+                            </div>
                         </div>
 
                         <div class="col-12 col-md-6 col-lg-3">
@@ -727,7 +824,7 @@ foreach ($rows as $row) {
                             <input type="number" min="0" step="0.01" class="form-control" name="valoare_neta" placeholder="0,00" data-chx-neta>
                         </div>
                         <div class="col-12 col-md-6 col-lg-3">
-                            <label class="chx-form-label">TVA <span class="text-muted fw-normal">(opțional)</span></label>
+                            <label class="chx-form-label">TVA <span class="chx-vat-rate" data-chx-vat-rate hidden></span> <span class="text-muted fw-normal">(opțional)</span></label>
                             <input type="number" min="0" step="0.01" class="form-control" name="tva" placeholder="0,00" data-chx-tva>
                         </div>
                         <div class="col-12 col-md-6 col-lg-3">
@@ -931,6 +1028,7 @@ foreach ($rows as $row) {
     'use strict';
 
     var EXPENSES = <?= json_encode($rowsJson, JSON_UNESCAPED_UNICODE) ?>;
+    var SUPPLIERS = <?= json_encode(array_values(is_array($supplierDirectory ?? null) ? $supplierDirectory : []), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG) ?>;
 
     function formatLei(value) {
         return value.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' lei';
@@ -1117,12 +1215,39 @@ foreach ($rows as $row) {
     })();
 
     // ------------------------------------------------- detalii alocari (tabel)
+    function toggleItem(item, open) {
+        if (!item) {
+            return;
+        }
+        var isOpen = typeof open === 'boolean' ? open : !item.classList.contains('is-open');
+        item.classList.toggle('is-open', isOpen);
+        var trigger = item.querySelector('[data-chx-expand]');
+        if (trigger) {
+            trigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        }
+    }
+
+    // Click oriunde pe rand deschide/inchide detaliile, cu exceptia
+    // elementelor interactive (link document, meniul de actiuni).
+    document.querySelectorAll('[data-chx-expand]').forEach(function (trigger) {
+        trigger.addEventListener('click', function (event) {
+            if (event.target.closest('a, button, .dropdown, form')) {
+                return;
+            }
+            toggleItem(trigger.closest('.chx-item'));
+        });
+        trigger.addEventListener('keydown', function (event) {
+            if (event.target !== trigger || (event.key !== 'Enter' && event.key !== ' ')) {
+                return;
+            }
+            event.preventDefault();
+            toggleItem(trigger.closest('.chx-item'));
+        });
+    });
+
     document.querySelectorAll('[data-chx-toggle-detail]').forEach(function (button) {
         button.addEventListener('click', function () {
-            var row = document.getElementById(button.getAttribute('data-chx-toggle-detail'));
-            if (row) {
-                row.hidden = !row.hidden;
-            }
+            toggleItem(document.getElementById(button.getAttribute('data-chx-toggle-detail')));
         });
     });
 
@@ -1134,7 +1259,7 @@ foreach ($rows as $row) {
         if (typeof bootstrap === 'undefined') {
             return;
         }
-        document.querySelectorAll('.chx-table [data-bs-toggle="dropdown"]').forEach(function (toggle) {
+        document.querySelectorAll('.chx-list [data-bs-toggle="dropdown"]').forEach(function (toggle) {
             bootstrap.Dropdown.getOrCreateInstance(toggle, { popperConfig: { strategy: 'fixed' } });
         });
     });
@@ -1620,10 +1745,308 @@ foreach ($rows as $row) {
         benefBlock.querySelector('select').required = benefSwitch.checked;
     });
 
+    // ------------------------------------------------------ agenda furnizori
+    // Detaliile unei firme se salveaza pe server la prima cheltuiala completa
+    // (cheltuieli_furnizori); aici doar se cauta in agenda si se completeaza
+    // formularul. Campurile deja alese de utilizator nu se suprascriu.
+    var supWrap = form.querySelector('[data-chx-sup]');
+    var supInput = form.querySelector('[data-chx-sup-input]');
+    var supMenu = form.querySelector('[data-chx-sup-menu]');
+    var cuiInput = form.querySelector('[data-chx-cui]');
+    var supHint = form.querySelector('[data-chx-sup-hint]');
+    var supHintText = form.querySelector('[data-chx-sup-hint-text]');
+    var vatRateBadge = form.querySelector('[data-chx-vat-rate]');
+    var monedaSelect = form.querySelector('select[name="moneda"]');
+    var plataSelect = form.querySelector('select[name="modalitate_plata"]');
+    var supMatches = [];
+    var supActive = -1;
+    var vatRate = null;
+
+    function foldText(value) {
+        return String(value || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+    }
+
+    function cuiDigits(value) {
+        return String(value || '').toUpperCase().replace(/[\s.\-]/g, '').replace(/^RO/, '');
+    }
+
+    function findSupplierExact(name, cui) {
+        var digits = cuiDigits(cui);
+        if (/^\d{2,10}$/.test(digits)) {
+            for (var i = 0; i < SUPPLIERS.length; i++) {
+                if (cuiDigits(SUPPLIERS[i].cui) === digits) {
+                    return SUPPLIERS[i];
+                }
+            }
+        }
+        var folded = foldText(name);
+        if (folded === '') {
+            return null;
+        }
+        for (var j = 0; j < SUPPLIERS.length; j++) {
+            if (foldText(SUPPLIERS[j].nume) === folded) {
+                return SUPPLIERS[j];
+            }
+        }
+        return null;
+    }
+
+    function searchSuppliers(query) {
+        var folded = foldText(query);
+        var digits = cuiDigits(query);
+        var byDigits = /^\d{2,}$/.test(digits);
+        if (folded === '') {
+            return SUPPLIERS.slice(0, 8);
+        }
+        var starts = [];
+        var contains = [];
+        SUPPLIERS.forEach(function (sup) {
+            var name = foldText(sup.nume);
+            if (name.indexOf(folded) === 0 || (byDigits && cuiDigits(sup.cui).indexOf(digits) === 0)) {
+                starts.push(sup);
+            } else if (name.indexOf(folded) !== -1 || (byDigits && cuiDigits(sup.cui).indexOf(digits) !== -1)) {
+                contains.push(sup);
+            }
+        });
+        return starts.concat(contains).slice(0, 8);
+    }
+
+    function escapeHtml(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+        });
+    }
+
+    function highlight(text, query) {
+        var folded = foldText(query);
+        if (folded === '') {
+            return escapeHtml(text);
+        }
+        var index = foldText(text).indexOf(folded);
+        if (index === -1) {
+            return escapeHtml(text);
+        }
+        return escapeHtml(text.slice(0, index)) + '<mark>' + escapeHtml(text.slice(index, index + folded.length)) + '</mark>' + escapeHtml(text.slice(index + folded.length));
+    }
+
+    function renderSupplierMenu() {
+        supMatches = searchSuppliers(supInput.value);
+        supActive = -1;
+        if (supMatches.length === 0) {
+            closeSupplierMenu();
+            return;
+        }
+        supMenu.innerHTML = '<div class="chx-sup-menu-head">' + (foldText(supInput.value) === '' ? 'Furnizori folosiți frecvent' : 'Furnizori salvați') + '</div>'
+            + supMatches.map(function (sup, index) {
+                var meta = [];
+                if (sup.cui) meta.push('CUI ' + escapeHtml(sup.cui));
+                if (sup.tip_nume) meta.push(escapeHtml(sup.tip_nume));
+                var vat = sup.cota_tva !== null ? '<span class="chx-sup-vat">TVA ' + String(sup.cota_tva).replace('.', ',') + '%</span>' : '';
+                return '<button type="button" class="chx-sup-option" role="option" data-index="' + index + '">'
+                    + '<span class="chx-sup-name"><span class="chx-sup-label">' + highlight(sup.nume, supInput.value) + '</span>' + vat + '</span>'
+                    + '<span class="chx-sup-meta">' + meta.join(' · ') + '</span>'
+                    + '<span class="chx-sup-uses">' + sup.nr_utilizari + '×</span>'
+                    + '</button>';
+            }).join('');
+        supMenu.hidden = false;
+        supInput.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeSupplierMenu() {
+        supMenu.hidden = true;
+        supActive = -1;
+        supInput.setAttribute('aria-expanded', 'false');
+    }
+
+    function moveSupplierActive(step) {
+        var options = supMenu.querySelectorAll('.chx-sup-option');
+        if (options.length === 0) {
+            return;
+        }
+        supActive = (supActive + step + options.length) % options.length;
+        options.forEach(function (option, index) {
+            option.classList.toggle('is-active', index === supActive);
+        });
+        options[supActive].scrollIntoView({ block: 'nearest' });
+    }
+
+    function parseNum(input) {
+        var value = parseFloat(String(input.value).replace(',', '.'));
+        return isNaN(value) ? null : value;
+    }
+
+    // Net/TVA completate de noi pot fi recalculate; cele scrise de mana nu.
+    function isAutoOrEmpty(input) {
+        return input.value === '' || input.dataset.chxAuto === '1';
+    }
+
+    function setAutoValue(input, value) {
+        input.value = value.toFixed(2);
+        input.dataset.chxAuto = '1';
+    }
+
+    function splitTotalByRate() {
+        var total = parseNum(valInput);
+        if (vatRate === null || total === null || total <= 0 || !isAutoOrEmpty(netaInput) || !isAutoOrEmpty(tvaInput)) {
+            return;
+        }
+        var net = Math.round(total / (1 + vatRate / 100) * 100) / 100;
+        setAutoValue(netaInput, net);
+        setAutoValue(tvaInput, Math.round((total - net) * 100) / 100);
+    }
+
+    function setVatRate(rate) {
+        vatRate = rate === null || rate === undefined ? null : Number(rate);
+        vatRateBadge.hidden = vatRate === null;
+        vatRateBadge.textContent = vatRate === null ? '' : String(vatRate).replace('.', ',') + '%';
+    }
+
+    // Valorile net/TVA calculate automat dispar odata cu cota care le-a produs.
+    function dropAutoVat() {
+        [netaInput, tvaInput].forEach(function (input) {
+            if (input.dataset.chxAuto === '1') {
+                input.value = '';
+            }
+            delete input.dataset.chxAuto;
+        });
+    }
+
+    function clearSupplierState() {
+        setVatRate(null);
+        dropAutoVat();
+        supHint.hidden = true;
+        closeSupplierMenu();
+    }
+
+    function applySupplier(sup) {
+        var editing = form.querySelector('[data-chx-id]').value !== '';
+        var filled = [];
+        supInput.value = sup.nume;
+        if (sup.cui && cuiDigits(cuiInput.value) !== cuiDigits(sup.cui)) {
+            cuiInput.value = sup.cui;
+            filled.push('CUI');
+        }
+        if (!editing) {
+            if (sup.categorie && tipSelect.value === '') {
+                var radio = form.querySelector('input[name="categorie"][value="' + sup.categorie + '"]');
+                if (radio) {
+                    radio.checked = true;
+                    syncToggleGroup(form.querySelector('[data-chx-cat-group]'));
+                    filterTipOptions(sup.tip_id ? String(sup.tip_id) : '');
+                    if (tipSelect.value !== '') {
+                        filled.push('subcategoria ' + (sup.tip_nume || ''));
+                    }
+                }
+            }
+            if (sup.tip_document && tipDocSelect.value !== sup.tip_document) {
+                tipDocSelect.value = sup.tip_document;
+                refreshDocFields();
+                filled.push(tipDocSelect.options[tipDocSelect.selectedIndex].text.toLowerCase());
+            }
+            if (sup.moneda && monedaSelect.value !== sup.moneda) {
+                monedaSelect.value = sup.moneda;
+                filled.push('moneda ' + sup.moneda);
+            }
+        }
+        if (sup.modalitate_plata && plataSelect.value === '') {
+            plataSelect.value = sup.modalitate_plata;
+            filled.push('plata ' + plataSelect.options[plataSelect.selectedIndex].text.toLowerCase());
+        }
+        setVatRate(sup.cota_tva);
+        if (vatRate !== null) {
+            filled.push('cota TVA ' + String(vatRate).replace('.', ',') + '%');
+            splitTotalByRate();
+        }
+        refreshAllocationUi();
+
+        supHintText.innerHTML = filled.length > 0
+            ? 'Furnizor cunoscut (<strong>' + sup.nr_utilizari + '</strong> cheltuieli). Completat automat: ' + escapeHtml(filled.join(', ')) + '.'
+            : 'Furnizor cunoscut (<strong>' + sup.nr_utilizari + '</strong> cheltuieli). Câmpurile completate deja au fost păstrate.';
+        form.querySelector('[data-chx-sup-forget]').hidden = vatRate === null;
+        supHint.hidden = false;
+        closeSupplierMenu();
+    }
+
+    supInput.addEventListener('focus', renderSupplierMenu);
+    supInput.addEventListener('input', function () {
+        // Numele s-a schimbat: cota TVA a furnizorului anterior nu mai e valabila.
+        setVatRate(null);
+        dropAutoVat();
+        supHint.hidden = true;
+        renderSupplierMenu();
+    });
+    supInput.addEventListener('keydown', function (event) {
+        if (supMenu.hidden) {
+            if (event.key === 'ArrowDown') {
+                renderSupplierMenu();
+                event.preventDefault();
+            }
+            return;
+        }
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            moveSupplierActive(event.key === 'ArrowDown' ? 1 : -1);
+        } else if (event.key === 'Enter' && supActive >= 0) {
+            event.preventDefault();
+            applySupplier(supMatches[supActive]);
+        } else if (event.key === 'Escape') {
+            event.stopPropagation();
+            closeSupplierMenu();
+        }
+    });
+    // Nume scris complet (fara alegere din lista) -> tot se completeaza.
+    supInput.addEventListener('change', function () {
+        var sup = findSupplierExact(supInput.value, '');
+        if (sup && vatRate === null && supHint.hidden) {
+            applySupplier(sup);
+        }
+    });
+    supMenu.addEventListener('mousedown', function (event) {
+        event.preventDefault(); // pastreaza focusul in input pana la click
+    });
+    supMenu.addEventListener('click', function (event) {
+        var option = event.target.closest('.chx-sup-option');
+        if (option) {
+            applySupplier(supMatches[Number(option.getAttribute('data-index'))]);
+        }
+    });
+    document.addEventListener('click', function (event) {
+        if (!supWrap.contains(event.target)) {
+            closeSupplierMenu();
+        }
+    });
+
+    // CUI introdus manual -> se recunoaste firma dupa CUI.
+    cuiInput.addEventListener('change', function () {
+        var sup = findSupplierExact('', cuiInput.value);
+        if (sup && (supInput.value.trim() === '' || foldText(supInput.value) === foldText(sup.nume))) {
+            applySupplier(sup);
+        }
+    });
+
+    form.querySelector('[data-chx-sup-forget]').addEventListener('click', function () {
+        clearSupplierState();
+    });
+
+    valInput.addEventListener('input', splitTotalByRate);
+    netaInput.addEventListener('input', function () {
+        delete netaInput.dataset.chxAuto;
+        // Doar netul scris: TVA-ul se deduce din cota furnizorului.
+        var net = parseNum(netaInput);
+        if (vatRate !== null && net !== null && isAutoOrEmpty(tvaInput)) {
+            setAutoValue(tvaInput, Math.round(net * vatRate) / 100);
+            autoTotal();
+        }
+    });
+    tvaInput.addEventListener('input', function () {
+        delete tvaInput.dataset.chxAuto;
+    });
+
     form.querySelector('[data-chx-new-supplier]').addEventListener('click', function () {
-        var input = form.querySelector('input[name="furnizor"]');
-        input.value = '';
-        input.focus();
+        supInput.value = '';
+        cuiInput.value = '';
+        clearSupplierState();
+        supInput.focus();
     });
 
     // ---------------------------------------------------------- add / edit
@@ -1644,6 +2067,7 @@ foreach ($rows as $row) {
         benefBlock.hidden = true;
         benefBlock.querySelector('select').required = false;
         manualList.innerHTML = '';
+        clearSupplierState();
         // Inputurile hidden nu sunt atinse de form.reset() - datele revin explicit
         // la valorile initiale (azi pentru document, gol pentru plata/scadenta).
         dateWrappers.forEach(function (wrapper) {

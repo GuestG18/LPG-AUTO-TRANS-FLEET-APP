@@ -3,7 +3,11 @@ declare(strict_types=1);
 
 class InactiveResourceApprovalModel extends BaseModel
 {
-    private const RESOURCE_TYPES = ['vehicle', 'driver', 'repair'];
+    private const RESOURCE_TYPES = ['vehicle', 'driver', 'repair', 'diurna'];
+    /** Cerere de modificare a numarului de diurne al unei curse (resource_id = trip_id). */
+    public const DIURNA_REASON = 'diurna_change';
+    public const DIURNA_REASON_LABEL = 'Modificare diurna';
+    public const DIURNA_MAX_DAYS = 60;
     private const REVIEW_STATUSES = ['approved', 'rejected'];
     private const TRANSPORT_TYPE_LABELS = [
         'primar' => 'Primar km',
@@ -23,7 +27,7 @@ class InactiveResourceApprovalModel extends BaseModel
         $this->db->exec("
             CREATE TABLE IF NOT EXISTS inactive_resource_approvals (
                 id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                resource_type ENUM('vehicle', 'driver', 'repair') NOT NULL,
+                resource_type ENUM('vehicle', 'driver', 'repair', 'diurna') NOT NULL,
                 resource_id INT UNSIGNED NOT NULL,
                 trip_id INT UNSIGNED NULL,
                 usage_context VARCHAR(120) NOT NULL DEFAULT 'dispecer_curse',
@@ -78,7 +82,7 @@ class InactiveResourceApprovalModel extends BaseModel
     {
         $this->ensureSchema();
 
-        $counts = ['vehicle' => 0, 'driver' => 0, 'repair' => 0];
+        $counts = ['vehicle' => 0, 'driver' => 0, 'repair' => 0, 'diurna' => 0];
         $stmt = $this->db->query("
             SELECT resource_type, COUNT(*) AS total
             FROM inactive_resource_approvals
@@ -95,10 +99,11 @@ class InactiveResourceApprovalModel extends BaseModel
 
         return [
             'counts' => $counts,
-            'total' => $counts['vehicle'] + $counts['driver'] + $counts['repair'],
+            'total' => array_sum($counts),
             'vehicles' => $this->getPendingRowsByType('vehicle', $limitPerType),
             'drivers' => $this->getPendingRowsByType('driver', $limitPerType),
             'repairs' => $this->getPendingRowsByType('repair', $limitPerType),
+            'diurne' => $this->getPendingRowsByType('diurna', $limitPerType),
         ];
     }
 
@@ -621,6 +626,7 @@ class InactiveResourceApprovalModel extends BaseModel
             FROM inactive_resource_approvals
             WHERE trip_id = :trip_id
               AND status = 'pending'
+              AND resource_type <> 'diurna'
         ");
         $stmt->bindValue(':trip_id', $tripId, PDO::PARAM_INT);
         $stmt->execute();
@@ -643,8 +649,143 @@ class InactiveResourceApprovalModel extends BaseModel
             'manual_inactive' => 'Dezactivat manual / Inactiv',
             'medical_leave' => 'Concediu medical',
             'leave' => 'Concediu',
+            self::DIURNA_REASON => self::DIURNA_REASON_LABEL,
             'other' => 'Alt motiv',
         ];
+    }
+
+    /**
+     * Cerere de modificare a diurnelor unei curse din Dispecer curse.
+     *
+     * Valoarea aprobata nu se scrie pe cursa: se citeste la afisare din ultima
+     * cerere aprobata (getDiurnaAdjustmentsForTrips). Asa decizia se aplica la fel
+     * indiferent de unde vine (panou, pagina de aprobari, email) si dispare daca
+     * cererea este repusa in asteptare.
+     *
+     * $request: trip_id, calculat (diurnele dupa regula), curent (valoarea afisata),
+     * solicitat, motiv, sofer, vehicul, interval.
+     */
+    public function createDiurnaRequest(array $request, int $userId, bool $approveNow): int
+    {
+        $this->ensureSchema();
+
+        $tripId = (int) ($request['trip_id'] ?? 0);
+        if ($tripId <= 0 || $userId <= 0) {
+            return 0;
+        }
+
+        $computed = (int) ($request['calculat'] ?? 0);
+        $current = (int) ($request['curent'] ?? $computed);
+        $requested = (int) ($request['solicitat'] ?? 0);
+        $snapshot = [
+            'approval_resource_type' => 'diurna',
+            'calculat' => $computed,
+            'curent' => $current,
+            'solicitat' => $requested,
+            'motiv' => trim((string) ($request['motiv'] ?? '')),
+            'sofer' => trim((string) ($request['sofer'] ?? '')),
+            'vehicul' => trim((string) ($request['vehicul'] ?? '')),
+            'interval' => trim((string) ($request['interval'] ?? '')),
+            'detail' => $current . ' → ' . $requested . ' diurne',
+        ];
+
+        $now = date('Y-m-d H:i:s');
+        $stmt = $this->db->prepare("
+            INSERT INTO inactive_resource_approvals (
+                resource_type, resource_id, trip_id, usage_context, resource_label,
+                inactive_reason, inactive_reason_label, inactive_since, status,
+                requested_by_user_id, requested_at, reviewed_by_user_id, reviewed_at,
+                review_note, snapshot_json, created_at, updated_at
+            ) VALUES (
+                'diurna', :resource_id, :trip_id, 'Dispecer curse', :resource_label,
+                :inactive_reason, :inactive_reason_label, NULL, :status,
+                :requested_by_user_id, :requested_at, :reviewed_by_user_id, :reviewed_at,
+                :review_note, :snapshot_json, :created_at, :updated_at
+            )
+        ");
+        $label = 'Diurna cursa #' . $tripId . ($snapshot['sofer'] !== '' ? ' - ' . $snapshot['sofer'] : '');
+        $stmt->bindValue(':resource_id', $tripId, PDO::PARAM_INT);
+        $stmt->bindValue(':trip_id', $tripId, PDO::PARAM_INT);
+        $stmt->bindValue(':resource_label', $this->limitString($label, 190));
+        $stmt->bindValue(':inactive_reason', self::DIURNA_REASON);
+        $stmt->bindValue(':inactive_reason_label', self::DIURNA_REASON_LABEL);
+        $stmt->bindValue(':status', $approveNow ? 'approved' : 'pending');
+        $stmt->bindValue(':requested_by_user_id', $userId, PDO::PARAM_INT);
+        $stmt->bindValue(':requested_at', $now);
+        $this->bindNullableInt($stmt, ':reviewed_by_user_id', $approveNow ? $userId : null);
+        $this->bindNullableString($stmt, ':reviewed_at', $approveNow ? $now : null);
+        $this->bindNullableString($stmt, ':review_note', $approveNow ? 'Modificat direct de administrator din Dispecer curse.' : null);
+        $this->bindNullableString($stmt, ':snapshot_json', $this->encodeSnapshot($snapshot));
+        $stmt->bindValue(':created_at', $now);
+        $stmt->bindValue(':updated_at', $now);
+        $stmt->execute();
+
+        return (int) $this->db->lastInsertId();
+    }
+
+    /**
+     * Pentru fiecare cursa: ultima cerere de diurna aprobata si cererea aflata in
+     * asteptare (daca exista).
+     *
+     * @return array<int, array{approved: ?array, pending: ?array}>
+     */
+    public function getDiurnaAdjustmentsForTrips(array $tripIds): array
+    {
+        $this->ensureSchema();
+        $tripIds = array_values(array_unique(array_filter(array_map('intval', $tripIds), static fn (int $id): bool => $id > 0)));
+        if ($tripIds === []) {
+            return [];
+        }
+
+        $result = [];
+        foreach (array_chunk($tripIds, 500) as $chunk) {
+            $placeholders = [];
+            $params = [];
+            foreach ($chunk as $index => $tripId) {
+                $placeholders[] = ':trip_' . $index;
+                $params[':trip_' . $index] = $tripId;
+            }
+
+            $stmt = $this->db->prepare("
+                SELECT a.id, a.trip_id, a.status, a.snapshot_json, a.requested_at, a.reviewed_at,
+                       requester.nume AS requested_by_name, reviewer.nume AS reviewed_by_name
+                FROM inactive_resource_approvals a
+                LEFT JOIN utilizatori requester ON requester.id = a.requested_by_user_id
+                LEFT JOIN utilizatori reviewer ON reviewer.id = a.reviewed_by_user_id
+                WHERE a.resource_type = 'diurna'
+                  AND a.status IN ('pending', 'approved')
+                  AND a.trip_id IN (" . implode(', ', $placeholders) . ")
+                ORDER BY a.trip_id ASC, COALESCE(a.reviewed_at, a.requested_at) ASC, a.id ASC
+            ");
+            $this->bindParams($stmt, $params);
+            $stmt->execute();
+
+            foreach ($stmt->fetchAll() as $row) {
+                $tripId = (int) $row['trip_id'];
+                $snapshot = $this->decodeSnapshot((string) ($row['snapshot_json'] ?? ''));
+                $entry = [
+                    'id' => (int) $row['id'],
+                    'calculat' => (int) ($snapshot['calculat'] ?? 0),
+                    'solicitat' => (int) ($snapshot['solicitat'] ?? 0),
+                    'motiv' => (string) ($snapshot['motiv'] ?? ''),
+                    'requested_by_name' => (string) ($row['requested_by_name'] ?? ''),
+                    'requested_at' => (string) ($row['requested_at'] ?? ''),
+                    'reviewed_by_name' => (string) ($row['reviewed_by_name'] ?? ''),
+                    'reviewed_at' => (string) ($row['reviewed_at'] ?? ''),
+                ];
+                $result[$tripId] ??= ['approved' => null, 'pending' => null];
+                // Ordonat crescator: ultima cerere din fiecare status castiga.
+                $result[$tripId][(string) $row['status'] === 'approved' ? 'approved' : 'pending'] = $entry;
+            }
+        }
+
+        return $result;
+    }
+
+    /** Cererea de diurna in asteptare pentru o cursa, daca exista. */
+    public function getPendingDiurnaRequestForTrip(int $tripId): ?array
+    {
+        return $this->getDiurnaAdjustmentsForTrips([$tripId])[$tripId]['pending'] ?? null;
     }
 
     private function baseSelectSql(): string
@@ -838,6 +979,9 @@ class InactiveResourceApprovalModel extends BaseModel
         $snapshot = $this->decodeSnapshot((string) ($approval['snapshot_json'] ?? ''));
         $documents = is_array($approval['documents'] ?? null) ? $approval['documents'] : [];
         $resourceType = (string) ($approval['resource_type'] ?? '');
+        if ($resourceType === 'diurna') {
+            return $this->buildDiurnaApprovalContext($approval, $snapshot);
+        }
         $tripId = (int) ($approval['trip_id'] ?? 0);
         $primaryLabel = $this->approvalPrimaryLabel($approval);
         $problemTitle = $this->approvalProblemTitle($approval, $documents, $snapshot);
@@ -896,6 +1040,60 @@ class InactiveResourceApprovalModel extends BaseModel
             'scope_message' => $this->approvalScopeMessage($approval, $primaryLabel, $problemTitle),
             'scope_kind' => $tripId > 0 ? 'trip' : 'request',
             'module_label' => $this->usageContextLabel((string) ($approval['usage_context'] ?? '')),
+        ];
+    }
+
+    private function buildDiurnaApprovalContext(array $approval, array $snapshot): array
+    {
+        $tripId = (int) ($approval['trip_id'] ?? 0);
+        $computed = (int) ($snapshot['calculat'] ?? 0);
+        $current = (int) ($snapshot['curent'] ?? $computed);
+        $requested = (int) ($snapshot['solicitat'] ?? 0);
+        $reason = trim((string) ($snapshot['motiv'] ?? ''));
+        $driver = $this->firstNonEmpty($snapshot['sofer'] ?? '', $approval['trip_driver_label'] ?? '');
+        $usageDate = $this->approvalUsageDate($approval);
+        $primaryLabel = $driver !== '' ? $driver : ('Cursa #' . $tripId);
+        $problemTitle = 'Diurne: ' . $current . ' → ' . $requested;
+
+        $summaryRows = [];
+        $this->appendContextRow($summaryRows, 'Diurne calculate', (string) $computed);
+        if ($current !== $computed) {
+            $this->appendContextRow($summaryRows, 'Diurne actuale', (string) $current);
+        }
+        $this->appendContextRow($summaryRows, 'Diurne solicitate', (string) $requested);
+        $this->appendContextRow($summaryRows, 'Motiv', $reason);
+
+        $detailRows = [];
+        $this->appendContextRow($detailRows, 'Interval cursa', $this->firstNonEmpty($snapshot['interval'] ?? '', $this->approvalIntervalLabel($approval)));
+        $this->appendContextRow($detailRows, 'Beneficiar', $this->stringValue($approval['trip_beneficiary_name'] ?? ''));
+        $this->appendContextRow($detailRows, 'Tip transport', $this->transportTypeLabel((string) ($approval['trip_transport_type'] ?? '')));
+        $this->appendContextRow($detailRows, 'Vehicul cursa', $this->firstNonEmpty($approval['trip_vehicle_label'] ?? '', $snapshot['vehicul'] ?? ''));
+        $this->appendContextRow($detailRows, 'Sofer cursa', $this->stringValue($approval['trip_driver_label'] ?? ''));
+        $this->appendContextRow($detailRows, 'Ruta', $this->approvalRouteLabel($approval));
+        $this->appendContextRow($detailRows, 'Solicitat de', $this->stringValue($approval['requested_by_name'] ?? ''));
+        $this->appendContextRow($detailRows, 'Solicitat la', $this->formatContextDateTime($approval['requested_at'] ?? ''));
+        $this->appendContextRow($detailRows, 'Modul', 'Dispecer curse');
+
+        return [
+            'request_type_label' => self::DIURNA_REASON_LABEL,
+            'resource_type' => 'diurna',
+            'resource_type_label' => 'Diurna',
+            'primary_label' => $primaryLabel,
+            'problem_title' => $problemTitle,
+            'operation_title' => $this->approvalOperationTitle($approval),
+            'operation_has_trip' => $tripId > 0,
+            'operation_url' => $this->approvalOperationUrl($tripId),
+            'operation_link_label' => $tripId > 0 ? 'Vezi cursa' : '',
+            'usage_date' => $usageDate,
+            'usage_date_label' => 'Data cursei',
+            'inactive_date' => '',
+            'inactive_date_label' => '',
+            'summary_rows' => $summaryRows,
+            'detail_rows' => $detailRows,
+            'scope_message' => 'Prin aprobare, cursa #' . $tripId . ' va avea ' . $requested . ' diurne in loc de ' . $current
+                . ' (regula calculeaza ' . $computed . '). La respingere ramane valoarea actuala.',
+            'scope_kind' => 'trip',
+            'module_label' => 'Dispecer curse',
         ];
     }
 
@@ -1165,6 +1363,7 @@ class InactiveResourceApprovalModel extends BaseModel
         return match ($resourceType) {
             'driver' => 'Sofer',
             'repair' => 'Reparatie',
+            'diurna' => 'Diurna',
             default => 'Vehicul',
         };
     }
@@ -1301,8 +1500,8 @@ class InactiveResourceApprovalModel extends BaseModel
             LIMIT 1
         ");
         $columnType = (string) $stmt->fetchColumn();
-        if ($columnType !== '' && !str_contains($columnType, "'repair'")) {
-            $this->db->exec("ALTER TABLE inactive_resource_approvals MODIFY COLUMN resource_type ENUM('vehicle','driver','repair') NOT NULL");
+        if ($columnType !== '' && (!str_contains($columnType, "'repair'") || !str_contains($columnType, "'diurna'"))) {
+            $this->db->exec("ALTER TABLE inactive_resource_approvals MODIFY COLUMN resource_type ENUM('vehicle','driver','repair','diurna') NOT NULL");
         }
     }
 

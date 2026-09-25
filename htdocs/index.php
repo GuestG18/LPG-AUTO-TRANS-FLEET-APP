@@ -296,6 +296,7 @@ require_once __DIR__ . '/includes/csrf.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/access.php';
 require_once __DIR__ . '/includes/profile_helpers.php';
+require_once __DIR__ . '/includes/vehicle_capacity_groups.php';
 
 require_once __DIR__ . '/models/BaseModel.php';
 require_once __DIR__ . '/models/AccessRightsModel.php';
@@ -305,6 +306,7 @@ require_once __DIR__ . '/models/PasskeyModel.php';
 require_once __DIR__ . '/models/NotificationDeliveryModel.php';
 require_once __DIR__ . '/models/ModuleModel.php';
 require_once __DIR__ . '/models/VehicleCouplingModel.php';
+require_once __DIR__ . '/models/VehicleCapacityCategoryModel.php';
 require_once __DIR__ . '/models/TireModel.php';
 require_once __DIR__ . '/models/DashboardModel.php';
 require_once __DIR__ . '/models/DocumentModel.php';
@@ -319,7 +321,9 @@ require_once __DIR__ . '/models/ReinvoiceFeeExpectationModel.php';
 require_once __DIR__ . '/models/DashboardAnaliticV2Model.php';
 require_once __DIR__ . '/models/ProgramareConcediiModel.php';
 require_once __DIR__ . '/models/NotificationRuleModel.php';
+require_once __DIR__ . '/models/DriverDiurnaModel.php';
 require_once __DIR__ . '/models/StaffAccountancyModel.php';
+require_once __DIR__ . '/models/PayrollModel.php';
 require_once __DIR__ . '/models/ExpenseModel.php';
 require_once __DIR__ . '/models/MaintenanceModel.php';
 require_once __DIR__ . '/models/TechnicalHealthModel.php';
@@ -349,6 +353,10 @@ require_once __DIR__ . '/services/TariffReviewService.php';
 require_once __DIR__ . '/services/TariffRepriceService.php';
 require_once __DIR__ . '/services/CostNormalizationService.php';
 require_once __DIR__ . '/services/CostBreakEvenService.php';
+require_once __DIR__ . '/services/LegalCalendarService.php';
+require_once __DIR__ . '/services/StaffMonthlyAccountingService.php';
+require_once __DIR__ . '/services/PayrollCalculatorService.php';
+require_once __DIR__ . '/services/PayrollMonthService.php';
 require_once __DIR__ . '/services/OperationalCostService.php';
 require_once __DIR__ . '/services/OcrSpaceService.php';
 require_once __DIR__ . '/services/OcrInvoiceHeuristics.php';
@@ -366,6 +374,7 @@ require_once __DIR__ . '/controllers/ModuleController.php';
 require_once __DIR__ . '/controllers/VehicleEquipmentInventoryController.php';
 require_once __DIR__ . '/controllers/DriverEquipmentController.php';
 require_once __DIR__ . '/controllers/VehicleAuthorizationController.php';
+require_once __DIR__ . '/controllers/VehicleCapacityCategoryController.php';
 require_once __DIR__ . '/controllers/ProfileController.php';
 require_once __DIR__ . '/controllers/DispecerCurseController.php';
 require_once __DIR__ . '/controllers/FleetMapController.php';
@@ -681,6 +690,13 @@ try {
         case 'reguli_taxe_refacturare':
             require_auth();
             (new ReinvoiceFeeRulesController($db))->handle($action);
+            break;
+
+        // Catalogul de categorii de capacitate: etichetele dupa care se
+        // grupeaza vehiculele in selectoare. Nu atinge capacitatea reala.
+        case 'categorii_capacitate':
+            require_auth();
+            (new VehicleCapacityCategoryController($db))->handle($action);
             break;
 
         case 'cazare':

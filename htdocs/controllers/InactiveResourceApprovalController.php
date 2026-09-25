@@ -436,7 +436,7 @@ class InactiveResourceApprovalController
         }
 
         $resourceType = strtolower(trim((string) ($_GET['resource_type'] ?? 'all')));
-        if (!in_array($resourceType, ['vehicle', 'driver', 'repair', 'all'], true)) {
+        if (!in_array($resourceType, ['vehicle', 'driver', 'repair', 'diurna', 'all'], true)) {
             $resourceType = 'all';
         }
 

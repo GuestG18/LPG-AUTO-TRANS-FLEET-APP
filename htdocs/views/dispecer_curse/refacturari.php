@@ -10,7 +10,6 @@ $beneficiaryOptions = is_array($beneficiaryOptions ?? null) ? $beneficiaryOption
 // Vehiculele grupate dupa capacitate, ca in selectorul din Configurare transport.
 $selectedVehicleIds = array_map('intval', (array) ($filters['vehicle_ids'] ?? []));
 $vehicleLabelById = [];
-$vehicleCapacityGroups = [];
 foreach ($plateOptions as $plateOption) {
     $vehicleOptionId = (int) ($plateOption['id'] ?? 0);
     if ($vehicleOptionId <= 0) {
@@ -18,21 +17,16 @@ foreach ($plateOptions as $plateOption) {
     }
     $vehicleName = trim((string) (($plateOption['marca'] ?? '') . ' ' . ($plateOption['model'] ?? '')));
     $vehicleLabelById[$vehicleOptionId] = trim((string) ($plateOption['nr_inmatriculare'] ?? '')) . ($vehicleName !== '' ? ' - ' . $vehicleName : '');
-
-    $capacityValue = (float) ($plateOption['capacitate_transport'] ?? 0);
-    $capacityKey = $capacityValue > 0 ? number_format($capacityValue, 2, '.', '') : 'fara';
-    if (!isset($vehicleCapacityGroups[$capacityKey])) {
-        $vehicleCapacityGroups[$capacityKey] = [
-            'label' => $capacityValue > 0
-                ? rtrim(rtrim(number_format($capacityValue, 2, '.', ''), '0'), '.') . ' tone'
-                : 'Fără capacitate',
-            'capacity' => $capacityValue,
-            'vehicles' => [],
-        ];
-    }
-    $vehicleCapacityGroups[$capacityKey]['vehicles'][] = $plateOption;
 }
-uasort($vehicleCapacityGroups, static fn (array $a, array $b): int => $b['capacity'] <=> $a['capacity']);
+
+/*
+ * Grupare pe CATEGORIA de capacitate (eticheta), nu pe capacitatea tehnica.
+ * Aceeasi logica partajata ca in Configurare transport si Carburanti -
+ * vezi includes/vehicle_capacity_groups.php.
+ */
+$vehicleCapacityGroups = build_vehicle_capacity_groups($plateOptions, [
+    'fallback_label' => 'Fără categorie',
+]);
 
 $selectedVehicleIds = array_values(array_filter($selectedVehicleIds, static fn (int $id): bool => isset($vehicleLabelById[$id])));
 $selectedVehicleLabel = match (count($selectedVehicleIds)) {
@@ -181,6 +175,23 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
         </a>
     </div>
 
+    <?php if ((string) ($filters['ids'] ?? '') !== ''): ?>
+        <?php
+        $requestedRefCount = count(explode(',', (string) $filters['ids']));
+        $refListLabel = trim((string) ($filters['ids_label'] ?? ''));
+        $allRefUrl = $filterBase;
+        unset($allRefUrl['ids'], $allRefUrl['ids_label']);
+        ?>
+        <div class="alert alert-info d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
+            <span>
+                <i class="bi bi-funnel-fill" aria-hidden="true"></i>
+                Afișezi <?= $refListLabel !== '' ? e($refListLabel) : 'o selecție de refacturări' ?>:
+                <strong><?= e((string) $totalRows) ?></strong> din <?= e((string) $requestedRefCount) ?> refacturări.
+            </span>
+            <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(array_merge($allRefUrl, ['p' => 1]))) ?>">Arată toate refacturările</a>
+        </div>
+    <?php endif; ?>
+
     <section class="refacturare-kpi-grid" aria-label="Indicatori refacturări">
         <article class="refacturare-kpi-card is-blue">
             <div class="refacturare-kpi-icon"><i class="bi bi-wallet2" aria-hidden="true"></i></div>
@@ -231,6 +242,10 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
             <input type="hidden" name="per_page" value="<?= e((string) $perPage) ?>">
             <input type="hidden" name="sort" value="<?= e($currentSort) ?>">
             <input type="hidden" name="dir" value="<?= e($currentDirection) ?>">
+            <?php if ((string) ($filters['ids'] ?? '') !== ''): ?>
+                <input type="hidden" name="ids" value="<?= e((string) $filters['ids']) ?>">
+                <input type="hidden" name="ids_label" value="<?= e((string) ($filters['ids_label'] ?? '')) ?>">
+            <?php endif; ?>
 
             <div class="refacturare-filter-field">
                 <label class="form-label" for="ref_period_display">Perioadă</label>

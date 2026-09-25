@@ -101,6 +101,11 @@ class EntityStatusService
             ];
         }
 
+        // Soferii colaboratori au documentele la firma care ii angajeaza: nu le verificam.
+        if ($this->isCollaboratorDriver($driverId)) {
+            return $this->buildEvaluation([]);
+        }
+
         $checks = $this->buildDocumentChecks(
             'documente_soferi',
             'driver_id',
@@ -109,6 +114,19 @@ class EntityStatusService
         );
 
         return $this->buildEvaluation($checks);
+    }
+
+    private function isCollaboratorDriver(int $driverId): bool
+    {
+        if (!$this->columnExists('soferi', 'tip_colaborare')) {
+            return false;
+        }
+
+        $stmt = $this->db->prepare('SELECT tip_colaborare FROM soferi WHERE id = :id LIMIT 1');
+        $stmt->bindValue(':id', $driverId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (string) ($stmt->fetchColumn() ?: '') === 'colaborator';
     }
 
     private function buildEvaluation(array $checks): array

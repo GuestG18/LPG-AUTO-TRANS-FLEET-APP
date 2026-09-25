@@ -42,7 +42,7 @@ class UserActivityModel extends BaseModel
 
         return [
             'filters'       => $filters,
-            'rows'          => array_slice($rows, 0, self::TIMELINE_LIMIT),
+            'rows'          => $this->attachLinks(array_slice($rows, 0, self::TIMELINE_LIMIT)),
             'rowsTotal'     => count($rows),
             'timelineLimit' => self::TIMELINE_LIMIT,
             'kpis'          => $this->buildKpis($periodRows, $filters),
@@ -501,6 +501,113 @@ class UserActivityModel extends BaseModel
         }
 
         return ['total' => $total, 'items' => $out];
+    }
+
+    // --------------------------------------------------------------- linkuri
+
+    /**
+     * Adauga fiecarui rand 'link' (URL catre inregistrarea afectata) si 'link_label'.
+     * Existenta se verifica in lot, per modul, ca sa nu trimitem la inregistrari sterse:
+     * o cursa stearsa (soft delete) duce la "Curse sterse", o inregistrare stearsa definitiv nu are link.
+     *
+     * @param array<int,array<string,mixed>> $rows
+     * @return array<int,array<string,mixed>>
+     */
+    private function attachLinks(array $rows): array
+    {
+        $idsByModule = [];
+        foreach ($rows as $row) {
+            $recordId = (int) ($row['record_id'] ?? 0);
+            if ($recordId > 0) {
+                $idsByModule[(string) $row['module_key']][$recordId] = true;
+            }
+        }
+
+        $races = $this->lookupRecords('curse_dispecer', 'id, deleted_at', array_keys($idsByModule['dispecer_curse'] ?? []));
+        $documents = $this->lookupRecords('documente', 'id', array_keys($idsByModule['documente'] ?? []));
+        $leaves = $this->lookupRecords('concedii', 'id', array_keys($idsByModule['concedii'] ?? []));
+        $contracts = $this->lookupRecords('leasing_contracts', 'id, contract_number', array_keys($idsByModule['scadentar_leasing'] ?? []));
+
+        foreach ($rows as &$row) {
+            $row['link'] = null;
+            $row['link_label'] = null;
+            $recordId = (int) ($row['record_id'] ?? 0);
+            if ($recordId <= 0) {
+                continue;
+            }
+
+            switch ((string) $row['module_key']) {
+                case 'dispecer_curse':
+                    $race = $races[$recordId] ?? null;
+                    if ($race === null) {
+                        break;
+                    }
+                    $deletedAt = (string) ($race['deleted_at'] ?? '');
+                    if ($deletedAt !== '') {
+                        $day = substr($deletedAt, 0, 10);
+                        $row['link'] = build_query_url([
+                            'page' => 'dispecer_curse', 'action' => 'curse_sterse',
+                            'deleted_start' => $day, 'deleted_end' => $day,
+                        ]);
+                        $row['link_label'] = 'Vezi în Curse șterse';
+                    } else {
+                        $row['link'] = build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $recordId]);
+                        $row['link_label'] = 'Deschide cursa #' . $recordId;
+                    }
+                    break;
+                case 'documente':
+                    if (isset($documents[$recordId])) {
+                        $row['link'] = build_query_url(['page' => 'documente', 'action' => 'show', 'id' => $recordId]);
+                        $row['link_label'] = 'Deschide documentul';
+                    }
+                    break;
+                case 'concedii':
+                    if (isset($leaves[$recordId])) {
+                        $row['link'] = build_query_url(['page' => 'programare_concedii', 'tab' => 'cereri', 'edit_id' => $recordId]);
+                        $row['link_label'] = 'Deschide cererea de concediu';
+                    }
+                    break;
+                case 'scadentar_leasing':
+                    if (isset($contracts[$recordId])) {
+                        $row['link'] = build_query_url(['page' => 'scadentar_leasing', 'q' => (string) ($contracts[$recordId]['contract_number'] ?? '')]);
+                        $row['link_label'] = 'Deschide contractul de leasing';
+                    }
+                    break;
+            }
+        }
+        unset($row);
+
+        return $rows;
+    }
+
+    /**
+     * @param array<int,int> $ids
+     * @return array<int,array<string,mixed>> randurile existente, indexate dupa id
+     */
+    private function lookupRecords(string $table, string $columns, array $ids): array
+    {
+        $ids = array_values(array_filter(array_map('intval', $ids), static fn (int $id): bool => $id > 0));
+        if ($ids === [] || !$this->tableExists($table)) {
+            return [];
+        }
+
+        $found = [];
+        try {
+            foreach (array_chunk($ids, 500) as $chunk) {
+                $placeholders = implode(',', array_fill(0, count($chunk), '?'));
+                $stmt = $this->db->prepare('SELECT ' . $columns . ' FROM ' . $table . ' WHERE id IN (' . $placeholders . ')');
+                $stmt->execute($chunk);
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $record) {
+                    $found[(int) $record['id']] = $record;
+                }
+            }
+        } catch (Throwable $exception) {
+            // Linkurile sunt un confort; daca o coloana lipseste, cronologia se afiseaza fara ele.
+            error_log('[UserActivityModel][lookupRecords] ' . $table . ': ' . $exception->getMessage());
+            return [];
+        }
+
+        return $found;
     }
 
     // --------------------------------------------------------------- optiuni UI

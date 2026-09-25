@@ -235,7 +235,7 @@ class OperationalCostController
             $this->sendJson(['success' => false, 'message' => 'Rulați migrarea database/update_cost_operational_km.sql mai întâi.'], 409);
         }
         $userId = function_exists('current_user') ? (int) (current_user()['id'] ?? 0) : null;
-        $allowed = ['eur_ron_rate', 'salariu_multiplicator', 'tva_carburant_fallback', 'management_alocare', 'diurna_tarif_zi', 'km_source'];
+        $allowed = ['eur_ron_rate', 'salariu_multiplicator', 'tva_carburant_fallback', 'management_alocare', 'km_source'];
         foreach ($allowed as $key) {
             if (!array_key_exists($key, $_POST)) {
                 continue;

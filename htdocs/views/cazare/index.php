@@ -91,6 +91,12 @@ $raceLabel = static function (array $race): string {
                 <i class="bi bi-download" aria-hidden="true"></i> Export CSV
             </a>
         <?php endif; ?>
+        <?php if ($canDelete): ?>
+            <button type="button" class="btn btn-outline-danger btn-sm" data-cazare-bulk-delete disabled>
+                <i class="bi bi-trash3" aria-hidden="true"></i> Șterge selectate
+                <span class="badge text-bg-danger ms-1 d-none" data-cazare-bulk-count>0</span>
+            </button>
+        <?php endif; ?>
         <?php if ($canCreate): ?>
             <button type="button" class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#cazareFormModal" data-cazare-new>
                 <i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă cazare
@@ -187,6 +193,11 @@ $raceLabel = static function (array $race): string {
         <table class="table table-hover align-middle mb-0 cazare-table">
             <thead>
                 <tr>
+                    <?php if ($canDelete): ?>
+                        <th class="cazare-select-col">
+                            <input type="checkbox" class="form-check-input" data-cazare-select-all title="Selectează toate de pe pagină" aria-label="Selectează toate de pe pagină">
+                        </th>
+                    <?php endif; ?>
                     <th>Data</th>
                     <th>Șofer</th>
                     <th class="text-end">Total</th>
@@ -200,7 +211,7 @@ $raceLabel = static function (array $race): string {
             <tbody>
             <?php if ($rows === []): ?>
                 <tr>
-                    <td colspan="8" class="text-center text-secondary py-4">Nu există înregistrări de cazare pentru filtrele selectate.</td>
+                    <td colspan="<?= $canDelete ? 9 : 8 ?>" class="text-center text-secondary py-4">Nu există înregistrări de cazare pentru filtrele selectate.</td>
                 </tr>
             <?php endif; ?>
             <?php foreach ($rows as $row): ?>
@@ -211,6 +222,11 @@ $raceLabel = static function (array $race): string {
                 $rowId = (int) $row['id'];
                 ?>
                 <tr>
+                    <?php if ($canDelete): ?>
+                        <td class="cazare-select-col">
+                            <input type="checkbox" class="form-check-input" value="<?= $rowId ?>" data-cazare-select aria-label="Selectează cazarea">
+                        </td>
+                    <?php endif; ?>
                     <td class="fw-semibold"><?= e(format_date_ro((string) $row['data'])) ?></td>
                     <td>
                         <?= e((string) $row['sofer_nume']) ?>
@@ -426,15 +442,27 @@ $raceLabel = static function (array $race): string {
 <?php endif; ?>
 
 <?php if ($canDelete): ?>
+<!-- Stergerea multipla: JS completeaza ids[] din bifele tabelului. Pastram filtrele
+     si pagina curenta ca redirectul sa revina in acelasi loc. -->
+<form method="post" action="<?= e(build_query_url(['page' => 'cazare', 'action' => 'bulk_delete'])) ?>" class="d-none" id="cazareBulkDeleteForm" data-cazare-delete>
+    <?= csrf_field() ?>
+    <?php foreach (array_merge($baseQuery, ['p' => (string) ((int) ($pagination['page'] ?? 1))]) as $key => $value): ?>
+        <?php if ($key !== 'page'): ?>
+            <input type="hidden" name="<?= e((string) $key) ?>" value="<?= e((string) $value) ?>">
+        <?php endif; ?>
+    <?php endforeach; ?>
+    <div data-cazare-bulk-ids></div>
+</form>
+
 <div class="modal fade" id="cazareDeleteModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-sm">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Ștergi cazarea?</h5>
+                <h5 class="modal-title" data-cazare-delete-title>Ștergi cazarea?</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
             </div>
             <div class="modal-body">
-                <p class="mb-0">Înregistrarea și cheltuiala corespunzătoare de pe cursă vor fi șterse definitiv.</p>
+                <p class="mb-0" data-cazare-delete-text>Înregistrarea și cheltuiala corespunzătoare de pe cursă vor fi șterse definitiv.</p>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Renunță</button>

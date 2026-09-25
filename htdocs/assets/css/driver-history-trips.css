@@ -1,0 +1,299 @@
+/*
+ * Istoric activitati sofer - comparatie: randul desfasurat al unui sofer cu cursele lui.
+ * Acelasi aspect de tabel imbricat ca randurile desfasurate din Centralizator facturare.
+ */
+
+.driver-history-trips-toggle {
+    width: 24px;
+    height: 24px;
+    margin-right: 6px;
+    padding: 0;
+    border: 1px solid #cfe0f5;
+    border-radius: 6px;
+    background: #fff;
+    color: #0b4fd8;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+    transition: background .16s ease;
+}
+.driver-history-trips-toggle:hover { background: #f0f6ff; }
+.driver-history-trips-toggle i { transition: transform .16s ease; }
+.driver-history-trips-toggle[aria-expanded="true"] i { transform: rotate(90deg); }
+.driver-history-trips-parent { cursor: pointer; }
+.driver-history-trips-parent.is-expanded > td { background: #eef5ff; }
+
+.driver-history-trips-row[hidden] { display: none; }
+.driver-history-trips-row > td {
+    padding: 0 !important;
+    background: #f8fbff;
+    white-space: normal;
+}
+/*
+ * Randul e lat cat tot tabelul de comparatie, care deruleaza lateral: continutul
+ * ramane lipit de marginea din stanga, pe latimea vizibila (setata din JS).
+ */
+.driver-history-trips {
+    position: sticky;
+    left: 0;
+    width: var(--dh-visible-width, auto);
+    max-width: 100%;
+    padding: 10px 12px 12px 20px;
+    border-left: 3px solid #b9d5ff;
+    background: linear-gradient(90deg, #f4f8ff, #fff);
+}
+.driver-history-trips-wrap {
+    overflow-x: auto;
+    border: 1px solid #d9e2ef;
+    border-radius: 7px;
+    background: #fff;
+}
+.driver-history-trips-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    color: #1c2d54;
+}
+.driver-history-trips-table th,
+.driver-history-trips-table td {
+    border-bottom: 1px solid #d9e2ef;
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+.driver-history-trips-table thead th {
+    color: #26385f;
+    background: #fbfcff;
+    font-weight: 900;
+}
+.driver-history-trips-table td { font-weight: 650; }
+.driver-history-trips-table .is-number { text-align: right; font-variant-numeric: tabular-nums; }
+.driver-history-trips-table tbody tr:hover td { background: #f8fbff; }
+.driver-history-trips-table tbody tr:last-child > td { border-bottom: 0; }
+.driver-history-trips-table tfoot th {
+    border-top: 1px solid #cbd5e1;
+    border-bottom: 0;
+    background: #fbfcff;
+    font-weight: 900;
+}
+
+/* Coloanele de sumar din comparatie (Vehicul, Beneficiar): buton "N detalii". */
+.driver-history-compare-table td.driver-history-summary-cell { padding: .3rem .5rem; }
+.driver-history-summary-cell .dispatcher-summary-count-btn {
+    min-width: 5.6rem;
+    height: 1.85rem;
+    padding: 0 .55rem;
+    font-size: .78rem;
+}
+
+/* Comparatie soferi: comutatorul Sumar soferi / Curse (ca in Istoric activitate). */
+.driver-history-view-switch {
+    display: inline-flex;
+    gap: 2px;
+    margin: 0 0 .6rem;
+    padding: 3px;
+    border: 1px solid #dbe4f1;
+    border-radius: 8px;
+    background: #f4f7fc;
+}
+.driver-history-view-switch button {
+    border: 0;
+    border-radius: 6px;
+    padding: .3rem .85rem;
+    background: transparent;
+    color: #26385f;
+    font-size: .82rem;
+    font-weight: 800;
+}
+.driver-history-view-switch button:hover { background: #e8effb; }
+.driver-history-compare-views[data-compare-view="summary"] [data-compare-view-button="summary"],
+.driver-history-compare-views[data-compare-view="trips"] [data-compare-view-button="trips"] {
+    background: #0b55f4;
+    color: #fff;
+}
+/* Modul "Curse": raportul detaliat pe toata latimea, fara sumar si grafice. */
+.driver-history-compare-views[data-compare-view="trips"] .driver-history-compare-panel,
+.driver-history-compare-views[data-compare-view="trips"] .driver-history-chart-grid { display: none; }
+/* Pagina unui singur sofer: modul "Curse" ascunde cardurile, graficele si rezumatele. */
+.driver-history-compare-views[data-compare-view="trips"] .driver-history-kpi-shell,
+.driver-history-compare-views[data-compare-view="trips"] .driver-history-secondary-grid { display: none; }
+
+/*
+ * Cardurile KPI au doua fete in acelasi container: sumarul (icon + valoare) si
+ * defalcarea pe tip de transport. La hover / focus cardul isi schimba continutul,
+ * fara sa isi schimbe dimensiunea si fara sa miste grila. Datele sunt deja randate
+ * (din aceleasi filtre ca valoarea), deci hover-ul nu cere nimic de la server.
+ */
+.driver-history-kpi-card { position: relative; overflow: hidden; }
+.driver-history-kpi-card > .driver-history-kpi-icon,
+.driver-history-kpi-card > div:not(.driver-history-kpi-breakdown) {
+    transition: opacity .2s ease, transform .2s ease;
+}
+.driver-history-kpi-card.has-breakdown:hover > .driver-history-kpi-icon,
+.driver-history-kpi-card.has-breakdown:hover > div:not(.driver-history-kpi-breakdown),
+.driver-history-kpi-card.has-breakdown:focus-visible > .driver-history-kpi-icon,
+.driver-history-kpi-card.has-breakdown:focus-visible > div:not(.driver-history-kpi-breakdown),
+.driver-history-kpi-card.has-breakdown:focus-within > .driver-history-kpi-icon,
+.driver-history-kpi-card.has-breakdown:focus-within > div:not(.driver-history-kpi-breakdown) {
+    opacity: 0;
+    transform: translateY(-4px);
+}
+/* A doua fata: acelasi spatiu, peste sumar. */
+.driver-history-kpi-breakdown {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0;
+    padding: .5rem .75rem;
+    background: inherit;
+    border-radius: inherit;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(4px);
+    transition: opacity .2s ease, transform .2s ease, visibility .2s;
+    overflow: auto;
+    scrollbar-width: thin;
+}
+.driver-history-kpi-card.has-breakdown:hover .driver-history-kpi-breakdown,
+.driver-history-kpi-card.has-breakdown:focus-visible .driver-history-kpi-breakdown,
+.driver-history-kpi-card.has-breakdown:focus-within .driver-history-kpi-breakdown {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+/* Accent discret pe card cat timp arata defalcarea: contur si umbra usoara. */
+.driver-history-kpi-card.has-breakdown {
+    transition: box-shadow .2s ease;
+}
+.driver-history-kpi-card.has-breakdown:hover,
+.driver-history-kpi-card.has-breakdown:focus-within {
+    box-shadow: inset 0 0 0 1px #c7d9f7, 0 4px 12px rgba(15, 23, 42, .06);
+}
+/* Focusul de la tastatura se vede pe cardul intreg, nu pe randurile din defalcare. */
+.driver-history-kpi-card.has-breakdown:focus { outline: none; }
+.driver-history-kpi-card.has-breakdown:focus-visible,
+.driver-history-kpi-card.has-breakdown:has(a.is-link:focus-visible) {
+    box-shadow: inset 0 0 0 2px #93b4ec, 0 4px 12px rgba(15, 23, 42, .06);
+}
+@media (prefers-reduced-motion: reduce) {
+    .driver-history-kpi-card.has-breakdown,
+    .driver-history-kpi-card > .driver-history-kpi-icon,
+    .driver-history-kpi-card > div:not(.driver-history-kpi-breakdown),
+    .driver-history-kpi-breakdown { transition: none; }
+}
+.driver-history-kpi-breakdown > div,
+.driver-history-kpi-breakdown > a {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: .5rem;
+    padding: .06rem 0;
+    font-size: .84rem;
+    line-height: 1.2;
+}
+.driver-history-kpi-breakdown > div span,
+.driver-history-kpi-breakdown > a span {
+    color: #475569;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.driver-history-kpi-breakdown > div strong,
+.driver-history-kpi-breakdown > a strong {
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+/*
+ * Randurile cardului "Total curse" duc in Desfasurator curse, dar arata ca text
+ * static: fara fundal, contur sau inel de focus pe rand. Singurul semnal de hover /
+ * focus este pe cardul intreg (mai sus).
+ */
+.driver-history-kpi-breakdown > a.is-link {
+    color: inherit;
+    text-decoration: none;
+    outline: none;
+}
+.driver-history-kpi-breakdown > a.is-link:hover,
+.driver-history-kpi-breakdown > a.is-link:focus,
+.driver-history-kpi-breakdown > a.is-link:focus-visible {
+    color: inherit;
+    text-decoration: none;
+    outline: none;
+    background: none;
+    box-shadow: none;
+}
+/* Singurul semnal pe rand: textul (eticheta si valoarea) devine albastru. */
+.driver-history-kpi-card .driver-history-kpi-breakdown > a.is-link span,
+.driver-history-kpi-card .driver-history-kpi-breakdown > a.is-link strong {
+    transition: color .2s ease;
+}
+.driver-history-kpi-card .driver-history-kpi-breakdown > a.is-link:hover span,
+.driver-history-kpi-card .driver-history-kpi-breakdown > a.is-link:hover strong,
+.driver-history-kpi-card .driver-history-kpi-breakdown > a.is-link:focus-visible span,
+.driver-history-kpi-card .driver-history-kpi-breakdown > a.is-link:focus-visible strong {
+    color: #2563eb;
+}
+/*
+ * Diurne: doua valori pe rand (numar si lei), in coloane aliniate: eticheta la
+ * stanga, numarul si valoarea la dreapta, fiecare pe coloana ei.
+ */
+.driver-history-kpi-breakdown.has-secondary > div,
+.driver-history-kpi-breakdown.has-secondary > a {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(6.5rem, auto);
+    column-gap: .75rem;
+}
+.driver-history-kpi-breakdown.has-secondary strong { text-align: right; }
+.driver-history-kpi-breakdown > div.is-unallocated {
+    margin-top: .1rem;
+    padding-top: .16rem;
+    border-top: 1px solid #eef2f7;
+}
+.driver-history-kpi-breakdown > div.is-unallocated span { color: #94a3b8; }
+.driver-history-kpi-breakdown p {
+    margin: .15rem 0 0;
+    color: #94a3b8;
+    font-size: .62rem;
+    line-height: 1.2;
+}
+/*
+ * Cardul KPI are reguli proprii pentru span / strong (valoarea mare); in a doua fata
+ * randurile trebuie sa ramana compacte, deci le suprascriem explicit.
+ */
+.driver-history-kpi-card .driver-history-kpi-breakdown span,
+.driver-history-kpi-card .driver-history-kpi-breakdown strong {
+    display: block;
+    margin: 0;
+    font-size: .84rem;
+    line-height: 1.2;
+    font-weight: 800;
+    overflow-wrap: normal;
+}
+.driver-history-kpi-card .driver-history-kpi-breakdown span { font-weight: 650; }
+
+/*
+ * Tabelul de curse: randul deschide cursa in Dispecer curse. Acelasi semnal discret
+ * ca pe cardurile KPI - doar textul devine albastru, fara contur sau fundal nou.
+ */
+.driver-history-table tbody tr.driver-history-row-link { cursor: pointer; }
+.driver-history-table tbody tr.driver-history-row-link td,
+.driver-history-table tbody tr.driver-history-row-link td strong {
+    transition: color .2s ease;
+}
+.driver-history-table tbody tr.driver-history-row-link:hover td,
+.driver-history-table tbody tr.driver-history-row-link:hover td strong,
+.driver-history-table tbody tr.driver-history-row-link:focus-visible td,
+.driver-history-table tbody tr.driver-history-row-link:focus-visible td strong {
+    color: #2563eb;
+}
+.driver-history-table tbody tr.driver-history-row-link:focus { outline: none; }
+@media (prefers-reduced-motion: reduce) {
+    .driver-history-table tbody tr.driver-history-row-link td,
+    .driver-history-table tbody tr.driver-history-row-link td strong { transition: none; }
+}

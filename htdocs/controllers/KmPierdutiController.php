@@ -19,6 +19,7 @@ class KmPierdutiController
 {
     private PDO $db;
     private SasDashboardService $service;
+    private static ?bool $segmentsTableExists = null;
 
     public function __construct(PDO $db)
     {
@@ -111,16 +112,37 @@ class KmPierdutiController
      */
     private function registeredKmByVehicleId(string $start, string $end): array
     {
-        $statement = $this->db->prepare(
-            "SELECT vehicle_id,
-                    COUNT(*) AS nr,
-                    COALESCE(SUM(km_cursa), 0) AS km_cursa,
-                    COALESCE(SUM(km_totali), 0) AS km_totali
-             FROM curse_dispecer
-             WHERE deleted_at IS NULL
-               AND data_inceput BETWEEN :start AND :end
-             GROUP BY vehicle_id"
-        );
+        // Cursele oprite si reluate raman o singura cursa, dar km-ii lor se impart
+        // intre vehiculele segmentelor (proportional cu km-ii fiecarui segment),
+        // ca sa se compare cu km-ii GPS ai vehiculului potrivit. Cursa se numara
+        // o singura data, pe primul segment.
+        $hasSegments = $this->segmentsTableExists();
+        $sql = $hasSegments
+            ? "SELECT COALESCE(s.vehicle_id, c.vehicle_id) AS vehicle_id,
+                      SUM(CASE WHEN seg.cursa_id IS NULL OR s.ordine = 1 THEN 1 ELSE 0 END) AS nr,
+                      COALESCE(SUM(COALESCE(c.km_cursa, 0) * COALESCE(COALESCE(s.km, 0) / seg.km_total, 1)), 0) AS km_cursa,
+                      COALESCE(SUM(COALESCE(c.km_totali, 0) * COALESCE(COALESCE(s.km, 0) / seg.km_total, 1)), 0) AS km_totali
+               FROM curse_dispecer c
+               LEFT JOIN (
+                     SELECT cursa_id, SUM(COALESCE(km, 0)) AS km_total
+                       FROM curse_segmente
+                      GROUP BY cursa_id
+                     HAVING COUNT(*) >= 2 AND SUM(COALESCE(km, 0)) > 0
+               ) seg ON seg.cursa_id = c.id
+               LEFT JOIN curse_segmente s ON s.cursa_id = seg.cursa_id
+               WHERE c.deleted_at IS NULL
+                 AND c.data_inceput BETWEEN :start AND :end
+               GROUP BY COALESCE(s.vehicle_id, c.vehicle_id)"
+            : "SELECT vehicle_id,
+                      COUNT(*) AS nr,
+                      COALESCE(SUM(km_cursa), 0) AS km_cursa,
+                      COALESCE(SUM(km_totali), 0) AS km_totali
+               FROM curse_dispecer
+               WHERE deleted_at IS NULL
+                 AND data_inceput BETWEEN :start AND :end
+               GROUP BY vehicle_id";
+
+        $statement = $this->db->prepare($sql);
         $statement->execute([':start' => $start, ':end' => $end]);
 
         $result = [];
@@ -133,6 +155,27 @@ class KmPierdutiController
         }
 
         return $result;
+    }
+
+    /** Segmentele exista doar dupa migrarea 2026_09_18_000002. */
+    private function segmentsTableExists(): bool
+    {
+        if (self::$segmentsTableExists !== null) {
+            return self::$segmentsTableExists;
+        }
+
+        try {
+            $statement = $this->db->prepare(
+                'SELECT COUNT(*) FROM information_schema.TABLES
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = "curse_segmente"'
+            );
+            $statement->execute();
+            self::$segmentsTableExists = ((int) $statement->fetchColumn()) > 0;
+        } catch (Throwable $exception) {
+            self::$segmentsTableExists = false;
+        }
+
+        return self::$segmentsTableExists;
     }
 
     private function gpsAction(): void

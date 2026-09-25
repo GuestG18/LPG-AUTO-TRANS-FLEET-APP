@@ -13,6 +13,38 @@ $tripOptions = $fuelData['trip_options'] ?? [];
 $syncLogs = $fuelData['sync_logs'] ?? [];
 $lastSync = $fuelData['last_sync'] ?? null;
 $vehicleOptions = $fuelData['vehicle_options'] ?? [];
+$excludedVehicles = is_array($excludedVehicles ?? null) ? $excludedVehicles : [];
+// Formularul "Vehicule sincronizate": optiunile din selector + numerele deja excluse,
+// grupate pe categoria de capacitate.
+$fuelSyncKey = static fn (string $value): string => str_replace(' ', '', strtoupper(trim($value)));
+$fuelSyncGroups = [];
+$fuelSyncSeen = [];
+foreach ($vehicleOptions as $option) {
+    $registration = trim((string) ($option['vehicle_registration'] ?? ''));
+    if ($registration === '' || isset($fuelSyncSeen[$fuelSyncKey($registration)])) {
+        continue;
+    }
+    $fuelSyncSeen[$fuelSyncKey($registration)] = true;
+    $group = trim((string) ($option['categorie_capacitate'] ?? '')) ?: 'Fara categorie';
+    $fuelSyncGroups[$group][] = [
+        'registration' => $registration,
+        'label' => trim((string) ($option['marca'] ?? '') . ' ' . (string) ($option['model'] ?? '')),
+        'excluded' => isset($excludedVehicles[$fuelSyncKey($registration)]),
+    ];
+}
+foreach ($excludedVehicles as $key => $registration) {
+    if (!isset($fuelSyncSeen[$key])) {
+        $fuelSyncGroups['Fara categorie'][] = ['registration' => $registration, 'label' => '', 'excluded' => true];
+    }
+}
+ksort($fuelSyncGroups);
+if (isset($fuelSyncGroups['Fara categorie'])) {
+    $noCategory = $fuelSyncGroups['Fara categorie'];
+    unset($fuelSyncGroups['Fara categorie']);
+    $fuelSyncGroups['Fara categorie'] = $noCategory;
+}
+$fuelSyncTotal = array_sum(array_map('count', $fuelSyncGroups));
+$fuelSyncExcludedCount = count($excludedVehicles);
 $comparison = is_array($fuelData['comparison'] ?? null) ? $fuelData['comparison'] : null;
 $vehicleComparison = is_array($fuelData['vehicle_comparison'] ?? null) ? $fuelData['vehicle_comparison'] : [];
 $vehicleDailyCharts = is_array($fuelData['vehicle_daily_charts'] ?? null) ? $fuelData['vehicle_daily_charts'] : [];
@@ -745,10 +777,20 @@ $donutStyle = static function (array $items): string {
             <p>Monitorizare alimentări, consumuri și analiză pe vehicul și tip transport</p>
         </div>
         <?php if ($canManageFull): ?>
-            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#fuelAddManualModal">
-                <i class="bi bi-plus-lg" aria-hidden="true"></i>
-                Adaugă alimentare
-            </button>
+            <div class="d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#fuelSyncVehiclesModal"
+                        title="Alege pentru ce vehicule se importa alimentarile din CardOil">
+                    <i class="bi bi-funnel" aria-hidden="true"></i>
+                    Vehicule sincronizate
+                    <span class="badge <?= $fuelSyncExcludedCount > 0 ? 'text-bg-warning' : 'text-bg-light' ?> ms-1">
+                        <?= (int) ($fuelSyncTotal - $fuelSyncExcludedCount) ?>/<?= (int) $fuelSyncTotal ?>
+                    </span>
+                </button>
+                <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#fuelAddManualModal">
+                    <i class="bi bi-plus-lg" aria-hidden="true"></i>
+                    Adaugă alimentare
+                </button>
+            </div>
         <?php endif; ?>
     </div>
 
@@ -809,13 +851,13 @@ $donutStyle = static function (array $items): string {
                         ?>
                     </button>
                     <?php
-                    // Vehiculele grupate pe capacitatea de transport, ca in
-                    // Configurare transport: grupe "X tone" descrescator, iar
-                    // vehiculele fara fisa/capacitate la final.
-                    $fuelVehicleGroups = [];
+                    // Vehiculele grupate pe CATEGORIA de capacitate, ca in Configurare
+                    // transport. Eticheta grupei vine din catalogul de categorii, nu din
+                    // capacitatea tehnica; capacitatea reala se afiseaza langa vehicul.
+                    // Vehiculele fara fisa / fara categorie ajung in grupa de la final.
+                    $fuelVehicleCandidates = [];
                     foreach ($vehicleOptions as $vehicle) {
-                        $vehicleValue = trim((string) ($vehicle['vehicle_registration'] ?? ''));
-                        if ($vehicleValue === '') {
+                        if (trim((string) ($vehicle['vehicle_registration'] ?? '')) === '') {
                             continue;
                         }
                         // Cu filtrul de marca activ, selectorul arata doar
@@ -823,20 +865,12 @@ $donutStyle = static function (array $items): string {
                         if ($activeBrand !== '' && strcasecmp(trim((string) ($vehicle['marca'] ?? '')), $activeBrand) !== 0) {
                             continue;
                         }
-                        $capacityValue = (float) ($vehicle['capacitate_transport'] ?? 0);
-                        $capacityKey = $capacityValue > 0 ? number_format($capacityValue, 2, '.', '') : 'fara';
-                        if (!isset($fuelVehicleGroups[$capacityKey])) {
-                            $fuelVehicleGroups[$capacityKey] = [
-                                'label' => $capacityValue > 0
-                                    ? rtrim(rtrim(number_format($capacityValue, 2, '.', ''), '0'), '.') . ' tone'
-                                    : 'Fără capacitate',
-                                'capacity' => $capacityValue,
-                                'vehicles' => [],
-                            ];
-                        }
-                        $fuelVehicleGroups[$capacityKey]['vehicles'][] = $vehicle;
+                        $fuelVehicleCandidates[] = $vehicle;
                     }
-                    uasort($fuelVehicleGroups, static fn (array $a, array $b): int => $b['capacity'] <=> $a['capacity']);
+                    $fuelVehicleGroups = build_vehicle_capacity_groups($fuelVehicleCandidates, [
+                        'id_key' => 'vehicle_registration',
+                        'fallback_label' => 'Fără categorie',
+                    ]);
                     ?>
                     <div class="dropdown-menu fuel-vehicle-menu">
                         <input type="search" class="form-control form-control-sm mb-2" placeholder="Caută vehicul..." data-vehicle-search>
@@ -865,10 +899,13 @@ $donutStyle = static function (array $items): string {
                                     <?php
                                     $vehicleValue = trim((string) ($vehicle['vehicle_registration'] ?? ''));
                                     $vehicleBrand = trim(trim((string) ($vehicle['marca'] ?? '')) . ' ' . trim((string) ($vehicle['model'] ?? '')));
+                                    // Capacitatea REALA, informativa; grupa este categoria.
+                                    $vehicleRealCapacity = vehicle_capacity_format_tons($vehicle['capacitate_transport'] ?? null);
                                     ?>
                                     <label class="fuel-vehicle-option" data-brand="<?= e(mb_strtoupper(trim((string) ($vehicle['marca'] ?? '')))) ?>">
                                         <input type="checkbox" class="form-check-input" name="vehicles[]" value="<?= e($vehicleValue) ?>" <?= in_array($vehicleValue, $selectedVehicles, true) ? 'checked' : '' ?>>
                                         <span><?= e($vehicleValue . ($vehicleBrand !== '' ? ' - ' . $vehicleBrand : '')) ?></span>
+                                        <?php if ($vehicleRealCapacity !== null): ?><span class="text-muted small ms-auto"><?= e($vehicleRealCapacity) ?></span><?php endif; ?>
                                     </label>
                                 <?php endforeach; ?>
                             </div>
@@ -1976,6 +2013,206 @@ $donutStyle = static function (array $items): string {
         </form>
     </div>
 </div>
+
+<div class="modal fade" id="fuelSyncVehiclesModal" tabindex="-1" aria-labelledby="fuelSyncVehiclesModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'vehicle_selection'])) ?>">
+            <?= csrf_field() ?>
+            <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+            <div class="modal-header">
+                <h5 class="modal-title" id="fuelSyncVehiclesModalTitle">Vehicule sincronizate din CardOil</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted mb-2">
+                    Se importa alimentarile doar pentru vehiculele bifate. Pentru cele debifate, sincronizarea
+                    (manuala sau automata) ignora alimentarile venite din CardOil. Lista este comuna pentru toti utilizatorii;
+                    alimentarile deja importate si cele adaugate manual raman neschimbate.
+                </p>
+                <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+                    <input type="search" class="form-control form-control-sm" id="fuelSyncSearch" style="max-width: 240px;"
+                           placeholder="Cauta numar..." autocomplete="off">
+                    <div class="btn-group btn-group-sm">
+                        <button type="button" class="btn btn-outline-secondary" data-fuel-sync-all="1">Toate</button>
+                        <button type="button" class="btn btn-outline-secondary" data-fuel-sync-all="0">Niciunul</button>
+                    </div>
+                    <span class="ms-auto small fw-semibold" id="fuelSyncCount"></span>
+                </div>
+                <div id="fuelSyncList">
+                    <?php if ($fuelSyncGroups === []): ?>
+                        <div class="text-muted small">Nu exista vehicule.</div>
+                    <?php endif; ?>
+                    <?php foreach ($fuelSyncGroups as $groupName => $groupVehicles): ?>
+                        <div class="fuel-sync-group border rounded mb-2">
+                            <label class="d-flex align-items-center gap-2 fw-semibold small px-2 py-1 m-0 bg-body-tertiary" style="cursor:pointer;">
+                                <input type="checkbox" class="form-check-input m-0 fuel-sync-grp">
+                                <?= e($groupName) ?> <span class="text-muted fw-normal">(<?= count($groupVehicles) ?>)</span>
+                            </label>
+                            <div class="p-2" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:.2rem .8rem;">
+                                <?php foreach ($groupVehicles as $vehicle): ?>
+                                    <label class="form-check small m-0 fuel-sync-item" data-search="<?= e(strtolower($vehicle['registration'] . ' ' . $vehicle['label'])) ?>"
+                                           title="<?= e($vehicle['label']) ?>">
+                                        <input type="hidden" name="all[]" value="<?= e($vehicle['registration']) ?>">
+                                        <input type="checkbox" class="form-check-input fuel-sync-car" name="included[]"
+                                               value="<?= e($vehicle['registration']) ?>" <?= $vehicle['excluded'] ? '' : 'checked' ?>>
+                                        <span class="form-check-label"><?= e($vehicle['registration']) ?></span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <?php if ($fuelSyncExcludedCount > 0): ?>
+                    <button type="button" class="btn btn-outline-danger me-auto" data-bs-toggle="modal" data-bs-target="#fuelPurgeModal">
+                        <i class="bi bi-trash" aria-hidden="true"></i>
+                        Șterge datele deja importate…
+                    </button>
+                <?php endif; ?>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
+                <button type="submit" class="btn btn-primary">Salvează</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<?php if ($fuelSyncExcludedCount > 0): ?>
+<div class="modal fade" id="fuelPurgeModal" tabindex="-1" aria-labelledby="fuelPurgeModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <form class="modal-content" method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'purge_excluded'])) ?>">
+            <?= csrf_field() ?>
+            <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+            <div class="modal-header">
+                <h5 class="modal-title" id="fuelPurgeModalTitle">Șterge alimentările vehiculelor excluse</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted mb-2">
+                    Se șterg definitiv alimentările venite din CardOil pentru cele <?= (int) $fuelSyncExcludedCount ?> vehicule debifate
+                    în „Vehicule sincronizate”, începând cu data aleasă. Dispar și asocierile lor cu cursele și deciziile T0.
+                    Alimentările adăugate manual rămân.
+                </p>
+                <div class="d-flex align-items-end gap-2 mb-3">
+                    <div>
+                        <label class="form-label small mb-1" for="fuelPurgeFrom">Începând cu</label>
+                        <input type="date" class="form-control form-control-sm" id="fuelPurgeFrom" name="date_from" value="2026-07-01" required>
+                    </div>
+                </div>
+                <div id="fuelPurgePreview" class="small text-muted"
+                     data-url="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'purge_preview'])) ?>">Se calculează…</div>
+                <div class="form-check mt-3">
+                    <input class="form-check-input" type="checkbox" name="confirm" value="1" id="fuelPurgeConfirm" required>
+                    <label class="form-check-label small" for="fuelPurgeConfirm">
+                        Am verificat lista de mai sus și vreau ștergerea definitivă a acestor alimentări.
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
+                <button type="submit" class="btn btn-danger" id="fuelPurgeSubmit" disabled>
+                    <i class="bi bi-trash" aria-hidden="true"></i>
+                    Șterge definitiv
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+(function () {
+    var modal = document.getElementById('fuelPurgeModal');
+    var dateInput = document.getElementById('fuelPurgeFrom');
+    var preview = document.getElementById('fuelPurgePreview');
+    var confirmBox = document.getElementById('fuelPurgeConfirm');
+    var submit = document.getElementById('fuelPurgeSubmit');
+    var total = 0;
+    var fmt = function (n, d) { return Number(n).toLocaleString('ro-RO', { minimumFractionDigits: d, maximumFractionDigits: d }); };
+    var esc = function (v) { return String(v).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+
+    function updateSubmit() { submit.disabled = !(confirmBox.checked && total > 0); }
+
+    function load() {
+        total = 0;
+        confirmBox.checked = false;
+        updateSubmit();
+        preview.textContent = 'Se calculează…';
+        fetch(preview.getAttribute('data-url') + '&date_from=' + encodeURIComponent(dateInput.value), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { preview.textContent = res.error || 'Eroare.'; return; }
+                if (res.rows.length === 0) { preview.textContent = 'Nu există alimentări CardOil de șters pentru vehiculele excluse din această perioadă.'; return; }
+                var liters = 0, value = 0;
+                var rows = res.rows.map(function (r) {
+                    total += r.fillups; liters += r.liters; value += r.total_value;
+                    return '<tr><td>' + esc(r.vehicle_registration) + '</td><td class="text-end">' + r.fillups + '</td><td class="text-end">' +
+                        fmt(r.liters, 2) + '</td><td class="text-end">' + fmt(r.total_value, 2) + '</td><td>' +
+                        esc(r.first_at.substring(0, 10)) + ' → ' + esc(r.last_at.substring(0, 10)) + '</td></tr>';
+                }).join('');
+                preview.innerHTML = '<table class="table table-sm mb-0"><thead><tr><th>Vehicul</th><th class="text-end">Alimentări</th>' +
+                    '<th class="text-end">Litri</th><th class="text-end">Valoare (lei)</th><th>Perioadă</th></tr></thead><tbody>' + rows +
+                    '</tbody><tfoot><tr class="fw-semibold"><td>Total</td><td class="text-end">' + total + '</td><td class="text-end">' +
+                    fmt(liters, 2) + '</td><td class="text-end">' + fmt(value, 2) + '</td><td></td></tr></tfoot></table>';
+                updateSubmit();
+            })
+            .catch(function () { preview.textContent = 'Previzualizarea nu a putut fi încărcată.'; });
+    }
+
+    modal.addEventListener('show.bs.modal', load);
+    dateInput.addEventListener('change', load);
+    confirmBox.addEventListener('change', updateSubmit);
+})();
+</script>
+<?php endif; ?>
+<script>
+(function () {
+    var list = document.getElementById('fuelSyncList');
+    if (!list) { return; }
+    var search = document.getElementById('fuelSyncSearch');
+    var count = document.getElementById('fuelSyncCount');
+
+    function sync() {
+        list.querySelectorAll('.fuel-sync-group').forEach(function (group) {
+            var cars = group.querySelectorAll('.fuel-sync-car');
+            var on = group.querySelectorAll('.fuel-sync-car:checked').length;
+            var head = group.querySelector('.fuel-sync-grp');
+            head.checked = cars.length > 0 && on === cars.length;
+            head.indeterminate = on > 0 && on < cars.length;
+        });
+        count.textContent = list.querySelectorAll('.fuel-sync-car:checked').length + ' din ' +
+            list.querySelectorAll('.fuel-sync-car').length + ' sincronizate';
+    }
+
+    // Toate / Niciunul si bifa de grup actioneaza doar pe vehiculele vizibile dupa cautare.
+    function setVisible(scope, value) {
+        scope.querySelectorAll('.fuel-sync-item').forEach(function (item) {
+            if (item.style.display !== 'none') { item.querySelector('.fuel-sync-car').checked = value; }
+        });
+        sync();
+    }
+
+    list.addEventListener('change', function (event) {
+        if (event.target.classList.contains('fuel-sync-grp')) {
+            setVisible(event.target.closest('.fuel-sync-group'), event.target.checked);
+            return;
+        }
+        sync();
+    });
+    document.querySelectorAll('[data-fuel-sync-all]').forEach(function (btn) {
+        btn.addEventListener('click', function () { setVisible(list, btn.getAttribute('data-fuel-sync-all') === '1'); });
+    });
+    search.addEventListener('input', function () {
+        var term = search.value.trim().toLowerCase();
+        list.querySelectorAll('.fuel-sync-item').forEach(function (item) {
+            item.style.display = term === '' || item.getAttribute('data-search').indexOf(term) !== -1 ? '' : 'none';
+        });
+        list.querySelectorAll('.fuel-sync-group').forEach(function (group) {
+            var any = Array.prototype.some.call(group.querySelectorAll('.fuel-sync-item'), function (i) { return i.style.display !== 'none'; });
+            group.style.display = any ? '' : 'none';
+        });
+    });
+    sync();
+})();
+</script>
 
 <div class="modal fade" id="fuelDeleteManualModal" tabindex="-1" aria-labelledby="fuelDeleteManualModalTitle" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">

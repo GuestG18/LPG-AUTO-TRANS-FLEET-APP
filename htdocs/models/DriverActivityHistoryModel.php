@@ -70,13 +70,102 @@ class DriverActivityHistoryModel extends BaseModel
         return (int) ($stmt->fetchColumn() ?: 0);
     }
 
-    public function getDriverOptions(): array
+    /**
+     * Soferii care pot fi alesi in filtru. Cu filtre (perioada, vehicul, tip transport)
+     * raman doar cei care chiar au activitate inregistrata acolo: un sofer fara nicio
+     * cursa in perioada nu are ce cauta nici in lista, nici in comparatie.
+     * Activitate = o cursa a lui sau o faza condusa de el (curse_segmente).
+     */
+    public function getDriverOptions(array $filters = []): array
+    {
+        $dateStart = (string) ($filters['date_start'] ?? '');
+        $dateEnd = (string) ($filters['date_end'] ?? '');
+        if ($dateStart === '' || $dateEnd === '') {
+            return $this->db->query("
+                SELECT id, nume, status
+                FROM soferi
+                ORDER BY CASE WHEN status = 'activ' THEN 0 ELSE 1 END, nume ASC
+            ")->fetchAll();
+        }
+
+        // Parametrii nu se pot repeta intr-o interogare (EMULATE_PREPARES=false),
+        // deci fiecare subinterogare are prefixul ei.
+        $params = [
+            ':trip_start' => $dateStart,
+            ':trip_end' => $dateEnd,
+        ];
+        $tripWhere = [
+            $this->activeRaceCondition('c'),
+            'COALESCE(c.data_inceput, c.data_cursa) <= :trip_end',
+            'COALESCE(c.data_sfarsit, c.data_inceput, c.data_cursa) >= :trip_start',
+            "(c.driver_id = s.id OR (
+                c.driver_id IS NULL
+                AND EXISTS (
+                    SELECT 1 FROM soferi_vehicule sv
+                    WHERE sv.driver_id = s.id AND sv.vehicle_id = c.vehicle_id
+                )
+            ))",
+        ];
+        if ((int) ($filters['vehicle_id'] ?? 0) > 0) {
+            $tripWhere[] = 'c.vehicle_id = :trip_vehicle_id';
+            $params[':trip_vehicle_id'] = (int) $filters['vehicle_id'];
+        }
+        $optBeneficiarySql = $this->beneficiaryFilterSql('c.beneficiar_id', $filters, $params, 'opt_beneficiar');
+        if ($optBeneficiarySql !== '') {
+            $tripWhere[] = $optBeneficiarySql;
+        }
+        $tripTransport = $this->transportFilterSql('c.tip_transport', (string) ($filters['transport_type'] ?? ''), $params, 'trip_transport');
+        if ($tripTransport !== '') {
+            $tripWhere[] = $tripTransport;
+        }
+        $exists = ['EXISTS (SELECT 1 FROM curse_dispecer c WHERE ' . implode(' AND ', $tripWhere) . ')'];
+
+        if ($this->tableExists('curse_segmente')) {
+            $params[':seg_start'] = $dateStart;
+            $params[':seg_end'] = $dateEnd;
+            $segmentDeleted = $this->columnExists('curse_segmente', 'deleted_at') ? 'AND seg.deleted_at IS NULL' : '';
+            $segWhere = [
+                $this->activeRaceCondition('sc'),
+                'COALESCE(sc.data_inceput, sc.data_cursa) <= :seg_end',
+                'COALESCE(sc.data_sfarsit, sc.data_inceput, sc.data_cursa) >= :seg_start',
+                "EXISTS (SELECT 1 FROM curse_segmente seg WHERE seg.cursa_id = sc.id AND seg.driver_id = s.id {$segmentDeleted})",
+            ];
+            if ((int) ($filters['vehicle_id'] ?? 0) > 0) {
+                $segWhere[] = 'sc.vehicle_id = :seg_vehicle_id';
+                $params[':seg_vehicle_id'] = (int) $filters['vehicle_id'];
+            }
+            $optSegBeneficiarySql = $this->beneficiaryFilterSql('sc.beneficiar_id', $filters, $params, 'optseg_beneficiar');
+            if ($optSegBeneficiarySql !== '') {
+                $segWhere[] = $optSegBeneficiarySql;
+            }
+            $segTransport = $this->transportFilterSql('sc.tip_transport', (string) ($filters['transport_type'] ?? ''), $params, 'seg_transport');
+            if ($segTransport !== '') {
+                $segWhere[] = $segTransport;
+            }
+            $exists[] = 'EXISTS (SELECT 1 FROM curse_dispecer sc WHERE ' . implode(' AND ', $segWhere) . ')';
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT s.id, s.nume, s.status
+            FROM soferi s
+            WHERE " . implode(' OR ', $exists) . "
+            ORDER BY CASE WHEN s.status = 'activ' THEN 0 ELSE 1 END, s.nume ASC
+        ");
+        $this->bindParams($stmt, $params);
+        $stmt->execute();
+
+        return $stmt->fetchAll() ?: [];
+    }
+
+    /** Beneficiarii pentru filtrul din bara de sus (aceiasi ca in Configurare transport). */
+    public function getBeneficiaryOptions(): array
     {
         return $this->db->query("
-            SELECT id, nume, status
-            FROM soferi
-            ORDER BY CASE WHEN status = 'activ' THEN 0 ELSE 1 END, nume ASC
-        ")->fetchAll();
+            SELECT id, nume
+            FROM configurare_beneficiari_transport
+            WHERE activ = 1
+            ORDER BY nume ASC
+        ")->fetchAll() ?: [];
     }
 
     public function getVehicleOptionsForDriver(int $driverId): array
@@ -101,6 +190,203 @@ class DriverActivityHistoryModel extends BaseModel
         return $stmt->fetchAll();
     }
 
+    /**
+     * Comparatia mai multor soferi pe aceleasi filtre. Fiecare sofer este
+     * calculat cu getDashboard, deci cifrele lui sunt identice cu cele din
+     * pagina lui individuala; aici doar se aseaza alaturi si se combina listele.
+     */
+    /**
+     * $preloaded: dashboard-uri deja calculate (driver_id => dashboard). Pagina unui
+     * singur sofer isi trimite dashboard-ul aici, ca tabelul de sumar sa nu-l recalculeze.
+     */
+    public function getComparison(array $driverIds, array $filters, array $preloaded = []): array
+    {
+        $drivers = [];
+        $trips = [];
+        $fuelRows = [];
+        $diurneRows = [];
+        $vehicleOptions = [];
+        $timeline = [];
+
+        foreach ($driverIds as $driverId) {
+            $dashboard = $preloaded[(int) $driverId] ?? $this->getDashboard((int) $driverId, $filters);
+            $driver = $dashboard['driver'] ?? null;
+            if ($driver === null) {
+                continue;
+            }
+
+            $id = (int) $driver['id'];
+            $name = (string) ($driver['nume'] ?? '-');
+            $tag = static function (array $row) use ($id, $name): array {
+                $row['driver_id_compare'] = $id;
+                $row['driver_name_compare'] = $name;
+                return $row;
+            };
+
+            foreach ((array) $dashboard['trips'] as $trip) {
+                $trips[] = $tag($trip);
+                [$key, $label] = $this->groupDate((string) ($trip['data_inceput'] ?? ''), (string) $filters['grouping']);
+                if ($key !== '') {
+                    $timeline[$key]['label'] = $label;
+                    $timeline[$key]['values'][$id] = ($timeline[$key]['values'][$id] ?? 0.0) + (float) ($trip['effective_km'] ?? 0);
+                }
+            }
+            foreach ((array) $dashboard['fuelRows'] as $fuel) {
+                $fuelRows[] = $tag($fuel);
+            }
+            foreach ((array) ($dashboard['diurneRows'] ?? []) as $row) {
+                $diurneRows[] = $tag($row);
+            }
+            foreach ((array) $dashboard['vehicleOptions'] as $vehicle) {
+                $vehicleOptions[(int) $vehicle['id']] = $vehicle;
+            }
+
+            $kpis = (array) $dashboard['kpis'];
+            $totalKm = (float) ($kpis['total_km'] ?? 0);
+            $drivers[] = [
+                'id' => $id,
+                'nume' => $name,
+                'status' => (string) ($driver['status'] ?? ''),
+                'kpis' => $kpis,
+                'cost_per_km' => $totalKm > 0 ? (float) ($kpis['total_costs'] ?? 0) / $totalKm : null,
+                'trip_ids' => array_values(array_filter(array_map(static fn (array $trip): int => (int) ($trip['id'] ?? 0), (array) $dashboard['trips']))),
+            ];
+        }
+
+        $byDate = static fn (string $field): Closure => static fn (array $a, array $b): int => strcmp((string) ($b[$field] ?? ''), (string) ($a[$field] ?? ''));
+        usort($trips, $byDate('data_inceput'));
+        usort($fuelRows, $byDate('fillup_datetime'));
+        usort($diurneRows, $byDate('data_inceput'));
+        usort($vehicleOptions, static fn (array $a, array $b): int => strcmp((string) $a['nr_inmatriculare'], (string) $b['nr_inmatriculare']));
+        ksort($timeline);
+
+        $metric = static fn (string $key): array => array_map(static fn (array $row): float => round((float) ($row['kpis'][$key] ?? 0), 2), $drivers);
+
+        return [
+            'drivers' => $drivers,
+            // Cardurile KPI ale selectiei: aceleasi totaluri ca randul "Total" din tabel.
+            'kpis' => $this->combineKpis($drivers),
+            'trips' => $trips,
+            'fuelRows' => $fuelRows,
+            'diurneRows' => $diurneRows,
+            'vehicleOptions' => array_values($vehicleOptions),
+            'charts' => [
+                'compare' => [
+                    'drivers' => array_column($drivers, 'nume'),
+                    'km' => $metric('total_km'),
+                    'transported_tons' => $metric('total_transported_tons'),
+                    'delivered_tons' => $metric('total_delivered_tons'),
+                    'consumption' => array_map(static fn (array $row): ?float => ($row['kpis']['average_consumption'] ?? null) !== null ? round((float) $row['kpis']['average_consumption'], 2) : null, $drivers),
+                    'fuel_cost' => $metric('fuel_cost'),
+                    'repair_cost' => $metric('repair_cost'),
+                    'trip_cost' => $metric('trip_cost'),
+                    'salary_cost' => $metric('salary_cost'),
+                    'diurne_cost' => $metric('diurne_value_in_total'),
+                    'trip_value' => $metric('trip_value'),
+                    'profit' => $metric('profit'),
+                    'diurne' => $metric('diurne'),
+                    'timeline' => [
+                        'labels' => array_column($timeline, 'label'),
+                        'series' => array_map(static fn (array $driver): array => [
+                            'label' => $driver['nume'],
+                            'values' => array_map(static fn (array $bucket): float => round((float) ($bucket['values'][$driver['id']] ?? 0), 2), array_values($timeline)),
+                        ], $drivers),
+                    ],
+                ],
+            ],
+            'updatedAt' => date('Y-m-d H:i:s'),
+        ];
+    }
+
+    /**
+     * Totalurile selectiei pentru cardurile KPI din comparatie: se aduna valorile
+     * soferilor, exact ca randul "Total" din tabelul de sumar (un vehicul condus de
+     * mai multi soferi isi aduce reparatiile la fiecare dintre ei), iar defalcarea pe
+     * tip de transport se aduna pe aceleasi tipuri.
+     */
+    private function combineKpis(array $drivers): array
+    {
+        $sumKeys = [
+            'total_trips', 'total_km', 'total_transported_tons', 'total_delivered_tons',
+            'driving_minutes', 'total_fuel_liters', 'fuel_cost', 'repair_cost', 'trip_cost',
+            'total_costs', 'salary_cost', 'worked_days', 'diurne', 'diurne_trips', 'diurne_missing',
+            'diurne_unvalued', 'diurne_not_eligible', 'diurne_value', 'diurne_value_in_total',
+            'trip_value', 'refacturare_total', 'refacturare_recovered', 'profit', 'clients_total',
+        ];
+        $combined = array_fill_keys($sumKeys, 0.0);
+        $breakdown = [];
+        $breakdownTripIds = [];
+        $breakdownFuelLinks = [];
+        $breakdownRepairLink = ['vehicle_ids' => [], 'from' => null, 'to' => null];
+        $salaryMissing = false;
+
+        foreach ($drivers as $driver) {
+            $kpis = (array) ($driver['kpis'] ?? []);
+            foreach ($sumKeys as $key) {
+                $combined[$key] += (float) ($kpis[$key] ?? 0);
+            }
+            $salaryMissing = $salaryMissing || !empty($kpis['salary_missing']);
+
+            foreach ((array) ($kpis['breakdown']['trip_ids'] ?? []) as $bucket => $ids) {
+                $breakdownTripIds[$bucket] = array_merge($breakdownTripIds[$bucket] ?? [], (array) $ids);
+            }
+            $repairLink = (array) ($kpis['breakdown']['repair_link'] ?? []);
+            $breakdownRepairLink['vehicle_ids'] = array_values(array_unique(array_merge($breakdownRepairLink['vehicle_ids'], (array) ($repairLink['vehicle_ids'] ?? []))));
+            foreach (['from' => 'min', 'to' => 'max'] as $edge => $pick) {
+                $value = $repairLink[$edge] ?? null;
+                if ($value !== null) {
+                    $breakdownRepairLink[$edge] = $breakdownRepairLink[$edge] === null ? $value : $pick($breakdownRepairLink[$edge], $value);
+                }
+            }
+            foreach ((array) ($kpis['breakdown']['fuel_links'] ?? []) as $bucket => $link) {
+                $current = $breakdownFuelLinks[$bucket] ?? ['vehicles' => [], 'from' => null, 'to' => null];
+                $current['vehicles'] = array_values(array_unique(array_merge($current['vehicles'], (array) ($link['vehicles'] ?? []))));
+                foreach (['from' => 'min', 'to' => 'max'] as $edge => $pick) {
+                    $value = $link[$edge] ?? null;
+                    if ($value !== null) {
+                        $current[$edge] = $current[$edge] === null ? $value : $pick($current[$edge], $value);
+                    }
+                }
+                $breakdownFuelLinks[$bucket] = $current;
+            }
+            foreach ((array) ($kpis['breakdown']['metrics'] ?? []) as $metricKey => $metric) {
+                $breakdown[$metricKey]['format'] = (string) ($metric['format'] ?? 'number');
+                foreach (['unallocated_label', 'note'] as $textKey) {
+                    if (isset($metric[$textKey])) {
+                        $breakdown[$metricKey][$textKey] = $metric[$textKey];
+                    }
+                }
+                foreach ((array) ($metric['values'] ?? []) as $bucket => $value) {
+                    $breakdown[$metricKey]['values'][$bucket] = ($breakdown[$metricKey]['values'][$bucket] ?? 0.0) + (float) $value;
+                }
+                $breakdown[$metricKey]['unallocated'] = ($breakdown[$metricKey]['unallocated'] ?? 0.0) + (float) ($metric['unallocated'] ?? 0);
+            }
+        }
+
+        foreach ($breakdown as $metricKey => $metric) {
+            $breakdown[$metricKey]['values'] = (array) ($metric['values'] ?? []);
+        }
+
+        $combined['total_trips'] = (int) $combined['total_trips'];
+        $combined['driving_minutes'] = (int) $combined['driving_minutes'];
+        $combined['worked_days'] = (int) $combined['worked_days'];
+        $combined['diurne'] = (int) $combined['diurne'];
+        $combined['average_consumption'] = $combined['total_km'] > 0
+            ? $combined['total_fuel_liters'] / $combined['total_km'] * 100
+            : null;
+        $combined['operational_costs'] = $combined['fuel_cost'] + $combined['repair_cost'] + $combined['trip_cost'];
+        $combined['salary_missing'] = $salaryMissing;
+        $combined['breakdown'] = [
+            'labels' => self::TRANSPORT_LABELS,
+            'trip_ids' => array_map(static fn (array $ids): array => array_values(array_unique($ids)), $breakdownTripIds),
+            'fuel_links' => $breakdownFuelLinks,
+            'repair_link' => $breakdownRepairLink,
+            'metrics' => $breakdown,
+        ];
+
+        return $combined;
+    }
+
     public function getDashboard(int $driverId, array $filters): array
     {
         $driver = $this->getDriver($driverId);
@@ -109,6 +395,7 @@ class DriverActivityHistoryModel extends BaseModel
         }
 
         $trips = $this->getTripRows($driverId, $filters);
+        $diurne = $this->attachDiurne($driverId, $filters, $trips);
         $fuelRows = $this->getFuelRows($driverId, $filters, $trips);
         $usedVehicleIds = $this->resolveUsedVehicleIds($driverId, $filters, $trips, $fuelRows);
         $repairs = $this->getRepairRows($filters, $usedVehicleIds);
@@ -118,6 +405,47 @@ class DriverActivityHistoryModel extends BaseModel
         $repairAnalytics = $this->buildRepairCategoryAnalytics($repairs);
         $consumption = $this->buildConsumptionSummary($trips, $fuelRows);
         $kpis = $this->buildKpis($trips, $fuelRows, $repairs);
+        $kpis['diurne'] = $diurne['total'];
+        $kpis['diurne_trips'] = $diurne['trips'];
+        $kpis['diurne_missing'] = $diurne['missing'];
+        $kpis['diurne_not_eligible'] = $diurne['not_eligible'];
+        $kpis['diurne_value'] = $diurne['value'];
+        $kpis['diurne_unvalued'] = $diurne['unvalued'];
+        $kpis['diurna_policy'] = $diurne['policy'];
+        $diurneRows = $diurne['rows'];
+
+        // Salariul intra in costul total, dupa zilele lucrate din curse.
+        $salary = $this->buildSalaryCost($driverId, $diurne['worked_dates'], $diurne['worked_date_buckets']);
+        $kpis['salary_cost'] = $salary['cost'];
+        $kpis['worked_days'] = $salary['worked_days'];
+        $kpis['salary_months'] = $salary['months'];
+        $kpis['salary_missing'] = $salary['missing_salary'];
+        $kpis['total_costs'] += $salary['cost'];
+
+        // Diurna in lei intra in costul total, fara cursele pe care diurna e deja
+        // trecuta ca cheltuiala (aceea e deja in costul curselor).
+        $kpis['diurne_value_in_total'] = $diurne['value_in_total'];
+        $kpis['diurne_value_recorded'] = $diurne['value_recorded'];
+        $kpis['total_costs'] += $diurne['value_in_total'];
+
+        // Profit: valoarea curselor (tariful facturat) + refacturarile trecute in
+        // "Refacturat" (bani recuperati) - costul total. Pana la refacturare,
+        // suma ramane doar in costul cursei.
+        $kpis['trip_value'] = array_sum(array_map(static fn (array $trip): float => (float) ($trip['total_facturare'] ?? 0), $trips));
+        $kpis['refacturare_total'] = array_sum(array_map(static fn (array $trip): float => (float) ($trip['total_refacturare'] ?? 0), $trips));
+        $kpis['refacturare_recovered'] = array_sum(array_map(static fn (array $trip): float => (float) ($trip['total_refacturare_facturata'] ?? 0), $trips));
+        $kpis['profit'] = $kpis['trip_value'] + $kpis['refacturare_recovered'] - $kpis['total_costs'];
+        $kpis += $this->buildClientStats($trips);
+
+        // Defalcarea pe tip de transport a cardurilor KPI: aceleasi curse / alimentari /
+        // reparatii filtrate din care ies si valorile de pe carduri.
+        $kpis['breakdown'] = $this->buildKpiBreakdown($trips, $fuelRows, $repairs, $diurneRows, (float) $salary['cost'], (array) $salary['by_bucket']);
+
+        $charts = $this->buildCharts($filters, $trips, $fuelRows, $repairs);
+        $charts['cost_distribution']['labels'][] = 'Salariu';
+        $charts['cost_distribution']['values'][] = round($salary['cost'], 2);
+        $charts['cost_distribution']['labels'][] = 'Diurne';
+        $charts['cost_distribution']['values'][] = round($diurne['value_in_total'], 2);
 
         return [
             'driver' => $driver,
@@ -132,7 +460,8 @@ class DriverActivityHistoryModel extends BaseModel
             'repairAnalytics' => $repairAnalytics,
             'consumption' => $consumption,
             'kpis' => $kpis,
-            'charts' => $this->buildCharts($filters, $trips, $fuelRows, $repairs),
+            'charts' => $charts,
+            'diurneRows' => $diurneRows,
             'updatedAt' => date('Y-m-d H:i:s'),
         ];
     }
@@ -221,6 +550,11 @@ class DriverActivityHistoryModel extends BaseModel
             $params[':vehicle_id'] = (int) $filters['vehicle_id'];
         }
 
+        $beneficiarySql = $this->beneficiaryFilterSql('c.beneficiar_id', $filters, $params, 'trip_beneficiar');
+        if ($beneficiarySql !== '') {
+            $where[] = $beneficiarySql;
+        }
+
         $transportSql = $this->transportFilterSql('c.tip_transport', (string) ($filters['transport_type'] ?? ''), $params, 'trip_transport');
         if ($transportSql !== '') {
             $where[] = $transportSql;
@@ -238,7 +572,10 @@ class DriverActivityHistoryModel extends BaseModel
                 zd.nume AS zona_distributie_nume,
                 COALESCE(exp.total_cheltuieli, 0) AS total_cheltuieli,
                 COALESCE(exp.total_motorina, 0) AS total_motorina,
-                COALESCE(exp.total_alte_cheltuieli, 0) AS total_alte_cheltuieli
+                COALESCE(exp.total_alte_cheltuieli, 0) AS total_alte_cheltuieli,
+                COALESCE(exp.total_diurna, 0) AS total_diurna,
+                COALESCE(exp.total_refacturare, 0) AS total_refacturare,
+                COALESCE(exp.total_refacturare_facturata, 0) AS total_refacturare_facturata
             FROM curse_dispecer c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
@@ -262,111 +599,480 @@ class DriverActivityHistoryModel extends BaseModel
         return $rows;
     }
 
+    /**
+     * Diurnele soferului si zilele lucrate, din cursele lui.
+     *
+     * Numarul de diurne al unei curse: aceeasi regula ca in Desfasurator
+     * (dispatcher_diurna_for_interval). La o cursa reluata cu alt sofer diurnele
+     * se impart pe soferii fazelor dupa timpul petrecut pe drum
+     * (dispatcher_diurna_split), deci se numara si cursele pe care soferul a
+     * condus doar o faza, chiar daca pe cursa figureaza alt sofer.
+     *
+     * Daca soferul primeste diurna si cat valoreaza o zi se stabileste per sofer
+     * in Contabilitate Personal (DriverDiurnaModel), cu regula valabila la data
+     * inceperii cursei: "fara diurna" = 0 diurne platite, "nesetat" = diurnele se
+     * numara dar nu au valoare in lei.
+     *
+     * Zilele lucrate (pentru salariu) sunt zilele calendaristice acoperite de
+     * curse, fiecare numarata o data; la o cursa cu mai multe faze conteaza doar
+     * fazele soferului. Se pastreaza doar zilele din perioada filtrata.
+     *
+     * Pune pe fiecare cursa din lista 'diurne' / 'diurne_value' si intoarce totalurile.
+     */
+    private function attachDiurne(int $driverId, array $filters, array &$trips): array
+    {
+        $races = [];
+        foreach ($trips as $trip) {
+            $races[(int) $trip['id']] = $trip;
+        }
+        foreach ($this->getSegmentOnlyTrips($driverId, $filters, array_keys($races)) as $trip) {
+            $races[(int) $trip['id']] = $trip;
+        }
+
+        // Modificarile de diurna aprobate in Dispecer curse inlocuiesc valoarea calculata.
+        $raceList = array_values($races);
+        dispatcher_attach_diurna_adjustments($this->db, $raceList);
+        foreach ($raceList as $race) {
+            $races[(int) $race['id']] = $race;
+        }
+
+        $segments = $this->getActiveSegments(array_keys($races));
+        $diurnaHistory = (new DriverDiurnaModel($this->db))->getHistoryForDrivers([$driverId])[$driverId] ?? [];
+        $perRace = [];
+        $rows = [];
+        $workedDates = [];
+        $workedDateBuckets = [];
+        $summary = [
+            'total' => 0,            // diurne platite (soferul primeste diurna)
+            'trips' => 0,
+            'missing' => 0,          // curse fara data/ora completa
+            'not_eligible' => 0,     // diurne calculate, dar soferul nu primeste diurna
+            'value' => 0.0,          // lei, doar unde valoarea pe zi e stabilita
+            'value_in_total' => 0.0, // partea adaugata in costul total
+            'value_recorded' => 0.0, // curse cu diurna deja trecuta ca cheltuiala (nu se adauga)
+            'unvalued' => 0,         // diurne fara valoare stabilita
+            'minutes' => 0,
+            'rows' => [],
+        ];
+
+        foreach ($races as $raceId => $race) {
+            $raceSegments = $segments[$raceId] ?? [];
+            $ownSegments = count($raceSegments) > 1
+                ? array_filter($raceSegments, static fn (array $segment): bool => (int) ($segment['driver_id'] ?? 0) === $driverId)
+                : [];
+            // Tipul de transport al cursei: pe ce tip se trec zilele lucrate (cardul Salariu).
+            $raceBucket = (string) ($race['transport_bucket'] ?? $this->normalizeTransportBucket((string) ($race['tip_transport'] ?? '')));
+            foreach (count($raceSegments) > 1 ? $ownSegments : [$race] as $span) {
+                foreach ($this->spanDates($span, $filters) as $date) {
+                    $workedDates[$date] = true;
+                    if (isset(self::TRANSPORT_LABELS[$raceBucket])) {
+                        $workedDateBuckets[$date][$raceBucket] = true;
+                    }
+                }
+            }
+
+            $interval = dispatcher_diurna_for_interval($race);
+            $policy = DriverDiurnaModel::policyAt($diurnaHistory, (string) ($race['data_inceput'] ?? $race['data_cursa'] ?? ''));
+            $row = [
+                'id' => $raceId,
+                'data_inceput' => $race['data_inceput'] ?? null,
+                'ora_inceput' => $race['ora_inceput'] ?? null,
+                'data_sfarsit' => $race['data_sfarsit'] ?? null,
+                'ora_sfarsit' => $race['ora_sfarsit'] ?? null,
+                'nr_inmatriculare' => $race['nr_inmatriculare'] ?? null,
+                'status' => $interval['status'],
+                'minutes' => $interval['minute'],
+                'trip_diurne' => $interval['diurne'],
+                'diurne' => null,
+                'diurne_value' => null,
+                'diurna_recorded' => null,
+                'policy' => $policy,
+                'split' => '',
+                'segment_only' => !isset($race['beneficiary_label']),
+            ];
+
+            if ($interval['status'] !== 'ok') {
+                $perRace[$raceId] = ['days' => null, 'value' => null];
+                $summary['missing']++;
+                $rows[] = $row;
+                continue;
+            }
+
+            $days = (int) $interval['diurne'];
+            if (count($raceSegments) > 1) {
+                $share = 0;
+                foreach (dispatcher_diurna_split($days, $raceSegments) as $splitRow) {
+                    if ((int) $splitRow['driver_id'] === $driverId) {
+                        $share += (int) $splitRow['zile'];
+                    }
+                }
+                $row['split'] = dispatcher_diurna_summary($days, $raceSegments);
+                $days = $share;
+            }
+
+            if ($policy['status'] === DriverDiurnaModel::STATUS_NONE) {
+                $summary['not_eligible'] += $days;
+                $days = 0;
+            } elseif ($policy['rate'] !== null) {
+                $row['diurne_value'] = $days * (float) $policy['rate'];
+                $summary['value'] += $row['diurne_value'];
+                // Diurna deja trecuta ca cheltuiala pe cursa (tip "diurna") este in
+                // costul curselor; valoarea calculata nu se mai adauga, ca sa nu se
+                // numere de doua ori. Doar cursele din lista soferului au costurile
+                // in totalul lui, deci doar acolo poate aparea dublarea.
+                $recorded = isset($race['beneficiary_label']) ? (float) ($race['total_diurna'] ?? 0) : 0.0;
+                if ($recorded > 0) {
+                    $row['diurna_recorded'] = $recorded;
+                    $summary['value_recorded'] += $row['diurne_value'];
+                } else {
+                    $summary['value_in_total'] += $row['diurne_value'];
+                }
+            } else {
+                $summary['unvalued'] += $days;
+            }
+
+            $row['diurne'] = $days;
+            $rows[] = $row;
+            $perRace[$raceId] = ['days' => $days, 'value' => $row['diurne_value']];
+            $summary['total'] += $days;
+            $summary['minutes'] += (int) $interval['minute'];
+            if ($days > 0) {
+                $summary['trips']++;
+            }
+        }
+
+        foreach ($trips as &$trip) {
+            $trip['diurne'] = $perRace[(int) $trip['id']]['days'] ?? null;
+            $trip['diurne_value'] = $perRace[(int) $trip['id']]['value'] ?? null;
+        }
+        unset($trip);
+
+        usort($rows, static fn (array $a, array $b): int => strcmp(
+            (string) $b['data_inceput'] . ' ' . (string) $b['ora_inceput'],
+            (string) $a['data_inceput'] . ' ' . (string) $a['ora_inceput']
+        ));
+        ksort($workedDates);
+        $summary['rows'] = $rows;
+        $summary['policy'] = DriverDiurnaModel::policyAt($diurnaHistory, (string) $filters['date_end']);
+        $summary['worked_dates'] = array_keys($workedDates);
+        $summary['worked_date_buckets'] = $workedDateBuckets;
+
+        return $summary;
+    }
+
+    /** Zilele calendaristice ale unei curse / faze, taiate la perioada filtrata. */
+    private function spanDates(array $span, array $filters): array
+    {
+        $start = (string) ($span['data_inceput'] ?? $span['data_cursa'] ?? '');
+        $end = (string) ($span['data_sfarsit'] ?? '') !== '' ? (string) $span['data_sfarsit'] : $start;
+        if ($start === '') {
+            return [];
+        }
+        $start = max(substr($start, 0, 10), (string) $filters['date_start']);
+        $end = min(substr($end, 0, 10), (string) $filters['date_end']);
+        if ($end < $start) {
+            return [];
+        }
+
+        $dates = [];
+        for ($day = new DateTimeImmutable($start); $day->format('Y-m-d') <= $end; $day = $day->modify('+1 day')) {
+            $dates[] = $day->format('Y-m-d');
+        }
+
+        return $dates;
+    }
+
+    /**
+     * Costul salarial al soferului in perioada, dupa zilele lucrate.
+     *
+     * Pe fiecare luna: salariul lunii (salary_history valabil la sfarsitul lunii,
+     * altfel salariul din fisa soferului) / zilele lucratoare ale lunii (luni-vineri)
+     * x zilele lucrate in luna. Zilele de weekend lucrate se adauga peste.
+     *
+     * Defalcarea pe tip de transport (cardul Salariu) foloseste aceeasi valoare pe zi:
+     * fiecare zi lucrata merge pe tipul curselor din ziua respectiva; o zi cu curse de
+     * doua tipuri se imparte egal intre ele, deci sumele raman egale cu totalul.
+     *
+     * @return array{cost: float, worked_days: int, months: array, missing_salary: bool, by_bucket: array}
+     */
+    private function buildSalaryCost(int $driverId, array $workedDates, array $workedDateBuckets = []): array
+    {
+        $byBucket = [
+            'days' => array_fill_keys(array_keys(self::TRANSPORT_LABELS), 0.0),
+            'cost' => array_fill_keys(array_keys(self::TRANSPORT_LABELS), 0.0),
+        ];
+        $byMonth = [];
+        foreach ($workedDates as $date) {
+            $byMonth[substr($date, 0, 7)][] = $date;
+        }
+
+        $months = [];
+        $total = 0.0;
+        $missingSalary = false;
+        foreach ($byMonth as $month => $dates) {
+            $monthStart = new DateTimeImmutable($month . '-01');
+            $monthEnd = $monthStart->modify('last day of this month');
+            $salary = $this->salaryAt($driverId, $monthEnd->format('Y-m-d'));
+            $workingDays = 0;
+            for ($day = $monthStart; $day <= $monthEnd; $day = $day->modify('+1 day')) {
+                if ((int) $day->format('N') <= 5) {
+                    $workingDays++;
+                }
+            }
+
+            $cost = $salary !== null && $workingDays > 0 ? $salary / $workingDays * count($dates) : null;
+            if ($cost === null) {
+                $missingSalary = true;
+            }
+            $daily = $salary !== null && $workingDays > 0 ? $salary / $workingDays : 0.0;
+            foreach ($dates as $date) {
+                $dateBuckets = array_keys((array) ($workedDateBuckets[$date] ?? []));
+                foreach ($dateBuckets as $bucket) {
+                    $share = 1 / count($dateBuckets);
+                    $byBucket['days'][$bucket] += $share;
+                    $byBucket['cost'][$bucket] += $daily * $share;
+                }
+            }
+            $total += (float) $cost;
+            $months[] = [
+                'month' => $month,
+                'worked_days' => count($dates),
+                'working_days' => $workingDays,
+                'salary' => $salary,
+                'daily' => $salary !== null && $workingDays > 0 ? $salary / $workingDays : null,
+                'cost' => $cost,
+            ];
+        }
+
+        return [
+            'cost' => $total,
+            'worked_days' => count($workedDates),
+            'months' => $months,
+            'missing_salary' => $missingSalary,
+            'by_bucket' => $byBucket,
+        ];
+    }
+
+    /** Salariul soferului la o data: ultimul din istoric, altfel cel din fisa. */
+    private function salaryAt(int $driverId, string $date): ?float
+    {
+        if ($this->tableExists('salary_history')) {
+            $stmt = $this->db->prepare('
+                SELECT current_salary
+                FROM salary_history
+                WHERE driver_id = :driver_id AND effective_date <= :date
+                ORDER BY effective_date DESC, id DESC
+                LIMIT 1
+            ');
+            $stmt->execute([':driver_id' => $driverId, ':date' => $date]);
+            $value = $stmt->fetchColumn();
+            if ($value !== false && $value !== null) {
+                return (float) $value;
+            }
+        }
+
+        $stmt = $this->db->prepare('SELECT salariu FROM soferi WHERE id = :id');
+        $stmt->execute([':id' => $driverId]);
+        $value = $stmt->fetchColumn();
+
+        return $value !== false && $value !== null && (float) $value > 0 ? (float) $value : null;
+    }
+
+    /**
+     * Cursele din perioada pe care soferul a condus o faza, dar pe care figureaza
+     * alt sofer (deci nu sunt in lista de curse a soferului).
+     */
+    private function getSegmentOnlyTrips(int $driverId, array $filters, array $excludeIds): array
+    {
+        if (!$this->tableExists('curse_segmente')) {
+            return [];
+        }
+
+        $params = [
+            ':seg_driver_id' => $driverId,
+            ':seg_date_start' => (string) $filters['date_start'],
+            ':seg_date_end' => (string) $filters['date_end'],
+        ];
+        $segmentDeleted = $this->columnExists('curse_segmente', 'deleted_at') ? 'AND seg.deleted_at IS NULL' : '';
+        $where = [
+            $this->activeRaceCondition('c'),
+            'COALESCE(c.data_inceput, c.data_cursa) <= :seg_date_end',
+            'COALESCE(c.data_sfarsit, c.data_inceput, c.data_cursa) >= :seg_date_start',
+            "EXISTS (
+                SELECT 1 FROM curse_segmente seg
+                WHERE seg.cursa_id = c.id AND seg.driver_id = :seg_driver_id {$segmentDeleted}
+            )",
+        ];
+        if ((int) ($filters['vehicle_id'] ?? 0) > 0) {
+            $where[] = 'c.vehicle_id = :seg_vehicle_id';
+            $params[':seg_vehicle_id'] = (int) $filters['vehicle_id'];
+        }
+        $segBeneficiarySql = $this->beneficiaryFilterSql('c.beneficiar_id', $filters, $params, 'seg_beneficiar');
+        if ($segBeneficiarySql !== '') {
+            $where[] = $segBeneficiarySql;
+        }
+        $transportSql = $this->transportFilterSql('c.tip_transport', (string) ($filters['transport_type'] ?? ''), $params, 'seg_transport');
+        if ($transportSql !== '') {
+            $where[] = $transportSql;
+        }
+        if ($excludeIds !== []) {
+            $where[] = 'c.id NOT IN (' . $this->inClause($params, 'seg_exclude', array_map('intval', $excludeIds)) . ')';
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT c.id, c.driver_id, c.data_inceput, c.ora_inceput, c.data_sfarsit, c.ora_sfarsit, c.tip_transport, v.nr_inmatriculare
+            FROM curse_dispecer c
+            LEFT JOIN vehicule v ON v.id = c.vehicle_id
+            WHERE " . implode(' AND ', $where));
+        $this->bindParams($stmt, $params);
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    /** Fazele active ale curselor, grupate pe cursa. */
+    private function getActiveSegments(array $raceIds): array
+    {
+        if ($raceIds === [] || !$this->tableExists('curse_segmente')) {
+            return [];
+        }
+
+        $params = [];
+        $segmentDeleted = $this->columnExists('curse_segmente', 'deleted_at') ? 'AND seg.deleted_at IS NULL' : '';
+        $stmt = $this->db->prepare("
+            SELECT seg.cursa_id, seg.driver_id, seg.data_inceput, seg.ora_inceput, seg.data_sfarsit, seg.ora_sfarsit, s.nume AS sofer_nume
+            FROM curse_segmente seg
+            LEFT JOIN soferi s ON s.id = seg.driver_id
+            WHERE seg.cursa_id IN (" . $this->inClause($params, 'diurna_race', array_map('intval', $raceIds)) . ")
+              {$segmentDeleted}
+            ORDER BY seg.cursa_id ASC, seg.ordine ASC, seg.id ASC
+        ");
+        $this->bindParams($stmt, $params);
+        $stmt->execute();
+
+        $grouped = [];
+        foreach ($stmt->fetchAll() as $segment) {
+            $grouped[(int) $segment['cursa_id']][] = $segment;
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * Alimentarile soferului, din aceeasi sursa ca pagina Carburanti
+     * (fuel_fillups, sincronizat din CardOil + introduse manual). Tabelul vechi
+     * `alimentari` nu mai este alimentat, de aceea costul carburantului aparea 0.
+     *
+     * O alimentare este a soferului cand:
+     *  1. este legata (fuel_trip_links, automat sau manual in Carburanti) de una
+     *     dintre cursele lui din perioada filtrata; sau
+     *  2. nu este legata de nicio cursa, este in perioada, iar soferul de pe card
+     *     este acest sofer (doar cand nu se filtreaza pe tip de transport, fiindca
+     *     fara cursa tipul de transport nu se cunoaste).
+     * Se numara doar motorina; AdBlue nu intra in consum si nici in costul carburantului.
+     */
     private function getFuelRows(int $driverId, array $filters, array $trips): array
     {
-        $params = [
-            ':date_start' => (string) $filters['date_start'],
-            ':date_end' => (string) $filters['date_end'],
-            ':fuel_exists_driver' => $driverId,
-            ':fuel_exists_assignment' => $driverId,
-        ];
-
-        $where = [
-            "a.tip_inregistrare = 'alimentare'",
-            'a.data_alimentare BETWEEN :date_start AND :date_end',
-        ];
-
-        if ((int) ($filters['vehicle_id'] ?? 0) > 0) {
-            $where[] = 'a.vehicle_id = :fuel_vehicle_id';
-            $params[':fuel_vehicle_id'] = (int) $filters['vehicle_id'];
+        if (!$this->tableExists('fuel_fillups')) {
+            return [];
         }
 
-        $association = [];
-        $tripIds = array_values(array_unique(array_map(static fn (array $row): int => (int) ($row['id'] ?? 0), $trips)));
-        $tripIds = array_values(array_filter($tripIds, static fn (int $id): bool => $id > 0));
-        if ($tripIds !== []) {
-            $association[] = 'a.cursa_id IN (' . $this->inClause($params, 'fuel_trip', $tripIds) . ')';
+        $tripsById = [];
+        foreach ($trips as $trip) {
+            $tripsById[(int) ($trip['id'] ?? 0)] = $trip;
         }
+        unset($tripsById[0]);
+        $hasLinks = $this->tableExists('fuel_trip_links');
 
-        if ((string) ($filters['transport_type'] ?? '') === '') {
-            $association[] = 'a.driver_id = :driver_direct';
-            $params[':driver_direct'] = $driverId;
-        }
-
-        $existsWhere = [
-            $this->activeRaceCondition('c2'),
-            'c2.vehicle_id = a.vehicle_id',
-            'COALESCE(c2.data_inceput, c2.data_cursa) <= a.data_alimentare',
-            'COALESCE(c2.data_sfarsit, c2.data_inceput, c2.data_cursa) >= a.data_alimentare',
-            "(c2.driver_id = :fuel_exists_driver OR (
-                c2.driver_id IS NULL
-                AND EXISTS (
-                    SELECT 1
-                    FROM soferi_vehicule sv2
-                    WHERE sv2.driver_id = :fuel_exists_assignment
-                      AND sv2.vehicle_id = c2.vehicle_id
-                )
-            ))",
-        ];
-
-        $transportSql = $this->transportFilterSql('c2.tip_transport', (string) ($filters['transport_type'] ?? ''), $params, 'fuel_transport');
-        if ($transportSql !== '') {
-            $existsWhere[] = $transportSql;
-        }
-
-        if ((int) ($filters['vehicle_id'] ?? 0) > 0) {
-            $existsWhere[] = 'c2.vehicle_id = :fuel_exists_vehicle_id';
-            $params[':fuel_exists_vehicle_id'] = (int) $filters['vehicle_id'];
-        }
-
-        $association[] = 'EXISTS (SELECT 1 FROM curse_dispecer c2 WHERE ' . implode(' AND ', $existsWhere) . ')';
-        $where[] = '(' . implode(' OR ', $association) . ')';
-
-        $sql = "
+        $select = "
             SELECT
-                a.*,
-                v.nr_inmatriculare,
+                f.id,
+                f.fillup_datetime,
+                DATE(f.fillup_datetime) AS data_alimentare,
+                f.quantity_liters AS litri,
+                f.unit_price AS pret_litru,
+                f.total_value AS cost_total,
+                COALESCE(f.odometer_km_manual, f.odometer_km) AS km_bord,
+                f.station_name AS observatii,
+                f.driver_name AS record_sofer_nume,
+                f.source_type,
+                f.receipt_path,
+                f.vehicle_registration,
+                v.id AS vehicle_id,
+                COALESCE(v.nr_inmatriculare, f.vehicle_registration) AS nr_inmatriculare,
                 v.marca,
                 v.model,
                 v.tip_vehicul,
-                sr.nume AS record_sofer_nume,
-                c.id AS explicit_trip_id,
-                c.tip_transport AS explicit_tip_transport,
-                c.data_inceput AS explicit_data_inceput,
-                c.data_sfarsit AS explicit_data_sfarsit,
-                bt.nume AS explicit_beneficiar_nume
-            FROM alimentari a
-            INNER JOIN vehicule v ON v.id = a.vehicle_id
-            LEFT JOIN soferi sr ON sr.id = a.driver_id
-            LEFT JOIN curse_dispecer c ON c.id = a.cursa_id AND " . $this->activeRaceCondition('c') . "
-            LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
-            WHERE " . implode(' AND ', $where) . "
-            ORDER BY a.vehicle_id ASC, a.data_alimentare ASC, a.km_bord ASC, a.id ASC
+                " . ($hasLinks ? 'l.trip_id' : 'NULL') . " AS explicit_trip_id
+            FROM fuel_fillups f
+            LEFT JOIN vehicule v ON REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = REPLACE(UPPER(f.vehicle_registration), ' ', '')
+            " . ($hasLinks ? 'LEFT JOIN fuel_trip_links l ON l.fillup_id = f.id' : '') . "
+            WHERE f.fuel_type = 'motorina'
         ";
 
-        $stmt = $this->db->prepare($sql);
-        $this->bindParams($stmt, $params);
-        $stmt->execute();
-        $rows = $stmt->fetchAll();
+        $rows = [];
 
-        $tripsByVehicle = [];
-        foreach ($trips as $trip) {
-            $tripsByVehicle[(int) ($trip['vehicle_id'] ?? 0)][] = $trip;
+        // 1. Alimentari legate de cursele soferului.
+        if ($hasLinks && $tripsById !== []) {
+            $params = [];
+            $stmt = $this->db->prepare($select . ' AND l.trip_id IN (' . $this->inClause($params, 'fuel_trip', array_keys($tripsById)) . ')');
+            $this->bindParams($stmt, $params);
+            $stmt->execute();
+            foreach ($stmt->fetchAll() as $row) {
+                $rows[(int) $row['id']] = $row;
+            }
         }
 
+        // 2. Alimentari fara cursa, dupa soferul de pe card.
+        $driverTokens = $this->nameTokens((string) ($this->db->query('SELECT nume FROM soferi WHERE id = ' . (int) $driverId)->fetchColumn() ?: ''));
+        $beneficiaryFiltered = (int) ($filters['beneficiar_id'] ?? 0) > 0;
+        if ((string) ($filters['transport_type'] ?? '') === '' && !$beneficiaryFiltered && $driverTokens !== []) {
+            $params = [
+                ':fuel_date_start' => (string) $filters['date_start'] . ' 00:00:00',
+                ':fuel_date_end' => (string) $filters['date_end'] . ' 23:59:59',
+            ];
+            $sql = $select . ' AND f.fillup_datetime BETWEEN :fuel_date_start AND :fuel_date_end';
+            if ($hasLinks) {
+                $sql .= ' AND l.id IS NULL';
+            }
+            if ((int) ($filters['vehicle_id'] ?? 0) > 0) {
+                $sql .= ' AND v.id = :fuel_vehicle_id';
+                $params[':fuel_vehicle_id'] = (int) $filters['vehicle_id'];
+            }
+            $stmt = $this->db->prepare($sql);
+            $this->bindParams($stmt, $params);
+            $stmt->execute();
+            foreach ($stmt->fetchAll() as $row) {
+                $cardTokens = $this->nameTokens((string) ($row['record_sofer_nume'] ?? ''));
+                // "Causanu Mihai" (card) = "Causanu Mihai Nicusor" (sofer): toate
+                // cuvintele de pe card se regasesc in numele soferului.
+                if (count($cardTokens) >= 2 && array_diff($cardTokens, $driverTokens) === []) {
+                    $rows[(int) $row['id']] = $row;
+                }
+            }
+        }
+
+        $rows = array_values($rows);
         foreach ($rows as &$row) {
-            $linkedTrip = $this->findTripForFuel($row, $tripsByVehicle);
+            $linkedTrip = $tripsById[(int) ($row['explicit_trip_id'] ?? 0)] ?? null;
             $row = $this->decorateFuelRow($row, $linkedTrip);
         }
         unset($row);
 
+        usort($rows, static fn (array $a, array $b): int => [(int) $a['vehicle_id'], (string) $a['fillup_datetime']] <=> [(int) $b['vehicle_id'], (string) $b['fillup_datetime']]);
         $rows = $this->attachFuelConsumption($rows);
-        usort($rows, static function (array $a, array $b): int {
-            return strcmp((string) ($b['data_alimentare'] ?? ''), (string) ($a['data_alimentare'] ?? ''))
-                ?: ((int) ($b['id'] ?? 0) <=> (int) ($a['id'] ?? 0));
-        });
+        usort($rows, static fn (array $a, array $b): int => strcmp((string) $b['fillup_datetime'], (string) $a['fillup_datetime']));
 
         return $rows;
+    }
+
+    /** Cuvintele unui nume, fara diacritice si majuscule, pentru comparare. */
+    private function nameTokens(string $name): array
+    {
+        $name = strtr(mb_strtolower(trim($name)), ['ă' => 'a', 'â' => 'a', 'î' => 'i', 'ș' => 's', 'ş' => 's', 'ț' => 't', 'ţ' => 't', '-' => ' ', '.' => ' ']);
+        $tokens = preg_split('/\s+/', $name, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        return array_values(array_unique($tokens));
     }
 
     private function getRepairRows(array $filters, array $vehicleIds): array
@@ -586,6 +1292,182 @@ class DriverActivityHistoryModel extends BaseModel
         return array_map('intval', array_column($stmt->fetchAll(), 'vehicle_id'));
     }
 
+    /**
+     * Defalcarea pe tip de transport pentru cardurile KPI (ce se vede la hover).
+     * Se calculeaza din aceleasi randuri filtrate ca valorile afisate, deci se schimba
+     * odata cu ele la fiecare filtrare (pagina se re-randeaza la "Filtreaza").
+     *
+     * Ce nu tine de o cursa nu se poate imparti pe tip de transport si intra in
+     * "nealocat": reparatiile (sunt ale vehiculului), salariul (e pe zile lucrate) si
+     * alimentarile nelegate de o cursa. Sumele raman egale cu totalul de pe card.
+     */
+    private function buildKpiBreakdown(array $trips, array $fuelRows, array $repairs, array $diurneRows, float $salaryCost, array $salaryByBucket = []): array
+    {
+        $buckets = array_keys(self::TRANSPORT_LABELS);
+        $empty = array_fill_keys($buckets, 0.0);
+        $metrics = [
+            'trips' => $empty, 'km' => $empty, 'tons' => $empty, 'minutes' => $empty,
+            'liters' => $empty, 'costs' => $empty, 'diurne' => $empty, 'profit' => $empty,
+            // Valoarea diurnelor (aceeasi ca pe card, 'diurne_value'), afisata langa numar.
+            'diurne_value' => $empty,
+            // Costul operational (fara salariu si diurne) - cardul celor fara drept financiar.
+            'operational' => $empty,
+        ];
+        $tripsById = [];
+        // Cursele fiecarui tip: randurile cardului "Total curse" deschid exact aceste
+        // curse in Desfasurator curse.
+        $tripIds = array_fill_keys($buckets, []);
+
+        foreach ($trips as $trip) {
+            $bucket = (string) ($trip['transport_bucket'] ?? '');
+            $tripsById[(int) ($trip['id'] ?? 0)] = $bucket;
+            // '__all': toate cursele, pentru randul "Curse" din Cost total.
+            if ((int) ($trip['id'] ?? 0) > 0) {
+                $tripIds['__all'][] = (int) $trip['id'];
+            }
+            if (!isset($metrics['trips'][$bucket])) {
+                continue;
+            }
+            if ((int) ($trip['id'] ?? 0) > 0) {
+                $tripIds[$bucket][] = (int) $trip['id'];
+            }
+            $tripCost = (float) ($trip['total_cheltuieli'] ?? 0);
+            $metrics['trips'][$bucket] += 1;
+            $metrics['km'][$bucket] += (float) ($trip['effective_km'] ?? 0);
+            $metrics['tons'][$bucket] += (float) ($trip['transported_tons'] ?? 0) + (float) ($trip['delivered_tons'] ?? 0);
+            $metrics['minutes'][$bucket] += (int) ($trip['duration_minutes_effective'] ?? 0);
+            $metrics['costs'][$bucket] += $tripCost;
+            $metrics['operational'][$bucket] += $tripCost;
+            $metrics['profit'][$bucket] += (float) ($trip['total_facturare'] ?? 0)
+                + (float) ($trip['total_refacturare_facturata'] ?? 0) - $tripCost;
+        }
+
+        // Alimentarile intra pe tipul cursei de care sunt legate; cele fara cursa raman nealocate.
+        // Pentru fiecare tip se retin si vehiculele si datele alimentarilor: randurile
+        // cardului "Consum total" deschid Carburanti pe acestea (acolo nu exista filtru de sofer).
+        $fuelUnallocatedLiters = 0.0;
+        $fuelUnallocatedCost = 0.0;
+        $fuelLinks = [];
+        foreach ($fuelRows as $fuel) {
+            $bucket = (string) ($fuel['transport_bucket'] ?? '');
+            $liters = (float) ($fuel['litri'] ?? 0);
+            $cost = (float) ($fuel['cost_total'] ?? 0);
+            // '__all': toate alimentarile (si cele fara cursa), pentru randul "Carburant" din Cost total.
+            $registration = trim((string) ($fuel['vehicle_registration'] ?? ''));
+            $fuelDate = substr((string) ($fuel['fillup_datetime'] ?? ''), 0, 10);
+            foreach (isset($metrics['liters'][$bucket]) ? [$bucket, '__all'] : ['__all'] as $linkKey) {
+                if ($registration !== '') {
+                    $fuelLinks[$linkKey]['vehicles'][$registration] = $registration;
+                }
+                if ($fuelDate !== '') {
+                    $fuelLinks[$linkKey]['from'] = min($fuelLinks[$linkKey]['from'] ?? $fuelDate, $fuelDate);
+                    $fuelLinks[$linkKey]['to'] = max($fuelLinks[$linkKey]['to'] ?? $fuelDate, $fuelDate);
+                }
+            }
+            if (isset($metrics['liters'][$bucket])) {
+                $metrics['liters'][$bucket] += $liters;
+                $metrics['costs'][$bucket] += $cost;
+                $metrics['operational'][$bucket] += $cost;
+                $metrics['profit'][$bucket] -= $cost;
+                continue;
+            }
+            $fuelUnallocatedLiters += $liters;
+            $fuelUnallocatedCost += $cost;
+        }
+
+        // Diurnele: numarul si valoarea care intra in costul total, pe tipul cursei.
+        $diurneUnallocated = 0.0;
+        $diurneValueUnallocated = 0.0;
+        foreach ($diurneRows as $row) {
+            $bucket = $tripsById[(int) ($row['id'] ?? 0)] ?? '';
+            $count = (float) ($row['diurne'] ?? 0);
+            // Diurna deja trecuta ca cheltuiala pe cursa este in costul cursei.
+            $value = ($row['diurna_recorded'] ?? null) === null ? (float) ($row['diurne_value'] ?? 0) : 0.0;
+            if (isset($metrics['diurne'][$bucket])) {
+                $metrics['diurne'][$bucket] += $count;
+                $metrics['diurne_value'][$bucket] += (float) ($row['diurne_value'] ?? 0);
+                $metrics['costs'][$bucket] += $value;
+                $metrics['profit'][$bucket] -= $value;
+                continue;
+            }
+            $diurneUnallocated += $count;
+            $diurneValueUnallocated += $value;
+        }
+
+        $repairCost = array_sum(array_map(static fn (array $row): float => (float) ($row['cost'] ?? 0), $repairs));
+        $costsUnallocated = $repairCost + $salaryCost + $fuelUnallocatedCost + $diurneValueUnallocated;
+
+        // Vehiculele si datele reparatiilor: randul "Reparatii" din Cost total deschide Mentenanta pe ele.
+        $repairLink = ['vehicle_ids' => [], 'from' => null, 'to' => null];
+        foreach ($repairs as $repair) {
+            $repairVehicleId = (int) ($repair['vehicle_id'] ?? 0);
+            if ($repairVehicleId > 0) {
+                $repairLink['vehicle_ids'][$repairVehicleId] = $repairVehicleId;
+            }
+            $repairDate = substr((string) ($repair['data_interventie'] ?? ''), 0, 10);
+            if ($repairDate !== '') {
+                $repairLink['from'] = $repairLink['from'] === null ? $repairDate : min($repairLink['from'], $repairDate);
+                $repairLink['to'] = $repairLink['to'] === null ? $repairDate : max($repairLink['to'], $repairDate);
+            }
+        }
+        $repairLink['vehicle_ids'] = array_values($repairLink['vehicle_ids']);
+
+        return [
+            'labels' => self::TRANSPORT_LABELS,
+            'trip_ids' => $tripIds,
+            'repair_link' => $repairLink,
+            'fuel_links' => array_map(static fn (array $link): array => [
+                'vehicles' => array_values((array) ($link['vehicles'] ?? [])),
+                'from' => $link['from'] ?? null,
+                'to' => $link['to'] ?? null,
+            ], $fuelLinks),
+            'metrics' => [
+                'trips' => ['values' => $metrics['trips'], 'unallocated' => 0.0, 'format' => 'int'],
+                'km' => ['values' => $metrics['km'], 'unallocated' => 0.0, 'format' => 'km'],
+                'tons' => ['values' => $metrics['tons'], 'unallocated' => 0.0, 'format' => 'tons'],
+                'minutes' => ['values' => $metrics['minutes'], 'unallocated' => 0.0, 'format' => 'duration'],
+                'liters' => [
+                    'values' => $metrics['liters'],
+                    'unallocated' => $fuelUnallocatedLiters,
+                    'unallocated_label' => 'Alimentari fara cursa',
+                    'format' => 'liters',
+                ],
+                'costs' => [
+                    'values' => $metrics['costs'],
+                    'unallocated' => $costsUnallocated,
+                    'unallocated_label' => 'Nealocat (reparatii, salariu, alimentari fara cursa)',
+                    'format' => 'money',
+                ],
+                'operational' => [
+                    'values' => $metrics['operational'],
+                    'unallocated' => $repairCost + $fuelUnallocatedCost,
+                    'unallocated_label' => 'Nealocat (reparatii, alimentari fara cursa)',
+                    'format' => 'money',
+                ],
+                // Salariul pe zilele lucrate pe fiecare tip (vezi buildSalaryCost).
+                'salary' => [
+                    'values' => (array) ($salaryByBucket['cost'] ?? []),
+                    'unallocated' => max(0.0, $salaryCost - array_sum((array) ($salaryByBucket['cost'] ?? []))),
+                    'format' => 'money',
+                ],
+                'salary_days' => ['values' => (array) ($salaryByBucket['days'] ?? []), 'unallocated' => 0.0, 'format' => 'days'],
+                'diurne' => [
+                    'values' => $metrics['diurne'],
+                    'unallocated' => $diurneUnallocated,
+                    'unallocated_label' => 'Curse fara tip (faze)',
+                    'format' => 'int',
+                ],
+                'diurne_value' => ['values' => $metrics['diurne_value'], 'unallocated' => 0.0, 'format' => 'money'],
+                'profit' => [
+                    'values' => $metrics['profit'],
+                    'unallocated' => -$costsUnallocated,
+                    'unallocated_label' => 'Nealocat (reparatii, salariu, alimentari fara cursa)',
+                    'format' => 'money',
+                ],
+            ],
+        ];
+    }
+
     private function buildKpis(array $trips, array $fuelRows, array $repairs): array
     {
         $totalKm = array_sum(array_map(static fn (array $row): float => (float) ($row['effective_km'] ?? 0), $trips));
@@ -598,7 +1480,7 @@ class DriverActivityHistoryModel extends BaseModel
         return [
             'total_trips' => count($trips),
             'total_km' => $totalKm,
-            'total_loaded_tons' => array_sum(array_map(static fn (array $row): float => (float) ($row['loaded_tons'] ?? 0), $trips)),
+            'total_transported_tons' => array_sum(array_map(static fn (array $row): float => (float) ($row['transported_tons'] ?? 0), $trips)),
             'total_delivered_tons' => array_sum(array_map(static fn (array $row): float => (float) ($row['delivered_tons'] ?? 0), $trips)),
             'driving_minutes' => $durationMinutes,
             'total_fuel_liters' => $totalFuel,
@@ -635,7 +1517,7 @@ class DriverActivityHistoryModel extends BaseModel
                 'tip_vehicul' => (string) ($vehicle['tip_vehicul'] ?? ''),
                 'trips' => 0,
                 'kilometers' => 0.0,
-                'loaded_tons' => 0.0,
+                'transported_tons' => 0.0,
                 'delivered_tons' => 0.0,
                 'fuel_cost' => 0.0,
                 'repair_cost' => 0.0,
@@ -652,7 +1534,7 @@ class DriverActivityHistoryModel extends BaseModel
             }
             $rows[$id]['trips']++;
             $rows[$id]['kilometers'] += (float) ($trip['effective_km'] ?? 0);
-            $rows[$id]['loaded_tons'] += (float) ($trip['loaded_tons'] ?? 0);
+            $rows[$id]['transported_tons'] += (float) ($trip['transported_tons'] ?? 0);
             $rows[$id]['delivered_tons'] += (float) ($trip['delivered_tons'] ?? 0);
             $rows[$id]['trip_cost'] += (float) ($trip['total_cheltuieli'] ?? 0);
         }
@@ -694,7 +1576,7 @@ class DriverActivityHistoryModel extends BaseModel
             $row = $row ?? $this->emptyDailyRow($date);
             $row['trips']++;
             $row['kilometers'] += (float) ($trip['effective_km'] ?? 0);
-            $row['loaded_tons'] += (float) ($trip['loaded_tons'] ?? 0);
+            $row['transported_tons'] += (float) ($trip['transported_tons'] ?? 0);
             $row['delivered_tons'] += (float) ($trip['delivered_tons'] ?? 0);
             $row['trip_cost'] += (float) ($trip['total_cheltuieli'] ?? 0);
             $row['driving_minutes'] += (int) ($trip['duration_minutes_effective'] ?? 0);
@@ -830,7 +1712,7 @@ class DriverActivityHistoryModel extends BaseModel
         $tons = [];
         $transportDistribution = [];
         foreach (self::TRANSPORT_LABELS as $key => $label) {
-            $tons[$key] = ['label' => $label, 'loaded' => 0.0, 'delivered' => 0.0];
+            $tons[$key] = ['label' => $label, 'transported' => 0.0, 'delivered' => 0.0];
             $transportDistribution[$key] = ['label' => $label, 'count' => 0];
         }
 
@@ -839,7 +1721,7 @@ class DriverActivityHistoryModel extends BaseModel
             if (!isset($tons[$bucket])) {
                 continue;
             }
-            $tons[$bucket]['loaded'] += (float) ($trip['loaded_tons'] ?? 0);
+            $tons[$bucket]['transported'] += (float) ($trip['transported_tons'] ?? 0);
             $tons[$bucket]['delivered'] += (float) ($trip['delivered_tons'] ?? 0);
             $transportDistribution[$bucket]['count']++;
         }
@@ -873,7 +1755,7 @@ class DriverActivityHistoryModel extends BaseModel
         return [
             'tons' => [
                 'labels' => array_column($tons, 'label'),
-                'loaded' => array_map(static fn (array $row): float => round((float) $row['loaded'], 2), array_values($tons)),
+                'transported' => array_map(static fn (array $row): float => round((float) $row['transported'], 2), array_values($tons)),
                 'delivered' => array_map(static fn (array $row): float => round((float) $row['delivered'], 2), array_values($tons)),
             ],
             'kilometers_timeline' => [
@@ -901,8 +1783,8 @@ class DriverActivityHistoryModel extends BaseModel
         $row['transport_label'] = self::TRANSPORT_LABELS[(string) $row['transport_bucket']] ?? (string) ($row['tip_transport'] ?? '-');
         $row['effective_km'] = $this->effectiveTripKm($row);
         $row['non_billable_km'] = $this->nonBillableKm($row);
-        $row['loaded_tons'] = $this->normalizeTons($row['cantitate_incarcata'] ?? null, $row);
-        $row['delivered_tons'] = $this->deliveredTons($row);
+        [$row['transported_tons'], $row['delivered_tons']] = $this->tripTons($row, (string) $row['transport_bucket']);
+        $row['clients'] = max(0, (int) ($row['nr_clienti'] ?? 0));
         $row['duration_minutes_effective'] = $this->durationMinutes($row);
         $row['beneficiary_label'] = trim((string) ($row['beneficiar_nume'] ?? '')) !== '' ? (string) $row['beneficiar_nume'] : '-';
 
@@ -971,32 +1853,13 @@ class DriverActivityHistoryModel extends BaseModel
         return $rows;
     }
 
-    private function findTripForFuel(array $fuel, array $tripsByVehicle): ?array
-    {
-        $vehicleId = (int) ($fuel['vehicle_id'] ?? 0);
-        $date = (string) ($fuel['data_alimentare'] ?? '');
-        if ($vehicleId <= 0 || $date === '') {
-            return null;
-        }
-
-        foreach ($tripsByVehicle[$vehicleId] ?? [] as $trip) {
-            $start = (string) ($trip['data_inceput'] ?? $trip['data_cursa'] ?? '');
-            $end = (string) ($trip['data_sfarsit'] ?? $start);
-            if ($start !== '' && $end !== '' && $start <= $date && $end >= $date) {
-                return $trip;
-            }
-        }
-
-        return null;
-    }
-
     private function emptyDailyRow(string $date): array
     {
         return [
             'date' => $date,
             'trips' => 0,
             'kilometers' => 0.0,
-            'loaded_tons' => 0.0,
+            'transported_tons' => 0.0,
             'delivered_tons' => 0.0,
             'fuel_used' => 0.0,
             'fuel_cost' => 0.0,
@@ -1030,26 +1893,69 @@ class DriverActivityHistoryModel extends BaseModel
         return $total > $course ? $total - $course : 0.0;
     }
 
-    private function deliveredTons(array $row): float
+    /**
+     * Clientii si tonele livrate pe client. Doar cursele de Distributie si
+     * Primar + Distributie au clienti; Primar si Compresor transporta fara clienti.
+     *
+     * Raportul se face doar pe cursele care au numarul de clienti completat:
+     * o cursa cu tone dar fara clienti ar umfla artificial tonele pe client.
+     */
+    private function buildClientStats(array $trips): array
     {
-        if ((string) ($row['tip_transport'] ?? '') === 'compresor') {
-            $delivered = $this->positiveFloat($row['tona_livrata'] ?? null);
-            if ($delivered > 0) {
-                return $delivered;
+        $clients = 0;
+        $tons = 0.0;
+        $withoutClients = 0;
+        foreach ($trips as $trip) {
+            if (!in_array((string) ($trip['transport_bucket'] ?? ''), ['distributie', 'primar_distributie'], true)) {
+                continue;
+            }
+            $tripClients = (int) ($trip['clients'] ?? 0);
+            $tripTons = (float) ($trip['delivered_tons'] ?? 0);
+            if ($tripClients > 0) {
+                $clients += $tripClients;
+                $tons += $tripTons;
+            } elseif ($tripTons > 0) {
+                $withoutClients++;
             }
         }
 
-        $prelevata = $this->normalizeTons($row['cantitate_prelevata'] ?? null, $row);
-        if ($prelevata > 0) {
-            return $prelevata;
+        return [
+            'clients_total' => $clients,
+            'clients_delivered' => $clients,
+            'tons_delivered_with_clients' => $tons,
+            'delivered_per_client' => $clients > 0 ? $tons / $clients : null,
+            'delivered_trips_without_clients' => $withoutClients,
+        ];
+    }
+
+    /**
+     * Tonele unei curse, dupa tipul de transport:
+     *  - Primar si Compresor transporta marfa: Tone transportate = cantitatea incarcata;
+     *  - Distributie si Primar + Distributie livreaza la clienti: Tone livrate =
+     *    tona livrata cand e completata (poate fi mai mica decat incarcatura),
+     *    altfel cantitatea incarcata.
+     * O cursa intra intr-o singura coloana, deci cele doua nu se aduna de doua ori.
+     *
+     * @return array{0: float, 1: float} [tone transportate, tone livrate]
+     */
+    private function tripTons(array $row, string $bucket): array
+    {
+        $loaded = $this->normalizeTons($row['cantitate_incarcata'] ?? null, $row);
+
+        if ($bucket === 'distributie' || $bucket === 'primar_distributie') {
+            $delivered = $this->normalizeTons($row['tona_livrata'] ?? null, $row);
+
+            return [0.0, $delivered > 0 ? $delivered : $loaded];
         }
 
-        $delivered = $this->positiveFloat($row['tona_livrata'] ?? null);
-        if ($delivered > 0) {
-            return $delivered;
+        if ($bucket === 'compresor' && $loaded <= 0) {
+            $loaded = $this->normalizeTons($row['cantitate_prelevata'] ?? null, $row);
+            if ($loaded <= 0) {
+                $loaded = $this->normalizeTons($row['tona_livrata'] ?? null, $row);
+            }
         }
 
-        return $this->normalizeTons($row['cantitate_incarcata'] ?? null, $row);
+        return [$loaded, 0.0];
     }
 
     private function normalizeTons(mixed $value, array $row = []): float
@@ -1203,6 +2109,18 @@ class DriverActivityHistoryModel extends BaseModel
         return $value;
     }
 
+    /** Filtrul de beneficiar din bara de sus (un singur beneficiar, ca la Tip transport). */
+    private function beneficiaryFilterSql(string $column, array $filters, array &$params, string $prefix): string
+    {
+        $beneficiaryId = (int) ($filters['beneficiar_id'] ?? 0);
+        if ($beneficiaryId <= 0) {
+            return '';
+        }
+        $params[':' . $prefix] = $beneficiaryId;
+
+        return $column . ' = :' . $prefix;
+    }
+
     private function transportFilterSql(string $column, string $filter, array &$params, string $prefix): string
     {
         $filter = $this->normalizeTransportBucket($filter);
@@ -1215,18 +2133,27 @@ class DriverActivityHistoryModel extends BaseModel
 
     private function expenseAggregateJoinSql(): string
     {
+        // Costul cursei = tot ce s-a inregistrat pe cursa: cheltuielile platite
+        // (suma) plus cele de refacturat (refacturare_suma), fiindca firma le
+        // plateste intai. Un rand este fie una, fie alta, deci nu se dubleaza.
+        // Refacturarile trecute in "Refacturat" raman cost, dar sunt si bani
+        // recuperati: se aduna separat (total_refacturare_facturata) si intra in
+        // profit, nu se scad din cost.
         $hasInvoiced = $this->columnExists('curse_cheltuieli', 'refacturare_facturata');
-        $refacturedInvoiced = $hasInvoiced
-            ? "SUM(CASE WHEN COALESCE(refacturare_facturata, 0) = 1 THEN COALESCE(refacturare_suma, 0) ELSE 0 END)"
-            : '0';
+        $invoicedFlag = $hasInvoiced ? 'COALESCE(refacturare_facturata, 0) = 1' : '0 = 1';
 
         return "
             LEFT JOIN (
                 SELECT
                     cursa_id,
-                    GREATEST(0, SUM(COALESCE(suma, 0)) - {$refacturedInvoiced}) AS total_cheltuieli,
+                    SUM(COALESCE(suma, 0)) + SUM(COALESCE(refacturare_suma, 0)) AS total_cheltuieli,
+                    SUM(COALESCE(suma, 0)) AS total_cheltuieli_platite,
+                    SUM(COALESCE(refacturare_suma, 0)) AS total_refacturare,
+                    SUM(CASE WHEN {$invoicedFlag} THEN COALESCE(refacturare_suma, 0) ELSE 0 END) AS total_refacturare_facturata,
                     SUM(CASE WHEN tip_cheltuiala = 'motorina' THEN COALESCE(suma, 0) ELSE 0 END) AS total_motorina,
-                    SUM(CASE WHEN tip_cheltuiala <> 'motorina' THEN COALESCE(suma, 0) ELSE 0 END) AS total_alte_cheltuieli
+                    SUM(CASE WHEN tip_cheltuiala <> 'motorina' THEN COALESCE(suma, 0) ELSE 0 END) AS total_alte_cheltuieli,
+                    SUM(CASE WHEN tip_cheltuiala = 'diurna' THEN COALESCE(suma, 0) ELSE 0 END)
+                        + SUM(CASE WHEN COALESCE(refacturare_tip_cheltuiala, tip_cheltuiala) = 'diurna' THEN COALESCE(refacturare_suma, 0) ELSE 0 END) AS total_diurna
                 FROM curse_cheltuieli
                 GROUP BY cursa_id
             ) exp ON exp.cursa_id = c.id
@@ -1393,7 +2320,7 @@ class DriverActivityHistoryModel extends BaseModel
             'kpis' => [
                 'total_trips' => 0,
                 'total_km' => 0,
-                'total_loaded_tons' => 0,
+                'total_transported_tons' => 0,
                 'total_delivered_tons' => 0,
                 'driving_minutes' => 0,
                 'total_fuel_liters' => 0,
@@ -1404,7 +2331,7 @@ class DriverActivityHistoryModel extends BaseModel
                 'total_costs' => 0,
             ],
             'charts' => [
-                'tons' => ['labels' => [], 'loaded' => [], 'delivered' => []],
+                'tons' => ['labels' => [], 'transported' => [], 'delivered' => []],
                 'kilometers_timeline' => ['labels' => [], 'values' => []],
                 'fuel_timeline' => ['labels' => [], 'values' => []],
                 'cost_distribution' => ['labels' => [], 'values' => []],

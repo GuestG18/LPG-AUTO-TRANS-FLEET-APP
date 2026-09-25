@@ -4,6 +4,7 @@ $driverSelected = (string) ((int) (($filters['driver_ids'][0] ?? 0)));
 $beneficiarySelected = (string) ((int) (($filters['beneficiary_ids'][0] ?? 0)));
 $transportSelected = (string) ($filters['transport_types'][0] ?? '');
 $capacitySelected = (string) ($filters['transport_capacities'][0] ?? '');
+$capacityCategorySelected = (string) ((int) (($filters['capacity_categories'][0] ?? 0)));
 $statusSelected = (string) ($filters['statuses'][0] ?? '');
 $formatDateRo = static function (string $isoDate): string {
     $isoDate = trim($isoDate);
@@ -190,7 +191,21 @@ $formatDateRo = static function (string $isoDate): string {
                     </select>
                 </div>
                 <div class="col-12 col-md-6 col-xl-2">
-                    <label class="form-label" for="da_transport_capacity">Capacitate transport</label>
+                    <label class="form-label" for="da_capacity_category">Categorie capacitate</label>
+                    <select class="form-select" id="da_capacity_category" name="categorie_capacitate_id">
+                        <option value="">Toate</option>
+                        <?php foreach ((array) ($filterOptions['capacity_categories'] ?? []) as $categoryRow): ?>
+                            <?php $categoryId = (string) ((int) ($categoryRow['id'] ?? 0)); ?>
+                            <?php if ($categoryId === '0'): continue; endif; ?>
+                            <option value="<?= e($categoryId) ?>" <?= $capacityCategorySelected === $categoryId ? 'selected' : '' ?>>
+                                <?= e((string) ($categoryRow['nume'] ?? '')) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <div class="form-text">Doar grupare: gradul de umplere ramane calculat pe capacitatea reala.</div>
+                </div>
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label class="form-label" for="da_transport_capacity">Capacitate reala</label>
                     <select class="form-select" id="da_transport_capacity" name="capacitate_transport">
                         <option value="">Toate</option>
                         <?php foreach ((array) ($filterOptions['transport_capacities'] ?? []) as $capacityRow): ?>

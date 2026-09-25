@@ -887,7 +887,7 @@ class ProgramareConcediiController
         return [
             'garaj' => '',
             'categorie_vehicul' => 'camion',
-            'capacitate_transport' => '',
+            'categorie_capacitate_id' => '',
             'min_soferi_disponibili' => '1',
             'activ' => '1',
         ];
@@ -897,7 +897,10 @@ class ProgramareConcediiController
     {
         $garage = trim((string) ($input['garaj'] ?? ''));
         $category = trim((string) ($input['categorie_vehicul'] ?? ''));
-        $capacityRaw = trim((string) ($input['capacitate_transport'] ?? ''));
+        // Criteriul de capacitate al regulii este CATEGORIA (eticheta de grupare),
+        // nu capacitatea tehnica: o corectie de capacitate reala nu trebuie sa
+        // scoata pe tacute un vehicul de sub regula.
+        $capacityCategoryRaw = trim((string) ($input['categorie_capacitate_id'] ?? ''));
         $minimum = (int) ($input['min_soferi_disponibili'] ?? 0);
         $active = isset($input['activ']) ? '1' : '0';
         $vehicleRuleOptions = $this->model->getAvailabilityRuleOptions();
@@ -909,9 +912,9 @@ class ProgramareConcediiController
         $capacityOptionsByCategory = [];
         foreach ((array) ($vehicleRuleOptions['capacities'] ?? []) as $capacityOption) {
             $optionCategory = (string) ($capacityOption['categorie_vehicul'] ?? '');
-            $optionCapacity = $this->normalizeRuleCapacityInput((string) ($capacityOption['capacitate_transport'] ?? ''));
-            if ($optionCategory !== '' && $optionCapacity !== null) {
-                $capacityOptionsByCategory[$optionCategory][$optionCapacity] = true;
+            $optionCapacityCategory = (int) ($capacityOption['categorie_capacitate_id'] ?? 0);
+            if ($optionCategory !== '' && $optionCapacityCategory > 0) {
+                $capacityOptionsByCategory[$optionCategory][$optionCapacityCategory] = true;
             }
         }
 
@@ -930,13 +933,14 @@ class ProgramareConcediiController
             $errors['categorie_vehicul'] = 'Selecteaza un tip de activitate valid.';
         }
 
-        $capacity = null;
-        if ($capacityRaw !== '') {
-            $capacity = $this->normalizeRuleCapacityInput($capacityRaw);
-            if ($capacity === null) {
-                $errors['capacitate_transport'] = 'Capacitatea trebuie sa fie un numar pozitiv.';
-            } elseif (!isset($capacityOptionsByCategory[$category][$capacity])) {
-                $errors['capacitate_transport'] = 'Alege o capacitate incarcata din Vehicule pentru activitatea selectata.';
+        $capacityCategoryId = null;
+        if ($capacityCategoryRaw !== '') {
+            $capacityCategoryId = (int) $capacityCategoryRaw;
+            if ($capacityCategoryId <= 0) {
+                $errors['categorie_capacitate_id'] = 'Selectia de categorie nu este valida.';
+                $capacityCategoryId = null;
+            } elseif (!isset($capacityOptionsByCategory[$category][$capacityCategoryId])) {
+                $errors['categorie_capacitate_id'] = 'Alege o categorie de capacitate folosita de vehiculele pentru activitatea selectata.';
             }
         }
 
@@ -947,7 +951,7 @@ class ProgramareConcediiController
         $old = [
             'garaj' => $garage,
             'categorie_vehicul' => $category,
-            'capacitate_transport' => $capacityRaw,
+            'categorie_capacitate_id' => $capacityCategoryRaw,
             'min_soferi_disponibili' => (string) max(1, $minimum),
             'activ' => $active,
         ];
@@ -955,7 +959,7 @@ class ProgramareConcediiController
         $data = [
             'garaj' => $garage,
             'categorie_vehicul' => $category,
-            'capacitate_transport' => $capacity,
+            'categorie_capacitate_id' => $capacityCategoryId,
             'min_soferi_disponibili' => max(1, $minimum),
             'activ' => $active === '1',
         ];
@@ -983,8 +987,15 @@ class ProgramareConcediiController
         $first = $violations[0] ?? [];
         $category = (string) ($first['categorie_vehicul'] ?? '');
         $categoryLabel = self::CATEGORII_REGULI_DISPONIBILITATE[$category] ?? $category;
+        // Eticheta din mesaj este numele categoriei; regulile vechi, inca scrise pe
+        // capacitate numerica, isi pastreaza vechea eticheta.
+        $capacityCategoryName = trim((string) ($first['categorie_capacitate'] ?? ''));
         $capacity = (string) ($first['capacitate_transport'] ?? '');
-        $capacityLabel = $capacity !== '' ? ' / ' . rtrim(rtrim($capacity, '0'), '.') . ' t' : '';
+        if ($capacityCategoryName !== '') {
+            $capacityLabel = ' / ' . $capacityCategoryName;
+        } else {
+            $capacityLabel = $capacity !== '' ? ' / ' . rtrim(rtrim($capacity, '0'), '.') . ' t' : '';
+        }
         $date = (string) ($first['date'] ?? '');
         $garage = (string) ($first['garaj'] ?? '');
         $available = (int) ($first['soferi_disponibili'] ?? 0);

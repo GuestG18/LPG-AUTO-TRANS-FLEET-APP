@@ -809,6 +809,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
     $tireTypeOptionsByAxleType = is_array($maintenanceTireStockContext['tire_type_options_by_axle_type'] ?? null) ? $maintenanceTireStockContext['tire_type_options_by_axle_type'] : [];
     $tireStatusOptions = is_array($maintenanceTireStockContext['status_options'] ?? null) ? $maintenanceTireStockContext['status_options'] : [];
     $conditionOptions = is_array($maintenanceTireStockContext['condition_options'] ?? null) ? $maintenanceTireStockContext['condition_options'] : [];
+    $initialConditionOptions = is_array($maintenanceTireStockContext['initial_condition_options'] ?? null) ? $maintenanceTireStockContext['initial_condition_options'] : ['new' => 'Noua', 'used' => 'Folosita'];
     $seasonOptions = is_array($maintenanceTireStockContext['season_options'] ?? null) ? $maintenanceTireStockContext['season_options'] : [];
     $locationOptions = is_array($maintenanceTireStockContext['location_options'] ?? null) ? $maintenanceTireStockContext['location_options'] : [];
     $axleConfigOptions = is_array($maintenanceTireStockContext['axle_config_options'] ?? null) ? $maintenanceTireStockContext['axle_config_options'] : [];
@@ -1161,7 +1162,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                 </select>
                 <select class="form-select" name="condition" aria-label="Stare">
                     <option value="">Toate starile</option>
-                    <?php foreach ($conditionOptions as $value => $label): ?>
+                    <?php foreach ($initialConditionOptions as $value => $label): ?>
                         <option value="<?= e((string) $value) ?>" <?= (string) ($tireFilters['condition'] ?? '') === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option>
                     <?php endforeach; ?>
                 </select>
@@ -1179,10 +1180,121 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                 <button class="btn btn-outline-secondary" type="submit"><i class="bi bi-funnel me-1"></i> Filtre</button>
             </form>
 
+            <form method="post" id="tireBulkDeleteForm" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'bulk_delete_tire_stock'])) ?>" class="d-none align-items-center gap-2 px-3 py-2 border-bottom bg-light" data-tire-bulk-bar>
+                <?= csrf_field() ?>
+                <input type="hidden" name="return_query" value="<?= e((string) ($_SERVER['QUERY_STRING'] ?? '')) ?>">
+                <span class="small fw-semibold"><span data-tire-bulk-count>0</span> anvelope selectate</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-tire-bulk-clear>Deselecteaza</button>
+                <button type="submit" class="btn btn-sm btn-danger ms-auto" data-tire-bulk-submit><i class="bi bi-trash me-1"></i>Sterge selectate</button>
+            </form>
+            <style>
+                .tire-table td:has(> [data-tire-bulk-item]) { cursor: pointer; }
+                body.tire-bulk-dragging, body.tire-bulk-dragging * { user-select: none; cursor: pointer !important; }
+                .tire-table tr:has([data-tire-bulk-item]:checked) > td { background-color: rgba(13, 110, 253, 0.06); }
+            </style>
+            <script>
+                document.addEventListener('DOMContentLoaded', function () {
+                    var form = document.getElementById('tireBulkDeleteForm');
+                    if (!form) { return; }
+                    var allBox = document.querySelector('[data-tire-bulk-all]');
+                    var countEl = form.querySelector('[data-tire-bulk-count]');
+                    var items = function () { return Array.prototype.slice.call(document.querySelectorAll('[data-tire-bulk-item]')); };
+                    var refresh = function () {
+                        var list = items();
+                        var checked = list.filter(function (box) { return box.checked; }).length;
+                        countEl.textContent = String(checked);
+                        form.classList.toggle('d-none', checked === 0);
+                        form.classList.toggle('d-flex', checked > 0);
+                        if (allBox) {
+                            allBox.checked = list.length > 0 && checked === list.length;
+                            allBox.indeterminate = checked > 0 && checked < list.length;
+                            allBox.disabled = list.length === 0;
+                        }
+                    };
+                    document.addEventListener('change', function (event) {
+                        if (event.target.matches('[data-tire-bulk-item]')) { refresh(); }
+                    });
+                    if (allBox) {
+                        allBox.addEventListener('change', function () {
+                            items().forEach(function (box) { box.checked = allBox.checked; });
+                            refresh();
+                        });
+                    }
+                    form.querySelector('[data-tire-bulk-clear]').addEventListener('click', function () {
+                        items().forEach(function (box) { box.checked = false; });
+                        refresh();
+                    });
+                    // Selectie prin tragere: apesi pe casuta unui rand si tragi peste celelalte randuri.
+                    // Shift + click selecteaza intervalul fata de ultimul rand bifat.
+                    var dragState = null;
+                    var lastBox = null;
+                    var setBox = function (box, state) {
+                        if (box && !box.disabled) { box.checked = state; }
+                    };
+                    var boxFromCell = function (target) {
+                        var cell = target.closest ? target.closest('td') : null;
+                        return cell ? cell.querySelector('[data-tire-bulk-item]') : null;
+                    };
+                    var boxFromRow = function (target) {
+                        var row = target.closest ? target.closest('tr') : null;
+                        return row ? row.querySelector('[data-tire-bulk-item]') : null;
+                    };
+                    document.addEventListener('mousedown', function (event) {
+                        if (event.button !== 0) { return; }
+                        var box = boxFromCell(event.target);
+                        if (!box) { return; }
+                        event.preventDefault();
+                        var state = !box.checked;
+                        if (event.shiftKey && lastBox) {
+                            var list = items();
+                            var from = list.indexOf(lastBox);
+                            var to = list.indexOf(box);
+                            if (from > -1 && to > -1) {
+                                state = lastBox.checked;
+                                list.slice(Math.min(from, to), Math.max(from, to) + 1).forEach(function (item) { setBox(item, state); });
+                            }
+                        } else {
+                            setBox(box, state);
+                        }
+                        lastBox = box;
+                        dragState = state;
+                        document.body.classList.add('tire-bulk-dragging');
+                        refresh();
+                    });
+                    document.addEventListener('mouseover', function (event) {
+                        if (dragState === null) { return; }
+                        var box = boxFromRow(event.target);
+                        if (box && box.checked !== dragState) {
+                            setBox(box, dragState);
+                            lastBox = box;
+                            refresh();
+                        }
+                    });
+                    document.addEventListener('mouseup', function () {
+                        if (dragState === null) { return; }
+                        dragState = null;
+                        document.body.classList.remove('tire-bulk-dragging');
+                    });
+                    // Starea e setata deja la mousedown; oprim comutarea implicita a click-ului.
+                    document.addEventListener('click', function (event) {
+                        // detail === 0 = tastatura (Space): lasam comportamentul normal.
+                        if (event.detail > 0 && event.target.matches('[data-tire-bulk-item]')) { event.preventDefault(); }
+                    });
+                    form.addEventListener('submit', function (event) {
+                        var checked = items().filter(function (box) { return box.checked; }).length;
+                        if (checked === 0 || !window.confirm('Sigur vrei sa stergi ' + checked + ' anvelope din stoc? Actiunea nu poate fi anulata.')) {
+                            event.preventDefault();
+                        }
+                    });
+                    refresh();
+                });
+            </script>
+
             <div class="table-responsive">
                 <table class="table tire-table align-middle mb-0">
                     <thead>
                     <tr>
+                        <th class="ps-3" style="width: 1%;"><input type="checkbox" class="form-check-input" data-tire-bulk-all aria-label="Selecteaza toate anvelopele de pe pagina" title="Selecteaza toate anvelopele nemontate de pe pagina (cele montate nu pot fi sterse)"></th>
                         <th>Anvelopa</th>
                         <th>Locatie & Pozitie</th>
                         <th>Stare & Uzura</th>
@@ -1196,7 +1308,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                     </thead>
                     <tbody>
                     <?php if ($inventoryRows === []): ?>
-                        <tr><td colspan="9" class="text-center text-muted py-4">Nu exista anvelope pentru filtrele selectate.</td></tr>
+                        <tr><td colspan="10" class="text-center text-muted py-4">Nu exista anvelope pentru filtrele selectate.</td></tr>
                     <?php else: ?>
                         <?php foreach ($inventoryRows as $tireRow): ?>
                             <?php
@@ -1222,6 +1334,13 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                             $locationPhotoUrl = $locationPhotoPath !== '' ? url('uploads/anvelope_locatii/' . rawurlencode(basename($locationPhotoPath))) : '';
                             ?>
                             <tr>
+                                <td class="ps-3">
+                                    <?php if (!empty($tireRow['is_mounted'])): ?>
+                                        <i class="bi bi-lock text-muted" title="Anvelopa este montata pe <?= e((string) ($tireRow['nr_inmatriculare'] ?? 'vehicul')) ?>. Demonteaz-o inainte de stergere." aria-label="Montata - nu poate fi stearsa"></i>
+                                    <?php else: ?>
+                                        <input type="checkbox" class="form-check-input" name="tire_ids[]" value="<?= e((string) $tireId) ?>" form="tireBulkDeleteForm" data-tire-bulk-item aria-label="Selecteaza anvelopa">
+                                    <?php endif; ?>
+                                </td>
                                 <td>
                                     <div class="d-flex align-items-center gap-3">
                                         <div class="tire-thumb<?= (string) ($tireRow['status'] ?? '') === 'missing' && $profilePhotoUrl === '' ? ' tire-thumb-missing' : '' ?>">
@@ -1240,7 +1359,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                                     <div class="small text-primary"><?= e((string) ($tireRow['axle_display'] ?? '-')) ?></div>
                                 </td>
                                 <td>
-                                    <div class="fw-semibold"><span class="<?= e((string) ($conditionMeta['dot_class'] ?? '')) ?>"></span><?= e((string) ($conditionMeta['label'] ?? '-')) ?></div>
+                                    <div class="fw-semibold"><span class="<?= e((string) ($conditionMeta['dot_class'] ?? '')) ?>"></span><?= e((string) ($tireRow['initial_condition_label'] ?? 'Noua')) ?></div>
                                     <div class="small text-muted"><?= $wearPercent !== null ? e(number_format((float) $wearPercent, 0, ',', '.')) . '% uzura' : 'Uzura necunoscuta' ?></div>
                                     <div class="tire-progress-track"><span class="<?= e((string) ($conditionMeta['progress_class'] ?? '')) ?>" style="width: <?= e(number_format($wearWidth, 2, '.', '')) ?>%"></span></div>
                                 </td>
@@ -1395,7 +1514,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                                                     <div class="col-md-4"><label class="form-label">Compatibilitate vehicul</label><?php $renderVehicleCompatibilityPicker('stock_edit_target_vehicle_types[]', $currentTargetVehicleTypes); ?><?php if ($currentTargetVehicleType !== 'universal' && !array_key_exists($currentTargetVehicleType, $targetVehicleTypeOptions)): ?><input type="hidden" name="stock_edit_target_vehicle_types[]" value="<?= e($currentTargetVehicleType) ?>"><?php endif; ?></div>
                                                     <div class="col-md-4"><label class="form-label">Formula axelor</label><select class="form-select" name="stock_edit_target_axle_config" data-tire-axle-config data-current="<?= e($currentTargetAxleConfig) ?>"></select></div>
                                                     <div class="col-md-4"><label class="form-label">Status</label><select class="form-select" name="stock_edit_status"><?php foreach ($tireStatusOptions as $value => $label): ?><option value="<?= e((string) $value) ?>" <?= (string) ($tireRow['status'] ?? '') === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option><?php endforeach; ?></select></div>
-                                                    <div class="col-md-4"><label class="form-label">Conditie</label><select class="form-select" name="stock_edit_condition_status"><?php foreach ($conditionOptions as $value => $label): ?><option value="<?= e((string) $value) ?>" <?= (string) ($tireRow['condition_status'] ?? '') === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option><?php endforeach; ?></select></div>
+                                                    <div class="col-md-4"><label class="form-label">Conditie</label><select class="form-select" name="stock_edit_initial_condition"><?php foreach ($initialConditionOptions as $value => $label): ?><option value="<?= e((string) $value) ?>" <?= (string) ($tireRow['initial_condition'] ?? 'new') === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option><?php endforeach; ?></select></div>
                                                     <div class="col-md-4"><label class="form-label">DOT</label><input class="form-control" name="stock_edit_dot_code" value="<?= e((string) ($tireRow['dot_code'] ?? '')) ?>"></div>
                                                     <div class="col-md-4"><label class="form-label">Km curent</label><input type="number" class="form-control" name="stock_edit_current_mileage" value="<?= e((string) ((int) ($tireRow['current_mileage'] ?? 0))) ?>"></div>
                                                     <div class="col-md-4"><label class="form-label">Km ramasi</label><input type="number" class="form-control" name="stock_edit_estimated_remaining_km" value="<?= e((string) ($tireRow['estimated_remaining_km'] ?? '')) ?>"></div>
@@ -1442,7 +1561,6 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
             <div class="modal-content">
                 <form method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'add_tire_stock'])) ?>" data-tire-compatibility-form>
                     <?= csrf_field() ?>
-                    <input type="hidden" name="stock_quantity" value="1">
                     <input type="hidden" name="stock_serial_prefix" value="ANV">
                     <input type="hidden" name="stock_mount_date" value="<?= e(date('Y-m-d')) ?>">
                     <input type="hidden" name="stock_require_vehicle_compatibility" value="1">
@@ -1465,11 +1583,12 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                             <div class="col-md-6"><label class="form-label">Poza locatie</label><input type="file" class="form-control" name="stock_location_photo_upload" accept=".jpg,.jpeg,.png,.webp"><div class="form-text">JPG, PNG, WEBP. Maxim 5 MB.</div></div>
                             <div class="col-md-3"><label class="form-label">Furnizor</label><input class="form-control" name="stock_supplier"></div>
                             <div class="col-md-3"><label class="form-label">Data achizitiei</label><input type="date" class="form-control" name="stock_purchase_date"></div>
-                            <div class="col-md-3"><label class="form-label">Cost</label><input class="form-control" name="stock_purchase_price" placeholder="Ex: 1200"></div>
+                            <div class="col-md-3"><label class="form-label">Cost / buc</label><input class="form-control" name="stock_purchase_price" placeholder="Ex: 1200"></div>
                             <div class="col-md-3"><label class="form-label">Factura</label><input type="file" class="form-control" name="stock_invoice_upload" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"><div class="form-text">PDF, JPG, PNG, WEBP, DOC, DOCX. Maxim 5 MB.</div></div>
                             <div class="col-md-6"><label class="form-label">Km curent</label><input type="number" class="form-control" name="stock_current_mileage" value="0" min="0"></div>
                             <div class="col-md-6"><label class="form-label">Km ramasi</label><input type="number" class="form-control" name="stock_estimated_remaining_km" min="0"></div>
-                            <div class="col-md-6"><label class="form-label">Conditie initiala</label><select class="form-select" name="stock_initial_condition"><?php foreach ($conditionOptions as $value => $label): ?><option value="<?= e((string) $value) ?>"><?= e((string) $label) ?></option><?php endforeach; ?></select></div>
+                            <div class="col-md-6"><label class="form-label">Conditie initiala</label><select class="form-select" name="stock_initial_condition"><?php foreach ($initialConditionOptions as $value => $label): ?><option value="<?= e((string) $value) ?>"><?= e((string) $label) ?></option><?php endforeach; ?></select></div>
+                            <div class="col-md-6"><label class="form-label">Cantitate *</label><input type="number" class="form-control" name="stock_quantity" value="1" min="1" max="1000" step="1" required><div class="form-text">Se creeaza cate o inregistrare separata pentru fiecare anvelopa, cu serie unica.</div></div>
                             <div class="col-12"><label class="form-label">Observatii</label><textarea class="form-control" name="stock_notes" rows="3" placeholder="Observatii optionale..."></textarea></div>
                         </div>
                     </div>

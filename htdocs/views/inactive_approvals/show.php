@@ -12,6 +12,7 @@ $resourceTypeLabels = [
     'vehicle' => 'Vehicul',
     'driver' => 'Sofer',
     'repair' => 'Reparatie',
+    'diurna' => 'Diurna',
 ];
 $formatDate = static fn(mixed $value): string => trim((string) $value) !== '' ? format_date_ro((string) $value) : '-';
 $formatDateTime = static fn(mixed $value): string => trim((string) $value) !== '' ? format_datetime_ro((string) $value) : '-';
@@ -22,6 +23,7 @@ $resourceType = (string) ($approval['resource_type'] ?? '');
 $resourceLabelTitle = match ($resourceType) {
     'driver' => 'Sofer',
     'repair' => 'Vehicul',
+    'diurna' => 'Diurna',
     default => 'Vehicul',
 };
 $approvalId = (int) ($approval['id'] ?? 0);

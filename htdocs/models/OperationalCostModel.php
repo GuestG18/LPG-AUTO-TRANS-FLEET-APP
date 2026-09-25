@@ -23,11 +23,11 @@ class OperationalCostModel extends BaseModel
         'salariu_multiplicator' => '1.75',
         'tva_carburant_fallback'=> '21.00',
         'management_alocare'    => 'vehicule_active',
-        'diurna_tarif_zi'       => '',
         'km_source'             => 'curse_reali',
     ];
 
     private static ?bool $schemaReady = null;
+    private static ?bool $segmentsTableReady = null;
 
     // ------------------------------------------------------------------
     // Schema proprie (config only)
@@ -229,19 +229,13 @@ class OperationalCostModel extends BaseModel
     public function getActivityByVehicle(string $dateStart, string $dateEnd): array
     {
         $stmt = $this->db->prepare(
-            'SELECT c.vehicle_id,
-                    COUNT(*) AS curse,
-                    SUM(CASE WHEN c.km_totali IS NOT NULL AND c.km_totali > 0 THEN c.km_totali
-                             WHEN c.km_cursa IS NOT NULL AND c.km_cursa > 0 THEN c.km_cursa
-                             ELSE 0 END) AS km_real,
-                    SUM(CASE WHEN c.km_cursa IS NOT NULL AND c.km_cursa > 0 THEN c.km_cursa
-                             WHEN c.km_totali IS NOT NULL AND c.km_totali > 0 THEN c.km_totali
-                             ELSE 0 END) AS km_facturat,
-                    SUM(COALESCE(c.total_facturare, 0)) AS venit
-               FROM curse_dispecer c
-              WHERE c.deleted_at IS NULL
-                AND c.data_inceput BETWEEN :ds AND :de
-              GROUP BY c.vehicle_id'
+            'SELECT leg_vehicle_id AS vehicle_id,
+                    SUM(leg_cursa) AS curse,
+                    ROUND(SUM(leg_km_real)) AS km_real,
+                    ROUND(SUM(leg_km_facturat)) AS km_facturat,
+                    SUM(leg_venit) AS venit
+               FROM (' . $this->raceLegsSql() . ') legs
+              GROUP BY leg_vehicle_id'
         );
         $stmt->execute(['ds' => $dateStart, 'de' => $dateEnd]);
         $out = [];
@@ -266,22 +260,93 @@ class OperationalCostModel extends BaseModel
     public function getActivityMatrix(string $dateStart, string $dateEnd): array
     {
         $stmt = $this->db->prepare(
-            'SELECT c.vehicle_id, c.driver_id, c.beneficiar_id, c.tip_transport,
-                    COUNT(*) AS curse,
-                    SUM(CASE WHEN c.km_totali IS NOT NULL AND c.km_totali > 0 THEN c.km_totali
-                             WHEN c.km_cursa IS NOT NULL AND c.km_cursa > 0 THEN c.km_cursa
-                             ELSE 0 END) AS km_real,
-                    SUM(CASE WHEN c.km_cursa IS NOT NULL AND c.km_cursa > 0 THEN c.km_cursa
-                             WHEN c.km_totali IS NOT NULL AND c.km_totali > 0 THEN c.km_totali
-                             ELSE 0 END) AS km_facturat,
-                    SUM(COALESCE(c.total_facturare, 0)) AS venit
-               FROM curse_dispecer c
-              WHERE c.deleted_at IS NULL
-                AND c.data_inceput BETWEEN :ds AND :de
-              GROUP BY c.vehicle_id, c.driver_id, c.beneficiar_id, c.tip_transport'
+            'SELECT leg_vehicle_id AS vehicle_id,
+                    leg_driver_id AS driver_id,
+                    beneficiar_id,
+                    tip_transport,
+                    SUM(leg_cursa) AS curse,
+                    ROUND(SUM(leg_km_real)) AS km_real,
+                    ROUND(SUM(leg_km_facturat)) AS km_facturat,
+                    SUM(leg_venit) AS venit
+               FROM (' . $this->raceLegsSql() . ') legs
+              GROUP BY leg_vehicle_id, leg_driver_id, beneficiar_id, tip_transport'
         );
         $stmt->execute(['ds' => $dateStart, 'de' => $dateEnd]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * Cursele, desfacute pe "picioare" (legs) de activitate.
+     *
+     * O cursa oprita si reluata ramane o singura cursa (un singur tarif), dar poate
+     * fi condusa de mai multi soferi / mai multe vehicule: segmentele ei impart
+     * km-ii si venitul proportional cu km-ii fiecarui segment. Cursa se numara o
+     * singura data, pe primul segment, ca sa nu se dubleze numarul de curse.
+     *
+     * Cursele fara segmente dau exact un leg, identic cu randul cursei.
+     */
+    private function raceLegsSql(): string
+    {
+        $kmReal = 'CASE WHEN c.km_totali IS NOT NULL AND c.km_totali > 0 THEN c.km_totali
+                        WHEN c.km_cursa IS NOT NULL AND c.km_cursa > 0 THEN c.km_cursa
+                        ELSE 0 END';
+        $kmFacturat = 'CASE WHEN c.km_cursa IS NOT NULL AND c.km_cursa > 0 THEN c.km_cursa
+                            WHEN c.km_totali IS NOT NULL AND c.km_totali > 0 THEN c.km_totali
+                            ELSE 0 END';
+
+        if (!$this->segmentsTableReady()) {
+            return "SELECT c.vehicle_id AS leg_vehicle_id,
+                           c.driver_id AS leg_driver_id,
+                           c.beneficiar_id,
+                           c.tip_transport,
+                           1 AS leg_cursa,
+                           ($kmReal) AS leg_km_real,
+                           ($kmFacturat) AS leg_km_facturat,
+                           COALESCE(c.total_facturare, 0) AS leg_venit
+                      FROM curse_dispecer c
+                     WHERE c.deleted_at IS NULL
+                       AND c.data_inceput BETWEEN :ds AND :de";
+        }
+
+        return "SELECT COALESCE(s.vehicle_id, c.vehicle_id) AS leg_vehicle_id,
+                       COALESCE(s.driver_id, c.driver_id) AS leg_driver_id,
+                       c.beneficiar_id,
+                       c.tip_transport,
+                       CASE WHEN seg.cursa_id IS NULL OR s.ordine = 1 THEN 1 ELSE 0 END AS leg_cursa,
+                       ($kmReal) * COALESCE(COALESCE(s.km, 0) / seg.km_total, 1) AS leg_km_real,
+                       ($kmFacturat) * COALESCE(COALESCE(s.km, 0) / seg.km_total, 1) AS leg_km_facturat,
+                       COALESCE(c.total_facturare, 0) * COALESCE(COALESCE(s.km, 0) / seg.km_total, 1) AS leg_venit
+                  FROM curse_dispecer c
+                  LEFT JOIN (
+                        SELECT cursa_id, SUM(COALESCE(km, 0)) AS km_total
+                          FROM curse_segmente
+                         GROUP BY cursa_id
+                        HAVING COUNT(*) >= 2 AND SUM(COALESCE(km, 0)) > 0
+                  ) seg ON seg.cursa_id = c.id
+                  LEFT JOIN curse_segmente s ON s.cursa_id = seg.cursa_id
+                 WHERE c.deleted_at IS NULL
+                   AND c.data_inceput BETWEEN :ds AND :de";
+    }
+
+    /** Segmentele exista doar dupa migrarea 2026_09_18_000002; pana atunci calculam ca inainte. */
+    private function segmentsTableReady(): bool
+    {
+        if (self::$segmentsTableReady !== null) {
+            return self::$segmentsTableReady;
+        }
+
+        try {
+            $stmt = $this->db->prepare(
+                'SELECT COUNT(*) FROM information_schema.TABLES
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = "curse_segmente"'
+            );
+            $stmt->execute();
+            self::$segmentsTableReady = ((int) $stmt->fetchColumn()) > 0;
+        } catch (Throwable $e) {
+            self::$segmentsTableReady = false;
+        }
+
+        return self::$segmentsTableReady;
     }
 
     /** Lista beneficiarilor activi (pentru filtre + etichete). @return array<int,string> */
@@ -753,18 +818,69 @@ class OperationalCostModel extends BaseModel
      */
     public function getCourseExpensesByType(string $dateStart, string $dateEnd, string $expenseType): array
     {
+        // Cursele oprite si reluate au mai multi soferi. Diurna se cuvine celui care
+        // era plecat in acel timp, deci se imparte dupa DURATA segmentelor; celelalte
+        // cheltuieli de cursa urmeaza km-ii, ca restul costurilor pe vehicul.
+        $net = 'GREATEST(0, ce.suma - CASE WHEN ce.refacturare_facturata = 1 THEN COALESCE(ce.refacturare_suma, 0) ELSE 0 END)';
+        $weight = $expenseType === 'diurna' ? 'time' : 'km';
+
+        if (!$this->segmentsTableReady()) {
+            $stmt = $this->db->prepare(
+                "SELECT c.vehicle_id, c.driver_id,
+                        COUNT(*) AS items,
+                        COALESCE(SUM($net), 0) AS total
+                   FROM curse_cheltuieli ce
+                   JOIN curse_dispecer c ON c.id = ce.cursa_id
+                  WHERE ce.tip_cheltuiala = :tip
+                    AND c.deleted_at IS NULL
+                    AND ce.data_cheltuiala BETWEEN :ds AND :de
+                  GROUP BY c.vehicle_id, c.driver_id"
+            );
+            $stmt->execute(['tip' => $expenseType, 'ds' => $dateStart, 'de' => $dateEnd]);
+
+            return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        }
+
+        $segmentWeight = $this->segmentWeightSql('s', $weight);
+        $totalWeight = $this->segmentWeightSql('sw', $weight);
         $stmt = $this->db->prepare(
-            'SELECT c.vehicle_id, c.driver_id,
-                    COUNT(*) AS items,
-                    COALESCE(SUM(GREATEST(0, ce.suma - CASE WHEN ce.refacturare_facturata = 1 THEN COALESCE(ce.refacturare_suma, 0) ELSE 0 END)), 0) AS total
+            "SELECT COALESCE(s.vehicle_id, c.vehicle_id) AS vehicle_id,
+                    COALESCE(s.driver_id, c.driver_id) AS driver_id,
+                    COUNT(DISTINCT ce.id) AS items,
+                    COALESCE(SUM($net * COALESCE($segmentWeight / seg.weight_total, 1)), 0) AS total
                FROM curse_cheltuieli ce
                JOIN curse_dispecer c ON c.id = ce.cursa_id
+               LEFT JOIN (
+                     SELECT sw.cursa_id, SUM($totalWeight) AS weight_total
+                       FROM curse_segmente sw
+                      GROUP BY sw.cursa_id
+                     HAVING COUNT(*) >= 2 AND SUM($totalWeight) > 0
+               ) seg ON seg.cursa_id = c.id
+               LEFT JOIN curse_segmente s ON s.cursa_id = seg.cursa_id
               WHERE ce.tip_cheltuiala = :tip
                 AND c.deleted_at IS NULL
                 AND ce.data_cheltuiala BETWEEN :ds AND :de
-              GROUP BY c.vehicle_id, c.driver_id'
+              GROUP BY COALESCE(s.vehicle_id, c.vehicle_id), COALESCE(s.driver_id, c.driver_id)"
         );
         $stmt->execute(['tip' => $expenseType, 'ds' => $dateStart, 'de' => $dateEnd]);
+
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * Ponderea unui segment in cursa: km parcursi sau minute petrecute pe drum.
+     * Segmentele fara valoarea respectiva cantaresc 0, deci nu trag nimic la ele.
+     */
+    private function segmentWeightSql(string $alias, string $weight): string
+    {
+        if ($weight === 'time') {
+            return "GREATEST(0, COALESCE(TIMESTAMPDIFF(
+                MINUTE,
+                CONCAT($alias.data_inceput, ' ', COALESCE($alias.ora_inceput, '00:00:00')),
+                CONCAT($alias.data_sfarsit, ' ', COALESCE($alias.ora_sfarsit, '00:00:00'))
+            ), 0))";
+        }
+
+        return "COALESCE($alias.km, 0)";
     }
 }

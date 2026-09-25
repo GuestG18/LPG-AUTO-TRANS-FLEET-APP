@@ -82,6 +82,7 @@ class ExpenseController
                 'drivers' => $this->model->getDrivers(),
                 'beneficiaries' => $this->model->getBeneficiaries(),
                 'suppliers' => $this->model->getSuppliers(),
+                'supplierDirectory' => $this->model->getSupplierDirectory(),
                 'overallRange' => $this->model->getOverallRange(),
                 'pagination' => [
                     'page' => $result['page'],

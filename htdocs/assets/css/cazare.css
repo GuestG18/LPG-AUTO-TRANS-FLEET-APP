@@ -38,6 +38,12 @@
     max-width: 22rem;
 }
 
+/* Coloana de bife pentru stergerea multipla. */
+.cazare-table .cazare-select-col {
+    width: 2.25rem;
+    padding-right: 0;
+}
+
 .cazare-table td form {
     margin-bottom: 0;
 }

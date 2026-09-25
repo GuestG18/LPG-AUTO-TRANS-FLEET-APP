@@ -47,6 +47,20 @@ class CentralizatorFacturareService
                     WHEN v.tip_vehicul = 'cap_tractor' AND vcs.capacitate_transport > 0 THEN vcs.capacitate_transport
                     ELSE v.capacitate_transport
                 END";
+    /*
+     * Categoria de capacitate: eticheta dupa care se grupeaza vehiculele in
+     * tabele si selectoare. Nu este o capacitate si nu intra in niciun calcul.
+     * Ca si capacitatea, capul tractor o preia de la semiremorca cuplata activ.
+     */
+    private const VEHICLE_CAPACITY_CATEGORY_ID_SQL = "CASE
+                    WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(vcs.categorie_capacitate_id, v.categorie_capacitate_id)
+                    ELSE v.categorie_capacitate_id
+                END";
+    private const VEHICLE_CAPACITY_CATEGORY_JOIN_SQL = "LEFT JOIN vehicule_categorii_capacitate vcc
+                ON vcc.id = CASE
+                     WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(vcs.categorie_capacitate_id, v.categorie_capacitate_id)
+                     ELSE v.categorie_capacitate_id
+                   END";
     private const ACTIVE_TRAILER_JOIN_SQL = "LEFT JOIN (
                 SELECT vc1.tractor_id, vc1.semiremorca_id
                 FROM vehicule_cuplaje vc1
@@ -107,7 +121,8 @@ class CentralizatorFacturareService
             'refacturari' => $core['refacturari'],
             'visibility' => $this->buildVisibility($filters, $core),
             'tariff_evolution' => $this->buildTariffEvolution($filters, $core),
-            'lookups' => $this->buildLookups($filters),
+            'lookups' => $lookups = $this->buildLookups($filters),
+            'scope' => $this->buildScope($filters, $lookups),
             'warnings' => array_values(array_unique(array_filter(array_merge(
                 $core['distribution']['warnings'] ?? [],
                 $core['primary_routes']['warnings'] ?? [],
@@ -135,15 +150,33 @@ class CentralizatorFacturareService
 
         $bounds = $this->monthBounds($month);
         /*
-         * beneficiar_id <= 0 (sau lipsa) inseamna "toti beneficiarii", adica
-         * situatia generala - acesta este si comportamentul implicit al paginii.
-         * Un id pozitiv restrange raportul la un singur client.
+         * Toate filtrele (in afara de luna) sunt cu selectie multipla: o lista goala
+         * inseamna "toate" - fara beneficiari alesi raportul e situatia generala.
+         * Un singur parametru (URL vechi) e acceptat in continuare.
          */
-        $beneficiaryId = $this->normalizePositiveInt($input['beneficiar_id'] ?? null);
+        $activities = [];
+        foreach ($this->inputList($input['tip_activitate'] ?? []) as $activity) {
+            $activity = strtolower($activity);
+            if (isset(self::TRANSPORT_TYPES[$activity])) {
+                $activities[$activity] = $activity;
+            }
+        }
+        /* Toate tipurile bifate e acelasi lucru cu niciunul: situatia generala. */
+        $activities = count($activities) === count(self::TRANSPORT_TYPES) ? [] : array_values($activities);
 
-        $activity = trim(strtolower((string) ($input['tip_activitate'] ?? '')));
-        if (!array_key_exists($activity, self::ACTIVITY_OPTIONS)) {
-            $activity = '';
+        $cargo = [];
+        foreach ($this->inputList($input['tip_marfa'] ?? []) as $value) {
+            $key = $this->normalizeCargoKey($value);
+            if ($key !== '') {
+                $cargo[$key] = $key;
+            }
+        }
+        $routes = [];
+        foreach ($this->inputList($input['ruta'] ?? []) as $value) {
+            $key = $this->normalizeRouteKey($value);
+            if ($key !== '') {
+                $routes[$key] = $key;
+            }
         }
 
         $perPage = $this->normalizePositiveInt($input['per_page'] ?? ($input['ref_per_page'] ?? 10));
@@ -162,13 +195,19 @@ class CentralizatorFacturareService
             'date_start' => $bounds['start'],
             'date_end' => $bounds['end'],
             'date_next' => $bounds['next'],
-            'beneficiar_id' => $beneficiaryId,
-            'tip_activitate' => $activity,
-            'tip_marfa' => $this->normalizeCargoKey((string) ($input['tip_marfa'] ?? '')),
-            'loc_incarcare_id' => $this->normalizePositiveInt($input['loc_incarcare_id'] ?? null),
-            'zona_distributie_id' => $this->normalizePositiveInt($input['zona_distributie_id'] ?? null),
-            'ruta' => $this->normalizeRouteKey((string) ($input['ruta'] ?? '')),
-            'vehicle_id' => $this->normalizePositiveInt($input['vehicle_id'] ?? null),
+            'beneficiar_ids' => $this->normalizeIdList($input['beneficiar_id'] ?? []),
+            /*
+             * tip_activitate ramane "modul" paginii (panourile si cardurile unui tip):
+             * are valoare doar cand e ales un singur tip. Cu mai multe tipuri pagina
+             * e cea generala, restransa la tipurile din tip_activitate_list.
+             */
+            'tip_activitate' => count($activities) === 1 ? $activities[0] : '',
+            'tip_activitate_list' => $activities,
+            'tip_marfa_list' => array_values($cargo),
+            'loc_incarcare_ids' => $this->normalizeIdList($input['loc_incarcare_id'] ?? []),
+            'zona_distributie_ids' => $this->normalizeIdList($input['zona_distributie_id'] ?? []),
+            'rute' => array_values($routes),
+            'vehicle_ids' => $this->normalizeIdList($input['vehicle_id'] ?? []),
             'vehicle_sort' => $vehicleSort,
             'page_no' => max(1, $this->normalizePositiveInt($input['page_no'] ?? ($input['p'] ?? 1))),
             'per_page' => $perPage,
@@ -508,7 +547,7 @@ class CentralizatorFacturareService
 
     private function buildDistributionSection(array $rows, array $filters): array
     {
-        $types = $this->distributionTypesForMode((string) $filters['tip_activitate']);
+        $types = array_values(array_intersect($this->distributionTypesForMode((string) $filters['tip_activitate']), $this->activityTypes($filters)));
         $rows = array_values(array_filter($rows, static fn (array $row): bool => in_array((string) ($row['tip_transport'] ?? ''), $types, true)));
 
         $warnings = [];
@@ -1272,7 +1311,7 @@ class CentralizatorFacturareService
 
     private function fetchTripRows(array $filters, string $prefix): array
     {
-        $where = $this->buildTripWhere($filters, $this->typesForMode((string) $filters['tip_activitate']), $prefix);
+        $where = $this->buildTripWhere($filters, $this->activityTypes($filters), $prefix);
         $sql = "
             SELECT
                 c.id,
@@ -1308,13 +1347,17 @@ class CentralizatorFacturareService
                 zd.nume AS zona_distributie_nume,
                 bt.nume AS beneficiar_nume,
                 v.nr_inmatriculare,
-                " . self::VEHICLE_CAPACITY_SQL . " AS vehicle_capacitate_transport
+                " . self::VEHICLE_CAPACITY_SQL . " AS vehicle_capacitate_transport,
+                " . self::VEHICLE_CAPACITY_CATEGORY_ID_SQL . " AS vehicle_categorie_capacitate_id,
+                vcc.nume AS vehicle_categorie_capacitate,
+                vcc.ordine_afisare AS vehicle_categorie_capacitate_ordine
             FROM curse_dispecer c
             LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
             LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             LEFT JOIN vehicule v ON v.id = c.vehicle_id
             " . self::ACTIVE_TRAILER_JOIN_SQL . "
+            " . self::VEHICLE_CAPACITY_CATEGORY_JOIN_SQL . "
             " . $where['where'] . "
             ORDER BY COALESCE(c.data_inceput, c.data_cursa) ASC, c.id ASC
         ";
@@ -1369,7 +1412,10 @@ class CentralizatorFacturareService
                 zd.nume AS zona_distributie_nume,
                 bt.nume AS beneficiar_nume,
                 v.nr_inmatriculare,
-                " . self::VEHICLE_CAPACITY_SQL . " AS vehicle_capacitate_transport
+                " . self::VEHICLE_CAPACITY_SQL . " AS vehicle_capacitate_transport,
+                " . self::VEHICLE_CAPACITY_CATEGORY_ID_SQL . " AS vehicle_categorie_capacitate_id,
+                vcc.nume AS vehicle_categorie_capacitate,
+                vcc.ordine_afisare AS vehicle_categorie_capacitate_ordine
             FROM curse_cheltuieli e
             INNER JOIN curse_dispecer c ON c.id = e.cursa_id
             LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
@@ -1377,6 +1423,7 @@ class CentralizatorFacturareService
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             LEFT JOIN vehicule v ON v.id = c.vehicle_id
             " . self::ACTIVE_TRAILER_JOIN_SQL . "
+            " . self::VEHICLE_CAPACITY_CATEGORY_JOIN_SQL . "
             " . $where['where'] . "
             ORDER BY COALESCE(e.refacturare_data, e.data_cheltuiala) DESC, e.id DESC
         ";
@@ -1400,11 +1447,6 @@ class CentralizatorFacturareService
             ':' . $prefix . '_date_next' => $filters['date_next'],
         ];
 
-        if ((int) $filters['beneficiar_id'] > 0) {
-            $where[] = 'c.beneficiar_id = :' . $prefix . '_beneficiar_id';
-            $params[':' . $prefix . '_beneficiar_id'] = (int) $filters['beneficiar_id'];
-        }
-
         if ($types !== []) {
             $placeholders = [];
             foreach (array_values($types) as $index => $type) {
@@ -1417,41 +1459,7 @@ class CentralizatorFacturareService
             $where[] = '1 = 0';
         }
 
-        if ((string) $filters['tip_marfa'] !== '') {
-            $where[] = "FIND_IN_SET(:" . $prefix . "_cargo, REPLACE(REPLACE(REPLACE(LOWER(COALESCE(c.tip_marfa, '')), ' ', ''), ';', ','), '|', ',')) > 0";
-            $params[':' . $prefix . '_cargo'] = (string) $filters['tip_marfa'];
-        }
-
-        if ((int) ($filters['loc_incarcare_id'] ?? 0) > 0) {
-            $where[] = 'c.loc_incarcare_id = :' . $prefix . '_loc_filter_id';
-            $params[':' . $prefix . '_loc_filter_id'] = (int) $filters['loc_incarcare_id'];
-        }
-
-        if ((int) ($filters['zona_distributie_id'] ?? 0) > 0) {
-            $where[] = 'c.zona_distributie_id = :' . $prefix . '_zone_filter_id';
-            $params[':' . $prefix . '_zone_filter_id'] = (int) $filters['zona_distributie_id'];
-        }
-
-        $route = $this->parseRouteKey((string) $filters['ruta']);
-        if ($route !== null) {
-            if ($route['loc'] > 0) {
-                $where[] = 'c.loc_incarcare_id = :' . $prefix . '_loc_id';
-                $params[':' . $prefix . '_loc_id'] = $route['loc'];
-            } else {
-                $where[] = 'c.loc_incarcare_id IS NULL';
-            }
-            if ($route['zone'] > 0) {
-                $where[] = 'c.zona_distributie_id = :' . $prefix . '_zone_id';
-                $params[':' . $prefix . '_zone_id'] = $route['zone'];
-            } else {
-                $where[] = 'c.zona_distributie_id IS NULL';
-            }
-        }
-
-        if ((int) $filters['vehicle_id'] > 0) {
-            $where[] = 'c.vehicle_id = :' . $prefix . '_vehicle_id';
-            $params[':' . $prefix . '_vehicle_id'] = (int) $filters['vehicle_id'];
-        }
+        $this->appendDimensionFilters($where, $params, $filters, $prefix);
 
         return ['where' => 'WHERE ' . implode(' AND ', $where), 'params' => $params];
     }
@@ -1469,12 +1477,7 @@ class CentralizatorFacturareService
             ':' . $prefix . '_date_next' => $filters['date_next'],
         ];
 
-        if ((int) $filters['beneficiar_id'] > 0) {
-            $where[] = 'c.beneficiar_id = :' . $prefix . '_beneficiar_id';
-            $params[':' . $prefix . '_beneficiar_id'] = (int) $filters['beneficiar_id'];
-        }
-
-        $types = $this->typesForMode((string) $filters['tip_activitate']);
+        $types = $this->activityTypes($filters);
         if ($types !== []) {
             $placeholders = [];
             foreach (array_values($types) as $index => $type) {
@@ -1485,43 +1488,120 @@ class CentralizatorFacturareService
             $where[] = 'c.tip_transport IN (' . implode(', ', $placeholders) . ')';
         }
 
-        if ((string) $filters['tip_marfa'] !== '') {
-            $where[] = "FIND_IN_SET(:" . $prefix . "_cargo, REPLACE(REPLACE(REPLACE(LOWER(COALESCE(c.tip_marfa, '')), ' ', ''), ';', ','), '|', ',')) > 0";
-            $params[':' . $prefix . '_cargo'] = (string) $filters['tip_marfa'];
-        }
-
-        if ((int) ($filters['loc_incarcare_id'] ?? 0) > 0) {
-            $where[] = 'c.loc_incarcare_id = :' . $prefix . '_loc_filter_id';
-            $params[':' . $prefix . '_loc_filter_id'] = (int) $filters['loc_incarcare_id'];
-        }
-
-        if ((int) ($filters['zona_distributie_id'] ?? 0) > 0) {
-            $where[] = 'c.zona_distributie_id = :' . $prefix . '_zone_filter_id';
-            $params[':' . $prefix . '_zone_filter_id'] = (int) $filters['zona_distributie_id'];
-        }
-
-        $route = $this->parseRouteKey((string) $filters['ruta']);
-        if ($route !== null) {
-            if ($route['loc'] > 0) {
-                $where[] = 'c.loc_incarcare_id = :' . $prefix . '_loc_id';
-                $params[':' . $prefix . '_loc_id'] = $route['loc'];
-            } else {
-                $where[] = 'c.loc_incarcare_id IS NULL';
-            }
-            if ($route['zone'] > 0) {
-                $where[] = 'c.zona_distributie_id = :' . $prefix . '_zone_id';
-                $params[':' . $prefix . '_zone_id'] = $route['zone'];
-            } else {
-                $where[] = 'c.zona_distributie_id IS NULL';
-            }
-        }
-
-        if ((int) $filters['vehicle_id'] > 0) {
-            $where[] = 'c.vehicle_id = :' . $prefix . '_vehicle_id';
-            $params[':' . $prefix . '_vehicle_id'] = (int) $filters['vehicle_id'];
-        }
+        $this->appendDimensionFilters($where, $params, $filters, $prefix);
 
         return ['where' => 'WHERE ' . implode(' AND ', $where), 'params' => $params];
+    }
+
+    /*
+     * Filtrele comune curselor si refacturarilor, toate cu selectie multipla: in
+     * cadrul unui filtru valorile se leaga cu SAU, intre filtre cu SI.
+     */
+    private function appendDimensionFilters(array &$where, array &$params, array $filters, string $prefix): void
+    {
+        $inList = function (string $column, array $values, string $name) use (&$where, &$params, $prefix): void {
+            if ($values === []) {
+                return;
+            }
+            $placeholders = [];
+            foreach (array_values($values) as $index => $value) {
+                $placeholder = ':' . $prefix . '_' . $name . '_' . $index;
+                $placeholders[] = $placeholder;
+                $params[$placeholder] = $value;
+            }
+            $where[] = $column . ' IN (' . implode(', ', $placeholders) . ')';
+        };
+
+        $inList('c.beneficiar_id', (array) ($filters['beneficiar_ids'] ?? []), 'beneficiar');
+        $inList('c.loc_incarcare_id', (array) ($filters['loc_incarcare_ids'] ?? []), 'loc_filter');
+        $inList('c.zona_distributie_id', (array) ($filters['zona_distributie_ids'] ?? []), 'zone_filter');
+        $inList('c.vehicle_id', (array) ($filters['vehicle_ids'] ?? []), 'vehicle');
+
+        /* Tipul de marfa e o lista in text pe cursa: cursa intra daca are oricare marfa aleasa. */
+        $cargoConditions = [];
+        foreach (array_values((array) ($filters['tip_marfa_list'] ?? [])) as $index => $cargo) {
+            $placeholder = ':' . $prefix . '_cargo_' . $index;
+            $cargoConditions[] = "FIND_IN_SET(" . $placeholder . ", REPLACE(REPLACE(REPLACE(LOWER(COALESCE(c.tip_marfa, '')), ' ', ''), ';', ','), '|', ',')) > 0";
+            $params[$placeholder] = (string) $cargo;
+        }
+        if ($cargoConditions !== []) {
+            $where[] = '(' . implode(' OR ', $cargoConditions) . ')';
+        }
+
+        /* Ruta = perechea loc incarcare : zona (0 = nesetat). */
+        $routeConditions = [];
+        foreach (array_values((array) ($filters['rute'] ?? [])) as $index => $routeKey) {
+            $route = $this->parseRouteKey((string) $routeKey);
+            if ($route === null) {
+                continue;
+            }
+            $parts = [];
+            if ($route['loc'] > 0) {
+                $parts[] = 'c.loc_incarcare_id = :' . $prefix . '_route_loc_' . $index;
+                $params[':' . $prefix . '_route_loc_' . $index] = $route['loc'];
+            } else {
+                $parts[] = 'c.loc_incarcare_id IS NULL';
+            }
+            if ($route['zone'] > 0) {
+                $parts[] = 'c.zona_distributie_id = :' . $prefix . '_route_zone_' . $index;
+                $params[':' . $prefix . '_route_zone_' . $index] = $route['zone'];
+            } else {
+                $parts[] = 'c.zona_distributie_id IS NULL';
+            }
+            $routeConditions[] = '(' . implode(' AND ', $parts) . ')';
+        }
+        if ($routeConditions !== []) {
+            $where[] = '(' . implode(' OR ', $routeConditions) . ')';
+        }
+    }
+
+    /*
+     * Etichetele raportului (bara "Raport pentru" din pagina si antetul din Excel):
+     * beneficiarii alesi si filtrele optionale care restrang efectiv datele.
+     */
+    private function buildScope(array $filters, array $lookups): array
+    {
+        $labelsFor = static function (array $items, array $selected, string $valueKey, string $labelKey): array {
+            $selectedMap = array_flip(array_map('strval', $selected));
+            $labels = [];
+            foreach ($items as $item) {
+                if (isset($selectedMap[(string) ($item[$valueKey] ?? '')])) {
+                    $labels[] = (string) ($item[$labelKey] ?? '');
+                }
+            }
+
+            return array_values(array_filter($labels, static fn (string $label): bool => $label !== ''));
+        };
+
+        $beneficiaries = $labelsFor((array) ($lookups['beneficiaries'] ?? []), (array) $filters['beneficiar_ids'], 'id', 'nume');
+        $active = [];
+        $activityLabels = array_values(array_filter(array_map(
+            static fn (string $type): string => (string) (self::ACTIVITY_OPTIONS[$type] ?? ''),
+            (array) $filters['tip_activitate_list']
+        )));
+        if ($activityLabels !== []) {
+            $active[] = ['label' => 'Tip activitate', 'value' => implode(', ', $activityLabels)];
+        }
+        foreach ([
+            ['Tip marfă', 'tip_marfa_list', 'cargo', 'value', 'label'],
+            ['Vehicul', 'vehicle_ids', 'vehicles', 'id', 'nr_inmatriculare'],
+            ['Loc încărcare', 'loc_incarcare_ids', 'loading_locations', 'id', 'label'],
+            ['Zonă descărcare', 'zona_distributie_ids', 'unloading_zones', 'id', 'label'],
+            ['Rută', 'rute', 'routes', 'value', 'label'],
+        ] as [$label, $filterKey, $lookupKey, $valueKey, $labelKey]) {
+            $values = $labelsFor((array) ($lookups[$lookupKey] ?? []), (array) ($filters[$filterKey] ?? []), $valueKey, $labelKey);
+            if ($values !== []) {
+                $active[] = ['label' => $label, 'value' => implode(', ', $values)];
+            }
+        }
+
+        return [
+            'all_beneficiaries' => $filters['beneficiar_ids'] === [],
+            'beneficiary' => $filters['beneficiar_ids'] === []
+                ? 'Toți beneficiarii'
+                : ($beneficiaries !== [] ? implode(', ', $beneficiaries) : 'beneficiar neselectat'),
+            'active' => $active,
+        ];
     }
 
     private function buildLookups(array $filters): array
@@ -1582,8 +1662,8 @@ class CentralizatorFacturareService
 
     private function cargoOptions(array $filters): array
     {
-        $lookupFilters = array_merge($filters, ['tip_marfa' => '']);
-        $where = $this->buildTripWhere($lookupFilters, $this->typesForMode((string) $filters['tip_activitate']), 'cargo');
+        $lookupFilters = array_merge($filters, ['tip_marfa_list' => []]);
+        $where = $this->buildTripWhere($lookupFilters, $this->activityTypes($filters), 'cargo');
         $stmt = $this->db->prepare("SELECT DISTINCT c.tip_marfa FROM curse_dispecer c " . $where['where'] . " AND COALESCE(TRIM(c.tip_marfa), '') <> '' ORDER BY c.tip_marfa ASC");
         $this->bindParams($stmt, $where['params']);
         $stmt->execute();
@@ -1600,8 +1680,8 @@ class CentralizatorFacturareService
 
     private function routeOptions(array $filters): array
     {
-        $lookupFilters = array_merge($filters, ['ruta' => '']);
-        $where = $this->buildTripWhere($lookupFilters, $this->typesForMode((string) $filters['tip_activitate']), 'route');
+        $lookupFilters = array_merge($filters, ['rute' => []]);
+        $where = $this->buildTripWhere($lookupFilters, $this->activityTypes($filters), 'route');
         $sql = "
             SELECT
                 c.loc_incarcare_id,
@@ -1631,8 +1711,8 @@ class CentralizatorFacturareService
 
     private function loadingLocationOptions(array $filters): array
     {
-        $lookupFilters = array_merge($filters, ['loc_incarcare_id' => 0, 'ruta' => '']);
-        $where = $this->buildTripWhere($lookupFilters, $this->typesForMode((string) $filters['tip_activitate']), 'loc_lookup');
+        $lookupFilters = array_merge($filters, ['loc_incarcare_ids' => [], 'rute' => []]);
+        $where = $this->buildTripWhere($lookupFilters, $this->activityTypes($filters), 'loc_lookup');
         $sql = "
             SELECT
                 c.loc_incarcare_id AS id,
@@ -1659,8 +1739,8 @@ class CentralizatorFacturareService
 
     private function unloadingZoneOptions(array $filters): array
     {
-        $lookupFilters = array_merge($filters, ['zona_distributie_id' => 0, 'ruta' => '']);
-        $where = $this->buildTripWhere($lookupFilters, $this->typesForMode((string) $filters['tip_activitate']), 'zone_lookup');
+        $lookupFilters = array_merge($filters, ['zona_distributie_ids' => [], 'rute' => []]);
+        $where = $this->buildTripWhere($lookupFilters, $this->activityTypes($filters), 'zone_lookup');
         $sql = "
             SELECT
                 c.zona_distributie_id AS id,
@@ -1687,13 +1767,20 @@ class CentralizatorFacturareService
 
     private function vehicleOptions(array $filters): array
     {
-        $lookupFilters = array_merge($filters, ['vehicle_id' => 0]);
-        $where = $this->buildTripWhere($lookupFilters, $this->typesForMode((string) $filters['tip_activitate']), 'vehicle');
+        $lookupFilters = array_merge($filters, ['vehicle_ids' => []]);
+        $where = $this->buildTripWhere($lookupFilters, $this->activityTypes($filters), 'vehicle');
         $sql = "
-            SELECT DISTINCT v.id, v.nr_inmatriculare, " . self::VEHICLE_CAPACITY_SQL . " AS capacitate_transport
+            SELECT DISTINCT
+                v.id,
+                v.nr_inmatriculare,
+                " . self::VEHICLE_CAPACITY_SQL . " AS capacitate_transport,
+                " . self::VEHICLE_CAPACITY_CATEGORY_ID_SQL . " AS categorie_capacitate_id,
+                vcc.nume AS categorie_capacitate,
+                vcc.ordine_afisare AS categorie_capacitate_ordine
             FROM curse_dispecer c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             " . self::ACTIVE_TRAILER_JOIN_SQL . "
+            " . self::VEHICLE_CAPACITY_CATEGORY_JOIN_SQL . "
             " . $where['where'] . "
             ORDER BY v.nr_inmatriculare ASC
         ";
@@ -1707,8 +1794,9 @@ class CentralizatorFacturareService
     private function vehicleSortOptions(): array
     {
         return [
-            'capacity_asc' => 'Capacitate crescător',
-            'capacity_desc' => 'Capacitate descrescător',
+            // Sortarea grupelor: dupa ordinea de afisare a categoriei de capacitate.
+            'capacity_asc' => 'Categorie capacitate (crescător)',
+            'capacity_desc' => 'Categorie capacitate (descrescător)',
             'plate_asc' => 'Nr. înmatriculare A-Z',
             'plate_desc' => 'Nr. înmatriculare Z-A',
         ];
@@ -1745,7 +1833,7 @@ class CentralizatorFacturareService
             return ['rows' => []];
         }
 
-        $mode = (string) $filters['tip_activitate'];
+        $activityTypes = $this->activityTypes($filters);
         $monthStart = (string) $filters['date_start'];
         $monthEnd = (string) $filters['date_end'];
         $rows = [];
@@ -1781,7 +1869,7 @@ class CentralizatorFacturareService
                             continue;
                         }
                         $transportType = (string) ($version['transport_type'] ?? '');
-                        if ($mode !== '' && $transportType !== '' && $transportType !== $mode) {
+                        if ($transportType !== '' && !in_array($transportType, $activityTypes, true)) {
                             continue;
                         }
 
@@ -1850,13 +1938,12 @@ class CentralizatorFacturareService
         ];
     }
 
-    private function typesForMode(string $mode): array
+    /** Tipurile de transport din raport: cele bifate, altfel toate. */
+    private function activityTypes(array $filters): array
     {
-        if ($mode === '') {
-            return array_keys(self::TRANSPORT_TYPES);
-        }
+        $selected = (array) ($filters['tip_activitate_list'] ?? []);
 
-        return isset(self::TRANSPORT_TYPES[$mode]) ? [$mode] : [];
+        return $selected !== [] ? array_values($selected) : array_keys(self::TRANSPORT_TYPES);
     }
 
     private function distributionTypesForMode(string $mode): array
@@ -1888,12 +1975,20 @@ class CentralizatorFacturareService
     private function emptyVehicleBucket(string $key, ?array $row): array
     {
         $capacity = $row !== null ? $this->nullableFloat($row['vehicle_capacitate_transport'] ?? null) : null;
+        // Categoria este doar eticheta de grupare a randurilor; `capacity` ramane
+        // capacitatea tehnica reala, afisata pe randul vehiculului.
+        $categoryId = $row !== null ? (int) ($row['vehicle_categorie_capacitate_id'] ?? 0) : 0;
 
         return [
             'key' => $key,
             'vehicle_id' => $row !== null ? (int) ($row['vehicle_id'] ?? 0) : 0,
             'nr_inmatriculare' => $row !== null ? (string) ($row['nr_inmatriculare'] ?? 'Vehicul nealocat') : 'Vehicul nealocat',
             'capacity' => $capacity,
+            'capacity_category_id' => $categoryId > 0 ? $categoryId : null,
+            'capacity_category' => $row !== null && ($row['vehicle_categorie_capacitate'] ?? null) !== null
+                ? (string) $row['vehicle_categorie_capacitate']
+                : null,
+            'capacity_category_order' => $row !== null ? (int) ($row['vehicle_categorie_capacitate_ordine'] ?? 0) : 0,
             'trips' => 0,
             'primar' => ['_trips' => 0, 'km' => 0.0, 'value' => 0.0],
             'primar_tona' => ['_trips' => 0, 'tone' => 0.0, 'value' => 0.0],
@@ -2020,13 +2115,23 @@ class CentralizatorFacturareService
                 'vehicle_id' => (int) ($vehicle['vehicle_id'] ?? 0),
                 'vehicle' => (string) $vehicle['nr_inmatriculare'],
                 'capacity' => $vehicle['capacity'],
+                'capacity_category_id' => $vehicle['capacity_category_id'] ?? null,
+                'capacity_category' => $vehicle['capacity_category'] ?? null,
+                'capacity_category_order' => (int) ($vehicle['capacity_category_order'] ?? 0),
                 'route_summary' => (string) ($vehicle['route_summary'] ?? '-'),
                 'detail_rows' => (array) ($vehicle['detail_rows'] ?? []),
                 'detail_columns' => $this->vehicleTripDetailColumns($mode, $distributionBilling),
             ], $metric);
         }
 
-        $totals = ['vehicle' => 'TOTAL', 'capacity' => null, 'trips' => array_sum(array_column($rows, 'trips'))];
+        $totals = [
+            'vehicle' => 'TOTAL',
+            'capacity' => null,
+            'capacity_category_id' => null,
+            'capacity_category' => null,
+            'capacity_category_order' => 0,
+            'trips' => array_sum(array_column($rows, 'trips')),
+        ];
         foreach (['km', 'tone', 'activity', 'value'] as $key) {
             $totals[$key] = round(array_sum(array_map(static fn (array $row): float => (float) ($row[$key] ?? 0), $rows)), $key === 'value' ? 2 : 4);
         }
@@ -2352,6 +2457,7 @@ class CentralizatorFacturareService
             ];
             $groups[$groupKey]['quantity'] += $quantity > 0 ? $quantity : 1;
             $groups[$groupKey]['amount'] += $amount;
+            $this->addRefacturarePrice($groups[$groupKey], $quantity > 0 ? $quantity : 1, $amount, (int) ($expense['expense_id'] ?? 0));
 
             return;
         }
@@ -2385,6 +2491,7 @@ class CentralizatorFacturareService
                 ];
                 $groups[$groupKey]['quantity'] += $qty;
                 $groups[$groupKey]['amount'] += $lineTotal;
+                $this->addRefacturarePrice($groups[$groupKey], $qty, $lineTotal, (int) ($expense['expense_id'] ?? 0));
             }
 
             $difference = round($amount - $componentTotal, 2);
@@ -2418,6 +2525,27 @@ class CentralizatorFacturareService
         ];
         $groups[$groupKey]['quantity'] += 1;
         $groups[$groupKey]['amount'] += $amount;
+        $this->addRefacturarePrice($groups[$groupKey], 1.0, $amount, (int) ($expense['expense_id'] ?? 0));
+    }
+
+    /*
+     * Defalcarea unui grup pe pret unitar (cate bucati la ce pret), afisata in cardul
+     * "Total refacturari". Pretul se deduce din total / bucati, rotunjit la bani.
+     * expense_ids: inregistrarile din spatele randului, deschise in Refacturari curse.
+     */
+    private function addRefacturarePrice(array &$group, float $quantity, float $amount, int $expenseId = 0): void
+    {
+        if ($quantity <= 0) {
+            return;
+        }
+        $unitPrice = round($amount / $quantity, 2);
+        $priceKey = number_format($unitPrice, 2, '.', '');
+        $group['prices'][$priceKey] ??= ['unit_price' => $unitPrice, 'quantity' => 0.0, 'amount' => 0.0, 'expense_ids' => []];
+        $group['prices'][$priceKey]['quantity'] += $quantity;
+        $group['prices'][$priceKey]['amount'] += $amount;
+        if ($expenseId > 0) {
+            $group['prices'][$priceKey]['expense_ids'][$expenseId] = $expenseId;
+        }
     }
 
     /*
@@ -3082,6 +3210,34 @@ class CentralizatorFacturareService
     {
         $value = trim((string) $value);
         return $value !== '' && ctype_digit($value) ? max(0, (int) $value) : 0;
+    }
+
+    /** Valorile unui filtru cu selectie multipla (param[]=...), sau un singur parametru vechi. */
+    private function inputList(mixed $value): array
+    {
+        $values = is_array($value) ? $value : [$value];
+        $list = [];
+        foreach ($values as $item) {
+            if (is_scalar($item) && ($item = trim((string) $item)) !== '') {
+                $list[] = $item;
+            }
+        }
+
+        return $list;
+    }
+
+    /** @return int[] Id-uri pozitive unice; 0 ("toti") sau valorile invalide se ignora. */
+    private function normalizeIdList(mixed $value): array
+    {
+        $ids = [];
+        foreach ($this->inputList($value) as $item) {
+            $id = $this->normalizePositiveInt($item);
+            if ($id > 0) {
+                $ids[$id] = $id;
+            }
+        }
+
+        return array_values($ids);
     }
 
     private function normalizeCargoKey(string $value): string

@@ -1070,7 +1070,7 @@ class MaintenanceController
     private function isLegacyAction(string $action): bool
     {
         return in_array($action, [
-            'tire_stock', 'add_tire_stock', 'bulk_tire_stock', 'update_tire_stock', 'delete_tire_stock',
+            'tire_stock', 'add_tire_stock', 'bulk_tire_stock', 'update_tire_stock', 'delete_tire_stock', 'bulk_delete_tire_stock',
             'axis_config', 'update_tire_layout', 'mount_tire', 'unmount_tire', 'move_tire', 'change_tire_status',
             'create', 'store', 'edit', 'update', 'delete', 'show', 'preview',
         ], true);

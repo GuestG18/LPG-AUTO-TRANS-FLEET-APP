@@ -47,8 +47,20 @@ class CentralizatorFacturareController
                 $this->exportAction();
                 return;
 
+            case 'export_trips':
+                if ($this->routePage !== 'istoric_activitate') {
+                    $this->notFound();
+                    return;
+                }
+                $this->exportTripsAction();
+                return;
+
             case 'update_status':
                 $this->updateStatusAction();
+                return;
+
+            case 'bulk_update_status':
+                $this->bulkUpdateStatusAction();
                 return;
 
             default:
@@ -145,6 +157,13 @@ class CentralizatorFacturareController
         $report = $this->centralizerService->getExportData($this->collectReportFilters());
         $filters = $report['filters'] ?? [];
         $fileMonth = preg_replace('/[^0-9\-]/', '', (string) ($filters['month'] ?? date('Y-m')));
+
+        /* Excel formatat ca pagina; CSV-ul plat ramane doar ca rezerva fara extensia zip. */
+        if (class_exists(ZipArchive::class)) {
+            $this->exportExcel($report, 'centralizator_facturare_' . $fileMonth . '_' . date('Ymd_His') . '.xlsx');
+            return;
+        }
+
         $filename = 'centralizator_facturare_' . $fileMonth . '_' . date('Ymd_His') . '.csv';
 
         header_remove('Content-Type');
@@ -161,11 +180,10 @@ class CentralizatorFacturareController
         fwrite($out, "\xEF\xBB\xBF");
         fputcsv($out, ['Centralizator facturare'], ';');
         fputcsv($out, ['Luna', (string) ($filters['month_label'] ?? '')], ';');
-        fputcsv($out, ['Beneficiar ID', (string) ($filters['beneficiar_id'] ?? '')], ';');
-        fputcsv($out, ['Tip activitate', (string) ($filters['tip_activitate'] ?? 'toate')], ';');
-        fputcsv($out, ['Loc incarcare ID', (string) ($filters['loc_incarcare_id'] ?? '')], ';');
-        fputcsv($out, ['Zona descarcare ID', (string) ($filters['zona_distributie_id'] ?? '')], ';');
-        fputcsv($out, ['Ruta', (string) ($filters['ruta'] ?? '')], ';');
+        fputcsv($out, ['Beneficiar', (string) ($report['scope']['beneficiary'] ?? '')], ';');
+        foreach ((array) ($report['scope']['active'] ?? []) as $activeFilter) {
+            fputcsv($out, [(string) ($activeFilter['label'] ?? ''), (string) ($activeFilter['value'] ?? '')], ';');
+        }
         fputcsv($out, [], ';');
 
         fputcsv($out, ['Summary'], ';');
@@ -295,6 +313,178 @@ class CentralizatorFacturareController
         exit;
     }
 
+    private function exportExcel(array $report, string $filename): void
+    {
+        require_once __DIR__ . '/../services/CentralizatorFacturareExcelExport.php';
+
+        $path = tempnam(sys_get_temp_dir(), 'cfx');
+        if ($path === false) {
+            http_response_code(500);
+            exit('Nu pot crea fișierul temporar pentru export.');
+        }
+
+        try {
+            (new CentralizatorFacturareExcelExport($report))->save($path);
+
+            header_remove('Content-Type');
+            header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            header('Content-Disposition: attachment; filename="' . $filename . '"');
+            header('Content-Length: ' . (string) filesize($path));
+            header('Pragma: no-cache');
+            header('Expires: 0');
+            readfile($path);
+        } finally {
+            @unlink($path);
+        }
+        exit;
+    }
+
+    /*
+     * Export Excel din tabelul "Curse" (Istoric activitate): primeste randurile exact
+     * cum sunt afisate - vizibile, bifate, in ordinea din tabel - si le scrie formatat.
+     * Numerele afisate ("19,08 t", "1.335,60 lei", "246 km") devin valori numerice.
+     */
+    private function exportTripsAction(): void
+    {
+        $backUrl = build_query_url(['page' => $this->routePage, 'action' => 'index']);
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($backUrl);
+        }
+        ensure_csrf_or_redirect($backUrl);
+
+        $payload = (string) ($_POST['payload'] ?? '');
+        $data = strlen($payload) <= 20_000_000 ? json_decode($payload, true) : null;
+        $columns = is_array($data['columns'] ?? null) ? array_slice(array_values($data['columns']), 0, 30) : [];
+        $rows = is_array($data['rows'] ?? null) ? array_slice(array_values($data['rows']), 0, 50000) : [];
+        if ($columns === [] || $rows === [] || !class_exists(ZipArchive::class)) {
+            flash_set('warning', $rows === [] ? 'Nu există curse bifate de exportat.' : 'Exportul Excel nu este disponibil pe server (extensia zip lipsește).');
+            redirect($backUrl);
+        }
+
+        require_once __DIR__ . '/../services/SimpleXlsxWriter.php';
+        $columns = array_map(static fn ($label): string => mb_substr(trim((string) $label), 0, 60), $columns);
+        $columns = array_map(static fn (string $label): string => $label === '#' ? 'Nr.' : $label, $columns);
+        $columnCount = count($columns);
+
+        /* Tipul fiecarei coloane dupa unitatea afisata; "De refacturat" vine ca numar simplu (lei). */
+        $unitFor = static function (string $label): ?string {
+            $key = mb_strtolower($label, 'UTF-8');
+            return match (true) {
+                $key === 'tone' => 't',
+                str_starts_with($key, 'km') => 'km',
+                in_array($key, ['facturat', 'de refacturat'], true) => 'lei',
+                $key === 'nr.' => 'nr',
+                default => null,
+            };
+        };
+        $parseNumber = static function (string $text): ?float {
+            $clean = trim(preg_replace('/\s*(lei|ron|km|t)$/iu', '', trim($text)) ?? '');
+            if ($clean === '' || $clean === '-') {
+                return null;
+            }
+            if (preg_match('/^-?\d+(\.\d+)?$/', $clean) === 1 && substr_count($clean, '.') === 1 && !preg_match('/\.\d{3}$/', $clean)) {
+                return (float) $clean;
+            }
+            if (preg_match('/^-?[\d.]*\d(,\d+)?$/', $clean) !== 1) {
+                return null;
+            }
+
+            return (float) str_replace(['.', ','], ['', '.'], $clean);
+        };
+        $styleFor = static fn (?string $unit, bool $total = false): string => ($total ? 'total_' : '') . match ($unit) {
+            'km', 'nr' => 'int',
+            't' => 'num2',
+            default => 'money',
+        };
+
+        $xlsx = new SimpleXlsxWriter();
+        $sheet = $xlsx->addSheet('Curse');
+        $widths = [];
+        foreach ($columns as $index => $label) {
+            $widths[$index + 1] = match ($unitFor($label)) {
+                'nr' => 6,
+                'km', 't' => 13,
+                'lei' => 15,
+                default => match (mb_strtolower($label, 'UTF-8')) {
+                    'cursă' => 30,
+                    'calcul' => 42,
+                    'șofer' => 24,
+                    default => 15,
+                },
+            };
+        }
+        $xlsx->setColumnWidths($sheet, $widths);
+
+        $xlsx->addRow($sheet, [['v' => 'Istoric activitate - curse', 's' => 'title']], ['height' => 24]);
+        $summary = trim(mb_substr((string) ($_POST['filters_summary'] ?? ''), 0, 1000));
+        $xlsx->addRow($sheet, [['v' => $summary !== '' ? 'Filtre: ' . $summary : 'Fără filtre', 's' => 'muted']]);
+        $xlsx->addRow($sheet, [['v' => count($rows) . ' curse exportate (bifate în tabel) · ' . date('d.m.Y H:i'), 's' => 'muted']]);
+        $xlsx->addRow($sheet);
+
+        $head = [];
+        foreach ($columns as $label) {
+            $head[] = ['v' => $label, 's' => $unitFor($label) !== null ? 'th_num' : 'th'];
+        }
+        $headRow = $xlsx->addRow($sheet, $head);
+        $xlsx->freezeRows($sheet, $headRow);
+
+        $totals = array_fill(0, $columnCount, 0.0);
+        foreach ($rows as $rowIndex => $row) {
+            $cellsIn = is_array($row['cells'] ?? null) ? array_values($row['cells']) : [];
+            $cells = [];
+            foreach ($columns as $index => $label) {
+                $text = mb_substr(trim((string) ($cellsIn[$index] ?? '')), 0, 500);
+                $unit = $unitFor($label);
+                if ($unit === 'nr') {
+                    $cells[] = ['v' => $rowIndex + 1, 's' => 'int'];
+                    continue;
+                }
+                $number = $unit !== null ? $parseNumber($text) : null;
+                if ($number !== null) {
+                    $totals[$index] += $number;
+                    $cells[] = ['v' => $number, 's' => $styleFor($unit)];
+                } else {
+                    $cells[] = ['v' => $text !== '' ? $text : '-', 's' => $unit !== null ? 'text_num' : 'text'];
+                }
+            }
+            $xlsx->addRow($sheet, $cells);
+        }
+
+        $totalCells = [];
+        foreach ($columns as $index => $label) {
+            $unit = $unitFor($label);
+            if ($index === 0) {
+                $totalCells[] = ['v' => 'TOTAL', 's' => 'total'];
+            } elseif ($unit !== null && $unit !== 'nr') {
+                $totalCells[] = ['v' => $totals[$index], 's' => $styleFor($unit, true)];
+            } elseif (mb_strtolower($label, 'UTF-8') === 'cursă') {
+                $totalCells[] = ['v' => count($rows) . ' curse', 's' => 'total'];
+            } else {
+                $totalCells[] = ['v' => '', 's' => 'total'];
+            }
+        }
+        $xlsx->addRow($sheet, $totalCells);
+
+        $path = tempnam(sys_get_temp_dir(), 'cfx');
+        if ($path === false) {
+            flash_set('danger', 'Nu s-a putut genera exportul Excel.');
+            redirect($backUrl);
+        }
+        try {
+            $xlsx->save($path);
+            header_remove('Content-Type');
+            header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            header('Content-Disposition: attachment; filename="istoric_activitate_curse_' . date('Ymd_His') . '.xlsx"');
+            header('Content-Length: ' . (string) filesize($path));
+            header('Pragma: no-cache');
+            header('Expires: 0');
+            readfile($path);
+        } finally {
+            @unlink($path);
+        }
+        exit;
+    }
+
     private function updateStatusAction(): void
     {
         $isJsonRequest = $this->isJsonRequest();
@@ -355,24 +545,72 @@ class CentralizatorFacturareController
         $this->redirectToSafeCentralizerUrl($returnUrl);
     }
 
+    /**
+     * Schimbare in bloc: primeste ID-urile curselor afisate de filtrul curent si le aplica acelasi status.
+     */
+    private function bulkUpdateStatusAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => $this->routePage]));
+        }
+
+        $returnUrl = trim((string) ($_POST['return_url'] ?? ''));
+        if (!verify_csrf_token($_POST['_token'] ?? null)) {
+            flash_set('danger', 'Token CSRF invalid. Reîncearcă operațiunea.');
+            $this->redirectToSafeCentralizerUrl($returnUrl);
+        }
+
+        $billingStatus = $this->normalizeBillingStatus((string) ($_POST['status_facturare'] ?? ''));
+        $raceIds = array_values(array_filter(
+            array_map('intval', explode(',', (string) ($_POST['race_ids'] ?? ''))),
+            static fn (int $id): bool => $id > 0
+        ));
+
+        if ($billingStatus === '' || $raceIds === []) {
+            flash_set('warning', $billingStatus === '' ? 'Statusul de facturare selectat este invalid.' : 'Nu există curse selectate.');
+            $this->redirectToSafeCentralizerUrl($returnUrl);
+        }
+
+        try {
+            $userId = (int) (current_user()['id'] ?? 0);
+            $changed = $this->model->updateRacesBillingStatus($raceIds, $billingStatus, date('Y-m-d H:i:s'), $userId > 0 ? $userId : null);
+            $label = self::BILLING_STATUSES[$billingStatus] ?? $billingStatus;
+            $unchanged = count(array_unique($raceIds)) - $changed;
+            $message = $changed . ' curse au fost trecute pe „' . $label . '”.';
+            if ($unchanged > 0) {
+                $message .= ' ' . $unchanged . ' aveau deja acest status.';
+            }
+            flash_set('success', $message);
+        } catch (Throwable $exception) {
+            error_log('[CentralizatorFacturareController][bulk_update_status] ' . $exception->getMessage());
+            flash_set('danger', 'Nu s-a putut actualiza statusul curselor. Nicio cursă nu a fost modificată.');
+        }
+
+        $this->redirectToSafeCentralizerUrl($returnUrl);
+    }
+
     private function collectFilters(): array
     {
         $status = $this->normalizeBillingStatus((string) ($_GET['status_facturare'] ?? ''));
-        $transportType = trim((string) ($_GET['tip_transport'] ?? ''));
-        if ($transportType === 'primar_tona') {
-            $transportType = 'primar';
-        }
-        if (!array_key_exists($transportType, self::TRANSPORT_TYPES)) {
-            $transportType = '';
+        /* Tip transport, vehicul, sofer si beneficiar: selectie multipla (tip_transport[]=...); un singur parametru vechi e acceptat in continuare. */
+        $transportTypes = [];
+        foreach ((array) ($_GET['tip_transport'] ?? []) as $transportType) {
+            $transportType = trim((string) $transportType);
+            if ($transportType === 'primar_tona') {
+                $transportType = 'primar';
+            }
+            if (array_key_exists($transportType, self::TRANSPORT_TYPES)) {
+                $transportTypes[$transportType] = $transportType;
+            }
         }
 
         return [
             'status_facturare' => $status,
-            'tip_transport' => $transportType,
+            'tip_transport' => array_values($transportTypes),
             'nr_inmatriculare' => $this->normalizeTextFilter($_GET['nr_inmatriculare'] ?? ''),
-            'vehicle_id' => $this->normalizePositiveIntFilter($_GET['vehicle_id'] ?? ''),
-            'driver_id' => $this->normalizePositiveIntFilter($_GET['driver_id'] ?? ''),
-            'beneficiar_id' => $this->normalizePositiveIntFilter($_GET['beneficiar_id'] ?? ''),
+            'vehicle_id' => $this->normalizePositiveIntArrayFilter($_GET['vehicle_id'] ?? []),
+            'driver_id' => $this->normalizePositiveIntArrayFilter($_GET['driver_id'] ?? []),
+            'beneficiar_id' => $this->normalizePositiveIntArrayFilter($_GET['beneficiar_id'] ?? []),
             'tip_marfa' => $this->normalizeGoodsFilter($_GET['tip_marfa'] ?? ''),
             'zona_distributie_id' => $this->normalizePositiveIntFilter($_GET['zona_distributie_id'] ?? ''),
             'locatie_operationala' => $this->normalizeTextArrayFilter($_GET['locatie_operationala'] ?? []),
@@ -387,13 +625,14 @@ class CentralizatorFacturareController
     {
         return [
             'month' => trim((string) ($_GET['month'] ?? '')),
-            'beneficiar_id' => $this->normalizePositiveIntFilter($_GET['beneficiar_id'] ?? ''),
-            'tip_activitate' => trim((string) ($_GET['tip_activitate'] ?? '')),
-            'tip_marfa' => trim((string) ($_GET['tip_marfa'] ?? '')),
-            'loc_incarcare_id' => $this->normalizePositiveIntFilter($_GET['loc_incarcare_id'] ?? ''),
-            'zona_distributie_id' => $this->normalizePositiveIntFilter($_GET['zona_distributie_id'] ?? ''),
-            'ruta' => trim((string) ($_GET['ruta'] ?? '')),
-            'vehicle_id' => $this->normalizePositiveIntFilter($_GET['vehicle_id'] ?? ''),
+            /* Filtre cu selectie multipla (param[]=...): listele se valideaza in serviciu. */
+            'beneficiar_id' => $_GET['beneficiar_id'] ?? [],
+            'tip_activitate' => $_GET['tip_activitate'] ?? [],
+            'tip_marfa' => $_GET['tip_marfa'] ?? [],
+            'loc_incarcare_id' => $_GET['loc_incarcare_id'] ?? [],
+            'zona_distributie_id' => $_GET['zona_distributie_id'] ?? [],
+            'ruta' => $_GET['ruta'] ?? [],
+            'vehicle_id' => $_GET['vehicle_id'] ?? [],
             'vehicle_sort' => trim((string) ($_GET['vehicle_sort'] ?? 'capacity_asc')),
             'page_no' => $this->normalizePositiveIntFilter($_GET['p'] ?? ($_GET['page_no'] ?? '1')),
             'per_page' => $this->normalizePositiveIntFilter($_GET['per_page'] ?? '10'),
@@ -415,6 +654,19 @@ class CentralizatorFacturareController
         }
 
         return $value;
+    }
+
+    private function normalizePositiveIntArrayFilter(mixed $value): array
+    {
+        $ids = [];
+        foreach ((array) $value as $item) {
+            $item = $this->normalizePositiveIntFilter($item);
+            if ($item !== '') {
+                $ids[$item] = $item;
+            }
+        }
+
+        return array_values($ids);
     }
 
     private function normalizeTextFilter(mixed $value): string

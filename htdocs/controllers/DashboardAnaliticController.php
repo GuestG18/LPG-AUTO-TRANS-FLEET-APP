@@ -90,6 +90,8 @@ class DashboardAnaliticController
                     'km_tona' => 0,
                     'tona_km' => 0,
                     'grad_incarcare_mediu' => 0,
+                    'curse_cu_capacitate' => 0,
+                    'curse_capacitate_neconfirmata' => 0,
                     'km_nefacturati' => 0,
                     'km_facturati' => 0,
                     'grad_utilizare_flota_percent' => 0,
@@ -142,6 +144,9 @@ class DashboardAnaliticController
             'beneficiary_ids' => $this->parseIntList($input['beneficiary_ids'] ?? ($input['beneficiary_id'] ?? '')),
             'transport_types' => $this->parseStringList($input['transport_types'] ?? ($input['tip_transport'] ?? '')),
             'transport_capacities' => $this->parseDecimalList($input['transport_capacities'] ?? ($input['capacitate_transport'] ?? '')),
+            // Filtru de GRUPARE pe categoria de capacitate a vehiculului. Alege ce
+            // curse intra in raport; nu schimba numitorul gradului de umplere.
+            'capacity_categories' => $this->parseIntList($input['capacity_categories'] ?? ($input['categorie_capacitate_id'] ?? '')),
             'statuses' => $this->parseStringList($input['statuses'] ?? ($input['status'] ?? '')),
         ];
     }

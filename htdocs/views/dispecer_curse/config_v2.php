@@ -319,27 +319,10 @@ foreach (($vehicles ?? []) as $garageVehicle) {
 }
 ksort($vehicleGarageOptions);
 
-// V2.7: vehiculele grupate dupa capacitatea de transport, pentru dropdown-urile de selectie
-$vehicleCapacityGroups = [];
-foreach (($vehicles ?? []) as $capacityGroupVehicle) {
-    $capacityGroupVehicleId = (int) ($capacityGroupVehicle['id'] ?? 0);
-    if ($capacityGroupVehicleId <= 0) {
-        continue;
-    }
-    $vehicleCapacityValue = (float) ($capacityGroupVehicle['capacitate_transport'] ?? 0);
-    $vehicleCapacityKey = $vehicleCapacityValue > 0 ? number_format($vehicleCapacityValue, 2, '.', '') : 'fara';
-    if (!isset($vehicleCapacityGroups[$vehicleCapacityKey])) {
-        $vehicleCapacityGroups[$vehicleCapacityKey] = [
-            'label' => $vehicleCapacityValue > 0
-                ? rtrim(rtrim(number_format($vehicleCapacityValue, 2, '.', ''), '0'), '.') . ' tone'
-                : 'Fara capacitate',
-            'capacity' => $vehicleCapacityValue,
-            'vehicles' => [],
-        ];
-    }
-    $vehicleCapacityGroups[$vehicleCapacityKey]['vehicles'][] = $capacityGroupVehicle;
-}
-uasort($vehicleCapacityGroups, static fn(array $a, array $b): int => $b['capacity'] <=> $a['capacity']);
+// V2.7 / 2026-09-18: vehiculele grupate dupa CATEGORIA de capacitate (eticheta de
+// grupare), nu dupa capacitatea tehnica reala. Aceeasi logica partajata ca in
+// config.php - vezi includes/vehicle_capacity_groups.php.
+$vehicleCapacityGroups = build_vehicle_capacity_groups($vehicles ?? []);
 $configTabVisibility = [
     'beneficiar' => true,
     'catalog' => $isCatalogSelected,

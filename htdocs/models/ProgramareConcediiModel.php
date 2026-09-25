@@ -439,15 +439,24 @@ class ProgramareConcediiModel extends BaseModel
         $stmt = $this->db->query("
             SELECT *
             FROM concedii_reguli_disponibilitate
-            ORDER BY garaj ASC, categorie_vehicul ASC, capacitate_transport IS NULL ASC, capacitate_transport ASC, id DESC
+            ORDER BY garaj ASC, categorie_vehicul ASC, categorie_capacitate_id IS NULL ASC, categorie_capacitate_id ASC, id DESC
         ");
 
         return $stmt->fetchAll();
     }
 
+    /**
+     * Optiunile formularului de reguli: garajele si perechile
+     * (tip vehicul x categorie de capacitate) care exista in flota.
+     *
+     * Regula se scrie pe CATEGORIE, nu pe capacitatea tehnica: asa ramane valabila
+     * chiar daca administratorul corecteaza ulterior capacitatea reala a unui vehicul.
+     */
     public function getAvailabilityRuleOptions(): array
     {
-        $capacityExpr = $this->transportCapacityExpression();
+        $this->ensureVehicleCapacityCategorySchema();
+
+        $categoryExpr = $this->capacityCategoryExpression();
         $sql = "
             SELECT DISTINCT
                 NULLIF(TRIM(v.garaj), '') AS garaj,
@@ -456,14 +465,17 @@ class ProgramareConcediiModel extends BaseModel
                     WHEN v.tip_vehicul = 'cap_tractor' THEN 'ansamblu'
                     ELSE NULL
                 END AS categorie_vehicul,
-                {$capacityExpr} AS capacitate_transport
+                {$categoryExpr} AS categorie_capacitate_id,
+                cc.nume AS categorie_capacitate,
+                cc.ordine_afisare AS categorie_capacitate_ordine
             FROM vehicule v
             " . $this->latestActiveCouplingJoin() . "
             LEFT JOIN vehicule tr ON tr.id = vc.semiremorca_id
+            LEFT JOIN vehicule_categorii_capacitate cc ON cc.id = ({$categoryExpr})
             WHERE v.status = 'activ'
               AND v.tip_vehicul IN ('camion', 'cap_tractor')
               AND NULLIF(TRIM(v.garaj), '') IS NOT NULL
-            ORDER BY garaj ASC, categorie_vehicul ASC, capacitate_transport ASC
+            ORDER BY garaj ASC, categorie_vehicul ASC, categorie_capacitate_ordine ASC
         ";
 
         $stmt = $this->db->query($sql);
@@ -477,12 +489,13 @@ class ProgramareConcediiModel extends BaseModel
                 $garageMap[$this->normalizeGarageKey($garage)] = $garage;
             }
 
-            $category = (string) ($row['categorie_vehicul'] ?? '');
-            $capacity = $this->normalizeCapacityValue($row['capacitate_transport'] ?? null);
-            if ($category !== '' && $capacity !== null) {
-                $capacityMap[$category . ':' . $capacity] = [
-                    'categorie_vehicul' => $category,
-                    'capacitate_transport' => $capacity,
+            $vehicleCategory = (string) ($row['categorie_vehicul'] ?? '');
+            $capacityCategoryId = (int) ($row['categorie_capacitate_id'] ?? 0);
+            if ($vehicleCategory !== '' && $capacityCategoryId > 0) {
+                $capacityMap[$vehicleCategory . ':' . $capacityCategoryId] = [
+                    'categorie_vehicul' => $vehicleCategory,
+                    'categorie_capacitate_id' => $capacityCategoryId,
+                    'categorie_capacitate' => (string) ($row['categorie_capacitate'] ?? ''),
                 ];
             }
         }
@@ -499,7 +512,9 @@ class ProgramareConcediiModel extends BaseModel
 
         $garage = trim((string) ($data['garaj'] ?? ''));
         $category = (string) ($data['categorie_vehicul'] ?? '');
-        $capacity = $this->normalizeCapacityValue($data['capacitate_transport'] ?? null);
+        // Criteriul este categoria de capacitate; null = regula acopera toate categoriile.
+        $capacityCategoryId = (int) ($data['categorie_capacitate_id'] ?? 0);
+        $capacityCategoryId = $capacityCategoryId > 0 ? $capacityCategoryId : null;
         $minimum = max(1, (int) ($data['min_soferi_disponibili'] ?? 1));
         $active = !empty($data['activ']) ? 1 : 0;
         $now = date('Y-m-d H:i:s');
@@ -508,7 +523,7 @@ class ProgramareConcediiModel extends BaseModel
             INSERT INTO concedii_reguli_disponibilitate (
                 garaj,
                 categorie_vehicul,
-                capacitate_transport,
+                categorie_capacitate_id,
                 min_soferi_disponibili,
                 activ,
                 created_at,
@@ -516,7 +531,7 @@ class ProgramareConcediiModel extends BaseModel
             ) VALUES (
                 :garaj,
                 :categorie_vehicul,
-                :capacitate_transport,
+                :categorie_capacitate_id,
                 :min_soferi_disponibili,
                 :activ,
                 :created_at,
@@ -525,10 +540,10 @@ class ProgramareConcediiModel extends BaseModel
         ");
         $stmt->bindValue(':garaj', $garage, PDO::PARAM_STR);
         $stmt->bindValue(':categorie_vehicul', $category, PDO::PARAM_STR);
-        if ($capacity === null) {
-            $stmt->bindValue(':capacitate_transport', null, PDO::PARAM_NULL);
+        if ($capacityCategoryId === null) {
+            $stmt->bindValue(':categorie_capacitate_id', null, PDO::PARAM_NULL);
         } else {
-            $stmt->bindValue(':capacitate_transport', $capacity, PDO::PARAM_STR);
+            $stmt->bindValue(':categorie_capacitate_id', $capacityCategoryId, PDO::PARAM_INT);
         }
         $stmt->bindValue(':min_soferi_disponibili', $minimum, PDO::PARAM_INT);
         $stmt->bindValue(':activ', $active, PDO::PARAM_INT);
@@ -624,6 +639,8 @@ class ProgramareConcediiModel extends BaseModel
                         'garaj' => (string) ($rule['garaj'] ?? ''),
                         'categorie_vehicul' => (string) ($rule['categorie_vehicul'] ?? ''),
                         'capacitate_transport' => $this->normalizeCapacityValue($rule['capacitate_transport'] ?? null),
+                        'categorie_capacitate_id' => (int) ($rule['categorie_capacitate_id'] ?? 0) ?: null,
+                        'categorie_capacitate' => $this->capacityCategoryName((int) ($rule['categorie_capacitate_id'] ?? 0)),
                         'min_soferi_disponibili' => $minimum,
                         'soferi_disponibili' => max(0, $available),
                         'soferi_eligibili' => count($eligibleDriverMap),
@@ -707,7 +724,52 @@ class ProgramareConcediiModel extends BaseModel
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
+        /*
+         * Regula se scrie acum pe CATEGORIA de capacitate, nu pe capacitatea
+         * tehnica: doua camioane din aceeasi categorie pot avea capacitati reale
+         * diferite, iar o corectie de capacitate nu trebuie sa scoata pe tacute
+         * un vehicul de sub regula. `capacitate_transport` ramane in tabel pentru
+         * regulile vechi si pentru audit; la potrivire are prioritate categoria.
+         */
+        if (!$this->availabilityRuleColumnExists('categorie_capacitate_id')) {
+            $this->db->exec("
+                ALTER TABLE concedii_reguli_disponibilitate
+                ADD COLUMN categorie_capacitate_id INT UNSIGNED NULL AFTER capacitate_transport
+            ");
+            $this->db->exec("
+                ALTER TABLE concedii_reguli_disponibilitate
+                ADD INDEX idx_concedii_reguli_categorie (categorie_capacitate_id)
+            ");
+        }
+
         $ensured = true;
+    }
+
+    private function availabilityRuleColumnExists(string $column): bool
+    {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'concedii_reguli_disponibilitate'
+              AND COLUMN_NAME = :c
+        ");
+        $stmt->bindValue(':c', $column);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    /**
+     * Categoria de capacitate a vehiculului (eticheta de grupare).
+     * Capul tractor o preia de la semiremorca cuplata activ, ca si capacitatea.
+     */
+    private function capacityCategoryExpression(): string
+    {
+        return "CASE
+                    WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(tr.categorie_capacitate_id, v.categorie_capacitate_id)
+                    ELSE v.categorie_capacitate_id
+                END";
     }
 
     private function getActiveAvailabilityRules(): array
@@ -725,6 +787,7 @@ class ProgramareConcediiModel extends BaseModel
     private function getDriverTransportContexts(int $driverId): array
     {
         $capacityExpr = $this->transportCapacityExpression();
+        $categoryExpr = $this->capacityCategoryExpression();
         $sql = "
             SELECT DISTINCT
                 sv.driver_id,
@@ -735,7 +798,8 @@ class ProgramareConcediiModel extends BaseModel
                     WHEN v.tip_vehicul = 'cap_tractor' THEN 'ansamblu'
                     ELSE NULL
                 END AS categorie_vehicul,
-                {$capacityExpr} AS capacitate_transport
+                {$capacityExpr} AS capacitate_transport,
+                {$categoryExpr} AS categorie_capacitate_id
             FROM soferi_vehicule sv
             INNER JOIN soferi d ON d.id = sv.driver_id AND d.status = 'activ'
             INNER JOIN vehicule v ON v.id = sv.vehicle_id AND v.status = 'activ'
@@ -753,12 +817,24 @@ class ProgramareConcediiModel extends BaseModel
         return $stmt->fetchAll();
     }
 
+    /**
+     * Soferii care intra sub o regula de disponibilitate.
+     *
+     * Criteriul principal este CATEGORIA de capacitate a vehiculului. Regulile
+     * scrise inainte de separare (care au doar `capacitate_transport`) continua
+     * sa functioneze pe vechea potrivire numerica, pana sunt rescrise.
+     */
     private function getEligibleDriverIdsForRule(array $rule): array
     {
         $capacityExpr = $this->transportCapacityExpression();
+        $categoryExpr = $this->capacityCategoryExpression();
         $vehicleType = (string) ($rule['categorie_vehicul'] ?? '') === 'ansamblu' ? 'cap_tractor' : 'camion';
         $garageKey = $this->normalizeGarageKey((string) ($rule['garaj'] ?? ''));
-        $capacity = $this->normalizeCapacityValue($rule['capacitate_transport'] ?? null);
+        $capacityCategoryId = (int) ($rule['categorie_capacitate_id'] ?? 0);
+        $capacityCategoryId = $capacityCategoryId > 0 ? $capacityCategoryId : null;
+        $legacyCapacity = $capacityCategoryId === null
+            ? $this->normalizeCapacityValue($rule['capacitate_transport'] ?? null)
+            : null;
 
         $sql = "
             SELECT DISTINCT sv.driver_id
@@ -771,7 +847,11 @@ class ProgramareConcediiModel extends BaseModel
               AND UPPER(TRIM(COALESCE(v.garaj, ''))) = :garaj
         ";
 
-        if ($capacity !== null) {
+        if ($capacityCategoryId !== null) {
+            $sql .= "
+              AND ({$categoryExpr}) = :categorie_capacitate_id
+            ";
+        } elseif ($legacyCapacity !== null) {
             $sql .= "
               AND {$capacityExpr} IS NOT NULL
               AND ABS(({$capacityExpr}) - :capacitate_transport) < 0.01
@@ -781,8 +861,10 @@ class ProgramareConcediiModel extends BaseModel
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':vehicle_type', $vehicleType, PDO::PARAM_STR);
         $stmt->bindValue(':garaj', $garageKey, PDO::PARAM_STR);
-        if ($capacity !== null) {
-            $stmt->bindValue(':capacitate_transport', $capacity, PDO::PARAM_STR);
+        if ($capacityCategoryId !== null) {
+            $stmt->bindValue(':categorie_capacitate_id', $capacityCategoryId, PDO::PARAM_INT);
+        } elseif ($legacyCapacity !== null) {
+            $stmt->bindValue(':capacitate_transport', $legacyCapacity, PDO::PARAM_STR);
         }
         $stmt->execute();
 
@@ -846,12 +928,39 @@ class ProgramareConcediiModel extends BaseModel
             return false;
         }
 
+        // Potrivirea pe CATEGORIE (eticheta de grupare). Regulile vechi, scrise
+        // inainte de separare, cad pe potrivirea numerica de dinainte.
+        $ruleCategoryId = (int) ($rule['categorie_capacitate_id'] ?? 0);
+        if ($ruleCategoryId > 0) {
+            return $ruleCategoryId === (int) ($context['categorie_capacitate_id'] ?? 0);
+        }
+
         $ruleCapacity = $this->normalizeCapacityValue($rule['capacitate_transport'] ?? null);
         if ($ruleCapacity === null) {
             return true;
         }
 
         return $ruleCapacity === $this->normalizeCapacityValue($context['capacitate_transport'] ?? null);
+    }
+
+    /** Numele unei categorii de capacitate, pentru mesajele catre operator. */
+    private function capacityCategoryName(int $categoryId): ?string
+    {
+        static $cache = [];
+
+        if ($categoryId <= 0) {
+            return null;
+        }
+
+        if (!array_key_exists($categoryId, $cache)) {
+            $stmt = $this->db->prepare("SELECT nume FROM vehicule_categorii_capacitate WHERE id = :id LIMIT 1");
+            $stmt->bindValue(':id', $categoryId, PDO::PARAM_INT);
+            $stmt->execute();
+            $name = $stmt->fetchColumn();
+            $cache[$categoryId] = $name === false ? null : (string) $name;
+        }
+
+        return $cache[$categoryId];
     }
 
     private function normalizeGarageKey(string $garage): string

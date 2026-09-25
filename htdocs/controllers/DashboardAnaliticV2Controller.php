@@ -115,6 +115,9 @@ class DashboardAnaliticV2Controller
             'beneficiary_ids' => $this->parseIntList($input['beneficiary_ids'] ?? ($input['beneficiar_id'] ?? '')),
             'transport_types' => $this->parseStringList($input['transport_types'] ?? ($input['tip_transport'] ?? '')),
             'transport_capacities' => $this->parseDecimalList($input['transport_capacities'] ?? ($input['capacitate_transport'] ?? '')),
+            // Filtru de GRUPARE pe categoria de capacitate a vehiculului. Alege ce
+            // curse intra in raport; nu schimba numitorul gradului de umplere.
+            'capacity_categories' => $this->parseIntList($input['capacity_categories'] ?? ($input['categorie_capacitate_id'] ?? '')),
             'statuses' => $this->parseStringList($input['statuses'] ?? ($input['status'] ?? '')),
             // pragurile intervalelor de km; modelul le valideaza si revine la cele implicite
             'km_bands' => $this->parseIntList($input['km_bands'] ?? ''),

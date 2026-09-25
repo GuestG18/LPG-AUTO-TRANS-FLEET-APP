@@ -438,13 +438,93 @@ if ($postCreateFlow) {
 </script>
 
 
-<div class="card border-0 shadow-sm mb-3">
-    <div class="card-header bg-white">
-        <h3 class="h6 mb-0">Date cursa</h3>
+<?php
+// Reluarea cursei: fazele conduse de alt sofer / alt vehicul, pe aceeasi cursa.
+// Fazele NU au un formular separat — se completeaza si se corecteaza in ACEST
+// formular: sagetile din antet schimba ce arata (cursa intreaga sau o faza), iar
+// "Reia cursa" il pregateste pentru o faza noua.
+$phaseMode = isset($phaseMode) ? (string) $phaseMode : '';
+$phaseSegment = isset($phaseSegment) && is_array($phaseSegment) ? $phaseSegment : null;
+$phaseList = array_values((array) ($raceSegments ?? []));
+$phaseCount = count($phaseList);
+$phaseId = (int) ($phaseSegment['id'] ?? 0);
+
+// Pozitiile prin care umbla sagetile: cursa intreaga, apoi fiecare faza.
+$phaseSteps = [['faza' => '', 'label' => 'Cursa']];
+foreach ($phaseList as $phaseIndex => $phaseRow) {
+    $phaseSteps[] = [
+        'faza' => (string) (int) ($phaseRow['id'] ?? 0),
+        'label' => 'Faza ' . ($phaseIndex + 1) . ' din ' . $phaseCount,
+    ];
+}
+$phaseCurrentStep = 0;
+foreach ($phaseSteps as $phaseStepIndex => $phaseStep) {
+    if ($phaseMode === 'editare' && $phaseStep['faza'] === (string) $phaseId) {
+        $phaseCurrentStep = $phaseStepIndex;
+    }
+}
+$phaseStepUrl = static function (int $index) use ($phaseSteps, $raceId): string {
+    $params = ['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId];
+    if (($phaseSteps[$index]['faza'] ?? '') !== '') {
+        $params['faza'] = $phaseSteps[$index]['faza'];
+    }
+
+    return build_query_url($params) . '#race-form';
+};
+
+// Titlul si actiunea formularului urmeaza ce se editeaza acum.
+$phaseTitle = 'Date cursa';
+if ($phaseMode === 'noua') {
+    $phaseTitle = 'Faza ' . ($phaseCount > 0 ? $phaseCount + 1 : 2) . ' (nouă)';
+} elseif ($phaseMode === 'editare') {
+    $phaseTitle = (string) ($phaseSteps[$phaseCurrentStep]['label'] ?? 'Faza');
+}
+$phaseFormAction = build_query_url(['page' => 'dispecer_curse', 'action' => 'update', 'id' => $raceId]);
+if ($phaseMode === 'noua') {
+    $phaseFormAction = build_query_url(['page' => 'dispecer_curse', 'action' => 'segment_store']);
+} elseif ($phaseMode === 'editare') {
+    $phaseFormAction = build_query_url(['page' => 'dispecer_curse', 'action' => 'segment_update']);
+}
+
+// Totalurile cursei sunt suma fazelor, deci pe CURSA raman doar de citit; pe o
+// faza se completeaza normal, ele sunt sursa totalurilor.
+$raceHasSegments = $phaseMode === '' && $phaseCount > 1;
+$segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din antet).';
+?>
+
+<div class="card border-0 shadow-sm mb-3<?= $phaseMode !== '' ? ' dispatcher-phase-active' : '' ?>" id="race-form">
+    <div class="card-header bg-white d-flex flex-wrap align-items-center gap-2">
+        <?php // Sagetile stau in stanga, langa titlu: ele spun ce arata formularul. ?>
+        <?php if ($phaseCount > 1 && $phaseMode !== 'noua'): ?>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Treci prin fazele cursei">
+                <a
+                    class="btn btn-outline-secondary<?= $phaseCurrentStep === 0 ? ' disabled' : '' ?>"
+                    href="<?= e($phaseStepUrl(max(0, $phaseCurrentStep - 1))) ?>"
+                    title="Înapoi: <?= e((string) ($phaseSteps[max(0, $phaseCurrentStep - 1)]['label'] ?? '')) ?>"
+                    <?= $phaseCurrentStep === 0 ? 'aria-disabled="true" tabindex="-1"' : '' ?>
+                >
+                    <i class="bi bi-chevron-left" aria-hidden="true"></i>
+                </a>
+                <a
+                    class="btn btn-outline-secondary<?= $phaseCurrentStep >= count($phaseSteps) - 1 ? ' disabled' : '' ?>"
+                    href="<?= e($phaseStepUrl(min(count($phaseSteps) - 1, $phaseCurrentStep + 1))) ?>"
+                    title="Înainte: <?= e((string) ($phaseSteps[min(count($phaseSteps) - 1, $phaseCurrentStep + 1)]['label'] ?? '')) ?>"
+                    <?= $phaseCurrentStep >= count($phaseSteps) - 1 ? 'aria-disabled="true" tabindex="-1"' : '' ?>
+                >
+                    <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                </a>
+            </div>
+        <?php endif; ?>
+        <h3 class="h6 mb-0">
+            <?php if ($phaseMode !== ''): ?>
+                <i class="bi bi-signpost-split me-1" aria-hidden="true"></i>
+            <?php endif; ?>
+            <?= e($phaseTitle) ?>
+        </h3>
     </div>
     <div class="card-body">
         <form method="post"
-              action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'update', 'id' => $raceId])) ?>"
+              action="<?= e($phaseFormAction) ?>"
               class="dispatcher-race-form"
               data-zone-tariffs='<?= e($zoneTariffJson) ?>'
               data-zone-extra-km-costs='<?= e($zoneExtraKmJson) ?>'
@@ -463,17 +543,29 @@ if ($postCreateFlow) {
               data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>'
               data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>'
               data-invoiced-refacturare-total='<?= e((string) $invoicedRefacturareTotal) ?>'
+              <?php if ($phaseMode === ''): ?>
               data-inactive-resource-status-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'inactive_resource_status'])) ?>"
               data-inactive-approval-mode="<?= (function_exists('can') && can('inactive_approvals', 'review')) ? 'admin' : 'user' ?>"
               data-inactive-approval-request-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'request_inactive_vehicle_approval'])) ?>"
               data-inactive-approval-cancel-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'cancel_inactive_vehicle_approval'])) ?>"
-              data-inactive-trip-id="<?= e((string) $raceId) ?>"
               data-races-activity-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'races_activity'])) ?>" data-races-activity-since="<?= e(date('Y-m-d H:i:s')) ?>"
+              <?php endif; ?>
+              <?php /* trip_id = cursa parinte: faza nu se "suprapune" cu propria cursa, dar o
+                       ciocnire cu ALTA cursa tot se semnaleaza. */ ?>
+              data-inactive-trip-id="<?= e((string) $raceId) ?>"
               data-trip-conflict-check-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'trip_conflict_check'])) ?>"
               novalidate>
             <?= csrf_field() ?>
-            <input type="hidden" name="inactive_approval_decision" value="<?= e((string) ($raceFormData['inactive_approval_decision'] ?? '')) ?>" data-inactive-approval-decision>
-            <input type="hidden" name="inactive_approval_signature" value="" data-inactive-approval-signature>
+            <?php if ($phaseMode === 'noua'): ?>
+                <input type="hidden" name="cursa_id" value="<?= e((string) $raceId) ?>">
+                <input type="hidden" name="segment_origin" value="edit">
+            <?php elseif ($phaseMode === 'editare'): ?>
+                <input type="hidden" name="segment_id" value="<?= e((string) $phaseId) ?>">
+                <input type="hidden" name="segment_origin" value="edit">
+            <?php else: ?>
+                <input type="hidden" name="inactive_approval_decision" value="<?= e((string) ($raceFormData['inactive_approval_decision'] ?? '')) ?>" data-inactive-approval-decision>
+                <input type="hidden" name="inactive_approval_signature" value="" data-inactive-approval-signature>
+            <?php endif; ?>
             <input type="hidden" name="confirm_incomplete" value="">
             <input type="hidden" name="confirm_similar" value="" data-trip-similar-confirm-flag>
             <datalist id="edit_race_time_options">
@@ -760,13 +852,13 @@ if ($postCreateFlow) {
 
                 <div class="col-12 col-md-6 dispatcher-primary-grid-field" data-role="field-cantitate">
                     <label class="form-label" for="edit_race_cantitate_incarcata">Cantitate incarcata</label>
-                    <input type="number" class="form-control <?= isset($raceFormErrors['cantitate_incarcata']) ? 'is-invalid' : '' ?>" id="edit_race_cantitate_incarcata" name="cantitate_incarcata" step="0.01" min="0" value="<?= e((string) ($raceFormData['cantitate_incarcata'] ?? '')) ?>" data-role="cantitate">
+                    <input type="number" class="form-control <?= isset($raceFormErrors['cantitate_incarcata']) ? 'is-invalid' : '' ?>" id="edit_race_cantitate_incarcata"<?= $raceHasSegments ? ' readonly title="' . e($segmentTotalsNote) . '"' : '' ?> name="cantitate_incarcata" step="0.01" min="0" value="<?= e((string) ($raceFormData['cantitate_incarcata'] ?? '')) ?>" data-role="cantitate">
                     <div class="form-text text-muted">Valoarea introdusa este folosita direct in calcule, fara conversie automata.</div>
                     <?php if (isset($raceFormErrors['cantitate_incarcata'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['cantitate_incarcata']) ?></div><?php endif; ?>
                 </div>
 
                 <div class="col-12 col-md-6 dispatcher-primary-grid-field" data-role="field-capacitate-transport">
-                    <label class="form-label" for="edit_race_capacitate_transport">Capacitate transport</label>
+                    <label class="form-label" for="edit_race_capacitate_transport">Capacitate transport reala</label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['capacitate_transport']) ? 'is-invalid' : '' ?>" id="edit_race_capacitate_transport" name="capacitate_transport" step="0.01" min="0" value="<?= e((string) ($raceFormData['capacitate_transport'] ?? '')) ?>" data-role="capacitate-transport" readonly>
                     <?php if (isset($raceFormErrors['capacitate_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['capacitate_transport']) ?></div><?php endif; ?>
                     <div class="form-text">Se completeaza automat din fisa vehiculului.</div>
@@ -774,13 +866,13 @@ if ($postCreateFlow) {
 
                 <div class="col-12 col-md-6" data-role="field-km">
                     <label class="form-label" for="edit_race_km_cursa" data-role="km-label" data-default-label="Km efectuati" data-primary-km-label="Km agreati"><?= $isAgreedKmNamingSelected ? 'Km agreati' : 'Km efectuati' ?></label>
-                    <input type="number" class="form-control <?= isset($raceFormErrors['km_cursa']) ? 'is-invalid' : '' ?>" id="edit_race_km_cursa" name="km_cursa" min="0" step="1" value="<?= e((string) ($raceFormData['km_cursa'] ?? '')) ?>" data-role="km">
+                    <input type="number" class="form-control <?= isset($raceFormErrors['km_cursa']) ? 'is-invalid' : '' ?>" id="edit_race_km_cursa"<?= $raceHasSegments ? ' readonly title="' . e($segmentTotalsNote) . '"' : '' ?> name="km_cursa" min="0" step="1" value="<?= e((string) ($raceFormData['km_cursa'] ?? '')) ?>" data-role="km">
                     <?php if (isset($raceFormErrors['km_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_cursa']) ?></div><?php endif; ?>
                 </div>
 
                 <div class="col-12 col-md-6 <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="field-nr-clienti">
                     <label class="form-label" for="edit_race_nr_clienti">Nr. clienti</label>
-                    <input type="number" class="form-control <?= isset($raceFormErrors['nr_clienti']) ? 'is-invalid' : '' ?>" id="edit_race_nr_clienti" name="nr_clienti" min="0" step="1" value="<?= e((string) ($raceFormData['nr_clienti'] ?? '')) ?>">
+                    <input type="number" class="form-control <?= isset($raceFormErrors['nr_clienti']) ? 'is-invalid' : '' ?>" id="edit_race_nr_clienti"<?= $raceHasSegments ? ' readonly title="' . e($segmentTotalsNote) . '"' : '' ?> name="nr_clienti" min="0" step="1" value="<?= e((string) ($raceFormData['nr_clienti'] ?? '')) ?>">
                     <?php if (isset($raceFormErrors['nr_clienti'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['nr_clienti']) ?></div><?php endif; ?>
                 </div>
 
@@ -830,7 +922,7 @@ if ($postCreateFlow) {
 
                 <div class="col-12 col-md-6 <?= $isKmTotalSelected ? '' : 'd-none' ?>" data-role="field-km-totali">
                     <label class="form-label" for="edit_race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
-                    <input type="number" class="form-control <?= isset($raceFormErrors['km_totali']) ? 'is-invalid' : '' ?>" id="edit_race_km_totali" name="km_totali" min="0" step="1" value="<?= e((string) ($raceFormData['km_totali'] ?? '')) ?>" data-role="km-totali">
+                    <input type="number" class="form-control <?= isset($raceFormErrors['km_totali']) ? 'is-invalid' : '' ?>" id="edit_race_km_totali"<?= $raceHasSegments ? ' readonly title="' . e($segmentTotalsNote) . '"' : '' ?> name="km_totali" min="0" step="1" value="<?= e((string) ($raceFormData['km_totali'] ?? '')) ?>" data-role="km-totali">
                     <?php if (isset($raceFormErrors['km_totali'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_totali']) ?></div><?php endif; ?>
                     <div class="form-text text-muted <?= $isPrimaryDistributionSelected ? '' : 'd-none' ?>" data-role="km-distributie-calculation">Cost/km Distributie (calcul): Km distributie = Km efectuati - Km agreati; Cost/km Distributie = Cost distributie (Pret tona x tone) / Km distributie.</div>
                 </div>
@@ -855,7 +947,7 @@ if ($postCreateFlow) {
 
                 <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-tona-livrata">
                     <label class="form-label" for="edit_race_tona_livrata">Cantitate livrata (tone)</label>
-                    <input type="number" class="form-control <?= isset($raceFormErrors['tona_livrata']) ? 'is-invalid' : '' ?>" id="edit_race_tona_livrata" name="tona_livrata" step="0.01" min="0" value="<?= e((string) ($raceFormData['tona_livrata'] ?? '')) ?>" data-role="tona-livrata">
+                    <input type="number" class="form-control <?= isset($raceFormErrors['tona_livrata']) ? 'is-invalid' : '' ?>" id="edit_race_tona_livrata"<?= $raceHasSegments ? ' readonly title="' . e($segmentTotalsNote) . '"' : '' ?> name="tona_livrata" step="0.01" min="0" value="<?= e((string) ($raceFormData['tona_livrata'] ?? '')) ?>" data-role="tona-livrata">
                     <?php if (isset($raceFormErrors['tona_livrata'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tona_livrata']) ?></div><?php endif; ?>
                 </div>
 
@@ -910,11 +1002,59 @@ if ($postCreateFlow) {
                 </div>
             </div>
 
+            <?php
+            // "Reia cursa" apare doar acolo unde se poate continua: pe ultima faza
+            // adaugata sau, cat timp cursa nu are faze, pe cursa insasi.
+            $phaseIsLast = $phaseMode === 'editare' && $phaseCurrentStep === count($phaseSteps) - 1;
+            $phaseCanResume = ($phaseMode === '' && $phaseCount === 0) || $phaseIsLast;
+            ?>
             <div class="mt-3 d-flex flex-wrap gap-2">
-                <button type="submit" class="btn btn-primary">Salveaza cursa</button>
-                <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Inapoi</a>
+                <?php if ($phaseMode === 'noua'): ?>
+                    <button type="submit" class="btn btn-primary">Salveaza faza</button>
+                    <a class="btn btn-outline-secondary" href="<?= e($phaseStepUrl(0)) ?>">Renunta</a>
+                <?php elseif ($phaseMode === 'editare'): ?>
+                    <button type="submit" class="btn btn-primary">Salveaza faza</button>
+                <?php else: ?>
+                    <button type="submit" class="btn btn-primary">Salveaza cursa</button>
+                <?php endif; ?>
+
+                <?php if ($phaseCanResume): ?>
+                    <a
+                        class="btn btn-outline-primary"
+                        href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'faza' => 'noua']) . '#race-form') ?>"
+                        title="Completează în acest formular porțiunea următoare a cursei (alt șofer / alt vehicul). Cursa rămâne una singură, fără tarif suplimentar."
+                    >
+                        <i class="bi bi-arrow-repeat me-1" aria-hidden="true"></i> Reia cursa
+                    </a>
+                <?php endif; ?>
+
+                <?php if ($phaseMode === 'editare'): ?>
+                    <?php /* Stergerea are propriul formular (nu se pot imbrica): butonul il
+                             comanda prin atributul form=. */ ?>
+                    <button
+                        type="submit"
+                        form="race-phase-delete-form"
+                        class="btn btn-outline-danger"
+                        data-confirm="Ștergi <?= e((string) ($phaseSteps[$phaseCurrentStep]['label'] ?? 'faza')) ?> a cursei #<?= e((string) $raceId) ?>?"
+                    >Sterge faza</button>
+                    <a class="btn btn-outline-secondary" href="<?= e($phaseStepUrl(0)) ?>">Inapoi la cursa</a>
+                <?php elseif ($phaseMode === ''): ?>
+                    <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Inapoi</a>
+                <?php endif; ?>
             </div>
         </form>
+        <?php if ($phaseMode === 'editare' && $phaseId > 0): ?>
+            <form
+                method="post"
+                action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'segment_delete'])) ?>"
+                id="race-phase-delete-form"
+                class="d-none"
+            >
+                <?= csrf_field() ?>
+                <input type="hidden" name="segment_id" value="<?= e((string) $phaseId) ?>">
+                <input type="hidden" name="segment_origin" value="edit">
+            </form>
+        <?php endif; ?>
     </div>
 </div>
 

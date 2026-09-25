@@ -12,11 +12,12 @@ $showGlobalApprovalDrawer = false;
 $globalApprovalDrawerMode = 'user';
 $canReviewInactiveApprovals = false;
 $globalApprovalSummary = [
-    'counts' => ['vehicle' => 0, 'driver' => 0, 'repair' => 0],
+    'counts' => ['vehicle' => 0, 'driver' => 0, 'repair' => 0, 'diurna' => 0],
     'total' => 0,
     'vehicles' => [],
     'drivers' => [],
     'repairs' => [],
+    'diurne' => [],
 ];
 if (
     $showSidebar
@@ -143,9 +144,9 @@ $navAttrs = static fn(string $key, ?string $group = null): string => function_ex
                 <?php if ($can('centralizator_facturare')): ?><a<?= $navAttrs('istoric_activitate') ?> class="nav-link <?= $currentPage === 'istoric_activitate' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'istoric_activitate'])) ?>"><i class="bi bi-clock-history" aria-hidden="true"></i><span>Istoric activitate</span></a><?php endif; ?>
                 <?php if ($can('programare_concedii')): ?><a<?= $navAttrs('programare_concedii') ?> class="nav-link <?= $currentPage === 'programare_concedii' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'programare_concedii'])) ?>"><i class="bi bi-calendar2-week" aria-hidden="true"></i><span>Programare concedii</span></a><?php endif; ?>
                 <?php
-                $isVehicleNavGroup = in_array($currentRoutePage, ['vehicule', 'vehicule_usoare', 'vehicule_grele', 'documente', 'inventar_dotari_vehicule', 'stare_tehnica'], true)
+                $isVehicleNavGroup = in_array($currentRoutePage, ['vehicule', 'vehicule_usoare', 'vehicule_grele', 'documente', 'inventar_dotari_vehicule', 'stare_tehnica', 'categorii_capacitate'], true)
                     || in_array($currentPage, ['vehicule', 'vehicule_usoare', 'vehicule_grele'], true);
-                $vehShow = $can('vehicule_usoare') || $can('vehicule_grele') || $can('documente') || $can('inventar_dotari_vehicule') || $can('stare_tehnica');
+                $vehShow = $can('vehicule_usoare') || $can('vehicule_grele') || $can('documente') || $can('inventar_dotari_vehicule') || $can('stare_tehnica') || $can('categorii_capacitate');
                 ?>
                 <?php if ($vehShow): ?>
                 <div class="sidebar-nav-group"<?= $navAttrs('grp_vehicule') ?>>
@@ -168,6 +169,7 @@ $navAttrs = static fn(string $key, ?string $group = null): string => function_ex
                             <?php if ($can('documente')): ?><a<?= $navAttrs('documente', 'grp_vehicule') ?> class="nav-link <?= $currentRoutePage === 'documente' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'documente'])) ?>">Documente Vehicule</a><?php endif; ?>
                             <?php if ($can('inventar_dotari_vehicule')): ?><a<?= $navAttrs('inventar_dotari_vehicule', 'grp_vehicule') ?> class="nav-link <?= $currentRoutePage === 'inventar_dotari_vehicule' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'inventar_dotari_vehicule'])) ?>">Inventar Dotari</a><?php endif; ?>
                             <?php if ($can('stare_tehnica')): ?><a<?= $navAttrs('stare_tehnica', 'grp_vehicule') ?> class="nav-link <?= $currentPage === 'stare_tehnica' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'stare_tehnica'])) ?>">Stare tehnic&#259;</a><?php endif; ?>
+                            <?php if ($can('categorii_capacitate')): ?><a<?= $navAttrs('categorii_capacitate', 'grp_vehicule') ?> class="nav-link <?= $currentPage === 'categorii_capacitate' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'categorii_capacitate'])) ?>">Categorii capacitate</a><?php endif; ?>
                         </div>
                     </div>
                 </div>

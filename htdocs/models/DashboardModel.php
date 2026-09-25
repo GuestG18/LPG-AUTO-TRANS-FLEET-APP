@@ -953,6 +953,11 @@ class DashboardModel extends BaseModel
 
         $params = [];
         $condition = $this->inCondition('s.id', $driverIds, $params, 'driver_doc');
+        // Soferii colaboratori au documentele la firma care ii angajeaza: nu le verificam.
+        $collaboratorFilter = (int) $this->fetchScalar("
+            SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'soferi' AND COLUMN_NAME = 'tip_colaborare'
+        ") > 0 ? "AND s.tip_colaborare <> 'colaborator'" : '';
         $sql = "
             SELECT s.id AS driver_id,
                    cfg.document_type,
@@ -966,6 +971,7 @@ class DashboardModel extends BaseModel
                AND LOWER(TRIM(d.tip_document)) = LOWER(TRIM(cfg.document_type))
             WHERE {$condition}
               AND TRIM(cfg.document_type) <> ''
+              {$collaboratorFilter}
             GROUP BY s.id, cfg.document_type, cfg.requires_expiry
         ";
 

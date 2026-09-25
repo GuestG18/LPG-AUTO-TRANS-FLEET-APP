@@ -10,6 +10,58 @@ class DispecerCurseModel extends BaseModel
     private const DISTRIBUTION_ROUTE_TARIFF_MODE_KM = 'km';
     private const DEFAULT_BILLING_STATUS = 'in_curs_facturare';
 
+    /*
+     * CAPACITATE REALA vs. CATEGORIE DE CAPACITATE
+     * --------------------------------------------
+     * `vehicule.capacitate_transport` = capacitatea tehnica REALA (tone). Este
+     * singura valoare acceptata in calcule (grad de umplere, supraincarcare).
+     * `vehicule.categorie_capacitate_id` = eticheta de grupare pentru dropdown-uri
+     * si filtre. Numarul din numele categoriei NU este o capacitate.
+     *
+     * Capul tractor nu are capacitate proprie: o preia, ca si categoria, de la
+     * semiremorca cuplata activ (alias `s` in interogarile de mai jos).
+     */
+    private const VEHICLE_REAL_CAPACITY_SQL = "
+        CASE
+            WHEN v.tip_vehicul = 'cap_tractor' THEN s.capacitate_transport
+            ELSE v.capacitate_transport
+        END
+    ";
+
+    private const VEHICLE_CAPACITY_CONFIRMED_SQL = "
+        CASE
+            WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(s.capacitate_transport_confirmata, 0)
+            ELSE v.capacitate_transport_confirmata
+        END
+    ";
+
+    private const VEHICLE_CATEGORY_ID_SQL = "
+        CASE
+            WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(s.categorie_capacitate_id, v.categorie_capacitate_id)
+            ELSE v.categorie_capacitate_id
+        END
+    ";
+
+    /** JOIN-ul catre semiremorca cuplata activ + catalogul de categorii. */
+    private const VEHICLE_CAPACITY_JOIN_SQL = "
+        LEFT JOIN (
+            SELECT vc1.tractor_id, vc1.semiremorca_id
+            FROM vehicule_cuplaje vc1
+            INNER JOIN (
+                SELECT tractor_id, MAX(id) AS max_id
+                FROM vehicule_cuplaje
+                WHERE activ = 1
+                GROUP BY tractor_id
+            ) latest ON latest.max_id = vc1.id
+        ) vc ON vc.tractor_id = v.id
+        LEFT JOIN vehicule s ON s.id = vc.semiremorca_id
+        LEFT JOIN vehicule_categorii_capacitate cc
+               ON cc.id = CASE
+                    WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(s.categorie_capacitate_id, v.categorie_capacitate_id)
+                    ELSE v.categorie_capacitate_id
+                  END
+    ";
+
     private bool $distributionRouteTableEnsured = false;
     private bool $primaryRouteTableEnsured = false;
     private bool $compressorVehicleAssignmentTableEnsured = false;
@@ -21,6 +73,7 @@ class DispecerCurseModel extends BaseModel
     private bool $raceDuplicateKeySchemaEnsured = false;
     private bool $raceSoftDeleteSchemaEnsured = false;
     private bool $raceAuditLogSchemaEnsured = false;
+    private bool $raceSegmentsTableEnsured = false;
     private bool $expenseRefacturareColumnEnsured = false;
     private bool $expenseCategorySchemaEnsured = false;
     private bool $transportBeneficiaryColumnsEnsured = false;
@@ -170,6 +223,8 @@ class DispecerCurseModel extends BaseModel
 
     public function getVehicleOptions(bool $onlyActive = false): array
     {
+        $this->ensureVehicleCapacityCategorySchema();
+
         $sql = "
             SELECT
                 v.id,
@@ -178,22 +233,13 @@ class DispecerCurseModel extends BaseModel
                 v.model,
                 v.tip_vehicul,
                 v.garaj,
-                CASE
-                    WHEN v.tip_vehicul = 'cap_tractor' THEN s.capacitate_transport
-                    ELSE v.capacitate_transport
-                END AS capacitate_transport
+                (" . self::VEHICLE_REAL_CAPACITY_SQL . ") AS capacitate_transport,
+                (" . self::VEHICLE_CAPACITY_CONFIRMED_SQL . ") AS capacitate_transport_confirmata,
+                (" . self::VEHICLE_CATEGORY_ID_SQL . ") AS categorie_capacitate_id,
+                cc.nume AS categorie_capacitate,
+                cc.ordine_afisare AS categorie_capacitate_ordine
             FROM vehicule v
-            LEFT JOIN (
-                SELECT vc1.tractor_id, vc1.semiremorca_id
-                FROM vehicule_cuplaje vc1
-                INNER JOIN (
-                    SELECT tractor_id, MAX(id) AS max_id
-                    FROM vehicule_cuplaje
-                    WHERE activ = 1
-                    GROUP BY tractor_id
-                ) latest ON latest.max_id = vc1.id
-            ) vc ON vc.tractor_id = v.id
-            LEFT JOIN vehicule s ON s.id = vc.semiremorca_id
+            " . self::VEHICLE_CAPACITY_JOIN_SQL . "
             WHERE v.tip_vehicul NOT IN ('semiremorca', 'semiremorca_primar', 'semiremorca_distributie')
             " . ($onlyActive ? "AND v.status = 'activ'" : "") . "
             ORDER BY v.nr_inmatriculare ASC
@@ -3776,6 +3822,7 @@ class DispecerCurseModel extends BaseModel
     {
         $this->ensureExpenseRefacturareColumn();
         $this->ensureRaceSoftDeleteSchema();
+        $this->ensureVehicleCapacityCategorySchema();
 
         $stmt = $this->db->prepare("
             SELECT
@@ -3787,19 +3834,12 @@ class DispecerCurseModel extends BaseModel
                 CASE
                     WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(NULLIF(s.capacitate_transport, 0), v.capacitate_transport)
                     ELSE v.capacitate_transport
-                END AS capacitate_transport
+                END AS capacitate_transport,
+                (" . self::VEHICLE_CATEGORY_ID_SQL . ") AS categorie_capacitate_id,
+                cc.nume AS categorie_capacitate,
+                cc.ordine_afisare AS categorie_capacitate_ordine
             FROM vehicule v
-            LEFT JOIN (
-                SELECT vc1.tractor_id, vc1.semiremorca_id
-                FROM vehicule_cuplaje vc1
-                INNER JOIN (
-                    SELECT tractor_id, MAX(id) AS max_id
-                    FROM vehicule_cuplaje
-                    WHERE activ = 1
-                    GROUP BY tractor_id
-                ) latest ON latest.max_id = vc1.id
-            ) vc ON vc.tractor_id = v.id
-            LEFT JOIN vehicule s ON s.id = vc.semiremorca_id
+            " . self::VEHICLE_CAPACITY_JOIN_SQL . "
             WHERE COALESCE(TRIM(v.nr_inmatriculare), '') <> ''
               AND EXISTS (
                   SELECT 1
@@ -4034,6 +4074,17 @@ class DispecerCurseModel extends BaseModel
             $where[] = "COALESCE(TRIM(e.refacturare_document_path), '') <> ''";
         } elseif (($filters['document'] ?? '') === 'fara_document') {
             $where[] = "COALESCE(TRIM(e.refacturare_document_path), '') = ''";
+        }
+
+        $expenseIds = array_values(array_filter(array_map('intval', explode(',', (string) ($filters['ids'] ?? ''))), static fn (int $id): bool => $id > 0));
+        if ($expenseIds !== []) {
+            $idPlaceholders = [];
+            foreach ($expenseIds as $index => $expenseId) {
+                $placeholder = ':' . $prefix . '_expense_' . $index;
+                $idPlaceholders[] = $placeholder;
+                $params[$placeholder] = $expenseId;
+            }
+            $where[] = 'e.id IN (' . implode(', ', $idPlaceholders) . ')';
         }
 
         if (($filters['q'] ?? '') !== '') {
@@ -4882,6 +4933,7 @@ class DispecerCurseModel extends BaseModel
         $this->ensureRaceCreatedByColumn();
         $this->ensureRaceExpenseStatusColumn();
         $this->ensureRaceDuplicateKeySchema();
+        $this->ensureVehicleCapacityCategorySchema();
         $data['duplicate_key'] = $this->buildRaceDuplicateKey($data);
 
         $sql = "
@@ -4905,6 +4957,7 @@ class DispecerCurseModel extends BaseModel
                 beneficiar_id,
                 tip_marfa,
                 capacitate_transport,
+                capacitate_transport_confirmata,
                 cantitate_incarcata,
                 cantitate_prelevata,
                 nr_clienti,
@@ -4949,6 +5002,7 @@ class DispecerCurseModel extends BaseModel
                 :beneficiar_id,
                 :tip_marfa,
                 :capacitate_transport,
+                :capacitate_transport_confirmata,
                 :cantitate_incarcata,
                 :cantitate_prelevata,
                 :nr_clienti,
@@ -4987,6 +5041,10 @@ class DispecerCurseModel extends BaseModel
     {
         $this->ensureRaceAuditLogSchema();
         $this->ensureRaceDuplicateKeySchema();
+        // Tabela de faze se pregateste INAINTE de tranzactie: orice CREATE/ALTER face
+        // commit implicit in MySQL, iar tranzactia s-ar inchide in mijlocul stergerii
+        // ("There is no active transaction" la curse cu faze).
+        $this->ensureRaceSegmentsTable();
         $this->db->beginTransaction();
 
         try {
@@ -5016,6 +5074,7 @@ class DispecerCurseModel extends BaseModel
         $this->ensureRaceLoadingDateColumn();
         $this->ensureRaceDuplicateKeySchema();
         $this->ensureRaceSoftDeleteSchema();
+        $this->ensureVehicleCapacityCategorySchema();
         $data['duplicate_key'] = $this->buildRaceDuplicateKey($data);
 
         $sql = "
@@ -5040,6 +5099,7 @@ class DispecerCurseModel extends BaseModel
                 beneficiar_id = :beneficiar_id,
                 tip_marfa = :tip_marfa,
                 capacitate_transport = :capacitate_transport,
+                capacitate_transport_confirmata = :capacitate_transport_confirmata,
                 cantitate_incarcata = :cantitate_incarcata,
                 cantitate_prelevata = :cantitate_prelevata,
                 nr_clienti = :nr_clienti,
@@ -5077,7 +5137,16 @@ class DispecerCurseModel extends BaseModel
     {
         $this->ensureRaceAuditLogSchema();
         $this->ensureRaceDuplicateKeySchema();
-        $this->db->beginTransaction();
+        // Tabela de faze se pregateste INAINTE de tranzactie: orice CREATE/ALTER face
+        // commit implicit in MySQL, iar tranzactia s-ar inchide in mijlocul stergerii
+        // ("There is no active transaction" la curse cu faze).
+        $this->ensureRaceSegmentsTable();
+        // Poate fi apelata si din interiorul unei tranzactii (scripturi): in acest
+        // caz tranzactia ramane a apelantului.
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
 
         try {
             $previousRace = $this->getRaceSnapshotForUpdate($id);
@@ -5088,21 +5157,961 @@ class DispecerCurseModel extends BaseModel
             if (!$this->updateRace($id, $data)) {
                 throw new RuntimeException('Actualizarea cursei a esuat.');
             }
-            $alerts = $this->syncVehicleKmForRaceChange($previousRace, $data);
+            // Cursa si segmentele ei trebuie sa spuna acelasi lucru: soferul/vehiculul
+            // si inceputul cursei apartin primului segment, sfarsitul ei ultimului.
+            $this->syncEdgeSegmentsWithRace($id, $data);
+            // Id-ul insotieste datele noi ca sincronizarea sa vada segmentele cursei.
+            $alerts = $this->syncVehicleKmForRaceChange($previousRace, $data + ['id' => $id]);
             $this->logRaceAudit($id, 'updated', $userId);
 
-            $this->db->commit();
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
 
             return [
                 'maintenance_alerts' => $alerts,
             ];
         } catch (Throwable $exception) {
-            if ($this->db->inTransaction()) {
+            if ($ownTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
 
             throw $exception;
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Segmente de cursa
+    //
+    // O cursa oprita si reluata (schimbare de sofer si/sau vehicul) ramane O
+    // SINGURA cursa: un singur tarif, un singur rand in centralizator. Cine a
+    // condus fiecare portiune se inregistreaza in curse_segmente, iar km-ii pe
+    // vehicul (bord, revizie, rapoarte) se impart intre vehiculele segmentelor.
+    // ------------------------------------------------------------------
+
+    private function ensureRaceSegmentsTable(): void
+    {
+        if ($this->raceSegmentsTableEnsured) {
+            return;
+        }
+
+        $this->db->exec("
+            CREATE TABLE IF NOT EXISTS curse_segmente (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                cursa_id INT UNSIGNED NOT NULL,
+                ordine SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+                vehicle_id INT UNSIGNED NULL,
+                driver_id INT UNSIGNED NULL,
+                data_inceput DATE NULL,
+                ora_inceput TIME NULL,
+                data_sfarsit DATE NULL,
+                ora_sfarsit TIME NULL,
+                km INT UNSIGNED NULL,
+                observatii VARCHAR(255) NULL,
+                created_by INT UNSIGNED NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                deleted_at DATETIME NULL DEFAULT NULL,
+                deleted_by INT UNSIGNED NULL DEFAULT NULL,
+                UNIQUE KEY uq_segment_cursa_ordine (cursa_id, ordine),
+                KEY idx_segment_vehicle (vehicle_id),
+                KEY idx_segment_driver (driver_id),
+                KEY idx_segment_interval (data_inceput, data_sfarsit),
+                KEY idx_segment_deleted (deleted_at),
+                CONSTRAINT fk_segment_cursa FOREIGN KEY (cursa_id) REFERENCES curse_dispecer(id) ON DELETE CASCADE,
+                CONSTRAINT fk_segment_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE SET NULL,
+                CONSTRAINT fk_segment_driver FOREIGN KEY (driver_id) REFERENCES soferi(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
+        // Fazele au si detaliile lor de cursa: unde s-a incarcat, unde s-a livrat,
+        // cate tone si cati clienti. Coloanele se adauga la nevoie, ca sa mearga si
+        // pe bazele create inainte de migrarea 2026_09_18_000003.
+        $segmentColumns = [
+            'loc_incarcare_id' => 'ALTER TABLE curse_segmente ADD COLUMN loc_incarcare_id INT UNSIGNED NULL AFTER driver_id',
+            'zona_distributie_id' => 'ALTER TABLE curse_segmente ADD COLUMN zona_distributie_id INT UNSIGNED NULL AFTER loc_incarcare_id',
+            'loc_plecare' => 'ALTER TABLE curse_segmente ADD COLUMN loc_plecare VARCHAR(255) NULL AFTER zona_distributie_id',
+            'loc_livrare' => 'ALTER TABLE curse_segmente ADD COLUMN loc_livrare VARCHAR(255) NULL AFTER loc_plecare',
+            'cantitate_incarcata' => 'ALTER TABLE curse_segmente ADD COLUMN cantitate_incarcata DECIMAL(12,2) NULL AFTER km',
+            'tona_livrata' => 'ALTER TABLE curse_segmente ADD COLUMN tona_livrata DECIMAL(12,2) NULL AFTER cantitate_incarcata',
+            'nr_clienti' => 'ALTER TABLE curse_segmente ADD COLUMN nr_clienti INT UNSIGNED NULL AFTER tona_livrata',
+            'ore_functionare' => 'ALTER TABLE curse_segmente ADD COLUMN ore_functionare DECIMAL(10,2) NULL AFTER nr_clienti',
+            // Fazele se sterg odata cu cursa (soft delete, ca la curse_dispecer) si
+            // se intorc la restaurarea ei. Vezi migrarea 2026_09_18_000004.
+            'deleted_at' => 'ALTER TABLE curse_segmente ADD COLUMN deleted_at DATETIME NULL DEFAULT NULL AFTER updated_at, ADD KEY idx_segment_deleted (deleted_at)',
+            'deleted_by' => 'ALTER TABLE curse_segmente ADD COLUMN deleted_by INT UNSIGNED NULL DEFAULT NULL AFTER deleted_at',
+        ];
+
+        // Coloanele existente se citesc dintr-o singura interogare: verificarea lor
+        // una cate una insemna 10 interogari in INFORMATION_SCHEMA la FIECARE cerere
+        // (~20 ms), desi in mod normal nu lipseste niciuna.
+        $existingColumns = $this->db->query("
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'curse_segmente'
+        ")->fetchAll(PDO::FETCH_COLUMN);
+        $existingColumns = array_flip(array_map('strtolower', array_map('strval', $existingColumns)));
+
+        $addedSoftDelete = false;
+        foreach ($segmentColumns as $columnName => $alterSql) {
+            if (isset($existingColumns[strtolower($columnName)])) {
+                continue;
+            }
+
+            $this->db->exec($alterSql);
+            $addedSoftDelete = $addedSoftDelete || $columnName === 'deleted_at' || $columnName === 'deleted_by';
+        }
+
+        // Fazele ramase in urma stergerilor facute inainte de coloanele de mai sus
+        // sunt orfane: cursa lor e stearsa, ele nu. Le aliniem o singura data, la
+        // adaugarea coloanelor.
+        if ($addedSoftDelete) {
+            $this->db->exec("
+                UPDATE curse_segmente seg
+                INNER JOIN curse_dispecer c ON c.id = seg.cursa_id
+                SET seg.deleted_at = c.deleted_at,
+                    seg.deleted_by = c.deleted_by
+                WHERE c.deleted_at IS NOT NULL
+                  AND seg.deleted_at IS NULL
+            ");
+        }
+
+        $this->raceSegmentsTableEnsured = true;
+    }
+
+    /**
+     * Tipul fazei, dedus din ce a completat operatorul: se incarca marfa, se
+     * livreaza la clienti, sau este doar o deplasare (pozitionare, retur).
+     */
+    public static function segmentPhaseType(array $segment): string
+    {
+        $loaded = (float) ($segment['cantitate_incarcata'] ?? 0);
+        $delivered = (float) ($segment['tona_livrata'] ?? 0);
+        $clients = (int) ($segment['nr_clienti'] ?? 0);
+
+        if ($delivered > 0 || $clients > 0) {
+            return $loaded > 0 ? 'incarcare_livrare' : 'livrare';
+        }
+
+        return $loaded > 0 ? 'incarcare' : 'deplasare';
+    }
+
+    public static function segmentPhaseLabel(array $segment): string
+    {
+        return [
+            'incarcare' => 'Încărcare',
+            'livrare' => 'Livrare',
+            'incarcare_livrare' => 'Încărcare + livrare',
+            'deplasare' => 'Deplasare',
+        ][self::segmentPhaseType($segment)] ?? 'Deplasare';
+    }
+
+    /**
+     * Segmentele unei curse, in ordinea desfasurarii, cu numele soferului si
+     * numarul de inmatriculare pentru afisare.
+     */
+    public function getRaceSegments(int $cursaId): array
+    {
+        if ($cursaId <= 0) {
+            return [];
+        }
+
+        $this->ensureRaceSegmentsTable();
+
+        $stmt = $this->db->prepare("
+            SELECT
+                seg.*,
+                v.nr_inmatriculare,
+                s.nume AS sofer_nume
+            FROM curse_segmente seg
+            LEFT JOIN vehicule v ON v.id = seg.vehicle_id
+            LEFT JOIN soferi s ON s.id = seg.driver_id
+            WHERE seg.cursa_id = :cursa_id
+              AND seg.deleted_at IS NULL
+            ORDER BY seg.ordine ASC, seg.id ASC
+        ");
+        $stmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * Segmentele mai multor curse deodata (pentru listare), grupate pe cursa.
+     */
+    public function getRaceSegmentsForRaces(array $cursaIds): array
+    {
+        $ids = [];
+        foreach ($cursaIds as $cursaId) {
+            $cursaId = (int) $cursaId;
+            if ($cursaId > 0) {
+                $ids[$cursaId] = true;
+            }
+        }
+        if ($ids === []) {
+            return [];
+        }
+
+        $this->ensureRaceSegmentsTable();
+
+        $idList = array_keys($ids);
+        $placeholders = implode(',', array_fill(0, count($idList), '?'));
+        $stmt = $this->db->prepare("
+            SELECT
+                seg.*,
+                v.nr_inmatriculare,
+                s.nume AS sofer_nume
+            FROM curse_segmente seg
+            LEFT JOIN vehicule v ON v.id = seg.vehicle_id
+            LEFT JOIN soferi s ON s.id = seg.driver_id
+            WHERE seg.cursa_id IN ($placeholders)
+              AND seg.deleted_at IS NULL
+            ORDER BY seg.cursa_id ASC, seg.ordine ASC, seg.id ASC
+        ");
+        $stmt->execute($idList);
+
+        $grouped = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $segment) {
+            $grouped[(int) $segment['cursa_id']][] = $segment;
+        }
+
+        return $grouped;
+    }
+
+    public function getRaceSegmentById(int $segmentId): ?array
+    {
+        if ($segmentId <= 0) {
+            return null;
+        }
+
+        $this->ensureRaceSegmentsTable();
+
+        $stmt = $this->db->prepare('SELECT * FROM curse_segmente WHERE id = :id AND deleted_at IS NULL LIMIT 1');
+        $stmt->bindValue(':id', $segmentId, PDO::PARAM_INT);
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row ?: null;
+    }
+
+    /**
+     * Adauga un segment nou la o cursa existenta (reluarea cursei).
+     * Primul segment se materializeaza din cursa insasi, ca sa ramana vizibil
+     * cine a condus portiunea initiala.
+     */
+    public function addRaceSegment(int $cursaId, array $segment, ?int $userId = null): array
+    {
+        $this->ensureRaceSegmentsTable();
+        $this->ensureRaceAuditLogSchema();
+        // Metoda poate fi apelata si din interiorul unei tranzactii (scripturi,
+        // conversii): in acest caz tranzactia ramane a apelantului.
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $race = $this->getRaceSnapshotForUpdate($cursaId);
+            if ($race === null) {
+                throw new RuntimeException('Cursa nu exista.');
+            }
+
+            $kmBefore = $this->buildRaceKmDistribution($race);
+
+            $this->materializeFirstSegment($race, $userId);
+            $segmentId = $this->insertRaceSegment($cursaId, $segment, $userId);
+            $this->refreshRaceFromSegments($cursaId);
+
+            $raceAfter = $this->getRaceSnapshotForUpdate($cursaId);
+            $alerts = $this->applyKmDistributionDelta($kmBefore, $this->buildRaceKmDistribution($raceAfter));
+            $this->logRaceAudit($cursaId, 'updated', $userId, ['segment_adaugat' => $segmentId]);
+
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
+
+            return [
+                'segment_id' => $segmentId,
+                'maintenance_alerts' => $alerts,
+            ];
+        } catch (Throwable $exception) {
+            if ($ownTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
+    public function updateRaceSegment(int $segmentId, array $segment, ?int $userId = null): array
+    {
+        $this->ensureRaceSegmentsTable();
+        $this->ensureRaceAuditLogSchema();
+        // Metoda poate fi apelata si din interiorul unei tranzactii (scripturi,
+        // conversii): in acest caz tranzactia ramane a apelantului.
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $existing = $this->getRaceSegmentById($segmentId);
+            if ($existing === null) {
+                throw new RuntimeException('Segmentul nu exista.');
+            }
+
+            $cursaId = (int) $existing['cursa_id'];
+            $race = $this->getRaceSnapshotForUpdate($cursaId);
+            if ($race === null) {
+                throw new RuntimeException('Cursa nu exista.');
+            }
+
+            $kmBefore = $this->buildRaceKmDistribution($race);
+
+            $stmt = $this->db->prepare("
+                UPDATE curse_segmente
+                SET vehicle_id = :vehicle_id,
+                    driver_id = :driver_id,
+                    loc_incarcare_id = :loc_incarcare_id,
+                    zona_distributie_id = :zona_distributie_id,
+                    loc_plecare = :loc_plecare,
+                    loc_livrare = :loc_livrare,
+                    data_inceput = :data_inceput,
+                    ora_inceput = :ora_inceput,
+                    data_sfarsit = :data_sfarsit,
+                    ora_sfarsit = :ora_sfarsit,
+                    km = :km,
+                    cantitate_incarcata = :cantitate_incarcata,
+                    tona_livrata = :tona_livrata,
+                    nr_clienti = :nr_clienti,
+                    ore_functionare = :ore_functionare,
+                    observatii = :observatii,
+                    updated_at = :updated_at
+                WHERE id = :id
+            ");
+            $this->bindRaceSegmentValues($stmt, $segment);
+            $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+            $stmt->bindValue(':id', $segmentId, PDO::PARAM_INT);
+            $stmt->execute();
+
+            $this->reorderRaceSegments($cursaId);
+            $this->refreshRaceFromSegments($cursaId);
+
+            $raceAfter = $this->getRaceSnapshotForUpdate($cursaId);
+            $alerts = $this->applyKmDistributionDelta($kmBefore, $this->buildRaceKmDistribution($raceAfter));
+            $this->logRaceAudit($cursaId, 'updated', $userId, ['segment_modificat' => $segmentId]);
+
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
+
+            return [
+                'cursa_id' => $cursaId,
+                'maintenance_alerts' => $alerts,
+            ];
+        } catch (Throwable $exception) {
+            if ($ownTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
+    /**
+     * Sterge un segment. Cand ramane un singur segment, cursa redevine o cursa
+     * obisnuita (segmentul unic nu mai aduce informatie in plus fata de cursa).
+     */
+    public function deleteRaceSegment(int $segmentId, ?int $userId = null): array
+    {
+        $this->ensureRaceSegmentsTable();
+        $this->ensureRaceAuditLogSchema();
+        // Metoda poate fi apelata si din interiorul unei tranzactii (scripturi,
+        // conversii): in acest caz tranzactia ramane a apelantului.
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $existing = $this->getRaceSegmentById($segmentId);
+            if ($existing === null) {
+                throw new RuntimeException('Segmentul nu exista.');
+            }
+
+            $cursaId = (int) $existing['cursa_id'];
+            $race = $this->getRaceSnapshotForUpdate($cursaId);
+            if ($race === null) {
+                throw new RuntimeException('Cursa nu exista.');
+            }
+
+            $kmBefore = $this->buildRaceKmDistribution($race);
+
+            $deleteStmt = $this->db->prepare('DELETE FROM curse_segmente WHERE id = :id');
+            $deleteStmt->bindValue(':id', $segmentId, PDO::PARAM_INT);
+            $deleteStmt->execute();
+
+            $remaining = $this->getRaceSegments($cursaId);
+            if (count($remaining) <= 1) {
+                // Cursa se intoarce la intervalul segmentului ramas (cel initial),
+                // apoi segmentul dispare: o cursa cu un singur segment e o cursa simpla.
+                $this->refreshRaceFromSegments($cursaId);
+                $cleanupStmt = $this->db->prepare('DELETE FROM curse_segmente WHERE cursa_id = :cursa_id AND deleted_at IS NULL');
+                $cleanupStmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+                $cleanupStmt->execute();
+            } else {
+                $this->reorderRaceSegments($cursaId);
+                $this->refreshRaceFromSegments($cursaId);
+            }
+
+            $raceAfter = $this->getRaceSnapshotForUpdate($cursaId);
+            $alerts = $this->applyKmDistributionDelta($kmBefore, $this->buildRaceKmDistribution($raceAfter));
+            $this->logRaceAudit($cursaId, 'updated', $userId, ['segment_sters' => $segmentId]);
+
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
+
+            return [
+                'cursa_id' => $cursaId,
+                'maintenance_alerts' => $alerts,
+            ];
+        } catch (Throwable $exception) {
+            if ($ownTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
+    }
+
+    /**
+     * Fazele urmeaza cursa la stergere: cursa cu faze se sterge INTREAGA, nu doar
+     * portiunea ei initiala. Stergerea este tot "soft", ca la cursa, ca restaurarea
+     * sa aduca inapoi cursa cu toate fazele ei.
+     *
+     * Se apeleaza DUPA calculul km-ilor pe vehicule: impartirea km-ilor pe fazele
+     * cursei citeste fazele active (vezi buildRaceVehicleKmShares()).
+     */
+    private function softDeleteRaceSegments(int $cursaId, ?int $userId, string $deletedAt): int
+    {
+        if ($cursaId <= 0) {
+            return 0;
+        }
+
+        $stmt = $this->db->prepare("
+            UPDATE curse_segmente
+            SET deleted_at = :deleted_at,
+                deleted_by = :deleted_by,
+                updated_at = :updated_at
+            WHERE cursa_id = :cursa_id
+              AND deleted_at IS NULL
+        ");
+        $stmt->bindValue(':deleted_at', $deletedAt, PDO::PARAM_STR);
+        if ($userId !== null && $userId > 0) {
+            $stmt->bindValue(':deleted_by', $userId, PDO::PARAM_INT);
+        } else {
+            $stmt->bindValue(':deleted_by', null, PDO::PARAM_NULL);
+        }
+        $stmt->bindValue(':updated_at', $deletedAt, PDO::PARAM_STR);
+        $stmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->rowCount();
+    }
+
+    /**
+     * Restaurarea cursei aduce inapoi fazele sterse odata cu ea. Se apeleaza INAINTE
+     * de sincronizarea km-ilor, ca acestia sa se imparta din nou pe vehiculele fazelor.
+     */
+    private function restoreRaceSegments(int $cursaId, ?string $deletedAt = null): int
+    {
+        if ($cursaId <= 0) {
+            return 0;
+        }
+
+        $deletedAt = $deletedAt !== null ? trim($deletedAt) : '';
+        $sql = "
+            UPDATE curse_segmente
+            SET deleted_at = NULL,
+                deleted_by = NULL,
+                updated_at = :updated_at
+            WHERE cursa_id = :cursa_id
+              AND deleted_at IS NOT NULL
+        ";
+        // Cand stim momentul stergerii cursei restauram exact fazele sterse atunci,
+        // ca sa nu inviem si fazele scoase manual inainte de stergerea cursei.
+        if ($deletedAt !== '') {
+            $sql .= ' AND deleted_at = :deleted_at';
+        }
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        $stmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+        if ($deletedAt !== '') {
+            $stmt->bindValue(':deleted_at', $deletedAt, PDO::PARAM_STR);
+        }
+        $stmt->execute();
+
+        return $stmt->rowCount();
+    }
+
+    /**
+     * Primul segment = portiunea condusa pana la oprire, luata din cursa insasi.
+     * Se creeaza o singura data, la prima reluare.
+     */
+    private function materializeFirstSegment(array $race, ?int $userId): void
+    {
+        $cursaId = (int) ($race['id'] ?? 0);
+        if ($cursaId <= 0) {
+            return;
+        }
+
+        $countStmt = $this->db->prepare('SELECT COUNT(*) FROM curse_segmente WHERE cursa_id = :cursa_id AND deleted_at IS NULL');
+        $countStmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+        $countStmt->execute();
+        if ((int) $countStmt->fetchColumn() > 0) {
+            return;
+        }
+
+        $this->insertRaceSegment($cursaId, [
+            'vehicle_id' => (int) ($race['vehicle_id'] ?? 0),
+            'driver_id' => (int) ($race['driver_id'] ?? 0),
+            'loc_incarcare_id' => (int) ($race['loc_incarcare_id'] ?? 0),
+            'zona_distributie_id' => (int) ($race['zona_distributie_id'] ?? 0),
+            'loc_plecare' => (string) ($race['loc_plecare'] ?? ''),
+            'loc_livrare' => (string) ($race['loc_livrare'] ?? ''),
+            'data_inceput' => (string) ($race['data_inceput'] ?? ''),
+            'ora_inceput' => (string) ($race['ora_inceput'] ?? ''),
+            'data_sfarsit' => (string) ($race['data_sfarsit'] ?? ''),
+            'ora_sfarsit' => (string) ($race['ora_sfarsit'] ?? ''),
+            'km' => $this->getRaceEffectiveKmForSync($race),
+            'cantitate_incarcata' => $race['cantitate_incarcata'] ?? null,
+            'tona_livrata' => $race['tona_livrata'] ?? null,
+            'nr_clienti' => $race['nr_clienti'] ?? null,
+            'ore_functionare' => $race['ore_functionare'] ?? null,
+            'observatii' => '',
+        ], $userId);
+    }
+
+    private function insertRaceSegment(int $cursaId, array $segment, ?int $userId): int
+    {
+        // Ordinea se ia peste TOATE fazele cursei, inclusiv cele sterse odata cu ea:
+        // unique (cursa_id, ordine) le numara si pe acelea, iar o cursa restaurata
+        // isi primeste fazele inapoi cu ordinele lor.
+        $orderStmt = $this->db->prepare('SELECT COALESCE(MAX(ordine), 0) + 1 FROM curse_segmente WHERE cursa_id = :cursa_id');
+        $orderStmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+        $orderStmt->execute();
+        $ordine = (int) $orderStmt->fetchColumn();
+
+        $now = date('Y-m-d H:i:s');
+        $stmt = $this->db->prepare("
+            INSERT INTO curse_segmente
+                (cursa_id, ordine, vehicle_id, driver_id, loc_incarcare_id, zona_distributie_id,
+                 loc_plecare, loc_livrare, data_inceput, ora_inceput, data_sfarsit, ora_sfarsit,
+                 km, cantitate_incarcata, tona_livrata, nr_clienti, ore_functionare,
+                 observatii, created_by, created_at, updated_at)
+            VALUES
+                (:cursa_id, :ordine, :vehicle_id, :driver_id, :loc_incarcare_id, :zona_distributie_id,
+                 :loc_plecare, :loc_livrare, :data_inceput, :ora_inceput, :data_sfarsit, :ora_sfarsit,
+                 :km, :cantitate_incarcata, :tona_livrata, :nr_clienti, :ore_functionare,
+                 :observatii, :created_by, :created_at, :updated_at)
+        ");
+        $stmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+        $stmt->bindValue(':ordine', $ordine, PDO::PARAM_INT);
+        $this->bindRaceSegmentValues($stmt, $segment);
+        $stmt->bindValue(':created_by', $userId !== null && $userId > 0 ? $userId : null, $userId !== null && $userId > 0 ? PDO::PARAM_INT : PDO::PARAM_NULL);
+        $stmt->bindValue(':created_at', $now, PDO::PARAM_STR);
+        $stmt->bindValue(':updated_at', $now, PDO::PARAM_STR);
+        $stmt->execute();
+
+        return (int) $this->db->lastInsertId();
+    }
+
+    private function bindRaceSegmentValues(PDOStatement $stmt, array $segment): void
+    {
+        $intOrNull = static function ($value): ?int {
+            if ($value === null || $value === '' || (int) $value <= 0) {
+                return null;
+            }
+
+            return (int) $value;
+        };
+        $stringOrNull = static function ($value): ?string {
+            $value = trim((string) ($value ?? ''));
+
+            return $value === '' ? null : $value;
+        };
+
+        $decimalOrNull = static function ($value): ?string {
+            if ($value === null || trim((string) $value) === '') {
+                return null;
+            }
+
+            $number = (float) str_replace(',', '.', (string) $value);
+
+            return $number < 0 ? null : number_format($number, 2, '.', '');
+        };
+
+        $vehicleId = $intOrNull($segment['vehicle_id'] ?? null);
+        $driverId = $intOrNull($segment['driver_id'] ?? null);
+        $loadLocationId = $intOrNull($segment['loc_incarcare_id'] ?? null);
+        $zoneId = $intOrNull($segment['zona_distributie_id'] ?? null);
+        $km = $segment['km'] ?? null;
+        $km = ($km === null || $km === '' || (int) $km < 0) ? null : (int) $km;
+        $clients = $segment['nr_clienti'] ?? null;
+        $clients = ($clients === null || $clients === '' || (int) $clients < 0) ? null : (int) $clients;
+
+        $stmt->bindValue(':vehicle_id', $vehicleId, $vehicleId === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+        $stmt->bindValue(':driver_id', $driverId, $driverId === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+        $stmt->bindValue(':loc_incarcare_id', $loadLocationId, $loadLocationId === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+        $stmt->bindValue(':zona_distributie_id', $zoneId, $zoneId === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+        $stmt->bindValue(':loc_plecare', $stringOrNull($segment['loc_plecare'] ?? null));
+        $stmt->bindValue(':loc_livrare', $stringOrNull($segment['loc_livrare'] ?? null));
+        $stmt->bindValue(':data_inceput', $stringOrNull($segment['data_inceput'] ?? null));
+        $stmt->bindValue(':ora_inceput', $stringOrNull($segment['ora_inceput'] ?? null));
+        $stmt->bindValue(':data_sfarsit', $stringOrNull($segment['data_sfarsit'] ?? null));
+        $stmt->bindValue(':ora_sfarsit', $stringOrNull($segment['ora_sfarsit'] ?? null));
+        $stmt->bindValue(':km', $km, $km === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+        $stmt->bindValue(':cantitate_incarcata', $decimalOrNull($segment['cantitate_incarcata'] ?? null));
+        $stmt->bindValue(':tona_livrata', $decimalOrNull($segment['tona_livrata'] ?? null));
+        $stmt->bindValue(':nr_clienti', $clients, $clients === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+        $stmt->bindValue(':ore_functionare', $decimalOrNull($segment['ore_functionare'] ?? null));
+        $stmt->bindValue(':observatii', $stringOrNull($segment['observatii'] ?? null));
+    }
+
+    /**
+     * Segmentele se tin in ordinea cronologica a inceputului.
+     */
+    private function reorderRaceSegments(int $cursaId): void
+    {
+        $stmt = $this->db->prepare("
+            SELECT id
+            FROM curse_segmente
+            WHERE cursa_id = :cursa_id
+              AND deleted_at IS NULL
+            ORDER BY
+                COALESCE(CONCAT(data_inceput, ' ', COALESCE(ora_inceput, '00:00:00')), '9999-12-31 23:59:59') ASC,
+                ordine ASC,
+                id ASC
+        ");
+        $stmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+        $stmt->execute();
+        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
+        if ($ids === []) {
+            return;
+        }
+
+        // Ordinele se muta intai in afara intervalului, ca unique (cursa_id, ordine)
+        // sa nu se ciocneasca in timpul renumerotarii.
+        $offsetStmt = $this->db->prepare('UPDATE curse_segmente SET ordine = ordine + 1000 WHERE cursa_id = :cursa_id AND deleted_at IS NULL');
+        $offsetStmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+        $offsetStmt->execute();
+
+        $updateStmt = $this->db->prepare('UPDATE curse_segmente SET ordine = :ordine WHERE id = :id');
+        foreach ($ids as $index => $segmentId) {
+            $updateStmt->bindValue(':ordine', $index + 1, PDO::PARAM_INT);
+            $updateStmt->bindValue(':id', $segmentId, PDO::PARAM_INT);
+            $updateStmt->execute();
+        }
+    }
+
+    /**
+     * Cursa preia intervalul acoperit de segmente: inceputul primului segment si
+     * sfarsitul ultimului. Km si cantitatile raman ale cursei intregi (ele sunt
+     * baza de facturare), la fel soferul/vehiculul principal = primul segment.
+     */
+    /**
+     * Totalurile cursei, adunate din fazele ei: km, cantitatea incarcata, tonele
+     * chiar livrate, numarul de clienti si orele de functionare. Cheia lipseste
+     * cand nicio faza nu are valoarea respectiva, ca sa nu suprascriem cu 0 ceva
+     * ce operatorul a completat pe cursa.
+     *
+     * @param array<int,array<string,mixed>> $segments
+     * @return array<string, float|int>
+     */
+    public static function sumSegmentTotals(array $segments): array
+    {
+        $fields = [
+            'km' => 'int',
+            'cantitate_incarcata' => 'float',
+            'tona_livrata' => 'float',
+            'nr_clienti' => 'int',
+            'ore_functionare' => 'float',
+        ];
+
+        $totals = [];
+        foreach ($segments as $segment) {
+            foreach ($fields as $field => $type) {
+                $value = $segment[$field] ?? null;
+                if ($value === null || trim((string) $value) === '') {
+                    continue;
+                }
+                $totals[$field] = ($totals[$field] ?? 0) + ($type === 'int' ? (int) $value : (float) $value);
+            }
+        }
+
+        return $totals;
+    }
+
+    private function refreshRaceFromSegments(int $cursaId): void
+    {
+        $segments = $this->getRaceSegments($cursaId);
+        if ($segments === []) {
+            return;
+        }
+
+        $first = $segments[0];
+        $last = $segments[count($segments) - 1];
+
+        $startDate = trim((string) ($first['data_inceput'] ?? ''));
+        $startTime = trim((string) ($first['ora_inceput'] ?? ''));
+        $endDate = trim((string) ($last['data_sfarsit'] ?? ''));
+        $endTime = trim((string) ($last['ora_sfarsit'] ?? ''));
+
+        $durationMinutes = null;
+        if ($startDate !== '' && $endDate !== '') {
+            $start = strtotime($startDate . ' ' . ($startTime !== '' ? $startTime : '00:00:00'));
+            $end = strtotime($endDate . ' ' . ($endTime !== '' ? $endTime : '00:00:00'));
+            if ($start !== false && $end !== false && $end >= $start) {
+                $durationMinutes = (int) floor(($end - $start) / 60);
+            }
+        }
+
+        // Cursa preia si totalurile fazelor. Km-ii merg in campul care tine km-ii
+        // REALI: la Primar / Primar+Distributie km_cursa sunt km-ii agreati pe ruta,
+        // deci acolo suma fazelor intra in km_totali.
+        $race = $this->getRaceSnapshotForUpdate($cursaId);
+        $transportType = (string) ($race['tip_transport'] ?? '');
+        $agreedKmType = in_array($transportType, ['primar', 'primar_distributie'], true);
+        $totals = self::sumSegmentTotals($segments);
+
+        $quantityAssignments = [];
+        $quantityValues = [];
+        $assign = static function (string $column, $value) use (&$quantityAssignments, &$quantityValues): void {
+            $quantityAssignments[] = $column . ' = :' . $column;
+            $quantityValues[$column] = $value;
+        };
+
+        if (isset($totals['km'])) {
+            $assign($agreedKmType ? 'km_totali' : 'km_cursa', (int) $totals['km']);
+        }
+        if (isset($totals['cantitate_incarcata'])) {
+            $assign('cantitate_incarcata', number_format((float) $totals['cantitate_incarcata'], 2, '.', ''));
+        }
+        // Tonele livrate se tin pe curse doar la Compresor (la celelalte tipuri
+        // formularul cursei nu are campul si l-ar sterge la prima salvare). Pentru
+        // restul tipurilor, cat s-a livrat ramane pe faze si se aduna la afisare.
+        if (isset($totals['tona_livrata']) && $transportType === 'compresor') {
+            $assign('tona_livrata', number_format((float) $totals['tona_livrata'], 2, '.', ''));
+        }
+        if (isset($totals['nr_clienti'])) {
+            $assign('nr_clienti', (int) $totals['nr_clienti']);
+        }
+        if (isset($totals['ore_functionare'])) {
+            $assign('ore_functionare', number_format((float) $totals['ore_functionare'], 2, '.', ''));
+        }
+
+        $quantitySql = $quantityAssignments === [] ? '' : implode(",\n                ", $quantityAssignments) . ',';
+
+        $stmt = $this->db->prepare("
+            UPDATE curse_dispecer
+            SET data_inceput = :data_inceput,
+                ora_inceput = :ora_inceput,
+                data_sfarsit = :data_sfarsit,
+                ora_sfarsit = :ora_sfarsit,
+                durata_cursa_minute = :durata_cursa_minute,
+                {$quantitySql}
+                updated_at = :updated_at
+            WHERE id = :id
+        ");
+        foreach ($quantityValues as $column => $value) {
+            $stmt->bindValue(':' . $column, $value);
+        }
+        $stmt->bindValue(':data_inceput', $startDate !== '' ? $startDate : null, $startDate !== '' ? PDO::PARAM_STR : PDO::PARAM_NULL);
+        $stmt->bindValue(':ora_inceput', $startTime !== '' ? $startTime : null, $startTime !== '' ? PDO::PARAM_STR : PDO::PARAM_NULL);
+        $stmt->bindValue(':data_sfarsit', $endDate !== '' ? $endDate : null, $endDate !== '' ? PDO::PARAM_STR : PDO::PARAM_NULL);
+        $stmt->bindValue(':ora_sfarsit', $endTime !== '' ? $endTime : null, $endTime !== '' ? PDO::PARAM_STR : PDO::PARAM_NULL);
+        $stmt->bindValue(':durata_cursa_minute', $durationMinutes, $durationMinutes === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        $stmt->bindValue(':id', $cursaId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        // Amprenta de cursa dubla contine datele si durata, deci se reface dupa
+        // schimbarea intervalului. O coliziune (teoretica) nu trebuie sa blocheze
+        // salvarea segmentului: amprenta ramane cea veche si se reface la editare.
+        try {
+            $freshRace = $this->getRaceSnapshotForUpdate($cursaId);
+            if ($freshRace !== null) {
+                $keyStmt = $this->db->prepare('UPDATE curse_dispecer SET duplicate_key = :duplicate_key WHERE id = :id');
+                $keyStmt->bindValue(':duplicate_key', $this->buildRaceDuplicateKey($freshRace), PDO::PARAM_STR);
+                $keyStmt->bindValue(':id', $cursaId, PDO::PARAM_INT);
+                $keyStmt->execute();
+            }
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseModel][refreshRaceFromSegments] ' . $exception->getMessage());
+        }
+    }
+
+    /**
+     * Editarea cursei se reflecta in segmentele de capat: soferul, vehiculul si
+     * inceputul cursei sunt ale primului segment, sfarsitul cursei este al ultimului.
+     * Km-ii segmentelor nu se ating (ei se editeaza din panoul de segmente).
+     */
+    private function syncEdgeSegmentsWithRace(int $cursaId, array $data): void
+    {
+        $segments = $this->getRaceSegments($cursaId);
+        if ($segments === []) {
+            return;
+        }
+
+        $nullable = static function ($value): ?string {
+            $value = trim((string) ($value ?? ''));
+
+            return $value === '' ? null : $value;
+        };
+
+        $first = $segments[0];
+        $firstStmt = $this->db->prepare("
+            UPDATE curse_segmente
+            SET vehicle_id = :vehicle_id,
+                driver_id = :driver_id,
+                data_inceput = :data_inceput,
+                ora_inceput = :ora_inceput,
+                updated_at = :updated_at
+            WHERE id = :id
+        ");
+        $vehicleId = (int) ($data['vehicle_id'] ?? 0);
+        $driverId = (int) ($data['driver_id'] ?? 0);
+        $firstStmt->bindValue(':vehicle_id', $vehicleId > 0 ? $vehicleId : null, $vehicleId > 0 ? PDO::PARAM_INT : PDO::PARAM_NULL);
+        $firstStmt->bindValue(':driver_id', $driverId > 0 ? $driverId : null, $driverId > 0 ? PDO::PARAM_INT : PDO::PARAM_NULL);
+        $firstStmt->bindValue(':data_inceput', $nullable($data['data_inceput'] ?? null));
+        $firstStmt->bindValue(':ora_inceput', $nullable($data['ora_inceput'] ?? null));
+        $firstStmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        $firstStmt->bindValue(':id', (int) $first['id'], PDO::PARAM_INT);
+        $firstStmt->execute();
+
+        $last = $segments[count($segments) - 1];
+        $lastStmt = $this->db->prepare("
+            UPDATE curse_segmente
+            SET data_sfarsit = :data_sfarsit,
+                ora_sfarsit = :ora_sfarsit,
+                updated_at = :updated_at
+            WHERE id = :id
+        ");
+        $lastStmt->bindValue(':data_sfarsit', $nullable($data['data_sfarsit'] ?? null));
+        $lastStmt->bindValue(':ora_sfarsit', $nullable($data['ora_sfarsit'] ?? null));
+        $lastStmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        $lastStmt->bindValue(':id', (int) $last['id'], PDO::PARAM_INT);
+        $lastStmt->execute();
+    }
+
+    /**
+     * Km-ii cursei, impartiti pe vehicule: proportional cu km-ii segmentelor cand
+     * cursa are segmente, altfel integral pe vehiculul cursei. Suma ramane aceeasi,
+     * indiferent de numarul de segmente.
+     *
+     * @return array<int, array{km_bord:int, km_revizie:int}>
+     */
+    private function buildRaceKmDistribution(?array $race): array
+    {
+        if ($race === null) {
+            return [];
+        }
+
+        $kmBord = $this->getRaceEffectiveKmForSync($race);
+        $kmRevizie = $this->getRaceEffectiveMaintenanceKmForSync($race);
+        if ($kmBord <= 0 && $kmRevizie <= 0) {
+            return [];
+        }
+
+        $shares = $this->buildRaceVehicleKmShares($race);
+        $distribution = [];
+        foreach ($shares as $vehicleId => $share) {
+            $vehicleId = (int) $vehicleId;
+            if ($vehicleId <= 0 || $share <= 0) {
+                continue;
+            }
+
+            foreach ($this->getKmSyncVehicleIds($vehicleId) as $syncVehicleId) {
+                if (!isset($distribution[$syncVehicleId])) {
+                    $distribution[$syncVehicleId] = ['km_bord' => 0, 'km_revizie' => 0];
+                }
+                $distribution[$syncVehicleId]['km_bord'] += (int) round($kmBord * $share);
+                $distribution[$syncVehicleId]['km_revizie'] += (int) round($kmRevizie * $share);
+            }
+        }
+
+        return $distribution;
+    }
+
+    /**
+     * Ponderea fiecarui vehicul in km-ii cursei (1.0 = tot).
+     *
+     * @return array<int, float>
+     */
+    private function buildRaceVehicleKmShares(array $race): array
+    {
+        $raceId = (int) ($race['id'] ?? 0);
+        $raceVehicleId = (int) ($race['vehicle_id'] ?? 0);
+        $segments = $raceId > 0 ? $this->getRaceSegments($raceId) : [];
+        if (count($segments) < 2) {
+            return $raceVehicleId > 0 ? [$raceVehicleId => 1.0] : [];
+        }
+
+        $kmByVehicle = [];
+        $kmTotal = 0;
+        foreach ($segments as $segment) {
+            $vehicleId = (int) ($segment['vehicle_id'] ?? 0);
+            $km = max(0, (int) ($segment['km'] ?? 0));
+            if ($vehicleId <= 0 || $km <= 0) {
+                continue;
+            }
+            $kmByVehicle[$vehicleId] = ($kmByVehicle[$vehicleId] ?? 0) + $km;
+            $kmTotal += $km;
+        }
+
+        if ($kmTotal <= 0 || $kmByVehicle === []) {
+            // Fara km pe segmente nu avem cum imparti: km raman pe vehiculul cursei.
+            return $raceVehicleId > 0 ? [$raceVehicleId => 1.0] : [];
+        }
+
+        $shares = [];
+        foreach ($kmByVehicle as $vehicleId => $km) {
+            $shares[$vehicleId] = $km / $kmTotal;
+        }
+
+        return $shares;
+    }
+
+    /**
+     * @param array<int, array{km_bord:int, km_revizie:int}> $before
+     * @param array<int, array{km_bord:int, km_revizie:int}> $after
+     */
+    private function applyKmDistributionDelta(array $before, array $after): array
+    {
+        $vehicleIds = array_unique(array_merge(array_keys($before), array_keys($after)));
+        $alerts = [];
+        foreach ($vehicleIds as $vehicleId) {
+            $vehicleId = (int) $vehicleId;
+            if ($vehicleId <= 0) {
+                continue;
+            }
+
+            $deltaKmBord = (int) (($after[$vehicleId]['km_bord'] ?? 0) - ($before[$vehicleId]['km_bord'] ?? 0));
+            $deltaKmRevizie = (int) (($after[$vehicleId]['km_revizie'] ?? 0) - ($before[$vehicleId]['km_revizie'] ?? 0));
+            if ($deltaKmBord === 0 && $deltaKmRevizie === 0) {
+                continue;
+            }
+
+            $alert = $this->applyKmDeltaToVehicle($vehicleId, $deltaKmBord, $deltaKmRevizie);
+            if ($alert !== null) {
+                $alerts[] = $alert;
+            }
+        }
+
+        return $alerts;
     }
 
     public function updateRaceBillingStatus(int $id, string $billingStatus, string $updatedAt, ?int $userId = null): bool
@@ -5128,6 +6137,54 @@ class DispecerCurseModel extends BaseModel
         }
 
         return $updated;
+    }
+
+    /**
+     * Schimba statusul de facturare pentru mai multe curse deodata (actiunea in bloc din Istoric activitate).
+     * Sare peste cursele care au deja statusul cerut; fiecare schimbare ramane in jurnalul de audit.
+     */
+    public function updateRacesBillingStatus(array $ids, string $billingStatus, string $updatedAt, ?int $userId = null): int
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static fn (int $id): bool => $id > 0)));
+        if ($ids === []) {
+            return 0;
+        }
+
+        $this->ensureRaceAuditLogSchema();
+
+        $stmt = $this->db->prepare("
+            UPDATE curse_dispecer
+            SET status_facturare = :status_facturare,
+                updated_at = :updated_at
+            WHERE id = :id
+              AND deleted_at IS NULL
+              AND status_facturare <> :status_curent
+        ");
+
+        $changed = 0;
+        $this->db->beginTransaction();
+        try {
+            foreach ($ids as $id) {
+                $stmt->bindValue(':status_facturare', $billingStatus, PDO::PARAM_STR);
+                $stmt->bindValue(':updated_at', $updatedAt, PDO::PARAM_STR);
+                $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+                $stmt->bindValue(':status_curent', $billingStatus, PDO::PARAM_STR);
+                $stmt->execute();
+                if ($stmt->rowCount() > 0) {
+                    $changed++;
+                    $this->logRaceAudit($id, 'status_changed', $userId, [
+                        'status_facturare' => $billingStatus,
+                        'bulk' => true,
+                    ]);
+                }
+            }
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            $this->db->rollBack();
+            throw $exception;
+        }
+
+        return $changed;
     }
 
     public function updateRaceExpenseStatus(int $id, string $expenseStatus, string $updatedAt, ?int $userId = null): bool
@@ -5160,11 +6217,11 @@ class DispecerCurseModel extends BaseModel
         return $updated;
     }
 
-    public function deleteRace(int $id, ?int $userId = null): bool
+    public function deleteRace(int $id, ?int $userId = null, ?string $deletedAt = null): bool
     {
         $this->ensureRaceSoftDeleteSchema();
 
-        $deletedAt = date('Y-m-d H:i:s');
+        $deletedAt = $deletedAt !== null && trim($deletedAt) !== '' ? trim($deletedAt) : date('Y-m-d H:i:s');
         $stmt = $this->db->prepare("
             UPDATE curse_dispecer
             SET deleted_at = :deleted_at,
@@ -5190,7 +6247,16 @@ class DispecerCurseModel extends BaseModel
     public function deleteRaceAndSyncVehicleKm(int $id, ?int $userId = null): bool
     {
         $this->ensureRaceAuditLogSchema();
-        $this->db->beginTransaction();
+        // Tabela de faze se pregateste INAINTE de tranzactie: orice CREATE/ALTER face
+        // commit implicit in MySQL, iar tranzactia s-ar inchide in mijlocul stergerii
+        // ("There is no active transaction" la curse cu faze).
+        $this->ensureRaceSegmentsTable();
+        // Poate fi apelata si din interiorul unei tranzactii (scripturi, conversii):
+        // in acest caz tranzactia ramane a apelantului.
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
 
         try {
             $previousRace = $this->getRaceSnapshotForUpdate($id);
@@ -5198,22 +6264,32 @@ class DispecerCurseModel extends BaseModel
                 throw new RuntimeException('Cursa nu exista pentru stergere.');
             }
 
-            $deleted = $this->deleteRace($id, $userId);
+            $deletedAt = date('Y-m-d H:i:s');
+            $deleted = $this->deleteRace($id, $userId, $deletedAt);
             if (!$deleted) {
                 throw new RuntimeException('Stergerea cursei a esuat.');
             }
+            // Intai km-ii (se impart pe vehiculele fazelor, deci au nevoie de faze
+            // active), apoi fazele: cursa pleaca intreaga, cu tot cu ele.
             $this->syncVehicleKmForRaceChange($previousRace, null);
-            $this->logRaceAudit((int) $previousRace['id'], 'deleted', $userId, [
+            $deletedSegments = $this->softDeleteRaceSegments($id, $userId, $deletedAt);
+            $auditDetails = [
                 'nr_inmatriculare' => $previousRace['nr_inmatriculare'] ?? null,
                 'data_cursa' => $previousRace['data_cursa'] ?? null,
                 'duplicate_key' => $previousRace['duplicate_key'] ?? null,
-            ]);
+            ];
+            if ($deletedSegments > 0) {
+                $auditDetails['faze_sterse'] = $deletedSegments;
+            }
+            $this->logRaceAudit((int) $previousRace['id'], 'deleted', $userId, $auditDetails);
 
-            $this->db->commit();
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
 
             return $deleted;
         } catch (Throwable $exception) {
-            if ($this->db->inTransaction()) {
+            if ($ownTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
 
@@ -5225,7 +6301,16 @@ class DispecerCurseModel extends BaseModel
     {
         $this->ensureRaceAuditLogSchema();
         $this->ensureRaceDuplicateKeySchema();
-        $this->db->beginTransaction();
+        // Tabela de faze se pregateste INAINTE de tranzactie: orice CREATE/ALTER face
+        // commit implicit in MySQL, iar tranzactia s-ar inchide in mijlocul stergerii
+        // ("There is no active transaction" la curse cu faze).
+        $this->ensureRaceSegmentsTable();
+        // Poate fi apelata si din interiorul unei tranzactii (scripturi, conversii):
+        // in acest caz tranzactia ramane a apelantului.
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
 
         try {
             $deletedRace = $this->getRaceSnapshotForUpdate($id, true);
@@ -5257,20 +6342,30 @@ class DispecerCurseModel extends BaseModel
                 throw new RuntimeException('Restaurarea cursei a esuat.');
             }
 
+            // Fazele se intorc INAINTE de sincronizarea km-ilor: cursa cu faze isi
+            // imparte km-ii pe vehiculele lor, nu pe vehiculul cursei.
+            $restoredSegments = $this->restoreRaceSegments($id, (string) ($deletedRace['deleted_at'] ?? ''));
+
             $restoredRace = $deletedRace;
             $restoredRace['deleted_at'] = null;
             $restoredRace['duplicate_key'] = $duplicateKey;
             $this->syncVehicleKmForRaceChange(null, $restoredRace);
-            $this->logRaceAudit($id, 'restored', $userId, [
+            $auditDetails = [
                 'deleted_at' => $deletedRace['deleted_at'] ?? null,
                 'deleted_by' => $deletedRace['deleted_by'] ?? null,
-            ]);
+            ];
+            if ($restoredSegments > 0) {
+                $auditDetails['faze_restaurate'] = $restoredSegments;
+            }
+            $this->logRaceAudit($id, 'restored', $userId, $auditDetails);
 
-            $this->db->commit();
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
 
             return true;
         } catch (Throwable $exception) {
-            if ($this->db->inTransaction()) {
+            if ($ownTransaction && $this->db->inTransaction()) {
                 $this->db->rollBack();
             }
 
@@ -6611,26 +7706,41 @@ class DispecerCurseModel extends BaseModel
         ];
     }
 
+    /**
+     * Capacitatea tehnica REALA a vehiculului, in tone.
+     *
+     * Nu se intoarce niciodata valoarea din numele categoriei de capacitate si
+     * nu se substituie cu 0: cand capacitatea reala lipseste, rezultatul este
+     * null, iar apelantul trebuie sa trateze explicit cazul.
+     */
     public function getVehicleTransportCapacity(int $vehicleId): ?float
     {
+        return $this->getVehicleCapacityInfo($vehicleId)['capacity'];
+    }
+
+    /**
+     * Capacitatea reala + starea ei de verificare + categoria de grupare.
+     *
+     * @return array{capacity: ?float, confirmed: bool, category_id: ?int, category: ?string}
+     */
+    public function getVehicleCapacityInfo(int $vehicleId): array
+    {
+        $empty = ['capacity' => null, 'confirmed' => false, 'category_id' => null, 'category' => null];
+
+        if ($vehicleId <= 0) {
+            return $empty;
+        }
+
+        $this->ensureVehicleCapacityCategorySchema();
+
         $stmt = $this->db->prepare("
             SELECT
-                CASE
-                    WHEN v.tip_vehicul = 'cap_tractor' THEN s.capacitate_transport
-                    ELSE v.capacitate_transport
-                END AS capacitate_transport
+                (" . self::VEHICLE_REAL_CAPACITY_SQL . ") AS capacitate_transport,
+                (" . self::VEHICLE_CAPACITY_CONFIRMED_SQL . ") AS capacitate_transport_confirmata,
+                (" . self::VEHICLE_CATEGORY_ID_SQL . ") AS categorie_capacitate_id,
+                cc.nume AS categorie_capacitate
             FROM vehicule v
-            LEFT JOIN (
-                SELECT vc1.tractor_id, vc1.semiremorca_id
-                FROM vehicule_cuplaje vc1
-                INNER JOIN (
-                    SELECT tractor_id, MAX(id) AS max_id
-                    FROM vehicule_cuplaje
-                    WHERE activ = 1
-                    GROUP BY tractor_id
-                ) latest ON latest.max_id = vc1.id
-            ) vc ON vc.tractor_id = v.id
-            LEFT JOIN vehicule s ON s.id = vc.semiremorca_id
+            " . self::VEHICLE_CAPACITY_JOIN_SQL . "
             WHERE v.id = :id
             LIMIT 1
         ");
@@ -6639,15 +7749,24 @@ class DispecerCurseModel extends BaseModel
         $row = $stmt->fetch();
 
         if (!$row) {
-            return null;
+            return $empty;
         }
 
         $capacity = $row['capacitate_transport'] ?? null;
-        if ($capacity === null || $capacity === '') {
-            return null;
+        $capacity = ($capacity === null || $capacity === '') ? null : (float) $capacity;
+        // O capacitate de 0 nu este o capacitate: e o valoare lipsa.
+        if ($capacity !== null && $capacity <= 0) {
+            $capacity = null;
         }
 
-        return (float) $capacity;
+        $categoryId = (int) ($row['categorie_capacitate_id'] ?? 0);
+
+        return [
+            'capacity' => $capacity,
+            'confirmed' => $capacity !== null && (int) ($row['capacitate_transport_confirmata'] ?? 0) === 1,
+            'category_id' => $categoryId > 0 ? $categoryId : null,
+            'category' => $row['categorie_capacitate'] !== null ? (string) $row['categorie_capacitate'] : null,
+        ];
     }
 
     public function existsActiveVehicle(int $id): bool
@@ -6750,10 +7869,13 @@ class DispecerCurseModel extends BaseModel
     {
         $this->ensureExpenseRefacturareColumn();
         $this->ensureRaceSoftDeleteSchema();
+        $this->ensureVehicleCapacityCategorySchema();
     }
 
     public function getDashboardAnalyticFilterOptions(): array
     {
+        $this->ensureVehicleCapacityCategorySchema();
+
         $from = $this->dashboardFromSql();
 
         $vehiclesStmt = $this->db->query("
@@ -6800,6 +7922,7 @@ class DispecerCurseModel extends BaseModel
             ORDER BY c.status_facturare ASC
         ");
 
+        // Capacitatile REALE care apar efectiv in curse (filtru numeric, ca pana acum).
         $capacitiesStmt = $this->db->query("
             SELECT DISTINCT c.capacitate_transport
             FROM curse_dispecer c
@@ -6809,14 +7932,107 @@ class DispecerCurseModel extends BaseModel
             ORDER BY c.capacitate_transport ASC
         ");
 
+        /*
+         * Categoriile de capacitate ale vehiculelor care au curse. Este un filtru
+         * de GRUPARE: alege ce curse intra in raport, fara sa schimbe cu ce se
+         * imparte gradul de umplere (acela ramane capacitatea reala din cursa).
+         */
+        $categoriesStmt = $this->db->query("
+            SELECT DISTINCT cc.id, cc.nume, cc.ordine_afisare
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN (
+                SELECT vc1.tractor_id, vc1.semiremorca_id
+                FROM vehicule_cuplaje vc1
+                INNER JOIN (
+                    SELECT tractor_id, MAX(id) AS max_id
+                    FROM vehicule_cuplaje
+                    WHERE activ = 1
+                    GROUP BY tractor_id
+                ) latest ON latest.max_id = vc1.id
+            ) vc ON vc.tractor_id = v.id
+            LEFT JOIN vehicule s ON s.id = vc.semiremorca_id
+            INNER JOIN vehicule_categorii_capacitate cc
+                    ON cc.id = CASE
+                         WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(s.categorie_capacitate_id, v.categorie_capacitate_id)
+                         ELSE v.categorie_capacitate_id
+                       END
+            WHERE c.deleted_at IS NULL
+            ORDER BY cc.ordine_afisare ASC, cc.nume ASC
+        ");
+
         return [
             'vehicles' => $vehiclesStmt->fetchAll(),
             'drivers' => $driversStmt->fetchAll(),
             'beneficiaries' => $beneficiariesStmt->fetchAll(),
             'transport_types' => $transportTypesStmt->fetchAll(),
             'transport_capacities' => $capacitiesStmt->fetchAll(),
+            'capacity_categories' => $categoriesStmt->fetchAll(),
             'statuses' => $statusesStmt->fetchAll(),
         ];
+    }
+
+    /**
+     * Conditia SQL pentru filtrul pe CATEGORIE de capacitate.
+     *
+     * Este un filtru de apartenenta (ce curse intra in raport), nu o sursa de
+     * numere: gradul de umplere continua sa se imparta la capacitatea reala
+     * din snapshot-ul cursei.
+     */
+    private function dashboardCapacityCategorySql(): string
+    {
+        return "
+            EXISTS (
+                SELECT 1
+                FROM vehicule fv
+                LEFT JOIN (
+                    SELECT vc1.tractor_id, vc1.semiremorca_id
+                    FROM vehicule_cuplaje vc1
+                    INNER JOIN (
+                        SELECT tractor_id, MAX(id) AS max_id
+                        FROM vehicule_cuplaje
+                        WHERE activ = 1
+                        GROUP BY tractor_id
+                    ) latest ON latest.max_id = vc1.id
+                ) fvc ON fvc.tractor_id = fv.id
+                LEFT JOIN vehicule fs ON fs.id = fvc.semiremorca_id
+                WHERE fv.id = c.vehicle_id
+                  AND CASE
+                        WHEN fv.tip_vehicul = 'cap_tractor' THEN COALESCE(fs.categorie_capacitate_id, fv.categorie_capacitate_id)
+                        ELSE fv.categorie_capacitate_id
+                      END IN (%s)
+            )
+        ";
+    }
+
+    private function appendDashboardCapacityCategoryFilter(
+        array &$where,
+        array &$params,
+        array $values,
+        string $prefix
+    ): void {
+        $normalized = [];
+        foreach ($values as $value) {
+            $id = (int) $value;
+            if ($id > 0) {
+                $normalized[$id] = $id;
+            }
+        }
+
+        if ($normalized === []) {
+            return;
+        }
+
+        $placeholders = [];
+        $index = 0;
+        foreach (array_values($normalized) as $id) {
+            $placeholder = ':' . $prefix . '_' . $index;
+            $placeholders[] = $placeholder;
+            $params[$placeholder] = $id;
+            $index++;
+        }
+
+        $where[] = sprintf($this->dashboardCapacityCategorySql(), implode(', ', $placeholders));
     }
 
     private function dashboardTransportBuckets(): array
@@ -6960,13 +8176,30 @@ class DispecerCurseModel extends BaseModel
                 ELSE (" . $loadedTonsExpr . ")
             END
         ";
-        $gradIncarcareExpr = "
+        /*
+         * GRAD DE INCARCARE (Dashboard Analitic V1)
+         * -----------------------------------------
+         * Numitorul este `c.capacitate_transport` = snapshot-ul capacitatii tehnice
+         * REALE a vehiculului la momentul cursei. Categoria de capacitate nu apare
+         * niciodata aici: ea decide doar ce curse intra intr-un grup.
+         *
+         * Fara plafonul LEAST(100, ...): o supraincarcare reala trebuie sa se vada.
+         * Agregarea se face ponderat pe capacitate (total tone / total capacitati),
+         * nu ca medie a procentelor - vezi $tonsForGradExpr / $capacityForGradExpr.
+         */
+        $tonsForGradExpr = "
             CASE
-                WHEN c.capacitate_transport IS NOT NULL AND c.capacitate_transport > 0
-                THEN LEAST(100, GREATEST(0, ((" . $loadedTonsExpr . ") / c.capacitate_transport) * 100))
-                ELSE 0
+                WHEN c.capacitate_transport IS NULL OR c.capacitate_transport <= 0 THEN 0
+                ELSE GREATEST(0, COALESCE(NULLIF((" . $loadedTonsExpr . "), 0), (" . $deliveredTonsExpr . ")))
             END
         ";
+        $capacityForGradExpr = "
+            CASE
+                WHEN c.capacitate_transport IS NULL OR c.capacitate_transport <= 0 THEN 0
+                ELSE c.capacitate_transport
+            END
+        ";
+        $gradPonderatExpr = "COALESCE(SUM(" . $tonsForGradExpr . ") / NULLIF(SUM(" . $capacityForGradExpr . "), 0) * 100, 0)";
         $facturareWithInvoicedExpr = "(COALESCE(c.total_facturare, 0) + COALESCE(exp.total_refacturare_facturata, 0))";
         $refacturarePendingExpr = "COALESCE(exp.total_refacturare_pending, 0)";
         $transportBucketExpr = $this->dashboardTransportBucketSql();
@@ -6999,7 +8232,13 @@ class DispecerCurseModel extends BaseModel
                     END
                 ), 0) AS tone_distributie,
                 COALESCE(SUM(" . $kmNefacturatiExpr . "), 0) AS km_nefacturati,
-                COALESCE(AVG(" . $gradIncarcareExpr . "), 0) AS grad_incarcare_mediu
+                " . $gradPonderatExpr . " AS grad_incarcare_mediu,
+                SUM(CASE WHEN c.capacitate_transport IS NOT NULL AND c.capacitate_transport > 0 THEN 1 ELSE 0 END) AS curse_cu_capacitate,
+                -- Cate curse s-au calculat pe o capacitate reala inca neverificata:
+                -- rezultatul lor este orientativ pana cand cineva confirma capacitatea.
+                SUM(CASE WHEN c.capacitate_transport IS NOT NULL AND c.capacitate_transport > 0
+                              AND COALESCE(c.capacitate_transport_confirmata, 0) = 0
+                         THEN 1 ELSE 0 END) AS curse_capacitate_neconfirmata
             {$from}
             {$whereData['where']}
         ";
@@ -7143,7 +8382,7 @@ class DispecerCurseModel extends BaseModel
                 COALESCE(SUM(" . $refacturarePendingExpr . "), 0) AS refacturare,
                 COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS cheltuieli,
                 COALESCE(SUM(" . $kmNefacturatiExpr . "), 0) AS km_nefacturati,
-                COALESCE(AVG(" . $gradIncarcareExpr . "), 0) AS grad_incarcare_mediu
+                " . $gradPonderatExpr . " AS grad_incarcare_mediu
             {$from}
             {$whereData['where']}
             GROUP BY c.vehicle_id, v.nr_inmatriculare
@@ -7261,7 +8500,7 @@ class DispecerCurseModel extends BaseModel
                 COALESCE(SUM(" . $facturareWithInvoicedExpr . "), 0) AS facturare,
                 COALESCE(SUM(" . $refacturarePendingExpr . "), 0) AS refacturare,
                 COALESCE(SUM(COALESCE(exp.total_cheltuieli, 0)), 0) AS cheltuieli,
-                COALESCE(AVG(" . $gradIncarcareExpr . "), 0) AS grad_incarcare_mediu
+                " . $gradPonderatExpr . " AS grad_incarcare_mediu
             {$from}
             {$whereData['where']}
             GROUP BY c.driver_id, COALESCE(NULLIF(TRIM(s.nume), ''), 'Fara sofer')
@@ -7353,6 +8592,8 @@ class DispecerCurseModel extends BaseModel
                 'km_tona' => round($kmPerTo, 4),
                 'tona_km' => round($toPerKm, 4),
                 'grad_incarcare_mediu' => round((float) ($fleetRow['grad_incarcare_mediu'] ?? 0), 2),
+                'curse_cu_capacitate' => (int) ($fleetRow['curse_cu_capacitate'] ?? 0),
+                'curse_capacitate_neconfirmata' => (int) ($fleetRow['curse_capacitate_neconfirmata'] ?? 0),
                 'km_nefacturati' => round($kmNefacturatiTotal, 2),
                 'km_facturati' => round($kmFacturatiTotal, 2),
                 'grad_utilizare_flota_percent' => round((float) ($fleetUtilizare['grad_utilizare_flota_percent'] ?? 0), 2),
@@ -7971,6 +9212,7 @@ class DispecerCurseModel extends BaseModel
         $this->appendDashboardIntFilter($where, $params, 'c.beneficiar_id', (array) ($filters['beneficiary_ids'] ?? []), 'util_beneficiary_id');
         $this->appendDashboardStringFilter($where, $params, 'c.tip_transport', (array) ($filters['transport_types'] ?? []), 'util_transport_type');
         $this->appendDashboardDecimalFilter($where, $params, 'c.capacitate_transport', (array) ($filters['transport_capacities'] ?? []), 'util_transport_capacity');
+        $this->appendDashboardCapacityCategoryFilter($where, $params, (array) ($filters['capacity_categories'] ?? []), 'util_capacity_category');
         $this->appendDashboardStringFilter($where, $params, 'c.status_facturare', (array) ($filters['statuses'] ?? []), 'util_status');
 
         return [
@@ -8071,6 +9313,7 @@ class DispecerCurseModel extends BaseModel
         $this->appendDashboardIntFilter($where, $params, 'c.beneficiar_id', (array) ($filters['beneficiary_ids'] ?? []), 'dash_beneficiary_id');
         $this->appendDashboardStringFilter($where, $params, 'c.tip_transport', (array) ($filters['transport_types'] ?? []), 'dash_transport_type');
         $this->appendDashboardDecimalFilter($where, $params, 'c.capacitate_transport', (array) ($filters['transport_capacities'] ?? []), 'dash_transport_capacity');
+        $this->appendDashboardCapacityCategoryFilter($where, $params, (array) ($filters['capacity_categories'] ?? []), 'dash_capacity_category');
         $this->appendDashboardStringFilter($where, $params, 'c.status_facturare', (array) ($filters['statuses'] ?? []), 'dash_status');
 
         return [
@@ -8307,6 +9550,16 @@ class DispecerCurseModel extends BaseModel
             $params[':data_end'] = (string) $filters['data_end'];
         }
 
+        if (($filters['ids'] ?? '') !== '') {
+            $placeholders = [];
+            foreach (explode(',', (string) $filters['ids']) as $index => $id) {
+                $placeholder = ':race_id_' . $index;
+                $placeholders[] = $placeholder;
+                $params[$placeholder] = (int) $id;
+            }
+            $where[] = 'c.id IN (' . implode(', ', $placeholders) . ')';
+        }
+
         return [
             'where' => $where === [] ? '' : ' WHERE ' . implode(' AND ', $where),
             'params' => $params,
@@ -8352,36 +9605,24 @@ class DispecerCurseModel extends BaseModel
             $params[':billing_status'] = (string) $filters['status_facturare'];
         }
 
-        if (($filters['nr_inmatriculare'] ?? '') !== '') {
+        if (($filters['nr_inmatriculare'] ?? '') !== '' && !is_array($filters['nr_inmatriculare'])) {
             $where[] = "v.nr_inmatriculare LIKE :billing_plate";
             $params[':billing_plate'] = '%' . (string) $filters['nr_inmatriculare'] . '%';
         }
 
-        if (($filters['tip_transport'] ?? '') !== '') {
-            if ((string) $filters['tip_transport'] === 'primar') {
-                $where[] = "c.tip_transport IN (:billing_tip_transport_primar, :billing_tip_transport_primar_tona)";
-                $params[':billing_tip_transport_primar'] = 'primar';
-                $params[':billing_tip_transport_primar_tona'] = 'primar_tona';
-            } else {
-                $where[] = "c.tip_transport = :billing_tip_transport";
-                $params[':billing_tip_transport'] = (string) $filters['tip_transport'];
+        /* Tip transport, vehicul si beneficiar accepta o valoare sau o lista (selectie multipla in Istoric activitate). */
+        $transportTypes = [];
+        foreach ($this->billingFilterList($filters['tip_transport'] ?? '') as $transportType) {
+            $transportTypes[$transportType] = $transportType;
+            if ($transportType === 'primar') {
+                $transportTypes['primar_tona'] = 'primar_tona';
             }
         }
+        $this->appendBillingInFilter($where, $params, 'c.tip_transport', array_values($transportTypes), 'billing_tip_transport', false);
+        $this->appendBillingInFilter($where, $params, 'c.vehicle_id', $this->billingFilterList($filters['vehicle_id'] ?? ''), 'billing_vehicle_id', true);
 
-        if (($filters['vehicle_id'] ?? '') !== '') {
-            $where[] = "c.vehicle_id = :billing_vehicle_id";
-            $params[':billing_vehicle_id'] = (int) $filters['vehicle_id'];
-        }
-
-        if (($filters['driver_id'] ?? '') !== '') {
-            $where[] = "c.driver_id = :billing_driver_id";
-            $params[':billing_driver_id'] = (int) $filters['driver_id'];
-        }
-
-        if (($filters['beneficiar_id'] ?? '') !== '') {
-            $where[] = "c.beneficiar_id = :billing_beneficiar_id";
-            $params[':billing_beneficiar_id'] = (int) $filters['beneficiar_id'];
-        }
+        $this->appendBillingInFilter($where, $params, 'c.driver_id', $this->billingFilterList($filters['driver_id'] ?? ''), 'billing_driver_id', true);
+        $this->appendBillingInFilter($where, $params, 'c.beneficiar_id', $this->billingFilterList($filters['beneficiar_id'] ?? ''), 'billing_beneficiar_id', true);
 
         if (($filters['tip_marfa'] ?? '') !== '') {
             $where[] = "FIND_IN_SET(:billing_tip_marfa, REPLACE(COALESCE(c.tip_marfa, ''), ' ', '')) > 0";
@@ -8446,6 +9687,36 @@ class DispecerCurseModel extends BaseModel
             'where' => $where === [] ? '' : ' WHERE ' . implode(' AND ', $where),
             'params' => $params,
         ];
+    }
+
+    private function billingFilterList(mixed $value): array
+    {
+        $values = is_array($value) ? $value : [$value];
+        $list = [];
+        foreach ($values as $item) {
+            $item = trim((string) $item);
+            if ($item !== '') {
+                $list[$item] = $item;
+            }
+        }
+
+        return array_values($list);
+    }
+
+    /* Placeholder distinct pentru fiecare valoare (EMULATE_PREPARES=false nu permite reutilizarea). */
+    private function appendBillingInFilter(array &$where, array &$params, string $column, array $values, string $prefix, bool $asInt): void
+    {
+        if ($values === []) {
+            return;
+        }
+
+        $placeholders = [];
+        foreach (array_values($values) as $index => $value) {
+            $placeholder = ':' . $prefix . '_' . $index;
+            $placeholders[] = $placeholder;
+            $params[$placeholder] = $asInt ? (int) $value : (string) $value;
+        }
+        $where[] = $column . ' IN (' . implode(', ', $placeholders) . ')';
     }
 
     private function appendBillingLocationFilter(
@@ -8525,6 +9796,8 @@ class DispecerCurseModel extends BaseModel
         $this->bindNullableInt($stmt, ':beneficiar_id', $data['beneficiar_id'] ?? null);
         $this->bindNullableString($stmt, ':tip_marfa', $data['tip_marfa'] ?? null);
         $this->bindNullableDecimal($stmt, ':capacitate_transport', $data['capacitate_transport'] ?? null);
+        // Snapshot istoric: capacitatea din momentul cursei era deja verificata?
+        $stmt->bindValue(':capacitate_transport_confirmata', (int) ($data['capacitate_transport_confirmata'] ?? 0) === 1 ? 1 : 0, PDO::PARAM_INT);
         $this->bindNullableDecimal($stmt, ':cantitate_incarcata', $data['cantitate_incarcata'] ?? null);
         $this->bindNullableDecimal($stmt, ':cantitate_prelevata', $data['cantitate_prelevata'] ?? null);
         $this->bindNullableInt($stmt, ':nr_clienti', $data['nr_clienti'] ?? null);
@@ -8681,60 +9954,13 @@ class DispecerCurseModel extends BaseModel
 
     private function syncVehicleKmForRaceChange(?array $oldRace, ?array $newRace): array
     {
-        $deltaByVehicle = [];
-
-        $oldVehicleId = $oldRace !== null ? (int) ($oldRace['vehicle_id'] ?? 0) : 0;
-        $oldKmBord = $this->getRaceEffectiveKmForSync($oldRace);
-        $oldKmRevizie = $this->getRaceEffectiveMaintenanceKmForSync($oldRace);
-        if ($oldVehicleId > 0 && ($oldKmBord > 0 || $oldKmRevizie > 0)) {
-            foreach ($this->getKmSyncVehicleIds($oldVehicleId) as $vehicleId) {
-                if (!isset($deltaByVehicle[$vehicleId])) {
-                    $deltaByVehicle[$vehicleId] = [
-                        'km_bord' => 0,
-                        'km_revizie' => 0,
-                    ];
-                }
-                $deltaByVehicle[$vehicleId]['km_bord'] -= $oldKmBord;
-                $deltaByVehicle[$vehicleId]['km_revizie'] -= $oldKmRevizie;
-            }
-        }
-
-        $newVehicleId = $newRace !== null ? (int) ($newRace['vehicle_id'] ?? 0) : 0;
-        $newKmBord = $this->getRaceEffectiveKmForSync($newRace);
-        $newKmRevizie = $this->getRaceEffectiveMaintenanceKmForSync($newRace);
-        if ($newVehicleId > 0 && ($newKmBord > 0 || $newKmRevizie > 0)) {
-            foreach ($this->getKmSyncVehicleIds($newVehicleId) as $vehicleId) {
-                if (!isset($deltaByVehicle[$vehicleId])) {
-                    $deltaByVehicle[$vehicleId] = [
-                        'km_bord' => 0,
-                        'km_revizie' => 0,
-                    ];
-                }
-                $deltaByVehicle[$vehicleId]['km_bord'] += $newKmBord;
-                $deltaByVehicle[$vehicleId]['km_revizie'] += $newKmRevizie;
-            }
-        }
-
-        $alerts = [];
-        foreach ($deltaByVehicle as $vehicleId => $deltaValues) {
-            $vehicleId = (int) $vehicleId;
-            if ($vehicleId <= 0) {
-                continue;
-            }
-
-            $deltaKmBord = (int) ($deltaValues['km_bord'] ?? 0);
-            $deltaKmRevizie = (int) ($deltaValues['km_revizie'] ?? 0);
-            if ($deltaKmBord === 0 && $deltaKmRevizie === 0) {
-                continue;
-            }
-
-            $alert = $this->applyKmDeltaToVehicle($vehicleId, $deltaKmBord, $deltaKmRevizie);
-            if ($alert !== null) {
-                $alerts[] = $alert;
-            }
-        }
-
-        return $alerts;
+        // Cand cursa are segmente (a fost oprita si reluata cu alt sofer/vehicul),
+        // km-ii se impart intre vehiculele segmentelor; altfel merg integral pe
+        // vehiculul cursei. Vezi buildRaceKmDistribution().
+        return $this->applyKmDistributionDelta(
+            $this->buildRaceKmDistribution($oldRace),
+            $this->buildRaceKmDistribution($newRace)
+        );
     }
 
     private function getRaceEffectiveKmForSync(?array $race): int

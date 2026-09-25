@@ -908,7 +908,7 @@ Confirmed: there is **no** cron, no CLI script, no batch job that rewrites `tota
 | Someone opens the trip and saves it **without changing anything** | **500 lei** | `mergeRaceUpdateData()`: no pricing input changed ⇒ stored values restored |
 | Someone edits the trip and changes km, quantity, vehicle, loc, zonă, beneficiar or tip transport | **600 lei** ⚠ | `pricingChanged = true` and the trip is not `facturat` ⇒ freshly computed values kept |
 | The same edit, but `status_facturare = 'facturat'` | **500 lei** + info flash | explicit guard, line 1435 |
-| The trip is duplicated / resumed (`resume_id`) | **new** price | `buildResumeFormData()` copies the commercial context, not the money; `validateRaceInput` prices the new segment at today's rates |
+| The trip is resumed (`resume_id`, since 18.09.2026) | **500 lei** | resuming no longer creates a second trip: it adds a row in `curse_segmente`, so the stored price is untouched |
 | The trip is soft-deleted and restored | **500 lei** | restore does not re-run pricing |
 
 ### 12.2 Evidence

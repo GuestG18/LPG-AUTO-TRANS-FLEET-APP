@@ -74,7 +74,21 @@ class TireModel extends BaseModel
         $this->addColumnIfMissing('anvelope', 'invoice_document_path', 'VARCHAR(190) NULL AFTER invoice_document_original_name');
         $this->addColumnIfMissing('anvelope', 'current_mileage', 'INT UNSIGNED NOT NULL DEFAULT 0 AFTER km_initial');
         $this->addColumnIfMissing('anvelope', 'estimated_remaining_km', 'INT UNSIGNED NULL AFTER estimated_life_km');
-        $this->addColumnIfMissing('anvelope', 'initial_condition', "ENUM('good','acceptable','high_wear','critical','missing') NOT NULL DEFAULT 'good' AFTER min_tread_depth_mm");
+        $this->addColumnIfMissing('anvelope', 'initial_condition', "ENUM('new','used') NOT NULL DEFAULT 'new' AFTER min_tread_depth_mm");
+        // Conditia initiala = Noua / Folosita. Valorile vechi de uzura se convertesc: good -> new, restul -> used.
+        $initialConditionType = $this->columnType('anvelope', 'initial_condition');
+        if ($initialConditionType !== null && str_contains($initialConditionType, "'good'")) {
+            $this->db->exec(
+                "ALTER TABLE anvelope MODIFY COLUMN initial_condition ENUM('new','used','good','acceptable','high_wear','critical','missing') NOT NULL DEFAULT 'new'"
+            );
+            $this->db->exec(
+                "UPDATE anvelope SET initial_condition = CASE WHEN initial_condition = 'good' THEN 'new' ELSE 'used' END
+                 WHERE initial_condition NOT IN ('new', 'used')"
+            );
+            $this->db->exec(
+                "ALTER TABLE anvelope MODIFY COLUMN initial_condition ENUM('new','used') NOT NULL DEFAULT 'new'"
+            );
+        }
         $this->addColumnIfMissing('anvelope', 'condition_status', "ENUM('good','acceptable','high_wear','critical','missing') NOT NULL DEFAULT 'good' AFTER initial_condition");
         $this->addColumnIfMissing('anvelope', 'season', "ENUM('summer','winter','all_season') NOT NULL DEFAULT 'all_season' AFTER condition_status");
         $this->addColumnIfMissing('anvelope', 'directional', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER season');
@@ -295,6 +309,27 @@ class TireModel extends BaseModel
             'critical' => 'Critica',
             'missing' => 'Lipsa',
         ];
+    }
+
+    public function getInitialConditionOptions(): array
+    {
+        return [
+            'new' => 'Noua',
+            'used' => 'Folosita',
+        ];
+    }
+
+    /**
+     * Conditia la achizitie (noua / folosita). Valorile vechi de uzura: good -> new, restul -> used.
+     */
+    public function normalizeInitialCondition(?string $condition): string
+    {
+        $value = strtolower(trim((string) $condition));
+
+        return match ($value) {
+            'new', 'noua', 'good', 'buna', '' => 'new',
+            default => 'used',
+        };
     }
 
     public function getSeasonOptions(): array
@@ -1417,7 +1452,7 @@ class TireModel extends BaseModel
             ':estimated_remaining_km' => $data['estimated_remaining_km'] ?? null,
             ':tread_depth_mm' => $data['tread_depth_mm'],
             ':min_tread_depth_mm' => $data['min_tread_depth_mm'],
-            ':initial_condition' => $this->normalizeCondition((string) ($data['initial_condition'] ?? 'good')),
+            ':initial_condition' => $this->normalizeInitialCondition((string) ($data['initial_condition'] ?? 'new')),
             ':condition_status' => $this->normalizeCondition((string) ($data['condition_status'] ?? ($data['initial_condition'] ?? 'good'))),
             ':season' => in_array((string) ($data['season'] ?? 'all_season'), ['summer', 'winter', 'all_season'], true) ? (string) $data['season'] : 'all_season',
             ':directional' => !empty($data['directional']) ? 1 : 0,
@@ -1512,7 +1547,7 @@ class TireModel extends BaseModel
                 'estimated_remaining_km' => $data['estimated_remaining_km'] ?? $estimatedLifeKm,
                 'tread_depth_mm' => $data['tread_depth_mm'] ?? null,
                 'min_tread_depth_mm' => $data['min_tread_depth_mm'] ?? 2.0,
-                'initial_condition' => $data['initial_condition'] ?? 'good',
+                'initial_condition' => $data['initial_condition'] ?? 'new',
                 'condition_status' => $data['condition_status'] ?? ($data['initial_condition'] ?? 'good'),
                 'season' => $data['season'] ?? 'all_season',
                 'directional' => $data['directional'] ?? 0,
@@ -2065,7 +2100,8 @@ class TireModel extends BaseModel
                     : $this->normalizeAxleType($data[$column] ?? null),
                 'tire_type' => $tireTypeForValidation ?? $this->normalizeTireType((string) $data[$column]),
                 'status' => $this->normalizeTireStatus((string) $data[$column]),
-                'initial_condition', 'condition_status' => $this->normalizeCondition((string) $data[$column]),
+                'initial_condition' => $this->normalizeInitialCondition((string) $data[$column]),
+                'condition_status' => $this->normalizeCondition((string) $data[$column]),
                 'directional' => !empty($data[$column]) ? 1 : 0,
                 default => $data[$column],
             };
@@ -2277,8 +2313,8 @@ class TireModel extends BaseModel
 
         $condition = trim((string) ($filters['condition'] ?? ''));
         if ($condition !== '' && $condition !== 'all') {
-            $conditions[] = 'COALESCE(t.condition_status, "good") = :condition_status';
-            $params[':condition_status'] = $this->normalizeCondition($condition);
+            $conditions[] = 'COALESCE(t.initial_condition, "new") = :initial_condition';
+            $params[':initial_condition'] = $this->normalizeInitialCondition($condition);
         }
 
         $location = trim((string) ($filters['location'] ?? ''));
@@ -2342,6 +2378,11 @@ class TireModel extends BaseModel
         $usedKm = $currentMileage + $currentSegmentKm;
         $remainingKm = $storedRemaining;
 
+        // Fara durata estimata explicita: durata = km la introducere + km ramasi declarati.
+        if (($estimatedLife === null || $estimatedLife <= 0) && $storedRemaining !== null && ($currentMileage + $storedRemaining) > 0) {
+            $estimatedLife = $currentMileage + $storedRemaining;
+        }
+
         if ($estimatedLife !== null && $estimatedLife > 0) {
             $remainingKm = max(0, $estimatedLife - $usedKm);
         }
@@ -2349,8 +2390,6 @@ class TireModel extends BaseModel
         $wearPercent = null;
         if ($estimatedLife !== null && $estimatedLife > 0) {
             $wearPercent = min(100.0, max(0.0, ($usedKm / $estimatedLife) * 100.0));
-        } elseif ($remainingKm !== null && $remainingKm > 0) {
-            $wearPercent = 25.0;
         }
 
         $conditionValue = $this->normalizeCondition((string) ($row['condition_status'] ?? 'good'));
@@ -2394,6 +2433,8 @@ class TireModel extends BaseModel
             'target_axle_config_label' => trim((string) ($row['target_axle_config'] ?? '')),
             'condition_meta' => $conditionMeta,
             'condition_value' => $conditionMeta['value'],
+            'initial_condition' => $this->normalizeInitialCondition((string) ($row['initial_condition'] ?? 'new')),
+            'initial_condition_label' => $this->getInitialConditionOptions()[$this->normalizeInitialCondition((string) ($row['initial_condition'] ?? 'new'))],
             'compatibility_label' => $this->compatibilityLabelForTire($row),
             'location_display' => $location,
             'is_mounted' => $isMounted,
@@ -2722,6 +2763,7 @@ class TireModel extends BaseModel
             'tire_type_options_by_axle_type' => $this->getTireTypeOptionsByAxleType(),
             'status_options' => $this->getTireStatusOptions(),
             'condition_options' => $this->getConditionOptions(),
+            'initial_condition_options' => $this->getInitialConditionOptions(),
             'season_options' => $this->getSeasonOptions(),
             'axle_type_options' => $this->getAxleTypeOptions(),
             'target_layout_options_by_type' => $this->getTargetLayoutOptionsByType(),

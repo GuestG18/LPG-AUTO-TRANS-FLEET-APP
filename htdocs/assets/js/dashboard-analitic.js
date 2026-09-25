@@ -417,6 +417,8 @@
         var beneficiaryId = (formData.get('beneficiary_id') || '').toString().trim();
         var transportType = (formData.get('tip_transport') || '').toString().trim();
         var transportCapacity = (formData.get('capacitate_transport') || '').toString().trim();
+        // Categoria de capacitate este doar un filtru de grupare.
+        var capacityCategory = (formData.get('categorie_capacitate_id') || '').toString().trim();
         var status = (formData.get('status') || '').toString().trim();
 
         if (dateStart !== '') {
@@ -440,6 +442,9 @@
         if (transportCapacity !== '') {
             params.set('capacitate_transport', transportCapacity);
         }
+        if (capacityCategory !== '') {
+            params.set('categorie_capacitate_id', capacityCategory);
+        }
         if (status !== '') {
             params.set('status', status);
         }
@@ -455,7 +460,7 @@
         url.searchParams.set('page', 'dashboard_analitic');
 
         var formData = new FormData(filtersForm);
-        var keys = ['date_start', 'date_end', 'vehicle_id', 'driver_id', 'beneficiary_id', 'tip_transport', 'capacitate_transport', 'status'];
+        var keys = ['date_start', 'date_end', 'vehicle_id', 'driver_id', 'beneficiary_id', 'tip_transport', 'capacitate_transport', 'categorie_capacitate_id', 'status'];
 
         keys.forEach(function (key) {
             var value = (formData.get(key) || '').toString().trim();

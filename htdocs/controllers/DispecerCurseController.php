@@ -15,6 +15,19 @@ class DispecerCurseController
         'compresor' => 'Compresor',
     ];
 
+    // Banda GPS live: masinile in mers raporteaza la ~60-90s, deci o pozitie
+    // "in miscare" mai veche de 3 minute nu mai confirma miscarea acum.
+    private const LIVE_FRESH_SECONDS = 180;
+
+    private const LIVE_VEHICLE_TYPES = [
+        'cap_tractor' => 'Cap tractor',
+        'semiremorca_primar' => 'Semi-remorcă primar',
+        'semiremorca_distributie' => 'Semi-remorcă distribuție',
+        'camion' => 'Camion',
+        'autovehicul' => 'Autoturism',
+        'autoutilitara' => 'Autoutilitară',
+    ];
+
     private const EXPENSE_TYPES = [
         'motorina' => 'Motorina',
         'taxa_acces' => 'Taxa acces',
@@ -282,12 +295,24 @@ class DispecerCurseController
             case 'cancel_inactive_vehicle_approval':
                 $this->cancelInactiveVehicleApprovalAction();
                 return;
+            case 'request_diurna_change':
+                $this->requestDiurnaChangeAction();
+                return;
             case 'store':
                 $this->syncTariffLegacyValues();
                 $this->storeAction();
                 return;
             case 'edit':
                 $this->editAction();
+                return;
+            case 'segment_store':
+                $this->storeRaceSegmentAction();
+                return;
+            case 'segment_update':
+                $this->updateRaceSegmentAction();
+                return;
+            case 'segment_delete':
+                $this->deleteRaceSegmentAction();
                 return;
             case 'update':
                 $this->syncTariffLegacyValues();
@@ -533,40 +558,95 @@ class DispecerCurseController
             $overview = $service->getLiveOverview();
             // "In desfasurare" pentru dispecerat: in miscare acum sau oprit de
             // putin timp (incarcare/descarcare); parcatele si offline nu apar.
+            // Vehiculele scoase din formularul Harta Flota nu apar nici aici.
+            $hidden = array_flip(FleetMapController::hiddenCarIdsForCurrentUser($this->db));
             $active = array_values(array_filter(
                 $overview['vehicles'],
                 static fn (array $vehicle): bool => in_array($vehicle['status'] ?? '', ['moving', 'idle'], true)
+                    && !isset($hidden[(int) ($vehicle['sas_vehicle_id'] ?? 0)])
             ));
 
             $localIds = array_values(array_unique(array_filter(array_map(
                 static fn (array $vehicle): int => (int) ($vehicle['local_vehicle_id'] ?? 0),
                 $active
             ))));
+            // Toate lookup-urile din aplicatie sunt pe lot (cate o interogare),
+            // nu per vehicul: curse deschise, ultima cursa, fisa vehiculului, soferi.
             $openRaces = $this->ongoingRacesByVehicleId($localIds);
             $latestRaces = $this->latestRacesByVehicleId($localIds);
+            $localVehicles = $this->liveVehicleDetailsById($localIds);
+            $drivers = $this->liveDriverDirectory();
+            $canSeeDriverPhone = !function_exists('can') || can('soferi', 'view');
+            $vehicleTypes = self::LIVE_VEHICLE_TYPES;
 
             $rows = [];
+            $counts = ['active' => 0, 'with_trip' => 0, 'without_trip' => 0, 'stationary' => 0];
             foreach ($active as $vehicle) {
                 $localId = (int) ($vehicle['local_vehicle_id'] ?? 0);
                 $race = $openRaces[$localId] ?? null;
                 // Sablon de precompletare pentru "adauga": ultima cursa a
                 // vehiculului da beneficiarul/tipul/soferul cu care lucreaza de obicei.
                 $latest = $race === null ? ($latestRaces[$localId] ?? null) : null;
+                $local = $localVehicles[$localId] ?? null;
+                $age = is_numeric($vehicle['age_seconds'] ?? null) ? (int) $vehicle['age_seconds'] : null;
+                $status = (string) $vehicle['status'];
+
+                // GPS spune doar ce face fizic vehiculul; cursa vine din aplicatie.
+                // "In miscare" = viteza > 0 si pozitie proaspata; altfel (oprit
+                // recent sau raportare intarziata) starea e neutra, nu confirmata.
+                $isFreshMoving = $status === 'moving' && $age !== null && $age <= self::LIVE_FRESH_SECONDS;
+                if ($isFreshMoving) {
+                    $state = $race !== null ? 'trip' : 'no_trip';
+                } else {
+                    $state = 'stale';
+                }
+
+                $counts['active']++;
+                $counts[$race !== null ? 'with_trip' : 'without_trip']++;
+                if ($state === 'stale') {
+                    $counts['stationary']++;
+                }
+
+                $driver = $this->resolveLiveDriver($race, $vehicle, $localId, $drivers, $canSeeDriverPhone);
+                $speed = is_numeric($vehicle['speed'] ?? null) ? (int) round((float) $vehicle['speed']) : null;
+                $heading = $status === 'moving' && is_numeric($vehicle['heading'] ?? null) ? (int) round((float) $vehicle['heading']) % 360 : null;
+                $photo = $local !== null ? (string) ($local['poza_stocata'] ?? '') : '';
+                // null si cand fisierul lipseste de pe disc (upload_image_thumb_url verifica).
+                $thumbUrl = upload_image_thumb_url('vehicule', $photo, 240);
+                $vehiclePhoto = $thumbUrl !== null
+                    ? ['thumb' => $thumbUrl, 'large' => upload_image_thumb_url('vehicule', $photo, 480)]
+                    : null;
+                $capacity = $local !== null && is_numeric($local['capacitate_transport'] ?? null) && (float) $local['capacitate_transport'] > 0
+                    ? (float) $local['capacitate_transport']
+                    : null;
+                $timestamp = strtotime((string) ($vehicle['timestamp'] ?? ''));
+
                 $rows[] = [
+                    'key' => (string) ((int) ($vehicle['sas_vehicle_id'] ?? 0) ?: ($vehicle['registration'] ?? '')),
+                    'sas_vehicle_id' => (int) ($vehicle['sas_vehicle_id'] ?? 0) ?: null,
                     'plate' => (string) ($vehicle['registration'] ?? ''),
                     'vehicle_label' => $vehicle['local_label'] ?? null,
+                    'vehicle_type' => $local !== null ? ($vehicleTypes[(string) ($local['tip_vehicul'] ?? '')] ?? null) : null,
+                    'capacity_t' => $capacity,
+                    'vehicle_photo' => $vehiclePhoto,
                     'local_vehicle_id' => $localId > 0 ? $localId : null,
-                    'driver' => $race['sofer_nume'] ?? null ?: ($vehicle['driver'] ?? null),
-                    'status' => (string) $vehicle['status'],
-                    'speed' => is_numeric($vehicle['speed'] ?? null) ? (int) round((float) $vehicle['speed']) : null,
+                    'driver' => $driver,
+                    'status' => $status,
+                    'state' => $state,
+                    'speed' => $speed,
+                    'heading' => $heading,
                     'place' => $vehicle['place'] ?? null,
-                    'age_seconds' => $vehicle['age_seconds'] ?? null,
+                    'latitude' => is_numeric($vehicle['latitude'] ?? null) ? (float) $vehicle['latitude'] : null,
+                    'longitude' => is_numeric($vehicle['longitude'] ?? null) ? (float) $vehicle['longitude'] : null,
+                    'position_ts' => $timestamp !== false ? $timestamp : null,
+                    'age_seconds' => $age,
                     'race' => $race !== null ? [
                         'id' => (int) $race['id'],
                         'url' => $this->raceEditUrl((int) $race['id']),
                         'tip_transport' => self::TRANSPORT_TYPES[(string) $race['tip_transport']] ?? (string) $race['tip_transport'],
-                        'data_inceput' => (string) ($race['data_inceput'] ?? ''),
-                        'beneficiar' => $race['beneficiar_nume'] ?? null,
+                        'route' => $this->liveRaceRouteLabel($race),
+                        'start_label' => $this->liveRaceStartLabel($race),
+                        'beneficiar' => ($race['beneficiar_nume'] ?? '') !== '' ? $race['beneficiar_nume'] : null,
                     ] : null,
                     'prefill' => $latest !== null ? [
                         'beneficiar_id' => (int) ($latest['beneficiar_id'] ?? 0) ?: null,
@@ -580,7 +660,15 @@ class DispecerCurseController
                 'success' => true,
                 'credentials' => true,
                 'fetched_at' => $overview['fetched_at'],
+                'server_ts' => time(),
+                'fresh_seconds' => self::LIVE_FRESH_SECONDS,
                 'error' => $overview['error'],
+                'counts' => $counts,
+                'permissions' => [
+                    'create' => !function_exists('can') || can('dispecer_curse', 'create'),
+                    'map' => !function_exists('can') || can('harta_flota', 'view'),
+                ],
+                'map_url' => build_query_url(['page' => 'harta_flota']),
                 'vehicles' => $rows,
             ]);
         } catch (Throwable $exception) {
@@ -610,12 +698,17 @@ class DispecerCurseController
 
         $placeholders = implode(',', array_fill(0, count($vehicleIds), '?'));
         $statement = $this->db->prepare(
-            "SELECT c.id, c.vehicle_id, c.tip_transport, c.data_inceput,
+            "SELECT c.id, c.vehicle_id, c.driver_id, c.tip_transport, c.data_inceput, c.ora_inceput,
+                    c.loc_plecare, c.loc_aspirare, c.loc_livrare, c.loc_livrare_cursa,
                     COALESCE(s.nume, '') AS sofer_nume,
-                    COALESCE(bt.nume, '') AS beneficiar_nume
+                    COALESCE(bt.nume, '') AS beneficiar_nume,
+                    li.nume AS loc_incarcare_nume,
+                    zd.nume AS zona_distributie_nume
              FROM curse_dispecer c
              LEFT JOIN soferi s ON s.id = c.driver_id
              LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+             LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
+             LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
              WHERE c.deleted_at IS NULL
                AND c.vehicle_id IN ($placeholders)
                AND c.data_inceput >= DATE_SUB(CURDATE(), INTERVAL 3 DAY)
@@ -669,6 +762,145 @@ class DispecerCurseController
         }
 
         return $byVehicle;
+    }
+
+    /**
+     * Fisa vehiculelor din aplicatie pentru banda GPS live (poza, tip,
+     * capacitate tehnica), intr-o singura interogare.
+     *
+     * @param array<int, int> $vehicleIds
+     * @return array<int, array<string, mixed>> vehicle_id -> vehicul
+     */
+    private function liveVehicleDetailsById(array $vehicleIds): array
+    {
+        $vehicleIds = array_values(array_filter(array_map('intval', $vehicleIds), static fn (int $id): bool => $id > 0));
+        if ($vehicleIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($vehicleIds), '?'));
+        $statement = $this->db->prepare(
+            "SELECT id, tip_vehicul, capacitate_transport, poza_stocata
+             FROM vehicule
+             WHERE id IN ($placeholders)"
+        );
+        $statement->execute($vehicleIds);
+
+        $byId = [];
+        foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $vehicle) {
+            $byId[(int) $vehicle['id']] = $vehicle;
+        }
+
+        return $byId;
+    }
+
+    /**
+     * Soferii din aplicatie (tabel mic) indexati dupa id, dupa numele
+     * normalizat si dupa vehiculul asociat, ca soferul raportat de SAS sau
+     * cel alocat vehiculului sa poata fi legat de fisa lui (poza, telefon).
+     *
+     * @return array{by_id: array<int, array<string, mixed>>, by_name: array<string, array<string, mixed>>, by_vehicle: array<int, array<int, array<string, mixed>>>}
+     */
+    private function liveDriverDirectory(): array
+    {
+        $directory = ['by_id' => [], 'by_name' => [], 'by_vehicle' => []];
+        $statement = $this->db->query(
+            "SELECT id, nume, poza_stocata, telefon, vehicle_id, status FROM soferi"
+        );
+        foreach ($statement ? $statement->fetchAll(PDO::FETCH_ASSOC) : [] as $driver) {
+            $id = (int) $driver['id'];
+            $directory['by_id'][$id] = $driver;
+            $nameKey = $this->liveNameKey((string) $driver['nume']);
+            if ($nameKey !== '' && !isset($directory['by_name'][$nameKey])) {
+                $directory['by_name'][$nameKey] = $driver;
+            }
+            $vehicleId = (int) ($driver['vehicle_id'] ?? 0);
+            if ($vehicleId > 0 && ($driver['status'] ?? '') !== 'inactiv') {
+                $directory['by_vehicle'][$vehicleId][] = $driver;
+            }
+        }
+
+        return $directory;
+    }
+
+    /**
+     * Soferul afisat pe banda GPS: cel al cursei deschise; altfel cel raportat
+     * de SAS (legat de fisa din aplicatie dupa nume); altfel, doar daca e unic,
+     * soferul alocat vehiculului in aplicatie. Sursa se trimite explicit.
+     */
+    private function resolveLiveDriver(?array $race, array $vehicle, int $localId, array $drivers, bool $withPhone): ?array
+    {
+        $record = null;
+        $source = null;
+        $name = null;
+
+        $raceDriverId = $race !== null ? (int) ($race['driver_id'] ?? 0) : 0;
+        if ($raceDriverId > 0 && isset($drivers['by_id'][$raceDriverId])) {
+            $record = $drivers['by_id'][$raceDriverId];
+            $source = 'race';
+        } elseif ($race !== null && trim((string) ($race['sofer_nume'] ?? '')) !== '') {
+            $name = trim((string) $race['sofer_nume']);
+            $source = 'race';
+        }
+
+        if ($source === null) {
+            $gpsName = trim((string) ($vehicle['driver'] ?? ''));
+            if ($gpsName !== '') {
+                $key = $this->liveNameKey($gpsName);
+                $record = $drivers['by_name'][$key] ?? $drivers['by_name'][$this->liveNameKey(implode(' ', array_reverse(preg_split('/\s+/', $gpsName) ?: [])))] ?? null;
+                $name = $gpsName;
+                $source = 'gps';
+            }
+        }
+
+        if ($source === null && $localId > 0 && count($drivers['by_vehicle'][$localId] ?? []) === 1) {
+            $record = $drivers['by_vehicle'][$localId][0];
+            $source = 'vehicle';
+        }
+
+        if ($source === null) {
+            return null;
+        }
+
+        $displayName = $record !== null ? trim((string) $record['nume']) : (string) $name;
+        $photo = $record !== null ? (string) ($record['poza_stocata'] ?? '') : '';
+        $phone = $withPhone && $record !== null ? trim((string) ($record['telefon'] ?? '')) : '';
+
+        return [
+            'id' => $record !== null ? (int) $record['id'] : null,
+            'name' => $displayName,
+            'source' => $source,
+            'photo' => $photo !== '' ? upload_image_thumb_url('soferi', $photo, 160) : null,
+            'phone' => $phone !== '' ? $phone : null,
+        ];
+    }
+
+    private function liveNameKey(string $name): string
+    {
+        $name = mb_strtolower(trim($name), 'UTF-8');
+        $name = strtr($name, ['ă' => 'a', 'â' => 'a', 'î' => 'i', 'ș' => 's', 'ş' => 's', 'ț' => 't', 'ţ' => 't']);
+
+        return preg_replace('/\s+/', ' ', $name) ?? $name;
+    }
+
+    private function liveRaceRouteLabel(array $race): ?string
+    {
+        $route = $this->buildDeletedRaceRouteLabel($race);
+
+        return $route !== '-' ? $route : null;
+    }
+
+    /** "25.09.2026 08:00" din data + ora de inceput a cursei (ora doar daca exista). */
+    private function liveRaceStartLabel(array $race): ?string
+    {
+        $date = substr(trim((string) ($race['data_inceput'] ?? '')), 0, 10);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            return null;
+        }
+        $label = substr($date, 8, 2) . '.' . substr($date, 5, 2) . '.' . substr($date, 0, 4);
+        $time = substr(trim((string) ($race['ora_inceput'] ?? '')), 0, 5);
+
+        return preg_match('/^\d{2}:\d{2}$/', $time) ? $label . ' ' . $time : $label;
     }
 
     private function raceActivityPayload(array $race): array
@@ -837,6 +1069,109 @@ class DispecerCurseController
         }
     }
 
+    /**
+     * Modificarea diurnelor unei curse din coloana "Diurna" a Desfasuratorului.
+     * Operatorul trimite o cerere in panoul de aprobari (tab-ul "Diurne"); valoarea
+     * se schimba abia dupa aprobare. Adminul (drept de aprobare) o aplica direct,
+     * dar ramane inregistrata ca cerere aprobata, pentru istoric.
+     */
+    private function requestDiurnaChangeAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->sendJson(['success' => false, 'message' => 'Metoda invalida.'], 405);
+        }
+        if (!verify_csrf_token($_POST['_token'] ?? null)) {
+            $this->sendJson(['success' => false, 'message' => 'Token CSRF invalid. Reincarca pagina.'], 419);
+        }
+        if (function_exists('can') && !can('dispecer_curse', 'edit')) {
+            $this->sendJson(['success' => false, 'message' => 'Nu ai dreptul sa modifici cursele.'], 403);
+        }
+
+        $userId = (int) ($this->currentUserId() ?? 0);
+        $tripId = $this->positiveIntFromInput($_POST['trip_id'] ?? null);
+        $rawValue = trim((string) ($_POST['diurne'] ?? ''));
+        $reason = mb_substr(trim((string) ($_POST['motiv'] ?? '')), 0, 500);
+        if ($userId <= 0 || $tripId === null) {
+            $this->sendJson(['success' => false, 'message' => 'Cursa invalida.'], 422);
+        }
+        if (!preg_match('/^\d{1,3}$/', $rawValue) || (int) $rawValue > InactiveResourceApprovalModel::DIURNA_MAX_DAYS) {
+            $this->sendJson([
+                'success' => false,
+                'message' => 'Introdu un numar intreg de diurne intre 0 si ' . InactiveResourceApprovalModel::DIURNA_MAX_DAYS . '.',
+            ], 422);
+        }
+        $requested = (int) $rawValue;
+
+        try {
+            $race = $this->model->getRaceById($tripId);
+            if ($race === null) {
+                $this->sendJson(['success' => false, 'message' => 'Cursa nu a fost gasita.'], 404);
+            }
+
+            $rows = [$race];
+            dispatcher_attach_diurna_adjustments($this->db, $rows);
+            $race = $rows[0];
+            $interval = dispatcher_diurna_for_interval($race);
+            if ($interval['status'] !== 'ok') {
+                $this->sendJson([
+                    'success' => false,
+                    'message' => 'Completeaza intai data si ora de inceput / sfarsit ale cursei; diurnele se modifica doar pe o cursa cu interval valid.',
+                ], 422);
+            }
+
+            $computed = (int) $interval['calculat'];
+            $current = (int) $interval['diurne'];
+            if ($requested === $current) {
+                $this->sendJson(['success' => false, 'message' => 'Cursa are deja ' . $current . ' diurne.'], 422);
+            }
+
+            $pending = $race['diurna_cerere'] ?? null;
+            $isAdmin = $this->canReviewInactiveApprovals();
+            if (is_array($pending) && !$isAdmin) {
+                $this->sendJson([
+                    'success' => false,
+                    'message' => 'Exista deja o cerere in asteptare pentru aceasta cursa ('
+                        . $pending['solicitat'] . ' diurne, trimisa de ' . ($pending['requested_by_name'] ?: 'alt operator')
+                        . '). Asteapta decizia administratorului sau anuleaz-o din panoul de aprobari.',
+                ], 409);
+            }
+
+            $approvalId = $this->inactiveApprovalModel->createDiurnaRequest([
+                'trip_id' => $tripId,
+                'calculat' => $computed,
+                'curent' => $current,
+                'solicitat' => $requested,
+                'motiv' => $reason,
+                'sofer' => (string) ($race['sofer_nume'] ?? ''),
+                'vehicul' => (string) ($race['nr_inmatriculare'] ?? ''),
+                'interval' => $this->formatRaceInterval($race),
+            ], $userId, $isAdmin);
+
+            if ($isAdmin && is_array($pending)) {
+                // Decizia adminului inlocuieste cererea operatorului, care altfel ar
+                // putea fi aprobata ulterior peste valoarea stabilita acum.
+                $this->inactiveApprovalModel->reject((int) $pending['id'], $userId, 'Inlocuita de modificarea facuta direct de administrator.');
+            }
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][request_diurna_change] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'message' => 'Cererea nu a putut fi salvata. Reincearca.'], 500);
+        }
+
+        $this->sendJson([
+            'success' => $approvalId > 0,
+            'status' => $isAdmin ? 'approved' : 'pending',
+            'approval_id' => $approvalId,
+            'trip_id' => $tripId,
+            'calculat' => $computed,
+            'curent' => $current,
+            'solicitat' => $requested,
+            'message' => $isAdmin
+                ? 'Diurnele cursei #' . $tripId . ' au fost modificate: ' . $current . ' → ' . $requested . '.'
+                : 'Cererea a fost trimisa administratorului. Diurnele cursei #' . $tripId . ' raman ' . $current
+                    . ' pana la aprobare; vei vedea decizia in „Solicitarile mele de aprobare”.',
+        ], $approvalId > 0 ? 200 : 500);
+    }
+
     private function cancelInactiveVehicleApprovalAction(): void
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -927,21 +1262,24 @@ class DispecerCurseController
         $incompleteConfirmItems = (array) ($_SESSION['_dispecer_incomplete_confirm_race_create'] ?? []);
         unset($_SESSION['_dispecer_incomplete_confirm_race_create']);
 
-        // Reluare cursa: precompleteaza formularul dintr-o cursa existenta; segmentul nou
-        // pastreaza contextul (beneficiar, tip transport, traseu), dar km/cantitatile/orele
-        // se introduc pentru segmentul curent, iar soferul/vehiculul pot fi schimbate.
-        $resumeSource = null;
+        // Reluarea unei curse NU creeaza o cursa noua: cursa ramane una singura (un
+        // singur tarif, un singur rand in centralizator), iar portiunea condusa de alt
+        // sofer / alt vehicul se inregistreaza ca faza. Faza se completeaza in chiar
+        // formularul cursei, deci `resume_id` din lista duce la editarea cursei, cu
+        // formularul pregatit pentru o faza noua.
         $resumeId = (int) ($_GET['resume_id'] ?? 0);
         if ($resumeId > 0) {
-            $resumeSource = $this->model->getRaceById($resumeId);
-            if ($resumeSource === null) {
+            if ($this->model->getRaceById($resumeId) === null) {
                 flash_set('warning', 'Cursa selectata pentru reluare nu a fost gasita.');
-            } elseif ($formFlash['old'] === []) {
-                $formData = array_merge($formData, $this->buildResumeFormData($resumeSource, $resumeId));
+                redirect(build_query_url(['page' => 'dispecer_curse']));
             }
-        }
-        if ($resumeSource === null && (int) ($formData['parent_cursa_id'] ?? 0) > 0) {
-            $resumeSource = $this->model->getRaceById((int) $formData['parent_cursa_id']);
+
+            redirect(build_query_url([
+                'page' => 'dispecer_curse',
+                'action' => 'edit',
+                'id' => $resumeId,
+                'faza' => 'noua',
+            ]) . '#race-form');
         }
 
         $postCreateExpensePrompt = $this->consumePostCreateExpensePrompt();
@@ -971,7 +1309,14 @@ class DispecerCurseController
             $primaryRouteKmMap = $this->model->getPrimaryRouteKmMap(true);
             $beneficiaryPricing = $this->buildBeneficiaryPricingMap($beneficiaries);
             $openRacesOverview = $this->buildOpenRacesOverviewData($this->model->getOpenRacesOverview(2000));
-            [$resumeParents, $resumeChildren] = $this->getResumeLinksForRows($result['rows']);
+            $raceSegments = $this->getSegmentsForRows($result['rows']);
+            // Modificarile de diurna aprobate / in asteptare (coloana Diurna).
+            dispatcher_attach_diurna_adjustments($this->db, $result['rows']);
+            // Diurna per sofer (Contabilitate Personal): coloana Diurna marcheaza
+            // cursele soferilor care nu primesc diurna.
+            $diurnaHistoryByDriver = (new DriverDiurnaModel($this->db))->getHistoryForDrivers(
+                array_map(static fn (array $row): int => (int) ($row['driver_id'] ?? 0), $result['rows'])
+            );
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][index] ' . $exception->getMessage());
             flash_set('danger', $this->buildPersistenceErrorMessage($exception));
@@ -1011,8 +1356,8 @@ class DispecerCurseController
                 'plates' => [],
                 'transport_types_present' => [],
             ];
-            $resumeParents = [];
-            $resumeChildren = [];
+            $raceSegments = [];
+            $diurnaHistoryByDriver = [];
         }
 
         render('dispecer_curse/index.php', [
@@ -1061,41 +1406,9 @@ class DispecerCurseController
             'postCreateExpensePrompt' => $postCreateExpensePrompt,
             'openRacesOverview' => $openRacesOverview,
             'maintenancePopupMessages' => $this->consumeMaintenancePopupMessages(),
-            'resumeSource' => $resumeSource,
-            'resumeParents' => $resumeParents,
-            'resumeChildren' => $resumeChildren,
+            'raceSegments' => $raceSegments,
+            'diurnaHistoryByDriver' => $diurnaHistoryByDriver,
         ]);
-    }
-
-    /**
-     * Datele precompletate pentru un segment nou care continua cursa $source.
-     * Contextul comercial se pastreaza; valorile masurate per segment se reintroduc.
-     */
-    private function buildResumeFormData(array $source, int $resumeId): array
-    {
-        $sourceEndDate = trim((string) ($source['data_sfarsit'] ?? ''));
-        $sourceEndTime = trim((string) ($source['ora_sfarsit'] ?? ''));
-
-        return [
-            'parent_cursa_id' => (string) $resumeId,
-            'beneficiar_id' => (string) ($source['beneficiar_id'] ?? ''),
-            'tip_transport' => (string) ($source['tip_transport'] ?? ''),
-            'vehicle_id' => (string) ($source['vehicle_id'] ?? ''),
-            'driver_id' => (string) ($source['driver_id'] ?? ''),
-            'data_incarcare' => (string) ($source['data_incarcare'] ?? ''),
-            // Segmentul nou incepe unde s-a terminat segmentul anterior.
-            'data_inceput' => $sourceEndDate !== '' ? $sourceEndDate : date('Y-m-d'),
-            'data_sfarsit' => $sourceEndDate !== '' ? $sourceEndDate : date('Y-m-d'),
-            'ora_inceput' => $sourceEndTime !== '' ? substr($sourceEndTime, 0, 5) : '',
-            'loc_incarcare_id' => (string) ($source['loc_incarcare_id'] ?? ''),
-            'loc_plecare' => (string) ($source['loc_plecare'] ?? ''),
-            'loc_aspirare' => (string) ($source['loc_aspirare'] ?? ''),
-            'loc_livrare' => (string) ($source['loc_livrare'] ?? ''),
-            'loc_livrare_cursa' => (string) ($source['loc_livrare_cursa'] ?? ''),
-            'zona_distributie_id' => (string) ($source['zona_distributie_id'] ?? ''),
-            'capacitate_transport' => (string) ($source['capacitate_transport'] ?? ''),
-            'tip_marfa' => $this->normalizeGoodsTypeSelection($source['tip_marfa'] ?? []),
-        ];
     }
 
     /**
@@ -1281,10 +1594,10 @@ class DispecerCurseController
     }
 
     /**
-     * Legaturile parinte/copil pentru randurile afisate in Desfasurator.
-     * Returneaza [copil => parinte, parinte => [copii]].
+     * Segmentele curselor afisate in Desfasurator, grupate pe cursa.
+     * O cursa fara segmente nu apare in rezultat.
      */
-    private function getResumeLinksForRows(array $rows): array
+    private function getSegmentsForRows(array $rows): array
     {
         $rowIds = [];
         foreach ($rows as $row) {
@@ -1294,32 +1607,428 @@ class DispecerCurseController
             }
         }
         if ($rowIds === []) {
-            return [[], []];
+            return [];
         }
 
-        $placeholders = implode(',', array_fill(0, count($rowIds), '?'));
-        $stmt = $this->db->prepare(
-            "SELECT id, parent_cursa_id
-             FROM curse_dispecer
-             WHERE deleted_at IS NULL
-               AND parent_cursa_id IS NOT NULL
-               AND (id IN ($placeholders) OR parent_cursa_id IN ($placeholders))"
-        );
-        $stmt->execute(array_merge($rowIds, $rowIds));
+        return $this->model->getRaceSegmentsForRaces($rowIds);
+    }
 
-        $parents = [];
-        $children = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $link) {
-            $childId = (int) ($link['id'] ?? 0);
-            $parentId = (int) ($link['parent_cursa_id'] ?? 0);
-            if ($childId <= 0 || $parentId <= 0) {
-                continue;
+    /**
+     * Datele unui segment, din formular. Segmentul acopera o portiune din cursa:
+     * cine a condus, cu ce vehicul, in ce interval si cati km.
+     *
+     * @return array{0: array, 1: array}  [date, erori]
+     */
+    private function validateRaceSegmentInput(array $input, array $race): array
+    {
+        $errors = [];
+
+        // Faza se completeaza cu formularul de cursa, deci vine cu aceleasi nume de
+        // campuri si acelasi format de data (zz/ll/aaaa). Campurile ascunse de tipul
+        // de transport nu ajung in POST — lipsa lor inseamna "necompletat", nu zero.
+        $vehicleId = (int) ($input['vehicle_id'] ?? 0);
+        $driverId = (int) ($input['driver_id'] ?? 0);
+        $startDate = $this->normalizeRaceDate((string) ($input['data_inceput'] ?? ''));
+        $endDate = $this->normalizeRaceDate((string) ($input['data_sfarsit'] ?? ''));
+        $observatii = trim((string) ($input['observatii'] ?? ''));
+
+        if ($vehicleId <= 0) {
+            $errors['vehicle_id'] = 'Alege vehiculul fazei.';
+        }
+        if ($driverId <= 0) {
+            $errors['driver_id'] = 'Alege soferul fazei.';
+        }
+        if ($startDate === null) {
+            $errors['data_inceput'] = 'Data de inceput a fazei este obligatorie.';
+        }
+        if ($endDate === null && trim((string) ($input['data_sfarsit'] ?? '')) !== '') {
+            $errors['data_sfarsit'] = 'Data de sfarsit a fazei este invalida.';
+        }
+
+        $normalizeTime = static function ($value): string {
+            $value = trim((string) $value);
+            if ($value === '') {
+                return '';
             }
-            $parents[$childId] = $parentId;
-            $children[$parentId][] = $childId;
+
+            return strlen($value) === 5 ? $value . ':00' : $value;
+        };
+        $startTime = $normalizeTime($input['ora_inceput'] ?? '');
+        $endTime = $normalizeTime($input['ora_sfarsit'] ?? '');
+
+        if ($startDate !== null && $endDate !== null) {
+            $start = strtotime($startDate . ' ' . ($startTime !== '' ? $startTime : '00:00:00'));
+            $end = strtotime($endDate . ' ' . ($endTime !== '' ? $endTime : '00:00:00'));
+            if ($start !== false && $end !== false && $end < $start) {
+                $errors['data_sfarsit'] = 'Sfarsitul fazei nu poate fi inaintea inceputului.';
+            }
         }
 
-        return [$parents, $children];
+        $positiveNumber = static function ($value, string $field, array &$errors, string $label): ?float {
+            $value = trim((string) $value);
+            if ($value === '') {
+                return null;
+            }
+            $value = str_replace(',', '.', $value);
+            if (!is_numeric($value) || (float) $value < 0) {
+                $errors[$field] = $label . ' trebuie sa fie un numar pozitiv.';
+
+                return null;
+            }
+
+            return (float) $value;
+        };
+
+        // Km-ii fazei vin din campul de km potrivit tipului de transport: la Compresor
+        // "Km efectuati" este km_dislocare, la Primar km reali sunt km_totali, in rest km_cursa.
+        $kmCandidates = [
+            $input['km'] ?? '',
+            $input['km_dislocare'] ?? '',
+            $input['km_totali'] ?? '',
+            $input['km_cursa'] ?? '',
+        ];
+        $km = null;
+        foreach ($kmCandidates as $kmCandidate) {
+            $kmValue = $positiveNumber($kmCandidate, 'km', $errors, 'Km fazei');
+            if ($kmValue !== null && $kmValue > 0) {
+                $km = (int) round($kmValue);
+                break;
+            }
+        }
+
+        $loadedQuantity = $positiveNumber($input['cantitate_incarcata'] ?? '', 'cantitate_incarcata', $errors, 'Cantitatea incarcata');
+        $deliveredTons = $positiveNumber($input['tona_livrata'] ?? '', 'tona_livrata', $errors, 'Cantitatea livrata');
+        $workingHours = $positiveNumber(
+            trim((string) ($input['ore_aspirare'] ?? '')) !== '' ? $input['ore_aspirare'] : ($input['ore_functionare'] ?? ''),
+            'ore_functionare',
+            $errors,
+            'Orele de functionare'
+        );
+
+        $clientsRaw = trim((string) ($input['nr_clienti'] ?? ''));
+        $clients = null;
+        if ($clientsRaw !== '') {
+            if (!ctype_digit($clientsRaw)) {
+                $errors['nr_clienti'] = 'Numarul de clienti trebuie sa fie un numar intreg.';
+            } else {
+                $clients = (int) $clientsRaw;
+            }
+        }
+
+        // Faza trebuie sa stea in intervalul cursei: altfel km-ii si diurna ar acoperi
+        // zile care nu apartin cursei.
+        $raceStart = trim((string) ($race['data_inceput'] ?? ''));
+        if ($raceStart !== '' && $startDate !== null && $startDate < $raceStart) {
+            $errors['data_inceput'] = 'Faza nu poate incepe inainte de inceputul cursei ('
+                . format_date_ro($raceStart) . ').';
+        }
+
+        return [[
+            'vehicle_id' => $vehicleId,
+            'driver_id' => $driverId,
+            'loc_incarcare_id' => (int) ($input['loc_incarcare_id'] ?? 0),
+            'zona_distributie_id' => (int) ($input['zona_distributie_id'] ?? 0),
+            'loc_plecare' => trim((string) ($input['loc_plecare'] ?? '')),
+            'loc_livrare' => trim((string) ($input['loc_livrare'] ?? '')),
+            'data_inceput' => (string) $startDate,
+            'ora_inceput' => $startTime,
+            'data_sfarsit' => (string) $endDate,
+            'ora_sfarsit' => $endTime,
+            'km' => $km,
+            'cantitate_incarcata' => $loadedQuantity,
+            'tona_livrata' => $deliveredTons,
+            'nr_clienti' => $clients,
+            'ore_functionare' => $workingHours,
+            'observatii' => $observatii,
+        ], $errors];
+    }
+
+    /**
+     * Dupa orice modificare a fazelor, cursa se recalculeaza din ele: totalurile
+     * (km, cantitate, tone livrate, clienti, ore) sunt deja adunate de model, iar
+     * aici se reface tariful pe baza lor — pe acelasi drum ca la salvarea cursei.
+     * Cursele deja facturate nu se ating.
+     */
+    private function repriceRaceFromSegments(int $raceId): void
+    {
+        try {
+            $race = $this->model->getRaceById($raceId);
+            if ($race === null || (string) ($race['status_facturare'] ?? '') === 'facturat') {
+                return;
+            }
+
+            $input = $race;
+            $input['tip_marfa'] = $this->normalizeGoodsTypeSelection($race['tip_marfa'] ?? []);
+            $input['ora_inceput'] = substr((string) ($race['ora_inceput'] ?? ''), 0, 5);
+            $input['ora_sfarsit'] = substr((string) ($race['ora_sfarsit'] ?? ''), 0, 5);
+
+            [$data, $errors] = $this->validateRaceInput($input, false, true);
+            if ($errors !== []) {
+                error_log('[DispecerCurseController][reprice_segments] cursa #' . $raceId . ': ' . implode(' ', $errors));
+
+                return;
+            }
+
+            $data = $this->mergeRaceUpdateData($data, $race, $input);
+            $data = $this->applyVersionedPricing($data);
+            $data['status_facturare'] = (string) ($race['status_facturare'] ?? self::DEFAULT_BILLING_STATUS);
+            $data['updated_at'] = date('Y-m-d H:i:s');
+            unset($data['created_by'], $data['created_at']);
+
+            $this->model->updateRaceAndSyncVehicleKm($raceId, $data, $this->currentUserId());
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][reprice_segments] ' . $exception->getMessage());
+        }
+    }
+
+    /**
+     * Reluarea cursei: portiunea noua se adauga ca segment la cursa existenta.
+     * Cursa ramane una singura, deci tariful si numarul de curse nu se dubleaza.
+     */
+    /**
+     * Ce arata formularul cursei: cursa intreaga, o faza existenta sau o faza noua.
+     * Parametrul din adresa (`faza`) este 'noua' sau id-ul unei faze a cursei.
+     *
+     * @param array<int, array<string, mixed>> $segments
+     * @return array{0: string, 1: array<string, mixed>|null}
+     */
+    private function resolveRacePhaseView(array $segments, string $requested): array
+    {
+        $requested = trim($requested);
+        if ($requested === 'noua') {
+            return ['noua', null];
+        }
+        if ($requested === '' || !ctype_digit($requested)) {
+            return ['', null];
+        }
+
+        foreach ($segments as $segment) {
+            if ((int) ($segment['id'] ?? 0) === (int) $requested) {
+                return ['editare', $segment];
+            }
+        }
+
+        // Faza ceruta nu mai exista (a fost stearsa intre timp): aratam cursa.
+        return ['', null];
+    }
+
+    /**
+     * Valorile unei faze, in campurile formularului de cursa. Km-ul fazei merge in
+     * toate campurile de km, pentru ca formularul arata alt camp dupa tipul de
+     * transport (km_cursa / km_totali / km_dislocare).
+     *
+     * @param array<string, mixed> $segment
+     * @return array<string, mixed>
+     */
+    private function raceFormDataFromSegment(array $segment): array
+    {
+        $km = $segment['km'] ?? '';
+
+        return [
+            'vehicle_id' => $segment['vehicle_id'] ?? '',
+            'driver_id' => $segment['driver_id'] ?? '',
+            'data_inceput' => $segment['data_inceput'] ?? '',
+            'ora_inceput' => $segment['ora_inceput'] ?? '',
+            'data_sfarsit' => $segment['data_sfarsit'] ?? '',
+            'ora_sfarsit' => $segment['ora_sfarsit'] ?? '',
+            'loc_incarcare_id' => $segment['loc_incarcare_id'] ?? '',
+            'zona_distributie_id' => $segment['zona_distributie_id'] ?? '',
+            'loc_plecare' => $segment['loc_plecare'] ?? '',
+            'loc_livrare' => $segment['loc_livrare'] ?? '',
+            'km_cursa' => $km,
+            'km_totali' => $km,
+            'km_dislocare' => $km,
+            'cantitate_incarcata' => $segment['cantitate_incarcata'] ?? '',
+            'tona_livrata' => $segment['tona_livrata'] ?? '',
+            'nr_clienti' => $segment['nr_clienti'] ?? '',
+            'ore_aspirare' => $segment['ore_functionare'] ?? '',
+            'ore_functionare' => $segment['ore_functionare'] ?? '',
+            'observatii' => $segment['observatii'] ?? '',
+        ];
+    }
+
+    /**
+     * Formularul pregatit pentru o faza noua: continua de unde s-a oprit ultima faza
+     * (sau cursa, daca nu are faze). Vehiculul, soferul si traseul se preiau de acolo,
+     * iar inceputul fazei noi este sfarsitul celei anterioare. Se golesc doar sfarsitul
+     * si ce se masoara pe faza (km, cantitati, clienti): totalurile cursei sunt suma
+     * fazelor, deci valorile copiate s-ar numara de doua ori.
+     *
+     * @param array<string, mixed> $race
+     * @param array<int, array<string, mixed>> $segments
+     * @return array<string, mixed>
+     */
+    private function raceFormDataForNewSegment(array $race, array $segments): array
+    {
+        $last = $segments !== [] ? $segments[count($segments) - 1] : null;
+        $startDate = trim((string) ($last['data_sfarsit'] ?? ($race['data_sfarsit'] ?? '')));
+        $startTime = substr(trim((string) ($last['ora_sfarsit'] ?? ($race['ora_sfarsit'] ?? ''))), 0, 5);
+        $previous = static function (string $key) use ($last, $race): string {
+            $value = trim((string) ($last[$key] ?? ''));
+
+            return $value !== '' ? $value : trim((string) ($race[$key] ?? ''));
+        };
+
+        return [
+            'vehicle_id' => $previous('vehicle_id'),
+            'driver_id' => $previous('driver_id'),
+            'loc_incarcare_id' => $previous('loc_incarcare_id'),
+            'zona_distributie_id' => $previous('zona_distributie_id'),
+            'loc_plecare' => $previous('loc_plecare'),
+            'loc_livrare' => $previous('loc_livrare'),
+            'data_inceput' => $startDate !== '' ? $startDate : (string) ($race['data_inceput'] ?? ''),
+            'ora_inceput' => $startTime,
+            'data_sfarsit' => '',
+            'ora_sfarsit' => '',
+            'km_cursa' => '',
+            'km_totali' => '',
+            'km_dislocare' => '',
+            'cantitate_incarcata' => '',
+            'tona_livrata' => '',
+            'nr_clienti' => '',
+            'ore_aspirare' => '',
+            'ore_functionare' => '',
+            'observatii' => '',
+        ];
+    }
+
+    private function storeRaceSegmentAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'dispecer_curse']));
+
+        $raceId = (int) ($_POST['cursa_id'] ?? 0);
+        $race = $raceId > 0 ? $this->model->getRaceById($raceId) : null;
+        $redirectUrl = $this->raceSegmentRedirectUrl($raceId);
+        if ($race === null) {
+            flash_set('warning', 'Cursa pentru care adaugi faza nu a fost gasita.');
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        [$segment, $errors] = $this->validateRaceSegmentInput($_POST, $race);
+        if ($errors !== []) {
+            flash_set('danger', 'Faza nu a fost salvata: ' . implode(' ', $errors));
+            redirect($this->raceSegmentRedirectUrl($raceId, 'noua'));
+        }
+
+        try {
+            $result = $this->model->addRaceSegment($raceId, $segment, $this->currentUserId());
+            $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
+            $this->repriceRaceFromSegments($raceId);
+            flash_set(
+                'success',
+                'Cursa #' . $raceId . ' a fost reluata: faza a fost inregistrata pe aceeasi cursa, '
+                . 'fara tarif suplimentar.'
+            );
+
+            // Dupa reluare, formularul se deschide pe faza abia adaugata: e ultima,
+            // deci de acolo se poate relua din nou cursa.
+            $newSegmentId = (int) ($result['segment_id'] ?? 0);
+            if ($newSegmentId > 0) {
+                redirect($this->raceSegmentRedirectUrl($raceId, (string) $newSegmentId));
+            }
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][segment_store] ' . $exception->getMessage());
+            flash_set('danger', 'Faza nu a putut fi salvata. Reincearca.');
+            redirect($this->raceSegmentRedirectUrl($raceId, 'noua'));
+        }
+
+        redirect($redirectUrl);
+    }
+
+    private function updateRaceSegmentAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'dispecer_curse']));
+
+        $segmentId = (int) ($_POST['segment_id'] ?? 0);
+        $existing = $segmentId > 0 ? $this->model->getRaceSegmentById($segmentId) : null;
+        if ($existing === null) {
+            flash_set('warning', 'Faza nu a fost gasita.');
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        $raceId = (int) $existing['cursa_id'];
+        $race = $this->model->getRaceById($raceId);
+        $redirectUrl = $this->raceSegmentRedirectUrl($raceId);
+        if ($race === null) {
+            flash_set('warning', 'Cursa fazei nu a fost gasita.');
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        [$segment, $errors] = $this->validateRaceSegmentInput($_POST, $race);
+        if ($errors !== []) {
+            flash_set('danger', 'Faza nu a fost salvata: ' . implode(' ', $errors));
+            redirect($this->raceSegmentRedirectUrl($raceId, (string) $segmentId));
+        }
+
+        try {
+            $result = $this->model->updateRaceSegment($segmentId, $segment, $this->currentUserId());
+            $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
+            $this->repriceRaceFromSegments($raceId);
+            flash_set('success', 'Faza a fost actualizata.');
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][segment_update] ' . $exception->getMessage());
+            flash_set('danger', 'Faza nu a putut fi actualizata. Reincearca.');
+        }
+
+        redirect($redirectUrl);
+    }
+
+    private function deleteRaceSegmentAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'dispecer_curse']));
+
+        $segmentId = (int) ($_POST['segment_id'] ?? 0);
+        $existing = $segmentId > 0 ? $this->model->getRaceSegmentById($segmentId) : null;
+        if ($existing === null) {
+            flash_set('warning', 'Faza nu a fost gasita.');
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        $raceId = (int) $existing['cursa_id'];
+        $redirectUrl = $this->raceSegmentRedirectUrl($raceId);
+
+        try {
+            $result = $this->model->deleteRaceSegment($segmentId, $this->currentUserId());
+            $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
+            $this->repriceRaceFromSegments($raceId);
+            flash_set('success', 'Faza a fost stearsa.');
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][segment_delete] ' . $exception->getMessage());
+            flash_set('danger', 'Faza nu a putut fi stearsa. Reincearca.');
+        }
+
+        redirect($redirectUrl);
+    }
+
+    /**
+     * Unde se intoarce operatorul dupa o operatie pe faze. `$phase` tine formularul
+     * deschis pe faza respectiva ('noua' sau id-ul ei) cand salvarea a esuat.
+     */
+    private function raceSegmentRedirectUrl(int $raceId, string $phase = ''): string
+    {
+        $origin = trim((string) ($_POST['segment_origin'] ?? ''));
+        if ($origin !== 'list' && $raceId > 0) {
+            $params = ['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId];
+            if ($phase !== '') {
+                $params['faza'] = $phase;
+            }
+
+            return build_query_url($params) . '#race-form';
+        }
+
+        return build_query_url(['page' => 'dispecer_curse']);
     }
 
     private function storeAction(): void
@@ -1331,15 +2040,6 @@ class DispecerCurseController
         ensure_csrf_or_redirect(build_query_url(['page' => 'dispecer_curse']));
 
         [$data, $errors, $old, $softErrors] = $this->validateRaceInput($_POST, false);
-
-        // Reluare cursa: segmentul nou refera cursa-parinte.
-        $parentCursaId = (int) ($_POST['parent_cursa_id'] ?? 0);
-        if ($parentCursaId > 0) {
-            $old['parent_cursa_id'] = (string) $parentCursaId;
-            if ($this->model->getRaceById($parentCursaId) === null) {
-                $errors['parent_cursa_id'] = 'Cursa sursa pentru reluare nu mai exista.';
-            }
-        }
 
         // Decizia adminului pentru un vehicul neconfigurat pe ruta.
         $vehicleConfigDecision = trim((string) ($_POST['vehicle_config_decision'] ?? ''));
@@ -1434,22 +2134,13 @@ class DispecerCurseController
                     );
                 }
             }
-            if ($raceId > 0 && $parentCursaId > 0) {
-                $linkStmt = $this->db->prepare('UPDATE curse_dispecer SET parent_cursa_id = :parent WHERE id = :id');
-                $linkStmt->execute(['parent' => $parentCursaId, 'id' => $raceId]);
-            }
             if ($raceId > 0 && $vehicleConfigDecision === 'permanent') {
                 $this->applyPermanentVehicleRouteConfig($data);
             } elseif ($raceId > 0 && $vehicleConfigDecision === 'trip') {
                 flash_set('info', 'Vehiculul a fost folosit doar pentru aceasta cursa, fara modificarea Configurarii Transport.');
             }
             $this->setPostCreateExpensePrompt($raceId, 'created');
-            flash_set(
-                'success',
-                $raceId > 0 && $parentCursaId > 0
-                    ? 'Cursa #' . $raceId . ' a fost adaugata ca o continuare a cursei #' . $parentCursaId . '.'
-                    : 'Cursa a fost adaugata cu succes.'
-            );
+            flash_set('success', 'Cursa a fost adaugata cu succes.');
             if ($similarRaces !== []) {
                 flash_set('warning', 'Verifica sa nu fie o cursa dubla: ' . $this->buildSimilarRacesMessage($similarRaces));
             }
@@ -1490,6 +2181,18 @@ class DispecerCurseController
             $raceFormData = array_merge($raceFormData, $raceFlash['old']);
         }
         $raceFormData['tip_marfa'] = $this->normalizeGoodsTypeSelection($raceFormData['tip_marfa'] ?? []);
+
+        // Fazele nu mai au formularul lor: se vad si se corecteaza in FORMULARUL CURSEI.
+        // Sagetile din antet schimba ce arata formularul (cursa intreaga sau o faza),
+        // iar "Reia cursa" pregateste o faza noua in aceleasi campuri.
+        $raceSegments = $this->model->getRaceSegments($raceId);
+        [$phaseMode, $phaseSegment] = $this->resolveRacePhaseView($raceSegments, (string) ($_GET['faza'] ?? ''));
+        if ($phaseMode === 'editare' && $phaseSegment !== null) {
+            $raceFormData = array_merge($raceFormData, $this->raceFormDataFromSegment($phaseSegment));
+        } elseif ($phaseMode === 'noua') {
+            $raceFormData = array_merge($raceFormData, $this->raceFormDataForNewSegment($race, $raceSegments));
+        }
+
         $postCreateExpensePrompt = $this->consumePostCreateExpensePrompt();
 
         $expenseFlash = $this->consumeFormFlash('expense_' . $raceId);
@@ -1553,6 +2256,13 @@ class DispecerCurseController
             // imediat pe care dintre cursele vehiculului lucreaza.
             'openRacesPanelCurrentRaceId' => $raceId,
             'race' => $race,
+            // Segmentele cursei: portiunile conduse de alt sofer / alt vehicul.
+            'raceSegments' => $raceSegments,
+            // Ce arata acum formularul: cursa intreaga (''), o faza ('editare') sau
+            // o faza noua ('noua').
+            'phaseMode' => $phaseMode,
+            'phaseSegment' => $phaseSegment,
+            'allActiveDrivers' => $this->model->getDriverOptions(true),
             'raceFormData' => $raceFormData,
             'raceFormErrors' => $raceFlash['errors'],
             'expenses' => $this->model->getRaceExpenses($raceId),
@@ -2000,9 +2710,12 @@ class DispecerCurseController
 
         // 5) capacitate_transport este un snapshot istoric: se re-deriva din vehicul doar
         //    daca vehiculul s-a schimbat sau snapshotul lipseste.
+        //    Corectarea ulterioara a capacitatii reale din fisa vehiculului NU
+        //    rescrie retroactiv cursele deja inregistrate.
         $vehicleUnchanged = (int) ($data['vehicle_id'] ?? 0) === (int) ($existing['vehicle_id'] ?? 0);
         if ($vehicleUnchanged && ($existing['capacitate_transport'] ?? null) !== null) {
             $data['capacitate_transport'] = $existing['capacitate_transport'];
+            $data['capacitate_transport_confirmata'] = (int) ($existing['capacitate_transport_confirmata'] ?? 0);
         }
 
         // 6) Valorile financiare se recalculeaza la fiecare salvare (validarea le-a calculat
@@ -2067,9 +2780,16 @@ class DispecerCurseController
             redirect(build_query_url(['page' => 'dispecer_curse']));
         }
 
+        // Fazele pleaca odata cu cursa; le numaram inainte, ca sa spunem operatorului
+        // cat a plecat cu ea.
+        $segmentCount = count($this->model->getRaceSegments($raceId));
+
         try {
             $this->model->deleteRaceAndSyncVehicleKm($raceId, $this->currentUserId());
             flash_set('success', 'Cursa a fost ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â¹ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢tearsÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢.');
+            if ($segmentCount > 0) {
+                flash_set('info', 'Cele ' . $segmentCount . ' faze ale cursei au fost sterse odata cu ea si se intorc daca restaurezi cursa.');
+            }
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][delete] ' . $exception->getMessage());
             flash_set('danger', 'Nu s-a putut ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â¹ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢terge cursa selectatÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢.');
@@ -2111,6 +2831,7 @@ class DispecerCurseController
         }
 
         $deletedCount = 0;
+        $deletedSegmentCount = 0;
         $missingCount = 0;
         $failedIds = [];
 
@@ -2120,9 +2841,13 @@ class DispecerCurseController
                 continue;
             }
 
+            // Fazele cursei pleaca odata cu ea; le numaram inainte de stergere.
+            $segmentCount = count($this->model->getRaceSegments($raceId));
+
             try {
                 $this->model->deleteRaceAndSyncVehicleKm($raceId, $this->currentUserId());
                 $deletedCount++;
+                $deletedSegmentCount += $segmentCount;
             } catch (Throwable $exception) {
                 error_log('[DispecerCurseController][delete_bulk][' . $raceId . '] ' . $exception->getMessage());
                 $failedIds[] = $raceId;
@@ -2134,6 +2859,10 @@ class DispecerCurseController
                 ? '1 cursa a fost stearsa.'
                 : $deletedCount . ' curse au fost sterse.';
             flash_set('success', $message);
+        }
+
+        if ($deletedSegmentCount > 0) {
+            flash_set('info', $deletedSegmentCount . ' faze ale curselor selectate au fost sterse odata cu ele si se intorc la restaurare.');
         }
 
         if ($failedIds !== []) {
@@ -2947,6 +3676,8 @@ class DispecerCurseController
             'status_factura' => '',
             'document' => '',
             'q' => '',
+            'ids' => '',
+            'ids_label' => '',
         ];
     }
 
@@ -3004,6 +3735,9 @@ class DispecerCurseController
             'status_factura' => $status,
             'document' => $document,
             'q' => $query,
+            /* Lista exacta de refacturari (ex. din Centralizator facturare: o trecere la un pret). */
+            'ids' => $this->normalizeRaceIdList((string) ($_GET['ids'] ?? '')),
+            'ids_label' => mb_substr(trim((string) ($_GET['ids_label'] ?? '')), 0, 160),
         ];
     }
 
@@ -5654,7 +6388,24 @@ class DispecerCurseController
             'zona_distributie_id' => trim((string) ($_GET['zona_distributie_id'] ?? '')),
             'data_start' => trim((string) ($_GET['data_start'] ?? '')),
             'data_end' => trim((string) ($_GET['data_end'] ?? '')),
+            // Lista explicita de curse, venita din alte pagini (ex. Istoric
+            // Activitati Sofer -> "Total curse"): Desfasuratorul arata exact acele curse.
+            'ids' => $this->normalizeRaceIdList((string) ($_GET['ids'] ?? '')),
+            'ids_label' => mb_substr(trim((string) ($_GET['ids_label'] ?? '')), 0, 160),
         ];
+    }
+
+    private function normalizeRaceIdList(string $value): string
+    {
+        $ids = [];
+        foreach (preg_split('/[^0-9]+/', $value) ?: [] as $part) {
+            $id = (int) $part;
+            if ($id > 0) {
+                $ids[$id] = $id;
+            }
+        }
+
+        return implode(',', array_slice(array_values($ids), 0, 1000));
     }
 
     private function collectDeletedRaceFilters(): array
@@ -5716,7 +6467,6 @@ class DispecerCurseController
     private function defaultRaceFormData(): array
     {
         return [
-            'parent_cursa_id' => '',
             'vehicle_id' => '',
             'driver_id' => '',
             'tip_transport' => '',
@@ -6054,9 +6804,15 @@ class DispecerCurseController
         } elseif (!$this->model->existsVehicle($vehicleId)) {
             $errors['vehicle_id'] = 'Selecteaza un vehicul valid.';
         }
-        $vehicleTransportCapacity = $vehicleId > 0
-            ? $this->model->getVehicleTransportCapacity($vehicleId)
-            : null;
+        /*
+         * CAPACITATEA REALA a vehiculului, nu categoria de capacitate.
+         * `capacity` este null cand vehiculul nu are capacitate reala stocata:
+         * in acest caz nu substituim nimic (nici 0, nici valoarea din numele
+         * categoriei), ci cerem completarea prin soft error.
+         */
+        $vehicleCapacityInfo = $this->model->getVehicleCapacityInfo($vehicleId);
+        $vehicleTransportCapacity = $vehicleCapacityInfo['capacity'];
+        $vehicleCapacityConfirmed = $vehicleCapacityInfo['confirmed'];
 
         $transportType = trim((string) ($input['tip_transport'] ?? ''));
         if (!array_key_exists($transportType, self::TRANSPORT_TYPES)) {
@@ -6455,6 +7211,35 @@ class DispecerCurseController
             $softErrors['cantitate_incarcata'] = 'Cantitatea incarcata nu este completata (necesara facturarii pe tone).';
         }
 
+        /*
+         * VALIDAREA INCARCARII se face pe capacitatea tehnica REALA a vehiculului.
+         * Categoria de capacitate nu este niciodata folosita aici: un vehicul din
+         * categoria "18.5 TONE" care duce real 20 t si transporta 19 t este la 95%,
+         * nu supraincarcat.
+         *
+         * Cand capacitatea reala lipseste sau nu este inca verificata, nu dam un
+         * verdict definitiv: cerem verificarea, fara sa presupunem o valoare.
+         */
+        $loadedTons = $this->normalizeLoadedQuantityToTons($qty, $vehicleTransportCapacity);
+        if ($loadedTons !== null && $loadedTons > 0) {
+            if ($vehicleTransportCapacity === null) {
+                $softErrors['cantitate_incarcata'] = 'Vehiculul nu are capacitate de transport reala completata, deci gradul de umplere nu poate fi verificat. Completeaza capacitatea reala in fisa vehiculului.';
+            } elseif (!$vehicleCapacityConfirmed) {
+                $softErrors['cantitate_incarcata'] = sprintf(
+                    'Capacitatea reala a vehiculului (%s t) nu este inca verificata, deci gradul de umplere de %s%% este orientativ. Confirma capacitatea in fisa vehiculului.',
+                    rtrim(rtrim(number_format($vehicleTransportCapacity, 2, '.', ''), '0'), '.'),
+                    number_format(($loadedTons / $vehicleTransportCapacity) * 100, 1, '.', '')
+                );
+            } elseif ($loadedTons > $vehicleTransportCapacity + 0.001) {
+                $softErrors['cantitate_incarcata'] = sprintf(
+                    'Cantitatea incarcata (%s t) depaseste capacitatea reala a vehiculului (%s t): grad de umplere %s%%.',
+                    rtrim(rtrim(number_format($loadedTons, 2, '.', ''), '0'), '.'),
+                    rtrim(rtrim(number_format($vehicleTransportCapacity, 2, '.', ''), '0'), '.'),
+                    number_format(($loadedTons / $vehicleTransportCapacity) * 100, 1, '.', '')
+                );
+            }
+        }
+
         if ($isDistributionTransport) {
             if ($qtyForTonPricing === null || $qtyForTonPricing <= 0) {
                 $softErrors['cantitate_incarcata'] = 'Cantitatea incarcata nu este completata (necesara facturarii distributiei).';
@@ -6817,6 +7602,7 @@ class DispecerCurseController
             'ora_sfarsit' => $endTimeRaw,
             'durata_cursa_minute' => $durationMinutes !== null ? (string) $durationMinutes : '',
             'capacitate_transport' => $vehicleTransportCapacity !== null ? (string) $vehicleTransportCapacity : '',
+            'capacitate_transport_confirmata' => $vehicleCapacityConfirmed ? '1' : '0',
             'loc_incarcare_id' => $loadLocationId !== null ? (string) $loadLocationId : '',
             'loc_plecare' => $departureLocationRaw,
             'loc_intoarcere' => trim((string) ($input['loc_intoarcere'] ?? '')),
@@ -6858,6 +7644,8 @@ class DispecerCurseController
             'ora_sfarsit' => $endTime,
             'durata_cursa_minute' => $durationMinutes,
             'capacitate_transport' => $vehicleTransportCapacity,
+            // Snapshot istoric: era capacitatea verificata la momentul cursei?
+            'capacitate_transport_confirmata' => $vehicleCapacityConfirmed ? 1 : 0,
             'loc_incarcare_id' => $loadLocationId,
             'loc_plecare' => $isCompressorTransport
                 ? ($departureLocationRaw !== '' ? $departureLocationRaw : null)
@@ -9146,6 +9934,31 @@ class DispecerCurseController
      * Normalizeaza cantitatea pentru calcule pe unitatea introdusa de operator.
      * Valorile sunt folosite direct (fara conversie automata tone -> kg).
      */
+    /**
+     * Cantitatea incarcata, adusa in tone.
+     *
+     * Operatorii introduc cand tone, cand kilograme. Regula este aceeasi ca in
+     * interogarile de raportare (`loadedTons`): peste 3x capacitatea reala sau
+     * peste 1000, valoarea este kilograme. Capacitatea primita aici este
+     * intotdeauna cea REALA, niciodata cea din numele categoriei.
+     */
+    private function normalizeLoadedQuantityToTons(?float $value, ?float $realCapacityTon): ?float
+    {
+        if ($value === null || $value <= 0) {
+            return null;
+        }
+
+        if ($realCapacityTon !== null && $realCapacityTon > 0 && $value > ($realCapacityTon * 3)) {
+            return $value / 1000;
+        }
+
+        if ($value >= 1000) {
+            return $value / 1000;
+        }
+
+        return $value;
+    }
+
     private function normalizeTonInputToKgForPricing(?float $value, ?float $vehicleCapacityTon = null): ?float
     {
         if ($value === null) {

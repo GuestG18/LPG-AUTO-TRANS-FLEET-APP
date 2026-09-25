@@ -139,6 +139,25 @@
     var pendingDeleteForm = null;
     var confirmModalEl = document.getElementById('cazareDeleteModal');
     var confirmButton = document.getElementById('cazareDeleteConfirm');
+    var bulkForm = document.getElementById('cazareBulkDeleteForm');
+
+    /** Textele modalului difera intre stergerea unui rand si stergerea multipla. */
+    function deleteTexts(deleteForm) {
+        if (deleteForm !== bulkForm) {
+            return {
+                title: 'Ștergi cazarea?',
+                body: 'Înregistrarea și cheltuiala corespunzătoare de pe cursă vor fi șterse definitiv.',
+                native: 'Ștergi definitiv această cazare?'
+            };
+        }
+
+        var count = selectedIds().length;
+        return {
+            title: 'Ștergi ' + count + (count === 1 ? ' cazare?' : ' cazări?'),
+            body: 'Înregistrările selectate și cheltuielile corespunzătoare de pe curse vor fi șterse definitiv.',
+            native: 'Ștergi definitiv ' + count + (count === 1 ? ' cazare selectată?' : ' cazări selectate?')
+        };
+    }
 
     document.addEventListener('submit', function (event) {
         var deleteForm = event.target.closest ? event.target.closest('[data-cazare-delete]') : null;
@@ -148,13 +167,25 @@
 
         event.preventDefault();
 
+        var texts = deleteTexts(deleteForm);
         var modalApi = confirmModalEl && window.bootstrap && window.bootstrap.Modal
             ? window.bootstrap.Modal.getOrCreateInstance(confirmModalEl)
             : null;
 
+        if (confirmModalEl) {
+            var titleEl = confirmModalEl.querySelector('[data-cazare-delete-title]');
+            var textEl = confirmModalEl.querySelector('[data-cazare-delete-text]');
+            if (titleEl) {
+                titleEl.textContent = texts.title;
+            }
+            if (textEl) {
+                textEl.textContent = texts.body;
+            }
+        }
+
         if (!modalApi) {
             // Fara Bootstrap disponibil: revenim la dialogul nativ.
-            if (window.confirm('Ștergi definitiv această cazare?')) {
+            if (window.confirm(texts.native)) {
                 deleteForm.dataset.cazareConfirmed = '1';
                 deleteForm.submit();
             }
@@ -183,4 +214,89 @@
             pendingDeleteForm = null;
         });
     }
+
+    // -------------------------------------------------------------------------
+    // Selectie multipla + "Sterge selectate"
+    // -------------------------------------------------------------------------
+
+    var selectAll = document.querySelector('[data-cazare-select-all]');
+    var bulkButton = document.querySelector('[data-cazare-bulk-delete]');
+    var bulkCount = document.querySelector('[data-cazare-bulk-count]');
+
+    function rowBoxes() {
+        return Array.prototype.slice.call(document.querySelectorAll('[data-cazare-select]'));
+    }
+
+    function selectedIds() {
+        return rowBoxes()
+            .filter(function (box) { return box.checked; })
+            .map(function (box) { return box.value; });
+    }
+
+    function refreshSelection() {
+        var boxes = rowBoxes();
+        var count = selectedIds().length;
+
+        boxes.forEach(function (box) {
+            var row = box.closest('tr');
+            if (row) {
+                row.classList.toggle('table-active', box.checked);
+            }
+        });
+
+        if (selectAll) {
+            selectAll.checked = boxes.length > 0 && count === boxes.length;
+            selectAll.indeterminate = count > 0 && count < boxes.length;
+            selectAll.disabled = boxes.length === 0;
+        }
+        if (bulkButton) {
+            bulkButton.disabled = count === 0;
+        }
+        if (bulkCount) {
+            bulkCount.textContent = String(count);
+            bulkCount.classList.toggle('d-none', count === 0);
+        }
+    }
+
+    document.addEventListener('change', function (event) {
+        if (event.target === selectAll) {
+            rowBoxes().forEach(function (box) {
+                box.checked = selectAll.checked;
+            });
+            refreshSelection();
+            return;
+        }
+        if (event.target.matches && event.target.matches('[data-cazare-select]')) {
+            refreshSelection();
+        }
+    });
+
+    if (bulkButton && bulkForm) {
+        bulkButton.addEventListener('click', function () {
+            var ids = selectedIds();
+            if (!ids.length) {
+                return;
+            }
+
+            var holder = bulkForm.querySelector('[data-cazare-bulk-ids]');
+            holder.textContent = '';
+            ids.forEach(function (id) {
+                var input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'ids[]';
+                input.value = id;
+                holder.appendChild(input);
+            });
+
+            // requestSubmit declanseaza evenimentul submit, deci trece prin confirmarea de mai sus.
+            delete bulkForm.dataset.cazareConfirmed;
+            if (typeof bulkForm.requestSubmit === 'function') {
+                bulkForm.requestSubmit();
+            } else {
+                bulkForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            }
+        });
+    }
+
+    refreshSelection();
 }());

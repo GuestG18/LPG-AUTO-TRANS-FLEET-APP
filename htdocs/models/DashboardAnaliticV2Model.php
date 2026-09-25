@@ -30,6 +30,12 @@ class DashboardAnaliticV2Model extends BaseModel
         'nefacturat' => 'Nefacturat',
     ];
 
+    /** Exista tabela de segmente de cursa? (verificata o singura data pe request) */
+    private static ?bool $segmentsAvailable = null;
+
+    /** Modelul de carburant, refolosit ca sa nu-si reverifice schema la fiecare apel. */
+    private ?FuelModel $fuelModel = null;
+
     private const TRANSPORT_TYPE_LABELS = [
         'primar' => 'Primar km',
         'primar_tona' => 'Primar tone',
@@ -44,17 +50,23 @@ class DashboardAnaliticV2Model extends BaseModel
     {
         $from = $this->fromSql();
 
+        // Listele contin si soferii / vehiculele care au facut doar un segment dintr-o
+        // cursa reluata din pauza — altfel nu i-ai putea alege in filtre.
+        $legsFrom = $this->legsFromSql();
+        $vehicleExpr = $this->legVehicleIdExpr();
+        $vehicleNameExpr = $this->legVehicleNameExpr();
         $vehicles = $this->db->query("
-            SELECT DISTINCT c.vehicle_id AS id, v.nr_inmatriculare
-            {$from}
-            WHERE c.vehicle_id IS NOT NULL AND c.deleted_at IS NULL
-            ORDER BY v.nr_inmatriculare ASC
+            SELECT DISTINCT {$vehicleExpr} AS id, {$vehicleNameExpr} AS nr_inmatriculare
+            {$legsFrom}
+            WHERE {$vehicleExpr} IS NOT NULL AND c.deleted_at IS NULL
+            ORDER BY nr_inmatriculare ASC
         ")->fetchAll();
 
+        $driverExpr = $this->legDriverExpr();
         $drivers = $this->db->query("
-            SELECT DISTINCT c.driver_id AS id,
+            SELECT DISTINCT {$driverExpr} AS id,
                    COALESCE(NULLIF(TRIM(s.nume), ''), 'Fara sofer') AS nume
-            {$from}
+            {$legsFrom}
             WHERE c.deleted_at IS NULL
             ORDER BY nume ASC
         ")->fetchAll();
@@ -90,12 +102,42 @@ class DashboardAnaliticV2Model extends BaseModel
             ORDER BY c.capacitate_transport ASC
         ")->fetchAll();
 
+        /*
+         * Categoriile de capacitate ale vehiculelor care au curse. Filtru de
+         * GRUPARE: schimba ce curse intra in raport, nu cu ce se imparte gradul
+         * de umplere (acela ramane capacitatea reala din snapshot-ul cursei).
+         */
+        $capacityCategories = $this->db->query("
+            SELECT DISTINCT cc.id, cc.nume, cc.ordine_afisare
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN (
+                SELECT vc1.tractor_id, vc1.semiremorca_id
+                FROM vehicule_cuplaje vc1
+                INNER JOIN (
+                    SELECT tractor_id, MAX(id) AS max_id
+                    FROM vehicule_cuplaje
+                    WHERE activ = 1
+                    GROUP BY tractor_id
+                ) latest ON latest.max_id = vc1.id
+            ) vc ON vc.tractor_id = v.id
+            LEFT JOIN vehicule s ON s.id = vc.semiremorca_id
+            INNER JOIN vehicule_categorii_capacitate cc
+                    ON cc.id = CASE
+                         WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(s.categorie_capacitate_id, v.categorie_capacitate_id)
+                         ELSE v.categorie_capacitate_id
+                       END
+            WHERE c.deleted_at IS NULL
+            ORDER BY cc.ordine_afisare ASC, cc.nume ASC
+        ")->fetchAll();
+
         return [
             'vehicles' => $vehicles,
             'drivers' => $drivers,
             'beneficiaries' => $beneficiaries,
             'transport_types' => $transportTypes,
             'transport_capacities' => $capacities,
+            'capacity_categories' => $capacityCategories,
             'statuses' => $statuses,
             'transport_type_labels' => self::TRANSPORT_TYPE_LABELS,
             'status_labels' => self::STATUS_LABELS,
@@ -113,7 +155,10 @@ class DashboardAnaliticV2Model extends BaseModel
 
         $usage = $this->calculateUsage($filters, $period);
 
-        $fleetRow = $this->fetchOne($this->fleetSql($from, $whereData['where'], $expr), $whereData['params']);
+        $fleetRow = $this->fetchOne(
+            $this->fleetSql($this->legsFromSql(), $whereData['where'], $expr, $this->legShareExpr()),
+            $whereData['params']
+        );
         $daily = $this->fetchDailySeries($from, $whereData, $expr);
         $vehicles = $this->fetchVehicles($from, $whereData, $expr, $usage['vehicles'], $usage['zile_lucratoare']);
         $drivers = $this->fetchDrivers($from, $whereData, $expr, $usage['drivers'], $usage['zile_lucratoare']);
@@ -292,7 +337,8 @@ class DashboardAnaliticV2Model extends BaseModel
                 COALESCE(SUM(" . $e['tons_delivered'] . "), 0) AS tone,
                 COALESCE(SUM(" . $e['facturare'] . "), 0) AS facturare,
                 COALESCE(SUM(" . $e['cheltuieli'] . "), 0) AS cheltuieli,
-                COALESCE(AVG(" . $e['grad_incarcare_efectiv'] . "), 0) AS grad_incarcare
+                COALESCE(SUM(" . $e['tone_pentru_grad'] . "), 0) AS tone_grad,
+                COALESCE(SUM(" . $e['capacitate_aplicabila'] . "), 0) AS capacitate_grad
             {$from}
             {$whereData['where']}
             GROUP BY km_band, c.capacitate_transport
@@ -329,8 +375,8 @@ class DashboardAnaliticV2Model extends BaseModel
                     'tone' => 0.0,
                     'facturare' => 0.0,
                     'cheltuieli' => 0.0,
-                    'grad_suma' => 0.0,
-                    'grad_curse' => 0,
+                    'tone_grad' => 0.0,
+                    'capacitate_grad' => 0.0,
                 ];
             }
 
@@ -340,9 +386,10 @@ class DashboardAnaliticV2Model extends BaseModel
             $cells[$cellKey]['facturare'] += $facturare;
             $cells[$cellKey]['cheltuieli'] += $cheltuieli;
             if ($hasCapacity) {
-                // media gradului de incarcare se pondereaza cu numarul de curse
-                $cells[$cellKey]['grad_suma'] += ((float) ($row['grad_incarcare'] ?? 0)) * $curse;
-                $cells[$cellKey]['grad_curse'] += $curse;
+                // Grad ponderat pe capacitate: acumulam tonele si capacitatile,
+                // nu procentele. Impartirea se face o singura data, la final.
+                $cells[$cellKey]['tone_grad'] += (float) ($row['tone_grad'] ?? 0);
+                $cells[$cellKey]['capacitate_grad'] += (float) ($row['capacitate_grad'] ?? 0);
             }
         }
 
@@ -356,7 +403,13 @@ class DashboardAnaliticV2Model extends BaseModel
                 'tone' => round((float) $cell['tone'], 2),
                 'facturare' => round((float) $cell['facturare'], 2),
                 'profit' => round((float) $cell['facturare'] - (float) $cell['cheltuieli'], 2),
-                'grad_incarcare' => $cell['grad_curse'] > 0 ? round($cell['grad_suma'] / $cell['grad_curse'], 2) : 0.0,
+                'grad_incarcare' => $cell['capacitate_grad'] > 0
+                    ? round(((float) $cell['tone_grad'] / (float) $cell['capacitate_grad']) * 100, 2)
+                    : 0.0,
+                // Capetele fractiei raman expuse, ca sa poata fi reagregate ponderat
+                // in interfata (o medie de procente ar denatura rezultatul).
+                'tone_grad' => round((float) $cell['tone_grad'], 3),
+                'capacitate_grad' => round((float) $cell['capacitate_grad'], 3),
                 'km_per_cursa' => $curse > 0 ? round((float) $cell['km'] / $curse, 2) : 0.0,
                 'tone_per_cursa' => $curse > 0 ? round((float) $cell['tone'] / $curse, 2) : 0.0,
             ];
@@ -462,7 +515,20 @@ class DashboardAnaliticV2Model extends BaseModel
 
         // restrangem la entitatea ceruta; id 0 inseamna "fara sofer" / "fara beneficiar"
         $column = self::ENTITY_COLUMNS[$type];
-        if ($id > 0) {
+        // Profilul unui sofer citeste cursele desfacute pe segmente si retine doar
+        // segmentele lui: cifrele sunt partea care i se cuvine dintr-o cursa pe
+        // care a impartit-o cu altcineva. Cursele fara segmente raman intregi.
+        $share = null;
+        if (($type === 'sofer' || $type === 'vehicul') && $id > 0 && $this->segmentsAvailable()) {
+            $from = $type === 'sofer'
+                ? $this->legsFromSql(':entity_id')
+                : $this->legsFromSql(null, ':entity_id');
+            $share = $this->legShareExpr();
+            $raceColumn = $type === 'sofer' ? 'c.driver_id' : 'c.vehicle_id';
+            $whereData['where'] .= ' AND (sg.id IS NOT NULL OR (sgt.cursa_id IS NULL AND ' . $raceColumn . ' = :entity_race_id))';
+            $whereData['params'][':entity_id'] = $id;
+            $whereData['params'][':entity_race_id'] = $id;
+        } elseif ($id > 0) {
             $whereData['where'] .= ' AND ' . $column . ' = :entity_id';
             $whereData['params'][':entity_id'] = $id;
         } else {
@@ -475,12 +541,14 @@ class DashboardAnaliticV2Model extends BaseModel
             $period
         );
 
+        $vehicleIdExpr = $share !== null ? $this->legVehicleIdExpr() : 'c.vehicle_id';
+        $driverIdExpr = $share !== null ? $this->legDriverExpr() : 'c.driver_id';
         $row = $this->fetchOne("
             SELECT
-                " . $this->aggregateColumns($expr) . ",
-                MIN(" . $this->entityNameExpr($type) . ") AS nume,
-                COUNT(DISTINCT c.vehicle_id) AS nr_vehicule,
-                COUNT(DISTINCT c.driver_id) AS nr_soferi,
+                " . $this->aggregateColumns($expr, $share) . ",
+                MIN(" . $this->entityNameExpr($type, $share !== null) . ") AS nume,
+                COUNT(DISTINCT {$vehicleIdExpr}) AS nr_vehicule,
+                COUNT(DISTINCT {$driverIdExpr}) AS nr_soferi,
                 COUNT(DISTINCT c.beneficiar_id) AS nr_beneficiari,
                 MIN(" . $this->reportingDateExpr() . ") AS prima_cursa,
                 MAX(" . $this->reportingDateExpr() . ") AS ultima_cursa
@@ -504,10 +572,10 @@ class DashboardAnaliticV2Model extends BaseModel
 
         return [
             'entity' => $totals,
-            'by_transport' => $this->groupedRows($expr['bucket'], $from, $whereData, $expr, self::TRANSPORT_BUCKETS),
-            'by_partner' => $this->partnerBreakdowns($type, $from, $whereData, $expr),
-            'daily' => $this->fetchDailySeries($from, $whereData, $expr),
-            'trips' => $this->fetchTrips($from, $whereData, $expr),
+            'by_transport' => $this->groupedRows($expr['bucket'], $from, $whereData, $expr, self::TRANSPORT_BUCKETS, $share),
+            'by_partner' => $this->partnerBreakdowns($type, $from, $whereData, $expr, $share),
+            'daily' => $this->fetchDailySeries($from, $whereData, $expr, $share),
+            'trips' => $this->fetchTrips($from, $whereData, $expr, $share),
             'period' => [
                 'start' => $period['start']->format('Y-m-d'),
                 'end' => $period['end']->format('Y-m-d'),
@@ -533,10 +601,12 @@ class DashboardAnaliticV2Model extends BaseModel
         return ['beneficiary_ids' => [$id]];
     }
 
-    private function entityNameExpr(string $type): string
+    private function entityNameExpr(string $type, bool $useLegs = false): string
     {
         if ($type === 'vehicul') {
-            return "COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut')";
+            return $useLegs
+                ? $this->legVehicleNameExpr()
+                : "COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut')";
         }
         if ($type === 'sofer') {
             return "COALESCE(NULLIF(TRIM(s.nume), ''), 'Fara sofer')";
@@ -546,11 +616,14 @@ class DashboardAnaliticV2Model extends BaseModel
     }
 
     /** Defalcarile pe parteneri difera in functie de entitatea deschisa. */
-    private function partnerBreakdowns(string $type, string $from, array $whereData, array $expr): array
+    private function partnerBreakdowns(string $type, string $from, array $whereData, array $expr, ?string $share = null): array
     {
-        $vehicule = ['key' => 'vehicule', 'label' => 'Vehicule', 'rows' => $this->groupedRows($this->entityNameExpr('vehicul'), $from, $whereData, $expr)];
-        $soferi = ['key' => 'soferi', 'label' => 'Soferi', 'rows' => $this->groupedRows($this->entityNameExpr('sofer'), $from, $whereData, $expr)];
-        $beneficiari = ['key' => 'beneficiari', 'label' => 'Beneficiari', 'rows' => $this->groupedRows($this->entityNameExpr('beneficiar'), $from, $whereData, $expr)];
+        // Pe profilul desfacut pe segmente, partenerii sunt cei de pe segmente: masina
+        // cu care soferul chiar a condus, respectiv soferii care au dus chiar masina.
+        $vehicleNameExpr = $share !== null ? $this->legVehicleNameExpr() : $this->entityNameExpr('vehicul');
+        $vehicule = ['key' => 'vehicule', 'label' => 'Vehicule', 'rows' => $this->groupedRows($vehicleNameExpr, $from, $whereData, $expr, [], $share)];
+        $soferi = ['key' => 'soferi', 'label' => 'Soferi', 'rows' => $this->groupedRows($this->entityNameExpr('sofer'), $from, $whereData, $expr, [], $share)];
+        $beneficiari = ['key' => 'beneficiari', 'label' => 'Beneficiari', 'rows' => $this->groupedRows($this->entityNameExpr('beneficiar'), $from, $whereData, $expr, [], $share)];
 
         if ($type === 'vehicul') {
             return [$beneficiari, $soferi];
@@ -567,12 +640,12 @@ class DashboardAnaliticV2Model extends BaseModel
      *
      * @param array<string,string> $labels etichete prietenoase pentru chei (optional)
      */
-    private function groupedRows(string $groupExpr, string $from, array $whereData, array $expr, array $labels = []): array
+    private function groupedRows(string $groupExpr, string $from, array $whereData, array $expr, array $labels = [], ?string $share = null): array
     {
         $rows = $this->fetchAll("
             SELECT
                 " . $groupExpr . " AS grup,
-                " . $this->aggregateColumns($expr) . "
+                " . $this->aggregateColumns($expr, $share) . "
             {$from}
             {$whereData['where']}
             GROUP BY grup
@@ -591,8 +664,16 @@ class DashboardAnaliticV2Model extends BaseModel
     }
 
     /** Lista curselor din spatele cifrelor, ca sa se poata verifica orice total. */
-    private function fetchTrips(string $from, array $whereData, array $expr): array
+    private function fetchTrips(string $from, array $whereData, array $expr, ?string $share = null): array
     {
+        // In profilul unui sofer, valorile din lista sunt partea lui din cursa, ca
+        // suma randurilor sa dea exact totalul de deasupra. Consumul, pretul
+        // motorinei si gradul de incarcare raman rapoarte, deci nu se impart.
+        $w = static fn (string $expr): string => $share === null
+            ? "(" . $expr . ")"
+            : "((" . $expr . ") * (" . $share . "))";
+        $vehicleExpr = $share !== null ? $this->legVehicleNameExpr() : "COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut')";
+
         $rows = $this->fetchAll("
             SELECT
                 c.id,
@@ -603,19 +684,19 @@ class DashboardAnaliticV2Model extends BaseModel
                 c.status_facturare,
                 c.capacitate_transport,
                 COALESCE(c.nr_clienti, 0) AS nr_clienti,
-                COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut') AS vehicul,
+                {$vehicleExpr} AS vehicul,
                 COALESCE(NULLIF(TRIM(s.nume), ''), 'Fara sofer') AS sofer,
                 COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fara beneficiar') AS beneficiar,
                 COALESCE(NULLIF(TRIM(c.loc_plecare), ''), '') AS loc_plecare,
                 COALESCE(NULLIF(TRIM(c.loc_livrare), ''), NULLIF(TRIM(c.loc_livrare_cursa), ''), '') AS loc_livrare,
-                (" . $expr['km_effective'] . ") AS km,
-                (" . $expr['km_billed'] . ") AS km_facturati,
-                (" . $expr['km_unbilled'] . ") AS km_nefacturati,
-                (" . $expr['tons_delivered'] . ") AS tone,
-                (" . $expr['facturare'] . ") AS facturare,
-                (" . $expr['refacturare'] . ") AS refacturare,
-                (" . $expr['cheltuieli'] . ") AS cheltuieli,
-                (" . $expr['carburant'] . ") AS carburant,
+                " . $w($expr['km_effective']) . " AS km,
+                " . $w($expr['km_billed']) . " AS km_facturati,
+                " . $w($expr['km_unbilled']) . " AS km_nefacturati,
+                " . $w($expr['tons_delivered']) . " AS tone,
+                " . $w($expr['facturare']) . " AS facturare,
+                " . $w($expr['refacturare']) . " AS refacturare,
+                " . $w($expr['cheltuieli']) . " AS cheltuieli,
+                " . $w($expr['carburant']) . " AS carburant,
                 (" . $expr['consum_l100'] . ") AS consum_l100,
                 (" . $expr['pret_motorina'] . ") AS pret_motorina,
                 (" . $expr['data_pret_motorina'] . ") AS data_pret_motorina,
@@ -758,7 +839,13 @@ class DashboardAnaliticV2Model extends BaseModel
         if (!class_exists('FuelModel')) {
             require_once __DIR__ . '/FuelModel.php';
         }
-        $fuel = new FuelModel($this->db);
+        // Modelul de carburant isi verifica schema la prima folosire, iar un obiect
+        // nou ar reface verificarea (si comitul implicit adus de DDL) la fiecare
+        // apel. Il pastram pe toata durata cererii.
+        if ($this->fuelModel === null) {
+            $this->fuelModel = new FuelModel($this->db);
+        }
+        $fuel = $this->fuelModel;
 
         $peVehicul = [];
         $flota = [];
@@ -934,23 +1021,50 @@ class DashboardAnaliticV2Model extends BaseModel
                 ELSE (" . $loadedTons . ")
             END
         ";
+        /*
+         * GRAD DE INCARCARE
+         * -----------------
+         * Numitorul este intotdeauna `c.capacitate_transport` = snapshot-ul
+         * capacitatii tehnice REALE a vehiculului la momentul cursei. Categoria
+         * de capacitate (eticheta de grupare) nu intra niciodata in acest calcul:
+         * gruparea pe categorie decide doar CE curse intra in grup, nu cu ce se imparte.
+         *
+         * Nu se mai aplica plafonul LEAST(100, ...): o supraincarcare reala
+         * (21 t intr-un vehicul de 20 t) trebuie sa se vada ca 105%, nu ca 100%.
+         */
+        $tonsForGrad = "
+            CASE
+                WHEN c.capacitate_transport IS NULL OR c.capacitate_transport <= 0 THEN 0
+                ELSE GREATEST(0, COALESCE(NULLIF((" . $loadedTons . "), 0), (" . $deliveredTons . ")))
+            END
+        ";
+        // Capacitatea "aplicabila": numai a curselor care au un snapshot de
+        // capacitate reala. Este numitorul agregarii ponderate.
+        $capacityForGrad = "
+            CASE
+                WHEN c.capacitate_transport IS NULL OR c.capacitate_transport <= 0 THEN 0
+                ELSE c.capacitate_transport
+            END
+        ";
+        // Gradul la nivel de cursa. 0 pentru cursele fara capacitate, ca sa nu
+        // se schimbe forma coloanelor vechi care se asteapta la un numar.
         $gradIncarcare = "
             CASE
                 WHEN c.capacitate_transport IS NOT NULL AND c.capacitate_transport > 0
-                THEN LEAST(100, GREATEST(0, ((" . $loadedTons . ") / c.capacitate_transport) * 100))
+                THEN GREATEST(0, ((" . $loadedTons . ") / c.capacitate_transport) * 100)
                 ELSE 0
             END
         ";
-        // Varianta corectata a gradului de incarcare:
-        //   - cursele fara capacitate configurata sunt EXCLUSE din medie (NULL), nu numarate ca 0%;
-        //   - cand nu exista cantitate incarcata (cazul curselor de compresor, unde se
+        // Varianta care nu minte:
+        //   - cursele fara capacitate sunt EXCLUSE (NULL), nu numarate ca 0%;
+        //   - cand nu exista cantitate incarcata (cazul compresorului, unde se
         //     inregistreaza doar tona livrata), folosim tona livrata ca numarator.
         $gradIncarcareEfectiv = "
             CASE
                 WHEN c.capacitate_transport IS NULL OR c.capacitate_transport <= 0 THEN NULL
-                ELSE LEAST(100, GREATEST(0, (
+                ELSE GREATEST(0, (
                     COALESCE(NULLIF((" . $loadedTons . "), 0), (" . $deliveredTons . ")) / c.capacitate_transport
-                ) * 100))
+                ) * 100)
             END
         ";
 
@@ -965,6 +1079,8 @@ class DashboardAnaliticV2Model extends BaseModel
             'tons_delivered' => $deliveredTons,
             'grad_incarcare' => $gradIncarcare,
             'grad_incarcare_efectiv' => $gradIncarcareEfectiv,
+            'tone_pentru_grad' => $tonsForGrad,
+            'capacitate_aplicabila' => $capacityForGrad,
             'facturare' => "(COALESCE(c.total_facturare, 0) + COALESCE(exp.total_refacturare_facturata, 0))",
             'refacturare' => "COALESCE(exp.total_refacturare_pending, 0)",
             // Cheltuiala totala a cursei: ce s-a inregistrat pe cursa + carburantul
@@ -997,9 +1113,20 @@ class DashboardAnaliticV2Model extends BaseModel
         ];
     }
 
-    /** Blocul de agregari comun tuturor gruparilor (flota, vehicul, sofer, client). */
-    private function aggregateColumns(array $e): string
+    /**
+     * Blocul de agregari comun tuturor gruparilor (flota, vehicul, sofer, client).
+     *
+     * $share este cota randului din cursa, folosita in vederile pe sofer: o cursa
+     * oprita si reluata se imparte intre soferii ei, proportional cu km-ii fiecarui
+     * segment, deci fiecare suma se inmulteste cu acea cota. Cursele se numara
+     * distinct (COUNT(DISTINCT c.id)), ca o cursa impartita sa ramana o cursa.
+     */
+    private function aggregateColumns(array $e, ?string $share = null): string
     {
+        if ($share !== null) {
+            return $this->weightedAggregateColumns($e, $share);
+        }
+
         return "
             COUNT(*) AS curse,
             COALESCE(SUM(" . $e['km_effective'] . "), 0) AS km_totali,
@@ -1018,21 +1145,89 @@ class DashboardAnaliticV2Model extends BaseModel
             COALESCE(SUM(" . $e['carburant'] . "), 0) AS carburant,
             COALESCE(SUM(" . $e['cheltuieli'] . "), 0) AS cheltuieli,
             COALESCE(SUM(" . $e['puncte_client'] . "), 0) AS puncte_client,
-            COALESCE(AVG(" . $e['grad_incarcare'] . "), 0) AS grad_incarcare_mediu,
+            -- Grad de incarcare PONDERAT pe capacitate: total tone / total capacitati
+            -- aplicabile. Nu media procentelor: o cursa de 2 t si una de 20 t nu
+            -- cantaresc la fel. Curse fara capacitate => nu intra nici la numarator,
+            -- nici la numitor.
+            COALESCE(
+                SUM(" . $e['tone_pentru_grad'] . ") / NULLIF(SUM(" . $e['capacitate_aplicabila'] . "), 0) * 100,
+                0
+            ) AS grad_incarcare_mediu,
             SUM(CASE WHEN c.capacitate_transport IS NOT NULL AND c.capacitate_transport > 0 THEN 1 ELSE 0 END) AS curse_cu_capacitate,
-            COALESCE(AVG(" . $e['grad_incarcare_efectiv'] . "), 0) AS grad_incarcare_efectiv
+            -- Cate dintre ele s-au calculat pe o capacitate inca neverificata.
+            SUM(CASE WHEN c.capacitate_transport IS NOT NULL AND c.capacitate_transport > 0
+                          AND COALESCE(c.capacitate_transport_confirmata, 0) = 0
+                     THEN 1 ELSE 0 END) AS curse_capacitate_neconfirmata,
+            COALESCE(
+                SUM(" . $e['tone_pentru_grad'] . ") / NULLIF(SUM(" . $e['capacitate_aplicabila'] . "), 0) * 100,
+                0
+            ) AS grad_incarcare_efectiv
         ";
     }
 
-    private function fleetSql(string $from, string $where, array $e): string
+    /**
+     * Aceleasi formule, dar fiecare suma inmultita cu cota randului din cursa.
+     * Gradul de incarcare ramane un raport: si numaratorul, si numitorul se
+     * pondereaza, deci procentul nu se deformeaza.
+     */
+    private function weightedAggregateColumns(array $e, string $share): string
     {
+        $w = static fn (string $expr): string => "COALESCE(SUM((" . $expr . ") * (" . $share . ")), 0)";
+
+        return "
+            COUNT(DISTINCT c.id) AS curse,
+            " . $w($e['km_effective']) . " AS km_totali,
+            " . $w($e['km_billed']) . " AS km_facturati,
+            " . $w($e['km_unbilled']) . " AS km_nefacturati,
+            " . $w($e['km_primar']) . " AS km_primar,
+            " . $w($e['km_distributie']) . " AS km_distributie,
+            " . $w($e['km_saved']) . " AS km_salvati,
+            " . $w($e['km_excess']) . " AS km_exces,
+            " . $w($e['tons_delivered']) . " AS tone_livrate,
+            " . $w($e['facturare']) . " AS facturare,
+            " . $w($e['refacturare']) . " AS refacturare,
+            " . $w($e['refacturare_in_cheltuieli']) . " AS refacturare_in_cheltuieli,
+            " . $w($e['refacturare_fara_cost']) . " AS refacturare_fara_cost,
+            " . $w($e['cheltuieli_proprii']) . " AS cheltuieli_proprii,
+            " . $w($e['carburant']) . " AS carburant,
+            " . $w($e['cheltuieli']) . " AS cheltuieli,
+            " . $w($e['puncte_client']) . " AS puncte_client,
+            COALESCE(
+                SUM((" . $e['tone_pentru_grad'] . ") * (" . $share . "))
+                    / NULLIF(SUM((" . $e['capacitate_aplicabila'] . ") * (" . $share . ")), 0) * 100,
+                0
+            ) AS grad_incarcare_mediu,
+            COUNT(DISTINCT CASE WHEN c.capacitate_transport IS NOT NULL AND c.capacitate_transport > 0
+                                THEN c.id END) AS curse_cu_capacitate,
+            COUNT(DISTINCT CASE WHEN c.capacitate_transport IS NOT NULL AND c.capacitate_transport > 0
+                                     AND COALESCE(c.capacitate_transport_confirmata, 0) = 0
+                                THEN c.id END) AS curse_capacitate_neconfirmata,
+            COALESCE(
+                SUM((" . $e['tone_pentru_grad'] . ") * (" . $share . "))
+                    / NULLIF(SUM((" . $e['capacitate_aplicabila'] . ") * (" . $share . ")), 0) * 100,
+                0
+            ) AS grad_incarcare_efectiv
+        ";
+    }
+
+    /**
+     * Totalul flotei se citeste tot din cursele desfacute pe segmente, ca numarul de
+     * masini si de soferi sa-i cuprinda si pe cei care au facut doar o portiune.
+     * Sumele nu se schimba: cotele unei curse dau impreuna exact cursa intreaga.
+     */
+    private function fleetSql(string $from, string $where, array $e, ?string $share = null): string
+    {
+        $weight = $share !== null ? ' * (' . $share . ')' : '';
+        $vehicleExpr = $share !== null ? $this->legVehicleIdExpr() : 'c.vehicle_id';
+        $driverExpr = $share !== null ? $this->legDriverExpr() : 'c.driver_id';
+
         return "
             SELECT
-                " . $this->aggregateColumns($e) . ",
-                COALESCE(SUM(CASE WHEN c.tip_transport IN ('primar', 'primar_tona') THEN (" . $e['tons_delivered'] . ") ELSE 0 END), 0) AS tone_primar,
-                COALESCE(SUM(CASE WHEN c.tip_transport IN ('distributie', 'primar_distributie') THEN (" . $e['tons_delivered'] . ") ELSE 0 END), 0) AS tone_distributie,
-                COUNT(DISTINCT c.vehicle_id) AS nr_vehicule,
-                COUNT(DISTINCT c.driver_id) AS nr_soferi,
+                " . $this->aggregateColumns($e, $share) . ",
+                COALESCE(SUM(CASE WHEN c.tip_transport IN ('primar', 'primar_tona') THEN (" . $e['tons_delivered'] . ") ELSE 0 END{$weight}), 0) AS tone_primar,
+                COALESCE(SUM(CASE WHEN c.tip_transport IN ('distributie', 'primar_distributie') THEN (" . $e['tons_delivered'] . ") ELSE 0 END{$weight}), 0) AS tone_distributie,
+                COUNT(DISTINCT {$vehicleExpr}) AS nr_vehicule,
+                COUNT(DISTINCT {$driverExpr}) AS nr_soferi,
                 COUNT(DISTINCT c.beneficiar_id) AS nr_beneficiari
             {$from}
             {$where}
@@ -1041,17 +1236,23 @@ class DashboardAnaliticV2Model extends BaseModel
 
     // -------------------------------------------------------------- interogari
 
-    private function fetchDailySeries(string $from, array $whereData, array $e): array
+    private function fetchDailySeries(string $from, array $whereData, array $e, ?string $share = null): array
     {
+        // In profilul unui sofer, ziua arata doar partea lui din cursele impartite.
+        $w = static fn (string $expr): string => $share === null
+            ? "COALESCE(SUM(" . $expr . "), 0)"
+            : "COALESCE(SUM((" . $expr . ") * (" . $share . ")), 0)";
+        $curse = $share === null ? 'COUNT(*)' : 'COUNT(DISTINCT c.id)';
+
         $rows = $this->fetchAll("
             SELECT
                 " . $this->reportingDateExpr() . " AS zi,
-                COALESCE(SUM(" . $e['facturare'] . "), 0) AS facturare,
-                COALESCE(SUM(" . $e['refacturare'] . "), 0) AS refacturare,
-                COALESCE(SUM(" . $e['cheltuieli'] . "), 0) AS cheltuieli,
-                COALESCE(SUM(" . $e['km_effective'] . "), 0) AS km,
-                COALESCE(SUM(" . $e['tons_delivered'] . "), 0) AS tone,
-                COUNT(*) AS curse
+                " . $w($e['facturare']) . " AS facturare,
+                " . $w($e['refacturare']) . " AS refacturare,
+                " . $w($e['cheltuieli']) . " AS cheltuieli,
+                " . $w($e['km_effective']) . " AS km,
+                " . $w($e['tons_delivered']) . " AS tone,
+                {$curse} AS curse
             {$from}
             {$whereData['where']}
             GROUP BY zi
@@ -1082,16 +1283,25 @@ class DashboardAnaliticV2Model extends BaseModel
 
     private function fetchVehicles(string $from, array $whereData, array $e, array $usageByVehicle, int $zileLucratoare): array
     {
+        // Ca si vederea pe sofer, vederea pe vehicul citeste cursele desfacute pe
+        // segmente: daca marfa a fost mutata pe alta masina, fiecare masina primeste
+        // partea ei de km, tone si bani, proportional cu km-ii segmentului.
+        $legsFrom = $this->legsFromSql();
+        $share = $this->legShareExpr();
+        $vehicleExpr = $this->legVehicleIdExpr();
+        $driverExpr = $this->legDriverExpr();
+        $vehicleNameExpr = $this->legVehicleNameExpr();
+
         $rows = $this->fetchAll("
             SELECT
-                c.vehicle_id,
-                COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut') AS nume,
-                " . $this->aggregateColumns($e) . ",
-                COUNT(DISTINCT c.driver_id) AS nr_soferi,
+                {$vehicleExpr} AS vehicle_id,
+                {$vehicleNameExpr} AS nume,
+                " . $this->aggregateColumns($e, $share) . ",
+                COUNT(DISTINCT {$driverExpr}) AS nr_soferi,
                 COUNT(DISTINCT c.beneficiar_id) AS nr_beneficiari
-            {$from}
+            {$legsFrom}
             {$whereData['where']}
-            GROUP BY c.vehicle_id, v.nr_inmatriculare
+            GROUP BY {$vehicleExpr}, {$vehicleNameExpr}
             ORDER BY nume ASC
         ", $whereData['params']);
 
@@ -1113,16 +1323,24 @@ class DashboardAnaliticV2Model extends BaseModel
 
     private function fetchDrivers(string $from, array $whereData, array $e, array $usageByDriver, int $zileLucratoare): array
     {
+        // Vederea pe sofer citeste cursele desfacute pe segmente: cine a condus
+        // fiecare portiune primeste partea lui de km, tone si bani. Cursa ramane
+        // una singura (COUNT DISTINCT), asa cum este si in facturare.
+        $legsFrom = $this->legsFromSql();
+        $share = $this->legShareExpr();
+        $driverExpr = $this->legDriverExpr();
+        $vehicleExpr = $this->legVehicleIdExpr();
+
         $rows = $this->fetchAll("
             SELECT
-                c.driver_id,
+                {$driverExpr} AS driver_id,
                 COALESCE(NULLIF(TRIM(s.nume), ''), 'Fara sofer') AS nume,
-                " . $this->aggregateColumns($e) . ",
-                COUNT(DISTINCT c.vehicle_id) AS nr_vehicule,
+                " . $this->aggregateColumns($e, $share) . ",
+                COUNT(DISTINCT {$vehicleExpr}) AS nr_vehicule,
                 COUNT(DISTINCT c.beneficiar_id) AS nr_beneficiari
-            {$from}
+            {$legsFrom}
             {$whereData['where']}
-            GROUP BY c.driver_id, COALESCE(NULLIF(TRIM(s.nume), ''), 'Fara sofer')
+            GROUP BY {$driverExpr}, COALESCE(NULLIF(TRIM(s.nume), ''), 'Fara sofer')
             ORDER BY nume ASC
         ", $whereData['params']);
 
@@ -1144,15 +1362,22 @@ class DashboardAnaliticV2Model extends BaseModel
 
     private function fetchBeneficiaries(string $from, array $whereData, array $e): array
     {
+        // Beneficiarul este al cursei intregi, dar masinile si soferii lui se numara
+        // pe segmente: o cursa preluata de alta masina aduce si acea masina la socoteala.
+        $legsFrom = $this->legsFromSql();
+        $share = $this->legShareExpr();
+        $vehicleExpr = $this->legVehicleIdExpr();
+        $driverExpr = $this->legDriverExpr();
+
         $rows = $this->fetchAll("
             SELECT
                 c.beneficiar_id,
                 COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fara beneficiar') AS nume,
-                " . $this->aggregateColumns($e) . ",
-                COUNT(DISTINCT c.vehicle_id) AS nr_vehicule,
-                COUNT(DISTINCT c.driver_id) AS nr_soferi,
+                " . $this->aggregateColumns($e, $share) . ",
+                COUNT(DISTINCT {$vehicleExpr}) AS nr_vehicule,
+                COUNT(DISTINCT {$driverExpr}) AS nr_soferi,
                 COUNT(DISTINCT " . $e['bucket'] . ") AS nr_tipuri_transport
-            {$from}
+            {$legsFrom}
             {$whereData['where']}
             GROUP BY c.beneficiar_id, COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fara beneficiar')
             ORDER BY nume ASC
@@ -1189,7 +1414,10 @@ class DashboardAnaliticV2Model extends BaseModel
                 COALESCE(SUM(" . $e['facturare'] . "), 0) AS facturare,
                 COALESCE(SUM(" . $e['cheltuieli'] . "), 0) AS cheltuieli,
                 COALESCE(SUM(" . $e['puncte_client'] . "), 0) AS puncte_client,
-                COALESCE(AVG(" . $e['grad_incarcare'] . "), 0) AS grad_incarcare_mediu
+                COALESCE(
+                    SUM(" . $e['tone_pentru_grad'] . ") / NULLIF(SUM(" . $e['capacitate_aplicabila'] . "), 0) * 100,
+                    0
+                ) AS grad_incarcare_mediu
             {$from}
             {$whereData['where']}
             GROUP BY c.beneficiar_id, nume, bucket
@@ -1209,7 +1437,10 @@ class DashboardAnaliticV2Model extends BaseModel
                 COALESCE(SUM(" . $e['refacturare'] . "), 0) AS refacturare,
                 COALESCE(SUM(" . $e['cheltuieli'] . "), 0) AS cheltuieli,
                 COALESCE(SUM(" . $e['puncte_client'] . "), 0) AS puncte_client,
-                COALESCE(AVG(" . $e['grad_incarcare'] . "), 0) AS grad_incarcare_mediu,
+                COALESCE(
+                    SUM(" . $e['tone_pentru_grad'] . ") / NULLIF(SUM(" . $e['capacitate_aplicabila'] . "), 0) * 100,
+                    0
+                ) AS grad_incarcare_mediu,
                 COUNT(DISTINCT c.beneficiar_id) AS nr_beneficiari,
                 COUNT(DISTINCT c.vehicle_id) AS nr_vehicule
             {$from}
@@ -1273,11 +1504,18 @@ class DashboardAnaliticV2Model extends BaseModel
             'km_per_cursa' => $curse > 0 ? round($km / $curse, 2) : 0.0,
             'tone_per_cursa' => $curse > 0 ? round($tone / $curse, 2) : 0.0,
             'km_nefacturati_percent' => $km > 0 ? round(($kmUnbilled / $km) * 100, 2) : 0.0,
-            // Identic cu V1: media include si cursele fara capacitate configurata (numarate ca 0%).
+            /*
+             * Grad de incarcare PONDERAT pe capacitate (total tone / total capacitati
+             * aplicabile), identic cu V1. Cursele fara snapshot de capacitate nu intra
+             * in niciun capat al fractiei, deci `grad_incarcare` si
+             * `grad_incarcare_efectiv` coincid; diferenta dintre ele s-a pierdut odata
+             * cu media aritmetica si se citeste acum din `curse_cu_capacitate`.
+             */
             'grad_incarcare' => round((float) ($row['grad_incarcare_mediu'] ?? 0), 2),
-            // Nou: aceeasi medie, dar doar peste cursele care chiar au capacitate configurata.
             'grad_incarcare_efectiv' => round((float) ($row['grad_incarcare_efectiv'] ?? 0), 2),
             'curse_cu_capacitate' => (int) ($row['curse_cu_capacitate'] ?? 0),
+            // Cate curse s-au calculat pe o capacitate reala inca neverificata.
+            'curse_capacitate_neconfirmata' => (int) ($row['curse_capacitate_neconfirmata'] ?? 0),
             'marja_percent' => $facturare > 0 ? round(($profit / $facturare) * 100, 2) : 0.0,
             'puncte_client' => $puncte,
             'km_per_punct' => $puncte > 0 ? round($km / $puncte, 2) : 0.0,
@@ -1605,6 +1843,7 @@ class DashboardAnaliticV2Model extends BaseModel
 
         $rows = $this->fetchAll("
             SELECT
+                c.id,
                 c.vehicle_id,
                 c.driver_id,
                 COALESCE(c.data_inceput, c.data_cursa) AS interval_start,
@@ -1612,6 +1851,10 @@ class DashboardAnaliticV2Model extends BaseModel
             " . $this->fromSql() . "
             {$whereData['where']}
         ", $whereData['params']);
+
+        // Zilele active urmeaza segmentele: intr-o cursa oprita si reluata, fiecare
+        // sofer si fiecare masina sunt active doar in zilele segmentului lor.
+        $segmentIntervals = $this->raceSegmentIntervals($rows);
 
         $vehicleDays = [];
         $driverDays = [];
@@ -1640,18 +1883,59 @@ class DashboardAnaliticV2Model extends BaseModel
 
             $vehicleId = (int) ($row['vehicle_id'] ?? 0);
             $driverId = (int) ($row['driver_id'] ?? 0);
-            if ($vehicleId > 0) {
-                $activeVehicles[$vehicleId] = $vehicleId;
+            $raceSegments = $segmentIntervals[(int) ($row['id'] ?? 0)] ?? [];
+
+            if ($raceSegments === []) {
+                if ($vehicleId > 0) {
+                    $activeVehicles[$vehicleId] = $vehicleId;
+                }
+
+                for ($cursor = $start; $cursor <= $end; $cursor = $cursor->modify('+1 day')) {
+                    $day = $cursor->format('Y-m-d');
+                    if ($vehicleId > 0) {
+                        $vehicleDays[$vehicleId][$day] = true;
+                        $fleetDays[$vehicleId . '|' . $day] = true;
+                    }
+                    if ($driverId > 0) {
+                        $driverDays[$driverId][$day] = true;
+                    }
+                }
+
+                continue;
             }
 
-            for ($cursor = $start; $cursor <= $end; $cursor = $cursor->modify('+1 day')) {
-                $day = $cursor->format('Y-m-d');
-                if ($vehicleId > 0) {
-                    $vehicleDays[$vehicleId][$day] = true;
-                    $fleetDays[$vehicleId . '|' . $day] = true;
+            foreach ($raceSegments as $segment) {
+                $segmentStart = $this->toDate($segment['start']);
+                $segmentEnd = $this->toDate($segment['end']);
+                if ($segmentStart === null || $segmentEnd === null) {
+                    continue;
                 }
-                if ($driverId > 0) {
-                    $driverDays[$driverId][$day] = true;
+                if ($segmentEnd < $segmentStart) {
+                    [$segmentStart, $segmentEnd] = [$segmentEnd, $segmentStart];
+                }
+                if ($segmentStart < $period['start']) {
+                    $segmentStart = $period['start'];
+                }
+                if ($segmentEnd > $period['end']) {
+                    $segmentEnd = $period['end'];
+                }
+                if ($segmentEnd < $segmentStart) {
+                    continue;
+                }
+
+                if ($segment['vehicle_id'] > 0) {
+                    $activeVehicles[$segment['vehicle_id']] = $segment['vehicle_id'];
+                }
+
+                for ($cursor = $segmentStart; $cursor <= $segmentEnd; $cursor = $cursor->modify('+1 day')) {
+                    $day = $cursor->format('Y-m-d');
+                    if ($segment['vehicle_id'] > 0) {
+                        $vehicleDays[$segment['vehicle_id']][$day] = true;
+                        $fleetDays[$segment['vehicle_id'] . '|' . $day] = true;
+                    }
+                    if ($segment['driver_id'] > 0) {
+                        $driverDays[$segment['driver_id']][$day] = true;
+                    }
                 }
             }
         }
@@ -1708,6 +1992,59 @@ class DashboardAnaliticV2Model extends BaseModel
         return $count;
     }
 
+    /**
+     * Intervalele segmentelor pentru cursele date, grupate pe cursa. Cursele fara
+     * segmente nu apar, deci ele isi pastreaza calculul pe soferul si vehiculul cursei.
+     *
+     * @param array<int,array<string,mixed>> $raceRows
+     * @return array<int, array<int, array{driver_id:int, vehicle_id:int, start:string, end:string}>>
+     */
+    private function raceSegmentIntervals(array $raceRows): array
+    {
+        if (!$this->segmentsAvailable() || $raceRows === []) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ($raceRows as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            if ($id > 0) {
+                $ids[$id] = $id;
+            }
+        }
+        if ($ids === []) {
+            return [];
+        }
+
+        $idList = array_values($ids);
+        $placeholders = implode(',', array_fill(0, count($idList), '?'));
+        $stmt = $this->db->prepare("
+            SELECT cursa_id, driver_id, vehicle_id, data_inceput, data_sfarsit
+              FROM curse_segmente
+             WHERE cursa_id IN ($placeholders)
+        ");
+        $stmt->execute($idList);
+
+        $grouped = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $start = trim((string) ($row['data_inceput'] ?? ''));
+            $end = trim((string) ($row['data_sfarsit'] ?? ''));
+            if ($start === '') {
+                continue;
+            }
+
+            $grouped[(int) $row['cursa_id']][] = [
+                'driver_id' => (int) ($row['driver_id'] ?? 0),
+                'vehicle_id' => (int) ($row['vehicle_id'] ?? 0),
+                'start' => $start,
+                // Segmentul inca neinchis acopera cel putin ziua in care a inceput.
+                'end' => $end !== '' ? $end : $start,
+            ];
+        }
+
+        return $grouped;
+    }
+
     private function toDate(string $value): ?DateTimeImmutable
     {
         $value = trim($value);
@@ -1715,12 +2052,107 @@ class DashboardAnaliticV2Model extends BaseModel
             return null;
         }
 
-        $date = DateTimeImmutable::createFromFormat('Y-m-d', $value);
+        // "!" fixeaza ora la 00:00:00. Fara el, createFromFormat completeaza ora
+        // curenta, iar numaratoarea zilelor active depindea de secunda in care era
+        // citita fiecare data: ultima zi a unui interval intra sau nu, dupa noroc.
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
 
         return ($date instanceof DateTimeImmutable && $date->format('Y-m-d') === $value) ? $date : null;
     }
 
     // ------------------------------------------------------------------- infra
+
+    /**
+     * Segmentele de cursa (cursa oprita si reluata, cu alt sofer / alt vehicul)
+     * exista doar dupa migrarea 2026_09_18_000002. Pana atunci, vederile pe sofer
+     * lucreaza ca inainte, cu soferul cursei.
+     */
+    private function segmentsAvailable(): bool
+    {
+        if (self::$segmentsAvailable !== null) {
+            return self::$segmentsAvailable;
+        }
+
+        try {
+            $stmt = $this->db->prepare(
+                "SELECT COUNT(*) FROM information_schema.TABLES
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'curse_segmente'"
+            );
+            $stmt->execute();
+            self::$segmentsAvailable = ((int) $stmt->fetchColumn()) > 0;
+        } catch (Throwable $exception) {
+            self::$segmentsAvailable = false;
+        }
+
+        return self::$segmentsAvailable;
+    }
+
+    /**
+     * FROM-ul vederilor pe sofer: cursa se desface pe segmentele ei, ca fiecare
+     * sofer sa primeasca partea lui din km, tone si bani (proportional cu km-ii
+     * segmentului sau). O cursa fara segmente da exact un rand, ca inainte.
+     *
+     * $driverParam restrange segmentele la un singur sofer (profilul soferului).
+     */
+    private function legsFromSql(?string $driverParam = null, ?string $vehicleParam = null): string
+    {
+        if (!$this->segmentsAvailable()) {
+            return $this->fromSql();
+        }
+
+        $conditions = ['sg.cursa_id = sgt.cursa_id'];
+        if ($driverParam !== null) {
+            $conditions[] = 'sg.driver_id = ' . $driverParam;
+        }
+        if ($vehicleParam !== null) {
+            $conditions[] = 'sg.vehicle_id = ' . $vehicleParam;
+        }
+        $segmentCondition = implode(' AND ', $conditions);
+
+        return "
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN (
+                SELECT cursa_id, SUM(COALESCE(km, 0)) AS weight_total
+                  FROM curse_segmente
+                 GROUP BY cursa_id
+                HAVING COUNT(*) >= 2 AND SUM(COALESCE(km, 0)) > 0
+            ) sgt ON sgt.cursa_id = c.id
+            LEFT JOIN curse_segmente sg ON {$segmentCondition}
+            LEFT JOIN soferi s ON s.id = COALESCE(sg.driver_id, c.driver_id)
+            LEFT JOIN vehicule lv ON lv.id = COALESCE(sg.vehicle_id, c.vehicle_id)
+            LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+        " . $this->expenseJoinSql();
+    }
+
+    /** Partea de cursa care ii revine randului curent (1 = toata cursa). */
+    private function legShareExpr(): string
+    {
+        if (!$this->segmentsAvailable()) {
+            return '1';
+        }
+
+        return 'COALESCE(COALESCE(sg.km, 0) / sgt.weight_total, 1)';
+    }
+
+    /** Soferul randului: cel al segmentului, altfel cel al cursei. */
+    private function legDriverExpr(): string
+    {
+        return $this->segmentsAvailable() ? 'COALESCE(sg.driver_id, c.driver_id)' : 'c.driver_id';
+    }
+
+    /** Vehiculul randului: cel al segmentului, altfel cel al cursei. */
+    private function legVehicleIdExpr(): string
+    {
+        return $this->segmentsAvailable() ? 'COALESCE(sg.vehicle_id, c.vehicle_id)' : 'c.vehicle_id';
+    }
+
+    private function legVehicleNameExpr(): string
+    {
+        return $this->segmentsAvailable()
+            ? "COALESCE(NULLIF(TRIM(lv.nr_inmatriculare), ''), NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut')"
+            : $this->entityNameExpr('vehicul');
+    }
 
     private function fromSql(): string
     {
@@ -1729,6 +2161,13 @@ class DashboardAnaliticV2Model extends BaseModel
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             LEFT JOIN soferi s ON s.id = c.driver_id
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+        " . $this->expenseJoinSql();
+    }
+
+    /** Cheltuielile cursei, agregate o data si refolosite de toate FROM-urile. */
+    private function expenseJoinSql(): string
+    {
+        return "
             LEFT JOIN (
                 SELECT
                     cursa_id,
@@ -1785,17 +2224,71 @@ class DashboardAnaliticV2Model extends BaseModel
             $params[':dash_date_end'] = (string) $filters['date_end'];
         }
 
-        $this->appendIntFilter($where, $params, 'c.vehicle_id', (array) ($filters['vehicle_ids'] ?? []), 'dash_vehicle');
-        $this->appendIntFilter($where, $params, 'c.driver_id', (array) ($filters['driver_ids'] ?? []), 'dash_driver');
+        $this->appendLegFilter($where, $params, 'c.vehicle_id', 'vehicle_id', (array) ($filters['vehicle_ids'] ?? []), 'dash_vehicle');
+        $this->appendLegFilter($where, $params, 'c.driver_id', 'driver_id', (array) ($filters['driver_ids'] ?? []), 'dash_driver');
         $this->appendIntFilter($where, $params, 'c.beneficiar_id', (array) ($filters['beneficiary_ids'] ?? []), 'dash_beneficiary');
         $this->appendStringFilter($where, $params, 'c.tip_transport', (array) ($filters['transport_types'] ?? []), 'dash_transport');
         $this->appendDecimalFilter($where, $params, 'c.capacitate_transport', (array) ($filters['transport_capacities'] ?? []), 'dash_capacity');
+        $this->appendCapacityCategoryFilter($where, $params, (array) ($filters['capacity_categories'] ?? []), 'dash_capacity_category');
         $this->appendStringFilter($where, $params, 'c.status_facturare', (array) ($filters['statuses'] ?? []), 'dash_status');
 
         return [
             'where' => ' WHERE ' . implode(' AND ', $where),
             'params' => $params,
         ];
+    }
+
+    /**
+     * Filtru pe CATEGORIE de capacitate a vehiculului cursei.
+     *
+     * Este un filtru de apartenenta la grup. Gradul de umplere continua sa se
+     * calculeze din capacitatea reala salvata pe cursa.
+     */
+    private function appendCapacityCategoryFilter(array &$where, array &$params, array $values, string $prefix): void
+    {
+        $normalized = [];
+        foreach ($values as $value) {
+            $id = (int) $value;
+            if ($id > 0) {
+                $normalized[$id] = $id;
+            }
+        }
+
+        if ($normalized === []) {
+            return;
+        }
+
+        $placeholders = [];
+        $index = 0;
+        foreach (array_values($normalized) as $id) {
+            $placeholder = ':' . $prefix . '_' . $index;
+            $placeholders[] = $placeholder;
+            $params[$placeholder] = $id;
+            $index++;
+        }
+
+        $where[] = "
+            EXISTS (
+                SELECT 1
+                FROM vehicule fv
+                LEFT JOIN (
+                    SELECT vc1.tractor_id, vc1.semiremorca_id
+                    FROM vehicule_cuplaje vc1
+                    INNER JOIN (
+                        SELECT tractor_id, MAX(id) AS max_id
+                        FROM vehicule_cuplaje
+                        WHERE activ = 1
+                        GROUP BY tractor_id
+                    ) latest ON latest.max_id = vc1.id
+                ) fvc ON fvc.tractor_id = fv.id
+                LEFT JOIN vehicule fs ON fs.id = fvc.semiremorca_id
+                WHERE fv.id = c.vehicle_id
+                  AND CASE
+                        WHEN fv.tip_vehicul = 'cap_tractor' THEN COALESCE(fs.categorie_capacitate_id, fv.categorie_capacitate_id)
+                        ELSE fv.categorie_capacitate_id
+                      END IN (" . implode(', ', $placeholders) . ")
+            )
+        ";
     }
 
     private function appendIntFilter(array &$where, array &$params, string $column, array $values, string $prefix): void
@@ -1808,6 +2301,55 @@ class DashboardAnaliticV2Model extends BaseModel
         }
 
         $this->appendInClause($where, $params, $column, $clean, $prefix);
+    }
+
+    /**
+     * Filtrul pe sofer / vehicul prinde si cursele in care soferul sau masina au
+     * facut doar un segment (cursa reluata din pauza). Altfel, alegand al doilea
+     * sofer sau a doua masina a unei curse, pagina ar ramane goala desi chiar au
+     * facut-o.
+     */
+    private function appendLegFilter(
+        array &$where,
+        array &$params,
+        string $raceColumn,
+        string $segmentColumn,
+        array $values,
+        string $prefix
+    ): void {
+        $clean = [];
+        foreach ($values as $value) {
+            if (is_numeric((string) $value) && (int) $value > 0) {
+                $clean[(int) $value] = (int) $value;
+            }
+        }
+        if ($clean === []) {
+            return;
+        }
+
+        if (!$this->segmentsAvailable()) {
+            $this->appendInClause($where, $params, $raceColumn, $clean, $prefix);
+
+            return;
+        }
+
+        // Fiecare placeholder apare o singura data: PDO ruleaza cu EMULATE_PREPARES=false.
+        $raceKeys = [];
+        $segmentKeys = [];
+        $index = 0;
+        foreach ($clean as $value) {
+            $raceKey = ':' . $prefix . '_' . $index;
+            $segmentKey = ':' . $prefix . '_seg_' . $index;
+            $index++;
+            $raceKeys[] = $raceKey;
+            $segmentKeys[] = $segmentKey;
+            $params[$raceKey] = $value;
+            $params[$segmentKey] = $value;
+        }
+
+        $where[] = '(' . $raceColumn . ' IN (' . implode(', ', $raceKeys) . ')'
+            . ' OR EXISTS (SELECT 1 FROM curse_segmente sgf'
+            . ' WHERE sgf.cursa_id = c.id AND sgf.' . $segmentColumn . ' IN (' . implode(', ', $segmentKeys) . ')))';
     }
 
     private function appendStringFilter(array &$where, array &$params, string $column, array $values, string $prefix): void

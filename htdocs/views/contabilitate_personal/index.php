@@ -5,10 +5,12 @@ $staffTypes = is_array($staffTypes ?? null) ? $staffTypes : [];
 $staffTypeOptions = is_array($staffTypeOptions ?? null) ? $staffTypeOptions : [];
 $allStaffTypeOptions = is_array($allStaffTypeOptions ?? null) ? $allStaffTypeOptions : [];
 $driverOptions = is_array($driverOptions ?? null) ? $driverOptions : [];
+$vehicleOptions = is_array($vehicleOptions ?? null) ? $vehicleOptions : [];
 $rows = is_array($rows ?? null) ? $rows : [];
 $rowModals = [];
 $documentsBySubject = is_array($documentsBySubject ?? null) ? $documentsBySubject : [];
 $salaryHistoryBySubject = is_array($salaryHistoryBySubject ?? null) ? $salaryHistoryBySubject : [];
+$diurnaHistoryByDriver = is_array($diurnaHistoryByDriver ?? null) ? $diurnaHistoryByDriver : [];
 $documentTypeOptionsByStaffType = is_array($documentTypeOptionsByStaffType ?? null) ? $documentTypeOptionsByStaffType : [];
 $sort = (string) ($sort ?? 'updated_at');
 $direction = (string) ($direction ?? 'desc');
@@ -44,27 +46,22 @@ $totalPersonal = max(0, (int) ($summary['total_personal'] ?? 0));
 $operationalCount = max(0, (int) ($summary['personal_operational'] ?? 0));
 $officeCount = max(0, (int) ($summary['personal_birou'] ?? 0));
 $categoryPercent = static fn(int $count): string => $totalPersonal > 0 ? format_number_ro(($count / $totalPersonal) * 100, 1) . '% din total' : '0% din total';
-$advancedFiltersOpen = (int) ($filters['staff_type_id'] ?? 0) > 0
-    || trim((string) ($filters['category'] ?? '')) !== ''
-    || trim((string) ($filters['status'] ?? '')) !== ''
-    || trim((string) ($filters['functie'] ?? '')) !== ''
-    || trim((string) ($filters['salary_min'] ?? '')) !== ''
-    || trim((string) ($filters['salary_max'] ?? '')) !== ''
-    || trim((string) ($filters['document_status'] ?? '')) !== '';
 $baseQuery = [
     'page' => 'contabilitate_personal',
     'q' => $filters['q'] ?? '',
-    'staff_type_id' => $filters['staff_type_id'] ?? '',
+    'staff_type_id' => (int) ($filters['staff_type_id'] ?? 0) > 0 ? (int) $filters['staff_type_id'] : '',
     'category' => $filters['category'] ?? '',
     'status' => $filters['status'] ?? '',
     'functie' => $filters['functie'] ?? '',
     'salary_min' => $filters['salary_min'] ?? '',
     'salary_max' => $filters['salary_max'] ?? '',
     'document_status' => $filters['document_status'] ?? '',
+    'regim' => $filters['regim'] ?? '',
+    'luna_status' => $filters['luna_status'] ?? '',
     'sort' => $sort,
     'dir' => $direction,
 ];
-$sortUrl = static function (string $column) use ($baseQuery, $sort, $direction): string {
+$sortUrl = static function (string $column) use (&$baseQuery, $sort, $direction): string {
     $nextDirection = ($sort === $column && $direction === 'asc') ? 'desc' : 'asc';
     return build_query_url(array_merge($baseQuery, ['sort' => $column, 'dir' => $nextDirection, 'p' => 1]));
 };
@@ -150,210 +147,321 @@ $addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static funct
 
     return true;
 }));
+$period = is_array($period ?? null) ? $period : StaffMonthlyAccountingService::parsePeriod(null);
+$calendarMonth = is_array($calendarMonth ?? null) ? $calendarMonth : ['complete' => false, 'working_days' => null, 'weekend_days' => null, 'holiday_days' => null, 'holidays_on_weekend' => null, 'calendar_days' => null, 'holidays' => [], 'days' => [], 'sync' => []];
+$monthCost = is_array($monthCost ?? null) ? $monthCost : ['record_count' => 0, 'paid_count' => 0, 'finalized_count' => 0, 'total_cost' => null];
+$monthBySubject = is_array($monthBySubject ?? null) ? $monthBySubject : [];
+$baseQuery['luna'] = $period['key'];
+// Calculul salarial al lunii (payroll_monthly): stadiu pe angajat, totaluri, regula fiscala.
+// Calculul fiscal e optional (implicit dezactivat): atunci costul = salariul configurat al lunii.
+$fiscalEnabled = (bool) ($fiscalEnabled ?? false);
+$configuredSalaryCost = is_array($configuredSalaryCost ?? null) ? $configuredSalaryCost : null;
+$tableColspan = $fiscalEnabled ? 10 : 8;
+$payrollStatusBySubject = is_array($payrollStatusBySubject ?? null) ? $payrollStatusBySubject : [];
+$payrollProfiles = is_array($payrollProfiles ?? null) ? $payrollProfiles : [];
+$payrollTotals = is_array($payrollTotals ?? null) ? $payrollTotals : ['calculated_count' => 0, 'confirmed_count' => 0, 'problem_count' => 0, 'total_cost' => null, 'confirmed_cost' => 0.0];
+$payrollRuleLookup = is_array($payrollRuleLookup ?? null) ? $payrollRuleLookup : ['rule' => null, 'error' => 'Configurația fiscală nu a putut fi încărcată.'];
+$payrollConfig = is_array($payrollConfig ?? null) ? $payrollConfig : ['rules' => [], 'item_types' => [], 'audit' => []];
+$payrollBulkSummary = is_array($payrollBulkSummary ?? null) ? $payrollBulkSummary : null;
+$canPayrollCalculate = !function_exists('can') || can('contabilitate_personal', 'payroll_calculate');
+$canPayrollConfig = !function_exists('can') || can('contabilitate_personal', 'payroll_config');
+$moneyShort = static fn (mixed $value): string => $value === null || $value === '' ? '—' : format_number_ro((float) $value, 0) . ' RON';
+$documentStatusCounts = is_array($documentStatusCounts ?? null) ? $documentStatusCounts : [];
+// Culoarea randului dupa starea documentelor angajatului.
+$documentStatusMeta = [
+    'valid' => ['label' => 'Valide', 'title' => 'Toate documentele sunt valide'],
+    'expira_curand' => ['label' => 'Expiră curând', 'title' => 'Cel puțin un document expiră în perioada de avertizare'],
+    'expirat' => ['label' => 'Expirate', 'title' => 'Cel puțin un document este expirat'],
+    'fara_documente' => ['label' => 'Fără documente', 'title' => 'Nu are documente încărcate'],
+];
+$percent = static fn (int $count): string => $totalPersonal > 0 ? format_number_ro(($count / $totalPersonal) * 100, 1) . '%' : '0%';
+$canOpenLeavePlanning = function_exists('can') && can('programare_concedii');
+$canExport = !function_exists('can') || can('contabilitate_personal', 'export');
+// Selectorul de luna: anul anterior, anul selectat si anul urmator.
+$monthOptions = [];
+for ($optionYear = $period['year'] - 1; $optionYear <= $period['year'] + 1; $optionYear++) {
+    for ($optionMonth = 1; $optionMonth <= 12; $optionMonth++) {
+        $monthOptions[sprintf('%04d-%02d', $optionYear, $optionMonth)] = LegalCalendarService::MONTH_NAMES[$optionMonth] . ' ' . $optionYear;
+    }
+}
 ?>
 
-<div class="accountancy-page">
-    <div class="accountancy-page-title mb-4">
+<link rel="stylesheet" href="<?= e(url('assets/css/contabilitate-personal.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/contabilitate-personal.css'))) ?>">
+
+<div class="accountancy-page cp-page" data-cp-period="<?= e($period['key']) ?>" data-cp-detail-url="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'employee_detail'])) ?>">
+    <header class="cp-header">
         <div>
-            <h2 class="h4 mb-1">Contabilitate Personal</h2>
-            <div class="text-primary small">
-                <i class="bi bi-info-circle" aria-hidden="true"></i>
-                Acces permis doar pentru contabilitate si administratori.
+            <h2 class="cp-title">Contabilitate Personal</h2>
+            <p class="cp-subtitle-text">Evidență angajați, salarii, zile lucrate și costuri salariale</p>
+        </div>
+        <div class="cp-header-actions">
+            <form method="get" class="cp-month-picker" data-cp-month-form>
+                <?php foreach ($baseQuery as $queryKey => $queryValue): ?>
+                    <?php if ($queryKey !== 'luna' && (string) $queryValue !== ''): ?>
+                        <input type="hidden" name="<?= e($queryKey) ?>" value="<?= e((string) $queryValue) ?>">
+                    <?php endif; ?>
+                <?php endforeach; ?>
+                <a class="cp-month-nav" href="<?= e(build_query_url(array_merge($baseQuery, ['luna' => $period['prev'], 'p' => 1]))) ?>" aria-label="Luna anterioară" title="Luna anterioară"><i class="bi bi-chevron-left" aria-hidden="true"></i></a>
+                <select class="form-select cp-month-select" name="luna" aria-label="Luna contabilă" data-cp-autosubmit>
+                    <?php foreach ($monthOptions as $optionKey => $optionLabel): ?>
+                        <option value="<?= e($optionKey) ?>" <?= $optionKey === $period['key'] ? 'selected' : '' ?>><?= e($optionLabel) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <a class="cp-month-nav" href="<?= e(build_query_url(array_merge($baseQuery, ['luna' => $period['next'], 'p' => 1]))) ?>" aria-label="Luna următoare" title="Luna următoare"><i class="bi bi-chevron-right" aria-hidden="true"></i></a>
+            </form>
+            <div class="btn-group cp-btn-group">
+                <button type="button" class="btn cp-btn-light" data-bs-toggle="modal" data-bs-target="#cpLegalCalendarModal">
+                    <span class="cp-flag-ro" aria-hidden="true"><i></i><i></i><i></i></span> Calendar legal
+                </button>
+                <button type="button" class="btn cp-btn-light dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Mai multe opțiuni">
+                    <i class="bi bi-calendar-week" aria-hidden="true"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li><button type="button" class="dropdown-item" data-bs-toggle="modal" data-bs-target="#cpLegalCalendarModal"><i class="bi bi-calendar3 me-2" aria-hidden="true"></i>Calendar legal <?= e($period['label']) ?></button></li>
+                    <?php if ($canOpenLeavePlanning): ?>
+                        <li><a class="dropdown-item" href="<?= e(build_query_url(['page' => 'programare_concedii'])) ?>"><i class="bi bi-airplane me-2" aria-hidden="true"></i>Programare concedii</a></li>
+                    <?php endif; ?>
+                    <li><hr class="dropdown-divider"></li>
+                    <?php if ($canPayrollConfig): ?>
+                        <li>
+                            <form method="post" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'payroll_toggle'])) ?>">
+                                <?= csrf_field() ?>
+                                <input type="hidden" name="luna" value="<?= e($period['key']) ?>">
+                                <input type="hidden" name="enabled" value="<?= $fiscalEnabled ? '0' : '1' ?>">
+                                <button type="submit" class="dropdown-item" data-confirm="<?= $fiscalEnabled ? 'Dezactivezi calculul fiscal? Costul salarial se va lua din salariul configurat. Calculele existente se păstrează.' : 'Activezi calculul fiscal (brut/net, CAS, CASS, impozit, CAM, cost firmă)? Necesită profil de salarizare pentru fiecare angajat.' ?>">
+                                    <i class="bi <?= $fiscalEnabled ? 'bi-toggle-on text-primary' : 'bi-toggle-off' ?> me-2" aria-hidden="true"></i>Calcul fiscal salarii (opțional): <?= $fiscalEnabled ? 'activ' : 'inactiv' ?>
+                                </button>
+                            </form>
+                        </li>
+                    <?php endif; ?>
+                    <li><button type="button" class="dropdown-item" data-bs-toggle="modal" data-bs-target="#staffTypesPanelModal"><i class="bi bi-sliders me-2" aria-hidden="true"></i>Configurează tipuri personal</button></li>
+                    <?php if ($canExport): ?>
+                        <li><a class="dropdown-item" href="<?= e(build_query_url(array_merge($baseQuery, ['action' => 'export']))) ?>"><i class="bi bi-download me-2" aria-hidden="true"></i>Export CSV</a></li>
+                    <?php endif; ?>
+                </ul>
+            </div>
+            <?php if ($fiscalEnabled): ?>
+                <button type="button" class="btn cp-btn-light cp-btn-config" data-bs-toggle="offcanvas" data-bs-target="#cpPayrollConfig" aria-controls="cpPayrollConfig">
+                    <i class="bi bi-gear" aria-hidden="true"></i> Configurare salarii
+                </button>
+            <?php endif; ?>
+            <button type="button" class="btn btn-primary cp-btn-primary" data-bs-toggle="modal" data-bs-target="#addStaffModal">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă angajat
+            </button>
+        </div>
+    </header>
+
+    <div class="cp-kpis">
+        <div class="cp-kpi">
+            <div class="cp-kpi-icon is-blue"><i class="bi bi-people" aria-hidden="true"></i></div>
+            <div class="cp-kpi-body">
+                <div class="cp-kpi-label">Total personal</div>
+                <div class="cp-kpi-value"><?= e((string) $totalPersonal) ?></div>
+                <div class="cp-kpi-note"><?= e((string) $operationalCount) ?> operațional • <?= e((string) $officeCount) ?> birou</div>
+            </div>
+        </div>
+        <div class="cp-kpi">
+            <div class="cp-kpi-icon is-green"><i class="bi bi-wallet2" aria-hidden="true"></i></div>
+            <div class="cp-kpi-body">
+                <div class="cp-kpi-label">Total salarii lunare (configurate)</div>
+                <div class="cp-kpi-value"><?= e(format_number_ro($summary['total_salarii'] ?? 0, 0)) ?> RON</div>
+                <div class="cp-kpi-note" title="Suma salariilor curente din fișe. Nu este costul istoric al unei luni.">salarii curente din fișe</div>
+            </div>
+        </div>
+        <div class="cp-kpi">
+            <div class="cp-kpi-icon is-purple"><i class="bi bi-database" aria-hidden="true"></i></div>
+            <div class="cp-kpi-body">
+                <div class="cp-kpi-label">Cost salarial lună selectată</div>
+                <?php if (!$fiscalEnabled): ?>
+                    <?php if ($configuredSalaryCost !== null && $configuredSalaryCost['count'] > 0): ?>
+                        <div class="cp-kpi-value"><?= e(format_number_ro($configuredSalaryCost['total'], 0)) ?> RON</div>
+                        <div class="cp-kpi-note" title="Suma salariilor configurate valabile în <?= e($period['label']) ?> (din istoricul salarial), pentru angajații din acea lună.">
+                            <?= e((string) $configuredSalaryCost['count']) ?> <?= $configuredSalaryCost['count'] === 1 ? 'angajat' : 'angajați' ?> · salarii configurate
+                        </div>
+                    <?php else: ?>
+                        <div class="cp-kpi-value is-pending">—</div>
+                        <div class="cp-kpi-note">niciun salariu configurat în <?= e($period['label']) ?></div>
+                    <?php endif; ?>
+                <?php elseif ($payrollTotals['total_cost'] !== null): ?>
+                    <div class="cp-kpi-value"><?= e(format_number_ro($payrollTotals['total_cost'], 0)) ?> RON</div>
+                    <div class="cp-kpi-note" title="Suma costului total firmă (brut + contribuții angajator + beneficii) din calculele lunii.">
+                        <?= e((string) $payrollTotals['calculated_count']) ?> <?= $payrollTotals['calculated_count'] === 1 ? 'angajat calculat' : 'angajați calculați' ?>
+                        · <?= e((string) $payrollTotals['confirmed_count']) ?>/<?= e((string) $payrollTotals['calculated_count']) ?> confirmați
+                    </div>
+                <?php elseif ($payrollRuleLookup['rule'] === null): ?>
+                    <div class="cp-kpi-value is-pending">—</div>
+                    <div class="cp-kpi-note text-warning-emphasis"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> fără configurație fiscală</div>
+                <?php else: ?>
+                    <div class="cp-kpi-value is-pending">—</div>
+                    <div class="cp-kpi-note" title="Costul lunii se formează din calculele salariale ale lunii, nu din salariile curente.">în așteptare · luna nu este calculată</div>
+                <?php endif; ?>
+            </div>
+        </div>
+        <button type="button" class="cp-kpi is-clickable" data-bs-toggle="modal" data-bs-target="#cpLegalCalendarModal" title="Deschide calendarul legal">
+            <div class="cp-kpi-icon is-sky"><i class="bi bi-calendar3" aria-hidden="true"></i></div>
+            <div class="cp-kpi-body">
+                <div class="cp-kpi-label">Zile lucrătoare (RO)</div>
+                <?php if ($calendarMonth['working_days'] !== null): ?>
+                    <div class="cp-kpi-value"><?= e((string) $calendarMonth['working_days']) ?></div>
+                    <div class="cp-kpi-note">în <?= e($period['label']) ?> <i class="bi bi-info-circle" title="Zile lucrătoare legale (Luni–Vineri fără sărbători legale). Nu sunt zilele lucrate de angajați." aria-hidden="true"></i></div>
+                <?php else: ?>
+                    <div class="cp-kpi-value is-pending">—</div>
+                    <div class="cp-kpi-note text-warning-emphasis"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> calendar incomplet</div>
+                <?php endif; ?>
+            </div>
+        </button>
+        <div class="cp-kpi">
+            <div class="cp-kpi-icon is-orange"><i class="bi bi-pie-chart-fill" aria-hidden="true"></i></div>
+            <div class="cp-kpi-body">
+                <div class="cp-kpi-label">Distribuție personal</div>
+                <div class="cp-distribution">
+                    <div><i class="cp-dot is-primary"></i><b><?= e($percent($operationalCount)) ?></b> Operațional</div>
+                    <div><i class="cp-dot is-amber"></i><b><?= e($percent($officeCount)) ?></b> • Birou</div>
+                </div>
             </div>
         </div>
     </div>
 
-    <div class="row g-3 mb-4 accountancy-kpi-row">
-        <div class="col-12 col-md-6 col-xl-3">
-            <div class="accountancy-kpi h-100">
-                <div class="d-flex align-items-center gap-3">
-                    <div class="accountancy-kpi-icon is-blue"><i class="bi bi-people" aria-hidden="true"></i></div>
-                    <div>
-                        <div class="accountancy-kpi-label">Total personal</div>
-                        <div class="accountancy-kpi-value"><?= e((string) $totalPersonal) ?></div>
-                        <div class="accountancy-kpi-note">Toți angajații</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="col-12 col-md-6 col-xl-3">
-            <div class="accountancy-kpi h-100">
-                <div class="d-flex align-items-center gap-3">
-                    <div class="accountancy-kpi-icon is-green"><i class="bi bi-wallet2" aria-hidden="true"></i></div>
-                    <div>
-                        <div class="accountancy-kpi-label">Total salarii lunare</div>
-                        <div class="accountancy-kpi-value"><?= e(format_number_ro($summary['total_salarii'] ?? 0, 0)) ?> RON</div>
-                        <div class="accountancy-kpi-note">Toți angajații</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="col-12 col-md-6 col-xl-3">
-            <div class="accountancy-kpi h-100">
-                <div class="d-flex align-items-center gap-3">
-                    <div class="accountancy-kpi-icon is-purple"><i class="bi bi-people" aria-hidden="true"></i></div>
-                    <div>
-                        <div class="accountancy-kpi-label">Personal operațional</div>
-                        <div class="accountancy-kpi-value"><?= e((string) $operationalCount) ?></div>
-                        <div class="accountancy-kpi-note"><?= e($categoryPercent($operationalCount)) ?></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="col-12 col-md-6 col-xl-3">
-            <div class="accountancy-kpi h-100">
-                <div class="d-flex align-items-center gap-3">
-                    <div class="accountancy-kpi-icon is-orange"><i class="bi bi-person" aria-hidden="true"></i></div>
-                    <div>
-                        <div class="accountancy-kpi-label">Personal de birou</div>
-                        <div class="accountancy-kpi-value"><?= e((string) $officeCount) ?></div>
-                        <div class="accountancy-kpi-note"><?= e($categoryPercent($officeCount)) ?></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <section class="accountancy-section mb-0">
-        <div class="accountancy-section-header">
-            <h3 class="h5 mb-0">Categorii personal</h3>
-            <button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#staffTypesPanelModal">
+    <section class="cp-card cp-toolbar-card cp-categories">
+        <div class="cp-block-head">
+            <div class="cp-block-title">Categorii personal</div>
+            <button type="button" class="btn btn-sm cp-btn-light" data-bs-toggle="modal" data-bs-target="#staffTypesPanelModal">
                 <i class="bi bi-sliders" aria-hidden="true"></i> Configurează tipuri personal
             </button>
         </div>
-        <div class="row g-3">
-            <div class="col-12 col-lg-4">
-                <a class="accountancy-category-card is-operational" href="<?= e(build_query_url(array_merge($baseQuery, ['category' => 'operational', 'p' => 1]))) ?>">
-                    <span class="accountancy-category-icon"><i class="bi bi-people" aria-hidden="true"></i></span>
-                    <span class="accountancy-category-body">
-                        <span class="accountancy-category-title">Personal operațional</span>
-                    </span>
-                    <span class="accountancy-category-badge"><?= e((string) $operationalCount) ?> <?= $operationalCount === 1 ? 'angajat' : 'angajați' ?></span>
-                    <i class="bi bi-chevron-right accountancy-category-arrow" aria-hidden="true"></i>
-                </a>
-            </div>
-            <div class="col-12 col-lg-4">
-                <a class="accountancy-category-card is-office" href="<?= e(build_query_url(array_merge($baseQuery, ['category' => 'office', 'p' => 1]))) ?>">
-                    <span class="accountancy-category-icon"><i class="bi bi-person" aria-hidden="true"></i></span>
-                    <span class="accountancy-category-body">
-                        <span class="accountancy-category-title">Personal de birou</span>
-                    </span>
-                    <span class="accountancy-category-badge"><?= e((string) $officeCount) ?> <?= $officeCount === 1 ? 'angajat' : 'angajați' ?></span>
-                    <i class="bi bi-chevron-right accountancy-category-arrow" aria-hidden="true"></i>
-                </a>
-            </div>
-            <div class="col-12 col-lg-4">
-                <a class="accountancy-category-card is-former" href="<?= e(build_query_url(['page' => 'fosti_angajati'])) ?>">
-                    <span class="accountancy-category-icon"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
-                    <span class="accountancy-category-body">
-                        <span class="accountancy-category-title">Foști angajați</span>
-                    </span>
-                    <span class="accountancy-category-badge">Vezi listă</span>
-                    <i class="bi bi-chevron-right accountancy-category-arrow" aria-hidden="true"></i>
-                </a>
-            </div>
+        <div class="cp-category-row">
+            <?php $activeCategory = (string) ($filters['category'] ?? ''); ?>
+            <a class="cp-category is-operational <?= $activeCategory === 'operational' ? 'is-active' : '' ?>" href="<?= e(build_query_url(array_merge($baseQuery, ['category' => $activeCategory === 'operational' ? '' : 'operational', 'p' => 1]))) ?>">
+                <i class="bi bi-people" aria-hidden="true"></i>
+                <span class="cp-category-name">Personal operațional</span>
+                <span class="cp-category-count"><?= e((string) $operationalCount) ?> <?= $operationalCount === 1 ? 'angajat' : 'angajați' ?></span>
+            </a>
+            <a class="cp-category is-office <?= $activeCategory === 'office' ? 'is-active' : '' ?>" href="<?= e(build_query_url(array_merge($baseQuery, ['category' => $activeCategory === 'office' ? '' : 'office', 'p' => 1]))) ?>">
+                <i class="bi bi-person-workspace" aria-hidden="true"></i>
+                <span class="cp-category-name">Personal de birou</span>
+                <span class="cp-category-count"><?= e((string) $officeCount) ?> <?= $officeCount === 1 ? 'angajat' : 'angajați' ?></span>
+            </a>
+            <a class="cp-category is-former" href="<?= e(build_query_url(['page' => 'fosti_angajati'])) ?>">
+                <i class="bi bi-people-fill" aria-hidden="true"></i>
+                <span class="cp-category-name">Foști angajați</span>
+                <i class="bi bi-chevron-right cp-category-arrow" aria-hidden="true"></i>
+            </a>
         </div>
     </section>
 
-    <section class="accountancy-section accountancy-management-section">
-        <div class="accountancy-section-header">
-            <h3 class="h5 mb-0">Gestionare personal</h3>
+    <?php if (empty($calendarMonth['complete'])): ?>
+        <div class="cp-alert is-warning mb-3">
+            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+            Calendarul legal pentru <?= e($period['label']) ?> este incomplet: <?= e((string) ($calendarMonth['sync']['error'] ?? 'sărbătorile legale nu sunt disponibile.')) ?>
+            Zilele lucrătoare nu sunt afișate până la sincronizare (se reîncearcă automat).
         </div>
-        <form method="get" class="accountancy-toolbar">
-            <input type="hidden" name="page" value="contabilitate_personal">
-            <div class="accountancy-toolbar-actions">
-                <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addStaffModal">
-                    <i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă angajat
-                </button>
-            </div>
-            <div class="accountancy-toolbar-filters">
-                <div class="accountancy-search">
-                    <i class="bi bi-search" aria-hidden="true"></i>
-                    <input type="search" class="form-control" id="filter_q" name="q" value="<?= e((string) ($filters['q'] ?? '')) ?>" placeholder="Caută angajat...">
-                </div>
-                <button type="button" class="btn btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#staffFiltersPanel" aria-expanded="<?= $advancedFiltersOpen ? 'true' : 'false' ?>" aria-controls="staffFiltersPanel">
-                    <i class="bi bi-funnel" aria-hidden="true"></i> Filtrează
-                </button>
-            </div>
-            <div class="collapse accountancy-filter-panel <?= $advancedFiltersOpen ? 'show' : '' ?>" id="staffFiltersPanel">
-                <div class="row g-2 align-items-end">
-                    <div class="col-12 col-md-6 col-xl-3">
-                        <label class="form-label" for="filter_staff_type">Tip personal</label>
-                        <select class="form-select" id="filter_staff_type" name="staff_type_id">
-                            <option value="">Toate</option>
-                            <?php foreach ($allStaffTypeOptions as $type): ?>
-                                <?php $typeId = (int) ($type['id'] ?? 0); ?>
-                                <option value="<?= e((string) $typeId) ?>" <?= (string) ($filters['staff_type_id'] ?? '') === (string) $typeId ? 'selected' : '' ?>>
-                                    <?= e((string) ($type['name'] ?? '-')) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="col-12 col-md-6 col-xl-3">
-                        <label class="form-label" for="filter_category">Categorie</label>
-                        <select class="form-select" id="filter_category" name="category">
-                            <option value="">Toate</option>
-                            <option value="operational" <?= (string) ($filters['category'] ?? '') === 'operational' ? 'selected' : '' ?>>Personal operațional</option>
-                            <option value="office" <?= (string) ($filters['category'] ?? '') === 'office' ? 'selected' : '' ?>>Personal de birou</option>
-                        </select>
-                    </div>
-                    <div class="col-12 col-md-6 col-xl-2">
-                        <label class="form-label" for="filter_status">Status</label>
-                        <select class="form-select" id="filter_status" name="status">
-                            <option value="">Toate</option>
-                            <option value="activ" <?= (string) ($filters['status'] ?? '') === 'activ' ? 'selected' : '' ?>>Activ</option>
-                            <option value="inactiv" <?= (string) ($filters['status'] ?? '') === 'inactiv' ? 'selected' : '' ?>>Inactiv</option>
-                        </select>
-                    </div>
-                    <div class="col-12 col-md-6 col-xl-2">
-                        <label class="form-label" for="filter_function">Funcție</label>
-                        <input type="text" class="form-control" id="filter_function" name="functie" value="<?= e((string) ($filters['functie'] ?? '')) ?>">
-                    </div>
-                    <div class="col-6 col-xl-2">
-                        <label class="form-label" for="filter_document_status">Documente</label>
-                        <select class="form-select" id="filter_document_status" name="document_status">
-                            <option value="">Toate</option>
-                            <option value="valid" <?= (string) ($filters['document_status'] ?? '') === 'valid' ? 'selected' : '' ?>>Valid</option>
-                            <option value="expira_curand" <?= (string) ($filters['document_status'] ?? '') === 'expira_curand' ? 'selected' : '' ?>>Expiră curând</option>
-                            <option value="expirat" <?= (string) ($filters['document_status'] ?? '') === 'expirat' ? 'selected' : '' ?>>Expirat</option>
-                            <option value="fara_documente" <?= (string) ($filters['document_status'] ?? '') === 'fara_documente' ? 'selected' : '' ?>>Fără documente</option>
-                        </select>
-                    </div>
-                    <div class="col-6 col-md-3 col-xl-2">
-                        <label class="form-label" for="filter_salary_min">Salariu minim</label>
-                        <input type="number" min="0" step="0.01" class="form-control" id="filter_salary_min" name="salary_min" value="<?= e((string) ($filters['salary_min'] ?? '')) ?>">
-                    </div>
-                    <div class="col-6 col-md-3 col-xl-2">
-                        <label class="form-label" for="filter_salary_max">Salariu maxim</label>
-                        <input type="number" min="0" step="0.01" class="form-control" id="filter_salary_max" name="salary_max" value="<?= e((string) ($filters['salary_max'] ?? '')) ?>">
-                    </div>
-                    <div class="col-12 col-xl-auto d-flex gap-2">
-                        <button type="submit" class="btn btn-primary">Aplică filtre</button>
-                        <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'contabilitate_personal'])) ?>">Resetează</a>
-                    </div>
-                </div>
-            </div>
-        </form>
+    <?php endif; ?>
 
+    <section class="cp-card cp-table-card">
+        <?php
+        // Starea documentelor: culoarea randului + filtru (chip-urile de deasupra tabelului).
+        $activeDocumentStatus = (string) ($filters['document_status'] ?? '');
+        $activeFilterCount = count(array_filter([
+            $filters['q'] ?? '', $filters['staff_type_id'] ?? '', $filters['status'] ?? '', $filters['functie'] ?? '',
+            $filters['salary_min'] ?? '', $filters['salary_max'] ?? '', $filters['regim'] ?? '', $filters['luna_status'] ?? '', $activeDocumentStatus,
+        ], static fn ($value): bool => (string) $value !== '' && (string) $value !== '0'));
+        ?>
+        <?php if ($fiscalEnabled && $payrollRuleLookup['rule'] === null): ?>
+            <div class="cp-alert is-warning cp-table-alert">
+                <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                <div class="flex-grow-1"><?= e((string) $payrollRuleLookup['error']) ?> Calculul salarial nu folosește automat regula unei alte perioade.</div>
+                <button type="button" class="btn btn-sm btn-outline-warning" data-bs-toggle="offcanvas" data-bs-target="#cpPayrollConfig">Configurează perioada</button>
+            </div>
+        <?php endif; ?>
+        <?php if ($fiscalEnabled && $payrollBulkSummary !== null): ?>
+            <?php
+            $bulkGroups = [
+                'calculated' => ['Calculate', 'is-info'],
+                'to_review' => ['Calculate, de verificat', 'is-warning'],
+                'unconfigured' => ['Necesită configurare', 'is-warning'],
+                'needs_accountant' => ['Necesită verificare contabilă', 'is-danger'],
+                'errors' => ['Erori de validare', 'is-danger'],
+                'confirmed_skipped' => ['Deja confirmate (neatinse)', 'is-success'],
+            ];
+            ?>
+            <div class="cp-bulk-summary">
+                <div class="cp-bulk-title"><i class="bi bi-calculator" aria-hidden="true"></i> Calculează luna — <?= e((string) ($payrollBulkSummary['period_label'] ?? '')) ?>: <?= e((string) $payrollBulkSummary['total']) ?> angajați</div>
+                <div class="cp-bulk-groups">
+                    <?php foreach ($bulkGroups as $groupKey => [$groupLabel, $groupClass]): ?>
+                        <?php $groupNames = (array) ($payrollBulkSummary[$groupKey] ?? []); ?>
+                        <?php if ($groupNames !== []): ?>
+                            <details class="cp-bulk-group">
+                                <summary><span class="cp-badge <?= e($groupClass) ?>"><?= e((string) count($groupNames)) ?></span> <?= e($groupLabel) ?></summary>
+                                <div class="cp-explain"><?= e(implode(', ', $groupNames)) ?></div>
+                            </details>
+                        <?php endif; ?>
+                    <?php endforeach; ?>
+                </div>
+                <div class="cp-explain">Motivele exacte sunt în rândul fiecărui angajat → „Calcul salarial”. Filtrați după „Status lună” pentru a-i găsi.</div>
+            </div>
+        <?php endif; ?>
+        <div class="cp-table-toolbar">
+            <div class="cp-doc-legend" role="group" aria-label="Filtrează după starea documentelor">
+                <span class="cp-doc-legend-label">Documente:</span>
+                <a class="cp-doc-chip <?= $activeDocumentStatus === '' ? 'is-active' : '' ?>" href="<?= e(build_query_url(array_merge($baseQuery, ['document_status' => '', 'p' => 1]))) ?>">Toate</a>
+                <?php foreach ($documentStatusMeta as $statusKey => $statusMeta): ?>
+                    <a
+                        class="cp-doc-chip is-<?= e($statusKey) ?> <?= $activeDocumentStatus === $statusKey ? 'is-active' : '' ?>"
+                        href="<?= e(build_query_url(array_merge($baseQuery, ['document_status' => $activeDocumentStatus === $statusKey ? '' : $statusKey, 'p' => 1]))) ?>"
+                        title="<?= e($statusMeta['title']) ?>"
+                    >
+                        <i class="cp-doc-swatch" aria-hidden="true"></i><?= e($statusMeta['label']) ?>
+                        <span class="cp-doc-chip-count"><?= e((string) ($documentStatusCounts[$statusKey] ?? 0)) ?></span>
+                    </a>
+                <?php endforeach; ?>
+            </div>
+            <div class="cp-table-tools">
+            <?php if ($fiscalEnabled && $canPayrollCalculate): ?>
+                <form method="post" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'payroll_calculate_month'])) ?>">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="luna" value="<?= e($period['key']) ?>">
+                    <button type="submit" class="btn btn-sm btn-outline-primary" data-confirm="Calculezi salariile pentru <?= e($period['label']) ?> pentru toți angajații? Calculele confirmate nu se modifică." <?= $payrollRuleLookup['rule'] === null ? 'disabled' : '' ?>>
+                        <i class="bi bi-calculator" aria-hidden="true"></i> Calculează luna
+                    </button>
+                </form>
+            <?php endif; ?>
+            <?php if ($activeFilterCount > 0): ?>
+                <a class="cp-reset-filters" href="<?= e(build_query_url(['page' => 'contabilitate_personal', 'luna' => $period['key'], 'category' => $filters['category'] ?? ''])) ?>">
+                    <i class="bi bi-x-circle" aria-hidden="true"></i> Resetează filtrele (<?= e((string) $activeFilterCount) ?>)
+                </a>
+            <?php endif; ?>
+            </div>
+        </div>
         <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0 accountancy-table">
+            <!-- Sortare + filtru din antet ca in Desfasurator curse (assets/js/table-column-filter.js):
+                 valorile din lista sunt cele din tabel, in cascada, cu cautare si Shift + click. -->
+            <table class="table align-middle mb-0 cp-table" data-column-filter>
                 <thead>
                     <tr>
-                        <th><a href="<?= e($sortUrl('nume')) ?>">Nume<?= e($sortMark('nume')) ?></a></th>
-                        <th><a href="<?= e($sortUrl('tip')) ?>">Tip personal<?= e($sortMark('tip')) ?></a></th>
-                        <th><a href="<?= e($sortUrl('functie')) ?>">Funcție<?= e($sortMark('functie')) ?></a></th>
-                        <th><a href="<?= e($sortUrl('salariu')) ?>">Salariu lunar<?= e($sortMark('salariu')) ?></a></th>
-                        <th><a href="<?= e($sortUrl('data_angajare')) ?>">Data angajării<?= e($sortMark('data_angajare')) ?></a></th>
-                        <th><a href="<?= e($sortUrl('active_days')) ?>">Zile active<?= e($sortMark('active_days')) ?></a></th>
-                        <th>Status</th>
-                        <th><a href="<?= e($sortUrl('documente')) ?>">Documente<?= e($sortMark('documente')) ?></a></th>
-                        <th class="accountancy-actions-column">Acțiuni</th>
+                        <th class="cp-col-toggle" data-no-filter aria-label="Detalii"></th>
+                        <th>Nume</th>
+                        <th>Tip personal</th>
+                        <?php if ($fiscalEnabled): ?>
+                            <th>Salariu configurat<span class="cp-th-period">curent · NET/BRUT</span></th>
+                            <th>Salariu brut<span class="cp-th-period"><?= e($period['short_label']) ?></span></th>
+                            <th>Cost firmă<span class="cp-th-period"><?= e($period['short_label']) ?></span></th>
+                        <?php else: ?>
+                            <th>Salariu lunar (curent)</th>
+                        <?php endif; ?>
+                        <th>Regim lucru</th>
+                        <th>Zile lucrate<span class="cp-th-period"><?= e($period['short_label']) ?></span></th>
+                        <?php if ($fiscalEnabled): ?>
+                            <th>Status lună<span class="cp-th-period"><?= e($period['short_label']) ?></span></th>
+                        <?php else: ?>
+                            <th>Cost salarial<span class="cp-th-period"><?= e($period['short_label']) ?></span></th>
+                        <?php endif; ?>
+                        <th class="cp-col-actions" data-no-filter>Acțiuni</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if ($rows === []): ?>
                         <tr>
-                            <td colspan="9" class="text-center text-muted py-4">Nu există înregistrări.</td>
+                            <td colspan="<?= e((string) $tableColspan) ?>" class="text-center text-muted py-4">Nu există înregistrări.</td>
                         </tr>
                     <?php endif; ?>
                     <?php foreach ($rows as $index => $row): ?>
@@ -362,6 +470,8 @@ $addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static funct
                         $rowId = preg_replace('/[^a-zA-Z0-9_-]/', '', $key);
                         $documents = $documentsBySubject[$key] ?? [];
                         $salaryHistory = $salaryHistoryBySubject[$key] ?? [];
+                        $diurnaHistory = (string) ($row['source_type'] ?? '') === 'driver' ? ($diurnaHistoryByDriver[(int) ($row['source_id'] ?? 0)] ?? []) : [];
+                        $diurnaPolicy = DriverDiurnaModel::policyAt($diurnaHistory, null);
                         $sourceType = (string) ($row['source_type'] ?? '');
                         $sourceId = (int) ($row['source_id'] ?? 0);
                         $staffTypeId = (int) ($row['staff_type_id'] ?? 0);
@@ -376,111 +486,193 @@ $addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static funct
                         if ($rowPhotoAlt === '') {
                             $rowPhotoAlt = 'Poza ' . (string) ($row['nume'] ?? 'angajat');
                         }
+                        $rowMonth = $monthBySubject[$key] ?? null;
+                        $rowRegime = StaffAccountancyModel::workRegimeLabel($row['regim_lucru'] ?? null, $row['regim_lucru_detalii'] ?? null);
+                        $documentStatus = (string) ($row['document_status'] ?? '');
+                        $rowPayroll = $payrollStatusBySubject[$key]['record'] ?? null;
+                        $rowPayrollMeta = PayrollMonthService::statusMeta($rowPayroll, (bool) ($payrollStatusBySubject[$key]['stale'] ?? false));
+                        $rowPayrollOk = $rowPayroll !== null && in_array($rowPayroll['calculation_status'], ['calculat', 'de_verificat'], true);
+                        $rowInputType = $payrollProfiles[$key]['salary_input_type'] ?? null;
                         ?>
-                        <tr>
-                            <td>
-                                <div class="d-flex align-items-center gap-2">
-                                    <div class="accountancy-avatar <?= $rowPhotoUrl !== null ? 'has-photo' : '' ?>">
+                        <?php $rowDocMeta = $documentStatusMeta[$documentStatus] ?? null; ?>
+                        <tr class="cp-row<?= $rowDocMeta !== null ? ' cp-doc-' . e($documentStatus) : '' ?>" data-cp-row="<?= e($rowId) ?>" data-source-type="<?= e($sourceType) ?>" data-source-id="<?= e((string) $sourceId) ?>">
+                            <td class="cp-col-toggle" title="<?= e($rowDocMeta['title'] ?? '') ?>">
+                                <button type="button" class="cp-chevron" data-cp-expand data-trips-toggle aria-expanded="false" aria-controls="cpDetail<?= e($rowId) ?>" aria-label="Detalii <?= e((string) ($row['nume'] ?? '')) ?>">
+                                    <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                                </button>
+                            </td>
+                            <td data-filter-values="<?= e((string) ($row['nume'] ?? '')) ?>">
+                                <div class="cp-name-cell">
+                                    <div class="cp-avatar <?= $rowPhotoUrl !== null ? 'has-photo' : '' ?>">
                                         <?php if ($rowPhotoUrl !== null): ?>
                                             <img src="<?= e($rowPhotoUrl) ?>" alt="<?= e($rowPhotoAlt) ?>" loading="lazy">
                                         <?php else: ?>
                                             <?= e($initials((string) ($row['nume'] ?? ''))) ?>
                                         <?php endif; ?>
                                     </div>
-                                    <div>
-                                        <div class="fw-semibold"><?= e((string) ($row['nume'] ?? '-')) ?></div>
-                                        <div class="small text-muted"><?= e($sourceType === 'driver' ? (string) ($row['vehicle_label'] ?? '-') : (string) ($row['email'] ?? '')) ?></div>
+                                    <div class="min-w-0">
+                                        <div class="cp-name">
+                                            <?= e((string) ($row['nume'] ?? '-')) ?>
+                                            <?php if ((string) ($row['tip_colaborare'] ?? '') === 'colaborator'): ?>
+                                                <span class="cp-badge is-collab">Colaborator</span>
+                                            <?php endif; ?>
+                                            <?php if ((string) ($row['status'] ?? 'activ') === 'inactiv'): ?>
+                                                <span class="cp-badge is-muted" title="Indisponibil temporar (nu apare în operațiuni). Rămâne angajat; plecările definitive sunt în Foști angajați.">Inactiv</span>
+                                            <?php endif; ?>
+                                            <?php if ($rowDocMeta !== null): ?>
+                                                <span class="visually-hidden">Documente: <?= e($rowDocMeta['title']) ?></span>
+                                            <?php endif; ?>
+                                        </div>
+                                        <div class="cp-name-sub"><?= e($sourceType === 'driver' ? (string) ($row['vehicle_label'] ?? '-') : (string) ($row['email'] ?? '')) ?></div>
                                     </div>
                                 </div>
                             </td>
-                            <td><span class="accountancy-type-pill <?= $category === 'office' ? 'is-office' : 'is-operational' ?>"><?= e((string) ($row['staff_type_name'] ?? '-')) ?></span></td>
-                            <td><?= e((string) ($row['functie'] ?? '-')) ?></td>
-                            <td><?= e($money($row['salariu'] ?? null)) ?></td>
-                            <td><?= e(!empty($row['data_angajare']) ? format_date_ro((string) $row['data_angajare']) : '-') ?></td>
-                            <td><?= e($activeDaysLabel($row['active_days'] ?? null)) ?></td>
-                            <td>
-                                <?= status_badge_html((string) ($row['status'] ?? 'activ')) ?>
-                                <?php if (!empty($row['data_incetare'])): ?>
-                                    <div class="small text-muted mt-1"><?= e(format_date_ro((string) $row['data_incetare'])) ?></div>
+                            <?php
+                            // Functia apare sub tip doar cand spune ceva in plus (ex. "Contabil" la Personal de birou).
+                            $rowTypeName = (string) ($row['staff_type_name'] ?? '-');
+                            $rowFunctie = trim((string) ($row['functie'] ?? ''));
+                            $rowFunctieExtra = $rowFunctie !== '' && mb_strtolower($rowFunctie) !== mb_strtolower($rowTypeName);
+                            ?>
+                            <td data-filter-values="<?= e($rowTypeName) ?>">
+                                <span class="cp-type-pill <?= $category === 'office' ? 'is-office' : 'is-operational' ?>"><?= e($rowTypeName) ?></span>
+                                <?php if ($rowFunctieExtra): ?>
+                                    <div class="cp-name-sub"><?= e($rowFunctie) ?></div>
                                 <?php endif; ?>
                             </td>
-                            <td>
-                                <button type="button" class="accountancy-doc-button" data-bs-toggle="modal" data-bs-target="#documentsModal<?= e($rowId) ?>" title="Documente">
-                                    <i class="bi bi-folder2-open" aria-hidden="true"></i>
-                                    <?= e((string) ($row['document_count'] ?? 0)) ?>
-                                </button>
+                            <td data-filter-values="<?= e($money($row['salariu'] ?? null)) ?>" data-value="<?= e($row['salariu'] !== null ? (string) (float) $row['salariu'] : '') ?>">
+                                <?= e($money($row['salariu'] ?? null)) ?>
+                                <?php if ($fiscalEnabled): ?>
+                                <span class="cp-input-type <?= $rowInputType === null ? 'is-unset' : '' ?>" title="<?= $rowInputType === null ? 'Profil de salarizare neconfigurat: nu se știe dacă salariul este NET sau BRUT' : 'Salariul din fișă este ' . ($rowInputType === 'net' ? 'NET' : 'BRUT') ?>"><?= $rowInputType === 'net' ? 'NET' : ($rowInputType === 'gross' ? 'BRUT' : '?') ?></span>
+                                <?php endif; ?>
                             </td>
-                            <td class="accountancy-actions-cell">
-                                <div class="dropdown accountancy-action-dropdown">
-                                    <button
-                                        type="button"
-                                        class="accountancy-actions-trigger"
-                                        id="accountancyActionsMenu<?= e($rowId) ?>"
-                                        data-bs-toggle="dropdown"
-                                        data-bs-boundary="viewport"
-                                        data-bs-offset="0,6"
-                                        aria-expanded="false"
-                                        title="Acțiuni"
-                                        aria-label="Deschide acțiuni"
-                                    >
-                                        <i class="bi bi-three-dots" aria-hidden="true"></i>
-                                    </button>
-                                    <ul class="dropdown-menu dropdown-menu-end accountancy-actions-menu" aria-labelledby="accountancyActionsMenu<?= e($rowId) ?>">
-                                        <li>
-                                            <button type="button" class="dropdown-item accountancy-action-menu-item" data-bs-toggle="modal" data-bs-target="#detailsModal<?= e($rowId) ?>">
-                                                <i class="bi bi-eye" aria-hidden="true"></i>
-                                                <span>Vizualizează</span>
-                                            </button>
-                                        </li>
-                                        <li>
-                                            <?php if ($sourceType === 'staff'): ?>
-                                                <button type="button" class="dropdown-item accountancy-action-menu-item is-primary" data-bs-toggle="modal" data-bs-target="#editStaffModal<?= e($rowId) ?>">
-                                                    <i class="bi bi-pencil" aria-hidden="true"></i>
-                                                    <span>Editare</span>
+                            <?php if ($fiscalEnabled): ?>
+                            <td><?= $rowPayrollOk ? e($moneyShort($rowPayroll['gross_salary'])) : '<span class="text-muted">—</span>' ?></td>
+                            <td>
+                                <?php if ($rowPayrollOk): ?>
+                                    <span class="fw-semibold"><?= e($moneyShort($rowPayroll['total_employer_cost'])) ?></span>
+                                <?php else: ?>
+                                    <span class="text-muted" title="Luna nu este calculată pentru acest angajat">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <?php endif; ?>
+                            <td><?= $rowRegime !== null ? e($rowRegime) : '<span class="text-muted">Nesetat</span>' ?></td>
+                            <td>
+                                <?php if ($rowMonth !== null && $rowMonth['worked_days'] !== null): ?>
+                                    <?= e(floor($rowMonth['worked_days']) === $rowMonth['worked_days'] ? (string) (int) $rowMonth['worked_days'] : format_number_ro($rowMonth['worked_days'], 1)) ?>
+                                <?php else: ?>
+                                    <span class="text-muted" title="Pontajul lunii nu este înregistrat">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <?php if (!$fiscalEnabled): ?>
+                            <td>
+                                <?php $rowConfiguredCost = $rowMonth['applicable_salary'] ?? null; ?>
+                                <?php if ($rowConfiguredCost !== null): ?>
+                                    <span class="fw-semibold" title="Salariul configurat valabil în <?= e($period['label']) ?><?= !empty($rowMonth['applicable_salary_since']) ? ' (din ' . e(format_date_ro((string) $rowMonth['applicable_salary_since'])) . ')' : '' ?>"><?= e($moneyShort($rowConfiguredCost)) ?></span>
+                                <?php else: ?>
+                                    <span class="text-muted" title="<?= ($rowMonth['applicable_salary_source'] ?? '') === 'neangajat' ? 'Nu era angajat în această lună' : 'Salariu neconfigurat' ?>">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <?php else: ?>
+                            <td>
+                                <span class="cp-status-stack" title="<?= e($rowPayroll !== null && $rowPayroll['confirmed_at'] ? 'Confirmat la ' . format_datetime_ro((string) $rowPayroll['confirmed_at']) . ' de ' . (string) ($rowPayroll['confirmed_by_name'] ?? '—') : '') ?>">
+                                    <span class="cp-badge <?= e($rowPayrollMeta['class']) ?>"><?= e($rowPayrollMeta['label']) ?></span>
+                                    <?php if ($rowPayrollMeta['confirm_label'] !== null): ?>
+                                        <span class="cp-badge <?= e($rowPayrollMeta['confirm_class']) ?>"><?= e($rowPayrollMeta['confirm_label']) ?></span>
+                                    <?php endif; ?>
+                                </span>
+                            </td>
+                            <?php endif; ?>
+                            <td class="cp-col-actions">
+                                <div class="cp-actions">
+                                    <?php if ($sourceType === 'staff'): ?>
+                                        <button type="button" class="cp-action-btn" data-bs-toggle="modal" data-bs-target="#editStaffModal<?= e($rowId) ?>" title="Editare" aria-label="Editare"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                    <?php else: ?>
+                                        <button type="button" class="cp-action-btn" data-bs-toggle="modal" data-bs-target="#salaryModal<?= e($rowId) ?>" title="Editare salariu" aria-label="Editare salariu"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                    <?php endif; ?>
+                                    <div class="dropdown">
+                                        <button
+                                            type="button"
+                                            class="cp-action-btn"
+                                            id="accountancyActionsMenu<?= e($rowId) ?>"
+                                            data-bs-toggle="dropdown"
+                                            data-bs-boundary="viewport"
+                                            data-bs-offset="0,6"
+                                            aria-expanded="false"
+                                            title="Acțiuni"
+                                            aria-label="Deschide acțiuni"
+                                        >
+                                            <i class="bi bi-three-dots" aria-hidden="true"></i>
+                                        </button>
+                                        <ul class="dropdown-menu dropdown-menu-end accountancy-actions-menu" aria-labelledby="accountancyActionsMenu<?= e($rowId) ?>">
+                                            <li>
+                                                <button type="button" class="dropdown-item accountancy-action-menu-item" data-bs-toggle="modal" data-bs-target="#detailsModal<?= e($rowId) ?>">
+                                                    <i class="bi bi-eye" aria-hidden="true"></i>
+                                                    <span>Vizualizează</span>
                                                 </button>
-                                            <?php else: ?>
-                                                <button type="button" class="dropdown-item accountancy-action-menu-item is-primary" data-bs-toggle="modal" data-bs-target="#salaryModal<?= e($rowId) ?>">
-                                                    <i class="bi bi-pencil" aria-hidden="true"></i>
-                                                    <span>Editare salariu</span>
+                                            </li>
+                                            <li>
+                                                <button type="button" class="dropdown-item accountancy-action-menu-item" data-bs-toggle="modal" data-bs-target="#salaryModal<?= e($rowId) ?>">
+                                                    <i class="bi bi-cash-coin" aria-hidden="true"></i>
+                                                    <span>Salariu &amp; istoric</span>
                                                 </button>
-                                            <?php endif; ?>
-                                        </li>
-                                        <li>
-                                            <?php if ($isActive && $canEndActivity): ?>
-                                                <button type="button" class="dropdown-item accountancy-action-menu-item" data-bs-toggle="modal" data-bs-target="#endActivityModal<?= e($rowId) ?>">
-                                                    <i class="bi bi-person-dash" aria-hidden="true"></i>
-                                                    <span>Încetează activitatea</span>
-                                                </button>
-                                            <?php elseif ($isTerminated): ?>
-                                                <button type="button" class="dropdown-item accountancy-action-menu-item" disabled>
-                                                    <i class="bi bi-person-dash" aria-hidden="true"></i>
-                                                    <span>Activitate încetată</span>
-                                                </button>
-                                            <?php endif; ?>
-                                        </li>
-                                        <li><hr class="dropdown-divider"></li>
-                                        <li>
-                                            <?php if ($canDelete): ?>
-                                                <form method="post" class="accountancy-action-menu-form" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'delete_staff'])) ?>">
-                                                    <?= csrf_field() ?>
-                                                    <input type="hidden" name="id" value="<?= e((string) $sourceId) ?>">
-                                                    <button type="submit" class="dropdown-item accountancy-action-menu-item is-danger" data-confirm="Sigur stergi acest angajat?">
-                                                        <i class="bi bi-trash" aria-hidden="true"></i>
-                                                        <span>Ștergere</span>
+                                            </li>
+                                            <?php if ($sourceType === 'driver'): ?>
+                                                <li>
+                                                    <button type="button" class="dropdown-item accountancy-action-menu-item" data-bs-toggle="modal" data-bs-target="#diurnaModal<?= e($rowId) ?>">
+                                                        <i class="bi bi-calendar-check" aria-hidden="true"></i>
+                                                        <span>Diurnă</span>
                                                     </button>
-                                                </form>
-                                            <?php else: ?>
-                                                <button type="button" class="dropdown-item accountancy-action-menu-item is-danger" disabled>
-                                                    <i class="bi bi-trash" aria-hidden="true"></i>
-                                                    <span>Ștergere indisponibilă</span>
-                                                </button>
+                                                </li>
                                             <?php endif; ?>
-                                        </li>
-                                    </ul>
+                                            <li>
+                                                <button type="button" class="dropdown-item accountancy-action-menu-item" data-bs-toggle="modal" data-bs-target="#documentsModal<?= e($rowId) ?>">
+                                                    <i class="bi bi-folder2-open" aria-hidden="true"></i>
+                                                    <span>Documente (<?= e((string) ($row['document_count'] ?? 0)) ?>)</span>
+                                                </button>
+                                            </li>
+                                            <li>
+                                                <?php if ($isActive && $canEndActivity): ?>
+                                                    <button type="button" class="dropdown-item accountancy-action-menu-item" data-bs-toggle="modal" data-bs-target="#endActivityModal<?= e($rowId) ?>">
+                                                        <i class="bi bi-person-dash" aria-hidden="true"></i>
+                                                        <span>Încetează activitatea</span>
+                                                    </button>
+                                                <?php elseif ($isTerminated): ?>
+                                                    <button type="button" class="dropdown-item accountancy-action-menu-item" disabled>
+                                                        <i class="bi bi-person-dash" aria-hidden="true"></i>
+                                                        <span>Activitate încetată</span>
+                                                    </button>
+                                                <?php endif; ?>
+                                            </li>
+                                            <li><hr class="dropdown-divider"></li>
+                                            <li>
+                                                <?php if ($canDelete): ?>
+                                                    <form method="post" class="accountancy-action-menu-form" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'delete_staff'])) ?>">
+                                                        <?= csrf_field() ?>
+                                                        <input type="hidden" name="id" value="<?= e((string) $sourceId) ?>">
+                                                        <button type="submit" class="dropdown-item accountancy-action-menu-item is-danger" data-confirm="Sigur stergi acest angajat?">
+                                                            <i class="bi bi-trash" aria-hidden="true"></i>
+                                                            <span>Ștergere</span>
+                                                        </button>
+                                                    </form>
+                                                <?php else: ?>
+                                                    <button type="button" class="dropdown-item accountancy-action-menu-item is-danger" disabled>
+                                                        <i class="bi bi-trash" aria-hidden="true"></i>
+                                                        <span>Ștergere indisponibilă</span>
+                                                    </button>
+                                                <?php endif; ?>
+                                            </li>
+                                        </ul>
+                                    </div>
                                 </div>
                             </td>
                         </tr>
-
+                        <tr class="cp-detail-row" id="cpDetail<?= e($rowId) ?>" data-cp-detail-row="<?= e($rowId) ?>" data-trips-detail hidden>
+                            <td colspan="<?= e((string) $tableColspan) ?>">
+                                <div class="cp-detail" data-cp-detail-host>
+                                    <div class="cp-detail-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Se încarcă detaliile...</div>
+                                </div>
+                            </td>
+                        </tr>
                         <?php ob_start(); ?>
                         <div class="modal fade" id="detailsModal<?= e($rowId) ?>" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-lg">
@@ -716,6 +908,74 @@ $addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static funct
                             </div>
                         </div>
 
+                        <?php if ($sourceType === 'driver'): ?>
+                        <div class="modal fade" id="diurnaModal<?= e($rowId) ?>" tabindex="-1" aria-hidden="true">
+                            <div class="modal-dialog modal-lg">
+                                <div class="modal-content">
+                                    <form method="post" action="<?= e(build_query_url(['page' => 'contabilitate_personal', 'action' => 'update_diurna'])) ?>" data-diurna-form>
+                                        <?= csrf_field() ?>
+                                        <input type="hidden" name="driver_id" value="<?= e((string) $sourceId) ?>">
+                                        <div class="modal-header">
+                                            <h3 class="modal-title fs-5">Diurnă - <?= e((string) ($row['nume'] ?? '')) ?></h3>
+                                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
+                                        </div>
+                                        <div class="modal-body">
+                                            <p class="small text-muted">
+                                                Numărul de diurne se calculează din cursele din Dispecer curse. Aici stabilești dacă șoferul
+                                                primește diurnă și cât valorează o zi. Schimbarea se aplică de la data aleasă; cursele de dinainte
+                                                își păstrează regula veche.
+                                            </p>
+                                            <div class="row g-3 mb-3">
+                                                <div class="col-md-4">
+                                                    <label class="form-label">Primește diurnă</label>
+                                                    <select class="form-select" name="primeste_diurna" data-diurna-receives>
+                                                        <option value="1" <?= $diurnaPolicy['status'] !== DriverDiurnaModel::STATUS_NONE ? 'selected' : '' ?>>Da</option>
+                                                        <option value="0" <?= $diurnaPolicy['status'] === DriverDiurnaModel::STATUS_NONE ? 'selected' : '' ?>>Nu</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-md-4" data-diurna-rate-field>
+                                                    <label class="form-label">Valoare / zi (lei)</label>
+                                                    <input type="number" min="0" step="0.01" class="form-control" name="valoare_zi" value="<?= e($diurnaPolicy['rate'] !== null ? (string) $diurnaPolicy['rate'] : '') ?>">
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <label class="form-label">Se aplică de la</label>
+                                                    <input type="date" class="form-control" name="data_aplicare" value="<?= e(date('Y-m-01')) ?>" required>
+                                                </div>
+                                                <div class="col-12">
+                                                    <label class="form-label">Observații</label>
+                                                    <input type="text" class="form-control" name="observatii" maxlength="255">
+                                                </div>
+                                            </div>
+                                            <div class="table-responsive">
+                                                <table class="table table-sm align-middle">
+                                                    <thead><tr><th>Se aplică de la</th><th>Primește</th><th>Valoare / zi</th><th>Stabilit de</th><th>Observații</th></tr></thead>
+                                                    <tbody>
+                                                        <?php if ($diurnaHistory === []): ?>
+                                                            <tr><td colspan="5" class="text-muted">Diurna nu a fost stabilită pentru acest șofer.</td></tr>
+                                                        <?php endif; ?>
+                                                        <?php foreach ($diurnaHistory as $history): ?>
+                                                            <tr>
+                                                                <td><?= e(format_date_ro((string) $history['data_aplicare'])) ?></td>
+                                                                <td><?= (int) $history['primeste_diurna'] === 1 ? 'Da' : 'Nu' ?></td>
+                                                                <td><?= $history['valoare_zi'] !== null ? e($money($history['valoare_zi'])) : '-' ?></td>
+                                                                <td><?= e((string) ($history['created_by_name'] ?? '-')) ?></td>
+                                                                <td><?= e((string) (($history['observatii'] ?? '') !== '' ? $history['observatii'] : '-')) ?></td>
+                                                            </tr>
+                                                        <?php endforeach; ?>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
+                                            <button type="submit" class="btn btn-primary">Salvează diurna</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                        <?php endif; ?>
+
                         <div class="modal fade" id="documentsModal<?= e($rowId) ?>" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-xl">
                                 <div class="modal-content">
@@ -822,36 +1082,75 @@ $addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static funct
             </table>
         </div>
 
-        <div class="card-footer bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <small class="text-muted">
-                Se afișează <?= e((string) min((int) $pagination['total_rows'], ((int) $pagination['page'] - 1) * (int) $pagination['per_page'] + 1)) ?>
-                -
-                <?= e((string) min((int) $pagination['total_rows'], (int) $pagination['page'] * (int) $pagination['per_page'])) ?>
-                din <?= e((string) ($pagination['total_rows'] ?? 0)) ?> persoane
-            </small>
-            <?php if ((int) ($pagination['total_pages'] ?? 1) > 1): ?>
-                <nav aria-label="Paginare contabilitate personal">
-                    <ul class="pagination pagination-sm mb-0">
-                        <?php
-                        $currentPageNo = (int) ($pagination['page'] ?? 1);
-                        $totalPages = (int) ($pagination['total_pages'] ?? 1);
-                        ?>
-                        <li class="page-item <?= $currentPageNo <= 1 ? 'disabled' : '' ?>">
-                            <a class="page-link" href="<?= e(build_query_url(array_merge($baseQuery, ['p' => max(1, $currentPageNo - 1)]))) ?>">Anterior</a>
-                        </li>
-                        <?php for ($i = 1; $i <= $totalPages; $i++): ?>
-                            <li class="page-item <?= $currentPageNo === $i ? 'active' : '' ?>">
-                                <a class="page-link" href="<?= e(build_query_url(array_merge($baseQuery, ['p' => $i]))) ?>"><?= e((string) $i) ?></a>
-                            </li>
-                        <?php endfor; ?>
-                        <li class="page-item <?= $currentPageNo >= $totalPages ? 'disabled' : '' ?>">
-                            <a class="page-link" href="<?= e(build_query_url(array_merge($baseQuery, ['p' => min($totalPages, $currentPageNo + 1)]))) ?>">Următor</a>
-                        </li>
-                    </ul>
-                </nav>
-            <?php endif; ?>
+        <div class="cp-table-footer">
+            <small class="text-muted" data-cp-row-count data-total="<?= e((string) count($rows)) ?>"><?= e((string) count($rows)) ?> persoane</small>
         </div>
     </section>
+</div>
+
+<div class="modal fade" id="cpLegalCalendarModal" tabindex="-1" aria-labelledby="cpLegalCalendarTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content cp-modal">
+            <div class="modal-header">
+                <div>
+                    <h3 class="modal-title fs-5" id="cpLegalCalendarTitle">
+                        <span class="cp-flag-ro" aria-hidden="true"><i></i><i></i><i></i></span>
+                        Calendar legal — <?= e($period['label']) ?>
+                    </h3>
+                    <div class="small text-muted">
+                        Sărbători legale RO: Nager.Date<?= !empty($calendarMonth['sync']['synced_at']) ? ' · sincronizat la ' . e(format_datetime_ro((string) $calendarMonth['sync']['synced_at'])) : '' ?>.
+                        Zi lucrătoare legală = Luni–Vineri, fără sărbători legale.
+                    </div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
+            </div>
+            <div class="modal-body">
+                <?php if (empty($calendarMonth['complete'])): ?>
+                    <div class="cp-alert is-warning">
+                        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                        Calendar incomplet: <?= e((string) ($calendarMonth['sync']['error'] ?? 'sărbătorile legale nu sunt disponibile.')) ?>
+                        Zilele de weekend sunt corecte, dar zilele lucrătoare nu pot fi confirmate.
+                    </div>
+                <?php endif; ?>
+                <div class="cp-legal-modal-grid">
+                    <div>
+                        <?php $cal = $calendarMonth; $overlay = []; $calSize = 'lg'; require __DIR__ . '/_month_calendar.php'; ?>
+                    </div>
+                    <div>
+                        <ul class="cp-stat-list">
+                            <li><i class="bi bi-calendar3 is-blue" aria-hidden="true"></i><span>Zile calendaristice</span><b><?= e((string) ($calendarMonth['calendar_days'] ?? '—')) ?></b></li>
+                            <li><i class="bi bi-briefcase-fill is-blue" aria-hidden="true"></i><span>Zile lucrătoare (RO)</span><b><?= e($calendarMonth['working_days'] !== null ? (string) $calendarMonth['working_days'] : '—') ?></b></li>
+                            <li><i class="bi bi-cup-hot-fill is-slate" aria-hidden="true"></i><span>Zile weekend</span><b><?= e($calendarMonth['weekend_days'] !== null ? (string) $calendarMonth['weekend_days'] : '—') ?></b></li>
+                            <li><i class="bi bi-star-fill is-red" aria-hidden="true"></i><span>Zile sărbători legale</span><b><?= e($calendarMonth['holiday_days'] !== null ? (string) $calendarMonth['holiday_days'] : '—') ?></b></li>
+                        </ul>
+                        <div class="cp-subtitle mt-3">Sărbători legale în <?= e($period['label']) ?></div>
+                        <?php if (empty($calendarMonth['complete'])): ?>
+                            <div class="small text-muted">Indisponibil.</div>
+                        <?php elseif (($calendarMonth['holidays'] ?? []) === []): ?>
+                            <div class="small text-muted">Nicio sărbătoare legală în această lună.</div>
+                        <?php else: ?>
+                            <ul class="cp-holiday-list">
+                                <?php foreach ($calendarMonth['holidays'] as $holiday): ?>
+                                    <?php $holidayDate = new DateTimeImmutable((string) $holiday['date']); ?>
+                                    <li>
+                                        <div class="cp-holiday-date"><?= e($holidayDate->format('j') . ' ' . LegalCalendarService::MONTH_NAMES[(int) $holidayDate->format('n')] . ' ' . $holidayDate->format('Y')) ?></div>
+                                        <div class="fw-semibold"><?= e((string) $holiday['local_name']) ?></div>
+                                        <div class="small text-muted">
+                                            Sărbătoare legală<?= $holiday['on_weekend'] ? ' · cade în weekend (numărată o singură dată, ca weekend)' : '' ?>
+                                        </div>
+                                    </li>
+                                <?php endforeach; ?>
+                            </ul>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <div class="cp-alert is-info mt-3 mb-0">
+                    <i class="bi bi-info-circle" aria-hidden="true"></i>
+                    Zilele lucrătoare legale nu sunt zilele lucrate de angajați: zilele lucrate se înregistrează separat, pe fiecare angajat (Pontaj &amp; Calendar).
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <?php foreach ($rowModals as $rowModalHtml): ?>
@@ -1236,6 +1535,49 @@ $addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static funct
                     </div>
 
                     <div data-role="accountancy-driver-fields">
+                        <div class="btn-group w-100 mb-3" role="group" aria-label="Tip șofer">
+                            <input type="radio" class="btn-check" name="driver_mode" id="driverModeExisting" value="existent" checked data-role="accountancy-driver-mode">
+                            <label class="btn btn-outline-primary" for="driverModeExisting">Șofer angajat existent</label>
+                            <input type="radio" class="btn-check" name="driver_mode" id="driverModeCollaborator" value="colaborator" data-role="accountancy-driver-mode">
+                            <label class="btn btn-outline-primary" for="driverModeCollaborator">Șofer colaborator (neangajat)</label>
+                        </div>
+
+                        <div data-role="accountancy-driver-mode-panel" data-mode="colaborator">
+                            <div class="alert alert-info">Colaboratorul se adaugă în lista de șoferi, ca să poată fi ales pe curse în Dispecer curse. Nu este angajat al firmei.</div>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">Nume complet</label>
+                                    <input type="text" class="form-control" name="colaborator_nume" maxlength="100" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Telefon</label>
+                                    <input type="text" class="form-control" name="colaborator_telefon" maxlength="20">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Vehicule pe care conduce</label>
+                                    <select class="form-select" name="colaborator_vehicle_ids[]" multiple size="5">
+                                        <?php foreach ($vehicleOptions as $vehicle): ?>
+                                            <option value="<?= e((string) ((int) ($vehicle['id'] ?? 0))) ?>"><?= e((string) ($vehicle['nr_inmatriculare'] ?? '-')) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <div class="form-text">În Dispecer curse șoferul apare doar la vehiculele asociate. Ctrl+click pentru mai multe; primul selectat devine vehiculul principal.</div>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Remunerație lunară</label>
+                                    <input type="number" min="0" step="0.01" class="form-control" name="colaborator_salariu" placeholder="Opțional">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Început colaborare</label>
+                                    <input type="date" class="form-control" name="colaborator_data_inceput" value="<?= e(date('Y-m-d')) ?>">
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label">Observații</label>
+                                    <textarea class="form-control" name="colaborator_observatii" rows="2" placeholder="Ex.: firma colaboratorului, condiții de colaborare"></textarea>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div data-role="accountancy-driver-mode-panel" data-mode="existent">
                         <div class="alert alert-info">Pentru tipul Șofer se selectează un șofer existent din modulul Șoferi. Nu se creează un șofer nou.</div>
                         <div class="row g-3">
                             <div class="col-md-6">
@@ -1261,6 +1603,7 @@ $addStaffTypeOptions = array_values(array_filter($staffTypeOptions, static funct
                                 <label class="form-label">Observații</label>
                                 <textarea class="form-control" name="driver_observatii" rows="2"></textarea>
                             </div>
+                        </div>
                         </div>
                     </div>
 
@@ -1468,8 +1811,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
             if (driverFields) {
                 driverFields.classList.toggle('d-none', !isDriver);
-                driverFields.querySelectorAll('select, input, textarea').forEach(function (input) {
+                var checkedMode = driverFields.querySelector('[data-role="accountancy-driver-mode"]:checked');
+                var driverMode = checkedMode ? checkedMode.value : 'existent';
+                driverFields.querySelectorAll('[data-role="accountancy-driver-mode"]').forEach(function (input) {
                     input.disabled = !isDriver;
+                });
+                driverFields.querySelectorAll('[data-role="accountancy-driver-mode-panel"]').forEach(function (panel) {
+                    var active = isDriver && panel.getAttribute('data-mode') === driverMode;
+                    panel.classList.toggle('d-none', !active);
+                    panel.querySelectorAll('select, input, textarea').forEach(function (input) {
+                        input.disabled = !active;
+                    });
                 });
             }
             if (directFields) {
@@ -1499,8 +1851,48 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         selectEl.addEventListener('change', syncFields);
+        form.querySelectorAll('[data-role="accountancy-driver-mode"]').forEach(function (input) {
+            input.addEventListener('change', syncFields);
+        });
         syncFields();
     });
 
 });
 </script>
+
+<script>
+// Venit din Istoric activitati sofer (cardul Cost total): ?open=salary|diurna&subject=driver-<id>
+// deschide direct fereastra de salariu / diurna a soferului. Bootstrap se incarca in
+// footer, dupa acest script, deci fereastra se deschide la 'load'.
+window.addEventListener('load', function () {
+    var params = new URLSearchParams(window.location.search);
+    var modalPrefix = { salary: 'salaryModal', diurna: 'diurnaModal' }[params.get('open') || ''];
+    var subject = (params.get('subject') || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    var modal = modalPrefix && subject ? document.getElementById(modalPrefix + subject) : null;
+    if (modal && window.bootstrap) {
+        window.bootstrap.Modal.getOrCreateInstance(modal).show();
+    }
+});
+
+// Diurna: campul "Valoare / zi" are sens doar cand soferul primeste diurna.
+document.querySelectorAll('[data-diurna-form]').forEach(function (form) {
+    var receives = form.querySelector('[data-diurna-receives]');
+    var rateField = form.querySelector('[data-diurna-rate-field]');
+    if (!receives || !rateField) {
+        return;
+    }
+    var rateInput = rateField.querySelector('input');
+    var sync = function () {
+        var on = receives.value === '1';
+        rateField.hidden = !on;
+        rateInput.required = on;
+    };
+    receives.addEventListener('change', sync);
+    sync();
+});
+</script>
+
+<?php if ($fiscalEnabled) { require __DIR__ . '/_payroll_config.php'; } ?>
+
+<script src="<?= e(url('assets/js/table-column-filter.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/table-column-filter.js'))) ?>"></script>
+<script src="<?= e(url('assets/js/contabilitate-personal.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/contabilitate-personal.js'))) ?>"></script>

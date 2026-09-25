@@ -11,7 +11,10 @@ return [
             "t.nr_inmatriculare <> 'STOC-ANVELOPE'",
             "t.serie_sasiu <> 'STOCANVELOPE00001'",
         ],
-        'select' => 't.*',
+        'select' => 't.*, cc.nume AS categorie_capacitate_nume, cc.ordine_afisare AS categorie_capacitate_ordine',
+        'joins' => [
+            ['type' => 'LEFT', 'table' => 'vehicule_categorii_capacitate cc', 'on' => 'cc.id = t.categorie_capacitate_id'],
+        ],
         'default_order' => 't.created_at DESC',
         'search_mode' => 'vehicle_plate',
         'search_fields' => ['t.nr_inmatriculare', 't.marca', 't.model', 't.tip_vehicul', 't.serie_sasiu', 't.nr_fabricatie', 't.an_fabricatie_rezervor', 't.formula_axelor', 't.organism_notificat', 't.garaj', 't.observatii'],
@@ -26,6 +29,7 @@ return [
             'km_bord' => ['label' => 'Km bord', 'type' => 'integer'],
             'km_revizie' => ['label' => 'Km revizie', 'type' => 'integer'],
             'serie_sasiu' => ['label' => 'Serie sasiu'],
+            'categorie_capacitate_nume' => ['label' => 'Categorie capacitate'],
             'garaj' => ['label' => 'Garaj'],
             'status' => ['label' => 'Status', 'type' => 'status'],
             'updated_at' => ['label' => 'Actualizat la', 'type' => 'datetime'],
@@ -43,7 +47,9 @@ return [
             'nr_fabricatie' => ['label' => 'Numar fabricatie rezervor'],
             'an_fabricatie_rezervor' => ['label' => 'An fabricatie rezervor', 'type' => 'year'],
             'serie_sasiu' => ['label' => 'Serie sasiu'],
-            'capacitate_transport' => ['label' => 'Capacitate transport (tone)', 'type' => 'number', 'decimals' => 2],
+            'capacitate_transport' => ['label' => 'Capacitate transport reala (tone)', 'type' => 'number', 'decimals' => 2],
+            'capacitate_transport_confirmata' => ['label' => 'Capacitate reala verificata', 'type' => 'capacity_verified'],
+            'categorie_capacitate_nume' => ['label' => 'Categorie capacitate'],
             'formula_axelor' => ['label' => 'Formula axelor'],
             'capacitate_rezervor' => ['label' => 'Capacitate rezervor (litri)', 'type' => 'number', 'decimals' => 2],
             'mma' => ['label' => 'MMA (kg)', 'type' => 'number', 'decimals' => 2],
@@ -123,13 +129,48 @@ return [
                 'placeholder' => 'Ex: 2011',
                 'col_class' => 'col-12 col-md-3',
             ],
+            // CAPACITATEA TEHNICA REALA. Singura valoare folosita in calcule
+            // (grad de umplere, validarea incarcarii, KPI). Nu are legatura cu
+            // categoria de mai jos si nu se schimba cand se schimba categoria.
             'capacitate_transport' => [
-                'label' => 'Capacitate transport (tone)',
+                'label' => 'Capacitate transport reala (tone)',
                 'type' => 'number',
                 'required' => false,
                 'nullable' => true,
                 'min' => 0,
                 'step' => '0.01',
+                'placeholder' => 'Ex: 20.00',
+                'help' => 'Capacitatea tehnica reala a vehiculului. Se foloseste in toate calculele. Nu completa aici valoarea grupei de selectie.',
+                'col_class' => 'col-12 col-md-4',
+            ],
+            // Marcajul de verificare: valorile venite din perioada in care acest
+            // camp servea si la grupare sunt nesigure pana le confirma un om.
+            'capacitate_transport_confirmata' => [
+                'label' => 'Capacitate reala verificata',
+                'type' => 'select',
+                'required' => true,
+                'options' => ['0' => 'Nu - de verificat', '1' => 'Da - verificata'],
+                'default' => '0',
+                'help' => 'Alege "Da" doar dupa ce ai confirmat capacitatea din documentele vehiculului. Cat timp este "Nu", rapoartele marcheaza cursele acestui vehicul ca fiind calculate pe o capacitate neverificata.',
+                'col_class' => 'col-12 col-md-4',
+            ],
+            // ETICHETA DE GRUPARE. Nu intra niciodata intr-un calcul; schimbarea
+            // ei nu atinge capacitatea reala de mai sus.
+            'categorie_capacitate_id' => [
+                'label' => 'Categorie capacitate',
+                'type' => 'select',
+                'required' => false,
+                'nullable' => true,
+                'placeholder' => '-- Fara categorie --',
+                'help' => 'Doar pentru grupare si selectie in masa in dropdown-uri. Nu influenteaza niciun calcul.',
+                'col_class' => 'col-12 col-md-4',
+                'source' => [
+                    'table' => 'vehicule_categorii_capacitate',
+                    'value' => 'id',
+                    'label' => 'nume',
+                    'where' => 'activ = 1',
+                    'order' => 'ordine_afisare ASC, nume ASC',
+                ],
             ],
             'formula_axelor' => [
                 'label' => 'Formula axelor',
@@ -216,6 +257,25 @@ return [
                     'autovehicul' => 'Autoturism',
                     'autoutilitara' => 'Autoutilitara',
                 ],
+            ],
+            'categorie_capacitate_id' => [
+                'label' => 'Categorie capacitate',
+                'type' => 'multiselect',
+                'column' => 't.categorie_capacitate_id',
+                'operator' => '=',
+                'source' => [
+                    'table' => 'vehicule_categorii_capacitate',
+                    'value' => 'id',
+                    'label' => 'nume',
+                    'order' => 'ordine_afisare ASC, nume ASC',
+                ],
+            ],
+            'capacitate_transport_confirmata' => [
+                'label' => 'Capacitate reala',
+                'type' => 'select',
+                'column' => 't.capacitate_transport_confirmata',
+                'operator' => '=',
+                'options' => ['1' => 'Verificata', '0' => 'De verificat'],
             ],
             // Numara ansamblul cap tractor + semiremorca cuplata ca o singura unitate de
             // flota: semiremorca cuplata activ este ascunsa (apare pe randul capului tractor,

@@ -46,6 +46,9 @@ $drawerTone = static function (string $reasonKey): string {
     if (in_array($reasonKey, ['repair', 'leave', 'medical_leave'], true)) {
         return 'warning';
     }
+    if ($reasonKey === 'diurna_change') {
+        return 'info';
+    }
 
     return 'muted';
 };
@@ -54,6 +57,7 @@ $drawerIcon = static function (string $reasonKey): string {
         'repair' => 'bi-tools',
         'leave', 'medical_leave' => 'bi-calendar2-check',
         'manual_inactive' => 'bi-slash-circle',
+        'diurna_change' => 'bi-calendar2-week',
         'missing_documents' => 'bi-file-earmark-excel',
         default => 'bi-file-earmark-x',
     };
@@ -94,7 +98,7 @@ $drawerSnapshot = static function (array $approval): array {
 };
 
 if ($drawerIsAdmin) {
-    $approvalCounts = is_array($approvalSummary['counts'] ?? null) ? $approvalSummary['counts'] : ['vehicle' => 0, 'driver' => 0, 'repair' => 0];
+    $approvalCounts = is_array($approvalSummary['counts'] ?? null) ? $approvalSummary['counts'] : ['vehicle' => 0, 'driver' => 0, 'repair' => 0, 'diurna' => 0];
     $approvalTabs = [
         'vehicle' => [
             'label' => 'Vehicule',
@@ -111,8 +115,13 @@ if ($drawerIsAdmin) {
             'count' => (int) ($approvalCounts['repair'] ?? 0),
             'rows' => is_array($approvalSummary['repairs'] ?? null) ? $approvalSummary['repairs'] : [],
         ],
+        'diurna' => [
+            'label' => 'Diurne',
+            'count' => (int) ($approvalCounts['diurna'] ?? 0),
+            'rows' => is_array($approvalSummary['diurne'] ?? null) ? $approvalSummary['diurne'] : [],
+        ],
     ];
-    $approvalTotal = (int) ($approvalSummary['total'] ?? ((int) ($approvalCounts['vehicle'] ?? 0) + (int) ($approvalCounts['driver'] ?? 0) + (int) ($approvalCounts['repair'] ?? 0)));
+    $approvalTotal = (int) ($approvalSummary['total'] ?? array_sum(array_map('intval', $approvalCounts)));
     $drawerTitle = 'Solicitari aprobare in asteptare';
     $drawerAllLabel = 'Vezi toate solicitarile';
 } else {
@@ -151,6 +160,7 @@ $resourceTypeLabels = [
     'vehicle' => 'Vehicul',
     'driver' => 'Sofer',
     'repair' => 'Reparatie',
+    'diurna' => 'Diurna',
 ];
 $statusLabels = [
     'pending' => 'In asteptare',

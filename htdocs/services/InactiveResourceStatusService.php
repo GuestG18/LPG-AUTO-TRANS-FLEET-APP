@@ -128,8 +128,7 @@ class InactiveResourceStatusService
     public function getDriverStatus(int $driverId, ?string $referenceDate = null): ?array
     {
         $stmt = $this->db->prepare("
-            SELECT id, nume, status, employment_status, observatii, created_at, updated_at,
-                   data_angajare, data_incetare, termination_date
+            SELECT *
             FROM soferi
             WHERE id = :id
             LIMIT 1
@@ -142,7 +141,10 @@ class InactiveResourceStatusService
             return null;
         }
 
-        $documents = $this->getDriverDocumentIssues($driverId);
+        // Soferii colaboratori au documentele la firma care ii angajeaza: nu le verificam.
+        $documents = (string) ($driver['tip_colaborare'] ?? '') === 'colaborator'
+            ? []
+            : $this->getDriverDocumentIssues($driverId);
         $documentReasonKey = $this->resolveDocumentReasonKey($documents);
         $reasons = [];
 

@@ -1606,10 +1606,11 @@
 
     /**
      * Aduna celulele unei serii pentru un interval de km.
-     * Sumele se aduna, procentele se mediaza ponderat cu numarul de curse.
+     * Sumele se aduna; gradul de incarcare se recalculeaza PONDERAT pe capacitate
+     * (total tone / total capacitati aplicabile), nu ca medie a procentelor.
      */
     function aggregateCapacityCell(cellsByKey, bandKey, series) {
-        var total = { curse: 0, km: 0, tone: 0, facturare: 0, profit: 0, grad_suma: 0, grad_curse: 0 };
+        var total = { curse: 0, km: 0, tone: 0, facturare: 0, profit: 0, tone_grad: 0, capacitate_grad: 0 };
 
         series.members.forEach(function (member) {
             var cell = cellsByKey[bandKey + '|' + member];
@@ -1622,13 +1623,11 @@
             total.tone += num(cell.tone);
             total.facturare += num(cell.facturare);
             total.profit += num(cell.profit);
-            if (num(cell.grad_incarcare) > 0) {
-                total.grad_suma += num(cell.grad_incarcare) * num(cell.curse);
-                total.grad_curse += num(cell.curse);
-            }
+            total.tone_grad += num(cell.tone_grad);
+            total.capacitate_grad += num(cell.capacitate_grad);
         });
 
-        total.grad_incarcare = total.grad_curse > 0 ? total.grad_suma / total.grad_curse : 0;
+        total.grad_incarcare = total.capacitate_grad > 0 ? (total.tone_grad / total.capacitate_grad) * 100 : 0;
         total.km_per_cursa = total.curse > 0 ? total.km / total.curse : 0;
         total.tone_per_cursa = total.curse > 0 ? total.tone / total.curse : 0;
 
@@ -1838,10 +1837,10 @@
                                 var eticheta = byCapacity ? 'pe capacitate' : 'pe interval';
 
                                 if (isRate) {
-                                    var suma = cells.reduce(function (sum, cell) {
-                                        return sum + num(cell.grad_incarcare) * num(cell.curse);
-                                    }, 0);
-                                    return 'Media ' + eticheta + ': ' + fmt(curse > 0 ? suma / curse : 0, 'pct') +
+                                    // Ponderat pe capacitate: total tone / total capacitati.
+                                    var toneGrad = cells.reduce(function (sum, cell) { return sum + num(cell.tone_grad); }, 0);
+                                    var capGrad = cells.reduce(function (sum, cell) { return sum + num(cell.capacitate_grad); }, 0);
+                                    return 'Media ' + eticheta + ': ' + fmt(capGrad > 0 ? (toneGrad / capGrad) * 100 : 0, 'pct') +
                                         ' · ' + fmt(curse, 'int') + ' curse';
                                 }
 

@@ -3,6 +3,8 @@ $credentialsAvailable = !empty($credentialsAvailable);
 $dataUrl = build_query_url(['page' => 'harta_flota', 'action' => 'data']);
 $hierarchyUrl = build_query_url(['page' => 'harta_flota', 'action' => 'hierarchy']);
 $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
+$selectionUrl = build_query_url(['page' => 'harta_flota', 'action' => 'selection']);
+$hiddenCarIds = array_values(array_map('intval', $hiddenCarIds ?? []));
 ?>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
@@ -56,6 +58,10 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
                             <span class="form-check-label"><i class="bi bi-exclamation-triangle-fill text-warning"></i> Fara semnal</span>
                         </label>
                     </div>
+                    <button type="button" class="btn btn-sm btn-outline-primary w-100 mt-2" id="fleet-sel-open">
+                        <i class="bi bi-funnel me-1"></i>Alege vehiculele afisate
+                        <span class="small" id="fleet-sel-summary"></span>
+                    </button>
                 </div>
                 <div class="overflow-auto p-2 fleet-tree" id="fleet-tree" style="min-height: 0;"></div>
             </div>
@@ -92,7 +98,44 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
     </div>
 </div>
 
+<!-- Formular: ce vehicule apar in pagina (lista + harta), salvat per utilizator -->
+<div class="modal fade" id="fleet-sel-modal" tabindex="-1" aria-labelledby="fleet-sel-title" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h6" id="fleet-sel-title"><i class="bi bi-funnel me-1"></i>Vehicule afisate in Harta Flota</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted mb-2">
+                    Doar vehiculele bifate apar in lista si pe harta. Alegerea se salveaza pe contul tau;
+                    vehiculele noi aparute in SAS sunt afisate implicit.
+                </p>
+                <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+                    <input type="search" id="fleet-sel-search" class="form-control form-control-sm" style="max-width: 260px;"
+                           placeholder="Cauta numar..." autocomplete="off">
+                    <div class="btn-group btn-group-sm">
+                        <button type="button" class="btn btn-outline-secondary" id="fleet-sel-all">Toate</button>
+                        <button type="button" class="btn btn-outline-secondary" id="fleet-sel-none">Niciunul</button>
+                    </div>
+                    <span class="ms-auto small fw-semibold" id="fleet-sel-count"></span>
+                </div>
+                <div id="fleet-sel-list"><div class="text-muted small">Se incarca vehiculele din SAS...</div></div>
+            </div>
+            <div class="modal-footer">
+                <span class="small text-danger me-auto" id="fleet-sel-error"></span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Anuleaza</button>
+                <button type="button" class="btn btn-sm btn-primary" id="fleet-sel-save">Salveaza</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <style>
+    .fleet-sel-group { border: 1px solid var(--bs-border-color); border-radius: .375rem; margin-bottom: .6rem; }
+    .fleet-sel-group-head { background: var(--bs-tertiary-bg); padding: .35rem .6rem; font-size: .85rem; cursor: pointer; }
+    .fleet-sel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: .2rem .8rem; padding: .45rem .6rem; }
+    .fleet-sel-grid .form-check { font-size: .85rem; margin: 0; }
     .fleet-map-shell { height: calc(100vh - 170px); min-height: 520px; }
     .fleet-side-panel { width: 300px; min-width: 300px; min-height: 0; transition: margin-left .2s ease; }
     .fleet-side-panel.hidden { display: none !important; }
@@ -144,6 +187,9 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
     var ROUTE_URL = <?= json_encode($routeUrl, JSON_UNESCAPED_SLASHES) ?>;
     var REFRESH_MS = 30000;
     var CREDENTIALS_OK = <?= $credentialsAvailable ? 'true' : 'false' ?>;
+    var SELECTION_URL = <?= json_encode($selectionUrl, JSON_UNESCAPED_SLASHES) ?>;
+    var CSRF = <?= json_encode(csrf_token()) ?>;
+    var savedHidden = new Set(<?= json_encode($hiddenCarIds) ?>);   // vehicule debifate, salvate per utilizator
 
     var EVENT_LABELS = {
         0: 'Obisnuit', 1: 'Alarma', 3: 'Panica', 6: 'Pornire motor', 7: 'Oprire motor',
@@ -190,7 +236,11 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
     var lastPositions = [];
     var hierarchy = null;
     var markersById = {};
-    var visibleCarIds = null;     // null = tot; Set de sas_vehicle_id vizibile
+    var focusCarId = (function () {
+        var value = new URLSearchParams(window.location.search).get('car');
+        return value && /^\d+$/.test(value) ? value : null;
+    })();
+    var visibleCarIds = null;    // null = tot; Set de sas_vehicle_id vizibile
     var selectedCarId = null;
     var searchTerm = '';
     var didInitialFit = false;
@@ -204,6 +254,10 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
     var elRouteEvents = document.getElementById('route-events');
     var elRouteSummary = document.getElementById('route-summary');
     var elRouteClear = document.getElementById('route-clear');
+    var elSelSummary = document.getElementById('fleet-sel-summary');
+    var elSelList = document.getElementById('fleet-sel-list');
+    var elSelCount = document.getElementById('fleet-sel-count');
+    var elSelError = document.getElementById('fleet-sel-error');
 
     function esc(value) {
         return String(value === null || value === undefined ? '' : value)
@@ -235,8 +289,13 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
         return haystack.indexOf(searchTerm) !== -1;
     }
 
+    function isHiddenCar(carId) {
+        return savedHidden.has(parseInt(carId, 10));
+    }
+
     function isVisible(p) {
         if (visibleCarIds !== null && !visibleCarIds.has(p.sas_vehicle_id)) { return false; }
+        if (isHiddenCar(p.sas_vehicle_id)) { return false; }
         return statusFilterAllows(p) && matchesSearch(p);
     }
 
@@ -311,7 +370,8 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
             bounds.push([p.latitude, p.longitude]);
         });
 
-        elCounter.textContent = shown + '/' + lastPositions.length;
+        var chosen = lastPositions.filter(function (p) { return !isHiddenCar(p.sas_vehicle_id); }).length;
+        elCounter.textContent = shown + '/' + chosen;
 
         if (!didInitialFit && bounds.length > 0) {
             map.fitBounds(bounds, { padding: [30, 30], maxZoom: 12 });
@@ -343,11 +403,14 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
         if (!hierarchy) { return; }
         var byBranch = {}, byWp = {};
         hierarchy.work_points.forEach(function (wp) { (byBranch[wp.branch_id] = byBranch[wp.branch_id] || []).push(wp); });
-        hierarchy.cars.forEach(function (c) { (byWp[c.work_point_id] = byWp[c.work_point_id] || []).push(c); });
+        var chosenCars = hierarchy.cars.filter(function (c) { return !isHiddenCar(c.sas_vehicle_id); });
+        chosenCars.forEach(function (c) { (byWp[c.work_point_id] = byWp[c.work_point_id] || []).push(c); });
 
         function vehRow(c) {
-            return '<li class="veh-row" data-car="' + esc(c.sas_vehicle_id) + '">' +
-                '<input type="checkbox" class="form-check-input form-check-input-sm me-1 veh-check" checked data-car="' + esc(c.sas_vehicle_id) + '">' +
+            var checked = ' checked';
+            return '<li class="veh-row" data-car="' + esc(c.sas_vehicle_id) + '" data-search="' +
+                esc(((c.registration || '') + ' ' + (c.driver || '')).toLowerCase()) + '">' +
+                '<input type="checkbox" class="form-check-input form-check-input-sm me-1 veh-check"' + checked + ' data-car="' + esc(c.sas_vehicle_id) + '">' +
                 '<span class="veh-status" data-car-status="' + esc(c.sas_vehicle_id) + '"></span> ' +
                 '<span class="veh-name" data-car-zoom="' + esc(c.sas_vehicle_id) + '">' + esc(c.registration) + '</span>' +
                 '</li>';
@@ -372,16 +435,24 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
                     if (cars.length === 0) { return; }
                     wpHtml += group('Punct lucru', wp.name, cars.map(vehRow).join(''), 3);
                 });
-                brHtml += group('Sucursala', br.name, wpHtml, 2);
+                if (wpHtml !== '') { brHtml += group('Sucursala', br.name, wpHtml, 2); }
             });
-            html += group('Companie', co.name, brHtml, 1);
+            if (brHtml !== '') { html += group('Companie', co.name, brHtml, 1); }
         });
         html += '</ul>';
+        if (chosenCars.length === 0) {
+            html = '<div class="text-muted small p-2">Niciun vehicul ales. Foloseste butonul "Alege vehiculele afisate".</div>';
+        }
         elTree.innerHTML = html;
+        elSelSummary.textContent = '(' + chosenCars.length + '/' + hierarchy.cars.length + ')';
+        syncGroupChecks();
+        recomputeVisibleFromTree();
+        applyTreeSearch();
+        renderMarkers();
         updateTreeStatusIcons();
 
         // Optiunile pentru selectorul de traseu.
-        var options = hierarchy.cars.slice().sort(function (a, b) {
+        var options = chosenCars.slice().sort(function (a, b) {
             return String(a.registration).localeCompare(String(b.registration));
         }).map(function (c) {
             return '<option value="' + esc(c.sas_vehicle_id) + '">' + esc(c.registration) + '</option>';
@@ -414,12 +485,156 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
         visibleCarIds = allChecked ? null : set;
     }
 
+    // Bifa de grup reflecta copiii: bifata = toti, indeterminata = partial.
+    function syncGroupChecks() {
+        var groups = Array.prototype.slice.call(elTree.querySelectorAll('.grp-check')).reverse();
+        groups.forEach(function (g) {
+            var kids = g.closest('li').querySelectorAll('ul .veh-check');
+            var on = 0;
+            kids.forEach(function (cb) { if (cb.checked) { on++; } });
+            g.checked = kids.length > 0 && on === kids.length;
+            g.indeterminate = on > 0 && on < kids.length;
+        });
+    }
+
+    // Cautarea filtreaza si lista, nu doar harta; grupurile fara potriviri se ascund.
+    function applyTreeSearch() {
+        elTree.querySelectorAll('.veh-row').forEach(function (row) {
+            var ok = searchTerm === '' || (row.getAttribute('data-search') || '').indexOf(searchTerm) !== -1;
+            row.style.display = ok ? '' : 'none';
+        });
+        Array.prototype.slice.call(elTree.querySelectorAll('.grp-check')).reverse().forEach(function (g) {
+            var li = g.closest('li');
+            var any = Array.prototype.some.call(li.querySelectorAll('.veh-row'), function (r) { return r.style.display !== 'none'; });
+            li.style.display = any ? '' : 'none';
+        });
+    }
+
+    // ---------------------------------------------------------------- formular selectie
+    var selModal = null;
+
+    function renderSelectionForm() {
+        if (!hierarchy) { return; }
+        var wpById = {}, brById = {};
+        hierarchy.work_points.forEach(function (wp) { wpById[wp.id] = wp; });
+        (hierarchy.branches || []).forEach(function (br) { brById[br.id] = br; });
+
+        var groups = {}, order = [];
+        hierarchy.cars.slice().sort(function (a, b) {
+            return String(a.registration).localeCompare(String(b.registration));
+        }).forEach(function (c) {
+            var key = String(c.work_point_id);
+            if (!groups[key]) {
+                var wp = wpById[c.work_point_id];
+                var br = wp ? brById[wp.branch_id] : null;
+                groups[key] = { title: (br ? br.name + ' / ' : '') + (wp ? wp.name : 'Fara punct de lucru'), cars: [] };
+                order.push(key);
+            }
+            groups[key].cars.push(c);
+        });
+        order.sort(function (a, b) { return groups[a].title.localeCompare(groups[b].title); });
+
+        elSelList.innerHTML = order.map(function (key) {
+            var g = groups[key];
+            return '<div class="fleet-sel-group">' +
+                '<label class="fleet-sel-group-head d-flex align-items-center gap-2 fw-semibold m-0">' +
+                '<input type="checkbox" class="form-check-input m-0 sel-grp"> ' + esc(g.title) +
+                ' <span class="text-muted fw-normal">(' + g.cars.length + ')</span></label>' +
+                '<div class="fleet-sel-grid">' + g.cars.map(function (c) {
+                    return '<label class="form-check sel-item" data-search="' + esc(String(c.registration || '').toLowerCase()) + '">' +
+                        '<input type="checkbox" class="form-check-input sel-car" value="' + esc(c.sas_vehicle_id) + '"' +
+                        (isHiddenCar(c.sas_vehicle_id) ? '' : ' checked') + '> ' +
+                        '<span class="form-check-label">' + esc(c.registration) + '</span></label>';
+                }).join('') + '</div></div>';
+        }).join('') || '<div class="text-muted small">Nu exista vehicule in SAS.</div>';
+        syncSelectionForm();
+    }
+
+    function syncSelectionForm() {
+        elSelList.querySelectorAll('.fleet-sel-group').forEach(function (g) {
+            var kids = g.querySelectorAll('.sel-car'), on = 0;
+            kids.forEach(function (cb) { if (cb.checked) { on++; } });
+            var head = g.querySelector('.sel-grp');
+            head.checked = kids.length > 0 && on === kids.length;
+            head.indeterminate = on > 0 && on < kids.length;
+        });
+        elSelCount.textContent = elSelList.querySelectorAll('.sel-car:checked').length + ' din ' +
+            elSelList.querySelectorAll('.sel-car').length + ' selectate';
+    }
+
+    elSelList.addEventListener('change', function (event) {
+        if (event.target.classList.contains('sel-grp')) {
+            event.target.closest('.fleet-sel-group').querySelectorAll('.sel-item').forEach(function (item) {
+                if (item.style.display !== 'none') { item.querySelector('.sel-car').checked = event.target.checked; }
+            });
+        }
+        syncSelectionForm();
+    });
+
+    document.getElementById('fleet-sel-search').addEventListener('input', function (event) {
+        var term = String(event.target.value || '').trim().toLowerCase();
+        elSelList.querySelectorAll('.sel-item').forEach(function (item) {
+            item.style.display = term === '' || item.getAttribute('data-search').indexOf(term) !== -1 ? '' : 'none';
+        });
+        elSelList.querySelectorAll('.fleet-sel-group').forEach(function (g) {
+            var any = Array.prototype.some.call(g.querySelectorAll('.sel-item'), function (i) { return i.style.display !== 'none'; });
+            g.style.display = any ? '' : 'none';
+        });
+    });
+
+    // Toate / Niciunul actioneaza doar pe vehiculele vizibile dupa cautare.
+    function setFormChecks(value) {
+        elSelList.querySelectorAll('.sel-item').forEach(function (item) {
+            if (item.style.display !== 'none') { item.querySelector('.sel-car').checked = value; }
+        });
+        syncSelectionForm();
+    }
+    document.getElementById('fleet-sel-all').addEventListener('click', function () { setFormChecks(true); });
+    document.getElementById('fleet-sel-none').addEventListener('click', function () { setFormChecks(false); });
+
+    document.getElementById('fleet-sel-open').addEventListener('click', function () {
+        elSelError.textContent = '';
+        document.getElementById('fleet-sel-search').value = '';
+        renderSelectionForm();
+        // bootstrap se incarca in footer, dupa acest script: il cautam la click.
+        if (!selModal) { selModal = new bootstrap.Modal(document.getElementById('fleet-sel-modal')); }
+        selModal.show();
+    });
+
+    document.getElementById('fleet-sel-save').addEventListener('click', function () {
+        var btn = this;
+        var hidden = [];
+        elSelList.querySelectorAll('.sel-car').forEach(function (cb) {
+            if (!cb.checked) { hidden.push(parseInt(cb.value, 10)); }
+        });
+        btn.disabled = true;
+        elSelError.textContent = '';
+        fetch(SELECTION_URL, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ csrf: CSRF, hidden: hidden })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res || !res.ok) { elSelError.textContent = (res && res.error) || 'Salvare esuata.'; return; }
+                savedHidden = new Set(res.hidden || hidden);
+                if (elRouteVehicle.value && isHiddenCar(elRouteVehicle.value)) { clearRoute(); }
+                didInitialFit = false;          // reincadram harta pe noua selectie
+                renderTree();
+                selModal.hide();
+            })
+            .catch(function () { elSelError.textContent = 'Salvare esuata.'; })
+            .then(function () { btn.disabled = false; });
+    });
+
     elTree.addEventListener('change', function (event) {
         var target = event.target;
         if (target.classList.contains('grp-check')) {
             target.closest('li').querySelectorAll('ul input[type="checkbox"]').forEach(function (cb) { cb.checked = target.checked; });
         }
         if (target.classList.contains('veh-check') || target.classList.contains('grp-check')) {
+            syncGroupChecks();
             recomputeVisibleFromTree();
             renderMarkers();
         }
@@ -541,6 +756,12 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
                 lastPositions = Array.isArray(payload.positions) ? payload.positions : [];
                 renderMarkers();
                 updateTreeStatusIcons();
+                // ?car=<id SAS> (ex. din banda GPS a Dispecer curse): centreaza o
+                // singura data pe vehiculul cerut, apoi harta ramane libera.
+                if (focusCarId !== null && markersById[focusCarId]) {
+                    zoomToCar(focusCarId);
+                    focusCarId = null;
+                }
                 showError(payload.error || null);
                 if (payload.fetched_at) {
                     elUpdated.textContent = 'Ultima actualizare SAS: ' + payload.fetched_at + (payload.from_cache ? ' (cache)' : '');
@@ -566,6 +787,7 @@ $routeUrl = build_query_url(['page' => 'harta_flota', 'action' => 'route']);
     // ---------------------------------------------------------------- UI diverse
     document.getElementById('fleet-map-search').addEventListener('input', function (event) {
         searchTerm = String(event.target.value || '').trim().toLowerCase();
+        applyTreeSearch();
         renderMarkers();
     });
     ['flt-moving', 'flt-stopped', 'flt-stale'].forEach(function (id) {

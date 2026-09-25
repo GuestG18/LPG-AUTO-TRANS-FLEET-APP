@@ -201,7 +201,163 @@ class FuelModel extends BaseModel
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
+        // Vehiculele debifate in formularul "Vehicule sincronizate": alimentarile
+        // lor din CardOil nu se mai importa. Cheia = numarul fara spatii, uppercase.
+        $this->db->exec("
+            CREATE TABLE IF NOT EXISTS fuel_vehicle_exclusions (
+                vehicle_key VARCHAR(40) NOT NULL PRIMARY KEY,
+                vehicle_registration VARCHAR(40) NOT NULL,
+                created_by INT UNSIGNED NULL,
+                created_at DATETIME NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
         $this->schemaEnsured = true;
+    }
+
+    /** @return array<string,string> vehicle_key => numar, pentru vehiculele excluse de la import */
+    public function getExcludedVehicles(): array
+    {
+        $this->ensureSchema();
+        $rows = $this->db->query('SELECT vehicle_key, vehicle_registration FROM fuel_vehicle_exclusions ORDER BY vehicle_registration')->fetchAll();
+
+        $excluded = [];
+        foreach ($rows as $row) {
+            $excluded[(string) $row['vehicle_key']] = (string) $row['vehicle_registration'];
+        }
+
+        return $excluded;
+    }
+
+    /**
+     * Inlocuieste lista de vehicule excluse de la importul CardOil.
+     *
+     * @param list<string> $registrations
+     */
+    public function saveExcludedVehicles(array $registrations, ?int $userId): void
+    {
+        $this->ensureSchema();
+
+        $rows = [];
+        foreach ($registrations as $registration) {
+            $registration = trim((string) $registration);
+            $key = $this->vehicleKey($registration);
+            if ($key !== '') {
+                $rows[$key] = $registration;
+            }
+        }
+
+        $this->db->beginTransaction();
+        try {
+            $this->db->exec('DELETE FROM fuel_vehicle_exclusions');
+            $stmt = $this->db->prepare('
+                INSERT INTO fuel_vehicle_exclusions (vehicle_key, vehicle_registration, created_by, created_at)
+                VALUES (:vehicle_key, :vehicle_registration, :created_by, :created_at)
+            ');
+            foreach ($rows as $key => $registration) {
+                $stmt->execute([
+                    ':vehicle_key' => $key,
+                    ':vehicle_registration' => $registration,
+                    ':created_by' => $userId,
+                    ':created_at' => date('Y-m-d H:i:s'),
+                ]);
+            }
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            $this->db->rollBack();
+            throw $exception;
+        }
+    }
+
+    /**
+     * Alimentarile CardOil deja importate pentru vehiculele excluse, de la o data,
+     * grupate pe vehicul (previzualizare inainte de stergere).
+     *
+     * @return list<array{vehicle_registration:string,fillups:int,liters:float,total_value:float,first_at:string,last_at:string}>
+     */
+    public function previewExcludedFillups(string $dateFrom): array
+    {
+        $this->ensureSchema();
+        if ($this->getExcludedVehicles() === []) {
+            return [];
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT MAX(x.vehicle_registration) AS vehicle_registration,
+                   COUNT(*) AS fillups,
+                   COALESCE(SUM(f.quantity_liters), 0) AS liters,
+                   COALESCE(SUM(f.total_value), 0) AS total_value,
+                   MIN(f.fillup_datetime) AS first_at,
+                   MAX(f.fillup_datetime) AS last_at
+            FROM fuel_fillups f
+            INNER JOIN fuel_vehicle_exclusions x
+              ON x.vehicle_key = REPLACE(UPPER(f.vehicle_registration), ' ', '')
+            WHERE f.source_type = 'api'
+              AND f.fillup_datetime >= :date_from
+            GROUP BY x.vehicle_key
+            ORDER BY vehicle_registration
+        ");
+        $stmt->execute([':date_from' => $dateFrom . ' 00:00:00']);
+
+        return array_map(static fn (array $row): array => [
+            'vehicle_registration' => (string) $row['vehicle_registration'],
+            'fillups' => (int) $row['fillups'],
+            'liters' => (float) $row['liters'],
+            'total_value' => (float) $row['total_value'],
+            'first_at' => (string) $row['first_at'],
+            'last_at' => (string) $row['last_at'],
+        ], $stmt->fetchAll());
+    }
+
+    /**
+     * Sterge definitiv alimentarile CardOil ale vehiculelor excluse, de la o data.
+     * Asocierile cu cursele si deciziile T0 dispar prin ON DELETE CASCADE;
+     * alimentarile introduse manual nu se ating.
+     */
+    public function deleteExcludedFillups(string $dateFrom): int
+    {
+        $this->ensureSchema();
+        if ($this->getExcludedVehicles() === []) {
+            return 0;
+        }
+
+        $stmt = $this->db->prepare("
+            DELETE f FROM fuel_fillups f
+            INNER JOIN fuel_vehicle_exclusions x
+              ON x.vehicle_key = REPLACE(UPPER(f.vehicle_registration), ' ', '')
+            WHERE f.source_type = 'api'
+              AND f.fillup_datetime >= :date_from
+        ");
+        $stmt->execute([':date_from' => $dateFrom . ' 00:00:00']);
+        $deleted = $stmt->rowCount();
+
+        if ($deleted > 0) {
+            $this->refreshFuelTariffMonitoring();
+        }
+
+        return $deleted;
+    }
+
+    /**
+     * Scoate din lotul CardOil alimentarile vehiculelor excluse.
+     *
+     * @return array{0: list<array>, 1: int} [inregistrari pastrate, numar ignorate]
+     */
+    private function withoutExcludedVehicles(array $records): array
+    {
+        $excluded = $this->getExcludedVehicles();
+        if ($excluded === [] || $records === []) {
+            return [array_values($records), 0];
+        }
+
+        $kept = [];
+        foreach ($records as $record) {
+            if (!isset($excluded[$this->vehicleKey((string) ($record['vehicle_registration'] ?? ''))])) {
+                $kept[] = $record;
+            }
+        }
+
+        return [$kept, count($records) - count($kept)];
     }
 
     public function getTransportLabels(): array
@@ -213,8 +369,9 @@ class FuelModel extends BaseModel
     {
         $this->ensureSchema();
 
-        // Capacitatea, marca si modelul vin din fisa vehiculului (daca exista),
-        // pentru gruparea pe tonaj din selectorul de vehicule.
+        // Marca, modelul, capacitatea REALA si CATEGORIA de capacitate vin din fisa
+        // vehiculului (daca exista). Selectorul grupeaza pe categorie (eticheta),
+        // iar capacitatea reala este doar afisata langa vehicul.
         //
         // Capetele tractor nu au capacitate proprie: capacitatea lor este cea a
         // semiremorcii cuplate (vehicule_cuplaje, activ = 1). Semiremorcile nu
@@ -232,6 +389,14 @@ class FuelModel extends BaseModel
                         ELSE semi.capacitate_transport
                     END
                 ) AS capacitate_transport,
+                MAX(
+                    CASE
+                        WHEN veh.tip_vehicul = 'cap_tractor' THEN COALESCE(semi.categorie_capacitate_id, veh.categorie_capacitate_id)
+                        ELSE veh.categorie_capacitate_id
+                    END
+                ) AS categorie_capacitate_id,
+                MAX(cc.nume) AS categorie_capacitate,
+                MAX(cc.ordine_afisare) AS categorie_capacitate_ordine,
                 MAX(veh.marca) AS marca,
                 MAX(veh.model) AS model
             FROM (
@@ -251,6 +416,11 @@ class FuelModel extends BaseModel
              AND cuplaj.activ = 1
             LEFT JOIN vehicule semi
               ON semi.id = cuplaj.semiremorca_id
+            LEFT JOIN vehicule_categorii_capacitate cc
+              ON cc.id = CASE
+                   WHEN veh.tip_vehicul = 'cap_tractor' THEN COALESCE(semi.categorie_capacitate_id, veh.categorie_capacitate_id)
+                   ELSE veh.categorie_capacitate_id
+                 END
             GROUP BY REPLACE(UPPER(vehicles.vehicle_registration), ' ', '')
             ORDER BY vehicle_registration ASC
         ");
@@ -451,7 +621,11 @@ class FuelModel extends BaseModel
             }
         }
 
-        $upsert = $this->upsertFillups(array_values($recordsByApiId));
+        [$importable, $skippedExcluded] = $this->withoutExcludedVehicles($recordsByApiId);
+        if ($skippedExcluded > 0) {
+            $warnings[] = $skippedExcluded . ' alimentari ignorate (vehicule excluse de la sincronizare).';
+        }
+        $upsert = $this->upsertFillups($importable);
         $this->refreshAutomaticAssociations($from->format('Y-m-d'), $to->format('Y-m-d'));
         if ($lastMeta !== []) {
             $this->storeSyncMeta($lastMeta);
@@ -561,7 +735,11 @@ class FuelModel extends BaseModel
         }
 
         $records = array_values($recordsByApiId);
-        $upsert = $this->upsertFillups($records);
+        [$importable, $skippedExcluded] = $this->withoutExcludedVehicles($records);
+        if ($skippedExcluded > 0) {
+            $warnings[] = $skippedExcluded . ' alimentari ignorate (vehicule excluse de la sincronizare).';
+        }
+        $upsert = $this->upsertFillups($importable);
 
         // Cursorul final real: ID-ul maxim adus (bucla se opreste inainte de a
         // avansa cursorul pe ultima pagina, deci $cursor singur ar fi in urma).

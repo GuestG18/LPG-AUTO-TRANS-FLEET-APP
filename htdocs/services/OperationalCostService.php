@@ -119,7 +119,6 @@ class OperationalCostService
                 'salariu_multiplicator' => (float) ($settings['salariu_multiplicator'] ?: 0),
                 'tva_carburant_fallback' => (float) ($settings['tva_carburant_fallback'] ?: 0),
                 'management_alocare' => (string) $settings['management_alocare'],
-                'diurna_tarif_zi' => (string) $settings['diurna_tarif_zi'],
                 'km_source' => $kmSource,
             ],
             'schema_ready' => $this->model->schemaReady(),

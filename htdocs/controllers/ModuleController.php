@@ -9,6 +9,7 @@ class ModuleController
     private DocumentModel $documentModel;
     private VehicleCouplingModel $vehicleCouplingModel;
     private TireModel $tireModel;
+    private VehicleCapacityCategoryModel $capacityCategoryModel;
     private EntityStatusService $entityStatusService;
     private PDO $db;
 
@@ -21,6 +22,7 @@ class ModuleController
         $this->documentModel = new DocumentModel($db);
         $this->vehicleCouplingModel = new VehicleCouplingModel($db);
         $this->tireModel = new TireModel($db);
+        $this->capacityCategoryModel = new VehicleCapacityCategoryModel($db);
         $this->entityStatusService = new EntityStatusService($db);
     }
 
@@ -99,6 +101,9 @@ class ModuleController
                 return;
             case 'delete_tire_stock':
                 $this->deleteMaintenanceTireStockAction($moduleKey, $module);
+                return;
+            case 'bulk_delete_tire_stock':
+                $this->bulkDeleteMaintenanceTireStockAction($moduleKey, $module);
                 return;
             case 'add_document_type_config':
                 $this->addDocumentTypeConfigAction($moduleKey, $module);
@@ -1795,6 +1800,11 @@ class ModuleController
                     } else {
                         $this->syncVehicleTireLayoutSafe($data + $existing + ['id' => $id]);
                     }
+
+                    // Capacitatea reala si categoria de capacitate sunt doua campuri
+                    // independente: schimbarea unuia nu il atinge pe celalalt. Logam
+                    // orice modificare a lor, ca sa fie auditabila corectia.
+                    $this->logVehicleCapacityChangeSafe($id, $existing, $updatedVehicle ?? ($data + $existing));
                 }
             }
 
@@ -2519,8 +2529,9 @@ class ModuleController
         $supplier = trim((string) ($_POST['stock_supplier'] ?? ''));
         $invoiceNumber = trim((string) ($_POST['stock_invoice_number'] ?? ''));
         $currentMileageRaw = trim((string) ($_POST['stock_current_mileage'] ?? $kmInitialRaw));
-        $initialConditionRaw = trim((string) ($_POST['stock_initial_condition'] ?? 'good'));
-        $conditionStatusRaw = trim((string) ($_POST['stock_condition_status'] ?? $initialConditionRaw));
+        $initialConditionRaw = trim((string) ($_POST['stock_initial_condition'] ?? 'new'));
+        // Conditia initiala e noua/folosita; starea de uzura porneste de la "Buna".
+        $conditionStatusRaw = trim((string) ($_POST['stock_condition_status'] ?? 'good'));
         $seasonRaw = trim((string) ($_POST['stock_season'] ?? 'all_season'));
         $directional = isset($_POST['stock_directional']) ? 1 : 0;
         $rotationDirection = trim((string) ($_POST['stock_rotation_direction'] ?? ''));
@@ -3092,6 +3103,51 @@ class ModuleController
             flash_set('danger', $this->buildPersistenceErrorMessage('vehicule', $exception, 'stergere'));
         } catch (Throwable $exception) {
             flash_set('danger', $exception->getMessage());
+        }
+
+        redirect($stockRedirectUrl);
+    }
+
+    private function bulkDeleteMaintenanceTireStockAction(string $moduleKey, array $module): void
+    {
+        $stockRedirectUrl = $this->maintenanceTireStockUrl();
+        // Revine pe aceeasi pagina / aceleasi filtre din lista.
+        parse_str((string) ($_POST['return_query'] ?? ''), $returnParams);
+        if (($returnParams['page'] ?? '') === 'mentenanta' && ($returnParams['action'] ?? '') === 'tire_stock') {
+            $stockRedirectUrl = build_query_url(array_filter($returnParams, 'is_string'));
+        }
+
+        if ($moduleKey !== 'mentenanta' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($stockRedirectUrl);
+        }
+
+        ensure_csrf_or_redirect($stockRedirectUrl);
+
+        $tireIds = array_values(array_unique(array_filter(
+            array_map('intval', (array) ($_POST['tire_ids'] ?? [])),
+            static fn (int $id): bool => $id > 0
+        )));
+        if ($tireIds === []) {
+            flash_set('warning', 'Nu ai selectat nicio anvelopa pentru stergere.');
+            redirect($stockRedirectUrl);
+        }
+
+        $deleted = 0;
+        $errors = [];
+        foreach ($tireIds as $tireId) {
+            try {
+                $this->tireModel->deleteStockTire($tireId);
+                $deleted++;
+            } catch (Throwable $exception) {
+                $errors[] = '#' . $tireId . ': ' . $exception->getMessage();
+            }
+        }
+
+        if ($deleted > 0) {
+            flash_set('success', 'Au fost sterse ' . $deleted . ' anvelope din stoc.');
+        }
+        if ($errors !== []) {
+            flash_set('danger', count($errors) . ' anvelope nu au putut fi sterse: ' . implode(' | ', array_slice($errors, 0, 5)) . (count($errors) > 5 ? ' ...' : ''));
         }
 
         redirect($stockRedirectUrl);
@@ -5541,6 +5597,48 @@ class ModuleController
     private function resolveCurrentPage(string $moduleKey, array $module): string
     {
         return (string) ($module['nav_parent'] ?? $moduleKey);
+    }
+
+    /**
+     * Jurnalizeaza schimbarile de capacitate reala / categorie / stare de
+     * verificare din fisa vehiculului. Nu blocheaza salvarea daca esueaza.
+     */
+    private function logVehicleCapacityChangeSafe(int $vehicleId, array $before, array $after): void
+    {
+        $normalizeCapacity = static function (mixed $value): ?float {
+            return ($value === null || $value === '') ? null : round((float) $value, 2);
+        };
+        $normalizeCategory = static function (mixed $value): ?int {
+            return ($value === null || $value === '' || (int) $value <= 0) ? null : (int) $value;
+        };
+
+        $oldCapacity = $normalizeCapacity($before['capacitate_transport'] ?? null);
+        $newCapacity = $normalizeCapacity($after['capacitate_transport'] ?? null);
+        $oldCategory = $normalizeCategory($before['categorie_capacitate_id'] ?? null);
+        $newCategory = $normalizeCategory($after['categorie_capacitate_id'] ?? null);
+        $oldConfirmed = (int) ($before['capacitate_transport_confirmata'] ?? 0) === 1;
+        $newConfirmed = (int) ($after['capacitate_transport_confirmata'] ?? 0) === 1;
+
+        if ($oldCapacity === $newCapacity && $oldCategory === $newCategory && $oldConfirmed === $newConfirmed) {
+            return;
+        }
+
+        try {
+            $userId = (int) (current_user()['id'] ?? 0);
+            $this->capacityCategoryModel->logChange(
+                $vehicleId,
+                $oldCapacity,
+                $newCapacity,
+                $oldCategory,
+                $newCategory,
+                $oldConfirmed,
+                $newConfirmed,
+                'Modificare din fisa vehiculului.',
+                $userId > 0 ? $userId : null
+            );
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][vehicule][capacity-audit] ' . $exception->getMessage());
+        }
     }
 
     private function moduleRoutePage(string $moduleKey, array $module): string

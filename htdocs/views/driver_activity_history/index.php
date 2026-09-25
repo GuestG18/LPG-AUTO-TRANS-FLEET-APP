@@ -7,7 +7,13 @@ $driver = is_array($dashboard['driver'] ?? null) ? $dashboard['driver'] : null;
 $kpis = is_array($dashboard['kpis'] ?? null) ? $dashboard['kpis'] : [];
 $transportLabels = is_array($transportLabels ?? null) ? $transportLabels : DriverActivityHistoryModel::TRANSPORT_LABELS;
 $driverOptions = is_array($driverOptions ?? null) ? $driverOptions : [];
+$beneficiaryOptions = is_array($beneficiaryOptions ?? null) ? $beneficiaryOptions : [];
 $driverId = (int) ($filters['driver_id'] ?? ($driver['id'] ?? 0));
+$isCompare = !empty($isCompare);
+// Dreptul „Date financiare” (Drepturi de acces). Fara el controllerul a scos deja
+// salariul, diurna in lei, costul total, valoarea curselor si profitul din date.
+$canFinancial = !empty($canFinancial);
+$selectedDriverIds = array_map('intval', (array) ($filters['driver_ids'] ?? [$driverId]));
 
 $fmtNumber = static function (mixed $value, int $decimals = 2): string {
     if ($value === null || $value === '') {
@@ -37,10 +43,6 @@ $activeDaysLabel = static function (mixed $value): string {
     return $days === 1 ? '1 zi' : $days . ' zile';
 };
 
-$fuelInvoiceUrl = static function (?string $stored): string {
-    $stored = basename(trim((string) $stored));
-    return $stored !== '' ? url('uploads/alimentari_facturi/' . rawurlencode($stored)) : '';
-};
 $maintenanceFileUrl = static function (?string $stored): string {
     $stored = basename(trim((string) $stored));
     if ($stored === '') {
@@ -58,14 +60,15 @@ $isPdf = static function (?string $file): bool {
 
 $queryBase = [
     'page' => 'istoric_activitati_sofer',
-    'driver_id' => $driverId,
+    'driver_ids' => $selectedDriverIds,
     'date_range' => (string) ($filters['date_range'] ?? ''),
     'vehicle_id' => (int) ($filters['vehicle_id'] ?? 0),
+    'beneficiar_id' => (int) ($filters['beneficiar_id'] ?? 0),
     'transport_type' => (string) ($filters['transport_type'] ?? ''),
     'grouping' => (string) ($filters['grouping'] ?? 'daily'),
 ];
 $exportQuery = $queryBase;
-$resetUrl = build_query_url(['page' => 'istoric_activitati_sofer', 'driver_id' => $driverId]);
+$resetUrl = build_query_url(['page' => 'istoric_activitati_sofer', 'driver_ids' => $selectedDriverIds]);
 $driverImage = $driver !== null ? driver_image_url((string) ($driver['poza_stocata'] ?? '')) : null;
 $status = strtolower((string) ($driver['status'] ?? ''));
 $statusClass = $status === 'activ' ? 'is-active' : 'is-inactive';
@@ -77,12 +80,40 @@ foreach ((array) ($dashboard['trips'] ?? []) as $trip) {
     if ($beneficiaryName === '' || $beneficiaryName === '-') {
         continue;
     }
-    $topBeneficiaries[$beneficiaryName] = ($topBeneficiaries[$beneficiaryName] ?? 0.0) + (float) ($trip['delivered_tons'] ?? 0);
+    $topBeneficiaries[$beneficiaryName] = ($topBeneficiaries[$beneficiaryName] ?? 0.0) + (float) ($trip['transported_tons'] ?? 0) + (float) ($trip['delivered_tons'] ?? 0);
 }
 arsort($topBeneficiaries);
 $topBeneficiaries = array_slice($topBeneficiaries, 0, 3, true);
 
 $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
+
+// Nota diurnelor: valoarea in lei dupa regula soferului din Contabilitate Personal.
+$diurnaNoteFor = static function (array $k) use ($fmtMoney): string {
+    $policy = (array) ($k['diurna_policy'] ?? []);
+    if (($policy['status'] ?? '') === DriverDiurnaModel::STATUS_NONE && (int) ($k['diurne'] ?? 0) === 0) {
+        return 'nu primeste diurna';
+    }
+    $parts = [];
+    if (!isset($k['diurne_value'])) {
+        return 'din ' . (int) ($k['diurne_trips'] ?? 0) . ' curse';
+    }
+    if ((float) ($k['diurne_value'] ?? 0) > 0) {
+        $parts[] = $fmtMoney($k['diurne_value']);
+    }
+    if ((int) ($k['diurne_unvalued'] ?? 0) > 0) {
+        $parts[] = (int) $k['diurne_unvalued'] . ' fara valoare / zi';
+    }
+    if ((int) ($k['diurne_missing'] ?? 0) > 0) {
+        $parts[] = (int) $k['diurne_missing'] . ' curse fara ora';
+    }
+
+    return $parts === [] ? 'din ' . (int) ($k['diurne_trips'] ?? 0) . ' curse' : implode(' · ', $parts);
+};
+$diurneNote = $diurnaNoteFor($kpis);
+
+// Distributie si Primar + Distributie livreaza (Tone livrate); Primar si
+// Compresor transporta (Tone transportate). Cealalta coloana ramane "-".
+$isDeliveryTrip = static fn (array $trip): bool => in_array((string) ($trip['transport_bucket'] ?? ''), ['distributie', 'primar_distributie'], true);
 ?>
 
 <div class="driver-history-page" id="driver-history-page">
@@ -96,8 +127,13 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                 <i class="bi bi-chevron-right" aria-hidden="true"></i>
                 <span>Detalii istoric</span>
             </div>
-            <h1>Istoric Activitati Sofer - <?= e((string) ($driver['nume'] ?? '')) ?></h1>
-            <p>Profil analitic complet pentru perioada selectata.</p>
+            <?php if ($isCompare): ?>
+                <h1>Comparatie soferi (<?= e((string) count((array) ($dashboard['drivers'] ?? []))) ?>)</h1>
+                <p>Activitatea soferilor selectati, alaturi, pentru aceeasi perioada si aceleasi filtre.</p>
+            <?php else: ?>
+                <h1>Istoric Activitati Sofer - <?= e((string) ($driver['nume'] ?? '')) ?></h1>
+                <p>Profil analitic complet pentru perioada selectata. Alege mai multi soferi pentru comparatie.</p>
+            <?php endif; ?>
         </div>
         <div class="driver-history-actions">
             <a class="btn btn-outline-secondary" href="<?= e(build_query_url(array_merge($exportQuery, ['action' => 'export_pdf']))) ?>" target="_blank" rel="noopener">
@@ -114,15 +150,47 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
         </div>
     </div>
 
-    <?php if ($driver === null): ?>
+    <?php if (!$isCompare && $driver === null): ?>
         <div class="card border-0 shadow-sm">
-            <div class="card-body text-center py-5 text-muted">Nu exista soferi inregistrati pentru afisarea istoricului.</div>
+            <div class="card-body text-center py-5 text-muted">
+                <?= $driverOptions === []
+                    ? 'Niciun sofer nu are activitate in perioada selectata. Schimba intervalul sau filtrele.'
+                    : 'Nu exista soferi inregistrati pentru afisarea istoricului.' ?>
+            </div>
         </div>
     <?php else: ?>
         <form class="driver-history-filter-card" method="get" action="<?= e(url('index.php')) ?>">
             <input type="hidden" name="page" value="istoric_activitati_sofer">
-            <input type="hidden" name="driver_id" value="<?= e((string) $driverId) ?>">
             <div class="driver-history-filter-grid">
+                <div class="driver-history-filter-field">
+                    <label for="driver_history_driver_toggle">Soferi</label>
+                    <div class="driver-picker" data-driver-picker>
+                        <button type="button" class="form-select driver-picker-toggle" id="driver_history_driver_toggle" data-driver-picker-toggle aria-expanded="false" aria-haspopup="true">
+                            <span data-driver-picker-label>Alege soferi</span>
+                        </button>
+                        <div class="driver-picker-menu" data-driver-picker-menu hidden>
+                            <input type="search" class="form-control form-control-sm" placeholder="Cauta sofer..." data-driver-picker-search aria-label="Cauta sofer">
+                            <div class="driver-picker-quick">
+                                <button type="button" data-driver-picker-active>Toti activii</button>
+                                <button type="button" data-driver-picker-clear>Niciunul</button>
+                                <span data-driver-picker-count></span>
+                            </div>
+                            <div class="driver-picker-list">
+                                <?php foreach ($driverOptions as $option): ?>
+                                    <?php
+                                    $optionId = (int) ($option['id'] ?? 0);
+                                    $optionActive = strtolower((string) ($option['status'] ?? '')) === 'activ';
+                                    ?>
+                                    <label class="driver-picker-option" data-driver-picker-option data-name="<?= e(mb_strtolower((string) ($option['nume'] ?? ''))) ?>">
+                                        <input type="checkbox" name="driver_ids[]" value="<?= e((string) $optionId) ?>" data-active="<?= $optionActive ? '1' : '0' ?>" <?= in_array($optionId, $selectedDriverIds, true) ? 'checked' : '' ?>>
+                                        <span><?= e((string) ($option['nume'] ?? '-')) ?></span>
+                                        <?php if (!$optionActive): ?><small>inactiv</small><?php endif; ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div class="driver-history-filter-field is-wide">
                     <label for="driver_history_date_range">Interval de timp</label>
                     <div class="input-group">
@@ -137,6 +205,18 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                         <?php foreach ($transportLabels as $key => $label): ?>
                             <option value="<?= e((string) $key) ?>" <?= (string) ($filters['transport_type'] ?? '') === (string) $key ? 'selected' : '' ?>>
                                 <?= e((string) $label) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="driver-history-filter-field">
+                    <label for="driver_history_beneficiary">Beneficiar</label>
+                    <select class="form-select" id="driver_history_beneficiary" name="beneficiar_id">
+                        <option value="">Toti beneficiarii</option>
+                        <?php foreach ($beneficiaryOptions as $beneficiary): ?>
+                            <?php $beneficiaryId = (int) ($beneficiary['id'] ?? 0); ?>
+                            <option value="<?= e((string) $beneficiaryId) ?>" <?= (int) ($filters['beneficiar_id'] ?? 0) === $beneficiaryId ? 'selected' : '' ?>>
+                                <?= e((string) ($beneficiary['nume'] ?? '-')) ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
@@ -166,8 +246,18 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                     <a class="btn btn-outline-secondary" href="<?= e($resetUrl) ?>"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Reseteaza</a>
                 </div>
             </div>
+            <?php if ((string) ($filters['date_range_invalid'] ?? '') !== ''): ?>
+                <div class="alert alert-warning py-2 mt-3 mb-0">
+                    Intervalul „<?= e((string) $filters['date_range_invalid']) ?>” nu a putut fi citit; se afiseaza <?= e((string) ($filters['date_range'] ?? '')) ?>. Foloseste formatul zz.ll.aaaa - zz.ll.aaaa.
+                </div>
+            <?php endif; ?>
         </form>
 
+        <?php if ($isCompare): ?>
+            <?php include __DIR__ . '/_compare.php'; ?>
+        <?php else: ?>
+        <?php /* Acelasi comutator ca in comparatie: sumar (KPI + grafice) sau toata activitatea. */ ?>
+        <div class="driver-history-compare-views" data-compare-view="summary">
         <section class="driver-history-kpi-shell">
             <article class="driver-history-driver-card">
                 <div class="driver-history-photo">
@@ -194,31 +284,24 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                 </div>
             </article>
 
-            <?php
-            $kpiCards = [
-                ['icon' => 'bi-signpost-2', 'tone' => 'blue', 'label' => 'Total curse', 'value' => (string) (int) ($kpis['total_trips'] ?? 0), 'note' => 'curse'],
-                ['icon' => 'bi-speedometer2', 'tone' => 'green', 'label' => 'Total kilometri', 'value' => $fmtNumber($kpis['total_km'] ?? 0, 0) . ' km', 'note' => 'parcursi'],
-                ['icon' => 'bi-box-seam', 'tone' => 'purple', 'label' => 'Total tonaj', 'value' => $fmtNumber($kpis['total_loaded_tons'] ?? 0, 2) . ' t', 'note' => 'din care ' . $fmtNumber($kpis['total_delivered_tons'] ?? 0, 2) . ' t livrate'],
-                ['icon' => 'bi-clock-history', 'tone' => 'orange', 'label' => 'Ore de condus', 'value' => $fmtDuration($kpis['driving_minutes'] ?? 0), 'note' => 'timp activ'],
-                ['icon' => 'bi-fuel-pump', 'tone' => 'blue', 'label' => 'Consum total', 'value' => $fmtNumber($kpis['total_fuel_liters'] ?? 0, 2) . ' L', 'note' => ($kpis['average_consumption'] ?? null) !== null ? $fmtNumber($kpis['average_consumption'], 2) . ' L/100 km' : 'fara medie calculata'],
-                ['icon' => 'bi-cash-coin', 'tone' => 'red', 'label' => 'Cost total', 'value' => $fmtMoney($kpis['total_costs'] ?? 0), 'note' => 'in perioada'],
-            ];
-            ?>
-            <?php foreach ($kpiCards as $card): ?>
-                <article class="driver-history-kpi-card">
-                    <span class="driver-history-kpi-icon is-<?= e((string) $card['tone']) ?>"><i class="bi <?= e((string) $card['icon']) ?>" aria-hidden="true"></i></span>
-                    <div>
-                        <span><?= e((string) $card['label']) ?></span>
-                        <strong><?= e((string) $card['value']) ?></strong>
-                        <small><?= e((string) $card['note']) ?></small>
-                    </div>
-                </article>
-            <?php endforeach; ?>
+            <?php include __DIR__ . '/_kpi_cards.php'; ?>
         </section>
+
+        <?php /* Comutatorul sta chiar deasupra tabelului, ca in comparatie (nu sus, langa cardul soferului). */ ?>
+        <div class="driver-history-view-switch" role="group" aria-label="Mod de afisare">
+            <button type="button" data-compare-view-button="summary" aria-pressed="true">Sumar sofer</button>
+            <button type="button" data-compare-view-button="trips" aria-pressed="false">Curse (<?= e((string) count((array) ($dashboard['trips'] ?? []))) ?>)</button>
+        </div>
+
+        <?php /* Acelasi tabel de sumar ca la comparatie, cu randul desfasurat al curselor. */ ?>
+        <?php if ((array) ($comparison['drivers'] ?? []) !== []): ?>
+            <?php $comparisonData = $comparison; ?>
+            <?php include __DIR__ . '/_summary_table.php'; ?>
+        <?php endif; ?>
 
         <section class="driver-history-chart-grid">
             <article class="driver-history-panel">
-                <h2>Tone incarcate vs. livrate</h2>
+                <h2>Tone transportate / livrate pe tip de transport</h2>
                 <div class="driver-history-chart-wrap" data-chart-wrapper>
                     <canvas id="driver_history_tons_chart"></canvas>
                     <div class="driver-history-chart-empty">Nu exista date.</div>
@@ -250,6 +333,7 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
         <section class="driver-history-tabs">
             <ul class="nav nav-tabs" id="driverHistoryTabs" role="tablist">
                 <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#driver-history-trips" type="button" role="tab">Curse</button></li>
+                <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#driver-history-diurne" type="button" role="tab"><?= $canFinancial ? 'Diurne &amp; salariu' : 'Diurne' ?></button></li>
                 <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#driver-history-fuel" type="button" role="tab">Alimentari</button></li>
                 <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#driver-history-consumption" type="button" role="tab">Consum</button></li>
                 <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#driver-history-repairs" type="button" role="tab">Reparatii</button></li>
@@ -261,21 +345,29 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
             <div class="tab-content">
                 <div class="tab-pane fade show active" id="driver-history-trips" role="tabpanel">
                     <div class="driver-history-table-wrap">
-                        <table class="table driver-history-table mb-0">
-                            <thead><tr><th>Data</th><th>Beneficiar</th><th>Vehicul</th><th>Tip transport</th><th>Total KM</th><th>KM nefacturabili</th><th>Tone incarcate</th><th>Tone livrate</th><th>Durata cursa</th><th>Cost cursa</th><th>Actiuni</th></tr></thead>
+                        <?php /* Sortare + filtrare din antet, ca in lista din comparatie. */ ?>
+                        <table class="table driver-history-table mb-0" data-column-filter>
+                            <thead><tr><th>Data</th><th>Beneficiar</th><th>Vehicul</th><th>Tip transport</th><th>Total KM</th><th>KM nefacturabili</th><th>Tone transportate</th><th>Tone livrate</th><th>Durata cursa</th><th>Diurne</th><?php if ($canFinancial): ?><th>Valoare cursa</th><?php endif; ?><th title="Toate cheltuielile inregistrate pe cursa, inclusiv cele de refacturat">Cost cursa</th><?php if ($canFinancial): ?><th title="Refacturari trecute in Refacturat (bani recuperati)">Refacturat</th><?php endif; ?><th data-no-filter>Actiuni</th></tr></thead>
                             <tbody>
+                            <?php
+                            // Randul intreg deschide formularul cursei in Dispecer curse (ca iconita "Cursa").
+                            $canOpenTrip = can_route('dispecer_curse');
+                            ?>
                             <?php foreach ((array) ($dashboard['trips'] ?? []) as $row): ?>
-                                <tr>
+                                <tr<?= $canOpenTrip ? ' class="driver-history-row-link" data-row-href="' . e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => (int) $row['id']])) . '" tabindex="0" title="Deschide cursa in Dispecer curse"' : '' ?>>
                                     <td><?= e($fmtDate($row['data_inceput'] ?? null)) ?></td>
                                     <td><?= e((string) ($row['beneficiary_label'] ?? '-')) ?></td>
                                     <td><?= e((string) ($row['nr_inmatriculare'] ?? '-')) ?></td>
                                     <td><?= e((string) ($row['transport_label'] ?? '-')) ?></td>
                                     <td><?= e($fmtNumber($row['effective_km'] ?? 0, 0)) ?></td>
                                     <td><?= e($fmtNumber($row['non_billable_km'] ?? 0, 0)) ?></td>
-                                    <td><?= e($fmtNumber($row['loaded_tons'] ?? 0, 2)) ?></td>
-                                    <td><?= e($fmtNumber($row['delivered_tons'] ?? 0, 2)) ?></td>
+                                    <td><?= $isDeliveryTrip($row) ? '-' : e($fmtNumber($row['transported_tons'] ?? 0, 2)) ?></td>
+                                    <td><?= $isDeliveryTrip($row) ? e($fmtNumber($row['delivered_tons'] ?? 0, 2)) : '-' ?></td>
                                     <td><?= e($fmtDuration($row['duration_minutes_effective'] ?? 0)) ?></td>
-                                    <td><?= e($fmtMoney($row['total_cheltuieli'] ?? 0)) ?></td>
+                                    <td<?= ($row['diurne'] ?? null) === null ? ' title="Lipseste data/ora de inceput sau sfarsit, ori intervalul este inversat."' : '' ?>><?= ($row['diurne'] ?? null) === null ? '-' : e((string) (int) $row['diurne']) ?></td>
+                                    <?php if ($canFinancial): ?><td><?= e($fmtMoney($row['total_facturare'] ?? 0)) ?></td><?php endif; ?>
+                                    <td title="<?= e('Platite: ' . $fmtMoney((float) ($row['total_cheltuieli'] ?? 0) - (float) ($row['total_refacturare'] ?? 0)) . ' · de refacturat: ' . $fmtMoney($row['total_refacturare'] ?? 0)) ?>"><?= e($fmtMoney($row['total_cheltuieli'] ?? 0)) ?></td>
+                                    <?php if ($canFinancial): ?><td><?= e($fmtMoney($row['total_refacturare_facturata'] ?? 0)) ?></td><?php endif; ?>
                                     <td>
                                         <div class="driver-history-row-actions">
                                             <a href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => (int) $row['id']])) ?>" title="Cursa"><i class="bi bi-eye" aria-hidden="true"></i></a>
@@ -284,21 +376,135 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
-                            <?php if (($dashboard['trips'] ?? []) === []): ?><tr><td colspan="11" class="text-center text-muted py-4">Nu exista curse pentru filtrele selectate.</td></tr><?php endif; ?>
+                            <?php if (($dashboard['trips'] ?? []) === []): ?><tr><td colspan="<?= $canFinancial ? 14 : 12 ?>" class="text-center text-muted py-4">Nu exista curse pentru filtrele selectate.</td></tr><?php endif; ?>
                             </tbody>
                         </table>
                     </div>
                 </div>
 
+                <div class="tab-pane fade" id="driver-history-diurne" role="tabpanel">
+                    <?php
+                    $diurneRows = (array) ($dashboard['diurneRows'] ?? []);
+                    $diurnaPolicy = (array) ($kpis['diurna_policy'] ?? ['status' => DriverDiurnaModel::STATUS_UNSET, 'rate' => null]);
+                    $salaryMonths = (array) ($kpis['salary_months'] ?? []);
+                    $diurnaSettingsUrl = build_query_url(['page' => 'contabilitate_personal', 'q' => (string) ($driver['nume'] ?? '')]);
+                    $policyLabelAt = static fn (array $policy): string => DriverDiurnaModel::label($policy);
+                    ?>
+                    <div class="driver-history-consumption-grid">
+                        <?php if ($canFinancial): ?><div><span>Diurna soferului</span><strong><?= e(DriverDiurnaModel::label($diurnaPolicy)) ?></strong></div><?php endif; ?>
+                        <div><span>Diurne platite</span><strong><?= e((string) (int) ($kpis['diurne'] ?? 0)) ?></strong></div>
+                        <?php if ($canFinancial): ?><div><span>Diurne in costul total</span><strong><?= e($fmtMoney($kpis['diurne_value_in_total'] ?? 0)) ?></strong></div><?php endif; ?>
+                        <div><span>Curse cu diurna</span><strong><?= e((string) (int) ($kpis['diurne_trips'] ?? 0)) ?> din <?= e((string) count($diurneRows)) ?></strong></div>
+                        <div><span>Zile lucrate</span><strong><?= e((string) (int) ($kpis['worked_days'] ?? 0)) ?></strong></div>
+                        <?php if ($canFinancial): ?><div><span>Cost salarial</span><strong><?= e($fmtMoney($kpis['salary_cost'] ?? 0)) ?></strong></div><?php endif; ?>
+                    </div>
+                    <?php if ($canFinancial && (($diurnaPolicy['status'] ?? '') === DriverDiurnaModel::STATUS_UNSET || (int) ($kpis['diurne_unvalued'] ?? 0) > 0)): ?>
+                        <div class="alert alert-warning py-2 small mt-3 mb-2">
+                            Diurna acestui sofer nu este stabilita (primeste sau nu, si valoarea pe zi), deci diurnele nu au valoare in lei.
+                            Se stabileste in <a href="<?= e($diurnaSettingsUrl) ?>">Contabilitate Personal</a> → meniul soferului → Diurnă.
+                        </div>
+                    <?php endif; ?>
+                    <?php if ((int) ($kpis['diurne_not_eligible'] ?? 0) > 0): ?>
+                        <div class="alert alert-secondary py-2 small mt-3 mb-2">
+                            Soferul nu primeste diurna: <?= e((string) (int) $kpis['diurne_not_eligible']) ?> zile rezultate din curse nu se platesc.
+                        </div>
+                    <?php endif; ?>
+                    <p class="text-muted small mb-2 mt-2">
+                        Numarul de diurne vine din Dispecer curse: durata = de la „Data si ora inceput” la „Data si ora sfarsit”;
+                        sub 12h = 0 diurne, 12h–35:59 = 1, apoi inca una la fiecare 24h. La cursele reluate cu alt sofer,
+                        diurnele se impart pe soferi dupa timpul condus.
+                        <?php if ($canFinancial): ?>
+                        Daca soferul primeste diurna si cat valoreaza o zi se stabileste per sofer in Contabilitate Personal.
+                        Valoarea diurnelor intra in costul total; la cursele pe care diurna este deja trecuta ca cheltuiala
+                        (tip „Diurna” in Dispecer curse) conteaza cheltuiala inregistrata, iar valoarea calculata nu se mai adauga.
+                        <?php endif; ?>
+                    </p>
+                    <div class="driver-history-table-wrap">
+                        <table class="table driver-history-table mb-0">
+                            <thead><tr><th>Inceput</th><th>Sfarsit</th><th>Vehicul</th><th>Durata</th><th>Diurne cursa</th><th>Diurne sofer</th><?php if ($canFinancial): ?><th>Valoare</th><?php endif; ?><th>Observatii</th><th>Actiuni</th></tr></thead>
+                            <tbody>
+                            <?php foreach ($diurneRows as $row): ?>
+                                <?php
+                                $note = match ((string) $row['status']) {
+                                    'lipsa' => 'Lipseste data sau ora de inceput / sfarsit.',
+                                    'invalid' => 'Sfarsitul este inaintea inceputului.',
+                                    default => (string) $row['split'] !== '' ? 'Impartit pe soferi - ' . $row['split'] : '',
+                                };
+                                if (!empty($row['segment_only'])) {
+                                    $note = trim('Soferul a condus doar o faza. ' . $note);
+                                }
+                                $rowPolicy = (array) ($row['policy'] ?? []);
+                                if (($rowPolicy['status'] ?? '') === DriverDiurnaModel::STATUS_NONE && $row['status'] === 'ok') {
+                                    $note = trim('Nu primeste diurna. ' . $note);
+                                }
+                                if (($row['diurna_recorded'] ?? null) !== null) {
+                                    $note = trim('Diurna e deja trecuta ca cheltuiala pe cursa (' . $fmtMoney($row['diurna_recorded']) . '); valoarea calculata nu se mai adauga. ' . $note);
+                                }
+                                $moment = static fn ($date, $time): string => ($date ? $fmtDate($date) : '-') . ($time ? ' ' . substr((string) $time, 0, 5) : '');
+                                ?>
+                                <tr>
+                                    <td><?= e($moment($row['data_inceput'], $row['ora_inceput'])) ?></td>
+                                    <td><?= e($moment($row['data_sfarsit'], $row['ora_sfarsit'])) ?></td>
+                                    <td><?= e((string) ($row['nr_inmatriculare'] ?? '-')) ?></td>
+                                    <td><?= $row['minutes'] !== null ? e($fmtDuration($row['minutes'])) : '-' ?></td>
+                                    <td><?= $row['trip_diurne'] !== null ? e((string) $row['trip_diurne']) : '-' ?></td>
+                                    <td><strong class="<?= $row['status'] === 'invalid' ? 'text-danger' : '' ?>"><?= $row['diurne'] !== null ? e((string) $row['diurne']) : '-' ?></strong></td>
+                                    <?php if ($canFinancial): ?><td title="<?= e($policyLabelAt($rowPolicy)) ?>" class="<?= ($row['diurna_recorded'] ?? null) !== null ? 'text-decoration-line-through text-muted' : '' ?>"><?= ($row['diurne_value'] ?? null) !== null ? e($fmtMoney($row['diurne_value'])) : '-' ?></td><?php endif; ?>
+                                    <td><?= e($note !== '' ? $note : '-') ?></td>
+                                    <td>
+                                        <div class="driver-history-row-actions">
+                                            <a href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => (int) $row['id']])) ?>" title="Cursa"><i class="bi bi-eye" aria-hidden="true"></i></a>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                            <?php if ($diurneRows === []): ?><tr><td colspan="<?= $canFinancial ? 9 : 8 ?>" class="text-center text-muted py-4">Nu exista curse pentru filtrele selectate.</td></tr><?php endif; ?>
+                            </tbody>
+                            <?php if ($diurneRows !== []): ?>
+                                <tfoot><tr><th colspan="5" class="text-end">Total sofer</th><th><?= e((string) (int) ($kpis['diurne'] ?? 0)) ?></th><?php if ($canFinancial): ?><th><?= e($fmtMoney($kpis['diurne_value'] ?? 0)) ?></th><?php endif; ?><th colspan="2"></th></tr></tfoot>
+                            <?php endif; ?>
+                        </table>
+                    </div>
+
+                    <?php if ($canFinancial): ?>
+                    <div class="driver-history-panel mt-3">
+                        <h2>Salariu dupa zilele lucrate</h2>
+                        <p class="text-muted small mb-2">
+                            Zilele lucrate sunt zilele acoperite de cursele soferului din Dispecer curse (fiecare zi o singura data).
+                            Salariu pe zi = salariul lunii din Contabilitate Personal / zilele lucratoare ale lunii (luni-vineri).
+                            Zilele de weekend lucrate se adauga peste.
+                        </p>
+                        <div class="driver-history-table-wrap is-compact">
+                            <table class="table driver-history-table mb-0">
+                                <thead><tr><th>Luna</th><th>Zile lucrate</th><th>Zile lucratoare</th><th>Salariu lunar</th><th>Salariu / zi</th><th>Cost salarial</th></tr></thead>
+                                <tbody>
+                                <?php foreach ($salaryMonths as $month): ?>
+                                    <tr>
+                                        <td><?= e(date('m.Y', strtotime($month['month'] . '-01'))) ?></td>
+                                        <td><?= e((string) (int) $month['worked_days']) ?></td>
+                                        <td><?= e((string) (int) $month['working_days']) ?></td>
+                                        <td><?= $month['salary'] !== null ? e($fmtMoney($month['salary'])) : '<span class="text-warning">nesetat</span>' ?></td>
+                                        <td><?= $month['daily'] !== null ? e($fmtMoney($month['daily'])) : '-' ?></td>
+                                        <td><strong><?= $month['cost'] !== null ? e($fmtMoney($month['cost'])) : '-' ?></strong></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                <?php if ($salaryMonths === []): ?><tr><td colspan="6" class="text-center text-muted py-3">Nicio zi lucrata in perioada selectata.</td></tr><?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+                </div>
+
                 <div class="tab-pane fade" id="driver-history-fuel" role="tabpanel">
                     <div class="driver-history-table-wrap">
                         <table class="table driver-history-table mb-0">
-                            <thead><tr><th>Data</th><th>Vehicul</th><th>Sofer</th><th>Litri combustibil</th><th>Pret combustibil</th><th>Cost combustibil</th><th>Kilometraj</th><th>Tip combustibil</th><th>Consum calculat</th><th>Observatii</th><th>Actiuni</th></tr></thead>
+                            <thead><tr><th>Data</th><th>Vehicul</th><th>Sofer</th><th>Litri combustibil</th><th>Pret combustibil</th><th>Cost combustibil</th><th>Kilometraj</th><th>Tip combustibil</th><th>Consum calculat</th><th>Statie</th><th>Actiuni</th></tr></thead>
                             <tbody>
                             <?php foreach ((array) ($dashboard['fuelRows'] ?? []) as $row): ?>
-                                <?php $invoiceUrl = $fuelInvoiceUrl((string) ($row['factura_stocata'] ?? '')); ?>
+                                <?php $receiptUrl = trim((string) ($row['receipt_path'] ?? '')) !== '' ? build_query_url(['page' => 'carburanti', 'action' => 'receipt', 'fillup_id' => (int) $row['id']]) : ''; ?>
                                 <tr>
-                                    <td><?= e($fmtDate($row['data_alimentare'] ?? null)) ?></td>
+                                    <td><?= e(format_datetime_ro((string) ($row['fillup_datetime'] ?? $row['data_alimentare'] ?? ''))) ?></td>
                                     <td><?= e((string) ($row['nr_inmatriculare'] ?? '-')) ?></td>
                                     <td><?= e((string) (($row['record_sofer_nume'] ?? '') !== '' ? $row['record_sofer_nume'] : ($driver['nume'] ?? '-'))) ?></td>
                                     <td><?= e($fmtNumber($row['litri'] ?? 0, 2)) ?> L</td>
@@ -311,7 +517,7 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                                     <td>
                                         <div class="driver-history-row-actions">
                                             <?php if ((int) ($row['linked_trip_id'] ?? 0) > 0): ?><a href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => (int) $row['linked_trip_id']])) ?>" title="Cursa"><i class="bi bi-signpost-2" aria-hidden="true"></i></a><?php endif; ?>
-                                            <?php if ($invoiceUrl !== ''): ?><a href="<?= e($invoiceUrl) ?>" target="_blank" rel="noopener" title="Factura"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></a><?php endif; ?>
+                                            <?php if ($receiptUrl !== ''): ?><a href="<?= e($receiptUrl) ?>" target="_blank" rel="noopener" title="Bon fiscal"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></a><?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>
@@ -414,7 +620,7 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                 <div class="tab-pane fade" id="driver-history-vehicles" role="tabpanel">
                     <div class="driver-history-table-wrap">
                         <table class="table driver-history-table mb-0">
-                            <thead><tr><th>Numar inmatriculare</th><th>Tip vehicul</th><th>Curse</th><th>Kilometri</th><th>Tone incarcate</th><th>Tone livrate</th><th>Cost combustibil</th><th>Cost reparatii</th><th>Cost total</th><th>Procent utilizare</th></tr></thead>
+                            <thead><tr><th>Numar inmatriculare</th><th>Tip vehicul</th><th>Curse</th><th>Kilometri</th><th>Tone transportate</th><th>Tone livrate</th><th>Cost combustibil</th><th>Cost reparatii</th><th>Cost total</th><th>Procent utilizare</th></tr></thead>
                             <tbody>
                             <?php foreach ((array) ($dashboard['vehicleRows'] ?? []) as $row): ?>
                                 <tr>
@@ -422,7 +628,7 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                                     <td><?= e(vehicle_type_label((string) ($row['tip_vehicul'] ?? ''))) ?></td>
                                     <td><?= e((string) ($row['trips'] ?? 0)) ?></td>
                                     <td><?= e($fmtNumber($row['kilometers'] ?? 0, 0)) ?> km</td>
-                                    <td><?= e($fmtNumber($row['loaded_tons'] ?? 0, 2)) ?> t</td>
+                                    <td><?= e($fmtNumber($row['transported_tons'] ?? 0, 2)) ?> t</td>
                                     <td><?= e($fmtNumber($row['delivered_tons'] ?? 0, 2)) ?> t</td>
                                     <td><?= e($fmtMoney($row['fuel_cost'] ?? 0)) ?></td>
                                     <td><?= e($fmtMoney($row['repair_cost'] ?? 0)) ?></td>
@@ -473,14 +679,14 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                 <div class="tab-pane fade" id="driver-history-daily" role="tabpanel">
                     <div class="driver-history-table-wrap">
                         <table class="table driver-history-table mb-0">
-                            <thead><tr><th>Data</th><th>Curse</th><th>Kilometri</th><th>Tone incarcate</th><th>Tone livrate</th><th>Combustibil utilizat</th><th>Cost combustibil</th><th>Cost reparatii</th><th>Cost zilnic total</th><th>Ore condus</th></tr></thead>
+                            <thead><tr><th>Data</th><th>Curse</th><th>Kilometri</th><th>Tone transportate</th><th>Tone livrate</th><th>Combustibil utilizat</th><th>Cost combustibil</th><th>Cost reparatii</th><th>Cost zilnic total</th><th>Ore condus</th></tr></thead>
                             <tbody>
                             <?php foreach ((array) ($dashboard['dailyRows'] ?? []) as $row): ?>
                                 <tr>
                                     <td><?= e($fmtDate($row['date'] ?? null)) ?></td>
                                     <td><?= e((string) ($row['trips'] ?? 0)) ?></td>
                                     <td><?= e($fmtNumber($row['kilometers'] ?? 0, 0)) ?> km</td>
-                                    <td><?= e($fmtNumber($row['loaded_tons'] ?? 0, 2)) ?> t</td>
+                                    <td><?= e($fmtNumber($row['transported_tons'] ?? 0, 2)) ?> t</td>
                                     <td><?= e($fmtNumber($row['delivered_tons'] ?? 0, 2)) ?> t</td>
                                     <td><?= e($fmtNumber($row['fuel_used'] ?? 0, 2)) ?> L</td>
                                     <td><?= e($fmtMoney($row['fuel_cost'] ?? 0)) ?></td>
@@ -499,7 +705,7 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
 
         <section class="driver-history-secondary-grid">
             <article class="driver-history-panel">
-                <h2>Top beneficiari dupa tonaj livrat</h2>
+                <h2>Top beneficiari dupa tonaj</h2>
                 <ol class="driver-history-ranked-list">
                     <?php foreach ($topBeneficiaries as $beneficiaryName => $tons): ?>
                         <li><span><?= e((string) $beneficiaryName) ?></span><strong><?= e($fmtNumber($tons, 2)) ?> t</strong></li>
@@ -519,7 +725,8 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                 <div class="driver-history-metric-list">
                     <div><span>Consum mediu</span><strong><?= ($kpis['average_consumption'] ?? null) !== null ? e($fmtNumber($kpis['average_consumption'], 2)) . ' L/100km' : '-' ?></strong></div>
                     <div><span>Cost combustibil</span><strong><?= e($fmtMoney($kpis['fuel_cost'] ?? 0)) ?></strong></div>
-                    <div><span>Cost total / km</span><strong><?= ((float) ($kpis['total_km'] ?? 0)) > 0 ? e($fmtMoney(((float) ($kpis['total_costs'] ?? 0)) / (float) $kpis['total_km'])) : '-' ?></strong></div>
+                    <?php $costPerKmKey = $canFinancial ? 'total_costs' : 'operational_costs'; ?>
+                    <div><span><?= $canFinancial ? 'Cost total / km' : 'Cost operational / km' ?></span><strong><?= ((float) ($kpis['total_km'] ?? 0)) > 0 ? e($fmtMoney(((float) ($kpis[$costPerKmKey] ?? 0)) / (float) $kpis['total_km'])) : '-' ?></strong></div>
                 </div>
             </article>
             <article class="driver-history-panel">
@@ -542,6 +749,9 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
                 </div>
             </article>
         </section>
+        </div>
+
+        <?php endif; ?>
 
         <div class="driver-history-footer-note">
             <span>Toate valorile sunt calculate pentru perioada selectata: <?= e($fmtDate($filters['date_start'] ?? null)) ?> - <?= e($fmtDate($filters['date_end'] ?? null)) ?></span>
@@ -552,5 +762,11 @@ $dailyPreviewRows = array_slice((array) ($dashboard['dailyRows'] ?? []), 0, 3);
 </div>
 
 <script type="application/json" id="driver-history-chart-data"><?= $chartsJson ?: '{}' ?></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
+<?php /* Comutatorul de afisare si randurile desfasurate: si la un sofer, si la comparatie. */ ?>
+<link rel="stylesheet" href="<?= e(url('assets/css/driver-history-trips.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/driver-history-trips.css'))) ?>">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/l10n/ro.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="<?= e(url('assets/js/table-column-filter.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/table-column-filter.js'))) ?>"></script>
 <script src="<?= e(url('assets/js/driver-activity-history.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/driver-activity-history.js'))) ?>"></script>

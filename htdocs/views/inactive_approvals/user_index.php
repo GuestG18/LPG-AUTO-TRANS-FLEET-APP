@@ -25,6 +25,7 @@ $resourceTypeLabels = [
     'vehicle' => 'Vehicul',
     'driver' => 'Sofer',
     'repair' => 'Reparatie',
+    'diurna' => 'Diurna',
 ];
 $formatDate = static fn(mixed $value): string => trim((string) $value) !== '' ? format_date_ro((string) $value) : '-';
 $formatDateTime = static fn(mixed $value): string => trim((string) $value) !== '' ? format_datetime_ro((string) $value) : '-';
@@ -43,6 +44,9 @@ $reasonTone = static function (string $reasonKey): string {
     if (in_array($reasonKey, ['repair', 'leave', 'medical_leave'], true)) {
         return 'warning';
     }
+    if ($reasonKey === 'diurna_change') {
+        return 'info';
+    }
 
     return 'muted';
 };
@@ -51,6 +55,7 @@ $reasonIcon = static function (string $reasonKey): string {
         'repair' => 'bi-tools',
         'leave', 'medical_leave' => 'bi-calendar2-check',
         'manual_inactive' => 'bi-slash-circle',
+        'diurna_change' => 'bi-calendar2-week',
         'missing_documents' => 'bi-file-earmark-excel',
         default => 'bi-file-earmark-x',
     };

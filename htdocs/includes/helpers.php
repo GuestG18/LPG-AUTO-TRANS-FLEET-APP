@@ -645,6 +645,76 @@ function driver_image_url(?string $storedFile): ?string
     return url('uploads/soferi/' . rawurlencode($storedFile));
 }
 
+/**
+ * URL-ul unei miniaturi (latime maxima $maxWidth) pentru o poza din
+ * uploads/<folder>/, generata o singura data cu GD in uploads/<folder>/thumbs/
+ * si regenerata doar daca originalul e mai nou. Daca GD lipseste sau
+ * generarea esueaza, se intoarce URL-ul originalului.
+ */
+function upload_image_thumb_url(string $folder, ?string $storedFile, int $maxWidth): ?string
+{
+    if ($storedFile === null || trim($storedFile) === '' || !preg_match('/^[a-z_]+$/', $folder)) {
+        return null;
+    }
+
+    $storedFile = basename($storedFile);
+    $originalUrl = url('uploads/' . $folder . '/' . rawurlencode($storedFile));
+    $sourcePath = __DIR__ . '/../uploads/' . $folder . '/' . $storedFile;
+    if (!is_file($sourcePath)) {
+        return null;
+    }
+
+    $thumbName = $maxWidth . '_' . pathinfo($storedFile, PATHINFO_FILENAME) . '.jpg';
+    $thumbDir = __DIR__ . '/../uploads/' . $folder . '/thumbs';
+    $thumbPath = $thumbDir . '/' . $thumbName;
+    $thumbUrl = url('uploads/' . $folder . '/thumbs/' . rawurlencode($thumbName));
+
+    if (is_file($thumbPath) && filemtime($thumbPath) >= filemtime($sourcePath)) {
+        return $thumbUrl;
+    }
+    if (!function_exists('imagecreatetruecolor')) {
+        return $originalUrl;
+    }
+
+    try {
+        $info = @getimagesize($sourcePath);
+        if (!is_array($info) || $info[0] <= 0 || $info[1] <= 0) {
+            return $originalUrl;
+        }
+        [$width, $height] = $info;
+        if ($width <= $maxWidth) {
+            return $originalUrl;
+        }
+
+        $source = match ($info[2]) {
+            IMAGETYPE_JPEG => @imagecreatefromjpeg($sourcePath),
+            IMAGETYPE_PNG => @imagecreatefrompng($sourcePath),
+            IMAGETYPE_WEBP => function_exists('imagecreatefromwebp') ? @imagecreatefromwebp($sourcePath) : false,
+            IMAGETYPE_GIF => @imagecreatefromgif($sourcePath),
+            default => false,
+        };
+        if ($source === false) {
+            return $originalUrl;
+        }
+
+        $targetHeight = max(1, (int) round($height * $maxWidth / $width));
+        $target = imagecreatetruecolor($maxWidth, $targetHeight);
+        // Fundal alb pentru PNG/GIF transparente (JPEG nu are canal alfa).
+        imagefill($target, 0, 0, imagecolorallocate($target, 255, 255, 255));
+        imagecopyresampled($target, $source, 0, 0, 0, 0, $maxWidth, $targetHeight, $width, $height);
+
+        if (!is_dir($thumbDir) && !@mkdir($thumbDir, 0775, true) && !is_dir($thumbDir)) {
+            return $originalUrl;
+        }
+        $saved = @imagejpeg($target, $thumbPath, 82);
+
+        return $saved ? $thumbUrl : $originalUrl;
+    } catch (Throwable $exception) {
+        error_log('[upload_image_thumb_url] ' . $exception->getMessage());
+        return $originalUrl;
+    }
+}
+
 function inventory_equipment_image_url(?string $storedFile): ?string
 {
     if ($storedFile === null || trim($storedFile) === '') {
@@ -864,6 +934,14 @@ function format_value_html(mixed $value, array $meta = [], array $row = []): str
         );
     }
 
+    // Marcajul "capacitatea reala a fost verificata de un om". 0 este o valoare
+    // reala (= de verificat), deci se trateaza inainte de scurtatura pentru gol.
+    if ($type === 'capacity_verified') {
+        return (string) $value === '1'
+            ? '<span class="badge bg-success-subtle text-success-emphasis">Verificata</span>'
+            : '<span class="badge bg-warning-subtle text-warning-emphasis">De verificat</span>';
+    }
+
     if ($value === null || $value === '') {
         return '-';
     }
@@ -957,3 +1035,289 @@ function current_month_ro(): string
     return ($months[$month] ?? '') . ' ' . date('Y');
 }
 
+
+/**
+ * Rezumatul segmentelor unei curse: cine a condus fiecare portiune, cu ce vehicul,
+ * in ce interval si cati km. Folosit ca tooltip in Desfasurator si in editare.
+ */
+function dispatcher_segments_summary(array $segments): string
+{
+    $lines = [];
+    foreach ($segments as $index => $segment) {
+        $vehicle = trim((string) ($segment['nr_inmatriculare'] ?? ''));
+        $driver = trim((string) ($segment['sofer_nume'] ?? ''));
+        $startDate = trim((string) ($segment['data_inceput'] ?? ''));
+        $startTime = substr(trim((string) ($segment['ora_inceput'] ?? '')), 0, 5);
+        $endDate = trim((string) ($segment['data_sfarsit'] ?? ''));
+        $endTime = substr(trim((string) ($segment['ora_sfarsit'] ?? '')), 0, 5);
+        $km = $segment['km'] ?? null;
+
+        $interval = $startDate !== '' ? format_date_ro($startDate) : '-';
+        if ($startTime !== '') {
+            $interval .= ' ' . $startTime;
+        }
+        if ($endDate !== '') {
+            $interval .= ' → ' . format_date_ro($endDate) . ($endTime !== '' ? ' ' . $endTime : '');
+        }
+
+        $lines[] = sprintf(
+            'Segment %d: %s, %s, %s%s',
+            (int) ($segment['ordine'] ?? ($index + 1)),
+            $vehicle !== '' ? $vehicle : 'vehicul -',
+            $driver !== '' ? $driver : 'sofer -',
+            $interval,
+            ($km !== null && $km !== '') ? ', ' . (int) $km . ' km' : ''
+        );
+    }
+
+    return implode(' | ', $lines);
+}
+
+/**
+ * Durata unui segment de cursa, in minute. Segmentele neinchise (fara sfarsit)
+ * nu au durata cunoscuta, deci cantaresc 0.
+ */
+function dispatcher_segment_minutes(array $segment): int
+{
+    $startDate = trim((string) ($segment['data_inceput'] ?? ''));
+    $endDate = trim((string) ($segment['data_sfarsit'] ?? ''));
+    if ($startDate === '' || $endDate === '') {
+        return 0;
+    }
+
+    $startTime = trim((string) ($segment['ora_inceput'] ?? ''));
+    $endTime = trim((string) ($segment['ora_sfarsit'] ?? ''));
+    $start = strtotime($startDate . ' ' . ($startTime !== '' ? $startTime : '00:00:00'));
+    $end = strtotime($endDate . ' ' . ($endTime !== '' ? $endTime : '00:00:00'));
+    if ($start === false || $end === false || $end <= $start) {
+        return 0;
+    }
+
+    return (int) floor(($end - $start) / 60);
+}
+
+/**
+ * Numarul de diurne pentru o durata in minute: prima diurna se castiga la 12h,
+ * fiecare urmatoare dupa inca 24h (0–11:59 = 0, 12:00–35:59 = 1, 36:00–59:59 = 2 ...).
+ * Singurul loc unde se aplica regula; restul aplicatiei o apeleaza de aici.
+ */
+function dispatcher_diurna_from_minutes(int $minutes): int
+{
+    if ($minutes < 720) {
+        return 0;
+    }
+
+    return intdiv($minutes - 720, 1440) + 1;
+}
+
+/**
+ * Diurnele unei curse, din "Data si ora inceput" (data_inceput + ora_inceput) si
+ * "Data si ora sfarsit" (data_sfarsit + ora_sfarsit). Durata se calculeaza din
+ * momentele complete, nu din coloana salvata, ca sa nu poata ramane in urma.
+ * La o cursa reluata acestea sunt inceputul primei faze si sfarsitul ultimei:
+ * aplicatia nu inregistreaza intoarcerile acasa, deci perioada este una singura.
+ *
+ * Status: 'ok', 'lipsa' (lipseste o data sau o ora) sau 'invalid' (sfarsitul
+ * este inaintea inceputului). Doar la 'ok' exista minute si diurne.
+ *
+ * @return array{status: string, minute: ?int, diurne: ?int}
+ */
+function dispatcher_diurna_for_interval(array $row): array
+{
+    $moment = static function ($date, $time): ?DateTimeImmutable {
+        $date = trim((string) ($date ?? ''));
+        $time = substr(trim((string) ($time ?? '')), 0, 5);
+        if ($date === '' || $time === '') {
+            return null;
+        }
+        $value = DateTimeImmutable::createFromFormat('!Y-m-d H:i', $date . ' ' . $time);
+
+        return $value instanceof DateTimeImmutable ? $value : null;
+    };
+
+    $start = $moment($row['data_inceput'] ?? null, $row['ora_inceput'] ?? null);
+    $end = $moment($row['data_sfarsit'] ?? null, $row['ora_sfarsit'] ?? null);
+    if ($start === null || $end === null) {
+        return ['status' => 'lipsa', 'minute' => null, 'diurne' => null];
+    }
+
+    $seconds = $end->getTimestamp() - $start->getTimestamp();
+    if ($seconds < 0) {
+        return ['status' => 'invalid', 'minute' => null, 'diurne' => null];
+    }
+
+    $minutes = intdiv($seconds, 60);
+    $days = dispatcher_diurna_from_minutes($minutes);
+    $result = ['status' => 'ok', 'minute' => $minutes, 'diurne' => $days, 'calculat' => $days, 'ajustat' => false, 'ajustare_expirata' => false];
+
+    // Modificare aprobata de admin (cerere "Modificare diurna", pusa pe rand de
+    // dispatcher_attach_diurna_adjustments). Se aplica doar cat timp regula da
+    // acelasi numar ca la solicitare: daca intervalul cursei s-a schimbat intre
+    // timp, aprobarea nu mai corespunde si revine valoarea calculata.
+    $adjustment = is_array($row['diurna_ajustare'] ?? null) ? $row['diurna_ajustare'] : null;
+    if ($adjustment !== null) {
+        if ((int) ($adjustment['calculat'] ?? -1) === $days) {
+            $result['diurne'] = max(0, (int) ($adjustment['solicitat'] ?? $days));
+            $result['ajustat'] = $result['diurne'] !== $days;
+        } else {
+            $result['ajustare_expirata'] = true;
+        }
+    }
+
+    return $result;
+}
+
+/**
+ * Pune pe fiecare cursa ('id') modificarea de diurna aprobata ('diurna_ajustare')
+ * si cererea aflata in asteptare ('diurna_cerere'), ca dispatcher_diurna_for_interval
+ * sa intoarca valoarea aprobata oriunde se afiseaza diurnele cursei.
+ */
+function dispatcher_attach_diurna_adjustments(PDO $db, array &$rows, string $idKey = 'id'): void
+{
+    if ($rows === [] || !class_exists('InactiveResourceApprovalModel')) {
+        return;
+    }
+
+    try {
+        $adjustments = (new InactiveResourceApprovalModel($db))->getDiurnaAdjustmentsForTrips(
+            array_map(static fn (array $row): int => (int) ($row[$idKey] ?? 0), $rows)
+        );
+    } catch (Throwable $exception) {
+        error_log('[diurna_adjustments] ' . $exception->getMessage());
+        return;
+    }
+
+    foreach ($rows as &$row) {
+        $entry = $adjustments[(int) ($row[$idKey] ?? 0)] ?? null;
+        $row['diurna_ajustare'] = $entry['approved'] ?? null;
+        $row['diurna_cerere'] = $entry['pending'] ?? null;
+    }
+    unset($row);
+}
+
+/**
+ * Diurnele cursei, impartite pe soferii care au condus-o.
+ *
+ * Diurna se cuvine celui care era plecat, deci zilele se impart dupa timpul
+ * petrecut de fiecare segment pe drum. Numarul total ramane al cursei: resturile
+ * se distribuie descrescator (metoda resturilor celor mai mari), ca suma sa dea
+ * exact totalul, nu unul rotunjit in plus sau in minus.
+ *
+ * @return array<int, array{driver_id:int, sofer:string, minute:int, zile:int}>
+ */
+function dispatcher_diurna_split(int $totalDays, array $segments): array
+{
+    if ($segments === []) {
+        return [];
+    }
+
+    $rows = [];
+    $minutesTotal = 0;
+    foreach ($segments as $index => $segment) {
+        $minutes = dispatcher_segment_minutes($segment);
+        $minutesTotal += $minutes;
+        $driverId = (int) ($segment['driver_id'] ?? 0);
+        $driverName = trim((string) ($segment['sofer_nume'] ?? ''));
+        $key = $driverId > 0 ? $driverId : -($index + 1);
+        if (!isset($rows[$key])) {
+            $rows[$key] = [
+                'driver_id' => $driverId,
+                'sofer' => $driverName !== '' ? $driverName : 'Sofer -',
+                'minute' => 0,
+                'zile' => 0,
+            ];
+        }
+        $rows[$key]['minute'] += $minutes;
+    }
+
+    if ($totalDays <= 0) {
+        return array_values($rows);
+    }
+
+    if ($minutesTotal <= 0) {
+        // Fara durate nu avem dupa ce imparti: diurnele raman ale primului segment.
+        $first = array_key_first($rows);
+        $rows[$first]['zile'] = $totalDays;
+
+        return array_values($rows);
+    }
+
+    $remainders = [];
+    $allocated = 0;
+    foreach ($rows as $key => $row) {
+        $exact = $totalDays * $row['minute'] / $minutesTotal;
+        $whole = (int) floor($exact);
+        $rows[$key]['zile'] = $whole;
+        $allocated += $whole;
+        $remainders[$key] = $exact - $whole;
+    }
+
+    arsort($remainders);
+    foreach (array_keys($remainders) as $key) {
+        if ($allocated >= $totalDays) {
+            break;
+        }
+        $rows[$key]['zile']++;
+        $allocated++;
+    }
+
+    return array_values($rows);
+}
+
+/** Rezumatul diurnelor pe soferi, pentru tooltip: "Ion: 2 | Vasile: 1". */
+function dispatcher_diurna_summary(int $totalDays, array $segments): string
+{
+    $parts = [];
+    foreach (dispatcher_diurna_split($totalDays, $segments) as $row) {
+        $parts[] = $row['sofer'] . ': ' . $row['zile'];
+    }
+
+    return implode(' | ', $parts);
+}
+
+/** Durata unei faze, formatata scurt ("8h", "18h 30m", "-" cand nu e inchisa). */
+function dispatcher_segment_duration_label(array $segment): string
+{
+    $minutes = dispatcher_segment_minutes($segment);
+    if ($minutes <= 0) {
+        return 'durată -';
+    }
+
+    $hours = intdiv($minutes, 60);
+    $rest = $minutes % 60;
+
+    return $rest > 0 ? $hours . 'h ' . $rest . 'm' : $hours . 'h';
+}
+
+/**
+ * Traseul unei faze, pe scurt: de unde a plecat si unde a ajuns. Locurile scrise
+ * de mana bat id-urile configurate, pentru ca ele sunt cele completate pe faza.
+ */
+function dispatcher_segment_route_label(array $segment, array $loadLocations = [], array $zones = []): string
+{
+    $nameById = static function (array $options, int $id): string {
+        foreach ($options as $option) {
+            if ((int) ($option['id'] ?? 0) === $id) {
+                return trim((string) ($option['nume'] ?? ''));
+            }
+        }
+
+        return '';
+    };
+
+    $from = trim((string) ($segment['loc_plecare'] ?? ''));
+    if ($from === '') {
+        $from = $nameById($loadLocations, (int) ($segment['loc_incarcare_id'] ?? 0));
+    }
+
+    $to = trim((string) ($segment['loc_livrare'] ?? ''));
+    if ($to === '') {
+        $to = $nameById($zones, (int) ($segment['zona_distributie_id'] ?? 0));
+    }
+
+    if ($from === '' && $to === '') {
+        return '';
+    }
+
+    return trim(($from !== '' ? $from : '?') . ' → ' . ($to !== '' ? $to : '?'));
+}
