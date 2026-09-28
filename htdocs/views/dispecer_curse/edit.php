@@ -728,16 +728,15 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                 <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-data-incarcare">
                     <label class="form-label" for="edit_race_data_incarcare">Data incarcare</label>
                     <?php
-                        $loadingDateRawValue = trim((string) ($raceFormData['data_incarcare'] ?? ''));
-                        $loadingDateIsoValue = $loadingDateRawValue;
-                        if (preg_match('/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/', $loadingDateRawValue, $loadingDateParts)) {
-                            $loadingDateIsoValue = sprintf('%04d-%02d-%02d', (int) $loadingDateParts[3], (int) $loadingDateParts[2], (int) $loadingDateParts[1]);
-                        }
+                        $loadingDateDisplayValue = $formatRaceDateInput(trim((string) ($raceFormData['data_incarcare'] ?? '')));
                     ?>
-                    <div class="input-group fleet-date-field">
-                        <input type="text" class="form-control js-date-display-input <?= isset($raceFormErrors['data_incarcare']) ? 'is-invalid' : '' ?>" id="edit_race_data_incarcare" name="data_incarcare" value="<?= e($formatRaceDateInput($loadingDateRawValue)) ?>" placeholder="dd/mm/yyyy" inputmode="numeric" maxlength="10" autocomplete="off" data-date-picker-id="edit_race_data_incarcare_picker">
-                        <button type="button" class="btn btn-outline-secondary js-date-picker-button" data-date-picker-target="edit_race_data_incarcare_picker" aria-label="Deschide calendarul pentru data incarcarii"><i class="bi bi-calendar3" aria-hidden="true"></i></button>
-                        <input type="date" id="edit_race_data_incarcare_picker" class="fleet-date-picker-native" value="<?= e($loadingDateIsoValue) ?>" tabindex="-1" aria-hidden="true">
+                    <div class="dispatcher-datetime-field" data-role="loading-date-field">
+                        <div class="input-group dispatcher-datetime-input-group">
+                            <input type="text" class="form-control <?= isset($raceFormErrors['data_incarcare']) ? 'is-invalid' : '' ?>" id="edit_race_data_incarcare" value="<?= e($loadingDateDisplayValue) ?>" placeholder="dd/mm/yyyy" inputmode="numeric" maxlength="10" autocomplete="off" data-role="loading-date-display" aria-label="Data incarcare">
+                            <button type="button" class="btn btn-outline-secondary" data-role="loading-date-toggle" aria-label="Deschide calendarul pentru data incarcarii" aria-expanded="false"><i class="bi bi-calendar3" aria-hidden="true"></i></button>
+                        </div>
+                        <div class="dispatcher-datetime-popover" data-role="loading-date-popover" hidden></div>
+                        <input type="hidden" id="edit_race_data_incarcare_value" name="data_incarcare" value="<?= e($loadingDateDisplayValue) ?>" data-role="loading-date-value">
                     </div>
                     <?php if (isset($raceFormErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_incarcare']) ?></div><?php endif; ?>
                 </div>

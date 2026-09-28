@@ -100,6 +100,11 @@
         var endDateTimeDisplayField = form.querySelector('[data-role="end-datetime-display"]');
         var endDateTimeToggleButton = form.querySelector('[data-role="end-datetime-toggle"]');
         var endDateTimePopover = form.querySelector('[data-role="end-datetime-popover"]');
+        var loadingDateField = form.querySelector('[data-role="loading-date-field"]');
+        var loadingDateDisplayField = form.querySelector('[data-role="loading-date-display"]');
+        var loadingDateToggleButton = form.querySelector('[data-role="loading-date-toggle"]');
+        var loadingDatePopover = form.querySelector('[data-role="loading-date-popover"]');
+        var loadingDateValueField = form.querySelector('[data-role="loading-date-value"]');
         var durationHintField = form.querySelector('[data-role="durata-cursa-hint"]');
         var distributionLocationNote = form.querySelector('[data-role="distributie-note-loc"]');
         var distributionZoneNote = form.querySelector('[data-role="distributie-note-zone"]');
@@ -128,6 +133,14 @@
             selectedMinute: null
         };
         var endDateTimePickerState = {
+            view: 'date',
+            viewedYear: null,
+            viewedMonth: null,
+            selectedDateParts: null,
+            selectedHour: null,
+            selectedMinute: null
+        };
+        var loadingDatePickerState = {
             view: 'date',
             viewedYear: null,
             viewedMonth: null,
@@ -690,14 +703,16 @@
             field.dispatchEvent(new Event('change', { bubbles: true }));
         }
 
+        // timeField === null => picker doar pentru data (fara selectorul de ora).
         function createDateTimePickerContext(field, displayField, toggleButton, popover, dateField, timeField, state) {
+            var dateOnly = timeField === null;
             if (
                 !(field instanceof HTMLElement)
                 || !(displayField instanceof HTMLInputElement)
                 || !(toggleButton instanceof HTMLButtonElement)
                 || !(popover instanceof HTMLElement)
                 || !(dateField instanceof HTMLInputElement)
-                || !(timeField instanceof HTMLInputElement)
+                || (!dateOnly && !(timeField instanceof HTMLInputElement))
             ) {
                 return null;
             }
@@ -709,6 +724,7 @@
                 popover: popover,
                 dateField: dateField,
                 timeField: timeField,
+                dateOnly: dateOnly,
                 state: state
             };
         }
@@ -868,6 +884,18 @@
             }
 
             var parsedValue = parseStartDateTimeDisplayValue(getActiveDateTimePicker().displayField.value);
+            if (getActiveDateTimePicker().dateOnly) {
+                // Campul doar-data este optional: gol => se goleste valoarea; ora tastata se ignora.
+                if (getActiveDateTimePicker().displayField.value.trim() === '') {
+                    getActiveDateTimePicker().dateField.value = '';
+                    dispatchFieldUpdate(getActiveDateTimePicker().dateField);
+                    setStartDateTimeDisplayInvalid(false);
+                    return true;
+                }
+                if (parsedValue !== null) {
+                    parsedValue.timeValue = '';
+                }
+            }
             if (parsedValue === null) {
                 if (markInvalid) {
                     setStartDateTimeDisplayInvalid(true);
@@ -999,9 +1027,11 @@
             }
             getActiveDateTimePicker().popover.appendChild(daysGrid);
 
-            footer.className = 'dispatcher-datetime-picker-footer';
-            footer.appendChild(createDateTimePickerIconButton('show-time', 'Alege ora', 'bi-clock'));
-            getActiveDateTimePicker().popover.appendChild(footer);
+            if (!getActiveDateTimePicker().dateOnly) {
+                footer.className = 'dispatcher-datetime-picker-footer';
+                footer.appendChild(createDateTimePickerIconButton('show-time', 'Alege ora', 'bi-clock'));
+                getActiveDateTimePicker().popover.appendChild(footer);
+            }
         }
 
         function getPickerSelectedDateParts() {
@@ -1423,6 +1453,10 @@
                     selectedDateParts,
                     getActiveDateTimePicker().timeField instanceof HTMLInputElement ? (normalizeTimeInputValue(getActiveDateTimePicker().timeField.value) || '') : ''
                 );
+                if (getActiveDateTimePicker().dateOnly) {
+                    closeStartDateTimePopover();
+                    return;
+                }
                 renderStartDateTimePopover();
                 return;
             }
@@ -5902,6 +5936,15 @@
                 endDateField,
                 endTimeField,
                 endDateTimePickerState
+            ),
+            createDateTimePickerContext(
+                loadingDateField,
+                loadingDateDisplayField,
+                loadingDateToggleButton,
+                loadingDatePopover,
+                loadingDateValueField,
+                null,
+                loadingDatePickerState
             )
         ].filter(function (dateTimePicker) {
             return dateTimePicker !== null;
