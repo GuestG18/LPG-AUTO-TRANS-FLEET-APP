@@ -275,20 +275,16 @@ class CentralizatorFacturareService
             $add('pd_trips', 'Total curse P+D', (float) ($activity['primar_distributie']['trips'] ?? 0), 'curse', 'green', 'bi-truck-front-fill', (float) ($previous['primar_distributie']['trips'] ?? 0));
         } elseif ($mode === 'distributie') {
             /*
-             * Cardurile urmeaza cum e facturata distributia in Configurare transport:
-             * pe km -> km in locul tonelor; pe tona + km -> ambele cantitati, iar
-             * numarul de curse ramane in tabelul pe vehicule.
+             * Km parcursi apar mereu; tonele doar cand distributia se factureaza pe tona
+             * (Configurare transport). Cu tone, numarul de curse ramane in tabelul pe
+             * tipuri de transport, ca sa incapa trei carduri.
              */
             $billing = (array) ($core['distribution']['billing'] ?? []);
-            $usesKm = !empty($billing['uses_km']);
             $usesTone = !array_key_exists('uses_tone', $billing) || !empty($billing['uses_tone']);
-            if ($usesKm) {
-                $add('distribution_km', 'Total km Distribuție', (float) ($activity['distributie']['km'] ?? 0), 'km', 'purple', 'bi-signpost-split-fill', (float) ($previous['distributie']['km'] ?? 0));
-            }
+            $add('distribution_km', 'Total km Distribuție', (float) ($activity['distributie']['km'] ?? 0), 'km', 'purple', 'bi-signpost-split-fill', (float) ($previous['distributie']['km'] ?? 0));
             if ($usesTone) {
-                $add('distribution_tone', 'Total tone Distribuție', (float) ($activity['distributie']['tone'] ?? 0), 'tone', $usesKm ? 'green' : 'purple', 'bi-fuel-pump-fill', (float) ($previous['distributie']['tone'] ?? 0));
-            }
-            if (!($usesKm && $usesTone)) {
+                $add('distribution_tone', 'Total tone Distribuție', (float) ($activity['distributie']['tone'] ?? 0), 'tone', 'green', 'bi-fuel-pump-fill', (float) ($previous['distributie']['tone'] ?? 0));
+            } else {
                 $add('distribution_trips', 'Total curse Distribuție', (float) ($activity['distributie']['trips'] ?? 0), 'curse', 'green', 'bi-truck-front-fill', (float) ($previous['distributie']['trips'] ?? 0));
             }
             $add('distribution_value', 'Valoare Distribuție', (float) ($activity['distributie']['value'] ?? 0), 'RON', 'blue', 'bi-cash-stack', (float) ($previous['distributie']['value'] ?? 0));
@@ -510,10 +506,11 @@ class CentralizatorFacturareService
                 $summary[$type]['tone'] += $this->normalizedLoadedTons($row);
             } elseif ($type === 'distributie') {
                 $summary[$type]['tone'] += $this->normalizedLoadedTons($row);
-                /* Km intra in raport doar cand beneficiarul chiar factureaza distributia pe km. */
-                if (in_array('km', $this->distributionBillingUnits($row), true)) {
-                    $summary[$type]['km'] += $this->rowKm($row);
-                }
+                /*
+                 * Km parcursi intra in activitate indiferent de unitatea de facturare;
+                 * km facturati pe km raman in sectiunea Distributie (distributionBillingTrips).
+                 */
+                $summary[$type]['km'] += $this->rowKm($row);
             } elseif ($type === 'compresor') {
                 $summary[$type]['activity'] += $this->compressorActivityValue($row);
                 $summary[$type]['activity_unit'] = $this->compressorActivityUnit($row);

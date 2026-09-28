@@ -73,6 +73,19 @@ $driversByVehicleJson = json_encode($driversByVehicle ?? [], JSON_UNESCAPED_UNIC
 if (!is_string($driversByVehicleJson)) {
     $driversByVehicleJson = '{}';
 }
+// Toti soferii activi, pentru optiunea "Alt sofer" (ca in formularul Adauga Cursa).
+$allDriversPayload = [];
+foreach ((array) ($allActiveDrivers ?? []) as $allDriverRow) {
+    $allDriverId = (int) ($allDriverRow['id'] ?? 0);
+    $allDriverName = trim((string) ($allDriverRow['nume'] ?? ''));
+    if ($allDriverId > 0 && $allDriverName !== '') {
+        $allDriversPayload[] = ['id' => $allDriverId, 'nume' => $allDriverName];
+    }
+}
+$allDriversJson = json_encode($allDriversPayload, JSON_UNESCAPED_UNICODE);
+if (!is_string($allDriversJson)) {
+    $allDriversJson = '[]';
+}
 $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url([
     'page' => 'dispecer_curse',
     'action' => 'edit',
@@ -542,6 +555,7 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
               data-compresor-vehicles-by-beneficiary='<?= e($compressorVehicleByBeneficiaryJson) ?>'
               data-active-driver-vehicle-ids='<?= e($activeDriverVehicleIdsJson) ?>'
               data-drivers-by-vehicle='<?= e($driversByVehicleJson) ?>'
+              data-all-drivers='<?= e($allDriversJson) ?>'
               data-invoiced-refacturare-total='<?= e((string) $invoicedRefacturareTotal) ?>'
               <?php if ($phaseMode === ''): ?>
               data-inactive-resource-status-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'inactive_resource_status'])) ?>"

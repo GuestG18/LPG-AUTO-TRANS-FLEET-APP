@@ -449,6 +449,8 @@
         var SHOW_ALL_DRIVERS_VALUE = '__show_all_drivers__';
         var driverListExpanded = false;
         var driverListVehicleId = '';
+        // Ultimul sofer real ales; la extinderea listei selectia revine la el, nu ramane pe "Alt sofer".
+        var lastRealDriverValue = driverField instanceof HTMLSelectElement ? String(driverField.value || '').trim() : '';
 
         // Sandbox: optiunea "Alt vehicul" — vehicule neconfigurate pe ruta, cu decizie admin.
         var SHOW_ALL_VEHICLES_VALUE = '__show_all_vehicles__';
@@ -2457,6 +2459,9 @@
 
             var vehicleId = String(vehicleField ? (vehicleField.value || '') : '').trim();
             var selectedDriverId = forceReset ? '' : String(driverField.value || '').trim();
+            if (selectedDriverId === SHOW_ALL_DRIVERS_VALUE) {
+                selectedDriverId = lastRealDriverValue;
+            }
             var options = vehicleId === '' ? [] : getDriverOptionsForVehicle(vehicleId);
             var placeholderLabel = '-- Selecteaza --';
 
@@ -5816,6 +5821,7 @@
                     driverField.focus();
                     return;
                 }
+                lastRealDriverValue = String(driverField.value || '').trim();
                 promptInactiveResourcesAfterSelectionChange();
             });
         }

@@ -6,8 +6,8 @@ declare(strict_types=1);
  *
  * Idee: masina consuma anvelope, motorina si uzura chiar si cand ruleaza fara o
  * cursa inregistrata. Km pierduti = km reali GPS (SAS travelsheet) minus km
- * acoperiti de curse (km_cursa = ruta facturata, km_totali = odometru cursa)
- * pentru acelasi vehicul si interval. Diferenta pozitiva = exploatare fara venit.
+ * efectuati pe curse (km_totali cand e completat, altfel km_cursa) pentru
+ * acelasi vehicul si interval; km_cursa (agreati/facturati) apare separat. Diferenta pozitiva = exploatare fara venit.
  *
  * Rute:
  *   ?page=km_pierduti                                   -> pagina raport (schelet + km inregistrati)
@@ -93,8 +93,11 @@ class KmPierdutiController
                 'plate' => (string) ($car['registration'] ?? ''),
                 'label' => $car['local_label'] ?? null,
                 'nr_curse' => $reg !== null ? (int) $reg['nr'] : 0,
+                // Cursele numarate aici: coloana "Curse" le deschide in Desfasurator curse.
+                'curse_ids' => $reg !== null ? $reg['ids'] : '',
                 'km_cursa' => $reg !== null ? (float) $reg['km_cursa'] : 0.0,
                 'km_totali' => $reg !== null ? (float) $reg['km_totali'] : 0.0,
+                'km_efectuati' => $reg !== null ? (float) $reg['km_efectuati'] : 0.0,
             ];
         }
 
@@ -108,7 +111,7 @@ class KmPierdutiController
     }
 
     /**
-     * @return array<int, array{nr: int, km_cursa: float, km_totali: float}>
+     * @return array<int, array{nr: int, ids: string, km_cursa: float, km_totali: float, km_efectuati: float}>
      */
     private function registeredKmByVehicleId(string $start, string $end): array
     {
@@ -116,12 +119,26 @@ class KmPierdutiController
         // intre vehiculele segmentelor (proportional cu km-ii fiecarui segment),
         // ca sa se compare cu km-ii GPS ai vehiculului potrivit. Cursa se numara
         // o singura data, pe primul segment.
+        // Cursa intra in perioada dupa data la care s-a INCHIS (ca in Dashboard
+        // Analitic V2): una inceputa pe 31 iulie si incheiata pe 3 august e in august.
+        //
+        // km_efectuati = km rulati efectiv pe cursa (ca "km realizati" din Dashboard):
+        // km_totali cand e completat (la Primar km = "Km efectuati"), altfel km_cursa
+        // (la Distributie = "Km efectuati"); la compresor km_dislocare. km_cursa ramane
+        // separat ca "km agreati / facturati".
+        $effective = static fn (string $p): string => "CASE
+                WHEN {$p}tip_transport = 'compresor' AND COALESCE({$p}km_dislocare, 0) > 0 THEN {$p}km_dislocare
+                WHEN COALESCE({$p}km_totali, 0) > 0 THEN {$p}km_totali
+                ELSE COALESCE({$p}km_cursa, 0)
+            END";
         $hasSegments = $this->segmentsTableExists();
         $sql = $hasSegments
             ? "SELECT COALESCE(s.vehicle_id, c.vehicle_id) AS vehicle_id,
                       SUM(CASE WHEN seg.cursa_id IS NULL OR s.ordine = 1 THEN 1 ELSE 0 END) AS nr,
+                      GROUP_CONCAT(DISTINCT c.id ORDER BY c.id) AS ids,
                       COALESCE(SUM(COALESCE(c.km_cursa, 0) * COALESCE(COALESCE(s.km, 0) / seg.km_total, 1)), 0) AS km_cursa,
-                      COALESCE(SUM(COALESCE(c.km_totali, 0) * COALESCE(COALESCE(s.km, 0) / seg.km_total, 1)), 0) AS km_totali
+                      COALESCE(SUM(COALESCE(c.km_totali, 0) * COALESCE(COALESCE(s.km, 0) / seg.km_total, 1)), 0) AS km_totali,
+                      COALESCE(SUM((" . $effective('c.') . ") * COALESCE(COALESCE(s.km, 0) / seg.km_total, 1)), 0) AS km_efectuati
                FROM curse_dispecer c
                LEFT JOIN (
                      SELECT cursa_id, SUM(COALESCE(km, 0)) AS km_total
@@ -131,17 +148,21 @@ class KmPierdutiController
                ) seg ON seg.cursa_id = c.id
                LEFT JOIN curse_segmente s ON s.cursa_id = seg.cursa_id
                WHERE c.deleted_at IS NULL
-                 AND c.data_inceput BETWEEN :start AND :end
+                 AND COALESCE(c.data_sfarsit, c.data_inceput, c.data_cursa) BETWEEN :start AND :end
                GROUP BY COALESCE(s.vehicle_id, c.vehicle_id)"
             : "SELECT vehicle_id,
                       COUNT(*) AS nr,
+                      GROUP_CONCAT(id ORDER BY id) AS ids,
                       COALESCE(SUM(km_cursa), 0) AS km_cursa,
-                      COALESCE(SUM(km_totali), 0) AS km_totali
+                      COALESCE(SUM(km_totali), 0) AS km_totali,
+                      COALESCE(SUM(" . $effective('') . "), 0) AS km_efectuati
                FROM curse_dispecer
                WHERE deleted_at IS NULL
-                 AND data_inceput BETWEEN :start AND :end
+                 AND COALESCE(data_sfarsit, data_inceput, data_cursa) BETWEEN :start AND :end
                GROUP BY vehicle_id";
 
+        // Lista de id-uri (link spre Desfasurator) poate depasi limita implicita de 1024 caractere.
+        $this->db->exec('SET SESSION group_concat_max_len = 65535');
         $statement = $this->db->prepare($sql);
         $statement->execute([':start' => $start, ':end' => $end]);
 
@@ -149,8 +170,10 @@ class KmPierdutiController
         foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $result[(int) $row['vehicle_id']] = [
                 'nr' => (int) $row['nr'],
+                'ids' => (string) ($row['ids'] ?? ''),
                 'km_cursa' => (float) $row['km_cursa'],
                 'km_totali' => (float) $row['km_totali'],
+                'km_efectuati' => (float) $row['km_efectuati'],
             ];
         }
 
