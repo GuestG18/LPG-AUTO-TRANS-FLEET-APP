@@ -138,6 +138,18 @@ class FuelModel extends BaseModel
             $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN odometer_km_manual INT UNSIGNED NULL DEFAULT NULL AFTER odometer_km');
         }
 
+        // Corectia manuala a vehiculului: soferul a alimentat cu cardul altei
+        // masini. vehicle_registration ramane valoarea EFECTIVA (toate
+        // calculele o folosesc), vehicle_registration_manual marcheaza si
+        // protejeaza decizia la sync, iar vehicle_registration_api pastreaza
+        // numarul de pe card, pentru afisare si pentru revenire.
+        if (!$this->columnExists('fuel_fillups', 'vehicle_registration_manual')) {
+            $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN vehicle_registration_manual VARCHAR(40) NULL DEFAULT NULL AFTER vehicle_registration');
+        }
+        if (!$this->columnExists('fuel_fillups', 'vehicle_registration_api')) {
+            $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN vehicle_registration_api VARCHAR(40) NULL DEFAULT NULL AFTER vehicle_registration_manual');
+        }
+
         $this->backfillDriverNamesFromRawPayload();
 
         // T0 = ROLUL unei alimentari pentru o luna anume, distinct de
@@ -917,7 +929,14 @@ class FuelModel extends BaseModel
                 :updated_at
             )
             ON DUPLICATE KEY UPDATE
-                vehicle_registration = VALUES(vehicle_registration),
+                -- Vehiculul corectat manual (card folosit pe alta masina) are
+                -- prioritate; numarul de pe card ramane in vehicle_registration_api.
+                vehicle_registration = IF(
+                    fuel_fillups.vehicle_registration_manual IS NOT NULL,
+                    fuel_fillups.vehicle_registration_manual,
+                    VALUES(vehicle_registration)
+                ),
+                vehicle_registration_api = VALUES(vehicle_registration),
                 driver_name = VALUES(driver_name),
                 fuel_type = VALUES(fuel_type),
                 quantity_liters = VALUES(quantity_liters),
@@ -1479,6 +1498,114 @@ class FuelModel extends BaseModel
         return $stmt->execute();
     }
 
+    /**
+     * Muta o alimentare pe alt vehicul (soferul a folosit cardul altei masini).
+     *
+     * vehicle_registration devine numarul corect (toate calculele il folosesc),
+     * vehicle_registration_manual protejeaza decizia la sync, iar numarul de
+     * pe card ramane in vehicle_registration_api. Asocierea automata cu cursa
+     * si un eventual T0 manual al vechiului vehicul nu mai sunt valide si se
+     * recalculeaza / se scot. Asocierile manuale cu o cursa sunt pastrate.
+     *
+     * $registration = null revine la numarul primit din CardOil.
+     */
+    public function setFillupVehicle(int $fillupId, ?string $registration): bool
+    {
+        $this->ensureSchema();
+
+        if ($fillupId <= 0) {
+            return false;
+        }
+
+        $rowStmt = $this->db->prepare('
+            SELECT vehicle_registration, vehicle_registration_manual, vehicle_registration_api, fillup_datetime
+            FROM fuel_fillups
+            WHERE id = :id
+        ');
+        $rowStmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $rowStmt->execute();
+        $row = $rowStmt->fetch();
+        if ($row === false) {
+            return false;
+        }
+
+        $current = (string) $row['vehicle_registration'];
+        // Numarul de pe card: cel pastrat la prima corectie sau, daca randul nu a
+        // mai fost corectat, chiar valoarea curenta.
+        $apiRegistration = trim((string) ($row['vehicle_registration_api'] ?? ''));
+        if ($apiRegistration === '') {
+            $apiRegistration = ($row['vehicle_registration_manual'] ?? null) === null ? $current : '';
+        }
+
+        if ($registration === null) {
+            if (($row['vehicle_registration_manual'] ?? null) === null) {
+                return true;
+            }
+            if ($apiRegistration === '') {
+                return false;
+            }
+            $target = $apiRegistration;
+            $manual = null;
+        } else {
+            $target = $this->normalizeRegistration($registration);
+            if ($target === '') {
+                return false;
+            }
+            // Corectie catre chiar numarul de pe card = revenire la API.
+            $manual = $this->vehicleKey($target) === $this->vehicleKey($apiRegistration) ? null : $target;
+        }
+
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $stmt = $this->db->prepare('
+                UPDATE fuel_fillups
+                SET vehicle_registration = :vehicle_registration,
+                    vehicle_registration_manual = :vehicle_registration_manual,
+                    vehicle_registration_api = :vehicle_registration_api,
+                    updated_at = :updated_at
+                WHERE id = :id
+            ');
+            $stmt->bindValue(':vehicle_registration', $target);
+            $this->bindNullableString($stmt, ':vehicle_registration_manual', $manual);
+            $this->bindNullableString($stmt, ':vehicle_registration_api', $apiRegistration !== '' ? $apiRegistration : null);
+            $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'));
+            $stmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+            $stmt->execute();
+
+            if ($this->vehicleKey($current) !== $this->vehicleKey($target)) {
+                $deleteLink = $this->db->prepare("DELETE FROM fuel_trip_links WHERE fillup_id = :fillup_id AND match_type = 'automatic'");
+                $deleteLink->bindValue(':fillup_id', $fillupId, PDO::PARAM_INT);
+                $deleteLink->execute();
+
+                // T0 al vechiului vehicul care indica aceasta alimentare.
+                $deleteT0 = $this->db->prepare('DELETE FROM fuel_month_t0 WHERE fillup_id = :fillup_id AND vehicle_key <> :vehicle_key');
+                $deleteT0->bindValue(':fillup_id', $fillupId, PDO::PARAM_INT);
+                $deleteT0->bindValue(':vehicle_key', $this->vehicleKey($target));
+                $deleteT0->execute();
+            }
+
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
+        } catch (Throwable $exception) {
+            if ($ownTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+
+        $day = substr((string) $row['fillup_datetime'], 0, 10);
+        if ($day !== '') {
+            $this->refreshAutomaticAssociations($day, $day);
+        }
+
+        return true;
+    }
+
     /** Km asa cum au venit de la API, din payload-ul brut pastrat la import. */
     public function apiOdometerFromRawPayload(string $rawPayload): ?int
     {
@@ -1870,6 +1997,7 @@ class FuelModel extends BaseModel
                 c.ora_inceput,
                 c.ora_sfarsit,
                 " . $this->effectiveKmExpr('c') . " AS trip_km,
+                " . $this->lightVehicleExpr('f') . " AS is_light_vehicle,
                 (
                     SELECT fp.odometer_km
                     FROM fuel_fillups fp
@@ -1911,6 +2039,8 @@ class FuelModel extends BaseModel
             LEFT JOIN fuel_trip_links l ON l.fillup_id = f.id
             " . $where['where'] . "
               AND l.id IS NULL
+              -- vehiculele usoare nu fac curse: alimentarile lor nu sunt de asociat
+              AND NOT " . $this->lightVehicleExpr('f') . "
             ORDER BY f.fillup_datetime DESC, f.id DESC
             LIMIT :limit_rows
         ";
@@ -1955,13 +2085,7 @@ class FuelModel extends BaseModel
     private function getKpiSummary(array $filters): array
     {
         $where = $this->buildFillupWhere($filters, 'kpi', true);
-        // Vehicule usoare = autoturisme / autoutilitare (ca in paginile Vehicule Usoare / Grele).
-        // Tot ce nu se potriveste pe o placuta usoara (inclusiv placute necunoscute) intra la grele.
-        $lightExpr = "EXISTS (
-            SELECT 1 FROM vehicule lv
-            WHERE lv.tip_vehicul IN ('autovehicul', 'autoturism', 'autoutilitara')
-              AND REPLACE(UPPER(lv.nr_inmatriculare), ' ', '') = REPLACE(UPPER(f.vehicle_registration), ' ', '')
-        )";
+        $lightExpr = $this->lightVehicleExpr('f');
         $stmt = $this->db->prepare("
             SELECT
                 COALESCE(SUM(CASE WHEN f.fuel_type = 'motorina' THEN f.quantity_liters ELSE 0 END), 0) AS motorina_liters,
@@ -3113,6 +3237,21 @@ class FuelModel extends BaseModel
         }
 
         return $rows;
+    }
+
+    /**
+     * Vehicule usoare = autoturisme / autoutilitare (ca in paginile Vehicule
+     * Usoare / Grele). Tot ce nu se potriveste pe o placuta usoara (inclusiv
+     * placute necunoscute) intra la grele. Nu fac curse, deci alimentarile lor
+     * nu se considera „neasociate”.
+     */
+    private function lightVehicleExpr(string $alias): string
+    {
+        return "EXISTS (
+            SELECT 1 FROM vehicule lv
+            WHERE lv.tip_vehicul IN ('autovehicul', 'autoturism', 'autoutilitara')
+              AND REPLACE(UPPER(lv.nr_inmatriculare), ' ', '') = REPLACE(UPPER({$alias}.vehicle_registration), ' ', '')
+        )";
     }
 
     /** Cheia normalizata folosita pentru identificarea vehiculului. */

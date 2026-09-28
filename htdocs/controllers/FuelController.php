@@ -46,6 +46,9 @@ class FuelController
             case 'set_odometer':
                 $this->setOdometerAction();
                 return;
+            case 'set_vehicle':
+                $this->setVehicleAction();
+                return;
             case 'add_manual':
                 $this->addManualAction();
                 return;
@@ -794,6 +797,65 @@ class FuelController
         }
 
         redirect($this->safeReturnUrl($_POST['return_url'] ?? null));
+    }
+
+    /**
+     * Muta o alimentare pe vehiculul corect cand soferul a folosit cardul
+     * altei masini, sau revine la numarul de pe card. Persistent la sync.
+     */
+    private function setVehicleAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect(build_query_url(['page' => 'carburanti']));
+        }
+
+        ensure_csrf_or_redirect(build_query_url(['page' => 'carburanti']));
+        $this->requireFullManagement();
+
+        $returnUrl = $this->safeReturnUrl($_POST['return_url'] ?? null);
+        $fillupId = (int) ($_POST['fillup_id'] ?? 0);
+        if ($fillupId <= 0) {
+            flash_set('warning', 'Alimentarea selectata nu este valida.');
+            redirect($returnUrl);
+        }
+
+        try {
+            if (isset($_POST['reset_api'])) {
+                if ($this->model->setFillupVehicle($fillupId, null)) {
+                    flash_set('success', 'Alimentarea a revenit pe vehiculul de pe cardul CardOil.');
+                } else {
+                    flash_set('warning', 'Vehiculul nu a putut fi resetat.');
+                }
+                redirect($returnUrl);
+            }
+
+            // Doar vehicule cunoscute (flota sau deja prezente in alimentari),
+            // cu scrierea din flota.
+            $requestedKey = str_replace(' ', '', strtoupper(trim((string) ($_POST['vehicle_registration'] ?? ''))));
+            $registration = null;
+            foreach ($this->model->getVehicleOptions() as $option) {
+                $value = (string) ($option['vehicle_registration'] ?? '');
+                if ($requestedKey !== '' && str_replace(' ', '', strtoupper(trim($value))) === $requestedKey) {
+                    $registration = $value;
+                    break;
+                }
+            }
+            if ($registration === null) {
+                flash_set('warning', 'Selecteaza un vehicul valid.');
+                redirect($returnUrl);
+            }
+
+            if ($this->model->setFillupVehicle($fillupId, $registration)) {
+                flash_set('success', sprintf('Alimentarea a fost mutata pe %s. Corectia este protejata la sincronizarile CardOil.', $registration));
+            } else {
+                flash_set('warning', 'Vehiculul nu a putut fi actualizat.');
+            }
+        } catch (Throwable $exception) {
+            error_log('[FuelController][set_vehicle] ' . $exception->getMessage());
+            flash_set('danger', 'A aparut o eroare la schimbarea vehiculului.');
+        }
+
+        redirect($returnUrl);
     }
 
     /**

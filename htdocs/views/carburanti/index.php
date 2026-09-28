@@ -239,6 +239,10 @@ $changeBadge = static function (?float $value): string {
 };
 $associationLabel = static function (array $row): string {
     $tripId = (int) ($row['trip_id'] ?? 0);
+    if ($tripId <= 0 && !empty($row['is_light_vehicle'])) {
+        // Vehiculele usoare nu fac curse — nu e nimic de asociat.
+        return '<span class="fuel-pill fuel-pill-partial" title="Vehicul ușor: nu face curse, alimentarea nu se asociază">Vehicul ușor</span>';
+    }
     if ($tripId <= 0) {
         return '<span class="fuel-pill fuel-pill-warning">Alimentare neasociată</span>';
     }
@@ -273,7 +277,14 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
                     <span class="fuel-pill fuel-pill-cash" title="Alimentare introdusă manual, plătită în afara cardului CardOil"><?= e($manualPaymentLabel) ?></span>
                 <?php endif; ?>
             </td>
-            <td class="fw-semibold"><?= e((string) ($row['vehicle_registration'] ?? '-')) ?></td>
+            <?php $vehicleIsManual = ($row['vehicle_registration_manual'] ?? null) !== null; ?>
+            <td class="fw-semibold">
+                <?= e((string) ($row['vehicle_registration'] ?? '-')) ?>
+                <?php if ($vehicleIsManual): ?>
+                    <span class="fuel-pill fuel-pill-manual"
+                          title="Vehicul corectat manual — alimentat cu cardul <?= e((string) ($row['vehicle_registration_api'] ?? '-')) ?>. Protejat la sincronizarea CardOil.">card <?= e((string) ($row['vehicle_registration_api'] ?? '-')) ?></span>
+                <?php endif; ?>
+            </td>
             <?php if (!$compact): ?>
                 <td><?= e(trim((string) ($row['driver_name'] ?? '')) !== '' ? (string) $row['driver_name'] : '-') ?></td>
                 <td><?= e((string) ($row['station_name'] ?? '-')) ?></td>
@@ -313,71 +324,90 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
                 </td>
                 <td><?= $associationLabel($row) ?></td>
             <?php endif; ?>
-            <td>
-                <div class="fuel-row-actions">
-                    <?php if (!$compact): ?>
-                        <form method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'set_full'])) ?>">
-                            <?= csrf_field() ?>
-                            <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
-                            <input type="hidden" name="fillup_id" value="<?= e((string) ((int) ($row['id'] ?? 0))) ?>">
-                            <input type="hidden" name="is_full" value="<?= !empty($row['is_full']) ? '0' : '1' ?>">
-                            <button class="fuel-icon-btn" type="submit" title="<?= !empty($row['is_full']) ? 'Marcheaza Partial' : 'Marcheaza Full' ?>">
-                                <i class="bi <?= !empty($row['is_full']) ? 'bi-circle' : 'bi-check2-circle' ?>" aria-hidden="true"></i>
-                            </button>
-                        </form>
-                        <button
-                            type="button"
-                            class="fuel-icon-btn"
-                            data-fuel-odo-open
-                            data-fillup-id="<?= e((string) ((int) ($row['id'] ?? 0))) ?>"
-                            data-fillup-label="<?= e($formatDateTime((string) ($row['fillup_datetime'] ?? '')) . ' · ' . (string) ($row['vehicle_registration'] ?? '-') . ' · ' . $formatLiters((float) ($row['quantity_liters'] ?? 0))) ?>"
-                            data-odo-value="<?= e((string) ((int) ($row['odometer_km'] ?? 0))) ?>"
-                            data-odo-manual="<?= ($row['odometer_km_manual'] ?? null) !== null ? '1' : '0' ?>"
-                            title="Corectează odometrul"
-                        >
-                            <i class="bi bi-speedometer2" aria-hidden="true"></i>
-                        </button>
-                    <?php endif; ?>
-                    <?php if ($tripId > 0): ?>
-                        <a class="fuel-icon-btn" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $tripId])) ?>" title="Deschide cursa">
-                            <i class="bi bi-eye" aria-hidden="true"></i>
-                        </a>
-                    <?php else: ?>
-                        <button
-                            type="button"
-                            class="fuel-icon-btn"
-                            data-fuel-link-open
-                            data-fillup-id="<?= e((string) ((int) ($row['id'] ?? 0))) ?>"
-                            data-fillup-label="<?= e($formatDateTime((string) ($row['fillup_datetime'] ?? '')) . ' - ' . (string) ($row['vehicle_registration'] ?? '-')) ?>"
-                            title="Asociaza manual"
-                        >
-                            <i class="bi bi-link-45deg" aria-hidden="true"></i>
-                        </button>
-                    <?php endif; ?>
-                    <?php if ($isManualRow && trim((string) ($row['receipt_path'] ?? '')) !== ''): ?>
-                        <a
-                            class="fuel-icon-btn"
-                            href="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'receipt', 'fillup_id' => (int) ($row['id'] ?? 0)])) ?>"
-                            target="_blank"
-                            rel="noopener"
-                            title="Deschide bonul fiscal"
-                        >
-                            <i class="bi bi-receipt" aria-hidden="true"></i>
-                        </a>
-                    <?php endif; ?>
-                    <?php if ($isManualRow && $canManageFull): ?>
-                        <button
-                            type="button"
-                            class="fuel-icon-btn fuel-icon-btn-danger"
-                            data-fuel-delete-open
-                            data-fillup-id="<?= e((string) ((int) ($row['id'] ?? 0))) ?>"
-                            data-fillup-label="<?= e($formatDateTime((string) ($row['fillup_datetime'] ?? '')) . ' · ' . (string) ($row['vehicle_registration'] ?? '-') . ' · ' . $formatLiters((float) ($row['quantity_liters'] ?? 0))) ?>"
-                            title="Șterge alimentarea manuală"
-                        >
-                            <i class="bi bi-trash" aria-hidden="true"></i>
-                        </button>
-                    <?php endif; ?>
+            <td class="fuel-actions-cell">
+                <?php
+                $fillupIdValue = (string) ((int) ($row['id'] ?? 0));
+                $fillupLabel = $formatDateTime((string) ($row['fillup_datetime'] ?? '')) . ' · ' . (string) ($row['vehicle_registration'] ?? '-') . ' · ' . $formatLiters((float) ($row['quantity_liters'] ?? 0));
+                // In lista compacta, un vehicul usor fara cursa nu are nicio actiune.
+                $hasActions = !$compact || $tripId > 0 || empty($row['is_light_vehicle']) || $isManualRow;
+                ?>
+                <?php if ($hasActions): ?>
+                <div class="dropdown fuel-row-menu">
+                    <button type="button" class="fuel-icon-btn" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" title="Acțiuni">
+                        <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                        <span class="visually-hidden">Acțiuni</span>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                        <?php if ($tripId > 0): ?>
+                            <li>
+                                <a class="dropdown-item" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $tripId])) ?>">
+                                    <i class="bi bi-eye" aria-hidden="true"></i> Deschide cursa #<?= e((string) $tripId) ?>
+                                </a>
+                            </li>
+                        <?php elseif (empty($row['is_light_vehicle'])): ?>
+                            <li>
+                                <button type="button" class="dropdown-item" data-fuel-link-open
+                                        data-fillup-id="<?= e($fillupIdValue) ?>"
+                                        data-fillup-label="<?= e($formatDateTime((string) ($row['fillup_datetime'] ?? '')) . ' - ' . (string) ($row['vehicle_registration'] ?? '-')) ?>">
+                                    <i class="bi bi-link-45deg" aria-hidden="true"></i> Asociază cu o cursă
+                                </button>
+                            </li>
+                        <?php endif; ?>
+                        <?php if (!$compact): ?>
+                            <li>
+                                <form method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'set_full'])) ?>">
+                                    <?= csrf_field() ?>
+                                    <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+                                    <input type="hidden" name="fillup_id" value="<?= e($fillupIdValue) ?>">
+                                    <input type="hidden" name="is_full" value="<?= !empty($row['is_full']) ? '0' : '1' ?>">
+                                    <button class="dropdown-item" type="submit">
+                                        <i class="bi <?= !empty($row['is_full']) ? 'bi-circle' : 'bi-check2-circle' ?>" aria-hidden="true"></i>
+                                        <?= !empty($row['is_full']) ? 'Marchează Partial' : 'Marchează Full' ?>
+                                    </button>
+                                </form>
+                            </li>
+                            <li>
+                                <button type="button" class="dropdown-item" data-fuel-odo-open
+                                        data-fillup-id="<?= e($fillupIdValue) ?>"
+                                        data-fillup-label="<?= e($fillupLabel) ?>"
+                                        data-odo-value="<?= e((string) ((int) ($row['odometer_km'] ?? 0))) ?>"
+                                        data-odo-manual="<?= ($row['odometer_km_manual'] ?? null) !== null ? '1' : '0' ?>">
+                                    <i class="bi bi-speedometer2" aria-hidden="true"></i> Corectează odometrul
+                                </button>
+                            </li>
+                            <?php if ($canManageFull): ?>
+                                <li>
+                                    <button type="button" class="dropdown-item" data-fuel-vehicle-open
+                                            data-fillup-id="<?= e($fillupIdValue) ?>"
+                                            data-fillup-label="<?= e($fillupLabel . ' · ' . (string) ($row['station_name'] ?? '-')) ?>"
+                                            data-vehicle="<?= e((string) ($row['vehicle_registration'] ?? '')) ?>"
+                                            data-vehicle-api="<?= e((string) ($row['vehicle_registration_api'] ?? '')) ?>"
+                                            data-vehicle-manual="<?= ($row['vehicle_registration_manual'] ?? null) !== null ? '1' : '0' ?>">
+                                        <i class="bi bi-arrow-left-right" aria-hidden="true"></i> Schimbă vehiculul
+                                    </button>
+                                </li>
+                            <?php endif; ?>
+                        <?php endif; ?>
+                        <?php if ($isManualRow && trim((string) ($row['receipt_path'] ?? '')) !== ''): ?>
+                            <li>
+                                <a class="dropdown-item" href="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'receipt', 'fillup_id' => (int) ($row['id'] ?? 0)])) ?>" target="_blank" rel="noopener">
+                                    <i class="bi bi-receipt" aria-hidden="true"></i> Deschide bonul fiscal
+                                </a>
+                            </li>
+                        <?php endif; ?>
+                        <?php if ($isManualRow && $canManageFull): ?>
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <button type="button" class="dropdown-item text-danger" data-fuel-delete-open
+                                        data-fillup-id="<?= e($fillupIdValue) ?>"
+                                        data-fillup-label="<?= e($fillupLabel) ?>">
+                                    <i class="bi bi-trash" aria-hidden="true"></i> Șterge alimentarea manuală
+                                </button>
+                            </li>
+                        <?php endif; ?>
+                    </ul>
                 </div>
+                <?php endif; ?>
             </td>
         </tr>
         <?php
@@ -2441,6 +2471,47 @@ $donutStyle = static function (array $items): string {
     </div>
 </div>
 
+<?php if ($canManageFull): ?>
+<div class="modal fade" id="fuelVehicleModal" tabindex="-1" aria-labelledby="fuelVehicleModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form class="modal-content" method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'set_vehicle'])) ?>">
+            <?= csrf_field() ?>
+            <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+            <input type="hidden" name="fillup_id" id="fuelVehicleFillupId" value="">
+            <div class="modal-header">
+                <h5 class="modal-title" id="fuelVehicleModalTitle">Schimbă vehiculul</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+            </div>
+            <div class="modal-body">
+                <p class="fuel-modal-subtitle" id="fuelVehicleFillupLabel">Alimentare</p>
+                <p class="small text-muted mb-2" id="fuelVehicleCardInfo" hidden></p>
+                <label class="form-label" for="fuelVehicleSelect">Vehiculul alimentat efectiv</label>
+                <select class="form-select" id="fuelVehicleSelect" name="vehicle_registration" required>
+                    <option value="">Selectează vehiculul</option>
+                    <?php foreach ($vehicleOptions as $vehicleOption): ?>
+                        <?php $vehicleValue = (string) ($vehicleOption['vehicle_registration'] ?? ''); ?>
+                        <option value="<?= e($vehicleValue) ?>"><?= e($vehicleValue) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <small class="text-muted d-block mt-2">
+                    Pentru cazul în care șoferul a alimentat cu cardul altei mașini. Alimentarea se mută
+                    pe vehiculul ales (consum, costuri, asociere cursă), iar corecția rămâne valabilă
+                    la sincronizările CardOil.
+                </small>
+            </div>
+            <div class="modal-footer">
+                <button type="submit" class="btn btn-outline-secondary me-auto" name="reset_api" value="1"
+                        id="fuelVehicleResetBtn" formnovalidate hidden>
+                    Revino la vehiculul de pe card
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
+                <button type="submit" class="btn btn-primary">Salvează</button>
+            </div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
+
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
 <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/l10n/ro.js"></script>
@@ -2884,6 +2955,30 @@ document.addEventListener('DOMContentLoaded', function () {
                 // Butonul de revenire la API apare doar cand exista o corectie manuala.
                 odoResetBtn.hidden = button.getAttribute('data-odo-manual') !== '1';
                 odoModal.show();
+            });
+        });
+    }
+
+    // Modalul de schimbare a vehiculului (card folosit pe alta masina).
+    var vehicleModalElement = document.getElementById('fuelVehicleModal');
+    if (vehicleModalElement && window.bootstrap) {
+        var vehicleModal = new bootstrap.Modal(vehicleModalElement);
+        var vehicleFillupId = document.getElementById('fuelVehicleFillupId');
+        var vehicleLabel = document.getElementById('fuelVehicleFillupLabel');
+        var vehicleSelect = document.getElementById('fuelVehicleSelect');
+        var vehicleCardInfo = document.getElementById('fuelVehicleCardInfo');
+        var vehicleResetBtn = document.getElementById('fuelVehicleResetBtn');
+        document.querySelectorAll('[data-fuel-vehicle-open]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                vehicleFillupId.value = button.getAttribute('data-fillup-id') || '';
+                vehicleLabel.textContent = button.getAttribute('data-fillup-label') || 'Alimentare';
+                vehicleSelect.value = button.getAttribute('data-vehicle') || '';
+                var isManual = button.getAttribute('data-vehicle-manual') === '1';
+                var cardVehicle = button.getAttribute('data-vehicle-api') || '';
+                vehicleCardInfo.hidden = !isManual || cardVehicle === '';
+                vehicleCardInfo.textContent = 'Alimentat cu cardul: ' + cardVehicle;
+                vehicleResetBtn.hidden = !isManual;
+                vehicleModal.show();
             });
         });
     }

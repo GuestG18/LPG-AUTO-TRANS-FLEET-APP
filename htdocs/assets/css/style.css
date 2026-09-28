@@ -17372,6 +17372,33 @@ tr:hover .diurna-edit-btn,
     margin: 0;
 }
 
+/* Meniul "⋮" cu actiunile unei alimentari. */
+.fuel-actions-cell {
+    width: 1%;
+    white-space: nowrap;
+    text-align: right;
+}
+
+.fuel-row-menu .dropdown-menu {
+    min-width: 14rem;
+    font-size: .875rem;
+}
+
+.fuel-row-menu .dropdown-menu form {
+    margin: 0;
+}
+
+.fuel-row-menu .dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+}
+
+.fuel-row-menu .dropdown-item .bi {
+    width: 1rem;
+    text-align: center;
+}
+
 .fuel-card-link {
     display: inline-flex;
     align-items: center;
