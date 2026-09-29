@@ -1657,4 +1657,67 @@ class DocumentModel extends BaseModel
             $stmt->bindValue($placeholder, (string) $value, PDO::PARAM_STR);
         }
     }
+
+    /**
+     * Vehiculul dupa numarul de inmatriculare, ignorand spatiile/cratimele si
+     * literele mici ("b219net" == "B 219 NET"). Folosit de Fleet Assistant.
+     */
+    public function findVehicleByRegistration(string $registration): ?array
+    {
+        $key = strtoupper(preg_replace('/[\s\-]+/', '', $registration) ?? '');
+        if ($key === '' || preg_match('/^[A-Z0-9]{2,20}$/', $key) !== 1) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare(
+            "SELECT id, nr_inmatriculare
+             FROM vehicule
+             WHERE REPLACE(REPLACE(UPPER(nr_inmatriculare), ' ', ''), '-', '') = :plate_key
+             ORDER BY id ASC
+             LIMIT 1"
+        );
+        $stmt->execute([':plate_key' => $key]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return is_array($row) ? $row : null;
+    }
+
+    /**
+     * Documentul curent de un anumit tip pentru un vehicul: intai cele cu fisier
+     * atasat, apoi cel cu expirarea cea mai tarzie (fara expirare la final).
+     */
+    public function findCurrentVehicleDocument(int $vehicleId, string $documentType): ?array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT id, vehicle_id, tip_document, data_expirare, fisier_original, fisier_stocat
+             FROM documente
+             WHERE vehicle_id = :vehicle_id
+               AND UPPER(TRIM(tip_document)) = UPPER(:tip_document)
+             ORDER BY (COALESCE(fisier_stocat, '') <> '') DESC,
+                      data_expirare IS NULL,
+                      data_expirare DESC,
+                      id DESC
+             LIMIT 1"
+        );
+        $stmt->execute([':vehicle_id' => $vehicleId, ':tip_document' => trim($documentType)]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return is_array($row) ? $row : null;
+    }
+
+    public function findVehicleDocumentWithVehicle(int $documentId): ?array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT d.id, d.vehicle_id, d.tip_document, d.data_expirare, d.fisier_original, d.fisier_stocat,
+                    v.nr_inmatriculare
+             FROM documente d
+             INNER JOIN vehicule v ON v.id = d.vehicle_id
+             WHERE d.id = :id
+             LIMIT 1"
+        );
+        $stmt->execute([':id' => $documentId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return is_array($row) ? $row : null;
+    }
 }

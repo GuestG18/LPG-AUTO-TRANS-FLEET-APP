@@ -413,6 +413,7 @@ require_once __DIR__ . '/controllers/OcrPartsController.php';
 
 if ($assistantApiPath !== null) {
     require_once __DIR__ . '/models/AssistantChannelModel.php';
+    require_once __DIR__ . '/models/AssistantDownloadTokenModel.php';
     require_once __DIR__ . '/controllers/AssistantApiController.php';
     (new AssistantApiController())->handle($assistantApiPath);
     exit;
