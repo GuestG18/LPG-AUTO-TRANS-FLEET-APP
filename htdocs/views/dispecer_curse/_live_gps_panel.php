@@ -17,11 +17,11 @@ $liveJsVersion = (string) @filemtime(BASE_PATH . '/assets/js/dispatcher-live.js'
 ?>
 <link rel="stylesheet" href="<?= e(url('assets/css/dispatcher-live.css?v=' . $liveCssVersion)) ?>">
 
-<section class="dispatcher-live d-none" id="dispatcher-live" data-endpoint="<?= e($liveGpsUrl) ?>" aria-labelledby="dispatcher-live-title">
+<section class="dispatcher-live is-collapsed d-none" id="dispatcher-live" data-endpoint="<?= e($liveGpsUrl) ?>" aria-labelledby="dispatcher-live-title">
     <header class="dispatcher-live-header">
         <div class="dispatcher-live-heading">
             <button type="button" class="dispatcher-live-title-btn" id="dispatcher-live-toggle"
-                    aria-expanded="true" aria-controls="dispatcher-live-body" title="Restrânge / extinde">
+                    aria-expanded="false" aria-controls="dispatcher-live-body" title="Restrânge / extinde">
                 <span class="dispatcher-live-pulse" aria-hidden="true"></span>
                 <h2 class="dispatcher-live-title" id="dispatcher-live-title">
                     Curse în desfășurare <span class="dispatcher-live-title-muted">(GPS live)</span>

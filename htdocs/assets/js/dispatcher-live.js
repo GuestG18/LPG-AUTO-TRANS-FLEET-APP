@@ -759,12 +759,13 @@
                 panel.classList.toggle('is-collapsed', collapsed);
                 toggleEl.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
             };
-            // Starea pliat/depliat se pastreaza per browser (aceeasi cheie ca inainte).
-            try { applyCollapsed(localStorage.getItem('dlgCollapsed') === '1'); } catch (e) { /* stocare indisponibila */ }
+            // Banda porneste mereu pliata (la intrarea in pagina si dupa salvarea unei
+            // curse); se deschide doar la click, fara sa-si aminteasca starea.
+            applyCollapsed(true);
+            try { localStorage.removeItem('dlgCollapsed'); } catch (e) { /* stocare indisponibila */ }
             toggleEl.addEventListener('click', function () {
                 var willCollapse = !panel.classList.contains('is-collapsed');
                 applyCollapsed(willCollapse);
-                try { localStorage.setItem('dlgCollapsed', willCollapse ? '1' : '0'); } catch (e) { /* stocare indisponibila */ }
                 if (!willCollapse && mapState.map) { setTimeout(function () { mapState.map.invalidateSize(false); }, 50); }
             });
         }
