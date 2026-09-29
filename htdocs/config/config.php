@@ -68,7 +68,7 @@ $defaultAppUrl = $httpHost !== ''
 $configuredAppUrl = trim((string) (getenv('APP_URL') ?: ''));
 define('APP_URL', rtrim($configuredAppUrl !== '' ? $configuredAppUrl : $defaultAppUrl, '/'));
 
-if (PHP_SAPI !== 'cli' && session_status() === PHP_SESSION_NONE) {
+if (PHP_SAPI !== 'cli' && !defined('FLEET_STATELESS_REQUEST') && session_status() === PHP_SESSION_NONE) {
     session_name('fleet_mvp_session');
     session_set_cookie_params([
         'lifetime' => 0,
@@ -81,7 +81,7 @@ if (PHP_SAPI !== 'cli' && session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-if (PHP_SAPI !== 'cli' && !isset($_SESSION['session_initialized'])) {
+if (PHP_SAPI !== 'cli' && !defined('FLEET_STATELESS_REQUEST') && !isset($_SESSION['session_initialized'])) {
     session_regenerate_id(true);
     $_SESSION['session_initialized'] = time();
 }

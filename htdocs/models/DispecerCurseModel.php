@@ -4806,6 +4806,59 @@ class DispecerCurseModel extends BaseModel
     }
 
     /**
+     * Cursele active intr-o zi (Fleet Assistant): intervalul data_inceput..data_sfarsit
+     * acopera ziua, plus cursele ramase deschise (fara ora de sfarsit) inceput in
+     * ultimele 3 zile — aceeasi fereastra ca "cursa in desfasurare" din banda GPS live.
+     */
+    public function getRacesActiveOnDay(string $day): array
+    {
+        $this->ensureRaceSoftDeleteSchema();
+
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d', $day);
+        if ($date === false || $date->format('Y-m-d') !== $day) {
+            return [];
+        }
+
+        $sql = "
+            SELECT
+                c.id,
+                c.tip_transport,
+                c.data_inceput,
+                c.ora_inceput,
+                c.data_sfarsit,
+                c.ora_sfarsit,
+                c.loc_plecare,
+                c.loc_aspirare,
+                c.loc_livrare,
+                c.loc_livrare_cursa,
+                v.nr_inmatriculare,
+                COALESCE(s.nume, '') AS sofer_nume,
+                COALESCE(li.nume, '') AS loc_incarcare_nume,
+                COALESCE(zd.nume, '') AS zona_distributie_nume
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
+            LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
+            WHERE c.deleted_at IS NULL
+              AND c.data_inceput <= :day_upper
+              AND (
+                    COALESCE(c.data_sfarsit, c.data_inceput) >= :day_lower
+                    OR (c.ora_sfarsit IS NULL AND c.data_inceput >= :open_since)
+              )
+            ORDER BY c.data_inceput ASC, c.ora_inceput IS NULL, c.ora_inceput ASC, c.id ASC
+        ";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->bindValue(':day_upper', $day, PDO::PARAM_STR);
+        $stmt->bindValue(':day_lower', $day, PDO::PARAM_STR);
+        $stmt->bindValue(':open_since', $date->modify('-3 days')->format('Y-m-d'), PDO::PARAM_STR);
+        $stmt->execute();
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
      * Cursele salvate dupa un moment dat — folosite pentru semnalul "curse noi"
      * din Desfasurator: in timp ce un operator completeaza formularul, un coleg
      * poate salva exact cursa pe care o introduce si el.

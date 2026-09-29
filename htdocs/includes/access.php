@@ -150,6 +150,56 @@ function can(string $pageKey, string $action = 'view'): bool
     return isset($state['perms'][$pageKey][$action]);
 }
 
+/**
+ * Aceleasi reguli ca can(), dar pentru un utilizator dat explicit (fara sesiune).
+ * Folosit de apelurile server-to-server (ex. Fleet Assistant), unde nu exista
+ * utilizator logat: rolul si drepturile se citesc din utilizatori / access_*.
+ *
+ * @param array{id:int|string,rol?:string,status?:string} $user
+ */
+function user_can(array $user, string $pageKey, string $action = 'view'): bool
+{
+    $userId = (int) ($user['id'] ?? 0);
+    if ($userId <= 0 || (string) ($user['status'] ?? 'inactiv') !== 'activ') {
+        return false;
+    }
+
+    $role = (string) ($user['rol'] ?? '');
+    if ($role === 'admin') {
+        return true;
+    }
+
+    $model = new AccessRightsModel(get_pdo());
+    $perms = $model->getUserPermissions($userId);
+    $configured = $perms !== [] ? true : $model->isConfigured($userId);
+
+    if (!$configured) {
+        // Neconfigurat -> comportament legacy bazat pe rol (vezi can()).
+        $isAccountancy = in_array($role, ['admin', 'contabilitate'], true);
+        if ($action !== 'view') {
+            $meta = permission_pages()[$pageKey]['actions'][$action] ?? null;
+            if (is_array($meta) && ($meta['admin'] ?? false) === true) {
+                return false;
+            }
+            if (is_array($meta) && ($meta['accountancy'] ?? false) === true) {
+                return $isAccountancy;
+            }
+        }
+
+        switch (permission_page_scope($pageKey)) {
+            case 'admin':
+                return false;
+            case 'accountancy':
+                return $isAccountancy;
+            case 'all':
+            default:
+                return true;
+        }
+    }
+
+    return isset($perms[$pageKey][$action]);
+}
+
 /** Varianta care primeste direct ruta ?page=... */
 function can_route(string $routePage, string $action = 'view'): bool
 {

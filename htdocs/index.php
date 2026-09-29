@@ -1,6 +1,16 @@
 <?php
 declare(strict_types=1);
 
+// Fleet Assistant API (/api/assistant/...): apel server-to-server, fara sesiune de browser.
+// Detectat inainte de config.php, care porneste sesiunea pentru restul aplicatiei.
+$assistantApiPath = null;
+$assistantApiPrefix = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/api/assistant/';
+$requestPath = (string) parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH);
+if (PHP_SAPI !== 'cli' && str_starts_with($requestPath, $assistantApiPrefix)) {
+    define('FLEET_STATELESS_REQUEST', true);
+    $assistantApiPath = substr($requestPath, strlen($assistantApiPrefix));
+}
+
 require_once __DIR__ . '/config/config.php';
 require_once __DIR__ . '/config/database.php';
 $composerAutoload = dirname(__DIR__) . '/vendor/autoload.php';
@@ -400,6 +410,13 @@ require_once __DIR__ . '/controllers/TransportTariffController.php';
 require_once __DIR__ . '/controllers/OperationalCostController.php';
 require_once __DIR__ . '/controllers/DevOcrTestController.php';
 require_once __DIR__ . '/controllers/OcrPartsController.php';
+
+if ($assistantApiPath !== null) {
+    require_once __DIR__ . '/models/AssistantChannelModel.php';
+    require_once __DIR__ . '/controllers/AssistantApiController.php';
+    (new AssistantApiController())->handle($assistantApiPath);
+    exit;
+}
 
 $db = get_pdo();
 
