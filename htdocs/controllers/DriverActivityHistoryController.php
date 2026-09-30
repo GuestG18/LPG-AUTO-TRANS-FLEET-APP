@@ -3,7 +3,6 @@ declare(strict_types=1);
 
 class DriverActivityHistoryController
 {
-    private const MAX_COMPARE_DRIVERS = 20;
 
     /** Cheile KPI care nu ajung la cei fara dreptul „Date financiare”. */
     private const FINANCIAL_KPI_KEYS = [
@@ -356,7 +355,11 @@ class DriverActivityHistoryController
         ];
     }
 
-    /** Soferii alesi: driver_ids[] (comparatie) sau driver_id (link-uri vechi). Maxim 20. */
+    /**
+     * Soferii alesi: driver_ids[] (comparatie) sau driver_id (link-uri vechi). Fara limita:
+     * lista e oricum restransa la soferii permisi (vezi mai sus), iar graficele comparatiei
+     * raman lizibile si cu 50+ soferi.
+     */
     private function resolveDriverIds(array $input): array
     {
         $raw = $input['driver_ids'] ?? [];
@@ -375,7 +378,7 @@ class DriverActivityHistoryController
             }
         }
 
-        return array_slice(array_values($ids), 0, self::MAX_COMPARE_DRIVERS);
+        return array_values($ids);
     }
 
     private function parseDateRange(string $value): array

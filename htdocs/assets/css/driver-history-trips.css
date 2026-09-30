@@ -115,7 +115,231 @@
 }
 /* Modul "Curse": raportul detaliat pe toata latimea, fara sumar si grafice. */
 .driver-history-compare-views[data-compare-view="trips"] .driver-history-compare-panel,
-.driver-history-compare-views[data-compare-view="trips"] .driver-history-chart-grid { display: none; }
+.driver-history-compare-views[data-compare-view="trips"] .driver-history-chart-grid,
+.driver-history-compare-views[data-compare-view="trips"] .driver-history-chart-switcher { display: none; }
+
+/* Graficele: un singur grafic pe toata latimea, ales din comutatorul din antet. */
+.driver-history-chart-switcher { margin-bottom: .9rem; }
+.driver-history-chart-switcher-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5rem 1rem;
+    margin-bottom: .8rem;
+}
+.driver-history-chart-switcher-head h2 { margin: 0; }
+.driver-history-chart-switcher-head .driver-history-view-switch {
+    flex-wrap: wrap;
+    margin: 0;
+}
+.driver-history-chart-switcher [data-chart-tab][aria-selected="true"] {
+    background: #0b55f4;
+    color: #fff;
+}
+.driver-history-chart-switcher .driver-history-chart-wrap,
+.driver-history-chart-switcher .driver-history-chart-wrap.is-donut {
+    height: clamp(320px, 26vw, 420px);
+}
+
+/* Comparatie: unelte locale ale graficului (cautare, sortare, resetare). */
+.driver-history-chart-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem .6rem;
+    margin: -.2rem 0 .8rem;
+}
+.driver-history-chart-tools[hidden],
+.driver-history-chart-tools [hidden] { display: none !important; }
+.driver-history-chart-search {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex: 0 1 260px;
+    min-width: 180px;
+    margin: 0;
+}
+.driver-history-chart-search i {
+    position: absolute;
+    left: .6rem;
+    color: #64748b;
+    font-size: .8rem;
+    pointer-events: none;
+}
+.driver-history-chart-search input {
+    width: 100%;
+    height: 2rem;
+    padding: 0 .6rem 0 1.8rem;
+    border: 1px solid #dbe4f1;
+    border-radius: 8px;
+    background: #fff;
+    color: #0f172a;
+    font-size: .82rem;
+    font-weight: 700;
+}
+.driver-history-chart-search input:focus {
+    outline: none;
+    border-color: #93b4ec;
+    box-shadow: 0 0 0 3px rgba(11, 85, 244, .12);
+}
+.driver-history-chart-search-status {
+    color: #475569;
+    font-size: .78rem;
+    font-weight: 750;
+}
+.driver-history-chart-tools .form-select {
+    width: auto;
+    height: 2rem;
+    margin-left: auto;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-color: #dbe4f1;
+    border-radius: 8px;
+    font-size: .8rem;
+    font-weight: 750;
+}
+.driver-history-chart-tools .btn {
+    height: 2rem;
+    border-radius: 8px;
+    font-size: .8rem;
+    font-weight: 750;
+}
+
+/*
+ * Bare orizontale ordonate: ~40 px pe sofer, deci graficul creste cu lista; peste
+ * ~14 soferi randurile se deruleaza in interiorul panoului, fara sa fie comprimate.
+ */
+.driver-history-chart-switcher .driver-history-chart-wrap.is-ranked {
+    height: auto;
+    min-height: 0;
+}
+.driver-history-chart-switcher .driver-history-chart-wrap.is-ranked.is-empty { min-height: 200px; }
+.driver-history-chart-wrap.is-ranked.is-empty .driver-history-rank-scroll { display: none; }
+.driver-history-rank-scroll {
+    max-height: 560px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+}
+/* Soferii care nu au bara pe grafic (fara valoare), numiti sub grafic. */
+.driver-history-chart-note {
+    margin: .6rem 0 0;
+    color: #64748b;
+    font-size: .76rem;
+    font-weight: 700;
+    line-height: 1.4;
+}
+.driver-history-rank-canvas {
+    position: relative;
+    min-width: 0;
+}
+
+/* Evolutie kilometri: graficul si panoul cu valorile zilei fixate, alaturi. */
+.driver-history-chart-switcher .driver-history-chart-wrap.is-timeline { height: auto; }
+.driver-history-chart-wrap.is-timeline.is-empty { min-height: 200px; }
+.driver-history-chart-wrap.is-timeline.is-empty .driver-history-timeline-layout { visibility: hidden; }
+.driver-history-timeline-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 290px;
+    gap: 1rem;
+}
+.driver-history-timeline-chart {
+    position: relative;
+    min-width: 0;
+    height: clamp(340px, 28vw, 440px);
+}
+.driver-history-timeline-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    max-height: clamp(340px, 28vw, 440px);
+    padding: .75rem;
+    border: 1px solid #dfe7f2;
+    border-radius: .5rem;
+    background: #f8fafc;
+}
+.driver-history-timeline-hint {
+    margin: auto 0;
+    color: #64748b;
+    font-size: .82rem;
+    font-weight: 750;
+    text-align: center;
+}
+.driver-history-timeline-panel-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: .5rem;
+}
+.driver-history-timeline-panel-head small {
+    display: block;
+    color: #64748b;
+    font-size: .72rem;
+    font-weight: 750;
+}
+.driver-history-timeline-panel-head strong {
+    color: #0f172a;
+    font-size: 1.05rem;
+    font-weight: 950;
+}
+.driver-history-timeline-panel-head .btn { padding: 0; font-size: .76rem; font-weight: 750; }
+.driver-history-timeline-total {
+    margin: .3rem 0 .5rem;
+    color: #475569;
+    font-size: .78rem;
+    font-weight: 700;
+}
+.driver-history-timeline-rows {
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+.driver-history-timeline-row {
+    display: grid;
+    grid-template-columns: 8px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: .5rem;
+    width: 100%;
+    padding: .28rem .35rem;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #334155;
+    font-size: .8rem;
+    font-weight: 700;
+    text-align: left;
+}
+.driver-history-timeline-row:hover { background: #e8effb; }
+.driver-history-timeline-row.is-active { background: #eaf2ff; color: #0b55f4; }
+.driver-history-timeline-row i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+.driver-history-timeline-row span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.driver-history-timeline-row strong {
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.driver-history-timeline-idle {
+    margin: .5rem 0 .2rem;
+    padding-top: .4rem;
+    border-top: 1px solid #e2e8f0;
+    color: #94a3b8;
+    font-size: .72rem;
+    font-weight: 750;
+}
+@container driver-history (max-width: 900px) {
+    .driver-history-timeline-layout { grid-template-columns: minmax(0, 1fr); }
+    .driver-history-timeline-panel { max-height: 320px; }
+    .driver-history-chart-tools .form-select { margin-left: 0; }
+}
 /* Pagina unui singur sofer: modul "Curse" ascunde cardurile, graficele si rezumatele. */
 .driver-history-compare-views[data-compare-view="trips"] .driver-history-kpi-shell,
 .driver-history-compare-views[data-compare-view="trips"] .driver-history-secondary-grid { display: none; }

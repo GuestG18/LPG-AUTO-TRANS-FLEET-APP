@@ -306,6 +306,16 @@ return [
                     ],
                 ],
             ],
+            // Selectie exacta venita din Dashboard (click pe un numar din cardul Status
+            // vehicule): lista arata fix unitatile numarate acolo. Nu apare in formularul
+            // de filtre; list.php afiseaza un banner cu optiunea de a o sterge.
+            'ids' => [
+                'label' => 'Selectie din Dashboard',
+                'type' => 'multiselect',
+                'column' => 't.id',
+                'operator' => '=',
+                'hidden' => true,
+            ],
         ],
         'unique_fields' => [
             ['field' => 'nr_inmatriculare', 'column' => 'nr_inmatriculare'],

@@ -6,81 +6,140 @@ declare(strict_types=1);
  *
  * Reguli:
  *   - Adminul are ACCES la tot (bypass total).
- *   - Un utilizator neconfigurat foloseste comportamentul legacy bazat pe rol
- *     (scope-ul din config/permissions.php), deci nimic nu se schimba pentru el.
- *   - Un utilizator configurat este guvernat STRICT de drepturile salvate.
+ *   - Actiunile 'admin_only' raman DOAR ale adminului: nu pot fi acordate altcuiva.
+ *   - Un utilizator neconfigurat mosteneste accesul implicit al rolului sau
+ *     (scope-ul modulului + flag-urile default_admin / default_accountancy).
+ *   - Un utilizator configurat este guvernat STRICT de drepturile salvate; o actiune
+ *     cere in plus accesul la pagina ('view') — pagina oprita blocheaza tot modulul.
  *
- * Depinde de: config/permissions.php, models/AccessRightsModel.php, get_pdo(),
- * si helper-ele din includes/auth.php (is_admin, is_logged_in, is_accountancy_user, current_user).
+ * Sursa metadatelor: PermissionRegistry (permissions/modules/*.php).
+ * Depinde de: models/AccessRightsModel.php, get_pdo() si helper-ele din includes/auth.php.
  */
 
+require_once __DIR__ . '/../services/PermissionRegistry.php';
+
+function permission_registry(): PermissionRegistry
+{
+    return PermissionRegistry::instance();
+}
+
+/**
+ * Catalogul in forma istorica ['groups' => ..., 'pages' => ...], construit din registru.
+ */
 function permission_catalog(): array
 {
-    static $catalog = null;
-    if ($catalog === null) {
-        $file = __DIR__ . '/../config/permissions.php';
-        $catalog = is_file($file) ? (require $file) : ['groups' => [], 'pages' => []];
-        if (!is_array($catalog)) {
-            $catalog = ['groups' => [], 'pages' => []];
-        }
-    }
-
-    return $catalog;
+    return permission_registry()->legacyCatalog();
 }
 
 /** @return array<string,array<string,mixed>> */
 function permission_pages(): array
 {
-    return permission_catalog()['pages'] ?? [];
+    return permission_catalog()['pages'];
 }
 
 /** @return array<string,array<string,mixed>> */
 function permission_groups(): array
 {
-    return permission_catalog()['groups'] ?? [];
+    return permission_catalog()['groups'];
 }
 
 /**
- * Mapeaza o ruta reala ?page=... pe cheia de catalog corespunzatoare.
+ * Mapeaza o ruta reala ?page=... pe (prima) cheie de modul corespunzatoare.
  * Intoarce null daca ruta nu este guvernata (pagina publica sau nemapata -> fail-open).
  */
 function route_to_permission_key(string $routePage): ?string
 {
-    static $routeMap = null;
-    if ($routeMap === null) {
-        $routeMap = [];
-        foreach (permission_pages() as $key => $page) {
-            $routeMap[$key] = $key;
-            foreach ((array) ($page['routes'] ?? []) as $route) {
-                $routeMap[(string) $route] = $key;
-            }
-        }
-    }
-
-    return $routeMap[$routePage] ?? null;
+    return permission_registry()->modulesForRoute($routePage)[0] ?? null;
 }
 
 function permission_page_scope(string $pageKey): string
 {
-    $page = permission_pages()[$pageKey] ?? null;
-
-    return is_array($page) ? (string) ($page['scope'] ?? 'all') : 'all';
+    return (string) (permission_registry()->module($pageKey)['scope'] ?? 'all');
 }
 
 /**
- * Comportamentul implicit (legacy) pentru un utilizator inca neconfigurat.
+ * Permite rolul, implicit (fara configurare explicita), pagina / actiunea data?
+ *
+ * @param array<string,mixed>      $module
+ * @param array<string,mixed>|null $action null = actiune nedeclarata (conteaza doar pagina)
  */
-function access_legacy_allows(string $pageKey): bool
+function access_role_allows(string $role, array $module, ?array $action): bool
 {
-    switch (permission_page_scope($pageKey)) {
-        case 'admin':
-            return is_admin();
-        case 'accountancy':
-            return function_exists('is_accountancy_user') ? is_accountancy_user() : is_admin();
-        case 'all':
-        default:
-            return is_logged_in();
+    $role = strtolower(trim($role));
+    if ($role === 'admin') {
+        return true;
     }
+    if (is_array($action) && ($action['admin_only'] ?? false) === true) {
+        return false;
+    }
+    $isAccountancy = $role === 'contabilitate';
+
+    $pageAllowed = match ((string) ($module['scope'] ?? 'all')) {
+        'admin'       => false,
+        'accountancy' => $isAccountancy,
+        default       => true,
+    };
+    if (!$pageAllowed || $action === null) {
+        return $pageAllowed;
+    }
+    if (($action['default_admin'] ?? false) === true) {
+        return false;
+    }
+    if (($action['default_accountancy'] ?? false) === true) {
+        return $isAccountancy;
+    }
+
+    return true;
+}
+
+/**
+ * Drepturile implicite ale unui rol — ce mosteneste un utilizator neconfigurat
+ * si fata de ce se calculeaza "personalizarile" in Drepturi de acces.
+ *
+ * @return array<string,array<string,bool>> [module][action] => true
+ */
+function access_role_defaults(string $role): array
+{
+    $granted = [];
+    foreach (permission_registry()->modules() as $moduleKey => $module) {
+        foreach ($module['actions'] as $actionKey => $action) {
+            if (access_role_allows($role, $module, $action)) {
+                $granted[$moduleKey][$actionKey] = true;
+            }
+        }
+    }
+
+    return $granted;
+}
+
+/**
+ * Regula unica de decizie, folosita de can() (sesiune) si user_can() (server-to-server).
+ *
+ * @param array<string,array<string,bool>> $perms drepturile salvate ale utilizatorului
+ */
+function access_evaluate(string $role, bool $configured, array $perms, string $pageKey, string $action = 'view'): bool
+{
+    if (strtolower(trim($role)) === 'admin') {
+        return true;
+    }
+
+    $registry = permission_registry();
+    $module = $registry->module($pageKey);
+    $meta = $module['actions'][$action] ?? null;
+    if (is_array($meta) && $meta['admin_only']) {
+        return false; // nu se poate acorda prin drepturi, nici macar din BD
+    }
+
+    if (!$configured) {
+        // Neconfigurat -> accesul implicit al rolului. Modul nedeclarat -> fail-open (legacy).
+        return $module === null ? true : access_role_allows($role, $module, $meta);
+    }
+
+    if ($action !== PermissionRegistry::VIEW && !isset($perms[$pageKey][PermissionRegistry::VIEW])) {
+        return false; // pagina oprita -> actiunile ei sunt inactive (dar raman salvate)
+    }
+
+    return isset($perms[$pageKey][$action]);
 }
 
 /**
@@ -129,25 +188,8 @@ function can(string $pageKey, string $action = 'view'): bool
     }
 
     $state = user_access_state();
-    if (!$state['configured']) {
-        // Neconfigurat -> comportament legacy bazat pe rol.
-        if ($action !== 'view') {
-            $meta = permission_pages()[$pageKey]['actions'][$action] ?? null;
-            if (is_array($meta) && ($meta['admin'] ?? false) === true) {
-                return is_admin();
-            }
-            // Actiune rezervata legacy rolurilor admin / contabilitate, chiar daca
-            // pagina in sine este accesibila tuturor (ex. incheierea colaborarii
-            // unui sofer din lista Soferi).
-            if (is_array($meta) && ($meta['accountancy'] ?? false) === true) {
-                return function_exists('is_accountancy_user') ? is_accountancy_user() : is_admin();
-            }
-        }
 
-        return access_legacy_allows($pageKey);
-    }
-
-    return isset($state['perms'][$pageKey][$action]);
+    return access_evaluate((string) ($_SESSION['auth_user']['rol'] ?? ''), $state['configured'], $state['perms'], $pageKey, $action);
 }
 
 /**
@@ -173,55 +215,47 @@ function user_can(array $user, string $pageKey, string $action = 'view'): bool
     $perms = $model->getUserPermissions($userId);
     $configured = $perms !== [] ? true : $model->isConfigured($userId);
 
-    if (!$configured) {
-        // Neconfigurat -> comportament legacy bazat pe rol (vezi can()).
-        $isAccountancy = in_array($role, ['admin', 'contabilitate'], true);
-        if ($action !== 'view') {
-            $meta = permission_pages()[$pageKey]['actions'][$action] ?? null;
-            if (is_array($meta) && ($meta['admin'] ?? false) === true) {
-                return false;
-            }
-            if (is_array($meta) && ($meta['accountancy'] ?? false) === true) {
-                return $isAccountancy;
-            }
-        }
-
-        switch (permission_page_scope($pageKey)) {
-            case 'admin':
-                return false;
-            case 'accountancy':
-                return $isAccountancy;
-            case 'all':
-            default:
-                return true;
-        }
-    }
-
-    return isset($perms[$pageKey][$action]);
+    return access_evaluate($role, $configured, $perms, $pageKey, $action);
 }
 
 /** Varianta care primeste direct ruta ?page=... */
 function can_route(string $routePage, string $action = 'view'): bool
 {
-    $key = route_to_permission_key($routePage);
-    if ($key === null) {
+    $keys = permission_registry()->modulesForRoute($routePage);
+    if ($keys === []) {
         return true; // ruta nemapata -> fail-open
     }
+    foreach ($keys as $key) {
+        if (can($key, $action)) {
+            return true;
+        }
+    }
 
-    return can($key, $action);
+    return false;
 }
 
 /**
- * Garda centrala pe router: 403 daca utilizatorul nu are acces la ruta.
+ * Garda centrala pe router: 403 daca utilizatorul nu are acces la ruta sau la
+ * actiunea ceruta. Endpoint-urile (?action=...) declarate de modul in 'endpoints'
+ * cer permisiunea corespunzatoare — autorizare reala, nu doar butoane ascunse.
+ * O ruta comuna mai multor module trece daca cel putin unul o permite.
  */
-function require_route_access(string $routePage): void
+function require_route_access(string $routePage, ?string $routeAction = null): void
 {
-    $key = route_to_permission_key($routePage);
-    if ($key === null) {
+    $registry = permission_registry();
+    $keys = $registry->modulesForRoute($routePage);
+    if ($keys === []) {
         return; // pagina publica / nemapata
     }
-    if (can($key, 'view')) {
-        return;
+
+    foreach ($keys as $key) {
+        if (!can($key, PermissionRegistry::VIEW)) {
+            continue;
+        }
+        $required = $routeAction !== null ? $registry->endpointAction($key, $routeAction) : null;
+        if ($required === null || can($key, $required)) {
+            return;
+        }
     }
 
     access_deny_403();
@@ -239,9 +273,26 @@ function require_page_or_403(string $pageKey): void
     access_deny_403();
 }
 
+function access_request_wants_json(): bool
+{
+    $accept = strtolower((string) ($_SERVER['HTTP_ACCEPT'] ?? ''));
+    $requestedWith = strtolower((string) ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? ''));
+
+    return $requestedWith === 'xmlhttprequest' || str_contains($accept, 'application/json');
+}
+
 function access_deny_403(): void
 {
     http_response_code(403);
+    if (access_request_wants_json()) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'success' => false,
+            'ok'      => false,
+            'message' => 'Nu ai dreptul să efectuezi această acțiune.',
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
     render('errors/403.php', [
         'pageTitle' => 'Acces interzis',
         'currentPage' => '',

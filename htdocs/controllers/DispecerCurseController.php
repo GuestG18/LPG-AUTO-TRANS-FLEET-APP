@@ -295,6 +295,12 @@ class DispecerCurseController
             case 'cancel_inactive_vehicle_approval':
                 $this->cancelInactiveVehicleApprovalAction();
                 return;
+            case 'service_km_store':
+                $this->storeServiceKmAction();
+                break;
+            case 'service_km_delete':
+                $this->deleteServiceKmAction();
+                break;
             case 'request_diurna_change':
                 $this->requestDiurnaChangeAction();
                 return;
@@ -1360,6 +1366,14 @@ class DispecerCurseController
             $diurnaHistoryByDriver = [];
         }
 
+        // Km service: formular si lista separate de curse (nu intra in tarifare).
+        try {
+            $serviceKmEntries = (new VehicleServiceKmModel($this->db))->getRecentEntries();
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseController][index][service_km] ' . $exception->getMessage());
+            $serviceKmEntries = [];
+        }
+
         render('dispecer_curse/index.php', [
             'pageTitle' => 'Dispecer curse',
             'currentPage' => 'dispecer_curse',
@@ -1408,7 +1422,134 @@ class DispecerCurseController
             'maintenancePopupMessages' => $this->consumeMaintenancePopupMessages(),
             'raceSegments' => $raceSegments,
             'diurnaHistoryByDriver' => $diurnaHistoryByDriver,
+            'serviceKmEntries' => $serviceKmEntries,
+            'serviceKmFlash' => $this->consumeFormFlash('service_km'),
         ]);
+    }
+
+    /**
+     * Km service (adaugare sau modificare cu `id`). Scrie doar in vehicule_service_km:
+     * nu atinge cursele, tarifele, diurnele sau km-ii vehiculului.
+     */
+    private function storeServiceKmAction(): void
+    {
+        $listUrl = build_query_url(['page' => 'dispecer_curse']) . '#service-km-panel';
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($listUrl);
+        }
+        ensure_csrf_or_redirect($listUrl);
+
+        $model = new VehicleServiceKmModel($this->db);
+        $id = (int) ($_POST['id'] ?? 0);
+        if ($id > 0 && $model->find($id) === null) {
+            flash_set('warning', 'Intrarea de service selectată nu mai există.');
+            redirect($listUrl);
+        }
+
+        $text = static function (string $key, int $max): ?string {
+            $value = trim((string) ($_POST[$key] ?? ''));
+            return $value === '' ? null : mb_substr($value, 0, $max);
+        };
+        $date = static function (string $key): ?string {
+            $value = trim((string) ($_POST[$key] ?? ''));
+            $parsed = DateTime::createFromFormat('!Y-m-d', $value);
+            return $parsed !== false && $parsed->format('Y-m-d') === $value ? $value : null;
+        };
+        $time = static function (string $key): ?string {
+            $value = trim((string) ($_POST[$key] ?? ''));
+            return preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $value) === 1 ? $value . ':00' : null;
+        };
+
+        $errors = [];
+        $vehicleId = (int) ($_POST['vehicle_id'] ?? 0);
+        if ($vehicleId <= 0) {
+            $errors['vehicle_id'] = 'Alege vehiculul.';
+        }
+        $driverId = (int) ($_POST['driver_id'] ?? 0);
+
+        $departure = $date('data_plecare');
+        if ($departure === null) {
+            $errors['data_plecare'] = 'Data plecării la service este obligatorie.';
+        }
+        $return = $date('data_intoarcere');
+        if (trim((string) ($_POST['data_intoarcere'] ?? '')) !== '' && $return === null) {
+            $errors['data_intoarcere'] = 'Data întoarcerii nu este validă.';
+        }
+        $departureTime = $time('ora_plecare');
+        $returnTime = $return !== null ? $time('ora_intoarcere') : null;
+        if ($departure !== null && $return !== null) {
+            $from = $departure . ' ' . ($departureTime ?? '00:00:00');
+            $to = $return . ' ' . ($returnTime ?? '23:59:59');
+            if ($to < $from) {
+                $errors['data_intoarcere'] = 'Întoarcerea nu poate fi înainte de plecare.';
+            }
+        }
+
+        $kmRaw = str_replace([' ', ','], ['', '.'], trim((string) ($_POST['km'] ?? '')));
+        $km = $kmRaw === '' ? 0.0 : (is_numeric($kmRaw) ? (float) $kmRaw : null);
+        if ($km === null || $km < 0 || $km > 100000) {
+            $errors['km'] = 'Km trebuie să fie un număr pozitiv.';
+        }
+
+        if ($errors === [] && $departure !== null) {
+            $overlap = $model->findOverlap($vehicleId, $departure, $return, $id);
+            if ($overlap !== null) {
+                $errors['data_plecare'] = sprintf(
+                    'Vehiculul are deja o perioadă de service care se suprapune (%s – %s).',
+                    date('d.m.Y', (int) strtotime((string) $overlap['data_plecare'])),
+                    $overlap['data_intoarcere'] !== null ? date('d.m.Y', (int) strtotime((string) $overlap['data_intoarcere'])) : 'în service'
+                );
+            }
+        }
+
+        if ($errors !== []) {
+            $this->setFormFlash('service_km', array_intersect_key($_POST, array_flip([
+                'id', 'vehicle_id', 'driver_id', 'data_plecare', 'ora_plecare', 'data_intoarcere',
+                'ora_intoarcere', 'km', 'service_nume', 'motiv', 'observatii',
+            ])), $errors);
+            flash_set('danger', 'Km service nu au fost salvați: ' . implode(' ', $errors));
+            redirect($listUrl);
+        }
+
+        try {
+            $model->save([
+                'vehicle_id' => $vehicleId,
+                'driver_id' => $driverId > 0 ? $driverId : null,
+                'data_plecare' => $departure,
+                'ora_plecare' => $departureTime,
+                'data_intoarcere' => $return,
+                'ora_intoarcere' => $returnTime,
+                'km' => $km,
+                'service_nume' => $text('service_nume', 150),
+                'motiv' => $text('motiv', 255),
+                'observatii' => $text('observatii', 2000),
+            ], $this->currentUserId(), $id);
+            flash_set('success', $id > 0 ? 'Intrarea de service a fost actualizată.' : 'Km service au fost adăugați.');
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseController][service_km_store] ' . $exception->getMessage());
+            flash_set('danger', 'Km service nu au putut fi salvați.');
+        }
+
+        redirect($listUrl);
+    }
+
+    private function deleteServiceKmAction(): void
+    {
+        $listUrl = build_query_url(['page' => 'dispecer_curse']) . '#service-km-panel';
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($listUrl);
+        }
+        ensure_csrf_or_redirect($listUrl);
+
+        try {
+            $deleted = (new VehicleServiceKmModel($this->db))->delete((int) ($_POST['id'] ?? 0));
+            flash_set($deleted ? 'success' : 'warning', $deleted ? 'Intrarea de service a fost ștearsă.' : 'Intrarea de service nu mai există.');
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseController][service_km_delete] ' . $exception->getMessage());
+            flash_set('danger', 'Intrarea de service nu a putut fi ștearsă.');
+        }
+
+        redirect($listUrl);
     }
 
     /**

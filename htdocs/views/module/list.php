@@ -2060,6 +2060,21 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
     <?php return; ?>
 <?php endif; ?>
 
+<?php if ($isVehicleList && !empty($filters['ids']) && is_array($filters['ids'])): ?>
+    <?php
+    $dashboardSelectionLabel = mb_substr(trim((string) ($_GET['selectie'] ?? '')), 0, 120, 'UTF-8');
+    $dashboardSelectionClearQuery = $baseQuery;
+    unset($dashboardSelectionClearQuery['ids']);
+    ?>
+    <div class="alert alert-primary d-flex flex-wrap align-items-center gap-2 mb-3" role="status">
+        <i class="bi bi-funnel-fill" aria-hidden="true"></i>
+        <span>
+            Afișezi <strong><?= e((string) count($filters['ids'])) ?></strong> vehicule selectate din Dashboard<?= $dashboardSelectionLabel !== '' ? ': <strong>' . e($dashboardSelectionLabel) . '</strong>' : '' ?>.
+        </span>
+        <a class="ms-auto btn btn-sm btn-outline-primary" href="<?= e(build_query_url($dashboardSelectionClearQuery)) ?>">Arată toate vehiculele</a>
+    </div>
+<?php endif; ?>
+
 <div class="card border-0 shadow-sm mb-3">
     <div class="card-body">
         <form method="get" class="row g-3 align-items-end">
@@ -2073,6 +2088,12 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
             </div>
 
             <?php foreach ($module['filters'] ?? [] as $filterKey => $filterMeta): ?>
+                <?php if (!empty($filterMeta['hidden'])): ?>
+                    <?php foreach ((array) ($filters[$filterKey] ?? []) as $hiddenFilterValue): ?>
+                        <input type="hidden" name="<?= e($filterKey) ?>[]" value="<?= e((string) $hiddenFilterValue) ?>">
+                    <?php endforeach; ?>
+                    <?php continue; ?>
+                <?php endif; ?>
                 <div class="col-12 col-md-3">
                     <?php $filterType = (string) ($filterMeta['type'] ?? 'text'); ?>
                     <?php $filterLabelFor = $filterType === 'multiselect' ? $filterKey . '_toggle' : $filterKey; ?>

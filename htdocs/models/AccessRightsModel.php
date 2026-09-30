@@ -9,13 +9,18 @@ declare(strict_types=1);
  *   - access_user_state           : marcheaza utilizatorii "configurati" (customized_at)
  *   - access_templates            : sabloane de rol reutilizabile
  *   - access_template_permissions : permisiunile fiecarui sablon
+ *   - access_permission_catalog   : oglinda in BD a PermissionRegistry, sincronizata
+ *                                   idempotent. Permisiunile disparute din cod devin
+ *                                   is_active = 0 (retrase) — nu se sterg niciodata.
  *
  * Semantica:
- *   - Un utilizator "neconfigurat" (fara rand in access_user_state) foloseste
- *     comportamentul legacy bazat pe rol -> nimic nu se schimba pana cand
- *     adminul nu salveaza explicit drepturile lui.
+ *   - Un utilizator "neconfigurat" (fara rand in access_user_state) mosteneste
+ *     accesul implicit al rolului -> nimic nu se schimba pana cand adminul nu
+ *     salveaza explicit drepturile lui.
  *   - Odata configurat, accesul e guvernat STRICT de randurile din access_permissions
  *     (zero randuri = niciun acces), cu exceptia adminului care are mereu acces.
+ *   - Randurile pentru chei retrase din registru sau 'admin_only' nu sunt atinse la
+ *     salvare: istoricul ramane intact, iar can() le ignora oricum.
  */
 class AccessRightsModel extends BaseModel
 {
@@ -72,8 +77,156 @@ class AccessRightsModel extends BaseModel
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
+        $this->db->exec("
+            CREATE TABLE IF NOT EXISTS access_permission_catalog (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                permission_key VARCHAR(130) NOT NULL,
+                module_key VARCHAR(64) NOT NULL,
+                action_key VARCHAR(64) NOT NULL,
+                module_label VARCHAR(190) NOT NULL,
+                label VARCHAR(255) NOT NULL,
+                section_key VARCHAR(64) NOT NULL,
+                action_group VARCHAR(64) NOT NULL DEFAULT '',
+                admin_only TINYINT(1) NOT NULL DEFAULT 0,
+                sort_order INT NOT NULL DEFAULT 0,
+                is_active TINYINT(1) NOT NULL DEFAULT 1,
+                deprecated_at DATETIME NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                UNIQUE KEY uq_access_permission_catalog_key (permission_key),
+                UNIQUE KEY uq_access_permission_catalog_pair (module_key, action_key),
+                INDEX idx_access_permission_catalog_active (is_active)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
         self::$schemaEnsured = true;
     }
+
+    // ----------------------------------------------------------------- Catalog
+
+    /**
+     * Aduce access_permission_catalog la zi fata de registru. Idempotent: a doua
+     * rulare nu mai scrie nimic. Nu sterge nimic — cheile disparute devin inactive,
+     * cele reaparute se reactiveaza, id-urile si drepturile acordate raman neatinse.
+     *
+     * @param list<array<string,mixed>> $rows PermissionRegistry::flatPermissions()
+     * @return array{inserted:int,updated:int,deprecated:int,reactivated:int}
+     */
+    public function syncCatalog(array $rows): array
+    {
+        $this->ensureSchema();
+        $stats = ['inserted' => 0, 'updated' => 0, 'deprecated' => 0, 'reactivated' => 0];
+        $fields = ['module_label', 'label', 'section_key', 'action_group', 'admin_only', 'sort_order'];
+
+        $existing = [];
+        foreach ($this->db->query('SELECT * FROM access_permission_catalog')->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $existing[(string) $row['permission_key']] = $row;
+        }
+
+        $inserts = [];
+        $updates = [];
+        $seen = [];
+        foreach ($rows as $row) {
+            $key = (string) $row['permission_key'];
+            $seen[$key] = true;
+            $current = $existing[$key] ?? null;
+            if ($current === null) {
+                $inserts[] = $row;
+                continue;
+            }
+            $changed = (int) $current['is_active'] !== 1;
+            foreach ($fields as $field) {
+                if ((string) $current[$field] !== (string) $row[$field]) {
+                    $changed = true;
+                }
+            }
+            if ($changed) {
+                $updates[] = $row + ['_reactivated' => (int) $current['is_active'] !== 1];
+            }
+        }
+        $deprecate = [];
+        foreach ($existing as $key => $row) {
+            if (!isset($seen[$key]) && (int) $row['is_active'] === 1) {
+                $deprecate[] = $key;
+            }
+        }
+
+        if ($inserts === [] && $updates === [] && $deprecate === []) {
+            return $stats;
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $this->db->beginTransaction();
+        try {
+            if ($inserts !== []) {
+                $ins = $this->db->prepare(
+                    'INSERT INTO access_permission_catalog
+                        (permission_key, module_key, action_key, module_label, label, section_key, action_group,
+                         admin_only, sort_order, is_active, deprecated_at, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)'
+                );
+                foreach ($inserts as $row) {
+                    $ins->execute([
+                        $row['permission_key'], $row['module_key'], $row['action_key'], $row['module_label'],
+                        $row['label'], $row['section_key'], $row['action_group'], (int) $row['admin_only'],
+                        (int) $row['sort_order'], $now, $now,
+                    ]);
+                    $stats['inserted']++;
+                }
+            }
+            if ($updates !== []) {
+                $upd = $this->db->prepare(
+                    'UPDATE access_permission_catalog
+                     SET module_label = ?, label = ?, section_key = ?, action_group = ?, admin_only = ?,
+                         sort_order = ?, is_active = 1, deprecated_at = NULL, updated_at = ?
+                     WHERE permission_key = ?'
+                );
+                foreach ($updates as $row) {
+                    $upd->execute([
+                        $row['module_label'], $row['label'], $row['section_key'], $row['action_group'],
+                        (int) $row['admin_only'], (int) $row['sort_order'], $now, $row['permission_key'],
+                    ]);
+                    $stats[$row['_reactivated'] ? 'reactivated' : 'updated']++;
+                }
+            }
+            if ($deprecate !== []) {
+                $dep = $this->db->prepare(
+                    'UPDATE access_permission_catalog SET is_active = 0, deprecated_at = ?, updated_at = ? WHERE permission_key = ?'
+                );
+                foreach ($deprecate as $key) {
+                    $dep->execute([$now, $now, $key]);
+                    $stats['deprecated']++;
+                }
+            }
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            $this->db->rollBack();
+            throw $exception;
+        }
+
+        return $stats;
+    }
+
+    /**
+     * Permisiunile retrase din registru (inactive), cu numarul de utilizatori
+     * care inca le au in istoric.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function deprecatedPermissions(): array
+    {
+        $this->ensureSchema();
+        $sql = 'SELECT c.permission_key, c.module_label, c.label, c.deprecated_at, COUNT(p.user_id) AS users
+                FROM access_permission_catalog c
+                LEFT JOIN access_permissions p ON p.page_key = c.module_key AND p.action_key = c.action_key
+                WHERE c.is_active = 0
+                GROUP BY c.id
+                ORDER BY c.module_label, c.label';
+
+        return $this->db->query($sql)->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    // ------------------------------------------------------------------- Users
 
     /**
      * @return array<string,bool> lista id-urilor de utilizatori configurati (customizati)
@@ -116,31 +269,54 @@ class AccessRightsModel extends BaseModel
     }
 
     /**
-     * Inlocuieste complet drepturile unui utilizator si il marcheaza drept configurat.
+     * Inlocuieste drepturile GESTIONATE ale unui utilizator si il marcheaza configurat,
+     * intr-o singura tranzactie (totul sau nimic).
+     *
+     * Randurile existente ale caror chei NU sunt in $managed (retrase din registru,
+     * 'admin_only') sunt pastrate neschimbate.
      *
      * @param array<string,array<int,string>> $granted [page_key => [action_key, ...]]
+     * @param array<string,array<string,bool>>|null $managed [page_key][action_key] gestionate
+     *        de formular; null = comportamentul istoric (inlocuieste tot)
      */
-    public function saveUserPermissions(int $userId, array $granted, ?int $actorId = null): void
+    public function saveUserPermissions(int $userId, array $granted, ?int $actorId = null, ?array $managed = null): void
     {
         $this->ensureSchema();
         $now = date('Y-m-d H:i:s');
 
+        $rows = [];
+        foreach ($granted as $pageKey => $actions) {
+            foreach ((array) $actions as $actionKey) {
+                $actionKey = trim((string) $actionKey);
+                if ($actionKey !== '') {
+                    $rows[$pageKey . "\0" . $actionKey] = [(string) $pageKey, $actionKey];
+                }
+            }
+        }
+
         $this->db->beginTransaction();
         try {
-            $del = $this->db->prepare('DELETE FROM access_permissions WHERE user_id = ?');
-            $del->execute([$userId]);
-
-            $ins = $this->db->prepare(
-                'INSERT INTO access_permissions (user_id, page_key, action_key, created_at) VALUES (?, ?, ?, ?)'
-            );
-            foreach ($granted as $pageKey => $actions) {
-                foreach ((array) $actions as $actionKey) {
-                    $actionKey = trim((string) $actionKey);
-                    if ($actionKey === '') {
-                        continue;
+            if ($managed !== null) {
+                foreach ($this->getUserPermissions($userId) as $pageKey => $actions) {
+                    foreach ($actions as $actionKey => $_) {
+                        if (!isset($managed[$pageKey][$actionKey])) {
+                            $rows[$pageKey . "\0" . $actionKey] = [(string) $pageKey, (string) $actionKey];
+                        }
                     }
-                    $ins->execute([$userId, (string) $pageKey, $actionKey, $now]);
                 }
+            }
+
+            $this->db->prepare('DELETE FROM access_permissions WHERE user_id = ?')->execute([$userId]);
+
+            foreach (array_chunk(array_values($rows), 200) as $chunk) {
+                $placeholders = implode(', ', array_fill(0, count($chunk), '(?, ?, ?, ?)'));
+                $params = [];
+                foreach ($chunk as [$pageKey, $actionKey]) {
+                    array_push($params, $userId, $pageKey, $actionKey, $now);
+                }
+                $this->db->prepare(
+                    "INSERT INTO access_permissions (user_id, page_key, action_key, created_at) VALUES {$placeholders}"
+                )->execute($params);
             }
 
             $state = $this->db->prepare(
@@ -158,6 +334,7 @@ class AccessRightsModel extends BaseModel
 
     /**
      * Readuce utilizatorul la comportamentul implicit bazat pe rol (sterge configurarea).
+     * Rolul in sine si sabloanele nu sunt atinse.
      */
     public function resetUser(int $userId): void
     {
@@ -179,13 +356,16 @@ class AccessRightsModel extends BaseModel
     public function getUsers(): array
     {
         $this->ensureSchema();
-        $sql = 'SELECT u.id, u.nume, u.email, u.rol, u.status,
-                       (s.user_id IS NOT NULL) AS is_configured
+        $sql = 'SELECT u.*, (s.user_id IS NOT NULL) AS is_configured
                 FROM utilizatori u
                 LEFT JOIN access_user_state s ON s.user_id = u.id
                 ORDER BY (u.rol = "admin") DESC, u.nume ASC';
 
-        return $this->db->query($sql)->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $rows = $this->db->query($sql)->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        // doar coloanele de care are nevoie pagina (fara parole / secrete in view)
+        $keep = array_flip(['id', 'nume', 'email', 'rol', 'status', 'is_configured', 'avatar_type', 'avatar_value', 'avatar_emoji', 'avatar_color']);
+
+        return array_map(static fn(array $row): array => array_intersect_key($row, $keep), $rows);
     }
 
     public function findUser(int $userId): ?array
@@ -223,6 +403,22 @@ class AccessRightsModel extends BaseModel
         $map = [];
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
             $map[(string) $row['page_key']][(string) $row['action_key']] = true;
+        }
+
+        return $map;
+    }
+
+    /**
+     * Permisiunile tuturor sabloanelor, intr-o singura interogare.
+     *
+     * @return array<int,array<string,array<string,bool>>> [template_id][page_key][action_key] => true
+     */
+    public function getAllTemplatePermissions(): array
+    {
+        $this->ensureSchema();
+        $map = [];
+        foreach ($this->db->query('SELECT template_id, page_key, action_key FROM access_template_permissions')->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $map[(int) $row['template_id']][(string) $row['page_key']][(string) $row['action_key']] = true;
         }
 
         return $map;

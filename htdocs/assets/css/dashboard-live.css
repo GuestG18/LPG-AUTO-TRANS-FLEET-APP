@@ -1,0 +1,922 @@
+/* Dashboard - filtre live (assets/js/dashboard-live.js) */
+
+.dashboard-live-contents {
+    display: contents;
+}
+
+.dashboard-filter-panel {
+    position: relative;
+    overflow: hidden;
+}
+
+/* Bara subtire de progres sub panoul de filtre cat timp se incarca datele. */
+.dashboard-live-progress {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, #0d6efd, #22c55e, transparent);
+    background-size: 50% 100%;
+    background-repeat: no-repeat;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+}
+
+.is-dashboard-loading .dashboard-live-progress {
+    opacity: 1;
+    animation: dashboardLiveProgress 0.9s linear infinite;
+}
+
+@keyframes dashboardLiveProgress {
+    from { background-position: -50% 0; }
+    to { background-position: 150% 0; }
+}
+
+.dashboard-category-option,
+.dashboard-period-option {
+    transition: transform 0.14s ease, background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.dashboard-period-option:active {
+    transform: scale(0.96);
+}
+
+/* In timpul incarcarii: cifrele si listele se estompeaza, cardurile raman pe loc. */
+[data-dashboard-live] .dashboard-stat strong,
+[data-dashboard-live] .dashboard-money-total,
+[data-dashboard-live] .dashboard-reason-count,
+[data-dashboard-live] .dashboard-count-badge,
+[data-dashboard-live] .dashboard-panel-table tbody,
+[data-dashboard-live] .dashboard-mini-table tbody,
+[data-dashboard-live] .dashboard-operational-summary {
+    transition: opacity 0.22s ease, filter 0.22s ease;
+}
+
+.is-dashboard-loading [data-dashboard-live] .dashboard-stat strong,
+.is-dashboard-loading [data-dashboard-live] .dashboard-money-total,
+.is-dashboard-loading [data-dashboard-live] .dashboard-reason-count,
+.is-dashboard-loading [data-dashboard-live] .dashboard-count-badge,
+.is-dashboard-loading [data-dashboard-live] .dashboard-panel-table tbody,
+.is-dashboard-loading [data-dashboard-live] .dashboard-mini-table tbody,
+.is-dashboard-loading [data-dashboard-live] .dashboard-operational-summary {
+    opacity: 0.35;
+    filter: blur(1.5px);
+}
+
+.is-dashboard-loading .dashboard-metric-card,
+.is-dashboard-loading .dashboard-detail-panel {
+    cursor: progress;
+}
+
+/* Morph dupa raspuns: continutul nou intra usor de jos, randurile pe rand. */
+.is-dashboard-refreshed > * {
+    animation: dashboardLiveMorphIn 0.46s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.is-dashboard-refreshed > *:nth-child(2) { animation-delay: 40ms; }
+.is-dashboard-refreshed > *:nth-child(3) { animation-delay: 80ms; }
+.is-dashboard-refreshed > *:nth-child(4) { animation-delay: 120ms; }
+.is-dashboard-refreshed > *:nth-child(n+5) { animation-delay: 160ms; }
+
+.dashboard-metric-card.is-dashboard-refreshed,
+.dashboard-detail-panel.is-dashboard-refreshed {
+    animation: dashboardLiveGlow 0.9s ease both;
+}
+
+.is-dashboard-refreshed .dashboard-panel-table tbody tr {
+    animation: dashboardLiveRowIn 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.is-dashboard-refreshed .dashboard-panel-table tbody tr:nth-child(2) { animation-delay: 50ms; }
+.is-dashboard-refreshed .dashboard-panel-table tbody tr:nth-child(3) { animation-delay: 100ms; }
+.is-dashboard-refreshed .dashboard-panel-table tbody tr:nth-child(4) { animation-delay: 150ms; }
+.is-dashboard-refreshed .dashboard-panel-table tbody tr:nth-child(5) { animation-delay: 200ms; }
+.is-dashboard-refreshed .dashboard-panel-table tbody tr:nth-child(n+6) { animation-delay: 250ms; }
+
+.is-dashboard-refreshed .dashboard-card-icon i {
+    display: inline-block;
+    animation: dashboardLiveIconSwap 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes dashboardLiveMorphIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px) scale(0.985);
+        filter: blur(2px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+        filter: none;
+    }
+}
+
+@keyframes dashboardLiveRowIn {
+    from {
+        opacity: 0;
+        transform: translateX(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@keyframes dashboardLiveIconSwap {
+    from {
+        opacity: 0;
+        transform: rotate(-25deg) scale(0.6);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@keyframes dashboardLiveGlow {
+    0% { box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08), 0 0 0 0 rgba(13, 110, 253, 0); }
+    30% { box-shadow: 0 14px 32px rgba(15, 23, 42, 0.12), 0 0 0 3px rgba(13, 110, 253, 0.22); }
+    100% { box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08), 0 0 0 0 rgba(13, 110, 253, 0); }
+}
+
+/* Cifrele care se schimba primesc un mic "puls" in timp ce numara. */
+[data-dashboard-money] {
+    display: inline-block;
+}
+
+[data-dashboard-count],
+[data-dashboard-money] {
+    font-variant-numeric: tabular-nums;
+    transition: transform 0.25s ease;
+}
+
+.is-counting-up,
+.is-counting-down {
+    transform: scale(1.08);
+}
+
+/* Eticheta categoriei in cardul Status vehicule. */
+.dashboard-card-vehicles .dashboard-card-title {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    min-width: 0;
+}
+
+.dashboard-category-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #0d6efd;
+    background: rgba(13, 110, 253, 0.1);
+    border: 1px solid rgba(13, 110, 253, 0.25);
+    white-space: nowrap;
+}
+
+.is-dashboard-refreshed .dashboard-category-tag {
+    animation: dashboardLiveIconSwap 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dashboard-live-progress,
+    .is-dashboard-refreshed > *,
+    .is-dashboard-refreshed .dashboard-panel-table tbody tr,
+    .is-dashboard-refreshed .dashboard-card-icon i,
+    .dashboard-metric-card.is-dashboard-refreshed,
+    .dashboard-detail-panel.is-dashboard-refreshed {
+        animation: none !important;
+    }
+}
+
+/* ---- Cardurile Status vehicule / soferi: fata cu inactivii ---- */
+
+.dashboard-card-face {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.dashboard-card-face[hidden] {
+    display: none;
+}
+
+[data-dashboard-flip-card] [data-dashboard-inactive-open] {
+    cursor: pointer;
+}
+
+[data-dashboard-flip-card] .dashboard-stat[data-dashboard-inactive-open] {
+    border-radius: 12px;
+    transition: background-color 0.18s ease, transform 0.18s ease;
+}
+
+[data-dashboard-flip-card] .dashboard-stat[data-dashboard-inactive-open]:hover {
+    background: rgba(239, 8, 8, 0.07);
+    transform: translateY(-2px);
+}
+
+.dashboard-inactive-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+}
+
+.dashboard-inactive-head h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 900;
+    color: #071735;
+}
+
+.dashboard-inactive-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid #d6e0ed;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.9);
+    color: #0d6efd;
+    box-shadow: 0 5px 12px rgba(15, 23, 42, 0.08);
+    transition: transform 0.16s ease, background-color 0.16s ease;
+}
+
+.dashboard-inactive-back:hover {
+    transform: translateX(-2px);
+    background: #ffffff;
+}
+
+.dashboard-inactive-total {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    color: #ef0808;
+    background: rgba(239, 8, 8, 0.1);
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.dashboard-inactive-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 12px 0 10px;
+}
+
+.dashboard-inactive-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border: 1px solid #d6e0ed;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.85);
+    color: #071735;
+    font-size: 12px;
+    font-weight: 800;
+    transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.12s ease;
+}
+
+.dashboard-inactive-filter:active {
+    transform: scale(0.95);
+}
+
+.dashboard-inactive-filter span {
+    opacity: 0.7;
+}
+
+.dashboard-inactive-filter.tone-danger i { color: #ef0808; }
+.dashboard-inactive-filter.tone-purple i { color: #7c3aed; }
+.dashboard-inactive-filter.tone-blue i { color: #0d6efd; }
+
+.dashboard-inactive-filter.is-active {
+    border-color: #0d6efd;
+    background: #0d6efd;
+    color: #ffffff;
+}
+
+.dashboard-inactive-filter.is-active i {
+    color: #ffffff;
+}
+
+.dashboard-inactive-list,
+.dashboard-inactive-issues {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.dashboard-inactive-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 250px;
+    overflow-y: auto;
+    padding-right: 4px;
+    scrollbar-width: thin;
+}
+
+.dashboard-inactive-unit {
+    padding: 9px 10px;
+    border: 1px solid rgba(214, 224, 237, 0.9);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.86);
+    box-shadow: 0 5px 12px rgba(15, 23, 42, 0.05);
+}
+
+.dashboard-inactive-unit[hidden] {
+    display: none;
+}
+
+.dashboard-inactive-unit-plates {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.dashboard-inactive-unit-plates .dashboard-vehicle-pill {
+    color: inherit;
+    text-decoration: none;
+}
+
+.dashboard-inactive-issue {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    transition: opacity 0.2s ease;
+}
+
+.dashboard-inactive-issue + .dashboard-inactive-issue {
+    border-top: 1px dashed #e2e8f0;
+}
+
+.dashboard-inactive-issue.is-muted {
+    opacity: 0.4;
+}
+
+.dashboard-inactive-issue-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: #f1f5f9;
+    color: #64748b;
+}
+
+.dashboard-inactive-issue.tone-danger .dashboard-inactive-issue-icon { color: #ef0808; background: rgba(239, 8, 8, 0.08); }
+.dashboard-inactive-issue.tone-purple .dashboard-inactive-issue-icon { color: #7c3aed; background: rgba(124, 58, 237, 0.1); }
+.dashboard-inactive-issue.tone-blue .dashboard-inactive-issue-icon { color: #0d6efd; background: rgba(13, 110, 253, 0.1); }
+
+.dashboard-inactive-issue-text {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-width: 0;
+    line-height: 1.25;
+}
+
+.dashboard-inactive-issue-text strong {
+    font-size: 13px;
+    font-weight: 900;
+    color: #071735;
+}
+
+.dashboard-inactive-issue-text small {
+    font-size: 11.5px;
+    color: #64748b;
+}
+
+.dashboard-inactive-issue.tone-danger .dashboard-inactive-issue-text small {
+    color: #b91c1c;
+}
+
+.dashboard-inactive-issue-link {
+    flex: 0 0 auto;
+    font-size: 11.5px;
+    font-weight: 800;
+    color: #0d6efd;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.dashboard-inactive-issue-link:hover {
+    text-decoration: underline;
+}
+
+.dashboard-inactive-empty {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 18px 0 0;
+    color: #15803d;
+    font-weight: 800;
+}
+
+/* Morph: cardul se intoarce usor, fata noua intra din lateral, elementele pe rand. */
+.dashboard-metric-card.is-card-turning {
+    animation: dashboardCardTurn 0.56s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.dashboard-card-face.is-face-entering {
+    animation: dashboardFaceIn 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.is-face-entering .dashboard-inactive-unit,
+.dashboard-inactive-list.is-face-entering .dashboard-inactive-unit {
+    animation: dashboardLiveRowIn 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.is-face-entering .dashboard-inactive-unit:nth-child(2) { animation-delay: 50ms; }
+.is-face-entering .dashboard-inactive-unit:nth-child(3) { animation-delay: 100ms; }
+.is-face-entering .dashboard-inactive-unit:nth-child(4) { animation-delay: 150ms; }
+.is-face-entering .dashboard-inactive-unit:nth-child(5) { animation-delay: 200ms; }
+.is-face-entering .dashboard-inactive-unit:nth-child(n+6) { animation-delay: 250ms; }
+
+@keyframes dashboardCardTurn {
+    0% { transform: perspective(1100px) rotateY(0) scale(1); }
+    35% { transform: perspective(1100px) rotateY(-7deg) scale(0.975); }
+    100% { transform: perspective(1100px) rotateY(0) scale(1); }
+}
+
+@keyframes dashboardFaceIn {
+    from {
+        opacity: 0;
+        transform: translateX(18px);
+        filter: blur(2px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+        filter: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dashboard-metric-card.is-card-turning,
+    .dashboard-card-face.is-face-entering,
+    .is-face-entering .dashboard-inactive-unit {
+        animation: none !important;
+    }
+}
+
+.dashboard-inactive-driver {
+    color: inherit;
+    text-decoration: none;
+}
+
+.dashboard-inactive-driver:hover strong {
+    text-decoration: underline;
+}
+
+/* ---- Cardul Status vehicule: fata "Vehicule active pe tip" ---- */
+
+.dashboard-inactive-total.is-green {
+    color: #15803d;
+    background: rgba(22, 163, 74, 0.12);
+}
+
+.dashboard-inactive-empty.is-muted {
+    color: #64748b;
+}
+
+[data-dashboard-flip-card] .dashboard-stat[data-dashboard-active-open] {
+    cursor: pointer;
+    border-radius: 12px;
+    transition: background-color 0.18s ease, transform 0.18s ease;
+}
+
+[data-dashboard-flip-card] .dashboard-stat[data-dashboard-active-open]:hover {
+    background: rgba(22, 163, 74, 0.08);
+    transform: translateY(-2px);
+}
+
+.dashboard-active-types {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 12px 0 0;
+    padding: 0 4px 0 0;
+    list-style: none;
+    max-height: 290px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+.dashboard-active-type {
+    border: 1px solid rgba(214, 224, 237, 0.9);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.86);
+    box-shadow: 0 5px 12px rgba(15, 23, 42, 0.05);
+    transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.dashboard-active-type.is-expanded {
+    border-color: rgba(22, 163, 74, 0.45);
+    box-shadow: 0 8px 18px rgba(22, 163, 74, 0.12);
+}
+
+.dashboard-active-type-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dashboard-active-type-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 30px;
+    height: 30px;
+    border-radius: 9px;
+    color: #15803d;
+    background: rgba(22, 163, 74, 0.1);
+    font-size: 15px;
+}
+
+.dashboard-active-type-label {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.dashboard-active-type-label strong {
+    font-size: 13px;
+    font-weight: 900;
+    color: #071735;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dashboard-active-type-bar {
+    display: block;
+    height: 5px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    overflow: hidden;
+}
+
+.dashboard-active-type-bar span {
+    display: block;
+    width: var(--share, 0%);
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #22c55e, #16a34a);
+}
+
+.dashboard-active-type-count {
+    flex: 0 0 auto;
+    min-width: 34px;
+    font-size: 20px;
+    font-weight: 900;
+    color: #16a34a;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.dashboard-active-type-chevron {
+    flex: 0 0 auto;
+    color: #94a3b8;
+    transition: transform 0.22s ease;
+}
+
+.dashboard-active-type.is-expanded .dashboard-active-type-chevron {
+    transform: rotate(180deg);
+}
+
+.dashboard-active-type-plates {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 2px 10px 10px 50px;
+}
+
+.dashboard-active-type-plates[hidden] {
+    display: none;
+}
+
+.dashboard-active-type-plates .dashboard-vehicle-pill {
+    color: inherit;
+    text-decoration: none;
+}
+
+/* La intrarea fetei: randurile vin pe rand, iar barele cresc de la zero. */
+.dashboard-active-face.is-face-entering .dashboard-active-type {
+    animation: dashboardLiveRowIn 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-delay: var(--delay, 0ms);
+}
+
+.dashboard-active-face.is-face-entering .dashboard-active-type-bar span {
+    animation: dashboardActiveBarGrow 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-delay: calc(var(--delay, 0ms) + 120ms);
+}
+
+@keyframes dashboardActiveBarGrow {
+    from { width: 0; }
+    to { width: var(--share, 0%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dashboard-active-face.is-face-entering .dashboard-active-type,
+    .dashboard-active-face.is-face-entering .dashboard-active-type-bar span {
+        animation: none !important;
+    }
+}
+
+/* ---- Fata "Toate vehiculele pe tip": bara imparte activ (verde) / inactiv (rosu) ---- */
+
+.dashboard-inactive-total.is-blue {
+    color: #0d6efd;
+    background: rgba(13, 110, 253, 0.1);
+}
+
+[data-dashboard-flip-card] .dashboard-stat[data-dashboard-active-open="total"]:hover {
+    background: rgba(13, 110, 253, 0.08);
+}
+
+.dashboard-type-legend {
+    display: flex;
+    gap: 14px;
+    margin: 10px 0 0 40px;
+    font-size: 11.5px;
+    font-weight: 800;
+    color: #475569;
+}
+
+.dashboard-type-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.dashboard-type-legend i {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 3px;
+}
+
+.dashboard-type-legend i.is-active { background: #16a34a; }
+.dashboard-type-legend i.is-inactive { background: #ef4444; }
+
+.dashboard-active-face.is-total .dashboard-active-type-icon {
+    color: #0d6efd;
+    background: rgba(13, 110, 253, 0.1);
+}
+
+.dashboard-active-face.is-total .dashboard-active-type-count {
+    color: #0d6efd;
+}
+
+.dashboard-active-face.is-total .dashboard-active-type.is-expanded {
+    border-color: rgba(13, 110, 253, 0.4);
+    box-shadow: 0 8px 18px rgba(13, 110, 253, 0.12);
+}
+
+/* Bara totala = ponderea tipului; in interior, verde pana la ponderea activelor, apoi rosu. */
+.dashboard-active-face.is-total .dashboard-active-type-bar span {
+    background: linear-gradient(90deg, #22c55e 0, #16a34a var(--active-share, 100%), #ef4444 var(--active-share, 100%), #dc2626 100%);
+}
+
+.dashboard-type-split {
+    font-size: 11px;
+    font-weight: 700;
+    color: #64748b;
+}
+
+.dashboard-type-split .is-active { color: #15803d; }
+.dashboard-type-split .is-inactive { color: #dc2626; }
+
+.dashboard-vehicle-assembly.is-inactive .dashboard-vehicle-pill {
+    border-color: rgba(239, 68, 68, 0.45);
+    background: rgba(254, 226, 226, 0.6);
+}
+
+.dashboard-plate-inactive-dot {
+    font-size: 7px;
+    color: #ef4444;
+}
+
+/* ---- Numerele din fetele pe tip deschid lista de vehicule cu exact acele unitati ---- */
+
+.dashboard-active-type-row {
+    cursor: default;
+}
+
+.dashboard-active-type-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dashboard-active-type-count {
+    padding: 2px 8px;
+    border-radius: 10px;
+    text-decoration: none;
+    transition: background-color 0.16s ease, transform 0.16s ease;
+}
+
+.dashboard-active-type-count:hover,
+.dashboard-active-type-count:focus-visible {
+    color: #15803d;
+    background: rgba(22, 163, 74, 0.12);
+    text-decoration: underline;
+    transform: translateY(-1px);
+}
+
+.dashboard-active-face.is-total .dashboard-active-type-count:hover,
+.dashboard-active-face.is-total .dashboard-active-type-count:focus-visible {
+    color: #0b5ed7;
+    background: rgba(13, 110, 253, 0.1);
+}
+
+.dashboard-active-type-chevron-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    cursor: pointer;
+}
+
+.dashboard-active-type-chevron-btn:hover {
+    background: #f1f5f9;
+}
+
+.dashboard-active-type > .dashboard-type-split {
+    display: block;
+    margin-top: -6px;
+    padding: 0 10px 8px 50px;
+}
+
+.dashboard-type-split a,
+.dashboard-type-legend a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.dashboard-type-split a:hover,
+.dashboard-type-legend a:hover {
+    text-decoration: underline;
+}
+
+.dashboard-type-split a.is-active { color: #15803d; }
+.dashboard-type-split a.is-inactive { color: #dc2626; }
+
+.dashboard-type-count-link {
+    text-decoration: none;
+    transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.dashboard-type-count-link:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(15, 23, 42, 0.12);
+    text-decoration: underline;
+}
+
+/* ---- Tip desfacut: filtru pe categoria de capacitate + numerele de inmatriculare ---- */
+
+.dashboard-active-type-plates {
+    display: block;
+}
+
+.dashboard-active-type-plates[hidden] {
+    display: none;
+}
+
+.dashboard-capacity-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed #e2e8f0;
+}
+
+.dashboard-capacity-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    font-weight: 800;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.dashboard-capacity-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.dashboard-capacity-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border: 1px solid #d6e0ed;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #071735;
+    font-size: 11.5px;
+    font-weight: 800;
+    transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.12s ease;
+}
+
+.dashboard-capacity-filter:hover {
+    border-color: #16a34a;
+}
+
+.dashboard-capacity-filter:active {
+    transform: scale(0.95);
+}
+
+.dashboard-capacity-filter span {
+    opacity: 0.65;
+}
+
+.dashboard-capacity-filter.is-active {
+    border-color: #16a34a;
+    background: #16a34a;
+    color: #ffffff;
+}
+
+.dashboard-capacity-filter.is-active span {
+    opacity: 0.85;
+}
+
+.dashboard-active-face.is-total .dashboard-capacity-filter:hover {
+    border-color: #0d6efd;
+}
+
+.dashboard-active-face.is-total .dashboard-capacity-filter.is-active {
+    border-color: #0d6efd;
+    background: #0d6efd;
+}
+
+.dashboard-plate-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.dashboard-plate-grid [data-capacity][hidden] {
+    display: none;
+}
+
+.dashboard-plate-grid.is-face-entering > * {
+    animation: dashboardLiveRowIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.dashboard-capacity-list-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 8px;
+    font-size: 12px;
+    font-weight: 800;
+    color: #0d6efd;
+    text-decoration: none;
+}
+
+.dashboard-capacity-list-link:hover {
+    text-decoration: underline;
+}

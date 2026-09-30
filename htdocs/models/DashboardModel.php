@@ -178,6 +178,8 @@ class DashboardModel extends BaseModel
         $reasonCounts = $this->buildReasonCounts(self::VEHICLE_REASON_DEFINITIONS);
         $inactiveRows = [];
         $inactive = 0;
+        $activeBreakdown = [];
+        $totalBreakdown = [];
 
         $units = $this->groupVehiclesIntoFleetUnits($vehicles);
 
@@ -191,13 +193,16 @@ class DashboardModel extends BaseModel
 
                 foreach ($this->buildVehicleReasons($member, $repairReasons, $documentIssues) as $reason) {
                     $reason['vehicle_id'] = $memberId;
+                    $reason['subject_id'] = $memberId;
                     $reason['vehicle_plate'] = (string) ($member['nr_inmatriculare'] ?? '');
                     $unitReasons[] = $reason;
                 }
             }
 
             $primaryReason = $this->pickPrimaryReason($unitReasons, self::VEHICLE_REASON_PRIORITY);
+            $this->addUnitToBreakdown($totalBreakdown, $unit, $primaryReason === null);
             if ($primaryReason === null) {
+                $this->addUnitToBreakdown($activeBreakdown, $unit, true);
                 continue;
             }
 
@@ -241,6 +246,7 @@ class DashboardModel extends BaseModel
                 'reason_tone' => $primaryReason['tone'],
                 'date' => $rowDate,
                 'sort_date' => $rowDate ?? '0000-00-00',
+                'issues' => $this->buildIssueDetails($unitReasons, $documentIssues['documents'] ?? [], self::VEHICLE_REASON_PRIORITY),
             ];
         }
 
@@ -253,7 +259,100 @@ class DashboardModel extends BaseModel
             'inactive' => $inactive,
             'reasons' => array_values($reasonCounts),
             'inactive_rows' => array_slice($inactiveRows, 0, 5),
+            'inactive_details' => $inactiveRows,
+            'active_breakdown' => $this->finalizeBreakdown($activeBreakdown),
+            'total_breakdown' => $this->finalizeBreakdown($totalBreakdown),
         ];
+    }
+
+    private const ACTIVE_UNIT_TYPES = [
+        'ansamblu' => ['label' => 'Cap tractor + semiremorcă', 'icon' => 'bi-truck-flatbed'],
+        'cap_tractor' => ['label' => 'Cap tractor (necuplat)', 'icon' => 'bi-truck-front'],
+        'camion' => ['label' => 'Camion', 'icon' => 'bi-truck'],
+        'semiremorca_primar' => ['label' => 'Semiremorcă primar (necuplată)', 'icon' => 'bi-truck-flatbed'],
+        'semiremorca_distributie' => ['label' => 'Semiremorcă distribuție (necuplată)', 'icon' => 'bi-truck-flatbed'],
+        'autovehicul' => ['label' => 'Autoturism', 'icon' => 'bi-car-front'],
+        'autoutilitara' => ['label' => 'Autoutilitară', 'icon' => 'bi-truck-front'],
+        'other' => ['label' => 'Alt tip', 'icon' => 'bi-question-circle'],
+    ];
+
+    /**
+     * O unitate de flota intra intr-un singur tip, ca suma pe tipuri sa fie egala cu
+     * contoarele "Total" / "Active": ansamblul cap tractor + semiremorca se numara o data.
+     */
+    private function addUnitToBreakdown(array &$breakdown, array $unit, bool $isActive): void
+    {
+        if (count($unit) > 1) {
+            $type = 'ansamblu';
+        } else {
+            $type = strtolower(trim((string) ($unit[0]['tip_vehicul'] ?? '')));
+            $type = match ($type) {
+                'autoturism' => 'autovehicul',
+                'semiremorca' => 'semiremorca_primar',
+                default => $type,
+            };
+            if (!isset(self::ACTIVE_UNIT_TYPES[$type])) {
+                $type = 'other';
+            }
+        }
+
+        // Capacitatea ansamblului vine de la semiremorca (capul tractor nu are categorie).
+        $capacitySource = $unit[0];
+        foreach ($unit as $member) {
+            if (str_starts_with((string) ($member['tip_vehicul'] ?? ''), 'semiremorca')) {
+                $capacitySource = $member;
+                break;
+            }
+        }
+        $capacityId = (int) ($capacitySource['categorie_capacitate_id'] ?? 0);
+        $capacityLabel = trim((string) ($capacitySource['categorie_capacitate'] ?? ''));
+        if ($capacityId <= 0 || $capacityLabel === '') {
+            $capacityId = 0;
+            $capacityLabel = 'Fără categorie';
+        }
+
+        $breakdown[$type] ??= ['key' => $type] + self::ACTIVE_UNIT_TYPES[$type] + ['count' => 0, 'active' => 0, 'inactive' => 0, 'units' => [], 'capacities' => []];
+        $breakdown[$type]['count']++;
+        $breakdown[$type][$isActive ? 'active' : 'inactive']++;
+
+        $breakdown[$type]['capacities'][$capacityId] ??= [
+            'key' => (string) $capacityId,
+            'label' => $capacityLabel,
+            'order' => $capacityId > 0 ? (int) ($capacitySource['categorie_capacitate_ordine'] ?? 0) : PHP_INT_MAX,
+            'count' => 0,
+        ];
+        $breakdown[$type]['capacities'][$capacityId]['count']++;
+
+        $realCapacity = $capacitySource['capacitate_transport'] ?? null;
+        $breakdown[$type]['units'][] = [
+            'active' => $isActive,
+            'capacity_key' => (string) $capacityId,
+            'capacity_label' => $capacityLabel,
+            'real_capacity' => is_numeric($realCapacity) && (float) $realCapacity > 0 ? (float) $realCapacity : null,
+            'members' => array_map(static fn(array $member): array => [
+                'id' => (int) ($member['id'] ?? 0),
+                'nr_inmatriculare' => (string) ($member['nr_inmatriculare'] ?? ''),
+                'tip_vehicul' => (string) ($member['tip_vehicul'] ?? ''),
+            ], $unit),
+        ];
+    }
+
+    private function finalizeBreakdown(array $breakdown): array
+    {
+        $order = array_flip(array_keys(self::ACTIVE_UNIT_TYPES));
+        foreach ($breakdown as &$row) {
+            usort($row['units'], static fn(array $a, array $b): int =>
+                strnatcasecmp($a['members'][0]['nr_inmatriculare'] ?? '', $b['members'][0]['nr_inmatriculare'] ?? ''));
+            // Categoriile in ordinea din Categorii capacitate, apoi natural dupa nume.
+            usort($row['capacities'], static fn(array $a, array $b): int =>
+                ($a['order'] <=> $b['order']) ?: strnatcasecmp($a['label'], $b['label']));
+        }
+        unset($row);
+
+        uasort($breakdown, static fn(array $a, array $b): int =>
+            ($b['count'] <=> $a['count']) ?: (($order[$a['key']] ?? 99) <=> ($order[$b['key']] ?? 99)));
+
+        return array_values($breakdown);
     }
 
     /**
@@ -282,6 +381,47 @@ class DashboardModel extends BaseModel
         }
 
         return $reasons;
+    }
+
+    /**
+     * Toate problemele unui vehicul / ansamblu / sofer: motivele de documente se desfac
+     * pe documentul concret (ITP, RCA, permis...) cu data expirarii. `subject_id` din
+     * fiecare motiv spune in ce set de documente se cauta.
+     */
+    private function buildIssueDetails(array $reasons, array $documentsBySubject, array $priority): array
+    {
+        $issues = [];
+
+        foreach ($reasons as $reason) {
+            $subjectId = (int) ($reason['subject_id'] ?? 0);
+            $base = [
+                'vehicle_id' => (int) ($reason['vehicle_id'] ?? 0),
+                'vehicle_plate' => (string) ($reason['vehicle_plate'] ?? ''),
+                'key' => $reason['key'],
+                'reason' => $reason['label'],
+                'icon' => $reason['icon'],
+                'tone' => $reason['tone'],
+                'document' => null,
+                'date' => $reason['date'] ?? null,
+            ];
+
+            if (!in_array($reason['key'], ['expired_documents', 'missing_documents'], true)) {
+                $issues[] = $base;
+                continue;
+            }
+
+            foreach ($documentsBySubject[$subjectId] ?? [] as $document) {
+                if ($document['key'] === $reason['key']) {
+                    $issues[] = array_merge($base, ['document' => $document['document'], 'date' => $document['date']]);
+                }
+            }
+        }
+
+        usort($issues, static fn(array $a, array $b): int =>
+            ($priority[$a['key']] ?? 999) <=> ($priority[$b['key']] ?? 999)
+            ?: strcmp((string) ($a['date'] ?? ''), (string) ($b['date'] ?? '')));
+
+        return $issues;
     }
 
     /**
@@ -443,6 +583,8 @@ class DashboardModel extends BaseModel
                 continue;
             }
 
+            $reasons = array_map(static fn(array $reason): array => $reason + ['subject_id' => $driverId], $reasons);
+
             $inactive++;
             $reasonKey = $primaryReason['key'];
             if (!isset($reasonCounts[$reasonKey])) {
@@ -459,6 +601,7 @@ class DashboardModel extends BaseModel
                 'reason_tone' => $primaryReason['tone'],
                 'date' => $this->firstDate($primaryReason['date'] ?? null, $driver['updated_at'] ?? null, $driver['created_at'] ?? null),
                 'sort_date' => $this->firstDate($primaryReason['date'] ?? null, $driver['updated_at'] ?? null, $driver['created_at'] ?? null) ?? '0000-00-00',
+                'issues' => $this->buildIssueDetails($reasons, $documentIssues['documents'] ?? [], self::DRIVER_REASON_PRIORITY),
             ];
         }
 
@@ -471,6 +614,7 @@ class DashboardModel extends BaseModel
             'inactive' => $inactive,
             'reasons' => array_values($reasonCounts),
             'inactive_rows' => array_slice($inactiveRows, 0, 5),
+            'inactive_details' => $inactiveRows,
         ];
     }
 
@@ -711,25 +855,36 @@ class DashboardModel extends BaseModel
     private function getDashboardVehicles(?int $vehicleId = null, string $vehicleCategory = 'toate'): array
     {
         $vehicleCategory = $this->normalizeVehicleCategory($vehicleCategory);
+        // Categoria de capacitate (vehicule_categorii_capacitate) e doar pentru grupare;
+        // capacitatea reala ramane v.capacitate_transport (vezi fata "pe tip" din dashboard).
+        $hasCapacityCategories = $this->tableExists('vehicule_categorii_capacitate');
+        $capacitySelect = $hasCapacityCategories
+            ? ', v.categorie_capacitate_id, vcc.nume AS categorie_capacitate, vcc.ordine_afisare AS categorie_capacitate_ordine'
+            : ', NULL AS categorie_capacitate_id, NULL AS categorie_capacitate, NULL AS categorie_capacitate_ordine';
+        $capacityJoin = $hasCapacityCategories
+            ? 'LEFT JOIN vehicule_categorii_capacitate vcc ON vcc.id = v.categorie_capacitate_id'
+            : '';
         $sql = "
-            SELECT id, nr_inmatriculare, marca, model, tip_vehicul, status, observatii, created_at, updated_at
-            FROM vehicule
-            WHERE nr_inmatriculare <> 'STOC-ANVELOPE'
-              AND serie_sasiu <> 'STOCANVELOPE00001'
+            SELECT v.id, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul, v.status, v.observatii,
+                   v.created_at, v.updated_at, v.capacitate_transport{$capacitySelect}
+            FROM vehicule v
+            {$capacityJoin}
+            WHERE v.nr_inmatriculare <> 'STOC-ANVELOPE'
+              AND v.serie_sasiu <> 'STOCANVELOPE00001'
         ";
         $params = [];
 
         if ($vehicleId !== null) {
-            $sql .= ' AND id = :vehicle_id';
+            $sql .= ' AND v.id = :vehicle_id';
             $params[':vehicle_id'] = $vehicleId;
         }
 
-        $vehicleCategoryCondition = $this->vehicleCategoryCondition('tip_vehicul', $vehicleCategory);
+        $vehicleCategoryCondition = $this->vehicleCategoryCondition('v.tip_vehicul', $vehicleCategory);
         if ($vehicleCategoryCondition !== null) {
             $sql .= ' AND ' . $vehicleCategoryCondition;
         }
 
-        $sql .= ' ORDER BY nr_inmatriculare ASC, id ASC';
+        $sql .= ' ORDER BY v.nr_inmatriculare ASC, v.id ASC';
 
         $stmt = $this->db->prepare($sql);
         $this->bindAll($stmt, $params);
@@ -846,7 +1001,7 @@ class DashboardModel extends BaseModel
     {
         $vehicleIds = $this->positiveIds($vehicleIds);
         if ($vehicleIds === [] || !$this->tableExists('configurare_costuri_documente_vehicule') || !$this->tableExists('documente')) {
-            return ['missing' => [], 'expired' => []];
+            return ['missing' => [], 'expired' => [], 'documents' => []];
         }
 
         $params = [];
@@ -880,7 +1035,8 @@ class DashboardModel extends BaseModel
         $stmt->execute();
 
         $today = (new DateTimeImmutable('today'))->format('Y-m-d');
-        $issues = ['missing' => [], 'expired' => []];
+        // 'documents' pastreaza documentul concret cu problema, pentru lista din card.
+        $issues = ['missing' => [], 'expired' => [], 'documents' => []];
 
         foreach ($stmt->fetchAll() as $row) {
             $vehicleId = (int) ($row['vehicle_id'] ?? 0);
@@ -890,14 +1046,17 @@ class DashboardModel extends BaseModel
 
             $documentCount = (int) ($row['document_count'] ?? 0);
             $latestExpiry = $this->normalizeDate($row['latest_expiry'] ?? null);
+            $documentType = trim((string) ($row['document_type'] ?? ''));
 
             if ($documentCount <= 0) {
                 $this->mergeReasonDate($issues['missing'], $vehicleId, null);
+                $issues['documents'][$vehicleId][] = ['key' => 'missing_documents', 'document' => $documentType, 'date' => null];
                 continue;
             }
 
             if ($latestExpiry === null || $latestExpiry < $today) {
                 $this->mergeReasonDate($issues['expired'], $vehicleId, $latestExpiry);
+                $issues['documents'][$vehicleId][] = ['key' => 'expired_documents', 'document' => $documentType, 'date' => $latestExpiry];
             }
         }
 
@@ -948,7 +1107,7 @@ class DashboardModel extends BaseModel
     {
         $driverIds = $this->positiveIds($driverIds);
         if ($driverIds === [] || !$this->tableExists('configurare_documente_obligatorii_soferi') || !$this->tableExists('documente_soferi')) {
-            return ['missing' => [], 'expired' => []];
+            return ['missing' => [], 'expired' => [], 'documents' => []];
         }
 
         $params = [];
@@ -980,7 +1139,7 @@ class DashboardModel extends BaseModel
         $stmt->execute();
 
         $today = (new DateTimeImmutable('today'))->format('Y-m-d');
-        $issues = ['missing' => [], 'expired' => []];
+        $issues = ['missing' => [], 'expired' => [], 'documents' => []];
 
         foreach ($stmt->fetchAll() as $row) {
             $driverId = (int) ($row['driver_id'] ?? 0);
@@ -992,13 +1151,17 @@ class DashboardModel extends BaseModel
             $requiresExpiry = (int) ($row['requires_expiry'] ?? 1) === 1;
             $latestExpiry = $this->normalizeDate($row['latest_expiry'] ?? null);
 
+            $documentType = trim((string) ($row['document_type'] ?? ''));
+
             if ($documentCount <= 0) {
                 $this->mergeReasonDate($issues['missing'], $driverId, null);
+                $issues['documents'][$driverId][] = ['key' => 'missing_documents', 'document' => $documentType, 'date' => null];
                 continue;
             }
 
             if ($requiresExpiry && ($latestExpiry === null || $latestExpiry < $today)) {
                 $this->mergeReasonDate($issues['expired'], $driverId, $latestExpiry);
+                $issues['documents'][$driverId][] = ['key' => 'expired_documents', 'document' => $documentType, 'date' => $latestExpiry];
             }
         }
 

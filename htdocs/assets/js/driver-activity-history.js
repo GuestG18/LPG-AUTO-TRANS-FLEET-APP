@@ -47,6 +47,13 @@
         }
     };
 
+    /*
+     * Graficele stau intr-un comutator (un singur grafic vizibil). Cel ascuns nu se
+     * construieste la incarcare, ci prima data cand e ales (Chart.js nu poate masura
+     * un canvas ascuns, iar asa pagina porneste cu un singur grafic).
+     */
+    var pendingCharts = {};
+
     var createChart = function (canvasId, values, configFactory) {
         if (!setEmptyState(canvasId, values) || typeof Chart === 'undefined') {
             return;
@@ -57,8 +64,69 @@
             return;
         }
 
+        var pane = canvas.closest('[data-chart-pane]');
+        if (pane && pane.hidden) {
+            pendingCharts[canvasId] = function () {
+                new Chart(canvas, configFactory(canvas));
+            };
+            return;
+        }
+
         new Chart(canvas, configFactory(canvas));
     };
+
+    document.querySelectorAll('[data-chart-switcher]').forEach(function (switcher) {
+        var storageKey = 'driver-history-chart:' + switcher.getAttribute('data-chart-switcher');
+        var title = switcher.querySelector('[data-chart-switcher-title]');
+        var tabs = switcher.querySelectorAll('[data-chart-tab]');
+        var panes = switcher.querySelectorAll('[data-chart-pane]');
+
+        var select = function (key, remember) {
+            var pane = switcher.querySelector('[data-chart-pane="' + key + '"]');
+            if (!pane) {
+                return;
+            }
+            panes.forEach(function (item) {
+                item.hidden = item !== pane;
+            });
+            tabs.forEach(function (tab) {
+                tab.setAttribute('aria-selected', tab.getAttribute('data-chart-tab') === key ? 'true' : 'false');
+            });
+            if (title) {
+                title.textContent = pane.getAttribute('data-chart-title') || '';
+            }
+            var canvas = pane.querySelector('canvas');
+            if (canvas && pendingCharts[canvas.id]) {
+                var build = pendingCharts[canvas.id];
+                delete pendingCharts[canvas.id];
+                build();
+            }
+            switcher.dispatchEvent(new CustomEvent('chartswitch', { detail: { key: key } }));
+            if (remember) {
+                try {
+                    window.localStorage.setItem(storageKey, key);
+                } catch (error) {
+                    // localStorage poate lipsi in modurile restrictive ale browserului.
+                }
+            }
+        };
+
+        tabs.forEach(function (tab) {
+            tab.addEventListener('click', function () {
+                select(tab.getAttribute('data-chart-tab'), true);
+            });
+        });
+
+        // Graficul ales ultima data; se aplica inainte de construirea graficelor.
+        try {
+            var saved = window.localStorage.getItem(storageKey);
+            if (saved) {
+                select(saved, false);
+            }
+        } catch (error) {
+            // Fara localStorage ramane primul grafic.
+        }
+    });
 
     var tons = chartData.tons || {};
     createChart(
@@ -231,78 +299,658 @@
         '#7c3aed'
     ]);
 
-    // Comparatie: grafice cu cate o culoare pe sofer.
+    /*
+     * Comparatie: graficele trebuie sa ramana lizibile si cu 50+ soferi.
+     * - Kilometri / Consum / Costuri: bare orizontale ordonate, un rand pe sofer (~40 px),
+     *   valoarea scrisa permanent la capatul barei, intr-o zona care se deruleaza.
+     * - Evolutie kilometri: cate o linie pe sofer; soferul activ iese in fata, ceilalti se
+     *   estompeaza, iar click pe o zi fixeaza valorile zilei in panoul de alaturi.
+     * Cautarea, sortarea si evidentierea sunt doar vizuale: filtrul global nu se schimba.
+     * Tooltip-ul aduce doar context suplimentar; valorile principale sunt mereu vizibile.
+     */
     var compare = chartData.compare || null;
-    if (compare) {
-        var palette = ['#0d6efd', '#16a34a', '#f59e0b', '#7c3aed', '#e11d48', '#0891b2', '#ea580c', '#475569', '#db2777', '#65a30d'];
-        var colorAt = function (index) { return palette[index % palette.length]; };
-        var driverColors = (compare.drivers || []).map(function (name, index) { return colorAt(index); });
-        var legend = { position: 'top', align: 'end', labels: { boxWidth: 10, boxHeight: 10, color: '#334155', font: { size: 11, weight: '700' } } };
-        var compareOptions = function (showLegend, stacked) {
-            return {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: showLegend ? legend : { display: false } },
-                scales: {
-                    x: { stacked: !!stacked, grid: { display: false }, ticks: defaultTicks },
-                    y: { stacked: !!stacked, beginAtZero: true, grid: defaultGrid, ticks: defaultTicks }
+    var compareSwitcher = document.querySelector('[data-chart-switcher="compare"]');
+    if (compare && compareSwitcher && typeof Chart !== 'undefined') {
+        var drivers = compare.drivers || [];
+        var ROW_HEIGHT = 40;
+        var LABEL_FONT = '700 12px ' + Chart.defaults.font.family;
+        var measureContext = document.createElement('canvas').getContext('2d');
+
+        // Format romanesc: 5.820 / 8.420,50 (fara Intl, ca si numerele de 4 cifre sa aiba punct).
+        var fmt = function (value, decimals) {
+            var number = Number(value) || 0;
+            var parts = Math.abs(number).toFixed(decimals).split('.');
+            return (number < 0 ? '-' : '') + parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.') + (parts[1] ? ',' + parts[1] : '');
+        };
+        var fold = function (text) {
+            return String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+        };
+        var rgba = function (hex, alpha) {
+            var value = parseInt(hex.slice(1), 16);
+            return 'rgba(' + (value >> 16) + ', ' + ((value >> 8) & 255) + ', ' + (value & 255) + ', ' + alpha + ')';
+        };
+        var textWidth = function (text) {
+            measureContext.font = LABEL_FONT;
+            return measureContext.measureText(text).width;
+        };
+        var byName = function (a, b) {
+            return drivers[a].localeCompare(drivers[b], 'ro');
+        };
+
+        // Starea comuna tuturor graficelor: soferul fixat prin click si soferii gasiti la cautare.
+        var focus = { pinned: null, matches: [] };
+        var hasFocus = function () {
+            return focus.pinned !== null || focus.matches.length > 0;
+        };
+        var isActive = function (index) {
+            return focus.pinned === index || focus.matches.indexOf(index) !== -1;
+        };
+        var views = {};
+        var refreshAll = function () {
+            Object.keys(views).forEach(function (key) { views[key].refresh(); });
+        };
+        var togglePinned = function (index) {
+            focus.pinned = focus.pinned === index ? null : index;
+            refreshAll();
+        };
+
+        /*
+         * Bare orizontale ordonate. options: datasets [{label, values, color}], total(i)
+         * (null = fara date), label(i) (textul permanent), tooltip(i) (linii suplimentare),
+         * showItems (componentele barei in tooltip) si legend (doar la costuri: 5 componente).
+         */
+        var rankedChart = function (key, canvasId, options) {
+            var canvas = document.getElementById(canvasId);
+            if (!canvas) {
+                return;
+            }
+            var pane = canvas.closest('[data-chart-pane]');
+            var holder = pane.querySelector('[data-rank-canvas]');
+            var scroller = pane.querySelector('[data-rank-scroll]');
+            /*
+             * Pe grafic apar doar soferii cu valoare (> 0). Ceilalti (ex. curse fara km
+             * completati) nu au ce bara sa arate: sunt numiti in nota de sub grafic, ca sa
+             * nu dispara fara urma. In tabelul de sumar raman, cu activitatea lor.
+             */
+            var included = [];
+            var excluded = [];
+            drivers.forEach(function (name, index) {
+                var value = options.total(index);
+                (value !== null && value > 0 ? included : excluded).push(index);
+            });
+            var state = { sort: 'desc', order: included.slice() };
+            var valueWidth = Math.max.apply(null, included.map(function (index) { return textWidth(options.label(index)); }).concat([40])) + 14;
+            if (excluded.length && scroller) {
+                var note = document.createElement('p');
+                note.className = 'driver-history-chart-note';
+                var names = excluded.slice().sort(byName).map(function (index) { return drivers[index]; });
+                note.textContent = options.missingText + ' (' + names.length + '): ' + names.join(', ') + '.';
+                scroller.insertAdjacentElement('afterend', note);
+            }
+
+            var sortOrder = function () {
+                state.order = included.slice().sort(function (a, b) {
+                    if (state.sort === 'name') {
+                        return byName(a, b);
+                    }
+                    var first = options.total(a);
+                    var second = options.total(b);
+                    // Soferii fara date raman la final, indiferent de sens.
+                    if (first === null || second === null) {
+                        return first === second ? byName(a, b) : (first === null ? 1 : -1);
+                    }
+                    return (state.sort === 'asc' ? first - second : second - first) || byName(a, b);
+                });
+            };
+            var datasetValues = function (values) {
+                return state.order.map(function (index) { return Number(values[index]) || 0; });
+            };
+            // Numele lungi se scurteaza pe axa; numele intreg e in tooltip.
+            var shortName = function (name, chartWidth) {
+                var limit = Math.max(90, Math.min(230, chartWidth * 0.34));
+                if (textWidth(name) <= limit) {
+                    return name;
+                }
+                var cut = name;
+                while (cut.length > 3 && textWidth(cut + '…') > limit) {
+                    cut = cut.slice(0, -1);
+                }
+                return cut.trim() + '…';
+            };
+            var chart = function () {
+                return Chart.getChart(canvas);
+            };
+
+            var valueLabels = {
+                id: 'rankValueLabels',
+                afterDatasetsDraw: function (instance) {
+                    var metas = instance.getSortedVisibleDatasetMetas();
+                    var context = instance.ctx;
+                    context.save();
+                    context.font = LABEL_FONT;
+                    context.textBaseline = 'middle';
+                    context.textAlign = 'left';
+                    state.order.forEach(function (driverIndex, row) {
+                        var end = instance.scales.x.getPixelForValue(0);
+                        var y = null;
+                        metas.forEach(function (meta) {
+                            var element = meta.data[row];
+                            if (element) {
+                                end = Math.max(end, element.x);
+                                y = element.y;
+                            }
+                        });
+                        if (y === null) {
+                            return;
+                        }
+                        var missing = options.total(driverIndex) === null;
+                        context.fillStyle = missing || (hasFocus() && !isActive(driverIndex)) ? '#94a3b8' : '#0f172a';
+                        context.fillText(options.label(driverIndex), end + 6, y);
+                    });
+                    context.restore();
+                }
+            };
+
+            createChart(canvasId, drivers.map(function (name, index) { return options.total(index) || 0; }), function () {
+                sortOrder();
+                holder.style.height = (state.order.length * ROW_HEIGHT + 12) + 'px';
+                return {
+                    type: 'bar',
+                    data: {
+                        labels: state.order.map(function (index) { return drivers[index]; }),
+                        datasets: options.datasets.map(function (dataset) {
+                            return {
+                                label: dataset.label,
+                                data: datasetValues(dataset.values),
+                                backgroundColor: function (context) {
+                                    var index = state.order[context.dataIndex];
+                                    return hasFocus() && !isActive(index) ? rgba(dataset.color, 0.22) : dataset.color;
+                                },
+                                hoverBackgroundColor: dataset.color,
+                                borderRadius: 4,
+                                barPercentage: 0.72,
+                                categoryPercentage: 0.9,
+                                maxBarThickness: 24,
+                                stack: 'total'
+                            };
+                        })
+                    },
+                    options: {
+                        indexAxis: 'y',
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: { duration: 250 },
+                        layout: { padding: { top: 4, bottom: 4, right: valueWidth } },
+                        interaction: { mode: 'index', axis: 'y', intersect: false },
+                        onClick: function (event, elements) {
+                            if (elements.length) {
+                                togglePinned(state.order[elements[0].index]);
+                            }
+                        },
+                        onHover: function (event, elements) {
+                            canvas.style.cursor = elements.length ? 'pointer' : 'default';
+                        },
+                        plugins: {
+                            legend: options.legend
+                                ? { position: 'top', align: 'start', labels: { boxWidth: 10, boxHeight: 10, color: '#334155', font: { size: 11, weight: '700' } } }
+                                : { display: false },
+                            tooltip: {
+                                displayColors: !!options.showItems,
+                                callbacks: {
+                                    title: function (items) {
+                                        return items.length ? drivers[state.order[items[0].dataIndex]] : '';
+                                    },
+                                    label: function (item) {
+                                        return options.showItems ? ' ' + item.dataset.label + ': ' + fmt(item.raw, 2) + ' lei' : undefined;
+                                    },
+                                    afterBody: function (items) {
+                                        return items.length ? options.tooltip(state.order[items[0].dataIndex]) : [];
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: { stacked: true, beginAtZero: true, grid: defaultGrid, border: { display: false }, ticks: { display: false } },
+                            y: {
+                                stacked: true,
+                                grid: { display: false },
+                                border: { display: false },
+                                ticks: {
+                                    autoSkip: false,
+                                    color: function (context) {
+                                        var index = state.order[context.index];
+                                        return hasFocus() && isActive(index) ? '#0b55f4' : '#334155';
+                                    },
+                                    font: function (context) {
+                                        return { size: 12, weight: hasFocus() && isActive(state.order[context.index]) ? '900' : '700' };
+                                    },
+                                    callback: function (value, index) {
+                                        return shortName(drivers[state.order[index]] || '', this.chart.width);
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    plugins: [valueLabels]
+                };
+            });
+
+            views[key] = {
+                ranked: true,
+                refresh: function () {
+                    var instance = chart();
+                    if (instance) {
+                        instance.update('none');
+                    }
+                },
+                getSort: function () { return state.sort; },
+                setSort: function (mode) {
+                    state.sort = mode;
+                    var instance = chart();
+                    if (!instance) {
+                        return;
+                    }
+                    sortOrder();
+                    instance.data.labels = state.order.map(function (index) { return drivers[index]; });
+                    instance.data.datasets.forEach(function (dataset, position) {
+                        dataset.data = datasetValues(options.datasets[position].values);
+                    });
+                    instance.update();
+                },
+                // Aduce soferul in zona vizibila a listei derulabile.
+                reveal: function (index) {
+                    var instance = chart();
+                    if (!instance || !scroller) {
+                        return;
+                    }
+                    if (state.order.indexOf(index) === -1) {
+                        return;
+                    }
+                    var y = instance.scales.y.getPixelForValue(state.order.indexOf(index));
+                    scroller.scrollTo({ top: Math.max(0, y - scroller.clientHeight / 2), behavior: 'smooth' });
                 }
             };
         };
-        var perDriverBar = function (canvasId, label, values) {
-            createChart(canvasId, (values || []).map(Number), function () {
-                return {
-                    type: 'bar',
-                    data: { labels: compare.drivers, datasets: [{ label: label, data: values, backgroundColor: driverColors, borderRadius: 5, maxBarThickness: 46 }] },
-                    options: compareOptions(false, false)
-                };
+
+        var km = compare.km || [];
+        var trips = compare.trips || [];
+        var liters = compare.fuel_liters || [];
+        var period = compare.period || '';
+
+        rankedChart('km', 'driver_compare_km_chart', {
+            datasets: [{ label: 'Km', values: km, color: '#0d6efd' }],
+            total: function (index) { return Number(km[index]) || 0; },
+            missingText: 'Fara km inregistrati in perioada (curse fara km completati)',
+            label: function (index) { return fmt(km[index], 0) + ' km'; },
+            tooltip: function (index) {
+                var count = Number(trips[index]) || 0;
+                return [
+                    'Total km: ' + fmt(km[index], 0) + ' km',
+                    'Curse: ' + count,
+                    'Medie / cursa: ' + (count > 0 ? fmt((Number(km[index]) || 0) / count, 0) + ' km' : '-'),
+                    'Perioada: ' + period
+                ];
+            }
+        });
+
+        var consumption = compare.consumption || [];
+        rankedChart('consumption', 'driver_compare_consumption_chart', {
+            datasets: [{ label: 'L/100 km', values: consumption, color: '#0d6efd' }],
+            total: function (index) { return consumption[index] === null || consumption[index] === undefined ? null : Number(consumption[index]); },
+            missingText: 'Fara consum calculat (lipsesc alimentarile sau km)',
+            label: function (index) {
+                return consumption[index] === null || consumption[index] === undefined ? 'fara date' : fmt(consumption[index], 2) + ' L/100 km';
+            },
+            tooltip: function (index) {
+                return [
+                    'Consum mediu: ' + (consumption[index] === null || consumption[index] === undefined ? 'fara alimentari sau km' : fmt(consumption[index], 2) + ' L/100 km'),
+                    'Combustibil: ' + fmt(liters[index], 2) + ' L',
+                    'Kilometri: ' + fmt(km[index], 0) + ' km',
+                    'Perioada: ' + period
+                ];
+            }
+        });
+
+        // Salariul si diurnele lipsesc pentru cei fara dreptul „Date financiare” (vin sterse de pe server).
+        var costParts = [
+            { label: 'Carburant', values: compare.fuel_cost, color: '#0d6efd' },
+            { label: 'Reparatii', values: compare.repair_cost, color: '#fb5f72' },
+            { label: 'Costuri curse', values: compare.trip_cost, color: '#f59e0b' },
+            { label: 'Salariu', values: compare.salary_cost, color: '#7c3aed' },
+            { label: 'Diurne', values: compare.diurne_cost, color: '#16a34a' }
+        ].filter(function (part) { return Array.isArray(part.values); });
+        var costTotal = function (index) {
+            return costParts.reduce(function (sum, part) { return sum + (Number(part.values[index]) || 0); }, 0);
+        };
+        rankedChart('cost', 'driver_compare_cost_chart', {
+            datasets: costParts,
+            legend: true,
+            showItems: true,
+            total: costTotal,
+            missingText: 'Fara costuri in perioada',
+            label: function (index) { return fmt(costTotal(index), 2) + ' lei'; },
+            tooltip: function (index) {
+                var distance = Number(km[index]) || 0;
+                return [
+                    '',
+                    'Total: ' + fmt(costTotal(index), 2) + ' lei',
+                    'Cost / km: ' + (distance > 0 ? fmt(costTotal(index) / distance, 2) + ' lei' : '-'),
+                    'Perioada: ' + period
+                ];
+            }
+        });
+
+        // Evolutie kilometri: cate o linie pe sofer, peste tot intervalul filtrat.
+        var timeline = compare.timeline || {};
+        var series = timeline.series || [];
+        var dates = timeline.labels || [];
+        var linePalette = ['#0d6efd', '#16a34a', '#f59e0b', '#7c3aed', '#e11d48', '#0891b2', '#ea580c', '#475569', '#db2777', '#65a30d'];
+        var timelineCanvas = document.getElementById('driver_compare_timeline_chart');
+        var timelinePanel = compareSwitcher.querySelector('[data-timeline-panel]');
+        var timelineState = { hover: null, date: null };
+        // Soferii fara niciun km in perioada nu au linie (ar fi doar o dreapta pe 0).
+        var hasKm = series.map(function (item) { return (item.values || []).some(function (value) { return Number(value) > 0; }); });
+        var withoutKm = drivers.filter(function (name, index) { return !hasKm[index]; });
+        var timelineChart = function () {
+            return timelineCanvas ? Chart.getChart(timelineCanvas) : null;
+        };
+
+        var styleTimeline = function (instance) {
+            var hovering = timelineState.hover !== null;
+            var emphasis = hovering || hasFocus();
+            instance.data.datasets.forEach(function (dataset, index) {
+                var on = hovering ? index === timelineState.hover : isActive(index);
+                var color = linePalette[index % linePalette.length];
+                dataset.borderColor = !emphasis ? rgba(color, 0.7) : (on ? color : 'rgba(148, 163, 184, 0.22)');
+                dataset.borderWidth = emphasis && on ? 3 : 1.5;
+                dataset.pointRadius = emphasis && on ? 3 : 0;
+                dataset.pointBackgroundColor = color;
+                // Ordinea mai mica se deseneaza deasupra.
+                dataset.order = emphasis && on ? 0 : 1;
             });
         };
 
-        perDriverBar('driver_compare_km_chart', 'Km', compare.km);
-        perDriverBar('driver_compare_consumption_chart', 'L/100 km', compare.consumption);
-
-        createChart('driver_compare_cost_chart', (compare.fuel_cost || []).concat(compare.repair_cost || [], compare.trip_cost || [], compare.salary_cost || [], compare.diurne_cost || []), function () {
-            return {
-                type: 'bar',
-                data: {
-                    labels: compare.drivers,
-                    datasets: [
-                        { label: 'Carburant', data: compare.fuel_cost, backgroundColor: '#0d6efd', maxBarThickness: 46 },
-                        { label: 'Reparatii', data: compare.repair_cost, backgroundColor: '#fb5f72', maxBarThickness: 46 },
-                        { label: 'Costuri curse', data: compare.trip_cost, backgroundColor: '#f59e0b', maxBarThickness: 46 },
-                        { label: 'Salariu', data: compare.salary_cost, backgroundColor: '#7c3aed', maxBarThickness: 46 },
-                        { label: 'Diurne', data: compare.diurne_cost, backgroundColor: '#16a34a', maxBarThickness: 46 }
-                    ].filter(function (dataset) {
-                        // Salariul si diurnele lipsesc pentru cei fara dreptul „Date financiare”.
-                        return Array.isArray(dataset.data);
-                    })
-                },
-                options: compareOptions(true, true)
+        var renderTimelinePanel = function () {
+            if (!timelinePanel) {
+                return;
+            }
+            if (timelineState.date === null) {
+                timelinePanel.innerHTML = '<p class="driver-history-timeline-hint">Click pe o zi din grafic pentru a fixa aici km fiecarui sofer.</p>';
+                if (withoutKm.length) {
+                    var hintNote = document.createElement('p');
+                    hintNote.className = 'driver-history-chart-note';
+                    hintNote.textContent = 'Fara km in perioada (' + withoutKm.length + '): ' + withoutKm.join(', ') + '.';
+                    timelinePanel.appendChild(hintNote);
+                }
+                return;
+            }
+            var day = timelineState.date;
+            var rows = series.map(function (item, index) {
+                return { index: index, value: Number((item.values || [])[day]) || 0 };
+            }).filter(function (row) { return hasKm[row.index]; });
+            var active = rows.filter(function (row) { return row.value > 0; }).sort(function (a, b) { return b.value - a.value || byName(a.index, b.index); });
+            var idle = rows.filter(function (row) { return row.value <= 0; }).sort(function (a, b) { return byName(a.index, b.index); });
+            var total = active.reduce(function (sum, row) { return sum + row.value; }, 0);
+            var escape = function (text) {
+                var node = document.createElement('span');
+                node.textContent = text;
+                return node.innerHTML;
             };
-        });
+            var rowHtml = function (row) {
+                var classes = 'driver-history-timeline-row' + (hasFocus() && isActive(row.index) ? ' is-active' : '');
+                return '<button type="button" class="' + classes + '" data-timeline-driver="' + row.index + '" title="' + escape(drivers[row.index] || '') + '">'
+                    + '<i style="background:' + linePalette[row.index % linePalette.length] + '"></i>'
+                    + '<span>' + escape(drivers[row.index] || '') + '</span><strong>' + fmt(row.value, 0) + ' km</strong></button>';
+            };
+            timelinePanel.innerHTML = '<div class="driver-history-timeline-panel-head">'
+                + '<div><small>Data selectata</small><strong>' + escape(dates[day] || '') + '</strong></div>'
+                + '<button type="button" class="btn btn-sm btn-link" data-timeline-clear>Deselecteaza</button></div>'
+                + '<p class="driver-history-timeline-total">Total: <strong>' + fmt(total, 0) + ' km</strong> · ' + active.length + ' soferi cu km</p>'
+                + '<div class="driver-history-timeline-rows">' + active.map(rowHtml).join('')
+                + (idle.length ? '<p class="driver-history-timeline-idle">Fara km in aceasta zi (' + idle.length + ')</p>' + idle.map(rowHtml).join('') : '')
+                + '</div>'
+                + (withoutKm.length ? '<p class="driver-history-chart-note">Fara km in perioada (' + withoutKm.length + '): ' + escape(withoutKm.join(', ')) + '.</p>' : '');
+        };
 
-        var timeline = compare.timeline || {};
-        var series = timeline.series || [];
-        createChart('driver_compare_timeline_chart', [].concat.apply([], series.map(function (s) { return s.values || []; })), function () {
-            // Bare grupate: zilele fara curse raman 0, fara curbe care coboara sub zero.
+        var selectionLine = {
+            id: 'timelineSelection',
+            beforeDatasetsDraw: function (instance) {
+                if (timelineState.date === null) {
+                    return;
+                }
+                var x = instance.scales.x.getPixelForValue(timelineState.date);
+                var area = instance.chartArea;
+                var context = instance.ctx;
+                context.save();
+                context.fillStyle = 'rgba(13, 110, 253, 0.08)';
+                context.fillRect(x - 10, area.top, 20, area.bottom - area.top);
+                context.strokeStyle = 'rgba(13, 110, 253, 0.55)';
+                context.setLineDash([4, 3]);
+                context.beginPath();
+                context.moveTo(x, area.top);
+                context.lineTo(x, area.bottom);
+                context.stroke();
+                context.restore();
+            }
+        };
+
+        /*
+         * Hover pe evolutie: cel mai apropiat punct cu km (> 0), pe o raza de 40 px. Zilele
+         * fara curse (0 km) sunt comune tuturor soferilor, deci nu indica niciun sofer.
+         */
+        Chart.Interaction.modes.driverNearest = function (chart, event) {
+            var position = Chart.helpers.getRelativePosition(event, chart);
+            var best = null;
+            var bestDistance = 40 * 40;
+            chart.getSortedVisibleDatasetMetas().forEach(function (meta) {
+                var values = chart.data.datasets[meta.index].data;
+                meta.data.forEach(function (point, index) {
+                    if (!(Number(values[index]) > 0)) {
+                        return;
+                    }
+                    var distance = Math.pow(point.x - position.x, 2) + Math.pow(point.y - position.y, 2);
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        best = { element: point, datasetIndex: meta.index, index: index };
+                    }
+                });
+            });
+            return best ? [best] : [];
+        };
+
+        createChart('driver_compare_timeline_chart', [].concat.apply([], series.map(function (item) { return item.values || []; })), function () {
             return {
-                type: 'bar',
+                type: 'line',
                 data: {
-                    labels: timeline.labels || [],
-                    datasets: series.map(function (s, index) {
+                    labels: dates,
+                    datasets: series.map(function (item, index) {
+                        var color = linePalette[index % linePalette.length];
                         return {
-                            label: s.label,
-                            data: s.values,
-                            backgroundColor: colorAt(index),
-                            borderRadius: 3,
-                            maxBarThickness: 18
+                            label: item.label,
+                            data: item.values,
+                            borderColor: rgba(color, 0.7),
+                            backgroundColor: color,
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                            // Monoton: curba nu coboara sub zero intre zilele fara curse.
+                            cubicInterpolationMode: 'monotone',
+                            fill: false,
+                            hidden: !hasKm[index]
                         };
                     })
                 },
-                options: compareOptions(true, false)
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    interaction: { mode: 'driverNearest', intersect: false },
+                    onHover: function (event, elements) {
+                        var next = event.type === 'mouseout' || !elements.length ? null : elements[0].datasetIndex;
+                        if (next !== timelineState.hover) {
+                            timelineState.hover = next;
+                            var instance = timelineChart();
+                            styleTimeline(instance);
+                            instance.update('none');
+                        }
+                        timelineCanvas.style.cursor = 'pointer';
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                title: function (items) { return items.length ? items[0].label : ''; },
+                                label: function (item) { return ' ' + item.dataset.label + ': ' + fmt(item.raw, 0) + ' km'; },
+                                afterBody: function () { return ['', 'Click pentru a fixa ziua']; }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { grid: { display: false }, ticks: Object.assign({}, defaultTicks, { maxRotation: 0, autoSkipPadding: 12 }) },
+                        y: { beginAtZero: true, grid: defaultGrid, ticks: Object.assign({}, defaultTicks, { callback: function (value) { return fmt(value, 0); } }) }
+                    }
+                },
+                plugins: [selectionLine]
             };
         });
+
+        views.timeline = {
+            ranked: false,
+            refresh: function () {
+                var instance = timelineChart();
+                if (instance) {
+                    styleTimeline(instance);
+                    instance.update('none');
+                }
+                renderTimelinePanel();
+            },
+            reveal: function (index) {
+                var row = timelinePanel && timelinePanel.querySelector('[data-timeline-driver="' + index + '"]');
+                if (row) {
+                    row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }
+            }
+        };
+        if (timelineCanvas) {
+            // Click oriunde pe grafic (si pe eticheta datei): ziua cea mai apropiata se fixeaza.
+            timelineCanvas.addEventListener('click', function (event) {
+                var instance = timelineChart();
+                if (!instance || !dates.length) {
+                    return;
+                }
+                var position = Chart.helpers.getRelativePosition(event, instance);
+                var day = Math.round(instance.scales.x.getValueForPixel(position.x));
+                timelineState.date = Math.max(0, Math.min(dates.length - 1, day));
+                // Click chiar pe linia unui sofer: soferul ramane si evidentiat.
+                if (timelineState.hover !== null) {
+                    focus.pinned = timelineState.hover;
+                }
+                refreshAll();
+            });
+            timelineCanvas.addEventListener('mouseleave', function () {
+                var instance = timelineChart();
+                if (instance && timelineState.hover !== null) {
+                    timelineState.hover = null;
+                    styleTimeline(instance);
+                    instance.update('none');
+                }
+            });
+        }
+        if (timelinePanel) {
+            timelinePanel.addEventListener('click', function (event) {
+                if (event.target.closest('[data-timeline-clear]')) {
+                    timelineState.date = null;
+                    refreshAll();
+                    return;
+                }
+                var row = event.target.closest('[data-timeline-driver]');
+                if (row) {
+                    togglePinned(parseInt(row.getAttribute('data-timeline-driver'), 10));
+                }
+            });
+        }
+
+        // Uneltele din antet: cautare, sortare, resetare - pentru graficul afisat.
+        var tools = compareSwitcher.querySelector('[data-chart-tools]');
+        var searchInput = compareSwitcher.querySelector('[data-chart-search]');
+        var searchStatus = compareSwitcher.querySelector('[data-chart-search-status]');
+        var sortSelect = compareSwitcher.querySelector('[data-chart-sort]');
+        var visiblePane = compareSwitcher.querySelector('[data-chart-pane]:not([hidden])');
+        var currentKey = visiblePane ? visiblePane.getAttribute('data-chart-pane') : 'km';
+
+        var syncTools = function () {
+            var view = views[currentKey];
+            var pane = compareSwitcher.querySelector('[data-chart-pane="' + currentKey + '"]');
+            var ranked = !!(view && view.ranked);
+            if (sortSelect) {
+                sortSelect.hidden = !ranked;
+                if (ranked) {
+                    sortSelect.value = view.getSort();
+                    var descOption = sortSelect.querySelector('[data-chart-sort-desc]');
+                    if (descOption && pane) {
+                        descOption.textContent = pane.getAttribute('data-chart-sort-label') || 'Descrescator';
+                    }
+                }
+            }
+            if (tools) {
+                tools.hidden = !view;
+            }
+        };
+        var revealFirstMatch = function () {
+            var view = views[currentKey];
+            var target = focus.matches.length ? focus.matches[0] : focus.pinned;
+            if (view && target !== null && target !== undefined) {
+                view.reveal(target);
+            }
+        };
+
+        compareSwitcher.addEventListener('chartswitch', function (event) {
+            currentKey = event.detail.key;
+            syncTools();
+            refreshAll();
+            revealFirstMatch();
+        });
+        if (searchInput) {
+            searchInput.addEventListener('input', function () {
+                var query = fold(searchInput.value).trim();
+                focus.matches = query === '' ? [] : drivers.reduce(function (found, name, index) {
+                    if (fold(name).indexOf(query) !== -1) {
+                        found.push(index);
+                    }
+                    return found;
+                }, []);
+                if (searchStatus) {
+                    searchStatus.textContent = query === '' ? '' : (focus.matches.length ? focus.matches.length + (focus.matches.length === 1 ? ' sofer gasit' : ' soferi gasiti') : 'Niciun sofer gasit');
+                }
+                refreshAll();
+                revealFirstMatch();
+            });
+        }
+        if (sortSelect) {
+            sortSelect.addEventListener('change', function () {
+                var view = views[currentKey];
+                if (view && view.ranked) {
+                    view.setSort(sortSelect.value);
+                }
+            });
+        }
+        var resetButton = compareSwitcher.querySelector('[data-chart-reset]');
+        if (resetButton) {
+            resetButton.addEventListener('click', function () {
+                focus.pinned = null;
+                focus.matches = [];
+                timelineState.date = null;
+                timelineState.hover = null;
+                if (searchInput) {
+                    searchInput.value = '';
+                }
+                if (searchStatus) {
+                    searchStatus.textContent = '';
+                }
+                refreshAll();
+            });
+        }
+        syncTools();
     }
 
     // Selectorul de soferi: lista cu bife. Un sofer = istoricul lui; doi sau

@@ -332,6 +332,7 @@ require_once __DIR__ . '/models/DashboardAnaliticV2Model.php';
 require_once __DIR__ . '/models/ProgramareConcediiModel.php';
 require_once __DIR__ . '/models/NotificationRuleModel.php';
 require_once __DIR__ . '/models/DriverDiurnaModel.php';
+require_once __DIR__ . '/models/VehicleServiceKmModel.php';
 require_once __DIR__ . '/models/StaffAccountancyModel.php';
 require_once __DIR__ . '/models/PayrollModel.php';
 require_once __DIR__ . '/models/ExpenseModel.php';
@@ -484,10 +485,11 @@ try {
         redirect(url('index.php?page=dashboard'));
     }
 
-    // Garda centrala de acces per-pagina (drepturi de acces).
+    // Garda centrala de acces per-pagina si per-endpoint (drepturi de acces).
     // Adminul trece mereu; utilizatorii neconfigurati pastreaza accesul implicit al rolului.
+    // Endpoint-urile protejate sunt declarate de fiecare modul in permissions/modules/.
     if (is_logged_in() && function_exists('require_route_access')) {
-        require_route_access($page);
+        require_route_access((string) $page, is_string($action) ? $action : null);
     }
 
     switch ($page) {

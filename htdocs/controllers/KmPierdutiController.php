@@ -79,6 +79,8 @@ class KmPierdutiController
     private function buildVehicleRows(string $start, string $end): array
     {
         $registered = $this->registeredKmByVehicleId($start, $end);
+        // Drumurile la service justifica km GPS rulati fara cursa (nu sunt km pierduti).
+        $serviceKm = (new VehicleServiceKmModel($this->db))->kmByVehicleId($start, $end);
 
         $rows = [];
         foreach ($this->service->getFleetVehicles() as $car) {
@@ -98,6 +100,8 @@ class KmPierdutiController
                 'km_cursa' => $reg !== null ? (float) $reg['km_cursa'] : 0.0,
                 'km_totali' => $reg !== null ? (float) $reg['km_totali'] : 0.0,
                 'km_efectuati' => $reg !== null ? (float) $reg['km_efectuati'] : 0.0,
+                'km_service' => $localId > 0 ? (float) ($serviceKm[$localId]['km'] ?? 0) : 0.0,
+                'zile_service' => $localId > 0 ? (int) ($serviceKm[$localId]['zile'] ?? 0) : 0,
             ];
         }
 

@@ -69,13 +69,13 @@ if (!is_string($vehiclesJson)) {
     <div class="col-6 col-lg-3">
         <div class="card border-0 shadow-sm h-100"><div class="card-body py-2 text-center">
             <div class="h4 mb-0" id="kmp-kpi-cursa">–</div>
-            <div class="text-muted small"><i class="bi bi-signpost-2 me-1"></i>Km efectuați (curse)</div>
+            <div class="text-muted small"><i class="bi bi-signpost-2 me-1"></i>Km efectuați (curse + service)</div>
         </div></div>
     </div>
     <div class="col-6 col-lg-3">
         <div class="card border-0 shadow-sm h-100 border-start border-danger border-4"><div class="card-body py-2 text-center">
             <div class="h4 mb-0 text-danger" id="kmp-kpi-lost">–</div>
-            <div class="text-muted small"><i class="bi bi-exclamation-triangle me-1"></i>Km pierduți (GPS − efectuați)</div>
+            <div class="text-muted small"><i class="bi bi-exclamation-triangle me-1"></i>Km pierduți (GPS − curse − service)</div>
         </div></div>
     </div>
     <div class="col-6 col-lg-3">
@@ -100,15 +100,16 @@ if (!is_string($vehiclesJson)) {
                     <th class="text-end kmp-sort" data-sort="gps" role="button">Km GPS</th>
                     <th class="text-end kmp-sort" data-sort="efect" role="button" title="Km rulați pe curse: Km efectuați (Km totali când e completat, altfel Km efectuați / Km cursă)">Km efectuați</th>
                     <th class="text-end kmp-sort" data-sort="cursa" role="button" title="Km agreați / facturați (câmpul Km cursă)">Km agreați</th>
-                    <th class="text-end kmp-sort" data-sort="lostc" role="button" title="Km GPS − Km efectuați">Km pierduți</th>
-                    <th class="text-end kmp-sort" data-sort="lostt" role="button" title="Km GPS − Km agreați (facturați)">GPS − agreați</th>
+                    <th class="text-end kmp-sort" data-sort="service" role="button" title="Km la / de la service (Dispecer curse → Km service)">Km service</th>
+                    <th class="text-end kmp-sort" data-sort="lostc" role="button" title="Km GPS − Km efectuați − Km service">Km pierduți</th>
+                    <th class="text-end kmp-sort" data-sort="lostt" role="button" title="Km GPS − Km agreați (facturați) − Km service">GPS − agreați</th>
                 </tr>
             </thead>
             <tbody id="kmp-rows"></tbody>
         </table>
     </div>
     <div class="card-footer bg-white text-muted small">
-        <i class="bi bi-info-circle me-1"></i>Km pierduți = Km GPS reali − Km efectuați pe curse (Km totali / „Km efectuați” când e completat, altfel Km cursă). „GPS − agreați” compară cu km facturați. O cursă intră în perioada în care s-a închis (data de sfârșit), ca în Dashboard Analitic V2. Valorile negative (curse înregistrate cu mai mulți km decât s-au rulat) pot apărea când o cursă închisă în interval a fost rulată parțial în perioada anterioară.
+        <i class="bi bi-info-circle me-1"></i>Km pierduți = Km GPS reali − Km efectuați pe curse (Km totali / „Km efectuați” când e completat, altfel Km cursă) − Km service (drumuri la reparat, din Dispecer curse → Km service). „GPS − agreați” compară cu km facturați. O cursă intră în perioada în care s-a închis (data de sfârșit), ca în Dashboard Analitic V2. Valorile negative (curse înregistrate cu mai mulți km decât s-au rulat) pot apărea când o cursă închisă în interval a fost rulată parțial în perioada anterioară.
     </div>
 </div>
 
@@ -154,8 +155,8 @@ if (!is_string($vehiclesJson)) {
     function computeLost(v) {
         if (v.gps == null) { v.lostc = null; v.lostt = null; return; }
         // Pierdut = km GPS neacoperiti de km efectuati pe curse; al doilea: fata de km agreati (facturati).
-        v.lostc = v.gps - (v.km_efectuati || 0);
-        v.lostt = v.gps - (v.km_cursa || 0);
+        v.lostc = v.gps - (v.km_efectuati || 0) - (v.km_service || 0);
+        v.lostt = v.gps - (v.km_cursa || 0) - (v.km_service || 0);
     }
 
     function lostCell(value, pending) {
@@ -181,6 +182,13 @@ if (!is_string($vehiclesJson)) {
         return '<a class="kmp-races-link" href="' + esc(href) + '" title="' + esc(title) + '">' + nr + '</a>';
     }
 
+    // Km service: vehiculul a stat la reparat in perioada (zilele apar in tooltip).
+    function serviceCell(v) {
+        if (!v.km_service && !v.zile_service) { return '<span class="kmp-pending">-</span>'; }
+        var title = 'În service ' + (v.zile_service || 0) + ' zile în perioadă';
+        return '<span title="' + esc(title) + '"><i class="bi bi-tools text-warning me-1"></i>' + fmt(v.km_service) + '</span>';
+    }
+
     function matches(v) {
         if (state.search === '') { return true; }
         return ((v.plate || '') + ' ' + (v.label || '')).toLowerCase().indexOf(state.search) !== -1;
@@ -193,6 +201,7 @@ if (!is_string($vehiclesJson)) {
             case 'gps': return v.gps == null ? -1 : v.gps;
             case 'cursa': return v.km_cursa || 0;
             case 'efect': return v.km_efectuati || 0;
+            case 'service': return v.km_service || 0;
             case 'lostc': return v.lostc == null ? -Infinity : v.lostc;
             case 'lostt': return v.lostt == null ? -Infinity : v.lostt;
             default: return 0;
@@ -220,6 +229,7 @@ if (!is_string($vehiclesJson)) {
                 + '<td class="text-end">' + gpsCell + '</td>'
                 + '<td class="text-end">' + fmt(v.km_efectuati) + '</td>'
                 + '<td class="text-end text-muted">' + fmt(v.km_cursa) + '</td>'
+                + '<td class="text-end">' + serviceCell(v) + '</td>'
                 + '<td class="text-end">' + lostCell(v.lostc, pending) + '</td>'
                 + '<td class="text-end">' + lostCell(v.lostt, pending) + '</td>'
                 + '</tr>';
@@ -231,7 +241,7 @@ if (!is_string($vehiclesJson)) {
         VEHICLES.forEach(function (v) {
             if (!v.has_gps) { return; }
             tracked++;
-            cursa += (v.km_efectuati || 0);
+            cursa += (v.km_efectuati || 0) + (v.km_service || 0);
             if (v.gps != null) { gps += v.gps; loaded++; }
         });
         var lost = gps - cursa;

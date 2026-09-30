@@ -1,4 +1,9 @@
 <?php
+// Drepturile granulare (permissions/modules/dispecer_curse.php). Butoanele ascunse aici sunt
+// blocate si pe server, de garda din router (endpoints).
+$dispCanEdit = !function_exists('can') || can('dispecer_curse', 'edit');
+$dispCanDelete = !function_exists('can') || can('dispecer_curse', 'delete');
+$dispCanDeleteBulk = !function_exists('can') || can('dispecer_curse', 'delete_bulk');
 $baseQuery = [
     'page' => 'dispecer_curse',
     'action' => 'index',
@@ -254,6 +259,13 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
     <h2 class="h4 mb-0">Dispecer curse</h2>
     <div class="d-flex gap-2">
+        <?php $headerServiceKmActive = count(array_filter((array) ($serviceKmEntries ?? []), static fn (array $row): bool => !empty($row['in_service']))); ?>
+        <a class="btn btn-outline-secondary" href="#service-km-panel" title="Km service și vehicule aflate la reparat">
+            <i class="bi bi-tools" aria-hidden="true"></i> Km service
+            <?php if ($headerServiceKmActive > 0): ?>
+                <span class="badge text-bg-warning ms-1"><?= $headerServiceKmActive ?> în service</span>
+            <?php endif; ?>
+        </a>
         <a
             class="btn btn-outline-secondary"
             data-role="config-transport-link"
@@ -433,6 +445,8 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
     </div>
 </div>
 
+<?php include __DIR__ . '/_service_km_panel.php'; ?>
+
 <?php include __DIR__ . '/_race_day_panel.php'; ?>
 
 <?php if ((string) ($filters['ids'] ?? '') !== ''): ?>
@@ -504,6 +518,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                     </div>
                 </div>
             </div>
+            <?php if ($dispCanDeleteBulk): ?>
             <button
                 type="submit"
                 class="btn btn-sm btn-outline-danger"
@@ -514,6 +529,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
             >
                 Sterge selectate
             </button>
+            <?php endif; ?>
             <button
                 type="button"
                 class="btn btn-sm btn-outline-secondary"
@@ -1124,8 +1140,11 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                             <i class="bi bi-three-dots" aria-hidden="true"></i>
                                         </button>
                                         <div class="dispatcher-race-actions-menu" id="dispatcher_race_actions_<?= e((string) $raceId) ?>" data-dispatcher-race-actions-menu role="menu" hidden>
+                                            <?php if ($dispCanEdit): ?>
                                             <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">Editează</a>
                                             <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'faza' => 'noua']) . '#race-form') ?>" title="Deschide formularul cursei pregătit pentru o fază nouă (alt șofer / alt vehicul). Cursa rămâne una singură, fără tarif suplimentar.">Reia cursa</a>
+                                            <?php endif; ?>
+                                            <?php if ($dispCanDelete): ?>
                                             <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'delete'])) ?>" class="dispatcher-race-actions-form" role="none">
                                                 <?= csrf_field() ?>
                                                 <input type="hidden" name="id" value="<?= e((string) $raceId) ?>">
@@ -1134,6 +1153,10 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                                     Șterge
                                                 </button>
                                             </form>
+                                            <?php endif; ?>
+                                            <?php if (!$dispCanEdit && !$dispCanDelete): ?>
+                                            <span class="dispatcher-race-actions-item text-muted" role="none">Nicio acțiune permisă</span>
+                                            <?php endif; ?>
                                         </div>
                                     </div>
                                 </div>

@@ -31,35 +31,63 @@ $comparisonData = $dashboard;
 <?php include __DIR__ . '/_summary_table.php'; ?>
 
 
-<section class="driver-history-chart-grid">
-    <article class="driver-history-panel">
-        <h2>Kilometri pe sofer</h2>
-        <div class="driver-history-chart-wrap" data-chart-wrapper>
-            <canvas id="driver_compare_km_chart"></canvas>
-            <div class="driver-history-chart-empty">Nu exista date.</div>
+<?php
+/*
+ * Un singur grafic vizibil, ales din comutator (alegerea se pastreaza in browser).
+ * Graficele neafisate se construiesc abia cand sunt alese prima data.
+ */
+?>
+<section class="driver-history-panel driver-history-chart-switcher" data-chart-switcher="compare">
+    <div class="driver-history-chart-switcher-head">
+        <h2 data-chart-switcher-title>Kilometri pe sofer</h2>
+        <div class="driver-history-view-switch" role="tablist" aria-label="Alege graficul">
+            <button type="button" role="tab" data-chart-tab="km" aria-selected="true">Kilometri pe sofer</button>
+            <button type="button" role="tab" data-chart-tab="timeline" aria-selected="false">Evolutie kilometri</button>
+            <button type="button" role="tab" data-chart-tab="consumption" aria-selected="false">Consum mediu</button>
+            <button type="button" role="tab" data-chart-tab="cost" aria-selected="false">Costuri pe sofer</button>
         </div>
-    </article>
-    <article class="driver-history-panel">
-        <h2>Evolutie kilometri</h2>
-        <div class="driver-history-chart-wrap" data-chart-wrapper>
-            <canvas id="driver_compare_timeline_chart"></canvas>
-            <div class="driver-history-chart-empty">Nu exista date.</div>
+    </div>
+    <?php
+    /*
+     * Unelte locale ale graficelor (nu ating filtrul global de soferi): cautarea
+     * evidentiaza soferul in graficul curent, sortarea schimba doar ordinea barelor,
+     * iar "Reseteaza" sterge evidentierea si data fixata.
+     */
+    ?>
+    <div class="driver-history-chart-tools" data-chart-tools>
+        <label class="driver-history-chart-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search" placeholder="Cauta sofer..." autocomplete="off" aria-label="Cauta sofer in grafic" data-chart-search>
+        </label>
+        <span class="driver-history-chart-search-status" data-chart-search-status aria-live="polite"></span>
+        <select class="form-select form-select-sm" aria-label="Sortare grafic" data-chart-sort>
+            <option value="desc" data-chart-sort-desc>KM descrescator</option>
+            <option value="asc">Crescator</option>
+            <option value="name">A-Z</option>
+        </select>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-chart-reset><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reseteaza</button>
+    </div>
+    <div class="driver-history-chart-wrap is-ranked" data-chart-wrapper data-chart-pane="km" data-chart-title="Kilometri pe sofer" data-chart-sort-label="KM descrescator" role="tabpanel">
+        <div class="driver-history-rank-scroll" data-rank-scroll><div class="driver-history-rank-canvas" data-rank-canvas><canvas id="driver_compare_km_chart"></canvas></div></div>
+        <div class="driver-history-chart-empty">Nu exista kilometri in perioada selectata.</div>
+    </div>
+    <div class="driver-history-chart-wrap is-timeline" data-chart-wrapper data-chart-pane="timeline" data-chart-title="Evolutie kilometri" role="tabpanel" hidden>
+        <div class="driver-history-timeline-layout">
+            <div class="driver-history-timeline-chart"><canvas id="driver_compare_timeline_chart"></canvas></div>
+            <aside class="driver-history-timeline-panel" data-timeline-panel aria-live="polite">
+                <p class="driver-history-timeline-hint">Click pe o zi din grafic pentru a fixa aici km fiecarui sofer.</p>
+            </aside>
         </div>
-    </article>
-    <article class="driver-history-panel">
-        <h2>Consum mediu (L/100 km)</h2>
-        <div class="driver-history-chart-wrap" data-chart-wrapper>
-            <canvas id="driver_compare_consumption_chart"></canvas>
-            <div class="driver-history-chart-empty">Nu exista date.</div>
-        </div>
-    </article>
-    <article class="driver-history-panel">
-        <h2>Costuri pe sofer</h2>
-        <div class="driver-history-chart-wrap" data-chart-wrapper>
-            <canvas id="driver_compare_cost_chart"></canvas>
-            <div class="driver-history-chart-empty">Nu exista date.</div>
-        </div>
-    </article>
+        <div class="driver-history-chart-empty">Nu exista kilometri in perioada selectata.</div>
+    </div>
+    <div class="driver-history-chart-wrap is-ranked" data-chart-wrapper data-chart-pane="consumption" data-chart-title="Consum mediu (L/100 km)" data-chart-sort-label="Consum descrescator" role="tabpanel" hidden>
+        <div class="driver-history-rank-scroll" data-rank-scroll><div class="driver-history-rank-canvas" data-rank-canvas><canvas id="driver_compare_consumption_chart"></canvas></div></div>
+        <div class="driver-history-chart-empty">Nu exista consum calculat in perioada selectata.</div>
+    </div>
+    <div class="driver-history-chart-wrap is-ranked" data-chart-wrapper data-chart-pane="cost" data-chart-title="Costuri pe sofer" data-chart-sort-label="Cost descrescator" role="tabpanel" hidden>
+        <div class="driver-history-rank-scroll" data-rank-scroll><div class="driver-history-rank-canvas" data-rank-canvas><canvas id="driver_compare_cost_chart"></canvas></div></div>
+        <div class="driver-history-chart-empty">Nu exista costuri in perioada selectata.</div>
+    </div>
 </section>
 
 <section class="driver-history-tabs">

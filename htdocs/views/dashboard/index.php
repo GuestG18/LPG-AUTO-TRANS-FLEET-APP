@@ -34,6 +34,13 @@ $approvalCounts = is_array($approvalSummary['counts'] ?? null) ? $approvalSummar
 $approvalVehicleRows = is_array($approvalSummary['vehicles'] ?? null) ? $approvalSummary['vehicles'] : [];
 $approvalDriverRows = is_array($approvalSummary['drivers'] ?? null) ? $approvalSummary['drivers'] : [];
 $approvalTotal = (int) ($approvalSummary['total'] ?? ((int) ($approvalCounts['vehicle'] ?? 0) + (int) ($approvalCounts['driver'] ?? 0) + (int) ($approvalCounts['repair'] ?? 0)));
+$vehicleCategoryIcon = match ($selectedVehicleCategory) {
+    'grele' => 'bi-truck',
+    'usoare' => 'bi-car-front',
+    default => 'bi-truck-front',
+};
+$dashboardLiveCssVersion = (string) @filemtime(BASE_PATH . '/assets/css/dashboard-live.css');
+$dashboardLiveJsVersion = (string) @filemtime(BASE_PATH . '/assets/js/dashboard-live.js');
 $dashboardReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dashboard']));
 
 $driverDetailsUrl = build_query_url([
@@ -218,22 +225,26 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
 };
 ?>
 
-<div class="dashboard-page">
+<link rel="stylesheet" href="<?= e(url('assets/css/dashboard-live.css?v=' . $dashboardLiveCssVersion)) ?>">
+
+<div class="dashboard-page" data-dashboard-live-root>
     <header class="dashboard-page-heading">
         <h1>Dashboard</h1>
         <p>Privire de ansamblu asupra flotei</p>
     </header>
 
+    <div data-dashboard-live="error">
     <?php if (!empty($dashboardError)): ?>
         <div class="dashboard-inline-error" role="alert">
             <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
             <span><?= e($dashboardError) ?></span>
         </div>
     <?php endif; ?>
+    </div>
 
     <section class="dashboard-filter-panel" aria-labelledby="dashboard-filter-title">
         <h2 id="dashboard-filter-title" class="visually-hidden">Filtre dashboard</h2>
-        <form class="dashboard-filter-form" method="get">
+        <form class="dashboard-filter-form" method="get" data-dashboard-live-form>
             <input type="hidden" name="page" value="dashboard">
             <input type="hidden" name="operational_expanded" value="<?= $operationalInitiallyExpanded ? '1' : '0' ?>" data-dashboard-operational-state-input>
 
@@ -299,13 +310,13 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                     <i class="bi bi-funnel" aria-hidden="true"></i>
                     <span>Aplică filtre</span>
                 </button>
-                <a class="dashboard-reset-btn" href="<?= e(build_query_url(['page' => 'dashboard'])) ?>">
+                <a class="dashboard-reset-btn" data-dashboard-live-reset href="<?= e(build_query_url(['page' => 'dashboard'])) ?>">
                     <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
                     <span>Resetează</span>
                 </a>
             </div>
 
-            <div class="dashboard-filter-chips" aria-label="Filtre active">
+            <div class="dashboard-filter-chips" aria-label="Filtre active" aria-live="polite" data-dashboard-live="chips">
                 <span class="dashboard-filter-chip">
                     <i class="bi bi-calendar2-week" aria-hidden="true"></i>
                     <span>Perioadă: <?= e($periodRangeLabel) ?></span>
@@ -329,11 +340,14 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
         aria-label="Indicatori principali dashboard"
         data-dashboard-main-grid
     >
-        <article class="dashboard-metric-card dashboard-card-vehicles">
+        <article class="dashboard-metric-card dashboard-card-vehicles" data-dashboard-live="vehicles" data-dashboard-flip-card>
             <header class="dashboard-card-header">
                 <div class="dashboard-card-title">
-                    <span class="dashboard-card-icon" aria-hidden="true"><i class="bi bi-truck-front"></i></span>
+                    <span class="dashboard-card-icon" aria-hidden="true"><i class="bi <?= e($vehicleCategoryIcon) ?>"></i></span>
                     <h2>Status vehicule</h2>
+                    <?php if ($selectedVehicleCategory !== 'toate'): ?>
+                        <span class="dashboard-category-tag"><?= e($vehicleCategoryLabel) ?></span>
+                    <?php endif; ?>
                 </div>
                 <a class="dashboard-card-link" href="<?= e($vehicleDetailsUrl) ?>">
                     <span>Vezi detalii</span>
@@ -341,18 +355,19 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                 </a>
             </header>
 
+            <div class="dashboard-card-face" data-dashboard-summary-face>
             <div class="dashboard-stat-row">
-                <a class="dashboard-stat" href="<?= e($vehicleUnitUrl('toate')) ?>" title="Vezi toate unitatile de flota">
+                <a class="dashboard-stat" href="<?= e($vehicleUnitUrl('toate')) ?>" title="Vezi toate vehiculele pe tip" data-dashboard-active-open="total">
                     <span>Total vehicule</span>
-                    <strong class="is-blue"><?= e((string) ((int) ($vehicleStatus['total'] ?? 0))) ?></strong>
+                    <strong class="is-blue" data-dashboard-count="vehicles.total"><?= e((string) ((int) ($vehicleStatus['total'] ?? 0))) ?></strong>
                 </a>
-                <a class="dashboard-stat" href="<?= e($vehicleUnitUrl('active')) ?>" title="Vezi unitatile active">
+                <a class="dashboard-stat" href="<?= e($vehicleUnitUrl('active')) ?>" title="Vezi vehiculele active pe tip" data-dashboard-active-open="active">
                     <span>Active</span>
-                    <strong class="is-green"><?= e((string) ((int) ($vehicleStatus['active'] ?? 0))) ?></strong>
+                    <strong class="is-green" data-dashboard-count="vehicles.active"><?= e((string) ((int) ($vehicleStatus['active'] ?? 0))) ?></strong>
                 </a>
-                <a class="dashboard-stat" href="<?= e($vehicleUnitUrl('inactive')) ?>" title="Vezi unitatile inactive">
+                <a class="dashboard-stat" href="<?= e($vehicleUnitUrl('inactive')) ?>" title="Vezi vehiculele inactive si documentele cu probleme" data-dashboard-inactive-open="all">
                     <span>Inactive</span>
-                    <strong class="is-red"><?= e((string) ((int) ($vehicleStatus['inactive'] ?? 0))) ?></strong>
+                    <strong class="is-red" data-dashboard-count="vehicles.inactive"><?= e((string) ((int) ($vehicleStatus['inactive'] ?? 0))) ?></strong>
                 </a>
             </div>
 
@@ -367,10 +382,10 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                         }
                         $reasonKey = (string) ($reason['key'] ?? 'other');
                         ?>
-                        <a class="dashboard-reason-item tone-<?= e((string) ($reason['tone'] ?? 'muted')) ?>" href="<?= e($vehicleReasonUrl($reasonKey)) ?>">
+                        <a class="dashboard-reason-item tone-<?= e((string) ($reason['tone'] ?? 'muted')) ?>" href="<?= e($vehicleReasonUrl($reasonKey)) ?>"<?= $reasonCount > 0 ? ' data-dashboard-inactive-open="' . e($reasonKey) . '"' : '' ?>>
                             <span class="dashboard-reason-icon"><i class="bi <?= e((string) ($reason['icon'] ?? 'bi-circle')) ?>" aria-hidden="true"></i></span>
                             <span class="dashboard-reason-label"><?= e((string) ($reason['label'] ?? 'Alt motiv')) ?></span>
-                            <span class="dashboard-reason-count"><?= e((string) $reasonCount) ?></span>
+                            <span class="dashboard-reason-count" data-dashboard-count="vehicles.reason.<?= e($reasonKey) ?>"><?= e((string) $reasonCount) ?></span>
                         </a>
                     <?php endforeach; ?>
                 </div>
@@ -380,9 +395,14 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                 <i class="bi bi-info-circle" aria-hidden="true"></i>
                 <span>Vehiculele programate la reparații sunt marcate automat inactive.</span>
             </div>
+            </div>
+
+            <?php $faceKind = 'vehicles'; $faceStatus = $vehicleStatus; require __DIR__ . '/_inactive_face.php'; ?>
+            <?php $typeFaceMode = 'active'; require __DIR__ . '/_type_face.php'; ?>
+            <?php $typeFaceMode = 'total'; require __DIR__ . '/_type_face.php'; ?>
         </article>
 
-        <article class="dashboard-metric-card dashboard-card-drivers">
+        <article class="dashboard-metric-card dashboard-card-drivers" data-dashboard-live="drivers" data-dashboard-flip-card>
             <header class="dashboard-card-header">
                 <div class="dashboard-card-title">
                     <span class="dashboard-card-icon" aria-hidden="true"><i class="bi bi-person"></i></span>
@@ -394,18 +414,19 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                 </a>
             </header>
 
+            <div class="dashboard-card-face" data-dashboard-summary-face>
             <div class="dashboard-stat-row">
                 <a class="dashboard-stat" href="<?= e($driverStatusUrl(null)) ?>" title="Vezi toti soferii">
                     <span>Total șoferi</span>
-                    <strong class="is-blue"><?= e((string) ((int) ($driverStatus['total'] ?? 0))) ?></strong>
+                    <strong class="is-blue" data-dashboard-count="drivers.total"><?= e((string) ((int) ($driverStatus['total'] ?? 0))) ?></strong>
                 </a>
                 <a class="dashboard-stat" href="<?= e($driverStatusUrl('activ')) ?>" title="Vezi soferii activi">
                     <span>Activi</span>
-                    <strong class="is-green"><?= e((string) ((int) ($driverStatus['active'] ?? 0))) ?></strong>
+                    <strong class="is-green" data-dashboard-count="drivers.active"><?= e((string) ((int) ($driverStatus['active'] ?? 0))) ?></strong>
                 </a>
-                <a class="dashboard-stat" href="<?= e($driverStatusUrl('inactiv')) ?>" title="Vezi soferii inactivi">
+                <a class="dashboard-stat" href="<?= e($driverStatusUrl('inactiv')) ?>" title="Vezi soferii inactivi si documentele cu probleme" data-dashboard-inactive-open="all">
                     <span>Inactivi</span>
-                    <strong class="is-red"><?= e((string) ((int) ($driverStatus['inactive'] ?? 0))) ?></strong>
+                    <strong class="is-red" data-dashboard-count="drivers.inactive"><?= e((string) ((int) ($driverStatus['inactive'] ?? 0))) ?></strong>
                 </a>
             </div>
 
@@ -420,14 +441,17 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                         }
                         $reasonKey = (string) ($reason['key'] ?? 'other');
                         ?>
-                        <a class="dashboard-reason-item tone-<?= e((string) ($reason['tone'] ?? 'muted')) ?>" href="<?= e($driverReasonUrl($reasonKey)) ?>">
+                        <a class="dashboard-reason-item tone-<?= e((string) ($reason['tone'] ?? 'muted')) ?>" href="<?= e($driverReasonUrl($reasonKey)) ?>"<?= $reasonCount > 0 ? ' data-dashboard-inactive-open="' . e($reasonKey) . '"' : '' ?>>
                             <span class="dashboard-reason-icon"><i class="bi <?= e((string) ($reason['icon'] ?? 'bi-circle')) ?>" aria-hidden="true"></i></span>
                             <span class="dashboard-reason-label"><?= e((string) ($reason['label'] ?? 'Alt motiv')) ?></span>
-                            <span class="dashboard-reason-count"><?= e((string) $reasonCount) ?></span>
+                            <span class="dashboard-reason-count" data-dashboard-count="drivers.reason.<?= e($reasonKey) ?>"><?= e((string) $reasonCount) ?></span>
                         </a>
                     <?php endforeach; ?>
                 </div>
             </div>
+            </div>
+
+            <?php $faceKind = 'drivers'; $faceStatus = $driverStatus; require __DIR__ . '/_inactive_face.php'; ?>
         </article>
 
         <article
@@ -459,8 +483,9 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                 </div>
             </header>
 
+            <div class="dashboard-live-contents" data-dashboard-live="operational">
             <div class="dashboard-money-total is-orange dashboard-operational-total">
-                <?= e(format_number_ro($operationalTotal, 2)) ?> <small>lei</small>
+                <span data-dashboard-money="operational.total"><?= e(format_number_ro($operationalTotal, 2)) ?></span> <small>lei</small>
             </div>
             <p class="dashboard-card-period">Total perioadă: <?= e($periodRangeLabel) ?></p>
             <p class="dashboard-operational-hint">Click pentru detalii</p>
@@ -475,6 +500,7 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                         <strong><?= e($formatCurrency($row['value'] ?? 0)) ?></strong>
                     </div>
                 <?php endforeach; ?>
+            </div>
             </div>
 
         </article>
@@ -498,6 +524,7 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
             id="dashboard-operational-fuel-card"
             class="dashboard-metric-card dashboard-card-fuel dashboard-operational-sibling-card"
             data-dashboard-operational-detail-card
+            data-dashboard-live="fuel"
         >
             <header class="dashboard-card-header">
                 <div class="dashboard-card-title">
@@ -511,7 +538,7 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
             </header>
 
             <div class="dashboard-money-total is-orange">
-                <?= e(format_number_ro((float) ($fuelCost['total_value'] ?? 0), 2)) ?> <small>lei</small>
+                <span data-dashboard-money="fuel.total"><?= e(format_number_ro((float) ($fuelCost['total_value'] ?? 0), 2)) ?></span> <small>lei</small>
             </div>
             <p class="dashboard-card-period">Total perioad&#259;: <?= e($periodRangeLabel) ?></p>
 
@@ -551,6 +578,7 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
             id="dashboard-operational-maintenance-card"
             class="dashboard-metric-card dashboard-card-maintenance dashboard-operational-sibling-card"
             data-dashboard-operational-detail-card
+            data-dashboard-live="maintenance"
         >
             <header class="dashboard-card-header">
                 <div class="dashboard-card-title">
@@ -564,7 +592,7 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
             </header>
 
             <div class="dashboard-money-total is-purple">
-                <?= e(format_number_ro((float) ($maintenanceCost['total_value'] ?? 0), 2)) ?> <small>lei</small>
+                <span data-dashboard-money="maintenance.total"><?= e(format_number_ro((float) ($maintenanceCost['total_value'] ?? 0), 2)) ?></span> <small>lei</small>
             </div>
             <p class="dashboard-card-period">Total perioad&#259;: <?= e($periodRangeLabel) ?></p>
 
@@ -601,11 +629,11 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
     </section>
 
     <section class="dashboard-detail-grid" aria-label="Liste inactive dashboard">
-        <article class="dashboard-detail-panel dashboard-panel-vehicles">
+        <article class="dashboard-detail-panel dashboard-panel-vehicles" data-dashboard-live="vehicle-list">
             <header class="dashboard-panel-header">
                 <div>
                     <h2>Vehicule inactive</h2>
-                    <span class="dashboard-count-badge"><?= e((string) ((int) ($vehicleStatus['inactive'] ?? 0))) ?></span>
+                    <span class="dashboard-count-badge" data-dashboard-count="vehicles.inactive-list"><?= e((string) ((int) ($vehicleStatus['inactive'] ?? 0))) ?></span>
                 </div>
                 <a href="<?= e($vehicleDetailsUrl) ?>">Vezi toate</a>
             </header>
@@ -696,11 +724,11 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
             </a>
         </article>
 
-        <article class="dashboard-detail-panel dashboard-panel-drivers">
+        <article class="dashboard-detail-panel dashboard-panel-drivers" data-dashboard-live="driver-list">
             <header class="dashboard-panel-header">
                 <div>
                     <h2>Șoferi inactivi</h2>
-                    <span class="dashboard-count-badge"><?= e((string) ((int) ($driverStatus['inactive'] ?? 0))) ?></span>
+                    <span class="dashboard-count-badge" data-dashboard-count="drivers.inactive-list"><?= e((string) ((int) ($driverStatus['inactive'] ?? 0))) ?></span>
                 </div>
                 <a href="<?= e($driverDetailsUrl) ?>">Vezi toate</a>
             </header>
@@ -950,3 +978,5 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
         <?php endif; ?>
     </div>
 </div>
+
+<script src="<?= e(url('assets/js/dashboard-live.js?v=' . $dashboardLiveJsVersion)) ?>" defer></script>

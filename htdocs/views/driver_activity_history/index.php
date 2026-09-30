@@ -299,35 +299,33 @@ $isDeliveryTrip = static fn (array $trip): bool => in_array((string) ($trip['tra
             <?php include __DIR__ . '/_summary_table.php'; ?>
         <?php endif; ?>
 
-        <section class="driver-history-chart-grid">
-            <article class="driver-history-panel">
-                <h2>Tone transportate / livrate pe tip de transport</h2>
-                <div class="driver-history-chart-wrap" data-chart-wrapper>
-                    <canvas id="driver_history_tons_chart"></canvas>
-                    <div class="driver-history-chart-empty">Nu exista date.</div>
+        <?php /* Un singur grafic vizibil, ales din comutator (ca la comparatie, vezi _compare.php). */ ?>
+        <section class="driver-history-panel driver-history-chart-switcher" data-chart-switcher="single">
+            <div class="driver-history-chart-switcher-head">
+                <h2 data-chart-switcher-title>Tone transportate / livrate pe tip de transport</h2>
+                <div class="driver-history-view-switch" role="tablist" aria-label="Alege graficul">
+                    <button type="button" role="tab" data-chart-tab="tons" aria-selected="true">Tone</button>
+                    <button type="button" role="tab" data-chart-tab="km" aria-selected="false">Evolutie kilometri</button>
+                    <button type="button" role="tab" data-chart-tab="fuel" aria-selected="false">Consum combustibil</button>
+                    <button type="button" role="tab" data-chart-tab="cost" aria-selected="false">Distributie costuri</button>
                 </div>
-            </article>
-            <article class="driver-history-panel">
-                <h2>Evolutie kilometri</h2>
-                <div class="driver-history-chart-wrap" data-chart-wrapper>
-                    <canvas id="driver_history_km_chart"></canvas>
-                    <div class="driver-history-chart-empty">Nu exista date.</div>
-                </div>
-            </article>
-            <article class="driver-history-panel">
-                <h2>Evolutie consum combustibil</h2>
-                <div class="driver-history-chart-wrap" data-chart-wrapper>
-                    <canvas id="driver_history_fuel_chart"></canvas>
-                    <div class="driver-history-chart-empty">Nu exista date.</div>
-                </div>
-            </article>
-            <article class="driver-history-panel">
-                <h2>Distributie costuri</h2>
-                <div class="driver-history-chart-wrap is-donut" data-chart-wrapper>
-                    <canvas id="driver_history_cost_chart"></canvas>
-                    <div class="driver-history-chart-empty">Nu exista date.</div>
-                </div>
-            </article>
+            </div>
+            <div class="driver-history-chart-wrap" data-chart-wrapper data-chart-pane="tons" data-chart-title="Tone transportate / livrate pe tip de transport" role="tabpanel">
+                <canvas id="driver_history_tons_chart"></canvas>
+                <div class="driver-history-chart-empty">Nu exista date.</div>
+            </div>
+            <div class="driver-history-chart-wrap" data-chart-wrapper data-chart-pane="km" data-chart-title="Evolutie kilometri" role="tabpanel" hidden>
+                <canvas id="driver_history_km_chart"></canvas>
+                <div class="driver-history-chart-empty">Nu exista date.</div>
+            </div>
+            <div class="driver-history-chart-wrap" data-chart-wrapper data-chart-pane="fuel" data-chart-title="Evolutie consum combustibil" role="tabpanel" hidden>
+                <canvas id="driver_history_fuel_chart"></canvas>
+                <div class="driver-history-chart-empty">Nu exista date.</div>
+            </div>
+            <div class="driver-history-chart-wrap is-donut" data-chart-wrapper data-chart-pane="cost" data-chart-title="Distributie costuri" role="tabpanel" hidden>
+                <canvas id="driver_history_cost_chart"></canvas>
+                <div class="driver-history-chart-empty">Nu exista date.</div>
+            </div>
         </section>
 
         <section class="driver-history-tabs">

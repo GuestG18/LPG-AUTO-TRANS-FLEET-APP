@@ -258,6 +258,21 @@ class DriverActivityHistoryModel extends BaseModel
         usort($fuelRows, $byDate('fillup_datetime'));
         usort($diurneRows, $byDate('data_inceput'));
         usort($vehicleOptions, static fn (array $a, array $b): int => strcmp((string) $a['nr_inmatriculare'], (string) $b['nr_inmatriculare']));
+        /*
+         * Evolutia kilometrilor acopera tot intervalul filtrat, nu doar zilele cu curse:
+         * perioadele fara curse apar cu 0 km (linia nu sare peste ele).
+         */
+        try {
+            $day = new DateTimeImmutable((string) ($filters['date_start'] ?? ''));
+            $lastDay = new DateTimeImmutable((string) ($filters['date_end'] ?? ''));
+            for ($guard = 0; $day <= $lastDay && $guard < 3700; $guard++, $day = $day->modify('+1 day')) {
+                [$key, $label] = $this->groupDate($day->format('Y-m-d'), (string) $filters['grouping']);
+                $timeline[$key]['label'] ??= $label;
+                $timeline[$key]['values'] ??= [];
+            }
+        } catch (Throwable) {
+            // Fara interval valid raman doar perioadele cu curse.
+        }
         ksort($timeline);
 
         $metric = static fn (string $key): array => array_map(static fn (array $row): float => round((float) ($row['kpis'][$key] ?? 0), 2), $drivers);
@@ -273,6 +288,10 @@ class DriverActivityHistoryModel extends BaseModel
             'charts' => [
                 'compare' => [
                     'drivers' => array_column($drivers, 'nume'),
+                    // Context pentru tooltip-urile graficelor (valorile principale sunt pe grafic).
+                    'period' => format_date_ro((string) ($filters['date_start'] ?? '')) . ' - ' . format_date_ro((string) ($filters['date_end'] ?? '')),
+                    'trips' => array_map(static fn (array $row): int => (int) ($row['kpis']['total_trips'] ?? 0), $drivers),
+                    'fuel_liters' => $metric('total_fuel_liters'),
                     'km' => $metric('total_km'),
                     'transported_tons' => $metric('total_transported_tons'),
                     'delivered_tons' => $metric('total_delivered_tons'),
