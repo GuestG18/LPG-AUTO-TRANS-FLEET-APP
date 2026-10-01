@@ -12,7 +12,28 @@ $pagination = is_array($pagination ?? null) ? $pagination : ['page' => 1, 'total
 $perPageOptions = is_array($perPageOptions ?? null) ? $perPageOptions : [20, 50, 100];
 $canCreate = (bool) ($canCreate ?? false);
 $canImportSheet = (bool) ($canImportSheet ?? false);
+$scanStatus = is_array($scanStatus ?? null) ? $scanStatus : ['fetch' => null, 'ocr' => null, 'in_procesare' => 0, 'configurat' => false];
 $canLink = can('facturi', 'link');
+
+/** "azi 14:05" / "ieri 09:30" / "28.09.2026 18:00" pentru o data ISO. */
+$whenLabel = static function (?string $iso): string {
+    $time = $iso !== null ? strtotime($iso) : false;
+    if ($time === false) {
+        return '—';
+    }
+    $day = date('Y-m-d', $time);
+
+    return match ($day) {
+        date('Y-m-d') => 'azi ' . date('H:i', $time),
+        date('Y-m-d', strtotime('-1 day')) => 'ieri ' . date('H:i', $time),
+        default => date('d.m.Y H:i', $time),
+    };
+};
+$sourceIcon = [
+    'scan' => ['bi-envelope-paper', 'Scanare din email'],
+    'manual' => ['bi-upload', 'Încărcată manual'],
+    'legacy_cazare' => ['bi-house-heart', 'Din registrul Cazare'],
+];
 
 $money = static fn(mixed $value, string $currency = 'RON'): string => $value === null || $value === ''
     ? '—'
@@ -27,6 +48,7 @@ $baseQuery = array_filter([
     'vehicle_id' => (int) ($filters['vehicle_id'] ?? 0) > 0 ? (string) $filters['vehicle_id'] : '',
     'driver_id' => (int) ($filters['driver_id'] ?? 0) > 0 ? (string) $filters['driver_id'] : '',
     'q' => (string) ($filters['q'] ?? ''),
+    'sursa' => (string) ($filters['sursa'] ?? ''),
     'pp' => (string) ((int) ($pagination['per_page'] ?? 20)),
 ], static fn($value, $key) => $key === 'page' || $value !== '', ARRAY_FILTER_USE_BOTH);
 $pageUrl = static fn(int $page): string => build_query_url(array_merge($baseQuery, ['p' => (string) $page]));
@@ -79,6 +101,44 @@ require __DIR__ . '/_status.php';
         <?php endif; ?>
     </div>
 </div>
+
+<?php if ($scanStatus['configurat'] || $scanStatus['in_procesare'] > 0): ?>
+    <?php
+    $fetch = $scanStatus['fetch'];
+    $ocrRun = $scanStatus['ocr'];
+    $fetchErrors = is_array($fetch['erori'] ?? null) ? count($fetch['erori']) : 0;
+    $ocrFailures = (int) ($ocrRun['esecuri'] ?? 0);
+    $stale = $fetch !== null && strtotime((string) ($fetch['rulat_la'] ?? '')) < time() - 30 * 60;
+    $hasProblem = $fetchErrors > 0 || $ocrFailures > 0 || $stale;
+    ?>
+    <div class="facturi-scan-status alert <?= $hasProblem ? 'alert-warning' : 'alert-light' ?> d-flex flex-wrap align-items-center gap-3 py-2 small mb-3">
+        <span class="fw-semibold"><i class="bi bi-envelope-paper" aria-hidden="true"></i> Scanări din email</span>
+        <span title="Ultima citire a căsuței Gmail (la fiecare 5 minute)">
+            Ultima citire Gmail: <strong><?= e($whenLabel($fetch['rulat_la'] ?? null)) ?></strong>
+            <?php if ($fetch !== null): ?>
+                · <?= (int) ($fetch['emailuri_procesate'] ?? 0) ?> email(uri) preluate, <?= (int) ($fetch['fisiere_salvate'] ?? 0) ?> fișier(e)
+            <?php endif; ?>
+            <?php if ($stale): ?><span class="text-warning-emphasis">· nu a mai rulat de peste 30 de minute</span><?php endif; ?>
+        </span>
+        <span title="Ultima citire automată a facturilor (OCR)">
+            Ultima citire facturi: <strong><?= e($whenLabel($ocrRun['rulat_la'] ?? null)) ?></strong>
+            <?php if ($ocrRun !== null): ?>
+                · <?= (int) ($ocrRun['citite'] ?? 0) ?> citite
+            <?php endif; ?>
+        </span>
+        <?php if ($scanStatus['in_procesare'] > 0): ?>
+            <a class="text-decoration-none" href="<?= e(build_query_url(['page' => 'facturi', 'status' => 'in_procesare'])) ?>">
+                <i class="bi bi-hourglass-split" aria-hidden="true"></i> <?= (int) $scanStatus['in_procesare'] ?> în procesare
+            </a>
+        <?php endif; ?>
+        <?php if ($fetchErrors > 0 || $ocrFailures > 0): ?>
+            <span class="text-danger-emphasis" title="<?= e(implode(' | ', array_merge((array) ($fetch['erori'] ?? []), (array) ($ocrRun['erori'] ?? [])))) ?>">
+                <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> <?= $fetchErrors + $ocrFailures ?> erori la ultima rulare
+            </span>
+        <?php endif; ?>
+        <a class="ms-auto text-decoration-none" href="<?= e(build_query_url(['page' => 'facturi', 'sursa' => 'scan'])) ?>">Vezi doar scanările</a>
+    </div>
+<?php endif; ?>
 
 <div class="row g-3 mb-3">
     <div class="col-6 col-lg-3">
@@ -152,7 +212,16 @@ require __DIR__ . '/_status.php';
                 <label class="form-label small mb-1" for="facturiPana">Până la</label>
                 <input type="date" class="form-control form-control-sm" id="facturiPana" name="data_end" value="<?= e((string) ($filters['data_end'] ?? '')) ?>">
             </div>
-            <div class="col-6 col-lg-2">
+            <div class="col-6 col-lg-1">
+                <label class="form-label small mb-1" for="facturiSursa">Sursă</label>
+                <select class="form-select form-select-sm" id="facturiSursa" name="sursa">
+                    <option value="">Toate</option>
+                    <?php foreach (InvoiceModel::SOURCES as $sourceKey => $sourceLabel): ?>
+                        <option value="<?= e($sourceKey) ?>" <?= (string) ($filters['sursa'] ?? '') === $sourceKey ? 'selected' : '' ?>><?= e($sourceLabel) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="col-6 col-lg-1">
                 <label class="form-label small mb-1" for="facturiVehicul">Vehicul</label>
                 <select class="form-select form-select-sm" id="facturiVehicul" name="vehicle_id">
                     <option value="">Toate</option>
@@ -213,8 +282,27 @@ require __DIR__ . '/_status.php';
                 $status = (string) $row['status'];
                 ?>
                 <tr class="facturi-row" data-href="<?= e($viewUrl) ?>">
-                    <td class="fw-semibold text-nowrap"><?= $row['data_document'] !== null ? e(format_date_ro((string) $row['data_document'])) : '<span class="text-secondary">—</span>' ?></td>
-                    <td><?= e(InvoiceModel::TYPES[(string) $row['tip']]['label'] ?? (string) $row['tip']) ?></td>
+                    <?php [$iconClass, $iconTitle] = $sourceIcon[(string) $row['sursa']] ?? ['bi-file-earmark', '']; ?>
+                    <td class="fw-semibold text-nowrap">
+                        <i class="bi <?= e($iconClass) ?> text-secondary me-1" title="<?= e($iconTitle) ?>" aria-label="<?= e($iconTitle) ?>"></i>
+                        <?php if ($row['data_document'] !== null): ?>
+                            <?= e(format_date_ro((string) $row['data_document'])) ?>
+                        <?php elseif ($status === 'in_procesare' && $row['email_primit_la'] !== null): ?>
+                            <span class="fw-normal text-secondary" title="Primită pe email"><?= e($whenLabel((string) $row['email_primit_la'])) ?></span>
+                        <?php else: ?>
+                            <span class="text-secondary">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <?php if ($status === 'in_procesare'): ?>
+                            <span class="text-secondary"><span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>se citește…</span>
+                        <?php else: ?>
+                            <?= e(InvoiceModel::TYPES[(string) $row['tip']]['label'] ?? (string) $row['tip']) ?>
+                            <?php if (!empty($row['document_pagini']) && (string) $row['sursa'] === 'scan'): ?>
+                                <div class="small text-secondary">pag. <?= e((string) $row['document_pagini']) ?></div>
+                            <?php endif; ?>
+                        <?php endif; ?>
+                    </td>
                     <td><?= e(mb_strimwidth(trim((string) ($row['furnizor'] ?? '')) ?: '—', 0, 40, '…')) ?></td>
                     <td class="text-nowrap"><?= e(trim((string) ($row['numar_document'] ?? '')) ?: '—') ?></td>
                     <td class="text-end fw-semibold text-nowrap"><?= e($money($row['valoare_cu_tva'], (string) $row['moneda'])) ?></td>

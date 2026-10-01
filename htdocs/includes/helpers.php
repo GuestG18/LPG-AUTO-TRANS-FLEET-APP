@@ -266,6 +266,35 @@ function format_number_ro(mixed $value, int $decimals = 2): string
     return number_format((float) $value, $decimals, ',', '.');
 }
 
+/**
+ * Tarif unitar (lei/km, lei/tonă …): minim 2 zecimale, până la 4 fără zerouri inutile
+ * — 1,24 rămâne 1,24, iar 1,239 nu mai e rotunjit la 1,24.
+ */
+function format_rate_ro(mixed $value, int $maxDecimals = 4): string
+{
+    if ($value === null || $value === '') {
+        return '-';
+    }
+
+    $formatted = number_format((float) $value, $maxDecimals, ',', '.');
+    if ($maxDecimals > 2) {
+        $formatted = preg_replace('/(,\d{2}\d*?)0+$/', '$1', $formatted) ?? $formatted;
+    }
+
+    return $formatted;
+}
+
+/** Valoare de tarif pentru câmpuri de formular: punct zecimal, 2–4 zecimale. */
+function format_rate_input(mixed $value, int $maxDecimals = 4): string
+{
+    $formatted = number_format((float) $value, $maxDecimals, '.', '');
+    if ($maxDecimals > 2) {
+        $formatted = preg_replace('/(\.\d{2}\d*?)0+$/', '$1', $formatted) ?? $formatted;
+    }
+
+    return $formatted;
+}
+
 function format_year_ro(mixed $value): string
 {
     if ($value === null || $value === '') {

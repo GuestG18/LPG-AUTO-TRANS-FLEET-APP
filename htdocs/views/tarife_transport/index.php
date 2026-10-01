@@ -78,7 +78,7 @@ $reviewFor = static function (?array $version) use ($reviews): ?array {
 };
 
 $money = static fn (?float $value, int $decimals = 2): string
-    => $value === null ? '—' : format_number_ro($value, $decimals);
+    => $value === null ? '—' : ($decimals === 2 ? format_rate_ro($value) : format_number_ro($value, $decimals));
 
 $dateRo = static function (?string $date): string {
     if ($date === null || $date === '') {

@@ -1834,6 +1834,10 @@ class DispecerCurseModel extends BaseModel
             return;
         }
 
+        if (class_exists('TransportTariffModel')) {
+            TransportTariffModel::ensureRatePrecision($this->db);
+        }
+
         $sql = "
             CREATE TABLE IF NOT EXISTS configurare_rute_distributie (
                 id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1842,10 +1846,10 @@ class DispecerCurseModel extends BaseModel
                 zona_distributie_id INT UNSIGNED NOT NULL,
                 transport_scope ENUM('distributie', 'primar_distributie') NOT NULL DEFAULT 'primar_distributie',
                 tarif_mod ENUM('tona_km', 'tona', 'km') NOT NULL DEFAULT 'tona_km',
-                tarif_tona DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-                cost_extra_km DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+                tarif_tona DECIMAL(12,4) NOT NULL DEFAULT 0.0000,
+                cost_extra_km DECIMAL(12,4) NOT NULL DEFAULT 0.0000,
                 km_tarifare INT UNSIGNED NOT NULL DEFAULT 0,
-                cost_cursa DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                cost_cursa DECIMAL(14,4) NOT NULL DEFAULT 0.0000,
                 aplica_cost_cursa TINYINT(1) NOT NULL DEFAULT 0,
                 vehicle_ids TEXT NULL,
                 activ TINYINT(1) NOT NULL DEFAULT 1,
@@ -1944,7 +1948,7 @@ class DispecerCurseModel extends BaseModel
         $rideCostColumnCheckStmt->execute();
         $hasRideCostColumn = (int) $rideCostColumnCheckStmt->fetchColumn() > 0;
         if (!$hasRideCostColumn) {
-            $this->db->exec("ALTER TABLE configurare_rute_distributie ADD COLUMN cost_cursa DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER km_tarifare");
+            $this->db->exec("ALTER TABLE configurare_rute_distributie ADD COLUMN cost_cursa DECIMAL(14,4) NOT NULL DEFAULT 0.0000 AFTER km_tarifare");
         }
         $applyRideCostColumnCheckStmt = $this->db->prepare("
             SELECT COUNT(*)
@@ -2052,7 +2056,7 @@ class DispecerCurseModel extends BaseModel
                 loc_incarcare_id INT UNSIGNED NOT NULL,
                 zona_distributie_id INT UNSIGNED NOT NULL,
                 km_tarifare INT UNSIGNED NOT NULL DEFAULT 0,
-                cost_cursa DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+                cost_cursa DECIMAL(14,4) NOT NULL DEFAULT 0.0000,
                 aplica_cost_cursa TINYINT(1) NOT NULL DEFAULT 0,
                 vehicle_ids TEXT NULL,
                 km_agreati_manual TINYINT(1) NOT NULL DEFAULT 0,
@@ -2102,7 +2106,7 @@ class DispecerCurseModel extends BaseModel
         ");
         $rideCostColumnCheckStmt->execute();
         if ((int) $rideCostColumnCheckStmt->fetchColumn() === 0) {
-            $this->db->exec("ALTER TABLE configurare_rute_primar ADD COLUMN cost_cursa DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER km_tarifare");
+            $this->db->exec("ALTER TABLE configurare_rute_primar ADD COLUMN cost_cursa DECIMAL(14,4) NOT NULL DEFAULT 0.0000 AFTER km_tarifare");
         }
         $applyRideCostColumnCheckStmt = $this->db->prepare("
             SELECT COUNT(*)
@@ -2872,6 +2876,10 @@ class DispecerCurseModel extends BaseModel
     {
         if ($this->transportBeneficiaryColumnsEnsured) {
             return;
+        }
+
+        if (class_exists('TransportTariffModel')) {
+            TransportTariffModel::ensureRatePrecision($this->db);
         }
 
         $columnCheckStmt = $this->db->prepare("

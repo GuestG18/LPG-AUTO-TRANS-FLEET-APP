@@ -15,6 +15,13 @@ $canLink = (bool) ($canLink ?? false);
 $canDelete = (bool) ($canDelete ?? false);
 $canReject = (bool) ($canReject ?? false);
 $legacyDocuments = is_array($legacyDocuments ?? null) ? $legacyDocuments : [];
+$ocrDetails = is_array($ocrDetails ?? null) ? $ocrDetails : null;
+$scanSiblings = is_array($scanSiblings ?? null) ? $scanSiblings : [];
+$isScan = (string) ($invoice['sursa'] ?? '') === 'scan';
+
+// Scanare cu mai multe documente: preview-ul se deschide la prima pagina a acestei facturi.
+$firstPage = preg_match('/^\s*(\d+)/', (string) ($invoice['document_pagini'] ?? ''), $pageMatch) === 1 ? (int) $pageMatch[1] : 0;
+$previewUrl = $documentUrl . ($firstPage > 1 ? '#page=' . $firstPage : '');
 
 $id = (int) $invoice['id'];
 $status = (string) $invoice['status'];
@@ -77,6 +84,35 @@ require __DIR__ . '/_status.php';
     </div>
 <?php endif; ?>
 
+<?php if ($isScan): ?>
+    <div class="alert alert-light small d-flex flex-wrap gap-3 align-items-center py-2">
+        <span><i class="bi bi-envelope-paper" aria-hidden="true"></i> Scanare primită pe email
+            <?= $invoice['email_primit_la'] !== null ? 'la <strong>' . e(date('d.m.Y H:i', strtotime((string) $invoice['email_primit_la']))) . '</strong>' : '' ?></span>
+        <?php if (trim((string) ($invoice['email_subiect'] ?? '')) !== ''): ?>
+            <span>Subiect: <strong><?= e((string) $invoice['email_subiect']) ?></strong>
+                <?php $subjectType = InvoiceModel::typeFromSubject((string) $invoice['email_subiect']); ?>
+                <?php if ($subjectType !== null): ?>
+                    <span class="badge bg-info-subtle text-info-emphasis" title="Categoria a fost aleasă după subiectul emailului">→ <?= e(InvoiceModel::TYPES[$subjectType]['label']) ?></span>
+                <?php endif; ?>
+            </span>
+        <?php endif; ?>
+        <?php if (!empty($invoice['document_pagini'])): ?>
+            <span>Pagini în scanare: <strong><?= e((string) $invoice['document_pagini']) ?></strong></span>
+        <?php endif; ?>
+        <?php if ($scanSiblings !== []): ?>
+            <span>Din aceeași scanare:
+                <?php foreach ($scanSiblings as $sibling): ?>
+                    <a class="ms-1" href="<?= e(build_query_url(['page' => 'facturi', 'action' => 'view', 'id' => (int) $sibling['id']])) ?>"
+                       title="<?= e(InvoiceModel::TYPES[(string) $sibling['tip']]['label'] ?? '') ?> · <?= e((string) ($sibling['furnizor'] ?? '')) ?>">#<?= (int) $sibling['id'] ?><?= !empty($sibling['document_pagini']) ? ' (p. ' . e((string) $sibling['document_pagini']) . ')' : '' ?></a>
+                <?php endforeach; ?>
+            </span>
+        <?php endif; ?>
+        <?php if ($status === 'in_procesare'): ?>
+            <span class="text-info-emphasis"><span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Se citește automat (în câteva minute). Reîncarcă pagina.</span>
+        <?php endif; ?>
+    </div>
+<?php endif; ?>
+
 <div class="row g-3">
     <div class="col-12 col-xl-7">
         <div class="card facturi-preview-card">
@@ -93,7 +129,7 @@ require __DIR__ . '/_status.php';
             <?php elseif ($isImage): ?>
                 <div class="facturi-preview facturi-preview-image"><img src="<?= e($documentUrl) ?>" alt="Factura #<?= $id ?>"></div>
             <?php else: ?>
-                <iframe class="facturi-preview" src="<?= e($documentUrl) ?>" title="Factura #<?= $id ?>"></iframe>
+                <iframe class="facturi-preview" src="<?= e($previewUrl) ?>" title="Factura #<?= $id ?>"></iframe>
             <?php endif; ?>
         </div>
     </div>
@@ -125,7 +161,13 @@ require __DIR__ . '/_status.php';
 
                 <?php if (trim((string) ($invoice['match_reason'] ?? '')) !== ''): ?>
                     <div class="small mt-2 <?= $isAssociated ? 'text-secondary' : 'text-warning-emphasis' ?>">
-                        <i class="bi bi-info-circle" aria-hidden="true"></i> <?= e((string) $invoice['match_reason']) ?>
+                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                        <?php // "duplicat al facturii #23" devine link catre factura respectiva (textul e escapat inainte). ?>
+                        <?= preg_replace_callback(
+                            '/facturii #(\d+)/',
+                            static fn(array $m): string => 'facturii <a href="' . e(build_query_url(['page' => 'facturi', 'action' => 'view', 'id' => (int) $m[1]])) . '">#' . (int) $m[1] . '</a>',
+                            e((string) $invoice['match_reason'])
+                        ) ?>
                     </div>
                 <?php endif; ?>
 
@@ -229,6 +271,51 @@ require __DIR__ . '/_status.php';
                 </form>
             </div>
         </div>
+
+        <?php if ($ocrDetails !== null): ?>
+            <?php
+            $read = is_array($ocrDetails['citit'] ?? null) ? $ocrDetails['citit'] : [];
+            $readLabels = [
+                'tip' => 'Tip', 'furnizor' => 'Furnizor', 'cui_furnizor' => 'CUI furnizor', 'numar_document' => 'Nr. document',
+                'data_document' => 'Data', 'valoare_fara_tva' => 'Fără TVA', 'valoare_cu_tva' => 'Cu TVA', 'moneda' => 'Moneda',
+                'nr_inmatriculare' => 'Nr. auto', 'sofer' => 'Șofer', 'pagini' => 'Pagini', 'incredere' => 'Încredere', 'observatii' => 'Observații',
+            ];
+            $confidence = (string) ($read['incredere'] ?? '');
+            $usage = is_array($ocrDetails['usage'] ?? null) ? $ocrDetails['usage'] : [];
+            ?>
+            <div class="card mt-3">
+                <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                    <button class="btn btn-link p-0 fw-semibold text-decoration-none text-body" type="button" data-bs-toggle="collapse" data-bs-target="#facturaOcrPanel" aria-expanded="false">
+                        <i class="bi bi-magic" aria-hidden="true"></i> Date citite automat
+                    </button>
+                    <?php if ($confidence !== ''): ?>
+                        <span class="badge <?= $confidence === 'mare' ? 'bg-success-subtle text-success-emphasis' : ($confidence === 'medie' ? 'bg-warning-subtle text-warning-emphasis' : 'bg-danger-subtle text-danger-emphasis') ?>">încredere <?= e($confidence) ?></span>
+                    <?php endif; ?>
+                </div>
+                <div class="collapse" id="facturaOcrPanel">
+                    <div class="card-body small">
+                        <?php if ($read === []): ?>
+                            <p class="text-secondary mb-2">Citirea nu a găsit nicio factură sau bon în scanare.</p>
+                        <?php else: ?>
+                            <p class="text-secondary mb-2">Valorile de mai jos sunt cele citite inițial; cele din „Datele facturii” pot fi corectate de operator.</p>
+                            <dl class="row mb-2 facturi-ocr-values">
+                                <?php foreach ($readLabels as $key => $label): ?>
+                                    <?php $value = $read[$key] ?? null; ?>
+                                    <dt class="col-5 text-secondary fw-normal"><?= e($label) ?></dt>
+                                    <dd class="col-7 mb-1"><?= $value === null || $value === '' ? '<span class="text-secondary">—</span>' : e($key === 'tip' ? (InvoiceModel::TYPES[(string) $value]['label'] ?? (string) $value) : (string) $value) ?></dd>
+                                <?php endforeach; ?>
+                            </dl>
+                        <?php endif; ?>
+                        <div class="text-secondary">
+                            Model: <?= e((string) ($ocrDetails['model'] ?? '—')) ?>
+                            <?= !empty($ocrDetails['citit_la']) ? ' · citit ' . e(date('d.m.Y H:i', strtotime((string) $ocrDetails['citit_la']))) : '' ?>
+                            <?= (int) ($ocrDetails['documente'] ?? 0) > 1 ? ' · ' . (int) $ocrDetails['documente'] . ' documente în scanare' : '' ?>
+                            <?= $usage !== [] ? ' · tokeni: ' . (int) ($usage['input_tokens'] ?? 0) . ' / ' . (int) ($usage['output_tokens'] ?? 0) : '' ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        <?php endif; ?>
     </div>
 </div>
 

@@ -20,6 +20,65 @@ class TransportTariffModel extends BaseModel
     /** Sentinel used by the migration for tariffs with no evidenced start date. */
     public const MIGRATION_BASELINE = '2000-01-01';
 
+    /**
+     * Coloanele de tarif unitar din Configurare transport. Erau DECIMAL(x,2), deci
+     * 1,239 lei/km se rotunjea la 1,24 — acum păstrează 4 zecimale, ca
+     * transport_tariff_versions.value.
+     */
+    public const RATE_PRECISION_COLUMNS = [
+        'configurare_beneficiari_transport' => [
+            'pret_tarifare' => 14, 'pret_km' => 14, 'pret_tona' => 14,
+            'pret_distributie_km' => 14, 'pret_distributie_tona' => 14,
+            'pret_ora_aspirare' => 14, 'pret_km_dislocare' => 14, 'pret_tona_livrata' => 14,
+            'pret_tona_aspirata_lichida' => 14, 'pret_tona_aspirata_gazoasa' => 14,
+        ],
+        'configurare_rute_distributie' => ['tarif_tona' => 12, 'cost_extra_km' => 12, 'cost_cursa' => 14],
+        'configurare_rute_primar' => ['cost_cursa' => 14],
+        'configurare_zone_distributie' => ['tarif_distributie' => 12, 'cost_extra_km' => 12],
+        'configurare_locuri_incarcare' => ['tarif' => 12],
+    ];
+
+    private static bool $ratePrecisionEnsured = false;
+
+    /** Lărgește la 4 zecimale coloanele de tarif care încă au mai puține (idempotent). */
+    public static function ensureRatePrecision(PDO $db): void
+    {
+        if (self::$ratePrecisionEnsured) {
+            return;
+        }
+        self::$ratePrecisionEnsured = true;
+
+        try {
+            $stmt = $db->query("
+                SELECT TABLE_NAME, COLUMN_NAME, NUMERIC_SCALE, IS_NULLABLE, COLUMN_DEFAULT
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME IN ('" . implode("', '", array_keys(self::RATE_PRECISION_COLUMNS)) . "')
+                  AND DATA_TYPE = 'decimal'
+                  AND NUMERIC_SCALE < 4
+            ");
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $column) {
+                $table = (string) $column['TABLE_NAME'];
+                $name = (string) $column['COLUMN_NAME'];
+                $precision = self::RATE_PRECISION_COLUMNS[$table][$name] ?? null;
+                if ($precision === null) {
+                    continue;
+                }
+                $nullable = (string) $column['IS_NULLABLE'] === 'YES';
+                $default = $column['COLUMN_DEFAULT'];
+                $definition = 'DECIMAL(' . $precision . ',4) ' . ($nullable ? 'NULL' : 'NOT NULL');
+                if ($default !== null) {
+                    $definition .= ' DEFAULT ' . number_format((float) $default, 4, '.', '');
+                } elseif ($nullable) {
+                    $definition .= ' DEFAULT NULL';
+                }
+                $db->exec('ALTER TABLE `' . $table . '` MODIFY `' . $name . '` ' . $definition);
+            }
+        } catch (Throwable $e) {
+            error_log('TransportTariffModel::ensureRatePrecision: ' . $e->getMessage());
+        }
+    }
+
     public const TRANSPORT_TYPES = [
         'primar' => 'Primar km',
         'primar_tona' => 'Primar tone',
@@ -880,7 +939,7 @@ class TransportTariffModel extends BaseModel
                     WHERE id = :id AND beneficiar_id = :b
                 ');
                 $update->execute([
-                    'v' => number_format($value, 2, '.', ''),
+                    'v' => number_format($value, 4, '.', ''),
                     'ua' => date('Y-m-d H:i:s'),
                     'id' => $routeRefId,
                     'b' => $beneficiaryId,
@@ -894,7 +953,7 @@ class TransportTariffModel extends BaseModel
             $params = ['b' => $beneficiaryId, 'ua' => date('Y-m-d H:i:s')];
             foreach ($beneficiarySet as $column => $value) {
                 $assignments[] = $column . ' = :v_' . $column;
-                $params['v_' . $column] = number_format($value, 2, '.', '');
+                $params['v_' . $column] = number_format($value, 4, '.', '');
             }
             $update = $this->db->prepare('
                 UPDATE configurare_beneficiari_transport

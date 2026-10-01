@@ -4412,21 +4412,21 @@ class DispecerCurseController
                 $defaultBeneficiaryForm = array_merge($defaultBeneficiaryForm, [
                     'id' => (string) ((int) ($editBeneficiary['id'] ?? 0)),
                     'nume' => (string) ($editBeneficiary['nume'] ?? ''),
-                    'pret_tarifare' => number_format((float) ($editBeneficiary['pret_tarifare'] ?? 0), 2, '.', ''),
+                    'pret_tarifare' => format_rate_input($editBeneficiary['pret_tarifare'] ?? 0),
                     'tip_transporturi' => $selectedTransportTypes,
                     'suporta_primar' => !empty($editBeneficiary['suporta_primar']) ? '1' : '0',
                     'suporta_distributie' => !empty($editBeneficiary['suporta_distributie']) ? '1' : '0',
                     'suporta_primar_distributie' => !empty($editBeneficiary['suporta_primar_distributie']) ? '1' : '0',
                     'suporta_compresor' => !empty($editBeneficiary['suporta_compresor']) ? '1' : '0',
-                    'pret_km' => number_format((float) ($editBeneficiary['pret_km'] ?? 0), 2, '.', ''),
-                    'pret_tona' => number_format((float) ($editBeneficiary['pret_tona'] ?? 0), 2, '.', ''),
-                    'pret_distributie_km' => number_format((float) ($editBeneficiary['pret_distributie_km'] ?? 0), 2, '.', ''),
-                    'pret_distributie_tona' => number_format((float) ($editBeneficiary['pret_distributie_tona'] ?? 0), 2, '.', ''),
-                    'pret_ora_aspirare' => number_format((float) ($editBeneficiary['pret_ora_aspirare'] ?? 0), 2, '.', ''),
-                    'pret_km_dislocare' => number_format((float) ($editBeneficiary['pret_km_dislocare'] ?? 0), 2, '.', ''),
-                    'pret_tona_livrata' => number_format((float) ($editBeneficiary['pret_tona_livrata'] ?? 0), 2, '.', ''),
-                    'pret_tona_aspirata_lichida' => number_format((float) ($editBeneficiary['pret_tona_aspirata_lichida'] ?? 0), 2, '.', ''),
-                    'pret_tona_aspirata_gazoasa' => number_format((float) ($editBeneficiary['pret_tona_aspirata_gazoasa'] ?? 0), 2, '.', ''),
+                    'pret_km' => format_rate_input($editBeneficiary['pret_km'] ?? 0),
+                    'pret_tona' => format_rate_input($editBeneficiary['pret_tona'] ?? 0),
+                    'pret_distributie_km' => format_rate_input($editBeneficiary['pret_distributie_km'] ?? 0),
+                    'pret_distributie_tona' => format_rate_input($editBeneficiary['pret_distributie_tona'] ?? 0),
+                    'pret_ora_aspirare' => format_rate_input($editBeneficiary['pret_ora_aspirare'] ?? 0),
+                    'pret_km_dislocare' => format_rate_input($editBeneficiary['pret_km_dislocare'] ?? 0),
+                    'pret_tona_livrata' => format_rate_input($editBeneficiary['pret_tona_livrata'] ?? 0),
+                    'pret_tona_aspirata_lichida' => format_rate_input($editBeneficiary['pret_tona_aspirata_lichida'] ?? 0),
+                    'pret_tona_aspirata_gazoasa' => format_rate_input($editBeneficiary['pret_tona_aspirata_gazoasa'] ?? 0),
                     'compresor_vehicle_ids' => array_values(array_unique(array_map('strval', $compressorVehicleIds))),
                     'activ' => !empty($editBeneficiary['activ']) ? '1' : '0',
                 ]);
@@ -4560,7 +4560,7 @@ class DispecerCurseController
                 'id' => (string) $locationIdForEdit,
                 'beneficiar_id' => (string) ((int) ($editLocation['beneficiar_id'] ?? $distributionBeneficiaryId)),
                 'nume' => (string) ($editLocation['nume'] ?? ''),
-                'tarif' => number_format((float) ($editLocation['tarif'] ?? 0), 2, '.', ''),
+                'tarif' => format_rate_input($editLocation['tarif'] ?? 0),
                 'vehicle_ids' => array_values(array_unique($mappedVehicleIds)),
                 'activ' => !empty($editLocation['activ']) ? '1' : '0',
             ]);
@@ -4593,8 +4593,8 @@ class DispecerCurseController
                 'id' => (string) $zoneIdForEdit,
                 'beneficiar_id' => (string) ((int) ($editZone['beneficiar_id'] ?? $distributionBeneficiaryId)),
                 'nume' => (string) ($editZone['nume'] ?? ''),
-                'tarif_distributie' => number_format((float) ($editZone['tarif_distributie'] ?? 0), 2, '.', ''),
-                'cost_extra_km' => number_format((float) ($editZone['cost_extra_km'] ?? 0), 2, '.', ''),
+                'tarif_distributie' => format_rate_input($editZone['tarif_distributie'] ?? 0),
+                'cost_extra_km' => format_rate_input($editZone['cost_extra_km'] ?? 0),
                 'vehicle_ids' => array_values(array_unique($mappedVehicleIds)),
                 'activ' => !empty($editZone['activ']) ? '1' : '0',
             ]);
@@ -4608,8 +4608,8 @@ class DispecerCurseController
                 false
             );
             if ($routeRule !== null) {
-                $defaultZoneForm['ruta_tarif_tona'] = number_format((float) ($routeRule['tarif_tona'] ?? 0), 2, '.', '');
-                $defaultZoneForm['ruta_cost_extra_km'] = number_format((float) ($routeRule['cost_extra_km'] ?? 0), 2, '.', '');
+                $defaultZoneForm['ruta_tarif_tona'] = format_rate_input($routeRule['tarif_tona'] ?? 0);
+                $defaultZoneForm['ruta_cost_extra_km'] = format_rate_input($routeRule['cost_extra_km'] ?? 0);
                 $defaultZoneForm['ruta_km_tarifare'] = (string) ((int) max(0, (int) ($routeRule['km_tarifare'] ?? 0)));
             }
 
@@ -4668,10 +4668,10 @@ class DispecerCurseController
                 );
                 if ($prefillRouteRule !== null) {
                     $defaultForm['tarif_mod'] = $this->normalizeDistributionRouteTariffModeInput((string) ($prefillRouteRule['tarif_mod'] ?? ''));
-                    $defaultForm['tarif_tona'] = number_format((float) ($prefillRouteRule['tarif_tona'] ?? 0), 2, '.', '');
-                    $defaultForm['cost_extra_km'] = number_format((float) ($prefillRouteRule['cost_extra_km'] ?? 0), 2, '.', '');
+                    $defaultForm['tarif_tona'] = format_rate_input($prefillRouteRule['tarif_tona'] ?? 0);
+                    $defaultForm['cost_extra_km'] = format_rate_input($prefillRouteRule['cost_extra_km'] ?? 0);
                     $defaultForm['km_tarifare'] = (string) ((int) max(0, (int) ($prefillRouteRule['km_tarifare'] ?? 0)));
-                    $defaultForm['cost_cursa'] = number_format((float) ($prefillRouteRule['cost_cursa'] ?? 0), 2, '.', '');
+                    $defaultForm['cost_cursa'] = format_rate_input($prefillRouteRule['cost_cursa'] ?? 0);
                     $defaultForm['aplica_cost_cursa'] = !empty($prefillRouteRule['aplica_cost_cursa']) ? '1' : '0';
                     $routeVehicleIdsRaw = trim((string) ($prefillRouteRule['vehicle_ids'] ?? ''));
                     if ($routeVehicleIdsRaw !== '') {
@@ -4703,10 +4703,10 @@ class DispecerCurseController
                     $defaultForm['loc_id'] = (string) ((int) ($routeEditRule['loc_incarcare_id'] ?? 0));
                     $defaultForm['zona_id'] = (string) ((int) ($routeEditRule['zona_distributie_id'] ?? 0));
                     $defaultForm['tarif_mod'] = $this->normalizeDistributionRouteTariffModeInput((string) ($routeEditRule['tarif_mod'] ?? ''));
-                    $defaultForm['tarif_tona'] = number_format((float) ($routeEditRule['tarif_tona'] ?? 0), 2, '.', '');
-                    $defaultForm['cost_extra_km'] = number_format((float) ($routeEditRule['cost_extra_km'] ?? 0), 2, '.', '');
+                    $defaultForm['tarif_tona'] = format_rate_input($routeEditRule['tarif_tona'] ?? 0);
+                    $defaultForm['cost_extra_km'] = format_rate_input($routeEditRule['cost_extra_km'] ?? 0);
                     $defaultForm['km_tarifare'] = (string) ((int) max(0, (int) ($routeEditRule['km_tarifare'] ?? 0)));
-                    $defaultForm['cost_cursa'] = number_format((float) ($routeEditRule['cost_cursa'] ?? 0), 2, '.', '');
+                    $defaultForm['cost_cursa'] = format_rate_input($routeEditRule['cost_cursa'] ?? 0);
                     $defaultForm['aplica_cost_cursa'] = !empty($routeEditRule['aplica_cost_cursa']) ? '1' : '0';
                     $defaultForm['activ'] = !empty($routeEditRule['activ']) ? '1' : '0';
                     $defaultForm['route_scope'] = $routeScope;
@@ -4790,7 +4790,7 @@ class DispecerCurseController
                     'km_tarifare' => !empty($primaryRouteEditRule['km_agreati_manual'])
                         ? ''
                         : (string) ((int) ($primaryRouteEditRule['km_tarifare'] ?? 0)),
-                    'cost_cursa' => number_format((float) ($primaryRouteEditRule['cost_cursa'] ?? 0), 2, '.', ''),
+                    'cost_cursa' => format_rate_input($primaryRouteEditRule['cost_cursa'] ?? 0),
                     'aplica_cost_cursa' => !empty($primaryRouteEditRule['aplica_cost_cursa']) ? '1' : '0',
                     'vehicle_ids' => array_map(
                         'strval',

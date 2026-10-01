@@ -137,9 +137,10 @@
             if (value === null || value === undefined || isNaN(value)) {
                 return '—';
             }
+            // 2 zecimale = tarif unitar: minim 2, până la 4 (1,239 nu se rotunjește la 1,24).
             return Number(value).toLocaleString('ro-RO', {
                 minimumFractionDigits: decimals,
-                maximumFractionDigits: decimals
+                maximumFractionDigits: decimals === 2 ? 4 : decimals
             });
         }
 
@@ -537,7 +538,7 @@
         }
         return Number(value).toLocaleString('ro-RO', {
             minimumFractionDigits: 2,
-            maximumFractionDigits: 2
+            maximumFractionDigits: 4
         });
     };
 

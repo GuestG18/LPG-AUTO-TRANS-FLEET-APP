@@ -154,11 +154,22 @@ class InvoiceModel extends BaseModel
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE()
               AND TABLE_NAME = 'facturi'
-              AND COLUMN_NAME IN ('fara_asociere_auto')
         ")->fetchAll(PDO::FETCH_COLUMN) ?: [];
 
-        if (!in_array('fara_asociere_auto', $columns, true)) {
-            $this->db->exec('ALTER TABLE facturi ADD COLUMN fara_asociere_auto TINYINT(1) NOT NULL DEFAULT 0 AFTER match_reason');
+        // Doar aditiv, pe tabela modulului. Ordinea conteaza: AFTER trimite la coloane deja create.
+        $missing = [
+            'fara_asociere_auto' => 'ADD COLUMN fara_asociere_auto TINYINT(1) NOT NULL DEFAULT 0 AFTER match_reason',
+            // Facturile scanate (email -> OCR)
+            'document_pagini' => 'ADD COLUMN document_pagini VARCHAR(20) NULL AFTER document_sha256',
+            'ocr_incercari' => 'ADD COLUMN ocr_incercari TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER ocr_raw',
+            'email_message_id' => 'ADD COLUMN email_message_id VARCHAR(255) NULL AFTER ocr_incercari',
+            'email_subiect' => 'ADD COLUMN email_subiect VARCHAR(255) NULL AFTER email_message_id',
+            'email_primit_la' => 'ADD COLUMN email_primit_la DATETIME NULL AFTER email_subiect',
+        ];
+        foreach ($missing as $column => $ddl) {
+            if (!in_array($column, $columns, true)) {
+                $this->db->exec('ALTER TABLE facturi ' . $ddl);
+            }
         }
     }
 
@@ -183,6 +194,50 @@ class InvoiceModel extends BaseModel
     public static function isValidType(string $type): bool
     {
         return isset(self::TYPES[$type]);
+    }
+
+    /**
+     * Cuvintele (normalizate: litere mici, fara diacritice) dupa care subiectul emailului
+     * scris de operator pe scanner alege tipul facturii.
+     */
+    private const SUBJECT_KEYWORDS = [
+        'cazare' => ['cazare', 'cazari', 'hotel', 'hoteluri', 'pensiune', 'pensiuni', 'motel'],
+        'diurna' => ['diurna', 'diurne'],
+        'trece' => ['trecere', 'treceri', 'trece', 'pod', 'poduri', 'bac'],
+        'taxa_acces' => ['taxa acces', 'taxe acces', 'taxa de acces', 'taxe de acces', 'acces'],
+        'port' => ['port', 'porturi', 'taxa port', 'taxe port', 'taxe portuare'],
+        'service' => ['reparatii', 'reparatie', 'service', 'piese', 'revizie', 'revizii'],
+        'spalatorie' => ['spalatorie', 'spalatorii', 'spalare', 'spalari'],
+        'vulcanizare' => ['vulcanizare', 'vulcanizari', 'anvelope', 'cauciucuri'],
+        'alte' => ['alte', 'alte cheltuieli', 'altele', 'diverse'],
+    ];
+
+    /**
+     * Tipul ales de operator prin subiectul emailului ("cazari", "Vulcanizare", "hotel"...),
+     * sau null daca subiectul nu numeste exact un tip (atunci decide citirea automata).
+     */
+    public static function typeFromSubject(?string $subject): ?string
+    {
+        $text = mb_strtolower(trim((string) $subject));
+        if ($text === '' || str_starts_with($text, 'send data from')) {
+            return null;
+        }
+        $ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text);
+        if ($ascii !== false) {
+            $text = $ascii;
+        }
+        $text = ' ' . trim(preg_replace('/[^a-z]+/', ' ', $text) ?? '') . ' ';
+
+        $found = [];
+        foreach (self::SUBJECT_KEYWORDS as $type => $words) {
+            foreach ($words as $word) {
+                if (str_contains($text, ' ' . $word . ' ')) {
+                    $found[$type] = true;
+                    break;
+                }
+            }
+        }
+        return count($found) === 1 ? (string) array_key_first($found) : null;
     }
 
     /** tip_cheltuiala (ENUM legacy) pentru randul din curse_cheltuieli. */
@@ -247,6 +302,10 @@ class InvoiceModel extends BaseModel
         'ocr_raw' => PDO::PARAM_STR,
         'observatii' => PDO::PARAM_STR,
         'created_by' => PDO::PARAM_INT,
+        'document_pagini' => PDO::PARAM_STR,
+        'email_message_id' => PDO::PARAM_STR,
+        'email_subiect' => PDO::PARAM_STR,
+        'email_primit_la' => PDO::PARAM_STR,
     ];
 
     /**
@@ -585,6 +644,10 @@ class InvoiceModel extends BaseModel
                 $params[':status'] = [(string) $filters['status'], PDO::PARAM_STR];
             }
         }
+        if (!empty($filters['sursa']) && isset(self::SOURCES[(string) $filters['sursa']])) {
+            $conditions[] = 'f.sursa = :sursa';
+            $params[':sursa'] = [(string) $filters['sursa'], PDO::PARAM_STR];
+        }
         if (!empty($filters['data_start'])) {
             $conditions[] = 'f.data_document >= :data_start';
             $params[':data_start'] = [(string) $filters['data_start'], PDO::PARAM_STR];
@@ -619,6 +682,60 @@ class InvoiceModel extends BaseModel
         foreach ($params as $placeholder => [$value, $type]) {
             $stmt->bindValue($placeholder, $value, $type);
         }
+    }
+
+    /**
+     * Celelalte facturi citite din aceeasi scanare (acelasi fisier), in ordinea documentelor.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getScanSiblings(array $row): array
+    {
+        if ((string) $row['sursa'] !== 'scan' || empty($row['document_sha256'])) {
+            return [];
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT id, tip, status, furnizor, valoare_cu_tva, moneda, document_pagini
+            FROM facturi
+            WHERE sursa = 'scan'
+              AND document_sha256 = :sha
+              AND id <> :id
+              AND deleted_at IS NULL
+            ORDER BY id ASC
+        ");
+        $stmt->bindValue(':sha', (string) $row['document_sha256'], PDO::PARAM_STR);
+        $stmt->bindValue(':id', (int) $row['id'], PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * Ce a citit OCR-ul pentru aceasta factura: elementul ei din ocr_raw (dupa al catelea
+     * document din scanare este, din sursa_key) plus datele apelului.
+     *
+     * @return array{citit: ?array<string, mixed>, model: ?string, citit_la: ?string, usage: ?array<string, mixed>, documente: int}|null
+     */
+    public function ocrDetails(array $row): ?array
+    {
+        $raw = json_decode((string) ($row['ocr_raw'] ?? ''), true);
+        if (!is_array($raw)) {
+            return null;
+        }
+
+        $documents = is_array($raw['facturi'] ?? null) ? array_values($raw['facturi']) : [];
+        // scan:<sha256> = primul document; scan:<sha256>:<n> = documentul n din scanare.
+        $keyParts = explode(':', (string) $row['sursa_key']);
+        $index = count($keyParts) === 3 ? max(0, (int) $keyParts[2] - 1) : 0;
+
+        return [
+            'citit' => $documents[$index] ?? null,
+            'model' => isset($raw['model']) ? (string) $raw['model'] : null,
+            'citit_la' => isset($raw['citit_la']) ? (string) $raw['citit_la'] : null,
+            'usage' => is_array($raw['usage'] ?? null) ? $raw['usage'] : null,
+            'documente' => count($documents),
+        ];
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -709,9 +826,68 @@ class InvoiceModel extends BaseModel
             $reason = $blocker . ' ' . $reason;
         }
 
+        // Aceeasi cheltuiala poate veni de doua ori (scanata si introdusa in Cazare, sau
+        // scanata de doua ori): nu o legam automat, ca sa nu apara dublu pe cursa.
+        $duplicate = $this->findPossibleDuplicate($row, $result['vehicle_id'], $result['driver_id']);
+        if ($duplicate !== null) {
+            $status = 'de_verificat';
+            $raceId = null;
+            $reason = 'Posibil duplicat al facturii #' . (int) $duplicate['id']
+                . ' (' . (self::SOURCES[(string) $duplicate['sursa']] ?? $duplicate['sursa']) . ', aceeasi data si suma).'
+                . ' Respinge-o daca e dublura sau asociaz-o manual daca e alta cheltuiala.'
+                . ($result['status'] === 'de_verificat' ? ' ' . $result['reason'] : '');
+        }
+
         $this->applyAssociation($id, $status, $raceId, $result['candidates'], $reason, $result['vehicle_id'], $result['driver_id'], false);
 
         return ['status' => $status, 'cursa_id' => $raceId, 'reason' => $reason];
+    }
+
+    /**
+     * O alta factura (din orice sursa, inclusiv Cazare) cu acelasi tip, aceeasi data si
+     * aceeasi valoare cu TVA. Nu e duplicat cand cele doua au clar soferi sau vehicule
+     * diferite (doi soferi la acelasi hotel, in aceeasi noapte, la acelasi pret).
+     */
+    public function findPossibleDuplicate(array $row, ?int $vehicleId, ?int $driverId): ?array
+    {
+        if ($row['data_document'] === null || $row['valoare_cu_tva'] === null || (float) $row['valoare_cu_tva'] <= 0) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT id, sursa, vehicle_id, driver_id, numar_document
+            FROM facturi
+            WHERE id <> :id
+              AND deleted_at IS NULL
+              AND status <> 'respinsa'
+              AND tip = :tip
+              AND data_document = :data_document
+              AND ABS(valoare_cu_tva - :valoare) < 0.01
+            ORDER BY id ASC
+        ");
+        $stmt->bindValue(':id', (int) $row['id'], PDO::PARAM_INT);
+        $stmt->bindValue(':tip', (string) $row['tip'], PDO::PARAM_STR);
+        $stmt->bindValue(':data_document', (string) $row['data_document'], PDO::PARAM_STR);
+        $stmt->bindValue(':valoare', number_format((float) $row['valoare_cu_tva'], 2, '.', ''), PDO::PARAM_STR);
+        $stmt->execute();
+
+        $number = mb_strtolower(trim((string) ($row['numar_document'] ?? '')));
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $other) {
+            $otherNumber = mb_strtolower(trim((string) ($other['numar_document'] ?? '')));
+            if ($number !== '' && $otherNumber !== '' && $number !== $otherNumber) {
+                continue; // numere de document diferite: alte facturi
+            }
+            if ($driverId !== null && $other['driver_id'] !== null && (int) $other['driver_id'] !== $driverId) {
+                continue;
+            }
+            if ($vehicleId !== null && $other['vehicle_id'] !== null && (int) $other['vehicle_id'] !== $vehicleId) {
+                continue;
+            }
+
+            return $other;
+        }
+
+        return null;
     }
 
     /** Asociere aleasa de operator (confirmare candidat sau alta cursa). Intoarce eroarea sau null. */
@@ -806,6 +982,175 @@ class InvoiceModel extends BaseModel
         );
 
         return true;
+    }
+
+    // -------------------------------------------------------------------------
+    // Facturi scanate: coada OCR
+    // -------------------------------------------------------------------------
+
+    /** Dupa atatea esecuri, factura trece la "de verificat" si o completeaza operatorul. */
+    public const OCR_MAX_ATTEMPTS = 3;
+
+    /**
+     * Scanarile care asteapta citirea (cele mai vechi intai).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getPendingOcr(int $limit): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT *
+            FROM facturi
+            WHERE sursa = 'scan'
+              AND status = 'in_procesare'
+              AND deleted_at IS NULL
+              AND ocr_incercari < :max_incercari
+            ORDER BY id ASC
+            LIMIT :lim
+        ");
+        $stmt->bindValue(':max_incercari', self::OCR_MAX_ATTEMPTS, PDO::PARAM_INT);
+        $stmt->bindValue(':lim', max(1, $limit), PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /** Raspunsul OCR (brut) si paginile din scanare ale acestei facturi. */
+    public function saveOcrResult(int $id, string $rawJson, ?string $pages): void
+    {
+        $stmt = $this->db->prepare('
+            UPDATE facturi
+            SET ocr_raw = :ocr_raw, document_pagini = :document_pagini, ocr_incercari = ocr_incercari + 1, updated_at = :updated_at
+            WHERE id = :id
+        ');
+        $stmt->bindValue(':ocr_raw', $rawJson, PDO::PARAM_STR);
+        $this->bindNullable($stmt, ':document_pagini', $pages, PDO::PARAM_STR);
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+    }
+
+    /**
+     * Aplica rezultatul citirii pe o scanare "in procesare".
+     *
+     * Primul document completeaza randul scanarii (care trece astfel prin asocierea
+     * automata la cursa); fiecare document in plus din aceeasi scanare devine o factura
+     * noua, cu acelasi fisier si paginile ei. Nicio factura gasita -> scanarea e respinsa
+     * (operatorul poate anula respingerea din pagina facturii).
+     *
+     * @param array<int, array<string, mixed>> $invoices rezultat InvoiceOcrService::normalize()
+     * @param array<string, mixed> $meta model, usage (se pastreaza in ocr_raw)
+     * @return array<int, int> id-urile facturilor completate / create
+     */
+    public function applyOcrResult(int $id, array $invoices, array $meta = []): array
+    {
+        $row = $this->getById($id);
+        if ($row === null || (string) $row['sursa'] !== 'scan') {
+            return [];
+        }
+
+        $raw = (string) json_encode($meta + ['citit_la' => date('c'), 'facturi' => $invoices], JSON_UNESCAPED_UNICODE);
+
+        if ($invoices === []) {
+            $this->saveOcrResult($id, $raw, null);
+            $this->reject($id, 'citirea automata nu a gasit nicio factura sau bon in scanare');
+
+            return [$id];
+        }
+
+        $ids = [];
+        $sha = (string) $row['document_sha256'];
+        // Categoria scrisa de operator in subiectul emailului ("cazari", "vulcanizare"...)
+        // are prioritate fata de ce deduce citirea automata, pentru toate documentele scanarii.
+        $subjectType = self::typeFromSubject($row['email_subiect'] ?? null);
+        foreach (array_values($invoices) as $index => $invoice) {
+            $amount = static fn(mixed $value): ?string => $value !== null ? number_format((float) $value, 2, '.', '') : null;
+            $ocrType = self::isValidType((string) ($invoice['tip'] ?? '')) ? (string) $invoice['tip'] : 'alte';
+            $fields = [
+                'tip' => $subjectType ?? $ocrType,
+                'furnizor' => $invoice['furnizor'] ?? null,
+                'numar_document' => $invoice['numar_document'] ?? null,
+                'data_document' => $invoice['data_document'] ?? null,
+                'valoare_fara_tva' => $amount($invoice['valoare_fara_tva'] ?? null),
+                'valoare_cu_tva' => $amount($invoice['valoare_cu_tva'] ?? null),
+                'moneda' => $invoice['moneda'] ?? 'RON',
+                'nr_inmatriculare_extras' => $invoice['nr_inmatriculare'] ?? null,
+                'sofer_extras' => $invoice['sofer'] ?? null,
+                'observatii' => implode(' | ', array_filter([
+                    !empty($invoice['cui_furnizor']) ? 'CUI furnizor: ' . $invoice['cui_furnizor'] : null,
+                    $invoice['observatii'] ?? null,
+                    $subjectType !== null
+                        ? 'Tip din subiectul emailului: ' . self::TYPES[$subjectType]['label']
+                            . ($subjectType !== $ocrType ? ' (citirea automata propunea ' . self::TYPES[$ocrType]['label'] . ')' : '')
+                        : null,
+                    'Citire automata, incredere ' . ($invoice['incredere'] ?? 'necunoscuta'),
+                ])),
+            ];
+
+            if ($index === 0) {
+                $this->saveOcrResult($id, $raw, $invoice['pagini'] ?? null);
+                // update() muta factura din "in_procesare" in asocierea automata.
+                $this->update($id, $fields);
+                $ids[] = $id;
+                continue;
+            }
+
+            $sourceKey = 'scan:' . $sha . ':' . ($index + 1);
+            $existing = $this->findBySourceKey($sourceKey);
+            if ($existing !== null) {
+                // Rerulare dupa un esec partial: documentul exista deja.
+                $ids[] = (int) $existing['id'];
+                continue;
+            }
+
+            $newId = $this->create($fields + [
+                'sursa' => 'scan',
+                'sursa_key' => $sourceKey,
+                'document_path' => $row['document_path'],
+                'document_original_name' => $row['document_original_name'],
+                'document_mime' => $row['document_mime'],
+                'document_size' => $row['document_size'],
+                'document_sha256' => $sha,
+                'email_message_id' => $row['email_message_id'],
+                'email_subiect' => $row['email_subiect'],
+                'email_primit_la' => $row['email_primit_la'],
+                'created_by' => $row['created_by'],
+            ]);
+            $this->saveOcrResult($newId, $raw, $invoice['pagini'] ?? null);
+            $ids[] = $newId;
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Un esec la citire. Ramane "in procesare" (se reincearca la rularea urmatoare) pana la
+     * OCR_MAX_ATTEMPTS sau, la o eroare definitiva, trece direct la "de verificat".
+     */
+    public function recordOcrFailure(int $id, string $message, bool $permanent): void
+    {
+        $row = $this->getById($id);
+        if ($row === null) {
+            return;
+        }
+
+        $attempts = (int) $row['ocr_incercari'] + 1;
+        $final = $permanent || $attempts >= self::OCR_MAX_ATTEMPTS;
+        $reason = $final
+            ? 'Citirea automata a esuat: ' . $message . ' Completeaza datele manual.'
+            : 'Citirea automata a esuat (incercarea ' . $attempts . ' din ' . self::OCR_MAX_ATTEMPTS . '), se reincearca: ' . $message;
+
+        $stmt = $this->db->prepare('
+            UPDATE facturi
+            SET ocr_incercari = :incercari, status = :status, match_reason = :match_reason, updated_at = :updated_at
+            WHERE id = :id
+        ');
+        $stmt->bindValue(':incercari', $final ? max($attempts, self::OCR_MAX_ATTEMPTS) : $attempts, PDO::PARAM_INT);
+        $stmt->bindValue(':status', $final ? 'de_verificat' : 'in_procesare', PDO::PARAM_STR);
+        $stmt->bindValue(':match_reason', mb_substr($reason, 0, 255), PDO::PARAM_STR);
+        $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
     }
 
     /** Anuleaza respingerea: factura revine in fluxul automat. */

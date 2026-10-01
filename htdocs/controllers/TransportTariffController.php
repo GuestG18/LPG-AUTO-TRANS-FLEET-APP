@@ -21,6 +21,7 @@ class TransportTariffController
     public function __construct(PDO $db)
     {
         $this->db = $db;
+        TransportTariffModel::ensureRatePrecision($db);
         $this->model = new TransportTariffModel($db);
         $this->fuelIndex = new FuelPriceIndexService($db);
         $this->pricing = new TransportPricingService($db, $this->model);

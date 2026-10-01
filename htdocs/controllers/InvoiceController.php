@@ -146,6 +146,7 @@ class InvoiceController
             'perPageOptions' => self::PER_PAGE_OPTIONS,
             'canCreate' => can('facturi', 'create'),
             'canImportSheet' => can('cazare', 'create'),
+            'scanStatus' => $this->scanStatus(),
         ]);
     }
 
@@ -187,6 +188,8 @@ class InvoiceController
             'hasDocument' => $hasDocument,
             'documentUrl' => build_query_url(['page' => 'facturi', 'action' => 'document', 'id' => $id]),
             'legacyDocuments' => $legacyDocuments,
+            'ocrDetails' => $this->model->ocrDetails($row),
+            'scanSiblings' => $this->model->getScanSiblings($row),
             'canEdit' => can('facturi', 'edit') && !$isLegacy,
             'canLink' => can('facturi', 'link') && (!$isLegacy || can('cazare', 'link')),
             'canReject' => can('facturi', 'link') && !$isLegacy,
@@ -421,6 +424,41 @@ class InvoiceController
     // Utilitare
     // -------------------------------------------------------------------------
 
+    /**
+     * Starea fluxului de scanari, din fisierele scrise de cele doua scripturi
+     * (fetch_invoice_emails.py si process_invoice_inbox.php) dupa fiecare rulare.
+     *
+     * @return array{fetch: ?array<string, mixed>, ocr: ?array<string, mixed>, in_procesare: int, configurat: bool}
+     */
+    private function scanStatus(): array
+    {
+        $dir = dirname(BASE_PATH) . '/storage/invoices/inbox';
+        $read = static function (string $file): ?array {
+            if (!is_file($file)) {
+                return null;
+            }
+            $data = json_decode((string) @file_get_contents($file), true);
+
+            return is_array($data) ? $data : null;
+        };
+
+        $pending = 0;
+        try {
+            $pending = (int) $this->db->query("SELECT COUNT(*) FROM facturi WHERE sursa = 'scan' AND status = 'in_procesare' AND deleted_at IS NULL")->fetchColumn();
+        } catch (Throwable) {
+        }
+
+        $fetch = $read($dir . '/.last_fetch.json');
+        $ocr = $read($dir . '/.last_ocr.json');
+
+        return [
+            'fetch' => $fetch,
+            'ocr' => $ocr,
+            'in_procesare' => $pending,
+            'configurat' => $fetch !== null || $ocr !== null,
+        ];
+    }
+
     /** @return array<string, mixed> */
     private function collectFilters(): array
     {
@@ -432,6 +470,7 @@ class InvoiceController
             'vehicle_id' => (int) ($_GET['vehicle_id'] ?? 0) > 0 ? (int) $_GET['vehicle_id'] : null,
             'driver_id' => (int) ($_GET['driver_id'] ?? 0) > 0 ? (int) $_GET['driver_id'] : null,
             'q' => trim((string) ($_GET['q'] ?? '')),
+            'sursa' => isset(InvoiceModel::SOURCES[(string) ($_GET['sursa'] ?? '')]) ? (string) $_GET['sursa'] : '',
         ];
     }
 
@@ -583,7 +622,7 @@ class InvoiceController
     private function listUrl(): string
     {
         $params = ['page' => 'facturi'];
-        foreach (['tip', 'status', 'data_start', 'data_end', 'vehicle_id', 'driver_id', 'q', 'p', 'pp'] as $key) {
+        foreach (['tip', 'status', 'sursa', 'data_start', 'data_end', 'vehicle_id', 'driver_id', 'q', 'p', 'pp'] as $key) {
             $value = trim((string) ($_POST[$key] ?? $_GET[$key] ?? ''));
             if ($value !== '') {
                 $params[$key] = $value;

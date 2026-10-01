@@ -153,13 +153,13 @@ $buildRouteVehicleItems = static function (string $vehicleIdsRaw, array $details
 // "Administrare tarife" e cea aplicata efectiv la facturare.
 $renderRouteTariffValue = static function (array $rule, string $column): string {
     $baseValue = (float) ($rule[$column] ?? 0);
-    $html = e(format_number_ro($baseValue, 2));
+    $html = e(format_rate_ro($baseValue));
 
     $overrides = is_array($rule['tarif_overrides'] ?? null) ? $rule['tarif_overrides'] : [];
     if (array_key_exists($column, $overrides)) {
         $html .= '<div class="tcv2-tarif-override" title="Tarif programat din Administrare tarife, activ acum">'
             . '<i class="bi bi-calendar-event" aria-hidden="true"></i> '
-            . e(format_number_ro((float) $overrides[$column], 2))
+            . e(format_rate_ro((float) $overrides[$column]))
             . '</div>';
     }
 
@@ -675,12 +675,12 @@ if ($configCreateMode) {
                             <div class="row g-3">
                                 <div class="col-12 col-md-6">
                                     <label class="form-label" for="config_primar_pret_km">Pret/km</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_km']) ? 'is-invalid' : '' ?>" id="config_primar_pret_km" name="pret_km" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_km'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_km']) ? 'is-invalid' : '' ?>" id="config_primar_pret_km" name="pret_km" min="0" step="any" value="<?= e((string) ($beneficiaryFormData['pret_km'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_km'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_km']) ?></div><?php endif; ?>
                                 </div>
                                 <div class="col-12 col-md-6">
                                     <label class="form-label" for="config_primar_pret_tona">Pret/tona</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona']) ? 'is-invalid' : '' ?>" id="config_primar_pret_tona" name="pret_tona" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_tona'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona']) ? 'is-invalid' : '' ?>" id="config_primar_pret_tona" name="pret_tona" min="0" step="any" value="<?= e((string) ($beneficiaryFormData['pret_tona'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_tona']) ?></div><?php endif; ?>
                                 </div>
                             </div>
@@ -731,27 +731,27 @@ if ($configCreateMode) {
                             <div class="row g-3 tcv2-field-grid">
                                 <div class="col-12 col-md-4 tcv2-field">
                                     <label class="form-label tcv2-field-label" for="config_compresor_pret_ora_aspirare">Pret ora aspirare</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_ora_aspirare']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_ora_aspirare" name="pret_ora_aspirare" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_ora_aspirare'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_ora_aspirare']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_ora_aspirare" name="pret_ora_aspirare" min="0" step="any" value="<?= e((string) ($beneficiaryFormData['pret_ora_aspirare'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_ora_aspirare'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_ora_aspirare']) ?></div><?php endif; ?>
                                 </div>
                                 <div class="col-12 col-md-4 tcv2-field">
                                     <label class="form-label tcv2-field-label" for="config_compresor_pret_km_dislocare">Pret km dislocare</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_km_dislocare']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_km_dislocare" name="pret_km_dislocare" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_km_dislocare'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_km_dislocare']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_km_dislocare" name="pret_km_dislocare" min="0" step="any" value="<?= e((string) ($beneficiaryFormData['pret_km_dislocare'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_km_dislocare'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_km_dislocare']) ?></div><?php endif; ?>
                                 </div>
                                 <div class="col-12 col-md-4 tcv2-field">
                                     <label class="form-label tcv2-field-label" for="config_compresor_pret_tona_livrata">Pret tona livrata</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_livrata']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_livrata" name="pret_tona_livrata" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_tona_livrata'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_livrata']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_livrata" name="pret_tona_livrata" min="0" step="any" value="<?= e((string) ($beneficiaryFormData['pret_tona_livrata'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_tona_livrata'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_tona_livrata']) ?></div><?php endif; ?>
                                 </div>
                                 <div class="col-12 col-md-4 tcv2-field">
                                     <label class="form-label tcv2-field-label" for="config_compresor_pret_tona_aspirata_lichida">Pret tona aspirata lichida</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_aspirata_lichida']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_aspirata_lichida" name="pret_tona_aspirata_lichida" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_tona_aspirata_lichida'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_aspirata_lichida']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_aspirata_lichida" name="pret_tona_aspirata_lichida" min="0" step="any" value="<?= e((string) ($beneficiaryFormData['pret_tona_aspirata_lichida'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_tona_aspirata_lichida'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_tona_aspirata_lichida']) ?></div><?php endif; ?>
                                 </div>
                                 <div class="col-12 col-md-4 tcv2-field">
                                     <label class="form-label tcv2-field-label" for="config_compresor_pret_tona_aspirata_gazoasa">Pret tona aspirata gazoasa</label>
-                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_aspirata_gazoasa']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_aspirata_gazoasa" name="pret_tona_aspirata_gazoasa" min="0" step="0.01" value="<?= e((string) ($beneficiaryFormData['pret_tona_aspirata_gazoasa'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_aspirata_gazoasa']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_aspirata_gazoasa" name="pret_tona_aspirata_gazoasa" min="0" step="any" value="<?= e((string) ($beneficiaryFormData['pret_tona_aspirata_gazoasa'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_tona_aspirata_gazoasa'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_tona_aspirata_gazoasa']) ?></div><?php endif; ?>
                                 </div>
                                 <div class="col-12">
@@ -1093,14 +1093,14 @@ if ($configCreateMode) {
 
                                 <div class="col-12 col-md-4">
                                     <label class="form-label" for="config_distribution_only_route_tarif_tona">Pret tona (RON) <span class="text-danger">*</span></label>
-                                    <input type="number" class="form-control <?= isset($distributionOnlyRouteFormErrors['tarif_tona']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_tarif_tona" name="route_tarif_tona" min="0" step="0.01" value="<?= e((string) ($distributionOnlyRouteFormData['tarif_tona'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($distributionOnlyRouteFormErrors['tarif_tona']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_tarif_tona" name="route_tarif_tona" min="0" step="any" value="<?= e((string) ($distributionOnlyRouteFormData['tarif_tona'] ?? '')) ?>">
                                     
                                     <?php if (isset($distributionOnlyRouteFormErrors['tarif_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionOnlyRouteFormErrors['tarif_tona']) ?></div><?php endif; ?>
                                 </div>
 
                                 <div class="col-12 col-md-4">
                                     <label class="form-label" for="config_distribution_only_route_cost_extra_km">Pret km (RON) <span class="text-danger">*</span></label>
-                                    <input type="number" class="form-control <?= isset($distributionOnlyRouteFormErrors['cost_extra_km']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_cost_extra_km" name="route_cost_extra_km" min="0" step="0.01" value="<?= e((string) ($distributionOnlyRouteFormData['cost_extra_km'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($distributionOnlyRouteFormErrors['cost_extra_km']) ? 'is-invalid' : '' ?>" id="config_distribution_only_route_cost_extra_km" name="route_cost_extra_km" min="0" step="any" value="<?= e((string) ($distributionOnlyRouteFormData['cost_extra_km'] ?? '')) ?>">
                                     
                                     <?php if (isset($distributionOnlyRouteFormErrors['cost_extra_km'])): ?><div class="invalid-feedback d-block"><?= e((string) $distributionOnlyRouteFormErrors['cost_extra_km']) ?></div><?php endif; ?>
                                 </div>
@@ -1200,8 +1200,8 @@ if ($configCreateMode) {
                                                 <td><?= e((string) ($routeRule['loc_nume'] ?? '-')) ?></td>
                                                 <td><?= e((string) ($routeRule['zona_nume'] ?? '-')) ?></td>
                                                 <td><?= e((string) $distributionRouteTariffModeOptions[$routeTariffMode]) ?></td>
-                                                <td><?= $routeUsesTonTariff ? e(format_number_ro((float) ($routeRule['tarif_tona'] ?? 0), 2)) : '-' ?></td>
-                                                <td><?= $routeUsesKmTariff ? e(format_number_ro((float) ($routeRule['cost_extra_km'] ?? 0), 2)) : '-' ?></td>
+                                                <td><?= $routeUsesTonTariff ? e(format_rate_ro((float) ($routeRule['tarif_tona'] ?? 0))) : '-' ?></td>
+                                                <td><?= $routeUsesKmTariff ? e(format_rate_ro((float) ($routeRule['cost_extra_km'] ?? 0))) : '-' ?></td>
                                                 <td class="dispatcher-vehicle-cell"><?= $renderRouteVehicleButton($routeVehicleItems, 'distributie-' . $routeId) ?></td>
                                                 <td class="text-end transport-route-actions-cell">
                                                     <?= $renderTransportRowActions(
@@ -1302,14 +1302,14 @@ if ($configCreateMode) {
                                 <div class="col-12 tcv2-group-sep">Tarifare</div>
                                 <div class="col-12 col-md-3">
                                     <label class="form-label" for="config_primary_distribution_route_tarif_tona">Pret tona (RON) <span class="text-danger">*</span></label>
-                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['tarif_tona']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_tarif_tona" name="route_tarif_tona" min="0" step="0.01" value="<?= e((string) ($primaryDistributionRouteFormData['tarif_tona'] ?? '')) ?>" required>
+                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['tarif_tona']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_tarif_tona" name="route_tarif_tona" min="0" step="any" value="<?= e((string) ($primaryDistributionRouteFormData['tarif_tona'] ?? '')) ?>" required>
                                     
                                     <?php if (isset($primaryDistributionRouteFormErrors['tarif_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['tarif_tona']) ?></div><?php endif; ?>
                                 </div>
 
                                 <div class="col-12 col-md-3">
                                     <label class="form-label" for="config_primary_distribution_route_cost_extra_km">Pret km (RON) <span class="text-danger">*</span></label>
-                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['cost_extra_km']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_cost_extra_km" name="route_cost_extra_km" min="0" step="0.01" value="<?= e((string) ($primaryDistributionRouteFormData['cost_extra_km'] ?? '')) ?>" required>
+                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['cost_extra_km']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_cost_extra_km" name="route_cost_extra_km" min="0" step="any" value="<?= e((string) ($primaryDistributionRouteFormData['cost_extra_km'] ?? '')) ?>" required>
                                     
                                     <?php if (isset($primaryDistributionRouteFormErrors['cost_extra_km'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['cost_extra_km']) ?></div><?php endif; ?>
                                 </div>
@@ -1322,7 +1322,7 @@ if ($configCreateMode) {
 
                                 <div class="col-12 col-md-3">
                                     <label class="form-label" for="config_primary_distribution_route_cost_cursa">Cost cursa (RON)</label>
-                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['cost_cursa']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_cost_cursa" name="route_cost_cursa" min="0" step="0.01" readonly data-ride-cost-input="1" data-ride-cost-toggle-id="config_primary_distribution_route_aplica_cost_cursa" value="<?= e((string) ($primaryDistributionRouteFormData['cost_cursa'] ?? '')) ?>">
+                                    <input type="number" class="form-control <?= isset($primaryDistributionRouteFormErrors['cost_cursa']) ? 'is-invalid' : '' ?>" id="config_primary_distribution_route_cost_cursa" name="route_cost_cursa" min="0" step="any" readonly data-ride-cost-input="1" data-ride-cost-toggle-id="config_primary_distribution_route_aplica_cost_cursa" value="<?= e((string) ($primaryDistributionRouteFormData['cost_cursa'] ?? '')) ?>">
                                     <div class="form-text" data-ride-cost-hint="1">Activeaza &bdquo;Aplica doar pe aceasta ruta&rdquo; pentru a putea completa costul.</div>
                                     <?php if (isset($primaryDistributionRouteFormErrors['cost_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryDistributionRouteFormErrors['cost_cursa']) ?></div><?php endif; ?>
                                 </div>
@@ -1577,7 +1577,7 @@ if ($configCreateMode) {
 
                             <div class="col-12 col-md-6">
                                 <label class="form-label" for="config_primary_route_cost_cursa">Cost cursa (RON)</label>
-                                <input type="number" class="form-control <?= isset($primaryRouteFormErrors['cost_cursa']) ? 'is-invalid' : '' ?>" id="config_primary_route_cost_cursa" name="route_primar_cost_cursa" min="0" step="0.01" readonly data-ride-cost-input="1" data-ride-cost-toggle-id="config_primary_route_aplica_cost_cursa" value="<?= e((string) ($primaryRouteFormData['cost_cursa'] ?? '')) ?>">
+                                <input type="number" class="form-control <?= isset($primaryRouteFormErrors['cost_cursa']) ? 'is-invalid' : '' ?>" id="config_primary_route_cost_cursa" name="route_primar_cost_cursa" min="0" step="any" readonly data-ride-cost-input="1" data-ride-cost-toggle-id="config_primary_route_aplica_cost_cursa" value="<?= e((string) ($primaryRouteFormData['cost_cursa'] ?? '')) ?>">
                                 <div class="form-text" data-ride-cost-hint="1">Activeaza &bdquo;Aplica doar pe aceasta ruta&rdquo; pentru a putea completa costul.</div>
                                 <?php if (isset($primaryRouteFormErrors['cost_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $primaryRouteFormErrors['cost_cursa']) ?></div><?php endif; ?>
                             </div>
@@ -1755,15 +1755,15 @@ if ($configCreateMode) {
                             $beneficiaryName = (string) ($beneficiary['nume'] ?? '-');
                             $tariffLines = [];
                             if (!empty($beneficiary['suporta_primar'])) {
-                                $tariffLines[] = ['Primar', format_number_ro((float) ($beneficiary['pret_km'] ?? 0), 2) . ' lei/km · ' . format_number_ro((float) ($beneficiary['pret_tona'] ?? 0), 2) . ' lei/tona'];
+                                $tariffLines[] = ['Primar', format_rate_ro((float) ($beneficiary['pret_km'] ?? 0)) . ' lei/km · ' . format_rate_ro((float) ($beneficiary['pret_tona'] ?? 0)) . ' lei/tona'];
                             }
                             if (!empty($beneficiary['suporta_distributie'])) {
                                 $distributionBaseParts = [];
                                 if ((float) ($beneficiary['pret_distributie_km'] ?? 0) > 0) {
-                                    $distributionBaseParts[] = format_number_ro((float) $beneficiary['pret_distributie_km'], 2) . ' lei/km';
+                                    $distributionBaseParts[] = format_rate_ro((float) $beneficiary['pret_distributie_km']) . ' lei/km';
                                 }
                                 if ((float) ($beneficiary['pret_distributie_tona'] ?? 0) > 0) {
-                                    $distributionBaseParts[] = format_number_ro((float) $beneficiary['pret_distributie_tona'], 2) . ' lei/tona';
+                                    $distributionBaseParts[] = format_rate_ro((float) $beneficiary['pret_distributie_tona']) . ' lei/tona';
                                 }
                                 $tariffLines[] = ['Distributie', $distributionBaseParts !== [] ? implode(' · ', $distributionBaseParts) . ' · restul pe ruta' : 'preturi pe ruta'];
                             }
@@ -1781,7 +1781,7 @@ if ($configCreateMode) {
                                 ] as $compressorField) {
                                     $compressorValue = (float) ($beneficiary[$compressorField[0]] ?? 0);
                                     if ($compressorValue > 0) {
-                                        $compressorParts[] = format_number_ro($compressorValue, 2) . ' ' . $compressorField[1];
+                                        $compressorParts[] = format_rate_ro($compressorValue) . ' ' . $compressorField[1];
                                     }
                                 }
                                 $tariffLines[] = ['Compresor', $compressorParts !== [] ? implode(' · ', $compressorParts) : 'tarife necompletate'];
