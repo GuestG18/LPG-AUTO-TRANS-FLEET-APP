@@ -404,7 +404,20 @@ $pageSubtitle = match ($section) {
                 <thead><tr><th>Data programată</th><th>Vehicul</th><th>Tip</th><th>Centru de cost</th><th>Descriere</th><th>Furnizor / Service</th><th>Șofer</th><th>Cost estimat</th><th>Status</th><th>Acțiuni</th></tr></thead>
                 <tbody>
                 <?php foreach ($scheduledInterventions as $row): ?><tr>
-                    <td><?= e(format_date_ro((string) $row['data_programata'])) ?></td>
+                    <td><?= e(format_date_ro((string) $row['data_programata'])) ?>
+                        <?php if (!empty($row['service_km_id']) && !empty($row['service_data_plecare'])): ?>
+                            <span class="maintenance-badge maintenance-badge-blue d-inline-block mt-1" title="Programare trimisă din Dispecer curse → Km service"><i class="bi bi-truck"></i> Dispecer</span>
+                            <small class="d-block text-muted mt-1">
+                                Plecat: <?= e(date('d.m.Y', (int) strtotime((string) $row['service_data_plecare'])) . (!empty($row['service_ora_plecare']) ? ' ' . substr((string) $row['service_ora_plecare'], 0, 5) : '')) ?><br>
+                                <?php if (!empty($row['service_data_intoarcere'])): ?>
+                                    Întors: <?= e(date('d.m.Y', (int) strtotime((string) $row['service_data_intoarcere'])) . (!empty($row['service_ora_intoarcere']) ? ' ' . substr((string) $row['service_ora_intoarcere'], 0, 5) : '')) ?>
+                                <?php else: ?>
+                                    <span class="text-warning fw-semibold">În service acum</span>
+                                <?php endif; ?>
+                                <?php if ((float) ($row['service_km'] ?? 0) > 0): ?><br><?= e(number_format((float) $row['service_km'], 0, ',', '.')) ?> km service<?php endif; ?>
+                            </small>
+                        <?php endif; ?>
+                    </td>
                     <td><strong><?= e((string) $row['nr_inmatriculare']) ?></strong><small><?= e($vehicleTypeLabels[$row['tip_vehicul']] ?? (string) $row['tip_vehicul']) ?></small></td>
                     <td><span class="maintenance-badge <?= $row['tip_interventie'] === 'reparatie' ? 'maintenance-badge-danger' : 'maintenance-badge-success' ?>"><?= $row['tip_interventie'] === 'reparatie' ? 'Reparație' : 'Întreținere' ?></span></td>
                     <td><span class="maintenance-badge <?= e($centerClass((string) ($row['centru_cost'] ?? ''))) ?>"><?= e((string) ($row['centru_cost'] ?? 'Altele')) ?></span></td>

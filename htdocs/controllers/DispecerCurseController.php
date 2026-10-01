@@ -1512,7 +1512,8 @@ class DispecerCurseController
         }
 
         try {
-            $model->save([
+            $previous = $id > 0 ? $model->find($id) : null;
+            $savedId = $model->save([
                 'vehicle_id' => $vehicleId,
                 'driver_id' => $driverId > 0 ? $driverId : null,
                 'data_plecare' => $departure,
@@ -1524,13 +1525,31 @@ class DispecerCurseController
                 'motiv' => $text('motiv', 255),
                 'observatii' => $text('observatii', 2000),
             ], $this->currentUserId(), $id);
-            flash_set('success', $id > 0 ? 'Intrarea de service a fost actualizată.' : 'Km service au fost adăugați.');
+            $saved = $model->find($savedId);
+            $synced = $saved !== null && $this->syncServiceKmToMaintenance($saved, $previous);
+            flash_set('success', ($id > 0 ? 'Intrarea de service a fost actualizată.' : 'Km service au fost adăugați.')
+                . ($synced ? ' Programarea apare în Mentenanță → Intervenții planificate.' : ''));
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][service_km_store] ' . $exception->getMessage());
             flash_set('danger', 'Km service nu au putut fi salvați.');
         }
 
         redirect($listUrl);
+    }
+
+    /**
+     * Perioada de service devine interventie planificata in Mentenanta, ca operatorul
+     * de mentenanta sa o preia. Esecul nu blocheaza salvarea km-ilor de service.
+     */
+    private function syncServiceKmToMaintenance(array $entry, ?array $previous): bool
+    {
+        try {
+            (new MaintenanceModel($this->db))->syncFromServiceKm($entry, $this->currentUserId(), $previous);
+            return true;
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][service_km_store][mentenanta] ' . $exception->getMessage());
+            return false;
+        }
     }
 
     private function deleteServiceKmAction(): void
@@ -1542,7 +1561,15 @@ class DispecerCurseController
         ensure_csrf_or_redirect($listUrl);
 
         try {
-            $deleted = (new VehicleServiceKmModel($this->db))->delete((int) ($_POST['id'] ?? 0));
+            $serviceKmId = (int) ($_POST['id'] ?? 0);
+            $deleted = (new VehicleServiceKmModel($this->db))->delete($serviceKmId);
+            if ($deleted) {
+                try {
+                    (new MaintenanceModel($this->db))->detachServiceKm($serviceKmId);
+                } catch (Throwable $exception) {
+                    error_log('[DispecerCurseController][service_km_delete][mentenanta] ' . $exception->getMessage());
+                }
+            }
             flash_set($deleted ? 'success' : 'warning', $deleted ? 'Intrarea de service a fost ștearsă.' : 'Intrarea de service nu mai există.');
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][service_km_delete] ' . $exception->getMessage());

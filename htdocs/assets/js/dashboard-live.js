@@ -22,7 +22,7 @@
     var vehicleSelect = form.querySelector('select[name="vehicle_id"]');
     var resetLink = form.querySelector('[data-dashboard-live-reset]');
     var filterPanel = form.closest('.dashboard-filter-panel');
-    var morphSections = Array.prototype.slice.call(root.querySelectorAll('.dashboard-main-grid, .dashboard-detail-grid'));
+    var morphSections = Array.prototype.slice.call(root.querySelectorAll('.dashboard-main-grid'));
     var pendingController = null;
     var requestSeq = 0;
 
@@ -60,8 +60,14 @@
 
     function buildUrl() {
         var params = new URLSearchParams();
+        var periodField = form.querySelector('[data-dashboard-period-input]');
+        var isCustomPeriod = !!periodField && periodField.value === 'personalizat';
         new FormData(form).forEach(function (value, key) {
             if (key === 'vehicle_id' && value === '') {
+                return;
+            }
+            // Datele perioadei personalizate conteaza doar cand ea este aleasa.
+            if ((key === 'date_from' || key === 'date_to') && !isCustomPeriod) {
                 return;
             }
             params.append(key, String(value));
@@ -299,12 +305,8 @@
         resetLink.addEventListener('click', function (event) {
             event.preventDefault();
 
-            var defaultPeriod = form.querySelector('input[name="period"][value="luna_curenta"]')
-                || form.querySelector('input[name="period"]');
+            resetPeriodField();
             var defaultCategory = form.querySelector('input[name="vehicle_category"][value="toate"]');
-            if (defaultPeriod) {
-                defaultPeriod.checked = true;
-            }
             if (defaultCategory) {
                 defaultCategory.checked = true;
             }
@@ -313,6 +315,156 @@
             }
             syncVehicleOptions('toate');
             refresh();
+        });
+    }
+
+    // Perioadă: același câmp ca în Carburanți — calendar de interval (flatpickr) cu
+    // scurtături în interior. Un interval complet sau o scurtătură reîmprospătează
+    // dashboard-ul pe loc. Chip-ul "Perioadă" (re-randat la fiecare refresh) deschide
+    // același calendar, prin delegare pe formular.
+    var periodDisplay = form.querySelector('[data-dashboard-period-display]');
+    var periodInput = form.querySelector('[data-dashboard-period-input]');
+    var periodFrom = form.querySelector('[data-dashboard-date-from]');
+    var periodTo = form.querySelector('[data-dashboard-date-to]');
+    var periodPicker = null;
+    var pendingPreset = null;
+    var MONTHS_RO = ['Ianuarie', 'Februarie', 'Martie', 'Aprilie', 'Mai', 'Iunie',
+        'Iulie', 'August', 'Septembrie', 'Octombrie', 'Noiembrie', 'Decembrie'];
+
+    function toIso(d) {
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    function toRo(d) {
+        return String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+    }
+
+    function prettyLabel(start, end) {
+        if (toIso(start) === toIso(end)) {
+            return toRo(start);
+        }
+        var lastDay = new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate();
+        if (start.getDate() === 1 && end.getFullYear() === start.getFullYear()
+            && end.getMonth() === start.getMonth() && end.getDate() === lastDay) {
+            return MONTHS_RO[start.getMonth()] + ' ' + start.getFullYear();
+        }
+        return toRo(start) + ' – ' + toRo(end);
+    }
+
+    function periodPresets() {
+        var today = new Date();
+        today.setHours(0, 0, 0, 0);
+        var monthLabel = function (d) { return MONTHS_RO[d.getMonth()] + ' ' + d.getFullYear(); };
+        var thirtyAgo = new Date(today);
+        thirtyAgo.setDate(today.getDate() - 29);
+        var prevStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        return [
+            { text: 'Luna aceasta', key: 'luna_curenta', start: new Date(today.getFullYear(), today.getMonth(), 1), end: today, label: monthLabel(today) },
+            { text: 'Luna trecută', key: 'personalizat', start: prevStart, end: new Date(today.getFullYear(), today.getMonth(), 0), label: monthLabel(prevStart) },
+            { text: 'Ultimele 30 de zile', key: 'ultimele_30_zile', start: thirtyAgo, end: today, label: 'Ultimele 30 de zile' },
+            { text: 'Anul curent', key: 'an_curent', start: new Date(today.getFullYear(), 0, 1), end: today, label: 'Anul ' + today.getFullYear() }
+        ];
+    }
+
+    function setPeriod(key, start, end, label, silent) {
+        if (!periodInput || !periodFrom || !periodTo || !periodDisplay) {
+            return;
+        }
+        var from = toIso(start);
+        var to = toIso(end);
+        var unchanged = periodInput.value === key && periodFrom.value === from && periodTo.value === to;
+        periodInput.value = key;
+        periodFrom.value = from;
+        periodTo.value = to;
+        // setDate rescrie inputul în formatul flatpickr: eticheta se pune după el.
+        if (periodPicker) {
+            periodPicker.setDate([start, end], false);
+        }
+        periodDisplay.value = label;
+        periodDisplay.defaultValue = label;
+        if (!silent && !unchanged) {
+            refresh();
+        }
+    }
+
+    function resetPeriodField() {
+        var current = periodPresets()[0];
+        setPeriod(current.key, current.start, current.end, current.label, true);
+    }
+
+    if (periodDisplay && periodInput && periodFrom && periodTo) {
+        if (window.flatpickr) {
+            periodPicker = window.flatpickr(periodDisplay, {
+                mode: 'range',
+                locale: window.flatpickr.l10ns && window.flatpickr.l10ns.ro ? 'ro' : 'default',
+                dateFormat: 'Y-m-d',
+                defaultDate: periodFrom.value && periodTo.value ? [periodFrom.value, periodTo.value] : [],
+                onReady: function (selectedDates, dateStr, fp) {
+                    var presets = document.createElement('div');
+                    presets.className = 'fuel-fp-presets dashboard-fp-presets';
+                    periodPresets().forEach(function (preset, index) {
+                        var button = document.createElement('button');
+                        button.type = 'button';
+                        button.textContent = preset.text;
+                        button.addEventListener('click', function () {
+                            pendingPreset = periodPresets()[index]; // datele de azi, la click
+                            fp.close();
+                        });
+                        presets.appendChild(button);
+                    });
+                    fp.calendarContainer.appendChild(presets);
+                },
+                onClose: function (selectedDates) {
+                    if (pendingPreset) {
+                        var preset = pendingPreset;
+                        pendingPreset = null;
+                        setPeriod(preset.key, preset.start, preset.end, preset.label, false);
+                        return;
+                    }
+                    if (selectedDates.length === 2) {
+                        // deschis și închis fără schimbare: păstrează perioada (și cheia ei)
+                        if (toIso(selectedDates[0]) === periodFrom.value && toIso(selectedDates[1]) === periodTo.value) {
+                            periodDisplay.value = periodDisplay.defaultValue;
+                            return;
+                        }
+                        setPeriod('personalizat', selectedDates[0], selectedDates[1], prettyLabel(selectedDates[0], selectedDates[1]), false);
+                        return;
+                    }
+                    // selecție incompletă: revine la perioada curentă
+                    if (periodFrom.value && periodTo.value) {
+                        periodPicker.setDate([periodFrom.value, periodTo.value], false);
+                    }
+                    periodDisplay.value = periodDisplay.defaultValue;
+                }
+            });
+            // flatpickr își scrie propriul format; readucem eticheta de la server.
+            periodDisplay.value = periodDisplay.defaultValue;
+        } else {
+            // Fără CDN: cele două date devin calendare native vizibile.
+            periodDisplay.closest('.fuel-date-input').hidden = true;
+            [periodFrom, periodTo].forEach(function (input) {
+                input.type = 'date';
+                input.classList.add('dashboard-select');
+                input.addEventListener('change', function () {
+                    if (periodFrom.value && periodTo.value && periodFrom.value <= periodTo.value) {
+                        periodInput.value = 'personalizat';
+                        refresh();
+                    }
+                });
+            });
+        }
+
+        form.addEventListener('click', function (event) {
+            var chip = event.target instanceof Element ? event.target.closest('[data-dashboard-period-picker]') : null;
+            if (!chip) {
+                return;
+            }
+            event.preventDefault();
+            if (periodPicker) {
+                periodPicker.open();
+            } else {
+                periodFrom.focus();
+            }
         });
     }
 
@@ -407,7 +559,7 @@
 
         var focusTarget = face
             ? face.querySelector('[data-dashboard-face-close]')
-            : summary.querySelector('[data-dashboard-inactive-open="all"], [data-dashboard-active-open]');
+            : summary.querySelector('[data-dashboard-inactive-open="all"], [data-dashboard-active-open], [data-dashboard-face-open]');
         if (focusTarget) {
             focusTarget.focus({ preventScroll: true });
         }
@@ -427,13 +579,15 @@
             return;
         }
 
-        var opener = target.closest('[data-dashboard-inactive-open], [data-dashboard-active-open]');
+        var opener = target.closest('[data-dashboard-inactive-open], [data-dashboard-active-open], [data-dashboard-face-open]');
         if (opener) {
             if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
                 return;
             }
             event.preventDefault();
-            if (opener.hasAttribute('data-dashboard-active-open')) {
+            if (opener.hasAttribute('data-dashboard-face-open')) {
+                setCardFace(card, opener.getAttribute('data-dashboard-face-open'), null, true);
+            } else if (opener.hasAttribute('data-dashboard-active-open')) {
                 setCardFace(card, opener.getAttribute('data-dashboard-active-open') || 'active', null, true);
             } else {
                 setCardFace(card, 'inactive', opener.getAttribute('data-dashboard-inactive-open'), true);

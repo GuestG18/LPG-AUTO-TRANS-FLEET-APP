@@ -261,17 +261,16 @@ class CardOilApiClient
             'nrinmatric_card',
             'eticheta_card',
         ]);
-        $fuelType = $this->normalizeFuelType($this->firstString($payload, [
-            'fuel_type',
-            'tip_carburant',
-            'carburant',
-            'produs',
-            'product',
-            'denumire_produs',
-            'nume_produs',
-            'nume_subcategorie',
-            'nume_categorie',
-        ]));
+        // Subcategoria CardOil (MOTORINA / BENZINA / GPL / AdBlue) e cea mai
+        // curata; denumirea produsului ramane fallback. Discount-urile de volum
+        // (categoria "Discount") nu se potrivesc pe niciun tip si sunt ignorate.
+        $fuelType = null;
+        foreach (['nume_subcategorie', 'fuel_type', 'tip_carburant', 'carburant', 'produs', 'product', 'denumire_produs', 'nume_produs'] as $fuelKey) {
+            $fuelType = $this->normalizeFuelType($this->firstString($payload, [$fuelKey]));
+            if ($fuelType !== null) {
+                break;
+            }
+        }
         $quantity = $this->firstNumber($payload, [
             'quantity_liters',
             'cantitate_litri',
@@ -397,8 +396,16 @@ class CardOilApiClient
             return 'adblue';
         }
 
+        if (str_contains($normalized, 'gpl') || str_contains($normalized, 'lpg') || str_contains($normalized, 'autogas')) {
+            return 'gpl';
+        }
+
         if (str_contains($normalized, 'motorina') || str_contains($normalized, 'diesel') || str_contains($normalized, 'gazole')) {
             return 'motorina';
+        }
+
+        if (str_contains($normalized, 'benzina') || str_contains($normalized, 'petrol') || str_contains($normalized, 'gasoline')) {
+            return 'benzina';
         }
 
         return null;

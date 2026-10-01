@@ -117,7 +117,7 @@ class DashboardModel extends BaseModel
     public function getDashboardOverview(array $filters = []): array
     {
         $filters = $this->normalizeFilters($filters);
-        $periodRange = $this->getPeriodRange($filters['period']);
+        $periodRange = $this->getPeriodRange($filters['period'], $filters['date_from'], $filters['date_to']);
         $fuelCost = $this->getFuelCostBreakdown($filters);
         $maintenanceCost = $this->getMaintenanceCostBreakdown($filters);
 
@@ -134,7 +134,7 @@ class DashboardModel extends BaseModel
     public function getEmptyDashboardOverview(array $filters = []): array
     {
         $filters = $this->normalizeFilters($filters);
-        $periodRange = $this->getPeriodRange($filters['period']);
+        $periodRange = $this->getPeriodRange($filters['period'], $filters['date_from'], $filters['date_to']);
         $fuelCost = $this->emptyFuelBreakdown($periodRange);
         $maintenanceCost = $this->emptyMaintenanceBreakdown($periodRange);
 
@@ -164,7 +164,7 @@ class DashboardModel extends BaseModel
     {
         $filters = $this->normalizeFilters($filters);
 
-        return $this->getPeriodRange($filters['period']);
+        return $this->getPeriodRange($filters['period'], $filters['date_from'], $filters['date_to']);
     }
 
     public function getVehicleDashboardStatus(array $filters = []): array
@@ -618,10 +618,349 @@ class DashboardModel extends BaseModel
         ];
     }
 
+    private const DOCUMENT_VEHICLE_TYPE_LABELS = [
+        'cap_tractor' => 'Cap tractor',
+        'camion' => 'Camion',
+        'semiremorca_primar' => 'Semiremorcă primar',
+        'semiremorca_distributie' => 'Semiremorcă distribuție',
+        'autoutilitara' => 'Autoutilitară',
+        'autovehicul' => 'Autoturism',
+    ];
+
+    /**
+     * Costul documentelor din Configurare costuri, pe perioada Dashboard-ului, cu logica
+     * aplicației (DocumentModel::getVehicleDocumentDailyCost): lei/zi = cost / valabilitate,
+     * override-ul per vehicul are prioritate față de prețul pe tip de vehicul; perioada =
+     * zilele din intervalul filtrului. Vehiculele și șoferii sunt cei numărați în cardurile
+     * Status (aceleași filtre), doar cei activi. Documentele fără preț se raportează separat.
+     */
+    public function getDocumentCostBreakdown(array $filters = []): array
+    {
+        $filters = $this->normalizeFilters($filters);
+        $range = $this->getPeriodRange($filters['period'], $filters['date_from'], $filters['date_to']);
+        $days = (int) (new DateTimeImmutable($range['date_start']))->diff(new DateTimeImmutable($range['date_end']))->format('%a') + 1;
+
+        return [
+            'days' => $days,
+            'vehicles' => $this->getVehicleDocumentCosts($filters, $days),
+            'drivers' => $this->getDriverDocumentCosts($filters, $days),
+        ];
+    }
+
+    /**
+     * Dotările montate pe vehiculele din filtrul Dashboard-ului (inventar_dotari_vehicule),
+     * pe categorie din catalog și pe produs. Valoarea = costul unității (costul propriu
+     * sau costul implicit din catalog); costul lunar = valoare ÷ interval de inspecție
+     * (implicit 12 luni) — aceeași formulă ca elementul "Dotări" din Cost operațional / km.
+     * Costul perioadei = costul lunar × 12 ÷ 365 × zilele din filtru (și pentru o singură zi).
+     */
+    public function getEquipmentCostBreakdown(array $filters = []): array
+    {
+        $filters = $this->normalizeFilters($filters);
+        $range = $this->getPeriodRange($filters['period'], $filters['date_from'], $filters['date_to']);
+        $days = (int) (new DateTimeImmutable($range['date_start']))->diff(new DateTimeImmutable($range['date_end']))->format('%a') + 1;
+        $perDay = 12 / 365;
+        $result = ['available' => false, 'total' => 0.0, 'monthly' => 0.0, 'period_total' => 0.0, 'days' => $days, 'units' => 0, 'vehicles' => 0, 'categories' => []];
+        if (!$this->tableExists('inventar_dotari_vehicule') || !$this->tableExists('inventar_dotari_catalog')) {
+            return $result;
+        }
+        $result['available'] = true;
+
+        $vehicleIds = array_map(static fn(array $row): int => (int) ($row['id'] ?? 0),
+            $this->getDashboardVehicles($filters['vehicle_id'], $filters['vehicle_category']));
+        $vehicleIds = $this->positiveIds($vehicleIds);
+        if ($vehicleIds === []) {
+            return $result;
+        }
+
+        $params = [];
+        $condition = $this->inCondition('idv.vehicle_id', $vehicleIds, $params, 'equipment_vehicle');
+        $stmt = $this->db->prepare("
+            SELECT idv.vehicle_id,
+                   cat.id AS catalog_id,
+                   COALESCE(NULLIF(TRIM(cat.nume), ''), 'Dotare fără catalog') AS nume,
+                   COALESCE(NULLIF(TRIM(cat.categorie), ''), 'Fără categorie') AS categorie,
+                   CASE WHEN idv.cost > 0 THEN idv.cost ELSE COALESCE(cat.cost_implicit, 0) END AS cost,
+                   GREATEST(COALESCE(idv.interval_inspectie_luni, cat.interval_implicit_inspectie_luni, 12), 1) AS interval_luni
+            FROM inventar_dotari_vehicule idv
+            LEFT JOIN inventar_dotari_catalog cat ON cat.id = idv.catalog_id
+            WHERE {$condition}
+        ");
+        $this->bindAll($stmt, $params);
+        $stmt->execute();
+
+        $categories = [];
+        $allVehicles = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $cost = (float) $row['cost'];
+            $monthly = $cost / (int) $row['interval_luni'];
+            $periodCost = $monthly * $perDay * $days;
+            $vehicleId = (int) $row['vehicle_id'];
+            $catKey = mb_strtoupper((string) $row['categorie'], 'UTF-8');
+            $itemKey = (string) ($row['catalog_id'] ?? ('x' . $row['nume']));
+
+            $categories[$catKey] ??= ['label' => (string) $row['categorie'], 'total' => 0.0, 'monthly' => 0.0, 'period_total' => 0.0, 'units' => 0, 'vehicle_ids' => [], 'items' => []];
+            $category = &$categories[$catKey];
+            $category['total'] += $cost;
+            $category['monthly'] += $monthly;
+            $category['period_total'] += $periodCost;
+            $category['units']++;
+            $category['vehicle_ids'][$vehicleId] = true;
+            $category['items'][$itemKey] ??= ['label' => (string) $row['nume'], 'total' => 0.0, 'monthly' => 0.0, 'period_total' => 0.0, 'units' => 0, 'vehicle_ids' => []];
+            $category['items'][$itemKey]['total'] += $cost;
+            $category['items'][$itemKey]['monthly'] += $monthly;
+            $category['items'][$itemKey]['period_total'] += $periodCost;
+            $category['items'][$itemKey]['units']++;
+            $category['items'][$itemKey]['vehicle_ids'][$vehicleId] = true;
+            unset($category);
+
+            $allVehicles[$vehicleId] = true;
+            $result['total'] += $cost;
+            $result['monthly'] += $monthly;
+            $result['period_total'] += $periodCost;
+            $result['units']++;
+        }
+
+        foreach ($categories as &$category) {
+            foreach ($category['items'] as &$item) {
+                $item['vehicles'] = count($item['vehicle_ids']);
+                unset($item['vehicle_ids']);
+            }
+            unset($item);
+            $category['items'] = array_values($category['items']);
+            usort($category['items'], static fn(array $a, array $b): int => $b['period_total'] <=> $a['period_total']);
+            $category['vehicles'] = count($category['vehicle_ids']);
+            unset($category['vehicle_ids']);
+        }
+        unset($category);
+        uasort($categories, static fn(array $a, array $b): int => $b['period_total'] <=> $a['period_total']);
+
+        $result['categories'] = array_values($categories);
+        $result['vehicles'] = count($allVehicles);
+
+        return $result;
+    }
+
+    private function getVehicleDocumentCosts(array $filters, int $days): array
+    {
+        $result = ['total' => 0.0, 'groups' => [], 'unpriced' => 0, 'available' => false];
+        if (!$this->tableExists('configurare_costuri_documente_vehicule')) {
+            return $result;
+        }
+        $result['available'] = true;
+
+        $vehicles = [];
+        foreach ($this->getDashboardVehicles($filters['vehicle_id'], $filters['vehicle_category']) as $vehicle) {
+            if ((string) ($vehicle['status'] ?? 'activ') === 'activ') {
+                $vehicles[(int) $vehicle['id']] = $vehicle;
+            }
+        }
+        if ($vehicles === []) {
+            return $result;
+        }
+
+        $hasOverride = $this->tableExists('configurare_costuri_documente_vehicule_override');
+        $params = [];
+        $condition = $this->inCondition('v.id', array_keys($vehicles), $params, 'doc_cost_vehicle');
+        $typeMatch = "c.vehicle_type = (CASE WHEN v.tip_vehicul = 'autoturism' THEN 'autovehicul'
+                                           WHEN v.tip_vehicul = 'semiremorca' THEN 'semiremorca_primar'
+                                           ELSE v.tip_vehicul END)";
+        $sql = "
+            SELECT v.id AS vehicle_id, c.document_type,
+                   " . ($hasOverride ? 'COALESCE(o.document_cost, c.document_cost)' : 'c.document_cost') . " AS cost,
+                   " . ($hasOverride ? 'COALESCE(o.validity_days, c.validity_days)' : 'c.validity_days') . " AS validity_days
+            FROM vehicule v
+            INNER JOIN configurare_costuri_documente_vehicule c ON {$typeMatch}
+            " . ($hasOverride ? 'LEFT JOIN configurare_costuri_documente_vehicule_override o
+                ON o.vehicle_id = v.id AND UPPER(TRIM(o.document_type)) = UPPER(TRIM(c.document_type))' : '') . "
+            WHERE {$condition}
+        ";
+        $stmt = $this->db->prepare($sql);
+        $this->bindAll($stmt, $params);
+        $stmt->execute();
+        $rows = $stmt->fetchAll();
+
+        // Override-uri pentru documente care nu există în configurarea tipului de vehicul.
+        if ($hasOverride) {
+            $params = [];
+            $condition = $this->inCondition('v.id', array_keys($vehicles), $params, 'doc_cost_override');
+            $stmt = $this->db->prepare("
+                SELECT v.id AS vehicle_id, o.document_type, o.document_cost AS cost, o.validity_days
+                FROM vehicule v
+                INNER JOIN configurare_costuri_documente_vehicule_override o ON o.vehicle_id = v.id
+                WHERE {$condition}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM configurare_costuri_documente_vehicule c
+                      WHERE {$typeMatch} AND UPPER(TRIM(c.document_type)) = UPPER(TRIM(o.document_type))
+                  )
+            ");
+            $this->bindAll($stmt, $params);
+            $stmt->execute();
+            $rows = array_merge($rows, $stmt->fetchAll());
+        }
+
+        $groups = [];
+        $unpricedTypes = [];
+        foreach ($rows as $row) {
+            $vehicle = $vehicles[(int) $row['vehicle_id']] ?? null;
+            if ($vehicle === null) {
+                continue;
+            }
+            $type = match ((string) $vehicle['tip_vehicul']) {
+                'autoturism' => 'autovehicul',
+                'semiremorca' => 'semiremorca_primar',
+                default => (string) $vehicle['tip_vehicul'],
+            };
+            $capacityLabel = trim((string) ($vehicle['categorie_capacitate'] ?? ''));
+            $groupKey = $type . '|' . (int) ($vehicle['categorie_capacitate_id'] ?? 0);
+            $groups[$groupKey] ??= [
+                'key' => $groupKey,
+                'label' => (self::DOCUMENT_VEHICLE_TYPE_LABELS[$type] ?? ucfirst(str_replace('_', ' ', $type)))
+                    . ($capacityLabel !== '' ? ' · ' . $capacityLabel : ''),
+                'icon' => match ($type) {
+                    'autovehicul' => 'bi-car-front',
+                    'semiremorca_primar', 'semiremorca_distributie' => 'bi-truck-flatbed',
+                    'cap_tractor' => 'bi-truck-front',
+                    default => 'bi-truck',
+                },
+                'capacity_order' => $capacityLabel !== '' ? (int) ($vehicle['categorie_capacitate_ordine'] ?? 0) : PHP_INT_MAX,
+                'capacity_sum' => 0.0,
+                'capacity_count' => 0,
+                'vehicle_ids' => [],
+                'total' => 0.0,
+                'documents' => [],
+                'unpriced' => [],
+            ];
+            $group = &$groups[$groupKey];
+            if (!isset($group['vehicle_ids'][(int) $row['vehicle_id']])) {
+                $group['vehicle_ids'][(int) $row['vehicle_id']] = true;
+                if (is_numeric($vehicle['capacitate_transport'] ?? null) && (float) $vehicle['capacitate_transport'] > 0) {
+                    $group['capacity_sum'] += (float) $vehicle['capacitate_transport'];
+                    $group['capacity_count']++;
+                }
+            }
+
+            $docLabel = trim((string) $row['document_type']);
+            $docKey = mb_strtoupper($docLabel, 'UTF-8');
+            $cost = (float) ($row['cost'] ?? 0);
+            $validity = (int) ($row['validity_days'] ?? 0);
+            if ($cost <= 0 || $validity <= 0) {
+                $group['unpriced'][$docKey] = $docLabel;
+                $unpricedTypes[$docKey] = true;
+                unset($group);
+                continue;
+            }
+
+            $value = $cost / $validity * $days;
+            $group['documents'][$docKey] ??= ['label' => $docLabel, 'total' => 0.0, 'vehicles' => 0];
+            $group['documents'][$docKey]['total'] += $value;
+            $group['documents'][$docKey]['vehicles']++;
+            $group['total'] += $value;
+            $result['total'] += $value;
+            unset($group);
+        }
+
+        foreach ($groups as &$group) {
+            // tipul de document e "fără preț" doar dacă niciun vehicul din grupă nu îl are cu preț
+            $group['unpriced'] = array_values(array_diff_key($group['unpriced'], $group['documents']));
+            $group['documents'] = array_values($group['documents']);
+            usort($group['documents'], static fn(array $a, array $b): int => $b['total'] <=> $a['total']);
+            $group['vehicles'] = count($group['vehicle_ids']);
+            $group['capacity'] = $group['capacity_count'] > 0 ? $group['capacity_sum'] / $group['capacity_count'] : null;
+            unset($group['vehicle_ids'], $group['capacity_sum'], $group['capacity_count']);
+        }
+        unset($group);
+
+        // Ordonat după capacitate (ordinea din Categorii capacitate, apoi capacitatea medie).
+        uasort($groups, static fn(array $a, array $b): int =>
+            ($a['capacity_order'] <=> $b['capacity_order'])
+            ?: (($a['capacity'] ?? PHP_FLOAT_MAX) <=> ($b['capacity'] ?? PHP_FLOAT_MAX))
+            ?: strnatcasecmp($a['label'], $b['label']));
+
+        $result['groups'] = array_values($groups);
+        $result['unpriced'] = count($unpricedTypes);
+
+        return $result;
+    }
+
+    private function getDriverDocumentCosts(array $filters, int $days): array
+    {
+        $result = ['total' => 0.0, 'drivers' => [], 'documents' => [], 'drivers_without_cost' => 0, 'available' => false];
+        if (!$this->tableExists('configurare_costuri_documente_soferi')) {
+            return $result;
+        }
+        $result['available'] = true;
+
+        $drivers = [];
+        foreach ($this->getDashboardDrivers($filters['vehicle_id'], $filters['vehicle_category']) as $driver) {
+            if ((string) ($driver['status'] ?? 'activ') === 'activ') {
+                $drivers[(int) $driver['id']] = $driver;
+            }
+        }
+        if ($drivers === []) {
+            return $result;
+        }
+
+        $params = [];
+        $condition = $this->inCondition('c.driver_id', array_keys($drivers), $params, 'doc_cost_driver');
+        $stmt = $this->db->prepare("
+            SELECT c.driver_id, c.document_type, c.document_cost, c.validity_days
+            FROM configurare_costuri_documente_soferi c
+            WHERE {$condition}
+        ");
+        $this->bindAll($stmt, $params);
+        $stmt->execute();
+
+        $byDriver = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $cost = (float) ($row['document_cost'] ?? 0);
+            $validity = (int) ($row['validity_days'] ?? 0);
+            if ($cost <= 0 || $validity <= 0) {
+                continue;
+            }
+            $driverId = (int) $row['driver_id'];
+            $docLabel = trim((string) $row['document_type']);
+            $docKey = mb_strtoupper($docLabel, 'UTF-8');
+            $value = $cost / $validity * $days;
+
+            $byDriver[$driverId] ??= [
+                'id' => $driverId,
+                'nume' => (string) ($drivers[$driverId]['nume'] ?? ''),
+                'total' => 0.0,
+                'documents' => [],
+            ];
+            $byDriver[$driverId]['total'] += $value;
+            $byDriver[$driverId]['documents'][] = [
+                'label' => $docLabel,
+                'total' => $value,
+                'cost' => $cost,
+                'validity_days' => $validity,
+            ];
+
+            $result['documents'][$docKey] ??= ['label' => $docLabel, 'total' => 0.0, 'drivers' => 0];
+            $result['documents'][$docKey]['total'] += $value;
+            $result['documents'][$docKey]['drivers']++;
+            $result['total'] += $value;
+        }
+
+        foreach ($byDriver as &$driver) {
+            usort($driver['documents'], static fn(array $a, array $b): int => $b['total'] <=> $a['total']);
+        }
+        unset($driver);
+        uasort($byDriver, static fn(array $a, array $b): int => ($b['total'] <=> $a['total']) ?: strnatcasecmp($a['nume'], $b['nume']));
+
+        $result['drivers'] = array_values($byDriver);
+        $result['documents'] = array_values($result['documents']);
+        usort($result['documents'], static fn(array $a, array $b): int => $b['total'] <=> $a['total']);
+        $result['drivers_without_cost'] = count($drivers) - count($byDriver);
+
+        return $result;
+    }
+
     public function getFuelCostBreakdown(array $filters = []): array
     {
         $filters = $this->normalizeFilters($filters);
-        $periodRange = $this->getPeriodRange($filters['period']);
+        $periodRange = $this->getPeriodRange($filters['period'], $filters['date_from'], $filters['date_to']);
         $breakdown = $this->emptyFuelBreakdown($periodRange);
 
         if (!$this->fuelFillupsTableExists()) {
@@ -686,7 +1025,7 @@ class DashboardModel extends BaseModel
     public function getMaintenanceCostBreakdown(array $filters = []): array
     {
         $filters = $this->normalizeFilters($filters);
-        $periodRange = $this->getPeriodRange($filters['period']);
+        $periodRange = $this->getPeriodRange($filters['period'], $filters['date_from'], $filters['date_to']);
         $breakdown = $this->emptyMaintenanceBreakdown($periodRange);
 
         if (!$this->tableExists('mentenanta')) {
@@ -794,7 +1133,7 @@ class DashboardModel extends BaseModel
     public function getRecentActivity(int $limit = 10, array $filters = []): array
     {
         $filters = $this->normalizeFilters($filters);
-        $periodRange = $this->getPeriodRange($filters['period']);
+        $periodRange = $this->getPeriodRange($filters['period'], $filters['date_from'], $filters['date_to']);
 
         $sql = '
             SELECT activity.tip,
@@ -1170,11 +1509,24 @@ class DashboardModel extends BaseModel
 
     private function normalizeFilters(array $filters): array
     {
-        $allowedPeriods = ['luna_curenta', 'ultimele_30_zile', 'an_curent'];
+        $allowedPeriods = ['luna_curenta', 'ultimele_30_zile', 'an_curent', 'personalizat'];
         $period = (string) ($filters['period'] ?? 'luna_curenta');
 
         if (!in_array($period, $allowedPeriods, true)) {
             $period = 'luna_curenta';
+        }
+
+        // Perioada personalizata cere ambele capete valide, altfel revine la luna curenta.
+        $dateFrom = self::validDate($filters['date_from'] ?? null);
+        $dateTo = self::validDate($filters['date_to'] ?? null);
+        if ($period !== 'personalizat' || $dateFrom === null || $dateTo === null) {
+            $dateFrom = null;
+            $dateTo = null;
+            if ($period === 'personalizat') {
+                $period = 'luna_curenta';
+            }
+        } elseif ($dateFrom > $dateTo) {
+            [$dateFrom, $dateTo] = [$dateTo, $dateFrom];
         }
 
         $vehicleId = $filters['vehicle_id'] ?? null;
@@ -1184,9 +1536,22 @@ class DashboardModel extends BaseModel
 
         return [
             'period' => $period,
+            'date_from' => $dateFrom,
+            'date_to' => $dateTo,
             'vehicle_id' => $vehicleId,
             'vehicle_category' => $this->normalizeVehicleCategory((string) ($filters['vehicle_category'] ?? 'toate')),
         ];
+    }
+
+    private static function validDate(mixed $value): ?string
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+        $value = trim($value);
+        $parsed = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+
+        return $parsed !== false && $parsed->format('Y-m-d') === $value ? $value : null;
     }
 
     private function normalizeVehicleCategory(string $vehicleCategory): string
@@ -1212,11 +1577,21 @@ class DashboardModel extends BaseModel
         return $column . ' NOT IN (' . $lightTypes . ')';
     }
 
-    private function getPeriodRange(string $period): array
+    private function getPeriodRange(string $period, ?string $dateFrom = null, ?string $dateTo = null): array
     {
         $today = new DateTimeImmutable('today');
 
         switch ($period) {
+            case 'personalizat':
+                if ($dateFrom !== null && $dateTo !== null) {
+                    $start = new DateTimeImmutable($dateFrom);
+                    $end = new DateTimeImmutable($dateTo);
+                    break;
+                }
+                $start = $today->modify('first day of this month');
+                $end = $today;
+                break;
+
             case 'ultimele_30_zile':
                 $start = $today->modify('-29 days');
                 $end = $today;
@@ -1250,6 +1625,8 @@ class DashboardModel extends BaseModel
             'rows' => [
                 'motorina' => ['label' => 'Motorină', 'quantity' => 0.0, 'value' => 0.0, 'tone' => 'green'],
                 'adblue' => ['label' => 'AdBlue', 'quantity' => 0.0, 'value' => 0.0, 'tone' => 'blue'],
+                'benzina' => ['label' => 'Benzină', 'quantity' => 0.0, 'value' => 0.0, 'tone' => 'orange'],
+                'gpl' => ['label' => 'GPL', 'quantity' => 0.0, 'value' => 0.0, 'tone' => 'purple'],
             ],
             'total_quantity' => 0.0,
             'total_value' => 0.0,

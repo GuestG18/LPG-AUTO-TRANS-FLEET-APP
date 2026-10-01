@@ -310,7 +310,7 @@ $kpis = [
                                                         <?php
                                                         $docPath = trim((string) ($detail['file_path'] ?? ''));
                                                         $docName = trim((string) ($detail['original_name'] ?? ''));
-                                                        $docUrl = $docPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($docPath)) : null;
+                                                        $docUrl = trip_expense_document_url($docPath);
                                                         ?>
                                                         <tr>
                                                             <td><?= e($formatDateSlash((string) ($detail['data_cheltuiala'] ?? ''))) ?></td>

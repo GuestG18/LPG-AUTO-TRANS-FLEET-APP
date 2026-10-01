@@ -59,7 +59,7 @@ class FuelModel extends BaseModel
                 api_id VARCHAR(160) NOT NULL,
                 vehicle_registration VARCHAR(40) NOT NULL,
                 driver_name VARCHAR(180) NULL,
-                fuel_type ENUM('motorina', 'adblue') NOT NULL,
+                fuel_type ENUM('motorina', 'adblue', 'benzina', 'gpl') NOT NULL,
                 quantity_liters DECIMAL(12,2) NOT NULL DEFAULT 0.00,
                 odometer_km INT UNSIGNED NULL,
                 total_value DECIMAL(12,2) NOT NULL DEFAULT 0.00,
@@ -78,6 +78,16 @@ class FuelModel extends BaseModel
 
         if (!$this->columnExists('fuel_fillups', 'odometer_km')) {
             $this->db->exec('ALTER TABLE fuel_fillups ADD COLUMN odometer_km INT UNSIGNED NULL AFTER quantity_liters');
+        }
+
+        // Benzina si GPL vin si ele din CardOil (vehiculele usoare); inainte
+        // erau aruncate la import pentru ca ENUM-ul accepta doar motorina/adblue.
+        $fuelTypeColumn = (string) $this->db->query("
+            SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fuel_fillups' AND COLUMN_NAME = 'fuel_type'
+        ")->fetchColumn();
+        if ($fuelTypeColumn !== '' && !str_contains($fuelTypeColumn, "'gpl'")) {
+            $this->db->exec("ALTER TABLE fuel_fillups MODIFY fuel_type ENUM('motorina', 'adblue', 'benzina', 'gpl') NOT NULL");
         }
 
         if (!$this->columnExists('fuel_fillups', 'driver_name')) {
@@ -1086,8 +1096,8 @@ class FuelModel extends BaseModel
         }
 
         $fuelType = (string) ($input['fuel_type'] ?? '');
-        if (!in_array($fuelType, ['motorina', 'adblue'], true)) {
-            return ['ok' => false, 'message' => 'Tipul de carburant trebuie să fie Motorină sau AdBlue.'];
+        if (!in_array($fuelType, ['motorina', 'adblue', 'benzina', 'gpl'], true)) {
+            return ['ok' => false, 'message' => 'Tipul de carburant trebuie să fie Motorină, Benzină, GPL sau AdBlue.'];
         }
 
         $quantity = (float) ($input['quantity_liters'] ?? 0);
@@ -3386,7 +3396,7 @@ class FuelModel extends BaseModel
         }
 
         $fuelType = trim((string) ($filters['fuel_type'] ?? ''));
-        if (in_array($fuelType, ['motorina', 'adblue'], true)) {
+        if (in_array($fuelType, ['motorina', 'adblue', 'benzina', 'gpl'], true)) {
             $where[] = "f.fuel_type = :{$prefix}_fuel_type";
             $params[":{$prefix}_fuel_type"] = $fuelType;
         }

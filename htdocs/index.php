@@ -346,12 +346,14 @@ require_once __DIR__ . '/models/LeasingSchedulerModel.php';
 require_once __DIR__ . '/models/TransportTariffModel.php';
 require_once __DIR__ . '/models/OperationalCostModel.php';
 require_once __DIR__ . '/models/AccommodationExpenseModel.php';
+require_once __DIR__ . '/models/InvoiceModel.php';
 
 require_once __DIR__ . '/services/EntityStatusService.php';
 require_once __DIR__ . '/services/InactiveResourceStatusService.php';
 require_once __DIR__ . '/services/RaceCompletenessService.php';
 require_once __DIR__ . '/services/CentralizatorFacturareService.php';
 require_once __DIR__ . '/services/EmailService.php';
+require_once __DIR__ . '/services/InvoiceStorageService.php';
 require_once __DIR__ . '/services/CardOilApiClient.php';
 require_once __DIR__ . '/services/SasFleetClient.php';
 require_once __DIR__ . '/services/FleetLivePositionService.php';
@@ -370,6 +372,7 @@ require_once __DIR__ . '/services/StaffMonthlyAccountingService.php';
 require_once __DIR__ . '/services/PayrollCalculatorService.php';
 require_once __DIR__ . '/services/PayrollMonthService.php';
 require_once __DIR__ . '/services/OperationalCostService.php';
+require_once __DIR__ . '/services/DashboardOperationalCostService.php';
 require_once __DIR__ . '/services/OcrSpaceService.php';
 require_once __DIR__ . '/services/OcrInvoiceHeuristics.php';
 require_once __DIR__ . '/services/OcrPartsLineExtractor.php';
@@ -400,6 +403,7 @@ require_once __DIR__ . '/controllers/NotificationRuleController.php';
 require_once __DIR__ . '/controllers/StaffAccountancyController.php';
 require_once __DIR__ . '/controllers/ExpenseController.php';
 require_once __DIR__ . '/controllers/AccommodationExpenseController.php';
+require_once __DIR__ . '/controllers/InvoiceController.php';
 require_once __DIR__ . '/controllers/MaintenanceController.php';
 require_once __DIR__ . '/controllers/TechnicalHealthController.php';
 require_once __DIR__ . '/controllers/DriverActivityHistoryController.php';
@@ -722,7 +726,22 @@ try {
 
         case 'cazare':
             require_auth();
+            // Lista Cazare s-a mutat in Facturi (filtrul tip=cazare). Registrul vechi ramane
+            // accesibil cu ?vechi=1 (adaugare fara factura, export), iar dupa o actiune
+            // facuta din el (referer = registrul vechi) utilizatorul ramane acolo.
+            // Actiunile (import_sheet, download_document, store...) merg ca inainte.
+            if (in_array($action, ['index', 'list'], true)
+                && !isset($_GET['vechi'])
+                && !str_contains((string) ($_SERVER['HTTP_REFERER'] ?? ''), 'vechi=1')
+                && can('facturi')) {
+                redirect(build_query_url(['page' => 'facturi', 'tip' => 'cazare']));
+            }
             (new AccommodationExpenseController($db))->handle($action);
+            break;
+
+        case 'facturi':
+            require_auth();
+            (new InvoiceController($db))->handle($action);
             break;
 
         case 'cost_operational':

@@ -31,6 +31,8 @@ $baseQuery = array_filter([
     'status' => (string) ($filters['status'] ?? ''),
     'q' => (string) ($filters['q'] ?? ''),
     'pp' => (string) ((int) ($pagination['per_page'] ?? 20)),
+    // Registrul vechi (lista Cazare se deschide altfel in Facturi): ramanem aici.
+    'vechi' => isset($_GET['vechi']) ? '1' : '',
 ], static fn($value, $key) => $key === 'page' || $value !== '', ARRAY_FILTER_USE_BOTH);
 
 $pageUrl = static fn(int $page): string => build_query_url(array_merge($baseQuery, ['p' => (string) $page]));
@@ -149,6 +151,7 @@ $raceLabel = static function (array $race): string {
         <form method="get" class="row g-2 align-items-end">
             <input type="hidden" name="page" value="cazare">
             <input type="hidden" name="pp" value="<?= (int) ($pagination['per_page'] ?? 20) ?>">
+            <?php if (isset($_GET['vechi'])): ?><input type="hidden" name="vechi" value="1"><?php endif; ?>
             <div class="col-6 col-lg-2">
                 <label class="form-label small mb-1" for="cazareDataStart">De la</label>
                 <input type="date" class="form-control form-control-sm" id="cazareDataStart" name="data_start" value="<?= e((string) ($filters['data_start'] ?? '')) ?>">

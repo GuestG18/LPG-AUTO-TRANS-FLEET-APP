@@ -5,6 +5,11 @@ $periodOptions = is_array($periodOptions ?? null) ? $periodOptions : [];
 $vehicleCategoryOptions = is_array($vehicleCategoryOptions ?? null) ? $vehicleCategoryOptions : [];
 $vehicleOptions = is_array($vehicleOptions ?? null) ? $vehicleOptions : [];
 $approvalSummary = is_array($approvalSummary ?? null) ? $approvalSummary : [];
+$operationalCosts = is_array($operationalCosts ?? null) ? $operationalCosts : null;
+$expenseBreakdown = is_array($expenseBreakdown ?? null) ? $expenseBreakdown : null;
+$documentCosts = is_array($documentCosts ?? null) ? $documentCosts : null;
+$equipmentCosts = is_array($equipmentCosts ?? null) ? $equipmentCosts : null;
+$canViewFinancial = !empty($canViewFinancial);
 $canReviewInactiveApprovals = !empty($canReviewInactiveApprovals);
 $showDashboardApprovalPanel = false;
 
@@ -25,11 +30,33 @@ $vehicleCategoryLabel = (string) ($dashboardFilters['vehicle_category_label'] ??
 $vehicleLabel = (string) ($dashboardFilters['vehicle_label'] ?? 'Toate vehiculele');
 $dateStart = (string) ($periodRange['date_start'] ?? '');
 $dateEnd = (string) ($periodRange['date_end'] ?? '');
+$periodFieldLabel = (static function (string $period, string $start, string $end): string {
+    $months = ['Ianuarie', 'Februarie', 'Martie', 'Aprilie', 'Mai', 'Iunie', 'Iulie', 'August', 'Septembrie', 'Octombrie', 'Noiembrie', 'Decembrie'];
+    $startDate = DateTimeImmutable::createFromFormat('!Y-m-d', $start) ?: null;
+    $endDate = DateTimeImmutable::createFromFormat('!Y-m-d', $end) ?: null;
+    if ($period === 'ultimele_30_zile') {
+        return 'Ultimele 30 de zile';
+    }
+    if ($startDate === null || $endDate === null) {
+        return 'Alege perioada';
+    }
+    if ($period === 'an_curent') {
+        return 'Anul ' . $startDate->format('Y');
+    }
+    if ($start === $end) {
+        return $startDate->format('d.m.Y');
+    }
+    $fullMonth = $startDate->format('d') === '01'
+        && $startDate->format('Y-m') === $endDate->format('Y-m')
+        && ($period === 'luna_curenta' || $endDate->format('d') === $endDate->format('t'));
+    if ($fullMonth) {
+        return $months[(int) $startDate->format('n') - 1] . ' ' . $startDate->format('Y');
+    }
+
+    return $startDate->format('d.m.Y') . ' – ' . $endDate->format('d.m.Y');
+})($selectedPeriod, $dateStart, $dateEnd);
 $operationalRows = is_array($operationalCost['rows'] ?? null) ? $operationalCost['rows'] : [];
 $operationalTotal = (float) ($operationalCost['total_value'] ?? ((float) ($fuelCost['total_value'] ?? 0) + (float) ($maintenanceCost['total_value'] ?? 0)));
-$fuelHasData = (float) ($fuelCost['total_value'] ?? 0) > 0 || (float) ($fuelCost['total_quantity'] ?? 0) > 0;
-$maintenanceHasData = (float) ($maintenanceCost['total_value'] ?? 0) > 0;
-$operationalInitiallyExpanded = isset($_GET['operational_expanded']) && (string) $_GET['operational_expanded'] === '1';
 $approvalCounts = is_array($approvalSummary['counts'] ?? null) ? $approvalSummary['counts'] : ['vehicle' => 0, 'driver' => 0, 'repair' => 0];
 $approvalVehicleRows = is_array($approvalSummary['vehicles'] ?? null) ? $approvalSummary['vehicles'] : [];
 $approvalDriverRows = is_array($approvalSummary['drivers'] ?? null) ? $approvalSummary['drivers'] : [];
@@ -226,6 +253,9 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
 ?>
 
 <link rel="stylesheet" href="<?= e(url('assets/css/dashboard-live.css?v=' . $dashboardLiveCssVersion)) ?>">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/l10n/ro.js"></script>
 
 <div class="dashboard-page" data-dashboard-live-root>
     <header class="dashboard-page-heading">
@@ -246,26 +276,19 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
         <h2 id="dashboard-filter-title" class="visually-hidden">Filtre dashboard</h2>
         <form class="dashboard-filter-form" method="get" data-dashboard-live-form>
             <input type="hidden" name="page" value="dashboard">
-            <input type="hidden" name="operational_expanded" value="<?= $operationalInitiallyExpanded ? '1' : '0' ?>" data-dashboard-operational-state-input>
 
+            <?php /* Același câmp ca în Carburanți: calendar de interval (flatpickr) cu scurtături. */ ?>
             <div class="dashboard-filter-group dashboard-filter-period">
-                <span class="dashboard-filter-label">Perioadă</span>
-                <div class="dashboard-period-options" role="group" aria-label="Perioadă dashboard">
-                    <?php foreach ($periodOptions as $periodValue => $periodLabel): ?>
-                        <?php $periodId = 'dashboard_period_' . preg_replace('/[^a-z0-9_]+/i', '_', (string) $periodValue); ?>
-                        <input
-                            class="dashboard-period-radio"
-                            type="radio"
-                            id="<?= e($periodId) ?>"
-                            name="period"
-                            value="<?= e((string) $periodValue) ?>"
-                            <?= $selectedPeriod === (string) $periodValue ? 'checked' : '' ?>
-                        >
-                        <label class="dashboard-period-option" for="<?= e($periodId) ?>">
-                            <?= e((string) $periodLabel) ?>
-                        </label>
-                    <?php endforeach; ?>
+                <label class="dashboard-filter-label" for="dashboard_period_display">Perioadă</label>
+                <div class="fuel-date-input dashboard-date-input">
+                    <input type="text" class="form-control dashboard-select" id="dashboard_period_display"
+                           value="<?= e($periodFieldLabel) ?>" placeholder="Alege perioada" readonly
+                           data-dashboard-period-display>
+                    <i class="bi bi-calendar3" aria-hidden="true"></i>
                 </div>
+                <input type="hidden" name="period" value="<?= e($selectedPeriod) ?>" data-dashboard-period-input>
+                <input type="hidden" name="date_from" value="<?= e($dateStart) ?>" data-dashboard-date-from>
+                <input type="hidden" name="date_to" value="<?= e($dateEnd) ?>" data-dashboard-date-to>
             </div>
 
             <div class="dashboard-filter-group dashboard-filter-category">
@@ -316,11 +339,22 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                 </a>
             </div>
 
+            <div class="dashboard-filter-chips-row">
             <div class="dashboard-filter-chips" aria-label="Filtre active" aria-live="polite" data-dashboard-live="chips">
-                <span class="dashboard-filter-chip">
+                <button
+                    type="button"
+                    class="dashboard-filter-chip dashboard-period-chip<?= $selectedPeriod === 'personalizat' ? ' is-custom' : '' ?>"
+                    data-dashboard-period-picker
+                    data-date-start="<?= e($dateStart) ?>"
+                    data-date-end="<?= e($dateEnd) ?>"
+                    aria-haspopup="dialog"
+                    aria-expanded="false"
+                    title="Alege perioada"
+                >
                     <i class="bi bi-calendar2-week" aria-hidden="true"></i>
                     <span>Perioadă: <?= e($periodRangeLabel) ?></span>
-                </span>
+                    <i class="bi bi-chevron-down dashboard-period-chip-caret" aria-hidden="true"></i>
+                </button>
                 <span class="dashboard-filter-chip">
                     <i class="bi bi-diagram-3" aria-hidden="true"></i>
                     <span>Categorie: <?= e($vehicleCategoryLabel) ?></span>
@@ -330,13 +364,14 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
                     <span>Vehicul: <?= e($vehicleLabel) ?></span>
                 </span>
             </div>
+            </div>
         </form>
     </section>
 
     <div class="dashboard-approval-layout<?= $showDashboardApprovalPanel ? ' has-approval-panel' : '' ?>">
         <div class="dashboard-approval-content">
     <section
-        class="dashboard-main-grid<?= $operationalInitiallyExpanded ? ' is-operational-expanded' : '' ?>"
+        class="dashboard-main-grid<?= $canViewFinancial ? '' : ' is-without-financial' ?>"
         aria-label="Indicatori principali dashboard"
         data-dashboard-main-grid
     >
@@ -454,347 +489,11 @@ $driverReasonUrl = static function (string $reasonKey) use ($selectedVehicleSear
             <?php $faceKind = 'drivers'; $faceStatus = $driverStatus; require __DIR__ . '/_inactive_face.php'; ?>
         </article>
 
-        <article
-            class="dashboard-metric-card dashboard-card-operational dashboard-operational-summary-card<?= $operationalInitiallyExpanded ? ' is-expanded' : '' ?>"
-            role="button"
-            tabindex="0"
-            aria-expanded="<?= $operationalInitiallyExpanded ? 'true' : 'false' ?>"
-            aria-controls="dashboard-operational-fuel-card dashboard-operational-maintenance-card"
-            data-dashboard-operational-card
-            <?= $operationalInitiallyExpanded ? 'hidden' : '' ?>
-        >
-            <header class="dashboard-card-header dashboard-operational-header" data-dashboard-operational-header>
-                <div class="dashboard-card-title">
-                    <span class="dashboard-card-icon" aria-hidden="true"><i class="bi bi-cash-coin"></i></span>
-                    <h2>Cost total operațional</h2>
-                </div>
-                <div class="dashboard-operational-actions">
-                    <span class="dashboard-operational-badge" data-dashboard-operational-badge>Extins</span>
-                    <button
-                        class="dashboard-operational-toggle"
-                        type="button"
-                        aria-label="<?= $operationalInitiallyExpanded ? 'Restrânge cost total operațional' : 'Extinde cost total operațional' ?>"
-                        aria-expanded="<?= $operationalInitiallyExpanded ? 'true' : 'false' ?>"
-                        aria-controls="dashboard-operational-fuel-card dashboard-operational-maintenance-card"
-                        data-dashboard-operational-toggle
-                    >
-                        <i class="bi bi-chevron-down" aria-hidden="true"></i>
-                    </button>
-                </div>
-            </header>
-
-            <div class="dashboard-live-contents" data-dashboard-live="operational">
-            <div class="dashboard-money-total is-orange dashboard-operational-total">
-                <span data-dashboard-money="operational.total"><?= e(format_number_ro($operationalTotal, 2)) ?></span> <small>lei</small>
-            </div>
-            <p class="dashboard-card-period">Total perioadă: <?= e($periodRangeLabel) ?></p>
-            <p class="dashboard-operational-hint">Click pentru detalii</p>
-
-            <div class="dashboard-operational-summary" aria-label="Defalcare cost operațional">
-                <?php foreach ($operationalRows as $row): ?>
-                    <div class="dashboard-operational-summary-row">
-                        <span>
-                            <i class="dashboard-operational-dot tone-<?= e((string) ($row['tone'] ?? 'orange')) ?>" aria-hidden="true"></i>
-                            <?= e((string) ($row['label'] ?? '')) ?>
-                        </span>
-                        <strong><?= e($formatCurrency($row['value'] ?? 0)) ?></strong>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-            </div>
-
-        </article>
-
-        <section
-            class="dashboard-operational-detail-region<?= $operationalInitiallyExpanded ? ' is-visible' : '' ?>"
-            aria-hidden="<?= $operationalInitiallyExpanded ? 'false' : 'true' ?>"
-            data-dashboard-operational-detail-region
-            <?= $operationalInitiallyExpanded ? '' : 'hidden' ?>
-        >
-            <button
-                class="dashboard-operational-collapse"
-                type="button"
-                aria-label="Restrange costuri operationale"
-                data-dashboard-operational-collapse
-            >
-                <i class="bi bi-chevron-up" aria-hidden="true"></i>
-            </button>
-            <div class="dashboard-operational-detail-grid">
-        <article
-            id="dashboard-operational-fuel-card"
-            class="dashboard-metric-card dashboard-card-fuel dashboard-operational-sibling-card"
-            data-dashboard-operational-detail-card
-            data-dashboard-live="fuel"
-        >
-            <header class="dashboard-card-header">
-                <div class="dashboard-card-title">
-                    <span class="dashboard-card-icon" aria-hidden="true"><i class="bi bi-fuel-pump"></i></span>
-                    <h2>Cost total carburant</h2>
-                </div>
-                <a class="dashboard-card-link" href="<?= e($fuelDetailsUrl) ?>">
-                    <span>Vezi detalii</span>
-                    <i class="bi bi-chevron-right" aria-hidden="true"></i>
-                </a>
-            </header>
-
-            <div class="dashboard-money-total is-orange">
-                <span data-dashboard-money="fuel.total"><?= e(format_number_ro((float) ($fuelCost['total_value'] ?? 0), 2)) ?></span> <small>lei</small>
-            </div>
-            <p class="dashboard-card-period">Total perioad&#259;: <?= e($periodRangeLabel) ?></p>
-
-            <?php if (!$fuelHasData): ?>
-                <p class="dashboard-operational-empty">Nu exist&#259; aliment&#259;ri &icirc;n perioada selectat&#259;.</p>
-            <?php endif; ?>
-
-            <table class="dashboard-mini-table">
-                <thead>
-                <tr>
-                    <th>Produs</th>
-                    <th class="text-end">Cantitate</th>
-                    <th class="text-end">Valoare</th>
-                </tr>
-                </thead>
-                <tbody>
-                <?php foreach (($fuelCost['rows'] ?? []) as $row): ?>
-                    <tr>
-                        <td>
-                            <span class="dashboard-product-dot tone-<?= e((string) ($row['tone'] ?? 'blue')) ?>"></span>
-                            <?= e((string) ($row['label'] ?? '')) ?>
-                        </td>
-                        <td class="text-end"><?= e($formatLiters($row['quantity'] ?? 0)) ?></td>
-                        <td class="text-end"><?= e($formatCurrency($row['value'] ?? 0)) ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                <tr class="dashboard-mini-total">
-                    <td>Total</td>
-                    <td class="text-end"><?= e($formatLiters($fuelCost['total_quantity'] ?? 0)) ?></td>
-                    <td class="text-end"><?= e($formatCurrency($fuelCost['total_value'] ?? 0)) ?></td>
-                </tr>
-                </tbody>
-            </table>
-        </article>
-
-        <article
-            id="dashboard-operational-maintenance-card"
-            class="dashboard-metric-card dashboard-card-maintenance dashboard-operational-sibling-card"
-            data-dashboard-operational-detail-card
-            data-dashboard-live="maintenance"
-        >
-            <header class="dashboard-card-header">
-                <div class="dashboard-card-title">
-                    <span class="dashboard-card-icon" aria-hidden="true"><i class="bi bi-tools"></i></span>
-                    <h2>Cost mentenan&#539;&#259;</h2>
-                </div>
-                <a class="dashboard-card-link" href="<?= e($maintenanceDetailsUrl) ?>">
-                    <span>Vezi detalii</span>
-                    <i class="bi bi-chevron-right" aria-hidden="true"></i>
-                </a>
-            </header>
-
-            <div class="dashboard-money-total is-purple">
-                <span data-dashboard-money="maintenance.total"><?= e(format_number_ro((float) ($maintenanceCost['total_value'] ?? 0), 2)) ?></span> <small>lei</small>
-            </div>
-            <p class="dashboard-card-period">Total perioad&#259;: <?= e($periodRangeLabel) ?></p>
-
-            <?php if (!$maintenanceHasData): ?>
-                <p class="dashboard-operational-empty">Nu exist&#259; costuri de mentenan&#539;&#259; &icirc;n perioada selectat&#259;.</p>
-            <?php endif; ?>
-
-            <table class="dashboard-mini-table">
-                <thead>
-                <tr>
-                    <th>Categorie</th>
-                    <th class="text-end">Valoare</th>
-                </tr>
-                </thead>
-                <tbody>
-                <?php foreach (($maintenanceCost['rows'] ?? []) as $row): ?>
-                    <tr>
-                        <td>
-                            <i class="bi <?= e((string) ($row['icon'] ?? 'bi-wrench')) ?>" aria-hidden="true"></i>
-                            <?= e((string) ($row['label'] ?? '')) ?>
-                        </td>
-                        <td class="text-end"><?= e($formatCurrency($row['value'] ?? 0)) ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                <tr class="dashboard-mini-total">
-                    <td>Total</td>
-                    <td class="text-end"><?= e($formatCurrency($maintenanceCost['total_value'] ?? 0)) ?></td>
-                </tr>
-                </tbody>
-            </table>
-        </article>
-            </div>
-        </section>
+        <?php if ($canViewFinancial): ?>
+            <?php require __DIR__ . '/_operational_card.php'; ?>
+        <?php endif; ?>
     </section>
 
-    <section class="dashboard-detail-grid" aria-label="Liste inactive dashboard">
-        <article class="dashboard-detail-panel dashboard-panel-vehicles" data-dashboard-live="vehicle-list">
-            <header class="dashboard-panel-header">
-                <div>
-                    <h2>Vehicule inactive</h2>
-                    <span class="dashboard-count-badge" data-dashboard-count="vehicles.inactive-list"><?= e((string) ((int) ($vehicleStatus['inactive'] ?? 0))) ?></span>
-                </div>
-                <a href="<?= e($vehicleDetailsUrl) ?>">Vezi toate</a>
-            </header>
-
-            <div class="dashboard-panel-table-wrap">
-                <table class="dashboard-panel-table">
-                    <thead>
-                    <tr>
-                        <th>Vehicul</th>
-                        <th>Motiv</th>
-                        <th>De la</th>
-                        <th>Status</th>
-                        <th class="text-end">Actions</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    <?php if (($vehicleStatus['inactive_rows'] ?? []) === []): ?>
-                        <tr>
-                            <td colspan="5" class="dashboard-empty-cell">Nu există vehicule inactive pentru filtrele selectate.</td>
-                        </tr>
-                    <?php else: ?>
-                        <?php foreach ($vehicleStatus['inactive_rows'] as $row): ?>
-                            <?php
-                            $vehicleId = (int) ($row['id'] ?? 0);
-                            $plate = (string) ($row['nr_inmatriculare'] ?? '');
-                            $menuId = 'dashboard_vehicle_actions_' . $vehicleId;
-                            $unitMembers = is_array($row['members'] ?? null) && ($row['members'] !== [])
-                                ? $row['members']
-                                : [['id' => $vehicleId, 'nr_inmatriculare' => $plate]];
-                            $reasonPlate = (string) ($row['reason_vehicle'] ?? '');
-                            ?>
-                            <tr>
-                                <td>
-                                    <span class="dashboard-vehicle-assembly">
-                                        <?php foreach ($unitMembers as $memberIndex => $member): ?>
-                                            <?php if ($memberIndex > 0): ?>
-                                                <span class="dashboard-vehicle-assembly-plus" aria-hidden="true">+</span>
-                                            <?php endif; ?>
-                                            <span class="dashboard-vehicle-pill">
-                                                <i class="bi <?= e(str_starts_with((string) ($member['tip_vehicul'] ?? ''), 'semiremorca') ? 'bi-truck-flatbed' : 'bi-truck-front') ?>" aria-hidden="true"></i>
-                                                <strong><?= e((string) ($member['nr_inmatriculare'] ?? '')) ?></strong>
-                                            </span>
-                                        <?php endforeach; ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="dashboard-table-reason tone-<?= e((string) ($row['reason_tone'] ?? 'muted')) ?>">
-                                        <i class="bi <?= e((string) ($row['reason_icon'] ?? 'bi-circle')) ?>" aria-hidden="true"></i>
-                                        <?= e((string) ($row['reason'] ?? 'Alt motiv')) ?>
-                                    </span>
-                                    <?php if (count($unitMembers) > 1 && $reasonPlate !== ''): ?>
-                                        <small class="dashboard-table-reason-source">de la <?= e($reasonPlate) ?></small>
-                                    <?php endif; ?>
-                                </td>
-                                <td><?= e($formatDate($row['date'] ?? '')) ?></td>
-                                <td><span class="dashboard-status-badge"><i class="bi bi-circle-fill" aria-hidden="true"></i> Inactiv</span></td>
-                                <td class="text-end">
-                                    <div class="dropdown">
-                                        <button class="dashboard-menu-button" type="button" id="<?= e($menuId) ?>" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Acțiuni vehicul <?= e($plate) ?>">
-                                            <i class="bi bi-three-dots" aria-hidden="true"></i>
-                                        </button>
-                                        <ul class="dropdown-menu dropdown-menu-end dashboard-action-menu" aria-labelledby="<?= e($menuId) ?>">
-                                            <?php foreach ($unitMembers as $memberIndex => $member): ?>
-                                                <?php
-                                                $memberId = (int) ($member['id'] ?? 0);
-                                                $memberPlate = (string) ($member['nr_inmatriculare'] ?? '');
-                                                $memberSuffix = count($unitMembers) > 1 ? ' ' . $memberPlate : '';
-                                                ?>
-                                                <?php if ($memberIndex > 0): ?>
-                                                    <li><hr class="dropdown-divider"></li>
-                                                <?php endif; ?>
-                                                <li><a class="dropdown-item" href="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $memberId])) ?>">Vezi detalii<?= e($memberSuffix) ?></a></li>
-                                                <li><a class="dropdown-item" href="<?= e(build_query_url(['page' => 'vehicule', 'action' => 'edit', 'id' => $memberId])) ?>">Editează<?= e($memberSuffix) ?></a></li>
-                                            <?php endforeach; ?>
-                                        </ul>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-
-            <a class="dashboard-panel-footer-link" href="<?= e($vehicleDetailsUrl) ?>">
-                Vezi toate vehiculele inactive (<?= e((string) ((int) ($vehicleStatus['inactive'] ?? 0))) ?>)
-                <i class="bi bi-chevron-right" aria-hidden="true"></i>
-            </a>
-        </article>
-
-        <article class="dashboard-detail-panel dashboard-panel-drivers" data-dashboard-live="driver-list">
-            <header class="dashboard-panel-header">
-                <div>
-                    <h2>Șoferi inactivi</h2>
-                    <span class="dashboard-count-badge" data-dashboard-count="drivers.inactive-list"><?= e((string) ((int) ($driverStatus['inactive'] ?? 0))) ?></span>
-                </div>
-                <a href="<?= e($driverDetailsUrl) ?>">Vezi toate</a>
-            </header>
-
-            <div class="dashboard-panel-table-wrap">
-                <table class="dashboard-panel-table">
-                    <thead>
-                    <tr>
-                        <th>Șofer</th>
-                        <th>Motiv</th>
-                        <th>De la</th>
-                        <th>Status</th>
-                        <th class="text-end">Actions</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    <?php if (($driverStatus['inactive_rows'] ?? []) === []): ?>
-                        <tr>
-                            <td colspan="5" class="dashboard-empty-cell">Nu există șoferi inactivi pentru filtrele selectate.</td>
-                        </tr>
-                    <?php else: ?>
-                        <?php foreach ($driverStatus['inactive_rows'] as $row): ?>
-                            <?php
-                            $driverId = (int) ($row['id'] ?? 0);
-                            $driverName = (string) ($row['nume'] ?? '');
-                            $menuId = 'dashboard_driver_actions_' . $driverId;
-                            ?>
-                            <tr>
-                                <td>
-                                    <span class="dashboard-driver-cell">
-                                        <span class="dashboard-driver-avatar" aria-hidden="true"><?= e($initials($driverName)) ?></span>
-                                        <strong><?= e($driverName !== '' ? $driverName : ('Șofer #' . $driverId)) ?></strong>
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="dashboard-table-reason tone-<?= e((string) ($row['reason_tone'] ?? 'muted')) ?>">
-                                        <i class="bi <?= e((string) ($row['reason_icon'] ?? 'bi-circle')) ?>" aria-hidden="true"></i>
-                                        <?= e((string) ($row['reason'] ?? 'Alt motiv')) ?>
-                                    </span>
-                                </td>
-                                <td><?= e($formatDate($row['date'] ?? '')) ?></td>
-                                <td><span class="dashboard-status-badge"><i class="bi bi-circle-fill" aria-hidden="true"></i> Inactiv</span></td>
-                                <td class="text-end">
-                                    <div class="dropdown">
-                                        <button class="dashboard-menu-button" type="button" id="<?= e($menuId) ?>" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Acțiuni șofer <?= e($driverName) ?>">
-                                            <i class="bi bi-three-dots" aria-hidden="true"></i>
-                                        </button>
-                                        <ul class="dropdown-menu dropdown-menu-end dashboard-action-menu" aria-labelledby="<?= e($menuId) ?>">
-                                            <li><a class="dropdown-item" href="<?= e(build_query_url(['page' => 'soferi', 'action' => 'show', 'id' => $driverId])) ?>">Vezi detalii</a></li>
-                                            <li><a class="dropdown-item" href="<?= e(build_query_url(['page' => 'soferi', 'action' => 'edit', 'id' => $driverId])) ?>">Editează</a></li>
-                                        </ul>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-
-            <a class="dashboard-panel-footer-link" href="<?= e($driverDetailsUrl) ?>">
-                Vezi toți șoferii inactivi (<?= e((string) ((int) ($driverStatus['inactive'] ?? 0))) ?>)
-                <i class="bi bi-chevron-right" aria-hidden="true"></i>
-            </a>
-        </article>
-    </section>
         </div>
 
         <?php if ($showDashboardApprovalPanel): ?>

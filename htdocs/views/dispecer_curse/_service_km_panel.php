@@ -32,11 +32,25 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
                 <span class="badge text-bg-warning" title="Vehicule aflate acum în service"><?= count($serviceKmActive) ?> în service acum</span>
             <?php endif; ?>
         </h3>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+        <?php if ($serviceKmActive !== []): ?>
+            <span class="small text-muted d-none d-md-inline">
+                <?= e(implode(', ', array_map(static fn (array $row): string => (string) $row['nr_inmatriculare'], array_slice($serviceKmActive, 0, 4)))) ?><?= count($serviceKmActive) > 4 ? '…' : '' ?>
+            </span>
+        <?php endif; ?>
+        <?php if ($serviceKmEntries !== []): ?>
+            <button type="button" class="btn btn-sm btn-outline-primary dispatcher-filter-toggle" data-service-km-list-toggle aria-expanded="false" aria-controls="service-km-list-wrap">
+                <i class="bi bi-list-ul" aria-hidden="true"></i>
+                <span data-service-km-list-label>Afișează lista (<?= count($serviceKmEntries) ?>)</span>
+                <i class="bi bi-chevron-down" data-service-km-list-chevron aria-hidden="true"></i>
+            </button>
+        <?php endif; ?>
         <?php if ($serviceKmCanManage): ?>
             <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#service-km-form-wrap" aria-expanded="<?= $serviceKmOpen ? 'true' : 'false' ?>" aria-controls="service-km-form-wrap" data-service-km-new>
                 <i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă km service
             </button>
         <?php endif; ?>
+        </div>
     </div>
 
     <?php if ($serviceKmCanManage): ?>
@@ -120,6 +134,9 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
             Nicio perioadă de service în ultimele 90 de zile.
         </div>
     <?php else: ?>
+        <?php /* Lista sta ascunsa implicit, ca sa nu lungeasca pagina; antetul arata
+                 cate vehicule sunt acum in service. */ ?>
+        <div id="service-km-list-wrap" hidden data-service-km-list>
         <div class="table-responsive" style="max-height: 360px; overflow-y: auto;">
             <table class="table table-sm table-hover mb-0 align-middle">
                 <thead class="table-light position-sticky top-0">
@@ -198,18 +215,47 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
                 </tbody>
             </table>
         </div>
+        <div class="card-footer bg-white text-muted small">
+            Se afișează vehiculele aflate acum în service și perioadele încheiate în ultimele 90 de zile.
+            Km service apar separat și în raportul Km pierduți, ca justificare a km GPS rulați fără cursă.
+        </div>
+        </div>
     <?php endif; ?>
-    <div class="card-footer bg-white text-muted small">
-        Se afișează vehiculele aflate acum în service și perioadele încheiate în ultimele 90 de zile.
-        Km service apar separat și în raportul Km pierduți, ca justificare a km GPS rulați fără cursă.
-    </div>
 </div>
 
 <script>
 (function () {
     'use strict';
     var panel = document.querySelector('[data-service-km-panel]');
-    var form = panel ? panel.querySelector('[data-service-km-form]') : null;
+    if (!panel) { return; }
+
+    // Lista ascunsa implicit; se deschide din buton sau cand se ajunge la panou
+    // prin #service-km-panel (butonul "Km service" din antet, revenirea dupa salvare).
+    var list = panel.querySelector('[data-service-km-list]');
+    var listToggle = panel.querySelector('[data-service-km-list-toggle]');
+    function setListOpen(open) {
+        if (!list || !listToggle) { return; }
+        list.hidden = !open;
+        listToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        listToggle.classList.toggle('is-open', open);
+        var label = listToggle.querySelector('[data-service-km-list-label]');
+        if (label) { label.textContent = (open ? 'Ascunde lista' : 'Afișează lista') + ' (' + list.querySelectorAll('tbody tr').length + ')'; }
+        var chevron = listToggle.querySelector('[data-service-km-list-chevron]');
+        if (chevron) { chevron.classList.toggle('bi-chevron-up', open); chevron.classList.toggle('bi-chevron-down', !open); }
+    }
+    if (listToggle) {
+        listToggle.addEventListener('click', function () { setListOpen(list.hidden); });
+    }
+    function openFromHash() {
+        if (window.location.hash === '#service-km-panel') {
+            setListOpen(true);
+            panel.scrollIntoView({ block: 'start' });
+        }
+    }
+    openFromHash();
+    window.addEventListener('hashchange', openFromHash);
+
+    var form = panel.querySelector('[data-service-km-form]');
     if (!form) { return; }
 
     var driverMap = {};

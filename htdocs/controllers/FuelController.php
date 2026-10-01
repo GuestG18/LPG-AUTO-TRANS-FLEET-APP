@@ -1056,7 +1056,7 @@ class FuelController
         }
 
         $fuelType = trim((string) ($input['fuel_type'] ?? ''));
-        if (!in_array($fuelType, ['motorina', 'adblue'], true)) {
+        if (!in_array($fuelType, ['motorina', 'adblue', 'benzina', 'gpl'], true)) {
             $fuelType = '';
         }
 

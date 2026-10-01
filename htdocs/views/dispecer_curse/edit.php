@@ -175,7 +175,7 @@ $editExpenseId = (int) ($expenseFormData['expense_id'] ?? 0);
 $editingExpense = $expenseBeingEdited !== null || $editExpenseId > 0;
 $existingExpenseDoc = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['file_path'] ?? '') : '';
 $existingExpenseDocName = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['original_name'] ?? '') : '';
-$existingExpenseDocUrl = $existingExpenseDoc !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($existingExpenseDoc)) : null;
+$existingExpenseDocUrl = trip_expense_document_url($existingExpenseDoc);
 $existingRefacturareDoc = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['refacturare_document_path'] ?? '') : '';
 $existingRefacturareDocName = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['refacturare_document_original_name'] ?? '') : '';
 $existingRefacturareDocUrl = $existingRefacturareDoc !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($existingRefacturareDoc)) : null;
@@ -1563,7 +1563,7 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                                 $expenseId = (int) ($expense['id'] ?? 0);
                                 $docPath = (string) ($expense['file_path'] ?? '');
                                 $docName = (string) ($expense['original_name'] ?? '');
-                                $docUrl = $docPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($docPath)) : null;
+                                $docUrl = trip_expense_document_url($docPath);
                                 $refacturareDocPath = (string) ($expense['refacturare_document_path'] ?? '');
                                 $refacturareDocName = (string) ($expense['refacturare_document_original_name'] ?? '');
                                 $refacturareDocUrl = $refacturareDocPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($refacturareDocPath)) : null;

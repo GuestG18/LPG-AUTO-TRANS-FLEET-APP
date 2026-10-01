@@ -31,6 +31,9 @@ class OperationalCostService
     private array $elementStatus = [];
     private array $settings = [];
     private array $period = [];
+    /** Zilele intervalului cerut (null = luna întreagă, comportamentul paginii Cost / km). */
+    private ?int $rangeDays = null;
+    private int $daysInMonth = 30;
 
     public function __construct(PDO $db)
     {
@@ -49,12 +52,25 @@ class OperationalCostService
     /**
      * Calculează întreaga pagină pentru filtrele date.
      *
-     * @param array{period?:string,beneficiar_id?:int,categorie?:string,vehicle_id?:int,driver_id?:int,km_source?:string} $filters
+     * `date_start` / `date_end` (opționale, în interiorul lunii `period`) calculează PE ZI:
+     * sursele pe evenimente (carburant, mentenanță, cheltuieli cursă, km...) se citesc exact pe
+     * interval, iar costurile cu o perioadă de valabilitate se împart pe zile: documente =
+     * preț ÷ valabilitate × zile, anuale ÷ 365, amortizare ÷ ani ÷ 365, dotări ÷ interval
+     * inspecție, lunare (salarii, telefon) ÷ zilele lunii. Fără ele, calculul rămâne pe luna
+     * întreagă, cu normalizarea lunară (pagina Cost operațional / km).
+     *
+     * @param array{period?:string,date_start?:string,date_end?:string,beneficiar_id?:int,categorie?:string,vehicle_id?:int,driver_id?:int,km_source?:string} $filters
      */
     public function compute(array $filters): array
     {
-        $period = $this->resolvePeriod((string) ($filters['period'] ?? ''));
+        $period = $this->resolvePeriod(
+            (string) ($filters['period'] ?? ''),
+            (string) ($filters['date_start'] ?? ''),
+            (string) ($filters['date_end'] ?? '')
+        );
         $this->period = $period;
+        $this->rangeDays = $period['range_days'];
+        $this->daysInMonth = (int) $period['days'];
         $settings = $this->model->getSettings();
         $this->settings = $settings;
         $kmSource = ($filters['km_source'] ?? '') === 'curse_facturati' ? 'curse_facturati' : (($settings['km_source'] ?? 'curse_reali') === 'curse_facturati' ? 'curse_facturati' : 'curse_reali');
@@ -192,21 +208,64 @@ class OperationalCostService
     // Construirea unităților operaționale + rezolvarea elementelor
     // ==================================================================
 
-    private function resolvePeriod(string $raw): array
+    private function resolvePeriod(string $raw, string $rangeStart = '', string $rangeEnd = ''): array
     {
         if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $raw)) {
             $raw = date('Y-m');
         }
         $start = $raw . '-01';
         $end = date('Y-m-t', strtotime($start));
+        $daysInMonth = (int) date('t', strtotime($start));
+        $rangeDays = null;
+
+        // Interval opțional, valid doar în interiorul lunii: calcul pe zi.
+        $isDay = static fn(string $d): bool => preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) === 1 && strtotime($d) !== false;
+        if ($isDay($rangeStart) && $isDay($rangeEnd) && $rangeStart <= $rangeEnd
+            && $rangeStart >= $start && $rangeEnd <= $end) {
+            $start = $rangeStart;
+            $end = $rangeEnd;
+            $rangeDays = (int) round((strtotime($rangeEnd) - strtotime($rangeStart)) / 86400) + 1;
+        }
+
         $months = ['01'=>'Ianuarie','02'=>'Februarie','03'=>'Martie','04'=>'Aprilie','05'=>'Mai','06'=>'Iunie','07'=>'Iulie','08'=>'August','09'=>'Septembrie','10'=>'Octombrie','11'=>'Noiembrie','12'=>'Decembrie'];
         return [
             'key' => $raw,
             'start' => $start,
             'end' => $end,
             'label' => ($months[substr($raw, 5, 2)] ?? '') . ' ' . substr($raw, 0, 4),
-            'days' => (int) date('t', strtotime($start)),
+            'days' => $daysInMonth,
+            'range_days' => $rangeDays,
         ];
+    }
+
+    /** Un cost anual pe perioada calculată: pe interval = anual ÷ 365 × zile; pe lună = anual ÷ 12. */
+    private function annualToPeriod(float $annual): float
+    {
+        return $this->rangeDays !== null ? $annual / 365.0 * $this->rangeDays : $annual / 12.0;
+    }
+
+    /** Un cost lunar pe perioada calculată: pe interval = lunar ÷ zilele lunii × zile; pe lună = lunar. */
+    private function monthlyToPeriod(float $monthly): float
+    {
+        return $this->rangeDays !== null ? $monthly / $this->daysInMonth * $this->rangeDays : $monthly;
+    }
+
+    /** O valoare configurată manual, pe perioada calculată (după periodicitatea ei). */
+    private function manualToPeriod(array $el, float $value, float $eur): float
+    {
+        if ($this->rangeDays === null) {
+            return $this->normalizeManualToMonthly($el, $value, $eur);
+        }
+        $lei = $value * ($el['valoare_moneda'] === 'EUR' ? ($eur > 0 ? $eur : 0.0) : 1.0);
+        $ani = $el['amortizare_ani'] !== null ? (float) $el['amortizare_ani'] : null;
+        if ($ani !== null && $ani > 0) {
+            return $this->annualToPeriod($lei / $ani);
+        }
+        return match ((string) $el['periodicitate']) {
+            'lunar' => $this->monthlyToPeriod($lei),
+            'per_zi' => $lei * $this->rangeDays,
+            default => $this->annualToPeriod($lei),
+        };
     }
 
     /**
@@ -372,11 +431,11 @@ class OperationalCostService
                         continue;
                     }
                     $nonZero++;
-                    $push($unitId, $row['annual'] / 12.0, [
+                    $push($unitId, $this->annualToPeriod($row['annual']), [
                         'sursa' => 'Config documente (' . $row['source'] . ')',
                         'brut' => $row['cost'] . ' lei / ' . $row['validity_days'] . ' zile',
                         'normalizare' => 'cost × 365 / validity_days / 12',
-                        'valoare' => $row['annual'] / 12.0,
+                        'valoare' => $this->annualToPeriod($row['annual']),
                         'vehicul' => $vid !== $unitId ? 'semiremorcă cuplată' : null,
                     ]);
                 }
@@ -409,10 +468,10 @@ class OperationalCostService
                     }
                     $nonZero++;
                     $unitId = $carrier[$vid] ?? $vid;
-                    $push($unitId, $row['monthly'], [
+                    $push($unitId, $this->annualToPeriod($row['monthly'] * 12.0), [
                         'sursa' => 'Inventar dotări (' . $row['items'] . ' dotări)',
                         'normalizare' => 'cost / interval inspecție (luni)',
-                        'valoare' => $row['monthly'],
+                        'valoare' => $this->annualToPeriod($row['monthly'] * 12.0),
                     ]);
                 }
                 $status['quality'] = $nonZero > 0 ? 'partial' : 'lipsa';
@@ -427,7 +486,7 @@ class OperationalCostService
                         continue;
                     }
                     $withSalary++;
-                    $value = $sal * ($multSalarial > 0 ? $multSalarial : 1.0);
+                    $value = $this->monthlyToPeriod($sal * ($multSalarial > 0 ? $multSalarial : 1.0));
                     $unitId = $drv['vehicle_id'] !== null ? ($carrier[$drv['vehicle_id']] ?? $drv['vehicle_id']) : null;
                     $detail = [
                         'sursa' => 'soferi.salariu / salary_history — ' . $drv['nume'],
@@ -452,7 +511,7 @@ class OperationalCostService
                         continue;
                     }
                     $found++;
-                    $monthly = $row['annual'] / 12.0;
+                    $monthly = $this->annualToPeriod($row['annual']);
                     $vidAssigned = $drivers[$driverId]['vehicle_id'];
                     $unitId = $vidAssigned !== null ? ($carrier[$vidAssigned] ?? $vidAssigned) : null;
                     $detail = [
@@ -472,6 +531,8 @@ class OperationalCostService
 
             case 'management_office':
                 $mgmt = $this->model->getManagementMonthlyCost($period['start'], $period['end']);
+                // cheltuielile sunt deja pe interval; salariile de birou sunt lunare
+                $mgmt['total'] = $mgmt['office_net'] + $mgmt['admin_net'] + $this->monthlyToPeriod($mgmt['office_salaries']);
                 if ($mgmt['total'] > 0) {
                     $mode = (string) ($settings['management_alocare'] ?? 'vehicule_active');
                     $unitIds = array_keys(array_filter($this->units, fn($u) => $u['vehicle_status'] === 'activ' && ($u['tip_vehicul'] === 'cap_tractor' || $u['tip_vehicul'] === 'camion')));
@@ -648,7 +709,7 @@ class OperationalCostService
                     $status['quality_note'] = 'Element fără sursă în aplicație și fără valoare configurată — NU este tratat ca 0';
                     break;
                 }
-                $monthly = $this->normalizeManualToMonthly($el, $value, $eur);
+                $monthly = $this->manualToPeriod($el, $value, $eur);
                 $scope = (string) $el['scop'];
                 if ($scope === 'company') {
                     $unitIds = array_keys(array_filter($this->units, fn($u) => $u['vehicle_status'] === 'activ' && ($u['tip_vehicul'] === 'cap_tractor' || $u['tip_vehicul'] === 'camion')));

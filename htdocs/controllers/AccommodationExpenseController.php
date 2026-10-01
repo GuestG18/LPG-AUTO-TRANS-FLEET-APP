@@ -771,7 +771,7 @@ class AccommodationExpenseController
     {
         $params = ['page' => 'cazare'];
 
-        foreach (['data_start', 'data_end', 'sofer_id', 'status', 'q', 'p', 'pp'] as $key) {
+        foreach (['data_start', 'data_end', 'sofer_id', 'status', 'q', 'p', 'pp', 'vechi'] as $key) {
             $value = trim((string) ($_POST[$key] ?? $_GET[$key] ?? ''));
             if ($value !== '') {
                 $params[$key] = $value;

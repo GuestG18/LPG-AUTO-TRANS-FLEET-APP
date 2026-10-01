@@ -208,6 +208,8 @@ $fuelTypeLabel = static function (string $type): string {
     return match ($type) {
         'motorina' => 'Motorina',
         'adblue' => 'AdBlue',
+        'benzina' => 'Benzina',
+        'gpl' => 'GPL',
         default => $type !== '' ? $type : '-',
     };
 };
@@ -962,6 +964,8 @@ $donutStyle = static function (array $items): string {
                     <option value="">Toate</option>
                     <option value="motorina" <?= (string) ($filters['fuel_type'] ?? '') === 'motorina' ? 'selected' : '' ?>>Motorină</option>
                     <option value="adblue" <?= (string) ($filters['fuel_type'] ?? '') === 'adblue' ? 'selected' : '' ?>>AdBlue</option>
+                    <option value="benzina" <?= (string) ($filters['fuel_type'] ?? '') === 'benzina' ? 'selected' : '' ?>>Benzină</option>
+                    <option value="gpl" <?= (string) ($filters['fuel_type'] ?? '') === 'gpl' ? 'selected' : '' ?>>GPL</option>
                 </select>
             </div>
             <div class="fuel-filter-actions">
@@ -2122,6 +2126,8 @@ $donutStyle = static function (array $items): string {
                         <select class="form-select" id="fuelManualFuelType" name="fuel_type" required>
                             <option value="motorina">Motorină</option>
                             <option value="adblue">AdBlue</option>
+                            <option value="benzina">Benzină</option>
+                            <option value="gpl">GPL</option>
                         </select>
                     </div>
                     <div class="col-md-4">

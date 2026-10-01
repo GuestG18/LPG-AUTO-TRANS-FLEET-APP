@@ -746,8 +746,7 @@
                     stats: [
                         { label: 'Km facturați', value: fmt(f.km_facturati, 'km') },
                         { label: 'Km nefacturați', value: fmt(f.km_nefacturati, 'km') + ' (' + fmt(f.km_nefacturati_percent, 'pct') + ')' },
-                        { label: 'Km salvați față de rută', value: fmt(f.km_salvati, 'km') },
-                        { label: 'Km în exces față de rută', value: fmt(f.km_exces, 'km') },
+                        { label: kmRouteBalance(f).label + ' față de rută', value: fmt(kmRouteBalance(f).value, 'km') },
                         {
                             label: 'Km primar, cu mixt',
                             value: fmt(f.km_primar, 'km'),
@@ -1176,6 +1175,22 @@
         scheduleReload(0);
     }
 
+    /*
+     * Km salvati si km in exces fata de ruta tarifata se compenseaza: afisam doar
+     * soldul net (ca in V1). Excesul apare numai cand selectia chiar are mai multi
+     * km in exces decat salvati (ex. filtrat pe vehiculul care a depasit ruta).
+     */
+    function kmRouteBalance(f) {
+        var net = num(f.km_salvati) - num(f.km_exces);
+        if (Math.abs(net) < 0.005) {
+            return { label: 'Km față de rută', value: 0, tone: '' };
+        }
+        if (net > 0) {
+            return { label: 'Km salvați', value: net, tone: 'good' };
+        }
+        return { label: 'Km în exces', value: Math.abs(net), tone: 'bad' };
+    }
+
     function renderKmChart() {
         var f = state.data.fleet || {};
         var canvas = document.getElementById('da2-chart-km');
@@ -1218,9 +1233,9 @@
             });
         }
 
+        var kmNet = kmRouteBalance(f);
         document.getElementById('da2-km-stats').innerHTML = [
-            { label: 'Km salvați', value: fmt(f.km_salvati, 'km'), tone: 'good' },
-            { label: 'Km în exces', value: fmt(f.km_exces, 'km'), tone: 'bad' },
+            { label: kmNet.label, value: fmt(kmNet.value, 'km'), tone: kmNet.tone },
             { label: 'Km primar', value: fmt(f.km_primar, 'km'), tone: '' },
             { label: 'Km distribuție', value: fmt(f.km_distributie, 'km'), tone: '' }
         ].map(function (item) {

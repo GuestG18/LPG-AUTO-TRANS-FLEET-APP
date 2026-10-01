@@ -1,0 +1,78 @@
+/* Pagina "Facturi" */
+
+.facturi-stat .card-body {
+    padding: 0.85rem 1rem;
+}
+
+.facturi-stat-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--bs-secondary-color);
+}
+
+.facturi-stat-value {
+    font-size: 1.35rem;
+    font-weight: 600;
+    color: var(--bs-body-color);
+}
+
+.facturi-stat-sub {
+    font-size: 0.75rem;
+    color: var(--bs-secondary-color);
+}
+
+a.facturi-stat:hover {
+    border-color: var(--bs-primary-border-subtle);
+}
+
+.facturi-row[data-href] {
+    cursor: pointer;
+}
+
+.facturi-reason {
+    max-width: 18rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Preview-ul ramane vizibil cat timp lucrezi pe coloana din dreapta. */
+.facturi-preview-card {
+    position: sticky;
+    top: 1rem;
+}
+
+.facturi-preview {
+    display: block;
+    width: 100%;
+    height: calc(100vh - 9rem);
+    min-height: 32rem;
+    border: 0;
+    background: var(--bs-tertiary-bg);
+}
+
+.facturi-preview-image {
+    overflow: auto;
+    text-align: center;
+}
+
+.facturi-preview-image img {
+    max-width: 100%;
+    height: auto;
+}
+
+.facturi-candidates .list-group-item {
+    background: transparent;
+}
+
+@media (max-width: 1199.98px) {
+    .facturi-preview-card {
+        position: static;
+    }
+
+    .facturi-preview {
+        height: 70vh;
+        min-height: 24rem;
+    }
+}

@@ -243,6 +243,8 @@ class ExpenseModel extends BaseModel
                 FROM (
                     SELECT "operationala" AS categorie, "Motorină" AS nume, "motorina" AS slug, 10 AS sort_order UNION ALL
                     SELECT "operationala", "AdBlue", "adblue", 20 UNION ALL
+                    SELECT "operationala", "Benzină", "benzina", 12 UNION ALL
+                    SELECT "operationala", "GPL", "gpl", 14 UNION ALL
                     SELECT "operationala", "Taxe drum", "taxe-drum", 30 UNION ALL
                     SELECT "operationala", "Diurnă", "diurna", 40 UNION ALL
                     SELECT "operationala", "Cazare", "cazare", 50 UNION ALL
@@ -962,7 +964,7 @@ class ExpenseModel extends BaseModel
             return $gol;
         }
 
-        // Filtrul de subcategorie: acceptam doar tipurile Motorina / AdBlue.
+        // Filtrul de subcategorie: acceptam doar tipurile de carburant (Motorina / AdBlue / Benzina / GPL).
         $tipId = (int) ($filters['tip_id'] ?? 0);
         $fuelTypesWanted = array_keys($tipuri);
         if ($tipId > 0) {
@@ -1071,7 +1073,7 @@ class ExpenseModel extends BaseModel
     {
         $stmt = $this->db->query("
             SELECT id, nume, slug FROM cheltuieli_tipuri
-            WHERE slug IN ('motorina', 'adblue') AND categorie = 'operationala'
+            WHERE slug IN ('motorina', 'adblue', 'benzina', 'gpl') AND categorie = 'operationala'
         ");
 
         $map = [];
@@ -1194,6 +1196,61 @@ class ExpenseModel extends BaseModel
             'top_tipuri' => $topTypes,
             'carburant' => $fuel,
         ];
+    }
+
+    /**
+     * Totalurile pe categorie (administrativă / operațională) desfăcute pe subcategorii,
+     * cu aceleași filtre și aceeași regulă a carburantului ca getSummary() — folosit de
+     * cardul de cost din Dashboard, ca cifrele să coincidă cu pagina Cheltuieli.
+     */
+    public function getCategoryTypeBreakdown(array $filters): array
+    {
+        $summary = $this->getSummary($filters);
+
+        [$whereSql, $params] = $this->buildWhere($filters, false);
+        $stmt = $this->db->prepare('
+            SELECT e.categorie, t.id, t.nume, COALESCE(SUM(e.valoare), 0) AS total, COUNT(*) AS cnt
+            FROM cheltuieli e
+            INNER JOIN cheltuieli_tipuri t ON t.id = e.tip_id
+            LEFT JOIN configurare_beneficiari_transport b ON b.id = e.beneficiar_id
+            ' . $whereSql . '
+            GROUP BY e.categorie, t.id, t.nume
+        ');
+        $this->bindParams($stmt, $params);
+        $stmt->execute();
+
+        $types = ['administrativa' => [], 'operationala' => []];
+        foreach ($stmt->fetchAll() as $row) {
+            $types[(string) $row['categorie']][] = [
+                'tip_id' => (int) $row['id'],
+                'nume' => (string) $row['nume'],
+                'total' => (float) $row['total'],
+                'count' => (int) $row['cnt'],
+                'litri' => null,
+            ];
+        }
+
+        // Carburantul intră la operaționale, ca în getSummary().
+        $fuelTypes = $this->getFuelExpenseTypes();
+        foreach ((array) ($summary['carburant']['pe_tip'] ?? []) as $fuelType => $fuel) {
+            if ((float) ($fuel['total'] ?? 0) <= 0) {
+                continue;
+            }
+            $types['operationala'][] = [
+                'tip_id' => (int) ($fuelTypes[$fuelType]['id'] ?? 0),
+                'nume' => (string) $fuel['nume'],
+                'total' => (float) $fuel['total'],
+                'count' => (int) $fuel['count'],
+                'litri' => (float) $fuel['litri'],
+            ];
+        }
+
+        foreach ($types as &$list) {
+            usort($list, static fn(array $a, array $b): int => $b['total'] <=> $a['total']);
+        }
+        unset($list);
+
+        return ['summary' => $summary, 'tipuri' => $types];
     }
 
     // --------------------------------------------------------------------- CRUD

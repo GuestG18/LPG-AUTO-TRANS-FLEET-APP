@@ -529,11 +529,20 @@ class MaintenanceModel extends BaseModel
             $params[':status'] = (string) $filters['status'];
         }
         $whereSql = $where !== [] ? ' WHERE ' . implode(' AND ', $where) : '';
+        // Interventiile venite din Dispecer curse -> Km service: perioada reala de service.
+        $serviceSelect = '';
+        $serviceJoin = '';
+        if ($this->tableExists('vehicule_service_km')) {
+            $serviceSelect = ', sk.data_plecare AS service_data_plecare, sk.ora_plecare AS service_ora_plecare,
+                sk.data_intoarcere AS service_data_intoarcere, sk.ora_intoarcere AS service_ora_intoarcere,
+                sk.km AS service_km';
+            $serviceJoin = ' LEFT JOIN vehicule_service_km sk ON sk.id = i.service_km_id';
+        }
         $stmt = $this->db->prepare(
-            "SELECT i.*, v.nr_inmatriculare, v.tip_vehicul, s.nume AS sofer_nume
+            "SELECT i.*, v.nr_inmatriculare, v.tip_vehicul, s.nume AS sofer_nume" . $serviceSelect . "
              FROM mentenanta_interventii_programate i
              INNER JOIN vehicule v ON v.id = i.vehicle_id
-             LEFT JOIN soferi s ON s.id = i.driver_id" . $whereSql . "
+             LEFT JOIN soferi s ON s.id = i.driver_id" . $serviceJoin . $whereSql . "
              ORDER BY FIELD(i.status_interventie, 'in_lucru','confirmata','programata','finalizata','anulata'),
                       i.data_programata ASC, i.id DESC"
         );
@@ -616,6 +625,140 @@ class MaintenanceModel extends BaseModel
         );
         $stmt->execute([':id' => $id]);
         return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Km service din Dispecer curse -> interventie programata in Mentenanta.
+     *
+     * Dispecerul detine vehiculul, data plecarii si soferul; service-ul si motivul se
+     * copiaza doar cat timp operatorul de mentenanta nu le-a schimbat. Statusul avanseaza
+     * singur doar programata -> in_lucru (vehiculul a plecat la service); finalizarea,
+     * cu costul real, ramane decizia operatorului de mentenanta.
+     *
+     * $previous = randul de service inainte de modificare (recunoaste textul copiat anterior).
+     */
+    public function syncFromServiceKm(array $entry, ?int $userId = null, ?array $previous = null): int
+    {
+        $serviceKmId = (int) ($entry['id'] ?? 0);
+        if ($serviceKmId <= 0) {
+            return 0;
+        }
+        $departure = (string) $entry['data_plecare'];
+        $leftAlready = $departure <= date('Y-m-d');
+        $supplier = $this->nullIfEmpty((string) ($entry['service_nume'] ?? ''));
+        $driverId = !empty($entry['driver_id']) ? (int) $entry['driver_id'] : null;
+        $description = $this->serviceKmDescription($entry);
+        $now = date('Y-m-d H:i:s');
+
+        $stmt = $this->db->prepare(
+            "SELECT * FROM mentenanta_interventii_programate WHERE service_km_id = :service_km_id LIMIT 1"
+        );
+        $stmt->execute([':service_km_id' => $serviceKmId]);
+        $existing = $stmt->fetch();
+
+        if (!$existing) {
+            $this->db->prepare(
+                "INSERT INTO mentenanta_interventii_programate
+                    (vehicle_id, tip_interventie, data_programata, cost_estimat, furnizor,
+                     driver_id, descriere, status_interventie, service_km_id,
+                     created_by, created_at, updated_at)
+                 VALUES
+                    (:vehicle_id, 'reparatie', :data_programata, 0, :furnizor,
+                     :driver_id, :descriere, :status, :service_km_id,
+                     :created_by, :created_at, :updated_at)"
+            )->execute([
+                ':vehicle_id' => (int) $entry['vehicle_id'],
+                ':data_programata' => $departure,
+                ':furnizor' => $supplier,
+                ':driver_id' => $driverId,
+                ':descriere' => $description,
+                ':status' => $leftAlready ? 'in_lucru' : 'programata',
+                ':service_km_id' => $serviceKmId,
+                ':created_by' => $userId,
+                ':created_at' => $now,
+                ':updated_at' => $now,
+            ]);
+            return (int) $this->db->lastInsertId();
+        }
+
+        // Interventia finalizata/anulata in Mentenanta nu se mai modifica din dispecerat.
+        $status = (string) $existing['status_interventie'];
+        if (!empty($existing['converted_maintenance_id']) || in_array($status, ['finalizata', 'anulata'], true)) {
+            return (int) $existing['id'];
+        }
+        if ($status === 'programata' && $leftAlready) {
+            $status = 'in_lucru';
+        }
+        $currentDescription = trim((string) $existing['descriere']);
+        $copiedDescription = $previous !== null ? $this->serviceKmDescription($previous) : $description;
+        $currentSupplier = trim((string) ($existing['furnizor'] ?? ''));
+        $copiedSupplier = trim((string) ($previous['service_nume'] ?? ''));
+
+        $this->db->prepare(
+            "UPDATE mentenanta_interventii_programate SET
+                vehicle_id = :vehicle_id, data_programata = :data_programata, driver_id = :driver_id,
+                furnizor = :furnizor, descriere = :descriere,
+                status_interventie = :status, updated_at = :updated_at
+             WHERE id = :id"
+        )->execute([
+            ':vehicle_id' => (int) $entry['vehicle_id'],
+            ':data_programata' => $departure,
+            ':driver_id' => $driverId,
+            ':furnizor' => $currentSupplier === '' || $currentSupplier === $copiedSupplier ? $supplier : $currentSupplier,
+            ':descriere' => $currentDescription === '' || $currentDescription === $copiedDescription ? $description : $currentDescription,
+            ':status' => $status,
+            ':updated_at' => $now,
+            ':id' => (int) $existing['id'],
+        ]);
+        return (int) $existing['id'];
+    }
+
+    /**
+     * Intrarea de service a fost stearsa din dispecerat: interventia inca neatinsa de
+     * mentenanta (fara cost, nefinalizata) dispare odata cu ea; restul raman, fara legatura.
+     */
+    public function detachServiceKm(int $serviceKmId): void
+    {
+        if ($serviceKmId <= 0) {
+            return;
+        }
+        $this->db->prepare(
+            "DELETE FROM mentenanta_interventii_programate
+             WHERE service_km_id = :service_km_id AND converted_maintenance_id IS NULL
+               AND status_interventie IN ('programata', 'confirmata', 'in_lucru')
+               AND cost_estimat = 0"
+        )->execute([':service_km_id' => $serviceKmId]);
+        $this->db->prepare(
+            "UPDATE mentenanta_interventii_programate SET service_km_id = NULL, updated_at = :updated_at
+             WHERE service_km_id = :service_km_id"
+        )->execute([':service_km_id' => $serviceKmId, ':updated_at' => date('Y-m-d H:i:s')]);
+    }
+
+    private function serviceKmDescription(array $entry): string
+    {
+        $motiv = trim((string) ($entry['motiv'] ?? ''));
+        return $motiv !== '' ? $motiv : 'Vehicul trimis la service (Dispecer curse)';
+    }
+
+    /** O singura data, la adaugarea coloanei: intrarile de service existente devin interventii. */
+    private function backfillFromServiceKm(): void
+    {
+        if (!$this->tableExists('vehicule_service_km')) {
+            return;
+        }
+        foreach ($this->db->query('SELECT * FROM vehicule_service_km ORDER BY id ASC')->fetchAll() as $row) {
+            $this->syncFromServiceKm($row, !empty($row['created_by']) ? (int) $row['created_by'] : null);
+        }
+    }
+
+    private function tableExists(string $table): bool
+    {
+        $stmt = $this->db->prepare(
+            "SELECT COUNT(*) FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name"
+        );
+        $stmt->execute([':table_name' => $table]);
+        return (int) $stmt->fetchColumn() > 0;
     }
 
     public function getStockParts(array $filters = []): array
@@ -1626,6 +1769,14 @@ class MaintenanceModel extends BaseModel
                 updated_at DATETIME NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
+        if (!$this->columnExists('mentenanta_interventii_programate', 'service_km_id')) {
+            $this->db->exec(
+                "ALTER TABLE mentenanta_interventii_programate
+                 ADD COLUMN service_km_id BIGINT UNSIGNED NULL AFTER converted_maintenance_id,
+                 ADD UNIQUE KEY uq_ment_prog_service_km (service_km_id)"
+            );
+            $this->backfillFromServiceKm();
+        }
         $partColumns = [
             'garantie_piesa' => "VARCHAR(120) NULL AFTER avertizare_zile",
             'garantie_manopera' => "VARCHAR(120) NULL AFTER garantie_piesa",

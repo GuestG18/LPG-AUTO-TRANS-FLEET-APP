@@ -15,7 +15,11 @@ return [
     'icon'        => 'bi-house-door',
     'order'       => 10,
     'scope'       => 'all',
+    'groups'      => [
+        'financiar' => 'Date financiare',
+    ],
     'actions'     => [
-        'view' => ['label' => 'Vizualizare'],
+        'view'           => ['label' => 'Vizualizare'],
+        'view_financial' => ['label' => 'Cost total operațional (salarii, costuri, cheltuieli, documente, dotări)', 'group' => 'financiar', 'default_admin' => true, 'sensitive' => true],
     ],
 ];

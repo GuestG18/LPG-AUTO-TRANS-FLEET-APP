@@ -1,6 +1,9 @@
 <?php
 declare(strict_types=1);
 
+// Incarcat aici (nu doar din index.php) ca sa mearga si din scripts/import_cazari_sheet.php.
+require_once __DIR__ . '/../services/TripExpenseMirrorService.php';
+
 /**
  * Model pentru pagina "Cazare".
  *
@@ -399,62 +402,26 @@ class AccommodationExpenseModel extends BaseModel
             return;
         }
 
-        $now = date('Y-m-d H:i:s');
         // Costul care intra in rapoarte este totalul CU TVA.
-        $amount = round((float) $row['total_cu_tva'], 2);
-        $notes = $this->buildMirrorNotes($row);
+        $fields = [
+            'cursa_id' => $raceId,
+            'categorie_id' => $categoryId,
+            'suma' => number_format(round((float) $row['total_cu_tva'], 2), 2, '.', ''),
+            'data_cheltuiala' => (string) $row['data'],
+            'observatii' => $this->buildMirrorNotes($row),
+        ];
 
         $existingId = $this->findMirrorExpenseId($id);
-
         if ($existingId === null) {
-            $stmt = $this->db->prepare("
-                INSERT INTO curse_cheltuieli (
-                    cursa_id, tip_cheltuiala, categorie_id, cazare_id,
-                    suma, data_cheltuiala, observatii, added_by, created_at, updated_at
-                ) VALUES (
-                    :cursa_id, :tip_cheltuiala, :categorie_id, :cazare_id,
-                    :suma, :data_cheltuiala, :observatii, :added_by, :created_at, :updated_at
-                )
-            ");
-            $stmt->bindValue(':tip_cheltuiala', self::MIRROR_LEGACY_TYPE, PDO::PARAM_STR);
-            $stmt->bindValue(':categorie_id', $categoryId, PDO::PARAM_INT);
-            $stmt->bindValue(':cazare_id', $id, PDO::PARAM_INT);
-            $stmt->bindValue(':cursa_id', $raceId, PDO::PARAM_INT);
-            $stmt->bindValue(':suma', number_format($amount, 2, '.', ''), PDO::PARAM_STR);
-            $stmt->bindValue(':data_cheltuiala', (string) $row['data'], PDO::PARAM_STR);
-            $stmt->bindValue(':observatii', $notes, PDO::PARAM_STR);
-            if ($row['created_by'] === null) {
-                $stmt->bindValue(':added_by', null, PDO::PARAM_NULL);
-            } else {
-                $stmt->bindValue(':added_by', (int) $row['created_by'], PDO::PARAM_INT);
-            }
-            $stmt->bindValue(':created_at', $now, PDO::PARAM_STR);
-            $stmt->bindValue(':updated_at', $now, PDO::PARAM_STR);
-            $stmt->execute();
-
-            return;
+            // Doar la creare: tipul, legatura si autorul nu se mai rescriu ulterior.
+            $fields['tip_cheltuiala'] = self::MIRROR_LEGACY_TYPE;
+            $fields['cazare_id'] = $id;
+            $fields['added_by'] = $row['created_by'] !== null ? (int) $row['created_by'] : null;
         }
 
-        $stmt = $this->db->prepare("
-            UPDATE curse_cheltuieli
-            SET cursa_id = :cursa_id,
-                categorie_id = :categorie_id,
-                suma = :suma,
-                data_cheltuiala = :data_cheltuiala,
-                observatii = :observatii,
-                updated_at = :updated_at
-            WHERE id = :id
-        ");
-        $stmt->bindValue(':cursa_id', $raceId, PDO::PARAM_INT);
-        $stmt->bindValue(':categorie_id', $categoryId, PDO::PARAM_INT);
-        $stmt->bindValue(':suma', number_format($amount, 2, '.', ''), PDO::PARAM_STR);
-        $stmt->bindValue(':data_cheltuiala', (string) $row['data'], PDO::PARAM_STR);
-        $stmt->bindValue(':observatii', $notes, PDO::PARAM_STR);
-        $stmt->bindValue(':updated_at', $now, PDO::PARAM_STR);
-        $stmt->bindValue(':id', $existingId, PDO::PARAM_INT);
-        $stmt->execute();
-
-        $this->syncMirrorDocuments($id);
+        // Serviciul rescrie si documentele, inclusiv la primul insert (inainte
+        // facturile existente nu ajungeau pe cursa pana la urmatoarea actualizare).
+        (new TripExpenseMirrorService($this->db))->upsert($existingId, $fields, $this->getDocuments($id));
     }
 
     /**
@@ -471,29 +438,7 @@ class AccommodationExpenseModel extends BaseModel
             return;
         }
 
-        $stmt = $this->db->prepare('DELETE FROM curse_cheltuieli_documente WHERE cheltuiala_id = :cheltuiala_id');
-        $stmt->bindValue(':cheltuiala_id', $mirrorId, PDO::PARAM_INT);
-        $stmt->execute();
-
-        $documents = $this->getDocuments($id);
-        if ($documents === []) {
-            return;
-        }
-
-        $insert = $this->db->prepare("
-            INSERT INTO curse_cheltuieli_documente (cheltuiala_id, file_path, original_name, mime_type, file_size, created_at)
-            VALUES (:cheltuiala_id, :file_path, :original_name, :mime_type, :file_size, :created_at)
-        ");
-
-        foreach ($documents as $document) {
-            $insert->bindValue(':cheltuiala_id', $mirrorId, PDO::PARAM_INT);
-            $insert->bindValue(':file_path', (string) $document['file_path'], PDO::PARAM_STR);
-            $insert->bindValue(':original_name', (string) $document['original_name'], PDO::PARAM_STR);
-            $insert->bindValue(':mime_type', (string) ($document['mime_type'] ?? 'application/octet-stream'), PDO::PARAM_STR);
-            $insert->bindValue(':file_size', (int) $document['file_size'], PDO::PARAM_INT);
-            $insert->bindValue(':created_at', (string) $document['created_at'], PDO::PARAM_STR);
-            $insert->execute();
-        }
+        (new TripExpenseMirrorService($this->db))->replaceDocuments($mirrorId, $this->getDocuments($id));
     }
 
     // -------------------------------------------------------------------------

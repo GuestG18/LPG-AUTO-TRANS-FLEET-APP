@@ -327,7 +327,7 @@ $pageConfig = [
                 <header class="da2-card-head">
                     <div>
                         <h2>Km facturați vs. nefacturați</h2>
-                        <p class="da2-card-sub">Plus km salvați și km în exces față de ruta tarifată.</p>
+                        <p class="da2-card-sub">Plus soldul net față de ruta tarifată (km salvați sau km în exces).</p>
                     </div>
                 </header>
                 <div class="da2-chart"><canvas id="da2-chart-km"></canvas></div>

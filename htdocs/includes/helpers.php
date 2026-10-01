@@ -1007,6 +1007,27 @@ function build_query_url(array $params = []): string
     return $query === '' ? $base : $base . '?' . $query;
 }
 
+/**
+ * URL-ul unui document de cheltuiala de cursa (curse_cheltuieli_documente.file_path).
+ *
+ * Documentele venite din pagina Facturi stau in storage/invoices, in afara web
+ * root-ului, si sunt marcate "facturi:<id>": se deschid prin ruta autentificata.
+ * Restul stau, ca pana acum, in uploads/curse_cheltuieli.
+ */
+function trip_expense_document_url(string $filePath): ?string
+{
+    $filePath = trim($filePath);
+    if ($filePath === '') {
+        return null;
+    }
+
+    if (preg_match('/^facturi:(\d+)$/', $filePath, $match) === 1) {
+        return build_query_url(['page' => 'facturi', 'action' => 'document', 'id' => (int) $match[1]]);
+    }
+
+    return url('uploads/curse_cheltuieli/' . rawurlencode($filePath));
+}
+
 function absolute_query_url(array $params = []): string
 {
     $relative = build_query_url($params);
