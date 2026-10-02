@@ -76,6 +76,23 @@ class DriverActivityHistoryModel extends BaseModel
      * cursa in perioada nu are ce cauta nici in lista, nici in comparatie.
      * Activitate = o cursa a lui sau o faza condusa de el (curse_segmente).
      */
+    /** Numele soferilor dupa id (pentru mesaje), in ordinea primita. */
+    public function getDriverNames(array $driverIds): array
+    {
+        $ids = array_values(array_filter(array_map('intval', $driverIds), static fn (int $id): bool => $id > 0));
+        if ($ids === []) {
+            return [];
+        }
+        $stmt = $this->db->prepare('SELECT id, nume FROM soferi WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')');
+        $stmt->execute($ids);
+        $names = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $names[(int) $row['id']] = (string) $row['nume'];
+        }
+
+        return array_values(array_filter(array_map(static fn (int $id): ?string => $names[$id] ?? null, $ids)));
+    }
+
     public function getDriverOptions(array $filters = []): array
     {
         $dateStart = (string) ($filters['date_start'] ?? '');

@@ -69,6 +69,40 @@ $queryBase = [
 ];
 $exportQuery = $queryBase;
 $resetUrl = build_query_url(['page' => 'istoric_activitati_sofer', 'driver_ids' => $selectedDriverIds]);
+// Navigare pe luni: luna anterioara / urmatoare si lista ultimelor 24 de luni,
+// pastrand soferii si celelalte filtre. Luna curenta se opreste la azi.
+$monthNames = [1 => 'Ianuarie', 'Februarie', 'Martie', 'Aprilie', 'Mai', 'Iunie', 'Iulie', 'August', 'Septembrie', 'Octombrie', 'Noiembrie', 'Decembrie'];
+$todayDate = new DateTimeImmutable('today');
+$currentMonthStart = $todayDate->modify('first day of this month');
+$filterStart = DateTimeImmutable::createFromFormat('!Y-m-d', (string) ($filters['date_start'] ?? '')) ?: $currentMonthStart;
+$filterEnd = DateTimeImmutable::createFromFormat('!Y-m-d', (string) ($filters['date_end'] ?? '')) ?: $todayDate;
+$selectedMonthStart = $filterStart->modify('first day of this month');
+$monthUrl = static function (DateTimeImmutable $monthStart) use ($queryBase, $todayDate): string {
+    $monthEnd = $monthStart->modify('last day of this month');
+    if ($monthEnd > $todayDate) {
+        $monthEnd = $todayDate;
+    }
+    $params = $queryBase;
+    $params['date_range'] = $monthStart->format('d.m.Y') . ' - ' . $monthEnd->format('d.m.Y');
+    return build_query_url($params);
+};
+$monthLabel = static fn (DateTimeImmutable $month): string => $monthNames[(int) $month->format('n')] . ' ' . $month->format('Y');
+// Intervalul afisat e exact o luna (sau luna curenta pana azi)?
+$isWholeMonth = $filterStart == $selectedMonthStart
+    && ($filterEnd == $selectedMonthStart->modify('last day of this month')
+        || ($selectedMonthStart == $currentMonthStart && $filterEnd == $todayDate));
+$prevMonth = $selectedMonthStart->modify('-1 month');
+$nextMonth = $selectedMonthStart->modify('+1 month');
+$hasNextMonth = $nextMonth <= $currentMonthStart;
+$monthOptions = [];
+for ($i = 0; $i < 24; $i++) {
+    $month = $currentMonthStart->modify('-' . $i . ' month');
+    $monthOptions[$month->format('Y-m')] = $month;
+}
+if (!isset($monthOptions[$selectedMonthStart->format('Y-m')])) {
+    $monthOptions[$selectedMonthStart->format('Y-m')] = $selectedMonthStart;
+    krsort($monthOptions);
+}
 $driverImage = $driver !== null ? driver_image_url((string) ($driver['poza_stocata'] ?? '')) : null;
 $status = strtolower((string) ($driver['status'] ?? ''));
 $statusClass = $status === 'activ' ? 'is-active' : 'is-inactive';
@@ -131,7 +165,7 @@ $isDeliveryTrip = static fn (array $trip): bool => in_array((string) ($trip['tra
                 <h1>Comparatie soferi (<?= e((string) count((array) ($dashboard['drivers'] ?? []))) ?>)</h1>
                 <p>Activitatea soferilor selectati, alaturi, pentru aceeasi perioada si aceleasi filtre.</p>
             <?php else: ?>
-                <h1>Istoric Activitati Sofer - <?= e((string) ($driver['nume'] ?? '')) ?></h1>
+                <h1>Istoric Activitati Sofer<?= $driver !== null ? ' - ' . e((string) ($driver['nume'] ?? '')) : '' ?></h1>
                 <p>Profil analitic complet pentru perioada selectata. Alege mai multi soferi pentru comparatie.</p>
             <?php endif; ?>
         </div>
@@ -150,16 +184,7 @@ $isDeliveryTrip = static fn (array $trip): bool => in_array((string) ($trip['tra
         </div>
     </div>
 
-    <?php if (!$isCompare && $driver === null): ?>
-        <div class="card border-0 shadow-sm">
-            <div class="card-body text-center py-5 text-muted">
-                <?= $driverOptions === []
-                    ? 'Niciun sofer nu are activitate in perioada selectata. Schimba intervalul sau filtrele.'
-                    : 'Nu exista soferi inregistrati pentru afisarea istoricului.' ?>
-            </div>
-        </div>
-    <?php else: ?>
-        <form class="driver-history-filter-card" method="get" action="<?= e(url('index.php')) ?>">
+    <form class="driver-history-filter-card" method="get" action="<?= e(url('index.php')) ?>">
             <input type="hidden" name="page" value="istoric_activitati_sofer">
             <div class="driver-history-filter-grid">
                 <div class="driver-history-filter-field">
@@ -196,6 +221,22 @@ $isDeliveryTrip = static fn (array $trip): bool => in_array((string) ($trip['tra
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-calendar3" aria-hidden="true"></i></span>
                         <input class="form-control" id="driver_history_date_range" name="date_range" value="<?= e((string) ($filters['date_range'] ?? '')) ?>" placeholder="01.06.2026 - 06.06.2026" autocomplete="off">
+                    </div>
+                    <div class="driver-history-month-nav" aria-label="Navigare pe luni">
+                        <a class="btn btn-sm btn-outline-secondary" href="<?= e($monthUrl($prevMonth)) ?>" title="<?= e($monthLabel($prevMonth)) ?>" aria-label="Luna anterioara"><i class="bi bi-chevron-left" aria-hidden="true"></i></a>
+                        <select class="form-select form-select-sm" data-driver-history-month aria-label="Alege luna">
+                            <?php if (!$isWholeMonth): ?>
+                                <option value="" selected>Interval personalizat</option>
+                            <?php endif; ?>
+                            <?php foreach ($monthOptions as $monthKey => $month): ?>
+                                <option value="<?= e($monthUrl($month)) ?>" <?= $isWholeMonth && $month == $selectedMonthStart ? 'selected' : '' ?>><?= e($monthLabel($month)) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <?php if ($hasNextMonth): ?>
+                            <a class="btn btn-sm btn-outline-secondary" href="<?= e($monthUrl($nextMonth)) ?>" title="<?= e($monthLabel($nextMonth)) ?>" aria-label="Luna urmatoare"><i class="bi bi-chevron-right" aria-hidden="true"></i></a>
+                        <?php else: ?>
+                            <span class="btn btn-sm btn-outline-secondary disabled" aria-disabled="true"><i class="bi bi-chevron-right" aria-hidden="true"></i></span>
+                        <?php endif; ?>
                     </div>
                 </div>
                 <div class="driver-history-filter-field">
@@ -246,6 +287,11 @@ $isDeliveryTrip = static fn (array $trip): bool => in_array((string) ($trip['tra
                     <a class="btn btn-outline-secondary" href="<?= e($resetUrl) ?>"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Reseteaza</a>
                 </div>
             </div>
+            <?php if (!empty($droppedDriverNames)): ?>
+                <div class="alert alert-info py-2 mt-3 mb-0">
+                    <?= e(implode(', ', $droppedDriverNames)) ?> <?= count($droppedDriverNames) > 1 ? 'nu au' : 'nu are' ?> activitate in perioada <?= e((string) ($filters['date_range'] ?? '')) ?><?= $driverOptions !== [] ? ' si nu ' . (count($droppedDriverNames) > 1 ? 'apar' : 'apare') . ' in lista' : '' ?>.
+                </div>
+            <?php endif; ?>
             <?php if ((string) ($filters['date_range_invalid'] ?? '') !== ''): ?>
                 <div class="alert alert-warning py-2 mt-3 mb-0">
                     Intervalul „<?= e((string) $filters['date_range_invalid']) ?>” nu a putut fi citit; se afiseaza <?= e((string) ($filters['date_range'] ?? '')) ?>. Foloseste formatul zz.ll.aaaa - zz.ll.aaaa.
@@ -253,6 +299,15 @@ $isDeliveryTrip = static fn (array $trip): bool => in_array((string) ($trip['tra
             <?php endif; ?>
         </form>
 
+    <?php if (!$isCompare && $driver === null): ?>
+        <div class="card border-0 shadow-sm">
+            <div class="card-body text-center py-5 text-muted">
+                <?= $driverOptions === []
+                    ? 'Niciun sofer nu are activitate in perioada selectata. Alege alta luna sau schimba filtrele.'
+                    : 'Nu exista soferi inregistrati pentru afisarea istoricului.' ?>
+            </div>
+        </div>
+    <?php else: ?>
         <?php if ($isCompare): ?>
             <?php include __DIR__ . '/_compare.php'; ?>
         <?php else: ?>

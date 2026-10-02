@@ -79,96 +79,110 @@ check('numar: " TM 07 LPG " -> TM07LPG', InvoiceTripMatcher::normalizePlate(' TM
 check('nume: "Andreiaș  Cătălin" -> andreias catalin', InvoiceTripMatcher::normalizePersonName('Andreiaș  Cătălin') === 'andreias catalin');
 check('nume gol -> ""', InvoiceTripMatcher::normalizePersonName('  ') === '');
 
-echo "\nPotrivire unica\n";
+echo "\nO singura cursa in ziua documentului: se asociaza oricum\n";
 $trips = [
     trip(1, '2026-09-01', '2026-09-05', 10, 100),
     trip(2, '2026-09-10', '2026-09-12', 11, 101),
 ];
-$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-03', 'vehicle_id' => 10], $trips);
-check('Trecere, vehicul 10, 03.09 -> cursa 1', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 1, describe($r));
-$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-11', 'driver_id' => 101], $trips);
-check('Cazare, sofer 101, 11.09 -> cursa 2', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 2, describe($r));
+$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-03'], $trips);
+check('Trecere fara numar, o singura cursa pe 03.09 -> cursa 1', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 1, describe($r));
+$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-11'], $trips);
+check('Cazare fara sofer, o singura cursa pe 11.09 -> cursa 2', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 2, describe($r));
+$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-03', 'vehicle_id' => 99, 'nr_inmatriculare_extras' => 'XX99ZZZ'], $trips);
+check('Numarul de pe factura (alt vehicul / negasit) nu conteaza -> cursa 1', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 1, describe($r));
+$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-11', 'driver_id' => 999, 'sofer_extras' => 'Popescu Ion'], $trips);
+check('Soferul de pe factura (alt sofer / negasit) nu conteaza -> cursa 2', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 2, describe($r));
 
-echo "\nAcelasi vehicul, doua curse cu soferi diferiti\n";
+echo "\nMai multe curse in aceeasi zi: numarul / soferul de pe factura decid\n";
 $trips = [
     trip(3, '2026-09-01', '2026-09-03', 20, 200),
-    trip(4, '2026-09-01', '2026-09-03', 20, 201),
+    trip(4, '2026-09-02', '2026-09-02', 21, 201),
 ];
-$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-02', 'driver_id' => 201, 'vehicle_id' => 20], $trips);
-check('Cazare alege dupa sofer -> cursa 4', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 4, describe($r));
-$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-02', 'vehicle_id' => 20], $trips);
-check('Trecere fara sofer -> de_verificat cu 2 candidati', $r['status'] === 'de_verificat' && count($r['candidates']) === 2, describe($r));
-$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-02', 'vehicle_id' => 20, 'driver_id' => 200], $trips);
-check('Trecere cu sofer -> soferul restrange la cursa 3', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 3, describe($r));
-$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-02', 'vehicle_id' => 20, 'driver_id' => 999], $trips);
-check('Trecere cu sofer strain -> nu restrange, raman 2', $r['status'] === 'de_verificat' && count($r['candidates']) === 2, describe($r));
+$trips[0]['sofer_nume'] = 'Popescu Ion';
+$trips[1]['sofer_nume'] = 'Ionescu Maria';
+$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-02'], $trips);
+check('2 curse pe 02.09, fara numar / sofer -> de_verificat cu 2 candidati', $r['status'] === 'de_verificat' && $r['cursa_id'] === null && count($r['candidates']) === 2, describe($r));
+check('motivul spune cate curse sunt', str_contains($r['reason'], '2 curse'), describe($r));
 $candidate = $r['candidates'][0] ?? [];
 check('candidatul are id, perioada, numar, sofer, motiv', isset($candidate['id'], $candidate['data_inceput'], $candidate['data_sfarsit'], $candidate['nr_inmatriculare'], $candidate['sofer'], $candidate['motiv']));
+$r = $matcher->decide(['tip' => 'service', 'data_document' => '2026-09-02', 'nr_inmatriculare_extras' => 'v-21'], $trips);
+check('Service cu numarul citit (scris altfel) -> cursa 4', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 4, describe($r));
+$r = $matcher->decide(['tip' => 'service', 'data_document' => '2026-09-02', 'vehicle_id' => 20], $trips);
+check('Service cu vehiculul ales din lista -> cursa 3', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 3, describe($r));
+$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-02', 'sofer_extras' => 'IONESCU MARIA'], $trips);
+check('Cazare cu numele soferului -> cursa 4', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 4, describe($r));
+$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-02', 'driver_id' => 200], $trips);
+check('Cazare cu soferul ales din lista -> cursa 3', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 3, describe($r));
+$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-02', 'nr_inmatriculare_extras' => 'XX99ZZZ'], $trips);
+check('Numar care nu e pe nicio cursa a zilei -> ignorat, de_verificat cu 2 + motiv', $r['status'] === 'de_verificat' && count($r['candidates']) === 2 && str_contains($r['reason'], 'nu apare'), describe($r));
+$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-02', 'nr_inmatriculare_extras' => 'XX99ZZZ', 'sofer_extras' => 'Popescu Ion'], $trips);
+check('Numar gresit dar sofer bun -> soferul decide, cursa 3', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 3, describe($r));
+$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-03'], $trips);
+check('In 03.09 ramane doar cursa 3 -> asociata', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 3, describe($r));
 
-echo "\nSchimbare de vehicul / sofer prin segmente\n";
+echo "\nCazul real: factura de cazare #161 (mai multe curse in ziua respectiva)\n";
+$real = [
+    ['id' => 255, 'data_inceput' => '2026-08-10', 'data_sfarsit' => '2026-08-12', 'vehicle_id' => 1, 'driver_id' => 1, 'nr_inmatriculare' => 'B 325 NET', 'sofer_nume' => 'Voinea Beniamin', 'segments' => []],
+    ['id' => 260, 'data_inceput' => '2026-08-12', 'data_sfarsit' => '2026-08-13', 'vehicle_id' => 2, 'driver_id' => 2, 'nr_inmatriculare' => 'B 295 NET', 'sofer_nume' => 'Andreias Catalin', 'segments' => []],
+    ['id' => 261, 'data_inceput' => '2026-08-12', 'data_sfarsit' => '2026-08-13', 'vehicle_id' => 3, 'driver_id' => 20, 'nr_inmatriculare' => 'B 275 NET', 'sofer_nume' => 'Beznea Cristian-Gheorghe', 'segments' => []],
+    ['id' => 262, 'data_inceput' => '2026-08-12', 'data_sfarsit' => '2026-08-12', 'vehicle_id' => 4, 'driver_id' => 24, 'nr_inmatriculare' => 'B 999 NET', 'sofer_nume' => 'Beznea Ion', 'segments' => []],
+];
+$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-08-12', 'sofer_extras' => 'Beznea Christian'], $real);
+check('"Beznea Christian" -> cursa 261 (Beznea Cristian-Gheorghe), nu Beznea Ion', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 261, describe($r));
+$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-08-12', 'sofer_extras' => 'Beznea'], $real);
+check('Doar numele de familie, doi Beznea in acea zi -> de_verificat cu 2', $r['status'] === 'de_verificat' && count($r['candidates']) === 2, describe($r));
+
+echo "\nPotrivirea numelor\n";
+check('"Beznea Christian" ~ "Beznea Cristian-Gheorghe"', InvoiceTripMatcher::namesMatch('Beznea Christian', 'Beznea Cristian-Gheorghe'));
+check('"CRISTIAN BEZNEA" (ordine inversa) ~ "Beznea Cristian-Gheorghe"', InvoiceTripMatcher::namesMatch('CRISTIAN BEZNEA', 'Beznea Cristian-Gheorghe'));
+check('"Andreiaș Cătălin" ~ "Andreias Catalin"', InvoiceTripMatcher::namesMatch('Andreiaș Cătălin', 'Andreias Catalin'));
+check('"Beznea Cristian" !~ "Beznea Ion"', !InvoiceTripMatcher::namesMatch('Beznea Cristian', 'Beznea Ion'));
+check('"Ion" !~ "Ian" (cuvinte scurte: fara toleranta)', !InvoiceTripMatcher::namesMatch('Ion', 'Ian'));
+check('nume gol !~ nimic', !InvoiceTripMatcher::namesMatch('', 'Beznea Ion'));
+
+echo "\nSegmente: candidatul arata cine era pe cursa la data documentului\n";
 $trips = [
     trip(5, '2026-09-01', '2026-09-06', 30, 300, [
         segment(1, '2026-09-01', '2026-09-03', 30, 300),
         segment(2, '2026-09-04', '2026-09-06', 31, 301),
     ]),
 ];
-$r = $matcher->decide(['tip' => 'port', 'data_document' => '2026-09-05', 'vehicle_id' => 31], $trips);
-check('Port pe vehiculul din segmentul 2 -> cursa 5', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 5, describe($r));
-$r = $matcher->decide(['tip' => 'port', 'data_document' => '2026-09-05', 'vehicle_id' => 30], $trips);
-check('Port pe vehiculul segmentului 1, dupa predare -> neasociata', $r['status'] === 'neasociata', describe($r));
-$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-02', 'driver_id' => 301], $trips);
-check('Cazare a soferului 2 inainte sa preia -> neasociata', $r['status'] === 'neasociata', describe($r));
-$r = $matcher->decide(['tip' => 'diurna', 'data_document' => '2026-09-04', 'driver_id' => 301], $trips);
-check('Diurna soferului 2 in segmentul lui -> cursa 5', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 5, describe($r));
-$trips = [
-    trip(6, '2026-09-01', '2026-09-04', 40, 400, [
-        segment(1, '2026-09-01', '2026-09-02', 40, 400),
-        segment(2, '2026-09-02', '2026-09-04', 41, 401),
-    ]),
-];
-$r1 = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-02', 'vehicle_id' => 40], $trips);
-$r2 = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-02', 'vehicle_id' => 41], $trips);
-check('Ziua predarii: ambele vehicule se potrivesc', $r1['cursa_id'] === 6 && $r2['cursa_id'] === 6, describe($r1) . ' | ' . describe($r2));
+$r = $matcher->decide(['tip' => 'port', 'data_document' => '2026-09-05'], $trips);
+check('Port pe 05.09 -> cursa 5, cu vehiculul / soferul segmentului 2', $r['cursa_id'] === 5 && ($r['candidates'][0]['nr_inmatriculare'] ?? '') === 'V31' && ($r['candidates'][0]['sofer'] ?? '') === 'S301', describe($r));
 
 echo "\nMarginile perioadei si toleranta\n";
 $trips = [trip(7, '2026-09-10', '2026-09-12', 50, 500)];
-$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-10', 'vehicle_id' => 50], $trips);
+$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-10'], $trips);
 check('Data = prima zi a cursei -> asociata', $r['cursa_id'] === 7, describe($r));
-$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-12', 'vehicle_id' => 50], $trips);
+$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-12'], $trips);
 check('Data = ultima zi a cursei -> asociata', $r['cursa_id'] === 7, describe($r));
-$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-13', 'vehicle_id' => 50], $trips);
+$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-13'], $trips);
 check('Trecere a doua zi dupa cursa (toleranta 0) -> neasociata', $r['status'] === 'neasociata', describe($r));
-$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-13', 'driver_id' => 500], $trips);
+$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-13'], $trips);
 check('Cazare a doua zi dupa cursa (toleranta +1) -> asociata', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 7, describe($r));
-$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-14', 'driver_id' => 500], $trips);
+$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-14'], $trips);
 check('Cazare la doua zile dupa cursa -> neasociata', $r['status'] === 'neasociata', describe($r));
-$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-09', 'driver_id' => 500], $trips);
+$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-09'], $trips);
 check('Cazare cu o zi inainte (toleranta inainte 0) -> neasociata', $r['status'] === 'neasociata', describe($r));
 $trips = [
     trip(8, '2026-09-10', '2026-09-12', 50, 500),
-    trip(9, '2026-09-13', '2026-09-15', 51, 500),
+    trip(9, '2026-09-13', '2026-09-15', 51, 501),
 ];
-$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-13', 'driver_id' => 500], $trips);
+$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-13'], $trips);
 check('Cursa care contine data bate cursa prinsa prin toleranta -> 9', $r['status'] === 'asociata_auto' && $r['cursa_id'] === 9, describe($r));
 $custom = new InvoiceTripMatcher(null, ['trece' => ['before' => 2]]);
-$r = $custom->decide(['tip' => 'trece', 'data_document' => '2026-09-08', 'vehicle_id' => 50], [trip(10, '2026-09-10', '2026-09-12', 50, 500)]);
+$r = $custom->decide(['tip' => 'trece', 'data_document' => '2026-09-08'], [trip(10, '2026-09-10', '2026-09-12', 50, 500)]);
 check('Toleranta configurabila (trece: 2 zile inainte) -> asociata', $r['cursa_id'] === 10, describe($r));
 
 echo "\nFara potrivire / date lipsa\n";
 $trips = [trip(11, '2026-09-01', '2026-09-05', 60, 600)];
-$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-03', 'vehicle_id' => 61], $trips);
-check('Alt vehicul -> neasociata', $r['status'] === 'neasociata' && $r['cursa_id'] === null, describe($r));
-$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-03', 'vehicle_id' => 60], []);
+$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-20'], $trips);
+check('Nicio cursa la data documentului -> neasociata', $r['status'] === 'neasociata' && $r['cursa_id'] === null, describe($r));
+$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-03'], []);
 check('Nicio cursa in baza -> neasociata', $r['status'] === 'neasociata', describe($r));
-$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-03', 'driver_id' => 600], $trips);
-check('Trecere fara numar -> de_verificat', $r['status'] === 'de_verificat' && str_contains($r['reason'], 'Lipseste numarul'), describe($r));
-$r = $matcher->decide(['tip' => 'trece', 'data_document' => '2026-09-03', 'nr_inmatriculare_extras' => 'XX99ZZZ'], $trips);
-check('Trecere cu numar negasit -> de_verificat cu numarul in motiv', $r['status'] === 'de_verificat' && str_contains($r['reason'], 'XX99ZZZ'), describe($r));
-$r = $matcher->decide(['tip' => 'cazare', 'data_document' => '2026-09-03', 'vehicle_id' => 60], $trips);
-check('Cazare fara sofer -> de_verificat', $r['status'] === 'de_verificat' && str_contains($r['reason'], 'Lipseste soferul'), describe($r));
 $r = $matcher->decide(['tip' => 'trece', 'data_document' => null, 'vehicle_id' => 60], $trips);
 check('Fara data -> de_verificat', $r['status'] === 'de_verificat' && str_contains($r['reason'], 'data'), describe($r));
-$r = $matcher->decide(['tip' => 'necunoscut', 'data_document' => '2026-09-03', 'vehicle_id' => 60], $trips);
+$r = $matcher->decide(['tip' => 'necunoscut', 'data_document' => '2026-09-03'], $trips);
 check('Tip necunoscut -> de_verificat', $r['status'] === 'de_verificat', describe($r));
 
 // -----------------------------------------------------------------------------

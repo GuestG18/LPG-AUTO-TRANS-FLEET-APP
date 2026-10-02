@@ -25,6 +25,7 @@ return [
         'edit'   => ['label' => 'Editare date factură', 'group' => 'operare'],
         'link'   => ['label' => 'Asociere / dezasociere cursă, reverificare, respingere', 'group' => 'operare'],
         'delete' => ['label' => 'Ștergere factură', 'group' => 'stergere', 'sensitive' => true],
+        'purge'  => ['label' => 'Ștergere definitivă (cu fișierul, pentru retestare)', 'group' => 'stergere', 'sensitive' => true],
     ],
     'endpoints'   => [
         'store'   => 'create',
@@ -35,5 +36,6 @@ return [
         'rematch' => 'link',
         'reject'  => 'link',
         'delete'  => 'delete',
+        'purge'   => 'purge',
     ],
 ];

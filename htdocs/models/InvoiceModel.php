@@ -30,21 +30,20 @@ class InvoiceModel extends BaseModel
      *
      *   tip_cheltuiala  valoarea din ENUM-ul legacy curse_cheltuieli.tip_cheltuiala
      *   categorie       numele din categorii_cheltuieli_curse
-     *   necesita        campul obligatoriu la asocierea automata: 'sofer' sau 'vehicul'
      *
      * Tipurile fara valoare proprie in ENUM (Cazare, Spalatorie, Vulcanizare) merg pe
      * 'alte' + categorie, la fel cum functiona deja Cazare.
      */
     public const TYPES = [
-        'cazare' => ['label' => 'Cazare', 'tip_cheltuiala' => 'alte', 'categorie' => 'Cazare', 'necesita' => 'sofer'],
-        'diurna' => ['label' => 'Diurna', 'tip_cheltuiala' => 'diurna', 'categorie' => 'Diurna', 'necesita' => 'sofer'],
-        'trece' => ['label' => 'Trecere', 'tip_cheltuiala' => 'trece', 'categorie' => 'Trecere', 'necesita' => 'vehicul'],
-        'taxa_acces' => ['label' => 'Taxa acces', 'tip_cheltuiala' => 'taxa_acces', 'categorie' => 'Taxa acces', 'necesita' => 'vehicul'],
-        'port' => ['label' => 'Port', 'tip_cheltuiala' => 'port', 'categorie' => 'Port', 'necesita' => 'vehicul'],
-        'service' => ['label' => 'Reparatii', 'tip_cheltuiala' => 'service', 'categorie' => 'Reparatii', 'necesita' => 'vehicul'],
-        'spalatorie' => ['label' => 'Spalatorie', 'tip_cheltuiala' => 'alte', 'categorie' => 'Spalatorie', 'necesita' => 'vehicul'],
-        'vulcanizare' => ['label' => 'Vulcanizare', 'tip_cheltuiala' => 'alte', 'categorie' => 'Vulcanizare', 'necesita' => 'vehicul'],
-        'alte' => ['label' => 'Alte', 'tip_cheltuiala' => 'alte', 'categorie' => 'Alte cheltuieli', 'necesita' => 'vehicul'],
+        'cazare' => ['label' => 'Cazare', 'tip_cheltuiala' => 'alte', 'categorie' => 'Cazare'],
+        'diurna' => ['label' => 'Diurna', 'tip_cheltuiala' => 'diurna', 'categorie' => 'Diurna'],
+        'trece' => ['label' => 'Trecere', 'tip_cheltuiala' => 'trece', 'categorie' => 'Trecere'],
+        'taxa_acces' => ['label' => 'Taxa acces', 'tip_cheltuiala' => 'taxa_acces', 'categorie' => 'Taxa acces'],
+        'port' => ['label' => 'Port', 'tip_cheltuiala' => 'port', 'categorie' => 'Port'],
+        'service' => ['label' => 'Reparatii', 'tip_cheltuiala' => 'service', 'categorie' => 'Reparatii'],
+        'spalatorie' => ['label' => 'Spalatorie', 'tip_cheltuiala' => 'alte', 'categorie' => 'Spalatorie'],
+        'vulcanizare' => ['label' => 'Vulcanizare', 'tip_cheltuiala' => 'alte', 'categorie' => 'Vulcanizare'],
+        'alte' => ['label' => 'Alte', 'tip_cheltuiala' => 'alte', 'categorie' => 'Alte cheltuieli'],
     ];
 
     /** Categoriile noi de cheltuieli de cursa (fara cheie legacy, ca si Cazare). */
@@ -244,12 +243,6 @@ class InvoiceModel extends BaseModel
     public static function legacyExpenseType(string $type): ?string
     {
         return self::TYPES[$type]['tip_cheltuiala'] ?? null;
-    }
-
-    /** 'sofer' sau 'vehicul': ce camp e obligatoriu la asocierea automata. */
-    public static function requiredMatchField(string $type): ?string
-    {
-        return self::TYPES[$type]['necesita'] ?? null;
     }
 
     /** Id-ul categoriei din categorii_cheltuieli_curse pentru un tip de factura. */
@@ -1189,6 +1182,68 @@ class InvoiceModel extends BaseModel
         $this->syncMirror($id);
 
         return true;
+    }
+
+    /**
+     * Stergere definitiva, pentru retestare: randul (la o scanare, toate facturile din
+     * aceeasi scanare, si cele sterse logic), cheltuielile lor de pe cursa si fisierul,
+     * daca nu-l mai foloseste alta factura. sursa_key se elibereaza, deci aceeasi scanare
+     * poate fi preluata din nou.
+     *
+     * @return array{facturi: int, fisier_sters: bool}|null null daca factura nu exista sau e import de cazare
+     */
+    public function purge(int $id, InvoiceStorageService $storage): ?array
+    {
+        $stmt = $this->db->prepare('SELECT id, sursa, document_path, document_sha256 FROM facturi WHERE id = :id');
+        $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row === false || (string) $row['sursa'] === 'legacy_cazare') {
+            return null;
+        }
+
+        if ((string) $row['sursa'] === 'scan' && !empty($row['document_sha256'])) {
+            $stmt = $this->db->prepare("SELECT id, curse_cheltuiala_id FROM facturi WHERE sursa = 'scan' AND document_sha256 = :sha");
+            $stmt->bindValue(':sha', (string) $row['document_sha256'], PDO::PARAM_STR);
+        } else {
+            $stmt = $this->db->prepare('SELECT id, curse_cheltuiala_id FROM facturi WHERE id = :id');
+            $stmt->bindValue(':id', $id, PDO::PARAM_INT);
+        }
+        $stmt->execute();
+        $targets = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $mirror = new TripExpenseMirrorService($this->db);
+        $this->db->beginTransaction();
+        try {
+            foreach ($targets as $target) {
+                if ($target['curse_cheltuiala_id'] !== null) {
+                    $this->setMirrorPointer((int) $target['id'], null);
+                    $mirror->delete((int) $target['curse_cheltuiala_id']);
+                }
+                $delete = $this->db->prepare('DELETE FROM facturi WHERE id = :id');
+                $delete->bindValue(':id', (int) $target['id'], PDO::PARAM_INT);
+                $delete->execute();
+            }
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            $this->db->rollBack();
+            throw $exception;
+        }
+
+        // Fisierul pleaca doar daca nu mai e folosit (aceeasi poza poate fi si incarcare manuala).
+        $fileRemoved = false;
+        $path = trim((string) ($row['document_path'] ?? ''));
+        if ($path !== '' && str_starts_with($path, 'storage/invoices/')) {
+            $stmt = $this->db->prepare('SELECT COUNT(*) FROM facturi WHERE document_path = :path');
+            $stmt->bindValue(':path', $path, PDO::PARAM_STR);
+            $stmt->execute();
+            $absolute = $storage->resolveReadablePath($path);
+            if ((int) $stmt->fetchColumn() === 0 && $absolute !== null) {
+                $fileRemoved = @unlink($absolute);
+            }
+        }
+
+        return ['facturi' => count($targets), 'fisier_sters' => $fileRemoved];
     }
 
     /**

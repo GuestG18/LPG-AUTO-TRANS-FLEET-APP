@@ -26,7 +26,7 @@ $selectedType = $value('tip');
             <option value="">Alege tipul…</option>
             <?php foreach (InvoiceModel::TYPES as $typeKey => $typeConfig): ?>
                 <option value="<?= e($typeKey) ?>" <?= $selectedType === $typeKey ? 'selected' : '' ?>>
-                    <?= e($typeConfig['label']) ?> (asociere după <?= $typeConfig['necesita'] === 'sofer' ? 'șofer' : 'nr. auto' ?>)
+                    <?= e($typeConfig['label']) ?>
                 </option>
             <?php endforeach; ?>
         </select>

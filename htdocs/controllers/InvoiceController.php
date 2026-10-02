@@ -77,6 +77,10 @@ class InvoiceController
                 $this->requireAction('delete');
                 $this->deleteAction();
                 return;
+            case 'purge':
+                $this->requireAction('purge');
+                $this->purgeAction();
+                return;
             default:
                 http_response_code(404);
                 render('errors/404.php', [
@@ -194,6 +198,7 @@ class InvoiceController
             'canLink' => can('facturi', 'link') && (!$isLegacy || can('cazare', 'link')),
             'canReject' => can('facturi', 'link') && !$isLegacy,
             'canDelete' => can('facturi', 'delete') && !$isLegacy,
+            'canPurge' => can('facturi', 'purge') && !$isLegacy,
         ]);
     }
 
@@ -414,6 +419,31 @@ class InvoiceController
         } catch (Throwable $exception) {
             error_log('[InvoiceController][delete] ' . $exception->getMessage());
             flash_set('danger', 'Nu s-a putut sterge factura.');
+            redirect($this->viewUrl($id));
+        }
+
+        redirect($this->listUrl());
+    }
+
+    /** Stergere definitiva (retestare): aceeasi scanare poate fi preluata din nou. */
+    private function purgeAction(): void
+    {
+        $id = (int) ($_POST['id'] ?? 0);
+        $this->requirePost($this->viewUrl($id));
+        ensure_csrf_or_redirect($this->viewUrl($id));
+
+        try {
+            $result = $this->model->purge($id, $this->storage);
+            if ($result === null) {
+                flash_set('warning', 'Factura nu poate fi stearsa definitiv aici.');
+                redirect($this->viewUrl($id));
+            }
+            flash_set('success', 'Sters definitiv: ' . $result['facturi'] . ' factur' . ($result['facturi'] === 1 ? 'a' : 'i')
+                . ', cheltuielile lor de pe cursa' . ($result['fisier_sters'] ? ' si fisierul scanat' : '')
+                . '. Aceeasi scanare poate fi preluata din nou (din Gmail: scoate eticheta Facturi/Procesat de pe email sau scaneaza din nou).');
+        } catch (Throwable $exception) {
+            error_log('[InvoiceController][purge] ' . $exception->getMessage());
+            flash_set('danger', 'Nu s-a putut sterge definitiv factura.');
             redirect($this->viewUrl($id));
         }
 

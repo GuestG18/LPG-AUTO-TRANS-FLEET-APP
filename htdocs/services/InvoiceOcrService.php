@@ -21,7 +21,7 @@ use Anthropic\Core\Exceptions\RateLimitException;
  */
 class InvoiceOcrService
 {
-    public const DEFAULT_MODEL = 'claude-haiku-4-5';
+    public const DEFAULT_MODEL = 'claude-sonnet-5-5';
 
     /** Destul pentru o scanare cu multe bonuri; raspunsul e doar JSON. */
     private const MAX_TOKENS = 8000;

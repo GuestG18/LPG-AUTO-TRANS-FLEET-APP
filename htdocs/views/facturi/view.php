@@ -13,6 +13,7 @@ $documentUrl = (string) ($documentUrl ?? '');
 $canEdit = (bool) ($canEdit ?? false);
 $canLink = (bool) ($canLink ?? false);
 $canDelete = (bool) ($canDelete ?? false);
+$canPurge = (bool) ($canPurge ?? false);
 $canReject = (bool) ($canReject ?? false);
 $legacyDocuments = is_array($legacyDocuments ?? null) ? $legacyDocuments : [];
 $ocrDetails = is_array($ocrDetails ?? null) ? $ocrDetails : null;
@@ -60,7 +61,7 @@ require __DIR__ . '/_status.php';
             · adăugată <?= e(format_date_ro(substr((string) $invoice['created_at'], 0, 10))) ?>
         </div>
     </div>
-    <?php if ($canDelete): ?>
+    <?php if ($canDelete || $canPurge): ?>
         <button type="button" class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#facturaDeleteModal">
             <i class="bi bi-trash3" aria-hidden="true"></i> Șterge
         </button>
@@ -319,24 +320,44 @@ require __DIR__ . '/_status.php';
     </div>
 </div>
 
-<?php if ($canDelete): ?>
+<?php if ($canDelete || $canPurge): ?>
+<?php $purgeCount = 1 + count($scanSiblings); ?>
 <div class="modal fade" id="facturaDeleteModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered modal-sm">
-        <form class="modal-content" method="post" action="<?= e(build_query_url(['page' => 'facturi', 'action' => 'delete'])) ?>">
-            <?= csrf_field() ?>
-            <input type="hidden" name="id" value="<?= $id ?>">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Ștergi factura #<?= $id ?>?</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
             </div>
             <div class="modal-body small">
-                Factura dispare din listă și cheltuiala ei este scoasă de pe cursă. Fișierul rămâne pe server.
+                <?php if ($canDelete): ?>
+                    <form method="post" action="<?= e(build_query_url(['page' => 'facturi', 'action' => 'delete'])) ?>" class="d-flex gap-3 align-items-start">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="id" value="<?= $id ?>">
+                        <div class="flex-grow-1">
+                            <div class="fw-semibold">Șterge</div>
+                            Factura dispare din listă și cheltuiala ei este scoasă de pe cursă. Fișierul rămâne pe server, iar aceeași scanare nu mai este preluată a doua oară.
+                        </div>
+                        <button type="submit" class="btn btn-danger btn-sm text-nowrap">Șterge</button>
+                    </form>
+                <?php endif; ?>
+                <?php if ($canPurge): ?>
+                    <form method="post" action="<?= e(build_query_url(['page' => 'facturi', 'action' => 'purge'])) ?>" class="d-flex gap-3 align-items-start<?= $canDelete ? ' border-top pt-3 mt-3' : '' ?>">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="id" value="<?= $id ?>">
+                        <div class="flex-grow-1">
+                            <div class="fw-semibold">Șterge definitiv (pentru retestare)</div>
+                            Șterge din baza de date<?= $purgeCount > 1 ? ' toate cele ' . $purgeCount . ' facturi din aceeași scanare' : ' factura' ?>, cheltuiala de pe cursă și fișierul scanat. Nu se poate anula.
+                            Aceeași scanare poate fi preluată din nou: scoate eticheta <strong>Facturi/Procesat</strong> de pe email în Gmail sau scanează din nou.
+                        </div>
+                        <button type="submit" class="btn btn-outline-danger btn-sm text-nowrap">Șterge definitiv</button>
+                    </form>
+                <?php endif; ?>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Renunță</button>
-                <button type="submit" class="btn btn-danger btn-sm">Șterge</button>
             </div>
-        </form>
+        </div>
     </div>
 </div>
 <?php endif; ?>

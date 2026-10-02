@@ -14945,6 +14945,33 @@ tr:hover .diurna-edit-btn,
     box-shadow: none;
 }
 
+.driver-history-month-nav {
+    display: flex;
+    gap: .35rem;
+    align-items: center;
+    margin-top: .4rem;
+}
+
+.driver-history-filter-field .driver-history-month-nav .form-select {
+    min-height: 31px;
+    font-size: .8rem;
+    font-weight: 750;
+}
+
+.driver-history-month-nav .btn {
+    flex: 0 0 auto;
+}
+
+/* Randul de luni face campul de interval mai inalt: campurile se aliniaza sus,
+   iar butoanele coboara cu inaltimea unei etichete ca sa ramana in linie cu inputurile. */
+.driver-history-filter-grid {
+    align-items: start;
+}
+
+.driver-history-filter-actions {
+    margin-top: calc(.8rem * 1.25 + .45rem);
+}
+
 .driver-history-filter-field .form-control:focus,
 .driver-history-filter-field .form-select:focus {
     border-color: #0d6efd;

@@ -184,12 +184,12 @@ try {
         $expense = $db->query('SELECT tip_cheltuiala, suma FROM curse_cheltuieli WHERE id = ' . (int) $first['curse_cheltuiala_id'])->fetch(PDO::FETCH_ASSOC);
         check('prima: cheltuiala de cursa creata (trece, 24.20)', $expense !== false && $expense['tip_cheltuiala'] === 'trece' && (float) $expense['suma'] === 24.2);
     } else {
-        echo "  (cursa reala are mai multe potriviri pe acel vehicul: " . $first['status'] . ")\n";
+        echo "  (in ziua cursei reale sunt mai multe curse: " . $first['status'] . ")\n";
     }
 
     $second = $model->getById($ids[1]);
     check('a doua: factura noua cu acelasi fisier si pagina 2', $second['document_path'] === $first['document_path'] && $second['document_pagini'] === '2' && $second['sursa_key'] === $first['sursa_key'] . ':2');
-    check('a doua: sofer negasit -> de_verificat cu motiv', $second['status'] === 'de_verificat' && str_contains((string) $second['match_reason'], 'nu a fost gasit'), $second['status'] . ' / ' . $second['match_reason']);
+    check('a doua: nicio cursa la data documentului -> neasociata (soferul negasit nu conteaza)', $second['status'] === 'neasociata' && str_contains((string) $second['match_reason'], 'Nicio cursa'), $second['status'] . ' / ' . $second['match_reason']);
     check('a doua: subiectul emailului pastrat', str_starts_with((string) $second['email_subiect'], 'Send data from'));
     check('subiect implicit al scannerului: tipul ramane cel citit', $first['tip'] === 'trece' && !str_contains((string) $first['observatii'], 'subiectul emailului'));
 

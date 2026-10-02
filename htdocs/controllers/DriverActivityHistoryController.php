@@ -148,6 +148,7 @@ class DriverActivityHistoryController
             'dashboard' => $dashboard,
             'comparison' => $comparison,
             'filters' => $filters,
+            'droppedDriverNames' => $this->model->getDriverNames($filters['dropped_driver_ids'] ?? []),
             'isCompare' => $isCompare,
             'driverOptions' => $driverOptions,
             'beneficiaryOptions' => $this->model->getBeneficiaryOptions(),
@@ -165,9 +166,13 @@ class DriverActivityHistoryController
     {
         $driverOptions ??= $this->model->getDriverOptions($filters);
         $allowedIds = array_map('intval', array_column($driverOptions, 'id'));
+        $requestedIds = $filters['driver_ids'];
         if ($allowedIds !== []) {
             $filters['driver_ids'] = array_values(array_intersect($filters['driver_ids'], $allowedIds));
         }
+        // Soferii ceruti, dar fara activitate in perioada (ex. navigare pe alta luna):
+        // pagina le afiseaza numele, ca sa nu para ca s-a schimbat soferul pe tacute.
+        $filters['dropped_driver_ids'] = array_values(array_diff($requestedIds, $filters['driver_ids']));
 
         if ($filters['driver_ids'] === []) {
             $defaultId = $allowedIds !== [] ? $this->defaultDriverFrom($allowedIds) : 0;

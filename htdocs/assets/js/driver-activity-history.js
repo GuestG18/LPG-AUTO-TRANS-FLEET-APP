@@ -1090,6 +1090,16 @@
         });
     }
 
+    // Lista de luni de sub interval: alegerea unei luni reincarca pagina pe luna aceea.
+    var monthSelect = document.querySelector('[data-driver-history-month]');
+    if (monthSelect) {
+        monthSelect.addEventListener('change', function () {
+            if (monthSelect.value) {
+                window.location.href = monthSelect.value;
+            }
+        });
+    }
+
     var openRangePicker = function () {
         if (rangePicker) {
             rangePicker.open();

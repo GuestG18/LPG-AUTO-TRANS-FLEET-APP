@@ -9,13 +9,15 @@ declare(strict_types=1);
  *       data_inceput - toleranta_inainte <= data_document <= data_sfarsit + toleranta_dupa
  *     (tolerantele sunt pe tip; implicit 0, la Cazare +1 zi dupa: factura de hotel
  *     poate purta data plecarii, ziua de dupa sfarsitul cursei);
- *   - Cazare / Diurna:  soferul e OBLIGATORIU; numarul de inmatriculare, daca exista,
- *                       doar restrange lista de candidati;
- *   - restul tipurilor: numarul de inmatriculare e OBLIGATORIU; soferul doar restrange;
- *   - soferul / vehiculul se verifica pe segmentul cursei activ la data documentului
- *     (curse_segmente), fiindca pe o cursa reluata se pot schimba;
- *   - 1 candidat -> asociata_auto, 2+ -> de_verificat (cu lista de candidati),
- *     0 -> neasociata; camp obligatoriu lipsa / negasit -> de_verificat cu motiv.
+ *   - data alege cursele; o singura cursa in acea zi -> asociata, fara alte conditii;
+ *   - mai multe curse in acea zi: numarul de inmatriculare si / sau soferul de pe factura
+ *     (oricare apare; cazarea are de obicei soferul, service-ul numarul) arata cursa.
+ *     Se compara doar cu cine era pe cursele zilei (segmentul activ la data documentului,
+ *     curse_segmente), soferul cu potrivire larga (namesMatch). Un camp care nu se
+ *     regaseste pe nicio cursa a zilei e ignorat, nu blocheaza;
+ *   - cursele care contin data propriu-zisa au prioritate fata de cele prinse prin toleranta;
+ *   - 1 candidat ramas -> asociata_auto, 2+ -> de_verificat (cu lista de candidati),
+ *     0 -> neasociata; data lipsa -> de_verificat cu motiv.
  *
  * Nucleul (decide) e pur: primeste factura si cursele deja incarcate, deci se poate
  * testa fara baza de date (scripts/test_invoice_matcher.php).
@@ -105,30 +107,13 @@ class InvoiceTripMatcher
     public function decide(array $invoice, array $trips): array
     {
         $type = (string) ($invoice['tip'] ?? '');
-        $required = InvoiceModel::requiredMatchField($type);
-        if ($required === null) {
+        if (!InvoiceModel::isValidType($type)) {
             return $this->result('de_verificat', [], 'Tip de factura necunoscut: "' . $type . '".');
         }
 
         $date = $this->parseDate($invoice['data_document'] ?? null);
         if ($date === null) {
             return $this->result('de_verificat', [], 'Lipseste data documentului.');
-        }
-
-        $vehicleId = (int) ($invoice['vehicle_id'] ?? 0) ?: null;
-        $driverId = (int) ($invoice['driver_id'] ?? 0) ?: null;
-        $plateRaw = trim((string) ($invoice['nr_inmatriculare_extras'] ?? ''));
-        $driverRaw = trim((string) ($invoice['sofer_extras'] ?? ''));
-
-        if ($required === 'sofer' && $driverId === null) {
-            return $this->result('de_verificat', [], $driverRaw !== ''
-                ? 'Soferul "' . $driverRaw . '" nu a fost gasit in lista de soferi.'
-                : 'Lipseste soferul (obligatoriu pentru ' . $this->typeLabel($type) . ').');
-        }
-        if ($required === 'vehicul' && $vehicleId === null) {
-            return $this->result('de_verificat', [], $plateRaw !== ''
-                ? 'Numarul "' . $plateRaw . '" nu a fost gasit in lista de vehicule.'
-                : 'Lipseste numarul de inmatriculare (obligatoriu pentru ' . $this->typeLabel($type) . ').');
         }
 
         $tolerance = $this->toleranceFor($type);
@@ -147,29 +132,15 @@ class InvoiceTripMatcher
                 continue;
             }
 
-            $participants = $this->participantsOn($trip, $date, $start, $end);
-            $requiredOk = false;
-            foreach ($participants as $participant) {
-                if ($required === 'sofer' ? $participant['driver_id'] === $driverId : $participant['vehicle_id'] === $vehicleId) {
-                    $requiredOk = true;
-                    break;
-                }
-            }
-            if (!$requiredOk) {
-                continue;
-            }
-
             $matches[] = [
                 'trip' => $trip,
-                'participants' => $participants,
+                'participants' => $this->participantsOn($trip, $date, $start, $end),
                 'strict' => $date >= $start && $date <= $end,
             ];
         }
 
         if ($matches === []) {
-            return $this->result('neasociata', [], $required === 'sofer'
-                ? 'Nicio cursa a soferului in perioada documentului.'
-                : 'Nicio cursa a vehiculului in perioada documentului.');
+            return $this->result('neasociata', [], 'Nicio cursa in perioada documentului.');
         }
 
         $notes = [];
@@ -182,26 +153,31 @@ class InvoiceTripMatcher
             $notes[] = 'preferate cursele care contin data';
         }
 
-        // Campul optional restrange lista doar daca lasa macar un candidat.
-        $optionalId = $required === 'sofer' ? $vehicleId : $driverId;
-        if ($optionalId !== null && count($matches) > 1) {
-            $optionalKey = $required === 'sofer' ? 'vehicle_id' : 'driver_id';
-            $narrowed = array_values(array_filter($matches, static function (array $m) use ($optionalKey, $optionalId): bool {
-                foreach ($m['participants'] as $participant) {
-                    if ($participant[$optionalKey] === $optionalId) {
-                        return true;
+        // Mai multe curse in aceeasi zi: numarul / soferul de pe factura arata cursa,
+        // comparate doar cu cine era pe cursele din ziua respectiva.
+        $basis = 'data documentului';
+        if (count($matches) > 1) {
+            foreach ($this->identityFilters($invoice) as [$label, $filter]) {
+                $narrowed = array_values(array_filter($matches, static function (array $m) use ($filter): bool {
+                    foreach ($m['participants'] as $participant) {
+                        if ($filter($participant)) {
+                            return true;
+                        }
                     }
-                }
 
-                return false;
-            }));
-            if ($narrowed !== []) {
-                $matches = $narrowed;
-                $notes[] = $required === 'sofer' ? 'restrans dupa vehicul' : 'restrans dupa sofer';
+                    return false;
+                }));
+                if ($narrowed === []) {
+                    $notes[] = $label . ' de pe factura nu apare pe nicio cursa din acea zi';
+                    continue;
+                }
+                if (count($narrowed) < count($matches)) {
+                    $matches = $narrowed;
+                    $basis = 'data documentului + ' . $label;
+                }
             }
         }
 
-        $basis = $required === 'sofer' ? 'sofer + perioada' : 'vehicul + perioada';
         $suffix = $notes === [] ? '' : ' (' . implode(', ', $notes) . ')';
         $candidates = array_map(fn(array $m): array => $this->candidateSummary($m, $basis), $matches);
 
@@ -215,6 +191,62 @@ class InvoiceTripMatcher
         }
 
         return $this->result('de_verificat', $candidates, count($matches) . ' curse posibile: ' . $basis . $suffix . '. Alege cursa.');
+    }
+
+    /**
+     * Ce identifica vehiculul / soferul pe factura, in ordinea in care se aplica:
+     * numarul (alegerea din lista sau textul citit), apoi soferul.
+     *
+     * @return array<int, array{0: string, 1: callable(array): bool}>
+     */
+    private function identityFilters(array $invoice): array
+    {
+        $filters = [];
+
+        $vehicleId = (int) ($invoice['vehicle_id'] ?? 0) ?: null;
+        $plate = self::normalizePlate($invoice['nr_inmatriculare_extras'] ?? null);
+        if ($vehicleId !== null || $plate !== '') {
+            $filters[] = ['nr. auto', static fn(array $p): bool => ($vehicleId !== null && $p['vehicle_id'] === $vehicleId)
+                || ($plate !== '' && self::normalizePlate($p['nr_inmatriculare']) === $plate)];
+        }
+
+        $driverId = (int) ($invoice['driver_id'] ?? 0) ?: null;
+        $name = (string) ($invoice['sofer_extras'] ?? '');
+        if ($driverId !== null || self::normalizePersonName($name) !== '') {
+            $filters[] = ['sofer', static fn(array $p): bool => ($driverId !== null && $p['driver_id'] === $driverId)
+                || self::namesMatch($name, $p['sofer'])];
+        }
+
+        return $filters;
+    }
+
+    /**
+     * Numele de pe factura se potriveste cu numele din aplicatie daca fiecare cuvant al
+     * lui se regaseste in numele din aplicatie, in orice ordine, cu o litera diferenta
+     * la cuvintele lungi ("Beznea Christian" ~ "Beznea Cristian-Gheorghe").
+     */
+    public static function namesMatch(?string $invoiceName, ?string $appName): bool
+    {
+        $wanted = array_filter(explode(' ', self::normalizePersonName($invoiceName)), static fn(string $w): bool => strlen($w) >= 2);
+        $available = array_filter(explode(' ', self::normalizePersonName($appName)), static fn(string $w): bool => $w !== '');
+        if ($wanted === [] || $available === []) {
+            return false;
+        }
+
+        foreach ($wanted as $word) {
+            $found = false;
+            foreach ($available as $candidate) {
+                if ($word === $candidate || (strlen($word) >= 5 && strlen($candidate) >= 5 && levenshtein($word, $candidate) <= 1)) {
+                    $found = true;
+                    break;
+                }
+            }
+            if (!$found) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -291,11 +323,6 @@ class InvoiceTripMatcher
     private function result(string $status, array $candidates, string $reason): array
     {
         return ['status' => $status, 'cursa_id' => null, 'candidates' => $candidates, 'reason' => $reason];
-    }
-
-    private function typeLabel(string $type): string
-    {
-        return InvoiceModel::TYPES[$type]['label'] ?? $type;
     }
 
     private function parseDate(mixed $value): ?DateTimeImmutable
