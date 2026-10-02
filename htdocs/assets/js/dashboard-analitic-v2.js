@@ -330,52 +330,384 @@
         window.history.replaceState({}, '', url.toString());
     }
 
-    function setPreset(preset) {
-        var today = new Date();
-        var start;
-        var end = today;
+    // ------------------------------------------------------ selector de perioada
+    // Intervalul aplicat sta in #da2-date-start/#da2-date-end (ascunse). Popover-ul lucreaza
+    // pe o ciorna (period.start/end) si o scrie inapoi abia la „Aplică" sau la o presetare.
 
-        if (preset === 'luna_curenta') {
-            start = new Date(today.getFullYear(), today.getMonth(), 1);
-        } else if (preset === 'luna_trecuta') {
-            start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-            end = new Date(today.getFullYear(), today.getMonth(), 0);
-        } else if (preset === 'ultimele_30') {
-            start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29);
-        } else if (preset === 'trimestru') {
-            start = new Date(today.getFullYear(), Math.floor(today.getMonth() / 3) * 3, 1);
-        } else if (preset === 'an') {
-            start = new Date(today.getFullYear(), 0, 1);
-        } else {
+    var PRESET_LABELS = { luna_curenta: 'Luna curentă', an: 'Anul curent', an_trecut: 'Anul trecut' };
+    var period = { start: '', end: '', picking: 'start', hover: '', view: null, mode: 'days', anchor: '' };
+
+    function presetRanges() {
+        var today = new Date();
+        var year = today.getFullYear();
+        return {
+            luna_curenta: [toIso(new Date(year, today.getMonth(), 1)), toIso(today)],
+            an: [toIso(new Date(year, 0, 1)), toIso(today)],
+            an_trecut: [toIso(new Date(year - 1, 0, 1)), toIso(new Date(year - 1, 11, 31))]
+        };
+    }
+
+    function matchPreset(start, end) {
+        var ranges = presetRanges();
+        var found = '';
+        Object.keys(ranges).forEach(function (key) {
+            if (ranges[key][0] === start && ranges[key][1] === end) {
+                found = key;
+            }
+        });
+        return found;
+    }
+
+    function parseIso(iso) {
+        return new Date(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10)));
+    }
+
+    function setPreset(preset) {
+        var range = presetRanges()[preset];
+        if (!range) {
             return;
         }
+        applyPeriod(range[0], range[1]);
+    }
 
-        $('#da2-date-start').value = toIso(start);
-        $('#da2-date-end').value = toIso(end);
+    function applyPeriod(start, end) {
+        $('#da2-date-start').value = start;
+        $('#da2-date-end').value = end;
+        closePeriodPanel();
         markActivePreset();
+        renderChips();
         scheduleReload(0);
     }
 
+    /** Eticheta butonului de perioada + presetarea activa din popover. */
     function markActivePreset() {
         var start = $('#da2-date-start').value;
         var end = $('#da2-date-end').value;
-        var today = new Date();
-        var map = {
-            luna_curenta: [toIso(new Date(today.getFullYear(), today.getMonth(), 1)), toIso(today)],
-            luna_trecuta: [
-                toIso(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
-                toIso(new Date(today.getFullYear(), today.getMonth(), 0))
-            ],
-            ultimele_30: [toIso(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29)), toIso(today)],
-            trimestru: [toIso(new Date(today.getFullYear(), Math.floor(today.getMonth() / 3) * 3, 1)), toIso(today)],
-            an: [toIso(new Date(today.getFullYear(), 0, 1)), toIso(today)]
-        };
+        var active = matchPreset(start, end);
+
+        $('#da2-period-name').textContent = active ? PRESET_LABELS[active] : 'Interval personalizat';
+        $('#da2-period-range').textContent = (start ? fmtDateRo(start) : '…') + ' – ' + (end ? fmtDateRo(end) : '…');
 
         $$('.da2-preset').forEach(function (button) {
-            var range = map[button.getAttribute('data-preset')];
-            button.classList.toggle('is-active', !!range && range[0] === start && range[1] === end);
+            button.classList.toggle('is-active', button.getAttribute('data-preset') === active);
         });
     }
+
+    var MONTHS_SHORT = ['Ian', 'Feb', 'Mar', 'Apr', 'Mai', 'Iun', 'Iul', 'Aug', 'Sep', 'Oct', 'Noi', 'Dec'];
+
+    function monthEndIso(year, month) {
+        return toIso(new Date(year, month + 1, 0));
+    }
+
+    function calendarMonths() {
+        return window.matchMedia('(max-width: 760px)').matches ? 1 : 2;
+    }
+
+    /** Capetele de afisat: in timpul alegerii, intervalul se previzualizeaza pana sub mouse. */
+    function displayRange() {
+        var start = period.start;
+        var end = period.end;
+        if (period.picking === 'end' && period.hover) {
+            if (period.mode === 'months') {
+                var a = period.anchor;
+                var h = period.hover;
+                start = (a < h ? a : h) + '-01';
+                var last = a < h ? h : a;
+                end = monthEndIso(Number(last.slice(0, 4)), Number(last.slice(5, 7)) - 1);
+            } else {
+                start = period.start < period.hover ? period.start : period.hover;
+                end = period.start < period.hover ? period.hover : period.start;
+            }
+        }
+        return [start, end];
+    }
+
+    function renderDays(start, end) {
+        var months = calendarMonths();
+        var todayIso = toIso(new Date());
+        var html = '';
+
+        for (var m = 0; m < months; m += 1) {
+            var first = new Date(period.view.getFullYear(), period.view.getMonth() + m, 1);
+            var title = first.toLocaleDateString('ro-RO', { month: 'long', year: 'numeric' });
+            var offset = (first.getDay() + 6) % 7; // luni = prima zi
+            var daysInMonth = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+
+            html += '<div class="da2-cal-month"><div class="da2-cal-head">';
+            html += m === 0
+                ? '<button type="button" class="da2-cal-nav" data-cal-nav="-1" aria-label="Luna anterioară"><i class="bi bi-chevron-left"></i></button>'
+                : '<span class="da2-cal-nav-spacer"></span>';
+            html += '<button type="button" class="da2-cal-title" data-cal-month="' + toIso(first).slice(0, 7) + '" title="Selectează toată luna">' +
+                escapeHtml(title) + '</button>';
+            html += m === months - 1
+                ? '<button type="button" class="da2-cal-nav" data-cal-nav="1" aria-label="Luna următoare"><i class="bi bi-chevron-right"></i></button>'
+                : '<span class="da2-cal-nav-spacer"></span>';
+            html += '</div><div class="da2-cal-grid">';
+            ['Lu', 'Ma', 'Mi', 'Jo', 'Vi', 'Sâ', 'Du'].forEach(function (dow) {
+                html += '<span class="da2-cal-dow">' + dow + '</span>';
+            });
+            for (var blank = 0; blank < offset; blank += 1) {
+                html += '<span></span>';
+            }
+            for (var day = 1; day <= daysInMonth; day += 1) {
+                var iso = toIso(new Date(first.getFullYear(), first.getMonth(), day));
+                var classes = ['da2-cal-day'];
+                if (iso === todayIso) { classes.push('is-today'); }
+                if (start && iso === start) { classes.push('is-start'); }
+                if (end && iso === end) { classes.push('is-end'); }
+                if (start && end && iso > start && iso < end) { classes.push('in-range'); }
+                html += '<button type="button" class="' + classes.join(' ') + '" data-cal-day="' + iso + '">' + day + '</button>';
+            }
+            html += '</div></div>';
+        }
+        return html;
+    }
+
+    function renderMonths(start, end) {
+        var year = period.view.getFullYear();
+        var current = toIso(new Date()).slice(0, 7);
+        var startKey = start ? start.slice(0, 7) : '';
+        var endKey = end ? end.slice(0, 7) : '';
+        var html = '<div class="da2-cal-year"><div class="da2-cal-head">' +
+            '<button type="button" class="da2-cal-nav" data-cal-nav="-12" aria-label="Anul anterior"><i class="bi bi-chevron-left"></i></button>' +
+            '<button type="button" class="da2-cal-title" data-cal-year="' + year + '" title="Selectează tot anul">' + year + '</button>' +
+            '<button type="button" class="da2-cal-nav" data-cal-nav="12" aria-label="Anul următor"><i class="bi bi-chevron-right"></i></button>' +
+            '</div><div class="da2-cal-months">';
+
+        MONTHS_SHORT.forEach(function (label, index) {
+            var key = year + '-' + (index < 9 ? '0' : '') + (index + 1);
+            var classes = ['da2-cal-mon'];
+            if (key === current) { classes.push('is-today'); }
+            if (startKey && endKey && key >= startKey && key <= endKey) {
+                classes.push(key === startKey || key === endKey ? 'is-edge' : 'in-range');
+            }
+            html += '<button type="button" class="' + classes.join(' ') + '" data-cal-mon="' + key + '">' + label + '</button>';
+        });
+        return html + '</div></div>';
+    }
+
+    function renderCalendar() {
+        var range = displayRange();
+        $('#da2-cal').innerHTML = period.mode === 'months' ? renderMonths(range[0], range[1]) : renderDays(range[0], range[1]);
+        $('#da2-cal').classList.toggle('is-months', period.mode === 'months');
+
+        $$('[data-cal-mode]').forEach(function (button) {
+            button.classList.toggle('is-active', button.getAttribute('data-cal-mode') === period.mode);
+        });
+
+        var unit = period.mode === 'months' ? 'luna' : 'ziua';
+        $('#da2-period-hint').innerHTML = period.picking === 'end'
+            ? '<b>2.</b> Alege ' + unit + ' de sfârșit <span>sau apasă Aplică</span>'
+            : '<b>1.</b> Alege ' + unit + ' de început';
+
+        var startInput = $('#da2-draft-start');
+        var endInput = $('#da2-draft-end');
+        startInput.value = period.start ? fmtDateRo(period.start) : '';
+        endInput.value = period.end ? fmtDateRo(period.end) : '';
+        startInput.classList.remove('is-invalid');
+        endInput.classList.remove('is-invalid');
+        $('#da2-period-apply').disabled = !period.start;
+    }
+
+    function setCalendarView(iso) {
+        var anchor = iso ? parseIso(iso) : new Date();
+        period.view = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+    }
+
+    function openPeriodPanel() {
+        period.start = $('#da2-date-start').value;
+        period.end = $('#da2-date-end').value;
+        period.picking = 'start';
+        period.hover = '';
+        // intervalele lungi se aleg mai usor pe luni
+        var span = period.start && period.end ? (parseIso(period.end) - parseIso(period.start)) / 86400000 : 0;
+        period.mode = span > 62 ? 'months' : 'days';
+
+        // ultima luna din interval sta in dreapta, ca sa se vada capatul
+        var anchor = period.end ? parseIso(period.end) : new Date();
+        period.view = new Date(anchor.getFullYear(), anchor.getMonth() - (calendarMonths() - 1), 1);
+        if (period.start && parseIso(period.start) > period.view) {
+            setCalendarView(period.start);
+        }
+        if (period.mode === 'months' && period.end) {
+            setCalendarView(period.end);
+        }
+        renderCalendar();
+        $('#da2-period-panel').hidden = false;
+        $('#da2-period').classList.add('is-open');
+        $('#da2-period-toggle').setAttribute('aria-expanded', 'true');
+    }
+
+    function closePeriodPanel() {
+        $('#da2-period-panel').hidden = true;
+        $('#da2-period').classList.remove('is-open');
+        $('#da2-period-toggle').setAttribute('aria-expanded', 'false');
+    }
+
+    /** Primul clic fixeaza inceputul (si un interval de o zi); al doilea, capatul. */
+    function pickCalendarDay(iso) {
+        if (period.picking === 'start') {
+            period.start = iso;
+            period.end = iso;
+            period.picking = 'end';
+        } else {
+            period.end = iso < period.start ? period.start : iso;
+            period.start = iso < period.start ? iso : period.start;
+            period.picking = 'start';
+        }
+        period.hover = '';
+        renderCalendar();
+    }
+
+    /** Pe luni: primul clic alege luna intreaga, al doilea extinde intervalul pana la alta luna. */
+    function pickCalendarMonth(key) {
+        if (period.picking === 'start') {
+            period.anchor = key;
+            period.picking = 'end';
+        } else {
+            period.picking = 'start';
+        }
+        var a = period.picking === 'end' ? key : period.anchor;
+        var first = a < key ? a : key;
+        var last = a < key ? key : a;
+        period.start = first + '-01';
+        period.end = monthEndIso(Number(last.slice(0, 4)), Number(last.slice(5, 7)) - 1);
+        period.hover = '';
+        renderCalendar();
+    }
+
+    function selectWholeRange(start, end) {
+        period.start = start;
+        period.end = end;
+        period.picking = 'start';
+        period.hover = '';
+        renderCalendar();
+    }
+
+    /** Accepta 5.3.2026, 05/03/2026, 05-03-2026 si 2026-03-05. */
+    function parseRoDate(text) {
+        var value = String(text || '').trim();
+        var match = value.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/);
+        var y;
+        var mo;
+        var d;
+        if (match) {
+            d = Number(match[1]);
+            mo = Number(match[2]);
+            y = Number(match[3]);
+        } else if ((match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/))) {
+            y = Number(match[1]);
+            mo = Number(match[2]);
+            d = Number(match[3]);
+        } else {
+            return null;
+        }
+        var date = new Date(y, mo - 1, d);
+        if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) {
+            return null;
+        }
+        return toIso(date);
+    }
+
+    $('#da2-period-toggle').addEventListener('click', function () {
+        if ($('#da2-period-panel').hidden) {
+            openPeriodPanel();
+        } else {
+            closePeriodPanel();
+        }
+    });
+
+    $('#da2-period-panel').addEventListener('click', function (event) {
+        var target;
+        if ((target = event.target.closest('[data-cal-mode]'))) {
+            period.mode = target.getAttribute('data-cal-mode');
+            period.picking = 'start';
+            period.hover = '';
+            setCalendarView(period.mode === 'months' ? period.end : period.start);
+            renderCalendar();
+        } else if ((target = event.target.closest('[data-cal-nav]'))) {
+            period.view = new Date(period.view.getFullYear(), period.view.getMonth() + Number(target.getAttribute('data-cal-nav')), 1);
+            renderCalendar();
+        } else if ((target = event.target.closest('[data-cal-day]'))) {
+            pickCalendarDay(target.getAttribute('data-cal-day'));
+        } else if ((target = event.target.closest('[data-cal-mon]'))) {
+            pickCalendarMonth(target.getAttribute('data-cal-mon'));
+        } else if ((target = event.target.closest('[data-cal-month]'))) {
+            var key = target.getAttribute('data-cal-month');
+            selectWholeRange(key + '-01', monthEndIso(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1));
+        } else if ((target = event.target.closest('[data-cal-year]'))) {
+            var year = target.getAttribute('data-cal-year');
+            selectWholeRange(year + '-01-01', year + '-12-31');
+        }
+    });
+
+    $('#da2-cal').addEventListener('mouseover', function (event) {
+        if (period.picking !== 'end') {
+            return;
+        }
+        var cell = event.target.closest('[data-cal-day], [data-cal-mon]');
+        var key = cell ? (cell.getAttribute('data-cal-day') || cell.getAttribute('data-cal-mon')) : '';
+        if (!key || key === period.hover) {
+            return;
+        }
+        period.hover = key;
+        renderCalendar();
+    });
+
+    $('#da2-cal').addEventListener('mouseleave', function () {
+        if (period.hover) {
+            period.hover = '';
+            renderCalendar();
+        }
+    });
+
+    $('#da2-period-cancel').addEventListener('click', closePeriodPanel);
+
+    $('#da2-period-apply').addEventListener('click', function () {
+        if (!period.start) {
+            return;
+        }
+        applyPeriod(period.start, period.end || period.start);
+    });
+
+    function commitDraftInputs() {
+        var startInput = $('#da2-draft-start');
+        var endInput = $('#da2-draft-end');
+        var start = parseRoDate(startInput.value);
+        var end = parseRoDate(endInput.value);
+        startInput.classList.toggle('is-invalid', !start && startInput.value.trim() !== '');
+        endInput.classList.toggle('is-invalid', !end && endInput.value.trim() !== '');
+        if (!start || (!end && endInput.value.trim() !== '')) {
+            return false;
+        }
+        end = end || start;
+        period.start = start < end ? start : end;
+        period.end = start < end ? end : start;
+        period.picking = 'start';
+        period.hover = '';
+        setCalendarView(period.mode === 'months' ? period.end : period.start);
+        renderCalendar();
+        return true;
+    }
+
+    ['#da2-draft-start', '#da2-draft-end'].forEach(function (selector) {
+        $(selector).addEventListener('change', commitDraftInputs);
+        $(selector).addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                if (commitDraftInputs()) {
+                    applyPeriod(period.start, period.end);
+                }
+            }
+        });
+    });
+
+    document.addEventListener('click', function (event) {
+        var wrap = $('#da2-period');
+        if (!$('#da2-period-panel').hidden && !wrap.contains(event.target) && document.body.contains(event.target)) {
+            closePeriodPanel();
+        }
+    });
 
     // ------------------------------------------------------------------ incarcare
 
@@ -3976,11 +4308,6 @@
             $$('[data-ms-option]', list).forEach(function (option) {
                 option.hidden = needle !== '' && option.getAttribute('data-text').indexOf(needle) === -1;
             });
-            return;
-        }
-
-        if (event.target.type === 'date') {
-            scheduleReload(500);
         }
     });
 
@@ -4198,6 +4525,10 @@
 
     window.addEventListener('keydown', function (event) {
         if (event.key === 'Escape') {
+            if (!$('#da2-period-panel').hidden) {
+                closePeriodPanel();
+                return;
+            }
             closeThresholdsPanel();
             if (document.getElementById('da2-rank-card').classList.contains('is-expanded')) {
                 setRankCardExpanded(false);

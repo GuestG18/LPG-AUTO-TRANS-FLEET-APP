@@ -8,9 +8,21 @@
     'use strict';
 
     var OPEN_MS = 460;
-    var CLOSE_MS = 340;
+    var CLOSE_MS = 480;
+    var LOGO_HOLD_MS = 420;   // cat ramane logo-ul vizibil in rand dupa ce panoul s-a strans
+    var LOGO_FADE_MS = 220;
+    var LOGO_RATIO = 272 / 720; // inaltime / latime pentru lpg-auto-trans-logo.png
     var EASE_OPEN = 'cubic-bezier(0.2, 0.95, 0.25, 1.04)';
-    var EASE_CLOSE = 'cubic-bezier(0.4, 0, 0.6, 0.4)';
+    var EASE_CLOSE = 'cubic-bezier(0.45, 0, 0.2, 1)';
+
+    // Logo-ul firmei, in culorile originale, pe placa albastru-deschis in care
+    // se strange fisa la inchidere.
+    // Calea se rezolva fata de acest script, ca sa mearga si local (/htdocs) si pe VPS.
+    var scriptSrc = document.currentScript ? document.currentScript.src : '';
+    var LOGO_URL = scriptSrc !== ''
+        ? new URL('../img/lpg-auto-trans-logo.png', scriptSrc).toString()
+        : 'assets/img/lpg-auto-trans-logo.png';
+    new Image().src = LOGO_URL; // preincarcat, ca sa apara instant la prima inchidere
 
     var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     var active = null;
@@ -54,8 +66,7 @@
     };
 
     // Transformarea care asaza panoul (in pozitia finala) peste rect-ul de origine.
-    var transformToRect = function (sheetEl, rect) {
-        var finalRect = sheetEl.getBoundingClientRect();
+    var transformToRect = function (finalRect, rect) {
         if (rect === null) {
             // Fara origine vizibila: pornim/terminam usor micsorat, centrat.
             return 'translate(' + (finalRect.width * 0.06) + 'px, ' + (finalRect.height * 0.06) + 'px) scale(0.88)';
@@ -66,22 +77,82 @@
             + 'scale(' + scaleX + ', ' + scaleY + ')';
     };
 
-    var buildOverlay = function (fullUrl) {
+    // Placa din rand: dreptunghi cu colturi de ~12px dupa scalare (raza pe fiecare
+    // axa compenseaza scalarea neuniforma, altfel ar iesi o elipsa).
+    var radiusForRect = function (finalRect, rect) {
+        if (rect === null) {
+            return '40%';
+        }
+        var radiusPx = Math.min(12, rect.height / 2);
+        return (radiusPx * finalRect.width / rect.width) + 'px / '
+            + (radiusPx * finalRect.height / rect.height) + 'px';
+    };
+
+    // Logo-ul e un element separat, scalat UNIFORM (nu se deformeaza odata cu
+    // panoul), asezat in centrul panoului; transformarea il duce in centrul randului.
+    var createLogo = function (overlayEl, finalRect) {
+        var logoWidth = Math.min(360, finalRect.width * 0.5);
+        var logoHeight = logoWidth * LOGO_RATIO;
+        var logoEl = document.createElement('img');
+        logoEl.className = 'race-view-logo';
+        logoEl.src = LOGO_URL;
+        logoEl.alt = '';
+        logoEl.style.width = logoWidth + 'px';
+        logoEl.style.height = logoHeight + 'px';
+        logoEl.style.left = (finalRect.left + finalRect.width / 2 - logoWidth / 2) + 'px';
+        logoEl.style.top = (finalRect.top + finalRect.height / 2 - logoHeight / 2) + 'px';
+        overlayEl.appendChild(logoEl);
+        return logoEl;
+    };
+
+    var logoTransformToRect = function (logoEl, finalRect, rect) {
+        if (rect === null) {
+            return 'scale(0.88)';
+        }
+        var logoScale = Math.min(
+            rect.width * 0.7 / parseFloat(logoEl.style.width),
+            rect.height * 0.8 / parseFloat(logoEl.style.height)
+        );
+        var dx = (rect.left + rect.width / 2) - (finalRect.left + finalRect.width / 2);
+        var dy = (rect.top + rect.height / 2) - (finalRect.top + finalRect.height / 2);
+        return 'translate(' + dx + 'px, ' + dy + 'px) scale(' + logoScale + ')';
+    };
+
+    var buildOverlay = function () {
         var overlayEl = document.createElement('div');
         overlayEl.className = 'race-view-overlay';
         overlayEl.innerHTML = ''
             + '<div class="race-view-backdrop" data-race-view-close></div>'
-            + '<div class="race-view-sheet is-icon" role="dialog" aria-modal="true" aria-label="Fișa cursei" tabindex="-1">'
+            + '<div class="race-view-sheet is-icon" role="dialog" aria-modal="true" aria-label="Fișa cursei" aria-busy="true" tabindex="-1">'
             + '  <div class="race-view-grabber" aria-hidden="true"></div>'
-            + '  <div class="race-view-body">'
-            + '    <div class="race-view-loading">'
-            + '      <div class="spinner-border text-primary" role="status" aria-hidden="true"></div>'
-            + '      <div>Se încarcă fișa cursei…</div>'
-            + '    </div>'
-            + '  </div>'
+            + '  <div class="race-view-body"></div>'
+            + '  <div class="visually-hidden" role="status">Se încarcă fișa cursei…</div>'
             + '</div>';
-        overlayEl.dataset.fullUrl = fullUrl;
         return overlayEl;
+    };
+
+    // Ecranul de pornire (placa albastru-deschis cu logo-ul) ramane pana sosesc
+    // datele, dar cel putin cat dureaza animatia de deschidere.
+    var revealContent = function (state) {
+        if (state.revealed || active !== state) {
+            return;
+        }
+        state.revealed = true;
+        var waitMs = Math.max(0, state.splashUntil - Date.now());
+        window.setTimeout(function () {
+            if (active !== state || state.closing) {
+                return;
+            }
+            state.sheet.removeAttribute('aria-busy');
+            state.sheet.classList.remove('is-icon');
+            state.overlay.classList.add('is-loaded');
+            if (state.logo) {
+                var logoEl = state.logo;
+                state.logo = null;
+                logoEl.classList.remove('is-visible', 'is-loading');
+                window.setTimeout(function () { logoEl.remove(); }, LOGO_FADE_MS + 40);
+            }
+        }, waitMs);
     };
 
     var loadContent = function (state) {
@@ -106,6 +177,7 @@
                 Array.prototype.forEach.call(state.body.querySelectorAll('[data-race-view-return-url]'), function (inputEl) {
                     inputEl.value = window.location.pathname + window.location.search;
                 });
+                revealContent(state);
             })
             .catch(function () {
                 if (active !== state) {
@@ -120,15 +192,16 @@
                     + '    <button type="button" class="btn btn-sm btn-outline-secondary" data-race-view-close>Închide</button>'
                     + '  </div>'
                     + '</div>';
+                revealContent(state);
             });
     };
 
-    var open = function (url, originEl) {
+    var open = function (url, originEl, raceId) {
         if (active !== null) {
             return;
         }
 
-        var overlayEl = buildOverlay(url);
+        var overlayEl = buildOverlay();
         document.body.appendChild(overlayEl);
         var sheetEl = overlayEl.querySelector('.race-view-sheet');
         var bodyEl = overlayEl.querySelector('.race-view-body');
@@ -139,6 +212,10 @@
             sheet: sheetEl,
             body: bodyEl,
             origin: originEl,
+            raceId: String(raceId || ''),
+            logo: null,
+            revealed: false,
+            splashUntil: Date.now() + (reducedMotion ? 0 : OPEN_MS + 120),
             lastFocus: document.activeElement,
             bodyOverflow: document.body.style.overflow
         };
@@ -146,12 +223,20 @@
         document.body.style.overflow = 'hidden';
 
         if (reducedMotion) {
-            sheetEl.classList.remove('is-icon');
             overlayEl.classList.add('is-open');
         } else {
+            // Pornim din rand: placa albastru-deschis cu logo-ul, care creste in fisa.
+            var finalRect = sheetEl.getBoundingClientRect();
+            var openOriginRect = originRectFor(originEl);
+            var logoEl = createLogo(overlayEl, finalRect);
+            state.logo = logoEl;
+
             sheetEl.style.transition = 'none';
-            sheetEl.style.borderRadius = '40%';
-            sheetEl.style.transform = transformToRect(sheetEl, originRectFor(originEl));
+            sheetEl.style.borderRadius = radiusForRect(finalRect, openOriginRect);
+            sheetEl.style.transform = transformToRect(finalRect, openOriginRect);
+            logoEl.style.transition = 'none';
+            logoEl.style.transform = logoTransformToRect(logoEl, finalRect, openOriginRect);
+            logoEl.classList.add('is-visible');
             sheetEl.getBoundingClientRect(); // fixeaza pozitia de start inainte de tranzitie
 
             requestAnimationFrame(function () {
@@ -159,8 +244,16 @@
                     + ', border-radius ' + OPEN_MS + 'ms ' + EASE_OPEN;
                 sheetEl.style.transform = 'none';
                 sheetEl.style.borderRadius = '';
-                sheetEl.classList.remove('is-icon');
+                logoEl.style.transition = 'transform ' + OPEN_MS + 'ms ' + EASE_OPEN
+                    + ', opacity ' + LOGO_FADE_MS + 'ms ease';
+                logoEl.style.transform = 'none';
                 overlayEl.classList.add('is-open');
+                // Daca datele intarzie, logo-ul "respira" ca semn ca se incarca.
+                window.setTimeout(function () {
+                    if (state.logo === logoEl) {
+                        logoEl.classList.add('is-loading');
+                    }
+                }, OPEN_MS);
             });
         }
 
@@ -185,6 +278,8 @@
             if (focusEl instanceof HTMLElement) {
                 focusEl.focus({ preventScroll: true });
             }
+            // Dupa ce animatia s-a terminat, randul ramane marcat ca vizualizat.
+            markPreviewed(state.raceId, true);
         };
 
         state.overlay.classList.add('is-closing');
@@ -198,21 +293,123 @@
         var sheetEl = state.sheet;
         // Panoul nu mai primeste clicuri cat se strange.
         state.overlay.style.pointerEvents = 'none';
+        // Pozitia finala a panoului (fara transformare), chiar daca e inchis in timpul deschiderii.
+        var currentTransform = sheetEl.style.transform;
+        sheetEl.style.transition = 'none';
+        sheetEl.style.transform = 'none';
+        var sheetRect = sheetEl.getBoundingClientRect();
+        sheetEl.style.transform = currentTransform;
         var closeOriginRect = originRectFor(state.origin);
-        var targetTransform = transformToRect(sheetEl, closeOriginRect);
+
+        // Logo-ul ecranului de pornire (daca fisa inca se incarca) sau unul nou.
+        var logoEl = state.logo || createLogo(state.overlay, sheetRect);
+        state.logo = null;
+        logoEl.classList.remove('is-loading');
+
+        sheetEl.getBoundingClientRect(); // pozitia de start
         sheetEl.style.transition = 'transform ' + CLOSE_MS + 'ms ' + EASE_CLOSE
             + ', border-radius ' + CLOSE_MS + 'ms ' + EASE_CLOSE
-            + ', opacity ' + CLOSE_MS + 'ms ease';
+            + ', opacity ' + LOGO_FADE_MS + 'ms ease';
+        logoEl.style.transition = 'transform ' + CLOSE_MS + 'ms ' + EASE_CLOSE
+            + ', opacity ' + LOGO_FADE_MS + 'ms ease';
+        logoEl.getBoundingClientRect();
+
         requestAnimationFrame(function () {
             sheetEl.classList.add('is-icon');
-            sheetEl.style.transform = targetTransform;
-            sheetEl.style.borderRadius = '40%';
-            if (closeOriginRect === null) {
-                sheetEl.style.opacity = '0';
-            }
+            sheetEl.style.transform = transformToRect(sheetRect, closeOriginRect);
+            sheetEl.style.borderRadius = radiusForRect(sheetRect, closeOriginRect);
+            logoEl.classList.add('is-visible');
+            logoEl.style.transform = logoTransformToRect(logoEl, sheetRect, closeOriginRect);
         });
-        window.setTimeout(finish, CLOSE_MS + 20);
+
+        // Placa cu logo ramane o clipa in rand, apoi dispare usor.
+        var holdMs = closeOriginRect !== null ? LOGO_HOLD_MS : 120;
+        window.setTimeout(function () {
+            sheetEl.style.opacity = '0';
+            logoEl.style.opacity = '0';
+        }, CLOSE_MS + holdMs);
+        window.setTimeout(finish, CLOSE_MS + holdMs + LOGO_FADE_MS);
     };
+
+    // Ultima cursa vizualizata: dunga albastra pe marginea randului si un ochi langa
+    // numarul de inmatriculare, cu ora vizualizarii. Doar UN rand e marcat: cand
+    // deschizi alta cursa, marcajul se muta pe ea. Se pastreaza si la reincarcare.
+    var PREVIEWED_KEY = 'fleet.dispecerCurse.lastPreviewed.v1';
+    var PREVIEWED_FLASH_MS = 2400;
+
+    var loadLastPreviewed = function () {
+        try {
+            var data = JSON.parse(window.localStorage.getItem(PREVIEWED_KEY) || 'null');
+            return data && data.id ? data : null;
+        } catch (error) {
+            return null;
+        }
+    };
+
+    var saveLastPreviewed = function (data) {
+        try {
+            window.localStorage.setItem(PREVIEWED_KEY, JSON.stringify(data));
+        } catch (error) {
+            // localStorage poate lipsi (navigare privata): marcajul ramane doar pana la reincarcare.
+        }
+    };
+
+    var formatPreviewedAt = function (timestamp) {
+        var date = new Date(timestamp);
+        var pad = function (value) { return (value < 10 ? '0' : '') + value; };
+        return pad(date.getDate()) + '.' + pad(date.getMonth() + 1) + '.' + date.getFullYear()
+            + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+    };
+
+    var clearPreviewedMarks = function () {
+        Array.prototype.forEach.call(document.querySelectorAll('tr.is-previewed'), function (rowEl) {
+            rowEl.classList.remove('is-previewed', 'is-just-previewed');
+        });
+        Array.prototype.forEach.call(document.querySelectorAll('.race-previewed-icon'), function (iconEl) {
+            iconEl.remove();
+        });
+    };
+
+    var applyPreviewedMark = function (data, flash) {
+        clearPreviewedMarks();
+        var title = 'Ultima cursă vizualizată (' + formatPreviewedAt(data.at) + ')';
+        Array.prototype.forEach.call(
+            document.querySelectorAll('[data-dispatcher-column-table] tbody tr[data-race-id="' + CSS.escape(data.id) + '"]'),
+            function (rowEl) {
+                rowEl.classList.add('is-previewed');
+                var plateCellEl = rowEl.querySelector('td.col-plate');
+                var anchorEl = plateCellEl ? plateCellEl.querySelector('.vehicle-main') : null;
+                if (anchorEl !== null) {
+                    var iconEl = document.createElement('i');
+                    iconEl.className = 'bi bi-eye-fill race-previewed-icon';
+                    iconEl.title = title;
+                    iconEl.setAttribute('aria-label', title);
+                    anchorEl.insertAdjacentElement('afterend', iconEl);
+                }
+                if (flash) {
+                    rowEl.classList.add('is-just-previewed');
+                    window.setTimeout(function () { rowEl.classList.remove('is-just-previewed'); }, PREVIEWED_FLASH_MS);
+                }
+            }
+        );
+    };
+
+    var markPreviewed = function (raceId, flash) {
+        if (!raceId) {
+            return;
+        }
+        var data = { id: String(raceId), at: Date.now() };
+        saveLastPreviewed(data);
+        applyPreviewedMark(data, flash);
+    };
+
+    // La incarcarea paginii refacem marcajul ultimei curse vizualizate.
+    (function () {
+        var data = loadLastPreviewed();
+        if (data !== null) {
+            applyPreviewedMark(data, false);
+        }
+    })();
 
     // Ce se apasa intr-un rand si NU deschide fisa: controalele proprii ale celulelor
     // (selectia pentru stergere in masa, "N detalii", fazele, diurna, linkuri).
@@ -262,9 +459,11 @@
         }
         if (event.ctrlKey || event.metaKey) {
             window.open(raceViewUrl(raceId), '_blank', 'noopener');
+            markPreviewed(raceId, true);
             return;
         }
-        open(raceViewUrl(raceId), rowEl);
+        clearPreviewedMarks(); // marcajul vechi dispare cand deschizi alta cursa
+        open(raceViewUrl(raceId), rowEl, raceId);
     });
 
     document.addEventListener('keydown', function (event) {

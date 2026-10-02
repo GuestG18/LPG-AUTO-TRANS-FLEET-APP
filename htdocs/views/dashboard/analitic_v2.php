@@ -171,22 +171,51 @@ $pageConfig = [
 
     <form class="da2-filters" id="da2-filters" autocomplete="off">
         <div class="da2-filters-row da2-filters-row-top">
-            <div class="da2-presets" role="group" aria-label="Perioade rapide">
-                <button type="button" class="da2-preset" data-preset="luna_curenta">Luna curentă</button>
-                <button type="button" class="da2-preset" data-preset="luna_trecuta">Luna trecută</button>
-                <button type="button" class="da2-preset" data-preset="ultimele_30">Ultimele 30 zile</button>
-                <button type="button" class="da2-preset" data-preset="trimestru">Trimestrul curent</button>
-                <button type="button" class="da2-preset" data-preset="an">Anul curent</button>
-            </div>
-            <div class="da2-dates">
-                <label class="da2-date">
-                    <span>De la</span>
-                    <input type="date" id="da2-date-start" name="date_start" value="<?= e((string) ($filters['date_start'] ?? '')) ?>">
-                </label>
-                <label class="da2-date">
-                    <span>Până la</span>
-                    <input type="date" id="da2-date-end" name="date_end" value="<?= e((string) ($filters['date_end'] ?? '')) ?>">
-                </label>
+            <?php // Intervalul aplicat sta in campurile ascunse; popover-ul lucreaza pe o ciorna pana la „Aplică". ?>
+            <input type="hidden" id="da2-date-start" name="date_start" value="<?= e((string) ($filters['date_start'] ?? '')) ?>">
+            <input type="hidden" id="da2-date-end" name="date_end" value="<?= e((string) ($filters['date_end'] ?? '')) ?>">
+            <div class="da2-period" id="da2-period">
+                <button type="button" class="da2-period-toggle" id="da2-period-toggle" aria-haspopup="dialog" aria-expanded="false">
+                    <i class="bi bi-calendar3" aria-hidden="true"></i>
+                    <span class="da2-period-text">
+                        <span class="da2-period-name" id="da2-period-name">Perioadă</span>
+                        <span class="da2-period-range" id="da2-period-range">…</span>
+                    </span>
+                    <i class="bi bi-chevron-down da2-period-caret" aria-hidden="true"></i>
+                </button>
+                <div class="da2-period-panel" id="da2-period-panel" role="dialog" aria-label="Alege perioada" hidden>
+                    <div class="da2-period-presets" role="group" aria-label="Perioade rapide">
+                        <button type="button" class="da2-preset" data-preset="luna_curenta">Luna curentă</button>
+                        <button type="button" class="da2-preset" data-preset="an">Anul curent</button>
+                        <button type="button" class="da2-preset" data-preset="an_trecut">Anul trecut</button>
+                    </div>
+                    <div class="da2-period-body">
+                        <div class="da2-period-bar">
+                            <div class="da2-period-modes" role="tablist" aria-label="Mod de selecție">
+                                <button type="button" class="da2-period-mode" data-cal-mode="days">Zile</button>
+                                <button type="button" class="da2-period-mode" data-cal-mode="months">Luni</button>
+                            </div>
+                            <span class="da2-period-hint" id="da2-period-hint"></span>
+                        </div>
+                        <div class="da2-cal" id="da2-cal"></div>
+                        <div class="da2-period-footer">
+                            <div class="da2-dates">
+                                <label class="da2-date">
+                                    <span>De la</span>
+                                    <input type="text" id="da2-draft-start" inputmode="numeric" placeholder="zz.ll.aaaa" maxlength="10">
+                                </label>
+                                <label class="da2-date">
+                                    <span>Până la</span>
+                                    <input type="text" id="da2-draft-end" inputmode="numeric" placeholder="zz.ll.aaaa" maxlength="10">
+                                </label>
+                            </div>
+                            <div class="da2-period-actions">
+                                <button type="button" class="da2-btn da2-btn-ghost da2-btn-sm" id="da2-period-cancel">Anulează</button>
+                                <button type="button" class="da2-btn da2-btn-primary da2-btn-sm" id="da2-period-apply">Aplică</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
