@@ -38,7 +38,8 @@ return [
     ],
     'endpoints'   => [
         'store'                        => 'create',
-        'edit'                         => 'edit',
+        'view'                         => 'view',
+        'edit'                        => 'edit',
         'update'                       => 'edit',
         'segment_store'                => 'edit',
         'segment_update'               => 'edit',

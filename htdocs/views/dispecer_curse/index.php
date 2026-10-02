@@ -1140,6 +1140,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                             <i class="bi bi-three-dots" aria-hidden="true"></i>
                                         </button>
                                         <div class="dispatcher-race-actions-menu" id="dispatcher_race_actions_<?= e((string) $raceId) ?>" data-dispatcher-race-actions-menu role="menu" hidden>
+                                            <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'view', 'id' => $raceId])) ?>" title="Fișa cursei, doar citire — nu o încarcă în formular.">Vizualizează cursa</a>
                                             <?php if ($dispCanEdit): ?>
                                             <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">Editează</a>
                                             <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'faza' => 'noua']) . '#race-form') ?>" title="Deschide formularul cursei pregătit pentru o fază nouă (alt șofer / alt vehicul). Cursa rămâne una singură, fără tarif suplimentar.">Reia cursa</a>
@@ -1153,9 +1154,6 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                                     Șterge
                                                 </button>
                                             </form>
-                                            <?php endif; ?>
-                                            <?php if (!$dispCanEdit && !$dispCanDelete): ?>
-                                            <span class="dispatcher-race-actions-item text-muted" role="none">Nicio acțiune permisă</span>
                                             <?php endif; ?>
                                         </div>
                                     </div>

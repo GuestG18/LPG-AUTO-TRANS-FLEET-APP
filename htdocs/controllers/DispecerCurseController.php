@@ -308,6 +308,9 @@ class DispecerCurseController
                 $this->syncTariffLegacyValues();
                 $this->storeAction();
                 return;
+            case 'view':
+                $this->viewAction();
+                return;
             case 'edit':
                 $this->editAction();
                 return;
@@ -2325,6 +2328,44 @@ class DispecerCurseController
         }
 
         redirect(build_query_url(['page' => 'dispecer_curse']));
+    }
+
+    /**
+     * Fisa cursei, doar citire: aceleasi date ca formularul, fara campuri editabile
+     * si fara sa incarce cursa in formular.
+     */
+    private function viewAction(): void
+    {
+        $raceId = (int) ($_GET['id'] ?? 0);
+        $race = $raceId > 0 ? $this->model->getRaceById($raceId) : null;
+        if ($race === null) {
+            flash_set('warning', 'Cursa nu a fost găsită.');
+            redirect(build_query_url(['page' => 'dispecer_curse']));
+        }
+
+        $loadLocationNames = [];
+        foreach ($this->model->getLoadLocations(false) as $location) {
+            $loadLocationNames[(int) ($location['id'] ?? 0)] = (string) ($location['nume'] ?? '');
+        }
+        $zoneNames = [];
+        foreach ($this->model->getDistributionZones(false) as $zone) {
+            $zoneNames[(int) ($zone['id'] ?? 0)] = (string) ($zone['nume'] ?? '');
+        }
+
+        render('dispecer_curse/view.php', [
+            'pageTitle' => 'Vizualizare cursa #' . $raceId,
+            'currentPage' => 'dispecer_curse',
+            'race' => $race,
+            'raceSegments' => $this->model->getRaceSegments($raceId),
+            'expenses' => $this->model->getRaceExpenses($raceId),
+            'loadLocationNames' => $loadLocationNames,
+            'zoneNames' => $zoneNames,
+            'transportTypes' => self::TRANSPORT_TYPES,
+            'expenseTypes' => self::EXPENSE_TYPES,
+            'goodsTypeOptions' => self::GOODS_TYPES,
+            'goodsSelected' => $this->normalizeGoodsTypeSelection($race['tip_marfa'] ?? []),
+            'billingStatuses' => self::BILLING_STATUSES,
+        ]);
     }
 
     private function editAction(): void
