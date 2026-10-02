@@ -5,6 +5,7 @@
  */
 $raceId = (int) ($race['id'] ?? 0);
 $dispCanEdit = !function_exists('can') || can('dispecer_curse', 'edit');
+$dispCanDelete = !function_exists('can') || can('dispecer_curse', 'delete');
 
 $viewText = static function (mixed $value): string {
     $text = trim((string) ($value ?? ''));
@@ -105,9 +106,9 @@ $sections = [
 $observatii = trim((string) ($race['observatii'] ?? ''));
 ?>
 
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3<?= !empty($viewPartial) ? ' race-view-head' : '' ?>">
     <div class="d-flex flex-wrap align-items-center gap-2">
-        <h2 class="h4 mb-0">Cursa #<?= e((string) $raceId) ?></h2>
+        <h2 class="h4 mb-0" id="race_view_title_<?= e((string) $raceId) ?>">Cursa #<?= e((string) $raceId) ?></h2>
         <span class="badge rounded-pill <?= e($billingBadge) ?>"><?= e((string) ($billingStatuses[$billingKey] ?? $billingKey)) ?></span>
         <span class="badge rounded-pill bg-light text-secondary border"><i class="bi bi-eye me-1" aria-hidden="true"></i>doar vizualizare</span>
     </div>
@@ -116,8 +117,29 @@ $observatii = trim((string) ($race['observatii'] ?? ''));
             <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">
                 <i class="bi bi-pencil me-1" aria-hidden="true"></i>Editează
             </a>
+            <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'faza' => 'noua']) . '#race-form') ?>" title="Deschide formularul cursei pregătit pentru o fază nouă (alt șofer / alt vehicul). Cursa rămâne una singură, fără tarif suplimentar.">
+                <i class="bi bi-arrow-repeat me-1" aria-hidden="true"></i>Reia cursa
+            </a>
         <?php endif; ?>
-        <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Înapoi la listă</a>
+        <?php if ($dispCanDelete): ?>
+            <?php $segmentCount = count($raceSegments); ?>
+            <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'delete'])) ?>" class="d-inline">
+                <?= csrf_field() ?>
+                <input type="hidden" name="id" value="<?= e((string) $raceId) ?>">
+                <?php /* In panoul de peste lista, JS-ul pune aici URL-ul listei cu filtrele curente. */ ?>
+                <input type="hidden" name="return_url" value="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>" data-race-view-return-url>
+                <button type="submit" class="btn btn-outline-danger" data-confirm="Ștergi cursa #<?= e((string) $raceId) ?><?= $segmentCount > 1 ? ' si cele ' . e((string) $segmentCount) . ' faze ale ei' : '' ?>? Cursa va fi mutată în Curse șterse și va putea fi restaurată ulterior<?= $segmentCount > 1 ? ', cu tot cu faze' : '' ?>.">
+                    <i class="bi bi-trash me-1" aria-hidden="true"></i>Șterge
+                </button>
+            </form>
+        <?php endif; ?>
+        <?php if (!empty($viewPartial)): ?>
+            <button type="button" class="btn btn-outline-secondary" data-race-view-close aria-label="Închide fișa cursei">
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+            </button>
+        <?php else: ?>
+            <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Înapoi la listă</a>
+        <?php endif; ?>
     </div>
 </div>
 

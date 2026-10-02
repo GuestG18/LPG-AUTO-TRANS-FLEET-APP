@@ -376,6 +376,8 @@ require_once __DIR__ . '/services/DashboardOperationalCostService.php';
 require_once __DIR__ . '/services/OcrSpaceService.php';
 require_once __DIR__ . '/services/OcrInvoiceHeuristics.php';
 require_once __DIR__ . '/services/OcrPartsLineExtractor.php';
+require_once __DIR__ . '/services/InvoiceOcrService.php';
+require_once __DIR__ . '/services/PartsInvoiceOcrService.php';
 require_once __DIR__ . '/models/OcrPartsModel.php';
 
 require_once __DIR__ . '/controllers/AuthController.php';

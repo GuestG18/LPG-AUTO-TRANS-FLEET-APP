@@ -9,6 +9,7 @@ declare(strict_types=1);
  *   php scripts/process_invoice_inbox.php --no-ocr        doar preia fisierele (fara apeluri la Claude)
  *   php scripts/process_invoice_inbox.php --file=x.pdf    doar citeste un fisier si afiseaza JSON-ul
  *                                                         (test; nu scrie nimic in baza)
+ *   php scripts/process_invoice_inbox.php --file=x.pdf --piese   la fel, cu citirea pentru registrul de piese
  *
  * 1. Preluare: fiecare pereche <fisier> + <fisier>.json lasata de fetch_invoice_emails.py
  *    in storage/invoices/inbox/ devine un rand in Facturi (sursa "scan", status
@@ -18,6 +19,9 @@ declare(strict_types=1);
  *    completeaza factura, care trece prin asocierea automata la cursa ca orice factura.
  *    O scanare cu mai multe documente devine mai multe facturi, cu acelasi fisier.
  *    Erorile trecatoare se reincearca de cel mult 3 ori; apoi factura ramane "de verificat".
+ * 3. Piese: scanarile cu subiectul "piese" / "reparatii" / "service" / "revizie" nu intra in
+ *    Facturi, ci in registrul de piese (?page=ocr_piese), citite cu PartsInvoiceOcrService:
+ *    antet + articole + vehicule / km / garantie, cat apare pe factura (OcrPartsScanService).
  */
 
 if (PHP_SAPI !== 'cli') {
@@ -33,10 +37,14 @@ require_once $root . '/htdocs/models/BaseModel.php';
 require_once $root . '/htdocs/models/InvoiceModel.php';
 require_once $root . '/htdocs/services/InvoiceStorageService.php';
 require_once $root . '/htdocs/services/InvoiceOcrService.php';
+require_once $root . '/htdocs/models/OcrPartsModel.php';
+require_once $root . '/htdocs/services/PartsInvoiceOcrService.php';
+require_once $root . '/htdocs/services/OcrPartsScanService.php';
 
 $limit = 10;
 $runOcr = true;
 $testFile = null;
+$testParts = false;
 foreach (array_slice($argv, 1) as $argument) {
     if (preg_match('/^--limit=(\d+)$/', $argument, $match) === 1) {
         $limit = max(1, (int) $match[1]);
@@ -44,6 +52,8 @@ foreach (array_slice($argv, 1) as $argument) {
         $runOcr = false;
     } elseif (str_starts_with($argument, '--file=')) {
         $testFile = substr($argument, 7);
+    } elseif ($argument === '--piese') {
+        $testParts = true;
     } else {
         fwrite(STDERR, "Argument necunoscut: $argument\n");
         exit(2);
@@ -65,7 +75,7 @@ if ($testFile !== null) {
     $mime = (string) finfo_file($finfo, $path);
     finfo_close($finfo);
 
-    $ocr = new InvoiceOcrService();
+    $ocr = $testParts ? new PartsInvoiceOcrService() : new InvoiceOcrService();
     $log('Citesc ' . basename($path) . " ($mime) cu " . $ocr->model() . '...');
     try {
         $started = microtime(true);
@@ -92,7 +102,11 @@ if (!is_dir($inboxDir)) {
     @mkdir($inboxDir, 0750, true);
 }
 
-$summary = ['rulat_la' => date('c'), 'preluate' => 0, 'duplicate' => 0, 'citite' => 0, 'facturi_create' => 0, 'esecuri' => 0, 'erori' => []];
+$partsModel = new OcrPartsModel($db);
+$partsScans = new OcrPartsScanService($partsModel);
+
+$summary = ['rulat_la' => date('c'), 'preluate' => 0, 'duplicate' => 0, 'citite' => 0, 'facturi_create' => 0, 'esecuri' => 0,
+    'piese_preluate' => 0, 'piese_citite' => 0, 'piese_esecuri' => 0, 'erori' => []];
 
 // 1. Preluare din inbox
 foreach (glob($inboxDir . '/*.json') ?: [] as $metaPath) {
@@ -104,6 +118,21 @@ foreach (glob($inboxDir . '/*.json') ?: [] as $metaPath) {
     }
 
     try {
+        // Subiect "piese" / "reparatii" / "service" -> registrul de piese, nu Facturi.
+        if (OcrPartsScanService::isPartsSubject($meta['email_subiect'] ?? null)) {
+            [$outcome, $partsId] = $partsScans->ingest($filePath, $meta);
+            if ($outcome === 'duplicat') {
+                $summary['duplicate']++;
+                $log('Duplicat in registrul de piese: ' . ($meta['email_subiect'] ?? basename($filePath)));
+            } else {
+                $summary['piese_preluate']++;
+                $log("Preluata pentru registrul de piese #$partsId: " . ($meta['email_subiect'] ?? '') . ' (' . ($meta['nume_original'] ?? '') . ')');
+            }
+            @unlink($filePath);
+            @unlink($metaPath);
+            continue;
+        }
+
         [$document, $error] = $storage->storeFromPath($filePath, (string) ($meta['nume_original'] ?? basename($filePath)));
         if ($document === null) {
             throw new RuntimeException((string) $error);
@@ -180,7 +209,15 @@ if ($runOcr) {
     }
 }
 
+// 3. Registrul de piese
+if ($runOcr) {
+    $partsResult = $partsScans->processPending(new PartsInvoiceOcrService(), $limit, $log);
+    $summary['piese_citite'] = $partsResult['citite'];
+    $summary['piese_esecuri'] = $partsResult['esecuri'];
+}
+
 @file_put_contents($inboxDir . '/.last_ocr.json', json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-$log(sprintf('Preluate: %d | duplicate: %d | citite: %d | facturi suplimentare: %d | esecuri: %d',
-    $summary['preluate'], $summary['duplicate'], $summary['citite'], $summary['facturi_create'], $summary['esecuri']));
+$log(sprintf('Preluate: %d | duplicate: %d | citite: %d | facturi suplimentare: %d | esecuri: %d | piese: %d preluate, %d citite, %d esecuri',
+    $summary['preluate'], $summary['duplicate'], $summary['citite'], $summary['facturi_create'], $summary['esecuri'],
+    $summary['piese_preluate'], $summary['piese_citite'], $summary['piese_esecuri']));
 exit($summary['erori'] === [] ? 0 : 1);

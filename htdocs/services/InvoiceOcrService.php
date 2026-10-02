@@ -18,15 +18,18 @@ use Anthropic\Core\Exceptions\RateLimitException;
  *
  * Partea care nu vorbeste cu API-ul (schema, prompt, normalizarea raspunsului) e
  * statica si se testeaza fara bani: scripts/test_invoice_ocr.php.
+ *
+ * Apelul foloseste static:: pentru prompt / schema / normalizare: PartsInvoiceOcrService
+ * (registrul de piese, ?page=ocr_piese) le inlocuieste si refoloseste restul.
  */
 class InvoiceOcrService
 {
     public const DEFAULT_MODEL = 'claude-sonnet-5-5';
 
     /** Destul pentru o scanare cu multe bonuri; raspunsul e doar JSON. */
-    private const MAX_TOKENS = 8000;
+    protected const MAX_TOKENS = 8000;
 
-    private const CONFIDENCE = ['mare', 'medie', 'mica'];
+    protected const CONFIDENCE = ['mare', 'medie', 'mica'];
 
     private string $model;
     private ?Client $client;
@@ -42,6 +45,11 @@ class InvoiceOcrService
     public function model(): string
     {
         return $this->model;
+    }
+
+    public function isConfigured(): bool
+    {
+        return $this->apiKey !== '' || $this->client !== null;
     }
 
     private static function env(string $name): string
@@ -94,13 +102,13 @@ class InvoiceOcrService
         try {
             $message = $this->client()->messages->create(
                 model: $this->model,
-                maxTokens: self::MAX_TOKENS,
-                system: self::systemPrompt(),
+                maxTokens: static::MAX_TOKENS,
+                system: static::systemPrompt(),
                 messages: [[
                     'role' => 'user',
-                    'content' => [$block, ['type' => 'text', 'text' => self::userPrompt($hints)]],
+                    'content' => [$block, ['type' => 'text', 'text' => static::userPrompt($hints)]],
                 ]],
-                outputConfig: ['format' => ['type' => 'json_schema', 'schema' => self::schema()]],
+                outputConfig: ['format' => ['type' => 'json_schema', 'schema' => static::schema()]],
             );
         } catch (RateLimitException | InternalServerException | APIConnectionException | APITimeoutException $exception) {
             throw new InvoiceOcrException('Serviciul de citire e indisponibil momentan (' . $exception->getMessage() . ').', true, $exception);
@@ -131,7 +139,7 @@ class InvoiceOcrService
         }
 
         return [
-            'facturi' => self::normalize($decoded),
+            'facturi' => static::normalize($decoded),
             'raw' => $text,
             'model' => $this->model,
             'usage' => [
@@ -278,7 +286,7 @@ PROMPT;
         return $result;
     }
 
-    private static function text(mixed $value, int $max): ?string
+    protected static function text(mixed $value, int $max): ?string
     {
         if (!is_scalar($value)) {
             return null;
@@ -288,7 +296,7 @@ PROMPT;
         return $value === '' ? null : mb_substr($value, 0, $max);
     }
 
-    private static function date(mixed $value): ?string
+    protected static function date(mixed $value): ?string
     {
         $value = trim((string) (is_scalar($value) ? $value : ''));
         if ($value === '') {
@@ -306,7 +314,7 @@ PROMPT;
         return null;
     }
 
-    private static function amount(mixed $value): ?float
+    protected static function amount(mixed $value): ?float
     {
         if (is_int($value) || is_float($value)) {
             $number = (float) $value;

@@ -5272,7 +5272,6 @@ button.dispatcher-datetime-picker-title:focus-visible {
 .table-dispecer .col-diurna,
 .table-dispecer .col-quantity,
 .table-dispecer .col-expenses,
-.table-dispecer .col-actions,
 .table-dispecer .col-status {
     text-align: center !important;
 }
@@ -5299,7 +5298,6 @@ button.dispatcher-datetime-picker-title:focus-visible {
 .table-dispecer thead th.col-quantity,
 .table-dispecer thead th.col-expenses,
 .table-dispecer thead th.col-route,
-.table-dispecer thead th.col-actions,
 .table-dispecer thead th.col-status {
     text-align: center !important;
 }
@@ -6076,101 +6074,6 @@ tr:hover .diurna-edit-btn,
 
 .dispatcher-races-table .col-status {
     min-width: 190px;
-}
-
-.dispatcher-races-table .col-actions {
-    width: 64px;
-    min-width: 64px;
-    max-width: 64px;
-}
-
-.dispatcher-race-actions {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.dispatcher-race-actions-toggle {
-    width: 1.95rem;
-    height: 1.95rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border: 1px solid #d8e0eb;
-    border-radius: 6px;
-    background: #ffffff;
-    color: #0f172a;
-    line-height: 1;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-}
-
-.dispatcher-race-actions-toggle:hover,
-.dispatcher-race-actions-toggle:focus-visible,
-.dispatcher-race-actions-toggle.is-open {
-    border-color: #0d6efd;
-    background: #f8fbff;
-    color: #0d6efd;
-}
-
-.dispatcher-race-actions-toggle:focus-visible,
-.dispatcher-race-actions-item:focus-visible {
-    outline: 3px solid rgba(13, 110, 253, 0.18);
-    outline-offset: 2px;
-}
-
-.dispatcher-race-actions-menu {
-    position: fixed;
-    z-index: 3065;
-    width: 168px;
-    max-height: 220px;
-    padding: 0.42rem;
-    overflow: auto;
-    background: #ffffff;
-    border: 1px solid #dfe6f0;
-    border-radius: 8px;
-    box-shadow: 0 18px 44px rgba(15, 23, 42, 0.16);
-}
-
-.dispatcher-race-actions-menu[hidden] {
-    display: none !important;
-}
-
-.dispatcher-race-actions-form {
-    margin: 0;
-}
-
-.dispatcher-race-actions-item {
-    width: 100%;
-    min-height: 2.2rem;
-    display: flex;
-    align-items: center;
-    padding: 0.48rem 0.62rem;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: #0f172a;
-    font-size: 0.86rem;
-    font-weight: 700;
-    line-height: 1.2;
-    text-align: left;
-    text-decoration: none;
-}
-
-.dispatcher-race-actions-item:hover,
-.dispatcher-race-actions-item:focus-visible {
-    background: #f3f6fb;
-    color: #0d6efd;
-}
-
-.dispatcher-race-actions-danger {
-    color: #dc3545;
-}
-
-.dispatcher-race-actions-danger:hover,
-.dispatcher-race-actions-danger:focus-visible {
-    background: #fff1f2;
-    color: #dc3545;
 }
 
 .dispatcher-status-select {

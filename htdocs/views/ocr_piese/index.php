@@ -48,6 +48,7 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
     .rp-doc-box { line-height: 1.25; }
     .rp-doc-box .rp-doc { font-weight: 600; }
     .rp-doc-box .rp-supplier { color: #495057; font-size: .82rem; }
+    .rp-scan-badge { font-size: .7rem; font-weight: 600; margin-top: .15rem; display: inline-block; }
     tr.rp-parent.rp-open .rp-doc-wrap {
         border: 1px solid #cfe2ff; border-radius: .5rem; padding: .4rem 1.4rem .4rem .6rem;
         position: relative; background: #fff;
@@ -437,7 +438,16 @@ if ($searchMode) {
                     ], $eventVehicles),
                 ], JSON_UNESCAPED_UNICODE | JSON_HEX_APOS | JSON_HEX_QUOT);
                 ?>
+                <?php
+                $scanStatus = (string) ($event['scan_status'] ?? '');
+                $scanBadges = [
+                    'in_procesare' => ['text-bg-secondary', 'bi-hourglass-split', 'Scanare primită pe email, se citește automat'],
+                    'de_verificat' => ['text-bg-warning', 'bi-eye', 'Completată automat din scanare — verifică datele, apoi „Marchează verificată” din meniul Acțiuni'],
+                    'eroare' => ['text-bg-danger', 'bi-exclamation-triangle', (string) ($event['scan_eroare'] ?? 'Citirea automată a eșuat')],
+                ];
+                ?>
                 <tr class="rp-parent" data-event-id="<?= $eventId ?>"
+                    data-scan-status="<?= e($scanStatus) ?>"
                     data-children="<?= e((string) $childJson) ?>"
                     data-observatii="<?= e((string) ($event['observatii'] ?? '')) ?>"
                     <?php if (!empty($event['factura_fisier'])): ?>
@@ -471,6 +481,11 @@ if ($searchMode) {
                             <div class="rp-doc-box rp-doc-view">
                                 <div class="rp-doc"><?= e((string) (($event['document'] ?? '') !== '' ? $event['document'] : '—')) ?></div>
                                 <div class="rp-supplier"><?= e((string) ($event['furnizor'] ?? '')) ?></div>
+                                <?php if (isset($scanBadges[$scanStatus])): [$badgeClass, $badgeIcon, $badgeTitle] = $scanBadges[$scanStatus]; ?>
+                                    <span class="badge rp-scan-badge <?= e($badgeClass) ?>" title="<?= e($badgeTitle) ?>">
+                                        <i class="bi <?= e($badgeIcon) ?> me-1" aria-hidden="true"></i><?= e(OcrPartsModel::SCAN_STATUSES[$scanStatus]) ?>
+                                    </span>
+                                <?php endif; ?>
                             </div>
                             <div class="rp-doc-editors d-none">
                                 <input type="text" class="rp-input-sm w-100 mb-1 rp-parent-field" data-field="document" maxlength="120"
@@ -547,7 +562,8 @@ if ($searchMode) {
         itemUpdate: <?= json_encode($ajax('item_update'), JSON_UNESCAPED_SLASHES) ?>,
         itemDelete: <?= json_encode($ajax('item_delete'), JSON_UNESCAPED_SLASHES) ?>,
         vehicleAdd: <?= json_encode($ajax('vehicle_add'), JSON_UNESCAPED_SLASHES) ?>,
-        vehicleRemove: <?= json_encode($ajax('vehicle_remove'), JSON_UNESCAPED_SLASHES) ?>
+        vehicleRemove: <?= json_encode($ajax('vehicle_remove'), JSON_UNESCAPED_SLASHES) ?>,
+        markVerified: <?= json_encode($ajax('mark_verified'), JSON_UNESCAPED_SLASHES) ?>
     };
     var SELECTED_VEHICLE = <?= (int) $filters['vehicle_id'] ?>;
     var EXPAND_EVENT = <?= $expandEventId ?>;
@@ -1550,6 +1566,25 @@ if ($searchMode) {
             link.addEventListener('click', closeFloatMenu);
             floatMenu.appendChild(link);
             floatMenu.appendChild(Object.assign(document.createElement('div'), { className: 'rp-menu-sep' }));
+        }
+
+        if (parentTr.dataset.scanStatus === 'de_verificat' || parentTr.dataset.scanStatus === 'eroare') {
+            var verifyItem = document.createElement('button');
+            verifyItem.type = 'button';
+            verifyItem.className = 'rp-menu-item text-success';
+            verifyItem.innerHTML = '<i class="bi bi-check2-circle" aria-hidden="true"></i>Marchează verificată';
+            verifyItem.addEventListener('click', function (event) {
+                event.stopPropagation();
+                closeFloatMenu();
+                postForm(URLS.markVerified, { event_id: parentTr.dataset.eventId })
+                    .then(function () {
+                        parentTr.dataset.scanStatus = 'verificata';
+                        var badge = parentTr.querySelector('.rp-scan-badge');
+                        if (badge) { badge.remove(); }
+                    })
+                    .catch(function (error) { showError(error.message); });
+            });
+            floatMenu.appendChild(verifyItem);
         }
 
         var deleteItem = document.createElement('button');

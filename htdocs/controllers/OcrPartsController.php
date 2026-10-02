@@ -19,6 +19,11 @@ declare(strict_types=1);
  *   ?page=ocr_piese&action=item_update   -> POST, editare camp articol (JSON)
  *   ?page=ocr_piese&action=item_delete   -> POST (JSON)
  *   ?page=ocr_piese&action=vehicle_add   -> POST, asociaza un vehicul la factura (JSON)
+ *   ?page=ocr_piese&action=mark_verified -> POST, factura scanata "De verificat" -> "Verificată" (JSON)
+ *
+ * Citirea facturilor (recepția manuala si scanarile venite pe email cu subiectul
+ * "piese" / "reparatii" / "service") se face cu Claude, ca la pagina Facturi:
+ * PartsInvoiceOcrService. Fluxul automat: OcrPartsScanService + process_invoice_inbox.php.
  *
  * Separat complet de stocul de productie (mentenanta_piese): destinatia "stoc"
  * este inregistrata pe articol, dar NU scrie inca in stocul real (decizie
@@ -28,16 +33,20 @@ class OcrPartsController
 {
     private const UPLOAD_DIR = 'uploads/ocr_piese';
     private const MAX_LINES = 200;
+    /** Aceeasi limita ca la Facturi (InvoiceStorageService::MAX_SIZE). */
+    private const MAX_FILE_BYTES = 10 * 1024 * 1024;
+    private const ALLOWED_MIME = ['pdf' => 'application/pdf', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png'];
 
     private PDO $db;
     private OcrPartsModel $model;
-    private OcrSpaceService $ocrService;
+    private PartsInvoiceOcrService $ocrService;
 
     public function __construct(PDO $db)
     {
         $this->db = $db;
         $this->model = new OcrPartsModel($db);
-        $this->ocrService = new OcrSpaceService();
+        $this->ocrService = new PartsInvoiceOcrService();
+        $this->model->ensureScanSchema();
     }
 
     public function handle(string $action): void
@@ -78,6 +87,9 @@ class OcrPartsController
                 return;
             case 'vehicle_remove':
                 $this->vehicleRemove();
+                return;
+            case 'mark_verified':
+                $this->markVerified();
                 return;
             default:
                 $this->index();
@@ -130,68 +142,162 @@ class OcrPartsController
             'pageTitle' => 'Recepție factură piese (OCR)',
             'currentPage' => 'ocr_piese',
             'apiKeyConfigured' => $this->ocrService->isConfigured(),
-            'maxFileBytes' => $this->ocrService->maxFileBytes(),
-            'maxImageBytes' => $this->ocrService->maxImageUploadBytes(),
+            'ocrModel' => $this->ocrService->model(),
+            'maxFileBytes' => self::MAX_FILE_BYTES,
+            'maxImageBytes' => self::MAX_FILE_BYTES,
             'vehicles' => $this->model->getVehicleOptions(),
         ]);
     }
 
-    /** Ruleaza OCR pe fisierul incarcat si propune antetul + liniile de articole. */
+    /** Citeste factura incarcata cu Claude si propune antetul + liniile de articole. */
     private function run(): void
     {
         $this->requirePost();
         $this->requireCsrfJson();
 
         $file = $_FILES['invoice'] ?? null;
-
         try {
-            $result = $this->ocrService->recognizeUploadedFile(is_array($file) ? $file : null);
+            $mime = $this->validateInvoiceUpload(is_array($file) ? $file : null);
         } catch (InvalidArgumentException $exception) {
             http_response_code(422);
             $this->sendJson(['ok' => false, 'error' => $exception->getMessage()]);
             return;
-        } catch (RuntimeException $exception) {
+        }
+        if (!$this->ocrService->isConfigured()) {
             http_response_code(503);
+            $this->sendJson(['ok' => false, 'error' => 'ANTHROPIC_API_KEY lipsește din .env — completează formularul manual.']);
+            return;
+        }
+
+        $started = microtime(true);
+        try {
+            $result = $this->ocrService->extract((string) $file['tmp_name'], $mime, ['flota' => $this->model->getFleetPlates()]);
+        } catch (InvoiceOcrException $exception) {
+            http_response_code($exception->retryable ? 503 : 422);
             $this->sendJson(['ok' => false, 'error' => $exception->getMessage()]);
             return;
         } catch (Throwable $exception) {
             error_log('[OcrPartsController][run] ' . $exception->getMessage());
             http_response_code(500);
-            $this->sendJson(['ok' => false, 'error' => 'Eroare internă la procesarea OCR.']);
+            $this->sendJson(['ok' => false, 'error' => 'Eroare internă la citirea facturii.']);
+            return;
+        }
+        $durationMs = (int) round((microtime(true) - $started) * 1000);
+
+        $invoices = $result['facturi'];
+        if ($invoices === []) {
+            $this->sendJson(['ok' => false, 'error' => 'Nu am găsit nicio factură în fișier. Completează manual sau încearcă altă scanare.']);
             return;
         }
 
-        if (!$result['success']) {
-            $this->sendJson([
-                'ok' => false,
-                'error' => $result['error'],
-                'error_details' => $result['error_details'],
-                'duration_ms' => $result['duration_ms'],
-            ]);
-            return;
+        // Formularul primeste primul document; restul se semnaleaza (se pot incarca separat).
+        $invoice = $invoices[0];
+        $plateMap = $this->model->vehicleIdsByPlateKey();
+        $invoiceVehicles = [];
+        $unknownPlates = [];
+        foreach ($invoice['nr_inmatriculare'] as $plate) {
+            $vehicleId = $plateMap[PartsInvoiceOcrService::plateKey($plate)] ?? null;
+            if ($vehicleId !== null) {
+                $invoiceVehicles[$vehicleId] = $vehicleId;
+            } else {
+                $unknownPlates[$plate] = true;
+            }
+        }
+        $singleVehicle = count($invoiceVehicles) === 1 ? (int) reset($invoiceVehicles) : null;
+
+        $lines = [];
+        foreach ($invoice['articole'] as $item) {
+            $vehicleId = null;
+            if ($item['nr_inmatriculare'] !== null) {
+                $vehicleId = $plateMap[PartsInvoiceOcrService::plateKey($item['nr_inmatriculare'])] ?? null;
+                if ($vehicleId === null) {
+                    $unknownPlates[$item['nr_inmatriculare']] = true;
+                }
+            }
+            $lines[] = [
+                'denumire' => $item['denumire'],
+                'cod_piesa' => $item['cod_piesa'],
+                'tip' => $item['tip'],
+                'tip_lucrare' => $item['tip_lucrare'],
+                'destinatie' => $item['pentru_stoc'] ? 'stoc' : 'vehicul',
+                'vehicle_id' => $item['pentru_stoc'] ? null : ($vehicleId ?? $singleVehicle),
+                'unitate_masura' => $item['unitate_masura'],
+                'cantitate' => $item['cantitate'],
+                'pret_unitar' => $item['pret_unitar'],
+                'valoare' => $item['valoare'] ?? round($item['cantitate'] * $item['pret_unitar'], 2),
+                'verificat' => $item['verificat'],
+                'garantie_luni' => $item['garantie_luni'],
+                'km_bord' => $item['km_bord'],
+            ];
         }
 
-        $headerAnalysis = ['fields' => []];
-        $proposedLines = [];
-        $parseWarning = null;
-        try {
-            $headerAnalysis = OcrInvoiceHeuristics::analyze($result['parsed_text']);
-            $proposedLines = OcrPartsLineExtractor::extract($result['parsed_text']);
-        } catch (Throwable $exception) {
-            error_log('[OcrPartsController][run][parse] ' . $exception->getMessage());
-            $parseWarning = 'Parsarea automată a articolelor a eșuat — textul OCR este disponibil, completează liniile manual.';
+        $warnings = [];
+        if (count($invoices) > 1) {
+            $warnings[] = 'Fișierul conține ' . count($invoices) . ' documente; formularul arată doar primul (paginile '
+                . ($invoice['pagini'] ?? '?') . '). Celelalte se încarcă separat sau prin scanare pe email.';
+        }
+        if ($unknownPlates !== []) {
+            $warnings[] = 'Nr. de pe factură care nu sunt în flotă: ' . implode(', ', array_keys($unknownPlates)) . '.';
+        }
+        if (count($invoiceVehicles) > 1) {
+            $warnings[] = 'Factura are ' . count($invoiceVehicles) . ' vehicule — verifică vehiculul pe fiecare rând.';
         }
 
         $this->sendJson([
             'ok' => true,
-            'duration_ms' => $result['duration_ms'],
-            'engine' => $result['engine'],
-            'parsed_text' => $result['parsed_text'],
-            'header' => $headerAnalysis['fields'],
-            'lines' => $proposedLines,
-            'parse_warning' => $parseWarning,
-            'compression_note' => $result['compression_note'] ?? null,
+            'duration_ms' => $durationMs,
+            'engine' => $result['model'],
+            'parsed_text' => json_encode($invoice, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'header' => [
+                'numar_factura' => $invoice['numar_document'],
+                'data_facturii' => $invoice['data_document'],
+                'furnizor' => $invoice['furnizor'],
+                'cui' => $invoice['cui_furnizor'],
+                'moneda' => $invoice['moneda'],
+                'total' => $invoice['valoare_cu_tva'],
+                'vehicle_id' => $singleVehicle,
+                'km_bord' => count($invoiceVehicles) <= 1 ? $invoice['km_bord'] : null,
+                'observatii' => $invoice['observatii'],
+            ],
+            'lines' => $lines,
+            'parse_warning' => $warnings !== [] ? implode(' ', $warnings) : null,
         ]);
+    }
+
+    /**
+     * Validare upload (PDF / JPG / PNG, max 10 MB). Intoarce tipul MIME real.
+     *
+     * @throws InvalidArgumentException cu mesaj afisabil
+     */
+    private function validateInvoiceUpload(?array $file): string
+    {
+        if ($file === null || !isset($file['error']) || is_array($file['error'])) {
+            throw new InvalidArgumentException('Nu a fost primit niciun fișier. Selectează o factură și reîncearcă.');
+        }
+        if ((int) $file['error'] === UPLOAD_ERR_INI_SIZE || (int) $file['error'] === UPLOAD_ERR_FORM_SIZE) {
+            throw new InvalidArgumentException('Fișierul depășește limita de upload a serverului.');
+        }
+        if ((int) $file['error'] !== UPLOAD_ERR_OK) {
+            throw new InvalidArgumentException('Upload-ul a eșuat (cod ' . (int) $file['error'] . '). Reîncearcă.');
+        }
+        $tmpPath = (string) ($file['tmp_name'] ?? '');
+        if ($tmpPath === '' || !is_uploaded_file($tmpPath)) {
+            throw new InvalidArgumentException('Fișierul nu a ajuns pe server. Reîncearcă upload-ul.');
+        }
+        $size = (int) ($file['size'] ?? 0);
+        if ($size <= 0 || $size > self::MAX_FILE_BYTES) {
+            throw new InvalidArgumentException($size <= 0 ? 'Fișierul este gol.' : 'Fișierul depășește 10 MB.');
+        }
+
+        $extension = strtolower(pathinfo((string) ($file['name'] ?? ''), PATHINFO_EXTENSION));
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mime = (string) finfo_file($finfo, $tmpPath);
+        finfo_close($finfo);
+        if (!isset(self::ALLOWED_MIME[$extension]) || self::ALLOWED_MIME[$extension] !== $mime) {
+            throw new InvalidArgumentException('Tip de fișier neacceptat. Formate permise: PDF, JPG, JPEG, PNG.');
+        }
+
+        return $mime;
     }
 
     /** Salveaza formularul OCR confirmat: O factura + articole unificate (piesa/manopera). */
@@ -247,7 +353,9 @@ class OcrPartsController
                 'tip_lucrare' => (string) ($line['tip_lucrare'] ?? 'reparatie'),
                 'destinatie' => ($line['destinatie'] ?? 'vehicul') === 'stoc' ? 'stoc' : 'vehicul',
                 'vehicle_id' => $lineVehicle,
-            ];
+                // Citite de pe factura (garantie; km pe articol la facturile multi-vehicul).
+                'garantie_luni' => isset($line['garantie_luni']) && is_numeric($line['garantie_luni']) ? (int) $line['garantie_luni'] : null,
+            ] + (isset($line['km_bord']) && is_numeric($line['km_bord']) && (int) $line['km_bord'] > 0 ? ['km_bord' => (int) $line['km_bord']] : []);
         }
 
         if ($items === []) {
@@ -261,7 +369,7 @@ class OcrPartsController
         $file = $_FILES['invoice'] ?? null;
         if (is_array($file) && (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
             try {
-                $this->ocrService->validateUpload($file);
+                $this->validateInvoiceUpload($file);
                 [$originalFile, $storedFile] = $this->storeInvoiceFile($file);
             } catch (InvalidArgumentException $exception) {
                 http_response_code(422);
@@ -408,13 +516,33 @@ class OcrPartsController
         $eventId = (int) ($_POST['event_id'] ?? 0);
         if ($eventId > 0) {
             try {
-                $this->model->deleteEvent($eventId);
+                $orphanFile = $this->model->deleteEvent($eventId);
+                if ($orphanFile !== null) {
+                    @unlink(BASE_PATH . '/' . self::UPLOAD_DIR . '/' . basename($orphanFile));
+                }
             } catch (Throwable $exception) {
                 error_log('[OcrPartsController][event_delete] ' . $exception->getMessage());
                 http_response_code(500);
                 $this->sendJson(['ok' => false, 'error' => 'Ștergerea a eșuat.']);
                 return;
             }
+        }
+
+        $this->sendJson(['ok' => true]);
+    }
+
+    private function markVerified(): void
+    {
+        $this->requirePost();
+        $this->requireCsrfJson();
+
+        try {
+            $this->model->markScanVerified((int) ($_POST['event_id'] ?? 0));
+        } catch (Throwable $exception) {
+            error_log('[OcrPartsController][mark_verified] ' . $exception->getMessage());
+            http_response_code(500);
+            $this->sendJson(['ok' => false, 'error' => 'Marcarea nu a putut fi salvată.']);
+            return;
         }
 
         $this->sendJson(['ok' => true]);

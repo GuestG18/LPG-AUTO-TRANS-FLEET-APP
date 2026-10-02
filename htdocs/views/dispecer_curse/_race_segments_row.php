@@ -227,12 +227,5 @@ $inlineSummary = static function (array $parts, string $key, string $label) use 
                 <span class="dispatcher-cell-text" title="<?= e($inlineObservatii) ?>"><?= e($inlineObservatii !== '' ? $inlineObservatii : '-') ?></span>
             </div>
         </td>
-        <td class="col-actions text-center-cell">
-            <div class="cell-content center">
-                <a class="dispatcher-race-actions-btn" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $inlineRaceId])) ?>#race-segments" title="Editează fazele cursei #<?= e((string) $inlineRaceId) ?>" aria-label="Editează fazele cursei #<?= e((string) $inlineRaceId) ?>">
-                    <i class="bi bi-pencil" aria-hidden="true"></i>
-                </a>
-            </div>
-        </td>
     </tr>
 <?php endforeach; ?>

@@ -44,7 +44,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
 
 <?php if (!$apiKeyConfigured): ?>
     <div class="alert alert-warning">
-        <strong>Cheia OCR lipsește.</strong> Adaugă <code>OCR_SPACE_API_KEY</code> în <code>.env</code> pentru citirea automată.
+        <strong>Cheia pentru citire lipsește.</strong> Adaugă <code>ANTHROPIC_API_KEY</code> în <code>.env</code> (aceeași ca la Facturi) pentru citirea automată.
         Poți totuși completa formularul manual mai jos.
     </div>
 <?php endif; ?>
@@ -59,7 +59,8 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                      aria-label="Trage factura aici sau apasă pentru a selecta un fișier">
                     <i class="bi bi-file-earmark-arrow-up fs-2 text-secondary" aria-hidden="true"></i>
                     <div class="fw-semibold">Trage factura aici sau apasă pentru selectare</div>
-                    <div class="text-muted small">PDF max <?= e($maxFileMb) ?> MB (limită OCR.Space gratuit) &middot; JPG / PNG max <?= e($maxImageMb) ?> MB (comprimăm automat)</div>
+                    <div class="text-muted small">PDF / JPG / PNG max <?= e($maxImageMb) ?> MB &middot; citire cu Claude (<?= e((string) ($ocrModel ?? '')) ?>), ca la Facturi</div>
+                    <div class="text-muted small">Sau automat: scanează la imprimantă cu subiectul <strong>piese</strong> / <strong>service</strong> / <strong>reparatii</strong> și factura apare singură în registru.</div>
                     <input type="file" id="ocr-file-input" class="d-none" accept=".pdf,.jpg,.jpeg,.png">
                 </div>
             </div>
@@ -269,6 +270,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
     // "21.08.2026" -> "2026-08-21" pentru input type=date
     function roDateToIso(raw) {
         if (!raw) { return ''; }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(String(raw))) { return String(raw); }
         var match = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(String(raw).trim());
         if (!match) { return ''; }
         return match[3] + '-' + ('0' + match[2]).slice(-2) + '-' + ('0' + match[1]).slice(-2);
@@ -282,13 +284,8 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
             showError('Tip de fișier neacceptat. Formate permise: PDF, JPG, JPEG, PNG.');
             return;
         }
-        if (ext === 'pdf' && file.size > MAX_BYTES) {
-            showError('PDF-ul are ' + formatBytes(file.size) + ' și depășește limita OCR.Space gratuit (' + formatBytes(MAX_BYTES) +
-                '). Alternativă: fotografiază factura (JPG/PNG până la ' + formatBytes(MAX_IMG_BYTES) + ' — o comprimăm automat).');
-            return;
-        }
-        if (ext !== 'pdf' && file.size > MAX_IMG_BYTES) {
-            showError('Imaginea are ' + formatBytes(file.size) + ' și depășește limita de ' + formatBytes(MAX_IMG_BYTES) + '.');
+        if (file.size > MAX_BYTES) {
+            showError('Fișierul are ' + formatBytes(file.size) + ' și depășește limita de ' + formatBytes(MAX_BYTES) + '.');
             return;
         }
         selectedFile = file;
@@ -388,6 +385,9 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
         sourceBadge.className = line.din_ocr ? 'badge text-bg-info text-dark' : 'badge text-bg-secondary';
         sourceBadge.textContent = line.din_ocr ? 'OCR' : 'manual';
         row.dataset.dinOcr = line.din_ocr ? '1' : '0';
+        // Citite de pe factura, fara coloana in formular: merg mai departe la salvare.
+        if (line.garantie_luni) { row.dataset.garantie = String(line.garantie_luni); sourceBadge.title = 'Garanție ' + line.garantie_luni + ' luni'; }
+        if (line.km_bord) { row.dataset.km = String(line.km_bord); }
         sourceTd.appendChild(sourceBadge);
         row.appendChild(sourceTd);
 
@@ -444,6 +444,10 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
             if (header.moneda) { document.getElementById('f-moneda').value = header.moneda; }
             var total = parseRoNumber(header.total);
             document.getElementById('f-total').value = total !== null ? total.toFixed(2) : '';
+            // Vehiculul si km-ul doar daca apar pe factura (un singur vehicul).
+            document.getElementById('f-vehicul').value = header.vehicle_id ? String(header.vehicle_id) : '0';
+            document.getElementById('f-km').value = header.km_bord ? String(header.km_bord) : '';
+            document.getElementById('f-observatii').value = header.observatii || '';
 
             ocrText = payload.parsed_text || '';
             ocrDurationMs = payload.duration_ms || null;
@@ -472,7 +476,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
         clearError();
         runBtn.disabled = true;
         runSpinner.classList.remove('d-none');
-        runStatus.textContent = 'Se citește factura cu OCR.Space...';
+        runStatus.textContent = 'Se citește factura cu Claude (poate dura 10–40 sec)...';
 
         var formData = new FormData();
         formData.append('invoice', selectedFile, selectedFile.name);
@@ -488,9 +492,8 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                 if (!payload.ok) {
                     throw new Error((payload.error || 'OCR eșuat.') + (payload.error_details ? ' — ' + payload.error_details : ''));
                 }
-                runStatus.textContent = 'OCR finalizat în ' + ((payload.duration_ms || 0) / 1000).toFixed(2).replace('.', ',') +
-                    ' sec — ' + (payload.lines || []).length + ' articole propuse. Verifică și corectează mai jos.' +
-                    (payload.compression_note ? ' ' + payload.compression_note : '');
+                runStatus.textContent = 'Citire finalizată în ' + ((payload.duration_ms || 0) / 1000).toFixed(1).replace('.', ',') +
+                    ' sec — ' + (payload.lines || []).length + ' articole propuse. Verifică și corectează mai jos.';
                 if (payload.parse_warning) { showError(payload.parse_warning); }
                 openReview(payload);
             })
@@ -522,6 +525,8 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                 cantitate: parseFloat(row.querySelector('.ocr-in-qty').value) || 0,
                 pret_unitar: parseFloat(row.querySelector('.ocr-in-price').value) || 0,
                 valoare: parseFloat(row.querySelector('.ocr-in-value').value) || 0,
+                garantie_luni: row.dataset.garantie || null,
+                km_bord: row.dataset.km || null,
                 din_ocr: row.dataset.dinOcr === '1'
             });
         });

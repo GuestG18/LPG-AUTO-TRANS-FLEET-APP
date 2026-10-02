@@ -572,7 +572,6 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                     <col class="col-financial">
                     <col class="col-expenses">
                     <col class="col-beneficiary">
-                    <col class="col-actions">
                 </colgroup>
                 <thead>
                 <tr>
@@ -597,13 +596,12 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                     <th class="col-financial">Financiar</th>
                     <th class="col-expenses text-center">Cheltuieli / Refacturare</th>
                     <th class="col-beneficiary">Observatii</th>
-                    <th class="col-actions text-center">Actiuni</th>
                 </tr>
                 </thead>
                 <tbody>
                 <?php if ($rows === []): ?>
                     <tr>
-                        <td colspan="17" class="text-center text-muted py-4">Nu există curse înregistrate.</td>
+                        <td colspan="16" class="text-center text-muted py-4">Nu există curse înregistrate.</td>
                     </tr>
                 <?php else: ?>
                     <?php $canEditDiurna = !function_exists('can') || can('dispecer_curse', 'edit'); ?>
@@ -1121,42 +1119,6 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             <td class="col-beneficiary">
                                 <div class="cell-content">
                                     <span class="dispatcher-cell-text" title="<?= e($observatii !== '' ? $observatii : '-') ?>"><?= e($observatii !== '' ? $observatii : '-') ?></span>
-                                </div>
-                            </td>
-                            <td class="col-actions text-center-cell">
-                                <div class="cell-content center">
-                                    <div class="dispatcher-race-actions" data-dispatcher-race-actions>
-                                        <button
-                                            type="button"
-                                            class="dispatcher-race-actions-toggle"
-                                            data-dispatcher-race-actions-toggle
-                                            data-menu-id="dispatcher_race_actions_<?= e((string) $raceId) ?>"
-                                            aria-haspopup="menu"
-                                            aria-expanded="false"
-                                            aria-controls="dispatcher_race_actions_<?= e((string) $raceId) ?>"
-                                            aria-label="Actiuni cursa #<?= e((string) $raceId) ?>"
-                                            title="Actiuni"
-                                        >
-                                            <i class="bi bi-three-dots" aria-hidden="true"></i>
-                                        </button>
-                                        <div class="dispatcher-race-actions-menu" id="dispatcher_race_actions_<?= e((string) $raceId) ?>" data-dispatcher-race-actions-menu role="menu" hidden>
-                                            <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'view', 'id' => $raceId])) ?>" title="Fișa cursei, doar citire — nu o încarcă în formular.">Vizualizează cursa</a>
-                                            <?php if ($dispCanEdit): ?>
-                                            <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId])) ?>">Editează</a>
-                                            <a class="dispatcher-race-actions-item" role="menuitem" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'faza' => 'noua']) . '#race-form') ?>" title="Deschide formularul cursei pregătit pentru o fază nouă (alt șofer / alt vehicul). Cursa rămâne una singură, fără tarif suplimentar.">Reia cursa</a>
-                                            <?php endif; ?>
-                                            <?php if ($dispCanDelete): ?>
-                                            <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'delete'])) ?>" class="dispatcher-race-actions-form" role="none">
-                                                <?= csrf_field() ?>
-                                                <input type="hidden" name="id" value="<?= e((string) $raceId) ?>">
-                                                <input type="hidden" name="return_url" value="<?= e($currentListUrl) ?>">
-                                                <button type="submit" class="dispatcher-race-actions-item dispatcher-race-actions-danger" role="menuitem" data-confirm="Ștergi cursa #<?= e((string) $raceId) ?><?= count($rowSegments) > 1 ? ' si cele ' . e((string) count($rowSegments)) . ' faze ale ei' : '' ?>? Cursa va fi mutată în Curse șterse și va putea fi restaurată ulterior<?= count($rowSegments) > 1 ? ', cu tot cu faze' : '' ?>.">
-                                                    Șterge
-                                                </button>
-                                            </form>
-                                            <?php endif; ?>
-                                        </div>
-                                    </div>
                                 </div>
                             </td>
                         </tr>
@@ -1974,9 +1936,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
             const handleHeaderIntent = function (thEl, targetEl, anchorRect) {
                 const columnIndex = thEl.cellIndex;
-                if (thEl.classList.contains('col-actions')) {
-                    return;
-                }
                 if (targetEl.closest('.races-filter-btn')) {
                     if (openFilterColumn === columnIndex && !filterDropdownEl.hidden) {
                         closeFilterDropdown();
@@ -1994,9 +1953,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
             // Pregateste antetul real: cursor, sageata de sortare, buton de filtrare.
             Array.from(racesHeadRowEl.cells).forEach(function (thEl) {
-                if (thEl.classList.contains('col-actions')) {
-                    return;
-                }
                 thEl.classList.add('races-sortable');
                 thEl.title = 'Click: sorteaza. Palnie: filtreaza valorile coloanei.';
                 const controlsEl = document.createElement('span');
@@ -2309,169 +2265,6 @@ document.addEventListener('DOMContentLoaded', function () {
     document.addEventListener('scroll', repositionSummaryPopover, true);
     window.addEventListener('resize', repositionSummaryPopover);
 
-    var activeRaceActionsState = null;
-
-    var positionRaceActionsMenu = function (triggerEl, menuEl) {
-        if (!(triggerEl instanceof HTMLElement) || !(menuEl instanceof HTMLElement)) {
-            return;
-        }
-
-        var margin = 12;
-        var viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-        var viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-        var width = Math.min(168, Math.max(144, viewportWidth - margin * 2));
-        var maxHeight = Math.min(220, Math.max(140, viewportHeight - margin * 2));
-
-        menuEl.style.width = width + 'px';
-        menuEl.style.maxHeight = maxHeight + 'px';
-
-        var triggerRect = triggerEl.getBoundingClientRect();
-        var menuRect = menuEl.getBoundingClientRect();
-        var layerHeight = Math.min(menuRect.height || menuEl.scrollHeight || maxHeight, maxHeight);
-        var left = triggerRect.right - width;
-
-        if (left < margin) {
-            left = triggerRect.left;
-        }
-        left = Math.max(margin, Math.min(left, viewportWidth - margin - width));
-
-        var top = triggerRect.bottom + 8;
-        var topIfAbove = triggerRect.top - layerHeight - 8;
-        if (top + layerHeight > viewportHeight - margin && topIfAbove >= margin) {
-            top = topIfAbove;
-        } else if (top + layerHeight > viewportHeight - margin) {
-            top = Math.max(margin, viewportHeight - margin - layerHeight);
-        }
-        top = Math.max(margin, Math.min(top, viewportHeight - margin - layerHeight));
-
-        menuEl.style.left = Math.round(left) + 'px';
-        menuEl.style.top = Math.round(top) + 'px';
-    };
-
-    var closeRaceActionsMenu = function (restoreFocus) {
-        if (activeRaceActionsState === null) {
-            return;
-        }
-
-        var previousState = activeRaceActionsState;
-        activeRaceActionsState = null;
-        previousState.button.setAttribute('aria-expanded', 'false');
-        previousState.button.classList.remove('is-open');
-        previousState.menu.hidden = true;
-        previousState.menu.style.left = '';
-        previousState.menu.style.top = '';
-        previousState.menu.style.visibility = '';
-
-        if (restoreFocus) {
-            previousState.button.focus({ preventScroll: true });
-        }
-    };
-
-    var openRaceActionsMenu = function (buttonEl, focusFirstItem) {
-        if (!(buttonEl instanceof HTMLButtonElement)) {
-            return;
-        }
-
-        var menuId = String(buttonEl.dataset.menuId || '');
-        var menuEl = menuId !== '' ? document.getElementById(menuId) : null;
-        if (!(menuEl instanceof HTMLElement)) {
-            return;
-        }
-
-        closeRaceActionsMenu(false);
-        closeSummaryPopover(false);
-        if (typeof closeDispatcherColumnPanel === 'function') {
-            closeDispatcherColumnPanel(false);
-        }
-
-        activeRaceActionsState = {
-            button: buttonEl,
-            menu: menuEl
-        };
-
-        buttonEl.setAttribute('aria-expanded', 'true');
-        buttonEl.classList.add('is-open');
-        menuEl.style.visibility = 'hidden';
-        menuEl.hidden = false;
-        positionRaceActionsMenu(buttonEl, menuEl);
-        menuEl.style.visibility = '';
-
-        if (focusFirstItem) {
-            var firstItemEl = menuEl.querySelector('[role="menuitem"]');
-            if (firstItemEl instanceof HTMLElement) {
-                firstItemEl.focus({ preventScroll: true });
-            }
-        }
-    };
-
-    var repositionRaceActionsMenu = function () {
-        if (activeRaceActionsState !== null) {
-            positionRaceActionsMenu(activeRaceActionsState.button, activeRaceActionsState.menu);
-        }
-    };
-
-    document.addEventListener('click', function (event) {
-        var actionsButtonEl = closestElement(event.target, '[data-dispatcher-race-actions-toggle]');
-        if (actionsButtonEl instanceof HTMLButtonElement) {
-            event.preventDefault();
-            if (activeRaceActionsState !== null && activeRaceActionsState.button === actionsButtonEl) {
-                closeRaceActionsMenu(false);
-                return;
-            }
-            openRaceActionsMenu(actionsButtonEl, false);
-            return;
-        }
-
-        if (closestElement(event.target, '[data-dispatcher-race-actions-menu]') === null) {
-            closeRaceActionsMenu(false);
-        }
-    });
-
-    document.addEventListener('keydown', function (event) {
-        var actionsButtonEl = closestElement(event.target, '[data-dispatcher-race-actions-toggle]');
-        if (actionsButtonEl instanceof HTMLButtonElement && event.key === 'ArrowDown') {
-            event.preventDefault();
-            openRaceActionsMenu(actionsButtonEl, true);
-            return;
-        }
-
-        if (event.key === 'Escape' && activeRaceActionsState !== null) {
-            event.preventDefault();
-            closeRaceActionsMenu(true);
-            return;
-        }
-
-        if (activeRaceActionsState === null || !activeRaceActionsState.menu.contains(event.target)) {
-            return;
-        }
-
-        var menuItems = Array.prototype.slice.call(activeRaceActionsState.menu.querySelectorAll('[role="menuitem"]'))
-            .filter(function (itemEl) {
-                return itemEl instanceof HTMLElement && !itemEl.hasAttribute('disabled');
-            });
-        if (menuItems.length === 0) {
-            return;
-        }
-
-        var currentIndex = menuItems.indexOf(document.activeElement);
-        if (event.key === 'ArrowDown') {
-            event.preventDefault();
-            menuItems[(currentIndex + 1 + menuItems.length) % menuItems.length].focus({ preventScroll: true });
-        } else if (event.key === 'ArrowUp') {
-            event.preventDefault();
-            menuItems[(currentIndex - 1 + menuItems.length) % menuItems.length].focus({ preventScroll: true });
-        } else if (event.key === 'Home') {
-            event.preventDefault();
-            menuItems[0].focus({ preventScroll: true });
-        } else if (event.key === 'End') {
-            event.preventDefault();
-            menuItems[menuItems.length - 1].focus({ preventScroll: true });
-        }
-    });
-
-    document.addEventListener('scroll', repositionRaceActionsMenu, true);
-    window.addEventListener('resize', repositionRaceActionsMenu);
-
     var columnManagerEl = document.querySelector('[data-dispatcher-column-manager]');
     var columnToggleEl = document.querySelector('[data-dispatcher-columns-toggle]');
     var columnPanelEl = document.querySelector('[data-dispatcher-columns-panel]');
@@ -2495,8 +2288,7 @@ document.addEventListener('DOMContentLoaded', function () {
         { key: 'activity', label: 'Activitate' },
         { key: 'financial', label: 'Financiar' },
         { key: 'expenses', label: 'Cheltuieli / Refacturare' },
-        { key: 'observations', label: 'Observatii' },
-        { key: 'actions', label: 'Actiuni', required: true }
+        { key: 'observations', label: 'Observatii' }
     ];
     var defaultDispatcherColumnOrder = defaultDispatcherColumns.map(function (column) {
         return column.key;
@@ -2775,7 +2567,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         closeSummaryPopover(false);
-        closeRaceActionsMenu(false);
         columnPanelEl.hidden = false;
         columnToggleEl.setAttribute('aria-expanded', 'true');
         columnToggleEl.classList.add('is-open');
@@ -2952,3 +2743,5 @@ document.addEventListener('DOMContentLoaded', function () {
 
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
 <script src="<?= e(url('assets/js/dispecer-diurna.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-diurna.js'))) ?>"></script>
+<link rel="stylesheet" href="<?= e(url('assets/css/race-view-overlay.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/race-view-overlay.css'))) ?>">
+<script src="<?= e(url('assets/js/race-view-overlay.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/race-view-overlay.js'))) ?>"></script>

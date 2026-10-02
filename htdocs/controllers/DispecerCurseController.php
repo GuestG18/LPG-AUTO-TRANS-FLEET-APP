@@ -2352,7 +2352,7 @@ class DispecerCurseController
             $zoneNames[(int) ($zone['id'] ?? 0)] = (string) ($zone['nume'] ?? '');
         }
 
-        render('dispecer_curse/view.php', [
+        $viewData = [
             'pageTitle' => 'Vizualizare cursa #' . $raceId,
             'currentPage' => 'dispecer_curse',
             'race' => $race,
@@ -2365,7 +2365,21 @@ class DispecerCurseController
             'goodsTypeOptions' => self::GOODS_TYPES,
             'goodsSelected' => $this->normalizeGoodsTypeSelection($race['tip_marfa'] ?? []),
             'billingStatuses' => self::BILLING_STATUSES,
-        ]);
+        ];
+
+        // Din lista, fisa se deschide intr-un panou peste pagina: trimitem doar
+        // fragmentul, fara header/sidebar. Linkul direct ramane pagina completa.
+        if ((string) ($_GET['partial'] ?? '') === '1') {
+            $viewData['viewPartial'] = true;
+            header('Content-Type: text/html; charset=UTF-8');
+            (static function (array $__data): void {
+                extract($__data, EXTR_SKIP);
+                require BASE_PATH . '/views/dispecer_curse/view.php';
+            })($viewData);
+            exit;
+        }
+
+        render('dispecer_curse/view.php', $viewData);
     }
 
     private function editAction(): void

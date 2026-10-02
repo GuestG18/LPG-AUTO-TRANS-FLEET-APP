@@ -1,0 +1,155 @@
+/*
+ * Fisa cursei deschisa peste Dispecer curse, ca o aplicatie pe telefon:
+ * panoul creste din butonul ⋯ al randului si se strange inapoi la inchidere.
+ */
+.race-view-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1085;
+}
+
+.race-view-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.42);
+    -webkit-backdrop-filter: blur(6px) saturate(120%);
+    backdrop-filter: blur(6px) saturate(120%);
+    opacity: 0;
+    transition: opacity 0.32s ease;
+}
+
+.race-view-overlay.is-open .race-view-backdrop {
+    opacity: 1;
+}
+
+.race-view-sheet {
+    position: fixed;
+    top: 3vh;
+    left: 50%;
+    width: min(1240px, calc(100vw - 32px));
+    height: 94vh;
+    margin-left: calc(min(1240px, calc(100vw - 32px)) / -2);
+    display: flex;
+    flex-direction: column;
+    background: var(--bs-body-bg, #fff);
+    border-radius: 20px;
+    box-shadow: 0 30px 80px rgba(15, 23, 42, 0.35), 0 4px 14px rgba(15, 23, 42, 0.12);
+    overflow: hidden;
+    transform-origin: 0 0;
+    will-change: transform, border-radius;
+    outline: none;
+}
+
+/* Culoarea "iconitei" care se estompeaza pe masura ce panoul creste. */
+.race-view-sheet::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--bs-primary, #0d6efd);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.28s ease;
+}
+
+.race-view-sheet.is-icon::after {
+    opacity: 1;
+    transition: none;
+}
+
+.race-view-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 24px 24px;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.25s ease 0.12s, transform 0.3s ease 0.12s;
+}
+
+.race-view-overlay.is-open .race-view-body {
+    opacity: 1;
+    transform: none;
+}
+
+.race-view-overlay.is-closing .race-view-body {
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+
+.race-view-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin: 0 -24px 1rem !important;
+    padding: 16px 24px 12px;
+    background: var(--bs-body-bg, #fff);
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+/* Bara de "inchidere" de sus, ca pe un sheet de telefon. */
+.race-view-grabber {
+    flex: 0 0 auto;
+    width: 44px;
+    height: 5px;
+    margin: 8px auto 0;
+    border-radius: 3px;
+    background: rgba(15, 23, 42, 0.18);
+}
+
+.race-view-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    min-height: 60vh;
+    color: var(--bs-secondary-color, #6c757d);
+}
+
+@media (max-width: 575.98px) {
+    .race-view-sheet {
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100%;
+        margin-left: 0;
+        border-radius: 0;
+    }
+
+    .race-view-body {
+        padding: 0 16px 16px;
+    }
+
+    .race-view-head {
+        margin: 0 -16px 1rem !important;
+        padding: 12px 16px 10px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .race-view-backdrop,
+    .race-view-body,
+    .race-view-sheet::after {
+        transition: none !important;
+    }
+}
+
+/* La inchidere culoarea revine treptat, cat panoul se strange in buton. */
+.race-view-overlay.is-closing .race-view-sheet.is-icon::after {
+    transition: opacity 0.24s ease 0.06s;
+}
+
+/* Randul cursei este butonul care deschide fisa (coloana Actiuni a disparut). */
+[data-dispatcher-column-table] tbody tr[data-race-id],
+[data-dispatcher-column-table] tbody tr[data-segments-for] {
+    cursor: pointer;
+}
+
+[data-dispatcher-column-table] tbody tr[data-race-id]:hover > td,
+[data-dispatcher-column-table] tbody tr[data-segments-for]:hover > td {
+    background-color: rgba(13, 110, 253, 0.045);
+}
+
+[data-dispatcher-column-table] tbody tr[data-race-id]:active > td {
+    background-color: rgba(13, 110, 253, 0.09);
+}

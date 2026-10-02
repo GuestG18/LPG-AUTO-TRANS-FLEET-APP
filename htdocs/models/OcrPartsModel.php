@@ -598,9 +598,38 @@ class OcrPartsModel
         return (int) $this->db->lastInsertId();
     }
 
-    public function deleteEvent(int $eventId): void
+    /**
+     * Sterge randul din registru. La o factura scanata pleaca si factura (cheia scanarii),
+     * ca aceeasi scanare sa poata fi trimisa din nou. Intoarce fisierul ramas fara
+     * nicio factura (de sters de pe disc) sau null.
+     */
+    public function deleteEvent(int $eventId): ?string
     {
+        $stmt = $this->db->prepare(
+            "SELECT f.id, f.fisier_stocat FROM ocr_reparatii r
+             JOIN ocr_piese_facturi f ON f.id = r.factura_id AND f.sursa = 'scan'
+             WHERE r.id = :id"
+        );
+        $stmt->execute([':id' => $eventId]);
+        $scan = $stmt->fetch(PDO::FETCH_ASSOC);
+
         $this->db->prepare('DELETE FROM ocr_reparatii WHERE id = :id')->execute([':id' => $eventId]);
+        if ($scan === false) {
+            return null;
+        }
+
+        $this->db->prepare(
+            'DELETE FROM ocr_piese_facturi WHERE id = :id AND NOT EXISTS (SELECT 1 FROM ocr_reparatii WHERE factura_id = :id2)'
+        )->execute([':id' => (int) $scan['id'], ':id2' => (int) $scan['id']]);
+
+        $file = (string) ($scan['fisier_stocat'] ?? '');
+        if ($file === '') {
+            return null;
+        }
+        $used = $this->db->prepare('SELECT COUNT(*) FROM ocr_piese_facturi WHERE fisier_stocat = :f');
+        $used->execute([':f' => $file]);
+
+        return (int) $used->fetchColumn() === 0 ? $file : null;
     }
 
     public function updateEventField(int $eventId, string $field, ?string $rawValue): ?string
@@ -930,7 +959,7 @@ class OcrPartsModel
         'cant_alocata' => 'decimal',
     ];
 
-    public const WARRANTY_OPTIONS_V2 = [6, 12, 18, 24, 36];
+    public const WARRANTY_OPTIONS_V2 = [3, 6, 12, 18, 24, 36];
 
     /**
      * WHERE + parametri pentru filtre. Filtrul de vehicul acopera facturile
@@ -1003,6 +1032,7 @@ class OcrPartsModel
         $offset = max(0, ($page - 1) * $perPage);
         $stmt = $this->db->prepare(
             "SELECT r.*, f.fisier_stocat AS factura_fisier, f.numar_factura,
+                    f.status AS scan_status, f.ocr_eroare AS scan_eroare, f.email_subiect AS scan_subiect,
                     $pieseSql AS total_piese, $manoperaSql AS total_manopera
              FROM ocr_reparatii r
              LEFT JOIN ocr_piese_facturi f ON f.id = r.factura_id
@@ -1446,46 +1476,7 @@ class OcrPartsModel
             $eventId = (int) $this->db->lastInsertId();
 
             $kmBord = !empty($header['km_bord']) ? (int) $header['km_bord'] : null;
-            $itemStmt = $this->db->prepare(
-                'INSERT INTO ocr_reparatii_articole
-                    (reparatie_id, tip, denumire, cod_piesa, cantitate, pret_unitar, tip_lucrare,
-                     destinatie, vehicle_id, data_referinta, km_bord, created_at, updated_at)
-                 VALUES (:event_id, :tip, :denumire, :cod, :cantitate, :pret, :tip_lucrare,
-                     :destinatie, :vehicle_id, :data_ref, :km, :created_at, :updated_at)'
-            );
-            $vehicleIds = [];
-            foreach ($items as $item) {
-                $vehicleId = !empty($item['vehicle_id']) ? (int) $item['vehicle_id'] : null;
-                $destinatie = ($item['destinatie'] ?? 'vehicul') === 'stoc' ? 'stoc' : 'vehicul';
-                if ($destinatie === 'stoc') {
-                    $vehicleId = null;
-                }
-                if ($vehicleId !== null) {
-                    $vehicleIds[$vehicleId] = true;
-                }
-                $itemStmt->execute([
-                    ':event_id' => $eventId,
-                    ':tip' => ($item['tip'] ?? 'piesa') === 'manopera' ? 'manopera' : 'piesa',
-                    ':denumire' => mb_substr(trim((string) ($item['denumire'] ?? '')), 0, 255),
-                    ':cod' => self::nullIfEmpty($item['cod_piesa'] ?? ''),
-                    ':cantitate' => max(0, (float) ($item['cantitate'] ?? 1)),
-                    ':pret' => max(0, (float) ($item['pret_unitar'] ?? 0)),
-                    ':tip_lucrare' => isset(self::TIP_LUCRARE_OPTIONS[$item['tip_lucrare'] ?? '']) ? (string) $item['tip_lucrare'] : 'reparatie',
-                    ':destinatie' => $destinatie,
-                    ':vehicle_id' => $vehicleId,
-                    ':data_ref' => $invoiceDate,
-                    ':km' => $destinatie === 'vehicul' ? $kmBord : null,
-                    ':created_at' => $now,
-                    ':updated_at' => $now,
-                ]);
-            }
-
-            $assocStmt = $this->db->prepare(
-                'INSERT IGNORE INTO ocr_reparatii_vehicule (reparatie_id, vehicle_id, created_at) VALUES (:e, :v, :c)'
-            );
-            foreach (array_keys($vehicleIds) as $vehicleId) {
-                $assocStmt->execute([':e' => $eventId, ':v' => $vehicleId, ':c' => $now]);
-            }
+            $this->insertItems($eventId, $items, $invoiceDate, $kmBord, [], $now);
 
             $this->db->commit();
             return $eventId;
@@ -1519,6 +1510,496 @@ class OcrPartsModel
         $stmt->execute($params);
 
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * Articolele unei facturi + asocierile factura<->vehicul (in tranzactia apelantului).
+     * Un articol poate avea garantie_luni si km_bord proprii (citirea automata); altfel
+     * km-ul implicit al facturii, doar pentru articolele montate pe vehicul.
+     *
+     * @param array<int,array<string,mixed>> $items
+     * @param array<int,int> $extraVehicleIds vehicule de pe factura fara articole alocate
+     */
+    private function insertItems(int $eventId, array $items, ?string $invoiceDate, ?int $defaultKm, array $extraVehicleIds, string $now): void
+    {
+        $itemStmt = $this->db->prepare(
+            'INSERT INTO ocr_reparatii_articole
+                (reparatie_id, tip, denumire, cod_piesa, cantitate, pret_unitar, tip_lucrare,
+                 garantie_luni, garantie_pana_la, destinatie, vehicle_id, data_referinta, km_bord, created_at, updated_at)
+             VALUES (:event_id, :tip, :denumire, :cod, :cantitate, :pret, :tip_lucrare,
+                 :garantie_luni, :garantie_pana_la, :destinatie, :vehicle_id, :data_ref, :km, :created_at, :updated_at)'
+        );
+        $vehicleIds = array_fill_keys(array_map('intval', $extraVehicleIds), true);
+        foreach ($items as $item) {
+            $vehicleId = !empty($item['vehicle_id']) ? (int) $item['vehicle_id'] : null;
+            $tip = ($item['tip'] ?? 'piesa') === 'manopera' ? 'manopera' : 'piesa';
+            $destinatie = $tip === 'piesa' && ($item['destinatie'] ?? 'vehicul') === 'stoc' ? 'stoc' : 'vehicul';
+            if ($destinatie === 'stoc') {
+                $vehicleId = null;
+            }
+            if ($vehicleId !== null) {
+                $vehicleIds[$vehicleId] = true;
+            }
+            $km = array_key_exists('km_bord', $item) && $item['km_bord'] !== null ? (int) $item['km_bord'] : $defaultKm;
+            $warranty = isset($item['garantie_luni']) && in_array((int) $item['garantie_luni'], self::WARRANTY_OPTIONS_V2, true)
+                ? (int) $item['garantie_luni'] : null;
+
+            $itemStmt->execute([
+                ':event_id' => $eventId,
+                ':tip' => $tip,
+                ':denumire' => mb_substr(trim((string) ($item['denumire'] ?? '')), 0, 255),
+                ':cod' => self::nullIfEmpty($item['cod_piesa'] ?? ''),
+                ':cantitate' => max(0, (float) ($item['cantitate'] ?? 1)),
+                ':pret' => max(0, (float) ($item['pret_unitar'] ?? 0)),
+                ':tip_lucrare' => isset(self::TIP_LUCRARE_OPTIONS[$item['tip_lucrare'] ?? '']) ? (string) $item['tip_lucrare'] : 'reparatie',
+                ':garantie_luni' => $warranty,
+                // Startul garantiei = data facturii; fara data, se calculeaza cand o completeaza operatorul.
+                ':garantie_pana_la' => $warranty !== null && $invoiceDate !== null
+                    ? date('Y-m-d', strtotime($invoiceDate . ' +' . $warranty . ' months')) : null,
+                ':destinatie' => $destinatie,
+                ':vehicle_id' => $vehicleId,
+                ':data_ref' => $invoiceDate,
+                ':km' => $destinatie === 'vehicul' ? $km : null,
+                ':created_at' => $now,
+                ':updated_at' => $now,
+            ]);
+        }
+
+        $assocStmt = $this->db->prepare(
+            'INSERT IGNORE INTO ocr_reparatii_vehicule (reparatie_id, vehicle_id, created_at) VALUES (:e, :v, :c)'
+        );
+        foreach (array_keys($vehicleIds) as $vehicleId) {
+            $assocStmt->execute([':e' => $eventId, ':v' => $vehicleId, ':c' => $now]);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Facturi scanate: imprimanta -> Gmail -> Claude (scripts/process_invoice_inbox.php,
+    // OcrPartsScanService). Scanarea intra imediat in registru ("Se citește"), iar
+    // citirea completeaza antetul si articolele si o lasa "De verificat".
+    // ------------------------------------------------------------------
+
+    public const SCAN_MAX_ATTEMPTS = 3;
+
+    public const SCAN_STATUSES = [
+        'in_procesare' => 'Se citește',
+        'de_verificat' => 'De verificat',
+        'eroare' => 'Citire eșuată',
+        'verificata' => 'Verificată',
+    ];
+
+    /** Coloanele pentru scanari pe ocr_piese_facturi (idempotent; DDL = COMMIT implicit). */
+    public function ensureScanSchema(): void
+    {
+        static $ensured = false;
+        if ($ensured) {
+            return;
+        }
+
+        $existing = $this->db->query('SHOW COLUMNS FROM ocr_piese_facturi')->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        $columns = [
+            'sursa' => "VARCHAR(20) NOT NULL DEFAULT 'manual'",
+            'sursa_key' => 'VARCHAR(120) NULL',
+            'status' => 'VARCHAR(20) NULL',
+            'document_mime' => 'VARCHAR(100) NULL',
+            'document_pagini' => 'VARCHAR(20) NULL',
+            'email_subiect' => 'VARCHAR(255) NULL',
+            'email_primit_la' => 'DATETIME NULL',
+            'ocr_model' => 'VARCHAR(60) NULL',
+            'ocr_incercari' => 'TINYINT UNSIGNED NOT NULL DEFAULT 0',
+            'ocr_eroare' => 'VARCHAR(255) NULL',
+        ];
+        $clauses = [];
+        foreach ($columns as $column => $definition) {
+            if (!in_array($column, $existing, true)) {
+                $clauses[] = "ADD COLUMN $column $definition";
+            }
+        }
+        if (!in_array('sursa_key', $existing, true)) {
+            $clauses[] = 'ADD UNIQUE KEY uq_ocr_pf_sursa_key (sursa_key)';
+            $clauses[] = 'ADD KEY idx_ocr_pf_status (sursa, status)';
+        }
+        if ($clauses !== []) {
+            $this->db->exec('ALTER TABLE ocr_piese_facturi ' . implode(', ', $clauses));
+        }
+
+        $ensured = true;
+    }
+
+    /** @return array<string,mixed>|null */
+    public function findScanBySourceKey(string $sourceKey): ?array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM ocr_piese_facturi WHERE sursa_key = :k');
+        $stmt->execute([':k' => $sourceKey]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : $row;
+    }
+
+    /**
+     * Scanare noua: factura "in procesare" + randul ei din registru (gol pana la citire).
+     *
+     * @param array{sursa_key:string,fisier_original:?string,fisier_stocat:string,document_mime:string,email_subiect:?string,email_primit_la:?string} $data
+     * @return int id-ul din ocr_piese_facturi
+     */
+    public function createScanEntry(array $data): int
+    {
+        // Tranzactie proprie doar daca apelantul nu are deja una (testele ruleaza intr-una).
+        $own = !$this->db->inTransaction();
+        if ($own) {
+            $this->db->beginTransaction();
+        }
+        try {
+            $now = date('Y-m-d H:i:s');
+            $this->db->prepare(
+                "INSERT INTO ocr_piese_facturi
+                    (sursa, sursa_key, status, moneda, fisier_original, fisier_stocat, document_mime,
+                     email_subiect, email_primit_la, created_at, updated_at)
+                 VALUES ('scan', :sursa_key, 'in_procesare', 'RON', :fisier_original, :fisier_stocat, :mime,
+                     :subiect, :primit, :created_at, :updated_at)"
+            )->execute([
+                ':sursa_key' => $data['sursa_key'],
+                ':fisier_original' => self::nullIfEmpty(mb_substr((string) ($data['fisier_original'] ?? ''), 0, 255)),
+                ':fisier_stocat' => $data['fisier_stocat'],
+                ':mime' => $data['document_mime'],
+                ':subiect' => self::nullIfEmpty(mb_substr((string) ($data['email_subiect'] ?? ''), 0, 255)),
+                ':primit' => $data['email_primit_la'] ?? null,
+                ':created_at' => $now,
+                ':updated_at' => $now,
+            ]);
+            $invoiceId = (int) $this->db->lastInsertId();
+            $this->createScanEvent($invoiceId, 'Scanare primită pe email; se citește automat.', $now);
+
+            if ($own) {
+                $this->db->commit();
+            }
+            return $invoiceId;
+        } catch (Throwable $exception) {
+            if ($own && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+    }
+
+    private function createScanEvent(int $invoiceId, string $note, string $now): int
+    {
+        $this->db->prepare(
+            'INSERT INTO ocr_reparatii (factura_id, observatii, created_at, updated_at) VALUES (:f, :o, :c, :u)'
+        )->execute([':f' => $invoiceId, ':o' => $note, ':c' => $now, ':u' => $now]);
+
+        return (int) $this->db->lastInsertId();
+    }
+
+    /** @return array<int,array<string,mixed>> scanarile care asteapta citirea (cele mai vechi intai) */
+    public function getPendingScans(int $limit): array
+    {
+        $stmt = $this->db->prepare(
+            "SELECT * FROM ocr_piese_facturi
+             WHERE sursa = 'scan' AND status = 'in_procesare' AND ocr_incercari < :max
+             ORDER BY id ASC LIMIT :lim"
+        );
+        $stmt->bindValue(':max', self::SCAN_MAX_ATTEMPTS, PDO::PARAM_INT);
+        $stmt->bindValue(':lim', max(1, $limit), PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /** Numerele flotei, pentru indiciul trimis la citire. @return array<int,string> */
+    public function getFleetPlates(): array
+    {
+        return array_map(static fn (array $row): string => (string) $row['nr_inmatriculare'], $this->getVehicleOptions());
+    }
+
+    /** @return array<string,int> cheie PartsInvoiceOcrService::plateKey() -> vehicle_id */
+    public function vehicleIdsByPlateKey(): array
+    {
+        $map = [];
+        foreach ($this->getVehicleOptions() as $vehicle) {
+            $key = PartsInvoiceOcrService::plateKey((string) $vehicle['nr_inmatriculare']);
+            if ($key !== '') {
+                $map[$key] = (int) $vehicle['id'];
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * Aplica citirea pe o scanare: primul document completeaza randul scanarii, fiecare
+     * document in plus din aceeasi scanare devine o factura noua (acelasi fisier).
+     * Vehiculele se recunosc dupa numarul de inmatriculare; ce nu e pe factura ramane gol.
+     *
+     * @param array<int,array<string,mixed>> $invoices PartsInvoiceOcrService::normalize()
+     * @param array{model?:string,raw?:string} $meta
+     * @return array<int,int> id-urile din registru (ocr_reparatii) completate / create
+     */
+    public function applyScanResult(int $invoiceId, array $invoices, array $meta = []): array
+    {
+        $stmt = $this->db->prepare("SELECT * FROM ocr_piese_facturi WHERE id = :id AND sursa = 'scan'");
+        $stmt->execute([':id' => $invoiceId]);
+        $scan = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($scan === false) {
+            return [];
+        }
+
+        if ($invoices === []) {
+            $this->recordScanFailure($invoiceId, 'Nu am găsit nicio factură în scanare.', true);
+            $eventId = $this->findEventIdForInvoice($invoiceId);
+            return $eventId !== null ? [$eventId] : [];
+        }
+
+        $plateMap = $this->vehicleIdsByPlateKey();
+        $now = date('Y-m-d H:i:s');
+        $eventIds = [];
+
+        // Tranzactie proprie doar daca apelantul nu are deja una (testele ruleaza intr-una).
+        $own = !$this->db->inTransaction();
+        if ($own) {
+            $this->db->beginTransaction();
+        }
+        try {
+            foreach (array_values($invoices) as $index => $invoice) {
+                $targetInvoiceId = $invoiceId;
+                if ($index > 0) {
+                    $sourceKey = $scan['sursa_key'] . ':' . ($index + 1);
+                    $existing = $this->findScanBySourceKey($sourceKey);
+                    if ($existing !== null) {
+                        // Rerulare dupa un esec partial: documentul exista deja.
+                        $existingEvent = $this->findEventIdForInvoice((int) $existing['id']);
+                        if ($existingEvent !== null) {
+                            $eventIds[] = $existingEvent;
+                        }
+                        continue;
+                    }
+                    $this->db->prepare(
+                        "INSERT INTO ocr_piese_facturi
+                            (sursa, sursa_key, status, moneda, fisier_original, fisier_stocat, document_mime,
+                             email_subiect, email_primit_la, created_at, updated_at)
+                         VALUES ('scan', :sursa_key, 'in_procesare', 'RON', :fisier_original, :fisier_stocat, :mime,
+                             :subiect, :primit, :created_at, :updated_at)"
+                    )->execute([
+                        ':sursa_key' => $sourceKey,
+                        ':fisier_original' => $scan['fisier_original'],
+                        ':fisier_stocat' => $scan['fisier_stocat'],
+                        ':mime' => $scan['document_mime'],
+                        ':subiect' => $scan['email_subiect'],
+                        ':primit' => $scan['email_primit_la'],
+                        ':created_at' => $now,
+                        ':updated_at' => $now,
+                    ]);
+                    $targetInvoiceId = (int) $this->db->lastInsertId();
+                }
+
+                $eventIds[] = $this->fillScanInvoice($targetInvoiceId, $invoice, $plateMap, $meta, count($invoices), $now);
+            }
+
+            if ($own) {
+                $this->db->commit();
+            }
+        } catch (Throwable $exception) {
+            if ($own && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+
+        return $eventIds;
+    }
+
+    /**
+     * Completeaza o factura scanata si randul ei din registru cu un document citit.
+     *
+     * @param array<string,mixed> $invoice
+     * @param array<string,int> $plateMap
+     * @param array{model?:string,raw?:string} $meta
+     */
+    private function fillScanInvoice(int $invoiceId, array $invoice, array $plateMap, array $meta, int $documentCount, string $now): int
+    {
+        $invoiceDate = $invoice['data_document'] ?? null;
+        $notes = [];
+
+        // Vehiculele de pe factura: doar cele din flota; restul raman ca nota pentru operator.
+        $invoiceVehicleIds = [];
+        $unknownPlates = [];
+        foreach ($invoice['nr_inmatriculare'] ?? [] as $plate) {
+            $vehicleId = $plateMap[PartsInvoiceOcrService::plateKey((string) $plate)] ?? null;
+            if ($vehicleId !== null) {
+                $invoiceVehicleIds[$vehicleId] = $vehicleId;
+            } else {
+                $unknownPlates[(string) $plate] = true;
+            }
+        }
+        $singleVehicleId = count($invoiceVehicleIds) === 1 ? (int) reset($invoiceVehicleIds) : null;
+
+        $items = [];
+        $itemsTotal = 0.0;
+        $unverified = 0;
+        $warrantyNotes = [];
+        foreach ($invoice['articole'] ?? [] as $item) {
+            $vehicleId = null;
+            if (!empty($item['nr_inmatriculare'])) {
+                $vehicleId = $plateMap[PartsInvoiceOcrService::plateKey((string) $item['nr_inmatriculare'])] ?? null;
+                if ($vehicleId === null) {
+                    $unknownPlates[(string) $item['nr_inmatriculare']] = true;
+                }
+            }
+            $vehicleId ??= $singleVehicleId;
+            $warranty = $item['garantie_luni'] ?? null;
+            if ($warranty !== null && !in_array((int) $warranty, self::WARRANTY_OPTIONS_V2, true)) {
+                $warrantyNotes[] = $item['denumire'] . ': ' . (int) $warranty . ' luni';
+            }
+
+            $items[] = [
+                'tip' => $item['tip'] ?? 'piesa',
+                'denumire' => $item['denumire'] ?? '',
+                'cod_piesa' => $item['cod_piesa'] ?? '',
+                'cantitate' => $item['cantitate'] ?? 1,
+                'pret_unitar' => $item['pret_unitar'] ?? 0,
+                'tip_lucrare' => $item['tip_lucrare'] ?? null,
+                'garantie_luni' => $warranty,
+                'destinatie' => !empty($item['pentru_stoc']) ? 'stoc' : 'vehicul',
+                'vehicle_id' => $vehicleId,
+                // Km pe articol (facturi multi-vehicul) sau km-ul facturii cand e un singur vehicul.
+                'km_bord' => $item['km_bord'] ?? (count($invoiceVehicleIds) <= 1 ? ($invoice['km_bord'] ?? null) : null),
+            ];
+            $itemsTotal += (float) ($item['cantitate'] ?? 1) * (float) ($item['pret_unitar'] ?? 0);
+            if (($item['verificat'] ?? true) === false) {
+                $unverified++;
+            }
+        }
+
+        if ($invoice['observatii'] ?? null) {
+            $notes[] = (string) $invoice['observatii'];
+        }
+        if ($unknownPlates !== []) {
+            $notes[] = 'Nr. de pe factură care nu sunt în flotă: ' . implode(', ', array_keys($unknownPlates));
+        }
+        if ($items !== [] && array_filter($items, static fn (array $i): bool => empty($i['vehicle_id']) && $i['destinatie'] === 'vehicul') !== []) {
+            $notes[] = 'Unele articole nu au vehicul (nu reiese de pe factură) — alocă-le din panoul facturii.';
+        }
+        if ($unverified > 0) {
+            $notes[] = $unverified . ' articol(e) unde cantitate × preț ≠ valoarea de pe factură';
+        }
+        $netTotal = $invoice['valoare_fara_tva'] ?? null;
+        if ($items !== [] && $netTotal !== null && abs($itemsTotal - (float) $netTotal) > 0.05) {
+            $notes[] = sprintf('Suma articolelor %s ≠ total fără TVA %s', number_format($itemsTotal, 2, ',', '.'), number_format((float) $netTotal, 2, ',', '.'));
+        }
+        if ($warrantyNotes !== []) {
+            $notes[] = 'Garanții nestandard (completează manual): ' . implode('; ', $warrantyNotes);
+        }
+        if ($items === []) {
+            $notes[] = 'Nu am putut citi articolele — completează-le manual.';
+        }
+        if ($documentCount > 1 && !empty($invoice['pagini'])) {
+            $notes[] = 'Paginile ' . $invoice['pagini'] . ' din scanare';
+        }
+        $notes[] = 'Citită automat, încredere ' . ($invoice['incredere'] ?? 'necunoscută');
+
+        $this->db->prepare(
+            "UPDATE ocr_piese_facturi
+             SET numar_factura = :numar, data_facturii = :data, furnizor = :furnizor, cui_furnizor = :cui,
+                 moneda = :moneda, total_factura = :total, ocr_text = :raw, ocr_model = :model,
+                 document_pagini = :pagini, observatii = :observatii, status = 'de_verificat',
+                 ocr_incercari = ocr_incercari + 1, ocr_eroare = NULL, updated_at = :now
+             WHERE id = :id"
+        )->execute([
+            ':numar' => $invoice['numar_document'] ?? null,
+            ':data' => $invoiceDate,
+            ':furnizor' => $invoice['furnizor'] ?? null,
+            ':cui' => $invoice['cui_furnizor'] ?? null,
+            ':moneda' => $invoice['moneda'] ?? 'RON',
+            ':total' => $invoice['valoare_cu_tva'] ?? null,
+            ':raw' => json_encode($invoice, JSON_UNESCAPED_UNICODE),
+            ':model' => isset($meta['model']) ? mb_substr((string) $meta['model'], 0, 60) : null,
+            ':pagini' => $invoice['pagini'] ?? null,
+            ':observatii' => $invoice['observatii'] ?? null,
+            ':now' => $now,
+            ':id' => $invoiceId,
+        ]);
+
+        $eventId = $this->findEventIdForInvoice($invoiceId);
+        if ($eventId === null) {
+            $eventId = $this->createScanEvent($invoiceId, '', $now);
+        }
+        // Rerulare: articolele / asocierile anterioare ale acestei scanari se inlocuiesc.
+        $this->db->prepare('DELETE FROM ocr_reparatii_articole WHERE reparatie_id = :id')->execute([':id' => $eventId]);
+        $this->db->prepare('DELETE FROM ocr_reparatii_vehicule WHERE reparatie_id = :id')->execute([':id' => $eventId]);
+
+        $this->db->prepare(
+            'UPDATE ocr_reparatii
+             SET data_interventie = :data, document = :document, furnizor = :furnizor, observatii = :observatii, updated_at = :now
+             WHERE id = :id'
+        )->execute([
+            ':data' => $invoiceDate,
+            ':document' => !empty($invoice['numar_document']) ? mb_substr('Factura ' . $invoice['numar_document'], 0, 120) : null,
+            ':furnizor' => $invoice['furnizor'] ?? null,
+            ':observatii' => mb_substr(implode(' | ', $notes), 0, 2000),
+            ':now' => $now,
+            ':id' => $eventId,
+        ]);
+
+        $this->insertItems($eventId, $items, $invoiceDate, null, array_values($invoiceVehicleIds), $now);
+
+        return $eventId;
+    }
+
+    private function findEventIdForInvoice(int $invoiceId): ?int
+    {
+        $stmt = $this->db->prepare('SELECT id FROM ocr_reparatii WHERE factura_id = :id ORDER BY id LIMIT 1');
+        $stmt->execute([':id' => $invoiceId]);
+        $eventId = $stmt->fetchColumn();
+
+        return $eventId === false ? null : (int) $eventId;
+    }
+
+    /**
+     * Esec la citire: ramane "Se citește" (reincercare la rularea urmatoare) pana la
+     * SCAN_MAX_ATTEMPTS sau, la o eroare definitiva, trece in "Citire eșuată".
+     */
+    public function recordScanFailure(int $invoiceId, string $message, bool $permanent): void
+    {
+        $stmt = $this->db->prepare('SELECT ocr_incercari FROM ocr_piese_facturi WHERE id = :id');
+        $stmt->execute([':id' => $invoiceId]);
+        $attempts = $stmt->fetchColumn();
+        if ($attempts === false) {
+            return;
+        }
+
+        $attempts = (int) $attempts + 1;
+        $final = $permanent || $attempts >= self::SCAN_MAX_ATTEMPTS;
+        $this->db->prepare(
+            'UPDATE ocr_piese_facturi SET ocr_incercari = :n, status = :status, ocr_eroare = :err, updated_at = :now WHERE id = :id'
+        )->execute([
+            ':n' => $final ? max($attempts, self::SCAN_MAX_ATTEMPTS) : $attempts,
+            ':status' => $final ? 'eroare' : 'in_procesare',
+            ':err' => mb_substr($message, 0, 255),
+            ':now' => date('Y-m-d H:i:s'),
+            ':id' => $invoiceId,
+        ]);
+
+        if ($final) {
+            $this->db->prepare('UPDATE ocr_reparatii SET observatii = :o, updated_at = :now WHERE factura_id = :id')->execute([
+                ':o' => 'Citirea automată a eșuat: ' . $message . ' Completează datele manual din factura atașată.',
+                ':now' => date('Y-m-d H:i:s'),
+                ':id' => $invoiceId,
+            ]);
+        }
+    }
+
+    /** "De verificat" / "Citire eșuată" -> "Verificată" (operatorul a confirmat datele). */
+    public function markScanVerified(int $eventId): bool
+    {
+        $stmt = $this->db->prepare(
+            "UPDATE ocr_piese_facturi f
+             JOIN ocr_reparatii r ON r.factura_id = f.id
+             SET f.status = 'verificata', f.updated_at = :now
+             WHERE r.id = :id AND f.status IN ('de_verificat', 'eroare')"
+        );
+        $stmt->execute([':now' => date('Y-m-d H:i:s'), ':id' => $eventId]);
+
+        return $stmt->rowCount() > 0;
     }
 
     private static function nullIfEmpty(mixed $value): ?string
