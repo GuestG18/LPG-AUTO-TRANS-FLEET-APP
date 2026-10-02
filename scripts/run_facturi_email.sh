@@ -2,7 +2,7 @@
 # Wrapper cron pentru facturile scanate (Linux VPS): Gmail -> coada -> OCR -> Facturi.
 #
 # Crontab recomandat (la fiecare 5 minute):
-#   */5 * * * * /srv/apps/LPG-AUTO-TRANS-FLEET-APP/scripts/run_facturi_email.sh
+#   */5 * * * * /bin/sh /srv/apps/LPG-AUTO-TRANS-FLEET-APP/scripts/run_facturi_email.sh
 #
 # Pasi:
 #   1. scripts/fetch_invoice_emails.py   ia scanarile noi din Gmail in storage/invoices/inbox
@@ -52,7 +52,9 @@ if [ "${1:-}" = "--locked" ]; then
 fi
 
 if command -v flock >/dev/null 2>&1; then
-    flock -n -E 200 "$LOCK_FILE" "$0" --locked
+    # Prin /bin/sh: scriptul nu e executabil in git (644), iar cron-ul il porneste tot cu /bin/sh.
+    # Erorile lui flock merg in log: fara MTA, cron-ul arunca orice iesire.
+    flock -n -E 200 "$LOCK_FILE" /bin/sh "$SCRIPT_DIR/run_facturi_email.sh" --locked >> "$LOG_FILE" 2>&1
     STATUS=$?
     if [ "$STATUS" -eq 200 ]; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Rulare sarita: alta rulare este in curs." >> "$LOG_FILE"
