@@ -871,10 +871,23 @@
 
 /* -------------------------------------------------------------------- KPI */
 
+/* 9 carduri = 3 randuri de cate 3; pe ecrane inguste, 2 si apoi 1 pe rand */
 .da2-kpis {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
+}
+
+@media (max-width: 900px) {
+    .da2-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 560px) {
+    .da2-kpis {
+        grid-template-columns: 1fr;
+    }
 }
 
 .da2-kpi {
@@ -894,68 +907,17 @@
 
 .da2-kpi {
     position: relative;
-    cursor: pointer;
     overflow: hidden;
-    transition: transform .16s ease, border-color .15s, box-shadow .16s;
+    padding: 0;
+    perspective: 1100px;
 }
 
-.da2-kpi:hover {
-    transform: translateY(-2px);
-    border-left-color: var(--da2-accent);
-}
-
-.da2-kpi:active {
-    transform: scale(.985);
-    transition-duration: .06s;
-}
-
-.da2-kpi:focus-visible {
-    outline: 2px solid var(--da2-accent);
-    outline-offset: 2px;
-}
-
-.da2-kpi.is-open {
-    border-color: var(--da2-accent);
-    border-left-color: var(--da2-accent);
-    box-shadow: 0 0 0 1px var(--da2-accent) inset, var(--da2-shadow);
-}
-
-/* sageata care indica starea deschis / inchis */
+/* sageata care arata ca fata se poate intoarce */
 .da2-kpi-caret {
     margin-left: auto;
     font-size: 0.7rem;
     color: var(--da2-faint);
     transition: transform .2s ease, color .2s;
-}
-
-.da2-kpi.is-open .da2-kpi-caret {
-    transform: rotate(180deg);
-    color: var(--da2-accent);
-}
-
-/* unda de la apasare + saltul valorii */
-.da2-kpi.is-pressed::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(circle at var(--x, 50%) var(--y, 50%), rgba(37, 99, 235, 0.22), transparent 65%);
-    animation: da2-ripple .45s ease-out forwards;
-    pointer-events: none;
-}
-
-.da2-kpi.is-pressed .da2-kpi-value {
-    animation: da2-pop .32s ease-out;
-}
-
-@keyframes da2-ripple {
-    from { opacity: 1; transform: scale(.4); }
-    to { opacity: 0; transform: scale(1.6); }
-}
-
-@keyframes da2-pop {
-    0% { transform: scale(1); }
-    45% { transform: scale(1.07); }
-    100% { transform: scale(1); }
 }
 
 .da2-kpi-good { border-left-color: var(--da2-good); }
@@ -985,62 +947,1109 @@
     line-height: 1.35;
 }
 
-/* --------------------------------------------------- panoul de detaliu KPI */
+/* --------------------------------------- card care se intoarce pe loc (flip) */
 
 /*
- * Deschiderea foloseste grid-template-rows 0fr -> 1fr: se animeaza spre
- * inaltimea reala a continutului, fara max-height ghicit.
+ * Intors, cardul isi pastreaza celula din grila (celelalte carduri nu se misca),
+ * iar fata lui se intinde peste toata grila de 3 x 3. Celula ramasa e doar loc tinut;
+ * cardul devine static si fara perspectiva, ca fata absoluta sa se raporteze la grila.
  */
-.da2-kpi-detail {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows .28s cubic-bezier(.4, 0, .2, 1);
+.da2-kpis {
+    position: relative;
+    scroll-margin-top: 90px;
 }
 
-.da2-kpi-detail.is-open {
-    grid-template-rows: 1fr;
+.da2-kpi.is-flipped {
+    position: static;
+    overflow: visible;
+    perspective: none;
 }
 
-.da2-detail-inner {
+.da2-kpi.is-flipped .da2-face-detail {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
     overflow: hidden;
-    min-height: 0;
-    background: var(--da2-surface);
-    border: 1px solid var(--da2-accent);
+    border: 1px solid color-mix(in srgb, var(--kc) 45%, #fff);
+    border-left: 4px solid var(--kc);
     border-radius: var(--da2-radius);
-    box-shadow: var(--da2-shadow);
+    background:
+        radial-gradient(70% 120% at 100% 0%, color-mix(in srgb, var(--kc) 9%, transparent), transparent 60%),
+        #fff;
+    box-shadow: 0 24px 50px -24px color-mix(in srgb, var(--kc) 55%, transparent), var(--da2-shadow);
+}
+
+/* continutul intra dupa ce fata a inceput sa creasca si dispare inainte sa se stranga */
+.da2-kpi.is-expanding .da2-face-head,
+.da2-kpi.is-expanding .da2-face-sub,
+.da2-kpi.is-expanding .da2-face-body > * {
+    animation: da2-face-in .45s cubic-bezier(.22, 1, .36, 1) .12s both;
+}
+
+.da2-kpi.is-expanding .da2-face-body > :nth-child(2) { animation-delay: .17s; }
+.da2-kpi.is-expanding .da2-face-body > :nth-child(3) { animation-delay: .22s; }
+.da2-kpi.is-expanding .da2-face-body > :nth-child(n+4) { animation-delay: .27s; }
+
+.da2-kpi.is-collapsing .da2-face-detail > * {
     opacity: 0;
-    transform: translateY(-6px);
-    transition: opacity .22s ease .06s, transform .22s ease .06s;
+    transition: opacity .12s ease;
 }
 
-.da2-kpi-detail.is-open .da2-detail-inner {
-    opacity: 1;
-    transform: none;
+.da2-face {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
 }
 
-.da2-detail-head {
+.da2-face-summary {
+    gap: 5px;
+    padding: 13px 15px;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    border-radius: inherit;
+    transition: transform .16s ease;
+}
+
+.da2-face-summary:hover {
+    transform: translateY(-2px);
+}
+
+.da2-face-summary:hover .da2-kpi-caret {
+    color: var(--da2-accent);
+    transform: rotate(90deg);
+}
+
+.da2-face-summary:focus-visible,
+.da2-face-detail button:focus-visible {
+    outline: 2px solid var(--da2-accent);
+    outline-offset: -2px;
+}
+
+.da2-face-head {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 12px 16px;
+    gap: 6px;
+    padding: 6px 6px 4px;
     border-bottom: 1px solid var(--da2-border);
+}
+
+.da2-face-back {
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--da2-accent-soft);
+    color: var(--da2-accent);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background .15s, transform .15s;
+}
+
+.da2-face-back:hover {
+    background: #dbeafe;
+    transform: translateX(-2px);
+}
+
+.da2-face-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--da2-text);
+}
+
+.da2-face-count {
+    flex: none;
+    padding: 0 7px;
+    text-transform: none;
+    letter-spacing: 0;
+    border-radius: 999px;
+    background: var(--da2-accent-soft);
+    color: var(--da2-accent);
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+
+.da2-face-tabs {
+    flex: none;
+    display: flex;
+    gap: 1px;
+    padding: 2px;
+    border-radius: 8px;
+    background: var(--da2-bg);
+}
+
+.da2-face-tab {
+    width: 22px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--da2-muted);
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: background .15s, color .15s, box-shadow .15s;
+}
+
+.da2-face-tab:hover {
+    color: var(--da2-text);
+}
+
+.da2-face-tab.is-active {
+    background: var(--da2-surface);
+    color: var(--da2-accent);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
+
+.da2-face-sub {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 5px 10px 2px;
+    color: var(--da2-muted);
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.da2-face-sub span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.da2-face-body {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 4px 8px 8px;
+    scrollbar-width: thin;
+}
+
+.da2-face-body h4 {
+    margin: 8px 0 4px;
+    color: var(--da2-muted);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+}
+
+/* randurile pe tip de transport */
+.da2-ft-row {
+    border-radius: var(--da2-radius-sm);
+    transition: background .15s;
+}
+
+.da2-ft-row + .da2-ft-row {
+    margin-top: 2px;
+}
+
+.da2-ft-row.is-open {
+    background: var(--da2-bg);
+}
+
+.da2-ft-head {
+    display: grid;
+    grid-template-columns: 1fr auto 14px;
+    align-items: center;
+    column-gap: 6px;
+    row-gap: 3px;
+    width: 100%;
+    padding: 5px 6px;
+    border: 0;
+    border-radius: var(--da2-radius-sm);
+    background: transparent;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+.da2-ft-head:hover {
     background: var(--da2-accent-soft);
 }
 
-.da2-detail-title {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-weight: 650;
-    font-size: 0.9rem;
-    color: #1d4ed8;
+.da2-ft-head:disabled {
+    cursor: default;
 }
 
-.da2-detail-value {
-    font-size: 1.05rem;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
+.da2-ft-head:disabled:hover {
+    background: transparent;
 }
+
+.da2-ft-head.is-negative .da2-ft-value {
+    color: var(--da2-bad);
+}
+
+.da2-ft-head.is-negative .da2-ft-bar span {
+    background: var(--da2-bad);
+}
+
+.da2-ft-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.da2-ft-value {
+    font-size: 0.8rem;
+}
+
+.da2-ft-caret {
+    color: var(--da2-faint);
+    font-size: 0.65rem;
+    transition: transform .2s ease;
+}
+
+.da2-ft-row.is-open .da2-ft-caret {
+    transform: rotate(180deg);
+    color: var(--da2-accent);
+}
+
+.da2-ft-bar {
+    grid-column: 1 / 2;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--da2-border);
+    overflow: hidden;
+}
+
+.da2-ft-bar span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--da2-accent);
+    transform-origin: left;
+    animation: da2-bar-grow .5s cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.da2-ft-share {
+    grid-column: 2 / 4;
+    color: var(--da2-faint);
+    font-size: 0.6rem;
+    text-align: right;
+}
+
+.da2-ft-more {
+    padding: 0 6px 8px;
+    animation: da2-face-in .3s cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.da2-ft-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    color: var(--da2-muted);
+    font-size: 0.65rem;
+}
+
+.da2-ft-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.da2-ft-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 2px 0;
+    font-size: 0.7rem;
+    border-bottom: 1px dashed var(--da2-border);
+}
+
+.da2-ft-list li:last-child {
+    border-bottom: 0;
+}
+
+.da2-ft-plates {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+    gap: 4px;
+}
+
+.da2-ft-plate {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 3px;
+    padding: 3px 4px;
+    border: 1px solid var(--da2-border);
+    border-radius: 6px;
+    background: var(--da2-surface);
+    font-size: 0.65rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.da2-ft-plate small {
+    color: var(--da2-accent);
+    font-size: 0.58rem;
+}
+
+.da2-ft-note {
+    margin: 6px 0 0;
+    color: var(--da2-faint);
+    font-size: 0.62rem;
+    line-height: 1.4;
+}
+
+.da2-ft-more > .da2-face-link {
+    width: 100%;
+    margin-top: 4px;
+}
+
+/* fata "din ce se compune" */
+.da2-ft-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+}
+
+.da2-ft-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 5px 7px;
+    border: 1px solid var(--da2-border);
+    border-radius: var(--da2-radius-sm);
+}
+
+.da2-ft-stat span {
+    color: var(--da2-muted);
+    font-size: 0.6rem;
+    line-height: 1.25;
+}
+
+.da2-ft-stat strong {
+    font-size: 0.85rem;
+}
+
+/* fata "ce arata" */
+.da2-ft-text {
+    margin: 2px 0 0;
+    font-size: 0.7rem;
+    line-height: 1.45;
+}
+
+.da2-ft-formula {
+    display: block;
+    padding: 5px 7px;
+    border-radius: 6px;
+    background: var(--da2-bg);
+    color: var(--da2-text);
+    font-size: 0.65rem;
+    white-space: normal;
+}
+
+.da2-face-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--da2-border);
+}
+
+.da2-face-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 3px 4px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--da2-accent);
+    font: inherit;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+}
+
+.da2-face-link:hover {
+    background: var(--da2-accent-soft);
+}
+
+/* intoarcerea: cardul se inclina usor, fata noua intra din lateral, randurile pe rand */
+.da2-kpi.is-turning:not(.is-flipped) {
+    animation: da2-card-turn .56s cubic-bezier(.22, 1, .36, 1);
+}
+
+.da2-kpi.is-turning .da2-face {
+    animation: da2-face-in .42s cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.da2-kpi.is-turning-back .da2-face {
+    animation-name: da2-face-in-back;
+}
+
+.da2-kpi.is-turning .da2-ft-row,
+.da2-kpi.is-turning .da2-ft-stat {
+    animation: da2-face-in .38s cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.da2-kpi.is-turning :is(.da2-ft-row, .da2-ft-stat):nth-child(2) { animation-delay: 50ms; }
+.da2-kpi.is-turning :is(.da2-ft-row, .da2-ft-stat):nth-child(3) { animation-delay: 100ms; }
+.da2-kpi.is-turning :is(.da2-ft-row, .da2-ft-stat):nth-child(4) { animation-delay: 150ms; }
+.da2-kpi.is-turning :is(.da2-ft-row, .da2-ft-stat):nth-child(n+5) { animation-delay: 200ms; }
+
+@keyframes da2-card-turn {
+    0% { transform: perspective(1100px) rotateY(0) scale(1); }
+    35% { transform: perspective(1100px) rotateY(-7deg) scale(.975); }
+    100% { transform: perspective(1100px) rotateY(0) scale(1); }
+}
+
+@keyframes da2-face-in {
+    from { opacity: 0; transform: translateX(18px); filter: blur(2px); }
+    to { opacity: 1; transform: none; filter: none; }
+}
+
+@keyframes da2-face-in-back {
+    from { opacity: 0; transform: translateX(-18px); filter: blur(2px); }
+    to { opacity: 1; transform: none; filter: none; }
+}
+
+@keyframes da2-bar-grow {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .da2-kpi.is-turning,
+    .da2-kpi .da2-face,
+    .da2-kpi .da2-ft-row,
+    .da2-kpi .da2-ft-stat,
+    .da2-ft-more,
+    .da2-ft-bar span {
+        animation: none !important;
+    }
+}
+
+/* ------------------------------------------- culoarea si iconitele cardurilor */
+
+/*
+ * Fiecare card are culoarea lui (--kc), folosita in nuante: fundal, placuta iconitei,
+ * iconita mare din fundal, antetul fetei intoarse, barele si linkurile.
+ */
+.da2-kpi { --kc: var(--da2-accent); }
+.da2-kpi-k-curse { --kc: #2563eb; }
+.da2-kpi-k-facturare { --kc: #4f46e5; }
+.da2-kpi-k-cheltuieli { --kc: #e11d48; }
+.da2-kpi-k-profit { --kc: #059669; }
+.da2-kpi-k-km { --kc: #0d9488; }
+.da2-kpi-k-tone { --kc: #d97706; }
+.da2-kpi-k-incarcare { --kc: #7c3aed; }
+.da2-kpi-k-folosinta { --kc: #0891b2; }
+.da2-kpi-k-medii { --kc: #db2777; }
+.da2-kpi.da2-kpi-good { --kc: var(--da2-good); }
+.da2-kpi.da2-kpi-bad { --kc: var(--da2-bad); }
+
+.da2-kpi {
+    border-left-color: var(--kc);
+    background:
+        radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--kc) 13%, transparent), transparent 62%),
+        linear-gradient(160deg, color-mix(in srgb, var(--kc) 5%, #fff), #fff 70%);
+    transition: box-shadow .2s, border-color .2s;
+}
+
+.da2-kpi:hover {
+    box-shadow: 0 10px 26px -14px color-mix(in srgb, var(--kc) 70%, transparent), var(--da2-shadow);
+}
+
+.da2-kpi-icon {
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--kc) 15%, #fff);
+    color: var(--kc);
+    font-size: 0.85rem;
+    text-transform: none;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--kc) 22%, transparent);
+    transition: transform .25s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+.da2-face-summary:hover .da2-kpi-icon {
+    transform: scale(1.1) rotate(-6deg);
+}
+
+.da2-face-summary .da2-kpi-head {
+    gap: 8px;
+}
+
+.da2-face-summary .da2-kpi-value {
+    color: color-mix(in srgb, var(--kc) 62%, var(--da2-text));
+}
+
+.da2-face-summary:hover .da2-kpi-caret {
+    color: var(--kc);
+}
+
+/* iconita mare, abia vizibila, in coltul cardului */
+.da2-kpi-watermark {
+    position: absolute;
+    right: -8px;
+    bottom: -14px;
+    font-size: 4.6rem;
+    line-height: 1;
+    color: var(--kc);
+    opacity: .07;
+    transform: rotate(-12deg);
+    pointer-events: none;
+    transition: transform .4s cubic-bezier(.22, 1, .36, 1), opacity .3s;
+}
+
+.da2-face-summary:hover .da2-kpi-watermark {
+    opacity: .12;
+    transform: rotate(-4deg) scale(1.08);
+}
+
+.da2-face-summary > :not(.da2-kpi-watermark) {
+    position: relative;
+}
+
+/* fata intoarsa */
+
+.da2-kpi .da2-face-head {
+    background: linear-gradient(90deg, color-mix(in srgb, var(--kc) 14%, #fff), color-mix(in srgb, var(--kc) 4%, #fff));
+    border-bottom-color: color-mix(in srgb, var(--kc) 18%, var(--da2-border));
+}
+
+.da2-kpi .da2-face-title {
+    color: color-mix(in srgb, var(--kc) 70%, var(--da2-text));
+}
+
+.da2-kpi .da2-face-back {
+    background: var(--kc);
+    color: #fff;
+}
+
+.da2-kpi .da2-face-back:hover {
+    background: color-mix(in srgb, var(--kc) 85%, #000);
+}
+
+.da2-kpi .da2-face-tabs {
+    background: color-mix(in srgb, var(--kc) 10%, #fff);
+}
+
+.da2-kpi .da2-face-tab.is-active {
+    color: var(--kc);
+}
+
+.da2-kpi .da2-face-sub i {
+    margin-right: 4px;
+    color: var(--kc);
+}
+
+.da2-kpi .da2-face-count {
+    background: color-mix(in srgb, var(--kc) 14%, #fff);
+    color: color-mix(in srgb, var(--kc) 80%, #000);
+}
+
+.da2-kpi .da2-face-body h4 {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.da2-kpi .da2-face-body h4 i {
+    color: var(--kc);
+    font-size: 0.75rem;
+}
+
+/* randurile: iconita si culoarea tipului de transport (--rc), altfel a cardului */
+.da2-ft-row {
+    --rc: var(--kc);
+}
+
+.da2-ft-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.da2-ft-icon {
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--rc) 15%, #fff);
+    color: var(--rc);
+    font-size: 0.7rem;
+}
+
+.da2-kpi .da2-ft-head:hover {
+    background: color-mix(in srgb, var(--rc) 9%, #fff);
+}
+
+.da2-kpi .da2-ft-row.is-open {
+    background: color-mix(in srgb, var(--rc) 7%, #fff);
+    box-shadow: inset 2px 0 0 var(--rc);
+}
+
+.da2-kpi .da2-ft-row.is-open .da2-ft-caret {
+    color: var(--rc);
+}
+
+.da2-kpi .da2-ft-bar {
+    background: color-mix(in srgb, var(--rc) 12%, #fff);
+}
+
+.da2-kpi .da2-ft-bar span {
+    background: linear-gradient(90deg, color-mix(in srgb, var(--rc) 55%, #fff), var(--rc));
+}
+
+.da2-kpi .da2-ft-head.is-negative .da2-ft-bar span {
+    background: var(--da2-bad);
+}
+
+.da2-ft-list li span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.da2-ft-list li i {
+    color: var(--rc, var(--kc));
+    font-size: 0.7rem;
+}
+
+.da2-ft-plate i {
+    color: var(--rc, var(--kc));
+    font-size: 0.6rem;
+}
+
+.da2-ft-meta i {
+    color: var(--rc, var(--kc));
+}
+
+.da2-kpi .da2-ft-stat {
+    background: linear-gradient(160deg, color-mix(in srgb, var(--kc) 7%, #fff), #fff);
+    border-color: color-mix(in srgb, var(--kc) 16%, var(--da2-border));
+}
+
+.da2-ft-stat-icon {
+    margin-right: 3px;
+    color: var(--kc);
+}
+
+.da2-kpi .da2-ft-formula {
+    background: color-mix(in srgb, var(--kc) 8%, #fff);
+    border-left: 2px solid var(--kc);
+}
+
+.da2-kpi .da2-face-link {
+    color: color-mix(in srgb, var(--kc) 85%, #000);
+}
+
+.da2-kpi .da2-face-link:hover {
+    background: color-mix(in srgb, var(--kc) 10%, #fff);
+}
+
+/* --------------------------------- fata intinsa peste grila: totul pe latime */
+
+.da2-kpi.is-flipped .da2-face-head {
+    padding: 10px 14px 8px;
+}
+
+.da2-kpi.is-flipped .da2-face-back {
+    width: 30px;
+    height: 30px;
+    font-size: 0.95rem;
+}
+
+.da2-kpi.is-flipped .da2-face-title {
+    font-size: 0.95rem;
+}
+
+.da2-kpi.is-flipped .da2-face-tab {
+    width: auto;
+    height: 26px;
+    padding: 0 10px;
+    font-size: 0.85rem;
+}
+
+.da2-kpi.is-flipped .da2-face-tab::after {
+    content: attr(title);
+    margin-left: 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+.da2-kpi.is-flipped .da2-face-sub {
+    padding: 8px 16px 4px;
+    font-size: 0.72rem;
+}
+
+.da2-kpi.is-flipped .da2-face-count {
+    font-size: 0.85rem;
+}
+
+.da2-kpi.is-flipped .da2-face-body {
+    padding: 6px 16px 14px;
+}
+
+.da2-kpi.is-flipped .da2-face-body h4 {
+    font-size: 0.68rem;
+}
+
+/* randurile pe tip / din clasament stau unul langa altul; cel deschis ia toata latimea */
+.da2-face-body.is-defalcare,
+.da2-face-body.is-capacitate {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    align-content: start;
+    gap: 6px 12px;
+}
+
+.da2-face-body.is-defalcare > :not(.da2-ft-row),
+.da2-face-body.is-defalcare > .da2-ft-row.is-open,
+.da2-face-body.is-capacitate > :not(.da2-ft-row),
+.da2-face-body.is-capacitate > .da2-ft-row.is-open {
+    grid-column: 1 / -1;
+}
+
+.da2-face-body.is-defalcare .da2-ft-row + .da2-ft-row,
+.da2-face-body.is-capacitate .da2-ft-row + .da2-ft-row {
+    margin-top: 0;
+}
+
+.da2-kpi.is-flipped .da2-ft-row {
+    border: 1px solid color-mix(in srgb, var(--rc) 14%, var(--da2-border));
+}
+
+.da2-kpi.is-flipped .da2-ft-head {
+    padding: 8px 10px;
+}
+
+.da2-kpi.is-flipped .da2-ft-label {
+    font-size: 0.85rem;
+}
+
+.da2-kpi.is-flipped .da2-ft-value {
+    font-size: 0.95rem;
+}
+
+.da2-kpi.is-flipped .da2-ft-icon {
+    width: 26px;
+    height: 26px;
+    font-size: 0.85rem;
+}
+
+.da2-kpi.is-flipped .da2-ft-bar {
+    height: 6px;
+}
+
+.da2-kpi.is-flipped .da2-ft-share {
+    font-size: 0.68rem;
+}
+
+.da2-kpi.is-flipped .da2-ft-more {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) minmax(260px, 2fr);
+    gap: 4px 20px;
+    padding: 0 10px 10px;
+}
+
+.da2-kpi.is-flipped .da2-ft-more > .da2-ft-meta,
+.da2-kpi.is-flipped .da2-ft-more > .da2-face-link {
+    grid-column: 1 / -1;
+}
+
+.da2-kpi.is-flipped .da2-ft-more > h4 {
+    grid-row: 2;
+}
+
+.da2-kpi.is-flipped .da2-ft-more > .da2-ft-list,
+.da2-kpi.is-flipped .da2-ft-more > .da2-ft-plates {
+    grid-row: 3;
+    align-self: start;
+}
+
+/* clasament: indicatorii entitatii pe trei coloane */
+.da2-kpi.is-flipped .da2-ft-more > .da2-ft-list-entity {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    column-gap: 18px;
+}
+
+.da2-kpi.is-flipped .da2-ft-meta {
+    gap: 6px 16px;
+    font-size: 0.75rem;
+}
+
+.da2-kpi.is-flipped .da2-ft-list li {
+    font-size: 0.78rem;
+    padding: 3px 0;
+}
+
+.da2-kpi.is-flipped .da2-ft-plates {
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+}
+
+.da2-kpi.is-flipped .da2-ft-plate {
+    font-size: 0.72rem;
+    padding: 4px 6px;
+}
+
+.da2-kpi.is-flipped .da2-ft-stats {
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 8px;
+}
+
+.da2-kpi.is-flipped .da2-ft-stat {
+    padding: 9px 12px;
+}
+
+.da2-kpi.is-flipped .da2-ft-stat span {
+    font-size: 0.7rem;
+}
+
+.da2-kpi.is-flipped .da2-ft-stat strong {
+    font-size: 1.05rem;
+}
+
+.da2-kpi.is-flipped .da2-ft-text {
+    max-width: 90ch;
+    font-size: 0.85rem;
+}
+
+.da2-kpi.is-flipped .da2-ft-formula {
+    display: inline-block;
+    padding: 7px 10px;
+    font-size: 0.78rem;
+}
+
+.da2-kpi.is-flipped .da2-ft-note {
+    font-size: 0.7rem;
+}
+
+.da2-kpi.is-flipped .da2-face-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+}
+
+.da2-kpi.is-flipped .da2-face-link {
+    font-size: 0.78rem;
+}
+
+@media (max-width: 700px) {
+    .da2-kpi.is-flipped .da2-face-tab::after {
+        content: none;
+    }
+
+    .da2-kpi.is-flipped .da2-ft-more {
+        grid-template-columns: 1fr;
+    }
+
+    .da2-kpi.is-flipped .da2-ft-more > h4,
+    .da2-kpi.is-flipped .da2-ft-more > .da2-ft-list,
+    .da2-kpi.is-flipped .da2-ft-more > .da2-ft-plates {
+        grid-row: auto;
+    }
+}
+
+/* ------------------------------- alegerea si ordinea cardurilor (per utilizator) */
+
+.da2-kpis-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px 10px;
+    margin-bottom: -4px;
+}
+
+.da2-kpis-hint {
+    margin-right: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: var(--da2-accent-soft);
+    color: #1d4ed8;
+    font-size: 0.75rem;
+    font-weight: 600;
+    animation: da2-face-in .3s cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.da2-kpis-status {
+    color: var(--da2-faint);
+    font-size: 0.72rem;
+}
+
+.da2-kpis-status.is-ok { color: var(--da2-good); }
+.da2-kpis-status.is-error { color: var(--da2-bad); }
+
+.da2-kpis-empty {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin: 0;
+    padding: 22px;
+    border: 1px dashed var(--da2-border-strong);
+    border-radius: var(--da2-radius);
+    color: var(--da2-muted);
+    font-size: 0.85rem;
+}
+
+/* modul de editare: cardurile tremura usor, au maner si ochi; cele ascunse raman vizibile, estompate */
+.da2-kpis.is-editing .da2-kpi.is-editable {
+    cursor: grab;
+    outline: 2px dashed color-mix(in srgb, var(--kc) 45%, transparent);
+    outline-offset: 3px;
+    animation: da2-wiggle .5s ease-in-out infinite alternate;
+    user-select: none;
+}
+
+.da2-kpis.is-editing .da2-kpi.is-editable:nth-child(2n) { animation-delay: -.25s; }
+.da2-kpis.is-editing .da2-kpi.is-editable:nth-child(3n) { animation-duration: .6s; }
+
+.da2-kpis.is-editing .da2-kpi.is-editable:hover {
+    animation-play-state: paused;
+    box-shadow: 0 12px 28px -14px color-mix(in srgb, var(--kc) 70%, transparent), var(--da2-shadow);
+}
+
+.da2-kpi.is-editable .da2-face-summary {
+    cursor: inherit;
+}
+
+.da2-kpi.is-editable.is-dragging {
+    opacity: .35;
+    animation: none;
+    outline-style: solid;
+}
+
+.da2-kpi.is-hidden-card .da2-face-summary {
+    opacity: .38;
+    filter: grayscale(.85);
+}
+
+.da2-kpi.is-hidden-card {
+    outline-color: var(--da2-border-strong) !important;
+    background: repeating-linear-gradient(135deg, #f8fafc 0 10px, #f1f5f9 10px 20px);
+}
+
+.da2-kpi-grip {
+    position: absolute;
+    top: 50%;
+    left: 4px;
+    transform: translateY(-50%);
+    color: var(--da2-faint);
+    font-size: 1.1rem;
+    pointer-events: none;
+}
+
+.da2-kpi.is-editable .da2-face-summary {
+    padding-left: 24px;
+}
+
+.da2-kpi-toggle {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 2;
+    display: inline-grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid color-mix(in srgb, var(--kc) 35%, var(--da2-border));
+    border-radius: 50%;
+    background: #fff;
+    color: var(--kc);
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: transform .15s, background .15s, color .15s;
+}
+
+.da2-kpi-toggle:hover {
+    transform: scale(1.1);
+    background: var(--kc);
+    color: #fff;
+}
+
+.da2-kpi-toggle:focus-visible {
+    outline: 2px solid var(--kc);
+    outline-offset: 2px;
+}
+
+.da2-kpi.is-hidden-card .da2-kpi-toggle {
+    border-color: var(--da2-border-strong);
+    color: var(--da2-muted);
+}
+
+.da2-kpi-hidden-tag {
+    position: absolute;
+    right: 48px;
+    top: 15px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: var(--da2-muted);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+@keyframes da2-wiggle {
+    from { transform: rotate(-.35deg); }
+    to { transform: rotate(.35deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .da2-kpis.is-editing .da2-kpi.is-editable,
+    .da2-kpis-hint {
+        animation: none;
+    }
+}
+
+/* numarul de vehicule de langa numele categoriei de capacitate */
+.da2-ft-sublabel {
+    flex: none;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--rc, var(--kc)) 10%, #fff);
+    color: var(--da2-muted);
+    font-size: 0.62rem;
+    font-weight: 600;
+}
+
+/* ------------------------------- elemente comune folosite de fisa entitatii */
 
 .da2-detail-close {
     margin-left: auto;
@@ -1056,88 +2065,6 @@
 .da2-detail-close:hover {
     background: #fff;
     color: var(--da2-bad);
-}
-
-.da2-detail-body {
-    display: grid;
-    grid-template-columns: minmax(240px, 1.1fr) minmax(220px, 1fr) minmax(240px, 1.2fr);
-    gap: 18px;
-    padding: 16px;
-}
-
-.da2-detail-body h3 {
-    font-size: 0.68rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .05em;
-    color: var(--da2-muted);
-    margin: 0 0 6px;
-}
-
-.da2-detail-about h3:not(:first-child) {
-    margin-top: 14px;
-}
-
-.da2-detail-about p {
-    margin: 0;
-    font-size: 0.8125rem;
-    line-height: 1.5;
-    color: var(--da2-text);
-}
-
-.da2-detail-formula {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 0.75rem !important;
-    color: var(--da2-muted) !important;
-    background: #f8fafc;
-    border: 1px solid var(--da2-border);
-    border-radius: var(--da2-radius-sm);
-    padding: 8px 10px;
-}
-
-.da2-detail-stat-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-    gap: 7px;
-}
-
-.da2-detail-stat {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    padding: 7px 10px;
-    background: #f8fafc;
-    border: 1px solid var(--da2-border);
-    border-radius: var(--da2-radius-sm);
-}
-
-.da2-detail-stat-label {
-    font-size: 0.67rem;
-    color: var(--da2-muted);
-}
-
-.da2-detail-stat-label i {
-    font-size: 0.62rem;
-    opacity: .6;
-}
-
-.da2-detail-stat strong {
-    font-size: 0.85rem;
-    font-variant-numeric: tabular-nums;
-}
-
-.da2-detail-row {
-    display: grid;
-    grid-template-columns: minmax(80px, auto) 1fr minmax(70px, auto);
-    align-items: center;
-    gap: 9px;
-    padding: 4px 0;
-    font-size: 0.75rem;
-}
-
-.da2-detail-row-label {
-    color: var(--da2-muted);
-    white-space: nowrap;
 }
 
 .da2-detail-row-bar {
@@ -1160,50 +2087,12 @@
     to { transform: scaleX(1); transform-origin: left; }
 }
 
-.da2-detail-note {
-    margin: 8px 0 0;
-    font-size: 0.68rem;
-    color: var(--da2-faint);
-    line-height: 1.4;
-}
-
-.da2-detail-row-value {
-    text-align: right;
-    font-weight: 650;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-}
-
-.da2-detail-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 0 16px 14px;
-}
-
-.da2-detail-actions .da2-btn i {
-    font-size: 1rem;
-    margin-left: -2px;
-}
-
-@media (max-width: 1100px) {
-    .da2-detail-body {
-        grid-template-columns: 1fr;
-    }
-}
-
 /* utilizatorii care cer mai putina miscare primesc doar schimbarea de stare */
 @media (prefers-reduced-motion: reduce) {
     .da2-kpi,
-    .da2-kpi-detail,
-    .da2-detail-inner,
     .da2-detail-row-bar span {
         transition: none;
         animation: none;
-    }
-
-    .da2-kpi.is-pressed::after {
-        display: none;
     }
 }
 

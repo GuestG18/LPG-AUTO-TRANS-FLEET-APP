@@ -4745,8 +4745,30 @@
                 labelEl.setAttribute('title', joined);
             };
 
+            // O singura marfa per cursa: bifarea alteia o inlocuieste, apoi lista se inchide.
+            var toggleEl = goodsTypeDropdown.querySelector('[data-bs-toggle="dropdown"]');
+            var closeGoodsTypeDropdown = function () {
+                if (!toggleEl || !window.bootstrap || !window.bootstrap.Dropdown) {
+                    return;
+                }
+                window.bootstrap.Dropdown.getOrCreateInstance(toggleEl).hide();
+            };
+
             checkboxEls.forEach(function (checkboxEl) {
-                checkboxEl.addEventListener('change', refreshGoodsTypeLabel);
+                checkboxEl.addEventListener('change', function () {
+                    if (checkboxEl.checked) {
+                        checkboxEls.forEach(function (otherEl) {
+                            if (otherEl !== checkboxEl && otherEl.checked) {
+                                otherEl.checked = false;
+                                otherEl.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                        });
+                    }
+                    refreshGoodsTypeLabel();
+                    if (checkboxEl.checked) {
+                        closeGoodsTypeDropdown();
+                    }
+                });
             });
 
             refreshGoodsTypeLabel();

@@ -170,6 +170,7 @@ class DashboardAnaliticV2Model extends BaseModel
         $fleet = $this->buildFleetKpis($fleetRow, $usage, $beneficiaries);
 
         $summary = $this->buildSummary($transportRows, $matrixRows);
+        $summary['capacity'] = $this->buildCapacityBreakdown($this->fetchCapacityCategoryRows($from, $whereData, $expr));
         $distribution = $this->buildDistribution($from, $whereData, $expr, $this->kmThresholds($filters));
         $alerts = $this->buildAlerts($vehicles, $drivers, $beneficiaries, $fleet, $filters);
 
@@ -1430,6 +1431,112 @@ class DashboardAnaliticV2Model extends BaseModel
         ", $whereData['params']);
     }
 
+    /**
+     * Cursele pe categoria de capacitate a vehiculului (cea din Configurare, ca filtrul
+     * "Categorie capacitate"), detaliate pe beneficiar si vehicul, ca fata "Pe capacitate"
+     * a cardurilor sa poata aduna orice indicator si sa arate cine / cu ce a mers.
+     * Capul tractor ia categoria semiremorcii cuplate (aceeasi regula ca filtrul).
+     */
+    private function fetchCapacityCategoryRows(string $from, array $whereData, array $e): array
+    {
+        return $this->fetchAll("
+            SELECT
+                cap_cc.id AS categorie_id,
+                cap_cc.nume AS categorie,
+                cap_cc.ordine_afisare AS ordine,
+                c.vehicle_id,
+                COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut') AS vehicul,
+                COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fara beneficiar') AS beneficiar,
+                COUNT(*) AS curse,
+                COALESCE(SUM(" . $e['km_effective'] . "), 0) AS km,
+                COALESCE(SUM(" . $e['tons_delivered'] . "), 0) AS tone,
+                COALESCE(SUM(" . $e['facturare'] . "), 0) AS facturare,
+                COALESCE(SUM(" . $e['cheltuieli'] . "), 0) AS cheltuieli,
+                COALESCE(SUM(" . $e['tone_pentru_grad'] . "), 0) AS tone_grad,
+                COALESCE(SUM(" . $e['capacitate_aplicabila'] . "), 0) AS capacitate_grad
+            {$from}
+            LEFT JOIN (
+                SELECT vc1.tractor_id, vc1.semiremorca_id
+                FROM vehicule_cuplaje vc1
+                INNER JOIN (
+                    SELECT tractor_id, MAX(id) AS max_id
+                    FROM vehicule_cuplaje
+                    WHERE activ = 1
+                    GROUP BY tractor_id
+                ) cap_latest ON cap_latest.max_id = vc1.id
+            ) cap_vc ON cap_vc.tractor_id = v.id
+            LEFT JOIN vehicule cap_sr ON cap_sr.id = cap_vc.semiremorca_id
+            LEFT JOIN vehicule_categorii_capacitate cap_cc
+                   ON cap_cc.id = CASE
+                        WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(cap_sr.categorie_capacitate_id, v.categorie_capacitate_id)
+                        ELSE v.categorie_capacitate_id
+                      END
+            {$whereData['where']}
+            GROUP BY cap_cc.id, cap_cc.nume, cap_cc.ordine_afisare, c.vehicle_id, vehicul, beneficiar
+        ", $whereData['params']);
+    }
+
+    /**
+     * Categoriile de capacitate cu totalurile lor si randurile beneficiar x vehicul.
+     * Gradul de incarcare e ponderat (tone / capacitate insumate), nu medie de procente.
+     */
+    private function buildCapacityBreakdown(array $rows): array
+    {
+        $categories = [];
+        foreach ($rows as $row) {
+            $id = $row['categorie_id'] === null ? 0 : (int) $row['categorie_id'];
+            $key = $id > 0 ? 'cat_' . $id : 'fara_categorie';
+            if (!isset($categories[$key])) {
+                $categories[$key] = [
+                    'key' => $key,
+                    'label' => $id > 0 ? (string) $row['categorie'] : 'Fără categorie',
+                    'ordine' => $id > 0 ? (int) ($row['ordine'] ?? 0) : PHP_INT_MAX,
+                    'curse' => 0, 'km' => 0.0, 'tone' => 0.0, 'facturare' => 0.0, 'cheltuieli' => 0.0,
+                    'tone_grad' => 0.0, 'capacitate_grad' => 0.0,
+                    'rows' => [],
+                ];
+            }
+
+            $item = [
+                'vehicle_id' => (int) ($row['vehicle_id'] ?? 0),
+                'vehicul' => (string) $row['vehicul'],
+                'beneficiar' => (string) $row['beneficiar'],
+                'curse' => (int) $row['curse'],
+                'km' => round(max(0.0, (float) $row['km']), 2),
+                'tone' => round(max(0.0, (float) $row['tone']), 2),
+                'facturare' => round((float) $row['facturare'], 2),
+                'cheltuieli' => round((float) $row['cheltuieli'], 2),
+                'tone_grad' => round((float) $row['tone_grad'], 3),
+                'capacitate_grad' => round((float) $row['capacitate_grad'], 3),
+            ];
+            $categories[$key]['rows'][] = $item;
+            foreach (['curse', 'km', 'tone', 'facturare', 'cheltuieli', 'tone_grad', 'capacitate_grad'] as $field) {
+                $categories[$key][$field] += $item[$field];
+            }
+        }
+
+        foreach ($categories as $key => $category) {
+            $curse = (int) $category['curse'];
+            $categories[$key]['km'] = round($category['km'], 2);
+            $categories[$key]['tone'] = round($category['tone'], 2);
+            $categories[$key]['facturare'] = round($category['facturare'], 2);
+            $categories[$key]['cheltuieli'] = round($category['cheltuieli'], 2);
+            $categories[$key]['profit'] = round($category['facturare'] - $category['cheltuieli'], 2);
+            $categories[$key]['grad_incarcare'] = $category['capacitate_grad'] > 0
+                ? round($category['tone_grad'] / $category['capacitate_grad'] * 100, 2)
+                : 0.0;
+            $categories[$key]['km_per_cursa'] = $curse > 0 ? round($category['km'] / $curse, 2) : 0.0;
+            $categories[$key]['tone_per_cursa'] = $curse > 0 ? round($category['tone'] / $curse, 2) : 0.0;
+            $categories[$key]['nr_vehicule'] = count(array_unique(array_column($category['rows'], 'vehicle_id')));
+        }
+
+        // ordinea din Configurare, "Fara categorie" la final
+        $categories = array_values($categories);
+        usort($categories, static fn(array $a, array $b): int => [$a['ordine'], $a['label']] <=> [$b['ordine'], $b['label']]);
+
+        return $categories;
+    }
+
     private function fetchTransportTotals(string $from, array $whereData, array $e): array
     {
         return $this->fetchAll("
@@ -1756,6 +1863,8 @@ class DashboardAnaliticV2Model extends BaseModel
             'media_client' => $mediaClient,
             'media_client_per_transport' => $bucketClientAverages,
             'bucket_labels' => self::TRANSPORT_BUCKETS,
+            // completata in getData() (fetchCapacityCategoryRows); goala in payload-ul de eroare
+            'capacity' => [],
         ];
     }
 

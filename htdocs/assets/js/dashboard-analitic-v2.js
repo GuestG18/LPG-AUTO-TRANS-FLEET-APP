@@ -193,7 +193,11 @@
         compareSearch: '',
         matrixMetric: 'km',
         alertSeverity: '',
-        kpiOpen: null,
+        // fata afisata pe cardurile care se intorc: { curse: { face, open } }
+        kpiFaces: {},
+        // ce carduri vede utilizatorul si in ce ordine (salvat per utilizator): { order, hidden }
+        cardLayout: null,
+        cardsEditing: false,
         drawer: null,
         tableSort: {
             vehicles: { key: 'profit', dir: 'desc' },
@@ -922,7 +926,7 @@
     function bucketRows(field, kind) {
         var buckets = ((state.data.summary || {}).transport || []);
         return buckets.map(function (bucket) {
-            return { label: bucket.label, value: num(bucket[field]), text: fmt(bucket[field], kind) };
+            return { label: bucket.label, value: num(bucket[field]), text: fmt(bucket[field], kind), kind: kind, field: field, bucket: bucket };
         }).filter(function (row) {
             return row.value !== 0;
         });
@@ -930,13 +934,13 @@
 
     function topEntityRows(dimension, key, kind, limit) {
         return sortRows(rowsFor(dimension), key, 'desc').slice(0, limit || 6).map(function (row) {
-            return { label: row.nume, value: num(row[key]), text: fmt(row[key], kind) };
+            return { label: row.nume, value: num(row[key]), text: fmt(row[key], kind), kind: kind, entity: row, dimension: dimension };
         });
     }
 
     /**
-     * Definitia fiecarui KPI: valoarea afisata pe card + explicatia care se
-     * deschide sub grila cand utilizatorul apasa cardul.
+     * Definitia fiecarui KPI: valoarea afisata pe card + explicatia de pe fetele
+     * cardului intors (defalcare, compunere, ce arata).
      */
     function kpiCards() {
         var f = state.data.fleet || {};
@@ -1203,94 +1207,743 @@
     }
 
     function renderKpis() {
-        var cards = kpiCards();
+        var grid = document.getElementById('da2-kpis');
+        if (!state.cardLayout) {
+            state.cardLayout = normalizeCardLayout(config.cardLayout);
+        }
+        if (!state.data) {
+            renderCardsBar();
+            return;
+        }
+        var cards = orderedKpiCards();
+        var editing = state.cardsEditing;
+        var visible = cards.filter(function (card) {
+            return editing || state.cardLayout.hidden.indexOf(card.key) === -1;
+        });
 
-        document.getElementById('da2-kpis').innerHTML = cards.map(function (card) {
-            var isOpen = state.kpiOpen === card.key;
-            return '<button type="button" class="da2-kpi' + (card.tone ? ' da2-kpi-' + card.tone : '') +
-                (isOpen ? ' is-open' : '') + '" data-kpi="' + escapeHtml(card.key) + '" aria-expanded="' + isOpen + '">' +
-                '<span class="da2-kpi-head"><i class="bi ' + card.icon + '"></i>' + escapeHtml(card.name) +
-                '<i class="bi bi-chevron-down da2-kpi-caret"></i></span>' +
-                '<span class="da2-kpi-value">' + escapeHtml(card.value) + '</span>' +
-                (card.meter !== undefined ? meterHtml(card.meter, toneForPercent(card.meter)) : '') +
-                '<span class="da2-kpi-note">' + escapeHtml(card.note) + '</span>' +
-                '</button>';
-        }).join('');
-
-        renderKpiDetail();
+        grid.classList.toggle('is-editing', editing);
+        grid.innerHTML = visible.length
+            ? visible.map(function (card) {
+                return editing ? editableCardHtml(card) : flipCardHtml(card);
+            }).join('')
+            : '<p class="da2-kpis-empty"><i class="bi bi-eye-slash"></i>Toate cardurile sunt ascunse. ' +
+                '<button type="button" class="da2-face-link" data-kpis-edit>Alege ce carduri vezi</button></p>';
+        renderCardsBar();
     }
 
-    function renderKpiDetail() {
-        var container = document.getElementById('da2-kpi-detail');
-        if (!container) {
+    // ------------------------------------- alegerea si ordinea cardurilor (per utilizator)
+
+    // aceleasi chei si aceeasi ordine implicita ca in kpiCards() si in DashboardAnaliticV2Controller::CARD_KEYS
+    var KPI_CARD_KEYS = ['curse', 'facturare', 'cheltuieli', 'profit', 'km', 'tone', 'incarcare', 'folosinta', 'medii'];
+
+    function defaultCardKeys() {
+        return KPI_CARD_KEYS.slice();
+    }
+
+    /** Ordinea salvata, plus cardurile noi (necunoscute alegerii salvate) la final. */
+    function normalizeCardLayout(layout) {
+        var keys = defaultCardKeys();
+        var order = ((layout && layout.order) || []).filter(function (key, index, list) {
+            return keys.indexOf(key) !== -1 && list.indexOf(key) === index;
+        });
+        keys.forEach(function (key) {
+            if (order.indexOf(key) === -1) {
+                order.push(key);
+            }
+        });
+        var hidden = ((layout && layout.hidden) || []).filter(function (key, index, list) {
+            return keys.indexOf(key) !== -1 && list.indexOf(key) === index;
+        });
+        return { order: order, hidden: hidden };
+    }
+
+    function orderedKpiCards() {
+        var byKey = {};
+        kpiCards().forEach(function (card) { byKey[card.key] = card; });
+        return state.cardLayout.order.map(function (key) { return byKey[key]; }).filter(Boolean);
+    }
+
+    /** In modul de editare cardul nu se intoarce: are maner de tras si comutator de vizibilitate. */
+    function editableCardHtml(card) {
+        var hidden = state.cardLayout.hidden.indexOf(card.key) !== -1;
+        var tone = ' da2-kpi-k-' + card.key + (card.tone ? ' da2-kpi-' + card.tone : '');
+        return '<div class="da2-kpi is-editable' + tone + (hidden ? ' is-hidden-card' : '') + '" data-kpi-card="' + escapeHtml(card.key) + '" draggable="true">' +
+            '<div class="da2-face da2-face-summary">' +
+                '<i class="bi ' + card.icon + ' da2-kpi-watermark" aria-hidden="true"></i>' +
+                '<span class="da2-kpi-head"><span class="da2-kpi-icon"><i class="bi ' + card.icon + '"></i></span>' + escapeHtml(card.name) + '</span>' +
+                '<span class="da2-kpi-value">' + escapeHtml(card.value) + '</span>' +
+                '<span class="da2-kpi-note">' + escapeHtml(card.note) + '</span>' +
+            '</div>' +
+            '<span class="da2-kpi-grip" aria-hidden="true"><i class="bi bi-grip-vertical"></i></span>' +
+            '<button type="button" class="da2-kpi-toggle" data-kpi-toggle="' + escapeHtml(card.key) + '" aria-pressed="' + !hidden + '"' +
+                ' title="' + (hidden ? 'Arată cardul' : 'Ascunde cardul') + '" aria-label="' + escapeHtml((hidden ? 'Arată ' : 'Ascunde ') + card.name) + '">' +
+                '<i class="bi ' + (hidden ? 'bi-eye-slash' : 'bi-eye') + '"></i></button>' +
+            (hidden ? '<span class="da2-kpi-hidden-tag">Ascuns</span>' : '') +
+        '</div>';
+    }
+
+    function renderCardsBar() {
+        var editButton = document.getElementById('da2-kpis-edit');
+        if (!editButton) {
             return;
         }
+        var hiddenCount = state.cardLayout.hidden.length;
+        var label = state.cardsEditing ? 'Gata'
+            : 'Personalizează cardurile' + (hiddenCount ? ' (' + hiddenCount + ' ascuns' + (hiddenCount === 1 ? '' : 'e') + ')' : '');
+        editButton.innerHTML = '<i class="bi ' + (state.cardsEditing ? 'bi-check2' : 'bi-sliders') + '" aria-hidden="true"></i><span>' + escapeHtml(label) + '</span>';
+        editButton.classList.toggle('da2-btn-primary', state.cardsEditing);
+        editButton.setAttribute('aria-pressed', String(state.cardsEditing));
+        document.getElementById('da2-kpis-hint').hidden = !state.cardsEditing;
+        document.getElementById('da2-kpis-reset').hidden = !state.cardsEditing;
+    }
 
-        var card = kpiCards().filter(function (item) { return item.key === state.kpiOpen; })[0];
-        if (!card) {
-            container.classList.remove('is-open');
-            container.innerHTML = '';
+    function setCardsEditing(editing) {
+        state.cardsEditing = editing;
+        if (editing) {
+            // cardurile intinse revin la rezumat: in editare se muta, nu se intorc
+            Object.keys(state.kpiFaces).forEach(function (key) {
+                state.kpiFaces[key].face = 'summary';
+            });
+        }
+        renderKpis();
+    }
+
+    var cardsSaveTimer = null;
+
+    function saveCardLayout(reset) {
+        window.clearTimeout(cardsSaveTimer);
+        var status = document.getElementById('da2-kpis-status');
+        cardsSaveTimer = window.setTimeout(function () {
+            if (!config.cardsEndpoint) {
+                return;
+            }
+            status.textContent = 'Se salvează…';
+            status.className = 'da2-kpis-status';
+            fetch(config.cardsEndpoint, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify(reset
+                    ? { csrf: config.csrf, reset: true }
+                    : { csrf: config.csrf, order: state.cardLayout.order, hidden: state.cardLayout.hidden })
+            }).then(function (response) {
+                return response.json().then(function (payload) {
+                    if (!response.ok || !payload.ok) {
+                        throw new Error(payload.error || 'Nu s-a putut salva.');
+                    }
+                });
+            }).then(function () {
+                status.textContent = 'Salvat';
+                status.className = 'da2-kpis-status is-ok';
+            }).catch(function (error) {
+                status.textContent = error.message;
+                status.className = 'da2-kpis-status is-error';
+            });
+        }, reset ? 0 : 350);
+    }
+
+    function toggleCardHidden(key) {
+        var hidden = state.cardLayout.hidden;
+        var index = hidden.indexOf(key);
+        if (index === -1) {
+            hidden.push(key);
+        } else {
+            hidden.splice(index, 1);
+        }
+        renderKpis();
+        saveCardLayout(false);
+    }
+
+    /** Muta elemente in DOM, iar vecinii aluneca din vechea pozitie in cea noua (FLIP). */
+    function animateReorder(grid, mutate) {
+        var items = $$('[data-kpi-card]', grid);
+        var before = {};
+        items.forEach(function (el) { before[el.getAttribute('data-kpi-card')] = el.getBoundingClientRect(); });
+        mutate();
+        if (reducedMotion()) {
             return;
         }
+        items.forEach(function (el) {
+            var old = before[el.getAttribute('data-kpi-card')];
+            var now = el.getBoundingClientRect();
+            var dx = old.left - now.left;
+            var dy = old.top - now.top;
+            if ((dx || dy) && el.animate && !el.classList.contains('is-dragging')) {
+                el.animate([{ transform: 'translate(' + dx + 'px,' + dy + 'px)' }, { transform: 'none' }],
+                    { duration: 220, easing: 'cubic-bezier(.22, 1, .36, 1)' });
+            }
+        });
+    }
 
-        var d = card.detail;
-        var maxValue = d.breakdown.reduce(function (max, row) { return Math.max(max, Math.abs(row.value)); }, 0) || 1;
+    (function bindCardSorting() {
+        var grid = document.getElementById('da2-kpis');
+        var dragged = null;
 
-        var stats = d.stats.map(function (stat) {
-            return '<div class="da2-detail-stat"' + (stat.hint ? ' title="' + escapeHtml(stat.hint) + '"' : '') + '>' +
-                '<span class="da2-detail-stat-label">' + escapeHtml(stat.label) +
-                (stat.hint ? ' <i class="bi bi-info-circle"></i>' : '') + '</span>' +
-                '<strong>' + escapeHtml(stat.value) + '</strong></div>';
-        }).join('');
+        grid.addEventListener('dragstart', function (event) {
+            var card = event.target.closest && event.target.closest('[data-kpi-card]');
+            if (!state.cardsEditing || !card) {
+                return;
+            }
+            dragged = card;
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', card.getAttribute('data-kpi-card'));
+            window.setTimeout(function () { card.classList.add('is-dragging'); }, 0);
+        });
 
-        var breakdown = d.breakdown.length
-            ? d.breakdown.map(function (row) {
-                var share = Math.min(100, (Math.abs(row.value) / maxValue) * 100);
-                return '<div class="da2-detail-row">' +
-                    '<span class="da2-detail-row-label">' + escapeHtml(row.label) + '</span>' +
-                    '<span class="da2-detail-row-bar"><span style="width:' + share.toFixed(1) + '%"></span></span>' +
-                    '<span class="da2-detail-row-value">' + escapeHtml(row.text) + '</span>' +
-                    '</div>';
-            }).join('')
-            : '<p class="da2-empty">Nu există date pentru defalcare.</p>';
+        grid.addEventListener('dragover', function (event) {
+            if (!dragged) {
+                return;
+            }
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            var target = event.target.closest && event.target.closest('[data-kpi-card]');
+            if (!target || target === dragged) {
+                return;
+            }
+            // inainte sau dupa tinta, dupa jumatatea ei pe orizontala (grila se umple pe randuri)
+            var rect = target.getBoundingClientRect();
+            var after = event.clientX > rect.left + rect.width / 2;
+            var reference = after ? target.nextElementSibling : target;
+            if (reference === dragged || (reference && reference.previousElementSibling === dragged && !after)) {
+                return;
+            }
+            animateReorder(grid, function () { grid.insertBefore(dragged, reference); });
+        });
 
-        var actions = d.actions.map(function (action) {
-            return '<button type="button" class="da2-btn da2-btn-sm" data-detail-action="' + escapeHtml(action.type) + '"' +
+        grid.addEventListener('drop', function (event) {
+            if (dragged) {
+                event.preventDefault();
+            }
+        });
+
+        grid.addEventListener('dragend', function () {
+            if (!dragged) {
+                return;
+            }
+            dragged.classList.remove('is-dragging');
+            dragged = null;
+            var order = $$('[data-kpi-card]', grid).map(function (el) { return el.getAttribute('data-kpi-card'); });
+            if (order.join() !== state.cardLayout.order.join()) {
+                state.cardLayout.order = order;
+                saveCardLayout(false);
+            }
+        });
+
+        // tastatura: sagetile muta cardul care are focus pe comutator
+        grid.addEventListener('keydown', function (event) {
+            var toggle = event.target.closest && event.target.closest('[data-kpi-toggle]');
+            if (!state.cardsEditing || !toggle || ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].indexOf(event.key) === -1) {
+                return;
+            }
+            event.preventDefault();
+            var key = toggle.getAttribute('data-kpi-toggle');
+            var order = state.cardLayout.order;
+            var from = order.indexOf(key);
+            var to = from + (event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1);
+            if (to < 0 || to >= order.length) {
+                return;
+            }
+            order.splice(to, 0, order.splice(from, 1)[0]);
+            renderKpis();
+            var again = $('[data-kpi-toggle="' + key + '"]', grid);
+            if (again) {
+                again.focus();
+            }
+            saveCardLayout(false);
+        });
+
+        document.getElementById('da2-kpis-edit').addEventListener('click', function () {
+            setCardsEditing(!state.cardsEditing);
+        });
+
+        document.getElementById('da2-kpis-reset').addEventListener('click', function () {
+            state.cardLayout = normalizeCardLayout(null);
+            renderKpis();
+            saveCardLayout(true);
+        });
+    })();
+
+    // ------------------------------------------------- carduri care se intorc
+
+    /*
+     * Fiecare card isi schimba fata pe loc, ca in Tablou de bord:
+     * rezumat -> defalcare (randuri care se deschid) / din ce se compune / ce arata.
+     * Informatia din fostul panou de detaliu e impartita pe fete, nimic nu se pierde.
+     */
+    function flipFaces(card) {
+        // fara randuri (ex. nicio cheltuiala), defalcarea ramane cea pe tip de transport
+        var byBucket = !card.detail.breakdown.some(function (row) { return row.entity; });
+        return [
+            byBucket
+                ? { key: 'defalcare', icon: 'bi-diagram-3', title: 'Pe tip', label: card.detail.breakdownTitle }
+                : { key: 'defalcare', icon: 'bi-trophy', title: 'Top', label: card.detail.breakdownTitle },
+            { key: 'capacitate', icon: 'bi-boxes', title: 'Pe capacitate', label: 'Pe categorie de capacitate' },
+            { key: 'compunere', icon: 'bi-grid-3x2-gap', title: 'Compunere', label: 'Din ce se compune' },
+            { key: 'despre', icon: 'bi-info-circle', title: 'Ce arată', label: 'Ce arată și cum se calculează' }
+        ];
+    }
+
+    function flipState(key) {
+        if (!state.kpiFaces[key]) {
+            state.kpiFaces[key] = { face: 'summary', open: null };
+        }
+        return state.kpiFaces[key];
+    }
+
+    // fiecare tip de transport are iconita si culoarea lui, aceleasi pe toate cardurile
+    var BUCKET_LOOK = {
+        distributie: { icon: 'bi-box-seam', color: '#0ea5e9' },
+        primar: { icon: 'bi-truck', color: '#6366f1' },
+        primar_distributie: { icon: 'bi-arrow-left-right', color: '#8b5cf6' },
+        compresor: { icon: 'bi-fan', color: '#f59e0b' }
+    };
+
+    var ENTITY_ICONS = { vehicles: 'bi-truck-front', drivers: 'bi-person', beneficiaries: 'bi-building' };
+
+    // iconita unui indicator din fata "Compunere", dedusa din eticheta lui
+    var STAT_ICONS = [
+        [/marj|%|grad/i, 'bi-percent'],
+        [/carburant/i, 'bi-fuel-pump'],
+        [/profit/i, 'bi-graph-up-arrow'],
+        [/venit|factur|refactur|cheltuiel|lei/i, 'bi-cash-coin'],
+        [/punct/i, 'bi-geo-alt'],
+        [/ton/i, 'bi-box-seam'],
+        [/km/i, 'bi-signpost-2'],
+        [/zile|zi /i, 'bi-calendar3'],
+        [/șofer|sofer/i, 'bi-person'],
+        [/beneficiar/i, 'bi-building'],
+        [/vehicul/i, 'bi-truck-front'],
+        [/capacitate/i, 'bi-boxes'],
+        [/curs/i, 'bi-truck']
+    ];
+
+    function statIcon(label) {
+        for (var i = 0; i < STAT_ICONS.length; i++) {
+            if (STAT_ICONS[i][0].test(label)) {
+                return STAT_ICONS[i][1];
+            }
+        }
+        return 'bi-dot';
+    }
+
+    function bucketLook(key) {
+        return BUCKET_LOOK[key] || { icon: 'bi-signpost-split', color: '#64748b' };
+    }
+
+    // campurile pe care le are si defalcarea beneficiarilor pe tip de transport (summary.clients)
+    var CLIENT_BUCKET_FIELDS = ['curse', 'km', 'tone', 'facturare', 'profit', 'grad_incarcare', 'km_per_cursa'];
+
+    /** Pentru un tip de transport: beneficiarii (din sumar) si vehiculele (din lista de curse). */
+    function bucketDrillHtml(row) {
+        var bucket = row.bucket;
+        var field = CLIENT_BUCKET_FIELDS.indexOf(row.field) !== -1 ? row.field : 'curse';
+        var kind = field === row.field ? row.kind : 'int';
+
+        var clients = ((state.data.summary || {}).clients || []).map(function (client) {
+            var b = (client.buckets || {})[bucket.key];
+            return b && num(b.curse) > 0 ? { label: client.nume, value: num(b[field]) } : null;
+        }).filter(Boolean).sort(function (x, y) { return y.value - x.value; });
+
+        var counts = {};
+        (((state.data.distribution || {}).trips) || []).forEach(function (trip) {
+            if (trip.bucket === bucket.key && trip.vehicul) {
+                counts[trip.vehicul] = (counts[trip.vehicul] || 0) + 1;
+            }
+        });
+        var vehicles = Object.keys(counts).map(function (name) {
+            return { label: name, value: counts[name] };
+        }).sort(function (x, y) { return y.value - x.value || x.label.localeCompare(y.label, 'ro'); });
+
+        return '<div class="da2-ft-more">' +
+            '<div class="da2-ft-meta"><span><i class="bi bi-truck"></i> ' + escapeHtml(fmt(bucket.curse, 'int')) + ' curse</span>' +
+                '<span><i class="bi bi-signpost-2"></i> ' + escapeHtml(fmt(bucket.km, 'int')) + ' km</span>' +
+                '<span><i class="bi bi-box-seam"></i> ' + escapeHtml(fmt(bucket.tone, 'num')) + ' t</span>' +
+                '<span><i class="bi bi-rulers"></i> ' + escapeHtml(fmt(bucket.km_per_cursa, 'num')) + ' km/cursă</span></div>' +
+            (clients.length
+                ? '<h4><i class="bi bi-building"></i>Beneficiari' + (field !== row.field ? ' (curse)' : '') + '</h4><ul class="da2-ft-list">' + clients.map(function (client) {
+                    return '<li><span><i class="bi bi-dot"></i>' + escapeHtml(client.label) + '</span><strong>' + escapeHtml(fmt(client.value, kind)) + '</strong></li>';
+                }).join('') + '</ul>'
+                : '') +
+            (vehicles.length
+                ? '<h4><i class="bi bi-truck-front"></i>Vehicule (' + vehicles.length + ')</h4><div class="da2-ft-plates">' + vehicles.map(function (vehicle) {
+                    return '<span class="da2-ft-plate" title="' + escapeHtml(vehicle.value + ' curse') + '"><i class="bi bi-truck-front"></i>' + escapeHtml(vehicle.label) +
+                        (vehicle.value > 1 ? '<small>×' + vehicle.value + '</small>' : '') + '</span>';
+                }).join('') + '</div>'
+                : '') +
+            '</div>';
+    }
+
+    /** Pentru un vehicul / sofer / beneficiar din clasament: indicatorii lui si fisa completa. */
+    function entityDrillHtml(row) {
+        var e = row.entity;
+        var stats = [
+            { label: 'Curse', value: fmt(e.curse, 'int') },
+            { label: 'Km', value: fmt(e.km_totali, 'km') },
+            { label: 'Facturare', value: fmt(e.facturare, 'lei') },
+            { label: 'Profit', value: fmt(e.profit, 'lei') },
+            { label: 'Zile active', value: fmt(e.zile_active, 'int') + ' / ' + fmt(e.zile_disponibile, 'int') },
+            { label: 'Curse / zi activă', value: fmt(e.curse_per_zi_activa, 'num') }
+        ];
+        return '<div class="da2-ft-more">' +
+            '<ul class="da2-ft-list da2-ft-list-entity">' + stats.map(function (stat) {
+                return '<li><span><i class="bi ' + statIcon(stat.label) + '"></i>' + escapeHtml(stat.label) + '</span><strong>' + escapeHtml(stat.value) + '</strong></li>';
+            }).join('') + '</ul>' +
+            '<button type="button" class="da2-face-link" data-kpi-entity="' + escapeHtml(e.nume) + '" data-dimension="' + escapeHtml(row.dimension) + '">' +
+                'Deschide fișa<i class="bi bi-arrow-right-short"></i></button>' +
+            '</div>';
+    }
+
+    function flipActionsHtml(card) {
+        return '<div class="da2-face-actions">' + card.detail.actions.map(function (action) {
+            return '<button type="button" class="da2-face-link" data-detail-action="' + escapeHtml(action.type) + '"' +
                 (action.metric ? ' data-metric="' + escapeHtml(action.metric) + '"' : '') +
                 (action.tab ? ' data-target-tab="' + escapeHtml(action.tab) + '"' : '') +
                 (action.dimension ? ' data-dimension="' + escapeHtml(action.dimension) + '"' : '') +
                 (action.sort ? ' data-sort="' + escapeHtml(action.sort) + '"' : '') +
                 '>' + escapeHtml(action.label) + '<i class="bi bi-arrow-right-short"></i></button>';
+        }).join('') + '</div>';
+    }
+
+    function flipDefalcareHtml(card, fs) {
+        var rows = card.detail.breakdown;
+        if (!rows.length) {
+            return '<p class="da2-empty">Nu există date pentru defalcare.</p>';
+        }
+        var max = rows.reduce(function (m, row) { return Math.max(m, Math.abs(row.value)); }, 0) || 1;
+        // ponderea are sens doar pentru marimi care se aduna (nu pentru procente sau medii)
+        var additive = ['int', 'lei', 'km', 'tone'].indexOf(rows[0].kind) !== -1 &&
+            rows.every(function (row) { return row.value >= 0; });
+        var total = rows.reduce(function (sum, row) { return sum + row.value; }, 0) || 1;
+
+        return rows.map(function (row) {
+            var id = row.bucket ? row.bucket.key : 'e:' + row.label;
+            var expandable = !!(row.bucket || row.entity);
+            var isOpen = expandable && fs.open === id;
+            var look = row.bucket ? bucketLook(row.bucket.key) : { icon: ENTITY_ICONS[row.dimension] || 'bi-dot', color: '' };
+            return '<div class="da2-ft-row' + (isOpen ? ' is-open' : '') + '"' + (look.color ? ' style="--rc:' + look.color + '"' : '') + '>' +
+                '<button type="button" class="da2-ft-head' + (row.value < 0 ? ' is-negative' : '') + '"' +
+                    (expandable ? ' data-kpi-row="' + escapeHtml(id) + '" aria-expanded="' + isOpen + '"' : ' disabled') + '>' +
+                    '<span class="da2-ft-label" title="' + escapeHtml(row.label) + '"><span class="da2-ft-icon"><i class="bi ' + look.icon + '"></i></span>' + escapeHtml(row.label) + '</span>' +
+                    '<strong class="da2-ft-value">' + escapeHtml(row.text) + '</strong>' +
+                    (expandable ? '<i class="bi bi-chevron-down da2-ft-caret"></i>' : '<span></span>') +
+                    '<span class="da2-ft-bar"><span style="width:' + Math.min(100, (Math.abs(row.value) / max) * 100).toFixed(1) + '%"></span></span>' +
+                    '<span class="da2-ft-share">' + (additive ? escapeHtml(fmt((row.value / total) * 100, 'num')) + '%' : '') + '</span>' +
+                '</button>' +
+                (isOpen ? (row.bucket ? bucketDrillHtml(row) : entityDrillHtml(row)) : '') +
+            '</div>';
+        }).join('') +
+        (card.detail.breakdownNote ? '<p class="da2-ft-note">' + escapeHtml(card.detail.breakdownNote) + '</p>' : '');
+    }
+
+    /*
+     * Ce indicator arata fiecare card pe fata "Pe capacitate". Datele vin din
+     * summary.capacity: categorie -> randuri beneficiar x vehicul, din care se aduna orice.
+     */
+    var CAPACITY_METRICS = {
+        curse: { field: 'curse', kind: 'int' },
+        facturare: { field: 'facturare', kind: 'lei' },
+        cheltuieli: { field: 'cheltuieli', kind: 'lei' },
+        profit: { field: 'profit', kind: 'lei' },
+        km: { field: 'km', kind: 'km' },
+        tone: { field: 'tone', kind: 'tone' },
+        incarcare: { field: 'grad_incarcare', kind: 'pct' },
+        folosinta: { field: 'grad_folosinta', kind: 'pct' },
+        medii: { field: 'km_per_cursa', kind: 'num' }
+    };
+
+    var CAPACITY_COLORS = ['#2563eb', '#0d9488', '#d97706', '#7c3aed', '#db2777', '#0891b2', '#65a30d', '#e11d48'];
+
+    /** Aduna randurile beneficiar x vehicul; gradul de incarcare ponderat, folosinta pe zilele vehiculelor. */
+    function aggregateCapacityRows(rows) {
+        var t = { curse: 0, km: 0, tone: 0, facturare: 0, cheltuieli: 0, tone_grad: 0, capacitate_grad: 0, vehicles: {} };
+        rows.forEach(function (row) {
+            t.curse += num(row.curse);
+            t.km += num(row.km);
+            t.tone += num(row.tone);
+            t.facturare += num(row.facturare);
+            t.cheltuieli += num(row.cheltuieli);
+            t.tone_grad += num(row.tone_grad);
+            t.capacitate_grad += num(row.capacitate_grad);
+            t.vehicles[row.vehicle_id] = true;
+        });
+        t.profit = t.facturare - t.cheltuieli;
+        t.grad_incarcare = t.capacitate_grad > 0 ? (t.tone_grad / t.capacitate_grad) * 100 : 0;
+        t.km_per_cursa = t.curse > 0 ? t.km / t.curse : 0;
+
+        // zile-vehicul active / disponibile ale vehiculelor din grup (aceeasi formula ca pe card)
+        var active = 0;
+        var available = 0;
+        rowsFor('vehicles').forEach(function (vehicle) {
+            if (t.vehicles[vehicle.id]) {
+                active += num(vehicle.zile_active);
+                available += num(vehicle.zile_disponibile);
+            }
+        });
+        t.grad_folosinta = available > 0 ? (active / available) * 100 : 0;
+        t.nr_vehicule = Object.keys(t.vehicles).length;
+        return t;
+    }
+
+    function groupCapacityRows(rows, field) {
+        var groups = {};
+        rows.forEach(function (row) {
+            (groups[row[field]] = groups[row[field]] || []).push(row);
+        });
+        return Object.keys(groups).map(function (name) {
+            return { label: name, totals: aggregateCapacityRows(groups[name]) };
+        });
+    }
+
+    function capacityDrillHtml(category, metric) {
+        var t = aggregateCapacityRows(category.rows);
+        var clients = groupCapacityRows(category.rows, 'beneficiar').sort(function (a, b) {
+            return b.totals[metric.field] - a.totals[metric.field];
+        });
+        var vehicles = groupCapacityRows(category.rows, 'vehicul').sort(function (a, b) {
+            return b.totals.curse - a.totals.curse || a.label.localeCompare(b.label, 'ro');
+        });
+
+        return '<div class="da2-ft-more">' +
+            '<div class="da2-ft-meta"><span><i class="bi bi-truck"></i> ' + escapeHtml(fmt(t.curse, 'int')) + ' curse</span>' +
+                '<span><i class="bi bi-signpost-2"></i> ' + escapeHtml(fmt(t.km, 'int')) + ' km</span>' +
+                '<span><i class="bi bi-box-seam"></i> ' + escapeHtml(fmt(t.tone, 'num')) + ' t</span>' +
+                '<span><i class="bi bi-percent"></i> ' + escapeHtml(fmt(t.grad_incarcare, 'pct')) + ' încărcare</span>' +
+                '<span><i class="bi bi-cash-coin"></i> ' + escapeHtml(fmt(t.facturare, 'lei')) + '</span></div>' +
+            (clients.length
+                ? '<h4><i class="bi bi-building"></i>Beneficiari</h4><ul class="da2-ft-list">' + clients.map(function (client) {
+                    return '<li><span><i class="bi bi-dot"></i>' + escapeHtml(client.label) + '</span><strong>' +
+                        escapeHtml(fmt(client.totals[metric.field], metric.kind)) + '</strong></li>';
+                }).join('') + '</ul>'
+                : '') +
+            (vehicles.length
+                ? '<h4><i class="bi bi-truck-front"></i>Vehicule (' + vehicles.length + ')</h4><div class="da2-ft-plates">' + vehicles.map(function (vehicle) {
+                    var extra = metric.field === 'grad_folosinta'
+                        ? '<small>' + escapeHtml(fmt(vehicle.totals.grad_folosinta, 'pct')) + '</small>'
+                        : (vehicle.totals.curse > 1 ? '<small>×' + vehicle.totals.curse + '</small>' : '');
+                    return '<span class="da2-ft-plate" title="' + escapeHtml(vehicle.totals.curse + ' curse') + '"><i class="bi bi-truck-front"></i>' +
+                        escapeHtml(vehicle.label) + extra + '</span>';
+                }).join('') + '</div>'
+                : '') +
+            '</div>';
+    }
+
+    function flipCapacitateHtml(card, fs) {
+        var metric = CAPACITY_METRICS[card.key] || CAPACITY_METRICS.curse;
+        var categories = ((state.data.summary || {}).capacity || []).map(function (category, index) {
+            var t = aggregateCapacityRows(category.rows || []);
+            return { category: category, value: num(t[metric.field]), color: CAPACITY_COLORS[index % CAPACITY_COLORS.length] };
+        });
+        if (!categories.length) {
+            return '<p class="da2-empty">Nu există curse cu vehicule în categorii de capacitate.</p>';
+        }
+
+        var max = categories.reduce(function (m, row) { return Math.max(m, Math.abs(row.value)); }, 0) || 1;
+        var additive = ['int', 'lei', 'km', 'tone'].indexOf(metric.kind) !== -1 &&
+            categories.every(function (row) { return row.value >= 0; });
+        var total = categories.reduce(function (sum, row) { return sum + row.value; }, 0) || 1;
+
+        return categories.map(function (row) {
+            var id = 'cap:' + row.category.key;
+            var isOpen = fs.open === id;
+            return '<div class="da2-ft-row' + (isOpen ? ' is-open' : '') + '" style="--rc:' + row.color + '">' +
+                '<button type="button" class="da2-ft-head' + (row.value < 0 ? ' is-negative' : '') + '" data-kpi-row="' + escapeHtml(id) + '" aria-expanded="' + isOpen + '">' +
+                    '<span class="da2-ft-label" title="' + escapeHtml(row.category.label) + '"><span class="da2-ft-icon"><i class="bi bi-boxes"></i></span>' +
+                        escapeHtml(row.category.label) + '<small class="da2-ft-sublabel">' + escapeHtml(fmt(row.category.nr_vehicule, 'int')) + ' veh.</small></span>' +
+                    '<strong class="da2-ft-value">' + escapeHtml(fmt(row.value, metric.kind)) + '</strong>' +
+                    '<i class="bi bi-chevron-down da2-ft-caret"></i>' +
+                    '<span class="da2-ft-bar"><span style="width:' + Math.min(100, (Math.abs(row.value) / max) * 100).toFixed(1) + '%"></span></span>' +
+                    '<span class="da2-ft-share">' + (additive ? escapeHtml(fmt((row.value / total) * 100, 'num')) + '%' : '') + '</span>' +
+                '</button>' +
+                (isOpen ? capacityDrillHtml(row.category, metric) : '') +
+            '</div>';
+        }).join('') +
+        '<p class="da2-ft-note">Categoria de capacitate a vehiculului din Configurare (capul tractor ia categoria semiremorcii cuplate), ca la filtrul „Categorie capacitate”.</p>';
+    }
+
+    function flipCompunereHtml(card) {
+        return '<div class="da2-ft-stats">' + card.detail.stats.map(function (stat) {
+            return '<div class="da2-ft-stat"' + (stat.hint ? ' title="' + escapeHtml(stat.hint) + '"' : '') + '>' +
+                '<span><i class="bi ' + statIcon(stat.label) + ' da2-ft-stat-icon"></i>' + escapeHtml(stat.label) + (stat.hint ? ' <i class="bi bi-info-circle"></i>' : '') + '</span>' +
+                '<strong>' + escapeHtml(stat.value) + '</strong></div>';
+        }).join('') + '</div>';
+    }
+
+    function flipDespreHtml(card) {
+        return '<h4><i class="bi bi-lightbulb"></i>Ce arată</h4><p class="da2-ft-text">' + escapeHtml(card.detail.intro) + '</p>' +
+            '<h4><i class="bi bi-calculator"></i>Cum se calculează</h4><code class="da2-ft-formula">' + escapeHtml(card.detail.formula) + '</code>';
+    }
+
+    function flipCardHtml(card) {
+        var fs = flipState(card.key);
+        var tone = ' da2-kpi-k-' + card.key + (card.tone ? ' da2-kpi-' + card.tone : '');
+
+        if (fs.face === 'summary') {
+            return '<div class="da2-kpi' + tone + '" data-kpi-flip="' + escapeHtml(card.key) + '">' +
+                '<button type="button" class="da2-face da2-face-summary" data-kpi-face="defalcare" aria-label="' + escapeHtml(card.name + ': detalii') + '">' +
+                    '<i class="bi ' + card.icon + ' da2-kpi-watermark" aria-hidden="true"></i>' +
+                    '<span class="da2-kpi-head"><span class="da2-kpi-icon"><i class="bi ' + card.icon + '"></i></span>' + escapeHtml(card.name) +
+                    '<i class="bi bi-arrow-repeat da2-kpi-caret" title="Întoarce cardul"></i></span>' +
+                    '<span class="da2-kpi-value">' + escapeHtml(card.value) + '</span>' +
+                    (card.meter !== undefined ? meterHtml(card.meter, toneForPercent(card.meter)) : '') +
+                    '<span class="da2-kpi-note">' + escapeHtml(card.note) + '</span>' +
+                '</button></div>';
+        }
+
+        var faces = flipFaces(card);
+        var current = faces.filter(function (face) { return face.key === fs.face; })[0] || faces[0];
+        var body = current.key === 'compunere' ? flipCompunereHtml(card)
+            : current.key === 'despre' ? flipDespreHtml(card)
+            : current.key === 'capacitate' ? flipCapacitateHtml(card, fs)
+            : flipDefalcareHtml(card, fs);
+
+        var tabs = faces.map(function (face) {
+            var active = face.key === current.key;
+            return '<button type="button" class="da2-face-tab' + (active ? ' is-active' : '') + '" data-kpi-face="' + face.key + '"' +
+                ' title="' + escapeHtml(face.label) + '" aria-label="' + escapeHtml(face.label) + '" aria-pressed="' + active + '">' +
+                '<i class="bi ' + face.icon + '"></i></button>';
         }).join('');
 
-        container.innerHTML =
-            '<div class="da2-detail-inner">' +
-                '<header class="da2-detail-head">' +
-                    '<span class="da2-detail-title"><i class="bi ' + card.icon + '"></i>' + escapeHtml(card.name) + '</span>' +
-                    '<span class="da2-detail-value">' + escapeHtml(card.value) + '</span>' +
-                    '<button type="button" class="da2-detail-close" data-detail-close aria-label="Închide detaliul">' +
-                        '<i class="bi bi-x-lg"></i></button>' +
+        return '<div class="da2-kpi is-flipped' + tone + '" data-kpi-flip="' + escapeHtml(card.key) + '">' +
+            '<div class="da2-face da2-face-detail" data-face-name="' + current.key + '">' +
+                '<header class="da2-face-head">' +
+                    '<button type="button" class="da2-face-back" data-kpi-face="summary" aria-label="Înapoi la rezumat"><i class="bi bi-arrow-left"></i></button>' +
+                    '<span class="da2-face-title" title="' + escapeHtml(card.name + ' · ' + current.label) + '">' + escapeHtml(current.title) + '</span>' +
+                    '<nav class="da2-face-tabs">' + tabs + '</nav>' +
                 '</header>' +
-                '<div class="da2-detail-body">' +
-                    '<section class="da2-detail-about">' +
-                        '<h3>Ce arată</h3><p>' + escapeHtml(d.intro) + '</p>' +
-                        '<h3>Cum se calculează</h3><p class="da2-detail-formula">' + escapeHtml(d.formula) + '</p>' +
-                    '</section>' +
-                    '<section class="da2-detail-stats">' +
-                        '<h3>Din ce se compune</h3>' +
-                        '<div class="da2-detail-stat-grid">' + stats + '</div>' +
-                    '</section>' +
-                    '<section class="da2-detail-breakdown">' +
-                        '<h3>' + escapeHtml(d.breakdownTitle) + '</h3>' + breakdown +
-                        (d.breakdownNote ? '<p class="da2-detail-note">' + escapeHtml(d.breakdownNote) + '</p>' : '') +
-                    '</section>' +
-                '</div>' +
-                '<footer class="da2-detail-actions">' + actions + '</footer>' +
-            '</div>';
+                '<div class="da2-face-sub"><span title="' + escapeHtml(current.label) + '"><i class="bi ' + card.icon + '"></i>' + escapeHtml(card.name) + '</span>' +
+                    '<strong class="da2-face-count">' + escapeHtml(card.value) + '</strong></div>' +
+                '<div class="da2-face-body is-' + current.key + '">' + body + flipActionsHtml(card) + '</div>' +
+            '</div></div>';
+    }
 
-        // fortam un reflow ca tranzitia sa porneasca si cand se schimba direct alt card
-        void container.offsetHeight;
-        container.classList.add('is-open');
+    /** Redeseneaza doar cardul intors; `turn` = animatia de intoarcere (schimbare de fata). */
+    function redrawFlipCard(key, turn, backwards) {
+        var el = $('[data-kpi-flip="' + key + '"]');
+        var card = kpiCards().filter(function (item) { return item.key === key; })[0];
+        if (!el || !card) {
+            return;
+        }
+        var scroll = $('.da2-face-body', el);
+        var scrollTop = scroll && !turn ? scroll.scrollTop : 0;
+
+        var holder = document.createElement('div');
+        holder.innerHTML = flipCardHtml(card);
+        var fresh = holder.firstChild;
+        el.parentNode.replaceChild(fresh, el);
+
+        var freshScroll = $('.da2-face-body', fresh);
+        if (freshScroll) {
+            freshScroll.scrollTop = scrollTop;
+        }
+        if (turn && !reducedMotion()) {
+            fresh.classList.add('is-turning');
+            if (backwards) {
+                fresh.classList.add('is-turning-back');
+            }
+            window.setTimeout(function () { fresh.classList.remove('is-turning', 'is-turning-back'); }, 600);
+        }
+        return fresh;
+    }
+
+    function reducedMotion() {
+        return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    }
+
+    /**
+     * Decuparea care aduce fata intinsa (cat toata grila) exact peste celula cardului:
+     * animand-o spre inset(0) cardul pare ca se mareste din locul lui, fara sa deformeze textul.
+     */
+    function cellClip(card) {
+        var grid = document.getElementById('da2-kpis').getBoundingClientRect();
+        var cell = card.getBoundingClientRect();
+        return 'inset(' + Math.max(0, cell.top - grid.top) + 'px ' + Math.max(0, grid.right - cell.right) + 'px ' +
+            Math.max(0, grid.bottom - cell.bottom) + 'px ' + Math.max(0, cell.left - grid.left) + 'px round 14px)';
+    }
+
+    var EXPAND_EASING = 'cubic-bezier(.22, 1, .36, 1)';
+
+    function setFlipFace(key, face) {
+        var fs = flipState(key);
+        if (fs.face === face) {
+            return;
+        }
+        var el = $('[data-kpi-flip="' + key + '"]');
+
+        // inapoi la rezumat: fata se strange in celula cardului, apoi cardul revine la rezumat
+        if (face === 'summary') {
+            var expanded = el && $('.da2-face-detail', el);
+            var finish = function () {
+                fs.face = 'summary';
+                var fresh = redrawFlipCard(key, true, true);
+                var summary = fresh && $('.da2-face-summary', fresh);
+                if (summary) {
+                    summary.focus({ preventScroll: true });
+                }
+            };
+            if (!expanded || reducedMotion() || !expanded.animate) {
+                finish();
+                return;
+            }
+            el.classList.add('is-collapsing');
+            expanded.animate(
+                [{ clipPath: 'inset(0px 0px 0px 0px round 14px)', opacity: 1 }, { clipPath: cellClip(el), opacity: 0.35 }],
+                { duration: 380, easing: 'cubic-bezier(.4, 0, .2, 1)' }
+            ).onfinish = finish;
+            return;
+        }
+
+        var opening = fs.face === 'summary';
+        if (opening) {
+            // un singur card intins odata: celelalte revin la rezumat, fara animatie (sunt acoperite)
+            Object.keys(state.kpiFaces).forEach(function (other) {
+                if (other !== key && state.kpiFaces[other].face !== 'summary') {
+                    state.kpiFaces[other].face = 'summary';
+                    redrawFlipCard(other, false);
+                }
+            });
+        }
+        fs.face = face;
+        var fresh = redrawFlipCard(key, !opening, false);
+        if (!fresh) {
+            return;
+        }
+        if (opening && !reducedMotion()) {
+            var face2 = $('.da2-face-detail', fresh);
+            fresh.classList.add('is-expanding');
+            if (face2 && face2.animate) {
+                face2.animate(
+                    [{ clipPath: cellClip(fresh), opacity: 0.6 }, { clipPath: 'inset(0px 0px 0px 0px round 14px)', opacity: 1 }],
+                    { duration: 520, easing: EXPAND_EASING }
+                );
+            }
+            window.setTimeout(function () { fresh.classList.remove('is-expanding'); }, 700);
+        }
+        var focusTarget = $('.da2-face-tab.is-active', fresh);
+        if (focusTarget) {
+            focusTarget.focus({ preventScroll: true });
+        }
+        if (opening) {
+            var grid = document.getElementById('da2-kpis').getBoundingClientRect();
+            // 90px = antetul fix al aplicatiei, peste care nu trebuie sa ajunga cardul
+            if (grid.top < 90 || grid.bottom > window.innerHeight) {
+                document.getElementById('da2-kpis').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }
+    }
+
+    function toggleFlipRow(key, id) {
+        var fs = flipState(key);
+        fs.open = fs.open === id ? null : id;
+        var fresh = redrawFlipCard(key, false);
+        var row = fresh && $$('[data-kpi-row]', fresh).filter(function (el) { return el.getAttribute('data-kpi-row') === id; })[0];
+        var body = fresh && $('.da2-face-body', fresh);
+        if (row && body && fs.open) {
+            // randul deschis urca in capul fetei, ca detaliul sa fie vizibil in card
+            body.scrollTop = Math.max(0, row.parentNode.offsetTop - 4);
+        }
+        if (row) {
+            row.focus({ preventScroll: true });
+        }
     }
 
     // --------------------------------------------------------------- grafice
@@ -4102,32 +4755,34 @@
             return;
         }
 
-        if (event.target.closest('[data-detail-close]')) {
-            state.kpiOpen = null;
-            renderKpis();
-            return;
-        }
-
         var detailAction = event.target.closest('[data-detail-action]');
         if (detailAction) {
             runDetailAction(detailAction);
             return;
         }
 
-        var kpi = event.target.closest('[data-kpi]');
-        if (kpi) {
-            var cardKey = kpi.getAttribute('data-kpi');
-            state.kpiOpen = state.kpiOpen === cardKey ? null : cardKey;
-            renderKpis();
+        var cardToggle = event.target.closest('[data-kpi-toggle]');
+        if (cardToggle) {
+            toggleCardHidden(cardToggle.getAttribute('data-kpi-toggle'));
+            return;
+        }
+        if (event.target.closest('[data-kpis-edit]')) {
+            setCardsEditing(true);
+            return;
+        }
 
-            // renderKpis reconstruieste grila, deci animam cardul nou, nu pe cel apasat
-            var current = $('[data-kpi="' + cardKey + '"]');
-            if (current) {
-                pulse(current, event);
-                window.setTimeout(function () { current.classList.remove('is-pressed'); }, 500);
-            }
-            if (state.kpiOpen) {
-                scrollDetailIntoView();
+        var flipCard = event.target.closest('[data-kpi-flip]');
+        if (flipCard) {
+            var flipKey = flipCard.getAttribute('data-kpi-flip');
+            var faceButton = event.target.closest('[data-kpi-face]');
+            var rowButton = event.target.closest('[data-kpi-row]');
+            var entityButton = event.target.closest('[data-kpi-entity]');
+            if (faceButton) {
+                setFlipFace(flipKey, faceButton.getAttribute('data-kpi-face'));
+            } else if (rowButton) {
+                toggleFlipRow(flipKey, rowButton.getAttribute('data-kpi-row'));
+            } else if (entityButton) {
+                openEntityDrawer(entityButton.getAttribute('data-dimension'), entityButton.getAttribute('data-kpi-entity'));
             }
             return;
         }
@@ -4196,32 +4851,6 @@
             setPreset(preset.getAttribute('data-preset'));
         }
     });
-
-    /** Unda pleaca din punctul apasat; la navigare cu tastatura, din centru. */
-    function pulse(element, event) {
-        var rect = element.getBoundingClientRect();
-        var x = event && event.clientX ? ((event.clientX - rect.left) / rect.width) * 100 : 50;
-        var y = event && event.clientY ? ((event.clientY - rect.top) / rect.height) * 100 : 50;
-
-        element.style.setProperty('--x', x.toFixed(1) + '%');
-        element.style.setProperty('--y', y.toFixed(1) + '%');
-        element.classList.remove('is-pressed');
-        void element.offsetWidth;
-        element.classList.add('is-pressed');
-    }
-
-    function scrollDetailIntoView() {
-        var detail = document.getElementById('da2-kpi-detail');
-        if (!detail) {
-            return;
-        }
-        window.setTimeout(function () {
-            var rect = detail.getBoundingClientRect();
-            if (rect.bottom > window.innerHeight) {
-                detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }
-        }, 260);
-    }
 
     /** Butoanele din panoul de detaliu duc utilizatorul acolo unde poate acționa. */
     function runDetailAction(button) {
@@ -4536,6 +5165,15 @@
             }
             if (state.drawer) {
                 closeEntityDrawer();
+                return;
+            }
+            if (state.cardsEditing) {
+                setCardsEditing(false);
+                return;
+            }
+            var turned = document.activeElement && document.activeElement.closest('[data-kpi-flip].is-flipped');
+            if (turned) {
+                setFlipFace(turned.getAttribute('data-kpi-flip'), 'summary');
                 return;
             }
             $$('[data-ms]').forEach(function (ms) {

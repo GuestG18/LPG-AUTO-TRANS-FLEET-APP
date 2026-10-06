@@ -32,6 +32,7 @@ class DashboardAnaliticV2Controller
             'currentPage' => 'dashboard_analitic_v2',
             'filters' => $filters,
             'filterOptions' => $options,
+            'cardLayout' => $this->cardLayoutForCurrentUser(),
         ]);
     }
 
@@ -85,6 +86,99 @@ class DashboardAnaliticV2Controller
 
             http_response_code(500);
             $this->sendJson(['error' => 'Nu s-au putut incarca detaliile.']);
+        }
+    }
+
+    // ------------------------------------------- cardurile KPI ale utilizatorului
+
+    /** Cheile cardurilor KPI, in ordinea implicita (aceleasi ca in kpiCards() din JS). */
+    private const CARD_KEYS = ['curse', 'facturare', 'cheltuieli', 'profit', 'km', 'tone', 'incarcare', 'folosinta', 'medii'];
+
+    /**
+     * Ce carduri vede utilizatorul curent si in ce ordine: {order: [chei], hidden: [chei]}.
+     * Fara alegere salvata (sau fara coloana inca) -> toate, in ordinea implicita.
+     *
+     * @return array{order: list<string>, hidden: list<string>}
+     */
+    public function cardLayoutForCurrentUser(): array
+    {
+        try {
+            $stmt = $this->db->prepare('SELECT dashboard_v2_carduri FROM utilizatori WHERE id = :id LIMIT 1');
+            $stmt->execute([':id' => (int) (current_user()['id'] ?? 0)]);
+            $decoded = json_decode((string) $stmt->fetchColumn(), true);
+        } catch (Throwable $exception) {
+            // coloana apare la prima salvare; pana atunci, aspectul implicit
+            return $this->normalizeCardLayout([]);
+        }
+
+        return $this->normalizeCardLayout(is_array($decoded) ? $decoded : []);
+    }
+
+    /** POST JSON {csrf, order: [chei], hidden: [chei]}; `reset: true` revine la aspectul implicit. */
+    public function saveCards(): void
+    {
+        $body = json_decode((string) file_get_contents('php://input'), true);
+        $body = is_array($body) ? $body : [];
+        if (!verify_csrf_token((string) ($body['csrf'] ?? ''))) {
+            http_response_code(403);
+            $this->sendJson(['ok' => false, 'error' => 'Token CSRF invalid. Reîncarcă pagina.']);
+        }
+
+        $layout = $this->normalizeCardLayout(!empty($body['reset']) ? [] : $body);
+        $isDefault = $layout['order'] === self::CARD_KEYS && $layout['hidden'] === [];
+
+        try {
+            $this->ensureCardsColumn();
+            $stmt = $this->db->prepare('UPDATE utilizatori SET dashboard_v2_carduri = :v WHERE id = :id');
+            $stmt->execute([
+                ':v' => $isDefault ? null : json_encode($layout, JSON_UNESCAPED_UNICODE),
+                ':id' => (int) current_user()['id'],
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DashboardAnaliticV2Controller][cards] ' . $exception->getMessage());
+            http_response_code(500);
+            $this->sendJson(['ok' => false, 'error' => 'Alegerea cardurilor nu a putut fi salvată.']);
+        }
+
+        $this->sendJson(['ok' => true, 'layout' => $layout]);
+    }
+
+    /**
+     * Pastreaza doar cheile cunoscute, fara dubluri; cardurile lipsa din ordine
+     * (ex. un card nou) se adauga la final, ca sa nu dispara.
+     *
+     * @return array{order: list<string>, hidden: list<string>}
+     */
+    private function normalizeCardLayout(array $data): array
+    {
+        $order = [];
+        foreach ((array) ($data['order'] ?? []) as $key) {
+            if (is_string($key) && in_array($key, self::CARD_KEYS, true) && !in_array($key, $order, true)) {
+                $order[] = $key;
+            }
+        }
+        foreach (self::CARD_KEYS as $key) {
+            if (!in_array($key, $order, true)) {
+                $order[] = $key;
+            }
+        }
+
+        $hidden = [];
+        foreach ((array) ($data['hidden'] ?? []) as $key) {
+            if (is_string($key) && in_array($key, self::CARD_KEYS, true) && !in_array($key, $hidden, true)) {
+                $hidden[] = $key;
+            }
+        }
+
+        return ['order' => $order, 'hidden' => $hidden];
+    }
+
+    /** Vezi database/migrations/2026_10_06_000001_utilizatori_dashboard_v2_carduri.sql. */
+    private function ensureCardsColumn(): void
+    {
+        $exists = $this->db->query("SHOW COLUMNS FROM utilizatori LIKE 'dashboard_v2_carduri'")->fetch();
+        if (!$exists) {
+            $this->db->exec('ALTER TABLE utilizatori ADD COLUMN dashboard_v2_carduri TEXT NULL');
         }
     }
 

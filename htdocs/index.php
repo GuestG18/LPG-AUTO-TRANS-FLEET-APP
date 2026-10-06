@@ -569,6 +569,15 @@ try {
             (new DashboardAnaliticV2Controller($db))->entity();
             break;
 
+        case 'dashboard_analytic_v2_cards':
+            require_auth();
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                http_response_code(405);
+                exit;
+            }
+            (new DashboardAnaliticV2Controller($db))->saveCards();
+            break;
+
         case 'profil':
             require_auth();
             $profileController = new ProfileController($db);

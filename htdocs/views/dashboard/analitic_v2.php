@@ -136,6 +136,9 @@ $pageConfig = [
     'endpoint' => build_query_url(['page' => 'dashboard_analytic_v2_data']),
     'entityEndpoint' => build_query_url(['page' => 'dashboard_analytic_v2_entity']),
     'resetUrl' => build_query_url(['page' => 'dashboard_analitic_v2']),
+    'cardsEndpoint' => build_query_url(['page' => 'dashboard_analytic_v2_cards']),
+    'cardLayout' => $cardLayout ?? null,
+    'csrf' => csrf_token(),
     'transportTypeLabels' => $transportTypeLabels,
     'statusLabels' => $statusLabels,
 ];
@@ -294,10 +297,17 @@ $pageConfig = [
         <span>Se încarcă datele…</span>
     </div>
 
-    <section class="da2-kpis" id="da2-kpis" aria-label="Indicatori principali"></section>
+    <?php // Alegerea si ordinea cardurilor, salvate per utilizator; comenzile sunt legate din JS. ?>
+    <div class="da2-kpis-bar" id="da2-kpis-bar">
+        <span class="da2-kpis-hint" id="da2-kpis-hint" hidden>
+            <i class="bi bi-arrows-move" aria-hidden="true"></i>Trage cardurile în ordinea dorită · <i class="bi bi-eye" aria-hidden="true"></i> arată / ascunde un card
+        </span>
+        <span class="da2-kpis-status" id="da2-kpis-status" role="status" aria-live="polite"></span>
+        <button type="button" class="da2-btn da2-btn-sm" id="da2-kpis-reset" hidden><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i><span>Aspect implicit</span></button>
+        <button type="button" class="da2-btn da2-btn-sm" id="da2-kpis-edit" aria-pressed="false"><i class="bi bi-sliders" aria-hidden="true"></i><span>Personalizează cardurile</span></button>
+    </div>
 
-    <?php // Panoul de detaliu al KPI-ului apasat; continutul este randat din JS. ?>
-    <div class="da2-kpi-detail" id="da2-kpi-detail" role="region" aria-live="polite"></div>
+    <section class="da2-kpis" id="da2-kpis" aria-label="Indicatori principali"></section>
 
     <nav class="da2-tabs" id="da2-tabs" role="tablist">
         <button type="button" class="da2-tab is-active" data-tab="general" role="tab"><i class="bi bi-grid-1x2" aria-hidden="true"></i>Prezentare generală</button>

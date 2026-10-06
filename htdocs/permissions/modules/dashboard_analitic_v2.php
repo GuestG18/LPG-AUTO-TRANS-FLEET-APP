@@ -15,7 +15,7 @@ return [
     'icon'        => 'bi-bar-chart-line',
     'order'       => 30,
     'scope'       => 'all',
-    'routes'      => ['dashboard_analitic_v2', 'dashboard_analytic_v2_data', 'dashboard_analytic_v2_entity'],
+    'routes'      => ['dashboard_analitic_v2', 'dashboard_analytic_v2_data', 'dashboard_analytic_v2_entity', 'dashboard_analytic_v2_cards'],
     'actions'     => [
         'view' => ['label' => 'Vizualizare'],
     ],
