@@ -210,6 +210,32 @@
     vertical-align: middle;
 }
 
+/* Cursa cu segmente: celula e o grila (sageata | bifa+numar / badge). Ochiul sta sub
+   sageata, in coloana ei, ca sa nu impinga numarul si badge-ul din coloana a doua. */
+.vehicle-wrap.has-segments > .vehicle-main,
+.vehicle-wrap.has-segments > .dispatcher-segments-badge {
+    grid-column: 2;
+}
+
+.vehicle-wrap.has-segments > .vehicle-main {
+    grid-row: 1;
+}
+
+.vehicle-wrap.has-segments > .dispatcher-segments-badge {
+    grid-row: 2;
+}
+
+.vehicle-wrap.has-segments:has(> .race-previewed-icon) > .dispatcher-segments-toggle {
+    grid-row: 1;
+}
+
+.vehicle-wrap.has-segments > .race-previewed-icon {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: center;
+    margin-left: 0;
+}
+
 /* Imediat dupa inchidere: randul "clipeste" usor in albastru-deschis. */
 [data-dispatcher-column-table] tbody tr.is-just-previewed > td {
     animation: race-previewed-flash 2.4s ease-out;
