@@ -1235,7 +1235,7 @@ class DispecerCurseController
                     'message' => 'Solicitarea nu mai poate fi anulata deoarece statusul ei s-a modificat.',
                     'approval_id' => $approvalId,
                     'current_status' => (string) ($approval['status'] ?? ''),
-                    'summary' => $this->inactiveApprovalModel->getRequesterSummary($userId, 5),
+                    'summary' => $this->inactiveApprovalModel->getRequesterSummary($userId, 5, true),
                 ], 409);
             }
 
@@ -1246,7 +1246,7 @@ class DispecerCurseController
                 'message' => $ok
                     ? 'Solicitarea a fost anulata.'
                     : 'Solicitarea nu mai poate fi anulata deoarece statusul ei s-a modificat.',
-                'summary' => $this->inactiveApprovalModel->getRequesterSummary($userId, 5),
+                'summary' => $this->inactiveApprovalModel->getRequesterSummary($userId, 5, true),
             ], $ok ? 200 : 409);
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][cancel_inactive_vehicle_approval] ' . $exception->getMessage());

@@ -1364,8 +1364,55 @@ function initGlobalApprovalDrawer() {
         }
     }
 
+    // Modul operator: deciziile (aprobate/respinse) afisate in panou se marcheaza ca vazute la deschidere.
+    // Raman vizibile pana la reincarcarea paginii, apoi ies din panou.
+    var seenUrl = drawer.getAttribute('data-approval-seen-url') || '';
+    var seenCsrf = drawer.getAttribute('data-approval-seen-csrf') || '';
+    var seenSent = {};
+
+    function markDecisionsSeen() {
+        if (seenUrl === '') {
+            return;
+        }
+
+        var ids = [];
+        drawer.querySelectorAll('[data-approval-card][data-approval-status="approved"], [data-approval-card][data-approval-status="rejected"]').forEach(function (card) {
+            var id = card.getAttribute('data-approval-id') || '';
+            if (id !== '' && !seenSent[id]) {
+                seenSent[id] = true;
+                ids.push(id);
+            }
+        });
+        if (ids.length === 0) {
+            return;
+        }
+
+        var formData = new FormData();
+        formData.append('_token', seenCsrf);
+        ids.forEach(function (id) {
+            formData.append('ids[]', id);
+        });
+
+        fetch(seenUrl, {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: formData
+        }).catch(function () {
+            ids.forEach(function (id) {
+                delete seenSent[id];
+            });
+        });
+    }
+
     toggle.addEventListener('click', function () {
-        setOpen(!drawer.classList.contains('is-open'));
+        var open = !drawer.classList.contains('is-open');
+        setOpen(open);
+        if (open) {
+            markDecisionsSeen();
+        }
     });
 
     closeButtons.forEach(function (closeButton) {

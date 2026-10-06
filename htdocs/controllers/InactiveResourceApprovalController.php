@@ -34,6 +34,10 @@ class InactiveResourceApprovalController
                 $this->reopenAction();
                 return;
 
+            case 'mark_seen':
+                $this->markSeenAction();
+                return;
+
             case 'operator_activity':
                 $this->operatorActivityAction();
                 return;
@@ -197,6 +201,30 @@ class InactiveResourceApprovalController
 
         flash_set($ok ? 'success' : 'warning', $message);
         $this->redirectAfterAction();
+    }
+
+    /**
+     * Solicitantul a deschis panoul si a vazut deciziile (aprobate/respinse):
+     * la urmatoarea incarcare nu mai apar in panou, doar in "Vezi toate solicitarile mele".
+     */
+    private function markSeenAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf_token($_POST['_token'] ?? null)) {
+            $this->sendJson(['success' => false, 'message' => 'Cerere invalida. Reincarca pagina.'], 400);
+        }
+
+        $ids = $_POST['ids'] ?? [];
+        if (!is_array($ids)) {
+            $ids = explode(',', (string) $ids);
+        }
+
+        try {
+            $marked = $this->model->markDecisionsSeen((int) ($this->currentUserId() ?? 0), $ids);
+            $this->sendJson(['success' => true, 'marked' => $marked]);
+        } catch (Throwable $exception) {
+            error_log('[InactiveResourceApprovalController][mark_seen] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'message' => 'Nu am putut salva.'], 500);
+        }
     }
 
     /**

@@ -174,7 +174,15 @@ $statusIcons = [
 ];
 ?>
 
-<div class="fleet-approval-drawer <?= $drawerIsAdmin ? 'is-admin-mode' : 'is-user-mode' ?>" data-global-approval-drawer>
+<div
+    class="fleet-approval-drawer <?= $drawerIsAdmin ? 'is-admin-mode' : 'is-user-mode' ?>"
+    data-global-approval-drawer
+    <?php if (!$drawerIsAdmin): ?>
+        <?php // Deciziile vazute in panou ies din el la urmatoarea incarcare (raman in "Vezi toate solicitarile mele"). ?>
+        data-approval-seen-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'mark_seen'])) ?>"
+        data-approval-seen-csrf="<?= e(csrf_token()) ?>"
+    <?php endif; ?>
+>
     <button
         class="fleet-approval-drawer-toggle"
         type="button"

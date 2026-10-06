@@ -73,6 +73,7 @@ class InactiveResourceApprovalModel extends BaseModel
         ");
 
         $this->ensureRepairResourceTypeColumn();
+        $this->ensureRequesterSeenColumn();
         $this->migrateRepairCategoryRows();
 
         $ensured = true;
@@ -206,7 +207,11 @@ class InactiveResourceApprovalModel extends BaseModel
         ];
     }
 
-    public function getRequesterSummary(int $userId, int $limitPerStatus = 20): array
+    /**
+     * @param bool $unseenDecisionsOnly true pentru panoul lateral: cererile aprobate/respinse apar
+     *                                  doar pana cand solicitantul le-a vazut (markDecisionsSeen).
+     */
+    public function getRequesterSummary(int $userId, int $limitPerStatus = 20, bool $unseenDecisionsOnly = false): array
     {
         $this->ensureSchema();
 
@@ -225,6 +230,7 @@ class InactiveResourceApprovalModel extends BaseModel
             SELECT status, COUNT(*) AS total
             FROM inactive_resource_approvals
             WHERE requested_by_user_id = :requested_by_user_id
+            " . ($unseenDecisionsOnly ? "AND (status = 'pending' OR requester_seen_at IS NULL)" : '') . "
             GROUP BY status
         ");
         $stmt->bindValue(':requested_by_user_id', $userId, PDO::PARAM_INT);
@@ -241,12 +247,12 @@ class InactiveResourceApprovalModel extends BaseModel
             'counts' => $counts,
             'total' => $counts['pending'] + $counts['approved'] + $counts['rejected'],
             'pending' => $this->getRequesterRowsByStatus($userId, 'pending', $limitPerStatus),
-            'approved' => $this->getRequesterRowsByStatus($userId, 'approved', $limitPerStatus),
-            'rejected' => $this->getRequesterRowsByStatus($userId, 'rejected', $limitPerStatus),
+            'approved' => $this->getRequesterRowsByStatus($userId, 'approved', $limitPerStatus, $unseenDecisionsOnly),
+            'rejected' => $this->getRequesterRowsByStatus($userId, 'rejected', $limitPerStatus, $unseenDecisionsOnly),
         ];
     }
 
-    public function getRequesterRowsByStatus(int $userId, string $status, int $limit = 20): array
+    public function getRequesterRowsByStatus(int $userId, string $status, int $limit = 20, bool $unseenOnly = false): array
     {
         $this->ensureSchema();
         if ($userId <= 0) {
@@ -257,6 +263,7 @@ class InactiveResourceApprovalModel extends BaseModel
         $stmt = $this->db->prepare($this->baseSelectSql() . "
             WHERE a.requested_by_user_id = :requested_by_user_id
               AND a.status = :status
+              " . ($unseenOnly ? 'AND a.requester_seen_at IS NULL' : '') . "
             ORDER BY a.requested_at DESC, a.id DESC
             LIMIT :limit_rows
         ");
@@ -306,6 +313,7 @@ class InactiveResourceApprovalModel extends BaseModel
                 reviewed_by_user_id = :reviewed_by_user_id,
                 reviewed_at = :reviewed_at,
                 review_note = :review_note,
+                requester_seen_at = NULL,
                 updated_at = :updated_at
             WHERE id = :id
               AND status = 'pending'
@@ -350,6 +358,7 @@ class InactiveResourceApprovalModel extends BaseModel
                 reviewed_by_user_id = NULL,
                 reviewed_at = NULL,
                 review_note = :review_note,
+                requester_seen_at = NULL,
                 updated_at = :updated_at
             WHERE id = :id
               AND status IN ('approved', 'rejected')
@@ -360,6 +369,33 @@ class InactiveResourceApprovalModel extends BaseModel
         $stmt->execute();
 
         return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Solicitantul a vazut deciziile in panoul lateral: ies din panou la urmatoarea incarcare.
+     *
+     * @param int[] $ids
+     */
+    public function markDecisionsSeen(int $userId, array $ids): int
+    {
+        $this->ensureSchema();
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static fn(int $id): bool => $id > 0)));
+        if ($userId <= 0 || $ids === []) {
+            return 0;
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($ids), '?'));
+        $stmt = $this->db->prepare("
+            UPDATE inactive_resource_approvals
+            SET requester_seen_at = ?
+            WHERE requested_by_user_id = ?
+              AND status IN ('approved', 'rejected')
+              AND requester_seen_at IS NULL
+              AND id IN ({$placeholders})
+        ");
+        $stmt->execute(array_merge([date('Y-m-d H:i:s'), $userId], $ids));
+
+        return $stmt->rowCount();
     }
 
     public function getExistingOpenStatusForResourceTrip(string $resourceType, int $resourceId, ?int $tripId): ?string
@@ -1502,6 +1538,26 @@ class InactiveResourceApprovalModel extends BaseModel
         $columnType = (string) $stmt->fetchColumn();
         if ($columnType !== '' && (!str_contains($columnType, "'repair'") || !str_contains($columnType, "'diurna'"))) {
             $this->db->exec("ALTER TABLE inactive_resource_approvals MODIFY COLUMN resource_type ENUM('vehicle','driver','repair','diurna') NOT NULL");
+        }
+    }
+
+    /**
+     * requester_seen_at = cand solicitantul a vazut decizia (aprobata/respinsa) in panoul lateral.
+     * Dupa aceea cererea iese din panou; ramane in "Vezi toate solicitarile mele".
+     */
+    private function ensureRequesterSeenColumn(): void
+    {
+        $stmt = $this->db->query("
+            SELECT COUNT(*)
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'inactive_resource_approvals'
+              AND COLUMN_NAME = 'requester_seen_at'
+        ");
+        if ((int) $stmt->fetchColumn() === 0) {
+            $this->db->exec("ALTER TABLE inactive_resource_approvals ADD COLUMN requester_seen_at DATETIME NULL AFTER review_note");
+            // Deciziile deja existente sunt considerate vazute, ca panoul sa nu se umple cu istoricul vechi.
+            $this->db->exec("UPDATE inactive_resource_approvals SET requester_seen_at = COALESCE(reviewed_at, updated_at) WHERE status <> 'pending'");
         }
     }
 

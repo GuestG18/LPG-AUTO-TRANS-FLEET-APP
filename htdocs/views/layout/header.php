@@ -37,7 +37,7 @@ if (
             $globalApprovalSummary = $approvalModel->getPendingSummary(5);
         } else {
             $currentUserId = (int) ($user['id'] ?? 0);
-            $globalApprovalSummary = $approvalModel->getRequesterSummary($currentUserId, 5);
+            $globalApprovalSummary = $approvalModel->getRequesterSummary($currentUserId, 5, true);
         }
     } catch (Throwable $exception) {
         error_log('[layout][inactive_approvals] ' . $exception->getMessage());
