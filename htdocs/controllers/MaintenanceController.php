@@ -62,6 +62,12 @@ class MaintenanceController
             case 'save_auto_component_config':
                 $this->saveAutoComponentConfig();
                 return;
+            case 'auto_component_add':
+            case 'auto_component_rename':
+            case 'auto_component_remove':
+            case 'auto_component_restore':
+                $this->manageAutoComponent($action);
+                return;
             case 'export':
             case 'export_v2':
                 $this->export();
@@ -216,6 +222,12 @@ class MaintenanceController
             ],
             'categories' => $categories,
             'tree' => $this->getAutoVehicleTree($requestedVehicleType, $requestedPrimary, $requestedSubcategory),
+            // Gestionarea componentelor (adaugare / redenumire / eliminare) cere dreptul auto_catalog.
+            'can_manage_components' => function_exists('can') ? can('mentenanta', 'auto_catalog') : false,
+            'removed_components' => array_map(
+                fn (int $categoryId): array => (new AutoComponentCatalogService($this->db))->removedComponents($categoryId),
+                array_combine(array_keys($categories), array_keys($categories))
+            ),
         ];
     }
 
@@ -309,238 +321,7 @@ class MaintenanceController
 
     private function loadAutoCategoriesFromExcel(): array
     {
-        $categoryNames = [
-            1 => 'Suspensie',
-            2 => 'Rulare',
-            3 => 'Franare',
-            4 => 'Racire',
-            5 => 'Electrica',
-            6 => 'Motor',
-            7 => 'Comfort',
-            8 => 'Evacuare',
-            9 => 'Directie',
-            10 => 'Hidraulic',
-            11 => 'Livrare Gaz',
-            12 => 'Calculator Livrare',
-            13 => 'Imprimare Bon',
-            14 => 'Corp Masurator',
-            15 => 'Degazor',
-            16 => 'Valva Diferentiala',
-            17 => 'Rezervor Tank',
-        ];
-        $icons = [
-            1 => 'bi-truck-flatbed',
-            2 => 'bi-disc',
-            3 => 'bi-record-circle',
-            4 => 'bi-thermometer-snow',
-            5 => 'bi-lightning-charge',
-            6 => 'bi-gear-wide-connected',
-            7 => 'bi-sliders',
-            8 => 'bi-wind',
-            9 => 'bi-sign-turn-right',
-            10 => 'bi-droplet-half',
-            11 => 'bi-truck',
-            12 => 'bi-calculator',
-            13 => 'bi-printer-fill',
-            14 => 'bi-speedometer2',
-            15 => 'bi-filter-circle-fill',
-            16 => 'bi-diagram-3-fill',
-            17 => 'bi-hdd-fill',
-        ];
-
-        $categories = [];
-        foreach ($categoryNames as $id => $name) {
-            $categories[$id] = [
-                'id' => $id,
-                'title' => mb_strtoupper($name, 'UTF-8'),
-                'name' => $name,
-                'count' => 0,
-                'icon' => $icons[$id] ?? 'bi-circle',
-                'components' => [],
-            ];
-        }
-
-        $rows = $this->readAutoExcelRows();
-        $currentCategory = 0;
-        $categoryCounters = [];
-        foreach ($rows as $row) {
-            $rawCategory = trim((string) ($row['A'] ?? ''));
-            if ($rawCategory !== '' && preg_match('/^(\d+)\.?\s*(.+)$/u', $rawCategory, $matches)) {
-                $currentCategory = (int) $matches[1];
-            }
-            if ($currentCategory <= 0 || !isset($categories[$currentCategory])) {
-                continue;
-            }
-
-            $rawName = trim((string) ($row['B'] ?? ''));
-            if ($rawName === '') {
-                continue;
-            }
-
-            $categoryCounters[$currentCategory] = ($categoryCounters[$currentCategory] ?? 0) + 1;
-            $nr = (int) $categoryCounters[$currentCategory];
-            $displayName = $this->formatAutoComponentName($rawName);
-            $monitoringByVehicle = [
-                'camion' => trim((string) ($row['C'] ?? '')),
-                'cap_tractor' => trim((string) ($row['D'] ?? '')),
-                'semiremorca' => trim((string) ($row['E'] ?? '')),
-                'rezervor' => trim((string) ($row['F'] ?? '')),
-            ];
-            $details = trim((string) ($row['G'] ?? ''));
-            $notes = trim((string) ($row['H'] ?? ''));
-
-            $categories[$currentCategory]['components'][] = [
-                'id' => $currentCategory . '-' . $nr,
-                'nr' => $nr,
-                'category_id' => $currentCategory,
-                'name' => $displayName,
-                'raw_name' => $rawName,
-                'code' => $this->buildAutoComponentCode((string) $categories[$currentCategory]['name'], $nr),
-                'description' => $details !== ''
-                    ? $this->formatAutoSentence($details)
-                    : 'Componenta configurabila pentru categoria ' . (string) $categories[$currentCategory]['name'] . '.',
-                'details' => $details,
-                'notes' => $notes,
-                'monitoring_by_vehicle' => $monitoringByVehicle,
-                'interval' => '30.000',
-                'warning' => '25.000',
-                'critical' => '28.000',
-                'lifetime' => '35.000',
-                'wear' => null,
-                'configured' => false,
-                'photo_url' => '',
-                'photo_original' => '',
-                'garantie_piesa' => '',
-                'garantie_manopera' => '',
-                'warranty_status' => 'red',
-                'warranty_label' => 'Fara garantie',
-            ];
-        }
-
-        foreach ($categories as &$category) {
-            $category['count'] = count($category['components']);
-        }
-        unset($category);
-
-        return $categories;
-    }
-
-    private function readAutoExcelRows(): array
-    {
-        $path = dirname(BASE_PATH) . '/data/componente critice aplicatie.xlsx';
-        if (!is_file($path) || !class_exists(ZipArchive::class)) {
-            return [];
-        }
-
-        $zip = new ZipArchive();
-        if ($zip->open($path) !== true) {
-            return [];
-        }
-
-        $sharedStrings = [];
-        $sharedXml = $zip->getFromName('xl/sharedStrings.xml');
-        if (is_string($sharedXml) && $sharedXml !== '') {
-            $xml = simplexml_load_string($sharedXml);
-            if ($xml instanceof SimpleXMLElement) {
-                foreach ($xml->si as $item) {
-                    $text = '';
-                    if (isset($item->t)) {
-                        $text = (string) $item->t;
-                    } else {
-                        foreach ($item->r as $run) {
-                            $text .= (string) $run->t;
-                        }
-                    }
-                    $sharedStrings[] = $text;
-                }
-            }
-        }
-
-        $sheetXml = $zip->getFromName('xl/worksheets/sheet1.xml');
-        $zip->close();
-        if (!is_string($sheetXml) || $sheetXml === '') {
-            return [];
-        }
-
-        $sheet = simplexml_load_string($sheetXml);
-        if (!$sheet instanceof SimpleXMLElement) {
-            return [];
-        }
-
-        $rows = [];
-        foreach ($sheet->sheetData->row as $row) {
-            $rowIndex = (int) ($row['r'] ?? 0);
-            if ($rowIndex < 2) {
-                continue;
-            }
-
-            $values = [];
-            foreach ($row->c as $cell) {
-                $reference = (string) ($cell['r'] ?? '');
-                $column = preg_replace('/[^A-Z]/', '', strtoupper($reference)) ?? '';
-                if ($column === '') {
-                    continue;
-                }
-                $values[$column] = $this->excelCellValue($cell, $sharedStrings);
-            }
-            $rows[] = $values;
-        }
-
-        return $rows;
-    }
-
-    private function excelCellValue(SimpleXMLElement $cell, array $sharedStrings): string
-    {
-        $type = (string) ($cell['t'] ?? '');
-        if ($type === 's') {
-            $index = (int) ($cell->v ?? -1);
-            return trim((string) ($sharedStrings[$index] ?? ''));
-        }
-        if ($type === 'inlineStr') {
-            return trim((string) ($cell->is->t ?? ''));
-        }
-
-        return trim((string) ($cell->v ?? ''));
-    }
-
-    private function formatAutoComponentName(string $value): string
-    {
-        $value = preg_replace('/\s+/', ' ', trim($value)) ?? '';
-        $value = mb_convert_case(mb_strtolower($value, 'UTF-8'), MB_CASE_TITLE, 'UTF-8');
-        $replacements = [
-            'Abs' => 'ABS',
-            'Cpu' => 'CPU',
-            'Gpl' => 'GPL',
-            'Pto' => 'PTO',
-            'Adr' => 'ADR',
-            'A/C' => 'A/C',
-            'Pg' => 'PG',
-            'Cm' => 'CM',
-        ];
-        return strtr($value, $replacements);
-    }
-
-    private function formatAutoSentence(string $value): string
-    {
-        $value = preg_replace('/\s+/', ' ', trim($value)) ?? '';
-        if ($value === '') {
-            return '';
-        }
-        return mb_strtoupper(mb_substr($value, 0, 1, 'UTF-8'), 'UTF-8') . mb_substr($value, 1, null, 'UTF-8') . '.';
-    }
-
-    private function buildAutoComponentCode(string $categoryName, int $nr): string
-    {
-        $parts = preg_split('/\s+/', mb_strtoupper($categoryName, 'UTF-8')) ?: [];
-        $codeParts = [];
-        foreach ($parts as $part) {
-            $part = preg_replace('/[^A-Z0-9]/', '', $part) ?? '';
-            if ($part !== '') {
-                $codeParts[] = mb_substr($part, 0, 3, 'UTF-8');
-            }
-        }
-        $prefix = implode('-', array_slice($codeParts, 0, 2));
-        return ($prefix !== '' ? $prefix : 'CMP') . '-' . str_pad((string) $nr, 3, '0', STR_PAD_LEFT);
+        return (new AutoComponentCatalogService($this->db))->categories();
     }
 
     private function findAutoStockPart(array $partIndex, string $categoryName, string $componentName): ?array
@@ -935,6 +716,63 @@ class MaintenanceController
             'view' => 'components',
             'category_id' => max(0, (int) ($_POST['category_id'] ?? 0)),
             'component_id' => trim((string) ($_POST['component_id'] ?? '')),
+        ]));
+    }
+
+    /**
+     * Componentele unei categorii: adaugare / redenumire / eliminare (logica) / restaurare.
+     * Componenta noua primeste piesa ei din stoc la urmatoarea incarcare a catalogului.
+     */
+    private function manageAutoComponent(string $action): void
+    {
+        $this->requirePostAndCsrf('auto');
+        $catalog = new AutoComponentCatalogService($this->db);
+        $key = trim((string) ($_POST['component_key'] ?? ''));
+        $categoryId = max(0, (int) ($_POST['category_id'] ?? 0));
+        $selectComponent = $key;
+        try {
+            switch ($action) {
+                case 'auto_component_add':
+                    $added = $catalog->addComponent($categoryId, (string) ($_POST['name'] ?? ''), (string) ($_POST['details'] ?? ''));
+                    $this->model->syncAutoComponentsToStock($catalog->categories());
+                    $selectComponent = $added['key'];
+                    flash_set('success', 'Componenta „' . trim((string) $_POST['name']) . '” a fost adăugată (cod ' . $added['code'] . ').');
+                    break;
+                case 'auto_component_rename':
+                    $catalog->renameComponent($key, (string) ($_POST['name'] ?? ''));
+                    flash_set('success', 'Componenta a fost redenumită.');
+                    break;
+                case 'auto_component_remove':
+                    $usage = $catalog->usage($key);
+                    $catalog->setActive($key, false);
+                    $selectComponent = '';
+                    flash_set('success', 'Componenta a fost eliminată din listă.'
+                        . ($usage['configurari'] + $usage['montari'] > 0
+                            ? ' Istoricul ei (' . $usage['configurari'] . ' configurări, ' . $usage['montari'] . ' montări) rămâne; o poți restaura oricând.'
+                            : ''));
+                    break;
+                case 'auto_component_restore':
+                    $catalog->setActive($key, true);
+                    flash_set('success', 'Componenta a fost restaurată.');
+                    break;
+            }
+        } catch (InvalidArgumentException $exception) {
+            flash_set('danger', $exception->getMessage());
+        } catch (Throwable $exception) {
+            error_log('[MaintenanceController][' . $action . '] ' . $exception->getMessage());
+            flash_set('danger', 'Modificarea componentei nu a putut fi salvată.');
+        }
+
+        redirect(build_query_url([
+            'page' => 'mentenanta',
+            'action' => 'auto',
+            'vehicle_id' => max(0, (int) ($_POST['vehicle_id'] ?? 0)) ?: null,
+            'vehicle_type' => $this->normalizeAutoVehicleType((string) ($_POST['vehicle_type'] ?? 'camion')) ?: 'camion',
+            'primary_category' => trim((string) ($_POST['primary_category'] ?? 'sasiu')),
+            'subcategory' => trim((string) ($_POST['subcategory'] ?? 'sasiu')),
+            'view' => 'components',
+            'category_id' => $categoryId,
+            'component_id' => $selectComponent !== '' ? $selectComponent : null,
         ]));
     }
 

@@ -156,6 +156,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                             <th style="min-width:6rem">Cod piesă</th>
                             <th style="min-width:7rem">Tip</th>
                             <th style="min-width:7.5rem">Tip lucrare</th>
+                            <th style="min-width:15rem">Componentă (Reparații Auto)</th>
                             <th style="min-width:8.5rem">Destinație</th>
                             <th style="min-width:7rem">Vehicul</th>
                             <th style="min-width:4rem">U.M.</th>
@@ -169,7 +170,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                     <tbody id="ocr-lines-body"></tbody>
                     <tfoot class="table-light">
                         <tr>
-                            <td colspan="6" class="text-end fw-semibold">Total articole:</td>
+                            <td colspan="7" class="text-end fw-semibold">Total articole:</td>
                             <td class="text-end fw-semibold" id="ocr-lines-total">0,00</td>
                             <td colspan="2"><span class="small" id="ocr-total-diff"></span></td>
                         </tr>
@@ -218,6 +219,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
         array_map(null, array_keys(OcrPartsModel::TIP_LUCRARE_OPTIONS), array_values(OcrPartsModel::TIP_LUCRARE_OPTIONS)),
         JSON_UNESCAPED_UNICODE
     ) ?>;
+    var COMPONENT_CATALOG = <?= json_encode($componentCatalog ?? [], JSON_UNESCAPED_UNICODE) ?>;
     var API_KEY_CONFIGURED = <?= $apiKeyConfigured ? 'true' : 'false' ?>;
     var ALLOWED_EXT = ['pdf', 'jpg', 'jpeg', 'png'];
 
@@ -339,6 +341,49 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
 
         var typeSelect = makeSelect('ocr-in-tip', [['piesa', 'Piesă'], ['manopera', 'Manoperă']], line.tip || 'piesa');
         var tlSelect = makeSelect('ocr-in-tl', TIP_LUCRARE_OPTIONS, line.tip_lucrare || 'inlocuire');
+        // Locul in Reparatii Auto (propus de citire): ramura + componenta.
+        var primarySelect = makeSelect('ocr-in-primary', [['sasiu', 'Sasiu'], ['rezervor', 'Rezervor']], line.auto_primary || 'sasiu');
+        primarySelect.style.maxWidth = '6rem';
+        var compSelect = document.createElement('select');
+        compSelect.className = 'form-select form-select-sm ocr-in-comp';
+        function fillComponents() {
+            var selected = compSelect.value || line.auto_component_key || '';
+            compSelect.innerHTML = '<option value="">— fără componentă —</option>';
+            COMPONENT_CATALOG.forEach(function (category) {
+                if (primarySelect.value === 'sasiu' && category.subcategory === 'livrare_gaz') { return; }
+                var group = document.createElement('optgroup');
+                group.label = category.id + '. ' + category.name;
+                category.components.forEach(function (component) {
+                    var option = document.createElement('option');
+                    option.value = component.key;
+                    option.textContent = component.name;
+                    if (component.key === selected) { option.selected = true; }
+                    group.appendChild(option);
+                });
+                compSelect.appendChild(group);
+            });
+        }
+        // Componenta de Livrare Gaz aleasa de citire -> ramura Rezervor.
+        if (line.auto_component_key && /^1[1-7]-/.test(line.auto_component_key)) { primarySelect.value = 'rezervor'; }
+        fillComponents();
+        primarySelect.addEventListener('change', fillComponents);
+        // De unde vine componenta; o alegere a operatorului devine "manual".
+        row.dataset.sursa = line.auto_component_key ? (line.auto_sursa || 'manual') : '';
+        var marks = { invatat: ['text-success', '↺ învățat'] };
+        var mark = marks[row.dataset.sursa];
+        compSelect.addEventListener('change', function () { row.dataset.sursa = 'manual'; if (markEl) { markEl.remove(); } });
+        var compWrap = document.createElement('div');
+        compWrap.className = 'd-flex gap-1 align-items-center';
+        compWrap.appendChild(primarySelect);
+        compWrap.appendChild(compSelect);
+        var markEl = null;
+        if (mark) {
+            markEl = document.createElement('span');
+            markEl.className = 'small fw-semibold text-nowrap ' + mark[0];
+            markEl.textContent = mark[1];
+            compWrap.appendChild(markEl);
+        }
+
         var destSelect = makeSelect('ocr-in-dest', [['vehicul', 'Montează pe vehicul'], ['stoc', 'Trimite în stoc']], line.destinatie || 'vehicul');
         var vehSelect = makeSelect('ocr-in-veh', [['', '—']].concat(VEHICLES.map(function (v) { return [v.id, v.nr]; })),
             line.vehicle_id || document.getElementById('f-vehicul').value || '');
@@ -373,6 +418,7 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
         row.appendChild(cell(codeInput));
         row.appendChild(cell(typeSelect));
         row.appendChild(cell(tlSelect));
+        row.appendChild(cell(compWrap));
         row.appendChild(cell(destSelect));
         row.appendChild(cell(vehSelect));
         row.appendChild(cell(umInput));
@@ -526,6 +572,9 @@ $trackerUrl = build_query_url(['page' => 'ocr_piese']);
                 pret_unitar: parseFloat(row.querySelector('.ocr-in-price').value) || 0,
                 valoare: parseFloat(row.querySelector('.ocr-in-value').value) || 0,
                 garantie_luni: row.dataset.garantie || null,
+                auto_component_key: row.querySelector('.ocr-in-comp').value || null,
+                auto_primary: row.querySelector('.ocr-in-primary').value,
+                auto_sursa: row.dataset.sursa || 'manual',
                 km_bord: row.dataset.km || null,
                 din_ocr: row.dataset.dinOcr === '1'
             });

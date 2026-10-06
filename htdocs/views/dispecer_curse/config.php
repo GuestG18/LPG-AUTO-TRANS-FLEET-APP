@@ -25,6 +25,33 @@ foreach ($transportTypeOptions as $transportTypeValue => $transportTypeLabel) {
 }
 $selectedTransportButtonLabel = $selectedTransportLabels !== [] ? implode(', ', $selectedTransportLabels) : '-- Selecteaza --';
 
+$billingMonthRules = is_array($beneficiaryFormData['luna_facturare'] ?? null) ? $beneficiaryFormData['luna_facturare'] : [];
+/* Luna in care se factureaza o cursa care trece dintr-o luna in alta: regula negociata cu
+   beneficiarul, pe tip de transport si pe componenta (km / tone). Se aplica in Centralizator
+   facturare, Dashboard Analitic V2 si Istoric activitati sofer. */
+$renderBillingMonthRule = static function (string $transportType, string $component, string $label, string $hint = '') use ($billingMonthRules): void {
+    $current = BillingMonthRule::normalizeRule($billingMonthRules[$transportType][$component] ?? BillingMonthRule::DEFAULT_RULE);
+    $fieldId = 'config_luna_facturare_' . $transportType . '_' . $component;
+    ?>
+    <div class="col-12 col-md-6 tcv2-field">
+        <label class="form-label tcv2-field-label" for="<?= e($fieldId) ?>"><?= e($label) ?></label>
+        <select class="form-select" id="<?= e($fieldId) ?>" name="luna_facturare[<?= e($transportType) ?>][<?= e($component) ?>]">
+            <?php foreach (BillingMonthRule::RULE_LABELS as $ruleValue => $ruleLabel): ?>
+                <option value="<?= e($ruleValue) ?>" <?= $current === $ruleValue ? 'selected' : '' ?>><?= e($ruleLabel) ?></option>
+            <?php endforeach; ?>
+        </select>
+        <?php if ($hint !== ''): ?><div class="form-text"><?= e($hint) ?></div><?php endif; ?>
+    </div>
+    <?php
+};
+$billingMonthSplitHint = 'Cursa 31.07 - 01.08: cu reguli diferite pe tone si km, km-ii se factureaza intr-o luna si tonele in cealalta, cu partea lor de valoare. Regula de km conteaza doar la rutele facturate si pe km.';
+// Selecturile pereche stau pe acelasi rand; nota e una singura, sub amandoua, ca sa nu le dezalinieze.
+$renderBillingMonthNote = static function (string $note): void {
+    ?>
+    <div class="col-12 mt-1"><div class="form-text mt-0"><?= e($note) ?></div></div>
+    <?php
+};
+
 $isPrimarSelected = in_array('primar', $selectedTransportTypes, true);
 $isDistributieSelected = in_array('distributie', $selectedTransportTypes, true);
 $isPrimaryDistributionSelected = in_array('primar_distributie', $selectedTransportTypes, true);
@@ -683,6 +710,9 @@ if ($configCreateMode) {
                                     <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona']) ? 'is-invalid' : '' ?>" id="config_primar_pret_tona" name="pret_tona" min="0" step="any" value="<?= e((string) ($beneficiaryFormData['pret_tona'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_tona'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_tona']) ?></div><?php endif; ?>
                                 </div>
+                                <?php $renderBillingMonthRule('primar', 'km', 'Luna de facturare - Primar km'); ?>
+                                <?php $renderBillingMonthRule('primar_tona', 'tone', 'Luna de facturare - Primar tona'); ?>
+                                <?php $renderBillingMonthNote('Cursele Primar facturate pe km, respectiv pe tone, intra in luna datei alese.'); ?>
                             </div>
                             </div>
                         </div>
@@ -700,6 +730,11 @@ if ($configCreateMode) {
                                 <?php if ($catalogConfigReady): ?>
                                     <button type="button" class="tcv2-tile-link" data-open-tab="distributie">Deschide „Rute Distributie" <i class="bi bi-arrow-right-short" aria-hidden="true"></i></button>
                                 <?php endif; ?>
+                                <div class="row g-3 mt-1">
+                                    <?php $renderBillingMonthRule('distributie', 'tone', 'Luna de facturare - tone'); ?>
+                                    <?php $renderBillingMonthRule('distributie', 'km', 'Luna de facturare - km'); ?>
+                                    <?php $renderBillingMonthNote($billingMonthSplitHint); ?>
+                                </div>
                             </div>
                         </div>
 
@@ -716,6 +751,11 @@ if ($configCreateMode) {
                                 <?php if ($catalogConfigReady): ?>
                                     <button type="button" class="tcv2-tile-link" data-open-tab="primar_distributie">Deschide „Rute Primar+Distributie" <i class="bi bi-arrow-right-short" aria-hidden="true"></i></button>
                                 <?php endif; ?>
+                                <div class="row g-3 mt-1">
+                                    <?php $renderBillingMonthRule('primar_distributie', 'tone', 'Luna de facturare - tone'); ?>
+                                    <?php $renderBillingMonthRule('primar_distributie', 'km', 'Luna de facturare - km'); ?>
+                                    <?php $renderBillingMonthNote($billingMonthSplitHint); ?>
+                                </div>
                             </div>
                         </div>
 
@@ -754,6 +794,7 @@ if ($configCreateMode) {
                                     <input type="number" class="form-control <?= isset($beneficiaryFormErrors['pret_tona_aspirata_gazoasa']) ? 'is-invalid' : '' ?>" id="config_compresor_pret_tona_aspirata_gazoasa" name="pret_tona_aspirata_gazoasa" min="0" step="any" value="<?= e((string) ($beneficiaryFormData['pret_tona_aspirata_gazoasa'] ?? '')) ?>">
                                     <?php if (isset($beneficiaryFormErrors['pret_tona_aspirata_gazoasa'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['pret_tona_aspirata_gazoasa']) ?></div><?php endif; ?>
                                 </div>
+                                <?php $renderBillingMonthRule('compresor', 'total', 'Luna de facturare', 'Cursa de compresor se factureaza intreaga in luna datei alese.'); ?>
                                 <div class="col-12">
                                     <label class="form-label" for="config_compresor_vehicle_ids_toggle">Vehicule Compresor</label>
                                     <div class="dropdown vehicle-multiselect-dropdown">

@@ -62,6 +62,8 @@ if (!in_array($selectedCategoryId, $currentCategoryIds, true)) {
     $selectedCategoryId = (int) ($currentCategoryIds[0] ?? 11);
 }
 $selectedCategory = is_array($categories[$selectedCategoryId] ?? null) ? $categories[$selectedCategoryId] : [];
+$canManageComponents = !empty($catalog['can_manage_components']);
+$removedComponents = (array) (($catalog['removed_components'] ?? [])[$selectedCategoryId] ?? []);
 $selectedComponents = array_values(is_array($selectedCategory['components'] ?? null) ? $selectedCategory['components'] : []);
 $selectedComponentId = (string) ($_GET['component_id'] ?? '');
 $selectedComponent = $selectedComponents[0] ?? [];
@@ -405,6 +407,11 @@ if ($componentPage && $selectedCategory !== []) {
                     <div>
                         <h1><?= e((string) ($selectedCategory['name'] ?? $subcategoryLabel)) ?></h1>
                         <span><?= e((string) count($selectedComponents)) ?> componente</span>
+                        <?php if ($canManageComponents): ?>
+                            <button type="button" class="repair-auto-comp-add-btn" data-comp-add-toggle>
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă componentă
+                            </button>
+                        <?php endif; ?>
                     </div>
                     <i class="bi bi-chevron-right"></i>
                     <strong>Componente</strong>
@@ -414,6 +421,40 @@ if ($componentPage && $selectedCategory !== []) {
                         <?php if ($selectedVehicleKm > 0): ?><em><?= e(format_number_ro((float) $selectedVehicleKm, 0)) ?> km</em><?php endif; ?>
                     </div>
                 </div>
+
+                <?php if ($canManageComponents): ?>
+                    <?php
+                    $componentFormFields = static function () use ($vehicleId, $vehicle, $primary, $subcategory, $selectedCategoryId): string {
+                        return csrf_field()
+                            . '<input type="hidden" name="vehicle_id" value="' . e((string) $vehicleId) . '">'
+                            . '<input type="hidden" name="vehicle_type" value="' . e($vehicle) . '">'
+                            . '<input type="hidden" name="primary_category" value="' . e($primary) . '">'
+                            . '<input type="hidden" name="subcategory" value="' . e($subcategory) . '">'
+                            . '<input type="hidden" name="category_id" value="' . e((string) $selectedCategoryId) . '">';
+                    };
+                    ?>
+                    <form class="repair-auto-comp-add d-none" method="post" data-comp-add-form
+                          action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'auto_component_add'])) ?>">
+                        <?= $componentFormFields() ?>
+                        <div class="repair-auto-comp-add-title">Componentă nouă în <?= e((string) ($selectedCategory['name'] ?? '')) ?></div>
+                        <input type="text" name="name" maxlength="120" required placeholder="Nume componentă (ex. Ambreiaj, Filtru ulei)">
+                        <input type="text" name="details" maxlength="500" placeholder="Detalii (opțional)">
+                        <button type="submit" class="is-primary"><i class="bi bi-check-lg" aria-hidden="true"></i> Adaugă</button>
+                        <button type="button" data-comp-add-toggle>Renunță</button>
+                        <div class="repair-auto-comp-hint">Primește automat un cod și o piesă în stoc; apare imediat și în Registrul de piese (OCR).</div>
+                    </form>
+                    <form class="d-none" method="post" data-comp-rename-form
+                          action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'auto_component_rename'])) ?>">
+                        <?= $componentFormFields() ?>
+                        <input type="hidden" name="component_key" value="">
+                        <input type="hidden" name="name" value="">
+                    </form>
+                    <form class="d-none" method="post" data-comp-remove-form
+                          action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'auto_component_remove'])) ?>">
+                        <?= $componentFormFields() ?>
+                        <input type="hidden" name="component_key" value="">
+                    </form>
+                <?php endif; ?>
 
                 <div class="repair-auto-components-table" data-repair-components-table>
                     <div class="repair-auto-component-row is-header">
@@ -477,6 +518,10 @@ if ($componentPage && $selectedCategory !== []) {
                             <span class="repair-auto-row-actions">
                                 <button type="button" data-component-view title="Vezi configurarea"><i class="bi bi-eye"></i></button>
                                 <button type="button" data-component-open title="Deschide componenta"><i class="bi bi-chevron-right"></i></button>
+                                <?php if ($canManageComponents): ?>
+                                    <button type="button" data-comp-rename data-key="<?= e((string) ($payload['id'] ?? '')) ?>" title="Redenumește componenta"><i class="bi bi-pencil"></i></button>
+                                    <button type="button" data-comp-remove data-key="<?= e((string) ($payload['id'] ?? '')) ?>" title="Elimină componenta din listă (istoricul rămâne)"><i class="bi bi-trash3"></i></button>
+                                <?php endif; ?>
                             </span>
                         </div>
                     <?php endforeach; ?>
@@ -484,6 +529,20 @@ if ($componentPage && $selectedCategory !== []) {
                         <div class="repair-auto-empty">Nu exista componente in categoria selectata.</div>
                     <?php endif; ?>
                 </div>
+
+                <?php if ($canManageComponents && $removedComponents !== []): ?>
+                    <details class="repair-auto-comp-removed">
+                        <summary>Componente eliminate (<?= e((string) count($removedComponents)) ?>)</summary>
+                        <?php foreach ($removedComponents as $removed): ?>
+                            <form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'auto_component_restore'])) ?>">
+                                <?= $componentFormFields() ?>
+                                <input type="hidden" name="component_key" value="<?= e((string) $removed['key']) ?>">
+                                <span><?= e((string) $removed['name']) ?> <em><?= e((string) $removed['code']) ?></em></span>
+                                <button type="submit"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Restaurează</button>
+                            </form>
+                        <?php endforeach; ?>
+                    </details>
+                <?php endif; ?>
 
                 <div class="repair-auto-info">
                     <i class="bi bi-info-circle-fill"></i>
@@ -662,6 +721,96 @@ if ($componentPage && $selectedCategory !== []) {
     </main>
 </div>
 
+<style>
+    .repair-auto-comp-add-btn { margin-left: .6rem; border: 1px solid #0d6efd; color: #0d6efd; background: #fff; border-radius: .4rem; padding: .15rem .55rem; font-size: .78rem; font-weight: 600; }
+    .repair-auto-comp-add-btn:hover { background: #0d6efd; color: #fff; }
+    .repair-auto-comp-add { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin: 0 0 .8rem; padding: .7rem; border: 1px dashed #9ec5fe; border-radius: .5rem; background: #f5f9ff; }
+    .repair-auto-comp-add.d-none { display: none; }
+    .repair-auto-comp-add-title { width: 100%; font-weight: 700; font-size: .85rem; }
+    .repair-auto-comp-add input[type="text"] { flex: 1 1 14rem; border: 1px solid #ced4da; border-radius: .35rem; padding: .3rem .5rem; font-size: .85rem; }
+    .repair-auto-comp-add button { border: 1px solid #ced4da; background: #fff; border-radius: .35rem; padding: .3rem .7rem; font-size: .82rem; }
+    .repair-auto-comp-add button.is-primary { background: #0d6efd; border-color: #0d6efd; color: #fff; font-weight: 600; }
+    .repair-auto-comp-hint { width: 100%; font-size: .74rem; color: #6c757d; }
+    .repair-auto-row-actions [data-comp-remove].is-armed { background: #dc3545; color: #fff; border-color: #dc3545; }
+    .repair-auto-comp-rename-input { width: 100%; border: 1px solid #0d6efd; border-radius: .3rem; padding: .15rem .4rem; font-weight: 600; }
+    .repair-auto-comp-removed { margin-top: .8rem; font-size: .82rem; }
+    .repair-auto-comp-removed summary { cursor: pointer; color: #6c757d; font-weight: 600; }
+    .repair-auto-comp-removed form { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .3rem 0; border-bottom: 1px solid #f1f3f5; }
+    .repair-auto-comp-removed em { color: #6c757d; font-style: normal; font-size: .75rem; margin-left: .3rem; }
+    .repair-auto-comp-removed button { border: 1px solid #ced4da; background: #fff; border-radius: .3rem; padding: .1rem .5rem; font-size: .78rem; }
+</style>
+<script>
+// Gestionarea componentelor (adaugare / redenumire / eliminare). Butoanele stau pe randul
+// clicabil al componentei: oprim propagarea ca sa nu selecteze randul.
+(function () {
+    'use strict';
+    var addForm = document.querySelector('[data-comp-add-form]');
+    document.querySelectorAll('[data-comp-add-toggle]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            if (!addForm) { return; }
+            addForm.classList.toggle('d-none');
+            if (!addForm.classList.contains('d-none')) { addForm.querySelector('input[name="name"]').focus(); }
+        });
+    });
+
+    var renameForm = document.querySelector('[data-comp-rename-form]');
+    var removeForm = document.querySelector('[data-comp-remove-form]');
+    document.addEventListener('click', function (event) {
+        var renameBtn = event.target.closest('[data-comp-rename]');
+        var removeBtn = event.target.closest('[data-comp-remove]');
+        if (!renameBtn && !removeBtn) { return; }
+        event.preventDefault();
+        event.stopPropagation();
+        var row = (renameBtn || removeBtn).closest('[data-component-row]');
+
+        if (renameBtn && renameForm && row) {
+            var title = row.querySelector('strong');
+            if (title.querySelector('input')) { return; }
+            var oldName = title.textContent.trim();
+            var input = document.createElement('input');
+            input.type = 'text';
+            input.maxLength = 120;
+            input.value = oldName;
+            input.className = 'repair-auto-comp-rename-input';
+            title.textContent = '';
+            title.appendChild(input);
+            input.focus();
+            input.select();
+            ['click', 'keydown', 'keyup'].forEach(function (type) {
+                input.addEventListener(type, function (e) { e.stopPropagation(); });
+            });
+            var finish = function (save) {
+                var value = input.value.trim();
+                if (save && value !== '' && value !== oldName) {
+                    renameForm.querySelector('input[name="component_key"]').value = renameBtn.dataset.key;
+                    renameForm.querySelector('input[name="name"]').value = value;
+                    renameForm.submit();
+                    return;
+                }
+                title.textContent = oldName;
+            };
+            input.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                if (e.key === 'Escape') { finish(false); }
+            });
+            input.addEventListener('blur', function () { finish(true); });
+            return;
+        }
+
+        // Eliminare: al doilea click confirma (confirm() nativ e blocat in browserul integrat).
+        if (removeBtn && removeForm) {
+            if (!removeBtn.classList.contains('is-armed')) {
+                removeBtn.classList.add('is-armed');
+                removeBtn.title = 'Apasă din nou pentru eliminare';
+                setTimeout(function () { removeBtn.classList.remove('is-armed'); removeBtn.title = 'Elimină componenta din listă (istoricul rămâne)'; }, 3000);
+                return;
+            }
+            removeForm.querySelector('input[name="component_key"]').value = removeBtn.dataset.key;
+            removeForm.submit();
+        }
+    }, true);
+})();
+</script>
 <script>
 (() => {
     const page = document.querySelector('[data-repair-auto-page]');

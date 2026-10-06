@@ -49,6 +49,16 @@ $warrantyOptions = OcrPartsModel::WARRANTY_OPTIONS_V2;
     .rp-doc-box .rp-doc { font-weight: 600; }
     .rp-doc-box .rp-supplier { color: #495057; font-size: .82rem; }
     .rp-scan-badge { font-size: .7rem; font-weight: 600; margin-top: .15rem; display: inline-block; }
+    .rp-comp-cell { min-width: 15rem; }
+    .rp-comp-cell .rp-comp-row { display: flex; gap: .25rem; }
+    .rp-comp-cell select.rp-comp-primary { width: 5.6rem; flex: 0 0 auto; }
+    .rp-comp-cell select.rp-comp-select { flex: 1 1 auto; min-width: 9rem; }
+    .rp-comp-cell select.rp-comp-missing { border-color: #f0ad4e; background: #fff8e1; }
+    .rp-comp-path { font-size: .68rem; color: #6c757d; margin-top: .1rem; white-space: nowrap; }
+    .rp-comp-src { font-weight: 600; margin-left: .3rem; }
+    .rp-comp-src.is-learned { color: #0f5132; }
+    .rp-sent-badge { font-size: .66rem; font-weight: 600; background: #d1e7dd; color: #0f5132; border-radius: .25rem; padding: .05rem .3rem; white-space: nowrap; }
+    tr.rp-item-sent td { background: #f6fbf8; }
     tr.rp-parent.rp-open .rp-doc-wrap {
         border: 1px solid #cfe2ff; border-radius: .5rem; padding: .4rem 1.4rem .4rem .6rem;
         position: relative; background: #fff;
@@ -430,6 +440,10 @@ if ($searchMode) {
                         'km_bord' => $a['km_bord'] !== null ? (int) $a['km_bord'] : null,
                         'depozit' => (string) ($a['depozit'] ?? ''),
                         'cant_alocata' => $a['cant_alocata'] !== null ? (float) $a['cant_alocata'] : null,
+                        'auto_primary' => $a['auto_primary'] ?? null,
+                        'auto_component_key' => $a['auto_component_key'] ?? null,
+                        'auto_sursa' => $a['auto_sursa'] ?? null,
+                        'trimis' => !empty($a['mentenanta_trimis_la']),
                     ], $event['articole'] ?? []),
                     'vehicule' => array_map(static fn (array $v): array => [
                         'id' => (int) $v['vehicle_id'],
@@ -442,7 +456,7 @@ if ($searchMode) {
                 $scanStatus = (string) ($event['scan_status'] ?? '');
                 $scanBadges = [
                     'in_procesare' => ['text-bg-secondary', 'bi-hourglass-split', 'Scanare primită pe email, se citește automat'],
-                    'de_verificat' => ['text-bg-warning', 'bi-eye', 'Completată automat din scanare — verifică datele, apoi „Marchează verificată” din meniul Acțiuni'],
+                    'de_verificat' => ['text-bg-warning', 'bi-eye', 'Completată automat din scanare — verifică datele (inclusiv componenta), apoi Acțiuni → „Verificată — trimite în Reparații”'],
                     'eroare' => ['text-bg-danger', 'bi-exclamation-triangle', (string) ($event['scan_eroare'] ?? 'Citirea automată a eșuat')],
                 ];
                 ?>
@@ -563,7 +577,8 @@ if ($searchMode) {
         itemDelete: <?= json_encode($ajax('item_delete'), JSON_UNESCAPED_SLASHES) ?>,
         vehicleAdd: <?= json_encode($ajax('vehicle_add'), JSON_UNESCAPED_SLASHES) ?>,
         vehicleRemove: <?= json_encode($ajax('vehicle_remove'), JSON_UNESCAPED_SLASHES) ?>,
-        markVerified: <?= json_encode($ajax('mark_verified'), JSON_UNESCAPED_SLASHES) ?>
+        markVerified: <?= json_encode($ajax('mark_verified'), JSON_UNESCAPED_SLASHES) ?>,
+        sendMaintenance: <?= json_encode($ajax('send_maintenance'), JSON_UNESCAPED_SLASHES) ?>
     };
     var SELECTED_VEHICLE = <?= (int) $filters['vehicle_id'] ?>;
     var EXPAND_EVENT = <?= $expandEventId ?>;
@@ -575,6 +590,15 @@ if ($searchMode) {
         $vehicles
     ), JSON_UNESCAPED_UNICODE) ?>;
     var STOC_TAB = 'stoc';
+    // Categoriile / componentele din Reparatii Auto (Livrare Gaz exista doar sub Rezervor).
+    var COMPONENT_CATALOG = <?= json_encode($componentCatalog ?? [], JSON_UNESCAPED_UNICODE) ?>;
+    var SUBCATEGORY_LABELS = { sasiu: 'Sasiu', hidraulic: 'Hidraulic', livrare_gaz: 'Livrare Gaz' };
+    var COMPONENTS_BY_KEY = {};
+    COMPONENT_CATALOG.forEach(function (category) {
+        category.components.forEach(function (component) {
+            COMPONENTS_BY_KEY[component.key] = { name: component.name, category: category.name, categoryId: category.id, subcategory: category.subcategory };
+        });
+    });
 
     var errorBox = document.getElementById('rp-error');
     var pageTotals = {
@@ -798,6 +822,64 @@ if ($searchMode) {
         var tlSelect = selInput(tlOptions, item.tip_lucrare);
         tr.appendChild(td(tlSelect));
 
+        // 7b. Locul in Reparatii Auto: ramura (Sasiu / Rezervor) + categorie › componenta.
+        var compCell = document.createElement('td');
+        compCell.className = 'rp-comp-cell';
+        var compRow = document.createElement('div');
+        compRow.className = 'rp-comp-row';
+        var primarySelect = selInput([['sasiu', 'Sasiu'], ['rezervor', 'Rezervor']], item.auto_primary || 'sasiu', 'rp-comp-primary');
+        primarySelect.title = 'Ramura din Reparații Auto';
+        var compSelect = document.createElement('select');
+        compSelect.className = 'rp-comp-select';
+        function fillComponentOptions() {
+            compSelect.innerHTML = '';
+            var none = document.createElement('option');
+            none.value = '';
+            none.textContent = '— alege componenta —';
+            compSelect.appendChild(none);
+            COMPONENT_CATALOG.forEach(function (category) {
+                if (primarySelect.value === 'sasiu' && category.subcategory === 'livrare_gaz') { return; }
+                var group = document.createElement('optgroup');
+                group.label = category.id + '. ' + category.name + ' (' + (SUBCATEGORY_LABELS[category.subcategory] || '') + ')';
+                category.components.forEach(function (component) {
+                    var option = document.createElement('option');
+                    option.value = component.key;
+                    option.textContent = component.name;
+                    if (component.key === item.auto_component_key) { option.selected = true; }
+                    group.appendChild(option);
+                });
+                compSelect.appendChild(group);
+            });
+        }
+        fillComponentOptions();
+        var compPath = document.createElement('div');
+        compPath.className = 'rp-comp-path';
+        var SOURCE_MARKS = {
+            invatat: ['is-learned', '↺ învățat', 'Completat automat: aceeași piesă a fost confirmată pe o factură anterioară']
+        };
+        function refreshComponentPath() {
+            var info = COMPONENTS_BY_KEY[item.auto_component_key || ''];
+            compPath.textContent = info
+                ? (item.auto_primary === 'rezervor' ? 'Rezervor' : 'Sasiu') + ' › ' + (SUBCATEGORY_LABELS[info.subcategory] || '') + ' › ' + info.categoryId + '. ' + info.category
+                : '';
+            var mark = info ? SOURCE_MARKS[item.auto_sursa || ''] : null;
+            if (mark) {
+                var span = document.createElement('span');
+                span.className = 'rp-comp-src ' + mark[0];
+                span.textContent = mark[1];
+                span.title = mark[2];
+                compPath.appendChild(span);
+            }
+            // Piesa montata / in stoc fara componenta nu ajunge pe componenta in Reparatii.
+            compSelect.classList.toggle('rp-comp-missing', !isLabor && !info);
+        }
+        refreshComponentPath();
+        compRow.appendChild(primarySelect);
+        compRow.appendChild(compSelect);
+        compCell.appendChild(compRow);
+        compCell.appendChild(compPath);
+        tr.appendChild(compCell);
+
         // 8. Garantie (durata)
         var wOptions = [['', '--']].concat(WARRANTY_OPTIONS.map(function (m) { return [m, m + ' luni']; }));
         var warrantySelect = selInput(wOptions, item.garantie_luni === null ? '' : item.garantie_luni);
@@ -911,6 +993,26 @@ if ($searchMode) {
             saveField(priceInput, 'pret_unitar', function () { refreshLineTotal(); renderSelectedHeader(parentTr); });
         });
         tlSelect.addEventListener('change', function () { saveField(tlSelect, 'tip_lucrare'); });
+        function applyPlacement(payload) {
+            var placement = payload.placement || {};
+            item.auto_component_key = placement.auto_component_key || null;
+            item.auto_primary = placement.auto_primary || primarySelect.value;
+            item.auto_sursa = placement.auto_sursa || null;
+            primarySelect.value = item.auto_primary;
+            refreshComponentPath();
+        }
+        compSelect.addEventListener('change', function () { saveField(compSelect, 'auto_component_key', applyPlacement); });
+        primarySelect.addEventListener('change', function () {
+            var info = COMPONENTS_BY_KEY[item.auto_component_key || ''];
+            if (primarySelect.value === 'sasiu' && info && info.subcategory === 'livrare_gaz') {
+                showError('Livrare Gaz există doar sub Rezervor.');
+                primarySelect.value = 'rezervor';
+                return;
+            }
+            fillComponentOptions();
+            if (!item.auto_component_key) { item.auto_primary = primarySelect.value; return; }
+            saveField(primarySelect, 'auto_primary', applyPlacement);
+        });
         warrantySelect.addEventListener('change', function () { saveField(warrantySelect, 'garantie_luni'); });
         warrantyDateInput.addEventListener('change', function () { saveField(warrantyDateInput, 'garantie_pana_la'); });
         dateRefInput.addEventListener('change', function () { saveField(dateRefInput, 'data_referinta'); });
@@ -981,6 +1083,17 @@ if ($searchMode) {
                 if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
             });
         });
+
+        // Articol trimis in Reparatii: ramane ca istoric, corecturile se fac acolo.
+        if (item.trimis) {
+            tr.classList.add('rp-item-sent');
+            tr.querySelectorAll('input, select, button').forEach(function (el) { el.disabled = true; });
+            var sentBadge = document.createElement('span');
+            sentBadge.className = 'rp-sent-badge me-1';
+            sentBadge.title = 'Trimis în Reparații Auto — corecturile se fac acolo';
+            sentBadge.innerHTML = '<i class="bi bi-check2-circle" aria-hidden="true"></i> În Reparații';
+            actionsCell.insertBefore(sentBadge, actionsCell.firstChild);
+        }
 
         var delBtn = actionsCell.querySelector('.rp-item-del');
         delBtn.addEventListener('click', function () {
@@ -1080,7 +1193,7 @@ if ($searchMode) {
         });
         if (!body.children.length) {
             var empty = document.createElement('tr');
-            empty.innerHTML = '<td colspan="15" class="text-muted text-center py-3">Niciun articol pentru această selecție — folosește „+ Adaugă articol".</td>';
+            empty.innerHTML = '<td colspan="16" class="text-muted text-center py-3">Niciun articol pentru această selecție — folosește „+ Adaugă articol".</td>';
             body.appendChild(empty);
         }
     }
@@ -1145,7 +1258,7 @@ if ($searchMode) {
             '      <div class="mb-2"><button type="button" class="btn btn-sm btn-outline-primary rp-item-add"><i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Adaugă articol</button></div>' +
             '      <div class="rp-item-scroll"><table class="rp-item-table"><thead><tr>' +
             '        <th>Tip</th><th>Denumire</th><th>Cod</th><th>Cant.</th><th>Preț unitar</th><th class="text-end">Total</th>' +
-            '        <th>Tip lucrare</th><th>Garanție</th><th>Garanție până la</th><th>Destinație</th><th>Vehicul</th>' +
+            '        <th>Tip lucrare</th><th>Componentă (Reparații Auto)</th><th>Garanție</th><th>Garanție până la</th><th>Destinație</th><th>Vehicul</th>' +
             '        <th>Data montării / Recepției</th><th>KM bord / Depozit</th><th>Cant. mont./prim.</th><th></th>' +
             '      </tr></thead><tbody class="rp-items-body"></tbody></table></div>' +
             '    </div>' +
@@ -1568,7 +1681,55 @@ if ($searchMode) {
             floatMenu.appendChild(Object.assign(document.createElement('div'), { className: 'rp-menu-sep' }));
         }
 
-        if (parentTr.dataset.scanStatus === 'de_verificat' || parentTr.dataset.scanStatus === 'eroare') {
+        var menuState = eventState(parentTr);
+        var unsentItems = menuState.items.filter(function (item) { return !item.trimis; });
+        if (unsentItems.length) {
+            var sendItem = document.createElement('button');
+            sendItem.type = 'button';
+            sendItem.className = 'rp-menu-item text-success';
+            sendItem.innerHTML = '<i class="bi bi-box-arrow-in-right" aria-hidden="true"></i>Verificată — trimite în Reparații (' + unsentItems.length + ')';
+            sendItem.addEventListener('click', function (event) {
+                event.stopPropagation();
+                closeFloatMenu();
+                var noComponent = unsentItems.filter(function (item) { return item.tip === 'piesa' && !item.auto_component_key; }).length;
+                var noVehicle = unsentItems.filter(function (item) { return item.destinatie !== 'stoc' && item.vehicle_id === null; }).length;
+                rpDialog('Trimite în Reparații Auto',
+                    'Se trimit <strong>' + unsentItems.length + '</strong> articole:<ul class="mb-2">' +
+                    '<li>montate pe vehicul → intervenție pe vehicul (cost piese + manoperă) și montare pe componentă (km / data);</li>' +
+                    '<li>trimise în stoc → cantitatea intră în piesa-componentă din stoc.</li></ul>' +
+                    (noComponent ? '<div class="text-warning-emphasis">' + noComponent + ' piese fără componentă: intră doar ca cost (fără montare / stoc).</div>' : '') +
+                    (noVehicle ? '<div class="text-danger">' + noVehicle + ' articole fără vehicul rămân netrimise.</div>' : '') +
+                    '<div class="small text-muted mt-2">După trimitere, articolele se corectează în Reparații Auto.</div>',
+                    [
+                        { label: 'Anulează', cls: 'btn-outline-secondary', action: function () {} },
+                        { label: 'Trimite', cls: 'btn-success', action: function () {
+                            postForm(URLS.sendMaintenance, { event_id: parentTr.dataset.eventId })
+                                .then(function (payload) {
+                                    var sent = payload.sent_items || [];
+                                    menuState.items.forEach(function (item) { if (sent.indexOf(item.id) !== -1) { item.trimis = true; } });
+                                    parentTr.dataset.scanStatus = 'verificata';
+                                    var badge = parentTr.querySelector('.rp-scan-badge');
+                                    if (badge) { badge.remove(); }
+                                    if (getDetailRow(parentTr)) { renderDetail(parentTr); }
+                                    var sum = payload.summary || {};
+                                    var skipped = sum.sarite || [];
+                                    rpDialog('Trimis în Reparații',
+                                        '<div>' + (sum.interventii || 0) + ' intervenții pe vehicule, ' + (sum.montari || 0) +
+                                        ' montări pe componente, ' + (sum.stoc || 0) + ' intrări în stoc.</div>' +
+                                        (skipped.length ? '<div class="mt-2 text-danger">Netrimise:<ul class="mb-0">' +
+                                            skipped.map(function (text) {
+                                                var li = document.createElement('li'); li.textContent = text; return li.outerHTML;
+                                            }).join('') + '</ul></div>' : ''),
+                                        [{ label: 'OK', cls: 'btn-primary', action: function () {} }]);
+                                })
+                                .catch(function (error) { showError(error.message); });
+                        } }
+                    ]);
+            });
+            floatMenu.appendChild(sendItem);
+        }
+
+        if (!unsentItems.length && (parentTr.dataset.scanStatus === 'de_verificat' || parentTr.dataset.scanStatus === 'eroare')) {
             var verifyItem = document.createElement('button');
             verifyItem.type = 'button';
             verifyItem.className = 'rp-menu-item text-success';

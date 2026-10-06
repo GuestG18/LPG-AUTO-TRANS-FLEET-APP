@@ -32,6 +32,7 @@ require_once $root . '/htdocs/config/database.php';
 require_once $root . '/htdocs/models/BaseModel.php';
 require_once $root . '/htdocs/models/DispecerCurseModel.php';
 require_once $root . '/htdocs/models/OperationalCostModel.php';
+require_once $root . '/htdocs/services/BillingMonthRule.php';
 require_once $root . '/htdocs/models/DashboardAnaliticV2Model.php';
 require_once $root . '/htdocs/includes/helpers.php';
 

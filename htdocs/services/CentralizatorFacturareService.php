@@ -407,7 +407,7 @@ class CentralizatorFacturareService
                             'key' => 'pret_salvat',
                             'label' => 'Preț salvat pe cursă',
                             'quantity' => match ($savedUnit) {
-                                't' => round($this->normalizedLoadedTons($row), 4),
+                                't' => round($this->normalizedBilledTons($row), 4),
                                 'km' => round($this->rowKm($row), 4),
                                 default => 1.0,
                             },
@@ -480,7 +480,7 @@ class CentralizatorFacturareService
                 'trip_id' => $tripId,
                 'sort_date' => $date,
                 'date_label' => $this->formatDateLabel($date),
-                'race_no' => $this->formatRaceNumber($tripId, $date),
+                'race_no' => $this->formatRaceNumber($tripId, $date) . $this->billingPartSuffix($row),
                 'vehicle_label' => trim((string) ($row['nr_inmatriculare'] ?? '')) !== '' ? (string) $row['nr_inmatriculare'] : 'Vehicul nealocat',
                 'route_label' => $this->routeGarages($row) !== ['', ''] ? $this->billingRouteLabel($row) : $this->routeLabel($row),
                 'route_short' => $routeShort,
@@ -500,12 +500,12 @@ class CentralizatorFacturareService
             if ($type === 'primar') {
                 $summary[$type]['km'] += $this->rowKm($row);
             } elseif ($type === 'primar_tona') {
-                $summary[$type]['tone'] += $this->normalizedLoadedTons($row);
+                $summary[$type]['tone'] += $this->normalizedBilledTons($row);
             } elseif ($type === 'primar_distributie') {
                 $summary[$type]['km'] += $this->rowKm($row);
-                $summary[$type]['tone'] += $this->normalizedLoadedTons($row);
+                $summary[$type]['tone'] += $this->normalizedBilledTons($row);
             } elseif ($type === 'distributie') {
-                $summary[$type]['tone'] += $this->normalizedLoadedTons($row);
+                $summary[$type]['tone'] += $this->normalizedBilledTons($row);
                 /*
                  * Km parcursi intra in activitate indiferent de unitatea de facturare;
                  * km facturati pe km raman in sectiunea Distributie (distributionBillingTrips).
@@ -682,7 +682,7 @@ class CentralizatorFacturareService
         foreach ($rows as $row) {
             $parts = $this->distributionBillingParts($row);
             $units = array_column($parts, 'unit');
-            $tone = $this->normalizedLoadedTons($row);
+            $tone = $this->normalizedBilledTons($row);
             $km = in_array('km', $units, true) ? $this->rowKm($row) : 0.0;
             $counted = in_array('cursă', $units, true) || $tone > 0 || $km > 0;
             if (!$counted) {
@@ -1182,7 +1182,7 @@ class CentralizatorFacturareService
 
             $type = (string) ($row['tip_transport'] ?? '');
             $km = $this->rowKm($row);
-            $tone = $this->normalizedLoadedTons($row);
+            $tone = $this->normalizedBilledTons($row);
             $value = $this->rowValue($row);
             $vehicles[$key]['trips']++;
             $vehicles[$key]['total_value'] += $value;
@@ -1340,6 +1340,9 @@ class CentralizatorFacturareService
                 c.cost_km_distributie,
                 c.cost_km_mixt,
                 c.cost_km_compresor,
+                c.billing_part,
+                c.billing_counts,
+                c.billing_date,
                 li.nume AS loc_incarcare_nume,
                 zd.nume AS zona_distributie_nume,
                 bt.nume AS beneficiar_nume,
@@ -1348,7 +1351,7 @@ class CentralizatorFacturareService
                 " . self::VEHICLE_CAPACITY_CATEGORY_ID_SQL . " AS vehicle_categorie_capacitate_id,
                 vcc.nume AS vehicle_categorie_capacitate,
                 vcc.ordine_afisare AS vehicle_categorie_capacitate_ordine
-            FROM curse_dispecer c
+            " . $where['from'] . "
             LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
             LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
@@ -1434,15 +1437,11 @@ class CentralizatorFacturareService
 
     private function buildTripWhere(array $filters, array $types, string $prefix): array
     {
-        $where = [
-            'c.deleted_at IS NULL',
-            'COALESCE(c.data_inceput, c.data_cursa) >= :' . $prefix . '_date_start',
-            'COALESCE(c.data_inceput, c.data_cursa) < :' . $prefix . '_date_next',
-        ];
-        $params = [
-            ':' . $prefix . '_date_start' => $filters['date_start'],
-            ':' . $prefix . '_date_next' => $filters['date_next'],
-        ];
+        // Perioada se aplica prin sursa (BillingMonthRule::periodTripsSql): luna fiecarei
+        // componente (km / tone) dupa regula beneficiarului din Configurare transport; o
+        // cursa impartita intre doua luni vine cu partea ei din luna selectata.
+        $where = ['c.deleted_at IS NULL'];
+        $params = [];
 
         if ($types !== []) {
             $placeholders = [];
@@ -1458,7 +1457,20 @@ class CentralizatorFacturareService
 
         $this->appendDimensionFilters($where, $params, $filters, $prefix);
 
-        return ['where' => 'WHERE ' . implode(' AND ', $where), 'params' => $params];
+        return [
+            'from' => 'FROM ' . $this->periodTripsSource((string) $filters['date_start'], (string) $filters['date_next']) . ' c',
+            'where' => 'WHERE ' . implode(' AND ', $where),
+            'params' => $params,
+        ];
+    }
+
+    /** @var array<string, string> sursa „cursele perioadei”, refolosita de toate listele paginii */
+    private array $periodTripsSources = [];
+
+    private function periodTripsSource(string $from, string $toExclusive): string
+    {
+        return $this->periodTripsSources[$from . '|' . $toExclusive]
+            ??= BillingMonthRule::periodTripsSql($this->db, $from, $toExclusive);
     }
 
     private function buildRefacturareWhere(array $filters, string $prefix): array
@@ -1622,9 +1634,9 @@ class CentralizatorFacturareService
         $sql = "
             SELECT DISTINCT DATE_FORMAT(activity_date, '%Y-%m') AS ym
             FROM (
-                SELECT COALESCE(data_inceput, data_cursa) AS activity_date
-                FROM curse_dispecer
-                WHERE deleted_at IS NULL
+                SELECT " . BillingMonthRule::sqlDateExpr($this->db, 'c') . " AS activity_date
+                FROM curse_dispecer c
+                WHERE c.deleted_at IS NULL
                 UNION ALL
                 SELECT COALESCE(e.refacturare_data, e.data_cheltuiala) AS activity_date
                 FROM curse_cheltuieli e
@@ -1661,7 +1673,7 @@ class CentralizatorFacturareService
     {
         $lookupFilters = array_merge($filters, ['tip_marfa_list' => []]);
         $where = $this->buildTripWhere($lookupFilters, $this->activityTypes($filters), 'cargo');
-        $stmt = $this->db->prepare("SELECT DISTINCT c.tip_marfa FROM curse_dispecer c " . $where['where'] . " AND COALESCE(TRIM(c.tip_marfa), '') <> '' ORDER BY c.tip_marfa ASC");
+        $stmt = $this->db->prepare("SELECT DISTINCT c.tip_marfa " . $where['from'] . " " . $where['where'] . " AND COALESCE(TRIM(c.tip_marfa), '') <> '' ORDER BY c.tip_marfa ASC");
         $this->bindParams($stmt, $where['params']);
         $stmt->execute();
         $options = [];
@@ -1686,7 +1698,7 @@ class CentralizatorFacturareService
                 li.nume AS loc_incarcare_nume,
                 zd.nume AS zona_distributie_nume,
                 COUNT(*) AS total_curse
-            FROM curse_dispecer c
+            " . $where['from'] . "
             LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
             LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
             " . $where['where'] . "
@@ -1715,7 +1727,7 @@ class CentralizatorFacturareService
                 c.loc_incarcare_id AS id,
                 COALESCE(NULLIF(TRIM(li.nume), ''), 'Necunoscut') AS label,
                 COUNT(*) AS total_curse
-            FROM curse_dispecer c
+            " . $where['from'] . "
             LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
             " . $where['where'] . "
             AND c.loc_incarcare_id IS NOT NULL
@@ -1743,7 +1755,7 @@ class CentralizatorFacturareService
                 c.zona_distributie_id AS id,
                 COALESCE(NULLIF(TRIM(zd.nume), ''), 'Necunoscut') AS label,
                 COUNT(*) AS total_curse
-            FROM curse_dispecer c
+            " . $where['from'] . "
             LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
             " . $where['where'] . "
             AND c.zona_distributie_id IS NOT NULL
@@ -1774,7 +1786,7 @@ class CentralizatorFacturareService
                 " . self::VEHICLE_CAPACITY_CATEGORY_ID_SQL . " AS categorie_capacitate_id,
                 vcc.nume AS categorie_capacitate,
                 vcc.ordine_afisare AS categorie_capacitate_ordine
-            FROM curse_dispecer c
+            " . $where['from'] . "
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             " . self::ACTIVE_TRAILER_JOIN_SQL . "
             " . self::VEHICLE_CAPACITY_CATEGORY_JOIN_SQL . "
@@ -2192,7 +2204,7 @@ class CentralizatorFacturareService
         $type = (string) ($row['tip_transport'] ?? '');
         $date = (string) (($row['data_inceput'] ?? '') ?: ($row['data_cursa'] ?? ''));
         $km = $this->rowKm($row);
-        $tone = $this->normalizedLoadedTons($row);
+        $tone = $this->normalizedBilledTons($row);
         $value = $this->rowValue($row);
         $tariff = round((float) ($row['pret_tarifare'] ?? 0), 4);
         $isDistributionTrip = in_array($type, self::DISTRIBUTION_TYPES, true);
@@ -2212,7 +2224,7 @@ class CentralizatorFacturareService
             'trip_id' => $tripId,
             'sort_date' => $date,
             'date_label' => $this->formatDateLabel($date),
-            'race_no' => $this->formatRaceNumber($tripId, $date),
+            'race_no' => $this->formatRaceNumber($tripId, $date) . $this->billingPartSuffix($row),
             'type' => $type,
             'type_label' => self::TRANSPORT_TYPES[$type]['label'] ?? ($type !== '' ? $type : '-'),
             'vehicle_label' => trim((string) ($row['nr_inmatriculare'] ?? '')) !== '' ? (string) $row['nr_inmatriculare'] : 'Vehicul nealocat',
@@ -2402,12 +2414,12 @@ class CentralizatorFacturareService
             if ($type === 'primar') {
                 $expectedPrimaryKm += $this->rowKm($row);
             } elseif ($type === 'primar_tona') {
-                $expectedPrimaryTone += $this->normalizedLoadedTons($row);
+                $expectedPrimaryTone += $this->normalizedBilledTons($row);
             } elseif ($type === 'distributie') {
-                $expectedDistributionTone += $this->normalizedLoadedTons($row);
+                $expectedDistributionTone += $this->normalizedBilledTons($row);
             } elseif ($type === 'primar_distributie') {
                 $expectedPdKm += $this->rowKm($row);
-                $expectedPdTone += $this->normalizedLoadedTons($row);
+                $expectedPdTone += $this->normalizedBilledTons($row);
             }
         }
 
@@ -2713,7 +2725,7 @@ class CentralizatorFacturareService
                 'route_label' => $this->routeLabel($expense),
                 'vehicle_label' => trim((string) ($expense['nr_inmatriculare'] ?? '')) !== '' ? (string) $expense['nr_inmatriculare'] : 'Vehicul nealocat',
                 'tip_marfa_label' => $this->cargoDisplayLabel((string) ($expense['tip_marfa'] ?? '')),
-                'tone' => $this->normalizedLoadedTons($expense),
+                'tone' => $this->normalizedBilledTons($expense),
                 'km' => $this->rowKm($expense),
                 'trip_value' => $this->rowValue($expense),
                 'refacturare_amount' => 0.0,
@@ -2766,9 +2778,13 @@ class CentralizatorFacturareService
         return $saved > 0 ? round($saved, 4) : null;
     }
 
-    private function normalizedLoadedTons(array $row): float
+    /**
+     * Tonele facturate ale cursei, in tone: livrate la Distributie / Primar+Distributie
+     * (cand sunt completate), incarcate in rest - TransportPricingService::billableTons.
+     */
+    private function normalizedBilledTons(array $row): float
     {
-        $qty = (float) ($row['cantitate_incarcata'] ?? 0);
+        $qty = TransportPricingService::billableTons($row);
         $capacity = (float) (($row['cursa_capacitate_transport'] ?? null) ?: ($row['capacitate_transport'] ?? 0));
         if ($qty <= 0) {
             return 0.0;
@@ -2925,7 +2941,7 @@ class CentralizatorFacturareService
     private function distributionBillingParts(array $row): array
     {
         $units = $this->distributionBillingUnits($row);
-        $tone = $this->normalizedLoadedTons($row);
+        $tone = $this->normalizedBilledTons($row);
         $km = $this->rowKm($row);
         $value = $this->rowValue($row);
         $saved = round((float) ($row['pret_tarifare'] ?? 0), 4);
@@ -2996,7 +3012,7 @@ class CentralizatorFacturareService
             }
         }
 
-        return [$this->normalizedLoadedTons($row), 't'];
+        return [$this->normalizedBilledTons($row), 't'];
     }
 
     /*
@@ -3100,7 +3116,7 @@ class CentralizatorFacturareService
             return $tons;
         }
 
-        return $this->normalizedLoadedTons($row);
+        return $this->normalizedBilledTons($row);
     }
 
     private function compressorActivityUnit(array $row): string
@@ -3154,9 +3170,9 @@ class CentralizatorFacturareService
         $sql = "
             SELECT MAX(activity_date) AS max_date
             FROM (
-                SELECT COALESCE(data_inceput, data_cursa) AS activity_date
-                FROM curse_dispecer
-                WHERE deleted_at IS NULL
+                SELECT " . BillingMonthRule::sqlDateExpr($this->db, 'c') . " AS activity_date
+                FROM curse_dispecer c
+                WHERE c.deleted_at IS NULL
                 UNION ALL
                 SELECT COALESCE(e.refacturare_data, e.data_cheltuiala) AS activity_date
                 FROM curse_cheltuieli e
@@ -3360,7 +3376,7 @@ class CentralizatorFacturareService
      */
     private function savedRateUnit(array $row, float $rate, float $value): string
     {
-        $tone = $this->normalizedLoadedTons($row);
+        $tone = $this->normalizedBilledTons($row);
         if ($tone > 0 && $this->nearlyEqual($tone * $rate, $value, 0.05)) {
             return 't';
         }
@@ -3504,6 +3520,19 @@ class CentralizatorFacturareService
             'service' => 'Service',
             'alte' => 'Alte treceri',
         ][$type] ?? mb_convert_case(str_replace('_', ' ', $type), MB_CASE_TITLE, 'UTF-8');
+    }
+
+    /**
+     * Cursa impartita intre doua luni (regula de luna de facturare pe km / tone din
+     * Configurare transport): randul lunii arata doar partea lui, cu valoarea ei.
+     */
+    private function billingPartSuffix(array $row): string
+    {
+        return match ((string) ($row['billing_part'] ?? 'full')) {
+            'km' => ' (partea km)',
+            'tone' => ' (partea tone)',
+            default => '',
+        };
     }
 
     private function formatRaceNumber(int $id, string $date): string

@@ -257,11 +257,50 @@ $rankClass = static fn (int $index, $best, $worst): string => $index === $best ?
                                                 <td><?= e((string) ($trip['transport_label'] ?? '-')) ?></td>
                                                 <td><?= e((string) ($trip['beneficiary_label'] ?? '-')) ?></td>
                                                 <td class="is-number"><?= e($fmtNumber($trip['effective_km'] ?? 0, 0)) ?></td>
-                                                <td class="is-number"><?= $isDeliveryTrip($trip) ? '-' : e($fmtNumber($trip['transported_tons'] ?? 0, 2)) ?></td>
-                                                <td class="is-number"><?= $isDeliveryTrip($trip) ? e($fmtNumber($trip['delivered_tons'] ?? 0, 2)) : '-' ?></td>
+                                                <?php
+                                                // Luna de facturare (regula beneficiarului din Configurare transport): cursa
+                                                // facturata in alta luna apare pentru activitate, dar tonele si valoarea ei intra
+                                                // in luna aceea; cursa impartita (km / tone) aduce aici doar partea ei.
+                                                $billedElsewhere = !empty($trip['billing_outside_period']);
+                                                $billedPartial = !empty($trip['billing_partial']);
+                                                $billedPart = (string) ($trip['billing_part'] ?? '');
+                                                $billedNote = '';
+                                                if ($billedElsewhere) {
+                                                    $billedNote = 'Facturata in luna ' . (string) ($trip['billing_month_label'] ?? '') . ' - nu intra in totalurile acestei perioade';
+                                                } elseif ($billedPartial) {
+                                                    $billedNote = 'Cursa impartita: km facturati in ' . (string) ($trip['billing_km_month_label'] ?? '')
+                                                        . ', tone in ' . (string) ($trip['billing_tons_month_label'] ?? '') . '. Aici intra doar partea perioadei.';
+                                                }
+                                                $billedBadge = static fn (string $text): string => ' <span class="badge text-bg-light" title="' . e($billedNote) . '">' . e($text) . '</span>';
+                                                // Valoare / tone care nu intra in perioada: taiate, cu luna in care se factureaza.
+                                                $billedStruck = static fn (string $full, string $badge): string => '<span class="text-muted text-decoration-line-through" title="' . e($billedNote) . '">' . e($full) . '</span>' . $billedBadge($badge);
+                                                $otherMonthBadge = $billedElsewhere
+                                                    ? (string) ($trip['billing_month_label'] ?? '')
+                                                    : ($billedPart === 'km' ? 'tone ' . (string) ($trip['billing_tons_month_label'] ?? '') : 'km ' . (string) ($trip['billing_km_month_label'] ?? ''));
+                                                $tonsCell = static function (string $field) use ($trip, $billedElsewhere, $billedPartial, $billedPart, $billedStruck, $otherMonthBadge, $fmtNumber): string {
+                                                    $full = $fmtNumber($trip['full_' . $field] ?? 0, 2);
+                                                    // Tonele cursei impartite sunt toate in luna partii de tone.
+                                                    if ($billedElsewhere || ($billedPartial && $billedPart === 'km')) {
+                                                        return $billedStruck($full, $otherMonthBadge);
+                                                    }
+                                                    return e($full);
+                                                };
+                                                $valueCell = static function () use ($trip, $billedElsewhere, $billedPartial, $billedNote, $billedStruck, $billedBadge, $otherMonthBadge, $fmtMoney): string {
+                                                    $full = $fmtMoney($trip['full_total_facturare'] ?? 0);
+                                                    if ($billedElsewhere) {
+                                                        return $billedStruck($full, $otherMonthBadge);
+                                                    }
+                                                    if ($billedPartial) {
+                                                        return '<span title="' . e($billedNote . ' Valoare intreaga: ' . $full) . '">' . e($fmtMoney($trip['total_facturare'] ?? 0)) . '</span>' . $billedBadge('partial');
+                                                    }
+                                                    return e($full);
+                                                };
+                                                ?>
+                                                <td class="is-number"><?= $isDeliveryTrip($trip) ? '-' : $tonsCell('transported_tons') ?></td>
+                                                <td class="is-number"><?= $isDeliveryTrip($trip) ? $tonsCell('delivered_tons') : '-' ?></td>
                                                 <td class="is-number"><?= e($fmtDuration($trip['duration_minutes_effective'] ?? 0)) ?></td>
                                                 <td class="is-number"><?= ($trip['diurne'] ?? null) === null ? '-' : e((string) (int) $trip['diurne']) ?></td>
-                                                <?php if ($canFinancial): ?><td class="is-number"><?= e($fmtMoney($trip['total_facturare'] ?? 0)) ?></td><?php endif; ?>
+                                                <?php if ($canFinancial): ?><td class="is-number"><?= $valueCell() ?></td><?php endif; ?>
                                                 <td class="is-number"><?= e($fmtMoney($trip['total_cheltuieli'] ?? 0)) ?></td>
                                             </tr>
                                         <?php endforeach; ?>

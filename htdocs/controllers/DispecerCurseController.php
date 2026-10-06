@@ -2095,12 +2095,8 @@ class DispecerCurseController
                 . 'fara tarif suplimentar.'
             );
 
-            // Dupa reluare, formularul se deschide pe faza abia adaugata: e ultima,
-            // deci de acolo se poate relua din nou cursa.
-            $newSegmentId = (int) ($result['segment_id'] ?? 0);
-            if ($newSegmentId > 0) {
-                redirect($this->raceSegmentRedirectUrl($raceId, (string) $newSegmentId));
-            }
+            // Ca la adaugarea unei curse: dupa salvare operatorul revine in Dispecer curse.
+            redirect(build_query_url(['page' => 'dispecer_curse']));
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][segment_store] ' . $exception->getMessage());
             flash_set('danger', 'Faza nu a putut fi salvata. Reincearca.');
@@ -2127,7 +2123,6 @@ class DispecerCurseController
 
         $raceId = (int) $existing['cursa_id'];
         $race = $this->model->getRaceById($raceId);
-        $redirectUrl = $this->raceSegmentRedirectUrl($raceId);
         if ($race === null) {
             flash_set('warning', 'Cursa fazei nu a fost gasita.');
             redirect(build_query_url(['page' => 'dispecer_curse']));
@@ -2144,12 +2139,14 @@ class DispecerCurseController
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
             $this->repriceRaceFromSegments($raceId);
             flash_set('success', 'Faza a fost actualizata.');
+            // Ca la salvarea cursei: dupa salvare operatorul revine in Dispecer curse.
+            redirect(build_query_url(['page' => 'dispecer_curse']));
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][segment_update] ' . $exception->getMessage());
             flash_set('danger', 'Faza nu a putut fi actualizata. Reincearca.');
         }
 
-        redirect($redirectUrl);
+        redirect($this->raceSegmentRedirectUrl($raceId, (string) $segmentId));
     }
 
     private function deleteRaceSegmentAction(): void
@@ -4426,6 +4423,7 @@ class DispecerCurseController
             'pret_tona_aspirata_lichida' => '',
             'pret_tona_aspirata_gazoasa' => '',
             'compresor_vehicle_ids' => [],
+            'luna_facturare' => [],
             'activ' => '1',
         ];
 
@@ -4483,6 +4481,7 @@ class DispecerCurseController
                     'pret_tona_aspirata_lichida' => format_rate_input($editBeneficiary['pret_tona_aspirata_lichida'] ?? 0),
                     'pret_tona_aspirata_gazoasa' => format_rate_input($editBeneficiary['pret_tona_aspirata_gazoasa'] ?? 0),
                     'compresor_vehicle_ids' => array_values(array_unique(array_map('strval', $compressorVehicleIds))),
+                    'luna_facturare' => BillingMonthRule::rulesForBeneficiary($this->db, (int) ($editBeneficiary['id'] ?? 0)),
                     'activ' => !empty($editBeneficiary['activ']) ? '1' : '0',
                 ]);
             }
@@ -6250,6 +6249,31 @@ class DispecerCurseController
         redirect(build_query_url($redirectQuery));
     }
 
+    /**
+     * Luna de facturare trimisa din cardurile tipurilor de transport, pe componenta:
+     * luna_facturare[tip][km|tone|total].
+     *
+     * @return array<string, array<string, string>>
+     */
+    private function billingMonthRulesFromInput(mixed $input): array
+    {
+        $input = is_array($input) ? $input : [];
+        $rules = [];
+        foreach (BillingMonthRule::COMPONENTS as $type => $components) {
+            $typeInput = $input[$type] ?? null;
+            if (!is_array($typeInput)) {
+                continue;
+            }
+            foreach ($components as $component) {
+                if (array_key_exists($component, $typeInput)) {
+                    $rules[$type][$component] = BillingMonthRule::normalizeRule($typeInput[$component]);
+                }
+            }
+        }
+
+        return $rules;
+    }
+
     private function configStoreBeneficiaryAction(): void
     {
         require_admin_or_403();
@@ -6290,6 +6314,7 @@ class DispecerCurseController
         $supportsPrimaryDistribution = in_array('primar_distributie', $selectedTransportTypes, true);
         $supportsCompressor = in_array('compresor', $selectedTransportTypes, true);
         $active = isset($_POST['activ']) && (string) $_POST['activ'] === '1';
+        $billingMonthRules = $this->billingMonthRulesFromInput($_POST['luna_facturare'] ?? []);
         $errors = [];
 
         if ($name === '') {
@@ -6423,6 +6448,7 @@ class DispecerCurseController
                 'suporta_distributie' => $supportsDistribution ? '1' : '0',
                 'suporta_primar_distributie' => $supportsPrimaryDistribution ? '1' : '0',
                 'suporta_compresor' => $supportsCompressor ? '1' : '0',
+                'luna_facturare' => $billingMonthRules,
                 'activ' => $active ? '1' : '0',
             ], $errors);
             $redirectQuery = ['page' => 'dispecer_curse', 'action' => 'config'];
@@ -6485,6 +6511,7 @@ class DispecerCurseController
                     $beneficiaryId,
                     $supportsCompressor ? $compressorVehicleIds : []
                 );
+                BillingMonthRule::saveRulesForBeneficiary($this->db, $beneficiaryId, $billingMonthRules, $this->currentUserId());
             }
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][config_store_beneficiar] ' . $exception->getMessage());
@@ -7261,6 +7288,11 @@ class DispecerCurseController
             $errors['tona_livrata'] = 'Tona livrata este invalida.';
         }
         $deliveredTonForPricing = $this->normalizeTonInputToKgForPricing($deliveredTon, $vehicleTransportCapacity);
+        // Distributie si Primar+Distributie se factureaza pe tonele livrate, cand sunt
+        // completate (TransportPricingService::billableTons); altfel pe cantitatea incarcata.
+        if (in_array($transportType, ['distributie', 'primar_distributie'], true) && $deliveredTon !== null && $deliveredTon > 0) {
+            $qtyForTonPricing = $deliveredTon;
+        }
 
         $liquidSuctionTonRaw = trim((string) ($input['tona_aspirata_lichida'] ?? ''));
         $liquidSuctionTon = $liquidSuctionTonRaw === '' ? null : $this->normalizeDecimal($liquidSuctionTonRaw);
@@ -7894,7 +7926,7 @@ class DispecerCurseController
             'km_totali' => $kmTotal,
             'ore_aspirare' => $transportType === 'compresor' ? $hours : null,
             'km_dislocare' => $transportType === 'compresor' ? $relocationKm : null,
-            'tona_livrata' => $transportType === 'compresor' ? $deliveredTon : null,
+            'tona_livrata' => in_array($transportType, ['compresor', 'distributie', 'primar_distributie'], true) ? $deliveredTon : null,
             'zona_distributie_id' => $zoneId,
             'status_facturare' => $billingStatus,
             'pret_tarifare' => round($price, 2),

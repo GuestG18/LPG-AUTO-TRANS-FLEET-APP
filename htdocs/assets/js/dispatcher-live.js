@@ -676,6 +676,9 @@
                 }
             }
 
+            // Banda se pliaza inainte de derulare: altfel s-ar plia in timpul ei
+            // (pagina trece de banda) si corectia de pozitie ar opri derularea.
+            applyCollapsed(true);
             formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
             formEl.classList.remove('dispatcher-live-form-flash');
             void formEl.offsetWidth;
@@ -728,15 +731,36 @@
             if (state.pendingRender) { render(); }
         });
 
+        var applyCollapsed = function (collapsed) {
+            panel.classList.toggle('is-collapsed', collapsed);
+            if (toggleEl) { toggleEl.setAttribute('aria-expanded', collapsed ? 'false' : 'true'); }
+            if (!collapsed && mapState.map) { setTimeout(function () { mapState.map.invalidateSize(false); }, 50); }
+        };
+        // Un click pe un buton de filtru (sau alegerea din lista) deschide banda
+        // pliata si arata direct vehiculele filtrului ales.
+        var expandIfCollapsed = function () {
+            if (!panel.classList.contains('is-collapsed')) { return false; }
+            applyCollapsed(false);
+            return true;
+        };
+
         panel.querySelectorAll('[data-dl-filter]').forEach(function (chip) {
             chip.addEventListener('click', function () {
                 var filter = chip.getAttribute('data-dl-filter');
+                // Banda pliata: se deschide pe filtrul apasat (nu il anuleaza).
+                if (expandIfCollapsed()) {
+                    applyFilter(filter);
+                    return;
+                }
                 applyFilter(state.filter === filter && filter !== 'all' ? 'all' : filter);
             });
         });
 
         if (selectEl) {
-            selectEl.addEventListener('change', function () { applyFilter(selectEl.value || 'all'); });
+            selectEl.addEventListener('change', function () {
+                expandIfCollapsed();
+                applyFilter(selectEl.value || 'all');
+            });
         }
 
         if (searchEl) {
@@ -755,10 +779,6 @@
         }
 
         if (toggleEl) {
-            var applyCollapsed = function (collapsed) {
-                panel.classList.toggle('is-collapsed', collapsed);
-                toggleEl.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-            };
             // Banda porneste mereu pliata (la intrarea in pagina si dupa salvarea unei
             // curse); se deschide doar la click, fara sa-si aminteasca starea.
             applyCollapsed(true);
@@ -766,9 +786,60 @@
             toggleEl.addEventListener('click', function () {
                 var willCollapse = !panel.classList.contains('is-collapsed');
                 applyCollapsed(willCollapse);
-                if (!willCollapse && mapState.map) { setTimeout(function () { mapState.map.invalidateSize(false); }, 50); }
             });
         }
+
+        // Banda deschisa se pliaza singura cand pagina trece de ea (derulare in jos)
+        // sau la un click in afara ei. Pliind-o deasupra ecranului, continutul de
+        // dedesubt ar urca brusc; derularea se corecteaza cu inaltimea pierduta,
+        // ca utilizatorul sa ramana la acelasi loc.
+        var collapseKeepingPosition = function () {
+            if (panel.classList.contains('is-collapsed')) { return; }
+            // Reperul este elementul de sub banda: se masoara inainte si dupa pliere
+            // si se corecteaza doar cat s-a mutat. Chrome face deja asta singur
+            // (scroll anchoring), alte browsere nu; diferenta ramasa acopera ambele.
+            var anchorEl = panel.nextElementSibling;
+            while (anchorEl && anchorEl.getClientRects().length === 0) {
+                anchorEl = anchorEl.nextElementSibling; // sare peste <script> / elemente ascunse
+            }
+            var wasAbove = panel.getBoundingClientRect().bottom <= 0;
+            var anchorBefore = anchorEl ? anchorEl.getBoundingClientRect().top : 0;
+            applyCollapsed(true);
+            if (wasAbove && anchorEl) {
+                var shift = anchorEl.getBoundingClientRect().top - anchorBefore;
+                if (shift !== 0) {
+                    // 'instant': pagina are scroll-behavior smooth, iar o corectie
+                    // animata s-ar bate cu derularea aflata in curs.
+                    window.scrollBy({ top: shift, behavior: 'instant' });
+                }
+            }
+        };
+
+        var scrollCheckPending = false;
+        window.addEventListener('scroll', function () {
+            if (scrollCheckPending || panel.classList.contains('is-collapsed')) { return; }
+            scrollCheckPending = true;
+            window.requestAnimationFrame(function () {
+                scrollCheckPending = false;
+                if (panel.getBoundingClientRect().bottom <= 0) {
+                    collapseKeepingPosition();
+                }
+            });
+        }, { passive: true });
+
+        document.addEventListener('click', function (event) {
+            if (panel.classList.contains('is-collapsed')) { return; }
+            // composedPath pastreaza drumul initial chiar daca randul apasat a fost
+            // redesenat intre timp (altfel un click in banda ar parea "in afara").
+            var path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+            if (path.indexOf(panel) !== -1 || panel.contains(event.target)) { return; }
+            // Ferestrele deschise din banda (Vezi cursa, dialoguri) nu o inchid.
+            if (event.target instanceof Element
+                && event.target.closest('.race-view-overlay, .modal, .modal-backdrop, [role="dialog"]')) {
+                return;
+            }
+            collapseKeepingPosition();
+        });
 
         document.addEventListener('visibilitychange', function () {
             if (!document.hidden) { refresh(false); }

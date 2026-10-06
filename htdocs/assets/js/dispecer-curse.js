@@ -5421,7 +5421,8 @@
             setFieldState(zoneWrapper, zoneField, (isDistribution || isPrimaryKm || isPrimaryTon), true);
             setFieldState(suctionHoursWrapper, suctionHoursField, isCompressor, true);
             setFieldState(relocationKmWrapper, relocationKmField, isCompressor, true);
-            setFieldState(deliveredTonWrapper, deliveredTonField, isCompressor, true);
+            // Distributie / Primar+Distributie: se factureaza pe tonele livrate cand sunt completate.
+            setFieldState(deliveredTonWrapper, deliveredTonField, isCompressor || isDistribution, true);
             setFieldState(suctionLiquidTonWrapper, suctionLiquidTonField, isCompressor, true);
             setFieldState(suctionGasTonWrapper, suctionGasTonField, isCompressor, true);
 
@@ -5534,6 +5535,9 @@
             var relocationKmValue = parseNumber(relocationKmField ? relocationKmField.value : 0);
             var rawDeliveredTonValue = parseNumber(deliveredTonField ? deliveredTonField.value : 0);
             var deliveredTonValue = normalizeTonInputToKgForPricing(rawDeliveredTonValue, transportCapacityValue);
+            if (isDistributionTransport(transportType) && rawDeliveredTonValue > 0) {
+                quantityValue = rawDeliveredTonValue;
+            }
             var liquidSuctionTonValue = parseNumber(suctionLiquidTonField ? suctionLiquidTonField.value : 0);
             var gasSuctionTonValue = parseNumber(suctionGasTonField ? suctionGasTonField.value : 0);
             var rates = getBeneficiaryRates(transportType);

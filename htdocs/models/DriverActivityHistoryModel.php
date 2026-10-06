@@ -628,11 +628,59 @@ class DriverActivityHistoryModel extends BaseModel
         $rows = $stmt->fetchAll();
 
         foreach ($rows as &$row) {
-            $row = $this->decorateTrip($row);
+            $row = $this->applyBillingPeriod($this->decorateTrip($row), $filters);
         }
         unset($row);
 
         return $rows;
+    }
+
+    /**
+     * Cursele intra in lista dupa suprapunerea cu perioada (soferul chiar a lucrat
+     * atunci: km, zile, diurne). Valoarea, refacturarile si tonele urmeaza insa luna
+     * de facturare (BillingMonthRule, din Configurare transport), ca in Centralizator
+     * facturare si Dashboard Analitic V2: o cursa 31.07 - 04.08 nu se mai numara
+     * cu toata valoarea si in iulie, si in august.
+     *
+     * Regula e pe componenta (km / tone): o cursa de Distributie poate avea km-ii
+     * facturati in iulie si tonele in august; atunci fiecare luna primeste partea ei
+     * de valoare, iar refacturarile urmeaza luna partii principale. Campurile scazute
+     * raman cu valoarea reala in full_* pentru afisare.
+     */
+    private function applyBillingPeriod(array $row, array $filters): array
+    {
+        $start = (string) ($filters['date_start'] ?? '');
+        $end = (string) ($filters['date_end'] ?? '');
+        $next = $end !== '' ? date('Y-m-d', (int) strtotime($end . ' +1 day')) : '';
+        $share = BillingMonthRule::periodShare($this->db, $row, $start, $next);
+
+        $monthLabel = static fn (string $ym): string => $ym !== '' ? substr($ym, 5, 2) . '.' . substr($ym, 0, 4) : '';
+        $row['billing_part'] = $share['part'];
+        $row['billing_outside_period'] = $share['part'] === 'none';
+        $row['billing_partial'] = in_array($share['part'], ['km', 'tone'], true);
+        $row['billing_km_month_label'] = $monthLabel($share['km_month']);
+        $row['billing_tons_month_label'] = $monthLabel($share['tons_month']);
+        $row['billing_month_label'] = $share['part'] === 'none'
+            ? ($share['km_month'] === $share['tons_month']
+                ? $row['billing_tons_month_label']
+                : 'km ' . $row['billing_km_month_label'] . ' / tone ' . $row['billing_tons_month_label'])
+            : '';
+
+        foreach (['total_facturare', 'total_refacturare', 'total_refacturare_facturata', 'transported_tons', 'delivered_tons', 'clients'] as $field) {
+            $row['full_' . $field] = $row[$field] ?? 0;
+        }
+        $row['total_facturare'] = round((float) ($row['total_facturare'] ?? 0) * $share['value_share'], 2);
+        if (!$share['counts']) {
+            $row['total_refacturare'] = 0;
+            $row['total_refacturare_facturata'] = 0;
+        }
+        if (!$share['tons']) {
+            $row['transported_tons'] = 0;
+            $row['delivered_tons'] = 0;
+            $row['clients'] = 0;
+        }
+
+        return $row;
     }
 
     /**

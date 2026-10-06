@@ -34,6 +34,26 @@ class TransportPricingService
     }
 
     /**
+     * Tonele facturate ale cursei:
+     *  - Distributie si Primar+Distributie livreaza la clienti: tonele LIVRATE cand sunt
+     *    completate (pot fi mai putine decat incarcatura), altfel cantitatea incarcata;
+     *  - celelalte tipuri (Primar tona etc.): tonele transportate = cantitatea incarcata.
+     * Aceeasi regula ca Tone livrate / Tone transportate din Istoric activitati sofer.
+     */
+    public static function billableTons(array $trip, ?string $transportType = null): float
+    {
+        $type = $transportType ?? (string) ($trip['tip_transport'] ?? '');
+        $loaded = max(0.0, (float) ($trip['cantitate_incarcata'] ?? 0));
+        if ($type === 'distributie' || $type === 'primar_distributie') {
+            $delivered = max(0.0, (float) ($trip['tona_livrata'] ?? 0));
+
+            return $delivered > 0 ? $delivered : $loaded;
+        }
+
+        return $loaded;
+    }
+
+    /**
      * Produce a quote for a trip.
      *
      * @param array<string,mixed> $trip Keys: beneficiar_id, tip_transport, data_cursa,
@@ -233,7 +253,7 @@ class TransportPricingService
             return $this->applyFixedPrice($result, $override, 'distributie');
         }
 
-        $tone = (float) ($trip['cantitate_incarcata'] ?? 0);
+        $tone = self::billableTons($trip, 'distributie');
         $km = (float) ($trip['km_cursa'] ?? 0);
 
         $tonRate = ['value' => 0.0, 'version_id' => null, 'source' => 'mode_disabled'];
@@ -330,7 +350,7 @@ class TransportPricingService
             return $this->applyFixedPrice($result, $override, 'primar_distributie');
         }
 
-        $tone = (float) ($trip['cantitate_incarcata'] ?? 0);
+        $tone = self::billableTons($trip, 'primar_distributie');
         $km = (float) ($trip['km_cursa'] ?? 0);
         if ($km <= 0 && (int) ($route['km_tarifare'] ?? 0) > 0) {
             $km = (float) $route['km_tarifare'];

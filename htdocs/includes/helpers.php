@@ -1198,7 +1198,14 @@ function dispatcher_diurna_for_interval(array $row): array
 
     $minutes = intdiv($seconds, 60);
     $days = dispatcher_diurna_from_minutes($minutes);
-    $result = ['status' => 'ok', 'minute' => $minutes, 'diurne' => $days, 'calculat' => $days, 'ajustat' => false, 'ajustare_expirata' => false];
+    // Curse inlantuite ale aceluiasi sofer (puse pe rand de
+    // dispatcher_attach_same_day_diurna): diurnele castigate in plus prin
+    // adunarea lor stau pe ultima cursa a lantului.
+    $sameDay = is_array($row['diurna_zi'] ?? null) ? $row['diurna_zi'] : null;
+    if ($sameDay !== null && !empty($sameDay['ultima'])) {
+        $days += max(0, (int) ($sameDay['extra'] ?? 0));
+    }
+    $result = ['status' => 'ok', 'minute' => $minutes, 'diurne' => $days, 'calculat' => $days, 'ajustat' => false, 'ajustare_expirata' => false, 'zi' => $sameDay];
 
     // Modificare aprobata de admin (cerere "Modificare diurna", pusa pe rand de
     // dispatcher_attach_diurna_adjustments). Se aplica doar cat timp regula da
@@ -1224,7 +1231,13 @@ function dispatcher_diurna_for_interval(array $row): array
  */
 function dispatcher_attach_diurna_adjustments(PDO $db, array &$rows, string $idKey = 'id'): void
 {
-    if ($rows === [] || !class_exists('InactiveResourceApprovalModel')) {
+    if ($rows === []) {
+        return;
+    }
+
+    dispatcher_attach_same_day_diurna($db, $rows, $idKey);
+
+    if (!class_exists('InactiveResourceApprovalModel')) {
         return;
     }
 
@@ -1243,6 +1256,197 @@ function dispatcher_attach_diurna_adjustments(PDO $db, array &$rows, string $idK
         $row['diurna_cerere'] = $entry['pending'] ?? null;
     }
     unset($row);
+}
+
+/**
+ * Cursele inlantuite ale aceluiasi sofer: o cursa care incepe in ziua in care
+ * s-a terminat cea dinainte (de ex. o cursa scurta dimineata si una care pleaca
+ * dupa-amiaza, chiar daca aceasta continua in zilele urmatoare) formeaza un
+ * lant. Regula ramane cea din dispatcher_diurna_from_minutes, aplicata pe
+ * timpul total al lantului (suprapunerile se numara o singura data, pauzele
+ * dintre curse nu se numara).
+ *
+ * Adunarea doar adauga, nu ia niciodata: daca lantul castiga mai multe diurne
+ * decat suma curselor luate separat, diferenta se pune pe ultima cursa a
+ * lantului (cea care se termina cel mai tarziu); altfel nu se schimba nimic.
+ * Cursele cu mai multe faze (reluate) au soferii pe segmente, deci nu intra.
+ *
+ * Pune pe cursele lanturilor care castiga ceva 'diurna_zi' =
+ * [extra, diurne_lant, minute, curse, ultima]; dispatcher_diurna_for_interval
+ * il foloseste. Cursele soferului sunt citite din baza de date (fereastra de
+ * +/- 31 de zile), nu doar din $rows, ca rezultatul sa nu depinda de filtre.
+ */
+function dispatcher_attach_same_day_diurna(PDO $db, array &$rows, string $idKey = 'id'): void
+{
+    $driverIds = [];
+    $minDate = null;
+    $maxDate = null;
+    foreach ($rows as $row) {
+        $driverId = (int) ($row['driver_id'] ?? 0);
+        $start = trim((string) ($row['data_inceput'] ?? ''));
+        $end = trim((string) ($row['data_sfarsit'] ?? ''));
+        if ($driverId <= 0 || $start === '' || $end === '') {
+            continue;
+        }
+        $driverIds[$driverId] = true;
+        $minDate = $minDate === null || $start < $minDate ? $start : $minDate;
+        $maxDate = $maxDate === null || $end > $maxDate ? $end : $maxDate;
+    }
+    if ($driverIds === [] || $minDate === null) {
+        return;
+    }
+
+    try {
+        $from = (new DateTimeImmutable($minDate))->modify('-31 days')->format('Y-m-d');
+        $to = (new DateTimeImmutable($maxDate))->modify('+31 days')->format('Y-m-d');
+        $driverIds = array_keys($driverIds);
+        $driverMarks = implode(',', array_fill(0, count($driverIds), '?'));
+        $sql = "SELECT c.id, c.driver_id, c.data_inceput, c.ora_inceput, c.data_sfarsit, c.ora_sfarsit,
+                    (SELECT COUNT(*) FROM curse_segmente seg WHERE seg.cursa_id = c.id AND seg.deleted_at IS NULL) AS segmente
+                FROM curse_dispecer c
+                WHERE c.deleted_at IS NULL
+                  AND c.driver_id IN ({$driverMarks})
+                  AND c.data_sfarsit >= ?
+                  AND c.data_inceput <= ?";
+        $stmt = $db->prepare($sql);
+        $stmt->execute(array_merge($driverIds, [$from, $to]));
+        $trips = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $exception) {
+        error_log('[diurna_same_day] ' . $exception->getMessage());
+        return;
+    }
+
+    $byDriver = [];
+    foreach ($trips as $trip) {
+        if ((int) $trip['segmente'] > 1) {
+            continue;
+        }
+        $interval = dispatcher_diurna_for_interval($trip);
+        if ($interval['status'] !== 'ok') {
+            continue;
+        }
+        $start = DateTimeImmutable::createFromFormat('!Y-m-d H:i', $trip['data_inceput'] . ' ' . substr((string) $trip['ora_inceput'], 0, 5));
+        if (!$start instanceof DateTimeImmutable) {
+            continue;
+        }
+        $startTs = $start->getTimestamp();
+        $byDriver[(int) $trip['driver_id']][] = [
+            'id' => (int) $trip['id'],
+            'start_date' => (string) $trip['data_inceput'],
+            'end_date' => (string) $trip['data_sfarsit'],
+            'start' => $startTs,
+            'end' => $startTs + (int) $interval['minute'] * 60,
+            'diurne' => (int) $interval['diurne'],
+        ];
+    }
+
+    $byTrip = [];
+    foreach ($byDriver as $driverTrips) {
+        usort($driverTrips, static fn (array $a, array $b): int => [$a['start'], $a['id']] <=> [$b['start'], $b['id']]);
+
+        // Lanturi: o cursa se leaga daca incepe cel tarziu in ziua in care se
+        // termina lantul de pana atunci.
+        $chains = [];
+        $chainEndDate = null;
+        foreach ($driverTrips as $trip) {
+            if ($chainEndDate !== null && $trip['start_date'] <= $chainEndDate) {
+                $chains[count($chains) - 1][] = $trip;
+                $chainEndDate = max($chainEndDate, $trip['end_date']);
+            } else {
+                $chains[] = [$trip];
+                $chainEndDate = $trip['end_date'];
+            }
+        }
+
+        foreach ($chains as $chain) {
+            if (count($chain) < 2) {
+                continue;
+            }
+
+            // Pe langa lantul intreg se verifica si fiecare zi a lui (cursele
+            // care incep in aceeasi zi): o cursa lunga care acopera ziua poate
+            // ascunde doua curse scurte care, adunate, trec de prag. Se pastreaza
+            // varianta care da mai mult; diferentele nu se cumuleaza.
+            $groups = [dispatcher_diurna_chain_extra($chain)];
+            $byStartDate = [];
+            foreach ($chain as $trip) {
+                $byStartDate[$trip['start_date']][] = $trip;
+            }
+            $dayGroups = [];
+            $dayExtra = 0;
+            foreach ($byStartDate as $dayTrips) {
+                if (count($dayTrips) < 2) {
+                    continue;
+                }
+                $dayGroup = dispatcher_diurna_chain_extra($dayTrips);
+                if ($dayGroup['extra'] > 0) {
+                    $dayGroups[] = $dayGroup;
+                    $dayExtra += $dayGroup['extra'];
+                }
+            }
+            if ($dayExtra > $groups[0]['extra']) {
+                $groups = $dayGroups;
+            }
+
+            foreach ($groups as $group) {
+                if ($group['extra'] <= 0) {
+                    continue;
+                }
+                foreach ($group['trips'] as $trip) {
+                    $isLast = $trip['id'] === $group['last_id'];
+                    $byTrip[$trip['id']] = [
+                        'extra' => $isLast ? $group['extra'] : 0,
+                        'diurne_lant' => $group['together'],
+                        'minute' => $group['minutes'],
+                        'curse' => count($group['trips']),
+                        'ultima' => $isLast,
+                    ];
+                }
+            }
+        }
+    }
+
+    foreach ($rows as &$row) {
+        $row['diurna_zi'] = $byTrip[(int) ($row[$idKey] ?? 0)] ?? null;
+    }
+    unset($row);
+}
+
+/**
+ * Diurnele castigate in plus de un grup de curse (sortate dupa inceput) fata de
+ * suma curselor luate separat. Timpul grupului numara suprapunerile o data si
+ * nu numara pauzele dintre curse. Ultima cursa = cea care se termina cel mai tarziu.
+ *
+ * @return array{trips: array, minutes: int, together: int, extra: int, last_id: int}
+ */
+function dispatcher_diurna_chain_extra(array $trips): array
+{
+    $seconds = 0;
+    $coveredUntil = null;
+    $separately = 0;
+    $last = $trips[0];
+    foreach ($trips as $trip) {
+        $separately += $trip['diurne'];
+        $from = $coveredUntil === null ? $trip['start'] : max($trip['start'], $coveredUntil);
+        if ($trip['end'] > $from) {
+            $seconds += $trip['end'] - $from;
+        }
+        $coveredUntil = $coveredUntil === null ? $trip['end'] : max($coveredUntil, $trip['end']);
+        if ([$trip['end'], $trip['id']] > [$last['end'], $last['id']]) {
+            $last = $trip;
+        }
+    }
+
+    $minutes = intdiv($seconds, 60);
+    $together = dispatcher_diurna_from_minutes($minutes);
+
+    return [
+        'trips' => $trips,
+        'minutes' => $minutes,
+        'together' => $together,
+        'extra' => max(0, $together - $separately),
+        'last_id' => (int) $last['id'],
+    ];
 }
 
 /**

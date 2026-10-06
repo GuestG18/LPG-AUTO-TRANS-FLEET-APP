@@ -148,6 +148,7 @@ class DashboardAnaliticV2Model extends BaseModel
 
     public function getData(array $filters): array
     {
+        $this->useBillingPeriod($filters);
         $period = $this->resolvePeriod($filters);
         $from = $this->fromSql();
         $whereData = $this->buildWhere($filters);
@@ -334,7 +335,7 @@ class DashboardAnaliticV2Model extends BaseModel
             SELECT
                 " . $this->kmBandExpr($e, $thresholds) . " AS km_band,
                 c.capacitate_transport AS capacitate,
-                COUNT(*) AS curse,
+                SUM(c.billing_counts) AS curse,
                 COALESCE(SUM(" . $e['km_effective'] . "), 0) AS km,
                 COALESCE(SUM(" . $e['tons_delivered'] . "), 0) AS tone,
                 COALESCE(SUM(" . $e['facturare'] . "), 0) AS facturare,
@@ -511,6 +512,7 @@ class DashboardAnaliticV2Model extends BaseModel
             throw new InvalidArgumentException('Tip de entitate necunoscut: ' . $type);
         }
 
+        $this->useBillingPeriod($filters);
         $from = $this->fromSql();
         $expr = $this->metricExpressions($this->resolvePeriod($filters));
         $whereData = $this->buildWhere($filters);
@@ -1130,7 +1132,7 @@ class DashboardAnaliticV2Model extends BaseModel
         }
 
         return "
-            COUNT(*) AS curse,
+            SUM(c.billing_counts) AS curse,
             COALESCE(SUM(" . $e['km_effective'] . "), 0) AS km_totali,
             COALESCE(SUM(" . $e['km_billed'] . "), 0) AS km_facturati,
             COALESCE(SUM(" . $e['km_unbilled'] . "), 0) AS km_nefacturati,
@@ -1177,7 +1179,7 @@ class DashboardAnaliticV2Model extends BaseModel
         $w = static fn (string $expr): string => "COALESCE(SUM((" . $expr . ") * (" . $share . ")), 0)";
 
         return "
-            COUNT(DISTINCT c.id) AS curse,
+            COUNT(DISTINCT CASE WHEN c.billing_counts = 1 THEN c.id END) AS curse,
             " . $w($e['km_effective']) . " AS km_totali,
             " . $w($e['km_billed']) . " AS km_facturati,
             " . $w($e['km_unbilled']) . " AS km_nefacturati,
@@ -1244,7 +1246,8 @@ class DashboardAnaliticV2Model extends BaseModel
         $w = static fn (string $expr): string => $share === null
             ? "COALESCE(SUM(" . $expr . "), 0)"
             : "COALESCE(SUM((" . $expr . ") * (" . $share . ")), 0)";
-        $curse = $share === null ? 'COUNT(*)' : 'COUNT(DISTINCT c.id)';
+        // Cursa impartita intre doua luni (km / tone) se numara doar in luna partii principale.
+        $curse = $share === null ? 'SUM(c.billing_counts)' : 'COUNT(DISTINCT CASE WHEN c.billing_counts = 1 THEN c.id END)';
 
         $rows = $this->fetchAll("
             SELECT
@@ -2278,7 +2281,7 @@ class DashboardAnaliticV2Model extends BaseModel
         $segmentCondition = implode(' AND ', $conditions);
 
         return "
-            FROM curse_dispecer c
+            FROM " . $this->billingTripsSource() . " c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             LEFT JOIN (
                 SELECT cursa_id, SUM(COALESCE(km, 0)) AS weight_total
@@ -2325,7 +2328,7 @@ class DashboardAnaliticV2Model extends BaseModel
     private function fromSql(): string
     {
         return "
-            FROM curse_dispecer c
+            FROM " . $this->billingTripsSource() . " c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             LEFT JOIN soferi s ON s.id = c.driver_id
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
@@ -2360,37 +2363,52 @@ class DashboardAnaliticV2Model extends BaseModel
                         END) AS total_refacturare_fara_cost
                 FROM curse_cheltuieli
                 GROUP BY cursa_id
-            ) exp ON exp.cursa_id = c.id
+            ) exp ON exp.cursa_id = c.id AND c.billing_counts = 1
         ";
     }
 
     /**
-     * Data la care cursa este raportata in dashboard: data la care s-a INCHIS.
+     * Data la care cursa este raportata in dashboard: data de facturare.
      *
-     * O cursa inceputa pe 31 iulie si incheiata pe 2 august apartine lunii august,
-     * indiferent de tipul de transport. Fallback pe data de inceput, apoi pe data
-     * cursei, ca sa nu dispara cursele inca neinchise.
+     * Regula se alege per beneficiar si tip de transport in Configurare transport
+     * (BillingMonthRule): data de inceput (implicit) sau data de sfarsit. Astfel o
+     * cursa 31.07 - 02.08 cade in aceeasi luna ca in Centralizator facturare.
      */
     private function reportingDateExpr(): string
     {
-        return 'COALESCE(c.data_sfarsit, c.data_inceput, c.data_cursa)';
+        return 'c.billing_date';
+    }
+
+    /** Sursa „cursele perioadei” (BillingMonthRule::periodTripsSql) pentru filtrele curente. */
+    private ?string $billingTripsSql = null;
+
+    /**
+     * Fixeaza perioada sursei de curse. Se apeleaza la inceputul fiecarei metode publice,
+     * inainte de fromSql() / legsFromSql(): cursele intra dupa luna de facturare a
+     * componentelor lor (km / tone), iar cursa impartita vine doar cu partea perioadei.
+     */
+    private function useBillingPeriod(array $filters): void
+    {
+        $start = trim((string) ($filters['date_start'] ?? ''));
+        $end = trim((string) ($filters['date_end'] ?? ''));
+        $next = '';
+        if ($end !== '') {
+            $endDate = $this->toDate($end);
+            $next = $endDate !== null ? $endDate->modify('+1 day')->format('Y-m-d') : '';
+        }
+        $this->billingTripsSql = BillingMonthRule::periodTripsSql($this->db, $start, $next);
+    }
+
+    private function billingTripsSource(): string
+    {
+        return $this->billingTripsSql ??= BillingMonthRule::periodTripsSql($this->db, '', '');
     }
 
     private function buildWhere(array $filters): array
     {
+        // Perioada este deja in sursa (useBillingPeriod / periodTripsSql).
         $where = ['c.deleted_at IS NULL'];
         $params = [];
-        $ziRaportare = $this->reportingDateExpr();
-
-        if (($filters['date_start'] ?? null) !== null && $filters['date_start'] !== '') {
-            $where[] = $ziRaportare . ' >= :dash_date_start';
-            $params[':dash_date_start'] = (string) $filters['date_start'];
-        }
-
-        if (($filters['date_end'] ?? null) !== null && $filters['date_end'] !== '') {
-            $where[] = $ziRaportare . ' <= :dash_date_end';
-            $params[':dash_date_end'] = (string) $filters['date_end'];
-        }
 
         $this->appendLegFilter($where, $params, 'c.vehicle_id', 'vehicle_id', (array) ($filters['vehicle_ids'] ?? []), 'dash_vehicle');
         $this->appendLegFilter($where, $params, 'c.driver_id', 'driver_id', (array) ($filters['driver_ids'] ?? []), 'dash_driver');

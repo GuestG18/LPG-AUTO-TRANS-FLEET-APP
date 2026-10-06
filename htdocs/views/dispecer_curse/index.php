@@ -742,6 +742,19 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                         if ($diurnaSplitTitle !== '') {
                             $diurnaTitle = 'Diurne pe soferi - ' . $diurnaSplitTitle;
                         }
+                        // Curse inlantuite ale soferului: diurnele castigate in plus
+                        // prin adunarea lor stau pe ultima cursa a lantului.
+                        $diurnaSameDay = $diurnaResult['status'] === 'ok' && is_array($diurnaResult['zi'] ?? null) ? $diurnaResult['zi'] : null;
+                        if ($diurnaSameDay !== null) {
+                            $sameDayMinutes = (int) $diurnaSameDay['minute'];
+                            $sameDayNote = (int) $diurnaSameDay['curse'] . ' curse legate ale soferului, '
+                                . intdiv($sameDayMinutes, 60) . 'h ' . ($sameDayMinutes % 60) . 'm in total = '
+                                . (int) $diurnaSameDay['diurne_lant'] . ' diurne: '
+                                . (!empty($diurnaSameDay['ultima'])
+                                    ? '+' . (int) $diurnaSameDay['extra'] . ' adaugate pe aceasta cursa, ultima din lant.'
+                                    : 'diferenta este pe ultima cursa din lant.');
+                            $diurnaTitle = $diurnaTitle !== '' ? $diurnaTitle . '. ' . $sameDayNote : $sameDayNote;
+                        }
                         // Modificare de diurna aprobata de admin / cerere in asteptare
                         // (tab-ul "Diurne" din panoul de aprobari).
                         $diurnaAdjustment = is_array($row['diurna_ajustare'] ?? null) ? $row['diurna_ajustare'] : null;
@@ -763,6 +776,10 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                         // Randul cursei reluate rezuma fazele: toti soferii si toate
                         // vehiculele care au lucrat pe ea, in ordinea fazelor.
                         $rowPlateLabel = trim((string) ($row['nr_inmatriculare'] ?? ''));
+                        // Valorile pentru filtrul din antet: fiecare vehicul / sofer al
+                        // cursei separat, nu rezumatul fazelor din tooltip.
+                        $rowPlateValues = $rowPlateLabel !== '' ? [$rowPlateLabel] : [];
+                        $rowDriverValues = trim((string) $driverName) !== '' ? [trim((string) $driverName)] : [];
                         if (count($rowSegments) > 1) {
                             $segmentDriverNames = [];
                             $segmentPlates = [];
@@ -778,9 +795,11 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             }
                             if ($segmentDriverNames !== []) {
                                 $driverName = implode(', ', $segmentDriverNames);
+                                $rowDriverValues = array_values($segmentDriverNames);
                             }
                             if ($segmentPlates !== []) {
                                 $rowPlateLabel = implode(', ', $segmentPlates);
+                                $rowPlateValues = array_values($segmentPlates);
                             }
                         }
                         if ($rowPlateLabel === '') {
@@ -1009,7 +1028,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                                 form="bulk-race-delete-form"
                                                 aria-label="Selecteaza cursa ID <?= e((string) $raceId) ?>"
                                             >
-                                            <strong class="dispatcher-cell-text dispatcher-cell-nowrap dispatcher-plate-value vehicle-cell nr-auto-cell"<?= count($rowSegments) > 1 ? ' title="' . e($rowPlateLabel) . '"' : '' ?>><?= e($rowPlateLabel) ?></strong>
+                                            <strong class="dispatcher-cell-text dispatcher-cell-nowrap dispatcher-plate-value vehicle-cell nr-auto-cell" data-cell-value="<?= e($rowPlateLabel) ?>" data-cell-values="<?= e((string) json_encode($rowPlateValues, JSON_UNESCAPED_UNICODE)) ?>"<?= count($rowSegments) > 1 ? ' title="' . e($rowPlateLabel) . '"' : '' ?>><?= e($rowPlateLabel) ?></strong>
                                         </label>
                                         <?php if (count($rowSegments) > 1): ?>
                                             <button type="button" class="badge bg-info text-dark border-0 dispatcher-segments-badge" data-segments-toggle="<?= e((string) $raceId) ?>" aria-controls="race-segments-<?= e((string) $raceId) ?>" title="<?= e(dispatcher_segments_summary($rowSegments)) ?>">
@@ -1026,7 +1045,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             </td>
                             <td class="col-driver">
                                 <div class="cell-content">
-                                    <span class="dispatcher-cell-text driver-cell" title="<?= e($driverName) ?>"><?= e($driverName) ?></span>
+                                    <span class="dispatcher-cell-text driver-cell" title="<?= e($driverName) ?>" data-cell-value="<?= e($driverName) ?>" data-cell-values="<?= e((string) json_encode($rowDriverValues, JSON_UNESCAPED_UNICODE)) ?>"><?= e($driverName) ?></span>
                                 </div>
                             </td>
                             <td class="col-type">
@@ -1442,6 +1461,32 @@ document.addEventListener('DOMContentLoaded', function () {
                 return raw.replace(/\s+/g, ' ').trim();
             };
 
+            // Valorile pentru filtre: o cursa reluata cu mai multe vehicule / soferi
+            // apare la fiecare dintre ei (data-cell-values = lista JSON).
+            const getCellValues = function (rowEl, columnIndex) {
+                const cellEl = rowEl.cells[columnIndex];
+                const listEl = cellEl ? cellEl.querySelector('[data-cell-values]') : null;
+                if (listEl) {
+                    try {
+                        const list = JSON.parse(listEl.getAttribute('data-cell-values') || '[]');
+                        if (Array.isArray(list) && list.length > 0) {
+                            return list.map(function (value) {
+                                return String(value).replace(/\s+/g, ' ').trim();
+                            });
+                        }
+                    } catch (error) {
+                        // lista invalida: se foloseste valoarea simpla
+                    }
+                }
+                return [getCellValue(rowEl, columnIndex)];
+            };
+
+            const cellMatchesFilter = function (rowEl, columnIndex, allowed) {
+                return getCellValues(rowEl, columnIndex).some(function (value) {
+                    return allowed.has(value);
+                });
+            };
+
             // Afisam doar primele N randuri (dupa filtre si sortare). Fiecare rand are ~80 de
             // noduri DOM; cu sute de curse vizibile orice schimbare de layout in formularul de
             // sus recalcula tot tabelul si click-urile raspundeau in secunde (INP).
@@ -1619,7 +1664,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         if (!allowed || allowed.size === 0) {
                             return;
                         }
-                        if (!allowed.has(getCellValue(rowEl, parseInt(key, 10)))) {
+                        if (!cellMatchesFilter(rowEl, parseInt(key, 10), allowed)) {
                             visible = false;
                         }
                     });
@@ -1745,7 +1790,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (!allowed || allowed.size === 0) {
                         return;
                     }
-                    if (!allowed.has(getCellValue(rowEl, filterColumnIndex))) {
+                    if (!cellMatchesFilter(rowEl, filterColumnIndex, allowed)) {
                         matches = false;
                     }
                 });
@@ -1768,12 +1813,13 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (!rowMatchesFiltersExcept(rowEl, columnIndex)) {
                         return;
                     }
-                    const value = getCellValue(rowEl, columnIndex);
-                    if (value === '' || Object.prototype.hasOwnProperty.call(seenValues, value)) {
-                        return;
-                    }
-                    seenValues[value] = true;
-                    uniqueValues.push(value);
+                    getCellValues(rowEl, columnIndex).forEach(function (value) {
+                        if (value === '' || Object.prototype.hasOwnProperty.call(seenValues, value)) {
+                            return;
+                        }
+                        seenValues[value] = true;
+                        uniqueValues.push(value);
+                    });
                 });
                 // Valorile deja bifate pe aceasta coloana raman vizibile chiar daca nu mai au
                 // randuri disponibile, ca sa poata fi debifate.

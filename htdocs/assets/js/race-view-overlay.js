@@ -431,6 +431,24 @@
         popoverOpenAtPress = document.querySelector(OPEN_POPOVER_SELECTOR) !== null;
     }, true);
 
+    // In fisa cursei, clic pe randul unei faze deschide formularul direct pe acea faza.
+    document.addEventListener('click', function (event) {
+        var phaseRowEl = closest(event.target, 'tr[data-race-view-href]');
+        if (!phaseRowEl || event.defaultPrevented || event.button !== 0 || closest(event.target, 'a, button, input, select, textarea, label')) {
+            return;
+        }
+        if (window.getSelection && String(window.getSelection()).trim() !== '') {
+            return;
+        }
+        event.preventDefault();
+        var href = phaseRowEl.getAttribute('data-race-view-href') || '';
+        if (event.ctrlKey || event.metaKey) {
+            window.open(href, '_blank');
+        } else {
+            window.location.href = href;
+        }
+    });
+
     document.addEventListener('click', function (event) {
         if (active !== null) {
             if (closest(event.target, '[data-race-view-close]')) {

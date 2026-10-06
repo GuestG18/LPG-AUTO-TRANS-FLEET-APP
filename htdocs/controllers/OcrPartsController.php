@@ -20,6 +20,9 @@ declare(strict_types=1);
  *   ?page=ocr_piese&action=item_delete   -> POST (JSON)
  *   ?page=ocr_piese&action=vehicle_add   -> POST, asociaza un vehicul la factura (JSON)
  *   ?page=ocr_piese&action=mark_verified -> POST, factura scanata "De verificat" -> "Verificată" (JSON)
+ *   ?page=ocr_piese&action=send_maintenance -> POST, trimite articolele netrimise in Reparatii Auto
+ *                                          (interventie + montare pe componenta / intrare in stoc) si
+ *                                          marcheaza factura verificata (JSON)
  *
  * Citirea facturilor (recepția manuala si scanarile venite pe email cu subiectul
  * "piese" / "reparatii" / "service") se face cu Claude, ca la pagina Facturi:
@@ -91,6 +94,9 @@ class OcrPartsController
             case 'mark_verified':
                 $this->markVerified();
                 return;
+            case 'send_maintenance':
+                $this->sendMaintenance();
+                return;
             default:
                 $this->index();
         }
@@ -133,6 +139,7 @@ class OcrPartsController
             'currentPageNo' => $page,
             'expandEventId' => (int) ($_GET['deschide'] ?? 0),
             'expandItemId' => (int) ($_GET['articol'] ?? 0),
+            'componentCatalog' => $this->componentCatalogForView(),
         ]);
     }
 
@@ -146,7 +153,31 @@ class OcrPartsController
             'maxFileBytes' => self::MAX_FILE_BYTES,
             'maxImageBytes' => self::MAX_FILE_BYTES,
             'vehicles' => $this->model->getVehicleOptions(),
+            'componentCatalog' => $this->componentCatalogForView(),
         ]);
+    }
+
+    /**
+     * Categoriile din Reparatii Auto cu componentele lor, pentru selectoare.
+     *
+     * @return array<int,array{id:int,name:string,subcategory:?string,components:array<int,array{key:string,name:string}>}>
+     */
+    private function componentCatalogForView(): array
+    {
+        $result = [];
+        foreach ((new AutoComponentCatalogService())->categories() as $category) {
+            $result[] = [
+                'id' => (int) $category['id'],
+                'name' => (string) $category['name'],
+                'subcategory' => AutoComponentCatalogService::subcategoryFor((int) $category['id']),
+                'components' => array_map(
+                    static fn (array $c): array => ['key' => (string) $c['id'], 'name' => (string) $c['name']],
+                    $category['components']
+                ),
+            ];
+        }
+
+        return $result;
     }
 
     /** Citeste factura incarcata cu Claude si propune antetul + liniile de articole. */
@@ -228,7 +259,8 @@ class OcrPartsController
                 'verificat' => $item['verificat'],
                 'garantie_luni' => $item['garantie_luni'],
                 'km_bord' => $item['km_bord'],
-            ];
+            // Componenta: doar din locurile confirmate anterior (fara AI, fara tokeni).
+            ] + $this->model->suggestPlacement($item['denumire'], $item['cod_piesa']);
         }
 
         $warnings = [];
@@ -355,6 +387,9 @@ class OcrPartsController
                 'vehicle_id' => $lineVehicle,
                 // Citite de pe factura (garantie; km pe articol la facturile multi-vehicul).
                 'garantie_luni' => isset($line['garantie_luni']) && is_numeric($line['garantie_luni']) ? (int) $line['garantie_luni'] : null,
+                'auto_component_key' => is_string($line['auto_component_key'] ?? null) ? $line['auto_component_key'] : null,
+                'auto_primary' => is_string($line['auto_primary'] ?? null) ? $line['auto_primary'] : null,
+                'auto_sursa' => in_array($line['auto_sursa'] ?? null, ['invatat', 'manual'], true) ? $line['auto_sursa'] : 'manual',
             ] + (isset($line['km_bord']) && is_numeric($line['km_bord']) && (int) $line['km_bord'] > 0 ? ['km_bord' => (int) $line['km_bord']] : []);
         }
 
@@ -404,6 +439,9 @@ class OcrPartsController
             $this->sendJson(['ok' => false, 'error' => 'Salvarea în registru a eșuat. Detalii în logul serverului.']);
             return;
         }
+
+        // Formularul salvat = componente confirmate de operator: se tin minte pentru facturile urmatoare.
+        $this->model->learnFromEvent($eventId);
 
         flash_set('success', 'Factura a fost salvată: ' . count($items) . ' articole.');
         $this->sendJson([
@@ -548,6 +586,32 @@ class OcrPartsController
         $this->sendJson(['ok' => true]);
     }
 
+    private function sendMaintenance(): void
+    {
+        $this->requirePost();
+        $this->requireCsrfJson();
+
+        $eventId = (int) ($_POST['event_id'] ?? 0);
+        $user = function_exists('current_user') ? current_user() : null;
+        try {
+            $summary = (new OcrPartsMaintenanceSyncService($this->db))->send($eventId, isset($user['id']) ? (int) $user['id'] : null);
+            // Trimisa (chiar si partial) = operatorul a verificat-o; componentele devin locuri confirmate.
+            $this->model->markScanVerified($eventId);
+            $this->model->learnFromEvent($eventId);
+        } catch (InvalidArgumentException $exception) {
+            http_response_code(422);
+            $this->sendJson(['ok' => false, 'error' => $exception->getMessage()]);
+            return;
+        } catch (Throwable $exception) {
+            error_log('[OcrPartsController][send_maintenance] ' . $exception->getMessage());
+            http_response_code(500);
+            $this->sendJson(['ok' => false, 'error' => 'Trimiterea în Reparații a eșuat. Detalii în logul serverului.']);
+            return;
+        }
+
+        $this->sendJson(['ok' => true, 'summary' => $summary, 'sent_items' => $this->model->getSentItemIds($eventId)]);
+    }
+
     private function itemAdd(): void
     {
         $this->requirePost();
@@ -606,6 +670,7 @@ class OcrPartsController
             'value' => $result['value'],
             'garantie_pana_la' => $result['garantie_pana_la'],
             'garantie_manuala' => $result['garantie_manuala'],
+            'placement' => $result['placement'] ?? null,
             'totals' => $eventId !== null ? $this->model->getInvoiceTotals($eventId) : null,
         ]);
     }
@@ -624,6 +689,10 @@ class OcrPartsController
 
         try {
             $eventId = $this->model->deleteItem($itemId);
+        } catch (InvalidArgumentException $exception) {
+            http_response_code(422);
+            $this->sendJson(['ok' => false, 'error' => $exception->getMessage()]);
+            return;
         } catch (Throwable $exception) {
             error_log('[OcrPartsController][item_delete] ' . $exception->getMessage());
             http_response_code(500);

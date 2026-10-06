@@ -200,7 +200,8 @@ $observatii = trim((string) ($race['observatii'] ?? ''));
                     <th>Traseu</th>
                     <th class="text-end">Km</th>
                     <th class="text-end">Cantitate</th>
-                    <th class="pe-3">Observații</th>
+                    <th<?= $dispCanEdit ? '' : ' class="pe-3"' ?>>Observații</th>
+                    <?php if ($dispCanEdit): ?><th class="pe-3"></th><?php endif; ?>
                 </tr>
                 </thead>
                 <tbody>
@@ -212,8 +213,13 @@ $observatii = trim((string) ($race['observatii'] ?? ''));
                         $viewText($segment['loc_livrare'] ?? ''),
                         (string) ($zoneNames[(int) ($segment['zona_distributie_id'] ?? 0)] ?? ''),
                     ], static fn (string $part): bool => $part !== '');
+                    $segmentId = (int) ($segment['id'] ?? 0);
+                    $segmentEditUrl = $dispCanEdit && $segmentId > 0
+                        ? build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId, 'faza' => $segmentId]) . '#race-form'
+                        : '';
                     ?>
-                    <tr>
+                    <?php /* Clic pe rand (sau pe creion) deschide formularul direct pe faza respectiva. */ ?>
+                    <tr<?= $segmentEditUrl !== '' ? ' class="race-view-phase-row" data-race-view-href="' . e($segmentEditUrl) . '" title="Editează faza ' . e((string) ($index + 1)) . '"' : '' ?>>
                         <td class="ps-3"><?= e((string) ($index + 1)) ?></td>
                         <td><?= e($viewText($segment['nr_inmatriculare'] ?? '') ?: '-') ?></td>
                         <td><?= e($viewText($segment['sofer_nume'] ?? '') ?: '-') ?></td>
@@ -222,7 +228,16 @@ $observatii = trim((string) ($race['observatii'] ?? ''));
                         <td><?= e($segmentRoute !== [] ? implode(' → ', $segmentRoute) : '-') ?></td>
                         <td class="text-end"><?= e($viewNumber($segment['km'] ?? null, 0) ?: '-') ?></td>
                         <td class="text-end"><?= e($viewNumber($segment['cantitate_incarcata'] ?? null, 2, 't') ?: '-') ?></td>
-                        <td class="pe-3"><?= e($viewText($segment['observatii'] ?? '') ?: '-') ?></td>
+                        <td<?= $dispCanEdit ? '' : ' class="pe-3"' ?>><?= e($viewText($segment['observatii'] ?? '') ?: '-') ?></td>
+                        <?php if ($dispCanEdit): ?>
+                            <td class="pe-3 text-end">
+                                <?php if ($segmentEditUrl !== ''): ?>
+                                    <a class="btn btn-sm btn-outline-primary" href="<?= e($segmentEditUrl) ?>" aria-label="Editează faza <?= e((string) ($index + 1)) ?>">
+                                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                                    </a>
+                                <?php endif; ?>
+                            </td>
+                        <?php endif; ?>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>

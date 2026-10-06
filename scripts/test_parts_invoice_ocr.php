@@ -30,6 +30,9 @@ require_once $root . '/htdocs/models/OcrPartsModel.php';
 require_once $root . '/htdocs/services/InvoiceOcrService.php';
 require_once $root . '/htdocs/services/PartsInvoiceOcrService.php';
 require_once $root . '/htdocs/services/OcrPartsScanService.php';
+require_once $root . '/htdocs/models/MaintenanceModel.php';
+require_once $root . '/htdocs/services/AutoComponentCatalogService.php';
+require_once $root . '/htdocs/services/OcrPartsMaintenanceSyncService.php';
 
 $passed = 0;
 $failed = 0;
@@ -233,6 +236,218 @@ if (count($vehicles) < 2) {
             $db->rollBack();
         }
     }
+}
+
+echo "\nClasificare pe componente si trimitere in Reparatii (tranzactie anulata)\n";
+$catalog = new AutoComponentCatalogService();
+$components = $catalog->components();
+check('catalogul Reparatii Auto are componente', count($components) > 100, (string) count($components));
+check('1-1 = Suspensie / Amortizoare', ($components['1-1']['category'] ?? '') === 'Suspensie' && ($components['1-1']['name'] ?? '') === 'Amortizoare');
+check('ramura implicita: 1-9 Sasiu, 10 Hidraulic, 11-17 Rezervor/Livrare Gaz',
+    AutoComponentCatalogService::defaultPlacement(1) === ['sasiu', 'sasiu']
+    && AutoComponentCatalogService::defaultPlacement(10) === ['sasiu', 'hidraulic']
+    && AutoComponentCatalogService::defaultPlacement(12) === ['rezervor', 'livrare_gaz']);
+check('Livrare Gaz nu exista sub Sasiu', !AutoComponentCatalogService::isValidPlacement('sasiu', 'livrare_gaz')
+    && AutoComponentCatalogService::isValidPlacement('rezervor', 'sasiu'));
+// AI-ul doar citeste factura (decizia 2026-10-05, tokeni): fara catalog in prompt / schema.
+check('promptul NU include catalogul de componente', !str_contains(PartsInvoiceOcrService::userPrompt(['componente' => $components]), 'Amortizoare')
+    && !str_contains(PartsInvoiceOcrService::systemPrompt(), 'componenta'));
+$itemSchema = PartsInvoiceOcrService::schema()['properties']['facturi']['items']['properties']['articole']['items']['properties'];
+check('schema NU cere componenta', !isset($itemSchema['componenta']) && !isset($itemSchema['componenta_exacta']));
+check('inca sub limita de 16 campuri nullable', substr_count((string) json_encode(PartsInvoiceOcrService::schema()), 'anyOf') <= 16);
+check('cheile de invatare: cod + denumire normalizate',
+    OcrPartsModel::learningKeys('Pompă apă  Scania', ' 15-08532 ') === ['cod:1508532', 'nume:pompa apa scania']
+    && OcrPartsModel::learningKeys('Ax', '12') === []);
+
+$motorKey = null;
+$gasKey = null;
+foreach ($components as $key => $component) {
+    if ($component['category_id'] === 6 && $motorKey === null) {
+        $motorKey = $key;
+    }
+    if ($component['category_id'] === 12 && $gasKey === null) {
+        $gasKey = $key;
+    }
+}
+
+$line = static fn (string $tip, string $name, float $qty, float $price, string $component, bool $stock = false): array => [
+    'tip' => $tip, 'denumire' => $name, 'cod_piesa' => '', 'unitate_masura' => '', 'cantitate' => $qty,
+    'pret_unitar' => $price, 'valoare' => $qty * $price, 'tip_lucrare' => $tip === 'manopera' ? 'reparatie' : 'inlocuire',
+    'garantie_luni' => null, 'nr_inmatriculare' => '', 'km_bord' => null, 'pentru_stoc' => $stock, 'componenta' => $component,
+];
+$vehicle = $db->query('SELECT id, nr_inmatriculare FROM vehicule ORDER BY id LIMIT 1')->fetch(PDO::FETCH_ASSOC);
+$classified = PartsInvoiceOcrService::normalize(['facturi' => [[
+    'pagini' => '1', 'furnizor' => 'Service Test SRL', 'cui_furnizor' => '', 'numar_document' => 'ST 77',
+    'data_document' => '2026-09-20', 'valoare_fara_tva' => null, 'valoare_cu_tva' => null, 'moneda' => 'RON',
+    'nr_inmatriculare' => [$vehicle['nr_inmatriculare']], 'km_bord' => 412350,
+    'articole' => [
+        $line('piesa', 'Amortizor spate', 2, 500, '1-1'),
+        $line('manopera', 'Manopera amortizoare', 2, 150, '1-1'),
+        $line('piesa', 'Filtru pentru stoc', 3, 40, (string) $motorKey, true),
+        $line('piesa', 'Surub diverse', 10, 2, 'nu-e-cheie'),
+        $line('piesa', 'Consumabil stoc', 1, 9, '', true),
+        $line('piesa', 'Kit ambreiaj test', 1, 2000, ''),
+    ],
+    'incredere' => 'mare', 'observatii' => '',
+]]]);
+check('normalize ignora o eventuala componenta din raspuns', !array_key_exists('componenta', $classified[0]['articole'][0]));
+
+$maintenance = new MaintenanceModel($db); // DDL inainte de tranzactie (COMMIT implicit)
+$maintenance->syncAutoComponentsToStock($catalog->categories());
+$db->beginTransaction();
+try {
+    $sha3 = hash('sha256', 'clasificare-' . microtime(true));
+    $scan3 = $model->createScanEntry([
+        'sursa_key' => 'scan:' . $sha3, 'fisier_original' => 'c.pdf', 'fisier_stocat' => 'c_' . substr($sha3, 0, 8) . '.pdf',
+        'document_mime' => 'application/pdf', 'email_subiect' => 'piese', 'email_primit_la' => null,
+    ]);
+    // Locuri confirmate pe facturi anterioare: se completeaza automat, fara AI.
+    $model->learnPlacement('Amortizor spate', null, '1-1', 'sasiu');
+    $model->learnPlacement('Manopera amortizoare', null, '1-1', 'sasiu');
+    $model->learnPlacement('Filtru pentru stoc', null, (string) $motorKey, 'sasiu');
+    [$eventId] = $model->applyScanResult($scan3, $classified, ['model' => 'test']);
+    $itemsOf = static function () use ($db, $eventId): array {
+        $stmt = $db->prepare('SELECT * FROM ocr_reparatii_articole WHERE reparatie_id = ? ORDER BY id');
+        $stmt->execute([$eventId]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    };
+    $items = $itemsOf();
+    check('articol clasificat: Sasiu > Sasiu > 1 > Amortizoare',
+        $items[0]['auto_primary'] === 'sasiu' && $items[0]['auto_subcategory'] === 'sasiu'
+        && (int) $items[0]['auto_category_id'] === 1 && $items[0]['auto_component_name'] === 'Amortizoare');
+    check('piesa necunoscuta -> neclasificata', $items[3]['auto_component_key'] === null);
+    check('completat din invatare, restul gol', $items[0]['auto_sursa'] === 'invatat' && $items[5]['auto_component_key'] === null);
+    $model->updateItemField((int) $items[5]['id'], 'vehicle_id', (string) $vehicle['id']);
+
+    $model->updateItemField((int) $items[0]['id'], 'auto_primary', 'rezervor');
+    check('ramura schimbata pe Rezervor', $itemsOf()[0]['auto_primary'] === 'rezervor');
+    $model->updateItemField((int) $items[3]['id'], 'auto_component_key', (string) $gasKey);
+    check('componenta de Livrare Gaz -> ramura Rezervor automat', $itemsOf()[3]['auto_primary'] === 'rezervor');
+    try {
+        $model->updateItemField((int) $items[3]['id'], 'auto_primary', 'sasiu');
+        check('Livrare Gaz sub Sasiu respinsa', false);
+    } catch (InvalidArgumentException) {
+        check('Livrare Gaz sub Sasiu respinsa', true);
+    }
+    $model->updateItemField((int) $items[3]['id'], 'auto_component_key', '');
+    check('componenta golita', $itemsOf()[3]['auto_component_key'] === null);
+
+    // Invatare: corectura operatorului se aplica automat pe factura urmatoare, peste AI.
+    $model->updateItemField((int) $items[1]['id'], 'auto_component_key', '1-2');
+    check('corectura manuala -> sursa manual', $itemsOf()[1]['auto_sursa'] === 'manual');
+    $learned = $model->suggestPlacement('Manopera  amortizoare', null);
+    check('corectura se aplica pe factura urmatoare', $learned['auto_component_key'] === '1-2' && $learned['auto_sursa'] === 'invatat');
+    $model->learnPlacement('Filtru oarecare', 'FX-9001', '6-2', 'sasiu');
+    check('codul piesei castiga chiar cu alta denumire', $model->suggestPlacement('Alt nume total', 'fx 9001')['auto_component_key'] === '6-2');
+    check('piesa noua -> nimic propus', $model->suggestPlacement('Piesa noua necunoscuta xyz', null) === ['auto_component_key' => null, 'auto_primary' => null, 'auto_sursa' => null]);
+    $model->updateItemField((int) $items[1]['id'], 'auto_component_key', '1-1');
+
+    $partIndex = $maintenance->getAutoComponentPartIndex();
+    $amortizorPart = $partIndex['by_category_name']['suspensie|amortizoare'] ?? null;
+    $motorComponent = $components[$motorKey];
+    $lookup = static fn (string $v): string => preg_replace('/[^a-z0-9]+/iu', '', mb_strtolower($v, 'UTF-8')) ?? '';
+    $motorPart = $partIndex['by_category_name'][$lookup($motorComponent['category']) . '|' . $lookup($motorComponent['name'])] ?? null;
+    check('piesele-componenta exista in stoc', $amortizorPart !== null && $motorPart !== null);
+    $stockBefore = (float) $db->query('SELECT stoc_curent FROM mentenanta_piese WHERE id = ' . (int) $motorPart['id'])->fetchColumn();
+
+    $sync = new OcrPartsMaintenanceSyncService($db, $maintenance);
+    $summary = $sync->send($eventId);
+    check('o interventie, o montare, o intrare in stoc', $summary['interventii'] === 1 && $summary['montari'] === 1 && $summary['stoc'] === 1, json_encode($summary));
+    check('5 trimise, 1 sarit (stoc fara componenta)', $summary['trimise'] === 5 && count($summary['sarite']) === 1, json_encode($summary['sarite'], JSON_UNESCAPED_UNICODE));
+    $approxRow = $itemsOf()[5];
+    check('piesa fara componenta: doar cost in interventie, fara montare', $approxRow['mentenanta_utilizare_id'] === null && $approxRow['mentenanta_id'] !== null);
+
+    $items = $itemsOf();
+    $record = $db->query('SELECT * FROM mentenanta WHERE id = ' . (int) $items[0]['mentenanta_id'])->fetch(PDO::FETCH_ASSOC);
+    check('interventia e pe vehicul, cu data facturii si km', (int) $record['vehicle_id'] === (int) $vehicle['id']
+        && $record['data_interventie'] === '2026-09-20' && (int) $record['km_interventie'] === 412350);
+    check('cost piese 1020 + 2000 (fara componenta) + manopera 300', (float) $record['cost_piese'] === 3020.0 && (float) $record['cost_manopera'] === 300.0 && (float) $record['cost'] === 3320.0,
+        $record['cost_piese'] . ' / ' . $record['cost_manopera']);
+    check('reparatie, centru de cost Suspensie', $record['record_type'] === 'reparatie' && $record['centru_cost'] === 'Suspensie');
+    $usage = $maintenance->getAutoPartUsageForVehicle((int) $vehicle['id'])[(int) $amortizorPart['id']] ?? null;
+    check('montarea pe Amortizoare: km si data pentru uzura', $usage !== null && (int) $usage['km_montare'] === 412350
+        && $usage['data_montare'] === '2026-09-20' && (float) $usage['cantitate'] === 2.0);
+    $stockAfter = (float) $db->query('SELECT stoc_curent FROM mentenanta_piese WHERE id = ' . (int) $motorPart['id'])->fetchColumn();
+    check('stocul piesei-componenta creste cu 3', abs($stockAfter - $stockBefore - 3) < 0.001, "$stockBefore -> $stockAfter");
+    check('articolul din stoc fara componenta ramane netrimis', $items[4]['mentenanta_trimis_la'] === null);
+
+    try {
+        $model->updateItemField((int) $items[0]['id'], 'cantitate', '5');
+        check('articol trimis nu se mai editeaza', false);
+    } catch (InvalidArgumentException) {
+        check('articol trimis nu se mai editeaza', true);
+    }
+    try {
+        $model->deleteItem((int) $items[0]['id']);
+        check('articol trimis nu se sterge', false);
+    } catch (InvalidArgumentException) {
+        check('articol trimis nu se sterge', true);
+    }
+    check('getSentItemIds', count($model->getSentItemIds($eventId)) === 5);
+    $model->learnFromEvent($eventId);
+    check('trimiterea invata locurile pieselor', $model->suggestPlacement('Amortizor spate', null)['auto_component_key'] === '1-1');
+    check('articol fara componenta nu se invata', $model->suggestPlacement('Kit ambreiaj test', null)['auto_sursa'] === null);
+
+    $again = $sync->send($eventId);
+    check('a doua trimitere nu dubleaza', $again['interventii'] === 0 && $again['trimise'] === 0 && $again['stoc'] === 0);
+
+    check('tranzactia de test e inca deschisa (clasificare)', $db->inTransaction());
+} finally {
+    if ($db->inTransaction()) {
+        $db->rollBack();
+    }
+}
+
+echo "\nGestionarea componentelor (tranzactie anulata)\n";
+$db->beginTransaction();
+try {
+    $cat = new AutoComponentCatalogService($db);
+    $before = count($cat->categories()[6]['components']);
+    $maxNr = (int) $db->query('SELECT MAX(nr) FROM mentenanta_auto_componente WHERE category_id = 6')->fetchColumn();
+    $added = $cat->addComponent(6, '  Ambreiaj   test ', 'kit complet');
+    check('componenta noua: cheie urmatoare in categorie', $added['key'] === '6-' . ($maxNr + 1), $added['key']);
+    check('apare in categorie si in lista pentru AI / OCR', count($cat->categories()[6]['components']) === $before + 1
+        && ($cat->components()[$added['key']]['name'] ?? '') === 'Ambreiaj test');
+    try {
+        $cat->addComponent(6, 'ambreiaj TEST');
+        check('nume duplicat in categorie respins', false);
+    } catch (InvalidArgumentException) {
+        check('nume duplicat in categorie respins', true);
+    }
+    $maintenance->syncAutoComponentsToStock($cat->categories());
+    $part = $db->prepare('SELECT id, denumire, categorie FROM mentenanta_piese WHERE cod_piesa = ?');
+    $part->execute([$added['code']]);
+    $partRow = $part->fetch(PDO::FETCH_ASSOC);
+    check('piesa din stoc creata cu codul componentei', $partRow !== false && $partRow['denumire'] === 'Ambreiaj test' && $partRow['categorie'] === 'Motor');
+
+    $cat->renameComponent($added['key'], 'Ambreiaj complet');
+    $part->execute([$added['code']]);
+    check('redenumire: si piesa din stoc', $part->fetch(PDO::FETCH_ASSOC)['denumire'] === 'Ambreiaj complet'
+        && $cat->components()[$added['key']]['name'] === 'Ambreiaj complet');
+    try {
+        $cat->renameComponent($added['key'], $components['6-1']['name']);
+        check('redenumire peste un nume existent respinsa', false);
+    } catch (InvalidArgumentException) {
+        check('redenumire peste un nume existent respinsa', true);
+    }
+
+    $cat->setActive($added['key'], false);
+    check('eliminata: dispare din liste, ramane pentru istoric', !isset($cat->components()[$added['key']])
+        && isset($cat->components(true)[$added['key']])
+        && in_array($added['key'], array_column($cat->removedComponents(6), 'key'), true));
+    $second = $cat->addComponent(6, 'Filtru ulei motor');
+    check('cheia eliminata nu se refoloseste', $second['key'] === '6-' . ($maxNr + 2) && $second['code'] !== $added['code']);
+    $cat->setActive($added['key'], true);
+    check('restaurata', isset($cat->components()[$added['key']]));
+    check('cheie inexistenta respinsa', (static function () use ($cat): bool {
+        try { $cat->renameComponent('99-1', 'X y'); return false; } catch (InvalidArgumentException) { return true; }
+    })());
+    check('tranzactia de test e inca deschisa (componente)', $db->inTransaction());
+} finally {
+    if ($db->inTransaction()) {
+        $db->rollBack();
+    }
+    AutoComponentCatalogService::resetCache();
 }
 
 echo "\n$passed trecute, $failed picate\n";

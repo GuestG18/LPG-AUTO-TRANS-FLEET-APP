@@ -235,3 +235,12 @@
         animation: none;
     }
 }
+
+/* Fazele din fisa cursei se deschid direct in formular. */
+.race-view-phase-row {
+    cursor: pointer;
+}
+
+.race-view-phase-row:hover > td {
+    background-color: var(--bs-primary-bg-subtle, #e7f1ff);
+}

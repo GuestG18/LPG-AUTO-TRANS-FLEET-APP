@@ -1167,6 +1167,17 @@ class OcrPartsModel
         $partCount = (int) $counts['piese'];
         $laborCount = (int) $counts['manopera'];
 
+        if ($mode !== 'remove' && $partCount + $laborCount > 0) {
+            $sentStmt = $this->db->prepare(
+                'SELECT COUNT(*) FROM ocr_reparatii_articole
+                 WHERE reparatie_id = :event_id AND vehicle_id = :vehicle_id AND mentenanta_trimis_la IS NOT NULL'
+            );
+            $sentStmt->execute([':event_id' => $eventId, ':vehicle_id' => $vehicleId]);
+            if ((int) $sentStmt->fetchColumn() > 0) {
+                throw new InvalidArgumentException('Vehiculul are articole trimise deja în Reparații — corecturile se fac acolo.');
+            }
+        }
+
         $this->db->beginTransaction();
         try {
             $now = date('Y-m-d H:i:s');
@@ -1259,7 +1270,135 @@ class OcrPartsModel
 
     public function deleteItem(int $itemId): ?int
     {
+        $this->assertItemNotSent($itemId);
+
         return $this->deleteChildRow('ocr_reparatii_articole', $itemId);
+    }
+
+    /** @return array<int,int> articolele facturii deja trimise in Reparatii */
+    public function getSentItemIds(int $eventId): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT id FROM ocr_reparatii_articole WHERE reparatie_id = :id AND mentenanta_trimis_la IS NOT NULL'
+        );
+        $stmt->execute([':id' => $eventId]);
+
+        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
+    }
+
+    /** Un articol trimis in Reparatii se corecteaza acolo; aici ramane ca istoric. */
+    private function assertItemNotSent(int $itemId): void
+    {
+        $stmt = $this->db->prepare('SELECT mentenanta_trimis_la FROM ocr_reparatii_articole WHERE id = :id');
+        $stmt->execute([':id' => $itemId]);
+        $sentAt = $stmt->fetchColumn();
+        if (is_string($sentAt) && $sentAt !== '') {
+            throw new InvalidArgumentException('Articolul a fost trimis în Reparații pe ' . date('d.m.Y', strtotime($sentAt))
+                . ' — corecturile se fac acolo.');
+        }
+    }
+
+    /** Cheile de invatare ale unei piese: codul (cel mai sigur) si denumirea, normalizate. @return array<int,string> */
+    public static function learningKeys(string $name, ?string $code): array
+    {
+        $keys = [];
+        $code = strtoupper(preg_replace('/[^A-Za-z0-9]+/', '', (string) $code) ?? '');
+        if (strlen($code) >= 4) {
+            $keys[] = 'cod:' . $code;
+        }
+        $ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', mb_strtolower(trim($name), 'UTF-8'));
+        $normalized = trim(preg_replace('/[^a-z0-9]+/', ' ', $ascii !== false ? $ascii : mb_strtolower($name)) ?? '');
+        if (mb_strlen($normalized) >= 3) {
+            $keys[] = 'nume:' . mb_substr($normalized, 0, 190);
+        }
+
+        return $keys;
+    }
+
+    /** Tine minte locul confirmat al unei piese (dupa cod si dupa denumire). */
+    public function learnPlacement(string $name, ?string $code, string $componentKey, string $primary): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $stmt = $this->db->prepare(
+            'INSERT INTO ocr_piese_clasificari (cheie, auto_component_key, auto_primary, exemplu, created_at, updated_at)
+             VALUES (:cheie, :k, :p, :ex, :c, :u)
+             ON DUPLICATE KEY UPDATE
+                confirmari = IF(auto_component_key = VALUES(auto_component_key), confirmari + 1, 1),
+                auto_component_key = VALUES(auto_component_key), auto_primary = VALUES(auto_primary),
+                exemplu = VALUES(exemplu), updated_at = VALUES(updated_at)'
+        );
+        foreach (self::learningKeys($name, $code) as $key) {
+            $stmt->execute([':cheie' => $key, ':k' => $componentKey, ':p' => $primary, ':ex' => mb_substr($name, 0, 255), ':c' => $now, ':u' => $now]);
+        }
+    }
+
+    /** Articolele clasificate ale unei facturi devin locuri confirmate (la salvare / trimitere). */
+    public function learnFromEvent(int $eventId): void
+    {
+        $stmt = $this->db->prepare(
+            "SELECT denumire, cod_piesa, auto_component_key, auto_primary FROM ocr_reparatii_articole
+             WHERE reparatie_id = :id AND auto_component_key IS NOT NULL"
+        );
+        $stmt->execute([':id' => $eventId]);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $this->learnPlacement((string) $row['denumire'], $row['cod_piesa'], (string) $row['auto_component_key'], (string) ($row['auto_primary'] ?: 'sasiu'));
+        }
+    }
+
+    /**
+     * Componenta propusa pentru un articol citit: locul confirmat anterior pentru aceeasi
+     * piesa (dupa cod, apoi dupa denumire). AI-ul doar citeste factura, nu clasifica
+     * (decizia utilizatorului 2026-10-05, pentru tokeni); restul alege operatorul.
+     *
+     * @return array{auto_component_key:?string, auto_primary:?string, auto_sursa:?string}
+     */
+    public function suggestPlacement(string $name, ?string $code): array
+    {
+        $keys = self::learningKeys($name, $code);
+        if ($keys !== []) {
+            $placeholders = implode(',', array_fill(0, count($keys), '?'));
+            $stmt = $this->db->prepare(
+                "SELECT cheie, auto_component_key, auto_primary FROM ocr_piese_clasificari WHERE cheie IN ($placeholders)"
+            );
+            $stmt->execute($keys);
+            $found = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $found[$row['cheie']] = $row;
+            }
+            foreach ($keys as $key) {
+                if (isset($found[$key])) {
+                    return ['auto_component_key' => $found[$key]['auto_component_key'], 'auto_primary' => $found[$key]['auto_primary'], 'auto_sursa' => 'invatat'];
+                }
+            }
+        }
+
+        return ['auto_component_key' => null, 'auto_primary' => null, 'auto_sursa' => null];
+    }
+
+    /**
+     * Locul in Reparatii Auto pentru o componenta: categoria si subcategoria vin din
+     * catalog; ramura (Sasiu / Rezervor) e cea ceruta daca e compatibila, altfel implicita.
+     *
+     * @param array<string,array<string,mixed>> $components AutoComponentCatalogService::components()
+     * @return array{auto_primary:?string,auto_subcategory:?string,auto_category_id:?int,auto_component_key:?string,auto_component_name:?string}
+     */
+    private function resolvePlacement(array $components, string $componentKey, string $primary): array
+    {
+        $component = $components[$componentKey] ?? null;
+        if ($component === null) {
+            return ['auto_primary' => null, 'auto_subcategory' => null, 'auto_category_id' => null,
+                'auto_component_key' => null, 'auto_component_name' => null];
+        }
+
+        [$defaultPrimary, $subcategory] = AutoComponentCatalogService::defaultPlacement((int) $component['category_id']);
+
+        return [
+            'auto_primary' => AutoComponentCatalogService::isValidPlacement($primary, $subcategory) ? $primary : $defaultPrimary,
+            'auto_subcategory' => $subcategory,
+            'auto_category_id' => (int) $component['category_id'],
+            'auto_component_key' => $componentKey,
+            'auto_component_name' => mb_substr((string) $component['name'], 0, 190),
+        ];
     }
 
     public function getItemEventId(int $itemId): ?int
@@ -1281,6 +1420,51 @@ class OcrPartsModel
      */
     public function updateItemField(int $itemId, string $field, ?string $rawValue): array
     {
+        $this->assertItemNotSent($itemId);
+
+        if ($field === 'auto_component_key' || $field === 'auto_primary') {
+            $stmt = $this->db->prepare('SELECT auto_component_key, auto_primary FROM ocr_reparatii_articole WHERE id = :id');
+            $stmt->execute([':id' => $itemId]);
+            $current = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($current === false) {
+                throw new InvalidArgumentException('Rândul nu mai există (a fost șters).');
+            }
+            $value = trim((string) $rawValue);
+            $key = $field === 'auto_component_key' ? $value : (string) ($current['auto_component_key'] ?? '');
+            $primary = $field === 'auto_primary' ? $value : (string) ($current['auto_primary'] ?? '');
+            $components = (new AutoComponentCatalogService())->components();
+            if ($key !== '' && !isset($components[$key])) {
+                throw new InvalidArgumentException('Componentă necunoscută în Reparații Auto.');
+            }
+            $placement = $this->resolvePlacement($components, $key, $primary);
+            if ($field === 'auto_primary' && $key !== '' && $placement['auto_primary'] !== $value) {
+                throw new InvalidArgumentException('Livrare Gaz există doar sub Rezervor.');
+            }
+            $this->db->prepare(
+                'UPDATE ocr_reparatii_articole
+                 SET auto_primary = :p, auto_subcategory = :s, auto_category_id = :c,
+                     auto_component_key = :k, auto_component_name = :n, auto_sursa = :src, updated_at = :now
+                 WHERE id = :id'
+            )->execute([
+                ':p' => $placement['auto_primary'], ':s' => $placement['auto_subcategory'], ':c' => $placement['auto_category_id'],
+                ':k' => $placement['auto_component_key'], ':n' => $placement['auto_component_name'],
+                ':src' => $placement['auto_component_key'] !== null ? 'manual' : null,
+                ':now' => date('Y-m-d H:i:s'), ':id' => $itemId,
+            ]);
+            // Corectura operatorului se tine minte pentru facturile urmatoare.
+            if ($placement['auto_component_key'] !== null) {
+                $nameStmt = $this->db->prepare('SELECT denumire, cod_piesa FROM ocr_reparatii_articole WHERE id = :id');
+                $nameStmt->execute([':id' => $itemId]);
+                $names = $nameStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                $this->learnPlacement((string) ($names['denumire'] ?? ''), $names['cod_piesa'] ?? null,
+                    (string) $placement['auto_component_key'], (string) $placement['auto_primary']);
+            }
+            $placement['auto_sursa'] = $placement['auto_component_key'] !== null ? 'manual' : null;
+
+            return $this->itemWarrantyState($itemId, $field === 'auto_primary' ? $placement['auto_primary'] : $placement['auto_component_key'])
+                + ['placement' => $placement];
+        }
+
         if ($field === 'garantie_pana_la') {
             $value = $rawValue !== null ? trim($rawValue) : '';
             if ($value !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
@@ -1525,10 +1709,15 @@ class OcrPartsModel
         $itemStmt = $this->db->prepare(
             'INSERT INTO ocr_reparatii_articole
                 (reparatie_id, tip, denumire, cod_piesa, cantitate, pret_unitar, tip_lucrare,
-                 garantie_luni, garantie_pana_la, destinatie, vehicle_id, data_referinta, km_bord, created_at, updated_at)
+                 garantie_luni, garantie_pana_la, destinatie, vehicle_id, data_referinta, km_bord,
+                 auto_primary, auto_subcategory, auto_category_id, auto_component_key, auto_component_name, auto_sursa,
+                 created_at, updated_at)
              VALUES (:event_id, :tip, :denumire, :cod, :cantitate, :pret, :tip_lucrare,
-                 :garantie_luni, :garantie_pana_la, :destinatie, :vehicle_id, :data_ref, :km, :created_at, :updated_at)'
+                 :garantie_luni, :garantie_pana_la, :destinatie, :vehicle_id, :data_ref, :km,
+                 :auto_primary, :auto_subcategory, :auto_category_id, :auto_component_key, :auto_component_name, :auto_sursa,
+                 :created_at, :updated_at)'
         );
+        $components = null;
         $vehicleIds = array_fill_keys(array_map('intval', $extraVehicleIds), true);
         foreach ($items as $item) {
             $vehicleId = !empty($item['vehicle_id']) ? (int) $item['vehicle_id'] : null;
@@ -1543,6 +1732,8 @@ class OcrPartsModel
             $km = array_key_exists('km_bord', $item) && $item['km_bord'] !== null ? (int) $item['km_bord'] : $defaultKm;
             $warranty = isset($item['garantie_luni']) && in_array((int) $item['garantie_luni'], self::WARRANTY_OPTIONS_V2, true)
                 ? (int) $item['garantie_luni'] : null;
+            $components ??= (new AutoComponentCatalogService())->components();
+            $placement = $this->resolvePlacement($components, (string) ($item['auto_component_key'] ?? ''), (string) ($item['auto_primary'] ?? ''));
 
             $itemStmt->execute([
                 ':event_id' => $eventId,
@@ -1560,6 +1751,12 @@ class OcrPartsModel
                 ':vehicle_id' => $vehicleId,
                 ':data_ref' => $invoiceDate,
                 ':km' => $destinatie === 'vehicul' ? $km : null,
+                ':auto_primary' => $placement['auto_primary'],
+                ':auto_subcategory' => $placement['auto_subcategory'],
+                ':auto_category_id' => $placement['auto_category_id'],
+                ':auto_component_key' => $placement['auto_component_key'],
+                ':auto_component_name' => $placement['auto_component_name'],
+                ':auto_sursa' => $placement['auto_component_key'] !== null ? ($item['auto_sursa'] ?? 'manual') : null,
                 ':created_at' => $now,
                 ':updated_at' => $now,
             ]);
@@ -1622,6 +1819,48 @@ class OcrPartsModel
         if ($clauses !== []) {
             $this->db->exec('ALTER TABLE ocr_piese_facturi ' . implode(', ', $clauses));
         }
+
+        // Articole: locul in Reparatii Auto (ramura > subcategorie > categorie > componenta)
+        // si ce s-a scris acolo la trimitere (idempotent: un articol se trimite o singura data).
+        $itemColumns = $this->db->query('SHOW COLUMNS FROM ocr_reparatii_articole')->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        $itemClauses = [];
+        foreach ([
+            'auto_primary' => 'VARCHAR(20) NULL',
+            'auto_subcategory' => 'VARCHAR(20) NULL',
+            'auto_category_id' => 'TINYINT UNSIGNED NULL',
+            'auto_component_key' => 'VARCHAR(10) NULL',
+            'auto_component_name' => 'VARCHAR(190) NULL',
+            'mentenanta_id' => 'INT UNSIGNED NULL',
+            'mentenanta_utilizare_id' => 'INT UNSIGNED NULL',
+            'mentenanta_piesa_id' => 'INT UNSIGNED NULL',
+            'mentenanta_stoc_cant' => 'DECIMAL(10,2) NULL',
+            'mentenanta_trimis_la' => 'DATETIME NULL',
+            // De unde vine componenta: invatat (din alegerile anterioare) / manual.
+            'auto_sursa' => 'VARCHAR(12) NULL',
+        ] as $column => $definition) {
+            if (!in_array($column, $itemColumns, true)) {
+                $itemClauses[] = "ADD COLUMN $column $definition";
+            }
+        }
+        if ($itemClauses !== []) {
+            $this->db->exec('ALTER TABLE ocr_reparatii_articole ' . implode(', ', $itemClauses));
+        }
+
+        // Locurile confirmate de operator (corectate sau trimise in Reparatii), dupa codul
+        // si dupa denumirea piesei: aceeasi piesa pe o factura noua se plaseaza la fel, fara AI.
+        $this->db->exec(
+            "CREATE TABLE IF NOT EXISTS ocr_piese_clasificari (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                cheie VARCHAR(200) NOT NULL,
+                auto_component_key VARCHAR(10) NOT NULL,
+                auto_primary VARCHAR(20) NOT NULL,
+                exemplu VARCHAR(255) NULL,
+                confirmari INT UNSIGNED NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                UNIQUE KEY uq_ocr_pc_cheie (cheie)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+        );
 
         $ensured = true;
     }
@@ -1863,7 +2102,8 @@ class OcrPartsModel
                 'vehicle_id' => $vehicleId,
                 // Km pe articol (facturi multi-vehicul) sau km-ul facturii cand e un singur vehicul.
                 'km_bord' => $item['km_bord'] ?? (count($invoiceVehicleIds) <= 1 ? ($invoice['km_bord'] ?? null) : null),
-            ];
+            // Componenta: doar din locurile confirmate anterior (citirea AI nu clasifica).
+            ] + $this->suggestPlacement((string) ($item['denumire'] ?? ''), $item['cod_piesa'] ?? null);
             $itemsTotal += (float) ($item['cantitate'] ?? 1) * (float) ($item['pret_unitar'] ?? 0);
             if (($item['verificat'] ?? true) === false) {
                 $unverified++;

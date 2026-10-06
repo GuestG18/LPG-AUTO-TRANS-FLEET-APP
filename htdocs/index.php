@@ -351,6 +351,7 @@ require_once __DIR__ . '/models/InvoiceModel.php';
 require_once __DIR__ . '/services/EntityStatusService.php';
 require_once __DIR__ . '/services/InactiveResourceStatusService.php';
 require_once __DIR__ . '/services/RaceCompletenessService.php';
+require_once __DIR__ . '/services/BillingMonthRule.php';
 require_once __DIR__ . '/services/CentralizatorFacturareService.php';
 require_once __DIR__ . '/services/EmailService.php';
 require_once __DIR__ . '/services/InvoiceStorageService.php';
@@ -378,6 +379,8 @@ require_once __DIR__ . '/services/OcrInvoiceHeuristics.php';
 require_once __DIR__ . '/services/OcrPartsLineExtractor.php';
 require_once __DIR__ . '/services/InvoiceOcrService.php';
 require_once __DIR__ . '/services/PartsInvoiceOcrService.php';
+require_once __DIR__ . '/services/AutoComponentCatalogService.php';
+require_once __DIR__ . '/services/OcrPartsMaintenanceSyncService.php';
 require_once __DIR__ . '/models/OcrPartsModel.php';
 
 require_once __DIR__ . '/controllers/AuthController.php';

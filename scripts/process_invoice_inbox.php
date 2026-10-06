@@ -39,6 +39,7 @@ require_once $root . '/htdocs/services/InvoiceStorageService.php';
 require_once $root . '/htdocs/services/InvoiceOcrService.php';
 require_once $root . '/htdocs/models/OcrPartsModel.php';
 require_once $root . '/htdocs/services/PartsInvoiceOcrService.php';
+require_once $root . '/htdocs/services/AutoComponentCatalogService.php';
 require_once $root . '/htdocs/services/OcrPartsScanService.php';
 
 $limit = 10;

@@ -5961,10 +5961,10 @@ class DispecerCurseModel extends BaseModel
         if (isset($totals['cantitate_incarcata'])) {
             $assign('cantitate_incarcata', number_format((float) $totals['cantitate_incarcata'], 2, '.', ''));
         }
-        // Tonele livrate se tin pe curse doar la Compresor (la celelalte tipuri
-        // formularul cursei nu are campul si l-ar sterge la prima salvare). Pentru
-        // restul tipurilor, cat s-a livrat ramane pe faze si se aduna la afisare.
-        if (isset($totals['tona_livrata']) && $transportType === 'compresor') {
+        // Tonele livrate se tin pe cursa la Compresor, Distributie si Primar+Distributie
+        // (ultimele doua se factureaza pe tonele livrate). La Primar formularul cursei nu
+        // are campul si l-ar sterge la prima salvare, deci acolo raman doar pe faze.
+        if (isset($totals['tona_livrata']) && in_array($transportType, ['compresor', 'distributie', 'primar_distributie'], true)) {
             $assign('tona_livrata', number_format((float) $totals['tona_livrata'], 2, '.', ''));
         }
         if (isset($totals['nr_clienti'])) {
@@ -9560,20 +9560,29 @@ class DispecerCurseModel extends BaseModel
         ];
 
         if ($search !== '') {
-            $where[] = "(
-                v.nr_inmatriculare LIKE :search
-                OR v.marca LIKE :search
-                OR v.model LIKE :search
-                OR COALESCE(li.nume, '') LIKE :search
-                OR COALESCE(c.loc_plecare, '') LIKE :search
-                OR COALESCE(c.loc_aspirare, '') LIKE :search
-                OR COALESCE(c.loc_livrare, '') LIKE :search
-                OR COALESCE(c.loc_livrare_cursa, '') LIKE :search
-                OR COALESCE(bt.nume, '') LIKE :search
-                OR COALESCE(zd.nume, '') LIKE :search
-                OR COALESCE(c.observatii, '') LIKE :search
-            )";
-            $params[':search'] = '%' . $search . '%';
+            // Un placeholder distinct pe coloana: cu EMULATE_PREPARES=false acelasi
+            // parametru numit nu poate aparea de doua ori (HY093).
+            $searchColumns = [
+                'v.nr_inmatriculare',
+                'v.marca',
+                'v.model',
+                "COALESCE(s.nume, '')",
+                "COALESCE(li.nume, '')",
+                "COALESCE(c.loc_plecare, '')",
+                "COALESCE(c.loc_aspirare, '')",
+                "COALESCE(c.loc_livrare, '')",
+                "COALESCE(c.loc_livrare_cursa, '')",
+                "COALESCE(bt.nume, '')",
+                "COALESCE(zd.nume, '')",
+                "COALESCE(c.observatii, '')",
+            ];
+            $searchConditions = [];
+            foreach ($searchColumns as $index => $column) {
+                $placeholder = ':search_' . $index;
+                $searchConditions[] = $column . ' LIKE ' . $placeholder;
+                $params[$placeholder] = '%' . $search . '%';
+            }
+            $where[] = '(' . implode(' OR ', $searchConditions) . ')';
         }
 
         if (($filters['tip_transport'] ?? '') !== '') {
