@@ -215,6 +215,27 @@ try {
     $hPrimar = callPrivate($history, 'applyBillingPeriod', [$primarRow, ['date_start' => '2099-07-01', 'date_end' => '2099-07-31']]);
     check('4d. Primar km facturat in august: in iulie fara valoare', $hPrimar['billing_outside_period'] && (float) $hPrimar['total_facturare'] === 0.0 && $hPrimar['billing_month_label'] === '08.2099');
 
+    echo "\n-- Regula cu efect de la o luna (nu rescrie lunile facturate) --\n";
+    $setRules([]);
+    $augTrip = $newTrip('primar', '2099-08-31', '2099-09-01', 700.0);
+    $sepTrip = $newTrip('primar', '2099-09-30', '2099-10-02', 800.0);
+    $changed = BillingMonthRule::saveRulesForBeneficiary($db, $beneficiaryId, ['primar' => ['km' => BillingMonthRule::END]], null, '2099-09');
+    check('7a. O regula schimbata = o versiune noua', $changed === 1, (string) $changed);
+    $again = BillingMonthRule::saveRulesForBeneficiary($db, $beneficiaryId, ['primar' => ['km' => BillingMonthRule::END], 'compresor' => ['total' => BillingMonthRule::START]], null, '2099-09');
+    check('7b. Salvare fara schimbari = nimic scris', $again === 0, (string) $again);
+    check('7c. Cursa inceputa in august ramane pe regula veche (august)', isset($centralizatorRows('2099-08')[$augTrip]) && !isset($centralizatorRows('2099-09')[$augTrip]));
+    check('7d. Cursa inceputa in septembrie urmeaza regula noua (octombrie)', isset($centralizatorRows('2099-10')[$sepTrip]) && !isset($centralizatorRows('2099-09')[$sepTrip]));
+    check('7e. Dashboard V2 la fel', isset($dashboardRows('2099-08-01', '2099-08-31')[$augTrip]) && isset($dashboardRows('2099-10-01', '2099-10-31')[$sepTrip]));
+    check('7f. ruleFor dupa data de start', BillingMonthRule::ruleFor($db, $beneficiaryId, 'primar', 'km', '2099-08-31') === BillingMonthRule::START
+        && BillingMonthRule::ruleFor($db, $beneficiaryId, 'primar', 'km', '2099-09-01') === BillingMonthRule::END);
+    $back = BillingMonthRule::saveRulesForBeneficiary($db, $beneficiaryId, ['primar' => ['km' => BillingMonthRule::START]], null, '2099-11');
+    check('7g. Revenire din noiembrie: septembrie-octombrie raman pe Data sfarsit', $back === 1
+        && BillingMonthRule::ruleFor($db, $beneficiaryId, 'primar', 'km', '2099-10-15') === BillingMonthRule::END
+        && BillingMonthRule::ruleFor($db, $beneficiaryId, 'primar', 'km', '2099-11-01') === BillingMonthRule::START);
+    $historyRows = BillingMonthRule::history($db, $beneficiaryId);
+    check('7h. Istoricul arata ambele modificari', count($historyRows) === 2 && $historyRows[0]['valabil_de_la'] === '2099-11-01', (string) count($historyRows));
+    check('7i. Luna invalida respinsa', BillingMonthRule::normalizeMonth('2099-13') === null && BillingMonthRule::normalizeMonth('abc') === null && BillingMonthRule::normalizeMonth('2099-09') === '2099-09-01');
+
     echo "\n-- Tone facturate --\n";
     check('5a. Distributie cu tone livrate: se factureaza livratele', TransportPricingService::billableTons(['tip_transport' => 'distributie', 'cantitate_incarcata' => 20, 'tona_livrata' => 17.5]) === 17.5);
     check('5b. Distributie fara tone livrate: fallback pe incarcate', TransportPricingService::billableTons(['tip_transport' => 'distributie', 'cantitate_incarcata' => 20, 'tona_livrata' => null]) === 20.0);

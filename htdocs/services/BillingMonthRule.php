@@ -63,7 +63,15 @@ final class BillingMonthRule
 
     private static bool $schemaReady = false;
 
-    /** @var array<int, array<string, array<string, string>>>|null beneficiar => tip => componenta => regula */
+    /** Prima luna posibila: versiunea „dintotdeauna” (reguli salvate fara luna de start). */
+    public const SINCE_ALWAYS = '1000-01-01';
+
+    /**
+     * Versiunile regulilor, crescator dupa luna de start:
+     * beneficiar => tip => componenta => [valabil_de_la (Y-m-d) => regula].
+     *
+     * @var array<int, array<string, array<string, array<string, string>>>>|null
+     */
     private static ?array $cache = null;
 
     /** @var array<int, float|null> cursa_id => ponderea km-ilor in valoare */
@@ -88,18 +96,25 @@ final class BillingMonthRule
                 beneficiar_id INT UNSIGNED NOT NULL,
                 tip_transport VARCHAR(32) NOT NULL,
                 componenta VARCHAR(16) NOT NULL DEFAULT \'total\',
+                valabil_de_la DATE NOT NULL DEFAULT \'' . self::SINCE_ALWAYS . '\',
                 regula ENUM(\'data_inceput\', \'data_sfarsit\') NOT NULL DEFAULT \'data_inceput\',
                 updated_by INT UNSIGNED NULL,
                 updated_at DATETIME NOT NULL,
-                PRIMARY KEY (beneficiar_id, tip_transport, componenta)
+                PRIMARY KEY (beneficiar_id, tip_transport, componenta, valabil_de_la)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ');
-        // Prima versiune a tabelei nu avea componenta (o regula pe tip).
-        if (!self::hasComponentColumn($db)) {
+        // Versiuni vechi ale tabelei: fara componenta (o regula pe tip), apoi fara luna de start.
+        if (!self::hasColumn($db, 'componenta')) {
             $db->exec('ALTER TABLE ' . self::TABLE . "
                 ADD COLUMN componenta VARCHAR(16) NOT NULL DEFAULT 'total' AFTER tip_transport,
                 DROP PRIMARY KEY,
                 ADD PRIMARY KEY (beneficiar_id, tip_transport, componenta)");
+        }
+        if (!self::hasColumn($db, 'valabil_de_la')) {
+            $db->exec('ALTER TABLE ' . self::TABLE . "
+                ADD COLUMN valabil_de_la DATE NOT NULL DEFAULT '" . self::SINCE_ALWAYS . "' AFTER componenta,
+                DROP PRIMARY KEY,
+                ADD PRIMARY KEY (beneficiar_id, tip_transport, componenta, valabil_de_la)");
         }
         self::$schemaReady = true;
     }
@@ -115,7 +130,24 @@ final class BillingMonthRule
     }
 
     /**
-     * @return array<int, array<string, array<string, string>>>
+     * Luna de start a unei modificari (YYYY-MM sau Y-m-d) -> prima zi a lunii, sau null.
+     */
+    public static function normalizeMonth(mixed $value): ?string
+    {
+        $value = trim((string) $value);
+        if (preg_match('/^(\d{4})-(\d{2})(?:-\d{2})?$/', $value, $match) !== 1) {
+            return null;
+        }
+        $month = (int) $match[2];
+        if ($month < 1 || $month > 12 || (int) $match[1] < 2000) {
+            return null;
+        }
+
+        return sprintf('%04d-%02d-01', (int) $match[1], $month);
+    }
+
+    /**
+     * @return array<int, array<string, array<string, array<string, string>>>>
      */
     public static function allRules(PDO $db): array
     {
@@ -129,8 +161,9 @@ final class BillingMonthRule
             return self::$cache = $rules;
         }
 
-        $componentSelect = self::hasComponentColumn($db) ? 'componenta' : "'total' AS componenta";
-        $stmt = $db->query("SELECT beneficiar_id, tip_transport, {$componentSelect}, regula FROM " . self::TABLE);
+        $componentSelect = self::hasColumn($db, 'componenta') ? 'componenta' : "'total' AS componenta";
+        $sinceSelect = self::hasColumn($db, 'valabil_de_la') ? 'valabil_de_la' : "'" . self::SINCE_ALWAYS . "' AS valabil_de_la";
+        $stmt = $db->query("SELECT beneficiar_id, tip_transport, {$componentSelect}, {$sinceSelect}, regula FROM " . self::TABLE);
         $legacy = [];
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
             $type = (string) $row['tip_transport'];
@@ -138,34 +171,46 @@ final class BillingMonthRule
                 continue;
             }
             $component = (string) $row['componenta'];
+            $since = substr((string) $row['valabil_de_la'], 0, 10);
             $rule = self::normalizeRule($row['regula']);
             if (in_array($component, self::COMPONENTS[$type], true)) {
-                $rules[(int) $row['beneficiar_id']][$type][$component] = $rule;
+                $rules[(int) $row['beneficiar_id']][$type][$component][$since] = $rule;
             } elseif ($component === 'total') {
-                $legacy[(int) $row['beneficiar_id']][$type] = $rule;
+                $legacy[(int) $row['beneficiar_id']][$type][$since] = $rule;
             }
         }
         // O regula veche „pe tot tipul” se aplica fiecarei componente fara regula proprie.
         foreach ($legacy as $beneficiaryId => $types) {
-            foreach ($types as $type => $rule) {
+            foreach ($types as $type => $versions) {
                 foreach (self::COMPONENTS[$type] as $component) {
-                    $rules[$beneficiaryId][$type][$component] ??= $rule;
+                    $rules[$beneficiaryId][$type][$component] ??= $versions;
                 }
             }
         }
+        foreach ($rules as &$types) {
+            foreach ($types as &$components) {
+                foreach ($components as &$versions) {
+                    ksort($versions);
+                }
+            }
+        }
+        unset($types, $components, $versions);
 
         return self::$cache = $rules;
     }
 
     /**
+     * Regulile afisate in Configurare transport: cele valabile la luna data (implicit
+     * ultima versiune salvata, inclusiv una programata pentru o luna viitoare).
+     *
      * @return array<string, array<string, string>> tip => componenta => regula, pentru toate
      */
-    public static function rulesForBeneficiary(PDO $db, int $beneficiaryId): array
+    public static function rulesForBeneficiary(PDO $db, int $beneficiaryId, ?string $atDate = null): array
     {
         $rules = [];
         foreach (self::COMPONENTS as $type => $components) {
             foreach ($components as $component) {
-                $rules[$type][$component] = self::ruleFor($db, $beneficiaryId, $type, $component);
+                $rules[$type][$component] = self::ruleFor($db, $beneficiaryId, $type, $component, $atDate ?? '9999-12-31');
             }
         }
 
@@ -173,20 +218,27 @@ final class BillingMonthRule
     }
 
     /**
+     * Salveaza regulile cu efect de la luna data: pentru cursele INCEPUTE din luna aceea.
+     * Cursele mai vechi raman pe regula valabila la data lor. Se scrie o versiune noua doar
+     * pentru componentele a caror regula se schimba fata de cea valabila in luna aceea.
+     *
      * @param array<string, mixed> $rules tip => [componenta => regula]
+     * @return int numarul de reguli modificate
      */
-    public static function saveRulesForBeneficiary(PDO $db, int $beneficiaryId, array $rules, ?int $userId = null): void
+    public static function saveRulesForBeneficiary(PDO $db, int $beneficiaryId, array $rules, ?int $userId = null, ?string $fromMonth = null): int
     {
         if ($beneficiaryId <= 0) {
-            return;
+            return 0;
         }
 
+        $since = $fromMonth === null ? self::SINCE_ALWAYS : (self::normalizeMonth($fromMonth) ?? self::SINCE_ALWAYS);
         self::ensureSchema($db);
         $stmt = $db->prepare('
-            INSERT INTO ' . self::TABLE . ' (beneficiar_id, tip_transport, componenta, regula, updated_by, updated_at)
-            VALUES (:beneficiar_id, :tip_transport, :componenta, :regula, :updated_by, :updated_at)
+            INSERT INTO ' . self::TABLE . ' (beneficiar_id, tip_transport, componenta, valabil_de_la, regula, updated_by, updated_at)
+            VALUES (:beneficiar_id, :tip_transport, :componenta, :valabil_de_la, :regula, :updated_by, :updated_at)
             ON DUPLICATE KEY UPDATE regula = VALUES(regula), updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)
         ');
+        $changed = 0;
         foreach (self::COMPONENTS as $type => $components) {
             $typeRules = $rules[$type] ?? null;
             if (!is_array($typeRules)) {
@@ -196,23 +248,62 @@ final class BillingMonthRule
                 if (!array_key_exists($component, $typeRules)) {
                     continue;
                 }
+                $rule = self::normalizeRule($typeRules[$component]);
+                $versions = self::allRules($db)[$beneficiaryId][$type][$component] ?? [];
+                // Neschimbata in luna aleasa (si fara versiune proprie in luna aceea): nimic de scris.
+                if (!isset($versions[$since]) && self::ruleFor($db, $beneficiaryId, $type, $component, $since) === $rule) {
+                    continue;
+                }
+                if (isset($versions[$since]) && $versions[$since] === $rule) {
+                    continue;
+                }
                 $stmt->bindValue(':beneficiar_id', $beneficiaryId, PDO::PARAM_INT);
                 $stmt->bindValue(':tip_transport', $type, PDO::PARAM_STR);
                 $stmt->bindValue(':componenta', $component, PDO::PARAM_STR);
-                $stmt->bindValue(':regula', self::normalizeRule($typeRules[$component]), PDO::PARAM_STR);
+                $stmt->bindValue(':valabil_de_la', $since, PDO::PARAM_STR);
+                $stmt->bindValue(':regula', $rule, PDO::PARAM_STR);
                 $stmt->bindValue(':updated_by', $userId, $userId === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
                 $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
                 $stmt->execute();
+                $changed++;
             }
         }
         self::$cache = null;
+
+        return $changed;
     }
 
     /**
-     * Regula unei componente. Componenta pe care tipul nu o are (ex. tone la Primar km)
-     * urmeaza componenta principala a tipului, ca sa nu imparta niciodata cursa.
+     * Istoricul modificarilor unui beneficiar, cele mai noi primele.
+     *
+     * @return list<array{valabil_de_la: string, tip_transport: string, componenta: string, regula: string, updated_at: string, updated_by_name: string}>
      */
-    public static function ruleFor(PDO $db, int $beneficiaryId, string $transportType, string $component = 'main'): string
+    public static function history(PDO $db, int $beneficiaryId): array
+    {
+        if ($beneficiaryId <= 0 || $db->query("SHOW TABLES LIKE '" . self::TABLE . "'")->fetchColumn() === false
+            || !self::hasColumn($db, 'valabil_de_la')) {
+            return [];
+        }
+
+        $stmt = $db->prepare('
+            SELECT r.valabil_de_la, r.tip_transport, r.componenta, r.regula, r.updated_at,
+                   COALESCE(u.nume, \'\') AS updated_by_name
+            FROM ' . self::TABLE . ' r
+            LEFT JOIN utilizatori u ON u.id = r.updated_by
+            WHERE r.beneficiar_id = :beneficiar_id
+            ORDER BY r.valabil_de_la DESC, r.updated_at DESC, r.tip_transport, r.componenta
+        ');
+        $stmt->execute([':beneficiar_id' => $beneficiaryId]);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * Regula unei componente pentru o cursa inceputa la data data (implicit: azi).
+     * Componenta pe care tipul nu o are (ex. tone la Primar km) urmeaza componenta
+     * principala a tipului, ca sa nu imparta niciodata cursa.
+     */
+    public static function ruleFor(PDO $db, int $beneficiaryId, string $transportType, string $component = 'main', ?string $tripStart = null): string
     {
         $components = self::COMPONENTS[$transportType] ?? null;
         if ($components === null) {
@@ -222,15 +313,28 @@ final class BillingMonthRule
             $component = $components[0];
         }
 
-        return self::allRules($db)[$beneficiaryId][$transportType][$component] ?? self::DEFAULT_RULE;
+        $date = substr(trim((string) ($tripStart ?? '')), 0, 10);
+        if ($date === '') {
+            $date = date('Y-m-d');
+        }
+        $rule = self::DEFAULT_RULE;
+        foreach (self::allRules($db)[$beneficiaryId][$transportType][$component] ?? [] as $since => $versionRule) {
+            if ($since > $date) {
+                break;
+            }
+            $rule = $versionRule;
+        }
+
+        return $rule;
     }
 
     // ------------------------------------------------------------------ date
 
     /**
      * Expresia SQL a datei de facturare a unei componente ('km', 'tone' sau 'main').
-     * Doar literali validati (fara parametri), deci se poate repeta in aceeasi
-     * interogare (PDO ruleaza cu EMULATE_PREPARES=false).
+     * Regula se alege dupa luna in care a INCEPUT cursa (versiunile din Configurare
+     * transport). Doar literali validati (fara parametri), deci se poate repeta in
+     * aceeasi interogare (PDO ruleaza cu EMULATE_PREPARES=false).
      */
     public static function sqlComponentDateExpr(PDO $db, string $alias, string $component): string
     {
@@ -238,21 +342,36 @@ final class BillingMonthRule
         $start = "COALESCE({$alias}.data_inceput, {$alias}.data_cursa)";
         $end = "COALESCE({$alias}.data_sfarsit, {$alias}.data_inceput, {$alias}.data_cursa)";
 
-        $pairs = [];
+        // Intervalele [de la, pana la) in care regula componentei este Data sfarsit.
+        $conditions = [];
         foreach (self::allRules($db) as $beneficiaryId => $types) {
-            foreach (array_keys($types) as $type) {
-                if (self::ruleFor($db, (int) $beneficiaryId, $type, $component) === self::END) {
-                    $pairs[] = '(' . (int) $beneficiaryId . ", '" . $type . "')";
+            foreach ($types as $type => $components) {
+                $own = in_array($component, self::COMPONENTS[$type], true) ? $component : self::COMPONENTS[$type][0];
+                $versions = $components[$own] ?? [];
+                $sinceList = array_keys($versions);
+                foreach ($sinceList as $index => $since) {
+                    if ($versions[$since] !== self::END) {
+                        continue;
+                    }
+                    $until = $sinceList[$index + 1] ?? null;
+                    $condition = "{$alias}.beneficiar_id = " . (int) $beneficiaryId
+                        . " AND {$alias}.tip_transport = '" . $type . "'";
+                    if ($since > self::SINCE_ALWAYS) {
+                        $condition .= " AND {$start} >= '" . $since . "'";
+                    }
+                    if ($until !== null) {
+                        $condition .= " AND {$start} < '" . $until . "'";
+                    }
+                    $conditions[] = '(' . $condition . ')';
                 }
             }
         }
 
-        if ($pairs === []) {
+        if ($conditions === []) {
             return $start;
         }
 
-        return "(CASE WHEN ({$alias}.beneficiar_id, {$alias}.tip_transport) IN (" . implode(', ', $pairs) . ')'
-            . " THEN {$end} ELSE {$start} END)";
+        return '(CASE WHEN ' . implode(' OR ', $conditions) . " THEN {$end} ELSE {$start} END)";
     }
 
     /** Data de facturare a partii principale a cursei (luna in care cursa se numara). */
@@ -268,8 +387,8 @@ final class BillingMonthRule
      */
     public static function dateForRow(PDO $db, array $row, string $component = 'main'): string
     {
-        $start = (string) (($row['data_inceput'] ?? '') ?: ($row['data_cursa'] ?? ''));
-        $rule = self::ruleFor($db, (int) ($row['beneficiar_id'] ?? 0), (string) ($row['tip_transport'] ?? ''), $component);
+        $start = substr((string) (($row['data_inceput'] ?? '') ?: ($row['data_cursa'] ?? '')), 0, 10);
+        $rule = self::ruleFor($db, (int) ($row['beneficiar_id'] ?? 0), (string) ($row['tip_transport'] ?? ''), $component, $start);
         if ($rule === self::END) {
             $end = trim((string) ($row['data_sfarsit'] ?? ''));
             if ($end !== '') {
@@ -277,7 +396,7 @@ final class BillingMonthRule
             }
         }
 
-        return substr($start, 0, 10);
+        return $start;
     }
 
     // ------------------------------------------------------------------ partea din perioada
@@ -473,9 +592,11 @@ final class BillingMonthRule
         self::$kmFractionCache = [];
     }
 
-    private static function hasComponentColumn(PDO $db): bool
+    private static function hasColumn(PDO $db, string $column): bool
     {
-        return $db->query('SHOW COLUMNS FROM ' . self::TABLE . " LIKE 'componenta'")->fetchColumn() !== false;
+        $column = preg_replace('/[^a-z_]/', '', $column);
+
+        return $db->query('SHOW COLUMNS FROM ' . self::TABLE . " LIKE '" . $column . "'")->fetchColumn() !== false;
     }
 
     /** @return list<string> */

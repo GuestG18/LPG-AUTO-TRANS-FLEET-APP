@@ -4424,6 +4424,8 @@ class DispecerCurseController
             'pret_tona_aspirata_gazoasa' => '',
             'compresor_vehicle_ids' => [],
             'luna_facturare' => [],
+            'luna_facturare_de_la' => date('Y-m'),
+            'luna_facturare_istoric' => [],
             'activ' => '1',
         ];
 
@@ -4482,6 +4484,7 @@ class DispecerCurseController
                     'pret_tona_aspirata_gazoasa' => format_rate_input($editBeneficiary['pret_tona_aspirata_gazoasa'] ?? 0),
                     'compresor_vehicle_ids' => array_values(array_unique(array_map('strval', $compressorVehicleIds))),
                     'luna_facturare' => BillingMonthRule::rulesForBeneficiary($this->db, (int) ($editBeneficiary['id'] ?? 0)),
+                    'luna_facturare_istoric' => BillingMonthRule::history($this->db, (int) ($editBeneficiary['id'] ?? 0)),
                     'activ' => !empty($editBeneficiary['activ']) ? '1' : '0',
                 ]);
             }
@@ -6315,7 +6318,13 @@ class DispecerCurseController
         $supportsCompressor = in_array('compresor', $selectedTransportTypes, true);
         $active = isset($_POST['activ']) && (string) $_POST['activ'] === '1';
         $billingMonthRules = $this->billingMonthRulesFromInput($_POST['luna_facturare'] ?? []);
+        // Luna din care se aplica modificarile la Luna de facturare: cursele incepute din ea.
+        $billingMonthFromRaw = trim((string) ($_POST['luna_facturare_de_la'] ?? ''));
+        $billingMonthFrom = BillingMonthRule::normalizeMonth($billingMonthFromRaw);
         $errors = [];
+        if ($billingMonthFrom === null) {
+            $errors['luna_facturare_de_la'] = 'Alege luna din care se aplica regulile de luna de facturare.';
+        }
 
         if ($name === '') {
             $errors['nume'] = 'Numele beneficiarului este obligatoriu.';
@@ -6449,6 +6458,7 @@ class DispecerCurseController
                 'suporta_primar_distributie' => $supportsPrimaryDistribution ? '1' : '0',
                 'suporta_compresor' => $supportsCompressor ? '1' : '0',
                 'luna_facturare' => $billingMonthRules,
+                'luna_facturare_de_la' => $billingMonthFromRaw,
                 'activ' => $active ? '1' : '0',
             ], $errors);
             $redirectQuery = ['page' => 'dispecer_curse', 'action' => 'config'];
@@ -6511,7 +6521,22 @@ class DispecerCurseController
                     $beneficiaryId,
                     $supportsCompressor ? $compressorVehicleIds : []
                 );
-                BillingMonthRule::saveRulesForBeneficiary($this->db, $beneficiaryId, $billingMonthRules, $this->currentUserId());
+                $changedBillingRules = BillingMonthRule::saveRulesForBeneficiary(
+                    $this->db,
+                    $beneficiaryId,
+                    $billingMonthRules,
+                    $this->currentUserId(),
+                    $billingMonthFrom
+                );
+                if ($changedBillingRules > 0) {
+                    flash_set('info', sprintf(
+                        'Luna de facturare: %d %s, aplicat%s curselor incepute din %s. Cursele mai vechi raman pe regula anterioara.',
+                        $changedBillingRules,
+                        $changedBillingRules === 1 ? 'regula modificata' : 'reguli modificate',
+                        $changedBillingRules === 1 ? 'a' : 'e',
+                        date('m.Y', (int) strtotime((string) $billingMonthFrom))
+                    ));
+                }
             }
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][config_store_beneficiar] ' . $exception->getMessage());

@@ -689,6 +689,61 @@ if ($configCreateMode) {
                     <label class="form-label mb-1">Tipuri transport <span class="text-danger">*</span></label>
                     <div class="form-text mt-0 mb-2">Bifeaza tipurile pentru care beneficiarul are reguli active — fiecare tip isi arata setarile direct in cardul lui.</div>
                     <?php if (isset($beneficiaryFormErrors['tip_transport'])): ?><div class="invalid-feedback d-block mb-2"><?= e((string) $beneficiaryFormErrors['tip_transport']) ?></div><?php endif; ?>
+                <?php
+                // Luna de facturare: modificarile se aplica doar curselor incepute din luna aleasa,
+                // ca lunile deja facturate sa ramana neschimbate.
+                $billingMonthFrom = (string) ($beneficiaryFormData['luna_facturare_de_la'] ?? date('Y-m'));
+                $billingMonthHistory = is_array($beneficiaryFormData['luna_facturare_istoric'] ?? null) ? $beneficiaryFormData['luna_facturare_istoric'] : [];
+                $billingTypeLabels = [
+                    'primar' => 'Primar km',
+                    'primar_tona' => 'Primar tona',
+                    'distributie' => 'Distributie',
+                    'primar_distributie' => 'Primar+Distributie',
+                    'compresor' => 'Compresor',
+                ];
+                ?>
+                <div class="mb-3">
+                    <div class="border rounded p-3 bg-body-tertiary">
+                        <div class="row g-3 align-items-end">
+                            <div class="col-12 col-md-4">
+                                <label class="form-label" for="config_luna_facturare_de_la">Luna de facturare: aplica modificarile incepand cu luna</label>
+                                <input type="month" class="form-control <?= isset($beneficiaryFormErrors['luna_facturare_de_la']) ? 'is-invalid' : '' ?>" id="config_luna_facturare_de_la" name="luna_facturare_de_la" value="<?= e(substr($billingMonthFrom, 0, 7)) ?>" required>
+                                <?php if (isset($beneficiaryFormErrors['luna_facturare_de_la'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['luna_facturare_de_la']) ?></div><?php endif; ?>
+                            </div>
+                            <div class="col-12 col-md-8">
+                                <div class="form-text mt-0">
+                                    Doar selecturile „Luna de facturare” pe care le schimbi in cardurile de mai jos primesc luna aleasa; restul raman cum sunt.<br>Ele se aplica doar curselor <strong>incepute</strong> din luna aleasa.
+                                    Cursele mai vechi raman pe regula de atunci, deci lunile deja facturate nu se modifica.
+                                </div>
+                            </div>
+                        </div>
+                        <?php if ($billingMonthHistory !== []): ?>
+                            <details class="mt-3">
+                                <summary class="small fw-semibold">Istoric luna de facturare (<?= e((string) count($billingMonthHistory)) ?>)</summary>
+                                <div class="table-responsive mt-2">
+                                    <table class="table table-sm small mb-0">
+                                        <thead>
+                                            <tr><th>Din luna</th><th>Tip transport</th><th>Componenta</th><th>Regula</th><th>Modificat</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php foreach ($billingMonthHistory as $historyRow): ?>
+                                                <?php $historySince = (string) ($historyRow['valabil_de_la'] ?? ''); ?>
+                                                <tr>
+                                                    <td><?= $historySince <= BillingMonthRule::SINCE_ALWAYS ? 'dintotdeauna' : e(date('m.Y', (int) strtotime($historySince))) ?></td>
+                                                    <td><?= e($billingTypeLabels[(string) ($historyRow['tip_transport'] ?? '')] ?? (string) ($historyRow['tip_transport'] ?? '')) ?></td>
+                                                    <td><?= e(BillingMonthRule::COMPONENT_LABELS[(string) ($historyRow['componenta'] ?? '')] ?? (string) ($historyRow['componenta'] ?? '')) ?></td>
+                                                    <td><?= e(BillingMonthRule::RULE_LABELS[(string) ($historyRow['regula'] ?? '')] ?? (string) ($historyRow['regula'] ?? '')) ?></td>
+                                                    <td><?= e(trim(date('d.m.Y H:i', (int) strtotime((string) ($historyRow['updated_at'] ?? ''))) . ' ' . (string) ($historyRow['updated_by_name'] ?? ''))) ?></td>
+                                                </tr>
+                                            <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </details>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
                     <div class="tcv2-type-grid" data-role="transport-type-dropdown">
                         <div class="tcv2-type-tile">
                             <label class="tcv2-type-tile-head">
