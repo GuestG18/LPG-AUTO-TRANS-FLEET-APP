@@ -32,7 +32,7 @@ $inlineRender = isset($renderDispatcherSummaryDetails) && is_callable($renderDis
 // Diurnele cursei, impartite pe soferii fazelor dupa timpul petrecut pe drum.
 $inlineDiurnaDays = (int) (dispatcher_diurna_for_interval($inlineRace)['diurne'] ?? 0);
 $inlineDiurnaByDriver = [];
-foreach (dispatcher_diurna_split($inlineDiurnaDays, $inlineSegments) as $inlineDiurnaRow) {
+foreach (dispatcher_diurna_split($inlineDiurnaDays, $inlineSegments, (array) ($inlineRace['diurna_soferi'] ?? [])) as $inlineDiurnaRow) {
     $inlineDiurnaByDriver[(int) $inlineDiurnaRow['driver_id']] = (int) $inlineDiurnaRow['zile'];
 }
 $inlineDiurnaPrinted = [];

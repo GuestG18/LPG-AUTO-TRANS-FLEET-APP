@@ -1,0 +1,122 @@
+/*
+ * Monitorizare flotă - harta 3D (MapLibre). Harta ocupa restul inaltimii
+ * ferestrei; inaltimea exacta este setata din JS (--fleet-monitoring-height),
+ * iar calc() de mai jos e doar valoarea de pornire.
+ */
+.fleet-monitoring {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    min-width: 0;
+}
+
+.fleet-monitoring-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.fleet-monitoring-stage {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+    height: var(--fleet-monitoring-height, calc(100vh - 170px));
+    min-height: 420px;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: #050707;
+    border: 1px solid #1f2626;
+}
+
+.fleet-monitoring-map {
+    position: absolute;
+    inset: 0;
+}
+
+.fleet-monitoring-map .maplibregl-map,
+.fleet-monitoring-map.maplibregl-map {
+    background: #050707;
+}
+
+/* Aspect operational intunecat, ca in referinta: stilul "bright" atenuat. */
+.fleet-monitoring-map .maplibregl-canvas {
+    filter: saturate(0.5) contrast(1.1) brightness(0.66);
+    outline: none;
+}
+
+.fleet-monitoring-map .maplibregl-ctrl-attrib {
+    background: rgba(5, 7, 7, 0.75);
+    color: #9aa5a5;
+    font-size: 10px;
+}
+
+.fleet-monitoring-map .maplibregl-ctrl-attrib a {
+    color: #c3cccc;
+}
+
+.fleet-monitoring-map .maplibregl-ctrl-attrib-button {
+    filter: invert(1);
+}
+
+.fleet-monitoring-camera {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 2;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.fleet-monitoring-camera .btn {
+    width: 36px;
+    height: 34px;
+    padding: 0;
+    color: #e8eded;
+    background: rgba(8, 11, 11, 0.88);
+    border: 1px solid #364040;
+}
+
+.fleet-monitoring-camera .btn:hover,
+.fleet-monitoring-camera .btn:focus-visible {
+    color: #fff;
+    background: rgba(30, 38, 38, 0.95);
+    border-color: #5b6a6a;
+}
+
+.fleet-monitoring-status {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 3;
+    padding: 0.55rem 0.9rem;
+    border-radius: 0.4rem;
+    background: rgba(8, 11, 11, 0.9);
+    border: 1px solid #364040;
+    color: #dfe6e6;
+    font-size: 0.875rem;
+    pointer-events: none;
+}
+
+.fleet-monitoring-status[hidden] {
+    display: none;
+}
+
+.fleet-monitoring-status.is-error {
+    border-color: #b4414e;
+    color: #ffb3bb;
+}
+
+/* DEMO camion de test (etapa 2) - se sterge odata cu fleet-monitoring-demo.js */
+.fleet-monitoring-demo {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.fleet-monitoring-divider {
+    width: 1px;
+    height: 1.4rem;
+    background: var(--bs-border-color, #dee2e6);
+}

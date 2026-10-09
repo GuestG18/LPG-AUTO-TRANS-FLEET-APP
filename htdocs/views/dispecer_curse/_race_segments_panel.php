@@ -38,9 +38,12 @@ $segmentsLastEndDate = trim((string) ($segmentsLast['data_sfarsit'] ?? ($segment
 $segmentsLastEndTime = substr(trim((string) ($segmentsLast['ora_sfarsit'] ?? ($segmentsRace['ora_sfarsit'] ?? ''))), 0, 5);
 
 // Diurnele cursei, impartite pe soferii fazelor dupa timpul petrecut pe drum.
+if (!array_key_exists('diurna_minute_faze', $segmentsRace)) {
+    $segmentsRace['diurna_minute_faze'] = dispatcher_phase_minutes($segmentsList);
+}
 $segmentsDiurnaDays = (int) (dispatcher_diurna_for_interval($segmentsRace)['diurne'] ?? 0);
 $segmentsDiurnaByKey = [];
-foreach (dispatcher_diurna_split($segmentsDiurnaDays, $segmentsList) as $segmentsDiurnaRow) {
+foreach (dispatcher_diurna_split($segmentsDiurnaDays, $segmentsList, (array) ($segmentsRace['diurna_soferi'] ?? [])) as $segmentsDiurnaRow) {
     $segmentsDiurnaByKey[(int) $segmentsDiurnaRow['driver_id']] = $segmentsDiurnaRow;
 }
 $segmentsDiurnaPrinted = [];

@@ -20,11 +20,12 @@ return [
     ],
     'actions'     => [
         'view'   => ['label' => 'Vizualizare categorii & raport verificare'],
-        'manage' => ['label' => 'Adăugare / editare / ștergere categorii', 'group' => 'configurare', 'default_admin' => true],
+        'manage' => ['label' => 'Adăugare / editare / ștergere categorii, asignare vehicule', 'group' => 'configurare', 'default_admin' => true],
     ],
     'endpoints'   => [
         'store'  => 'manage',
         'update' => 'manage',
         'delete' => 'manage',
+        'assign' => 'manage',
     ],
 ];

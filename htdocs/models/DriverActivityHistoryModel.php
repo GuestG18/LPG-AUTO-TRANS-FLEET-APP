@@ -432,7 +432,12 @@ class DriverActivityHistoryModel extends BaseModel
 
         $trips = $this->getTripRows($driverId, $filters);
         $diurne = $this->attachDiurne($driverId, $filters, $trips);
-        $fuelRows = $this->getFuelRows($driverId, $filters, $trips);
+        // Alimentarile legate de o cursa raman la soferul cursei: pe cursele unde soferul
+        // doar a condus o faza, aceeasi alimentare s-ar numara la doi soferi.
+        $fuelRows = $this->getFuelRows($driverId, $filters, array_values(array_filter(
+            $trips,
+            static fn (array $trip): bool => empty($trip['phase_share_only'])
+        )));
         $usedVehicleIds = $this->resolveUsedVehicleIds($driverId, $filters, $trips, $fuelRows);
         $repairs = $this->getRepairRows($filters, $usedVehicleIds);
         $documents = $this->getDocumentRows($driverId, $filters, $usedVehicleIds);
@@ -578,7 +583,7 @@ class DriverActivityHistoryModel extends BaseModel
                     WHERE sv.driver_id = :driver_assignment
                       AND sv.vehicle_id = c.vehicle_id
                 )
-            ))",
+            )" . $this->phaseMemberSql($params) . ")",
         ];
 
         if ((int) ($filters['vehicle_id'] ?? 0) > 0) {
@@ -627,12 +632,109 @@ class DriverActivityHistoryModel extends BaseModel
         $stmt->execute();
         $rows = $stmt->fetchAll();
 
+        $segmentsByRace = $this->getActiveSegments(array_map(static fn (array $row): int => (int) $row['id'], $rows));
         foreach ($rows as &$row) {
-            $row = $this->applyBillingPeriod($this->decorateTrip($row), $filters);
+            $row = $this->decorateTrip($row);
+            $row = $this->applyPhaseShare($row, $segmentsByRace[(int) $row['id']] ?? [], $driverId);
+            $row = $this->applyBillingPeriod($row, $filters);
         }
         unset($row);
 
         return $rows;
+    }
+
+    /**
+     * Conditia SQL: soferul a condus o faza a cursei (curse_segmente), chiar daca pe
+     * cursa figureaza alt sofer. Gol cand tabela fazelor lipseste.
+     */
+    private function phaseMemberSql(array &$params): string
+    {
+        if (!$this->tableExists('curse_segmente')) {
+            return '';
+        }
+        $params[':phase_member_driver'] = (int) $params[':driver_id'];
+        $segmentDeleted = $this->columnExists('curse_segmente', 'deleted_at') ? 'AND seg.deleted_at IS NULL' : '';
+
+        return " OR EXISTS (
+                SELECT 1 FROM curse_segmente seg
+                WHERE seg.cursa_id = c.id AND seg.driver_id = :phase_member_driver {$segmentDeleted}
+            )";
+    }
+
+    /**
+     * Cursa cu mai multe faze: soferul primeste doar partea lui (cerinta 2026-10-08):
+     *  - km si timpul pe drum = fazele lui (raportul km-ilor fazelor aplicat pe km-ii cursei);
+     *  - clientii = Nr. clienti de pe fazele lui;
+     *  - tonele = repartizarea pe km din Dispecer curse (km sofer / km total × tone cursa);
+     *    repartizare incompleta (faza fara sofer / km) → tonele raman la soferul cursei.
+     * Valoarea, cheltuielile si refacturarile raman la soferul cursei (altfel s-ar numara de
+     * doua ori): pe randurile in care soferul doar a condus o faza ele sunt 0.
+     */
+    private function applyPhaseShare(array $row, array $segments, int $driverId): array
+    {
+        $isOwner = (int) ($row['driver_id'] ?? 0) === $driverId || (int) ($row['driver_id'] ?? 0) === 0;
+        $row['phase_share'] = false;
+        $row['phase_share_only'] = !$isOwner;
+        if (!$isOwner) {
+            foreach (['total_facturare', 'total_cheltuieli', 'total_motorina', 'total_alte_cheltuieli', 'total_diurna', 'total_refacturare', 'total_refacturare_facturata'] as $moneyField) {
+                $row[$moneyField] = 0;
+            }
+        }
+        if (count($segments) < 2) {
+            return $row;
+        }
+
+        $mine = array_values(array_filter($segments, static fn (array $segment): bool => (int) ($segment['driver_id'] ?? 0) === $driverId));
+        $sum = static fn (array $list, string $field): float => array_sum(array_map(static fn (array $segment): float => max(0.0, (float) ($segment[$field] ?? 0)), $list));
+        $row['phase_share'] = true;
+        $row['phase_count'] = count($segments);
+        $row['phase_mine'] = count($mine);
+
+        // Km si timpul pe drum: fazele soferului.
+        $kmTotal = $sum($segments, 'km');
+        $kmRatio = $kmTotal > 0 ? $sum($mine, 'km') / $kmTotal : ($isOwner ? 1.0 : 0.0);
+        $row['effective_km'] = round((float) $row['effective_km'] * $kmRatio, 2);
+        $row['non_billable_km'] = round((float) $row['non_billable_km'] * $kmRatio, 2);
+        $row['duration_minutes_effective'] = array_sum(array_map('dispatcher_segment_minutes', $mine));
+
+        // Clientii: Nr. clienti de pe fazele lui (date vechi fara clienti pe faze: raman la soferul cursei).
+        if ($sum($segments, 'nr_clienti') > 0) {
+            $row['clients'] = (int) $sum($mine, 'nr_clienti');
+        } elseif (!$isOwner) {
+            $row['clients'] = 0;
+        }
+
+        // Tonele: aceeasi repartizare pe km ca in Dispecer curse (Activitate → "Repartizare
+        // încărcătură / km", dispatcher_load_allocation_by_km): tone sofer = km sofer / km total
+        // × tonele cursei, rotunjite la fel, deci cifrele coincid. Repartizare incompleta (faza
+        // fara sofer / km): tonele raman la soferul cursei, ca la o cursa fara faze.
+        foreach (['transported_tons', 'delivered_tons'] as $tonsField) {
+            $tripTons = (float) $row[$tonsField];
+            if ($tripTons <= 0) {
+                continue;
+            }
+            $allocation = dispatcher_load_allocation_by_km($segments, $tripTons);
+            if ($allocation['status'] === 'ok') {
+                $myTons = 0.0;
+                foreach ($allocation['rows'] as $allocationRow) {
+                    if ((int) $allocationRow['driver_id'] === $driverId) {
+                        $myTons += (float) $allocationRow['tone'];
+                    }
+                }
+                $row[$tonsField] = $myTons;
+            } elseif (!$isOwner) {
+                $row[$tonsField] = 0.0;
+            }
+        }
+
+        // Vehiculul cu care a lucrat soferul (pentru tabelul pe vehicule), cand e unul singur.
+        $myVehicles = array_values(array_unique(array_filter(array_map(static fn (array $segment): int => (int) ($segment['vehicle_id'] ?? 0), $mine))));
+        if (count($myVehicles) === 1 && $myVehicles[0] !== (int) ($row['vehicle_id'] ?? 0)) {
+            $row['vehicle_id'] = $myVehicles[0];
+            $row['nr_inmatriculare'] = (string) ($mine[0]['nr_inmatriculare'] ?? $row['nr_inmatriculare']);
+        }
+
+        return $row;
     }
 
     /**
@@ -772,7 +874,7 @@ class DriverActivityHistoryModel extends BaseModel
                 'diurna_recorded' => null,
                 'policy' => $policy,
                 'split' => '',
-                'segment_only' => !isset($race['beneficiary_label']),
+                'segment_only' => !isset($race['beneficiary_label']) || !empty($race['phase_share_only']),
             ];
 
             if ($interval['status'] !== 'ok') {
@@ -785,12 +887,14 @@ class DriverActivityHistoryModel extends BaseModel
             $days = (int) $interval['diurne'];
             if (count($raceSegments) > 1) {
                 $share = 0;
-                foreach (dispatcher_diurna_split($days, $raceSegments) as $splitRow) {
+                // Cu modificarile de diurna aprobate pe soferi (cererile cu driver_id).
+                $driverAdjustments = (array) ($race['diurna_soferi'] ?? []);
+                foreach (dispatcher_diurna_split($days, $raceSegments, $driverAdjustments) as $splitRow) {
                     if ((int) $splitRow['driver_id'] === $driverId) {
                         $share += (int) $splitRow['zile'];
                     }
                 }
-                $row['split'] = dispatcher_diurna_summary($days, $raceSegments);
+                $row['split'] = dispatcher_diurna_summary($days, $raceSegments, $driverAdjustments);
                 $days = $share;
             }
 
@@ -1024,9 +1128,11 @@ class DriverActivityHistoryModel extends BaseModel
         $params = [];
         $segmentDeleted = $this->columnExists('curse_segmente', 'deleted_at') ? 'AND seg.deleted_at IS NULL' : '';
         $stmt = $this->db->prepare("
-            SELECT seg.cursa_id, seg.driver_id, seg.data_inceput, seg.ora_inceput, seg.data_sfarsit, seg.ora_sfarsit, s.nume AS sofer_nume
+            SELECT seg.id, seg.cursa_id, seg.driver_id, seg.vehicle_id, seg.data_inceput, seg.ora_inceput, seg.data_sfarsit, seg.ora_sfarsit,
+                   seg.km, seg.nr_clienti, seg.tona_livrata, seg.cantitate_incarcata, s.nume AS sofer_nume, v.nr_inmatriculare
             FROM curse_segmente seg
             LEFT JOIN soferi s ON s.id = seg.driver_id
+            LEFT JOIN vehicule v ON v.id = seg.vehicle_id
             WHERE seg.cursa_id IN (" . $this->inClause($params, 'diurna_race', array_map('intval', $raceIds)) . ")
               {$segmentDeleted}
             ORDER BY seg.cursa_id ASC, seg.ordine ASC, seg.id ASC

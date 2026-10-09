@@ -1666,6 +1666,14 @@ class FuelModel extends BaseModel
         $this->ensureSchema();
 
         $summary = $this->getKpiSummary($filters);
+        // Cardurile grele / usoare sunt chiar filtrul de categorie: arata
+        // mereu ambele parti (fara filtrul de categorie), ca sa poti comuta.
+        $splitSummary = ($filters['vehicle_class'] ?? '') !== ''
+            ? $this->getKpiSummary(array_merge($filters, ['vehicle_class' => '']))
+            : $summary;
+        foreach (['light_value', 'light_liters', 'light_fillups', 'heavy_value', 'heavy_liters', 'heavy_fillups', 'total_value'] as $splitKey) {
+            $summary['split'][$splitKey] = $splitSummary[$splitKey] ?? 0;
+        }
         $previousSummary = $this->getKpiSummary($this->previousPeriodFilters($filters));
         $summary['changes'] = [
             'motorina_liters' => $this->percentageChange($summary['motorina_liters'], $previousSummary['motorina_liters']),
@@ -2061,6 +2069,196 @@ class FuelModel extends BaseModel
         $stmt->execute();
 
         return $stmt->fetchAll();
+    }
+
+    /**
+     * Explica de ce o alimentare a ramas neasociata: ultima alimentare a
+     * aceluiasi vehicul care A FOST asociata (si cursa ei), cursele cele mai
+     * apropiate inainte/dupa si motivul pentru care findMatchingTrip() nu le-a
+     * acceptat (toleranta ±TRIP_MATCH_TOLERANCE_HOURS fata de interval).
+     */
+    public function getUnassociatedDiagnosis(int $fillupId): ?array
+    {
+        $this->ensureSchema();
+
+        $stmt = $this->db->prepare('SELECT * FROM fuel_fillups WHERE id = :id');
+        $stmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $stmt->execute();
+        $fillup = $stmt->fetch();
+        if (!$fillup) {
+            return null;
+        }
+
+        $registration = (string) ($fillup['vehicle_registration'] ?? '');
+        $regKey = str_replace(' ', '', strtoupper(trim($registration)));
+        $datetime = (string) ($fillup['fillup_datetime'] ?? '');
+        $toleranceHours = self::TRIP_MATCH_TOLERANCE_HOURS;
+        $startExpr = $this->tripIntervalStartExpr('c');
+        $endExpr = $this->tripIntervalEndExpr('c');
+
+        $linkStmt = $this->db->prepare('SELECT trip_id, match_type FROM fuel_trip_links WHERE fillup_id = :id LIMIT 1');
+        $linkStmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $linkStmt->execute();
+        $currentLink = $linkStmt->fetch() ?: null;
+
+        $result = [
+            'fillup' => [
+                'id' => (int) $fillup['id'],
+                'vehicle_registration' => $registration,
+                'fillup_datetime' => $datetime,
+                'fuel_type' => (string) ($fillup['fuel_type'] ?? ''),
+                'quantity_liters' => (float) ($fillup['quantity_liters'] ?? 0),
+                'driver_name' => (string) ($fillup['driver_name'] ?? ''),
+            ],
+            'tolerance_hours' => $toleranceHours,
+            'current_trip_id' => $currentLink ? (int) $currentLink['trip_id'] : null,
+            'vehicle_found' => false,
+            'last_linked' => null,
+            'previous_trip' => null,
+            'next_trip' => null,
+            'deleted_trip' => null,
+            'inverted_trips' => [],
+            'reasons' => [],
+        ];
+
+        if ($regKey === '' || $datetime === '') {
+            $result['reasons'][] = 'Alimentarea nu are număr de înmatriculare sau dată — nu poate fi potrivită cu o cursă.';
+            return $result;
+        }
+
+        $vehicleStmt = $this->db->prepare("SELECT id FROM vehicule WHERE REPLACE(UPPER(nr_inmatriculare), ' ', '') = :reg LIMIT 1");
+        $vehicleStmt->bindValue(':reg', $regKey);
+        $vehicleStmt->execute();
+        $result['vehicle_found'] = (bool) $vehicleStmt->fetchColumn();
+
+        // Ultima alimentare anterioara a vehiculului care are cursa asociata.
+        $lastStmt = $this->db->prepare("
+            SELECT
+                f2.id AS fillup_id,
+                f2.fillup_datetime,
+                f2.fuel_type,
+                f2.quantity_liters,
+                l.match_type,
+                c.id AS trip_id,
+                {$startExpr} AS trip_start,
+                {$endExpr} AS trip_end,
+                s.nume AS driver_name
+            FROM fuel_trip_links l
+            INNER JOIN fuel_fillups f2 ON f2.id = l.fillup_id
+            INNER JOIN curse_dispecer c ON c.id = l.trip_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            WHERE REPLACE(UPPER(f2.vehicle_registration), ' ', '') = :reg
+              AND f2.id <> :id
+              AND f2.fillup_datetime <= :dt
+            ORDER BY f2.fillup_datetime DESC, f2.id DESC
+            LIMIT 1
+        ");
+        $lastStmt->bindValue(':reg', $regKey);
+        $lastStmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $lastStmt->bindValue(':dt', $datetime);
+        $lastStmt->execute();
+        $last = $lastStmt->fetch();
+        if ($last) {
+            $result['last_linked'] = $last;
+        }
+
+        $tripSelect = "
+            SELECT c.id, {$startExpr} AS trip_start, {$endExpr} AS trip_end, s.nume AS driver_name
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            LEFT JOIN soferi s ON s.id = c.driver_id
+            WHERE REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = :reg
+              AND " . $this->activeRaceCondition('c');
+
+        $prevStmt = $this->db->prepare($tripSelect . " AND {$endExpr} < :dt ORDER BY trip_end DESC, c.id DESC LIMIT 1");
+        $prevStmt->bindValue(':reg', $regKey);
+        $prevStmt->bindValue(':dt', $datetime);
+        $prevStmt->execute();
+        $prev = $prevStmt->fetch() ?: null;
+
+        $nextStmt = $this->db->prepare($tripSelect . " AND {$startExpr} > :dt ORDER BY trip_start ASC, c.id ASC LIMIT 1");
+        $nextStmt->bindValue(':reg', $regKey);
+        $nextStmt->bindValue(':dt', $datetime);
+        $nextStmt->execute();
+        $next = $nextStmt->fetch() ?: null;
+
+        $fillupAt = new DateTimeImmutable($datetime);
+        $hoursBetween = static fn (string $a, DateTimeImmutable $b): float =>
+            round(abs($b->getTimestamp() - (new DateTimeImmutable($a))->getTimestamp()) / 3600, 1);
+        if ($prev) {
+            $prev['gap_hours'] = $hoursBetween((string) $prev['trip_end'], $fillupAt);
+            $result['previous_trip'] = $prev;
+        }
+        if ($next) {
+            $next['gap_hours'] = $hoursBetween((string) $next['trip_start'], $fillupAt);
+            $result['next_trip'] = $next;
+        }
+
+        // O cursa stearsa care ar fi acoperit alimentarea explica disparitia asocierii.
+        if ($this->activeRaceCondition('c') !== '1=1') {
+            $deletedStmt = $this->db->prepare("
+                SELECT c.id, {$startExpr} AS trip_start, {$endExpr} AS trip_end
+                FROM curse_dispecer c
+                INNER JOIN vehicule v ON v.id = c.vehicle_id
+                WHERE REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = :reg
+                  AND c.deleted_at IS NOT NULL
+                  AND :dt BETWEEN DATE_SUB({$startExpr}, INTERVAL {$toleranceHours} HOUR)
+                              AND DATE_ADD({$endExpr}, INTERVAL {$toleranceHours} HOUR)
+                ORDER BY c.id DESC
+                LIMIT 1
+            ");
+            $deletedStmt->bindValue(':reg', $regKey);
+            $deletedStmt->bindValue(':dt', $datetime);
+            $deletedStmt->execute();
+            $result['deleted_trip'] = $deletedStmt->fetch() ?: null;
+        }
+
+        // Cursa cu sfarsitul inaintea inceputului (data tastata gresit) nu poate
+        // contine nicio alimentare; o semnalam daca ar fi acoperit-o.
+        $invertedStmt = $this->db->prepare("
+            SELECT c.id, {$startExpr} AS trip_start, {$endExpr} AS trip_end
+            FROM curse_dispecer c
+            INNER JOIN vehicule v ON v.id = c.vehicle_id
+            WHERE REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = :reg
+              AND " . $this->activeRaceCondition('c') . "
+              AND {$endExpr} < {$startExpr}
+              AND :dt BETWEEN DATE_SUB({$endExpr}, INTERVAL 31 DAY) AND DATE_ADD({$startExpr}, INTERVAL {$toleranceHours} HOUR)
+            ORDER BY c.id DESC
+            LIMIT 3
+        ");
+        $invertedStmt->bindValue(':reg', $regKey);
+        $invertedStmt->bindValue(':dt', $datetime);
+        $invertedStmt->execute();
+        $result['inverted_trips'] = $invertedStmt->fetchAll();
+
+        if ($result['current_trip_id'] !== null) {
+            $result['reasons'][] = 'Alimentarea este acum asociată cu cursa #' . $result['current_trip_id'] . ' (reîncarcă pagina).';
+        } elseif (!$result['vehicle_found']) {
+            $result['reasons'][] = 'Numărul ' . $registration . ' nu există în lista de vehicule, deci nu are curse în Dispecer curse. '
+                . 'Dacă șoferul a alimentat cu cardul altei mașini, folosește „Schimbă vehiculul”.';
+        } elseif ($prev === null && $next === null) {
+            $result['reasons'][] = 'Vehiculul nu are nicio cursă (activă) în Dispecer curse.';
+        } else {
+            $closest = [];
+            if ($prev) {
+                $closest[] = 'cursa #' . (int) $prev['id'] . ' s-a încheiat cu ' . format_number_ro((float) $prev['gap_hours'], 1) . ' h înainte';
+            }
+            if ($next) {
+                $closest[] = 'cursa #' . (int) $next['id'] . ' începe la ' . format_number_ro((float) $next['gap_hours'], 1) . ' h după';
+            }
+            $result['reasons'][] = 'Nicio cursă a vehiculului nu acoperă momentul alimentării: ' . implode(', iar ', $closest)
+                . '. Asocierea automată acceptă cel mult ' . $toleranceHours . ' h față de începutul sau sfârșitul cursei.';
+        }
+        foreach ($result['inverted_trips'] as $inverted) {
+            $result['reasons'][] = 'Cursa #' . (int) $inverted['id'] . ' are data de sfârșit ('
+                . date('d.m.Y H:i', strtotime((string) $inverted['trip_end'])) . ') înaintea datei de început ('
+                . date('d.m.Y H:i', strtotime((string) $inverted['trip_start'])) . ') — probabil o dată tastată greșit; după corectarea cursei, alimentarea se poate asocia automat.';
+        }
+        if ($result['deleted_trip']) {
+            $result['reasons'][] = 'Cursa #' . (int) $result['deleted_trip']['id'] . ', care acoperea alimentarea, a fost ștearsă.';
+        }
+
+        return $result;
     }
 
     public function getSyncLogs(int $limit = 10): array
@@ -3412,6 +3610,15 @@ class FuelModel extends BaseModel
                   AND UPPER(TRIM(vb.marca)) = UPPER(:{$prefix}_brand)
             )";
             $params[":{$prefix}_brand"] = $brand;
+        }
+
+        // Categoria de vehicul (cardurile „Vehicule grele / ușoare"): aceeasi
+        // regula ca la impartirea costului — tot ce nu e usor intra la grele.
+        $vehicleClass = (string) ($filters['vehicle_class'] ?? '');
+        if ($vehicleClass === 'usoare') {
+            $where[] = $this->lightVehicleExpr('f');
+        } elseif ($vehicleClass === 'grele') {
+            $where[] = 'NOT ' . $this->lightVehicleExpr('f');
         }
 
         $transportGroup = trim((string) ($filters['transport_group'] ?? ''));

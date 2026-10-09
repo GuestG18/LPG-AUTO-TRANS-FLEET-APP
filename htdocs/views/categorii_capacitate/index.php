@@ -16,8 +16,29 @@ $verificationSummary = is_array($verificationSummary ?? null) ? $verificationSum
 $auditTrail = is_array($auditTrail ?? null) ? $auditTrail : [];
 $formData = is_array($formData ?? null) ? $formData : [];
 $formErrors = is_array($formErrors ?? null) ? $formErrors : [];
+$assignmentVehicles = is_array($assignmentVehicles ?? null) ? $assignmentVehicles : [];
 $editingId = (int) ($editingId ?? 0);
 $canManage = !empty($canManage);
+
+$categoryNames = [];
+$activeCategories = [];
+foreach ($categories as $category) {
+    $categoryNames[(int) $category['id']] = (string) $category['nume'];
+    if ($category['activ']) {
+        $activeCategories[(int) $category['id']] = (string) $category['nume'];
+    }
+}
+$assignmentTypes = [];
+$assignmentGarages = [];
+foreach ($assignmentVehicles as $vehicle) {
+    $assignmentTypes[(string) $vehicle['tip_vehicul']] = vehicle_type_label((string) $vehicle['tip_vehicul']);
+    $garage = trim((string) ($vehicle['garaj'] ?? ''));
+    if ($garage !== '') {
+        $assignmentGarages[$garage] = $garage;
+    }
+}
+asort($assignmentTypes);
+ksort($assignmentGarages);
 
 $pageUrl = build_query_url(['page' => 'categorii_capacitate']);
 $field = static fn(string $key): string => (string) ($formData[$key] ?? '');
@@ -188,6 +209,170 @@ $priorityBadge = [
         </div>
     </div>
 
+    <div class="card border-0 shadow-sm mt-4" id="asignare-vehicule" data-capacity-assign>
+        <div class="card-header bg-white">
+            <h3 class="h6 mb-1">Vehicule pe categorii (<?= e((string) count($assignmentVehicles)) ?>)</h3>
+            <p class="text-muted small mb-0">
+                <?php if ($canManage): ?>
+                    Bifeaza vehiculele, alege categoria si apasa „Aplica pe selectate”, sau schimba categoria direct pe rand.
+                    Modificarile se salveaza toate odata. Capacitatea reala si starea de verificare nu sunt atinse.
+                <?php else: ?>
+                    Categoria fiecarui vehicul. Doar utilizatorii cu drept de administrare pot schimba asignarile.
+                <?php endif; ?>
+            </p>
+        </div>
+
+        <div class="card-body border-bottom">
+            <div class="row g-2 align-items-end">
+                <div class="col-12 col-md-4 col-xl-3">
+                    <label class="form-label small mb-1" for="cap_assign_search">Cauta</label>
+                    <input type="search" class="form-control form-control-sm" id="cap_assign_search" placeholder="Nr. inmatriculare, marca, model" data-assign-filter="search">
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small mb-1" for="cap_assign_type">Tip vehicul</label>
+                    <select class="form-select form-select-sm" id="cap_assign_type" data-assign-filter="type">
+                        <option value="">Toate</option>
+                        <?php foreach ($assignmentTypes as $typeKey => $typeLabel): ?>
+                            <option value="<?= e((string) $typeKey) ?>"><?= e($typeLabel) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small mb-1" for="cap_assign_category">Categorie actuala</label>
+                    <select class="form-select form-select-sm" id="cap_assign_category" data-assign-filter="category">
+                        <option value="">Toate</option>
+                        <option value="none">Fara categorie</option>
+                        <?php foreach ($categoryNames as $categoryId => $categoryName): ?>
+                            <option value="<?= e((string) $categoryId) ?>"><?= e($categoryName) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <?php if ($assignmentGarages !== []): ?>
+                    <div class="col-6 col-md-2">
+                        <label class="form-label small mb-1" for="cap_assign_garage">Garaj</label>
+                        <select class="form-select form-select-sm" id="cap_assign_garage" data-assign-filter="garage">
+                            <option value="">Toate</option>
+                            <?php foreach ($assignmentGarages as $garage): ?>
+                                <option value="<?= e($garage) ?>"><?= e($garage) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                <?php endif; ?>
+                <div class="col-6 col-md-2 col-xl-1">
+                    <label class="form-label small mb-1" for="cap_assign_status">Status</label>
+                    <select class="form-select form-select-sm" id="cap_assign_status" data-assign-filter="status">
+                        <option value="activ">Active</option>
+                        <option value="">Toate</option>
+                        <option value="inactiv">Inactive</option>
+                    </select>
+                </div>
+            </div>
+
+            <?php if ($canManage): ?>
+                <div class="d-flex flex-wrap align-items-center gap-2 mt-3 p-2 rounded bg-body-tertiary">
+                    <span class="small"><strong data-assign-selected-count>0</strong> selectate</span>
+                    <select class="form-select form-select-sm w-auto" data-assign-bulk-category aria-label="Categoria de aplicat">
+                        <option value="" disabled selected>-- Alege categoria --</option>
+                        <option value="none">Fara categorie</option>
+                        <?php foreach ($activeCategories as $categoryId => $categoryName): ?>
+                            <option value="<?= e((string) $categoryId) ?>"><?= e($categoryName) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-assign-bulk-apply disabled>
+                        <i class="bi bi-check2-square" aria-hidden="true"></i>
+                        Aplica pe selectate
+                    </button>
+                    <button type="button" class="btn btn-sm btn-link text-decoration-none" data-assign-clear-selection>Deselecteaza</button>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <form method="post" action="<?= e(build_query_url(['page' => 'categorii_capacitate', 'action' => 'assign'])) ?>" data-assign-form>
+            <?= csrf_field() ?>
+            <div class="table-responsive" style="max-height: 65vh;">
+                <table class="table table-sm table-hover mb-0 align-middle">
+                    <thead class="table-light" style="position: sticky; top: 0; z-index: 2;">
+                        <tr>
+                            <?php if ($canManage): ?>
+                                <th style="width: 2.5rem;">
+                                    <input class="form-check-input" type="checkbox" data-assign-select-all aria-label="Selecteaza toate vehiculele afisate">
+                                </th>
+                            <?php endif; ?>
+                            <th>Vehicul</th>
+                            <th>Tip</th>
+                            <th>Garaj</th>
+                            <th class="text-end">Capacitate reala</th>
+                            <th style="min-width: 14rem;">Categorie</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php if ($assignmentVehicles === []): ?>
+                        <tr><td colspan="<?= $canManage ? 6 : 5 ?>" class="text-muted">Nu exista vehicule.</td></tr>
+                    <?php endif; ?>
+                    <?php foreach ($assignmentVehicles as $vehicle): ?>
+                        <?php
+                        $vehicleId = (int) $vehicle['id'];
+                        $currentCategoryId = $vehicle['categorie_capacitate_id'];
+                        $searchText = mb_strtolower(trim((string) $vehicle['nr_inmatriculare'] . ' ' . (string) $vehicle['marca'] . ' ' . (string) $vehicle['model']));
+                        ?>
+                        <tr data-assign-row
+                            data-search="<?= e($searchText) ?>"
+                            data-type="<?= e((string) $vehicle['tip_vehicul']) ?>"
+                            data-garage="<?= e(trim((string) ($vehicle['garaj'] ?? ''))) ?>"
+                            data-status="<?= (string) $vehicle['status'] === 'activ' ? 'activ' : 'inactiv' ?>"
+                            data-category="<?= $currentCategoryId === null ? 'none' : e((string) $currentCategoryId) ?>">
+                            <?php if ($canManage): ?>
+                                <td><input class="form-check-input" type="checkbox" data-assign-check aria-label="Selecteaza <?= e((string) $vehicle['nr_inmatriculare']) ?>"></td>
+                            <?php endif; ?>
+                            <td>
+                                <span class="fw-semibold"><?= e((string) $vehicle['nr_inmatriculare']) ?></span>
+                                <div class="text-muted small"><?= e(trim((string) $vehicle['marca'] . ' ' . (string) $vehicle['model'])) ?><?= (string) $vehicle['status'] !== 'activ' ? ' &middot; inactiv' : '' ?></div>
+                            </td>
+                            <td class="small"><?= e(vehicle_type_label((string) $vehicle['tip_vehicul'])) ?></td>
+                            <td class="small text-muted"><?= e((string) ($vehicle['garaj'] ?? '')) ?></td>
+                            <td class="text-end small">
+                                <?= e($tons($vehicle['capacitate_transport'])) ?>
+                                <?php if ($vehicle['capacitate_transport'] !== null && !$vehicle['capacitate_transport_confirmata']): ?>
+                                    <i class="bi bi-exclamation-circle text-warning" title="Capacitate neverificata" aria-label="Capacitate neverificata"></i>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if ($canManage): ?>
+                                    <select class="form-select form-select-sm" name="assignments[<?= e((string) $vehicleId) ?>]" data-assign-select data-original="<?= $currentCategoryId === null ? '' : e((string) $currentCategoryId) ?>" aria-label="Categoria pentru <?= e((string) $vehicle['nr_inmatriculare']) ?>">
+                                        <option value="">-- Fara categorie --</option>
+                                        <?php foreach ($activeCategories as $categoryId => $categoryName): ?>
+                                            <option value="<?= e((string) $categoryId) ?>"<?= $currentCategoryId === $categoryId ? ' selected' : '' ?>><?= e($categoryName) ?></option>
+                                        <?php endforeach; ?>
+                                        <?php if ($currentCategoryId !== null && !isset($activeCategories[$currentCategoryId])): ?>
+                                            <option value="<?= e((string) $currentCategoryId) ?>" selected><?= e(($categoryNames[$currentCategoryId] ?? 'Categorie #' . $currentCategoryId) . ' (inactiva)') ?></option>
+                                        <?php endif; ?>
+                                    </select>
+                                <?php else: ?>
+                                    <?= $currentCategoryId !== null ? e($categoryNames[$currentCategoryId] ?? '-') : '<span class="text-muted">-</span>' ?>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    <tr data-assign-empty class="d-none"><td colspan="<?= $canManage ? 6 : 5 ?>" class="text-muted">Niciun vehicul nu corespunde filtrelor.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <?php if ($canManage): ?>
+                <div class="card-footer bg-white d-flex flex-wrap justify-content-between align-items-center gap-2 position-sticky bottom-0" style="z-index: 3;">
+                    <span class="small text-muted" data-assign-dirty-label>Nicio modificare nesalvata.</span>
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-assign-reset disabled>Anuleaza modificarile</button>
+                        <button type="submit" class="btn btn-sm btn-primary" data-assign-save disabled>
+                            <i class="bi bi-save" aria-hidden="true"></i>
+                            Salveaza
+                        </button>
+                    </div>
+                </div>
+            <?php endif; ?>
+        </form>
+    </div>
+
     <div class="card border-0 shadow-sm mt-4">
         <div class="card-header bg-white">
             <h3 class="h6 mb-1">Capacitati reale de verificat (<?= e((string) ($verificationSummary['total'] ?? 0)) ?>)</h3>
@@ -295,3 +480,5 @@ $priorityBadge = [
         </div>
     <?php endif; ?>
 </div>
+
+<script src="<?= e(url('assets/js/categorii-capacitate.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/categorii-capacitate.js'))) ?>"></script>

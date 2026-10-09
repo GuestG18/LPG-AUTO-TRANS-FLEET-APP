@@ -166,9 +166,20 @@ $formatDurationLabel = static function (?int $minutes): string {
     return $mins . 'm';
 };
 
-$renderDispatcherSummaryDetails = static function (array $parts, string $rowKey, string $summaryLabel): string {
+// $countWords = [singular, plural] pentru eticheta butonului (implicit "detaliu" / "detalii").
+// $options['footer'] = false ascunde "Total N detalii". Partile cu 'raw' sunt elemente de
+// popover gata facute (titlu de sectiune, rand de repartizare, nota) - nu intra in numarare.
+$renderDispatcherSummaryDetails = static function (array $parts, string $rowKey, string $summaryLabel, array $countWords = ['detaliu', 'detalii'], array $options = []): string {
     $items = [];
+    $count = 0;
     foreach ($parts as $part) {
+        if (is_array($part['raw'] ?? null)) {
+            $items[] = ['raw' => $part['raw'], 'title' => (string) ($part['title'] ?? '')];
+            if (!empty($part['count'])) {
+                $count++;
+            }
+            continue;
+        }
         $label = rtrim(trim((string) ($part['label'] ?? '')), ':');
         $value = trim((string) ($part['value'] ?? ''));
         if ($label === '' && $value === '') {
@@ -179,11 +190,15 @@ $renderDispatcherSummaryDetails = static function (array $parts, string $rowKey,
             'label' => $label,
             'value' => $value,
             'is_total' => !empty($part['is_total']),
+            // Doar numele (ex. lista de vehicule / soferi a cursei): fara eticheta + valoare.
+            'name_only' => !empty($part['name_only']),
         ];
+        $count++;
     }
 
-    $count = count($items);
-    $countLabel = $count === 1 ? '1 detaliu' : $count . ' detalii';
+    $countLabel = $count === 1 ? '1 ' . $countWords[0] : $count . ' ' . $countWords[1];
+    // $options['label']: textul butonului in locul lui "N detalii" (ex. durata totala "58h").
+    $buttonLabel = trim((string) ($options['label'] ?? '')) !== '' ? (string) $options['label'] : $countLabel;
     $safeRowKey = preg_replace('/[^a-zA-Z0-9_-]+/', '-', $rowKey) ?: uniqid('summary_', false);
 
     if ($count === 0) {
@@ -194,6 +209,18 @@ $renderDispatcherSummaryDetails = static function (array $parts, string $rowKey,
     $titleParts = [];
     $popoverItems = [];
     foreach ($items as $item) {
+        if (isset($item['raw'])) {
+            if ($item['title'] !== '') {
+                $titleParts[] = $item['title'];
+            }
+            $popoverItems[] = $item['raw'];
+            continue;
+        }
+        if (!empty($item['name_only'])) {
+            $titleParts[] = (string) $item['label'];
+            $popoverItems[] = ['n' => (string) $item['label']];
+            continue;
+        }
         $titleParts[] = trim((string) $item['label'] . ': ' . (string) $item['value']);
         $popoverItem = [
             'l' => $item['label'] !== '' ? $item['label'] : '-',
@@ -209,8 +236,60 @@ $renderDispatcherSummaryDetails = static function (array $parts, string $rowKey,
     // Popover-ul nu se mai randeaza in HTML (4 per rand x sute de curse umflau pagina
     // cu MB si mii de noduri DOM); se construieste in JS la primul click din data-summary-items.
     $html = '<div class="dispatcher-summary-list" data-dispatcher-summary-list>';
-    $html .= '<button type="button" class="dispatcher-summary-count-btn" data-dispatcher-summary-toggle data-popover-id="' . e($popoverId) . '" data-summary-label="' . e('Detalii ' . $summaryLabel) . '" data-summary-items="' . e((string) json_encode($popoverItems, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '" aria-haspopup="dialog" aria-expanded="false" aria-controls="' . e($popoverId) . '" aria-label="' . e('Afiseaza ' . $countLabel . ' ' . $summaryLabel) . '" title="' . e($title) . '">';
-    $html .= '<span>' . e($countLabel) . '</span><i class="bi bi-chevron-down" aria-hidden="true"></i>';
+    // $options['compact']: buton mic si popover cat continutul (ca la Diurna).
+    $html .= '<button type="button" class="dispatcher-summary-count-btn' . (!empty($options['compact']) ? ' is-compact' : '') . '"' . (!empty($options['compact']) ? ' data-summary-compact' : '') . ' data-dispatcher-summary-toggle data-popover-id="' . e($popoverId) . '" data-summary-label="' . e('Detalii ' . $summaryLabel) . '" data-summary-total="' . e($countLabel) . '"' . (($options['footer'] ?? true) ? '' : ' data-summary-footer="none"') . ' data-summary-items="' . e((string) json_encode($popoverItems, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '" aria-haspopup="dialog" aria-expanded="false" aria-controls="' . e($popoverId) . '" aria-label="' . e('Afiseaza ' . $buttonLabel . ' ' . $summaryLabel) . '" title="' . e($title) . '">';
+    $html .= '<span>' . e($buttonLabel) . '</span><i class="bi bi-chevron-down" aria-hidden="true"></i>';
+    $html .= '</button>';
+    $html .= '</div>';
+
+    return $html;
+};
+
+// Coloana Diurna: acelasi buton + popover ca "N detalii", dar eticheta este totalul
+// diurnelor efective, iar popover-ul are cate un rand pe sofer ("B-C-G → 1 ✎").
+// Valorile vin calculate de server (dispatcher_diurna_split + modificarile aprobate);
+// creionul deschide fereastra existenta "Modifica diurnele" pe soferul ales.
+// $drivers: [{key, name, value, computed, adjusted, pending}] - key = id-ul soferului (0 = toata cursa).
+$renderDiurnaDropdown = static function (int $raceId, int $total, array $drivers, bool $canEdit, string $title, bool $hasPending): string {
+    $items = [];
+    foreach ($drivers as $driver) {
+        $name = trim((string) ($driver['name'] ?? '')) !== '' ? (string) $driver['name'] : '-';
+        $item = [
+            'dr' => 1,
+            'k' => (int) ($driver['key'] ?? 0),
+            'i' => dispatcher_name_initials($name),
+            'n' => $name,
+            'v' => (int) ($driver['value'] ?? 0),
+        ];
+        if (!empty($driver['adjusted'])) {
+            $item['a'] = 'Modificat manual: regula calculeaza ' . (int) ($driver['computed'] ?? 0) . '.';
+        }
+        if (is_array($driver['pending'] ?? null)) {
+            $item['p'] = 'Cerere in asteptare: ' . (int) $driver['pending']['solicitat'] . ' diurne ('
+                . (($driver['pending']['requested_by_name'] ?? '') ?: '-') . ').';
+        }
+        if ($canEdit && !empty($driver['editable'])) {
+            $item['e'] = 1;
+        }
+        $items[] = $item;
+    }
+
+    $popoverId = 'dispatcher_summary_popover_diurna-' . $raceId;
+    $label = 'diurne pe soferi, cursa #' . $raceId;
+    $html = '<div class="dispatcher-summary-list" data-dispatcher-summary-list>';
+    $html .= '<button type="button" class="dispatcher-summary-count-btn dispatcher-diurna-btn" data-dispatcher-summary-toggle'
+        . ' data-popover-id="' . e($popoverId) . '" data-diurna-dropdown="' . e((string) $raceId) . '"'
+        . ' data-summary-label="' . e('Diurne pe sofer, cursa #' . $raceId) . '"'
+        . ' data-summary-footer="none"'
+        . ' data-summary-items="' . e((string) json_encode($items, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '"'
+        . ' aria-haspopup="dialog" aria-expanded="false" aria-controls="' . e($popoverId) . '"'
+        . ' aria-label="' . e('Afiseaza ' . $total . ' ' . $label) . '"' . ($title !== '' ? ' title="' . e($title) . '"' : '') . '>';
+    $html .= '<span data-diurna-total>' . e((string) $total) . '</span>';
+    if ($hasPending) {
+        // <span>, nu <i>: scriptul popover-ului roteste chevronul gasit cu querySelector('i').
+        $html .= '<span class="bi bi-hourglass-split dispatcher-diurna-pending" data-diurna-pending aria-hidden="true"></span>';
+    }
+    $html .= '<i class="bi bi-chevron-down" aria-hidden="true"></i>';
     $html .= '</button>';
     $html .= '</div>';
 
@@ -245,27 +324,34 @@ $openRacesSeverityCounts = is_array($openRacesOverview['severity_counts'] ?? nul
     : ['critical' => 0, 'important' => 0, 'minor' => 0];
 $openRacesPlates = is_array($openRacesOverview['plates'] ?? null) ? $openRacesOverview['plates'] : [];
 $showMissingSeverityHighlight = !(function_exists('is_admin') && is_admin());
+// Adminul nu vede randurile colorate, ci un punct langa numar: verde = cursa completa,
+// rosu = lipseste ceva (aceleasi reguli ca popup-ul de informatii lipsa).
+$showMissingSeverityDot = !$showMissingSeverityHighlight;
 $openRaceSeverityByRaceId = [];
+$openRaceMissingCountByRaceId = [];
+$openRaceFocusUrlByRaceId = [];
 foreach ($openRacesRows as $openRacesSeverityRow) {
     $openRacesSeverityRowId = (int) ($openRacesSeverityRow['id'] ?? 0);
     $openRacesSeverityValue = (string) ($openRacesSeverityRow['missing_severity'] ?? '');
     if ($openRacesSeverityRowId > 0 && in_array($openRacesSeverityValue, ['critical', 'important', 'minor'], true)) {
         $openRaceSeverityByRaceId[$openRacesSeverityRowId] = $openRacesSeverityValue;
+        $openRacesSeverityMissing = is_array($openRacesSeverityRow['missing_information'] ?? null)
+            ? $openRacesSeverityRow['missing_information']
+            : [];
+        $openRaceMissingCountByRaceId[$openRacesSeverityRowId] = count($openRacesSeverityMissing);
+        if ($showMissingSeverityDot) {
+            $openRaceFocusUrlByRaceId[$openRacesSeverityRowId] = RaceCompletenessService::editUrlWithFocus($openRacesSeverityRowId, $openRacesSeverityMissing);
+        }
     }
 }
 $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dispecer_curse']));
 ?>
 
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+<?php /* Titlul, butonul "informatii lipsa" si Configurare pe acelasi rand; Km service imediat dedesubt. */ ?>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 dispatcher-page-head">
     <h2 class="h4 mb-0">Dispecer curse</h2>
-    <div class="d-flex gap-2">
-        <?php $headerServiceKmActive = count(array_filter((array) ($serviceKmEntries ?? []), static fn (array $row): bool => !empty($row['in_service']))); ?>
-        <a class="btn btn-outline-secondary" href="#service-km-panel" title="Km service și vehicule aflate la reparat">
-            <i class="bi bi-tools" aria-hidden="true"></i> Km service
-            <?php if ($headerServiceKmActive > 0): ?>
-                <span class="badge text-bg-warning ms-1"><?= $headerServiceKmActive ?> în service</span>
-            <?php endif; ?>
-        </a>
+    <div class="d-flex flex-wrap align-items-center justify-content-end gap-2">
+        <?php include __DIR__ . '/_open_races_panel.php'; ?>
         <a
             class="btn btn-outline-secondary"
             data-role="config-transport-link"
@@ -277,8 +363,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
     </div>
 </div>
 
-
-<?php include __DIR__ . '/_open_races_panel.php'; ?>
+<?php $serviceKmCardSpacing = 'mb-3'; include __DIR__ . '/_service_km_panel.php'; ?>
 
 <?php include __DIR__ . '/_live_gps_panel.php'; ?>
 
@@ -297,7 +382,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                     <?= csrf_field() ?>
                     <input type="hidden" name="vehicle_config_decision" value="" data-vehicle-config-decision>
                     <input type="hidden" name="inactive_approval_decision" value="<?= e((string) ($formData['inactive_approval_decision'] ?? '')) ?>" data-inactive-approval-decision>
-                    <input type="hidden" name="inactive_approval_signature" value="" data-inactive-approval-signature>
+                    <input type="hidden" name="inactive_approval_signature" value="<?= e((string) ($formData['inactive_approval_signature'] ?? '')) ?>" data-inactive-approval-signature>
             <input type="hidden" name="confirm_incomplete" value="">
                     <input type="hidden" name="confirm_similar" value="" data-trip-similar-confirm-flag>
                     <datalist id="race_time_options">
@@ -445,8 +530,6 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
     </div>
 </div>
 
-<?php include __DIR__ . '/_service_km_panel.php'; ?>
-
 <?php include __DIR__ . '/_race_day_panel.php'; ?>
 
 <?php if ((string) ($filters['ids'] ?? '') !== ''): ?>
@@ -554,7 +637,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
         </div>
 
         <div class="table-responsive dispatcher-races-table-wrap table-container">
-            <table class="table table-hover align-middle mb-0 dispatcher-races-table curse-table table-dispecer" data-dispatcher-column-table>
+            <table class="table table-hover align-middle mb-0 dispatcher-races-table curse-table table-dispecer<?= $showMissingSeverityDot ? ' has-race-status-dot' : '' ?>" data-dispatcher-column-table>
                 <colgroup>
                     <col class="col-plate">
                     <col class="col-registration-details">
@@ -736,9 +819,35 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                         // Cursa reluata cu alt sofer: diurnele se impart intre soferii
                         // segmentelor, dupa timpul petrecut de fiecare pe drum.
                         $rowSegments = (array) (($raceSegments ?? [])[$raceId] ?? []);
-                        $diurnaSplitTitle = count($rowSegments) > 1 && $diurnaResult['status'] === 'ok'
-                            ? dispatcher_diurna_summary($diurnaDays, $rowSegments)
+                        $diurnaDriverAdjustments = (array) ($row['diurna_soferi'] ?? []);
+                        $diurnaSplitRows = count($rowSegments) > 1 && $diurnaResult['status'] === 'ok'
+                            ? dispatcher_diurna_split($diurnaDays, $rowSegments, $diurnaDriverAdjustments)
+                            : [];
+                        // Mai multi soferi: diurna se modifica pe partea fiecaruia, deci totalul
+                        // cursei este suma partilor (cu modificarile aprobate pe soferi).
+                        $diurnaMultiDriver = count($diurnaSplitRows) > 1;
+                        $diurnaDriverPending = false;
+                        if ($diurnaMultiDriver) {
+                            $diurnaDays = array_sum(array_column($diurnaSplitRows, 'zile'));
+                            $diurnaValue = $diurnaDays . ($diurnaNotPaid ? ' (fara diurna)' : '');
+                            foreach ($diurnaSplitRows as $diurnaSplitRow) {
+                                $diurnaResult['ajustat'] = !empty($diurnaResult['ajustat']) || $diurnaSplitRow['ajustat'];
+                                $diurnaDriverPending = $diurnaDriverPending || $diurnaSplitRow['cerere'] !== null;
+                            }
+                        }
+                        $diurnaSplitTitle = $diurnaSplitRows !== []
+                            ? dispatcher_diurna_summary((int) ($diurnaResult['diurne'] ?? 0), $rowSegments, $diurnaDriverAdjustments)
                             : '';
+                        // Soferii cursei pentru lista din fereastra "Modifica diurnele".
+                        $diurnaDriversForModal = array_map(static fn (array $splitRow): array => [
+                            'id' => (int) $splitRow['driver_id'],
+                            'name' => (string) $splitRow['sofer'],
+                            'computed' => (int) $splitRow['calculat'],
+                            'current' => (int) $splitRow['zile'],
+                            'pending' => $splitRow['cerere'] !== null
+                                ? $splitRow['cerere']['solicitat'] . '|' . ($splitRow['cerere']['requested_by_name'] ?: '-')
+                                : '',
+                        ], $diurnaMultiDriver ? $diurnaSplitRows : []);
                         if ($diurnaSplitTitle !== '') {
                             $diurnaTitle = 'Diurne pe soferi - ' . $diurnaSplitTitle;
                         }
@@ -780,6 +889,9 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                         // cursei separat, nu rezumatul fazelor din tooltip.
                         $rowPlateValues = $rowPlateLabel !== '' ? [$rowPlateLabel] : [];
                         $rowDriverValues = trim((string) $driverName) !== '' ? [trim((string) $driverName)] : [];
+                        $rowDriverSummaryParts = [];
+                        $rowPlateSummaryParts = [];
+                        $durationParts = [];
                         if (count($rowSegments) > 1) {
                             $segmentDriverNames = [];
                             $segmentPlates = [];
@@ -797,10 +909,114 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                 $driverName = implode(', ', $segmentDriverNames);
                                 $rowDriverValues = array_values($segmentDriverNames);
                             }
+
+                            // Cu mai multi soferi / vehicule, celula arata butonul "N soferi" /
+                            // "N vehicule" (ca Interval, Traseu...) - randul nu-si schimba inaltimea.
+                            // Popover-ul arata doar ce spune coloana: numerele, respectiv soferii.
+                            $toNameOnlyParts = static fn (array $names): array => array_map(
+                                static fn (string $name): array => ['label' => $name, 'value' => '', 'name_only' => true],
+                                array_values($names)
+                            );
+                            $rowDriverSummaryParts = $toNameOnlyParts($segmentDriverNames);
+                            $rowPlateSummaryParts = $toNameOnlyParts($segmentPlates);
                             if ($segmentPlates !== []) {
                                 $rowPlateLabel = implode(', ', $segmentPlates);
                                 $rowPlateValues = array_values($segmentPlates);
                             }
+
+                            // Interval: cate un rand pe faza (F1, F2...), cu inceputul / sfarsitul
+                            // salvate pe faza - ora lipsa ramane lipsa, nu se ia din faza vecina.
+                            // Ordonate cronologic; intervalul si durata cursei raman cele de mai sus.
+                            $phaseMoment = static fn (array $segment, string $dateKey, string $timeKey): string => trim((string) ($segment[$dateKey] ?? '')) === ''
+                                ? '-'
+                                : format_date_ro((string) $segment[$dateKey]) . (trim((string) ($segment[$timeKey] ?? '')) !== '' ? ' ' . substr((string) $segment[$timeKey], 0, 5) : '');
+                            $phasesByTime = [];
+                            foreach (array_values($rowSegments) as $phaseIndex => $rowSegment) {
+                                $phasesByTime[] = ['n' => $phaseIndex + 1, 'segment' => $rowSegment];
+                            }
+                            usort($phasesByTime, static function (array $a, array $b): int {
+                                $startA = trim((string) ($a['segment']['data_inceput'] ?? '')) . ' ' . trim((string) ($a['segment']['ora_inceput'] ?? ''));
+                                $startB = trim((string) ($b['segment']['data_inceput'] ?? '')) . ' ' . trim((string) ($b['segment']['ora_inceput'] ?? ''));
+                                if (trim($startA) === '' || trim($startB) === '') {
+                                    return $a['n'] <=> $b['n'];
+                                }
+
+                                return strcmp($startA, $startB) ?: $a['n'] <=> $b['n'];
+                            });
+                            $intervalParts = [];
+                            // Durata cursa: butonul arata durata totala (suma fazelor, ca pana acum),
+                            // iar popover-ul durata fiecarei faze, calculata din inceputul / sfarsitul ei.
+                            foreach ($phasesByTime as $phaseEntry) {
+                                $phaseMinutes = dispatcher_segment_minutes($phaseEntry['segment']);
+                                $phaseDurationDriver = trim((string) ($phaseEntry['segment']['sofer_nume'] ?? ''));
+                                $durationParts[] = [
+                                    'raw' => [
+                                        'ph' => 'F' . $phaseEntry['n'],
+                                        'iv' => $phaseMinutes > 0 ? $formatDurationLabel($phaseMinutes) : '-',
+                                        'i' => $phaseDurationDriver !== '' ? dispatcher_name_initials($phaseDurationDriver) : '-',
+                                        'n' => $phaseDurationDriver !== '' ? $phaseDurationDriver : 'Fara sofer',
+                                        'pl' => trim((string) ($phaseEntry['segment']['nr_inmatriculare'] ?? '')),
+                                    ],
+                                    'title' => 'F' . $phaseEntry['n'] . ': ' . ($phaseMinutes > 0 ? $formatDurationLabel($phaseMinutes) : '-'),
+                                    'count' => true,
+                                ];
+                            }
+                            foreach ($phasesByTime as $phaseEntry) {
+                                $phaseSegment = $phaseEntry['segment'];
+                                $phaseDriver = trim((string) ($phaseSegment['sofer_nume'] ?? ''));
+                                $phaseStart = $phaseMoment($phaseSegment, 'data_inceput', 'ora_inceput');
+                                $phaseEnd = $phaseMoment($phaseSegment, 'data_sfarsit', 'ora_sfarsit');
+                                $intervalParts[] = [
+                                    'raw' => [
+                                        'ph' => 'F' . $phaseEntry['n'],
+                                        'iv' => $phaseStart . ' → ' . $phaseEnd,
+                                        'i' => $phaseDriver !== '' ? dispatcher_name_initials($phaseDriver) : '-',
+                                        'n' => $phaseDriver !== '' ? $phaseDriver : 'Fara sofer',
+                                        'pl' => trim((string) ($phaseSegment['nr_inmatriculare'] ?? '')),
+                                    ],
+                                    'title' => 'F' . $phaseEntry['n'] . ': ' . $phaseStart . ' - ' . $phaseEnd,
+                                    'count' => true,
+                                ];
+                            }
+
+                            // Traseu: locurile / zonele tuturor fazelor, nu doar ale cursei.
+                            $segmentRouteValues = ['Loc incarcare' => [], 'Zona distributie' => []];
+                            foreach ($rowSegments as $rowSegment) {
+                                $segmentLoad = trim((string) ($rowSegment['loc_incarcare_nume'] ?? ''));
+                                $segmentZone = trim((string) ($rowSegment['zona_distributie_nume'] ?? ''));
+                                if ($segmentLoad !== '') {
+                                    $segmentRouteValues['Loc incarcare'][$segmentLoad] = $segmentLoad;
+                                }
+                                if ($segmentZone !== '') {
+                                    $segmentRouteValues['Zona distributie'][$segmentZone] = $segmentZone;
+                                }
+                            }
+                            // La Primar zona fazei apare in rand ca "Zona descarcare" / "Loc descarcare".
+                            $segmentRouteAliases = [
+                                'Loc incarcare' => ['Loc incarcare'],
+                                'Zona distributie' => ['Zona distributie', 'Zona descarcare', 'Loc descarcare'],
+                            ];
+                            foreach ($segmentRouteValues as $segmentRouteLabel => $segmentRouteNames) {
+                                if (count($segmentRouteNames) < 2) {
+                                    continue;
+                                }
+                                $segmentRouteJoined = implode(' → ', $segmentRouteNames);
+                                $segmentRouteReplaced = false;
+                                foreach ($routeParts as $routePartIndex => $routePart) {
+                                    if (!$segmentRouteReplaced && in_array(($routePart['label'] ?? ''), $segmentRouteAliases[$segmentRouteLabel], true)) {
+                                        $routeParts[$routePartIndex]['value'] = $segmentRouteJoined;
+                                        $segmentRouteReplaced = true;
+                                    }
+                                }
+                                if (!$segmentRouteReplaced) {
+                                    $routeParts[] = ['label' => $segmentRouteLabel, 'value' => $segmentRouteJoined];
+                                }
+                            }
+                            $routeTitleParts = [];
+                            foreach ($routeParts as $routePart) {
+                                $routeTitleParts[] = (string) ($routePart['label'] ?? '') . ': ' . (string) ($routePart['value'] ?? '');
+                            }
+                            $routeTitle = $routeTitleParts !== [] ? implode(' | ', $routeTitleParts) : '-';
                         }
                         if ($rowPlateLabel === '') {
                             $rowPlateLabel = '-';
@@ -959,10 +1175,43 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             $addActivityPart($activityParts, 'INCARCAT:', $formatTonValue($loadedQtyDisplayTon));
                             $addActivityPart($activityParts, 'GRAD:', $loadedPercentValue !== null ? number_format($loadedPercentValue, 0, ',', '.') . '%' : null);
                         }
+                        // Cursa cu faze: sub cele 4 totaluri, repartizarea incarcaturii pe soferi
+                        // proportional cu km-ii fiecaruia (doar informativ, nu schimba cantitati).
+                        $activityHasAllocation = false;
+                        if (count($rowSegments) > 1) {
+                            $loadAllocation = dispatcher_load_allocation_by_km($rowSegments, $loadedQtyDisplayTon);
+                            $activityHasAllocation = true;
+                            $activityParts[] = ['raw' => ['h' => 'Repartizare încărcătură / km']];
+                            if ($loadAllocation['status'] === 'ok') {
+                                // Cum se calculeaza, cu cifrele cursei (aceeasi regula si in Istoric activitati sofer).
+                                $activityParts[] = ['raw' => ['hn' => 'tone șofer = km șofer ÷ '
+                                    . number_format($loadAllocation['km_total'], 0, ',', '.') . ' km × '
+                                    . format_number_ro($loadAllocation['tone_total'], 2) . ' t']];
+                                foreach ($loadAllocation['rows'] as $allocationRow) {
+                                    $activityParts[] = [
+                                        'raw' => [
+                                            'al' => 1,
+                                            'k' => $allocationRow['driver_id'],
+                                            'i' => dispatcher_name_initials($allocationRow['sofer']),
+                                            'n' => $allocationRow['sofer'],
+                                            'km' => number_format($allocationRow['km'], 0, ',', '.') . ' km',
+                                            'tn' => format_number_ro($allocationRow['tone'], 2) . ' t',
+                                        ],
+                                        'title' => $allocationRow['sofer'] . ': ' . $allocationRow['km'] . ' km = ' . format_number_ro($allocationRow['tone'], 2) . ' t',
+                                    ];
+                                }
+                                $activityParts[] = ['raw' => ['l' => 'Total repartizat', 'v' => format_number_ro($loadAllocation['tone_total'], 2) . ' t', 't' => 1, 'sep' => 1]];
+                            } else {
+                                $activityParts[] = ['raw' => ['msg' => $loadAllocation['message']], 'title' => $loadAllocation['message']];
+                            }
+                        }
                         $activityTitle = '-';
                         if ($activityParts !== []) {
                             $activityTitleParts = [];
                             foreach ($activityParts as $activityPart) {
+                                if (isset($activityPart['raw'])) {
+                                    continue;
+                                }
                                 $activityTitleParts[] = (string) ($activityPart['label'] ?? '') . ' ' . (string) ($activityPart['value'] ?? '');
                             }
                             $activityTitle = implode(' | ', $activityTitleParts);
@@ -1000,24 +1249,17 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                         $billingStatusRowClass = 'race-status-' . preg_replace('/[^a-z0-9_]/', '', strtolower($billingStatus));
                         $rowMissingSeverity = $showMissingSeverityHighlight ? ($openRaceSeverityByRaceId[$raceId] ?? '') : '';
                         $rowSeverityClass = $rowMissingSeverity !== '' ? ' race-severity-' . $rowMissingSeverity : '';
+                        $rowStatusDotSeverity = isset($openRaceSeverityByRaceId[$raceId]) ? 'incomplete' : 'complete';
+                        $rowStatusDotTitle = $rowStatusDotSeverity === 'complete'
+                            ? 'Cursa completa - fara informatii lipsa'
+                            : ($openRaceMissingCountByRaceId[$raceId] ?? 0) . ' informatii lipsa - deschide cursa cu campurile de completat evidentiate';
                         ?>
-                        <tr class="<?= e($billingStatusRowClass . $rowSeverityClass . ($rowIndex >= 50 ? ' race-row-beyond-limit' : '')) ?>" data-race-id="<?= e((string) $raceId) ?>" data-billing-status="<?= e($billingStatus) ?>"<?= $rowMissingSeverity !== '' ? ' data-missing-severity="' . e($rowMissingSeverity) . '"' : '' ?>>
-                            <td class="col-plate">
+                        <tr class="<?= e($billingStatusRowClass . $rowSeverityClass . ($rowIndex >= 50 ? ' race-row-beyond-limit' : '')) ?>" data-race-id="<?= e((string) $raceId) ?>" data-billing-status="<?= e($billingStatus) ?>"<?= $showMissingSeverityDot ? ' data-race-completeness="' . e($rowStatusDotSeverity) . '"' : '' ?><?= $rowMissingSeverity !== '' ? ' data-missing-severity="' . e($rowMissingSeverity) . '"' : '' ?>>
+                            <?php /* Cursa cu faze: fara sageata (aliniere cu celelalte numere) - clic
+                                     pe numar / pe celula desface fazele; celula nu deschide fisa. */ ?>
+                            <td class="col-plate<?= count($rowSegments) > 1 ? ' dispatcher-plate-expandable' : '' ?>"<?= count($rowSegments) > 1 ? ' data-segments-toggle="' . e((string) $raceId) . '" data-race-view-ignore title="' . e('Clic pentru faze: ' . dispatcher_segments_summary($rowSegments)) . '"' : '' ?>>
                                 <div class="cell-content">
                                     <div class="vehicle-wrap<?= count($rowSegments) > 1 ? ' has-segments' : '' ?>">
-                                        <?php if (count($rowSegments) > 1): ?>
-                                            <button
-                                                type="button"
-                                                class="dispatcher-segments-toggle"
-                                                data-segments-toggle="<?= e((string) $raceId) ?>"
-                                                aria-expanded="false"
-                                                aria-controls="race-segments-<?= e((string) $raceId) ?>"
-                                                title="<?= e(dispatcher_segments_summary($rowSegments)) ?>"
-                                            >
-                                                <i class="bi bi-chevron-right dispatcher-segments-toggle-icon" aria-hidden="true"></i>
-                                                <span class="visually-hidden">Arata cum s-a desfasurat cursa #<?= e((string) $raceId) ?></span>
-                                            </button>
-                                        <?php endif; ?>
                                         <label class="vehicle-main mb-0" for="bulk-race-id-<?= e((string) $raceId) ?>">
                                             <input
                                                 type="checkbox"
@@ -1028,13 +1270,18 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                                 form="bulk-race-delete-form"
                                                 aria-label="Selecteaza cursa ID <?= e((string) $raceId) ?>"
                                             >
-                                            <strong class="dispatcher-cell-text dispatcher-cell-nowrap dispatcher-plate-value vehicle-cell nr-auto-cell" data-cell-value="<?= e($rowPlateLabel) ?>" data-cell-values="<?= e((string) json_encode($rowPlateValues, JSON_UNESCAPED_UNICODE)) ?>"<?= count($rowSegments) > 1 ? ' title="' . e($rowPlateLabel) . '"' : '' ?>><?= e($rowPlateLabel) ?></strong>
+                                            <?php if ($showMissingSeverityDot): ?>
+                                                <?php if ($rowStatusDotSeverity === 'incomplete'): ?>
+                                                    <a class="race-status-dot race-status-dot-incomplete" href="<?= e($openRaceFocusUrlByRaceId[$raceId] ?? '') ?>" title="<?= e($rowStatusDotTitle) ?>" aria-label="<?= e($rowStatusDotTitle) ?>"></a>
+                                                <?php else: ?>
+                                                    <span class="race-status-dot race-status-dot-complete" title="<?= e($rowStatusDotTitle) ?>" role="img" aria-label="<?= e($rowStatusDotTitle) ?>"></span>
+                                                <?php endif; ?>
+                                            <?php endif; ?>
+                                            <strong class="dispatcher-cell-text dispatcher-cell-nowrap dispatcher-plate-value vehicle-cell nr-auto-cell" data-cell-value="<?= e($rowPlateLabel) ?>" data-cell-values="<?= e((string) json_encode($rowPlateValues, JSON_UNESCAPED_UNICODE)) ?>"<?= count($rowSegments) > 1 ? ' title="' . e($rowPlateLabel) . '"' : '' ?>><?= count($rowPlateSummaryParts) > 1 ? '' : e($rowPlateLabel) ?></strong>
+                                            <?php if (count($rowPlateSummaryParts) > 1): ?>
+                                                <?= $renderDispatcherSummaryDetails($rowPlateSummaryParts, 'plates-' . (string) $raceId, 'pe cursa #' . (string) $raceId, ['vehicul', 'vehicule']) ?>
+                                            <?php endif; ?>
                                         </label>
-                                        <?php if (count($rowSegments) > 1): ?>
-                                            <button type="button" class="badge bg-info text-dark border-0 dispatcher-segments-badge" data-segments-toggle="<?= e((string) $raceId) ?>" aria-controls="race-segments-<?= e((string) $raceId) ?>" title="<?= e(dispatcher_segments_summary($rowSegments)) ?>">
-                                                <i class="bi bi-signpost-split" aria-hidden="true"></i> <?= e((string) count($rowSegments)) ?> segmente
-                                            </button>
-                                        <?php endif; ?>
                                     </div>
                                 </div>
                             </td>
@@ -1045,7 +1292,10 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             </td>
                             <td class="col-driver">
                                 <div class="cell-content">
-                                    <span class="dispatcher-cell-text driver-cell" title="<?= e($driverName) ?>" data-cell-value="<?= e($driverName) ?>" data-cell-values="<?= e((string) json_encode($rowDriverValues, JSON_UNESCAPED_UNICODE)) ?>"><?= e($driverName) ?></span>
+                                    <span class="dispatcher-cell-text driver-cell" title="<?= e($driverName) ?>" data-cell-value="<?= e($driverName) ?>" data-cell-values="<?= e((string) json_encode($rowDriverValues, JSON_UNESCAPED_UNICODE)) ?>"><?= count($rowDriverSummaryParts) > 1 ? '' : e($driverName) ?></span>
+                                    <?php if (count($rowDriverSummaryParts) > 1): ?>
+                                        <?= $renderDispatcherSummaryDetails($rowDriverSummaryParts, 'drivers-' . (string) $raceId, 'pe cursa #' . (string) $raceId, ['sofer', 'soferi']) ?>
+                                    <?php endif; ?>
                                 </div>
                             </td>
                             <td class="col-type">
@@ -1064,35 +1314,72 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                                 </div>
                             </td>
                             <td class="col-duration text-center-cell">
-                                <div class="cell-content center">
-                                    <span class="dispatcher-cell-text dispatcher-cell-nowrap"><?= e($durationLabel) ?></span>
+                                <?php /* Cursa cu faze: butonul arata durata totala, popover-ul durata fiecarei faze. */ ?>
+                                <div class="cell-content center<?= $durationParts !== [] ? ' dispatcher-summary-cell-content' : '' ?>" data-cell-value="<?= e($durationLabel) ?>">
+                                    <?php if ($durationParts !== [] && $durationLabel !== '-'): ?>
+                                        <?= $renderDispatcherSummaryDetails($durationParts, 'duration-' . (string) $raceId, 'durata pe faze, cursa #' . (string) $raceId, ['faza', 'faze'], ['label' => $durationLabel, 'footer' => false, 'compact' => true]) ?>
+                                    <?php else: ?>
+                                        <span class="dispatcher-cell-text dispatcher-cell-nowrap"><?= e($durationLabel) ?></span>
+                                    <?php endif; ?>
                                 </div>
                             </td>
+                            <?php
+                            // Randurile din dropdown-ul Diurna: un rand pe sofer distinct, cu valoarea
+                            // efectiva calculata pe server (impartirea pe faze + modificarile aprobate).
+                            // Cererile in asteptare NU schimba valoarea, doar se semnaleaza.
+                            $diurnaDropdownDrivers = [];
+                            if ($diurnaMultiDriver) {
+                                foreach ($diurnaSplitRows as $diurnaSplitRow) {
+                                    $diurnaDropdownDrivers[] = [
+                                        'key' => (int) $diurnaSplitRow['driver_id'],
+                                        'name' => (string) $diurnaSplitRow['sofer'],
+                                        'value' => (int) $diurnaSplitRow['zile'],
+                                        'computed' => (int) $diurnaSplitRow['calculat'],
+                                        'adjusted' => (bool) $diurnaSplitRow['ajustat'],
+                                        'pending' => $diurnaSplitRow['cerere'],
+                                        'editable' => (int) $diurnaSplitRow['driver_id'] > 0,
+                                    ];
+                                }
+                            } elseif ($diurnaResult['status'] === 'ok') {
+                                $diurnaDropdownDrivers[] = [
+                                    'key' => 0,
+                                    'name' => $diurnaSplitRows !== [] ? (string) $diurnaSplitRows[0]['sofer'] : trim((string) ($row['sofer_nume'] ?? '')),
+                                    'value' => $diurnaDays,
+                                    'computed' => (int) ($diurnaResult['calculat'] ?? $diurnaDays),
+                                    'adjusted' => !empty($diurnaResult['ajustat']),
+                                    'pending' => $diurnaPendingRequest,
+                                    'editable' => true,
+                                ];
+                            }
+                            ?>
                             <td class="col-diurna text-center-cell">
-                                <div class="cell-content center"<?= $diurnaTitle !== '' ? ' title="' . e($diurnaTitle) . '"' : '' ?> data-cell-value="<?= e($diurnaValue) ?>">
-                                    <span class="dispatcher-cell-text dispatcher-cell-nowrap<?= $diurnaResult['status'] === 'invalid' ? ' text-danger' : '' ?>"><?= e($diurnaValue) ?></span>
-                                    <?php if ($diurnaSplitTitle !== ''): ?>
-                                        <i class="bi bi-people small text-muted ms-1" aria-hidden="true"></i>
-                                        <span class="visually-hidden"><?= e('Diurne pe soferi: ' . $diurnaSplitTitle) ?></span>
-                                    <?php endif; ?>
-                                    <?php if (!empty($diurnaResult['ajustat'])): ?>
-                                        <span class="diurna-adjusted-badge" aria-hidden="true"><i class="bi bi-pencil-fill"></i></span>
-                                        <span class="visually-hidden"><?= e($diurnaAdjustmentNote) ?></span>
-                                    <?php endif; ?>
-                                    <?php if ($diurnaPendingRequest !== null): ?>
-                                        <span class="diurna-pending-badge" data-diurna-pending title="<?= e('Cerere in asteptare: ' . $diurnaPendingRequest['solicitat'] . ' diurne (' . ($diurnaPendingRequest['requested_by_name'] ?: '-') . ')') ?>">
-                                            <i class="bi bi-hourglass-split" aria-hidden="true"></i><?= e((string) $diurnaPendingRequest['solicitat']) ?>
-                                        </span>
+                                <div class="cell-content center dispatcher-summary-cell-content" data-cell-value="<?= e($diurnaValue) ?>">
+                                    <?php if ($diurnaDropdownDrivers !== []): ?>
+                                        <?= $renderDiurnaDropdown(
+                                            $raceId,
+                                            $diurnaDays,
+                                            $diurnaDropdownDrivers,
+                                            $diurnaCanRequest,
+                                            trim(($diurnaNotPaid ? 'Soferul nu primeste diurna (Contabilitate Personal); zilele nu se platesc. ' : '') . ($diurnaSameDay !== null ? $sameDayNote . ' ' : '') . (!empty($diurnaResult['ajustare_expirata']) ? $diurnaAdjustmentNote : '')),
+                                            $diurnaPendingRequest !== null || $diurnaDriverPending
+                                        ) ?>
+                                    <?php else: ?>
+                                        <span class="dispatcher-cell-text dispatcher-cell-nowrap<?= $diurnaResult['status'] === 'invalid' ? ' text-danger' : '' ?>"<?= $diurnaTitle !== '' ? ' title="' . e($diurnaTitle) . '"' : '' ?>><?= e($diurnaValue) ?></span>
                                     <?php endif; ?>
                                     <?php if ($diurnaCanRequest): ?>
+                                        <?php /* Sursa de date a ferestrei "Modifica diurnele" (ascunsa): creioanele din
+                                                 dropdown o deschid pe soferul lor, vezi dispecer-diurna.js. */ ?>
                                         <button
                                             type="button"
                                             class="diurna-edit-btn"
+                                            hidden
+                                            tabindex="-1"
                                             data-diurna-edit
                                             data-trip-id="<?= e((string) $raceId) ?>"
                                             data-current="<?= e((string) $diurnaDays) ?>"
                                             data-computed="<?= e((string) (int) ($diurnaResult['calculat'] ?? $diurnaDays)) ?>"
                                             data-driver="<?= e(trim((string) ($row['sofer_nume'] ?? ''))) ?>"
+                                            <?php if ($diurnaDriversForModal !== []): ?>data-drivers="<?= e((string) json_encode($diurnaDriversForModal, JSON_UNESCAPED_UNICODE)) ?>"<?php endif; ?>
                                             data-pending="<?= $diurnaPendingRequest !== null ? e((string) $diurnaPendingRequest['solicitat'] . '|' . ($diurnaPendingRequest['requested_by_name'] ?: '-')) : '' ?>"
                                             title="Modifica diurnele"
                                             aria-label="<?= e('Modifica diurnele cursei #' . $raceId) ?>"
@@ -1122,7 +1409,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                             </td>
                             <td class="col-activity">
                                 <div class="cell-content center dispatcher-summary-cell-content" title="<?= e($activityTitle) ?>">
-                                    <?= $renderDispatcherSummaryDetails($activityParts, 'activity-' . (string) $raceId, 'activitate cursa #' . (string) $raceId) ?>
+                                    <?= $renderDispatcherSummaryDetails($activityParts, 'activity-' . (string) $raceId, 'activitate cursa #' . (string) $raceId, ['detaliu', 'detalii'], ['footer' => !$activityHasAllocation]) ?>
                                 </div>
                             </td>
                             <td class="col-financial">
@@ -1359,6 +1646,18 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (racesHeadRowEl instanceof HTMLTableRowElement && racesBodyEl instanceof HTMLTableSectionElement) {
             const columnFilters = {};
+            // Filtrul dupa punctul de stare (doar admin): verde = completa, rosu = informatii
+            // lipsa. Apare in palnia primei coloane, langa valorile numerelor.
+            const STATUS_FILTER_COLUMN = 0;
+            const hasStatusDot = racesTableEl.classList.contains('has-race-status-dot');
+            const statusFilter = new Set();
+            const statusFilterOptions = [
+                { value: 'complete', label: 'Completă (verde)' },
+                { value: 'incomplete', label: 'Informații lipsă (roșu)' },
+            ];
+            const rowMatchesStatusFilter = function (rowEl) {
+                return statusFilter.size === 0 || statusFilter.has(rowEl.getAttribute('data-race-completeness') || '');
+            };
             const resetFiltersButtonEl = document.getElementById('races-reset-filters-btn');
             let currentSortIndex = -1;
             let currentSortDir = 1;
@@ -1437,6 +1736,11 @@ document.addEventListener('DOMContentLoaded', function () {
                     ? event.target.closest('[data-segments-toggle]')
                     : null;
                 if (toggleEl === null) {
+                    return;
+                }
+                // Celula numarului e toggle-ul fazelor, dar bifa, punctul de stare si
+                // butonul "N vehicule" din ea isi pastreaza actiunea lor.
+                if (toggleEl.tagName === 'TD' && event.target.closest('input, a, button, [data-dispatcher-summary-list]')) {
                     return;
                 }
                 event.preventDefault();
@@ -1572,11 +1876,59 @@ document.addEventListener('DOMContentLoaded', function () {
                         arrowEl.textContent = columnIndex === currentSortIndex ? (currentSortDir === 1 ? '▲' : '▼') : '↕';
                     }
                     const filterSet = columnFilters[columnIndex];
-                    thEl.classList.toggle('races-filtered', !!(filterSet && filterSet.size > 0));
+                    const statusActive = columnIndex === STATUS_FILTER_COLUMN && statusFilter.size > 0;
+                    thEl.classList.toggle('races-filtered', !!(filterSet && filterSet.size > 0) || statusActive);
                 });
 
                 if (resetFiltersButtonEl instanceof HTMLButtonElement) {
-                    resetFiltersButtonEl.disabled = Object.keys(columnFilters).length === 0;
+                    resetFiltersButtonEl.disabled = Object.keys(columnFilters).length === 0 && statusFilter.size === 0;
+                }
+            };
+
+            // Filtrele / sortarea din antet traiesc doar in pagina. Le tinem in
+            // sessionStorage ca, dupa "Salveaza cursa" (editare), Desfasuratorul sa revina
+            // exact cum l-a lasat operatorul. Coloanele se identifica dupa eticheta, nu
+            // dupa pozitie. Adaugarea unei curse (sau o deschidere normala) porneste curat.
+            const HEADER_STATE_KEY = 'dispecerRacesHeaderState';
+            const headerColumnLabel = function (columnIndex) {
+                const thEl = racesHeadRowEl.cells[columnIndex];
+                if (!thEl) {
+                    return '';
+                }
+                const labelEl = thEl.querySelector('.races-head-label') || thEl;
+                return labelEl.textContent.replace(/[▲▼↕]/g, '').replace(/\s+/g, ' ').trim();
+            };
+            const headerColumnIndexByLabel = function (label) {
+                for (let columnIndex = 0; columnIndex < racesHeadRowEl.cells.length; columnIndex++) {
+                    if (headerColumnLabel(columnIndex) === label) {
+                        return columnIndex;
+                    }
+                }
+                return -1;
+            };
+            const saveHeaderState = function () {
+                const state = { filters: {}, status: Array.from(statusFilter), sort: null };
+                Object.keys(columnFilters).forEach(function (key) {
+                    const allowed = columnFilters[key];
+                    if (allowed && allowed.size > 0) {
+                        state.filters[headerColumnLabel(parseInt(key, 10))] = Array.from(allowed);
+                    }
+                });
+                if (currentSortIndex >= 0) {
+                    state.sort = { label: headerColumnLabel(currentSortIndex), dir: currentSortDir };
+                }
+                try {
+                    window.sessionStorage.setItem(HEADER_STATE_KEY, JSON.stringify(state));
+                } catch (error) {
+                    // sessionStorage indisponibil: filtrele din antet nu se pastreaza.
+                }
+            };
+            const readHeaderState = function () {
+                try {
+                    const state = JSON.parse(window.sessionStorage.getItem(HEADER_STATE_KEY) || 'null');
+                    return state && typeof state === 'object' ? state : null;
+                } catch (error) {
+                    return null;
                 }
             };
 
@@ -1654,11 +2006,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 applyRowWindow();
                 updateHeadIndicators();
+                saveHeaderState();
             };
 
             const applyFilters = function () {
                 getDataRows().forEach(function (rowEl) {
-                    let visible = true;
+                    let visible = rowMatchesStatusFilter(rowEl);
                     Object.keys(columnFilters).forEach(function (key) {
                         const allowed = columnFilters[key];
                         if (!allowed || allowed.size === 0) {
@@ -1681,7 +2034,18 @@ document.addEventListener('DOMContentLoaded', function () {
                 rowWindowLimit = ROW_WINDOW_STEP;
                 applyRowWindow();
                 updateHeadIndicators();
+                saveHeaderState();
+                publishPlateFilter();
             };
+
+            // Filtrul pe Nr. Inmatriculare se transmite popup-ului "curse cu informatii
+            // lipsa" (_open_races_panel.php): acelasi set de vehicule si numarul din buton.
+            function publishPlateFilter() {
+                const plateSet = columnFilters[STATUS_FILTER_COLUMN];
+                const plates = plateSet ? Array.from(plateSet) : [];
+                window.dispatcherPlateFilter = plates;
+                document.dispatchEvent(new CustomEvent('dispatcher:plate-filter', { detail: { plates: plates } }));
+            }
 
             // Dropdown-ul de filtrare rapida (unic, repozitionat per coloana).
             const filterDropdownEl = document.createElement('div');
@@ -1779,8 +2143,8 @@ document.addEventListener('DOMContentLoaded', function () {
             // Trece rândul prin toate filtrele active, cu exceptia coloanei date.
             // Folosit pentru filtrarea in cascada: optiunile unei coloane reflecta doar
             // randurile ramase dupa filtrele celorlalte coloane.
-            const rowMatchesFiltersExcept = function (rowEl, excludedColumnIndex) {
-                let matches = true;
+            const rowMatchesFiltersExcept = function (rowEl, excludedColumnIndex, ignoreStatusFilter) {
+                let matches = ignoreStatusFilter === true || rowMatchesStatusFilter(rowEl);
                 Object.keys(columnFilters).forEach(function (key) {
                     const filterColumnIndex = parseInt(key, 10);
                     if (filterColumnIndex === excludedColumnIndex) {
@@ -1856,12 +2220,65 @@ document.addEventListener('DOMContentLoaded', function () {
                 resetEl.addEventListener('click', function (event) {
                     event.preventDefault();
                     delete columnFilters[columnIndex];
+                    if (columnIndex === STATUS_FILTER_COLUMN) {
+                        statusFilter.clear();
+                    }
                     applyFilters();
                     closeFilterDropdown();
                 });
                 headerEl.appendChild(titleEl);
                 headerEl.appendChild(resetEl);
                 filterDropdownEl.appendChild(headerEl);
+
+                if (hasStatusDot && columnIndex === STATUS_FILTER_COLUMN) {
+                    // Numarul de curse per culoare, dupa filtrele celorlalte coloane.
+                    const statusCounts = { complete: 0, incomplete: 0 };
+                    getDataRows().forEach(function (rowEl) {
+                        if (!rowMatchesFiltersExcept(rowEl, -1, true)) {
+                            return;
+                        }
+                        const status = rowEl.getAttribute('data-race-completeness') || '';
+                        if (Object.prototype.hasOwnProperty.call(statusCounts, status)) {
+                            statusCounts[status]++;
+                        }
+                    });
+                    const statusWrapEl = document.createElement('div');
+                    statusWrapEl.className = 'races-filter-status';
+                    const statusTitleEl = document.createElement('div');
+                    statusTitleEl.className = 'races-filter-status-title';
+                    statusTitleEl.textContent = 'Stare cursă';
+                    statusWrapEl.appendChild(statusTitleEl);
+                    statusFilterOptions.forEach(function (option) {
+                        const optionEl = document.createElement('label');
+                        optionEl.className = 'races-filter-status-option';
+                        const checkboxEl = document.createElement('input');
+                        checkboxEl.type = 'checkbox';
+                        checkboxEl.className = 'form-check-input m-0';
+                        checkboxEl.checked = statusFilter.has(option.value);
+                        checkboxEl.addEventListener('change', function () {
+                            if (checkboxEl.checked) {
+                                statusFilter.add(option.value);
+                            } else {
+                                statusFilter.delete(option.value);
+                            }
+                            applyFilters();
+                        });
+                        const dotEl = document.createElement('span');
+                        dotEl.className = 'race-status-dot race-status-dot-' + option.value;
+                        dotEl.setAttribute('aria-hidden', 'true');
+                        const labelSpan = document.createElement('span');
+                        labelSpan.textContent = option.label;
+                        const countEl = document.createElement('small');
+                        countEl.className = 'text-muted ms-auto';
+                        countEl.textContent = String(statusCounts[option.value]);
+                        optionEl.appendChild(checkboxEl);
+                        optionEl.appendChild(dotEl);
+                        optionEl.appendChild(labelSpan);
+                        optionEl.appendChild(countEl);
+                        statusWrapEl.appendChild(optionEl);
+                    });
+                    filterDropdownEl.appendChild(statusWrapEl);
+                }
 
                 const searchEl = document.createElement('input');
                 searchEl.type = 'search';
@@ -1972,6 +2389,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 Object.keys(columnFilters).forEach(function (key) {
                     delete columnFilters[key];
                 });
+                statusFilter.clear();
                 closeFilterDropdown();
                 applyFilters();
             };
@@ -2049,8 +2467,64 @@ document.addEventListener('DOMContentLoaded', function () {
                 });
             }
 
-            applyRowWindow();
-            updateHeadIndicators();
+            const restoreListViewRaceId = <?= (int) ($restoreListViewRaceId ?? 0) ?>;
+            const savedHeaderState = restoreListViewRaceId > 0 ? readHeaderState() : null;
+            if (savedHeaderState !== null) {
+                Object.keys(savedHeaderState.filters || {}).forEach(function (label) {
+                    const columnIndex = headerColumnIndexByLabel(label);
+                    const values = savedHeaderState.filters[label];
+                    if (columnIndex >= 0 && Array.isArray(values) && values.length > 0) {
+                        columnFilters[columnIndex] = new Set(values.map(String));
+                    }
+                });
+                if (hasStatusDot && Array.isArray(savedHeaderState.status)) {
+                    savedHeaderState.status.forEach(function (value) {
+                        statusFilter.add(String(value));
+                    });
+                }
+                const sortState = savedHeaderState.sort;
+                const sortIndex = sortState ? headerColumnIndexByLabel(String(sortState.label || '')) : -1;
+                if (sortIndex >= 0) {
+                    applySort(sortIndex);
+                    if (sortState.dir === -1) {
+                        applySort(sortIndex);
+                    }
+                }
+                applyFilters();
+            } else {
+                // Deschidere normala / dupa adaugare: lista porneste curat.
+                saveHeaderState();
+                applyRowWindow();
+                updateHeadIndicators();
+            }
+
+            // Cursa tocmai editata: o aducem in fereastra de randuri si in vizor.
+            const editedRowEl = restoreListViewRaceId > 0
+                ? racesBodyEl.querySelector('tr[data-race-id="' + restoreListViewRaceId + '"]')
+                : null;
+            if (editedRowEl instanceof HTMLTableRowElement && !editedRowEl.classList.contains('d-none')) {
+                if (editedRowEl.classList.contains('race-row-beyond-limit')) {
+                    const position = getDataRows().filter(function (rowEl) {
+                        return !rowEl.classList.contains('d-none');
+                    }).indexOf(editedRowEl) + 1;
+                    rowWindowLimit = Math.ceil(position / ROW_WINDOW_STEP) * ROW_WINDOW_STEP;
+                    applyRowWindow();
+                }
+                window.requestAnimationFrame(function () {
+                    editedRowEl.scrollIntoView({ block: 'center' });
+                    editedRowEl.classList.add('race-row-just-edited');
+                    window.setTimeout(function () {
+                        editedRowEl.classList.remove('race-row-just-edited');
+                    }, 2500);
+                });
+            }
+
+            // restore_view a fost folosit: un refresh ulterior porneste curat, ca inainte.
+            if (restoreListViewRaceId > 0 && window.history && typeof window.history.replaceState === 'function') {
+                const cleanUrl = new URL(window.location.href);
+                cleanUrl.searchParams.delete('restore_view');
+                window.history.replaceState(window.history.state, '', cleanUrl.toString());
+            }
         }
     }
 
@@ -2130,7 +2604,13 @@ document.addEventListener('DOMContentLoaded', function () {
         var width = Math.min(304, Math.max(220, viewportWidth - margin * 2));
         var maxHeight = Math.min(360, Math.max(180, viewportHeight - margin * 2));
 
-        popoverEl.style.width = width + 'px';
+        // Dropdown-ul Diurna ramane cat continutul (CSS: width max-content), fara latimea fixa.
+        if (popoverEl.classList.contains('is-diurna')) {
+            popoverEl.style.width = '';
+            width = Math.min(Math.ceil(popoverEl.getBoundingClientRect().width) || width, viewportWidth - margin * 2);
+        } else {
+            popoverEl.style.width = width + 'px';
+        }
         popoverEl.style.maxHeight = maxHeight + 'px';
 
         var triggerRect = triggerEl.getBoundingClientRect();
@@ -2172,6 +2652,15 @@ document.addEventListener('DOMContentLoaded', function () {
             iconEl.classList.add('bi-chevron-down');
         }
 
+        // Tooltip-urile cu numele soferilor (dropdown-ul Diurna) nu raman pe ecran.
+        if (window.bootstrap && window.bootstrap.Tooltip) {
+            previousState.popover.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (tipEl) {
+                var tip = window.bootstrap.Tooltip.getInstance(tipEl);
+                if (tip) {
+                    tip.hide();
+                }
+            });
+        }
         previousState.popover.hidden = true;
         previousState.popover.style.left = '';
         previousState.popover.style.top = '';
@@ -2180,6 +2669,27 @@ document.addEventListener('DOMContentLoaded', function () {
         if (restoreFocus) {
             previousState.button.focus({ preventScroll: true });
         }
+    };
+
+    // Initialele unui sofer (item.i), cu numele intreg (item.n) in tooltip la hover si focus.
+    var buildNameInitials = function (item) {
+        var initialsEl = document.createElement('span');
+        initialsEl.className = 'dispatcher-diurna-initials';
+        initialsEl.textContent = String(item.i || '-');
+        initialsEl.title = String(item.n || '');
+        initialsEl.tabIndex = 0;
+        initialsEl.setAttribute('aria-label', String(item.n || ''));
+        initialsEl.setAttribute('data-bs-toggle', 'tooltip');
+        if (window.bootstrap && window.bootstrap.Tooltip) {
+            window.bootstrap.Tooltip.getOrCreateInstance(initialsEl, {
+                trigger: 'hover focus',
+                container: 'body',
+                placement: 'top',
+                customClass: 'dispatcher-diurna-tooltip'
+            });
+        }
+
+        return initialsEl;
     };
 
     // Popover-ele de sumar vin din server doar ca data-summary-items (JSON) pe buton;
@@ -2212,6 +2722,129 @@ document.addEventListener('DOMContentLoaded', function () {
             itemEl.className = 'dispatcher-summary-popover-item';
             itemEl.setAttribute('role', 'listitem');
 
+            // Titlu de sectiune (ex. "Repartizare încărcătură / km").
+            if (item && item.h) {
+                itemEl.classList.add('is-section-heading');
+                itemEl.textContent = String(item.h);
+                listEl.appendChild(itemEl);
+                return;
+            }
+
+            // Formula de calcul, sub titlul sectiunii.
+            if (item && item.hn) {
+                itemEl.classList.add('is-hint');
+                itemEl.textContent = String(item.hn);
+                listEl.appendChild(itemEl);
+                return;
+            }
+
+            // Nota (ex. "Repartizare indisponibilă").
+            if (item && item.msg) {
+                itemEl.classList.add('is-note');
+                itemEl.textContent = String(item.msg);
+                listEl.appendChild(itemEl);
+                return;
+            }
+
+            // Repartizare pe sofer: "B-C-G   300 km   3,15 t".
+            if (item && item.al) {
+                itemEl.classList.add('is-allocation');
+                itemEl.appendChild(buildNameInitials(item));
+                var kmEl = document.createElement('span');
+                kmEl.className = 'dispatcher-allocation-km';
+                kmEl.textContent = String(item.km || '-');
+                itemEl.appendChild(kmEl);
+                var tonsEl = document.createElement('span');
+                tonsEl.className = 'dispatcher-allocation-tons';
+                tonsEl.textContent = String(item.tn || '-');
+                itemEl.appendChild(tonsEl);
+                listEl.appendChild(itemEl);
+                return;
+            }
+
+            // Interval pe faza: "F1  08.10.2026 08:00 → 09.10.2026" + "B-C-G · B 275 NET".
+            if (item && item.ph) {
+                itemEl.classList.add('is-phase-interval');
+                var phaseEl = document.createElement('strong');
+                phaseEl.textContent = String(item.ph);
+                itemEl.appendChild(phaseEl);
+                var phaseBodyEl = document.createElement('span');
+                phaseBodyEl.className = 'dispatcher-phase-interval-body';
+                var phaseRangeEl = document.createElement('span');
+                phaseRangeEl.className = 'dispatcher-phase-interval-range';
+                phaseRangeEl.textContent = String(item.iv || '-');
+                phaseBodyEl.appendChild(phaseRangeEl);
+                var phaseWhoEl = document.createElement('span');
+                phaseWhoEl.className = 'dispatcher-phase-interval-who';
+                phaseWhoEl.appendChild(buildNameInitials(item));
+                if (item.pl) {
+                    phaseWhoEl.appendChild(document.createTextNode(' · ' + String(item.pl)));
+                }
+                phaseBodyEl.appendChild(phaseWhoEl);
+                itemEl.appendChild(phaseBodyEl);
+                listEl.appendChild(itemEl);
+                return;
+            }
+
+            // Diurna pe sofer: "B-C-G → 1" + creion. Numele intreg in tooltip (hover si focus);
+            // creionul poarta id-ul soferului, niciodata initialele.
+            if (item && item.dr) {
+                itemEl.classList.add('is-diurna-driver');
+
+                itemEl.appendChild(buildNameInitials(item));
+
+                var arrowEl = document.createElement('span');
+                arrowEl.className = 'dispatcher-diurna-arrow';
+                arrowEl.setAttribute('aria-hidden', 'true');
+                arrowEl.textContent = '→';
+                itemEl.appendChild(arrowEl);
+
+                var diurnaValueEl = document.createElement('span');
+                diurnaValueEl.className = 'dispatcher-diurna-value';
+                diurnaValueEl.textContent = String(item.v != null ? item.v : '-');
+                if (item.a) {
+                    diurnaValueEl.title = String(item.a);
+                    diurnaValueEl.classList.add('is-adjusted');
+                }
+                itemEl.appendChild(diurnaValueEl);
+
+                if (item.p) {
+                    var pendingEl = document.createElement('span');
+                    pendingEl.className = 'bi bi-hourglass-split dispatcher-diurna-pending';
+                    pendingEl.title = String(item.p);
+                    pendingEl.setAttribute('role', 'img');
+                    pendingEl.setAttribute('aria-label', String(item.p));
+                    itemEl.appendChild(pendingEl);
+                }
+
+                if (item.e) {
+                    var editEl = document.createElement('button');
+                    editEl.type = 'button';
+                    editEl.className = 'dispatcher-diurna-edit';
+                    editEl.setAttribute('data-diurna-edit-driver', String(item.k || 0));
+                    editEl.setAttribute('data-diurna-trip', String(buttonEl.dataset.diurnaDropdown || ''));
+                    editEl.setAttribute('aria-label', 'Modifica diurnele pentru ' + String(item.n || ''));
+                    editEl.title = 'Modifica diurnele';
+                    editEl.innerHTML = '<span class="bi bi-pencil" aria-hidden="true"></span>';
+                    itemEl.appendChild(editEl);
+                }
+
+                listEl.appendChild(itemEl);
+                return;
+            }
+
+            // Lista simpla (vehiculele / soferii cursei): doar numele, fara eticheta.
+            if (item && item.n != null) {
+                itemEl.classList.add('is-name-only');
+                itemEl.textContent = String(item.n);
+                listEl.appendChild(itemEl);
+                return;
+            }
+
+            if (item && item.sep) {
+                itemEl.classList.add('has-separator');
+            }
+
             var labelEl = document.createElement('strong');
             labelEl.textContent = String(item && item.l != null ? item.l : '-');
 
@@ -2224,12 +2857,35 @@ document.addEventListener('DOMContentLoaded', function () {
             listEl.appendChild(itemEl);
         });
 
-        var totalEl = document.createElement('div');
-        totalEl.className = 'dispatcher-summary-popover-total';
-        totalEl.textContent = 'Total ' + (items.length === 1 ? '1 detaliu' : items.length + ' detalii');
+        // Dropdown-ul Diurna: popover strans pe continut (fara latimea fixa a celorlalte).
+        if (buttonEl.classList.contains('dispatcher-diurna-btn') || buttonEl.hasAttribute('data-summary-compact')) {
+            popoverEl.classList.add('is-diurna');
+        }
+
+        // Antet optional (data-summary-header).
+        if (buttonEl.dataset.summaryHeader) {
+            popoverEl.classList.add('has-header');
+            var headerEl = document.createElement('div');
+            headerEl.className = 'dispatcher-summary-popover-header';
+            var headerTitleEl = document.createElement('span');
+            headerTitleEl.textContent = String(buttonEl.dataset.summaryHeader);
+            headerEl.appendChild(headerTitleEl);
+            if (buttonEl.dataset.summaryHeaderTotal) {
+                var headerTotalEl = document.createElement('strong');
+                headerTotalEl.textContent = String(buttonEl.dataset.summaryHeaderTotal);
+                headerEl.appendChild(headerTotalEl);
+            }
+            popoverEl.appendChild(headerEl);
+        }
 
         popoverEl.appendChild(listEl);
-        popoverEl.appendChild(totalEl);
+        if (buttonEl.dataset.summaryFooter !== 'none') {
+            var totalEl = document.createElement('div');
+            totalEl.className = 'dispatcher-summary-popover-total';
+            totalEl.textContent = 'Total ' + (buttonEl.dataset.summaryTotal
+                || (items.length === 1 ? '1 detaliu' : items.length + ' detalii'));
+            popoverEl.appendChild(totalEl);
+        }
         buttonEl.insertAdjacentElement('afterend', popoverEl);
 
         return popoverEl;
@@ -2310,6 +2966,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
     document.addEventListener('scroll', repositionSummaryPopover, true);
     window.addEventListener('resize', repositionSummaryPopover);
+    // Pentru dispecer-diurna.js: creionul din dropdown-ul Diurna inchide popover-ul cand deschide fereastra.
+    window.dispatcherCloseSummaryPopover = function () {
+        closeSummaryPopover(false);
+    };
 
     var columnManagerEl = document.querySelector('[data-dispatcher-column-manager]');
     var columnToggleEl = document.querySelector('[data-dispatcher-columns-toggle]');

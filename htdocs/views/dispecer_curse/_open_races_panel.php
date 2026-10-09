@@ -35,7 +35,7 @@ $openRacesPanelCurrentRaceId = (int) ($openRacesPanelCurrentRaceId ?? 0);
             aria-controls="open-races-panel"
         >
             <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
-            <span><?= e($openRacesPanelLabel) ?> (<?= e((string) $openRacesCount) ?>)</span>
+            <span><?= e($openRacesPanelLabel) ?> (<span data-orx-toggle-count><?= e((string) $openRacesCount) ?></span>)</span>
         </button>
     </div>
 
@@ -58,19 +58,19 @@ $openRacesPanelCurrentRaceId = (int) ($openRacesPanelCurrentRaceId ?? 0);
                 <div class="orx-tabs" role="tablist" aria-label="Filtrare după severitate">
                     <button type="button" class="orx-tab is-active" data-orx-severity-tab="" aria-pressed="true">
                         <i class="bi bi-list-ul" aria-hidden="true"></i>
-                        <span>Toate (<?= e((string) $openRacesCount) ?>)</span>
+                        <span>Toate (<span data-orx-tab-count=""><?= e((string) $openRacesCount) ?></span>)</span>
                     </button>
                     <button type="button" class="orx-tab orx-tab-critical" data-orx-severity-tab="critical" aria-pressed="false">
                         <i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i>
-                        <span>Critice (<?= e((string) ($openRacesSeverityCounts['critical'] ?? 0)) ?>)</span>
+                        <span>Critice (<span data-orx-tab-count="critical"><?= e((string) ($openRacesSeverityCounts['critical'] ?? 0)) ?></span>)</span>
                     </button>
                     <button type="button" class="orx-tab orx-tab-important" data-orx-severity-tab="important" aria-pressed="false">
                         <i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i>
-                        <span>Importante (<?= e((string) ($openRacesSeverityCounts['important'] ?? 0)) ?>)</span>
+                        <span>Importante (<span data-orx-tab-count="important"><?= e((string) ($openRacesSeverityCounts['important'] ?? 0)) ?></span>)</span>
                     </button>
                     <button type="button" class="orx-tab orx-tab-minor" data-orx-severity-tab="minor" aria-pressed="false">
                         <i class="bi bi-info-circle-fill" aria-hidden="true"></i>
-                        <span>Minore (<?= e((string) ($openRacesSeverityCounts['minor'] ?? 0)) ?>)</span>
+                        <span>Minore (<span data-orx-tab-count="minor"><?= e((string) ($openRacesSeverityCounts['minor'] ?? 0)) ?></span>)</span>
                     </button>
                 </div>
                 <div class="orx-filters">
@@ -165,7 +165,13 @@ $openRacesPanelCurrentRaceId = (int) ($openRacesPanelCurrentRaceId ?? 0);
                         // Cheile de focus grupate pe severitate: butonul "Deschide cursa"
                         // trimite spre editare exact lipsurile din tab-ul activ (cerinta 9).
                         $orxFocusBySeverity = ['' => [], 'critical' => [], 'important' => [], 'minor' => []];
-                        foreach ($openMissing as $openMissingItem) {
+                        // Lipsurile de faza au formularul lor: nu intra in focusul formularului
+                        // cursei. Daca raman doar ele, butonul deschide direct faza cu probleme.
+                        $orxTripMissing = array_filter($openMissing, static fn (array $item): bool => (int) ($item['phase_id'] ?? 0) <= 0);
+                        if ($orxTripMissing === [] && $openMissing !== []) {
+                            $openDetailsUrl = RaceCompletenessService::editUrlWithFocus($openRaceId, $openMissing);
+                        }
+                        foreach ($orxTripMissing as $openMissingItem) {
                             $orxItemFocus = trim((string) ($openMissingItem['focus'] ?? ''));
                             if ($orxItemFocus === '') {
                                 continue;
@@ -247,8 +253,9 @@ $openRacesPanelCurrentRaceId = (int) ($openRacesPanelCurrentRaceId ?? 0);
                                     <?php
                                         $orxItemFocus = trim((string) ($openMissingItem['focus'] ?? ''));
                                         $orxItemSeverity = (string) ($openMissingItem['severity'] ?? 'minor');
-                                        $orxItemUrl = $orxItemFocus !== ''
-                                            ? build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $openRaceId, 'focus' => $orxItemFocus])
+                                        $orxItemPhaseId = (int) ($openMissingItem['phase_id'] ?? 0);
+                                        $orxItemUrl = $orxItemFocus !== '' || $orxItemPhaseId > 0
+                                            ? RaceCompletenessService::itemUrl($openRaceId, $orxItemPhaseId, [$openMissingItem])
                                             : $openDetailsUrl;
                                     ?>
                                     <li class="orx-missing-item orx-missing-item-<?= e($orxItemSeverity) ?>">
@@ -323,6 +330,39 @@ document.addEventListener('DOMContentLoaded', function () {
         var orxPlateOptionEls = openRacesModalEl.querySelectorAll('[data-orx-plate-option]');
         var orxEmptyEl = openRacesModalEl.querySelector('[data-orx-empty]');
         var orxSearchEl = openRacesModalEl.querySelector('[data-orx-search]');
+
+        // Legatura cu filtrul "Nr. Inmatriculare" din antetul Desfasuratorului: butonul
+        // arata cate curse cu lipsuri au vehiculele filtrate acolo, iar popup-ul se
+        // deschide cu aceleasi vehicule bifate. Lista vine prin window (filtrul se poate
+        // aplica inaintea acestui script) si prin evenimentul dispatcher:plate-filter.
+        var orxLinkedPlates = Array.isArray(window.dispatcherPlateFilter) ? window.dispatcherPlateFilter.slice() : [];
+        // Vehiculele filtrate nu au nicio cursa cu lipsuri: lista ramane goala, nu "toate".
+        var orxLinkedNoMatch = false;
+        var orxToggleCountEl = openRacesToggleEl.querySelector('[data-orx-toggle-count]');
+
+        var orxSyncToggleCount = function () {
+            if (!(orxToggleCountEl instanceof HTMLElement)) {
+                return;
+            }
+            var cards = openRacesModalEl.querySelectorAll('[data-open-race-card]');
+            if (orxLinkedPlates.length === 0) {
+                orxToggleCountEl.textContent = String(cards.length);
+                return;
+            }
+            var linkedCount = 0;
+            cards.forEach(function (cardEl) {
+                if (orxLinkedPlates.indexOf(cardEl.getAttribute('data-orx-plate-value') || '') !== -1) {
+                    linkedCount++;
+                }
+            });
+            orxToggleCountEl.textContent = String(linkedCount);
+        };
+
+        document.addEventListener('dispatcher:plate-filter', function (event) {
+            var plates = event.detail && Array.isArray(event.detail.plates) ? event.detail.plates : [];
+            orxLinkedPlates = plates.map(String);
+            orxSyncToggleCount();
+        });
 
         var orxSelectedPlates = function () {
             var plates = [];
@@ -428,16 +468,26 @@ document.addEventListener('DOMContentLoaded', function () {
                 ? orxSearchEl.value.trim().toLowerCase()
                 : '';
             var visibleCount = 0;
+            // Numerele din tab-uri urmeaza celelalte filtre (vehicul, tip, cautare).
+            var tabCounts = { '': 0, critical: 0, important: 0, minor: 0 };
 
             openRacesModalEl.querySelectorAll('[data-open-race-card]').forEach(function (cardEl) {
                 if (!(cardEl instanceof HTMLElement)) {
                     return;
                 }
 
-                var matches = (orxActiveSeverity === '' || cardEl.getAttribute('data-orx-severity-value') === orxActiveSeverity)
+                var cardSeverity = cardEl.getAttribute('data-orx-severity-value') || '';
+                var matchesOthers = !orxLinkedNoMatch
                     && (transport === '' || cardEl.getAttribute('data-orx-transport-value') === transport)
                     && (plates.length === 0 || plates.indexOf(cardEl.getAttribute('data-orx-plate-value') || '') !== -1)
                     && (search === '' || (cardEl.getAttribute('data-orx-search-value') || '').indexOf(search) !== -1);
+                if (matchesOthers) {
+                    tabCounts['']++;
+                    if (Object.prototype.hasOwnProperty.call(tabCounts, cardSeverity)) {
+                        tabCounts[cardSeverity]++;
+                    }
+                }
+                var matches = matchesOthers && (orxActiveSeverity === '' || cardSeverity === orxActiveSeverity);
 
                 cardEl.hidden = !matches;
                 if (matches) {
@@ -458,6 +508,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 var orxHasActiveFilters = orxActiveSeverity !== ''
                     || transport !== ''
                     || plates.length > 0
+                    || orxLinkedNoMatch
                     || search !== '';
                 orxHeaderCountEl.textContent = orxHasActiveFilters
                     ? visibleCount + ' din ' + orxTotalCount
@@ -471,9 +522,16 @@ document.addEventListener('DOMContentLoaded', function () {
                 var isActive = (tabEl.getAttribute('data-orx-severity-tab') || '') === orxActiveSeverity;
                 tabEl.classList.toggle('is-active', isActive);
                 tabEl.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+                var tabCountEl = tabEl.querySelector('[data-orx-tab-count]');
+                if (tabCountEl instanceof HTMLElement) {
+                    tabCountEl.textContent = String(tabCounts[tabCountEl.getAttribute('data-orx-tab-count') || ''] || 0);
+                }
             });
 
             orxSyncPlatesUi();
+            if (orxLinkedNoMatch && orxPlatesLabelEl instanceof HTMLElement) {
+                orxPlatesLabelEl.textContent = 'Nr. înmatriculare (' + orxLinkedPlates.length + ')';
+            }
         };
 
         var setOpenRacesFilter = function () {
@@ -485,11 +543,17 @@ document.addEventListener('DOMContentLoaded', function () {
             if (orxSearchEl instanceof HTMLInputElement) {
                 orxSearchEl.value = '';
             }
+            // Vehiculele filtrate in Desfasurator raman bifate si aici.
+            var linkedChecked = 0;
             orxPlateOptionEls.forEach(function (optionEl) {
                 if (optionEl instanceof HTMLInputElement) {
-                    optionEl.checked = false;
+                    optionEl.checked = orxLinkedPlates.indexOf(optionEl.value) !== -1;
+                    if (optionEl.checked) {
+                        linkedChecked++;
+                    }
                 }
             });
+            orxLinkedNoMatch = orxLinkedPlates.length > 0 && linkedChecked === 0;
             if (orxPlatesSearchEl instanceof HTMLInputElement) {
                 orxPlatesSearchEl.value = '';
                 orxPlateOptionEls.forEach(function (optionEl) {
@@ -546,12 +610,16 @@ document.addEventListener('DOMContentLoaded', function () {
 
         orxPlateOptionEls.forEach(function (optionEl) {
             if (optionEl instanceof HTMLInputElement) {
-                optionEl.addEventListener('change', applyOpenRacesFilters);
+                optionEl.addEventListener('change', function () {
+                    orxLinkedNoMatch = false;
+                    applyOpenRacesFilters();
+                });
             }
         });
 
         if (orxPlatesAllEl instanceof HTMLInputElement) {
             orxPlatesAllEl.addEventListener('change', function () {
+                orxLinkedNoMatch = false;
                 var check = orxPlatesAllEl.checked;
                 orxPlateOptionEls.forEach(function (optionEl) {
                     var labelEl = optionEl instanceof HTMLElement ? optionEl.closest('.orx-plates-option') : null;
@@ -579,6 +647,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (orxPlatesClearEl instanceof HTMLElement) {
             orxPlatesClearEl.addEventListener('click', function (event) {
                 event.preventDefault();
+                orxLinkedNoMatch = false;
                 orxPlateOptionEls.forEach(function (optionEl) {
                     if (optionEl instanceof HTMLInputElement) {
                         optionEl.checked = false;
@@ -615,6 +684,7 @@ document.addEventListener('DOMContentLoaded', function () {
         openRacesToggleEl.addEventListener('click', function () {
             setOpenRacesOpen(true);
         });
+        orxSyncToggleCount();
 
         openRacesCloseEls.forEach(function (closeEl) {
             if (!(closeEl instanceof HTMLButtonElement)) {

@@ -124,6 +124,100 @@
         var costKmMixtPreviewField = form.querySelector('[data-role="preview-cost-km-mixt-field"]');
         var kmDistributionCalculationNote = form.querySelector('[data-role="km-distributie-calculation"]');
         var costKmMixtCalculationNote = form.querySelector('[data-role="cost-km-mixt-calculation"]');
+        // Faza noua ("Reia cursa"): valorile de acum ale cursei. Calculul aduna faza
+        // la ele si arata totalul cursei dupa faza (cum il reface serverul la salvare).
+        var phaseBase = null;
+        if (form.hasAttribute('data-phase-base')) {
+            try {
+                phaseBase = JSON.parse(form.getAttribute('data-phase-base') || 'null');
+            } catch (error) {
+                phaseBase = null;
+            }
+        }
+        var phaseTotalBreakdown = form.querySelector('[data-role="phase-total-breakdown"]');
+        // 'editare' = faza existenta: baza este cursa FARA faza, iar totalul se compara cu cel de acum.
+        var phaseIsEdit = !!phaseBase && phaseBase.mode === 'editare';
+        var phaseBreakdownText = function (raceTotal, newTotal) {
+            return phaseIsEdit
+                ? ('Cursa acum: ' + formatCurrencyRo(raceTotal) + ' → după salvarea fazei: ' + formatCurrencyRo(newTotal))
+                : ('Cursa până acum: ' + formatCurrencyRo(raceTotal) + ' + faza nouă: ' + formatCurrencyRo(roundToTwo(newTotal - raceTotal)));
+        };
+        var phaseQuoteUrl = String(form.getAttribute('data-phase-quote-url') || '');
+        var phaseQuoteTimer = null;
+        var phaseQuoteKey = '';
+        var phaseQuoteResult = null;
+
+        // Estimarea exacta vine de la server (segment_quote): acelasi tarif versionat
+        // ca la salvarea fazei. Calculul din pagina ramane doar pana soseste raspunsul.
+        function applyPhaseQuote(quote) {
+            if (!quote || !quote.success) {
+                return;
+            }
+            totalPreview.textContent = formatCurrencyRo(parseNumber(quote.total_facturare) + invoicedRefacturareTotal);
+            if (costKmPrimarPreview) {
+                costKmPrimarPreview.textContent = formatCostPerKmRo(parseNumber(quote.cost_km_primar));
+            }
+            if (costKmDistributiePreview) {
+                costKmDistributiePreview.textContent = formatCostPerKmRo(parseNumber(quote.cost_km_distributie));
+            }
+            if (costKmMixtPreview) {
+                costKmMixtPreview.textContent = formatCostPerKmRo(parseNumber(quote.cost_km_mixt));
+            }
+            if (phaseTotalBreakdown) {
+                var raceTotal = parseNumber(quote.race_total);
+                phaseTotalBreakdown.textContent = quote.invoiced
+                    ? 'Cursa este facturată: totalul nu se mai recalculează.'
+                    : phaseBreakdownText(raceTotal, parseNumber(quote.total_facturare));
+            }
+        }
+
+        function schedulePhaseQuote() {
+            if (!phaseBase || phaseQuoteUrl === '') {
+                return;
+            }
+            // Km-ii fazei din campul VIZIBIL dupa tip, ca serverul (validateRaceSegmentInput):
+            // pe o faza existenta km-ul e copiat in toate campurile, iar cele ascunse raman vechi.
+            var phaseTransportType = String(tipField.value || '');
+            var phaseKmField = phaseTransportType === 'compresor'
+                ? relocationKmField
+                : ((phaseTransportType === 'primar' || phaseTransportType === 'primar_distributie') ? kmTotalField : kmField);
+            var phaseKm = phaseKmField && parseNumber(phaseKmField.value) > 0 ? String(phaseKmField.value) : '';
+            var params = new URLSearchParams();
+            params.set('km', phaseKm);
+            params.set('nr_clienti', clientsField ? String(clientsField.value || '') : '');
+            params.set('data_sfarsit', endDateField ? String(endDateField.value || '') : '');
+            params.set('ora_sfarsit', endTimeField ? String(endTimeField.value || '') : '');
+            // Faza existenta de incarcare: cantitatea ei poate fi corectata in formular.
+            if (phaseIsEdit && quantityField && quantityField.closest('[data-phase-keep]')) {
+                params.set('cantitate', String(quantityField.value || ''));
+            }
+            var key = params.toString();
+            if (key === phaseQuoteKey) {
+                applyPhaseQuote(phaseQuoteResult);
+                return;
+            }
+            window.clearTimeout(phaseQuoteTimer);
+            phaseQuoteTimer = window.setTimeout(function () {
+                phaseQuoteKey = key;
+                phaseQuoteResult = null;
+                fetch(phaseQuoteUrl + '&' + key, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                    .then(function (response) { return response.json(); })
+                    .then(function (quote) {
+                        if (key !== phaseQuoteKey) {
+                            return;
+                        }
+                        phaseQuoteResult = quote;
+                        applyPhaseQuote(quote);
+                    })
+                    .catch(function () {
+                        phaseQuoteKey = '';
+                    });
+            }, 250);
+        }
+        if (phaseBase) {
+            form.addEventListener('change', schedulePhaseQuote);
+            form.addEventListener('input', schedulePhaseQuote);
+        }
         var startDateTimePickerState = {
             view: 'date',
             viewedYear: null,
@@ -4381,7 +4475,9 @@
                     zoneField ? zoneField.value : ''
                 );
                 var selectedPairText = selectedRule && selectedRule.manualAgreedKm
-                    ? 'Combinatia selectata Loc ? Zona este valida. Completeaza manual Km agreati pentru aceasta cursa.'
+                    ? (isPrimaryKmTransport(String(tipField ? (tipField.value || '') : ''))
+                        ? 'Combinatia selectata Loc ? Zona este valida. Tariful se calculeaza pe Km efectuati completati in cursa.'
+                        : 'Combinatia selectata Loc ? Zona este valida. Completeaza manual Km agreati pentru aceasta cursa.')
                     : 'Combinatia selectata Loc ? Zona este valida in Setari Primar, iar Km agreati se completeaza automat.';
                 if (primaryLocationNote) {
                     primaryLocationNote.textContent = selectedPairText;
@@ -4403,12 +4499,61 @@
             syncFieldHoverHints(String(tipField ? (tipField.value || '') : ''));
         }
 
+        // Primar km pe o ruta cu "Introducere manuala in cursa": nu exista km agreati,
+        // deci campul Km agreati dispare si se factureaza Km efectuati (km_totali),
+        // oglinditi in km_cursa (serverul face la fel la salvare).
+        function setPrimaryKmBilledFromTotal(enabled) {
+            if (!kmField) {
+                return;
+            }
+            if (enabled) {
+                if (kmWrapper) {
+                    kmWrapper.classList.add('d-none');
+                    kmWrapper.setAttribute('data-primary-km-from-total', '1');
+                }
+                kmField.setAttribute('data-primary-km-from-total', '1');
+                kmField.readOnly = true;
+                kmField.removeAttribute('required');
+                kmField.value = kmTotalField ? String(kmTotalField.value || '') : '';
+                if (kmTotalField) {
+                    kmTotalField.setAttribute('required', 'required');
+                }
+                return;
+            }
+            if (!kmField.hasAttribute('data-primary-km-from-total')) {
+                return;
+            }
+            kmField.removeAttribute('data-primary-km-from-total');
+            if (kmWrapper && kmWrapper.hasAttribute('data-primary-km-from-total')) {
+                kmWrapper.removeAttribute('data-primary-km-from-total');
+                kmWrapper.classList.remove('d-none');
+            }
+            if (kmTotalField) {
+                kmTotalField.removeAttribute('required');
+            }
+        }
+
         function applyPrimaryRouteKmTariff(primaryScope) {
             if (!kmField) {
                 return;
             }
 
             var transportType = String(tipField.value || '');
+            var primaryRuleForTotal = isPrimaryKmTransport(transportType)
+                ? getPrimaryRouteRule(
+                    primaryScope,
+                    String(beneficiaryField ? (beneficiaryField.value || '') : '').trim(),
+                    String(loadLocationField ? (loadLocationField.value || '') : '').trim(),
+                    String(zoneField ? (zoneField.value || '') : '').trim()
+                )
+                : null;
+            setPrimaryKmBilledFromTotal(!!(primaryRuleForTotal && primaryRuleForTotal.manualAgreedKm));
+            if (kmField.hasAttribute('data-primary-km-from-total')) {
+                kmField.removeAttribute('data-primary-km-autofilled');
+                kmField.removeAttribute('data-primary-km-manual');
+                kmField.setAttribute('data-primary-route-id', String(primaryRuleForTotal.ruleId || ''));
+                return;
+            }
             if (!isPrimaryTransport(transportType)) {
                 if (kmField.hasAttribute('data-primary-km-autofilled')) {
                     kmField.removeAttribute('data-primary-km-autofilled');
@@ -5443,8 +5588,11 @@
             setFieldState(zoneWrapper, zoneField, (isDistribution || isPrimaryKm || isPrimaryTon), true);
             setFieldState(suctionHoursWrapper, suctionHoursField, isCompressor, true);
             setFieldState(relocationKmWrapper, relocationKmField, isCompressor, true);
-            // Distributie / Primar+Distributie: se factureaza pe tonele livrate cand sunt completate.
-            setFieldState(deliveredTonWrapper, deliveredTonField, isCompressor || isDistribution, true);
+            // "Cantitate livrata" doar la Compresor (componenta de facturare). La Distributie /
+            // P+D campul a fost scos (2026-10-08): livrarea se vede din Nr. clienti pe faze, iar
+            // tonele se impart pe km (calculul ramane pe cantitatea incarcata, ca pana acum -
+            // tona_livrata era goala pe toate cursele).
+            setFieldState(deliveredTonWrapper, deliveredTonField, isCompressor, true);
             setFieldState(suctionLiquidTonWrapper, suctionLiquidTonField, isCompressor, true);
             setFieldState(suctionGasTonWrapper, suctionGasTonField, isCompressor, true);
 
@@ -5556,6 +5704,24 @@
             var suctionHoursValue = parseNumber(suctionHoursField ? suctionHoursField.value : 0);
             var relocationKmValue = parseNumber(relocationKmField ? relocationKmField.value : 0);
             var rawDeliveredTonValue = parseNumber(deliveredTonField ? deliveredTonField.value : 0);
+            var applyPhaseBase = !!phaseBase && transportType !== 'compresor';
+            if (applyPhaseBase) {
+                // Totalurile cursei = suma fazelor (refreshRaceFromSegments): cantitatile
+                // se aduna; km-ii fazei merg in km_totali la Primar / P+D (km_cursa sunt
+                // acolo km-ii agreati pe ruta, neschimbati), altfel in km_cursa.
+                rawQuantityValue += parseNumber(phaseBase.cantitate);
+                quantityValue = rawQuantityValue;
+                rawDeliveredTonValue += parseNumber(phaseBase.tona_livrata);
+                if (transportType === 'primar' || transportType === 'primar_distributie') {
+                    kmTotalValue += parseNumber(phaseBase.km_totali);
+                } else {
+                    kmValue += parseNumber(phaseBase.km_cursa);
+                }
+                syncKmDistributionCalculationNote(transportType, kmValue, kmTotalValue);
+            }
+            if (kmField && kmField.hasAttribute('data-primary-km-from-total')) {
+                kmValue = kmTotalValue;
+            }
             var deliveredTonValue = normalizeTonInputToKgForPricing(rawDeliveredTonValue, transportCapacityValue);
             if (isDistributionTransport(transportType) && rawDeliveredTonValue > 0) {
                 quantityValue = rawDeliveredTonValue;
@@ -5838,6 +6004,11 @@
 
             var totalForDisplay = total + invoicedRefacturareTotal;
             totalPreview.textContent = formatCurrencyRo(totalForDisplay);
+            if (phaseTotalBreakdown) {
+                var phaseBaseTotal = applyPhaseBase ? parseNumber(phaseBase.total) : 0;
+                phaseTotalBreakdown.textContent = applyPhaseBase ? phaseBreakdownText(phaseBaseTotal, total) : '';
+            }
+            schedulePhaseQuote();
         }
 
         tipField.addEventListener('change', syncTransportMode);
@@ -5859,6 +6030,15 @@
                     vehicleListExpanded = true;
                     syncVehicleOptionsByContext();
                     vehicleField.focus();
+                    return;
+                }
+                if (form.classList.contains('dispatcher-phase-compact')) {
+                    // Faza noua: alta masina duce aceeasi marfa pe acelasi traseu, deci
+                    // locul / zona (ascunse aici) nu se schimba dupa vehiculul nou.
+                    syncDriverOptionsByVehicle(false);
+                    syncVehicleTransportCapacity();
+                    recalculateTotal();
+                    promptInactiveResourcesAfterSelectionChange();
                     return;
                 }
                 maybePromptVehicleRouteDecision();

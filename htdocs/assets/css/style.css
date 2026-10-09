@@ -5058,6 +5058,71 @@ button.dispatcher-datetime-picker-title:focus-visible {
     background: color-mix(in srgb, var(--row-color) 30%, transparent) !important;
 }
 
+/* Admin: punct de stare langa numarul de inmatriculare (verde = cursa completa). */
+.race-status-dot {
+    --dot-color: #16a34a;
+    flex: 0 0 auto;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--dot-color);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--dot-color) 22%, transparent);
+}
+
+.race-status-dot-incomplete { --dot-color: var(--orx-severity-critical); }
+
+/* Loc pentru punct, ca numarul sa nu fie trunchiat (coloanele au latime egala). Tabelul
+   primeste latimea in plus, altfel coloana lata o lua din celelalte si butoanele
+   "N detalii" (Interval, Traseu...) nu mai incapeau. */
+.dispatcher-races-table.has-race-status-dot {
+    min-width: max(100%, calc(var(--dispatcher-visible-columns) * var(--dispatcher-column-min-width) + 3.5rem));
+}
+
+.dispatcher-races-table.has-race-status-dot col[data-dispatcher-column-key="plate"],
+.dispatcher-races-table.has-race-status-dot th[data-dispatcher-column-key="plate"],
+.dispatcher-races-table.has-race-status-dot td[data-dispatcher-column-key="plate"] {
+    width: 195px;
+    min-width: 195px;
+}
+
+/* Butoanele "N detalii" se strang in celula in loc sa iasa din ea: depasirea facea ca
+   regula de ellipsis a celulei sa afiseze "..." langa buton. */
+.dispatcher-races-table .dispatcher-summary-count-btn {
+    min-width: min(6.8rem, 100%);
+    max-width: 100%;
+}
+
+.dispatcher-races-table td:has(.dispatcher-summary-list) {
+    text-overflow: clip;
+}
+
+/* In celula numarului (sageata, bifa, punct) butonul "N vehicule" e compact. */
+.dispatcher-races-table td.col-plate .dispatcher-summary-count-btn {
+    min-width: 0;
+    height: 1.85rem;
+    gap: 0.3rem;
+    padding: 0 0.45rem;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
+a.race-status-dot {
+    cursor: pointer;
+    transition: transform 0.12s ease;
+}
+
+a.race-status-dot:hover,
+a.race-status-dot:focus-visible {
+    transform: scale(1.3);
+}
+
+/* Fisa cursei: punctul langa numarul de inmatriculare. */
+.race-view-plate {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .dispatcher-cell-text {
     display: inline-block;
     vertical-align: middle;
@@ -5422,7 +5487,7 @@ tr:hover .diurna-edit-btn,
 
 .diurna-change-facts {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     margin: 0 0 14px;
 }
@@ -5432,6 +5497,15 @@ tr:hover .diurna-edit-btn,
     border: 1px solid #e2e8f0;
     border-radius: 8px;
     background: #f8fafc;
+}
+
+/* Caseta "Soferi" (lista cu soferii cursei) ocupa tot randul, ca numele sa nu fie taiate. */
+.diurna-change-facts > div:first-child {
+    grid-column: 1 / -1;
+}
+
+.diurna-change-facts > div:first-child ~ div {
+    grid-column: span 1;
 }
 
 .diurna-change-facts dt {
@@ -5858,6 +5932,216 @@ tr:hover .diurna-edit-btn,
     line-height: 1.32;
 }
 
+/* --- Coloana Diurna: buton "2 ▾" + popover compact "Diurne pe șofer" --- */
+.dispatcher-races-table .dispatcher-summary-count-btn.dispatcher-diurna-btn,
+.dispatcher-races-table .dispatcher-summary-count-btn.is-compact {
+    min-width: 3.4rem;
+    gap: 0.32rem;
+    padding: 0 0.55rem;
+}
+
+.dispatcher-diurna-btn .dispatcher-diurna-pending {
+    color: #b45309;
+    font-size: 0.78rem;
+}
+
+.dispatcher-summary-popover.has-header {
+    width: auto;
+    min-width: 11rem;
+    max-width: min(18rem, calc(100vw - 24px));
+}
+
+.dispatcher-summary-popover-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.4rem 0.7rem;
+    border-bottom: 1px solid #e2e8f0;
+    color: #64748b;
+    font-size: 0.74rem;
+    font-weight: 600;
+}
+
+.dispatcher-summary-popover-header strong {
+    color: #0f172a;
+    font-size: 0.8rem;
+}
+
+.dispatcher-summary-popover.has-header .dispatcher-summary-popover-list {
+    padding: 0.25rem 0.55rem 0.3rem 0.7rem;
+}
+
+/* Dropdown-ul Diurna: doar randurile soferilor, cat de lat e continutul. */
+.dispatcher-summary-popover.is-diurna {
+    width: max-content;
+    min-width: 0;
+    max-width: calc(100vw - 24px);
+}
+
+.dispatcher-summary-popover.is-diurna .dispatcher-summary-popover-list {
+    padding: 0.2rem 0.5rem;
+}
+
+.dispatcher-summary-popover-item.is-diurna-driver {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.22rem 0;
+    font-size: 0.84rem;
+    text-align: left;
+}
+
+.dispatcher-summary-popover-item.is-diurna-driver + .dispatcher-summary-popover-item.is-diurna-driver {
+    border-top: 1px solid #f1f5f9;
+}
+
+.dispatcher-diurna-initials {
+    font-weight: 700;
+    color: #0f172a;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    border-radius: 3px;
+    cursor: default;
+}
+
+.dispatcher-diurna-initials:focus-visible {
+    outline: 2px solid rgba(13, 110, 253, 0.35);
+    outline-offset: 1px;
+}
+
+/* Numele intreg al soferului apare peste popover (z-index 3060), nu sub el. */
+.tooltip.dispatcher-diurna-tooltip {
+    z-index: 3080;
+}
+
+.dispatcher-diurna-arrow {
+    color: #94a3b8;
+}
+
+.dispatcher-diurna-value {
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.dispatcher-diurna-value.is-adjusted {
+    text-decoration: underline dotted #0d6efd;
+    text-underline-offset: 2px;
+}
+
+.is-diurna-driver .dispatcher-diurna-pending {
+    color: #b45309;
+    font-size: 0.75rem;
+}
+
+/* Creionul sta imediat dupa valoare, nu impins la dreapta. */
+.dispatcher-diurna-edit {
+    margin-left: 0.1rem;
+    padding: 0.1rem 0.3rem;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #64748b;
+    font-size: 0.78rem;
+    line-height: 1;
+}
+
+.dispatcher-diurna-edit:hover,
+.dispatcher-diurna-edit:focus-visible {
+    background: #eff6ff;
+    color: #0d6efd;
+}
+
+.dispatcher-diurna-edit:focus-visible {
+    outline: 2px solid rgba(13, 110, 253, 0.35);
+}
+
+/* Activitate: "Repartizare încărcătură / km" sub cele 4 totaluri. */
+.dispatcher-summary-popover-item.is-section-heading {
+    display: block;
+    margin-top: 0.35rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid #e2e8f0;
+    color: #64748b;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    text-align: left;
+}
+
+.dispatcher-summary-popover-item.is-hint {
+    display: block;
+    padding: 0 0 0.2rem;
+    color: #64748b;
+    font-size: 0.74rem;
+    font-style: italic;
+    text-align: left;
+}
+
+.dispatcher-summary-popover-item.is-allocation {
+    display: grid;
+    grid-template-columns: minmax(3.2rem, auto) 1fr auto;
+    align-items: baseline;
+    column-gap: 0.75rem;
+    padding: 0.18rem 0;
+}
+
+.dispatcher-allocation-km {
+    color: #475569;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.dispatcher-allocation-tons {
+    color: #0f172a;
+    font-weight: 700;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.dispatcher-summary-popover-item.is-note {
+    display: block;
+    color: #b45309;
+    font-size: 0.8rem;
+    text-align: left;
+}
+
+.dispatcher-summary-popover-item.has-separator {
+    margin-top: 0.3rem;
+    padding-top: 0.4rem;
+    border-top: 1px solid #e2e8f0;
+}
+
+/* Interval pe faze: "F1  08.10.2026 08:00 → 09.10.2026" + "B-C-G · B 275 NET". */
+.dispatcher-summary-popover-item.is-phase-interval {
+    align-items: start;
+}
+
+.dispatcher-phase-interval-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
+}
+
+.dispatcher-phase-interval-range {
+    color: #0f172a;
+    font-weight: 600;
+}
+
+.dispatcher-phase-interval-who {
+    color: #64748b;
+    font-size: 0.76rem;
+}
+
+/* Lista simpla (vehiculele / soferii cursei): un nume pe rand, pe toata latimea. */
+.dispatcher-summary-popover-item.is-name-only {
+    display: block;
+    color: #0f172a;
+    font-weight: 700;
+    text-align: left;
+}
+
 .dispatcher-summary-popover-item strong {
     color: #0f172a;
     font-size: 0.78rem;
@@ -5869,9 +6153,10 @@ tr:hover .diurna-edit-btn,
 .dispatcher-summary-popover-item span {
     min-width: 0;
     color: #334155;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* In popover valoarea se poate rupe pe randuri (randul tabelului nu se schimba);
+       altfel detaliile lungi ale fazelor (sofer, vehicul, km) erau taiate. */
+    overflow-wrap: anywhere;
+    white-space: normal;
 }
 
 .dispatcher-summary-value-total {
@@ -16270,6 +16555,30 @@ tr:hover .diurna-edit-btn,
     white-space: nowrap;
 }
 
+/* Antetul (ambele randuri) ramane vizibil la derulare. .table-responsive are
+   overflow-x, deci sticky nu se poate lega de pagina: tabelul deruleaza in
+   propriul container. Inaltimea lasa loc barei de sus a aplicatiei (~71px)
+   si subsolului paginii (~113px), ca antetul sa nu ajunga sub bara. */
+.fuel-kmcheck-scroll {
+    max-height: calc(100vh - 190px);
+    overflow: auto;
+}
+
+.fuel-kmcheck-scroll .fuel-kmcheck-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+}
+
+.fuel-kmcheck-scroll .fuel-kmcheck-table thead th {
+    background: #f8fafc;
+}
+
+/* border-collapse pierde bordura sub antetul lipit: o redesenam cu umbra. */
+.fuel-kmcheck-scroll .fuel-kmcheck-table thead tr:last-child th {
+    box-shadow: inset 0 -1px 0 #e2e8f0;
+}
+
 .fuel-kmcheck-muted {
     color: #94a3b8;
 }
@@ -16367,6 +16676,52 @@ tr:hover .diurna-edit-btn,
     display: block;
     height: 100%;
     background: var(--fuel-split-accent);
+}
+
+/* Cardurile sunt si filtrul de categorie (?vehicle_class=grele|usoare). */
+a.fuel-split-card {
+    position: relative;
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+    transition: box-shadow .15s ease, border-color .15s ease, opacity .15s ease, transform .15s ease;
+}
+
+a.fuel-split-card:hover {
+    border-color: var(--fuel-split-accent);
+    box-shadow: 0 10px 22px rgba(15, 23, 42, .09);
+    transform: translateY(-1px);
+}
+
+a.fuel-split-card:focus-visible {
+    outline: 2px solid var(--fuel-split-accent);
+    outline-offset: 2px;
+}
+
+a.fuel-split-card.is-active {
+    border-color: var(--fuel-split-accent);
+    box-shadow: 0 0 0 2px var(--fuel-split-accent), 0 10px 22px rgba(15, 23, 42, .08);
+}
+
+.fuel-split.has-active a.fuel-split-card:not(.is-active) {
+    opacity: .6;
+}
+
+.fuel-split.has-active a.fuel-split-card:not(.is-active):hover {
+    opacity: 1;
+}
+
+.fuel-split-active-tag {
+    position: absolute;
+    top: -.6rem;
+    right: .9rem;
+    padding: .1rem .5rem;
+    border-radius: 999px;
+    background: var(--fuel-split-accent);
+    color: #ffffff;
+    font-size: .7rem;
+    font-weight: 700;
+    white-space: nowrap;
 }
 
 @media (max-width: 768px) {
@@ -17196,6 +17551,68 @@ tr:hover .diurna-edit-btn,
 
 .fuel-table.fuel-table-compact tbody td:last-child {
     text-align: right;
+}
+
+/* Tabul „Alimentări neasociate": latimile vin din <colgroup> (layout fix),
+   nu din regulile nth-child ale tabelului compact comun (care dadeau 100%
+   primelor 5 coloane si aliniau la dreapta doar antetul Valoare).
+   Sub ~920px tabelul nu se mai comprima: deruleaza in .table-responsive. */
+.fuel-table.fuel-table-unassoc {
+    min-width: 920px;
+}
+
+/* Acțiuni are latime fixa, cat butonul + meniul ⋮ (un procent lasa un gol
+   mare intre Valoare si buton pe monitoarele late). Restul latimii se
+   imparte proportional intre coloanele cu date. */
+.fuel-table.fuel-table-unassoc col.col-date { width: 22%; }
+.fuel-table.fuel-table-unassoc col.col-vehicle { width: 17%; }
+.fuel-table.fuel-table-unassoc col.col-fuel { width: 17%; }
+.fuel-table.fuel-table-unassoc col.col-qty { width: 14%; }
+.fuel-table.fuel-table-unassoc col.col-value { width: 14%; }
+.fuel-table.fuel-table-unassoc col.col-actions { width: 240px; }
+
+/* Specificitate egala cu .fuel-table.fuel-table-compact thead th:nth-child(n), declarata dupa ea. */
+.fuel-table.fuel-table-compact.fuel-table-unassoc thead th {
+    width: auto;
+    padding: .6rem .75rem;
+    text-align: left;
+}
+
+.fuel-table.fuel-table-unassoc tbody td {
+    padding: .45rem .75rem;
+}
+
+/* Cantitate + Valoare: aliniate la dreapta, antet inclus, cifre de latime egala. */
+.fuel-table.fuel-table-unassoc thead th.is-num,
+.fuel-table.fuel-table-unassoc tbody td:nth-child(4),
+.fuel-table.fuel-table-unassoc tbody td:nth-child(5) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.fuel-table.fuel-table-unassoc thead th.is-actions,
+.fuel-table.fuel-table-unassoc tbody td:last-child {
+    text-align: right;
+}
+
+.fuel-table.fuel-table-unassoc tbody td:last-child {
+    overflow: visible;
+}
+
+.fuel-table.fuel-table-unassoc .fuel-diagnosis-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    height: 28px;
+    padding: 0 .6rem;
+    font-size: .76rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.fuel-table.fuel-table-unassoc .fuel-icon-btn {
+    width: 28px;
+    height: 28px;
 }
 
 .fuel-table thead th {
@@ -22023,6 +22440,12 @@ body.dispatcher-races-header-pinned .dispatcher-open-races-alert-container {
     position: static;
 }
 
+/* Pe Dispecer curse butonul sta pe randul titlului, langa Configurare Transport. */
+.dispatcher-page-head .dispatcher-open-races-alert-container {
+    width: auto;
+    margin-bottom: 0;
+}
+
 /* Linkul "Reseteaza toate filtrele" din dropdown-ul de filtrare al Desfasuratorului */
 .dispatcher-races-filter-dropdown .races-filter-reset-all-wrap {
     border-top: 1px solid #f3f4f6;
@@ -22109,6 +22532,40 @@ body.dispatcher-races-header-pinned .dispatcher-open-races-alert-container {
 /* Fara selectie de text la Shift + click in listele de filtrare */
 .dispatcher-races-filter-dropdown .races-filter-option {
     user-select: none;
+}
+
+/* Filtrul dupa punctul de stare (verde / rosu), in palnia coloanei Nr. Inmatriculare. */
+.dispatcher-races-filter-dropdown .races-filter-status {
+    margin-top: 0.4rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.dispatcher-races-filter-dropdown .races-filter-status-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #6b7280;
+    margin-bottom: 0.15rem;
+}
+
+.dispatcher-races-filter-dropdown .races-filter-status-option {
+    display: flex;
+    gap: 0.45rem;
+    align-items: center;
+    padding: 0.2rem 0.25rem;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    border-radius: 0.25rem;
+    user-select: none;
+}
+
+.dispatcher-races-filter-dropdown .races-filter-status-option:hover {
+    background: rgba(13, 110, 253, 0.08);
+}
+
+.dispatcher-races-filter-dropdown .races-filter-status-option .race-status-dot {
+    width: 10px;
+    height: 10px;
 }
 
 /* =========================================================================
@@ -24975,51 +25432,36 @@ body.sidebar-reordering .sortable-fallback {
 }
 
 /* --- Cursele oprite si reluate: randul se desface si arata segmentele --- */
-/* Sageata sta in stanga randului, langa bifa si numarul de inmatriculare. */
+/* Sageata sta in stanga randului, langa bifa si numarul de inmatriculare - totul pe un
+   singur rand (badge-ul "N segmente" a fost scos 2026-10-08: sageata ajunge). */
 .vehicle-wrap.has-segments {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
     column-gap: 0.35rem;
-    align-items: center;
+    min-width: 0;
 }
 
-.vehicle-wrap.has-segments > .dispatcher-segments-toggle {
-    grid-row: 1 / span 2;
-}
-
-.dispatcher-segments-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    border: 1px solid #cfe0f5;
-    border-radius: 6px;
-    background: #f2f7fd;
-    color: #0d6efd;
+/* Fara sageata (2026-10-08): toata celula numarului desface fazele. Numarul e subliniat
+   punctat ca indiciu, iar cat timp fazele sunt deschise celula are o bara albastra in stanga. */
+.dispatcher-races-table td.dispatcher-plate-expandable {
     cursor: pointer;
 }
 
-.dispatcher-segments-toggle:hover {
-    background: #e3eefc;
+.dispatcher-races-table td.dispatcher-plate-expandable .dispatcher-plate-value {
+    text-decoration: underline dotted #93b4e6;
+    text-underline-offset: 3px;
 }
 
-.dispatcher-segments-toggle-icon {
-    /* inline-block: pe un element inline transformarea nu se aplica, iar sageata
-       nu s-ar mai roti la desfacerea randului. */
-    display: inline-block;
-    font-size: 0.8rem;
-    line-height: 1;
-    transition: transform 0.15s ease;
+.dispatcher-races-table td.dispatcher-plate-expandable.is-expanded {
+    box-shadow: inset 3px 0 0 #0d6efd;
 }
 
-.dispatcher-segments-toggle.is-expanded .dispatcher-segments-toggle-icon {
-    transform: rotate(90deg);
-}
-
-.dispatcher-segments-badge {
-    cursor: pointer;
+/* Bifa + numar (sau butonul "N vehicule") stau pe un rand, nu trec pe randul urmator. */
+.vehicle-wrap.has-segments > .vehicle-main {
+    flex: 1 1 0;
+    min-width: 0;
 }
 
 .dispatcher-segments-row > td {
@@ -25063,6 +25505,12 @@ body.sidebar-reordering .sortable-fallback {
    doar marcat discret pe margine, ca operatorul sa vada pe ce lucreaza. */
 .dispatcher-phase-active {
     border-left: 3px solid #0d6efd !important;
+}
+
+/* Faza noua ("Reia cursa"): doar campurile de completat si calculul; restul
+   raman in formular, ascunse, cu valorile preluate de unde s-a extins cursa. */
+.dispatcher-phase-compact > .row > *:not([data-phase-keep]) {
+    display: none !important;
 }
 
 .dispatcher-segment-card {
@@ -25586,4 +26034,18 @@ a.driver-history-kpi-card.is-link small {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Dispecer curse: randul cursei tocmai editate, la intoarcerea in Desfasurator. */
+.race-row-just-edited > td {
+    animation: race-row-just-edited-flash 2.5s ease-out;
+}
+
+@keyframes race-row-just-edited-flash {
+    0%, 40% {
+        box-shadow: inset 0 0 0 9999px rgba(13, 110, 253, 0.16);
+    }
+    100% {
+        box-shadow: inset 0 0 0 9999px rgba(13, 110, 253, 0);
+    }
 }

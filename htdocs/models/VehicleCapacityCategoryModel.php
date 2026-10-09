@@ -308,6 +308,145 @@ class VehicleCapacityCategoryModel extends BaseModel
         return [true, 'Categoria a fost stearsa.'];
     }
 
+    /**
+     * Toate vehiculele (fara randul tehnic de stoc anvelope), pentru
+     * asignarea in masa a categoriilor direct din pagina.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function getVehiclesForAssignment(): array
+    {
+        $this->ensureSchema();
+
+        $rows = $this->db->query("
+            SELECT
+                v.id,
+                v.nr_inmatriculare,
+                v.marca,
+                v.model,
+                v.tip_vehicul,
+                v.status,
+                v.garaj,
+                v.capacitate_transport,
+                v.capacitate_transport_confirmata,
+                v.categorie_capacitate_id
+            FROM vehicule v
+            WHERE v.nr_inmatriculare <> 'STOC-ANVELOPE'
+              AND v.serie_sasiu <> 'STOCANVELOPE00001'
+            ORDER BY (v.status = 'activ') DESC, v.nr_inmatriculare ASC
+        ")->fetchAll();
+
+        return array_map(static function (array $row): array {
+            $row['id'] = (int) $row['id'];
+            $row['categorie_capacitate_id'] = $row['categorie_capacitate_id'] === null ? null : (int) $row['categorie_capacitate_id'];
+            $row['capacitate_transport'] = $row['capacitate_transport'] === null ? null : (float) $row['capacitate_transport'];
+            $row['capacitate_transport_confirmata'] = (int) $row['capacitate_transport_confirmata'] === 1;
+
+            return $row;
+        }, $rows);
+    }
+
+    /**
+     * Asignarea in masa: [vehicle_id => category_id|null]. Se scriu doar
+     * vehiculele a caror categorie chiar se schimba, fiecare cu rand de audit.
+     * Capacitatea reala si starea de verificare NU sunt atinse.
+     *
+     * @param array<int, int|null> $assignments
+     * @return array{0: bool, 1: string, 2: int} [succes, mesaj, vehicule modificate]
+     */
+    public function assignCategories(array $assignments, ?int $userId): array
+    {
+        $this->ensureSchema();
+
+        if ($assignments === []) {
+            return [false, 'Nu ai ales nicio modificare.', 0];
+        }
+
+        $validCategories = [];
+        foreach ($this->db->query("SELECT id, nume FROM vehicule_categorii_capacitate")->fetchAll() as $category) {
+            $validCategories[(int) $category['id']] = (string) $category['nume'];
+        }
+
+        foreach ($assignments as $categoryId) {
+            if ($categoryId !== null && !isset($validCategories[$categoryId])) {
+                return [false, 'Una dintre categoriile alese nu mai exista. Reincarca pagina.', 0];
+            }
+        }
+
+        $vehicleIds = array_map('intval', array_keys($assignments));
+        $placeholders = implode(',', array_fill(0, count($vehicleIds), '?'));
+        $stmt = $this->db->prepare("
+            SELECT id, nr_inmatriculare, capacitate_transport, capacitate_transport_confirmata, categorie_capacitate_id
+            FROM vehicule
+            WHERE id IN ({$placeholders})
+        ");
+        $stmt->execute($vehicleIds);
+        $current = [];
+        foreach ($stmt->fetchAll() as $vehicle) {
+            $current[(int) $vehicle['id']] = $vehicle;
+        }
+
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        $changed = 0;
+        try {
+            $update = $this->db->prepare("UPDATE vehicule SET categorie_capacitate_id = :cat WHERE id = :id");
+
+            foreach ($assignments as $vehicleId => $newCategoryId) {
+                $vehicle = $current[(int) $vehicleId] ?? null;
+                if ($vehicle === null) {
+                    continue;
+                }
+
+                $oldCategoryId = $vehicle['categorie_capacitate_id'] === null ? null : (int) $vehicle['categorie_capacitate_id'];
+                if ($oldCategoryId === $newCategoryId) {
+                    continue;
+                }
+
+                $update->bindValue(':cat', $newCategoryId, $newCategoryId === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+                $update->bindValue(':id', (int) $vehicleId, PDO::PARAM_INT);
+                $update->execute();
+
+                $capacity = $vehicle['capacitate_transport'] === null ? null : (float) $vehicle['capacitate_transport'];
+                $confirmed = (int) $vehicle['capacitate_transport_confirmata'] === 1;
+                $this->logChange(
+                    (int) $vehicleId,
+                    $capacity,
+                    $capacity,
+                    $oldCategoryId,
+                    $newCategoryId,
+                    $confirmed,
+                    $confirmed,
+                    'Asignare in masa din pagina Categorii capacitate.',
+                    $userId
+                );
+                $changed++;
+            }
+
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
+        } catch (Throwable $exception) {
+            if ($ownTransaction) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+
+        if ($changed === 0) {
+            return [true, 'Nicio categorie nu s-a schimbat.', 0];
+        }
+
+        return [
+            true,
+            'Categoria a fost actualizata pentru ' . $changed . ' ' . ($changed === 1 ? 'vehicul.' : 'vehicule.'),
+            $changed,
+        ];
+    }
+
     /** @return list<array<string, mixed>> */
     private function vehiclesInCategory(int $categoryId): array
     {

@@ -323,14 +323,17 @@ try {
     }
 
     check('17. Cursa are 2 diurne pe tot intervalul', $diurnaDays === 2, 'diurne=' . $diurnaDays);
+    // Din 2026-10-08 fiecare sofer are regula diurnei pe timpul LUI (nu o cota
+    // proportionala din diurnele cursei): A 480 min (< 12h) -> 0, B 1350 min -> 1.
     check(
-        '18. Suma diurnelor pe soferi == diurnele cursei (nimic pierdut la rotunjire)',
-        array_sum($diurnaByDriver) === $diurnaDays,
-        'suma=' . array_sum($diurnaByDriver)
+        '18. Diurna fiecarui sofer = regula pe timpul lui',
+        ($diurnaByDriver[$driverA] ?? -1) === dispatcher_diurna_from_minutes(480)
+            && ($diurnaByDriver[$driverB] ?? -1) === dispatcher_diurna_from_minutes(1350),
+        'A=' . ($diurnaByDriver[$driverA] ?? 0) . ' B=' . ($diurnaByDriver[$driverB] ?? 0)
     );
     check(
-        '19. Fiecare sofer primeste o diurna (480 min vs 1350 min din 1830)',
-        ($diurnaByDriver[$driverA] ?? 0) === 1 && ($diurnaByDriver[$driverB] ?? 0) === 1,
+        '19. Sofer sub 12h nu primeste diurna, celalalt una (480 min vs 1350 min)',
+        ($diurnaByDriver[$driverA] ?? 0) === 0 && ($diurnaByDriver[$driverB] ?? 0) === 1,
         'A=' . ($diurnaByDriver[$driverA] ?? 0) . ' B=' . ($diurnaByDriver[$driverB] ?? 0)
     );
 

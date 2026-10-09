@@ -44,6 +44,7 @@ return [
         'segment_store'                => 'edit',
         'segment_update'               => 'edit',
         'segment_delete'               => 'edit',
+        'segment_quote'                => 'edit',
         'request_diurna_change'        => 'edit',
         'delete'                       => 'delete',
         'delete_bulk'                  => 'delete_bulk',

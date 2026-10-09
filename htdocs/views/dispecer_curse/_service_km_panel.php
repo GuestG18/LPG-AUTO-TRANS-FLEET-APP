@@ -23,7 +23,7 @@ $serviceKmValue = static fn (string $key): string => (string) ($serviceKmOld[$ke
 $serviceKmDate = static fn (?string $value): string => $value ? date('d.m.Y', (int) strtotime($value)) : '';
 $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0, 5) : '';
 ?>
-<div class="card border-0 shadow-sm mt-3 service-km-card" id="service-km-panel" data-service-km-panel data-driver-map="<?= e((string) json_encode($serviceKmDriversByVehicle)) ?>">
+<div class="card border-0 shadow-sm <?= e((string) ($serviceKmCardSpacing ?? 'mt-3')) ?> service-km-card" id="service-km-panel" data-service-km-panel data-driver-map="<?= e((string) json_encode($serviceKmDriversByVehicle)) ?>">
     <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2 flex-wrap">
         <h3 class="h6 mb-0 d-flex align-items-center gap-2">
             <i class="bi bi-tools" aria-hidden="true"></i>

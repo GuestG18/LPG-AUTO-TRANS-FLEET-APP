@@ -720,6 +720,9 @@ class InactiveResourceApprovalModel extends BaseModel
             'solicitat' => $requested,
             'motiv' => trim((string) ($request['motiv'] ?? '')),
             'sofer' => trim((string) ($request['sofer'] ?? '')),
+            // Cursa cu mai multi soferi: cererea e pentru partea unui singur sofer
+            // (0 = toata cursa, ca inainte de 2026-10-08).
+            'driver_id' => max(0, (int) ($request['driver_id'] ?? 0)),
             'vehicul' => trim((string) ($request['vehicul'] ?? '')),
             'interval' => trim((string) ($request['interval'] ?? '')),
             'detail' => $current . ' → ' . $requested . ' diurne',
@@ -761,9 +764,10 @@ class InactiveResourceApprovalModel extends BaseModel
 
     /**
      * Pentru fiecare cursa: ultima cerere de diurna aprobata si cererea aflata in
-     * asteptare (daca exista).
+     * asteptare (daca exista) pentru toata cursa, iar in 'drivers' aceleasi doua
+     * pentru fiecare sofer al unei curse cu mai multi soferi (cereri cu driver_id).
      *
-     * @return array<int, array{approved: ?array, pending: ?array}>
+     * @return array<int, array{approved: ?array, pending: ?array, drivers: array<int, array{approved: ?array, pending: ?array}>}>
      */
     public function getDiurnaAdjustmentsForTrips(array $tripIds): array
     {
@@ -808,10 +812,17 @@ class InactiveResourceApprovalModel extends BaseModel
                     'requested_at' => (string) ($row['requested_at'] ?? ''),
                     'reviewed_by_name' => (string) ($row['reviewed_by_name'] ?? ''),
                     'reviewed_at' => (string) ($row['reviewed_at'] ?? ''),
+                    'driver_id' => (int) ($snapshot['driver_id'] ?? 0),
                 ];
-                $result[$tripId] ??= ['approved' => null, 'pending' => null];
+                $result[$tripId] ??= ['approved' => null, 'pending' => null, 'drivers' => []];
+                $statusKey = (string) $row['status'] === 'approved' ? 'approved' : 'pending';
                 // Ordonat crescator: ultima cerere din fiecare status castiga.
-                $result[$tripId][(string) $row['status'] === 'approved' ? 'approved' : 'pending'] = $entry;
+                if ($entry['driver_id'] > 0) {
+                    $result[$tripId]['drivers'][$entry['driver_id']] ??= ['approved' => null, 'pending' => null];
+                    $result[$tripId]['drivers'][$entry['driver_id']][$statusKey] = $entry;
+                } else {
+                    $result[$tripId][$statusKey] = $entry;
+                }
             }
         }
 
@@ -1126,7 +1137,10 @@ class InactiveResourceApprovalModel extends BaseModel
             'inactive_date_label' => '',
             'summary_rows' => $summaryRows,
             'detail_rows' => $detailRows,
-            'scope_message' => 'Prin aprobare, cursa #' . $tripId . ' va avea ' . $requested . ' diurne in loc de ' . $current
+            'scope_message' => ((int) ($snapshot['driver_id'] ?? 0) > 0
+                    ? 'Prin aprobare, soferul ' . $driver . ' va avea pe cursa #' . $tripId . ' '
+                    : 'Prin aprobare, cursa #' . $tripId . ' va avea ')
+                . $requested . ' diurne in loc de ' . $current
                 . ' (regula calculeaza ' . $computed . '). La respingere ramane valoarea actuala.',
             'scope_kind' => 'trip',
             'module_label' => 'Dispecer curse',

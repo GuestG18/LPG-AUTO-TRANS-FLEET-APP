@@ -315,6 +315,7 @@ $focusFieldMap = [
     'start_time' => 'edit_race_start_datetime',
     'loading_date' => 'edit_race_data_incarcare',
     'driver' => 'edit_race_driver_id',
+    'vehicle' => 'edit_race_vehicle_id',
     'beneficiary' => 'edit_race_beneficiar_id',
     'goods' => 'edit_race_tip_marfa',
     'loading_location' => 'edit_race_loc_incarcare_id',
@@ -363,7 +364,7 @@ if ($postCreateFlow) {
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
     <h2 class="h4 mb-0">Editeaza cursa</h2>
-    <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Inapoi la lista</a>
+    <a class="btn btn-outline-secondary" href="<?= e($listReturnUrl ?? build_query_url(['page' => 'dispecer_curse'])) ?>">Inapoi la lista</a>
 </div>
 
 <?php if ($postCreateFlow): ?>
@@ -503,6 +504,32 @@ if ($phaseMode === 'noua') {
 // faza se completeaza normal, ele sunt sursa totalurilor.
 $raceHasSegments = $phaseMode === '' && $phaseCount > 1;
 $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din antet).';
+
+// Faza noua ("Reia cursa") arata doar ce se completeaza: datele, km-ii, clientii
+// si calculul. Restul campurilor raman in formular (ascunse), cu valorile preluate
+// de unde s-a extins cursa. Calculul arata totalul CURSEI dupa faza: JS-ul aduna
+// valorile fazei la cele de acum ale cursei (`data-phase-base`) si aplica aceeasi
+// formula, la fel ca recalcularea de pe server dupa salvarea fazei.
+// Si o faza EXISTENTA (din fisa cursei / sageti) se corecteaza in acelasi formular
+// compact (cerinta utilizator 2026-10-08). Acolo valorile fazei sunt deja in totalurile
+// cursei, deci baza calculului = cursa FARA faza editata (JS-ul aduna campurile fazei).
+$phaseCompact = $phaseMode === 'noua' || $phaseMode === 'editare';
+$phaseKeep = $phaseCompact ? ' data-phase-keep' : '';
+$phaseIsLoading = $phaseMode === 'editare'
+    && ($phaseCurrentStep === 1 || (float) ($phaseSegment['cantitate_incarcata'] ?? 0) > 0);
+$phaseBaseJson = '';
+if ($phaseCompact) {
+    $phaseOwn = static fn (string $key): float => $phaseMode === 'editare' ? (float) ($phaseSegment[$key] ?? 0) : 0.0;
+    $phaseKmOnTotals = in_array((string) ($race['tip_transport'] ?? ''), ['primar', 'primar_distributie'], true);
+    $phaseBaseJson = (string) json_encode([
+        'mode' => $phaseMode,
+        'total' => (float) ($race['total_facturare'] ?? 0),
+        'cantitate' => max(0.0, (float) ($race['cantitate_incarcata'] ?? 0) - $phaseOwn('cantitate_incarcata')),
+        'tona_livrata' => max(0.0, (float) ($race['tona_livrata'] ?? 0) - $phaseOwn('tona_livrata')),
+        'km_cursa' => max(0.0, (float) ($race['km_cursa'] ?? 0) - ($phaseKmOnTotals ? 0.0 : $phaseOwn('km'))),
+        'km_totali' => max(0.0, (float) ($race['km_totali'] ?? 0) - ($phaseKmOnTotals ? $phaseOwn('km') : 0.0)),
+    ]);
+}
 ?>
 
 <div class="card border-0 shadow-sm mb-3<?= $phaseMode !== '' ? ' dispatcher-phase-active' : '' ?>" id="race-form">
@@ -538,7 +565,14 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
     <div class="card-body">
         <form method="post"
               action="<?= e($phaseFormAction) ?>"
-              class="dispatcher-race-form"
+              class="dispatcher-race-form<?= $phaseCompact ? ' dispatcher-phase-compact' : '' ?>"
+              <?php if ($phaseMode !== 'noua' && $phaseMode !== 'editare'): ?>
+              data-role="race-update-form"
+              <?php endif; ?>
+              <?php if ($phaseCompact): ?>
+              data-phase-base='<?= e($phaseBaseJson) ?>'
+              data-phase-quote-url="<?= e(build_query_url(array_filter(['page' => 'dispecer_curse', 'action' => 'segment_quote', 'id' => $raceId, 'segment_id' => $phaseMode === 'editare' ? $phaseId : null]))) ?>"
+              <?php endif; ?>
               data-zone-tariffs='<?= e($zoneTariffJson) ?>'
               data-zone-extra-km-costs='<?= e($zoneExtraKmJson) ?>'
               data-distribution-route-tariffs='<?= e($distributionRouteTariffMapJson) ?>'
@@ -578,7 +612,7 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                 <input type="hidden" name="segment_origin" value="edit">
             <?php else: ?>
                 <input type="hidden" name="inactive_approval_decision" value="<?= e((string) ($raceFormData['inactive_approval_decision'] ?? '')) ?>" data-inactive-approval-decision>
-                <input type="hidden" name="inactive_approval_signature" value="" data-inactive-approval-signature>
+                <input type="hidden" name="inactive_approval_signature" value="<?= e((string) ($raceFormData['inactive_approval_signature'] ?? '')) ?>" data-inactive-approval-signature>
             <?php endif; ?>
             <input type="hidden" name="confirm_incomplete" value="">
             <input type="hidden" name="confirm_similar" value="" data-trip-similar-confirm-flag>
@@ -591,8 +625,25 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
             </datalist>
 
             <div class="row g-3">
+                <?php if ($phaseCompact): ?>
+                    <div class="col-12" data-phase-keep>
+                        <div class="alert alert-info py-2 mb-0 small d-flex align-items-start gap-2">
+                            <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                            <div>
+                                <?php if ($phaseMode === 'editare'): ?>
+                                Corectezi această fază: vehiculul, șoferul, intervalul, km-ii și clienții ei<?= $phaseIsLoading ? ', plus cantitatea încărcată (faza de încărcare)' : '' ?>.
+                                Traseul și marfa sunt ale cursei. Totalul de mai jos este al cursei întregi, după salvarea fazei.
+                                <?php else: ?>
+                                Faza continuă cursa de unde s-a oprit, pe același traseu. Vehiculul și șoferul sunt preluați din faza anterioară — schimbă-i dacă
+                                altă mașină / alt șofer duce marfa mai departe. Marfa a fost încărcată o singură dată, deci faza nu adaugă cantitate.
+                                Completează intervalul, km-ii și clienții; totalul de mai jos este al cursei întregi, după fază.
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
+                <?php endif; ?>
                 <?php if (isset($raceFormErrors['inactive_resources'])): ?>
-                    <div class="col-12">
+                    <div class="col-12"<?= $phaseKeep ?>>
                         <div class="alert alert-warning d-flex align-items-center gap-2 mb-0" role="alert">
                             <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
                             <span><?= e((string) $raceFormErrors['inactive_resources']) ?></span>
@@ -630,7 +681,8 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                     <?php if (isset($raceFormErrors['tip_transport'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tip_transport']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-vehicul">
+                <?php // Pe faza noua vehiculul si soferul raman alegibile: masina se poate strica dupa incarcare. ?>
+                <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-vehicul"<?= $phaseKeep ?>>
                     <label class="form-label" for="edit_race_vehicle_id">Nr. Inmatriculare <span class="text-danger">*</span></label>
                     <select class="form-select <?= isset($raceFormErrors['vehicle_id']) ? 'is-invalid' : '' ?>" id="edit_race_vehicle_id" name="vehicle_id" required>
                         <option value="">-- Selecteaza --</option>
@@ -648,7 +700,7 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                     <?php if (isset($raceFormErrors['vehicle_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['vehicle_id']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-sofer">
+                <div class="col-12 col-md-6 dispatcher-top-field" data-role="field-sofer"<?= $phaseKeep ?>>
                     <label class="form-label" for="edit_race_driver_id">Sofer <span class="text-danger">*</span></label>
                     <select class="form-select <?= isset($raceFormErrors['driver_id']) ? 'is-invalid' : '' ?>" id="edit_race_driver_id" name="driver_id" required>
                         <option value="">-- Selecteaza mai intai vehiculul --</option>
@@ -680,7 +732,7 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                     <div class="form-text">Soferii se incarca automat dupa vehiculul selectat.</div>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-start-datetime">
+                <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-start-datetime"<?= $phaseKeep ?>>
                     <label class="form-label" for="edit_race_start_datetime">Data si ora inceput <span class="text-danger">*</span></label>
                     <?php
                         $startDateDisplayValue = $formatRaceDateInput($raceFormData['data_inceput'] ?? ($raceFormData['data_cursa'] ?? ''));
@@ -741,7 +793,7 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                     <?php if (isset($raceFormErrors['data_incarcare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['data_incarcare']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-end-datetime">
+                <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-end-datetime"<?= $phaseKeep ?>>
                     <label class="form-label" for="edit_race_end_datetime">Data si ora sfarsit <span class="text-danger">*</span></label>
                     <?php
                         $endDateDisplayValue = $formatRaceDateInput($raceFormData['data_sfarsit'] ?? ($raceFormData['data_cursa'] ?? ''));
@@ -863,7 +915,8 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                     <?php if (isset($raceFormErrors['tip_marfa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tip_marfa']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-primary-grid-field" data-role="field-cantitate">
+                <?php // Faza de incarcare (de obicei faza 1) tine cantitatea cursei: ramane corectabila si in formularul compact. ?>
+                <div class="col-12 col-md-6 dispatcher-primary-grid-field" data-role="field-cantitate"<?= $phaseIsLoading ? ' data-phase-keep' : '' ?>>
                     <label class="form-label" for="edit_race_cantitate_incarcata">Cantitate incarcata</label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['cantitate_incarcata']) ? 'is-invalid' : '' ?>" id="edit_race_cantitate_incarcata"<?= $raceHasSegments ? ' readonly title="' . e($segmentTotalsNote) . '"' : '' ?> name="cantitate_incarcata" step="0.01" min="0" value="<?= e((string) ($raceFormData['cantitate_incarcata'] ?? '')) ?>" data-role="cantitate">
                     <div class="form-text text-muted">Valoarea introdusa este folosita direct in calcule, fara conversie automata.</div>
@@ -877,13 +930,14 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                     <div class="form-text">Se completeaza automat din fisa vehiculului.</div>
                 </div>
 
-                <div class="col-12 col-md-6" data-role="field-km">
+                <?php // La Primar / P+D campul acesta sunt km-ii AGREATI (din ruta): pe faza se completeaza Km efectuati (km_totali). ?>
+                <div class="col-12 col-md-6" data-role="field-km"<?= $isAgreedKmNamingSelected ? '' : $phaseKeep ?>>
                     <label class="form-label" for="edit_race_km_cursa" data-role="km-label" data-default-label="Km efectuati" data-primary-km-label="Km agreati"><?= $isAgreedKmNamingSelected ? 'Km agreati' : 'Km efectuati' ?></label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['km_cursa']) ? 'is-invalid' : '' ?>" id="edit_race_km_cursa"<?= $raceHasSegments ? ' readonly title="' . e($segmentTotalsNote) . '"' : '' ?> name="km_cursa" min="0" step="1" value="<?= e((string) ($raceFormData['km_cursa'] ?? '')) ?>" data-role="km">
                     <?php if (isset($raceFormErrors['km_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_cursa']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="field-nr-clienti">
+                <div class="col-12 col-md-6 <?= $isDistributionSelected ? '' : 'd-none' ?>" data-role="field-nr-clienti"<?= $phaseKeep ?>>
                     <label class="form-label" for="edit_race_nr_clienti">Nr. clienti</label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['nr_clienti']) ? 'is-invalid' : '' ?>" id="edit_race_nr_clienti"<?= $raceHasSegments ? ' readonly title="' . e($segmentTotalsNote) . '"' : '' ?> name="nr_clienti" min="0" step="1" value="<?= e((string) ($raceFormData['nr_clienti'] ?? '')) ?>">
                     <?php if (isset($raceFormErrors['nr_clienti'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['nr_clienti']) ?></div><?php endif; ?>
@@ -933,7 +987,7 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                     <div class="form-text text-muted">Variantele configurate pe aceasta ruta. Km si pretul urmeaza varianta aleasa.</div>
                 </div>
 
-                <div class="col-12 col-md-6 <?= $isKmTotalSelected ? '' : 'd-none' ?>" data-role="field-km-totali">
+                <div class="col-12 col-md-6 <?= $isKmTotalSelected ? '' : 'd-none' ?>" data-role="field-km-totali"<?= $phaseKeep ?>>
                     <label class="form-label" for="edit_race_km_totali" data-role="km-total-label" data-default-label="Km totali" data-primary-km-label="Km efectuati"><?= $isAgreedKmNamingSelected ? 'Km efectuati' : 'Km totali' ?></label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['km_totali']) ? 'is-invalid' : '' ?>" id="edit_race_km_totali"<?= $raceHasSegments ? ' readonly title="' . e($segmentTotalsNote) . '"' : '' ?> name="km_totali" min="0" step="1" value="<?= e((string) ($raceFormData['km_totali'] ?? '')) ?>" data-role="km-totali">
                     <?php if (isset($raceFormErrors['km_totali'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_totali']) ?></div><?php endif; ?>
@@ -964,15 +1018,18 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                     <?php if (isset($raceFormErrors['tona_livrata'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['tona_livrata']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-km-dislocare">
+                <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-km-dislocare"<?= $phaseKeep ?>>
                     <label class="form-label" for="edit_race_km_dislocare">Km efectuati</label>
                     <input type="number" class="form-control <?= isset($raceFormErrors['km_dislocare']) ? 'is-invalid' : '' ?>" id="edit_race_km_dislocare" name="km_dislocare" step="0.01" min="0" value="<?= e((string) ($raceFormData['km_dislocare'] ?? '')) ?>" data-role="km-dislocare">
                     <?php if (isset($raceFormErrors['km_dislocare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['km_dislocare']) ?></div><?php endif; ?>
                 </div>
 
-                <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="preview-total-field">
+                <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="preview-total-field"<?= $phaseKeep ?>>
                     <label class="form-label">Total facturare (estimare)</label>
                     <div class="dispatcher-total-preview" data-role="total-preview"><?= e(format_number_ro($displayTotalFacturare, 2)) ?> lei</div>
+                    <?php if ($phaseCompact): ?>
+                        <div class="form-text" data-role="phase-total-breakdown"></div>
+                    <?php endif; ?>
                 </div>
 
                 <?php
@@ -980,7 +1037,7 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                 $raceIsInvoiced = (string) ($raceFormData['status_facturare'] ?? '') === 'facturat';
                 ?>
                 <?php if ($raceIsInvoiced): ?>
-                    <div class="col-12" data-role="tariff-recalc-block">
+                    <div class="col-12" data-role="tariff-recalc-block"<?= $phaseKeep ?>>
                         <div class="alert alert-secondary py-2 mb-0 small d-flex align-items-start gap-2">
                             <i class="bi bi-lock-fill" aria-hidden="true"></i>
                             <div>
@@ -996,7 +1053,7 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                     <div class="dispatcher-total-preview" data-role="cost-km-primar-preview"><?= e(format_number_ro((float) ($raceFormData['cost_km_primar'] ?? 0), 2)) ?> lei/km</div>
                 </div>
 
-                <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-distributie-field">
+                <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-distributie-field"<?= $phaseKeep ?>>
                     <label class="form-label">Cost/km Distributie</label>
                     <div class="dispatcher-total-preview" data-role="cost-km-distributie-preview"><?= e(format_number_ro((float) ($raceFormData['cost_km_distributie'] ?? 0), 2)) ?> lei/km</div>
                 </div>
@@ -1052,7 +1109,7 @@ $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din a
                     >Sterge faza</button>
                     <a class="btn btn-outline-secondary" href="<?= e($phaseStepUrl(0)) ?>">Inapoi la cursa</a>
                 <?php elseif ($phaseMode === ''): ?>
-                    <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Inapoi</a>
+                    <a class="btn btn-outline-secondary" href="<?= e($listReturnUrl ?? build_query_url(['page' => 'dispecer_curse'])) ?>">Inapoi</a>
                 <?php endif; ?>
             </div>
         </form>
@@ -2213,6 +2270,260 @@ document.addEventListener('DOMContentLoaded', function () {
     expenseDateEls.forEach(function (input) {
         input.addEventListener('focus', syncExpenseDateRange);
     });
+
+    // Serverul valideaza cheltuiala dupa intervalul SALVAT al cursei. Daca datele cursei
+    // au fost schimbate in formular si nu sunt inca salvate, salvam intai cursa (prin
+    // submit-ul ei normal, cu verificarile de cursa dubla / resurse inactive) si apoi
+    // continuam aici: cheltuiala se trimite, sau se deschide refacturarea aleasa.
+    var raceUpdateFormEl = document.querySelector('[data-role="race-update-form"]');
+    var savedRaceRange = {
+        min: <?= json_encode($expenseDateMin) ?>,
+        max: <?= json_encode($expenseDateMax) ?>
+    };
+    var expenseDraftKey = 'dispecer_expense_draft_<?= (int) $raceId ?>';
+    var pendingAfterRaceSave = null;
+    var raceSaveStatusEl = null;
+
+    var raceDatesDirty = function () {
+        if (!(raceUpdateFormEl instanceof HTMLFormElement)
+            || !(raceStartEl instanceof HTMLInputElement)
+            || !(raceEndEl instanceof HTMLInputElement)) {
+            return false;
+        }
+        var min = toIsoDate(raceStartEl.value);
+        var max = toIsoDate(raceEndEl.value);
+        if (min === '' || max === '') {
+            return false;
+        }
+        if (max < min) {
+            var swap = min;
+            min = max;
+            max = swap;
+        }
+
+        return min !== (savedRaceRange.min || '') || max !== (savedRaceRange.max || '');
+    };
+
+    var showRaceSaveStatus = function (message, tone) {
+        if (!(raceSaveStatusEl instanceof HTMLElement)) {
+            raceSaveStatusEl = document.createElement('div');
+            raceSaveStatusEl.setAttribute('role', 'status');
+            expenseFormEl.insertBefore(raceSaveStatusEl, expenseFormEl.firstChild);
+        }
+        raceSaveStatusEl.className = 'alert alert-' + (tone || 'info') + ' py-2 small mb-3';
+        raceSaveStatusEl.textContent = message;
+    };
+
+    var setRaceFormHidden = function (name, value) {
+        var field = raceUpdateFormEl.querySelector('input[type="hidden"][name="' + name + '"]');
+        if (!(field instanceof HTMLInputElement)) {
+            field = document.createElement('input');
+            field.type = 'hidden';
+            field.name = name;
+            field.setAttribute('data-expense-return-field', '1');
+            raceUpdateFormEl.appendChild(field);
+        }
+        field.value = value;
+    };
+
+    var clearRaceFormReturnFields = function () {
+        Array.prototype.forEach.call(raceUpdateFormEl.querySelectorAll('[data-expense-return-field]'), function (field) {
+            field.remove();
+        });
+    };
+
+    // Ce a completat operatorul in cheltuiala supravietuieste reincarcarii (cand salvarea
+    // cursei cere o confirmare sau are erori). Fisierele nu se pot pastra.
+    var storeExpenseDraft = function () {
+        var values = [];
+        var hadFiles = false;
+        new FormData(expenseFormEl).forEach(function (value, name) {
+            if (value instanceof File) {
+                hadFiles = hadFiles || value.size > 0;
+                return;
+            }
+            values.push([name, String(value)]);
+        });
+        try {
+            window.sessionStorage.setItem(expenseDraftKey, JSON.stringify({
+                expense_id: String((expenseFormEl.querySelector('[name="expense_id"]') || {}).value || ''),
+                values: values,
+                had_files: hadFiles,
+                at: Date.now()
+            }));
+        } catch (error) {
+            // Fara sessionStorage operatorul reia doar completarea cheltuielii.
+        }
+    };
+
+    var restoreExpenseDraft = function () {
+        // Fisa intermediara (confirmare / erori la salvarea cursei) nu consuma ciorna:
+        // abia dupa salvare serverul ne aduce inapoi la sectiunea de cheltuieli.
+        if (window.location.hash !== '#expense-section') {
+            return;
+        }
+        var draft = null;
+        try {
+            draft = JSON.parse(window.sessionStorage.getItem(expenseDraftKey) || 'null');
+            window.sessionStorage.removeItem(expenseDraftKey);
+        } catch (error) {
+            draft = null;
+        }
+        var currentExpenseId = String((expenseFormEl.querySelector('[name="expense_id"]') || {}).value || '');
+        if (draft === null || !Array.isArray(draft.values)
+            || Date.now() - Number(draft.at || 0) > 15 * 60 * 1000
+            || String(draft.expense_id || '') !== currentExpenseId) {
+            return;
+        }
+
+        var valuesByName = {};
+        draft.values.forEach(function (entry) {
+            (valuesByName[entry[0]] = valuesByName[entry[0]] || []).push(entry[1]);
+        });
+        var fields = Array.prototype.slice.call(expenseFormEl.elements).filter(function (field) {
+            return field.name && field.type !== 'hidden' && field.type !== 'file'
+                && field.type !== 'submit' && field.type !== 'button';
+        });
+
+        // Intai bifele (deschid blocurile tipurilor), apoi valorile din blocuri.
+        fields.forEach(function (field) {
+            if (field.type === 'checkbox' || field.type === 'radio') {
+                var checked = (valuesByName[field.name] || []).indexOf(field.value) !== -1;
+                if (field.checked !== checked) {
+                    field.checked = checked;
+                    field.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+        });
+        fields.forEach(function (field) {
+            if (field.type !== 'checkbox' && field.type !== 'radio' && valuesByName[field.name]) {
+                field.value = valuesByName[field.name][0];
+                field.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
+
+        showRaceSaveStatus(
+            draft.had_files
+                ? 'Completarea cheltuielii a fost pastrata. Ataseaza din nou documentul si salveaza cheltuiala.'
+                : 'Completarea cheltuielii a fost pastrata. Verifica datele si salveaza cheltuiala.',
+            'info'
+        );
+    };
+
+    var saveRaceThen = function (returnExpenseId, keepDraft, continueFn) {
+        pendingAfterRaceSave = { keepDraft: keepDraft, continueFn: continueFn };
+        setRaceFormHidden('return_to_expenses', '1');
+        setRaceFormHidden('return_expense_id', String(returnExpenseId || ''));
+        showRaceSaveStatus('Datele cursei au fost schimbate: se salveaza intai cursa...', 'info');
+        if (typeof raceUpdateFormEl.requestSubmit === 'function') {
+            raceUpdateFormEl.requestSubmit();
+            return;
+        }
+        if (keepDraft) {
+            storeExpenseDraft();
+        }
+        raceUpdateFormEl.submit();
+    };
+
+    if (raceUpdateFormEl instanceof HTMLFormElement) {
+        // Ascultam pe document: ajungem aici doar dupa ce verificarile proprii ale
+        // formularului cursei au trecut (ele opresc propagarea cand intervin).
+        document.addEventListener('submit', function (event) {
+            if (event.target !== raceUpdateFormEl || event.defaultPrevented || pendingAfterRaceSave === null) {
+                return;
+            }
+            event.preventDefault();
+            var pending = pendingAfterRaceSave;
+            pendingAfterRaceSave = null;
+
+            var payload = new FormData(raceUpdateFormEl);
+            payload.set('inline_save', '1');
+            fetch(raceUpdateFormEl.action, {
+                method: 'POST',
+                body: payload,
+                credentials: 'same-origin',
+                redirect: 'manual',
+                headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+            }).then(function (response) {
+                var type = response.headers.get('Content-Type') || '';
+                return response.ok && type.indexOf('application/json') !== -1 ? response.json() : null;
+            }).catch(function () {
+                return null;
+            }).then(function (result) {
+                if (result !== null && result.success === true) {
+                    clearRaceFormReturnFields();
+                    var range = result.expense_date_range || {};
+                    savedRaceRange = { min: range.min || '', max: range.max || '' };
+                    syncExpenseDateRange();
+                    showRaceSaveStatus('Cursa a fost salvata cu noile date.', 'success');
+                    pending.continueFn();
+                    return;
+                }
+
+                // Salvarea a cerut o confirmare sau are erori: serverul le-a pus deja in
+                // sesiune, fisa reincarcata le arata, iar dupa salvare revenim aici.
+                if (pending.keepDraft) {
+                    storeExpenseDraft();
+                }
+                // Doar ancora schimbata nu reincarca pagina: o fixam si reincarcam explicit.
+                window.history.replaceState(null, '', window.location.pathname + window.location.search + '#race-form');
+                window.location.reload();
+            });
+        });
+
+        // Verificarile cursei (suprapunere, cursa asemanatoare, resurse inactive) raspund
+        // printr-un modal: semnalam ca salvarea asteapta acolo, nu ca ar rula inca.
+        document.addEventListener('shown.bs.modal', function () {
+            if (pendingAfterRaceSave !== null) {
+                showRaceSaveStatus('Salvarea cursei asteapta raspunsul din fereastra deschisa; cheltuiala se salveaza dupa ea.', 'warning');
+            }
+        });
+
+        // "Salveaza cursa" apasat direct inseamna salvarea obisnuita (inapoi la lista).
+        Array.prototype.forEach.call(raceUpdateFormEl.querySelectorAll('button[type="submit"], input[type="submit"]'), function (button) {
+            button.addEventListener('click', function () {
+                pendingAfterRaceSave = null;
+                clearRaceFormReturnFields();
+            });
+        });
+
+        expenseFormEl.addEventListener('submit', function (event) {
+            if (!raceDatesDirty()) {
+                return;
+            }
+            event.preventDefault();
+            var submitter = event.submitter || null;
+            saveRaceThen(
+                (expenseFormEl.querySelector('[name="expense_id"]') || {}).value || '',
+                true,
+                function () {
+                    if (typeof expenseFormEl.requestSubmit === 'function') {
+                        expenseFormEl.requestSubmit(submitter && submitter.form === expenseFormEl ? submitter : undefined);
+                    } else {
+                        expenseFormEl.submit();
+                    }
+                }
+            );
+        });
+
+        // "Editeaza" pe o cheltuiala salvata reincarca fisa: fara salvare s-ar pierde datele noi.
+        document.addEventListener('click', function (event) {
+            var link = event.target instanceof Element ? event.target.closest('a[href*="expense_id="]') : null;
+            if (!(link instanceof HTMLAnchorElement) || !raceDatesDirty()) {
+                return;
+            }
+            var linkExpenseId = new URL(link.href, window.location.href).searchParams.get('expense_id') || '';
+            if (linkExpenseId === '' || link.href.indexOf('action=edit') === -1) {
+                return;
+            }
+            event.preventDefault();
+            saveRaceThen(linkExpenseId, false, function () {
+                window.location.href = link.href;
+            });
+        });
+    }
+
+    restoreExpenseDraft();
     syncExpenseDateRange();
 
     if (typeof syncExpenseTypes === 'function') {

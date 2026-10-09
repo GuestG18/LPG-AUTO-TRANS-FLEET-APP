@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 48 48">
+  <!-- Camion vazut de sus, cu fata spre NORD (in sus): icon-rotate = directia geografica. -->
+  <ellipse cx="24" cy="26" rx="12" ry="21" fill="#000" opacity="0.28"/>
+  <!-- semiremorca -->
+  <rect x="15" y="17" width="18" height="27" rx="2" fill="#f5a524" stroke="#141a1a" stroke-width="1.6"/>
+  <line x1="18" y1="22" x2="30" y2="22" stroke="#141a1a" stroke-width="0.9" opacity="0.45"/>
+  <line x1="18" y1="39" x2="30" y2="39" stroke="#141a1a" stroke-width="0.9" opacity="0.45"/>
+  <!-- cabina -->
+  <rect x="16" y="4" width="16" height="11" rx="3.5" fill="#ffd56a" stroke="#141a1a" stroke-width="1.6"/>
+  <!-- parbriz (marcheaza fata) -->
+  <path d="M18.5 7.2 Q24 5.2 29.5 7.2 L28.6 9.6 Q24 8.4 19.4 9.6 Z" fill="#141a1a"/>
+  <!-- cuplaj cabina - remorca -->
+  <rect x="22" y="14.6" width="4" height="2.8" fill="#141a1a"/>
+</svg>

@@ -409,12 +409,12 @@ if (!isset($formatRaceDateForDisplay) || !is_callable($formatRaceDateForDisplay)
                             <?php if (isset($formErrors['tona_aspirata_gazoasa'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['tona_aspirata_gazoasa']) ?></div><?php endif; ?>
                         </div>
 
-                        <?php /* Pe faza, cantitatea livrata se completeaza la orice tip de transport:
-                                 marfa se incarca intr-o faza si se livreaza in urmatoarele. Pe cursa,
-                                 campul ramane doar la Compresor, asa ca JS-ul nu trebuie sa il ascunda. */ ?>
-                        <div class="col-12 col-md-6 dispatcher-compressor-metric-field" <?= $fieldIsPhase ? '' : 'data-role="field-tona-livrata"' ?>>
+                        <?php /* Cantitatea livrata ramane doar la Compresor (si pe cursa, si pe faza):
+                                 la Distributie / P+D livrarea se vede din Nr. clienti, iar tonele se
+                                 impart pe km (2026-10-08). JS-ul ascunde campul la celelalte tipuri. */ ?>
+                        <div class="col-12 col-md-6 dispatcher-compressor-metric-field" data-role="field-tona-livrata">
                             <label class="form-label" for="<?= e($fieldPrefix) ?>_tona_livrata"><?= $fieldIsPhase ? 'Cantitate livrata in faza (tone)' : 'Cantitate livrata (tone)' ?></label>
-                            <input type="number" class="form-control <?= isset($formErrors['tona_livrata']) ? 'is-invalid' : '' ?>" id="<?= e($fieldPrefix) ?>_tona_livrata" name="tona_livrata" step="0.01" min="0" value="<?= e((string) ($formData['tona_livrata'] ?? '')) ?>" <?= $fieldIsPhase ? '' : 'data-role="tona-livrata"' ?>>
+                            <input type="number" class="form-control <?= isset($formErrors['tona_livrata']) ? 'is-invalid' : '' ?>" id="<?= e($fieldPrefix) ?>_tona_livrata" name="tona_livrata" step="0.01" min="0" value="<?= e((string) ($formData['tona_livrata'] ?? '')) ?>" data-role="tona-livrata">
                             <?php if (isset($formErrors['tona_livrata'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['tona_livrata']) ?></div><?php endif; ?>
                         </div>
 
@@ -442,7 +442,7 @@ if (!isset($formatRaceDateForDisplay) || !is_callable($formatRaceDateForDisplay)
 
                         <?php if (!$fieldIsPhase): ?>
                         <div class="col-12 col-md-6 d-none" data-role="preview-cost-km-distributie-field">
-                            <label class="form-label">Cost/km Distribu?ie</label>
+                            <label class="form-label">Cost/km Distribuție</label>
                             <div class="dispatcher-total-preview" data-role="cost-km-distributie-preview">0,00 lei/km</div>
                         </div>
                         <?php endif; ?>

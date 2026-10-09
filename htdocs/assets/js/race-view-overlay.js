@@ -354,38 +354,20 @@
         }
     };
 
-    var formatPreviewedAt = function (timestamp) {
-        var date = new Date(timestamp);
-        var pad = function (value) { return (value < 10 ? '0' : '') + value; };
-        return pad(date.getDate()) + '.' + pad(date.getMonth() + 1) + '.' + date.getFullYear()
-            + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
-    };
-
     var clearPreviewedMarks = function () {
         Array.prototype.forEach.call(document.querySelectorAll('tr.is-previewed'), function (rowEl) {
             rowEl.classList.remove('is-previewed', 'is-just-previewed');
         });
-        Array.prototype.forEach.call(document.querySelectorAll('.race-previewed-icon'), function (iconEl) {
-            iconEl.remove();
-        });
     };
 
+    // Ultima cursa vizualizata se recunoaste doar dupa culoarea randului: iconita cu ochi
+    // (si tooltip-ul ei) a fost scoasa 2026-10-08, pentru ca marea inaltimea randului.
     var applyPreviewedMark = function (data, flash) {
         clearPreviewedMarks();
-        var title = 'Ultima cursă vizualizată (' + formatPreviewedAt(data.at) + ')';
         Array.prototype.forEach.call(
             document.querySelectorAll('[data-dispatcher-column-table] tbody tr[data-race-id="' + CSS.escape(data.id) + '"]'),
             function (rowEl) {
                 rowEl.classList.add('is-previewed');
-                var plateCellEl = rowEl.querySelector('td.col-plate');
-                var anchorEl = plateCellEl ? plateCellEl.querySelector('.vehicle-main') : null;
-                if (anchorEl !== null) {
-                    var iconEl = document.createElement('i');
-                    iconEl.className = 'bi bi-eye-fill race-previewed-icon';
-                    iconEl.title = title;
-                    iconEl.setAttribute('aria-label', title);
-                    anchorEl.insertAdjacentElement('afterend', iconEl);
-                }
                 if (flash) {
                     rowEl.classList.add('is-just-previewed');
                     window.setTimeout(function () { rowEl.classList.remove('is-just-previewed'); }, PREVIEWED_FLASH_MS);

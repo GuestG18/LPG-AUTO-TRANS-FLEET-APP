@@ -30,7 +30,13 @@ $diurnaModalIsAdmin = (function_exists('can') && can('inactive_approvals', 'revi
 
             <div class="modal-body" data-diurna-edit-step>
                 <dl class="diurna-change-facts">
-                    <div><dt>Sofer</dt><dd data-diurna-driver>-</dd></div>
+                    <?php /* Cursa cu mai multi soferi: cererea se face pentru soferul ales din lista. */ ?>
+                    <div>
+                        <dt><label for="diurnaChangeDriver">Soferi</label></dt>
+                        <dd>
+                            <select class="form-select form-select-sm" id="diurnaChangeDriver" data-diurna-driver-select></select>
+                        </dd>
+                    </div>
                     <div><dt>Calculat dupa regula</dt><dd data-diurna-computed>-</dd></div>
                     <div><dt>Valoare actuala</dt><dd data-diurna-current>-</dd></div>
                 </dl>

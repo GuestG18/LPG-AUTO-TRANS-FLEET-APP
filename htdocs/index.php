@@ -398,6 +398,7 @@ require_once __DIR__ . '/controllers/VehicleCapacityCategoryController.php';
 require_once __DIR__ . '/controllers/ProfileController.php';
 require_once __DIR__ . '/controllers/DispecerCurseController.php';
 require_once __DIR__ . '/controllers/FleetMapController.php';
+require_once __DIR__ . '/controllers/FleetMonitoringController.php';
 require_once __DIR__ . '/controllers/DispecerSasSandboxController.php';
 require_once __DIR__ . '/controllers/SasDashboardSandboxController.php';
 require_once __DIR__ . '/controllers/KmPierdutiController.php';
@@ -656,6 +657,11 @@ try {
         case 'harta_flota':
             require_auth();
             (new FleetMapController($db))->handle($action);
+            break;
+
+        case 'monitorizare_flota':
+            require_auth();
+            (new FleetMonitoringController())->handle($action);
             break;
 
         case 'dispecer_sandbox':

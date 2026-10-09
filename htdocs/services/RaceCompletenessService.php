@@ -154,6 +154,41 @@ final class RaceCompletenessService
             $add('total_facturare', 'Total facturare = 0,00 lei', 'critical', 'Totalul este 0 pentru că lipsesc date de tarifare — completează câmpurile marcate.', '');
         }
 
+        // --- Fazele cursei (cand apelantul le-a atasat in `_segments`) ---
+        // Cursa preia inceputul primei faze si sfarsitul ultimei, deci verificarile de mai
+        // sus nu vad golurile din mijloc: faza 1 fara ora de sfarsit, faza 2 fara inceput.
+        // Capetele cursei raman raportate o singura data (ca date ale cursei).
+        $segments = array_values((array) ($race['_segments'] ?? []));
+        $segmentCount = count($segments);
+        if ($segmentCount > 1) {
+            foreach ($segments as $index => $segment) {
+                $phaseLabel = 'Faza ' . ($index + 1);
+                $phaseId = (int) ($segment['id'] ?? 0);
+                $addPhase = static function (string $field, string $label, string $explanation, string $focus) use (&$items, $phaseId, $phaseLabel): void {
+                    $items[] = [
+                        'field' => 'faza_' . $phaseId . '_' . $field,
+                        'label' => $phaseLabel . ': ' . $label,
+                        'severity' => 'critical',
+                        'explanation' => $explanation,
+                        'focus' => $focus,
+                        'phase_id' => $phaseId,
+                    ];
+                };
+                if ((int) ($segment['vehicle_id'] ?? 0) <= 0) {
+                    $addPhase('vehicle_id', 'vehicul', 'Faza nu are vehicul — alege mașina care a făcut-o.', 'vehicle');
+                }
+                if ((int) ($segment['driver_id'] ?? 0) <= 0) {
+                    $addPhase('driver_id', 'șofer', 'Faza nu are șofer — asignează-l pentru pontaj și diurnă.', 'driver');
+                }
+                if ($index > 0 && ($isMissing($segment['data_inceput'] ?? null) || $isMissing($segment['ora_inceput'] ?? null))) {
+                    $addPhase('ora_inceput', 'ora de început', 'Completează data și ora de început ale fazei — intră în durata și diurna cursei.', 'start_time');
+                }
+                if ($index < $segmentCount - 1 && ($isMissing($segment['data_sfarsit'] ?? null) || $isMissing($segment['ora_sfarsit'] ?? null))) {
+                    $addPhase('ora_sfarsit', 'ora de sfârșit', 'Completează data și ora de sfârșit ale fazei — intră în durata și diurna cursei.', 'end_time');
+                }
+            }
+        }
+
         // --- Cheltuieli neasociate (pastreaza acoperirea popup-ului existent) ---
         $expenseCount = (int) ($race['expense_count'] ?? 0);
         $expenseStatus = (string) ($race['cheltuieli_status'] ?? 'pending');
@@ -167,5 +202,52 @@ final class RaceCompletenessService
     public static function isComplete(array $race): bool
     {
         return self::missingInformation($race) === [];
+    }
+
+    /**
+     * Linkul de editare cu toate lipsurile evidentiate — acelasi ca butonul
+     * "Deschide cursa" din panoul de informatii lipsa (tab-ul "Toate").
+     */
+    public static function editUrlWithFocus(int $raceId, array $missing): string
+    {
+        // Lipsurile cursei se deschid in formularul cursei; daca raman doar lipsuri de
+        // faza, se deschide prima faza cu probleme (campurile ei sunt in alt formular).
+        $tripItems = array_filter($missing, static fn (array $item): bool => (int) ($item['phase_id'] ?? 0) <= 0);
+        $phaseId = 0;
+        if ($tripItems === []) {
+            foreach ($missing as $item) {
+                if ((int) ($item['phase_id'] ?? 0) > 0) {
+                    $phaseId = (int) $item['phase_id'];
+                    break;
+                }
+            }
+        }
+        $focusItems = $phaseId > 0
+            ? array_filter($missing, static fn (array $item): bool => (int) ($item['phase_id'] ?? 0) === $phaseId)
+            : $tripItems;
+
+        return self::itemUrl($raceId, $phaseId, $focusItems);
+    }
+
+    /**
+     * Linkul unei liste de lipsuri: cursa (phaseId 0) sau faza, cu campurile evidentiate.
+     */
+    public static function itemUrl(int $raceId, int $phaseId, array $items): string
+    {
+        $focusKeys = [];
+        foreach ($items as $item) {
+            $focus = trim((string) ($item['focus'] ?? ''));
+            if ($focus !== '') {
+                $focusKeys[$focus] = $focus;
+            }
+        }
+
+        $params = ['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $raceId];
+        if ($phaseId > 0) {
+            $params['faza'] = $phaseId;
+        }
+        $url = build_query_url($params);
+
+        return $focusKeys !== [] ? $url . '&focus=' . rawurlencode(implode(',', $focusKeys)) : $url;
     }
 }

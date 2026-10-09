@@ -1164,8 +1164,8 @@ function dispatcher_diurna_from_minutes(int $minutes): int
  * Diurnele unei curse, din "Data si ora inceput" (data_inceput + ora_inceput) si
  * "Data si ora sfarsit" (data_sfarsit + ora_sfarsit). Durata se calculeaza din
  * momentele complete, nu din coloana salvata, ca sa nu poata ramane in urma.
- * La o cursa reluata acestea sunt inceputul primei faze si sfarsitul ultimei:
- * aplicatia nu inregistreaza intoarcerile acasa, deci perioada este una singura.
+ * La o cursa reluata conteaza doar timpul fazelor ('diurna_minute_faze'), nu si
+ * pauzele dintre ele.
  *
  * Status: 'ok', 'lipsa' (lipseste o data sau o ora) sau 'invalid' (sfarsitul
  * este inaintea inceputului). Doar la 'ok' exista minute si diurne.
@@ -1197,6 +1197,11 @@ function dispatcher_diurna_for_interval(array $row): array
     }
 
     $minutes = intdiv($seconds, 60);
+    // Cursa reluata: timpul pe drum e suma fazelor (pus pe rand de
+    // dispatcher_attach_phase_minutes), fara pauzele dintre oprire si "Reia cursa".
+    if (isset($row['diurna_minute_faze']) && is_int($row['diurna_minute_faze'])) {
+        $minutes = $row['diurna_minute_faze'];
+    }
     $days = dispatcher_diurna_from_minutes($minutes);
     // Curse inlantuite ale aceluiasi sofer (puse pe rand de
     // dispatcher_attach_same_day_diurna): diurnele castigate in plus prin
@@ -1235,6 +1240,7 @@ function dispatcher_attach_diurna_adjustments(PDO $db, array &$rows, string $idK
         return;
     }
 
+    dispatcher_attach_phase_minutes($db, $rows, $idKey);
     dispatcher_attach_same_day_diurna($db, $rows, $idKey);
 
     if (!class_exists('InactiveResourceApprovalModel')) {
@@ -1254,6 +1260,63 @@ function dispatcher_attach_diurna_adjustments(PDO $db, array &$rows, string $idK
         $entry = $adjustments[(int) ($row[$idKey] ?? 0)] ?? null;
         $row['diurna_ajustare'] = $entry['approved'] ?? null;
         $row['diurna_cerere'] = $entry['pending'] ?? null;
+        // Cursa cu mai multi soferi: modificarile pe partea fiecaruia (driver_id => approved/pending),
+        // aplicate de dispatcher_diurna_split.
+        $row['diurna_soferi'] = $entry['drivers'] ?? [];
+    }
+    unset($row);
+}
+
+/**
+ * Timpul pe drum al unei curse reluate = suma duratelor fazelor. Null cand cursa
+ * nu are mai multe faze sau ultima faza nu e inchisa (atunci ramane intervalul).
+ *
+ * @param array<int,array<string,mixed>> $segments
+ */
+function dispatcher_phase_minutes(array $segments): ?int
+{
+    if (count($segments) < 2) {
+        return null;
+    }
+    $last = $segments[count($segments) - 1];
+    if (trim((string) ($last['data_sfarsit'] ?? '')) === '') {
+        return null;
+    }
+
+    return array_sum(array_map('dispatcher_segment_minutes', $segments));
+}
+
+/**
+ * Pune pe cursele reluate 'diurna_minute_faze' (suma fazelor), ca diurna sa se
+ * calculeze din timpul pe drum, nu din inceputul primei faze -> sfarsitul ultimei.
+ */
+function dispatcher_attach_phase_minutes(PDO $db, array &$rows, string $idKey = 'id'): void
+{
+    $ids = array_values(array_filter(array_map(static fn (array $row): int => (int) ($row[$idKey] ?? 0), $rows)));
+    if ($ids === []) {
+        return;
+    }
+
+    try {
+        $marks = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $db->prepare("
+            SELECT cursa_id, data_inceput, ora_inceput, data_sfarsit, ora_sfarsit
+            FROM curse_segmente
+            WHERE cursa_id IN ({$marks}) AND deleted_at IS NULL
+            ORDER BY cursa_id ASC, ordine ASC, id ASC
+        ");
+        $stmt->execute($ids);
+        $byRace = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $segment) {
+            $byRace[(int) $segment['cursa_id']][] = $segment;
+        }
+    } catch (Throwable $exception) {
+        error_log('[diurna_phase_minutes] ' . $exception->getMessage());
+        return;
+    }
+
+    foreach ($rows as &$row) {
+        $row['diurna_minute_faze'] = dispatcher_phase_minutes($byRace[(int) ($row[$idKey] ?? 0)] ?? []);
     }
     unset($row);
 }
@@ -1457,9 +1520,62 @@ function dispatcher_diurna_chain_extra(array $trips): array
  * se distribuie descrescator (metoda resturilor celor mai mari), ca suma sa dea
  * exact totalul, nu unul rotunjit in plus sau in minus.
  *
- * @return array<int, array{driver_id:int, sofer:string, minute:int, zile:int}>
+ * $driverAdjustments = 'diurna_soferi' de pe cursa (dispatcher_attach_diurna_adjustments):
+ * modificarea aprobata pentru un sofer inlocuieste partea lui, cat timp regula ii da
+ * aceeasi parte ca la solicitare (la fel ca modificarea pe toata cursa).
+ *
+ * @return array<int, array{driver_id:int, sofer:string, minute:int, zile:int, calculat:int, ajustat:bool, cerere:?array}>
  */
-function dispatcher_diurna_split(int $totalDays, array $segments): array
+function dispatcher_diurna_split(int $totalDays, array $segments, array $driverAdjustments = []): array
+{
+    $rows = dispatcher_diurna_split_by_time($totalDays, $segments);
+    foreach ($rows as &$row) {
+        $row['calculat'] = $row['zile'];
+        $row['ajustat'] = false;
+        $row['cerere'] = null;
+        $adjustment = $row['driver_id'] > 0 ? ($driverAdjustments[$row['driver_id']] ?? null) : null;
+        if (!is_array($adjustment)) {
+            continue;
+        }
+        $row['cerere'] = is_array($adjustment['pending'] ?? null) ? $adjustment['pending'] : null;
+        $approved = is_array($adjustment['approved'] ?? null) ? $adjustment['approved'] : null;
+        if ($approved !== null && (int) ($approved['calculat'] ?? -1) === $row['calculat']) {
+            $row['zile'] = max(0, (int) ($approved['solicitat'] ?? $row['zile']));
+            $row['ajustat'] = $row['zile'] !== $row['calculat'];
+        }
+    }
+    unset($row);
+
+    return $rows;
+}
+
+/**
+ * Diurnele pe soferi, fara modificari aprobate.
+ *
+ * Un singur sofer: are diurnele cursei ($totalDays), ca pana acum. Mai multi soferi
+ * (2026-10-08, cerinta utilizator): fiecare primeste regula diurnei
+ * (dispatcher_diurna_from_minutes) aplicata pe timpul LUI - suma fazelor lui. Ex.
+ * #807: Beznea 16h -> 1, Serban 42h -> 2, deci cursa are 3 (suma soferilor), nu 2
+ * impartite proportional ca inainte.
+ */
+function dispatcher_diurna_split_by_time(int $totalDays, array $segments): array
+{
+    $rows = dispatcher_diurna_split_proportional($totalDays, $segments);
+    // Fara durate pe faze (faze neinchise) ramane comportamentul de pana acum.
+    if (count($rows) < 2 || array_sum(array_column($rows, 'minute')) <= 0) {
+        return $rows;
+    }
+
+    foreach ($rows as &$row) {
+        $row['zile'] = dispatcher_diurna_from_minutes((int) $row['minute']);
+    }
+    unset($row);
+
+    return $rows;
+}
+
+/** Impartirea totalului cursei pe soferi, proportional cu timpul (folosita la un singur sofer). */
+function dispatcher_diurna_split_proportional(int $totalDays, array $segments): array
 {
     if ($segments === []) {
         return [];
@@ -1518,11 +1634,113 @@ function dispatcher_diurna_split(int $totalDays, array $segments): array
     return array_values($rows);
 }
 
+/**
+ * Initialele unui nume pentru afisare compacta: "Beznea Cristian-Gheorghe" -> "B-C-G",
+ * "Șerban Marian" -> "Ș-M". Diacriticele raman; spatiile multiple si cratimele separa
+ * componentele. Doar pentru afisare - identificarea se face mereu dupa id.
+ */
+function dispatcher_name_initials(string $name): string
+{
+    $parts = preg_split('/[\s\-]+/u', trim($name), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    $initials = array_map(static fn (string $part): string => mb_strtoupper(mb_substr($part, 0, 1)), $parts);
+
+    return $initials !== [] ? implode('-', $initials) : '-';
+}
+
+/**
+ * Repartizarea incarcaturii cursei pe soferi, proportional cu km-ii efectuati de fiecare:
+ *   tone_sofer = (km_sofer / km_total) × tone_incarcate.
+ * Doar informativ (citire): nu modifica cantitatile, facturarea sau costurile.
+ *
+ * - Km-ii sunt `km` de pe fiecare faza (Km efectuati), adunati pe id-ul soferului;
+ *   fiecare faza (id) se numara o singura data.
+ * - Tonele sunt cantitatea incarcata a CURSEI (sursa autoritara), nu suma fazelor.
+ * - Rotunjirea se face pe sutimi, cu metoda resturilor celor mai mari (ordine stabila),
+ *   ca suma randurilor sa dea exact totalul afisat.
+ * - O faza fara sofer sau fara km valizi NU se redistribuie: status 'incomplete'.
+ * - Fara km total sau fara cantitate: status 'unavailable' (fara impartire la zero).
+ *
+ * @return array{status:string, message:string, rows:array<int,array{driver_id:int,sofer:string,km:int,tone:float}>, km_total:int, tone_total:float}
+ */
+function dispatcher_load_allocation_by_km(array $segments, ?float $loadedTonnes): array
+{
+    $result = ['status' => 'unavailable', 'message' => 'Repartizare indisponibilă', 'rows' => [], 'km_total' => 0, 'tone_total' => 0.0];
+
+    $byDriver = [];
+    $seen = [];
+    $missing = [];
+    foreach (array_values($segments) as $index => $segment) {
+        $segmentId = (int) ($segment['id'] ?? 0);
+        if ($segmentId > 0) {
+            if (isset($seen[$segmentId])) {
+                continue;
+            }
+            $seen[$segmentId] = true;
+        }
+        $driverId = (int) ($segment['driver_id'] ?? 0);
+        $km = is_numeric($segment['km'] ?? null) ? (float) $segment['km'] : 0.0;
+        if ($driverId <= 0 || $km <= 0) {
+            $missing[] = 'F' . ($index + 1) . ($driverId <= 0 ? ' fără șofer' : ' fără km');
+            continue;
+        }
+        $byDriver[$driverId] ??= ['driver_id' => $driverId, 'sofer' => trim((string) ($segment['sofer_nume'] ?? '')) ?: 'Sofer -', 'km' => 0.0];
+        $byDriver[$driverId]['km'] += $km;
+    }
+
+    if ($missing !== []) {
+        $result['status'] = 'incomplete';
+        $result['message'] = 'Repartizare incompletă: ' . implode(', ', $missing);
+
+        return $result;
+    }
+
+    $kmTotal = array_sum(array_column($byDriver, 'km'));
+    if ($kmTotal <= 0 || $loadedTonnes === null || $loadedTonnes <= 0) {
+        return $result;
+    }
+
+    // Sutimi de tona: partea intreaga pentru fiecare, apoi sutimile ramase merg la
+    // cele mai mari resturi (la egalitate, in ordinea fazelor).
+    $totalUnits = (int) round($loadedTonnes * 100);
+    $allocated = 0;
+    $remainders = [];
+    $rows = [];
+    foreach (array_values($byDriver) as $position => $driver) {
+        $exactUnits = $totalUnits * $driver['km'] / $kmTotal;
+        $units = (int) floor($exactUnits + 1e-9);
+        $allocated += $units;
+        $remainders[$position] = $exactUnits - $units;
+        $rows[$position] = $driver + ['units' => $units];
+    }
+    $order = array_keys($remainders);
+    usort($order, static fn (int $a, int $b): int => $remainders[$b] <=> $remainders[$a] ?: $a <=> $b);
+    foreach ($order as $position) {
+        if ($allocated >= $totalUnits) {
+            break;
+        }
+        $rows[$position]['units']++;
+        $allocated++;
+    }
+
+    $result['status'] = 'ok';
+    $result['message'] = '';
+    $result['km_total'] = (int) round($kmTotal);
+    $result['tone_total'] = $totalUnits / 100;
+    $result['rows'] = array_map(static fn (array $row): array => [
+        'driver_id' => $row['driver_id'],
+        'sofer' => $row['sofer'],
+        'km' => (int) round($row['km']),
+        'tone' => $row['units'] / 100,
+    ], $rows);
+
+    return $result;
+}
+
 /** Rezumatul diurnelor pe soferi, pentru tooltip: "Ion: 2 | Vasile: 1". */
-function dispatcher_diurna_summary(int $totalDays, array $segments): string
+function dispatcher_diurna_summary(int $totalDays, array $segments, array $driverAdjustments = []): string
 {
     $parts = [];
-    foreach (dispatcher_diurna_split($totalDays, $segments) as $row) {
+    foreach (dispatcher_diurna_split($totalDays, $segments, $driverAdjustments) as $row) {
         $parts[] = $row['sofer'] . ': ' . $row['zile'];
     }
 

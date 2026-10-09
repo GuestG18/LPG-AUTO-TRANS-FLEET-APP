@@ -76,6 +76,9 @@ class FuelController
             case 'km_check_fetch':
                 $this->kmCheckFetchAction();
                 return;
+            case 'unassociated_diagnosis':
+                $this->unassociatedDiagnosisAction();
+                return;
             case 'km_calibration_save':
                 $this->kmCalibrationSaveAction();
                 return;
@@ -301,6 +304,28 @@ class FuelController
             error_log('[FuelController][km_check_fetch] ' . $exception->getMessage());
             $row = $checkModel->saveTelemetry($fillup, $carId, 'error', [], 'SAS indisponibil: ' . $exception->getMessage());
             echo json_encode(['ok' => false, 'row' => $row, 'error' => 'Datele SAS nu au putut fi citite.'], JSON_UNESCAPED_UNICODE);
+        }
+        exit;
+    }
+
+    /** JSON: ultima cursa cu alimentare asociata + motivul pentru care alimentarea e neasociata. */
+    private function unassociatedDiagnosisAction(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store');
+
+        try {
+            $diagnosis = $this->model->getUnassociatedDiagnosis((int) ($_GET['fillup_id'] ?? 0));
+            if ($diagnosis === null) {
+                http_response_code(404);
+                echo json_encode(['ok' => false, 'error' => 'Alimentarea nu exista.']);
+                exit;
+            }
+            echo json_encode(['ok' => true, 'data' => $diagnosis], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $exception) {
+            error_log('[FuelController][unassociated_diagnosis] ' . $exception->getMessage());
+            http_response_code(500);
+            echo json_encode(['ok' => false, 'error' => 'Explicatia nu a putut fi incarcata.']);
         }
         exit;
     }
@@ -1065,6 +1090,12 @@ class FuelController
             $brand = '';
         }
 
+        // Categoria aleasa din cardurile „Vehicule grele / ușoare".
+        $vehicleClass = trim((string) ($input['vehicle_class'] ?? ''));
+        if (!in_array($vehicleClass, ['grele', 'usoare'], true)) {
+            $vehicleClass = '';
+        }
+
         return [
             'date_from' => $dateFrom->format('Y-m-d'),
             'date_to' => $dateTo->format('Y-m-d'),
@@ -1074,6 +1105,7 @@ class FuelController
             'transport_group' => $transportGroup,
             'fuel_type' => $fuelType,
             'brand' => $brand,
+            'vehicle_class' => $vehicleClass,
         ];
     }
 

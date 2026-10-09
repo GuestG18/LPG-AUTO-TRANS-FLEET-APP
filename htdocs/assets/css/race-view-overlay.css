@@ -202,47 +202,9 @@
     background-image: linear-gradient(rgba(46, 83, 155, 0.27), rgba(46, 83, 155, 0.27)) !important;
 }
 
-.race-previewed-icon {
-    margin-left: 6px;
-    color: #2e539b;
-    font-size: 0.8rem;
-    opacity: 0.85;
-    vertical-align: middle;
-}
-
-/* Cursa cu segmente: celula e o grila (sageata | bifa+numar / badge). Ochiul sta sub
-   sageata, in coloana ei, ca sa nu impinga numarul si badge-ul din coloana a doua. */
-.vehicle-wrap.has-segments > .vehicle-main,
-.vehicle-wrap.has-segments > .dispatcher-segments-badge {
-    grid-column: 2;
-}
-
-.vehicle-wrap.has-segments > .vehicle-main {
-    grid-row: 1;
-}
-
-.vehicle-wrap.has-segments > .dispatcher-segments-badge {
-    grid-row: 2;
-}
-
-.vehicle-wrap.has-segments:has(> .race-previewed-icon) > .dispatcher-segments-toggle {
-    grid-row: 1;
-}
-
-.vehicle-wrap.has-segments > .race-previewed-icon {
-    grid-column: 1;
-    grid-row: 2;
-    justify-self: center;
-    margin-left: 0;
-}
-
 /* Imediat dupa inchidere: randul "clipeste" usor in albastru-deschis. */
 [data-dispatcher-column-table] tbody tr.is-just-previewed > td {
     animation: race-previewed-flash 2.4s ease-out;
-}
-
-[data-dispatcher-column-table] tbody tr.is-just-previewed .race-previewed-icon {
-    animation: race-previewed-pop 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.4);
 }
 
 @keyframes race-previewed-flash {
@@ -250,14 +212,8 @@
     100% { background-color: transparent; }
 }
 
-@keyframes race-previewed-pop {
-    0% { transform: scale(0); opacity: 0; }
-    100% { transform: scale(1); opacity: 0.85; }
-}
-
 @media (prefers-reduced-motion: reduce) {
-    [data-dispatcher-column-table] tbody tr.is-just-previewed > td,
-    [data-dispatcher-column-table] tbody tr.is-just-previewed .race-previewed-icon {
+    [data-dispatcher-column-table] tbody tr.is-just-previewed > td {
         animation: none;
     }
 }

@@ -40,6 +40,10 @@ class VehicleCapacityCategoryController
                 $this->requireManage();
                 $this->deleteAction();
                 return;
+            case 'assign':
+                $this->requireManage();
+                $this->assignAction();
+                return;
             case 'index':
             case 'list':
             default:
@@ -66,6 +70,7 @@ class VehicleCapacityCategoryController
             'verificationRows' => $verification['rows'],
             'verificationSummary' => $verification['summary'],
             'auditTrail' => $this->model->getAuditTrail(25),
+            'assignmentVehicles' => $this->model->getVehiclesForAssignment(),
             'formData' => $formData,
             'formErrors' => $formErrors,
             'editingId' => $editing !== null ? (int) $editing['id'] : 0,
@@ -117,6 +122,41 @@ class VehicleCapacityCategoryController
 
         flash_set($ok ? 'success' : 'warning', $message);
         redirect(build_query_url(['page' => self::PAGE]));
+    }
+
+    /**
+     * Asignarea in masa: formularul trimite doar vehiculele modificate, ca
+     * assignments[vehicle_id] = category_id ("" = fara categorie).
+     */
+    private function assignAction(): void
+    {
+        $this->requirePostWithCsrf();
+
+        $redirectUrl = build_query_url(['page' => self::PAGE]) . '#asignare-vehicule';
+        $raw = $_POST['assignments'] ?? [];
+        $assignments = [];
+        if (is_array($raw)) {
+            foreach ($raw as $vehicleId => $categoryId) {
+                $vehicleId = (int) $vehicleId;
+                if ($vehicleId <= 0 || is_array($categoryId)) {
+                    continue;
+                }
+                $categoryId = trim((string) $categoryId);
+                $assignments[$vehicleId] = $categoryId === '' || (int) $categoryId <= 0 ? null : (int) $categoryId;
+            }
+        }
+
+        try {
+            [$ok, $message] = $this->model->assignCategories($assignments, $this->currentUserId());
+        } catch (Throwable $exception) {
+            error_log('[VehicleCapacityCategoryController][assign] ' . $exception->getMessage());
+            flash_set('danger', 'Categoriile nu au putut fi salvate.');
+            redirect($redirectUrl);
+            return;
+        }
+
+        flash_set($ok ? 'success' : 'warning', $message);
+        redirect($redirectUrl);
     }
 
     private function requireManage(): void

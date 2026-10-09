@@ -3593,8 +3593,45 @@ class DispecerCurseModel extends BaseModel
         $listStmt->execute();
 
         return [
-            'rows' => $listStmt->fetchAll(),
+            'rows' => $this->attachCompletenessSegments($listStmt->fetchAll()),
         ];
+    }
+
+    /**
+     * Pune fazele fiecarei curse in `_segments` (o singura interogare), ca regulile de
+     * completitudine sa vada si golurile din faze, nu doar capetele cursei.
+     */
+    private function attachCompletenessSegments(array $rows): array
+    {
+        $segmentsByRace = $this->getRaceSegmentsForRaces(array_map(static fn (array $row): int => (int) ($row['id'] ?? 0), $rows));
+        foreach ($rows as $index => $row) {
+            $rows[$index]['_segments'] = $segmentsByRace[(int) ($row['id'] ?? 0)] ?? [];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * O singura cursa cu coloanele de completitudine, doar daca ar aparea in panoul
+     * "curse cu informatii lipsa" (activa, in curs de facturare). Null = nu se verifica.
+     */
+    public function getOpenRaceForCompleteness(int $raceId): ?array
+    {
+        $this->ensureRaceExpenseStatusColumn();
+        $this->ensureRaceSoftDeleteSchema();
+
+        $stmt = $this->db->prepare($this->raceCompletenessSelectSql() . "
+            WHERE c.deleted_at IS NULL
+              AND c.id = :race_id
+              AND " . $this->defaultBillingStatusExpression() . " = :open_races_billing_status
+            LIMIT 1
+        ");
+        $stmt->bindValue(':race_id', $raceId, PDO::PARAM_INT);
+        $stmt->bindValue(':open_races_billing_status', self::DEFAULT_BILLING_STATUS, PDO::PARAM_STR);
+        $stmt->execute();
+        $row = $stmt->fetch();
+
+        return is_array($row) ? $this->attachCompletenessSegments([$row])[0] : null;
     }
 
     /**
@@ -3678,7 +3715,7 @@ class DispecerCurseModel extends BaseModel
             WHERE c.deleted_at IS NULL
         ");
 
-        return $stmt->fetchAll();
+        return $this->attachCompletenessSegments($stmt->fetchAll());
     }
 
     public function getRaceById(int $id): ?array
@@ -5422,10 +5459,14 @@ class DispecerCurseModel extends BaseModel
             SELECT
                 seg.*,
                 v.nr_inmatriculare,
-                s.nume AS sofer_nume
+                s.nume AS sofer_nume,
+                li.nume AS loc_incarcare_nume,
+                zd.nume AS zona_distributie_nume
             FROM curse_segmente seg
             LEFT JOIN vehicule v ON v.id = seg.vehicle_id
             LEFT JOIN soferi s ON s.id = seg.driver_id
+            LEFT JOIN configurare_locuri_incarcare li ON li.id = seg.loc_incarcare_id
+            LEFT JOIN configurare_zone_distributie zd ON zd.id = seg.zona_distributie_id
             WHERE seg.cursa_id IN ($placeholders)
               AND seg.deleted_at IS NULL
             ORDER BY seg.cursa_id ASC, seg.ordine ASC, seg.id ASC
@@ -5916,6 +5957,46 @@ class DispecerCurseModel extends BaseModel
         return $totals;
     }
 
+    /**
+     * Durata cursei cu segmente = suma duratelor segmentelor, nu intervalul
+     * inceput primul segment -> sfarsit ultimul: pauzele dintre oprire si
+     * "Reia cursa" nu sunt timp pe drum. Null cat timp ultimul segment e deschis
+     * (cursa nu are inca sfarsit), ca la o cursa simpla fara ora de sfarsit.
+     *
+     * @param array<int,array<string,mixed>> $segments
+     */
+    public static function sumSegmentDurationMinutes(array $segments): ?int
+    {
+        if ($segments === []) {
+            return null;
+        }
+        $last = $segments[count($segments) - 1];
+        if (trim((string) ($last['data_sfarsit'] ?? '')) === '') {
+            return null;
+        }
+
+        $total = 0;
+        $counted = false;
+        foreach ($segments as $segment) {
+            $startDate = trim((string) ($segment['data_inceput'] ?? ''));
+            $endDate = trim((string) ($segment['data_sfarsit'] ?? ''));
+            if ($startDate === '' || $endDate === '') {
+                continue;
+            }
+            $startTime = trim((string) ($segment['ora_inceput'] ?? ''));
+            $endTime = trim((string) ($segment['ora_sfarsit'] ?? ''));
+            $start = strtotime($startDate . ' ' . ($startTime !== '' ? $startTime : '00:00:00'));
+            $end = strtotime($endDate . ' ' . ($endTime !== '' ? $endTime : '00:00:00'));
+            if ($start === false || $end === false || $end < $start) {
+                continue;
+            }
+            $total += (int) floor(($end - $start) / 60);
+            $counted = true;
+        }
+
+        return $counted ? $total : null;
+    }
+
     private function refreshRaceFromSegments(int $cursaId): void
     {
         $segments = $this->getRaceSegments($cursaId);
@@ -5931,14 +6012,7 @@ class DispecerCurseModel extends BaseModel
         $endDate = trim((string) ($last['data_sfarsit'] ?? ''));
         $endTime = trim((string) ($last['ora_sfarsit'] ?? ''));
 
-        $durationMinutes = null;
-        if ($startDate !== '' && $endDate !== '') {
-            $start = strtotime($startDate . ' ' . ($startTime !== '' ? $startTime : '00:00:00'));
-            $end = strtotime($endDate . ' ' . ($endTime !== '' ? $endTime : '00:00:00'));
-            if ($start !== false && $end !== false && $end >= $start) {
-                $durationMinutes = (int) floor(($end - $start) / 60);
-            }
-        }
+        $durationMinutes = self::sumSegmentDurationMinutes($segments);
 
         // Cursa preia si totalurile fazelor. Km-ii merg in campul care tine km-ii
         // REALI: la Primar / Primar+Distributie km_cursa sunt km-ii agreati pe ruta,
@@ -5972,6 +6046,14 @@ class DispecerCurseModel extends BaseModel
         }
         if (isset($totals['ore_functionare'])) {
             $assign('ore_functionare', number_format((float) $totals['ore_functionare'], 2, '.', ''));
+        }
+        // Vehiculul si soferul cursei sunt ai primei faze (pereche cu syncEdgeSegmentsWithRace):
+        // fara asta, schimbarea lor pe faza 1 lasa cursa cu alta masina / alt sofer.
+        if ((int) ($first['vehicle_id'] ?? 0) > 0) {
+            $assign('vehicle_id', (int) $first['vehicle_id']);
+        }
+        if ((int) ($first['driver_id'] ?? 0) > 0) {
+            $assign('driver_id', (int) $first['driver_id']);
         }
 
         $quantitySql = $quantityAssignments === [] ? '' : implode(",\n                ", $quantityAssignments) . ',';
@@ -6066,6 +6148,16 @@ class DispecerCurseModel extends BaseModel
         $lastStmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
         $lastStmt->bindValue(':id', (int) $last['id'], PDO::PARAM_INT);
         $lastStmt->execute();
+
+        // Formularul cursei calculeaza durata ca sfarsit - inceput; cu mai multe
+        // segmente durata reala e suma lor (fara pauzele dintre ele).
+        if (count($segments) > 1) {
+            $durationStmt = $this->db->prepare('UPDATE curse_dispecer SET durata_cursa_minute = :durata_cursa_minute WHERE id = :id');
+            $durationMinutes = self::sumSegmentDurationMinutes($this->getRaceSegments($cursaId));
+            $durationStmt->bindValue(':durata_cursa_minute', $durationMinutes, $durationMinutes === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+            $durationStmt->bindValue(':id', $cursaId, PDO::PARAM_INT);
+            $durationStmt->execute();
+        }
     }
 
     /**

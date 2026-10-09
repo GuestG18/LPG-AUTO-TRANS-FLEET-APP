@@ -131,21 +131,38 @@ check('sfarsit mutat la 20:00 (12h) -> 1', $afterEnd === 1, (string) $afterEnd);
 check('sfarsit mutat pe 17.09 20:00 (60h) -> 3', $afterDate === 3, (string) $afterDate);
 check('inceput mutat la 07:59 (60h 01m) -> 3', $afterStart === 3, (string) $afterStart);
 
-echo "\n5) Cursa reluata (#710): perioada intreaga, nu suma fazelor\n";
-$race = ['data_inceput' => '2026-09-15', 'ora_inceput' => '08:00:00', 'data_sfarsit' => '2026-09-18', 'ora_sfarsit' => '14:00:00'];
-$raceResult = dispatcher_diurna_for_interval($race);
-check('15.09 08:00 -> 18.09 14:00 (78h) -> 3', $raceResult['minute'] === 4680 && $raceResult['diurne'] === 3, json_encode($raceResult));
+echo "\n5) Cursa reluata (#710): suma fazelor, fara pauzele dintre ele\n";
 $phases = [
     ['driver_id' => 17, 'sofer_nume' => 'A', 'data_inceput' => '2026-09-15', 'ora_inceput' => '08:00:00', 'data_sfarsit' => '2026-09-15', 'ora_sfarsit' => '12:00:00'],
     ['driver_id' => 17, 'sofer_nume' => 'A', 'data_inceput' => '2026-09-16', 'ora_inceput' => '05:00:00', 'data_sfarsit' => '2026-09-16', 'ora_sfarsit' => '14:00:00'],
     ['driver_id' => 17, 'sofer_nume' => 'A', 'data_inceput' => '2026-09-17', 'ora_inceput' => '12:00:00', 'data_sfarsit' => '2026-09-18', 'ora_sfarsit' => '14:00:00'],
 ];
+$race = ['data_inceput' => '2026-09-15', 'ora_inceput' => '08:00:00', 'data_sfarsit' => '2026-09-18', 'ora_sfarsit' => '14:00:00'];
+$intervalOnly = dispatcher_diurna_for_interval($race);
+check('fara faze: 15.09 08:00 -> 18.09 14:00 (78h) -> 3', $intervalOnly['minute'] === 4680 && $intervalOnly['diurne'] === 3, json_encode($intervalOnly));
+$race['diurna_minute_faze'] = dispatcher_phase_minutes($phases);
+$raceResult = dispatcher_diurna_for_interval($race);
+check('cu faze: 4h + 9h + 26h = 39h -> 2', $raceResult['minute'] === 2340 && $raceResult['diurne'] === 2, json_encode($raceResult));
+$openPhases = $phases;
+$openPhases[2]['data_sfarsit'] = '';
+check('ultima faza deschisa -> fara suma fazelor', dispatcher_phase_minutes($openPhases) === null);
 $split = dispatcher_diurna_split((int) $raceResult['diurne'], $phases);
-check('un singur sofer primeste toate cele 3 diurne', count($split) === 1 && $split[0]['zile'] === 3, json_encode($split));
+check('un singur sofer primeste toate cele 2 diurne', count($split) === 1 && $split[0]['zile'] === 2, json_encode($split));
 $phases[2]['driver_id'] = 21;
 $phases[2]['sofer_nume'] = 'B';
 $split = dispatcher_diurna_split((int) $raceResult['diurne'], $phases);
-check('doi soferi: impartirea pastreaza totalul 3', array_sum(array_column($split, 'zile')) === 3, json_encode($split));
+check('doi soferi: regula pe timpul fiecaruia (A 13h -> 1, B 26h -> 1)', array_column($split, 'zile') === [1, 1], json_encode($split));
+
+// #807 (2026-10-08): Beznea 16h, Serban 42h. Inainte: totalul cursei (58h -> 2) impartit
+// proportional -> 1 + 1. Acum fiecare sofer are regula pe timpul lui -> 1 + 2 = 3.
+$phases807 = [
+    ['driver_id' => 20, 'sofer_nume' => 'Beznea', 'data_inceput' => '2026-10-08', 'ora_inceput' => '08:00', 'data_sfarsit' => '2026-10-09', 'ora_sfarsit' => '00:00'],
+    ['driver_id' => 19, 'sofer_nume' => 'Serban', 'data_inceput' => '2026-10-09', 'ora_inceput' => '00:00', 'data_sfarsit' => '2026-10-10', 'ora_sfarsit' => '18:00'],
+];
+$split = dispatcher_diurna_split(2, $phases807);
+check('#807: Beznea 16h -> 1, Serban 42h -> 2 (total 3)', array_column($split, 'zile') === [1, 2], json_encode($split));
+$split = dispatcher_diurna_split(2, [$phases807[0], ['driver_id' => 19, 'sofer_nume' => 'Serban', 'data_inceput' => '2026-10-09', 'ora_inceput' => '', 'data_sfarsit' => '', 'ora_sfarsit' => '']]);
+check('faze fara durata la un sofer: el are 0, celalalt regula lui', array_column($split, 'zile') === [1, 0], json_encode($split));
 
 echo "\n" . ($failed === 0 ? "\033[32m" : "\033[31m") . "$passed trecute, $failed picate\033[0m\n";
 exit($failed === 0 ? 0 : 1);

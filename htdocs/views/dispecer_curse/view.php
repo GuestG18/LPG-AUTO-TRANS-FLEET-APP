@@ -104,6 +104,21 @@ $sections = [
     ],
 ];
 $observatii = trim((string) ($race['observatii'] ?? ''));
+
+// Admin: punctul cursei (ca in lista) langa "Vehicul", iar fiecare faza are punctul ei,
+// dupa lipsurile fazei (ex. faza 1 fara ora de sfarsit), nu dupa capetele cursei.
+$renderStatusDot = static function (?array $dot): string {
+    if ($dot === null) {
+        return '';
+    }
+    $title = (string) ($dot['title'] ?? '');
+
+    return !empty($dot['complete'])
+        ? '<span class="race-status-dot race-status-dot-complete" title="' . e($title) . '" role="img" aria-label="' . e($title) . '"></span>'
+        : '<a class="race-status-dot race-status-dot-incomplete" href="' . e((string) ($dot['url'] ?? '')) . '" title="' . e($title) . '" aria-label="' . e($title) . '"></a>';
+};
+$statusDotHtml = is_array($raceStatusDot ?? null) ? $renderStatusDot($raceStatusDot) : '';
+$phaseStatusDots = is_array($raceStatusDot['phases'] ?? null) ? $raceStatusDot['phases'] : [];
 ?>
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3<?= !empty($viewPartial) ? ' race-view-head' : '' ?>">
@@ -154,7 +169,11 @@ $observatii = trim((string) ($race['observatii'] ?? ''));
                     <dl class="row mb-0 small">
                         <?php foreach ($fields as $label => $value): ?>
                             <dt class="col-5 text-muted fw-normal py-1"><?= e($label) ?></dt>
-                            <dd class="col-7 mb-0 py-1 fw-semibold"><?= e((string) $value) ?></dd>
+                            <?php if ($label === 'Vehicul' && $statusDotHtml !== ''): ?>
+                                <dd class="col-7 mb-0 py-1 fw-semibold"><span class="race-view-plate"><?= $statusDotHtml ?><?= e((string) $value) ?></span></dd>
+                            <?php else: ?>
+                                <dd class="col-7 mb-0 py-1 fw-semibold"><?= e((string) $value) ?></dd>
+                            <?php endif; ?>
                         <?php endforeach; ?>
                     </dl>
                 </div>
@@ -221,7 +240,11 @@ $observatii = trim((string) ($race['observatii'] ?? ''));
                     <?php /* Clic pe rand (sau pe creion) deschide formularul direct pe faza respectiva. */ ?>
                     <tr<?= $segmentEditUrl !== '' ? ' class="race-view-phase-row" data-race-view-href="' . e($segmentEditUrl) . '" title="Editează faza ' . e((string) ($index + 1)) . '"' : '' ?>>
                         <td class="ps-3"><?= e((string) ($index + 1)) ?></td>
-                        <td><?= e($viewText($segment['nr_inmatriculare'] ?? '') ?: '-') ?></td>
+                        <?php if (count($raceSegments) > 1 && isset($phaseStatusDots[$segmentId])): ?>
+                            <td><span class="race-view-plate"><?= $renderStatusDot($phaseStatusDots[$segmentId]) ?><?= e($viewText($segment['nr_inmatriculare'] ?? '') ?: '-') ?></span></td>
+                        <?php else: ?>
+                            <td><?= e($viewText($segment['nr_inmatriculare'] ?? '') ?: '-') ?></td>
+                        <?php endif; ?>
                         <td><?= e($viewText($segment['sofer_nume'] ?? '') ?: '-') ?></td>
                         <td><?= e($viewDateTime($segment['data_inceput'] ?? '', $segment['ora_inceput'] ?? '') ?: '-') ?></td>
                         <td><?= e($viewDateTime($segment['data_sfarsit'] ?? '', $segment['ora_sfarsit'] ?? '') ?: '-') ?></td>

@@ -254,7 +254,7 @@ $associationLabel = static function (array $row): string {
 
     return '<span class="fuel-pill ' . $badgeClass . '">Cursa #' . e((string) $tripId) . '</span>';
 };
-$renderFillupRows = static function (array $rows, bool $compact = false) use ($formatDateTime, $formatLiters, $formatKm, $formatCurrency, $fuelTypeLabel, $associationLabel, $currentUrl, $canManageFull): void {
+$renderFillupRows = static function (array $rows, bool $compact = false, bool $withDiagnosis = false) use ($formatDateTime, $formatLiters, $formatKm, $formatCurrency, $fuelTypeLabel, $associationLabel, $currentUrl, $canManageFull): void {
     if ($rows === []) {
         $colspan = $compact ? 6 : 11;
         echo '<tr><td colspan="' . $colspan . '" class="text-center text-muted py-4">Nu exista alimentari pentru filtrele selectate.</td></tr>';
@@ -333,6 +333,16 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
                 // In lista compacta, un vehicul usor fara cursa nu are nicio actiune.
                 $hasActions = !$compact || $tripId > 0 || empty($row['is_light_vehicle']) || $isManualRow;
                 ?>
+                <?php $showDiagnosis = $withDiagnosis && $tripId <= 0 && empty($row['is_light_vehicle']); ?>
+                <?php if ($showDiagnosis): ?>
+                <div class="fuel-row-actions">
+                    <button type="button" class="btn btn-sm btn-outline-secondary fuel-diagnosis-btn" data-fuel-diagnosis-open
+                            data-fillup-id="<?= e($fillupIdValue) ?>"
+                            data-fillup-label="<?= e($fillupLabel) ?>"
+                            title="Ultima cursă cu alimentare asociată și motivul pentru care aceasta e neasociată">
+                        <i class="bi bi-search" aria-hidden="true"></i> Ultima cursă asociată
+                    </button>
+                <?php endif; ?>
                 <?php if ($hasActions): ?>
                 <div class="dropdown fuel-row-menu">
                     <button type="button" class="fuel-icon-btn" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" title="Acțiuni">
@@ -410,6 +420,7 @@ $renderFillupRows = static function (array $rows, bool $compact = false) use ($f
                     </ul>
                 </div>
                 <?php endif; ?>
+                <?php if ($showDiagnosis): ?></div><?php endif; ?>
             </td>
         </tr>
         <?php
@@ -831,6 +842,7 @@ $donutStyle = static function (array $items): string {
 
     <form class="fuel-filter-card" method="get" action="<?= e(url('index.php')) ?>">
         <input type="hidden" name="page" value="carburanti">
+        <input type="hidden" name="vehicle_class" value="<?= e((string) ($filters['vehicle_class'] ?? '')) ?>">
         <div class="fuel-filter-grid">
             <div>
                 <label class="form-label" for="fuel_period_display">Perioadă</label>
@@ -1108,16 +1120,28 @@ $donutStyle = static function (array $items): string {
         </article>
     </div>
     <?php
-    $fuelSplitTotal = (float) ($kpis['total_value'] ?? 0);
+    // Cifrele cardurilor ignora filtrul de categorie (vezi getDashboardData),
+    // ca ambele carduri sa ramana comparabile si clicabile.
+    $split = is_array($kpis['split'] ?? null) ? $kpis['split'] : $kpis;
+    $fuelSplitTotal = (float) ($split['total_value'] ?? 0);
+    $activeVehicleClass = (string) ($filters['vehicle_class'] ?? '');
     $fuelSplitGroups = [
-        ['label' => 'Vehicule grele', 'hint' => 'Camioane, capete tractor', 'icon' => 'bi-truck', 'accent' => 'blue', 'value' => (float) ($kpis['heavy_value'] ?? 0), 'liters' => (float) ($kpis['heavy_liters'] ?? 0), 'fillups' => (int) ($kpis['heavy_fillups'] ?? 0)],
-        ['label' => 'Vehicule ușoare', 'hint' => 'Autoturisme, autoutilitare', 'icon' => 'bi-car-front', 'accent' => 'purple', 'value' => (float) ($kpis['light_value'] ?? 0), 'liters' => (float) ($kpis['light_liters'] ?? 0), 'fillups' => (int) ($kpis['light_fillups'] ?? 0)],
+        ['key' => 'grele', 'label' => 'Vehicule grele', 'hint' => 'Camioane, capete tractor', 'icon' => 'bi-truck', 'accent' => 'blue', 'value' => (float) ($split['heavy_value'] ?? 0), 'liters' => (float) ($split['heavy_liters'] ?? 0), 'fillups' => (int) ($split['heavy_fillups'] ?? 0)],
+        ['key' => 'usoare', 'label' => 'Vehicule ușoare', 'hint' => 'Autoturisme, autoutilitare', 'icon' => 'bi-car-front', 'accent' => 'purple', 'value' => (float) ($split['light_value'] ?? 0), 'liters' => (float) ($split['light_liters'] ?? 0), 'fillups' => (int) ($split['light_fillups'] ?? 0)],
     ];
     ?>
-    <div class="fuel-split" aria-label="Cost carburant pe categorie de vehicul">
+    <div class="fuel-split<?= $activeVehicleClass !== '' ? ' has-active' : '' ?>" aria-label="Cost carburant pe categorie de vehicul — clic pentru a filtra pagina">
         <?php foreach ($fuelSplitGroups as $group): ?>
-            <?php $share = $fuelSplitTotal > 0 ? $group['value'] / $fuelSplitTotal * 100 : 0.0; ?>
-            <article class="fuel-split-card fuel-split-<?= e($group['accent']) ?>">
+            <?php
+            $share = $fuelSplitTotal > 0 ? $group['value'] / $fuelSplitTotal * 100 : 0.0;
+            $isActiveClass = $activeVehicleClass === $group['key'];
+            // Clic pe cardul activ scoate filtrul; pe celalalt comuta categoria.
+            $splitUrl = build_query_url(array_merge($_GET, ['page' => 'carburanti', 'vehicle_class' => $isActiveClass ? '' : $group['key']]));
+            ?>
+            <a class="fuel-split-card fuel-split-<?= e($group['accent']) ?><?= $isActiveClass ? ' is-active' : '' ?>"
+               href="<?= e($splitUrl) ?>"
+               aria-pressed="<?= $isActiveClass ? 'true' : 'false' ?>"
+               title="<?= e($isActiveClass ? 'Arată toate vehiculele' : 'Filtrează pagina pe ' . mb_strtolower($group['label'])) ?>">
                 <i class="bi <?= e($group['icon']) ?>" aria-hidden="true"></i>
                 <div class="fuel-split-main">
                     <span><?= e($group['label']) ?> <small><?= e($group['hint']) ?></small></span>
@@ -1129,7 +1153,10 @@ $donutStyle = static function (array $items): string {
                     <small>din cost total</small>
                     <div class="fuel-split-bar"><span style="width: <?= e(number_format(min(100.0, max(0.0, $share)), 1, '.', '')) ?>%"></span></div>
                 </div>
-            </article>
+                <?php if ($isActiveClass): ?>
+                    <span class="fuel-split-active-tag"><i class="bi bi-funnel-fill" aria-hidden="true"></i> Filtru activ · clic pentru toate</span>
+                <?php endif; ?>
+            </a>
         <?php endforeach; ?>
     </div>
     <?php endif; ?>
@@ -1659,6 +1686,7 @@ $donutStyle = static function (array $items): string {
                         <input type="hidden" name="transport_group" value="<?= e((string) ($filters['transport_group'] ?? '')) ?>">
                         <input type="hidden" name="fuel_type" value="<?= e((string) ($filters['fuel_type'] ?? '')) ?>">
                         <input type="hidden" name="brand" value="<?= e((string) ($filters['brand'] ?? '')) ?>">
+                        <input type="hidden" name="vehicle_class" value="<?= e((string) ($filters['vehicle_class'] ?? '')) ?>">
                         <div class="fuel-compare-form-grid">
                             <div>
                                 <label class="form-label" for="fuel_compare_mode">Mod comparație</label>
@@ -1897,7 +1925,7 @@ $donutStyle = static function (array $items): string {
                         <?php endif; ?>
                     </details>
                     <div class="fuel-kmcheck-summary" data-kmcheck-summary></div>
-                    <div class="table-responsive">
+                    <div class="table-responsive fuel-kmcheck-scroll">
                         <table class="table fuel-table fuel-kmcheck-table">
                             <thead data-kmcheck-head></thead>
                             <tbody data-kmcheck-body></tbody>
@@ -1951,18 +1979,26 @@ $donutStyle = static function (array $items): string {
                 <article class="fuel-card">
                     <div class="fuel-card-header"><h2>Alimentări neasociate</h2></div>
                     <div class="table-responsive">
-                        <table class="table fuel-table fuel-table-compact">
+                        <table class="table fuel-table fuel-table-compact fuel-table-unassoc">
+                            <colgroup>
+                                <col class="col-date">
+                                <col class="col-vehicle">
+                                <col class="col-fuel">
+                                <col class="col-qty">
+                                <col class="col-value">
+                                <col class="col-actions">
+                            </colgroup>
                             <thead>
                                 <tr>
                                     <th>Data și ora</th>
                                     <th>Vehicul</th>
                                     <th>Tip carburant</th>
-                                    <th>Cantitate</th>
-                                    <th>Valoare</th>
-                                    <th>Acțiuni</th>
+                                    <th class="is-num">Cantitate</th>
+                                    <th class="is-num">Valoare</th>
+                                    <th class="is-actions">Acțiuni</th>
                                 </tr>
                             </thead>
-                            <tbody><?php $renderFillupRows($unassociatedFillups, true); ?></tbody>
+                            <tbody><?php $renderFillupRows($unassociatedFillups, true, true); ?></tbody>
                         </table>
                     </div>
                 </article>
@@ -2445,6 +2481,119 @@ $donutStyle = static function (array $items): string {
         </form>
     </div>
 </div>
+
+<div class="modal fade" id="fuelDiagnosisModal" tabindex="-1" aria-labelledby="fuelDiagnosisModalTitle" aria-hidden="true"
+     data-endpoint="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'unassociated_diagnosis'])) ?>"
+     data-trip-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => '__ID__'])) ?>">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="fuelDiagnosisModalTitle">De ce e neasociată?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+            </div>
+            <div class="modal-body">
+                <p class="fuel-modal-subtitle" id="fuelDiagnosisLabel">Alimentare</p>
+                <div id="fuelDiagnosisBody"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Închide</button>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var modalEl = document.getElementById('fuelDiagnosisModal');
+    if (!modalEl) {
+        return;
+    }
+    var body = document.getElementById('fuelDiagnosisBody');
+    var label = document.getElementById('fuelDiagnosisLabel');
+    var endpoint = modalEl.getAttribute('data-endpoint');
+    var tripUrl = modalEl.getAttribute('data-trip-url');
+
+    function esc(value) {
+        var div = document.createElement('div');
+        div.textContent = value === null || value === undefined ? '' : String(value);
+        return div.innerHTML;
+    }
+    function fmtDate(value) {
+        var m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(value || '');
+        return m ? m[3] + '.' + m[2] + '.' + m[1] + ' ' + m[4] + ':' + m[5] : (value || '-');
+    }
+    function fmtNum(value, decimals) {
+        return Number(value || 0).toLocaleString('ro-RO', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    }
+    function tripLink(id) {
+        return '<a href="' + esc(tripUrl.replace('__ID__', encodeURIComponent(id))) + '" target="_blank" rel="noopener">Cursa #' + esc(id) + '</a>';
+    }
+    function tripRow(title, trip, gapText) {
+        if (!trip) {
+            return '<tr><th class="text-nowrap">' + esc(title) + '</th><td colspan="3" class="text-muted">Nu există</td></tr>';
+        }
+        return '<tr><th class="text-nowrap">' + esc(title) + '</th>'
+            + '<td>' + tripLink(trip.id) + '</td>'
+            + '<td>' + esc(fmtDate(trip.trip_start)) + ' → ' + esc(fmtDate(trip.trip_end))
+            + (trip.driver_name ? '<br><small class="text-muted">' + esc(trip.driver_name) + '</small>' : '') + '</td>'
+            + '<td class="text-nowrap">' + gapText + '</td></tr>';
+    }
+
+    function render(d) {
+        var html = '<div class="alert alert-warning mb-3"><strong>Motiv:</strong><ul class="mb-0 ps-3">';
+        d.reasons.forEach(function (reason) { html += '<li>' + esc(reason) + '</li>'; });
+        html += '</ul></div>';
+
+        html += '<h6 class="mb-2">Ultima cursă cu alimentare asociată</h6>';
+        if (d.last_linked) {
+            var l = d.last_linked;
+            html += '<div class="border rounded p-2 mb-3">'
+                + tripLink(l.trip_id) + ' · ' + esc(fmtDate(l.trip_start)) + ' → ' + esc(fmtDate(l.trip_end))
+                + (l.driver_name ? ' · ' + esc(l.driver_name) : '')
+                + '<br><small class="text-muted">Alimentarea asociată: ' + esc(fmtDate(l.fillup_datetime)) + ' · '
+                + esc(fmtNum(l.quantity_liters, 2)) + ' L ' + esc(l.fuel_type) + ' · asociere '
+                + (l.match_type === 'manual' ? 'manuală' : 'automată') + '</small></div>';
+        } else {
+            html += '<p class="text-muted">Vehiculul nu are nicio alimentare anterioară asociată cu o cursă.</p>';
+        }
+
+        var tol = d.tolerance_hours;
+        var gap = function (trip, word) {
+            var hours = Number(trip && trip.gap_hours || 0);
+            var cls = hours > tol ? 'text-danger' : 'text-success';
+            return '<span class="' + cls + '">' + esc(fmtNum(hours, 1)) + ' h ' + word + '</span>';
+        };
+        html += '<h6 class="mb-2">Cursele cele mai apropiate de alimentare (toleranță ±' + esc(tol) + ' h)</h6>'
+            + '<table class="table table-sm align-middle mb-0"><tbody>'
+            + tripRow('Înainte', d.previous_trip, d.previous_trip ? gap(d.previous_trip, 'înainte') : '')
+            + tripRow('După', d.next_trip, d.next_trip ? gap(d.next_trip, 'după') : '')
+            + '</tbody></table>';
+        body.innerHTML = html;
+    }
+
+    document.addEventListener('click', function (event) {
+        var button = event.target.closest('[data-fuel-diagnosis-open]');
+        if (!button || !window.bootstrap) {
+            return;
+        }
+        label.textContent = button.getAttribute('data-fillup-label') || 'Alimentare';
+        body.innerHTML = '<div class="text-muted py-3"><span class="spinner-border spinner-border-sm me-2"></span>Se încarcă…</div>';
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+
+        var url = endpoint + (endpoint.indexOf('?') === -1 ? '?' : '&') + 'fillup_id=' + encodeURIComponent(button.getAttribute('data-fillup-id') || '');
+        fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+            .then(function (response) { return response.json(); })
+            .then(function (payload) {
+                if (!payload || !payload.ok) {
+                    throw new Error(payload && payload.error ? payload.error : 'Eroare');
+                }
+                render(payload.data);
+            })
+            .catch(function (error) {
+                body.innerHTML = '<div class="alert alert-danger mb-0">' + esc(error.message || 'Explicația nu a putut fi încărcată.') + '</div>';
+            });
+    });
+});
+</script>
 
 <div class="modal fade" id="fuelOdoModal" tabindex="-1" aria-labelledby="fuelOdoModalTitle" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
