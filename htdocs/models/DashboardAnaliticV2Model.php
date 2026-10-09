@@ -920,8 +920,11 @@ class DashboardAnaliticV2Model extends BaseModel
 
     private function metricExpressions(array $period): array
     {
+        // Compresorul isi tine km in km_dislocare (facturati cu pret_km_dislocare),
+        // la fel ca in Centralizator (DispecerCurseModel, kmDoneExpr).
         $kmEffective = "
             CASE
+                WHEN c.tip_transport = 'compresor' AND COALESCE(c.km_dislocare, 0) > 0 THEN c.km_dislocare
                 WHEN c.km_totali IS NOT NULL AND c.km_totali > 0 THEN c.km_totali
                 WHEN c.km_cursa IS NOT NULL AND c.km_cursa > 0 THEN c.km_cursa
                 ELSE 0
@@ -952,6 +955,7 @@ class DashboardAnaliticV2Model extends BaseModel
 
         $kmBilled = "
             CASE
+                WHEN c.tip_transport = 'compresor' AND COALESCE(c.km_dislocare, 0) > 0 THEN c.km_dislocare
                 WHEN c.km_cursa IS NOT NULL AND c.km_cursa > 0 THEN c.km_cursa
                 WHEN c.km_totali IS NOT NULL AND c.km_totali > 0 THEN c.km_totali
                 ELSE 0
