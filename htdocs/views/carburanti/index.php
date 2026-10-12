@@ -241,6 +241,9 @@ $changeBadge = static function (?float $value): string {
 };
 $associationLabel = static function (array $row): string {
     $tripId = (int) ($row['trip_id'] ?? 0);
+    if ($tripId <= 0 && !empty($row['is_unregistered_vehicle'])) {
+        return '<span class="fuel-pill fuel-pill-partial" title="Card fără număr sau număr care nu există în Vehicule: nu are curse, alimentarea nu se asociază">Neînregistrat</span>';
+    }
     if ($tripId <= 0 && !empty($row['is_light_vehicle'])) {
         // Vehiculele usoare nu fac curse — nu e nimic de asociat.
         return '<span class="fuel-pill fuel-pill-partial" title="Vehicul ușor: nu face curse, alimentarea nu se asociază">Vehicul ușor</span>';
@@ -264,9 +267,19 @@ $renderFillupRows = static function (array $rows, bool $compact = false, bool $w
     foreach ($rows as $row) {
         $tripId = (int) ($row['trip_id'] ?? 0);
         $isManualRow = (string) ($row['source_type'] ?? 'api') === 'manual';
+        // data-filter-values: valorile din palnia de antet (table-column-filter.js), fara textul din etichete.
+        $fullFilter = !empty($row['is_full']) ? 'Full' : 'Partial';
+        if (($row['is_full_manual'] ?? null) !== null) {
+            $fullFilter .= '|Decizie manuală';
+        }
+        if ($tripId > 0) {
+            $associationFilter = (((string) ($row['match_type'] ?? 'automatic')) === 'manual' ? 'Asociată manual' : 'Asociată automat') . '|Cursa #' . $tripId;
+        } else {
+            $associationFilter = !empty($row['is_unregistered_vehicle']) ? 'Neînregistrat' : (!empty($row['is_light_vehicle']) ? 'Vehicul ușor' : 'Alimentare neasociată');
+        }
         ?>
         <tr>
-            <td>
+            <td data-filter-values="<?= e(format_date_ro(substr((string) ($row['fillup_datetime'] ?? ''), 0, 10))) ?>">
                 <?= e($formatDateTime((string) ($row['fillup_datetime'] ?? ''))) ?>
                 <?php if ($isManualRow): ?>
                     <?php
@@ -280,7 +293,7 @@ $renderFillupRows = static function (array $rows, bool $compact = false, bool $w
                 <?php endif; ?>
             </td>
             <?php $vehicleIsManual = ($row['vehicle_registration_manual'] ?? null) !== null; ?>
-            <td class="fw-semibold">
+            <td class="fw-semibold" data-filter-values="<?= e((string) ($row['vehicle_registration'] ?? '-')) ?>">
                 <?= e((string) ($row['vehicle_registration'] ?? '-')) ?>
                 <?php if ($vehicleIsManual): ?>
                     <span class="fuel-pill fuel-pill-manual"
@@ -316,7 +329,7 @@ $renderFillupRows = static function (array $rows, bool $compact = false, bool $w
                     <?php endif; ?>
                 </td>
                 <td><?= e($formatCurrency((float) ($row['total_value'] ?? 0))) ?></td>
-                <td>
+                <td data-filter-values="<?= e($fullFilter) ?>">
                     <span class="fuel-pill <?= !empty($row['is_full']) ? 'fuel-pill-full' : 'fuel-pill-partial' ?>">
                         <?= !empty($row['is_full']) ? 'Full' : 'Partial' ?>
                     </span>
@@ -324,7 +337,7 @@ $renderFillupRows = static function (array $rows, bool $compact = false, bool $w
                         <span class="fuel-pill fuel-pill-manual" title="Decizie manuală, protejată la sincronizarea CardOil">manual</span>
                     <?php endif; ?>
                 </td>
-                <td><?= $associationLabel($row) ?></td>
+                <td data-filter-values="<?= e($associationFilter) ?>"><?= $associationLabel($row) ?></td>
             <?php endif; ?>
             <td class="fuel-actions-cell">
                 <?php
@@ -356,7 +369,7 @@ $renderFillupRows = static function (array $rows, bool $compact = false, bool $w
                                     <i class="bi bi-eye" aria-hidden="true"></i> Deschide cursa #<?= e((string) $tripId) ?>
                                 </a>
                             </li>
-                        <?php elseif (empty($row['is_light_vehicle'])): ?>
+                        <?php elseif (empty($row['is_light_vehicle']) && empty($row['is_unregistered_vehicle'])): ?>
                             <li>
                                 <button type="button" class="dropdown-item" data-fuel-link-open
                                         data-fillup-id="<?= e($fillupIdValue) ?>"
@@ -1128,6 +1141,7 @@ $donutStyle = static function (array $items): string {
     $fuelSplitGroups = [
         ['key' => 'grele', 'label' => 'Vehicule grele', 'hint' => 'Camioane, capete tractor', 'icon' => 'bi-truck', 'accent' => 'blue', 'value' => (float) ($split['heavy_value'] ?? 0), 'liters' => (float) ($split['heavy_liters'] ?? 0), 'fillups' => (int) ($split['heavy_fillups'] ?? 0)],
         ['key' => 'usoare', 'label' => 'Vehicule ușoare', 'hint' => 'Autoturisme, autoutilitare', 'icon' => 'bi-car-front', 'accent' => 'purple', 'value' => (float) ($split['light_value'] ?? 0), 'liters' => (float) ($split['light_liters'] ?? 0), 'fillups' => (int) ($split['light_fillups'] ?? 0)],
+        ['key' => 'neinregistrate', 'label' => 'Neînregistrate', 'hint' => 'Carduri fără vehicul în flotă', 'icon' => 'bi-question-circle', 'accent' => 'amber', 'value' => (float) ($split['unregistered_value'] ?? 0), 'liters' => (float) ($split['unregistered_liters'] ?? 0), 'fillups' => (int) ($split['unregistered_fillups'] ?? 0)],
     ];
     ?>
     <div class="fuel-split<?= $activeVehicleClass !== '' ? ' has-active' : '' ?>" aria-label="Cost carburant pe categorie de vehicul — clic pentru a filtra pagina">
@@ -1376,8 +1390,12 @@ $donutStyle = static function (array $items): string {
             <section class="tab-pane fade" id="fuel-fillups" role="tabpanel" aria-labelledby="fuel-fillups-tab" tabindex="0">
                 <article class="fuel-card">
                     <div class="fuel-card-header"><h2>Alimentări</h2></div>
-                    <div class="table-responsive">
-                        <table class="table fuel-table">
+                    <?php if (count($allFillups) >= FuelModel::ALL_FILLUPS_LIMIT): ?>
+                        <div class="alert alert-warning py-2 small mb-2">Se afișează cele mai recente <?= e(format_number_ro(FuelModel::ALL_FILLUPS_LIMIT, 0)) ?> alimentări din perioadă — filtrele din antet lucrează doar pe acestea. Restrânge intervalul pentru restul.</div>
+                    <?php endif; ?>
+                    <div class="table-responsive fuel-table-scroll">
+                        <?php /* data-column-filter: sortare si filtrare din antet (assets/js/table-column-filter.js). */ ?>
+                        <table class="table fuel-table" data-column-filter>
                             <thead>
                                 <tr>
                                     <th>Data și ora</th>
@@ -1390,7 +1408,7 @@ $donutStyle = static function (array $items): string {
                                     <th>Valoare</th>
                                     <th>Tip alimentare</th>
                                     <th>Asociere cursă</th>
-                                    <th>Acțiuni</th>
+                                    <th data-no-filter>Acțiuni</th>
                                 </tr>
                             </thead>
                             <tbody><?php $renderFillupRows($allFillups); ?></tbody>
@@ -1978,8 +1996,8 @@ $donutStyle = static function (array $items): string {
             <section class="tab-pane fade" id="fuel-unassociated" role="tabpanel" aria-labelledby="fuel-unassociated-tab" tabindex="0">
                 <article class="fuel-card">
                     <div class="fuel-card-header"><h2>Alimentări neasociate</h2></div>
-                    <div class="table-responsive">
-                        <table class="table fuel-table fuel-table-compact fuel-table-unassoc">
+                    <div class="table-responsive fuel-table-scroll">
+                        <table class="table fuel-table fuel-table-compact fuel-table-unassoc" data-column-filter>
                             <colgroup>
                                 <col class="col-date">
                                 <col class="col-vehicle">
@@ -1995,7 +2013,7 @@ $donutStyle = static function (array $items): string {
                                     <th>Tip carburant</th>
                                     <th class="is-num">Cantitate</th>
                                     <th class="is-num">Valoare</th>
-                                    <th class="is-actions">Acțiuni</th>
+                                    <th class="is-actions" data-no-filter>Acțiuni</th>
                                 </tr>
                             </thead>
                             <tbody><?php $renderFillupRows($unassociatedFillups, true, true); ?></tbody>
@@ -3388,3 +3406,4 @@ document.addEventListener('DOMContentLoaded', function () {
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script src="<?= e(url('assets/js/carburanti-compare.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/carburanti-compare.js'))) ?>"></script>
 <script src="<?= e(url('assets/js/fuel-km-check.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/fuel-km-check.js'))) ?>"></script>
+<script src="<?= e(url('assets/js/table-column-filter.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/table-column-filter.js'))) ?>"></script>

@@ -1090,9 +1090,9 @@ class FuelController
             $brand = '';
         }
 
-        // Categoria aleasa din cardurile „Vehicule grele / ușoare".
+        // Categoria aleasa din cardurile „Vehicule grele / ușoare / Neînregistrate".
         $vehicleClass = trim((string) ($input['vehicle_class'] ?? ''));
-        if (!in_array($vehicleClass, ['grele', 'usoare'], true)) {
+        if (!in_array($vehicleClass, ['grele', 'usoare', 'neinregistrate'], true)) {
             $vehicleClass = '';
         }
 

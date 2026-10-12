@@ -1180,12 +1180,22 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                 <button class="btn btn-outline-secondary" type="submit"><i class="bi bi-funnel me-1"></i> Filtre</button>
             </form>
 
-            <form method="post" id="tireBulkDeleteForm" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'bulk_delete_tire_stock'])) ?>" class="d-none align-items-center gap-2 px-3 py-2 border-bottom bg-light" data-tire-bulk-bar>
+            <form method="post" id="tireBulkForm" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'bulk_delete_tire_stock'])) ?>" class="d-none flex-wrap align-items-center gap-2 px-3 py-2 border-bottom bg-light" data-tire-bulk-bar>
                 <?= csrf_field() ?>
                 <input type="hidden" name="return_query" value="<?= e((string) ($_SERVER['QUERY_STRING'] ?? '')) ?>">
-                <span class="small fw-semibold"><span data-tire-bulk-count>0</span> anvelope selectate</span>
+                <span class="small fw-semibold"><span data-tire-bulk-count>0</span> anvelope selectate <span class="text-muted fw-normal">(<span data-tire-bulk-mounted>0</span> montate, <span data-tire-bulk-free>0</span> nemontate)</span></span>
                 <button type="button" class="btn btn-sm btn-outline-secondary" data-tire-bulk-clear>Deselecteaza</button>
-                <button type="submit" class="btn btn-sm btn-danger ms-auto" data-tire-bulk-submit><i class="bi bi-trash me-1"></i>Sterge selectate</button>
+                <div class="d-flex flex-wrap align-items-center gap-2 ms-auto">
+                    <input type="date" class="form-control form-control-sm w-auto" name="unmount_date" value="<?= e(date('Y-m-d')) ?>" aria-label="Data demontaj" title="Data demontaj">
+                    <select class="form-select form-select-sm w-auto" name="status_end" aria-label="Status dupa demontare" title="Status dupa demontare">
+                        <option value="spare" selected>Rezerva</option>
+                        <option value="in_stock">In stoc</option>
+                        <option value="damaged">Deteriorata</option>
+                        <option value="removed">Scoasa din uz</option>
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-outline-danger" formaction="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'bulk_unmount_tire_stock'])) ?>" data-tire-bulk-unmount><i class="bi bi-box-arrow-down me-1"></i>Demonteaza (<span data-tire-bulk-mounted>0</span>)</button>
+                    <button type="submit" class="btn btn-sm btn-danger" data-tire-bulk-delete><i class="bi bi-trash me-1"></i>Sterge (<span data-tire-bulk-free>0</span>)</button>
+                </div>
             </form>
             <style>
                 .tire-table td:has(> [data-tire-bulk-item]) { cursor: pointer; }
@@ -1194,15 +1204,30 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
             </style>
             <script>
                 document.addEventListener('DOMContentLoaded', function () {
-                    var form = document.getElementById('tireBulkDeleteForm');
+                    var form = document.getElementById('tireBulkForm');
                     if (!form) { return; }
                     var allBox = document.querySelector('[data-tire-bulk-all]');
                     var countEl = form.querySelector('[data-tire-bulk-count]');
+                    var unmountBtn = form.querySelector('[data-tire-bulk-unmount]');
+                    var deleteBtn = form.querySelector('[data-tire-bulk-delete]');
                     var items = function () { return Array.prototype.slice.call(document.querySelectorAll('[data-tire-bulk-item]')); };
+                    var selection = function () {
+                        var picked = items().filter(function (box) { return box.checked; });
+                        var mounted = picked.filter(function (box) { return box.dataset.mounted === '1'; }).length;
+                        return { total: picked.length, mounted: mounted, free: picked.length - mounted };
+                    };
+                    var setText = function (selector, value) {
+                        form.querySelectorAll(selector).forEach(function (el) { el.textContent = String(value); });
+                    };
                     var refresh = function () {
                         var list = items();
-                        var checked = list.filter(function (box) { return box.checked; }).length;
+                        var sel = selection();
+                        var checked = sel.total;
                         countEl.textContent = String(checked);
+                        setText('[data-tire-bulk-mounted]', sel.mounted);
+                        setText('[data-tire-bulk-free]', sel.free);
+                        unmountBtn.disabled = sel.mounted === 0;
+                        deleteBtn.disabled = sel.free === 0;
                         form.classList.toggle('d-none', checked === 0);
                         form.classList.toggle('d-flex', checked > 0);
                         if (allBox) {
@@ -1224,56 +1249,150 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                         items().forEach(function (box) { box.checked = false; });
                         refresh();
                     });
-                    // Selectie prin tragere: apesi pe casuta unui rand si tragi peste celelalte randuri.
-                    // Shift + click selecteaza intervalul fata de ultimul rand bifat.
-                    var dragState = null;
-                    var lastBox = null;
+                    // Selectie cu mouse-ul pe casutele din prima coloana:
+                    // - click / Ctrl+click: comuta un singur rand, fara sa atinga restul selectiei;
+                    // - Shift+click: intervalul dintre ultimul rand atins (ancora) si randul curent;
+                    // - apasat + tras: interval viu intre randul de start si randul de sub cursor;
+                    //   daca revii spre start, randurile iesite din interval revin la starea dinainte.
+                    // Randurile se identifica prin id-ul anvelopei (valoarea casutei), iar ordinea e cea
+                    // din DOM, deci intervalul respecta filtrele / sortarea afisate.
+                    var anchorId = null;
+                    var drag = null;
+                    var boxId = function (box) { return box ? String(box.value) : null; };
+                    var boxById = function (id) {
+                        return items().filter(function (box) { return boxId(box) === id; })[0] || null;
+                    };
                     var setBox = function (box, state) {
                         if (box && !box.disabled) { box.checked = state; }
                     };
-                    var boxFromCell = function (target) {
-                        var cell = target.closest ? target.closest('td') : null;
-                        return cell ? cell.querySelector('[data-tire-bulk-item]') : null;
+                    var applyRange = function (fromId, toId, state, base) {
+                        var list = items();
+                        var ids = list.map(boxId);
+                        var from = ids.indexOf(fromId);
+                        var to = ids.indexOf(toId);
+                        if (from < 0 || to < 0) { return; }
+                        var lo = Math.min(from, to);
+                        var hi = Math.max(from, to);
+                        list.forEach(function (box, index) {
+                            if (index >= lo && index <= hi) {
+                                setBox(box, state);
+                            } else if (base && Object.prototype.hasOwnProperty.call(base, boxId(box))) {
+                                setBox(box, base[boxId(box)]);
+                            }
+                        });
                     };
-                    var boxFromRow = function (target) {
-                        var row = target.closest ? target.closest('tr') : null;
-                        return row ? row.querySelector('[data-tire-bulk-item]') : null;
+                    // Doar celula casutei porneste selectia; butoane, linkuri, meniuri raman neatinse.
+                    var boxFromCell = function (target) {
+                        if (!target.closest || target.closest('button, a, select, .dropdown, .dropdown-menu, label')) { return null; }
+                        var cell = target.closest('td');
+                        var box = cell ? cell.querySelector(':scope > [data-tire-bulk-item]') : null;
+                        return box && !box.disabled ? box : null;
+                    };
+                    // Randul de sub cursor dupa pozitia verticala: merge si cand cursorul iese din coloana
+                    // sau din tabel (peste capat = primul / ultimul rand).
+                    var boxAtY = function (clientY) {
+                        var list = items();
+                        if (list.length === 0) { return null; }
+                        for (var i = 0; i < list.length; i++) {
+                            var rect = list[i].closest('tr').getBoundingClientRect();
+                            if (clientY < rect.top) { return i === 0 ? list[0] : list[i - 1]; }
+                            if (clientY <= rect.bottom) { return list[i]; }
+                        }
+                        return list[list.length - 1];
+                    };
+                    var scrollParent = (function () {
+                        var table = document.querySelector('.tire-table');
+                        for (var el = table ? table.parentElement : null; el && el !== document.body; el = el.parentElement) {
+                            var overflowY = window.getComputedStyle(el).overflowY;
+                            if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight) { return el; }
+                        }
+                        return null;
+                    })();
+                    var viewportBounds = function () {
+                        if (scrollParent) {
+                            var rect = scrollParent.getBoundingClientRect();
+                            return { top: rect.top, bottom: rect.bottom };
+                        }
+                        // Antetul aplicatiei (.topbar) e lipit sus; zona de derulare incepe sub el.
+                        var topbar = document.querySelector('.topbar');
+                        return { top: topbar ? Math.max(0, topbar.getBoundingClientRect().bottom) : 0, bottom: window.innerHeight };
+                    };
+                    var updateDrag = function () {
+                        var box = boxAtY(drag.y);
+                        var id = boxId(box);
+                        if (id === null || id === drag.currentId) { return; }
+                        drag.currentId = id;
+                        anchorId = drag.startId;
+                        applyRange(drag.startId, id, drag.state, drag.base);
+                        refresh();
+                    };
+                    var autoScrollStep = function () {
+                        if (!drag) { return; }
+                        var bounds = viewportBounds();
+                        var edge = 48;
+                        var delta = 0;
+                        if (drag.y < bounds.top + edge) {
+                            delta = -Math.ceil((bounds.top + edge - drag.y) / 3);
+                        } else if (drag.y > bounds.bottom - edge) {
+                            delta = Math.ceil((drag.y - (bounds.bottom - edge)) / 3);
+                        }
+                        if (delta !== 0) {
+                            delta = Math.max(-30, Math.min(30, delta));
+                            // 'instant': pagina are scroll-behavior: smooth, care ar porni o animatie la fiecare pas.
+                            (scrollParent || window).scrollBy({ top: delta, behavior: 'instant' });
+                            updateDrag();
+                        }
+                        drag.frame = window.requestAnimationFrame(autoScrollStep);
+                    };
+                    var onDragMove = function (event) {
+                        if (!drag) { return; }
+                        if ((event.buttons & 1) === 0) { endDrag(); return; }
+                        drag.y = event.clientY;
+                        updateDrag();
+                    };
+                    var onDragKey = function (event) {
+                        // Esc anuleaza tragerea si reface selectia de dinainte.
+                        if (!drag || event.key !== 'Escape') { return; }
+                        items().forEach(function (box) {
+                            if (Object.prototype.hasOwnProperty.call(drag.base, boxId(box))) { setBox(box, drag.base[boxId(box)]); }
+                        });
+                        refresh();
+                        endDrag();
+                    };
+                    var endDrag = function () {
+                        if (!drag) { return; }
+                        window.cancelAnimationFrame(drag.frame);
+                        drag = null;
+                        document.removeEventListener('mousemove', onDragMove);
+                        document.removeEventListener('mouseup', endDrag);
+                        document.removeEventListener('keydown', onDragKey);
+                        window.removeEventListener('blur', endDrag);
+                        document.body.classList.remove('tire-bulk-dragging');
                     };
                     document.addEventListener('mousedown', function (event) {
-                        if (event.button !== 0) { return; }
+                        if (event.button !== 0 || drag) { return; }
                         var box = boxFromCell(event.target);
                         if (!box) { return; }
                         event.preventDefault();
-                        var state = !box.checked;
-                        if (event.shiftKey && lastBox) {
-                            var list = items();
-                            var from = list.indexOf(lastBox);
-                            var to = list.indexOf(box);
-                            if (from > -1 && to > -1) {
-                                state = lastBox.checked;
-                                list.slice(Math.min(from, to), Math.max(from, to) + 1).forEach(function (item) { setBox(item, state); });
-                            }
-                        } else {
-                            setBox(box, state);
-                        }
-                        lastBox = box;
-                        dragState = state;
-                        document.body.classList.add('tire-bulk-dragging');
-                        refresh();
-                    });
-                    document.addEventListener('mouseover', function (event) {
-                        if (dragState === null) { return; }
-                        var box = boxFromRow(event.target);
-                        if (box && box.checked !== dragState) {
-                            setBox(box, dragState);
-                            lastBox = box;
+                        var id = boxId(box);
+                        if (event.shiftKey && anchorId !== null && boxById(anchorId)) {
+                            applyRange(anchorId, id, boxById(anchorId).checked, null);
                             refresh();
+                            return;
                         }
-                    });
-                    document.addEventListener('mouseup', function () {
-                        if (dragState === null) { return; }
-                        dragState = null;
-                        document.body.classList.remove('tire-bulk-dragging');
+                        setBox(box, !box.checked);
+                        anchorId = id;
+                        refresh();
+                        if (event.ctrlKey || event.metaKey) { return; }
+                        var base = {};
+                        items().forEach(function (item) { base[boxId(item)] = item.checked; });
+                        drag = { startId: id, currentId: id, state: box.checked, base: base, y: event.clientY, frame: 0 };
+                        document.body.classList.add('tire-bulk-dragging');
+                        document.addEventListener('mousemove', onDragMove);
+                        document.addEventListener('mouseup', endDrag);
+                        document.addEventListener('keydown', onDragKey);
+                        window.addEventListener('blur', endDrag);
+                        drag.frame = window.requestAnimationFrame(autoScrollStep);
                     });
                     // Starea e setata deja la mousedown; oprim comutarea implicita a click-ului.
                     document.addEventListener('click', function (event) {
@@ -1281,8 +1400,18 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                         if (event.detail > 0 && event.target.matches('[data-tire-bulk-item]')) { event.preventDefault(); }
                     });
                     form.addEventListener('submit', function (event) {
-                        var checked = items().filter(function (box) { return box.checked; }).length;
-                        if (checked === 0 || !window.confirm('Sigur vrei sa stergi ' + checked + ' anvelope din stoc? Actiunea nu poate fi anulata.')) {
+                        var sel = selection();
+                        var message;
+                        if (event.submitter === unmountBtn) {
+                            message = 'Sigur vrei sa demontezi ' + sel.mounted + ' anvelope?'
+                                + (sel.free > 0 ? '\n' + sel.free + ' anvelope nemontate din selectie vor fi ignorate.' : '');
+                            if (sel.mounted === 0) { event.preventDefault(); return; }
+                        } else {
+                            message = 'Sigur vrei sa stergi ' + sel.free + ' anvelope din stoc? Actiunea nu poate fi anulata.'
+                                + (sel.mounted > 0 ? '\n' + sel.mounted + ' anvelope montate din selectie vor fi ignorate.' : '');
+                            if (sel.free === 0) { event.preventDefault(); return; }
+                        }
+                        if (!window.confirm(message)) {
                             event.preventDefault();
                         }
                     });
@@ -1294,7 +1423,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                 <table class="table tire-table align-middle mb-0">
                     <thead>
                     <tr>
-                        <th class="ps-3" style="width: 1%;"><input type="checkbox" class="form-check-input" data-tire-bulk-all aria-label="Selecteaza toate anvelopele de pe pagina" title="Selecteaza toate anvelopele nemontate de pe pagina (cele montate nu pot fi sterse)"></th>
+                        <th class="ps-3" style="width: 1%;"><input type="checkbox" class="form-check-input" data-tire-bulk-all aria-label="Selecteaza toate anvelopele de pe pagina" title="Selecteaza toate anvelopele de pe pagina"></th>
                         <th>Anvelopa</th>
                         <th>Locatie & Pozitie</th>
                         <th>Stare & Uzura</th>
@@ -1335,11 +1464,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                             ?>
                             <tr>
                                 <td class="ps-3">
-                                    <?php if (!empty($tireRow['is_mounted'])): ?>
-                                        <i class="bi bi-lock text-muted" title="Anvelopa este montata pe <?= e((string) ($tireRow['nr_inmatriculare'] ?? 'vehicul')) ?>. Demonteaz-o inainte de stergere." aria-label="Montata - nu poate fi stearsa"></i>
-                                    <?php else: ?>
-                                        <input type="checkbox" class="form-check-input" name="tire_ids[]" value="<?= e((string) $tireId) ?>" form="tireBulkDeleteForm" data-tire-bulk-item aria-label="Selecteaza anvelopa">
-                                    <?php endif; ?>
+                                    <input type="checkbox" class="form-check-input" name="tire_ids[]" value="<?= e((string) $tireId) ?>" form="tireBulkForm" data-tire-bulk-item data-mounted="<?= !empty($tireRow['is_mounted']) ? '1' : '0' ?>" aria-label="Selecteaza anvelopa">
                                 </td>
                                 <td>
                                     <div class="d-flex align-items-center gap-3">
@@ -1400,6 +1525,20 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                                                 </li>
                                             <?php endforeach; ?>
                                             <li><hr class="dropdown-divider"></li>
+                                            <?php if (!empty($tireRow['is_mounted']) && (int) ($tireRow['active_vehicle_id'] ?? 0) > 0): ?>
+                                                <li>
+                                                    <form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'unmount_tire'])) ?>">
+                                                        <?= csrf_field() ?>
+                                                        <input type="hidden" name="vehicle_id" value="<?= e((string) ((int) $tireRow['active_vehicle_id'])) ?>">
+                                                        <input type="hidden" name="allocation_id" value="<?= e((string) ((int) ($tireRow['active_allocation_id'] ?? 0))) ?>">
+                                                        <input type="hidden" name="unmount_date" value="<?= e(date('Y-m-d')) ?>">
+                                                        <input type="hidden" name="status_end" value="spare">
+                                                        <input type="hidden" name="return_to" value="tire_stock">
+                                                        <input type="hidden" name="return_query" value="<?= e((string) ($_SERVER['QUERY_STRING'] ?? '')) ?>">
+                                                        <button type="submit" class="dropdown-item text-danger" data-confirm="Sigur doresti demontarea anvelopei de pe <?= e((string) ($tireRow['nr_inmatriculare'] ?? 'vehicul')) ?>?"><i class="bi bi-box-arrow-down me-2"></i>Demonteaza</button>
+                                                    </form>
+                                                </li>
+                                            <?php endif; ?>
                                             <li>
                                                 <form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'delete_tire_stock'])) ?>">
                                                     <?= csrf_field() ?>

@@ -16597,10 +16597,10 @@ tr:hover .diurna-edit-btn,
 .fuel-kmcheck-row-bad > td:first-child { box-shadow: inset 3px 0 0 #dc2626; }
 .fuel-kmcheck-row-warn > td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
 
-/* Cost carburant pe categorie de vehicul (grele / usoare) */
+/* Cost carburant pe categorie de vehicul (grele / usoare / neinregistrate) */
 .fuel-split {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 1rem;
     margin-bottom: .85rem;
 }
@@ -16619,6 +16619,7 @@ tr:hover .diurna-edit-btn,
 
 .fuel-split-blue { --fuel-split-accent: #2563eb; }
 .fuel-split-purple { --fuel-split-accent: #9333ea; }
+.fuel-split-amber { --fuel-split-accent: #d97706; }
 
 .fuel-split-card > .bi {
     font-size: 1.5rem;
@@ -16678,7 +16679,7 @@ tr:hover .diurna-edit-btn,
     background: var(--fuel-split-accent);
 }
 
-/* Cardurile sunt si filtrul de categorie (?vehicle_class=grele|usoare). */
+/* Cardurile sunt si filtrul de categorie (?vehicle_class=grele|usoare|neinregistrate). */
 a.fuel-split-card {
     position: relative;
     color: inherit;
@@ -16722,6 +16723,12 @@ a.fuel-split-card.is-active {
     font-size: .7rem;
     font-weight: 700;
     white-space: nowrap;
+}
+
+@media (max-width: 1200px) {
+    .fuel-split {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 @media (max-width: 768px) {
@@ -17623,6 +17630,20 @@ a.fuel-split-card.is-active {
     font-size: .76rem;
     font-weight: 850;
     white-space: nowrap;
+}
+
+/* Taburile Alimentari / neasociate: tabelul deruleaza in propria zona, cu antetul fixat sus.
+   Inaltimea lasa loc barei de sus (.topbar) si subsolului paginii, ca antetul sa nu ajunga sub bara. */
+.fuel-table-scroll {
+    max-height: calc(100vh - 230px);
+    overflow: auto;
+}
+
+.fuel-table-scroll .fuel-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    box-shadow: inset 0 -1px 0 #e2e8f0;
 }
 
 .fuel-table tbody td {
@@ -25847,6 +25868,16 @@ a.driver-history-kpi-card.is-link small {
     display: flex;
     align-items: center;
     gap: 2px;
+}
+/* Wrapper-ul flex ignora text-align: coloanele numerice (th.is-num) raman aliniate la dreapta,
+   cu sageata + palnia in stanga etichetei, ca textul antetului sa se termine deasupra cifrelor. */
+.has-column-filter thead th.is-num .races-head-wrap {
+    flex-direction: row-reverse;
+    justify-content: flex-start;
+}
+.has-column-filter thead th.is-num .races-head-controls {
+    margin-left: 0;
+    margin-right: 2px;
 }
 .has-column-filter thead th .races-head-controls {
     display: inline-flex;

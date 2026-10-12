@@ -156,7 +156,107 @@ def fetch_matches_for_rule(conn, rule: dict[str, Any]) -> list[dict[str, Any]]:
         return fetch_tire_dot_matches(conn, rule)
     if event_type == "driver_birthday":
         return fetch_driver_birthday_matches(conn, rule)
+    if event_type in REVIZIE_EVENT_CATEGORY:
+        return fetch_revizie_matches(rule)
     return []
+
+
+# Eveniment de notificare -> categoria (tab-ul) din Revizii.
+REVIZIE_EVENT_CATEGORY = {
+    "revizie_schimb_ulei": "schimb_ulei",
+    "revizie_placute_frana": "placute_frana",
+    "revizie_anvelope": "anvelope",
+}
+
+REVIZIE_STATUS_LABELS = {
+    "necesita": "Necesita revizie",
+    "se_apropie": "Se apropie revizia",
+}
+
+_revizie_alerts_cache: list[dict[str, Any]] | None = None
+
+
+def php_binary() -> str:
+    configured = env_value(["PHP_BIN"])
+    if configured:
+        return configured
+    import shutil
+
+    found = shutil.which("php")
+    if found:
+        return found
+    # Task Scheduler pe Windows nu are de obicei PHP-ul Laragon in PATH.
+    laragon = sorted(Path("C:/laragon/bin/php").glob("*/php.exe"))
+    if laragon:
+        return str(laragon[-1])
+    return "php"
+
+
+def load_revizie_alerts() -> list[dict[str, Any]]:
+    """Alertele Revizii (Se apropie / Necesita), calculate o singura data per rulare.
+
+    Km ramasi se calculeaza doar in PHP (ReviziiService), deci le cerem de la
+    scripts/revizii_alerts.php. Pragul e cel din Revizii, per componenta.
+    """
+    global _revizie_alerts_cache
+    if _revizie_alerts_cache is not None:
+        return _revizie_alerts_cache
+
+    import subprocess
+
+    script = PROJECT_ROOT / "scripts" / "revizii_alerts.php"
+    result = subprocess.run(
+        [php_binary(), str(script)],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=180,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("revizii_alerts.php a esuat: " + (result.stderr or result.stdout).strip()[:500])
+    payload = json.loads(result.stdout.strip() or "{}")
+    _revizie_alerts_cache = list(payload.get("alerts") or [])
+    return _revizie_alerts_cache
+
+
+def fetch_revizie_matches(rule: dict[str, Any]) -> list[dict[str, Any]]:
+    category = REVIZIE_EVENT_CATEGORY[str(rule.get("event_type") or "")]
+    # Optional: doar componentele depasite (document_type = 'necesita').
+    only_status = str(rule.get("document_type") or "").strip()
+    try:
+        alerts = load_revizie_alerts()
+    except Exception as exc:
+        # O eroare la Revizii nu trebuie sa opreasca celelalte reguli.
+        sys.stderr.write(f"Revizii: {normalize_error(exc)}\n")
+        return []
+    rows: list[dict[str, Any]] = []
+    for alert in alerts:
+        if alert.get("categorie") != category:
+            continue
+        status = str(alert.get("status") or "")
+        if only_status and status != only_status:
+            continue
+        km_ramasi = float(alert.get("km_ramasi") or 0)
+        details = f"{alert.get('marca') or ''} / {alert.get('vehicul_tip') or ''}".strip(" /")
+        rows.append({
+            "entity_id": int(alert["plan_id"]),
+            "entity_type": "revizie",
+            "tip_document": str(alert.get("componenta") or alert.get("categorie_label") or "Revizie"),
+            "owner_id": int(alert.get("vehicle_id") or 0),
+            "owner_name": str(alert.get("nr") or ""),
+            "owner_details": details,
+            "notification_title": REVIZIE_STATUS_LABELS.get(status, "Revizie"),
+            "km_remaining": km_ramasi,
+            "revizie_status": status,
+            "revizie_categorie": category,
+            "revizie_interval_km": int(alert.get("interval_km") or 0),
+            "revizie_prag_km": int(alert.get("prag_km") or 0),
+            "revizie_complet": bool(alert.get("complet", True)),
+            # Ciclu nou (T0 nou dupa revizie) sau trecere Se apropie -> Necesita = notificare noua.
+            "context_suffix": f"{alert.get('baseline_at') or ''}:{status}",
+        })
+    return rows[:200]
 
 
 def fetch_vehicle_document_matches(conn, rule: dict[str, Any]) -> list[dict[str, Any]]:
@@ -516,6 +616,8 @@ def delivery_context_id(rule: dict[str, Any], match: dict[str, Any]) -> str:
         str(match.get("entity_type") or ""),
         str(int(match["entity_id"])),
     ]
+    if match.get("context_suffix"):
+        parts.append(str(match["context_suffix"]))
     if int(rule.get("repeat_until_resolved") or 0) == 1:
         parts.append(datetime.now().strftime("%Y-%m-%d"))
     return ":".join(parts)
@@ -588,6 +690,9 @@ def build_notification_email(
         "leave": "Concediu",
     }.get(entity_type, "Vehicul")
 
+    if entity_type == "revizie":
+        return build_revizie_email(config, match, recipient_name, status, document_type, owner_name, owner_details)
+
     page = "documente"
     target_id = int(match.get("document_id") or match.get("entity_id") or 0)
     if entity_type == "driver" and "document_id" in match:
@@ -624,6 +729,45 @@ def build_notification_email(
         lines.append(f"Km ramasi estimati: {int(match.get('km_remaining') or 0)}")
     if match.get("tread_depth_mm") is not None:
         lines.append(f"Profil actual: {match.get('tread_depth_mm')} mm")
+    lines.extend(["", "Deschide in aplicatie:", url, "", config.app_name])
+    return subject, "\n".join(lines)
+
+
+def build_revizie_email(
+    config: MailConfig,
+    match: dict[str, Any],
+    recipient_name: str,
+    status: str,
+    component: str,
+    owner_name: str,
+    owner_details: str,
+) -> tuple[str, str]:
+    km_remaining = int(round(float(match.get("km_remaining") or 0)))
+    if km_remaining <= 0:
+        km_line = f"Depasit cu: {abs(km_remaining)} km"
+    else:
+        km_line = f"Km ramasi estimati: {km_remaining}"
+    url = absolute_app_url("index.php", {"page": "revizii", "tip": str(match.get("revizie_categorie") or "")})
+
+    subject = f"[{config.app_name}] {status}: {component} - {owner_name}"
+    lines = [
+        f"Salut, {recipient_name},",
+        "",
+        "Exista o notificare de revizie configurata in aplicatia de flota.",
+        "",
+        f"Vehicul: {owner_name}",
+    ]
+    if owner_details:
+        lines.append(f"Detalii: {owner_details}")
+    lines.extend([
+        f"Componenta: {component}",
+        f"Status: {status}",
+        km_line,
+        f"Interval: {int(match.get('revizie_interval_km') or 0)} km",
+        f"Prag notificare: {int(match.get('revizie_prag_km') or 0)} km ramasi",
+    ])
+    if not match.get("revizie_complet", True):
+        lines.append("Atentie: calculul are zile fara telemetrie (date incomplete).")
     lines.extend(["", "Deschide in aplicatie:", url, "", config.app_name])
     return subject, "\n".join(lines)
 

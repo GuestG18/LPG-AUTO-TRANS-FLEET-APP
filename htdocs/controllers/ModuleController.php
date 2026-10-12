@@ -105,6 +105,9 @@ class ModuleController
             case 'bulk_delete_tire_stock':
                 $this->bulkDeleteMaintenanceTireStockAction($moduleKey, $module);
                 return;
+            case 'bulk_unmount_tire_stock':
+                $this->bulkUnmountMaintenanceTireStockAction($moduleKey, $module);
+                return;
             case 'add_document_type_config':
                 $this->addDocumentTypeConfigAction($moduleKey, $module);
                 return;
@@ -1989,6 +1992,16 @@ class ModuleController
     {
         $returnTo = trim((string) ($_POST['return_to'] ?? ''));
 
+        if ($returnTo === 'tire_stock') {
+            // Revine pe aceeasi pagina / aceleasi filtre din Stoc anvelope.
+            parse_str((string) ($_POST['return_query'] ?? ''), $returnParams);
+            if (($returnParams['page'] ?? '') === 'mentenanta' && ($returnParams['action'] ?? '') === 'tire_stock') {
+                return build_query_url(array_filter($returnParams, 'is_string'));
+            }
+
+            return $this->maintenanceTireStockUrl();
+        }
+
         if (($moduleKey === 'mentenanta' || $returnTo === 'axis_config') && $vehicleId > 0) {
             $redirectParams = [
                 'page' => 'mentenanta',
@@ -3133,8 +3146,15 @@ class ModuleController
         }
 
         $deleted = 0;
+        $skippedMounted = 0;
         $errors = [];
         foreach ($tireIds as $tireId) {
+            // Selectia poate contine si anvelope montate (folosita si pentru demontare): le sarim.
+            $tire = $this->tireModel->getStockTireById($tireId);
+            if ($tire !== null && (int) ($tire['active_allocation_id'] ?? 0) > 0) {
+                $skippedMounted++;
+                continue;
+            }
             try {
                 $this->tireModel->deleteStockTire($tireId);
                 $deleted++;
@@ -3146,8 +3166,103 @@ class ModuleController
         if ($deleted > 0) {
             flash_set('success', 'Au fost sterse ' . $deleted . ' anvelope din stoc.');
         }
+        if ($skippedMounted > 0) {
+            flash_set('warning', $skippedMounted . ' anvelope montate au fost ignorate. Demonteaza-le inainte de stergere.');
+        }
         if ($errors !== []) {
             flash_set('danger', count($errors) . ' anvelope nu au putut fi sterse: ' . implode(' | ', array_slice($errors, 0, 5)) . (count($errors) > 5 ? ' ...' : ''));
+        }
+
+        redirect($stockRedirectUrl);
+    }
+
+    private function bulkUnmountMaintenanceTireStockAction(string $moduleKey, array $module): void
+    {
+        $stockRedirectUrl = $this->maintenanceTireStockUrl();
+        // Revine pe aceeasi pagina / aceleasi filtre din lista.
+        parse_str((string) ($_POST['return_query'] ?? ''), $returnParams);
+        if (($returnParams['page'] ?? '') === 'mentenanta' && ($returnParams['action'] ?? '') === 'tire_stock') {
+            $stockRedirectUrl = build_query_url(array_filter($returnParams, 'is_string'));
+        }
+
+        if ($moduleKey !== 'mentenanta' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($stockRedirectUrl);
+        }
+
+        ensure_csrf_or_redirect($stockRedirectUrl);
+
+        $tireIds = array_values(array_unique(array_filter(
+            array_map('intval', (array) ($_POST['tire_ids'] ?? [])),
+            static fn (int $id): bool => $id > 0
+        )));
+        if ($tireIds === []) {
+            flash_set('warning', 'Nu ai selectat nicio anvelopa pentru demontare.');
+            redirect($stockRedirectUrl);
+        }
+
+        $unmountDate = trim((string) ($_POST['unmount_date'] ?? date('Y-m-d')));
+        if (!$this->isValidDate($unmountDate)) {
+            flash_set('danger', 'Data demontaj nu este valida (format YYYY-MM-DD).');
+            redirect($stockRedirectUrl);
+        }
+
+        $statusEnd = strtolower(trim((string) ($_POST['status_end'] ?? TireModel::STATUS_SPARE)));
+        if (!in_array($statusEnd, [TireModel::STATUS_IN_STOCK, TireModel::STATUS_SPARE, TireModel::STATUS_REMOVED, TireModel::STATUS_DAMAGED, TireModel::STATUS_MISSING, TireModel::STATUS_SCRAPPED], true)) {
+            $statusEnd = TireModel::STATUS_SPARE;
+        }
+
+        $unmounted = 0;
+        $skippedNotMounted = 0;
+        $errors = [];
+        $vehicles = [];
+        $updatedAt = date('Y-m-d H:i:s');
+        foreach ($tireIds as $tireId) {
+            $tire = $this->tireModel->getStockTireById($tireId);
+            $allocationId = (int) ($tire['active_allocation_id'] ?? 0);
+            $vehicleId = (int) ($tire['active_vehicle_id'] ?? 0);
+            if ($allocationId <= 0 || $vehicleId <= 0) {
+                $skippedNotMounted++;
+                continue;
+            }
+
+            if (!array_key_exists($vehicleId, $vehicles)) {
+                $vehicles[$vehicleId] = $this->findVehicleForTireAction($vehicleId);
+            }
+            $vehicle = $vehicles[$vehicleId];
+            if ($vehicle === null) {
+                $errors[] = '#' . $tireId . ': vehiculul nu a fost gasit';
+                continue;
+            }
+
+            try {
+                if ($this->tireModel->unmountTire(
+                    $allocationId,
+                    $vehicleId,
+                    max(0, (int) ($vehicle['km_bord'] ?? 0)),
+                    $unmountDate,
+                    $statusEnd,
+                    $updatedAt,
+                    $this->currentUserId(),
+                    'Demontare in masa din Stoc anvelope',
+                    null
+                )) {
+                    $unmounted++;
+                } else {
+                    $skippedNotMounted++;
+                }
+            } catch (Throwable $exception) {
+                $errors[] = '#' . $tireId . ': ' . $exception->getMessage();
+            }
+        }
+
+        if ($unmounted > 0) {
+            flash_set('success', 'Au fost demontate ' . $unmounted . ' anvelope.');
+        }
+        if ($skippedNotMounted > 0) {
+            flash_set('info', $skippedNotMounted . ' anvelope selectate nu erau montate si au fost ignorate.');
+        }
+        if ($errors !== []) {
+            flash_set('danger', count($errors) . ' anvelope nu au putut fi demontate: ' . implode(' | ', array_slice($errors, 0, 5)) . (count($errors) > 5 ? ' ...' : ''));
         }
 
         redirect($stockRedirectUrl);

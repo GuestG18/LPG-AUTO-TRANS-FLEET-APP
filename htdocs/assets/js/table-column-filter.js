@@ -44,7 +44,6 @@
         return cell ? cell.textContent.replace(/\s+/g, ' ').trim() : '';
     };
 
-    // "1.234,56 lei" -> 1234.56; "144h 53m" -> minute; "22.09.2026" -> data; "-" -> null.
     var parseValue = function (cell) {
         if (!cell) {
             return null;
@@ -53,7 +52,11 @@
             var raw = parseFloat(cell.getAttribute('data-value'));
             return isNaN(raw) ? null : raw;
         }
-        var text = cellText(cell);
+        return parseText(cellText(cell));
+    };
+
+    // "1.234,56 lei" -> 1234.56; "144h 53m" -> minute; "22.09.2026" -> data; "-" -> null.
+    var parseText = function (text) {
         var duration = text.match(/^(\d+)h\s*(\d+)m$/);
         if (duration) {
             return parseInt(duration[1], 10) * 60 + parseInt(duration[2], 10);
@@ -290,6 +293,13 @@
                 var rowValues = cellValues(cell);
                 if (!cell.hasAttribute('data-filter-values')) {
                     numeric[rowValues[0]] = parseValue(cell);
+                } else {
+                    // Valorile date explicit (ex. o data fara ora) se ordoneaza tot ca date / numere.
+                    rowValues.forEach(function (value) {
+                        if (!(value in numeric)) {
+                            numeric[value] = parseText(value);
+                        }
+                    });
                 }
                 if (!rowMatches(row, column)) {
                     return; // cascada: doar valorile ramase dupa filtrele celorlalte coloane

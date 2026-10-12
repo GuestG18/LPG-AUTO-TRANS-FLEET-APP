@@ -1984,7 +1984,8 @@ class TireModel extends BaseModel
         $stmt = $this->db->prepare(
             'SELECT
                 t.*,
-                active_alloc.id AS active_allocation_id
+                active_alloc.id AS active_allocation_id,
+                active_alloc.vehicle_id AS active_vehicle_id
              FROM anvelope t
              LEFT JOIN anvelope_alocari active_alloc
                 ON active_alloc.tire_id = t.id

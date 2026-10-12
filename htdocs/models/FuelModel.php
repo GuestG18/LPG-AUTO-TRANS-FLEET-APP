@@ -43,6 +43,8 @@ class FuelModel extends BaseModel
      * plecarii, cand momentul alimentarii cade in afara intervalului strict.
      */
     private const TRIP_MATCH_TOLERANCE_HOURS = 12;
+    /** Taburile Alimentari / neasociate filtreaza din antet in browser, deci trebuie sa primeasca toata perioada. */
+    public const ALL_FILLUPS_LIMIT = 3000;
 
     private bool $schemaEnsured = false;
     private ?bool $raceSoftDeleteAvailable = null;
@@ -1671,7 +1673,7 @@ class FuelModel extends BaseModel
         $splitSummary = ($filters['vehicle_class'] ?? '') !== ''
             ? $this->getKpiSummary(array_merge($filters, ['vehicle_class' => '']))
             : $summary;
-        foreach (['light_value', 'light_liters', 'light_fillups', 'heavy_value', 'heavy_liters', 'heavy_fillups', 'total_value'] as $splitKey) {
+        foreach (['light_value', 'light_liters', 'light_fillups', 'heavy_value', 'heavy_liters', 'heavy_fillups', 'unregistered_value', 'unregistered_liters', 'unregistered_fillups', 'total_value'] as $splitKey) {
             $summary['split'][$splitKey] = $splitSummary[$splitKey] ?? 0;
         }
         $previousSummary = $this->getKpiSummary($this->previousPeriodFilters($filters));
@@ -1689,8 +1691,8 @@ class FuelModel extends BaseModel
             'transport_chart' => $this->getTransportBreakdown($filters),
             'normative' => $this->getNormativeInterval($filters),
             'latest_fillups' => $this->getFillups($filters, 5),
-            'all_fillups' => $this->getFillups($filters, 200),
-            'unassociated_fillups' => $this->getUnassociatedFillups($filters, 100),
+            'all_fillups' => $this->getFillups($filters, self::ALL_FILLUPS_LIMIT),
+            'unassociated_fillups' => $this->getUnassociatedFillups($filters, self::ALL_FILLUPS_LIMIT),
             'trip_consumption' => $this->getConsumptionByTrip($filters),
             'transport_consumption' => $this->getConsumptionByTransport($filters),
             'trip_options' => $this->getTripOptions($filters),
@@ -2003,7 +2005,7 @@ class FuelModel extends BaseModel
     public function getFillups(array $filters, int $limit = 200): array
     {
         $where = $this->buildFillupWhere($filters, 'fillups', true);
-        $limit = max(1, min(500, $limit));
+        $limit = max(1, min(self::ALL_FILLUPS_LIMIT, $limit));
         $sql = "
             SELECT
                 f.*,
@@ -2016,6 +2018,7 @@ class FuelModel extends BaseModel
                 c.ora_sfarsit,
                 " . $this->effectiveKmExpr('c') . " AS trip_km,
                 " . $this->lightVehicleExpr('f') . " AS is_light_vehicle,
+                NOT " . $this->registeredVehicleExpr('f') . " AS is_unregistered_vehicle,
                 (
                     SELECT fp.odometer_km
                     FROM fuel_fillups fp
@@ -2049,7 +2052,7 @@ class FuelModel extends BaseModel
     public function getUnassociatedFillups(array $filters, int $limit = 100): array
     {
         $where = $this->buildFillupWhere($filters, 'unassoc', false);
-        $limit = max(1, min(300, $limit));
+        $limit = max(1, min(self::ALL_FILLUPS_LIMIT, $limit));
 
         $sql = "
             SELECT f.*
@@ -2059,6 +2062,8 @@ class FuelModel extends BaseModel
               AND l.id IS NULL
               -- vehiculele usoare nu fac curse: alimentarile lor nu sunt de asociat
               AND NOT " . $this->lightVehicleExpr('f') . "
+              -- nici cele neinregistrate (carduri GARAJ, numere din afara flotei): nu au curse
+              AND " . $this->registeredVehicleExpr('f') . "
             ORDER BY f.fillup_datetime DESC, f.id DESC
             LIMIT :limit_rows
         ";
@@ -2294,8 +2299,12 @@ class FuelModel extends BaseModel
     {
         $where = $this->buildFillupWhere($filters, 'kpi', true);
         $lightExpr = $this->lightVehicleExpr('f');
+        $unregisteredExpr = 'NOT ' . $this->registeredVehicleExpr('f');
         $stmt = $this->db->prepare("
             SELECT
+                COALESCE(SUM(CASE WHEN {$unregisteredExpr} THEN f.total_value ELSE 0 END), 0) AS unregistered_value,
+                COALESCE(SUM(CASE WHEN {$unregisteredExpr} THEN f.quantity_liters ELSE 0 END), 0) AS unregistered_liters,
+                COALESCE(SUM(CASE WHEN {$unregisteredExpr} THEN 1 ELSE 0 END), 0) AS unregistered_fillups,
                 COALESCE(SUM(CASE WHEN f.fuel_type = 'motorina' THEN f.quantity_liters ELSE 0 END), 0) AS motorina_liters,
                 COALESCE(SUM(CASE WHEN f.fuel_type = 'adblue' THEN f.quantity_liters ELSE 0 END), 0) AS adblue_liters,
                 COALESCE(SUM(f.total_value), 0) AS total_value,
@@ -2337,9 +2346,12 @@ class FuelModel extends BaseModel
             'light_value' => round((float) ($row['light_value'] ?? 0), 2),
             'light_liters' => round((float) ($row['light_liters'] ?? 0), 2),
             'light_fillups' => (int) ($row['light_fillups'] ?? 0),
-            'heavy_value' => round((float) ($row['total_value'] ?? 0) - (float) ($row['light_value'] ?? 0), 2),
-            'heavy_liters' => round((float) ($row['total_liters'] ?? 0) - (float) ($row['light_liters'] ?? 0), 2),
-            'heavy_fillups' => (int) ($row['total_fillups'] ?? 0) - (int) ($row['light_fillups'] ?? 0),
+            'unregistered_value' => round((float) ($row['unregistered_value'] ?? 0), 2),
+            'unregistered_liters' => round((float) ($row['unregistered_liters'] ?? 0), 2),
+            'unregistered_fillups' => (int) ($row['unregistered_fillups'] ?? 0),
+            'heavy_value' => round((float) ($row['total_value'] ?? 0) - (float) ($row['light_value'] ?? 0) - (float) ($row['unregistered_value'] ?? 0), 2),
+            'heavy_liters' => round((float) ($row['total_liters'] ?? 0) - (float) ($row['light_liters'] ?? 0) - (float) ($row['unregistered_liters'] ?? 0), 2),
+            'heavy_fillups' => (int) ($row['total_fillups'] ?? 0) - (int) ($row['light_fillups'] ?? 0) - (int) ($row['unregistered_fillups'] ?? 0),
             'linked_km' => round($km, 2),
             'consumption_liters' => round($motorinaForAverage, 2),
             'consumption_km_source' => $kmSource,
@@ -3449,9 +3461,8 @@ class FuelModel extends BaseModel
 
     /**
      * Vehicule usoare = autoturisme / autoutilitare (ca in paginile Vehicule
-     * Usoare / Grele). Tot ce nu se potriveste pe o placuta usoara (inclusiv
-     * placute necunoscute) intra la grele. Nu fac curse, deci alimentarile lor
-     * nu se considera „neasociate”.
+     * Usoare / Grele). Restul vehiculelor din flota sunt grele. Vehiculele usoare
+     * nu fac curse, deci alimentarile lor nu se considera „neasociate”.
      */
     private function lightVehicleExpr(string $alias): string
     {
@@ -3459,6 +3470,19 @@ class FuelModel extends BaseModel
             SELECT 1 FROM vehicule lv
             WHERE lv.tip_vehicul IN ('autovehicul', 'autoturism', 'autoutilitara')
               AND REPLACE(UPPER(lv.nr_inmatriculare), ' ', '') = REPLACE(UPPER({$alias}.vehicle_registration), ' ', '')
+        )";
+    }
+
+    /**
+     * Alimentarea apartine unui vehicul din Vehicule (grele sau usoare). Restul =
+     * categoria „Neînregistrate": carduri CardOil fara numar (eticheta „GARAJ …”)
+     * si numere care nu exista in flota. Nu pot fi asociate cu o cursa.
+     */
+    private function registeredVehicleExpr(string $alias): string
+    {
+        return "EXISTS (
+            SELECT 1 FROM vehicule rv
+            WHERE REPLACE(UPPER(rv.nr_inmatriculare), ' ', '') = REPLACE(UPPER({$alias}.vehicle_registration), ' ', '')
         )";
     }
 
@@ -3612,13 +3636,16 @@ class FuelModel extends BaseModel
             $params[":{$prefix}_brand"] = $brand;
         }
 
-        // Categoria de vehicul (cardurile „Vehicule grele / ușoare"): aceeasi
-        // regula ca la impartirea costului — tot ce nu e usor intra la grele.
+        // Categoria de vehicul (cardurile „Vehicule grele / ușoare / Neînregistrate"):
+        // aceeasi regula ca la impartirea costului din getKpiSummary.
         $vehicleClass = (string) ($filters['vehicle_class'] ?? '');
         if ($vehicleClass === 'usoare') {
             $where[] = $this->lightVehicleExpr('f');
         } elseif ($vehicleClass === 'grele') {
+            $where[] = $this->registeredVehicleExpr('f');
             $where[] = 'NOT ' . $this->lightVehicleExpr('f');
+        } elseif ($vehicleClass === 'neinregistrate') {
+            $where[] = 'NOT ' . $this->registeredVehicleExpr('f');
         }
 
         $transportGroup = trim((string) ($filters['transport_group'] ?? ''));
@@ -3969,9 +3996,12 @@ class FuelModel extends BaseModel
         ";
     }
 
+    // Intervalul cursei = Data + Ora inceput -> Data + Ora sfarsit. Data incarcarii
+    // NU intra in calcul (decizie 2026-10-12): combinata cu ora plecarii dadea
+    // intervale inversate si alimentari neasociate.
     private function tripIntervalStartExpr(string $alias): string
     {
-        return "CAST(CONCAT(COALESCE({$alias}.data_incarcare, {$alias}.data_inceput, {$alias}.data_cursa), ' ', COALESCE({$alias}.ora_inceput, '00:00:00')) AS DATETIME)";
+        return "CAST(CONCAT(COALESCE({$alias}.data_inceput, {$alias}.data_cursa), ' ', COALESCE({$alias}.ora_inceput, '00:00:00')) AS DATETIME)";
     }
 
     private function tripIntervalEndExpr(string $alias): string

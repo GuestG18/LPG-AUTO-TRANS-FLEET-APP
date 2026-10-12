@@ -101,6 +101,10 @@ $eventEntity = static function (string $event) use ($eventEntityMap): string {
 
 $ruleThreshold = static function (array $rule): string {
     $event = (string) ($rule['event_type'] ?? '');
+    if (str_starts_with($event, 'revizie_')) {
+        return (string) ($rule['document_type'] ?? '') === 'necesita' ? 'Depășit (Revizii)' : 'Prag din Revizii';
+    }
+
     if ($event === 'tire_km_limit' && (int) ($rule['threshold_km'] ?? 0) > 0) {
         return number_format((float) $rule['threshold_km'], 0, ',', '.') . ' km';
     }
@@ -563,7 +567,20 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
                     </select>
                     <?php if (isset($formErrors['event_type'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['event_type']) ?></small><?php endif; ?>
                 </label>
-                <label>
+                <?php
+                $revizieEvents = $revizieEvents ?? [];
+                $isRevizieRule = in_array((string) ($formData['event_type'] ?? ''), $revizieEvents, true);
+                $currentRevizieStatus = $isRevizieRule ? (string) ($formData['document_type'] ?? '') : '';
+                ?>
+                <label data-revizie-only hidden>
+                    <span>Notifica la</span>
+                    <select class="form-select" name="revizie_status">
+                        <?php foreach (($revizieStatusFilters ?? []) as $value => $label): ?>
+                            <option value="<?= e((string) $value) ?>" <?= $currentRevizieStatus === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label data-not-revizie>
                     <span>Tip document</span>
                     <select class="form-select <?= isset($formErrors['document_type']) ? 'is-invalid' : '' ?>" name="document_type">
                         <option value="">-</option>
@@ -573,17 +590,24 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
                     </select>
                     <?php if (isset($formErrors['document_type'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['document_type']) ?></small><?php endif; ?>
                 </label>
-                <label>
+                <label data-not-revizie>
                     <span>Zile inainte</span>
                     <input class="form-control <?= isset($formErrors['days_before']) ? 'is-invalid' : '' ?>" name="days_before" type="number" min="0" max="365" step="1" value="<?= e((string) ($formData['days_before'] ?? 30)) ?>" placeholder="30">
                     <?php if (isset($formErrors['days_before'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['days_before']) ?></small><?php endif; ?>
                 </label>
-                <label>
+                <div class="notification-wide" data-revizie-only hidden>
+                    <small class="text-muted d-block">
+                        Km rămași și pragul de notificare se iau din <a href="<?= e(build_query_url(['page' => 'revizii', 'tip' => 'prezentare'])) ?>">Revizii</a>,
+                        per componentă („Prag notificare (km rămași)” din Configurare; gol = pragul global).
+                        Fiecare ciclu nou (după „Înregistrează înlocuire”) și trecerea din „Se apropie” în „Necesită” trimit o notificare nouă.
+                    </small>
+                </div>
+                <label data-not-revizie>
                     <span>KM inainte</span>
                     <input class="form-control <?= isset($formErrors['threshold_km']) ? 'is-invalid' : '' ?>" name="threshold_km" type="number" min="0" step="1" value="<?= e((string) ($formData['threshold_km'] ?? '')) ?>" placeholder="Ex: 15000" data-threshold-km>
                     <?php if (isset($formErrors['threshold_km'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['threshold_km']) ?></small><?php endif; ?>
                 </label>
-                <label>
+                <label data-not-revizie>
                     <span>Prag adancime profil (mm)</span>
                     <input class="form-control <?= isset($formErrors['threshold_tread_depth']) ? 'is-invalid' : '' ?>" name="threshold_tread_depth" type="number" min="0" step="0.1" value="<?= e((string) ($formData['threshold_tread_depth'] ?? '')) ?>" placeholder="Ex: 3.0" data-threshold-tread>
                     <?php if (isset($formErrors['threshold_tread_depth'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['threshold_tread_depth']) ?></small><?php endif; ?>
@@ -735,6 +759,26 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
             treadInput.disabled = eventSelect.value !== 'tire_tread_depth';
         }
         syncApprovalFields();
+        syncRevizieFields();
+    };
+
+    const revizieEvents = <?= json_encode(array_values($revizieEvents ?? [])) ?>;
+
+    // Revizii: pragul vine din pagina Revizii, deci zile / km / profil / tip document nu se aplica.
+    const syncRevizieFields = () => {
+        if (!eventSelect) {
+            return;
+        }
+        const isRevizie = revizieEvents.includes(eventSelect.value);
+        document.querySelectorAll('[data-revizie-only]').forEach((field) => {
+            field.hidden = !isRevizie;
+            field.querySelectorAll('select, input').forEach((control) => {
+                control.disabled = !isRevizie;
+            });
+        });
+        document.querySelectorAll('[data-not-revizie]').forEach((field) => {
+            field.hidden = isRevizie;
+        });
     };
 
     if (modeSelect) {

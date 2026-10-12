@@ -14,6 +14,18 @@ class NotificationRuleController
         'leave' => 'Concediu',
         'equipment' => 'Dotare / Inventar',
         'approval' => 'Solicitare aprobare',
+        'revizie' => 'Revizie (km)',
+    ];
+
+    /**
+     * Evenimente Revizii: pragul de km ramasi vine din Revizii (per componenta), nu din regula.
+     * In document_type se pastreaza doar filtrul de stare: '' = Se apropie + Necesita.
+     */
+    public const REVIZIE_EVENTS = ['revizie_schimb_ulei', 'revizie_placute_frana', 'revizie_anvelope'];
+
+    public const REVIZIE_STATUS_FILTERS = [
+        '' => 'Se apropie sau Necesită (prag din Revizii)',
+        'necesita' => 'Doar Necesită (interval depășit)',
     ];
 
     /** Tipuri de resursa pentru regulile de aprobare. Gol = toate. */
@@ -38,6 +50,9 @@ class NotificationRuleController
         'equipment_inspection' => 'Inspectie dotare',
         'document_missing' => 'Document lipsa',
         'inactive_approval_pending' => 'Cerere aprobare in asteptare',
+        'revizie_schimb_ulei' => 'Schimb ulei',
+        'revizie_placute_frana' => 'Plăcuțe frână',
+        'revizie_anvelope' => 'Anvelope (revizie km)',
     ];
 
     private const EVENT_ENTITY = [
@@ -52,6 +67,9 @@ class NotificationRuleController
         'equipment_inspection' => 'equipment',
         'document_missing' => 'vehicle',
         'inactive_approval_pending' => 'approval',
+        'revizie_schimb_ulei' => 'revizie',
+        'revizie_placute_frana' => 'revizie',
+        'revizie_anvelope' => 'revizie',
     ];
 
     private const RECIPIENT_LABELS = [
@@ -191,6 +209,8 @@ class NotificationRuleController
             'driverDocumentTypes' => $driverDocumentTypes,
             'equipmentTypes' => $equipmentTypes,
             'approvalEvent' => self::APPROVAL_EVENT,
+            'revizieEvents' => self::REVIZIE_EVENTS,
+            'revizieStatusFilters' => self::REVIZIE_STATUS_FILTERS,
             'approvalResourceLabels' => self::APPROVAL_RESOURCE_LABELS,
             'approvalReasonOptions' => $this->approvalReasonOptions(),
             'mailSummary' => $this->mailSummary(),
@@ -349,6 +369,15 @@ class NotificationRuleController
             ];
 
             $data['document_type'] = '';
+            $data['days_before'] = 0;
+            $data['threshold_km'] = null;
+            $data['threshold_tread_depth'] = null;
+        }
+
+        // Revizii: km ramasi si pragul de notificare vin din pagina Revizii (per componenta).
+        if (in_array($data['event_type'], self::REVIZIE_EVENTS, true)) {
+            $status = trim((string) ($input['revizie_status'] ?? ''));
+            $data['document_type'] = array_key_exists($status, self::REVIZIE_STATUS_FILTERS) ? $status : '';
             $data['days_before'] = 0;
             $data['threshold_km'] = null;
             $data['threshold_tread_depth'] = null;
