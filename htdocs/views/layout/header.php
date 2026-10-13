@@ -282,6 +282,7 @@ $navAttrs = static fn(string $key, ?string $group = null): string => function_ex
                         'schimb_ulei' => ['Schimb ulei', ['page' => 'revizii']],
                         'placute_frana' => ['Pl&#259;cu&#539;e fr&acirc;n&#259;', ['page' => 'revizii', 'tip' => 'placute_frana']],
                         'anvelope' => ['Anvelope', ['page' => 'revizii', 'tip' => 'anvelope']],
+                        'istoric' => ['Istoric revizii', ['page' => 'revizii', 'tip' => 'istoric']],
                     ];
                     ?>
                 <div class="sidebar-nav-group"<?= $navAttrs('grp_revizii') ?>>

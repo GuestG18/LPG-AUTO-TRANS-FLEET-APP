@@ -32,9 +32,18 @@ class InvoiceStorageService
 
     private string $projectRoot;
 
-    public function __construct(?string $projectRoot = null)
+    /** Folderul (relativ la radacina proiectului) in care se scriu fisierele noi. */
+    private string $storageDir;
+
+    /**
+     * $storageDir: alt folder pentru alte module care refolosesc aceleasi reguli
+     * (ex. documentele din Revizii → storage/revizii/documente); se citeste doar din el
+     * si din radacinile implicite.
+     */
+    public function __construct(?string $projectRoot = null, ?string $storageDir = null)
     {
         $this->projectRoot = rtrim(str_replace('\\', '/', $projectRoot ?? dirname(__DIR__, 2)), '/');
+        $this->storageDir = trim(str_replace('\\', '/', $storageDir ?? self::STORAGE_DIR), '/');
     }
 
     /**
@@ -104,7 +113,7 @@ class InvoiceStorageService
             return [null, 'Fisierul nu a putut fi citit.'];
         }
 
-        $relativeDir = self::STORAGE_DIR . '/' . date('Y') . '/' . date('m');
+        $relativeDir = $this->storageDir . '/' . date('Y') . '/' . date('m');
         $absoluteDir = $this->projectRoot . '/' . $relativeDir;
         if (!is_dir($absoluteDir) && !@mkdir($absoluteDir, 0750, true) && !is_dir($absoluteDir)) {
             return [null, 'Nu s-a putut crea folderul ' . $relativeDir . '.'];
@@ -151,7 +160,7 @@ class InvoiceStorageService
         }
         $real = str_replace('\\', '/', $real);
 
-        foreach (self::READABLE_ROOTS as $root) {
+        foreach (array_unique(array_merge(self::READABLE_ROOTS, [$this->storageDir])) as $root) {
             $rootReal = realpath($this->projectRoot . '/' . $root);
             if ($rootReal === false) {
                 continue;
@@ -178,7 +187,7 @@ class InvoiceStorageService
      */
     private function ensureDenyFile(): void
     {
-        $file = $this->projectRoot . '/' . self::STORAGE_DIR . '/.htaccess';
+        $file = $this->projectRoot . '/' . $this->storageDir . '/.htaccess';
         if (!is_file($file)) {
             @file_put_contents($file, "Require all denied\n");
         }

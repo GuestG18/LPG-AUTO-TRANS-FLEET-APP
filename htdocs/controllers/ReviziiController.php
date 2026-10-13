@@ -14,6 +14,7 @@ require_once dirname(__DIR__) . '/services/ReviziiSasSyncService.php';
  *   ?page=revizii&action=record         POST: inregistreaza schimbul de ulei
  *   ?page=revizii&action=sync           POST JSON: sincronizare SasFleet cu buget limitat
  *   ?page=revizii&action=simulate       POST JSON: simulare pe date istorice (nu salveaza nimic)
+ *   ?page=revizii&tip=istoric           Istoric revizii + actiunile istoric_* (ReviziiIstoricController)
  */
 class ReviziiController
 {
@@ -41,8 +42,27 @@ class ReviziiController
             'record' => $this->recordAction(),
             'sync' => $this->syncAction(),
             'simulate' => $this->simulateAction(),
+            'istoric_data' => $this->istoric()->dataAction(),
+            'istoric_detail' => $this->istoric()->detailAction(),
+            'istoric_doc' => $this->istoric()->documentAction(),
+            'istoric_doc_upload' => $this->istoric()->uploadAction(),
+            'istoric_doc_delete' => $this->istoric()->deleteDocumentAction(),
+            'istoric_verify' => $this->istoric()->verifyAction(),
+            'istoric_reference' => $this->istoric()->referenceAction(),
+            'istoric_export' => $this->istoric()->exportAction(),
+            'istoric_report' => $this->istoric()->reportAction(),
+            'istoric_reports' => $this->istoric()->reportsAction(),
+            'istoric_report_download' => $this->istoric()->reportDownloadAction(),
             default => $this->index(),
         };
+    }
+
+    /** Revizii → Istoric revizii (?tip=istoric) are controller propriu. */
+    private function istoric(): ReviziiIstoricController
+    {
+        require_once __DIR__ . '/ReviziiIstoricController.php';
+
+        return new ReviziiIstoricController($this->db);
     }
 
     /** Tab-ul curent (GET la afisare, POST la salvare); necunoscut = schimb ulei. */
@@ -95,6 +115,10 @@ class ReviziiController
     {
         if (($_GET['tip'] ?? '') === 'prezentare') {
             $this->overview();
+            return;
+        }
+        if (($_GET['tip'] ?? '') === 'istoric') {
+            $this->istoric()->index();
             return;
         }
         $tab = $this->currentTab();

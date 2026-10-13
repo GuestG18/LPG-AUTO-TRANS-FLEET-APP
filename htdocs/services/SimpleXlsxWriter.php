@@ -86,9 +86,15 @@ class SimpleXlsxWriter
     {
         /* Excel: max 31 caractere, fara : \ / ? * [ ] */
         $clean = mb_substr(preg_replace('/[:\\\\\/\?\*\[\]]/u', ' ', $name) ?? 'Foaie', 0, 31);
-        $this->sheets[] = ['name' => $clean, 'rows' => [], 'widths' => [], 'merges' => [], 'freeze' => null];
+        $this->sheets[] = ['name' => $clean, 'rows' => [], 'widths' => [], 'merges' => [], 'freeze' => null, 'autofilter' => null];
 
         return count($this->sheets) - 1;
+    }
+
+    /* Filtru automat Excel pe un domeniu (ex. "A5:M120": randul de antet + datele). */
+    public function setAutoFilter(int $sheet, string $range): void
+    {
+        $this->sheets[$sheet]['autofilter'] = $range;
     }
 
     /** @param array<int, float> $widths coloana (1-based) => latime */
@@ -207,8 +213,24 @@ class SimpleXlsxWriter
             $xml .= '<sheet name="' . self::xml($sheet['name']) . '" sheetId="' . ($index + 1) . '" r:id="rId' . ($index + 1) . '"/>';
         }
 
+        $xml .= '</sheets>';
+
+        /* Domeniul filtrului automat (Excel il cere ca nume definit ascuns). */
+        $names = '';
+        foreach ($this->sheets as $index => $sheet) {
+            if (($sheet['autofilter'] ?? null) === null || !preg_match('/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/', (string) $sheet['autofilter'], $m)) {
+                continue;
+            }
+            $names .= '<definedName name="_xlnm._FilterDatabase" localSheetId="' . $index . '" hidden="1">'
+                . self::xml("'" . str_replace("'", "''", $sheet['name']) . "'!\$" . $m[1] . '$' . $m[2] . ':$' . $m[3] . '$' . $m[4])
+                . '</definedName>';
+        }
+        if ($names !== '') {
+            $xml .= '<definedNames>' . $names . '</definedNames>';
+        }
+
         /* Formulele se recalculeaza la deschidere (valorile scrise sunt doar cache). */
-        return $xml . '</sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>';
+        return $xml . '<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>';
     }
 
     private function workbookRelsXml(): string
@@ -275,6 +297,10 @@ class SimpleXlsxWriter
             $xml .= '</row>';
         }
         $xml .= '</sheetData>';
+
+        if (($sheet['autofilter'] ?? null) !== null) {
+            $xml .= '<autoFilter ref="' . self::xml((string) $sheet['autofilter']) . '"/>';
+        }
 
         if ($sheet['merges'] !== []) {
             $xml .= '<mergeCells count="' . count($sheet['merges']) . '">';
