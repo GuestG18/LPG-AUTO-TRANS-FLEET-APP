@@ -120,6 +120,11 @@ if ($drawerIsAdmin) {
             'count' => (int) ($approvalCounts['diurna'] ?? 0),
             'rows' => is_array($approvalSummary['diurne'] ?? null) ? $approvalSummary['diurne'] : [],
         ],
+        'route_config' => [
+            'label' => 'Rute',
+            'count' => (int) ($approvalCounts['route_config'] ?? 0),
+            'rows' => is_array($approvalSummary['route_configs'] ?? null) ? $approvalSummary['route_configs'] : [],
+        ],
     ];
     $approvalTotal = (int) ($approvalSummary['total'] ?? array_sum(array_map('intval', $approvalCounts)));
     $drawerTitle = 'Solicitari aprobare in asteptare';

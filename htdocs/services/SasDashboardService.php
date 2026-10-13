@@ -228,6 +228,60 @@ class SasDashboardService
     }
 
     /**
+     * Km GPS pentru "Km service" (Dispecer curse): totalul pe intervalul plecare ->
+     * intoarcere plus deplasarile gasite (ora, km, de unde -> unde), ca operatorul
+     * sa vada ce a numarat. Vehiculul sta parcat la service, deci totalul
+     * inseamna practic drumul pana acolo si inapoi.
+     *
+     * @return array{total_km: ?float, trips: array<int, array<string, mixed>>}
+     */
+    public function getIntervalTrips(int $carId, string $from, string $to): array
+    {
+        $fromTs = strtotime($from);
+        $toTs = strtotime($to);
+        if ($carId <= 0 || $fromTs === false || $toTs === false || $toTs <= $fromTs) {
+            throw new InvalidArgumentException('Interval invalid pentru km GPS.');
+        }
+
+        $this->restoreSasSession();
+        $sheet = $this->client->getTravelSheet(
+            $carId,
+            date('Y-m-d\TH:i:s', $fromTs),
+            date('Y-m-d\TH:i:s', $toTs),
+            $toTs < strtotime('today')
+        );
+        $this->persistSasSession();
+
+        $place = function (array $segment, string $suffix): ?string {
+            $city = $this->toStringOrNull($segment['city' . $suffix] ?? null);
+            $address = $this->toStringOrNull($segment['address' . $suffix] ?? null);
+            $label = trim(implode(', ', array_filter([$city, $address], static fn (?string $part): bool => $part !== null && trim($part) !== '')));
+            return $label !== '' ? $label : null;
+        };
+
+        $trips = [];
+        foreach ((array) ($sheet['segments'] ?? []) as $segment) {
+            if (!is_array($segment) || !is_numeric($segment['distance'] ?? null) || (float) $segment['distance'] <= 0) {
+                continue;
+            }
+            $start = $this->toStringOrNull($segment['dateStart'] ?? null);
+            $end = $this->toStringOrNull($segment['dateEnd'] ?? null);
+            $trips[] = [
+                'start' => $start !== null ? str_replace('T', ' ', $start) : null,
+                'end' => $end !== null ? str_replace('T', ' ', $end) : null,
+                'km' => round((float) $segment['distance'], 1),
+                'from' => $place($segment, 'Start'),
+                'to' => $place($segment, 'End'),
+            ];
+        }
+
+        return [
+            'total_km' => is_numeric($sheet['totalDistance'] ?? null) ? round((float) $sheet['totalDistance'], 1) : null,
+            'trips' => $trips,
+        ];
+    }
+
+    /**
      * Snapshot complet pentru dashboard: vehicule clasificate, KPI-uri si
      * feedul de evenimente de miscare.
      */

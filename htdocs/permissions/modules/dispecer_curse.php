@@ -50,6 +50,7 @@ return [
         'delete_bulk'                  => 'delete_bulk',
         'service_km_store'             => 'service_km',
         'service_km_delete'            => 'service_km',
+        'service_km_gps'               => 'service_km',
         'save_expense'                 => 'expenses',
         'delete_expense'               => 'expenses',
         'update_expense_status'        => 'expenses',

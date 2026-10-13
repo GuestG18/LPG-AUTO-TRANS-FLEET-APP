@@ -551,10 +551,21 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
     </div>
 <?php endif; ?>
 
-<div class="card border-0 shadow-sm mt-3 dispatcher-races-card">
+<?php $awaitingApprovalCount = (int) ($awaitingApprovalCount ?? 0); ?>
+<div class="card border-0 shadow-sm mt-3 dispatcher-races-card" data-races-tabs>
     <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2 flex-wrap dispatcher-races-card-header">
         <h3 class="h6 mb-0 d-flex align-items-center gap-2">
-            <span>Desfasurator curse</span>
+            <?php // Tab-uri: lista normala si cursele trimise spre aprobare (populate live de assets/js/approval-live.js). ?>
+            <span class="dispatcher-races-tabs" role="tablist" aria-label="Curse">
+                <button type="button" class="dispatcher-races-tab is-active" role="tab" aria-selected="true" data-races-tab="active">
+                    Desfasurator curse
+                </button>
+                <button type="button" class="dispatcher-races-tab" role="tab" aria-selected="false" data-races-tab="awaiting" title="Curse trimise administratorului spre aprobare">
+                    <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+                    In asteptare aprobare
+                    <span class="badge rounded-pill <?= $awaitingApprovalCount > 0 ? 'text-bg-warning' : 'text-bg-light' ?>" data-awaiting-trips-count><?= e((string) $awaitingApprovalCount) ?></span>
+                </button>
+            </span>
             <button
                 type="button"
                 class="btn btn-sm btn-warning d-none align-items-center gap-1"
@@ -566,7 +577,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                 <span data-race-new-label>curse noi</span>
             </button>
         </h3>
-        <div class="d-flex align-items-center gap-2">
+        <div class="d-flex align-items-center gap-2" data-races-tab-tools="active">
             <div class="dispatcher-column-manager" data-dispatcher-column-manager>
                 <button
                     type="button"
@@ -624,8 +635,9 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
             </button>
             <small class="text-muted">Total: <?= e((string) $pagination['total_rows']) ?> curse</small>
         </div>
+        <small class="text-muted d-none" data-races-tab-tools="awaiting">Se actualizeaza automat. Cursele apar in Desfasurator dupa aprobare.</small>
     </div>
-    <div class="card-body p-0">
+    <div class="card-body p-0" data-races-pane="active">
         <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'delete_bulk'])) ?>" id="bulk-race-delete-form" class="d-none">
             <?= csrf_field() ?>
             <input type="hidden" name="return_url" value="<?= e($currentListUrl) ?>">
@@ -1443,6 +1455,34 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                         ?>
                     <?php endforeach; ?>
                 <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="card-body p-0 d-none" id="curse-in-asteptare" data-races-pane="awaiting" data-awaiting-trips>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0 dispatcher-awaiting-table">
+                <thead>
+                <tr>
+                    <th>Nr. Inmatriculare</th>
+                    <th>Sofer</th>
+                    <th>Tip</th>
+                    <th>Data incarcare</th>
+                    <th>Interval</th>
+                    <th>Traseu</th>
+                    <th>Beneficiar</th>
+                    <th>Status</th>
+                    <th class="dispatcher-awaiting-reason">Motivul aprobarii</th>
+                    <th>Trimisa</th>
+                    <th class="text-end">Actiuni</th>
+                </tr>
+                </thead>
+                <tbody data-awaiting-trips-list>
+                <tr data-awaiting-trips-empty>
+                    <td colspan="11" class="text-center text-muted py-4">
+                        <?= $awaitingApprovalCount > 0 ? 'Se incarca...' : 'Nicio cursa nu asteapta aprobarea.' ?>
+                    </td>
+                </tr>
                 </tbody>
             </table>
         </div>
@@ -3345,7 +3385,12 @@ document.addEventListener('DOMContentLoaded', function () {
             <div class="modal-footer flex-wrap">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Renunță</button>
                 <button type="button" class="btn btn-outline-primary" data-vehicle-route-decision-trip title="Vehiculul este folosit doar pentru această cursă, fără a modifica Configurare Transport.">Doar pentru această cursă</button>
-                <button type="button" class="btn btn-primary" data-vehicle-route-decision-permanent title="Vehiculul este adăugat pe ruta corespunzătoare (beneficiar + tip transport) în Configurare Transport.">Adaugă permanent pe rută</button>
+                <?php if (function_exists('can') && can('inactive_approvals', 'review')): ?>
+                    <button type="button" class="btn btn-primary" data-vehicle-route-decision-permanent title="Vehiculul este adăugat pe ruta corespunzătoare (beneficiar + tip transport) în Configurare Transport.">Adaugă permanent pe rută</button>
+                <?php else: ?>
+                    <?php // Operatorul: cursa se salveaza cu vehiculul doar pentru ea; adaugarea permanenta asteapta aprobarea adminului. ?>
+                    <button type="button" class="btn btn-primary" data-vehicle-route-decision-permanent title="Cursa se salvează cu vehiculul folosit doar pentru ea; adăugarea permanentă pe rută se aplică după aprobarea administratorului.">Cere adăugarea permanentă (aprobare admin)</button>
+                <?php endif; ?>
             </div>
         </div>
     </div>

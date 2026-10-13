@@ -4946,6 +4946,7 @@ class DispecerCurseModel extends BaseModel
             LEFT JOIN utilizatori uc ON uc.id = c.created_by
             WHERE c.deleted_at IS NULL
               AND c.created_at > :since
+              AND NOT " . InactiveResourceApprovalModel::tripAwaitingApprovalSql('c.id') . "
             ORDER BY c.created_at DESC, c.id DESC
             LIMIT {$limit}
         ";
@@ -9641,11 +9642,27 @@ class DispecerCurseModel extends BaseModel
         ";
     }
 
+    /** Cursa are cereri de aprobare in asteptare / respinse care o tin in afara Desfasuratorului. */
+    public function isRaceAwaitingApproval(int $raceId): bool
+    {
+        if ($raceId <= 0) {
+            return false;
+        }
+
+        $stmt = $this->db->prepare('SELECT ' . InactiveResourceApprovalModel::tripAwaitingApprovalSql(':race_id') . ' AS awaiting');
+        $stmt->bindValue(':race_id', $raceId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn() === 1;
+    }
+
     private function buildRaceWhere(array $filters, string $search): array
     {
         $where = [
             'c.deleted_at IS NULL',
             $this->defaultBillingStatusExpression() . ' = :dispatcher_billing_status',
+            // Cursele trimise de operator spre aprobare apar doar dupa aprobare.
+            'NOT ' . InactiveResourceApprovalModel::tripAwaitingApprovalSql('c.id'),
         ];
         $params = [
             ':dispatcher_billing_status' => self::DEFAULT_BILLING_STATUS,

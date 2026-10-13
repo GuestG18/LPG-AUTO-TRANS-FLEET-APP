@@ -38,6 +38,10 @@ class InactiveResourceApprovalController
                 $this->markSeenAction();
                 return;
 
+            case 'live':
+                $this->liveAction();
+                return;
+
             case 'operator_activity':
                 $this->operatorActivityAction();
                 return;
@@ -149,6 +153,13 @@ class InactiveResourceApprovalController
         $ok = $targetStatus === 'approved'
             ? $this->model->approve($id, $this->currentUserId(), $note)
             : $this->model->reject($id, $this->currentUserId(), $note);
+        if ($ok && $targetStatus === 'approved') {
+            try {
+                (new DispecerCurseController(get_pdo()))->applyApprovedRouteConfigRequests();
+            } catch (Throwable $exception) {
+                error_log('[InactiveResourceApprovalController][review][route_config] ' . $exception->getMessage());
+            }
+        }
 
         $message = $targetStatus === 'approved'
             ? ($ok ? 'Solicitarea a fost aprobata.' : 'Solicitarea nu mai este in asteptare.')
@@ -224,6 +235,42 @@ class InactiveResourceApprovalController
         } catch (Throwable $exception) {
             error_log('[InactiveResourceApprovalController][mark_seen] ' . $exception->getMessage());
             $this->sendJson(['success' => false, 'message' => 'Nu am putut salva.'], 500);
+        }
+    }
+
+    /**
+     * Servit prin page=dispecer_curse&action=approvals_live (operatorii nu au acces la acest
+     * modul). Interogat la cateva secunde de pe orice pagina (assets/js/approval-live.js):
+     * - administratorul primeste cererile in asteptare (popup cu Aproba / Respinge);
+     * - oricine primeste cursele lui care asteapta aprobarea si deciziile nevazute.
+     * Tot aici se aplica cererile "adauga permanent pe ruta" aprobate, ca aprobarea venita
+     * pe email (direct in baza) sa ajunga in Configurare Transport fara alt job.
+     * Interogare scurta (fara conexiune tinuta deschisa): serverul de pe VPS (php -S)
+     * serveste o cerere odata.
+     */
+    private function liveAction(): void
+    {
+        $userId = (int) ($this->currentUserId() ?? 0);
+        $canReview = $this->canReview();
+
+        try {
+            $db = get_pdo();
+            (new DispecerCurseController($db))->applyApprovedRouteConfigRequests();
+        } catch (Throwable $exception) {
+            error_log('[InactiveResourceApprovalController][live][route_config] ' . $exception->getMessage());
+        }
+
+        try {
+            $this->sendJson([
+                'success' => true,
+                'can_review' => $canReview,
+                'pending' => $canReview ? $this->model->getPendingForLiveReview(30) : [],
+                'awaiting_trips' => $this->model->getTripsAwaitingApproval($canReview ? null : $userId, 30),
+                'decisions' => $this->model->getUnseenDecisionsForRequester($userId, 20),
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[InactiveResourceApprovalController][live] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'message' => 'Aprobarile nu au putut fi incarcate.'], 500);
         }
     }
 
@@ -464,7 +511,7 @@ class InactiveResourceApprovalController
         }
 
         $resourceType = strtolower(trim((string) ($_GET['resource_type'] ?? 'all')));
-        if (!in_array($resourceType, ['vehicle', 'driver', 'repair', 'diurna', 'all'], true)) {
+        if (!in_array($resourceType, ['vehicle', 'driver', 'repair', 'diurna', 'route_config', 'all'], true)) {
             $resourceType = 'all';
         }
 
@@ -531,6 +578,7 @@ class InactiveResourceApprovalController
         $source = strtolower(trim($source));
         $sourceLabel = match ($source) {
             'popup' => 'popup-ul de aprobari',
+            'popup_live' => 'notificarea live',
             'approval_page' => 'pagina de detalii',
             default => 'aplicatie',
         };

@@ -164,6 +164,64 @@ class VehicleServiceKmModel extends BaseModel
         return $row === false ? null : $row;
     }
 
+    /**
+     * Cursele (sau fazele de pe acelasi vehicul) din Desfasurator care se suprapun peste
+     * perioada de service: km-ii lor ar fi numarati de doua ori (o data pe cursa, o data
+     * in km service din GPS). Suprapunere stricta: o cursa care se termina exact la plecare
+     * nu conteaza. Ora lipsa = 00:00 la inceput / 23:59:59 la sfarsit; sfarsit lipsa = ziua
+     * de inceput. $to null = vehiculul inca in service (interval deschis).
+     *
+     * @return array<int, array{id: int, start: string, end: string}>
+     */
+    public function findOverlappingTrips(int $vehicleId, string $from, ?string $to): array
+    {
+        $to ??= '9999-12-31 23:59:59';
+        $stmt = $this->db->prepare("
+            SELECT trip_id, MIN(trip_start) AS trip_start, MAX(trip_end) AS trip_end
+            FROM (
+                SELECT c.id AS trip_id,
+                       TIMESTAMP(c.data_inceput, COALESCE(c.ora_inceput, '00:00:00')) AS trip_start,
+                       TIMESTAMP(COALESCE(c.data_sfarsit, c.data_inceput), COALESCE(c.ora_sfarsit, '23:59:59')) AS trip_end
+                FROM curse_dispecer c
+                WHERE c.deleted_at IS NULL AND c.vehicle_id = :vehicle_main AND c.data_inceput IS NOT NULL
+                UNION ALL
+                SELECT s.cursa_id,
+                       TIMESTAMP(s.data_inceput, COALESCE(s.ora_inceput, '00:00:00')),
+                       TIMESTAMP(COALESCE(s.data_sfarsit, s.data_inceput), COALESCE(s.ora_sfarsit, '23:59:59'))
+                FROM curse_segmente s
+                JOIN curse_dispecer cp ON cp.id = s.cursa_id AND cp.deleted_at IS NULL
+                WHERE s.deleted_at IS NULL AND s.vehicle_id = :vehicle_segment AND s.data_inceput IS NOT NULL
+            ) trips
+            WHERE trip_start < :service_to AND trip_end > :service_from
+            GROUP BY trip_id
+            ORDER BY trip_start ASC
+            LIMIT 20
+        ");
+        $stmt->execute([
+            ':vehicle_main' => $vehicleId,
+            ':vehicle_segment' => $vehicleId,
+            ':service_to' => $to,
+            ':service_from' => $from,
+        ]);
+
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['trip_id'],
+            'start' => (string) $row['trip_start'],
+            'end' => (string) $row['trip_end'],
+        ], $stmt->fetchAll(PDO::FETCH_ASSOC));
+    }
+
+    /** Text scurt pentru mesaje: "#868 (11.10.2026 16:26 – 12.10.2026 17:53)". */
+    public static function describeTrips(array $trips): string
+    {
+        return implode(', ', array_map(static fn (array $trip): string => sprintf(
+            '#%d (%s – %s)',
+            $trip['id'],
+            date('d.m.Y H:i', (int) strtotime($trip['start'])),
+            date('d.m.Y H:i', (int) strtotime($trip['end']))
+        ), $trips));
+    }
+
     /** Zilele in service (inclusiv ziua plecarii si a intoarcerii); cele deschise se numara pana azi. */
     private static function withDuration(array $row): array
     {

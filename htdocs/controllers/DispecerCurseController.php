@@ -84,6 +84,8 @@ class DispecerCurseController
         $this->model = new DispecerCurseModel($db);
         $this->inactiveStatusService = new InactiveResourceStatusService($db);
         $this->inactiveApprovalModel = new InactiveResourceApprovalModel($db);
+        // Lista Desfasurator filtreaza cursele care asteapta aprobarea (blocks_trip).
+        $this->inactiveApprovalModel->ensureSchema();
     }
 
     private function deletedRaceTransportTypes(): array
@@ -280,6 +282,11 @@ class DispecerCurseController
             case 'inactive_resource_status':
                 $this->inactiveResourceStatusAction();
                 return;
+            case 'approvals_live':
+                // Aprobari live pentru toate paginile: operatorii au acces la Dispecer curse,
+                // nu si la modulul de aprobari (vezi InactiveResourceApprovalController::liveAction).
+                (new InactiveResourceApprovalController($this->db))->handle('live');
+                return;
             case 'trip_conflict_check':
                 $this->tripConflictCheckAction();
                 return;
@@ -301,6 +308,9 @@ class DispecerCurseController
             case 'service_km_delete':
                 $this->deleteServiceKmAction();
                 break;
+            case 'service_km_gps':
+                $this->serviceKmGpsAction();
+                return;
             case 'request_diurna_change':
                 $this->requestDiurnaChangeAction();
                 return;
@@ -951,10 +961,19 @@ class DispecerCurseController
         $driverId = $this->positiveIntFromInput($_GET['driver_id'] ?? null);
         $tripId = $this->positiveIntFromInput($_GET['trip_id'] ?? null);
         $referenceDate = $this->resolveInactiveReferenceDate((string) ($_GET['trip_date'] ?? ''), $tripId);
-        $normalUserMode = !$this->canReviewInactiveApprovals();
+        $referenceTime = $this->inactiveReferenceTime((string) ($_GET['trip_time'] ?? ''), $referenceDate);
+        $referenceEndDate = $this->normalizeRaceDate((string) ($_GET['trip_end_date'] ?? ''));
+        $referenceEndTime = $this->inactiveReferenceTime((string) ($_GET['trip_end_time'] ?? ''), $referenceEndDate);
 
         try {
-            $status = $this->inactiveStatusService->getResourcesStatus($vehicleId, $driverId, $referenceDate);
+            $status = $this->inactiveStatusService->getResourcesStatus(
+                $vehicleId,
+                $driverId,
+                $referenceDate,
+                $referenceTime,
+                $referenceEndDate,
+                $referenceEndTime
+            );
             foreach ($status['resources'] as &$resource) {
                 $resourceType = $this->approvalResourceTypeForInactiveResource($resource);
                 $resourceId = (int) ($resource['resource_id'] ?? 0);
@@ -962,17 +981,11 @@ class DispecerCurseController
                 $resource['existing_approval_status'] = null;
                 $resource['user_pending_approval'] = null;
 
+                // Doar cererile legate de cursa conteaza: operatorul trimite cursa spre
+                // aprobare la salvare, deci nu mai exista o cerere separata, inainte de salvare.
                 if (!empty($resource['is_inactive']) && $tripId !== null && $resourceId > 0) {
                     $resource['existing_approval_status'] = $this->inactiveApprovalModel
                         ->getExistingOpenStatusForResourceTrip($resourceType, $resourceId, $tripId);
-                }
-
-                if (!empty($resource['is_inactive']) && $normalUserMode && $resourceId > 0) {
-                    $pendingApproval = $this->pendingRequesterApprovalForInactiveResource($resource);
-                    if ($pendingApproval !== null) {
-                        $resource['existing_approval_status'] = 'pending';
-                        $resource['user_pending_approval'] = $this->inactiveApprovalModalPayload($pendingApproval, $resource);
-                    }
                 }
             }
             unset($resource);
@@ -1038,7 +1051,15 @@ class DispecerCurseController
         }
 
         try {
-            $resource = $this->inactiveStatusService->getVehicleStatus($vehicleId);
+            $referenceDate = $this->normalizeRaceDate((string) ($_POST['trip_date'] ?? ''));
+            $referenceEndDate = $this->normalizeRaceDate((string) ($_POST['trip_end_date'] ?? ''));
+            $resource = $this->inactiveStatusService->getVehicleStatus(
+                $vehicleId,
+                $referenceDate,
+                $this->inactiveReferenceTime((string) ($_POST['trip_time'] ?? ''), $referenceDate),
+                $referenceEndDate,
+                $this->inactiveReferenceTime((string) ($_POST['trip_end_time'] ?? ''), $referenceEndDate)
+            );
             if ($resource === null) {
                 $this->sendJson([
                     'success' => false,
@@ -1409,9 +1430,21 @@ class DispecerCurseController
             $serviceKmEntries = [];
         }
 
+        // Tab-ul "In asteptare aprobare": numarul initial; lista vine live (approval-live.js).
+        try {
+            $awaitingApprovalCount = count($this->inactiveApprovalModel->getTripsAwaitingApproval(
+                $this->canReviewInactiveApprovals() ? null : (int) $this->currentUserId(),
+                100
+            ));
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][awaiting_count] ' . $exception->getMessage());
+            $awaitingApprovalCount = 0;
+        }
+
         render('dispecer_curse/index.php', [
             'pageTitle' => 'Dispecer curse',
             'currentPage' => 'dispecer_curse',
+            'awaitingApprovalCount' => $awaitingApprovalCount,
             'incompleteConfirmItems' => $incompleteConfirmItems,
             'rows' => $result['rows'],
             'search' => $search,
@@ -1461,6 +1494,85 @@ class DispecerCurseController
             'restoreListViewRaceId' => $restoreListViewRaceId,
             'serviceKmFlash' => $this->consumeFormFlash('service_km'),
         ]);
+    }
+
+    /**
+     * JSON pentru butonul "GPS" din formularul Km service: km SAS ai vehiculului intre
+     * plecarea la service si intoarcere (fara intoarcere = pana acum). Doar citire;
+     * operatorul vede deplasarile gasite si decide daca pastreaza valoarea.
+     */
+    private function serviceKmGpsAction(): void
+    {
+        $vehicleId = (int) ($_GET['vehicle_id'] ?? 0);
+        $date = static function (string $key): ?string {
+            $value = trim((string) ($_GET[$key] ?? ''));
+            $parsed = DateTime::createFromFormat('!Y-m-d', $value);
+            return $parsed !== false && $parsed->format('Y-m-d') === $value ? $value : null;
+        };
+        $time = static function (string $key): ?string {
+            $value = trim((string) ($_GET[$key] ?? ''));
+            return preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $value) === 1 ? $value : null;
+        };
+
+        $departure = $date('data_plecare');
+        if ($vehicleId <= 0 || $departure === null) {
+            $this->sendJson(['success' => false, 'error' => 'Alege vehiculul și data plecării la service.'], 422);
+        }
+        $departureTime = $time('ora_plecare');
+        $return = $date('data_intoarcere');
+        $returnTime = $return !== null ? $time('ora_intoarcere') : null;
+
+        $from = $departure . ' ' . ($departureTime ?? '00:00') . ':00';
+        // Fara intoarcere vehiculul e inca in service: numaram pana acum.
+        $to = $return !== null ? $return . ' ' . ($returnTime !== null ? $returnTime . ':00' : '23:59:59') : date('Y-m-d H:i:s');
+        if (strtotime($to) > time()) {
+            $to = date('Y-m-d H:i:s');
+        }
+        if (strtotime($to) <= strtotime($from)) {
+            $this->sendJson(['success' => false, 'error' => 'Intervalul plecare → întoarcere nu este valid (sau este în viitor).'], 422);
+        }
+
+        // Cursele vehiculului care cad in perioada de service; verificarea nu depinde de SAS,
+        // deci avertismentul apare si cand GPS-ul nu raspunde. Acelasi interval ca la salvare.
+        $overlappingTrips = array_map(fn (array $trip): array => $trip + [
+            'url' => $this->raceEditUrl($trip['id']),
+            'label' => VehicleServiceKmModel::describeTrips([$trip]),
+        ], (new VehicleServiceKmModel($this->db))->findOverlappingTrips(
+            $vehicleId,
+            $from,
+            $return !== null ? $return . ' ' . ($returnTime !== null ? $returnTime . ':00' : '23:59:59') : null
+        ));
+        $fail = function (string $error, int $status) use ($overlappingTrips): void {
+            $this->sendJson(['success' => false, 'error' => $error, 'overlapping_trips' => $overlappingTrips], $status);
+        };
+
+        try {
+            $service = new SasDashboardService($this->db);
+            if (!$service->credentialsAvailable()) {
+                $fail('Datele de acces SAS nu sunt configurate.', 503);
+            }
+            $carId = 0;
+            foreach ($service->getFleetVehicles() as $car) {
+                if ((int) ($car['local_vehicle_id'] ?? 0) === $vehicleId) {
+                    $carId = (int) ($car['sas_vehicle_id'] ?? 0);
+                    break;
+                }
+            }
+            if ($carId <= 0) {
+                $fail('Vehiculul nu are GPS SAS asociat.', 404);
+            }
+
+            $result = $service->getIntervalTrips($carId, $from, $to);
+            $this->sendJson([
+                'success' => true,
+                'total_km' => $result['total_km'],
+                'departure_without_time' => $departureTime === null,
+                'overlapping_trips' => $overlappingTrips,
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][service_km_gps] ' . $exception->getMessage());
+            $fail('Datele SAS nu au putut fi citite. Încearcă din nou.', 502);
+        }
     }
 
     /**
@@ -1535,6 +1647,21 @@ class DispecerCurseController
                     date('d.m.Y', (int) strtotime((string) $overlap['data_plecare'])),
                     $overlap['data_intoarcere'] !== null ? date('d.m.Y', (int) strtotime((string) $overlap['data_intoarcere'])) : 'în service'
                 );
+            }
+        }
+
+        // Km service nu au voie sa acopere o cursa a vehiculului: km-ii ei ar fi numarati de doua ori.
+        if ($errors === [] && $departure !== null) {
+            $overlappingTrips = $model->findOverlappingTrips(
+                $vehicleId,
+                $departure . ' ' . ($departureTime ?? '00:00:00'),
+                $return !== null ? $return . ' ' . ($returnTime ?? '23:59:59') : null
+            );
+            if ($overlappingTrips !== []) {
+                $errors['data_intoarcere'] = 'Perioada de service se suprapune cu '
+                    . (count($overlappingTrips) === 1 ? 'cursa ' : 'cursele ')
+                    . VehicleServiceKmModel::describeTrips($overlappingTrips)
+                    . '. Modifică plecarea / întoarcerea din service ca să nu acopere cursa.';
             }
         }
 
@@ -1619,20 +1746,21 @@ class DispecerCurseController
      * Decizia "Adauga permanent pe ruta": vehiculul este adaugat in Configurare Transport
      * pe regulile de ruta potrivite (beneficiar + loc incarcare / zona), in functie de
      * tipul de transport. Esecul nu blocheaza salvarea cursei — doar informeaza adminul.
+     *
+     * @return array{0: string, 1: string} [nivel mesaj, mesaj]
      */
-    private function applyPermanentVehicleRouteConfig(array $data): void
+    private function applyPermanentVehicleRouteConfig(array $data): array
     {
         $vehicleId = (int) ($data['vehicle_id'] ?? 0);
         $beneficiaryId = (int) ($data['beneficiar_id'] ?? 0);
         $transportType = (string) ($data['tip_transport'] ?? '');
         if ($vehicleId <= 0 || $beneficiaryId <= 0 || $transportType === '') {
-            return;
+            return ['warning', 'Datele rutei sunt incomplete; vehiculul a fost folosit doar pentru aceasta cursa.'];
         }
 
         try {
             if ($this->isVehicleAllowedForBeneficiaryAndTransport($beneficiaryId, $vehicleId, $transportType)) {
-                flash_set('info', 'Vehiculul era deja configurat pe aceasta ruta.');
-                return;
+                return ['info', 'Vehiculul era deja configurat pe aceasta ruta.'];
             }
 
             if ($transportType === 'compresor') {
@@ -1647,8 +1775,7 @@ class DispecerCurseController
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);
-                flash_set('info', 'Vehiculul a fost adaugat permanent la vehiculele Compresor ale beneficiarului.');
-                return;
+                return ['info', 'Vehiculul a fost adaugat permanent la vehiculele Compresor ale beneficiarului.'];
             }
 
             $isPrimary = $this->isPrimaryKmTransportType($transportType) || $this->isPrimaryTonTransportType($transportType);
@@ -1686,8 +1813,7 @@ class DispecerCurseController
             }
 
             if ($matchedRules === []) {
-                flash_set('warning', 'Nu exista o ruta configurata potrivita (loc incarcare / zona) pentru acest beneficiar; vehiculul a fost folosit doar pentru aceasta cursa. Adauga intai ruta din Configurare Transport.');
-                return;
+                return ['warning', 'Nu exista o ruta configurata potrivita (loc incarcare / zona) pentru acest beneficiar; vehiculul a fost folosit doar pentru aceasta cursa. Adauga intai ruta din Configurare Transport.'];
             }
 
             // La Distributie o pereche Loc-Zona poate avea mai multe reguli cu preturi diferite
@@ -1700,8 +1826,7 @@ class DispecerCurseController
                     $rulesPerPair[$pairKey] = ($rulesPerPair[$pairKey] ?? 0) + 1;
                 }
                 if (max($rulesPerPair) > 1) {
-                    flash_set('warning', 'Ruta are mai multe configuratii cu preturi diferite; vehiculul a fost folosit doar pentru aceasta cursa. Adauga-l pe configuratia potrivita din Configurare Transport.');
-                    return;
+                    return ['warning', 'Ruta are mai multe configuratii cu preturi diferite; vehiculul a fost folosit doar pentru aceasta cursa. Adauga-l pe configuratia potrivita din Configurare Transport.'];
                 }
             }
 
@@ -1722,16 +1847,106 @@ class DispecerCurseController
                 $updatedRules++;
             }
 
-            flash_set(
+            return [
                 'info',
                 $updatedRules > 0
                     ? 'Vehiculul a fost adaugat permanent pe ruta in Configurare Transport (' . $updatedRules . ' reguli actualizate).'
-                    : 'Vehiculul era deja prezent pe regulile rutei.'
-            );
+                    : 'Vehiculul era deja prezent pe regulile rutei.',
+            ];
         } catch (Throwable $exception) {
             error_log('[DispecerCurse][vehicle-route-config] ' . $exception->getMessage());
-            flash_set('warning', 'Nu am putut adauga vehiculul permanent pe ruta; a fost folosit doar pentru aceasta cursa.');
+            return ['warning', 'Nu am putut adauga vehiculul permanent pe ruta; a fost folosit doar pentru aceasta cursa.'];
         }
+    }
+
+    /**
+     * "Doar pentru aceasta cursa" / "Adauga permanent pe ruta". Adminul aplica direct;
+     * pentru operator adaugarea permanenta devine o cerere de aprobare (vehiculul ramane
+     * folosit doar pentru cursa lui pana la aprobare).
+     */
+    private function handleVehicleConfigDecision(string $decision, array $data, int $raceId): void
+    {
+        if ($decision === 'trip') {
+            flash_set('info', 'Vehiculul a fost folosit doar pentru aceasta cursa, fara modificarea Configurarii Transport.');
+            return;
+        }
+        if ($decision !== 'permanent') {
+            return;
+        }
+
+        if ($this->canReviewInactiveApprovals()) {
+            [$level, $message] = $this->applyPermanentVehicleRouteConfig($data);
+            flash_set($level, $message);
+            return;
+        }
+
+        try {
+            $labels = $this->routeConfigRequestLabels($data);
+            $requestId = $this->inactiveApprovalModel->createRouteConfigRequest(
+                $data,
+                $raceId,
+                (int) $this->currentUserId(),
+                $labels['vehicle'],
+                $labels['route'],
+                $labels['beneficiary']
+            );
+            flash_set(
+                $requestId > 0 ? 'info' : 'warning',
+                $requestId > 0
+                    ? 'Vehiculul a fost folosit pentru aceasta cursa. Adaugarea permanenta pe ruta a fost trimisa administratorului spre aprobare.'
+                    : 'Vehiculul a fost folosit doar pentru aceasta cursa; cererea de adaugare permanenta nu a putut fi trimisa.'
+            );
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurse][route-config-request] ' . $exception->getMessage());
+            flash_set('warning', 'Vehiculul a fost folosit doar pentru aceasta cursa; cererea de adaugare permanenta nu a putut fi trimisa.');
+        }
+    }
+
+    /** @return array{vehicle: string, route: string, beneficiary: string} */
+    private function routeConfigRequestLabels(array $data): array
+    {
+        $lookup = function (string $sql, int $id): string {
+            if ($id <= 0) {
+                return '';
+            }
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute(['id' => $id]);
+            return trim((string) ($stmt->fetchColumn() ?: ''));
+        };
+
+        $vehicle = $lookup('SELECT nr_inmatriculare FROM vehicule WHERE id = :id', (int) ($data['vehicle_id'] ?? 0));
+        $beneficiary = $lookup('SELECT nume FROM configurare_beneficiari_transport WHERE id = :id', (int) ($data['beneficiar_id'] ?? 0));
+        $location = $lookup('SELECT nume FROM configurare_locuri_incarcare WHERE id = :id', (int) ($data['loc_incarcare_id'] ?? 0));
+        $zone = $lookup('SELECT nume FROM configurare_zone_distributie WHERE id = :id', (int) ($data['zona_distributie_id'] ?? 0));
+        $transport = self::TRANSPORT_TYPES[(string) ($data['tip_transport'] ?? '')] ?? (string) ($data['tip_transport'] ?? '');
+
+        $route = implode(' → ', array_filter([$location, $zone], static fn(string $part): bool => $part !== ''));
+
+        return [
+            'vehicle' => $vehicle,
+            'route' => trim($beneficiary . ($transport !== '' ? ' · ' . $transport : '') . ($route !== '' ? ' · ' . $route : '')),
+            'beneficiary' => $beneficiary,
+        ];
+    }
+
+    /**
+     * Aplica in Configurare Transport cererile "adauga permanent pe ruta" aprobate, indiferent
+     * de unde a venit aprobarea (aplicatie, link sau raspuns pe email). Revendicarea dinainte
+     * garanteaza o singura aplicare. Intoarce numarul de cereri aplicate.
+     */
+    public function applyApprovedRouteConfigRequests(): int
+    {
+        $applied = 0;
+        foreach ($this->inactiveApprovalModel->getUnappliedApprovedRouteConfigs() as $request) {
+            if (!$this->inactiveApprovalModel->claimRouteConfigApplication($request['id'])) {
+                continue;
+            }
+            [, $message] = $this->applyPermanentVehicleRouteConfig($request['trip_data']);
+            $this->inactiveApprovalModel->appendReviewNote($request['id'], 'Aplicare: ' . $message);
+            $applied++;
+        }
+
+        return $applied;
     }
 
     private const MISSING_SEVERITY_ORDER = ['critical' => 3, 'important' => 2, 'minor' => 1];
@@ -2241,6 +2456,7 @@ class DispecerCurseController
         [$segment, $errors] = $this->validateRaceSegmentInput($_POST, $race);
         if ($errors !== []) {
             flash_set('danger', 'Faza nu a fost salvata: ' . implode(' ', $errors));
+            $this->setRaceSegmentFormFlash($raceId, $errors);
             redirect($this->raceSegmentRedirectUrl($raceId, 'noua'));
         }
 
@@ -2254,8 +2470,8 @@ class DispecerCurseController
                 . 'fara tarif suplimentar.'
             );
 
-            // Ca la adaugarea unei curse: dupa salvare operatorul revine in Dispecer curse.
-            redirect(build_query_url(['page' => 'dispecer_curse']));
+            // Ca la salvarea cursei: operatorul revine in Desfasurator cu filtrele lui.
+            redirect($this->listReturnUrl($raceId));
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][segment_store] ' . $exception->getMessage());
             flash_set('danger', 'Faza nu a putut fi salvata. Reincearca.');
@@ -2290,6 +2506,7 @@ class DispecerCurseController
         [$segment, $errors] = $this->validateRaceSegmentInput($_POST, $race);
         if ($errors !== []) {
             flash_set('danger', 'Faza nu a fost salvata: ' . implode(' ', $errors));
+            $this->setRaceSegmentFormFlash($raceId, $errors);
             redirect($this->raceSegmentRedirectUrl($raceId, (string) $segmentId));
         }
 
@@ -2298,8 +2515,8 @@ class DispecerCurseController
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
             $this->repriceRaceFromSegments($raceId);
             flash_set('success', 'Faza a fost actualizata.');
-            // Ca la salvarea cursei: dupa salvare operatorul revine in Dispecer curse.
-            redirect(build_query_url(['page' => 'dispecer_curse']));
+            // Ca la salvarea cursei: operatorul revine in Desfasurator cu filtrele lui.
+            redirect($this->listReturnUrl($raceId));
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][segment_update] ' . $exception->getMessage());
             flash_set('danger', 'Faza nu a putut fi actualizata. Reincearca.');
@@ -2340,6 +2557,21 @@ class DispecerCurseController
     }
 
     /**
+     * Faza respinsa la validare: formularul cursei se redeschide cu valorile tastate
+     * de operator si cu eroarea sub campul gresit, ca la salvarea cursei.
+     */
+    private function setRaceSegmentFormFlash(int $raceId, array $errors): void
+    {
+        $old = array_intersect_key($_POST, array_flip([
+            'vehicle_id', 'driver_id', 'data_incarcare', 'data_inceput', 'ora_inceput',
+            'data_sfarsit', 'ora_sfarsit', 'loc_incarcare_id', 'zona_distributie_id',
+            'loc_plecare', 'loc_livrare', 'km_cursa', 'km_totali', 'km_dislocare',
+            'cantitate_incarcata', 'tona_livrata', 'nr_clienti', 'ore_aspirare', 'observatii',
+        ]));
+        $this->setFormFlash('race_edit_' . $raceId, $old, $errors);
+    }
+
+    /**
      * Unde se intoarce operatorul dupa o operatie pe faze. `$phase` tine formularul
      * deschis pe faza respectiva ('noua' sau id-ul ei) cand salvarea a esuat.
      */
@@ -2355,7 +2587,7 @@ class DispecerCurseController
             return build_query_url($params) . '#race-form';
         }
 
-        return build_query_url(['page' => 'dispecer_curse']);
+        return $this->listReturnUrl($raceId);
     }
 
     private function storeAction(): void
@@ -2444,30 +2676,46 @@ class DispecerCurseController
             // Cursa noua poate prelua cazari introduse inainte de ea (vezi modulul Cazare).
             $this->rematchAccommodationExpenses();
             $this->persistTariffTraceability($raceId, $data);
-            $resourcesForTripApproval = $this->resourcesForTripInactiveApprovalCreation($inactiveResources, $approvalDecision);
-            if ($raceId > 0 && $resourcesForTripApproval !== []) {
-                $createdApprovalIds = $this->inactiveApprovalModel->createForInactiveResources(
-                    $resourcesForTripApproval,
+            $awaitingApproval = false;
+            if ($raceId > 0 && $approvalDecision === 'request') {
+                // Operatorul: cursa e salvata, dar asteapta decizia adminului.
+                $awaitingApproval = $this->inactiveApprovalModel->requestTripApprovals(
+                    $resourcesNeedingDecision,
                     $raceId,
-                    $approvalDecision !== '' ? $approvalDecision : 'pending',
-                    $this->currentUserId()
-                );
-                if ($createdApprovalIds !== []) {
-                    flash_set(
-                        $approvalDecision === 'approved' ? 'info' : 'warning',
-                        $approvalDecision === 'approved'
-                            ? 'Utilizarea resurselor inactive a fost aprobata imediat.'
-                            : 'Utilizarea resurselor inactive a fost trimisa spre aprobare.'
+                    (int) $this->currentUserId()
+                ) !== [];
+            } else {
+                $resourcesForTripApproval = $this->resourcesForTripInactiveApprovalCreation($inactiveResources, $approvalDecision);
+                if ($raceId > 0 && $resourcesForTripApproval !== []) {
+                    $createdApprovalIds = $this->inactiveApprovalModel->createForInactiveResources(
+                        $resourcesForTripApproval,
+                        $raceId,
+                        $approvalDecision !== '' ? $approvalDecision : 'pending',
+                        $this->currentUserId()
                     );
+                    if ($createdApprovalIds !== []) {
+                        flash_set(
+                            $approvalDecision === 'approved' ? 'info' : 'warning',
+                            $approvalDecision === 'approved'
+                                ? 'Utilizarea resurselor inactive a fost aprobata imediat.'
+                                : 'Utilizarea resurselor inactive a fost trimisa spre aprobare.'
+                        );
+                    }
                 }
             }
-            if ($raceId > 0 && $vehicleConfigDecision === 'permanent') {
-                $this->applyPermanentVehicleRouteConfig($data);
-            } elseif ($raceId > 0 && $vehicleConfigDecision === 'trip') {
-                flash_set('info', 'Vehiculul a fost folosit doar pentru aceasta cursa, fara modificarea Configurarii Transport.');
+            if ($raceId > 0) {
+                $this->handleVehicleConfigDecision($vehicleConfigDecision, $data, $raceId);
             }
-            $this->setPostCreateExpensePrompt($raceId, 'created');
-            flash_set('success', 'Cursa a fost adaugata cu succes.');
+            $this->setPostCreateExpensePrompt($awaitingApproval ? 0 : $raceId, 'created');
+            if ($awaitingApproval) {
+                flash_set(
+                    'warning',
+                    'Cursa #' . $raceId . ' a fost salvata si trimisa administratorului spre aprobare. '
+                    . 'Apare in Desfasurator curse dupa aprobare; pana atunci o gasesti in tab-ul "In asteptare aprobare".'
+                );
+            } else {
+                flash_set('success', 'Cursa a fost adaugata cu succes.');
+            }
             if ($similarRaces !== []) {
                 flash_set('warning', 'Verifica sa nu fie o cursa dubla: ' . $this->buildSimilarRacesMessage($similarRaces));
             }
@@ -2592,10 +2840,6 @@ class DispecerCurseController
         $incompleteConfirmItems = (array) ($_SESSION['_dispecer_incomplete_confirm_race_edit_' . $raceId] ?? []);
         unset($_SESSION['_dispecer_incomplete_confirm_race_edit_' . $raceId]);
         $raceFormData = $race;
-        if ($raceFlash['old'] !== []) {
-            $raceFormData = array_merge($raceFormData, $raceFlash['old']);
-        }
-        $raceFormData['tip_marfa'] = $this->normalizeGoodsTypeSelection($raceFormData['tip_marfa'] ?? []);
 
         // Fazele nu mai au formularul lor: se vad si se corecteaza in FORMULARUL CURSEI.
         // Sagetile din antet schimba ce arata formularul (cursa intreaga sau o faza),
@@ -2607,6 +2851,12 @@ class DispecerCurseController
         } elseif ($phaseMode === 'noua') {
             $raceFormData = array_merge($raceFormData, $this->raceFormDataForNewSegment($race, $raceSegments));
         }
+
+        // Valorile tastate la o salvare respinsa (cursa sau faza) castiga peste cele salvate.
+        if ($raceFlash['old'] !== []) {
+            $raceFormData = array_merge($raceFormData, $raceFlash['old']);
+        }
+        $raceFormData['tip_marfa'] = $this->normalizeGoodsTypeSelection($raceFormData['tip_marfa'] ?? []);
 
         $postCreateExpensePrompt = $this->consumePostCreateExpensePrompt();
 
@@ -2833,24 +3083,38 @@ class DispecerCurseController
             if ((string) ($raceBeforeUpdate['status_facturare'] ?? '') !== 'facturat') {
                 $this->persistTariffTraceability($raceId, $data);
             }
-            $resourcesForTripApproval = $this->resourcesForTripInactiveApprovalCreation($inactiveResources, $approvalDecision);
-            if ($resourcesForTripApproval !== []) {
-                $createdApprovalIds = $this->inactiveApprovalModel->createForInactiveResources(
-                    $resourcesForTripApproval,
-                    $raceId,
-                    $approvalDecision !== '' ? $approvalDecision : 'pending',
-                    $this->currentUserId()
-                );
-                if ($createdApprovalIds !== [] && $approvalDecision !== '') {
-                    flash_set(
-                        $approvalDecision === 'approved' ? 'info' : 'warning',
-                        $approvalDecision === 'approved'
-                            ? 'Utilizarea resurselor inactive a fost aprobata imediat.'
-                            : 'Utilizarea resurselor inactive a fost trimisa spre aprobare.'
+            if ($approvalDecision === 'request') {
+                if ($resourcesNeedingDecision !== []) {
+                    $this->inactiveApprovalModel->requestTripApprovals(
+                        $resourcesNeedingDecision,
+                        $raceId,
+                        (int) $this->currentUserId()
                     );
+                }
+            } else {
+                $resourcesForTripApproval = $this->resourcesForTripInactiveApprovalCreation($inactiveResources, $approvalDecision);
+                if ($resourcesForTripApproval !== []) {
+                    $createdApprovalIds = $this->inactiveApprovalModel->createForInactiveResources(
+                        $resourcesForTripApproval,
+                        $raceId,
+                        $approvalDecision !== '' ? $approvalDecision : 'pending',
+                        $this->currentUserId()
+                    );
+                    if ($createdApprovalIds !== [] && $approvalDecision !== '') {
+                        flash_set(
+                            $approvalDecision === 'approved' ? 'info' : 'warning',
+                            $approvalDecision === 'approved'
+                                ? 'Utilizarea resurselor inactive a fost aprobata imediat.'
+                                : 'Utilizarea resurselor inactive a fost trimisa spre aprobare.'
+                        );
+                    }
                 }
             }
             $this->inactiveApprovalModel->rejectPendingNoLongerUsed($raceId, $inactiveResources, $this->currentUserId());
+            // Cursa corectata (alt vehicul / sofer) sau aprobata de admin la editare nu mai
+            // asteapta; una retrimisa asteapta noua cerere, nu pe cea respinsa.
+            $this->inactiveApprovalModel->syncTripBlockingApprovals($raceId, $inactiveResources, $this->currentUserId());
+            $tripAwaitingApproval = $this->model->isRaceAwaitingApproval($raceId);
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
             $shouldPromptForExpenses = !is_array($raceBeforeUpdate)
                 || (
@@ -2862,7 +3126,11 @@ class DispecerCurseController
             } else {
                 $this->setPostCreateExpensePrompt(0);
             }
-            flash_set('success', 'Cursa a fost actualizată.');
+            if ($tripAwaitingApproval) {
+                flash_set('warning', 'Cursa a fost actualizată și așteaptă aprobarea administratorului. Apare în Desfășurător curse după aprobare.');
+            } else {
+                flash_set('success', 'Cursa a fost actualizată.');
+            }
             if ($similarRaces !== []) {
                 flash_set('warning', 'Verifica sa nu fie o cursa dubla: ' . $this->buildSimilarRacesMessage($similarRaces));
             }
@@ -2917,7 +3185,7 @@ class DispecerCurseController
         // Doar starea ferestrei: dreptul de aprobare se verifica la salvarea reala
         // (normalizeInactiveApprovalDecision), deci si raspunsul unui operator se pastreaza.
         $decision = trim((string) ($_POST['inactive_approval_decision'] ?? ''));
-        if (!in_array($decision, ['approved', 'pending'], true)) {
+        if (!in_array($decision, ['approved', 'pending', 'request'], true)) {
             return [];
         }
 
@@ -9093,17 +9361,21 @@ class DispecerCurseController
         return $intValue > 0 ? $intValue : null;
     }
 
+    /**
+     * Adminul decide pe loc ('approved') sau ulterior ('pending'); operatorul poate doar
+     * trimite cursa spre aprobare ('request'): cursa se salveaza, dar asteapta decizia.
+     */
     private function normalizeInactiveApprovalDecision(mixed $value): string
     {
-        if (!$this->canReviewInactiveApprovals()) {
-            return '';
-        }
-
         if (!is_scalar($value)) {
             return '';
         }
 
         $decision = strtolower(trim((string) $value));
+        if (!$this->canReviewInactiveApprovals()) {
+            return $decision === 'request' ? 'request' : '';
+        }
+
         return in_array($decision, ['approved', 'pending'], true) ? $decision : '';
     }
 
@@ -9111,10 +9383,15 @@ class DispecerCurseController
     {
         $vehicleId = isset($data['vehicle_id']) ? (int) $data['vehicle_id'] : 0;
         $driverId = isset($data['driver_id']) ? (int) $data['driver_id'] : 0;
+        $referenceDate = $this->raceDataReferenceDate($data);
+        $referenceEndDate = $this->normalizeRaceDate((string) ($data['data_sfarsit'] ?? ''));
         $status = $this->inactiveStatusService->getResourcesStatus(
             $vehicleId > 0 ? $vehicleId : null,
             $driverId > 0 ? $driverId : null,
-            $this->raceDataReferenceDate($data)
+            $referenceDate,
+            $this->inactiveReferenceTime((string) ($data['ora_inceput'] ?? ''), $referenceDate),
+            $referenceEndDate,
+            $this->inactiveReferenceTime((string) ($data['ora_sfarsit'] ?? ''), $referenceEndDate)
         );
 
         return is_array($status['inactive_resources'] ?? null) ? $status['inactive_resources'] : [];
@@ -9133,6 +9410,21 @@ class DispecerCurseController
         }
 
         return null;
+    }
+
+    /**
+     * Ora de inceput a cursei (H:i) conteaza doar impreuna cu o data de referinta.
+     */
+    private function inactiveReferenceTime(string $rawTime, ?string $referenceDate): ?string
+    {
+        if ($referenceDate === null || !preg_match('/^(\d{1,2}):(\d{2})/', trim($rawTime), $matches)) {
+            return null;
+        }
+        if ((int) $matches[1] > 23 || (int) $matches[2] > 59) {
+            return null;
+        }
+
+        return str_pad($matches[1], 2, '0', STR_PAD_LEFT) . ':' . $matches[2];
     }
 
     /**
@@ -9181,17 +9473,13 @@ class DispecerCurseController
                 continue;
             }
 
+            // Doar o cerere legata de aceasta cursa conteaza. O cerere a operatorului fara
+            // cursa nu mai deblocheaza salvarea: cursa se trimite spre aprobare ('request'),
+            // iar cererea existenta este preluata pe cursa (requestTripApprovals).
             $existingStatus = null;
             if ($tripId !== null && $tripId > 0) {
                 $existingStatus = $this->inactiveApprovalModel
                     ->getExistingOpenStatusForResourceTrip($resourceType, $resourceId, $tripId);
-            }
-
-            if ($existingStatus === null && !$this->canReviewInactiveApprovals()) {
-                $pendingApproval = $this->pendingRequesterApprovalForInactiveResource($resource);
-                if ($pendingApproval !== null) {
-                    $existingStatus = 'pending';
-                }
             }
 
             if (!in_array($existingStatus, ['pending', 'approved'], true)) {

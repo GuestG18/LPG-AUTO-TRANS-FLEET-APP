@@ -23,7 +23,7 @@ $serviceKmValue = static fn (string $key): string => (string) ($serviceKmOld[$ke
 $serviceKmDate = static fn (?string $value): string => $value ? date('d.m.Y', (int) strtotime($value)) : '';
 $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0, 5) : '';
 ?>
-<div class="card border-0 shadow-sm <?= e((string) ($serviceKmCardSpacing ?? 'mt-3')) ?> service-km-card" id="service-km-panel" data-service-km-panel data-driver-map="<?= e((string) json_encode($serviceKmDriversByVehicle)) ?>">
+<div class="card border-0 shadow-sm <?= e((string) ($serviceKmCardSpacing ?? 'mt-3')) ?> service-km-card" id="service-km-panel" data-service-km-panel data-driver-map="<?= e((string) json_encode($serviceKmDriversByVehicle)) ?>" data-gps-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'service_km_gps'])) ?>">
     <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2 flex-wrap">
         <h3 class="h6 mb-0 d-flex align-items-center gap-2">
             <i class="bi bi-tools" aria-hidden="true"></i>
@@ -95,21 +95,39 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
                                 <input type="number" class="form-control<?= isset($serviceKmErrors['km']) ? ' is-invalid' : '' ?>" id="service_km_km" name="km" min="0" step="0.01" inputmode="decimal" value="<?= e($serviceKmValue('km')) ?>" data-service-km-field="km">
                                 <span class="input-group-text">km</span>
                             </div>
+                            <div class="form-text" data-service-km-gps-hint>Se completează din GPS (SAS) după vehicul, plecare și întoarcere.</div>
                         </div>
+                        <?php /* Acelasi selector data + ora ca in "Adauga cursa" (assets/js/datetime-picker-field.js);
+                                 valorile trimise raman Y-m-d / HH:MM in campurile ascunse. */ ?>
                         <div class="col-md-3">
                             <label class="form-label" for="service_km_departure">Data plecării la service <span class="text-danger">*</span></label>
-                            <div class="input-group">
-                                <input type="date" class="form-control<?= isset($serviceKmErrors['data_plecare']) ? ' is-invalid' : '' ?>" id="service_km_departure" name="data_plecare" required value="<?= e($serviceKmValue('data_plecare') !== '' ? $serviceKmValue('data_plecare') : date('Y-m-d')) ?>" data-service-km-field="data_plecare">
-                                <input type="time" class="form-control" name="ora_plecare" aria-label="Ora plecării" value="<?= e($serviceKmValue('ora_plecare')) ?>" data-service-km-field="ora_plecare">
+                            <div class="dispatcher-datetime-field" data-datetime-picker<?= isset($serviceKmErrors['data_plecare']) ? ' data-dtp-server-error' : '' ?>>
+                                <div class="input-group dispatcher-datetime-input-group">
+                                    <input type="text" class="form-control<?= isset($serviceKmErrors['data_plecare']) ? ' is-invalid' : '' ?>" id="service_km_departure" placeholder="dd/mm/yyyy HH:mm" inputmode="numeric" autocomplete="off" maxlength="16" aria-label="Data și ora plecării la service" data-dtp-display>
+                                    <button type="button" class="btn btn-outline-secondary" aria-label="Deschide calendarul pentru plecarea la service" aria-expanded="false" data-dtp-toggle>
+                                        <i class="bi bi-calendar3" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>
+                                <input type="hidden" name="data_plecare" value="<?= e($serviceKmValue('data_plecare') !== '' ? $serviceKmValue('data_plecare') : date('Y-m-d')) ?>" data-dtp-date data-service-km-field="data_plecare">
+                                <input type="hidden" name="ora_plecare" value="<?= e($serviceKmValue('ora_plecare')) ?>" data-dtp-time data-service-km-field="ora_plecare">
                             </div>
+                            <?php if (isset($serviceKmErrors['data_plecare'])): ?><div class="invalid-feedback d-block"><?= e((string) $serviceKmErrors['data_plecare']) ?></div><?php endif; ?>
                         </div>
                         <div class="col-md-3">
                             <label class="form-label" for="service_km_return">Data întoarcerii</label>
-                            <div class="input-group">
-                                <input type="date" class="form-control<?= isset($serviceKmErrors['data_intoarcere']) ? ' is-invalid' : '' ?>" id="service_km_return" name="data_intoarcere" value="<?= e($serviceKmValue('data_intoarcere')) ?>" data-service-km-field="data_intoarcere">
-                                <input type="time" class="form-control" name="ora_intoarcere" aria-label="Ora întoarcerii" value="<?= e($serviceKmValue('ora_intoarcere')) ?>" data-service-km-field="ora_intoarcere">
+                            <div class="dispatcher-datetime-field" data-datetime-picker<?= isset($serviceKmErrors['data_intoarcere']) ? ' data-dtp-server-error' : '' ?>>
+                                <div class="input-group dispatcher-datetime-input-group">
+                                    <input type="text" class="form-control<?= isset($serviceKmErrors['data_intoarcere']) ? ' is-invalid' : '' ?>" id="service_km_return" placeholder="dd/mm/yyyy HH:mm" inputmode="numeric" autocomplete="off" maxlength="16" aria-label="Data și ora întoarcerii" data-dtp-display>
+                                    <button type="button" class="btn btn-outline-secondary" aria-label="Deschide calendarul pentru întoarcere" aria-expanded="false" data-dtp-toggle>
+                                        <i class="bi bi-calendar3" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>
+                                <input type="hidden" name="data_intoarcere" value="<?= e($serviceKmValue('data_intoarcere')) ?>" data-dtp-date data-service-km-field="data_intoarcere">
+                                <input type="hidden" name="ora_intoarcere" value="<?= e($serviceKmValue('ora_intoarcere')) ?>" data-dtp-time data-service-km-field="ora_intoarcere">
                             </div>
-                            <div class="form-text">Goală = vehiculul este încă în service.</div>
+                            <?php if (isset($serviceKmErrors['data_intoarcere'])): ?><div class="invalid-feedback d-block"><?= e((string) $serviceKmErrors['data_intoarcere']) ?></div><?php else: ?><div class="form-text">Goală = vehiculul este încă în service.</div><?php endif; ?>
                         </div>
                         <div class="col-md-3">
                             <label class="form-label" for="service_km_reason">Motiv / reparație</label>
@@ -120,6 +138,7 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
                             <input type="text" class="form-control" id="service_km_notes" name="observatii" value="<?= e($serviceKmValue('observatii')) ?>" data-service-km-field="observatii">
                         </div>
                     </div>
+                    <div class="text-danger small mt-2" hidden data-service-km-overlap></div>
                     <div class="mt-3 d-flex gap-2">
                         <button type="submit" class="btn btn-primary" data-service-km-submit><?= $serviceKmValue('id') !== '' ? 'Salvează modificarea' : 'Adaugă km service' ?></button>
                         <button type="button" class="btn btn-outline-secondary" data-service-km-reset>Renunță</button>
@@ -223,6 +242,7 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
     <?php endif; ?>
 </div>
 
+<script src="<?= e(url('assets/js/datetime-picker-field.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/datetime-picker-field.js'))) ?>"></script>
 <script>
 (function () {
     'use strict';
@@ -280,6 +300,18 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
             if (input) { input.value = values[key] == null ? '' : values[key]; }
         });
         submitBtn.textContent = values.id ? 'Salvează modificarea' : 'Adaugă km service';
+        // Datele stau in campuri ascunse: refacem textul afisat in selectoarele de data.
+        if (window.FleetDateTimePicker) { window.FleetDateTimePicker.sync(form); }
+        // Un calcul GPS pornit inainte nu mai are voie sa scrie peste valorile incarcate acum.
+        window.clearTimeout(gpsTimer);
+        gpsRequest++;
+        setGpsHint('');
+        showOverlap([]);
+    }
+
+    function todayIso() {
+        var now = new Date();
+        return now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' + ('0' + now.getDate()).slice(-2);
     }
 
     // Soferul asignat vehiculului se propune automat, doar daca nu a fost ales altul.
@@ -294,8 +326,7 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
             var values = {};
             try { values = JSON.parse(btn.getAttribute('data-service-km-edit') || '{}'); } catch (e) { return; }
             if (btn.getAttribute('data-service-km-return') === '1' && !values.data_intoarcere) {
-                var now = new Date();
-                values.data_intoarcere = now.getFullYear() + '-' + ('0' + (now.getMonth() + 1)).slice(-2) + '-' + ('0' + now.getDate()).slice(-2);
+                values.data_intoarcere = todayIso();
             }
             fill(values);
             openForm();
@@ -306,8 +337,86 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
 
     form.querySelector('[data-service-km-reset]').addEventListener('click', function () {
         form.reset();
-        fill({ id: '', vehicle_id: '', driver_id: '', data_intoarcere: '', ora_plecare: '', ora_intoarcere: '', km: '', service_nume: '', motiv: '', observatii: '' });
+        // form.reset() nu reface campurile ascunse, deci data plecarii revine explicit la azi.
+        fill({ id: '', vehicle_id: '', driver_id: '', data_plecare: todayIso(), data_intoarcere: '', ora_plecare: '', ora_intoarcere: '', km: '', service_nume: '', motiv: '', observatii: '' });
         form.querySelectorAll('.is-invalid').forEach(function (el) { el.classList.remove('is-invalid'); });
+    });
+
+    // Km din GPS (SAS): cand vehiculul, plecarea si intoarcerea sunt completate, "Km service"
+    // se calculeaza automat (totalul dintre plecare si intoarcere + deplasarile gasite).
+    // Se declanseaza doar la modificarile operatorului; fill() de la Editeaza nu emite evenimente,
+    // deci valoarea salvata nu se suprascrie doar prin deschiderea formularului.
+    // Fara panou cu deplasarile: doar textul de sub camp arata calculul in curs sau o eroare.
+    var gpsHint = form.querySelector('[data-service-km-gps-hint]');
+    var gpsHintDefault = gpsHint.textContent;
+    var gpsTimer = null;
+    var gpsRequest = 0;
+    function setGpsHint(text, isWarning) {
+        gpsHint.textContent = text || gpsHintDefault;
+        gpsHint.classList.toggle('text-warning-emphasis', !!isWarning);
+    }
+    // Cursele din Desfasurator care cad in perioada de service: km-ii lor s-ar numara de doua ori.
+    var overlapBox = form.querySelector('[data-service-km-overlap]');
+    function showOverlap(trips) {
+        overlapBox.textContent = '';
+        trips = Array.isArray(trips) ? trips : [];
+        overlapBox.hidden = trips.length === 0;
+        if (!trips.length) { return; }
+        var icon = document.createElement('i');
+        icon.className = 'bi bi-exclamation-triangle-fill me-1';
+        icon.setAttribute('aria-hidden', 'true');
+        overlapBox.appendChild(icon);
+        overlapBox.appendChild(document.createTextNode('Perioada de service se suprapune cu ' + (trips.length === 1 ? 'cursa ' : 'cursele ')));
+        trips.forEach(function (trip, index) {
+            if (index > 0) { overlapBox.appendChild(document.createTextNode(', ')); }
+            var link = document.createElement('a');
+            link.href = trip.url;
+            link.target = '_blank';
+            link.className = 'link-danger fw-semibold';
+            link.textContent = trip.label;
+            overlapBox.appendChild(link);
+        });
+        overlapBox.appendChild(document.createTextNode('. Modifică plecarea / întoarcerea din service ca să nu acopere cursa — altfel km se numără de două ori.'));
+    }
+    function fetchGpsKm() {
+        var params = new URLSearchParams();
+        ['vehicle_id', 'data_plecare', 'ora_plecare', 'data_intoarcere', 'ora_intoarcere'].forEach(function (name) {
+            params.set(name, field(name).value);
+        });
+        if (!params.get('vehicle_id') || !params.get('data_plecare') || !params.get('data_intoarcere')) {
+            setGpsHint('');
+            showOverlap([]);
+            return;
+        }
+        var url = panel.getAttribute('data-gps-url');
+        var requestId = ++gpsRequest;
+        setGpsHint('Se calculează km din GPS (SAS)…');
+        fetch(url + (url.indexOf('?') === -1 ? '?' : '&') + params.toString(), { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                // Operatorul a schimbat intre timp vehiculul/datele: raspunsul vechi se ignora.
+                if (requestId !== gpsRequest) { return; }
+                showOverlap(data && data.overlapping_trips);
+                if (!data || !data.success) {
+                    setGpsHint((data && data.error) || 'Datele SAS nu au putut fi citite; completează km manual.', true);
+                    return;
+                }
+                field('km').value = String(Math.round(data.total_km == null ? 0 : Number(data.total_km)));
+                setGpsHint('');
+            })
+            .catch(function () {
+                if (requestId !== gpsRequest) { return; }
+                setGpsHint('Datele SAS nu au putut fi citite; completează km manual.', true);
+            });
+    }
+
+    function scheduleGpsKm() {
+        window.clearTimeout(gpsTimer);
+        gpsTimer = window.setTimeout(fetchGpsKm, 500);
+    }
+    // Selectorul de data emite "change" pe campul ascuns de data si cand se schimba doar ora.
+    ['vehicle_id', 'data_plecare', 'data_intoarcere'].forEach(function (name) {
+        field(name).addEventListener('change', scheduleGpsKm);
     });
 
     panel.querySelectorAll('[data-service-km-delete-form]').forEach(function (deleteForm) {

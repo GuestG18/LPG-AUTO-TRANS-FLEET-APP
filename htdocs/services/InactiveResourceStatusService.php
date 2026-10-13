@@ -34,13 +34,23 @@ class InactiveResourceStatusService
     /**
      * @param string|null $referenceDate Data cursei (Y-m-d) pentru care se evalueaza resursele.
      *                                   Implicit: ziua curenta.
+     * @param string|null $referenceTime Ora de inceput a cursei (H:i), optionala: delimiteaza
+     *                                   ziua plecarii / intoarcerii din service.
+     * @param string|null $referenceEndDate Data de sfarsit a cursei (Y-m-d); implicit = inceputul.
+     * @param string|null $referenceEndTime Ora de sfarsit a cursei (H:i), optionala.
      */
-    public function getResourcesStatus(?int $vehicleId, ?int $driverId, ?string $referenceDate = null): array
-    {
+    public function getResourcesStatus(
+        ?int $vehicleId,
+        ?int $driverId,
+        ?string $referenceDate = null,
+        ?string $referenceTime = null,
+        ?string $referenceEndDate = null,
+        ?string $referenceEndTime = null
+    ): array {
         $resources = [];
 
         if ($vehicleId !== null && $vehicleId > 0) {
-            $vehicleStatus = $this->getVehicleStatus($vehicleId);
+            $vehicleStatus = $this->getVehicleStatus($vehicleId, $referenceDate, $referenceTime, $referenceEndDate, $referenceEndTime);
             if ($vehicleStatus !== null) {
                 $resources[] = $vehicleStatus;
             }
@@ -65,8 +75,13 @@ class InactiveResourceStatusService
         ];
     }
 
-    public function getVehicleStatus(int $vehicleId): ?array
-    {
+    public function getVehicleStatus(
+        int $vehicleId,
+        ?string $referenceDate = null,
+        ?string $referenceTime = null,
+        ?string $referenceEndDate = null,
+        ?string $referenceEndTime = null
+    ): ?array {
         $stmt = $this->db->prepare("
             SELECT id, nr_inmatriculare, marca, model, tip_vehicul, status, observatii, created_at, updated_at
             FROM vehicule
@@ -93,7 +108,7 @@ class InactiveResourceStatusService
             );
         }
 
-        $repair = $this->getVehicleRepairIssue($vehicleId);
+        $repair = $this->getVehicleRepairIssue($vehicleId, $referenceDate, $referenceTime, $referenceEndDate, $referenceEndTime);
         if ($repair !== null) {
             $reasons[] = $this->buildReason('repair', $repair['start_date'] ?? null, self::VEHICLE_REASON_DEFINITIONS);
         }
@@ -398,37 +413,79 @@ class InactiveResourceStatusService
         return $row ?: null;
     }
 
-    private function getVehicleRepairIssue(int $vehicleId): ?array
-    {
+    /**
+     * Reparatia se evalueaza fata de data (si ora) cursei, nu fata de azi. Interventiile
+     * venite din Dispecer curse -> Km service au perioada reala [plecare, intoarcere]:
+     * vehiculul e in service doar intre ele, chiar daca interventia ramane deschisa in
+     * Mentenanta dupa intoarcere. Vehiculul e semnalat doar daca intervalul cursei
+     * [inceput, sfarsit] se suprapune cu perioada de service; un service fara intoarcere
+     * tine din ziua plecarii pana azi (si mai departe, pana se completeaza intoarcerea).
+     */
+    private function getVehicleRepairIssue(
+        int $vehicleId,
+        ?string $referenceDate = null,
+        ?string $referenceTime = null,
+        ?string $referenceEndDate = null,
+        ?string $referenceEndTime = null
+    ): ?array {
         $candidates = [];
+        $reference = $this->normalizeDate($referenceDate) ?? (new DateTimeImmutable('today'))->format('Y-m-d');
+        $referenceEnd = $this->normalizeDate($referenceEndDate);
+        if ($referenceEnd === null || $referenceEnd < $reference) {
+            $referenceEnd = $reference;
+        }
+        $tripStart = $reference . ' ' . ($this->normalizeTime($referenceTime) ?? '00:00');
+        $tripEnd = $referenceEnd . ' ' . ($this->normalizeTime($referenceEndTime) ?? '23:59');
+        if ($tripEnd < $tripStart) {
+            $tripEnd = $referenceEnd . ' 23:59';
+        }
 
         if ($this->tableExists('mentenanta_interventii_programate')) {
+            $hasServiceKm = $this->tableExists('vehicule_service_km') && $this->columnExists('mentenanta_interventii_programate', 'service_km_id');
+            $serviceSelect = $hasServiceKm
+                ? ', sk.id AS sk_id, sk.data_plecare, sk.ora_plecare, sk.data_intoarcere, sk.ora_intoarcere'
+                : ', NULL AS sk_id';
+            $serviceJoin = $hasServiceKm ? ' LEFT JOIN vehicule_service_km sk ON sk.id = i.service_km_id' : '';
+            $serviceWhere = $hasServiceKm ? " OR (sk.id IS NOT NULL AND i.status_interventie <> 'anulata')" : '';
+
             $stmt = $this->db->prepare("
-                SELECT id,
-                       data_programata AS start_date,
-                       status_interventie,
-                       furnizor,
-                       descriere
-                FROM mentenanta_interventii_programate
-                WHERE vehicle_id = :vehicle_id
-                  AND tip_interventie = 'reparatie'
-                  AND status_interventie IN ('programata', 'confirmata', 'in_lucru')
-                  AND data_programata <= CURDATE()
-                ORDER BY data_programata ASC, id ASC
-                LIMIT 1
+                SELECT i.id,
+                       i.data_programata AS start_date,
+                       i.status_interventie,
+                       i.furnizor,
+                       i.descriere" . $serviceSelect . "
+                FROM mentenanta_interventii_programate i" . $serviceJoin . "
+                WHERE i.vehicle_id = :vehicle_id
+                  AND i.tip_interventie = 'reparatie'
+                  AND (i.status_interventie IN ('programata', 'confirmata', 'in_lucru')" . $serviceWhere . ")
+                ORDER BY i.data_programata ASC, i.id ASC
             ");
             $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
             $stmt->execute();
-            $row = $stmt->fetch();
-            if ($row) {
+
+            foreach ($stmt->fetchAll() as $row) {
+                if (!empty($row['sk_id'])) {
+                    if (!$this->serviceKmPeriodOverlaps($row, $tripStart, $tripEnd)) {
+                        continue;
+                    }
+                    $startDate = $this->normalizeDate($row['data_plecare'] ?? null);
+                } else {
+                    $startDate = $this->normalizeDate($row['start_date'] ?? null);
+                    if ($startDate === null || $startDate > $referenceEnd) {
+                        continue;
+                    }
+                }
+
                 $candidates[] = [
                     'source' => 'mentenanta_interventii_programate',
                     'source_id' => (int) ($row['id'] ?? 0),
-                    'start_date' => $this->normalizeDate($row['start_date'] ?? null),
+                    'start_date' => $startDate,
+                    'end_date' => !empty($row['sk_id']) ? $this->normalizeDate($row['data_intoarcere'] ?? null) : null,
                     'status' => (string) ($row['status_interventie'] ?? ''),
                     'supplier' => trim((string) ($row['furnizor'] ?? '')),
                     'detail' => trim((string) ($row['descriere'] ?? '')),
                 ];
+                break;
             }
         }
 
@@ -447,12 +504,13 @@ class InactiveResourceStatusService
                 WHERE vehicle_id = :vehicle_id
                   AND record_type = 'reparatie'
                   AND status_interventie IN ('in_lucru', 'in_asteptare')
-                  AND data_interventie <= CURDATE()
+                  AND data_interventie <= :reference_date
                   AND (status_interventie = 'in_lucru' OR COALESCE(zile_imobilizare, 0) > 0)
                 ORDER BY data_interventie ASC, id ASC
                 LIMIT 1
             ");
             $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+            $stmt->bindValue(':reference_date', $referenceEnd);
             $stmt->execute();
             $row = $stmt->fetch();
             if ($row) {
@@ -485,6 +543,31 @@ class InactiveResourceStatusService
         });
 
         return $candidates[0];
+    }
+
+    /**
+     * Intervalul cursei [inceput, sfarsit] ('Y-m-d H:i') se suprapune cu perioada de service
+     * [plecare, intoarcere]? Intoarcere goala = inca in service (de la plecare pana azi si dupa).
+     * Fara ora, plecarea conteaza de la 00:00 si intoarcerea pana la 23:59.
+     */
+    private function serviceKmPeriodOverlaps(array $row, string $tripStart, string $tripEnd): bool
+    {
+        $departureDate = $this->normalizeDate($row['data_plecare'] ?? null);
+        if ($departureDate === null) {
+            return false;
+        }
+
+        $departure = $departureDate . ' ' . ($this->normalizeTime($row['ora_plecare'] ?? null) ?? '00:00');
+        if ($tripEnd < $departure) {
+            return false;
+        }
+
+        $returnDate = $this->normalizeDate($row['data_intoarcere'] ?? null);
+        if ($returnDate === null) {
+            return true;
+        }
+
+        return $tripStart <= $returnDate . ' ' . ($this->normalizeTime($row['ora_intoarcere'] ?? null) ?? '23:59');
     }
 
     private function getDriverLeaveIssue(int $driverId): ?array
@@ -653,6 +736,38 @@ class InactiveResourceStatusService
 
         $candidate = substr($raw, 0, 10);
         return preg_match('/^\d{4}-\d{2}-\d{2}$/', $candidate) ? $candidate : null;
+    }
+
+    private function normalizeTime(mixed $value): ?string
+    {
+        $raw = trim((string) ($value ?? ''));
+        if (!preg_match('/^(\d{1,2}):(\d{2})/', $raw, $matches) || (int) $matches[1] > 23 || (int) $matches[2] > 59) {
+            return null;
+        }
+
+        return str_pad($matches[1], 2, '0', STR_PAD_LEFT) . ':' . $matches[2];
+    }
+
+    private function columnExists(string $tableName, string $columnName): bool
+    {
+        static $cache = [];
+        $key = $tableName . '.' . $columnName;
+        if (array_key_exists($key, $cache)) {
+            return $cache[$key];
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+              AND COLUMN_NAME = :column_name
+        ");
+        $stmt->bindValue(':table_name', $tableName);
+        $stmt->bindValue(':column_name', $columnName);
+        $stmt->execute();
+
+        return $cache[$key] = (int) $stmt->fetchColumn() > 0;
     }
 
     private function tableExists(string $tableName): bool

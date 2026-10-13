@@ -3,7 +3,13 @@ declare(strict_types=1);
 
 class InactiveResourceApprovalModel extends BaseModel
 {
-    private const RESOURCE_TYPES = ['vehicle', 'driver', 'repair', 'diurna'];
+    private const RESOURCE_TYPES = ['vehicle', 'driver', 'repair', 'diurna', 'route_config'];
+    /**
+     * Cerere de adaugare permanenta a unui vehicul pe o ruta din Configurare Transport,
+     * facuta de un operator (resource_id = vehicle_id). Se aplica dupa aprobare.
+     */
+    public const ROUTE_CONFIG_REASON = 'route_config';
+    public const ROUTE_CONFIG_REASON_LABEL = 'Adaugare permanenta pe ruta';
     /** Cerere de modificare a numarului de diurne al unei curse (resource_id = trip_id). */
     public const DIURNA_REASON = 'diurna_change';
     public const DIURNA_REASON_LABEL = 'Modificare diurna';
@@ -74,6 +80,7 @@ class InactiveResourceApprovalModel extends BaseModel
 
         $this->ensureRepairResourceTypeColumn();
         $this->ensureRequesterSeenColumn();
+        $this->ensureTripBlockingColumns();
         $this->migrateRepairCategoryRows();
 
         $ensured = true;
@@ -83,7 +90,7 @@ class InactiveResourceApprovalModel extends BaseModel
     {
         $this->ensureSchema();
 
-        $counts = ['vehicle' => 0, 'driver' => 0, 'repair' => 0, 'diurna' => 0];
+        $counts = ['vehicle' => 0, 'driver' => 0, 'repair' => 0, 'diurna' => 0, 'route_config' => 0];
         $stmt = $this->db->query("
             SELECT resource_type, COUNT(*) AS total
             FROM inactive_resource_approvals
@@ -105,6 +112,7 @@ class InactiveResourceApprovalModel extends BaseModel
             'drivers' => $this->getPendingRowsByType('driver', $limitPerType),
             'repairs' => $this->getPendingRowsByType('repair', $limitPerType),
             'diurne' => $this->getPendingRowsByType('diurna', $limitPerType),
+            'route_configs' => $this->getPendingRowsByType('route_config', $limitPerType),
         ];
     }
 
@@ -675,6 +683,445 @@ class InactiveResourceApprovalModel extends BaseModel
         }
     }
 
+    /**
+     * Operatorul a salvat cursa cu resurse care cer aprobare: cursa asteapta decizia
+     * (blocks_trip = 1). O cerere trimisa inainte, fara cursa, pentru aceeasi resursa
+     * este preluata pe cursa in loc sa se dubleze.
+     *
+     * @return int[] id-urile cererilor care blocheaza cursa
+     */
+    public function requestTripApprovals(array $resources, int $tripId, int $userId): array
+    {
+        $this->ensureSchema();
+        if ($tripId <= 0 || $userId <= 0) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ($resources as $resource) {
+            if (empty($resource['is_inactive'])) {
+                continue;
+            }
+
+            $resourceType = $this->approvalResourceTypeForSnapshot($resource);
+            $resourceId = (int) ($resource['resource_id'] ?? 0);
+            if ($resourceType === '' || $resourceId <= 0) {
+                continue;
+            }
+
+            $approvalId = 0;
+            $tripless = $this->getPendingForRequesterResourceContext(
+                $userId,
+                $resourceType,
+                $resourceId,
+                (string) ($resource['usage_context'] ?? 'Dispecer curse')
+            );
+            if ($tripless !== null && (int) ($tripless['trip_id'] ?? 0) === 0) {
+                $approvalId = (int) $tripless['id'];
+                $this->db->prepare("
+                    UPDATE inactive_resource_approvals
+                    SET trip_id = :trip_id, updated_at = :updated_at
+                    WHERE id = :id AND trip_id IS NULL AND status = 'pending'
+                ")->execute([':trip_id' => $tripId, ':updated_at' => date('Y-m-d H:i:s'), ':id' => $approvalId]);
+            }
+            if ($approvalId <= 0) {
+                $approvalId = $this->createOrReuseFromSnapshot($resource, $tripId, 'pending', $userId);
+            }
+            if ($approvalId <= 0) {
+                continue;
+            }
+
+            // O cerere deja aprobata pentru cursa nu o mai blocheaza: doar cele in asteptare.
+            $block = $this->db->prepare("
+                UPDATE inactive_resource_approvals
+                SET blocks_trip = 1, updated_at = :updated_at
+                WHERE id = :id AND status = 'pending'
+            ");
+            $block->execute([':updated_at' => date('Y-m-d H:i:s'), ':id' => $approvalId]);
+            $isPending = $block->rowCount() > 0
+                || (string) $this->db->query('SELECT status FROM inactive_resource_approvals WHERE id = ' . $approvalId)->fetchColumn() === 'pending';
+            if ($isPending) {
+                $ids[] = $approvalId;
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Dupa salvarea unei curse: cererile care o blocau si nu mai sunt actuale nu o mai
+     * blocheaza. O cerere in asteptare pentru o resursa scoasa din cursa se respinge;
+     * una respinsa nu mai blocheaza daca resursa nu mai e folosita / nu mai e inactiva
+     * sau a primit intre timp o cerere noua (in asteptare / aprobata) pe aceeasi cursa.
+     *
+     * @param array $currentInactiveResources resursele inactive ale cursei, dupa salvare
+     */
+    public function syncTripBlockingApprovals(int $tripId, array $currentInactiveResources, ?int $userId): void
+    {
+        $this->ensureSchema();
+        if ($tripId <= 0) {
+            return;
+        }
+
+        $currentKeys = [];
+        foreach ($currentInactiveResources as $resource) {
+            if (empty($resource['is_inactive'])) {
+                continue;
+            }
+            $type = $this->approvalResourceTypeForSnapshot($resource);
+            $id = (int) ($resource['resource_id'] ?? 0);
+            if ($type !== '' && $id > 0) {
+                $currentKeys[$type . ':' . $id] = true;
+            }
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT a.id, a.resource_type, a.resource_id, a.status,
+                   EXISTS (
+                       SELECT 1 FROM inactive_resource_approvals newer
+                       WHERE newer.trip_id = a.trip_id
+                         AND newer.resource_type = a.resource_type
+                         AND newer.resource_id = a.resource_id
+                         AND newer.status IN ('pending', 'approved')
+                         AND newer.id > a.id
+                   ) AS has_newer
+            FROM inactive_resource_approvals a
+            WHERE a.trip_id = :trip_id
+              AND a.blocks_trip = 1
+              AND a.status IN ('pending', 'rejected')
+        ");
+        $stmt->bindValue(':trip_id', $tripId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $release = $this->db->prepare("
+            UPDATE inactive_resource_approvals
+            SET blocks_trip = 0, updated_at = :updated_at
+            WHERE id = :id
+        ");
+        foreach ($stmt->fetchAll() as $row) {
+            $id = (int) $row['id'];
+            $isCurrent = isset($currentKeys[(string) $row['resource_type'] . ':' . (int) $row['resource_id']]);
+            if ((string) $row['status'] === 'pending') {
+                if ($isCurrent) {
+                    continue;
+                }
+                $this->reject($id, $userId, 'Resursa nu mai este asociata cursei sau nu mai este inactiva.');
+            } elseif ($isCurrent && (int) $row['has_newer'] === 0) {
+                continue;
+            }
+            $release->execute([':updated_at' => date('Y-m-d H:i:s'), ':id' => $id]);
+        }
+    }
+
+    /** Cursa nu apare in Desfasurator cat timp are cereri care o blocheaza. */
+    public static function tripAwaitingApprovalSql(string $tripIdExpression): string
+    {
+        return "EXISTS (
+            SELECT 1 FROM inactive_resource_approvals awaiting_approval
+            WHERE awaiting_approval.trip_id = {$tripIdExpression}
+              AND awaiting_approval.blocks_trip = 1
+              AND awaiting_approval.status IN ('pending', 'rejected')
+        )";
+    }
+
+    /**
+     * Cursele care asteapta aprobarea (sau au fost respinse), grupate pe cursa.
+     * $userId null = toate (administrator); altfel cursele adaugate / cerute de utilizator.
+     */
+    public function getTripsAwaitingApproval(?int $userId, int $limit = 50): array
+    {
+        $this->ensureSchema();
+
+        $userCondition = '';
+        if ($userId !== null) {
+            $userCondition = 'AND (c.created_by = :created_by OR a.requested_by_user_id = :requested_by)';
+        }
+
+        $stmt = $this->db->prepare($this->baseSelectSql() . "
+            WHERE a.blocks_trip = 1
+              AND a.status IN ('pending', 'rejected')
+              AND c.id IS NOT NULL
+              AND c.deleted_at IS NULL
+              {$userCondition}
+            ORDER BY a.requested_at DESC, a.id DESC
+            LIMIT :limit_rows
+        ");
+        if ($userId !== null) {
+            $stmt->bindValue(':created_by', $userId, PDO::PARAM_INT);
+            $stmt->bindValue(':requested_by', $userId, PDO::PARAM_INT);
+        }
+        $stmt->bindValue(':limit_rows', max(1, $limit * 3), PDO::PARAM_INT);
+        $stmt->execute();
+
+        $trips = [];
+        foreach ($this->hydrateDocuments($stmt->fetchAll()) as $row) {
+            $tripId = (int) $row['trip_id'];
+            if (!isset($trips[$tripId])) {
+                if (count($trips) >= $limit) {
+                    continue;
+                }
+                $trips[$tripId] = [
+                    'trip_id' => $tripId,
+                    'status' => 'pending',
+                    'title' => $this->approvalOperationTitle($row),
+                    'vehicle' => $this->stringValue($row['trip_vehicle_label'] ?? ''),
+                    'driver' => $this->stringValue($row['trip_driver_label'] ?? ''),
+                    'beneficiary' => $this->stringValue($row['trip_beneficiary_name'] ?? ''),
+                    'transport_type' => $this->transportTypeLabel((string) ($row['trip_transport_type'] ?? '')),
+                    'loading_date' => $this->formatContextDate($row['trip_loading_date'] ?? ''),
+                    'route' => $this->approvalRouteLabel($row),
+                    'interval' => $this->approvalIntervalLabel($row),
+                    'edit_url' => $this->approvalOperationUrl($tripId),
+                    'requested_by_name' => $this->stringValue($row['requested_by_name'] ?? ''),
+                    'requested_at' => $this->formatContextDateTime($row['requested_at'] ?? ''),
+                    'approvals' => [],
+                ];
+            }
+            $status = (string) $row['status'];
+            if ($status === 'rejected') {
+                $trips[$tripId]['status'] = 'rejected';
+            }
+            $trips[$tripId]['approvals'][] = [
+                'id' => (int) $row['id'],
+                'status' => $status,
+                'type_label' => (string) ($row['approval_context']['resource_type_label'] ?? ''),
+                'label' => (string) ($row['approval_context']['primary_label'] ?? ''),
+                'problem' => (string) ($row['approval_context']['problem_title'] ?? ''),
+                'reason' => $this->awaitingReasonDetail($row),
+                'review_note' => $this->stringValue($row['review_note'] ?? ''),
+                'reviewed_by_name' => $this->stringValue($row['reviewed_by_name'] ?? ''),
+                'reviewed_at' => $this->formatContextDateTime($row['reviewed_at'] ?? ''),
+            ];
+        }
+
+        return array_values($trips);
+    }
+
+    /**
+     * Detaliul motivului pentru coloana "Motivul aprobarii": de cand e inactiva resursa,
+     * perioada de service / reparatia, documentele afectate.
+     */
+    private function awaitingReasonDetail(array $approval): string
+    {
+        $snapshot = $this->decodeSnapshot((string) ($approval['snapshot_json'] ?? ''));
+        $parts = [];
+
+        $repair = is_array($snapshot['repair'] ?? null) ? $snapshot['repair'] : [];
+        if ($repair !== []) {
+            $start = $this->formatContextDate($repair['start_date'] ?? '');
+            $end = $this->formatContextDate($repair['end_date'] ?? '');
+            if ($start !== '') {
+                $parts[] = $end !== '' ? 'in service ' . $start . ' – ' . $end : 'in service din ' . $start;
+            }
+            $supplier = $this->stringValue($repair['supplier'] ?? '');
+            if ($supplier !== '') {
+                $parts[] = $supplier;
+            }
+            $detail = $this->stringValue($repair['detail'] ?? '');
+            if ($detail !== '') {
+                $parts[] = $detail;
+            }
+        } else {
+            $since = $this->formatContextDate($approval['inactive_since'] ?? '');
+            if ($since !== '') {
+                $parts[] = 'din ' . $since;
+            }
+            $detail = $this->stringValue($snapshot['detail'] ?? '');
+            if ($detail !== '') {
+                $parts[] = $detail;
+            }
+        }
+
+        return implode(' · ', $parts);
+    }
+
+    /** Cererile in asteptare pentru popup-ul live al administratorului (toate tipurile). */
+    public function getPendingForLiveReview(int $limit = 30): array
+    {
+        $this->ensureSchema();
+        $stmt = $this->db->prepare($this->baseSelectSql() . "
+            WHERE a.status = 'pending'
+            ORDER BY a.requested_at ASC, a.id ASC
+            LIMIT :limit_rows
+        ");
+        $stmt->bindValue(':limit_rows', max(1, $limit), PDO::PARAM_INT);
+        $stmt->execute();
+
+        $result = [];
+        foreach ($this->hydrateDocuments($stmt->fetchAll()) as $row) {
+            $context = is_array($row['approval_context'] ?? null) ? $row['approval_context'] : [];
+            $result[] = [
+                'id' => (int) $row['id'],
+                'resource_type' => (string) $row['resource_type'],
+                'type_label' => (string) ($context['resource_type_label'] ?? ''),
+                'request_type_label' => (string) ($context['request_type_label'] ?? ''),
+                'primary_label' => (string) ($context['primary_label'] ?? ''),
+                'problem_title' => (string) ($context['problem_title'] ?? ''),
+                'operation_title' => (string) ($context['operation_title'] ?? ''),
+                'operation_url' => (string) ($context['operation_url'] ?? ''),
+                'scope_message' => (string) ($context['scope_message'] ?? ''),
+                'detail_rows' => is_array($context['detail_rows'] ?? null) ? $context['detail_rows'] : [],
+                'blocks_trip' => (int) ($row['blocks_trip'] ?? 0) === 1,
+                'trip_id' => (int) ($row['trip_id'] ?? 0),
+                'requested_by_user_id' => (int) ($row['requested_by_user_id'] ?? 0),
+                'requested_by_name' => $this->stringValue($row['requested_by_name'] ?? ''),
+                'requested_at' => $this->formatContextDateTime($row['requested_at'] ?? ''),
+            ];
+        }
+
+        return $result;
+    }
+
+    /** Deciziile pe cererile utilizatorului pe care nu le-a vazut inca (pentru notificari live). */
+    public function getUnseenDecisionsForRequester(int $userId, int $limit = 20): array
+    {
+        $this->ensureSchema();
+        if ($userId <= 0) {
+            return [];
+        }
+
+        $rows = $this->getRequesterRowsByStatus($userId, 'approved', $limit, true);
+        $rows = array_merge($rows, $this->getRequesterRowsByStatus($userId, 'rejected', $limit, true));
+
+        $result = [];
+        foreach ($rows as $row) {
+            $context = is_array($row['approval_context'] ?? null) ? $row['approval_context'] : [];
+            $result[] = [
+                'id' => (int) $row['id'],
+                'status' => (string) $row['status'],
+                'resource_type' => (string) $row['resource_type'],
+                'primary_label' => (string) ($context['primary_label'] ?? ''),
+                'problem_title' => (string) ($context['problem_title'] ?? ''),
+                'trip_id' => (int) ($row['trip_id'] ?? 0),
+                'blocks_trip' => (int) ($row['blocks_trip'] ?? 0) === 1,
+                'review_note' => $this->stringValue($row['review_note'] ?? ''),
+                'reviewed_by_name' => $this->stringValue($row['reviewed_by_name'] ?? ''),
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Cerere de adaugare permanenta pe ruta a unui vehicul, facuta de operator. $tripData
+     * pastreaza campurile de care are nevoie aplicarea (beneficiar, tip, loc, zona, vehicul).
+     */
+    public function createRouteConfigRequest(array $tripData, int $tripId, int $userId, string $vehicleLabel, string $routeLabel, string $beneficiaryLabel): int
+    {
+        $this->ensureSchema();
+        $vehicleId = (int) ($tripData['vehicle_id'] ?? 0);
+        if ($vehicleId <= 0 || $userId <= 0) {
+            return 0;
+        }
+
+        $snapshot = [
+            'approval_resource_type' => 'route_config',
+            'vehicle_label' => $vehicleLabel,
+            'route_label' => $routeLabel,
+            'beneficiary_label' => $beneficiaryLabel,
+            'trip_data' => [
+                'vehicle_id' => $vehicleId,
+                'beneficiar_id' => (int) ($tripData['beneficiar_id'] ?? 0),
+                'tip_transport' => (string) ($tripData['tip_transport'] ?? ''),
+                'loc_incarcare_id' => (int) ($tripData['loc_incarcare_id'] ?? 0),
+                'zona_distributie_id' => (int) ($tripData['zona_distributie_id'] ?? 0),
+            ],
+            'detail' => $routeLabel,
+        ];
+
+        $now = date('Y-m-d H:i:s');
+        $stmt = $this->db->prepare("
+            INSERT INTO inactive_resource_approvals (
+                resource_type, resource_id, trip_id, usage_context, resource_label,
+                inactive_reason, inactive_reason_label, inactive_since, status,
+                requested_by_user_id, requested_at, snapshot_json, created_at, updated_at
+            ) VALUES (
+                'route_config', :resource_id, :trip_id, 'Dispecer curse', :resource_label,
+                :inactive_reason, :inactive_reason_label, NULL, 'pending',
+                :requested_by_user_id, :requested_at, :snapshot_json, :created_at, :updated_at
+            )
+        ");
+        $stmt->bindValue(':resource_id', $vehicleId, PDO::PARAM_INT);
+        $this->bindNullableInt($stmt, ':trip_id', $tripId);
+        $stmt->bindValue(':resource_label', $this->limitString($vehicleLabel !== '' ? $vehicleLabel : ('Vehicul #' . $vehicleId), 190));
+        $stmt->bindValue(':inactive_reason', self::ROUTE_CONFIG_REASON);
+        $stmt->bindValue(':inactive_reason_label', self::ROUTE_CONFIG_REASON_LABEL);
+        $stmt->bindValue(':requested_by_user_id', $userId, PDO::PARAM_INT);
+        $stmt->bindValue(':requested_at', $now);
+        $this->bindNullableString($stmt, ':snapshot_json', $this->encodeSnapshot($snapshot));
+        $stmt->bindValue(':created_at', $now);
+        $stmt->bindValue(':updated_at', $now);
+        $stmt->execute();
+
+        return (int) $this->db->lastInsertId();
+    }
+
+    /**
+     * Cererile route_config aprobate (din aplicatie, email sau raspuns la email) care nu au
+     * fost inca aplicate in Configurare Transport.
+     *
+     * @return array<int, array{id: int, trip_data: array}>
+     */
+    public function getUnappliedApprovedRouteConfigs(int $limit = 20): array
+    {
+        $this->ensureSchema();
+        $stmt = $this->db->prepare("
+            SELECT id, snapshot_json
+            FROM inactive_resource_approvals
+            WHERE resource_type = 'route_config'
+              AND status = 'approved'
+              AND applied_at IS NULL
+            ORDER BY id ASC
+            LIMIT :limit_rows
+        ");
+        $stmt->bindValue(':limit_rows', max(1, $limit), PDO::PARAM_INT);
+        $stmt->execute();
+
+        $result = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $snapshot = $this->decodeSnapshot((string) ($row['snapshot_json'] ?? ''));
+            $result[] = [
+                'id' => (int) $row['id'],
+                'trip_data' => is_array($snapshot['trip_data'] ?? null) ? $snapshot['trip_data'] : [],
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Revendica aplicarea unei cereri route_config: doar primul apel primeste true, deci
+     * doua cereri live simultane nu aplica de doua ori.
+     */
+    public function claimRouteConfigApplication(int $id): bool
+    {
+        $stmt = $this->db->prepare("
+            UPDATE inactive_resource_approvals
+            SET applied_at = :applied_at, updated_at = :updated_at
+            WHERE id = :id AND applied_at IS NULL AND status = 'approved'
+        ");
+        $now = date('Y-m-d H:i:s');
+        $stmt->execute([':applied_at' => $now, ':updated_at' => $now, ':id' => $id]);
+
+        return $stmt->rowCount() > 0;
+    }
+
+    /** Adauga rezultatul aplicarii la nota deciziei, ca sa se vada in istoricul cererii. */
+    public function appendReviewNote(int $id, string $message): void
+    {
+        $message = $this->limitString($message, 400);
+        if ($id <= 0 || $message === '') {
+            return;
+        }
+
+        $this->db->prepare("
+            UPDATE inactive_resource_approvals
+            SET review_note = TRIM(CONCAT(COALESCE(review_note, ''), ' ', :message)),
+                updated_at = :updated_at
+            WHERE id = :id
+        ")->execute([':message' => $message, ':updated_at' => date('Y-m-d H:i:s'), ':id' => $id]);
+    }
+
     public function getReasonOptions(): array
     {
         return [
@@ -686,6 +1133,7 @@ class InactiveResourceApprovalModel extends BaseModel
             'medical_leave' => 'Concediu medical',
             'leave' => 'Concediu',
             self::DIURNA_REASON => self::DIURNA_REASON_LABEL,
+            self::ROUTE_CONFIG_REASON => self::ROUTE_CONFIG_REASON_LABEL,
             'other' => 'Alt motiv',
         ];
     }
@@ -1029,6 +1477,9 @@ class InactiveResourceApprovalModel extends BaseModel
         if ($resourceType === 'diurna') {
             return $this->buildDiurnaApprovalContext($approval, $snapshot);
         }
+        if ($resourceType === 'route_config') {
+            return $this->buildRouteConfigApprovalContext($approval, $snapshot);
+        }
         $tripId = (int) ($approval['trip_id'] ?? 0);
         $primaryLabel = $this->approvalPrimaryLabel($approval);
         $problemTitle = $this->approvalProblemTitle($approval, $documents, $snapshot);
@@ -1143,6 +1594,48 @@ class InactiveResourceApprovalModel extends BaseModel
                 . $requested . ' diurne in loc de ' . $current
                 . ' (regula calculeaza ' . $computed . '). La respingere ramane valoarea actuala.',
             'scope_kind' => 'trip',
+            'module_label' => 'Dispecer curse',
+        ];
+    }
+
+    private function buildRouteConfigApprovalContext(array $approval, array $snapshot): array
+    {
+        $tripId = (int) ($approval['trip_id'] ?? 0);
+        $vehicle = $this->firstNonEmpty($snapshot['vehicle_label'] ?? '', $approval['resource_label'] ?? '', $approval['current_vehicle_label'] ?? '');
+        $route = $this->stringValue($snapshot['route_label'] ?? '');
+        $beneficiary = $this->firstNonEmpty($snapshot['beneficiary_label'] ?? '', $approval['trip_beneficiary_name'] ?? '');
+        $transport = $this->transportTypeLabel((string) ($snapshot['trip_data']['tip_transport'] ?? $approval['trip_transport_type'] ?? ''));
+
+        $summaryRows = [];
+        $this->appendContextRow($summaryRows, 'Vehicul', $vehicle);
+        $this->appendContextRow($summaryRows, 'Beneficiar', $beneficiary);
+        $this->appendContextRow($summaryRows, 'Tip transport', $transport);
+        $this->appendContextRow($summaryRows, 'Ruta', $route);
+
+        $detailRows = $summaryRows;
+        $this->appendContextRow($detailRows, 'Interval cursa', $this->approvalIntervalLabel($approval));
+        $this->appendContextRow($detailRows, 'Solicitat de', $this->stringValue($approval['requested_by_name'] ?? ''));
+        $this->appendContextRow($detailRows, 'Solicitat la', $this->formatContextDateTime($approval['requested_at'] ?? ''));
+
+        return [
+            'request_type_label' => self::ROUTE_CONFIG_REASON_LABEL,
+            'resource_type' => 'route_config',
+            'resource_type_label' => 'Ruta vehicul',
+            'primary_label' => $vehicle,
+            'problem_title' => 'Adaugare permanenta pe ruta' . ($route !== '' ? ': ' . $route : ''),
+            'operation_title' => $this->approvalOperationTitle($approval),
+            'operation_has_trip' => $tripId > 0,
+            'operation_url' => $this->approvalOperationUrl($tripId),
+            'operation_link_label' => $tripId > 0 ? 'Vezi cursa' : '',
+            'usage_date' => $this->approvalUsageDate($approval),
+            'usage_date_label' => 'Data cursei',
+            'inactive_date' => '',
+            'inactive_date_label' => '',
+            'summary_rows' => $summaryRows,
+            'detail_rows' => $detailRows,
+            'scope_message' => 'Prin aprobare, vehiculul ' . $vehicle . ' este adaugat permanent pe ruta in Configurare Transport.'
+                . ' Cursa a fost deja salvata cu vehiculul folosit doar pentru ea; la respingere configurarea ramane neschimbata.',
+            'scope_kind' => 'request',
             'module_label' => 'Dispecer curse',
         ];
     }
@@ -1414,6 +1907,7 @@ class InactiveResourceApprovalModel extends BaseModel
             'driver' => 'Sofer',
             'repair' => 'Reparatie',
             'diurna' => 'Diurna',
+            'route_config' => 'Ruta vehicul',
             default => 'Vehicul',
         };
     }
@@ -1550,8 +2044,38 @@ class InactiveResourceApprovalModel extends BaseModel
             LIMIT 1
         ");
         $columnType = (string) $stmt->fetchColumn();
-        if ($columnType !== '' && (!str_contains($columnType, "'repair'") || !str_contains($columnType, "'diurna'"))) {
-            $this->db->exec("ALTER TABLE inactive_resource_approvals MODIFY COLUMN resource_type ENUM('vehicle','driver','repair','diurna') NOT NULL");
+        if (
+            $columnType !== ''
+            && (!str_contains($columnType, "'repair'") || !str_contains($columnType, "'diurna'") || !str_contains($columnType, "'route_config'"))
+        ) {
+            $this->db->exec("ALTER TABLE inactive_resource_approvals MODIFY COLUMN resource_type ENUM('vehicle','driver','repair','diurna','route_config') NOT NULL");
+        }
+    }
+
+    /**
+     * blocks_trip = 1: cererea a fost trimisa de un operator la salvarea cursei, iar cursa
+     * asteapta decizia (nu apare in Desfasurator cat timp cererea e in asteptare sau
+     * respinsa). applied_at = cand s-a aplicat o cerere route_config aprobata.
+     */
+    private function ensureTripBlockingColumns(): void
+    {
+        $stmt = $this->db->query("
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'inactive_resource_approvals'
+              AND COLUMN_NAME IN ('blocks_trip', 'applied_at')
+        ");
+        $existing = array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        if (!in_array('blocks_trip', $existing, true)) {
+            $this->db->exec("
+                ALTER TABLE inactive_resource_approvals
+                ADD COLUMN blocks_trip TINYINT(1) NOT NULL DEFAULT 0 AFTER trip_id,
+                ADD INDEX idx_inactive_approvals_blocking (blocks_trip, status, trip_id)
+            ");
+        }
+        if (!in_array('applied_at', $existing, true)) {
+            $this->db->exec("ALTER TABLE inactive_resource_approvals ADD COLUMN applied_at DATETIME NULL AFTER requester_seen_at");
         }
     }
 

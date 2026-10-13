@@ -2813,6 +2813,45 @@
             return '';
         }
 
+        // Ora de inceput delimiteaza ziua plecarii / intoarcerii din service.
+        function getInactiveReferenceTime() {
+            if (startTimeField instanceof HTMLInputElement || startTimeField instanceof HTMLSelectElement) {
+                return String(startTimeField.value || '').trim();
+            }
+
+            return '';
+        }
+
+        // Sfarsitul cursei: vehiculul e semnalat daca intervalul cursei atinge perioada de service.
+        function readInactiveReferenceEnd() {
+            var endDate = endDateField instanceof HTMLInputElement ? String(endDateField.value || '').trim() : '';
+            var endTime = endTimeField instanceof HTMLInputElement || endTimeField instanceof HTMLSelectElement
+                ? String(endTimeField.value || '').trim()
+                : '';
+
+            return { date: endDate, time: endDate !== '' ? endTime : '' };
+        }
+
+        // Pe formularul de adaugare sfarsitul vine precompletat cu ziua de azi. Cat timp
+        // operatorul nu l-a schimbat, verificarea din timpul completarii nu il foloseste:
+        // altfel o cursa din trecut ar parea ca tine pana azi si ar atinge un service
+        // intre timp incheiat. La salvare se verifica intotdeauna intervalul complet.
+        var initialInactiveReferenceEnd = readInactiveReferenceEnd();
+
+        function getInactiveReferenceEnd(includeUntouchedDefault) {
+            var end = readInactiveReferenceEnd();
+            if (
+                includeUntouchedDefault !== true
+                && inactiveTripId === ''
+                && end.date === initialInactiveReferenceEnd.date
+                && end.time === initialInactiveReferenceEnd.time
+            ) {
+                return { date: '', time: '' };
+            }
+
+            return end;
+        }
+
         function getInactiveSelectionSignature() {
             var vehicleId = vehicleField instanceof HTMLSelectElement ? String(vehicleField.value || '').trim() : '';
             var driverId = driverField instanceof HTMLSelectElement ? String(driverField.value || '').trim() : '';
@@ -2844,7 +2883,7 @@
             }
 
             var decision = String(inactiveDecisionField.value || '').trim();
-            if (decision !== 'approved' && decision !== 'pending') {
+            if (decision !== 'approved' && decision !== 'pending' && decision !== 'request') {
                 return false;
             }
 
@@ -2871,18 +2910,27 @@
             inactiveModalIcon.appendChild(icon);
         }
 
+        // Operatorul: 'user-info' cand alege resursa (doar informare, poate completa cursa),
+        // 'user-submit' la salvare (cursa se trimite spre aprobare si asteapta decizia).
         function setInactiveModalControls(mode) {
             var isAdmin = mode === 'admin';
             var isUserBefore = mode === 'user-before';
             var isUserSent = mode === 'user-sent';
-            var isUserReadonly = mode === 'user-readonly';
+            var isUserReadonly = mode === 'user-readonly' || mode === 'user-info';
+            var isUserSubmit = mode === 'user-submit';
 
             setInactiveElementVisible(inactiveAdminCancelButton, isAdmin);
             setInactiveElementVisible(inactiveApproveLaterButton, isAdmin);
             setInactiveElementVisible(inactiveApproveNowButton, isAdmin);
-            setInactiveElementVisible(inactiveRequestApprovalButton, isUserBefore);
+            setInactiveElementVisible(inactiveRequestApprovalButton, isUserBefore || isUserSubmit);
+            if (inactiveRequestApprovalButton instanceof HTMLElement) {
+                inactiveRequestApprovalButton.textContent = isUserSubmit ? 'Trimite cursa spre aprobare' : 'Solicita aprobare';
+            }
+            if (inactiveCloseButton instanceof HTMLElement) {
+                inactiveCloseButton.textContent = isUserSubmit ? 'Inapoi la formular' : (mode === 'user-info' ? 'Am inteles' : 'Inchide');
+            }
             setInactiveElementVisible(inactivePostponeButton, isUserBefore);
-            setInactiveElementVisible(inactiveCloseButton, isUserBefore || isUserSent || isUserReadonly);
+            setInactiveElementVisible(inactiveCloseButton, isUserBefore || isUserSent || isUserReadonly || isUserSubmit);
             setInactiveElementVisible(inactiveCancelRequestButton, isUserSent && pendingInactiveApproval && pendingInactiveApproval.can_cancel !== false);
 
             if (inactiveModalEl instanceof HTMLElement) {
@@ -3112,7 +3160,7 @@
             list.appendChild(dd);
         }
 
-        function renderInactiveModal(resources) {
+        function renderInactiveModal(resources, introText) {
             if (!(inactiveModalBody instanceof HTMLElement)) {
                 return;
             }
@@ -3120,9 +3168,9 @@
             inactiveModalBody.innerHTML = '';
             var intro = document.createElement('p');
             intro.className = 'inactive-resource-warning-intro';
-            intro.textContent = resources.length === 1
+            intro.textContent = introText || (resources.length === 1
                 ? 'Continuarea utilizarii acestei resurse in Dispecer curse se face pe propria raspundere.'
-                : 'Continuarea utilizarii acestor resurse in Dispecer curse se face pe propria raspundere.';
+                : 'Continuarea utilizarii acestor resurse in Dispecer curse se face pe propria raspundere.');
             inactiveModalBody.appendChild(intro);
 
             resources.forEach(function (resource) {
@@ -3306,17 +3354,20 @@
                 inactiveSessionCheckbox.checked = false;
             }
 
-            if (resources.length === 1 && normalUserVehicleResource(resources[0])) {
-                inactiveModalTitle.textContent = 'Vehicul inactiv utilizat';
+            // Operatorul nu decide: cursa se salveaza si asteapta aprobarea administratorului
+            // (vehicul, reparatie / service, sofer — oricate resurse odata).
+            if (inactiveUserApprovalFlow) {
+                inactiveModalTitle.textContent = titleForInactiveResources(resources);
                 setInactiveModalIcon('warning');
-                setInactiveModalControls('user-before');
+                setInactiveModalControls(pendingInactiveSubmit ? 'user-submit' : 'user-info');
                 if (inactiveSessionOption instanceof HTMLElement) {
-                    inactiveSessionOption.classList.remove('d-none');
+                    inactiveSessionOption.classList.add('d-none');
                 }
-                if (inactiveSessionLabel instanceof HTMLElement) {
-                    inactiveSessionLabel.textContent = 'Nu mai afisa acest mesaj pentru acest vehicul in aceasta sesiune';
-                }
-                renderUserInactiveVehicleRequestModal(resources[0]);
+                renderInactiveModal(resources, pendingInactiveSubmit
+                    ? 'Cursa va fi salvata si trimisa administratorului spre aprobare. Apare in Desfasurator curse dupa aprobare; '
+                        + 'pana atunci o gasesti in Desfasurator curse, tab-ul "In asteptare aprobare". Daca administratorul este conectat, decizia vine in cateva secunde.'
+                    : 'Inca nu s-a trimis nimic administratorului. Completeaza cursa si apasa "Adauga Cursa": '
+                        + 'abia atunci cursa este trimisa spre aprobare si apare in Desfasurator curse dupa aprobare.');
                 inactiveModal.show();
 
                 return true;
@@ -3399,7 +3450,11 @@
             }
 
             postInactiveApprovalJson(inactiveApprovalRequestUrl, {
-                vehicle_id: resource.resource_id
+                vehicle_id: resource.resource_id,
+                trip_date: getInactiveReferenceDate(),
+                trip_time: getInactiveReferenceTime(),
+                trip_end_date: getInactiveReferenceEnd(true).date,
+                trip_end_time: getInactiveReferenceEnd(true).time
             }).then(function (payload) {
                 var updatedResource = Object.assign({}, resource, payload.resource || {});
                 if (payload.approval && typeof payload.approval === 'object') {
@@ -3484,7 +3539,7 @@
             });
         }
 
-        function fetchInactiveResourceStatus() {
+        function fetchInactiveResourceStatus(includeUntouchedEnd) {
             if (inactiveStatusUrl === '') {
                 return Promise.resolve({ inactive_resources: [] });
             }
@@ -3508,6 +3563,17 @@
             var referenceDate = getInactiveReferenceDate();
             if (referenceDate !== '') {
                 url.searchParams.set('trip_date', referenceDate);
+                var referenceTime = getInactiveReferenceTime();
+                if (referenceTime !== '') {
+                    url.searchParams.set('trip_time', referenceTime);
+                }
+                var referenceEnd = getInactiveReferenceEnd(includeUntouchedEnd === true);
+                if (referenceEnd.date !== '') {
+                    url.searchParams.set('trip_end_date', referenceEnd.date);
+                }
+                if (referenceEnd.time !== '') {
+                    url.searchParams.set('trip_end_time', referenceEnd.time);
+                }
             }
 
             return fetch(url.toString(), {
@@ -3524,11 +3590,37 @@
             });
         }
 
+        // Avertismentul apare o singura data pentru aceeasi inactivitate (resursa + motiv +
+        // data de inceput), nu la fiecare camp completat. Doar o resursa sau o perioada de
+        // inactivitate inca neafisata il aduce din nou; la salvare verificarea se face
+        // oricum, fara aceasta filtrare.
+        var promptedInactiveEpisodes = {};
+
+        function inactiveEpisodeKey(resource) {
+            return [
+                String(resource.resource_type || '').trim(),
+                String(resource.resource_id || '').trim(),
+                String(resource.reason_key || '').trim(),
+                String(resource.inactive_since || '').trim()
+            ].join(':');
+        }
+
+        function inactiveEpisodeAlreadyPrompted(resource) {
+            return promptedInactiveEpisodes[inactiveEpisodeKey(resource)] === true;
+        }
+
+        function markInactiveEpisodesPrompted(resources) {
+            resources.forEach(function (resource) {
+                promptedInactiveEpisodes[inactiveEpisodeKey(resource)] = true;
+            });
+        }
+
         function checkInactiveResourcesForSelection(options) {
             var config = options || {};
             var sequence = ++inactiveStatusSequence;
 
-            return fetchInactiveResourceStatus().then(function (payload) {
+            // Doar avertismentul din timpul completarii ignora sfarsitul precompletat.
+            return fetchInactiveResourceStatus(config.onlyNewEpisodes !== true).then(function (payload) {
                 if (sequence !== inactiveStatusSequence) {
                     return { inactiveResources: [], decisionRequired: [], promptable: [] };
                 }
@@ -3538,17 +3630,21 @@
                 var promptable = getPromptableInactiveResources(inactiveResources, config.ignoreSuppression === true);
 
                 if (config.showModal) {
+                    if (config.onlyNewEpisodes === true) {
+                        promptable = promptable.filter(function (resource) {
+                            return !inactiveEpisodeAlreadyPrompted(resource);
+                        });
+                    }
                     var pendingUserVehicle = inactiveResources.find(function (resource) {
-                        return normalUserVehicleResource(resource) && userPendingApprovalForResource(resource) !== null;
+                        return normalUserVehicleResource(resource)
+                            && userPendingApprovalForResource(resource) !== null
+                            && !(config.onlyNewEpisodes === true && inactiveEpisodeAlreadyPrompted(resource));
                     }) || null;
+                    markInactiveEpisodesPrompted(pendingUserVehicle !== null ? [pendingUserVehicle] : promptable);
                     if (pendingUserVehicle !== null) {
                         showInactiveApprovalSentModal(pendingUserVehicle, config.submitAfterDecision === true);
                     } else if (promptable.length > 0) {
-                        var promptableUserVehicle = promptable.find(normalUserVehicleResource) || null;
-                        showInactiveModal(
-                            promptableUserVehicle !== null ? [promptableUserVehicle] : promptable,
-                            config.submitAfterDecision === true
-                        );
+                        showInactiveModal(promptable, config.submitAfterDecision === true);
                     }
                 }
 
@@ -3567,7 +3663,7 @@
             }
 
             window.setTimeout(function () {
-                checkInactiveResourcesForSelection({ showModal: true, submitAfterDecision: false }).catch(function () {
+                checkInactiveResourcesForSelection({ showModal: true, submitAfterDecision: false, onlyNewEpisodes: true }).catch(function () {
                 });
             }, 0);
         }
@@ -3585,7 +3681,14 @@
         }
 
         if (inactiveRequestApprovalButton instanceof HTMLButtonElement) {
-            inactiveRequestApprovalButton.addEventListener('click', requestInactiveVehicleApproval);
+            inactiveRequestApprovalButton.addEventListener('click', function () {
+                // La salvare: cursa se trimite spre aprobare odata cu salvarea.
+                if (pendingInactiveSubmit) {
+                    completeInactiveDecision('request');
+                    return;
+                }
+                requestInactiveVehicleApproval();
+            });
         }
 
         if (inactivePostponeButton instanceof HTMLButtonElement) {
@@ -6195,15 +6298,25 @@
         // Schimbarea datei cursei poate muta cursa in afara / inauntrul perioadei
         // de angajare a soferului, deci re-evaluam resursele inactive. Comparam cu
         // ultima valoare ca sincronizarile de la initializare sa nu deschida modalul.
+        // Tot intervalul cursei (inceput si sfarsit, cu ore) se compara cu perioada de service.
         if (startDateField) {
-            var lastInactiveReferenceDate = getInactiveReferenceDate();
-            startDateField.addEventListener('change', function () {
-                var currentReferenceDate = getInactiveReferenceDate();
-                if (currentReferenceDate === lastInactiveReferenceDate) {
+            var inactiveReferenceInterval = function () {
+                var end = getInactiveReferenceEnd();
+                return [getInactiveReferenceDate(), getInactiveReferenceTime(), end.date, end.time].join(' ');
+            };
+            var lastInactiveReferenceDate = inactiveReferenceInterval();
+            [startDateField, startTimeField, endDateField, endTimeField].forEach(function (field) {
+                if (!field) {
                     return;
                 }
-                lastInactiveReferenceDate = currentReferenceDate;
-                promptInactiveResourcesAfterSelectionChange();
+                field.addEventListener('change', function () {
+                    var currentReferenceDate = inactiveReferenceInterval();
+                    if (currentReferenceDate === lastInactiveReferenceDate) {
+                        return;
+                    }
+                    lastInactiveReferenceDate = currentReferenceDate;
+                    promptInactiveResourcesAfterSelectionChange();
+                });
             });
         }
 
@@ -6816,15 +6929,13 @@
                 }
 
                 if (result.promptable.length === 0) {
-                    setInactiveApprovalDecision('pending');
+                    setInactiveApprovalDecision(inactiveUserApprovalFlow ? 'request' : 'pending');
                     submitRaceFormAfterInactiveDecision();
                     return;
                 }
 
-                var promptableUserVehicle = result.promptable.find(normalUserVehicleResource) || null;
-                var resourcesToPrompt = promptableUserVehicle !== null ? [promptableUserVehicle] : result.promptable;
-                if (!showInactiveModal(resourcesToPrompt, true)) {
-                    setInactiveApprovalDecision('pending');
+                if (!showInactiveModal(result.promptable, true)) {
+                    setInactiveApprovalDecision(inactiveUserApprovalFlow ? 'request' : 'pending');
                     submitRaceFormAfterInactiveDecision();
                 }
             }).catch(function () {
