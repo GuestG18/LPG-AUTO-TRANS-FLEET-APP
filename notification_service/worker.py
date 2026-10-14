@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
+import re
 import smtplib
 import ssl
 import sys
 import time
+import unicodedata
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email.message import EmailMessage
@@ -98,6 +103,180 @@ def mail_config() -> MailConfig:
     )
 
 
+@dataclass(frozen=True)
+class SmsConfig:
+    enabled: bool
+    username: str
+    api_key: str
+    api_url: str
+    modem_id: str
+    country_code: str
+    timeout: int
+    max_send_per_run: int
+    force_to: str
+
+    @property
+    def ready(self) -> bool:
+        return self.enabled and bool(self.username) and bool(self.api_key)
+
+
+def sms_config() -> SmsConfig:
+    return SmsConfig(
+        enabled=env_value(["SMSALERT_ENABLED"], "false").strip().lower() in {"1", "true", "yes", "on", "da"},
+        username=env_value(["SMSALERT_USERNAME"]).strip(),
+        api_key=env_value(["SMSALERT_API_KEY"]).strip(),
+        api_url=env_value(["SMSALERT_API_URL"], "https://smsalert.mobi/api").rstrip("/"),
+        modem_id=env_value(["SMSALERT_MODEM_ID"]).strip(),
+        country_code=re.sub(r"\D", "", env_value(["SMSALERT_DEFAULT_COUNTRY_CODE"], "40")) or "40",
+        timeout=max(5, int_env(["SMSALERT_TIMEOUT"], 20)),
+        max_send_per_run=max(1, int_env(["SMSALERT_MAX_SEND_PER_RUN"], 25)),
+        force_to=env_value(["SMSALERT_FORCE_TO"]).strip(),
+    )
+
+
+# Canalele unei reguli (coloana notification_rules.channel).
+RULE_CHANNELS = {
+    "email": {"email"},
+    "sms": {"sms"},
+    "email_sms": {"email", "sms"},
+}
+
+# API-ul SMSAlert permite 1 apel la 2 secunde (burst 5); pastram o marja.
+SMS_MIN_INTERVAL_SECONDS = 2.1
+SMS_MAX_LENGTH = 300
+
+
+class SmsRateLimited(RuntimeError):
+    """SMSAlert a raspuns 429: restul SMS-urilor raman pentru rularea urmatoare."""
+
+
+def normalize_phone(raw: Any, country_code: str = "40") -> str | None:
+    """Acelasi algoritm ca NotificationRuleModel::normalizePhone(): 07xx -> +407xx, 00 -> +."""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    has_plus = text.startswith("+")
+    digits = re.sub(r"\D", "", text)
+    if not digits:
+        return None
+    if not has_plus:
+        if digits.startswith("00"):
+            digits = digits[2:]
+        elif digits.startswith("0"):
+            digits = country_code + digits[1:]
+        elif len(digits) == 9 and digits[0] == "7":
+            digits = country_code + digits
+    if len(digits) < 10 or len(digits) > 15:
+        return None
+    # Romania: 40 + 9 cifre; un numar cu o cifra lipsa nu trebuie sa plece.
+    if digits.startswith("40") and len(digits) != 11:
+        return None
+    return "+" + digits
+
+
+def sms_plain_text(text: str) -> str:
+    """Fara diacritice: un SMS GSM are 160 de caractere, unul Unicode doar 70."""
+    folded = unicodedata.normalize("NFKD", text)
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    folded = re.sub(r"\s+", " ", folded).strip()
+    if len(folded) > SMS_MAX_LENGTH:
+        folded = folded[: SMS_MAX_LENGTH - 3].rstrip() + "..."
+    return folded
+
+
+def smsalert_send(config: SmsConfig, phone: str, text: str) -> str:
+    """POST /v2/message/send (https://apidocs.smsalert.mobi). Basic auth: user + cheie API."""
+    payload: dict[str, Any] = {
+        "phoneNumber": phone,
+        "message": text,
+        "cleanupUtf8": True,
+        "autoShortUrl": False,
+    }
+    if config.modem_id:
+        payload["modemId"] = config.modem_id
+
+    token = base64.b64encode(f"{config.username}:{config.api_key}".encode("utf-8")).decode("ascii")
+    request = urllib.request.Request(
+        f"{config.api_url}/v2/message/send",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Basic {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            # Cloudflare-ul SMSAlert respinge User-Agent-ul implicit Python-urllib (Error 1010 / 403).
+            "User-Agent": "FleetNotificationWorker/1.0",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=config.timeout) as response:
+            raw = response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace") if exc.fp else ""
+        if exc.code == 429:
+            raise SmsRateLimited("SMSAlert: limita de apeluri atinsa (HTTP 429).") from exc
+        if exc.code == 401:
+            raise RuntimeError("SMSAlert: autentificare respinsa (verifica SMSALERT_USERNAME / SMSALERT_API_KEY).") from exc
+        raise RuntimeError(f"SMSAlert HTTP {exc.code}: {smsalert_error_text(body)}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"SMSAlert indisponibil: {exc.reason}") from exc
+
+    try:
+        data = json.loads(raw or "{}")
+    except ValueError:
+        raise RuntimeError(f"SMSAlert: raspuns invalid: {raw[:300]}")
+
+    if not data.get("status"):
+        raise RuntimeError(f"SMSAlert a refuzat mesajul: {smsalert_error_text(raw)}")
+
+    return f"SMSAlert id={data.get('id') or '-'} sms={data.get('smsCount') or 1}"
+
+
+def smsalert_error_text(body: str) -> str:
+    try:
+        data = json.loads(body or "{}")
+    except ValueError:
+        return body[:300] or "fara detalii"
+    message = str(data.get("message") or "fara detalii")
+    if data.get("errorCode") is not None:
+        message += f" (cod {data.get('errorCode')})"
+    fields = data.get("errorFields")
+    if fields:
+        message += " " + json.dumps(fields, ensure_ascii=False)[:300]
+    return message
+
+
+def ensure_sms_schema(conn) -> None:
+    """Idempotent, ca NotificationRuleModel::ensureSmsDeliverySchema(): workerul poate rula
+    inaintea primei deschideri a paginii Notificari dupa deploy."""
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        """
+        SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'notification_deliveries'
+        """
+    )
+    columns = {str(row["COLUMN_NAME"]): row for row in cursor.fetchall()}
+    if not columns:
+        cursor.close()
+        return
+    channel_type = str(columns.get("channel", {}).get("COLUMN_TYPE") or "").lower()
+    if "channel" in columns and "'sms'" not in channel_type:
+        cursor.execute("ALTER TABLE notification_deliveries MODIFY channel ENUM('email','sms') NOT NULL DEFAULT 'email'")
+    if str(columns.get("recipient_email", {}).get("IS_NULLABLE") or "") == "NO":
+        cursor.execute("ALTER TABLE notification_deliveries MODIFY recipient_email VARCHAR(190) NULL")
+    if "recipient_phone" not in columns:
+        cursor.execute(
+            "ALTER TABLE notification_deliveries ADD COLUMN recipient_phone VARCHAR(32) NULL AFTER recipient_email, "
+            "ADD KEY idx_notification_deliveries_phone (recipient_phone, created_at)"
+        )
+    cursor.close()
+    conn.commit()
+
+
 def count_pending(conn) -> int:
     cursor = conn.cursor()
     cursor.execute(
@@ -158,7 +337,84 @@ def fetch_matches_for_rule(conn, rule: dict[str, Any]) -> list[dict[str, Any]]:
         return fetch_driver_birthday_matches(conn, rule)
     if event_type in REVIZIE_EVENT_CATEGORY:
         return fetch_revizie_matches(rule)
+    if event_type == APPROVAL_EVENT:
+        # Emailul de aprobare il trimite approval_flow.py; aici doar SMS-ul.
+        return fetch_approval_sms_matches(conn, rule)
     return []
+
+
+APPROVAL_EVENT = "inactive_approval_pending"
+
+
+def rule_metadata(rule: dict[str, Any]) -> dict[str, Any]:
+    raw: Any = rule.get("metadata_json") or "{}"
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", "replace")
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def rule_channels(rule: dict[str, Any]) -> set[str]:
+    channels = set(RULE_CHANNELS.get(str(rule.get("channel") or "email"), {"email"}))
+    if str(rule.get("event_type") or "") == APPROVAL_EVENT:
+        channels.discard("email")
+    return channels
+
+
+def fetch_approval_sms_matches(conn, rule: dict[str, Any]) -> list[dict[str, Any]]:
+    if "sms" not in rule_channels(rule):
+        return []
+    metadata = rule_metadata(rule)
+    resource_types = [str(v) for v in metadata.get("approval_resource_types") or []]
+    reasons = [str(v) for v in metadata.get("approval_reasons") or []]
+    repeat_days = max(1, int(metadata.get("repeat_days") or 1))
+
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        """
+        SELECT
+            a.id,
+            a.resource_type,
+            a.resource_label,
+            a.inactive_reason,
+            a.inactive_reason_label,
+            a.updated_at,
+            u.nume AS requested_by_name
+        FROM inactive_resource_approvals a
+        LEFT JOIN utilizatori u ON u.id = a.requested_by_user_id
+        WHERE a.status = 'pending'
+        ORDER BY a.requested_at ASC
+        LIMIT 200
+        """
+    )
+    rows = list(cursor.fetchall())
+    cursor.close()
+
+    matches: list[dict[str, Any]] = []
+    epoch_day = (datetime.now().date() - datetime(1970, 1, 1).date()).days
+    for row in rows:
+        if resource_types and str(row.get("resource_type") or "") not in resource_types:
+            continue
+        if reasons and str(row.get("inactive_reason") or "") not in reasons:
+            continue
+        updated = row.get("updated_at")
+        updated_key = updated.strftime("%Y%m%d%H%M%S") if hasattr(updated, "strftime") else str(updated or "")
+        matches.append({
+            "entity_id": int(row["id"]),
+            "entity_type": "approval",
+            "tip_document": str(row.get("inactive_reason_label") or row.get("inactive_reason") or "Cerere aprobare"),
+            "owner_id": 0,
+            "owner_name": str(row.get("resource_label") or ""),
+            "owner_details": str(row.get("requested_by_name") or ""),
+            "notification_title": "Cerere aprobare in asteptare",
+            # Cererea repusa in asteptare = SMS nou; reamintirea urmeaza "Reaminteste la (zile)".
+            "context_suffix": updated_key,
+            "repeat_bucket": f"r{epoch_day // repeat_days}",
+        })
+    return matches
 
 
 # Eveniment de notificare -> categoria (tab-ul) din Revizii.
@@ -576,17 +832,20 @@ def fetch_tire_dot_matches(conn, rule: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def resolve_recipients(conn, rule: dict[str, Any]) -> list[dict[str, Any]]:
+    """Utilizatorii regulii, cu email si/sau telefon; canalul se filtreaza la trimitere."""
+    mode = str(rule.get("recipient_mode") or "admins")
+    if mode == "drivers":
+        # Doar soferul: destinatarii vin din driver_recipients().
+        return []
     cursor = conn.cursor(dictionary=True)
-    if str(rule.get("recipient_mode") or "admins") == "specific_users":
+    if mode == "specific_users":
         cursor.execute(
             """
-            SELECT u.id, u.nume, u.email, u.rol
+            SELECT u.id, u.nume, u.email, u.telefon, u.rol
             FROM notification_rule_recipients rr
             INNER JOIN utilizatori u ON u.id = rr.user_id
             WHERE rr.rule_id = %s
               AND u.status = 'activ'
-              AND u.email IS NOT NULL
-              AND u.email <> ''
             ORDER BY u.nume ASC
             """,
             (int(rule["id"]),),
@@ -594,18 +853,49 @@ def resolve_recipients(conn, rule: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         cursor.execute(
             """
-            SELECT id, nume, email, rol
+            SELECT id, nume, email, telefon, rol
             FROM utilizatori
             WHERE status = 'activ'
               AND rol = 'admin'
-              AND email IS NOT NULL
-              AND email <> ''
             ORDER BY nume ASC
             """
         )
     rows = list(cursor.fetchall())
     cursor.close()
     return rows
+
+
+# Entitatile al caror owner_id este chiar soferul (restul au owner_id = vehiculul).
+DRIVER_OWNED_ENTITIES = {"driver", "leave"}
+
+
+def driver_recipients(conn, match: dict[str, Any], cache: dict[tuple[str, int], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Soferul notificarii: cel al documentului/concediului, altfel soferii alocati vehiculului."""
+    entity_type = str(match.get("entity_type") or "")
+    owner_id = int(match.get("owner_id") or 0)
+    if owner_id <= 0 or entity_type == "approval":
+        return []
+    key = ("driver" if entity_type in DRIVER_OWNED_ENTITIES else "vehicle", owner_id)
+    if key in cache:
+        return cache[key]
+
+    column = "id" if key[0] == "driver" else "vehicle_id"
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        f"""
+        SELECT id AS driver_id, nume, telefon
+        FROM soferi
+        WHERE {column} = %s
+          AND status = 'activ'
+          AND telefon IS NOT NULL
+          AND telefon <> ''
+        ORDER BY nume ASC
+        """,
+        (owner_id,),
+    )
+    cache[key] = [dict(row, email="", is_driver=True) for row in cursor.fetchall()]
+    cursor.close()
+    return cache[key]
 
 
 def delivery_context_id(rule: dict[str, Any], match: dict[str, Any]) -> str:
@@ -619,20 +909,22 @@ def delivery_context_id(rule: dict[str, Any], match: dict[str, Any]) -> str:
     if match.get("context_suffix"):
         parts.append(str(match["context_suffix"]))
     if int(rule.get("repeat_until_resolved") or 0) == 1:
-        parts.append(datetime.now().strftime("%Y-%m-%d"))
+        parts.append(str(match.get("repeat_bucket") or datetime.now().strftime("%Y-%m-%d")))
     return ":".join(parts)
 
 
-def delivery_dedupe_key(context_id: str, email: str) -> str:
+def delivery_dedupe_key(context_id: str, address: str) -> str:
+    """address = emailul, sau 'sms:+40...' pentru SMS (aceeasi forma ca in PHP)."""
     import hashlib
 
-    return hashlib.sha256(f"{context_id}|{email.strip().lower()}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{context_id}|{address.strip().lower()}".encode("utf-8")).hexdigest()
 
 
-def existing_queue(conn, context_id: str, email: str) -> dict[str, Any] | None:
+def existing_queue(conn, context_id: str, address: str, channel: str = "email") -> dict[str, Any] | None:
+    address_column = "d.recipient_phone" if channel == "sms" else "d.recipient_email"
     cursor = conn.cursor(dictionary=True)
     cursor.execute(
-        """
+        f"""
         SELECT
             q.id AS queue_id,
             q.status AS queue_status,
@@ -642,11 +934,12 @@ def existing_queue(conn, context_id: str, email: str) -> dict[str, Any] | None:
         LEFT JOIN notification_queue q ON q.delivery_id = d.id
         WHERE d.context = 'fleet_rule'
           AND d.context_id = %s
-          AND d.recipient_email = %s
+          AND d.channel = %s
+          AND {address_column} = %s
         ORDER BY d.id DESC
         LIMIT 1
         """,
-        (context_id, email),
+        (context_id, channel, address),
     )
     row = cursor.fetchone()
     cursor.close()
@@ -772,6 +1065,49 @@ def build_revizie_email(
     return subject, "\n".join(lines)
 
 
+def build_sms_text(config: MailConfig, rule: dict[str, Any], match: dict[str, Any]) -> str:
+    """Text scurt (un singur SMS cand se poate), fara link: SMS-ul e doar alerta."""
+    entity_type = str(match.get("entity_type") or "")
+    component = str(match.get("tip_document") or "Notificare")
+    owner = str(match.get("owner_name") or "").strip()
+    title = str(match.get("notification_title") or "").strip()
+
+    if entity_type == "revizie":
+        km = int(round(float(match.get("km_remaining") or 0)))
+        km_text = f"depasit cu {abs(km)} km" if km <= 0 else f"mai sunt {km} km"
+        text = f"{title or 'Revizie'}: {component} - {owner}, {km_text}"
+        interval = int(match.get("revizie_interval_km") or 0)
+        if interval > 0:
+            text += f" (interval {interval} km)"
+        if not match.get("revizie_complet", True):
+            text += ". Date GPS incomplete"
+    elif entity_type == "approval":
+        text = f"Cerere aprobare in asteptare: {owner} - {component}"
+        if match.get("owner_details"):
+            text += f", solicitata de {match['owner_details']}"
+        text += ". Decide din aplicatie sau din email"
+    else:
+        days_left_raw = match.get("days_left")
+        status = title or (expiry_status_label(int(days_left_raw or 0)) if days_left_raw is not None else str(rule.get("name") or "Notificare"))
+        text = f"{status}: {component} - {owner}"
+        if match.get("data_expirare"):
+            text += f" ({format_date(match.get('data_expirare'))})"
+        if match.get("km_remaining") is not None:
+            text += f", {int(match.get('km_remaining') or 0)} km ramasi"
+        if match.get("tread_depth_mm") is not None:
+            text += f", profil {match.get('tread_depth_mm')} mm"
+
+    return sms_plain_text(f"{config.app_name}: {text}.")
+
+
+def sms_subject(config: MailConfig, rule: dict[str, Any], match: dict[str, Any], recipient: dict[str, Any]) -> str:
+    """SMS-ul nu are subiect; il pastram doar pentru coloanele Coada / Istoric."""
+    if match.get("entity_type") == "approval":
+        return f"[{config.app_name}] Cerere aprobare: {match.get('owner_name') or ''}"
+    subject, _ = build_notification_email(config, rule, match, recipient)
+    return subject
+
+
 def create_pending_delivery(
     conn,
     context: str,
@@ -780,7 +1116,10 @@ def create_pending_delivery(
     subject: str,
     body: str,
     metadata: dict[str, Any],
+    channel: str = "email",
+    phone: str | None = None,
 ) -> int:
+    is_sms = channel == "sms"
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -789,6 +1128,7 @@ def create_pending_delivery(
             context_id,
             channel,
             recipient_email,
+            recipient_phone,
             recipient_name,
             subject,
             message,
@@ -799,13 +1139,14 @@ def create_pending_delivery(
         ) VALUES (
             %s,
             %s,
-            'email',
+            %s,
+            %s,
             %s,
             %s,
             %s,
             %s,
             'pending',
-            'smtp',
+            %s,
             %s,
             NOW()
         )
@@ -813,10 +1154,13 @@ def create_pending_delivery(
         (
             context[:80],
             context_id[:160],
-            str(recipient.get("email") or "")[:190],
+            "sms" if is_sms else "email",
+            None if is_sms else str(recipient.get("email") or "")[:190],
+            phone if is_sms else None,
             str(recipient.get("nume") or "")[:190] or None,
             subject[:255],
             body,
+            "smsalert" if is_sms else "smtp",
             json.dumps(metadata, ensure_ascii=False),
         ),
     )
@@ -883,28 +1227,73 @@ def requeue_existing_delivery(conn, queue_id: int, delivery_id: int) -> None:
     cursor.close()
 
 
-def enqueue_due_notifications(conn, config: MailConfig) -> dict[str, int]:
-    summary = {"rules": 0, "matched": 0, "queued": 0, "requeued": 0, "skipped": 0}
+def delivery_targets(
+    conn,
+    rule: dict[str, Any],
+    match: dict[str, Any],
+    users: list[dict[str, Any]],
+    channels: set[str],
+    sms: SmsConfig,
+    driver_cache: dict[tuple[str, int], list[dict[str, Any]]],
+) -> tuple[list[tuple[str, str, dict[str, Any]]], int]:
+    """(canal, adresa, destinatar) pentru o potrivire, fara dubluri; + cati au fost sariti."""
+    targets: list[tuple[str, str, dict[str, Any]]] = []
+    seen: set[tuple[str, str]] = set()
+    skipped = 0
+
+    def add(channel: str, address: str | None, recipient: dict[str, Any]) -> None:
+        nonlocal skipped
+        if not address:
+            skipped += 1
+            return
+        key = (channel, address.lower())
+        if key not in seen:
+            seen.add(key)
+            targets.append((channel, address, recipient))
+
+    for user in users:
+        if "email" in channels:
+            email = str(user.get("email") or "").strip()
+            add("email", email if "@" in email else None, user)
+        if "sms" in channels:
+            add("sms", normalize_phone(user.get("telefon"), sms.country_code), user)
+
+    wants_driver = str(rule.get("recipient_mode") or "") == "drivers" or bool(rule_metadata(rule).get("notify_driver"))
+    if "sms" in channels and wants_driver:
+        for driver in driver_recipients(conn, match, driver_cache):
+            add("sms", normalize_phone(driver.get("telefon"), sms.country_code), driver)
+
+    return targets, skipped
+
+
+def enqueue_due_notifications(conn, config: MailConfig, sms: SmsConfig) -> dict[str, int]:
+    summary = {"rules": 0, "matched": 0, "queued": 0, "queued_sms": 0, "requeued": 0, "skipped": 0, "sms_disabled": 0}
     rules = fetch_enabled_rules(conn)
     summary["rules"] = len(rules)
+    driver_cache: dict[tuple[str, int], list[dict[str, Any]]] = {}
 
     for rule in rules:
-        matches = fetch_matches_for_rule(conn, rule)
-        summary["matched"] += len(matches)
-        recipients = resolve_recipients(conn, rule)
-        if not recipients:
-            summary["skipped"] += len(matches)
+        channels = rule_channels(rule)
+        if "sms" in channels and not sms.ready:
+            # SMS oprit / neconfigurat: nu umplem coada cu livrari care oricum ar esua.
+            channels.discard("sms")
+            summary["sms_disabled"] += 1
+        if not channels:
             continue
 
-        for match in matches:
-            for recipient in recipients:
-                email = str(recipient.get("email") or "").strip()
-                if not email or "@" not in email:
-                    summary["skipped"] += 1
-                    continue
+        matches = fetch_matches_for_rule(conn, rule)
+        summary["matched"] += len(matches)
+        users = resolve_recipients(conn, rule)
 
-                context_id = delivery_context_id(rule, match)
-                existing = existing_queue(conn, context_id, email)
+        for match in matches:
+            targets, skipped = delivery_targets(conn, rule, match, users, channels, sms, driver_cache)
+            summary["skipped"] += skipped
+            if not targets:
+                continue
+
+            context_id = delivery_context_id(rule, match)
+            for channel, address, recipient in targets:
+                existing = existing_queue(conn, context_id, address, channel)
                 if existing:
                     if str(existing.get("queue_status") or "") == "failed":
                         requeue_existing_delivery(
@@ -917,24 +1306,28 @@ def enqueue_due_notifications(conn, config: MailConfig) -> dict[str, int]:
                         summary["skipped"] += 1
                     continue
 
-                subject, body = build_notification_email(config, rule, match, recipient)
-                delivery_id = create_pending_delivery(
-                    conn,
-                    "fleet_rule",
-                    context_id,
-                    recipient,
-                    subject,
-                    body,
-                    {
-                        "rule_id": int(rule["id"]),
-                        "event_type": str(rule.get("event_type") or ""),
-                        "entity_type": str(match.get("entity_type") or ""),
-                        "entity_id": int(match["entity_id"]),
-                        "document_id": int(match.get("document_id") or 0),
-                    },
-                )
-                create_queue_job(conn, delivery_id, delivery_dedupe_key(context_id, email))
-                summary["queued"] += 1
+                metadata = {
+                    "rule_id": int(rule["id"]),
+                    "event_type": str(rule.get("event_type") or ""),
+                    "entity_type": str(match.get("entity_type") or ""),
+                    "entity_id": int(match["entity_id"]),
+                    "document_id": int(match.get("document_id") or 0),
+                }
+                if channel == "sms":
+                    subject = sms_subject(config, rule, match, recipient)
+                    if recipient.get("is_driver"):
+                        metadata["driver_id"] = int(recipient.get("driver_id") or 0)
+                    delivery_id = create_pending_delivery(
+                        conn, "fleet_rule", context_id, recipient, subject,
+                        build_sms_text(config, rule, match), metadata, channel="sms", phone=address,
+                    )
+                    create_queue_job(conn, delivery_id, delivery_dedupe_key(context_id, f"sms:{address}"))
+                    summary["queued_sms"] += 1
+                else:
+                    subject, body = build_notification_email(config, rule, match, recipient)
+                    delivery_id = create_pending_delivery(conn, "fleet_rule", context_id, recipient, subject, body, metadata)
+                    create_queue_job(conn, delivery_id, delivery_dedupe_key(context_id, address))
+                    summary["queued"] += 1
 
     conn.commit()
     return summary
@@ -968,7 +1361,9 @@ def fetch_pending_jobs(conn, limit: int) -> list[dict[str, Any]]:
             q.delivery_id,
             q.attempts,
             q.max_attempts,
+            d.channel,
             d.recipient_email,
+            d.recipient_phone,
             d.recipient_name,
             d.subject,
             d.message,
@@ -1145,6 +1540,9 @@ def normalize_error(exception: BaseException) -> str:
     password = env_value(["MAIL_PASSWORD", "SMTP_PASSWORD"])
     if password:
         text = text.replace(password, "[hidden-password]")
+    api_key = env_value(["SMSALERT_API_KEY"])
+    if api_key:
+        text = text.replace(api_key, "[hidden-api-key]")
     return text[:2000]
 
 
@@ -1168,38 +1566,94 @@ def run_approval_flow() -> dict[str, Any] | None:
         return {"error": normalize_error(exc)}
 
 
+class SmsSender:
+    """Trimite SMS-urile unei rulari respectand limita SMSAlert (1 apel / 2 s)."""
+
+    def __init__(self, config: SmsConfig) -> None:
+        self.config = config
+        self.sent = 0
+        self.blocked_reason: str | None = None
+        self._last_call = 0.0
+
+    def can_send(self) -> bool:
+        return self.blocked_reason is None and self.sent < self.config.max_send_per_run
+
+    def send(self, job: dict[str, Any]) -> str:
+        if not self.config.ready:
+            raise RuntimeError("SMS neconfigurat sau oprit (SMSALERT_ENABLED / SMSALERT_USERNAME / SMSALERT_API_KEY).")
+        phone = str(job.get("recipient_phone") or "")
+        target = normalize_phone(self.config.force_to, self.config.country_code) if self.config.force_to else phone
+        if not target:
+            raise RuntimeError(f"Numar de telefon invalid: {phone or '-'}")
+
+        wait = SMS_MIN_INTERVAL_SECONDS - (time.monotonic() - self._last_call)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call = time.monotonic()
+        try:
+            response = smsalert_send(self.config, target, str(job["message"]))
+        except SmsRateLimited as exc:
+            self.blocked_reason = str(exc)
+            raise
+        self.sent += 1
+        return response if target == phone else f"{response} (mod test: trimis la {target})"
+
+
 def process_jobs(limit: int, enqueue: bool = True, send: bool = True) -> dict[str, Any]:
     conn = connect_db()
     config = mail_config()
+    sms = sms_config()
     summary: dict[str, Any] = {
         "checked_at": datetime.now().isoformat(timespec="seconds"),
         "enqueue": None,
         "released_locks": 0,
         "fetched": 0,
         "sent": 0,
+        "sent_sms": 0,
         "retry": 0,
         "failed": 0,
         "skipped_claimed": 0,
+        "deferred_sms": 0,
         "errors": [],
     }
 
     try:
+        ensure_sms_schema(conn)
         summary["released_locks"] = release_stale_processing(conn)
         if enqueue:
-            summary["enqueue"] = enqueue_due_notifications(conn, config)
+            summary["enqueue"] = enqueue_due_notifications(conn, config, sms)
         if not send:
             return summary
 
         jobs = fetch_pending_jobs(conn, limit)
         summary["fetched"] = len(jobs)
+        sms_sender = SmsSender(sms)
 
         for job in jobs:
             queue_id = int(job["queue_id"])
+            is_sms = str(job.get("channel") or "email") == "sms"
+            if is_sms and not sms_sender.can_send():
+                # Limita pe rulare sau 429: raman pending pentru rularea urmatoare.
+                summary["deferred_sms"] += 1
+                continue
             if not claim_job(conn, queue_id):
                 summary["skipped_claimed"] += 1
                 continue
 
             attempt_number = int(job.get("attempts") or 0) + 1
+            if is_sms:
+                # O singura incercare pe rulare: un timeout dupa acceptare ar dubla SMS-ul.
+                try:
+                    response = sms_sender.send(job)
+                    mark_sent(conn, queue_id, int(job["delivery_id"]), response)
+                    summary["sent_sms"] += 1
+                except Exception as exc:
+                    error = normalize_error(exc)
+                    status = mark_failed_or_retry(conn, job, error, attempt_number)
+                    summary[status] += 1
+                    summary["errors"].append({"queue_id": queue_id, "channel": "sms", "status": status, "error": error})
+                continue
+
             try:
                 response = None
                 last_error = None

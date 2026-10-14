@@ -177,13 +177,32 @@ $historyQuery = [
     'context' => (string) ($historyFilters['context'] ?? ''),
 ];
 $lastWorkerAt = $stats['last_worker_at'] ?? null;
+
+$channelIcon = static function (string $channel): string {
+    return match ($channel) {
+        'sms' => 'bi-phone',
+        'email_sms' => 'bi-envelope-paper',
+        default => 'bi-envelope',
+    };
+};
+
+// Livrarile SMS au numarul in recipient_phone; cele email in recipient_email.
+$deliveryRecipient = static function (array $row): string {
+    if ((string) ($row['channel'] ?? 'email') === 'sms') {
+        $name = trim((string) ($row['recipient_name'] ?? ''));
+        $phone = (string) ($row['recipient_phone'] ?? '');
+        return $name !== '' ? $name . ' · ' . $phone : $phone;
+    }
+
+    return (string) ($row['recipient_email'] ?? '');
+};
 ?>
 
 <div class="notifications-page">
     <div class="notifications-header">
         <div>
             <h2 class="notifications-title">Configurare notificari</h2>
-            <p class="notifications-subtitle">Configureaza regulile automate pentru documente, soferi, anvelope, concedii si dotari.</p>
+            <p class="notifications-subtitle">Configureaza regulile automate (email si SMS) pentru documente, soferi, anvelope, concedii, dotari si revizii.</p>
         </div>
         <div class="notifications-actions">
             <a class="btn btn-primary notification-main-action" href="<?= e(build_query_url(['page' => 'notificari', 'action' => 'create'])) ?>">
@@ -335,14 +354,29 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
                             <td>
                                 <span class="notification-status-badge <?= $enabled ? 'is-success' : 'is-muted' ?>"><?= $enabled ? 'Activ' : 'Inactiv' ?></span>
                             </td>
-                            <td class="notification-name-cell"><?= e((string) ($rule['name'] ?? '')) ?></td>
+                            <td class="notification-name-cell">
+                                <?= e((string) ($rule['name'] ?? '')) ?>
+                                <?php if ((int) ($rule['group_size'] ?? 1) > 1): ?>
+                                    <div class="notification-muted-line" title="Salvate împreună; „Editează” deschide tot grupul">
+                                        <i class="bi bi-collection" aria-hidden="true"></i> Grup de <?= e((string) (int) $rule['group_size']) ?> reguli
+                                    </div>
+                                <?php endif; ?>
+                            </td>
                             <td><?= e((string) ($entityLabels[$entityType] ?? $entityType)) ?></td>
                             <td><?= e((string) ($eventLabels[$eventType] ?? $eventType)) ?></td>
                             <td><?= e((string) (($rule['document_type'] ?? '') !== '' ? $rule['document_type'] : '-')) ?></td>
                             <td><?= e($ruleThreshold($rule)) ?></td>
-                            <td><i class="bi bi-envelope me-1" aria-hidden="true"></i><?= e((string) ($channelLabels[(string) ($rule['channel'] ?? 'email')] ?? 'Email')) ?></td>
+                            <?php
+                            $ruleChannel = (string) ($rule['channel'] ?? 'email');
+                            $ruleMetadata = json_decode((string) ($rule['metadata_json'] ?? ''), true);
+                            $ruleNotifiesDriver = is_array($ruleMetadata) && !empty($ruleMetadata['notify_driver']);
+                            ?>
+                            <td><i class="bi <?= e($channelIcon($ruleChannel)) ?> me-1" aria-hidden="true"></i><?= e((string) ($channelLabels[$ruleChannel] ?? 'Email')) ?></td>
                             <td>
                                 <?= e((string) ($recipientLabels[$recipientMode] ?? $recipientMode)) ?>
+                                <?php if ($ruleNotifiesDriver): ?>
+                                    <div class="notification-muted-line">+ soferul (SMS)</div>
+                                <?php endif; ?>
                                 <?php if ($recipientMode === 'specific_users' && (string) ($rule['recipient_names'] ?? '') !== ''): ?>
                                     <div class="notification-muted-line"><?= e((string) $rule['recipient_names']) ?></div>
                                 <?php endif; ?>
@@ -421,7 +455,7 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
                         <?php $status = (string) ($row['status'] ?? ''); ?>
                         <tr>
                             <td><span class="notification-status-badge <?= $statusClass($status) ?>"><?= e($statusLabel($status)) ?></span></td>
-                            <td><?= e((string) ($row['recipient_email'] ?? '')) ?></td>
+                            <td><i class="bi <?= e($channelIcon((string) ($row['channel'] ?? 'email'))) ?> me-1" aria-hidden="true"></i><?= e($deliveryRecipient($row)) ?></td>
                             <td class="notification-subject-cell"><?= e((string) ($row['subject'] ?? '')) ?></td>
                             <td><?= e($formatDateTime($row['scheduled_for'] ?? null)) ?></td>
                             <td><?= e((string) (int) ($row['attempts'] ?? 0)) ?> / <?= e((string) (int) ($row['max_attempts'] ?? 0)) ?></td>
@@ -475,7 +509,7 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
                         <tr>
                             <td><?= e($formatDateTime($row['created_at'] ?? null)) ?></td>
                             <td><?= e((string) ($row['context'] ?? '')) ?></td>
-                            <td><?= e((string) ($row['recipient_email'] ?? '')) ?></td>
+                            <td><i class="bi <?= e($channelIcon((string) ($row['channel'] ?? 'email'))) ?> me-1" aria-hidden="true"></i><?= e($deliveryRecipient($row)) ?></td>
                             <td class="notification-subject-cell"><?= e((string) ($row['subject'] ?? '')) ?></td>
                             <td><span class="notification-status-badge <?= $statusClass($status) ?>"><?= e($statusLabel($status)) ?></span></td>
                             <td class="notification-error-cell"><?= e((string) ($row['error_message'] ?? '')) ?></td>
@@ -493,6 +527,34 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
                     <strong><?= !empty($serviceStatus['smtp_configured']) ? 'Configurat' : 'Incomplet' ?></strong>
                     <span><?= e((string) ($mailSummary['host'] ?? '')) ?> <?= e((string) ($mailSummary['port'] ?? '')) ?>/<?= e((string) ($mailSummary['encryption'] ?? '')) ?></span>
                     <small><?= e((string) ($mailSummary['from'] ?? '')) ?></small>
+                </div>
+                <?php
+                $smsEnabled = !empty($serviceStatus['sms_enabled']);
+                $smsConfigured = !empty($serviceStatus['sms_configured']);
+                $smsForceTo = (string) ($serviceStatus['sms_force_to'] ?? '');
+                ?>
+                <div class="notification-status-card">
+                    <div class="notification-status-card-title">SMS (SMSAlert)</div>
+                    <strong><?= !$smsConfigured ? 'Neconfigurat' : ($smsEnabled ? 'Activ' : 'Oprit') ?></strong>
+                    <span>
+                        <?php if (!$smsConfigured): ?>
+                            Completeaza SMSALERT_USERNAME si SMSALERT_API_KEY in .env.
+                        <?php elseif (!$smsEnabled): ?>
+                            SMSALERT_ENABLED=false: regulile cu SMS nu trimit nimic.
+                        <?php else: ?>
+                            Cont <?= e((string) ($serviceStatus['sms_username'] ?? '')) ?>
+                        <?php endif; ?>
+                    </span>
+                    <?php if ($smsForceTo !== ''): ?>
+                        <small>Mod test: toate SMS-urile merg la <?= e($smsForceTo) ?></small>
+                    <?php endif; ?>
+                    <form method="post" action="<?= e(build_query_url(['page' => 'notificari', 'action' => 'send_test_sms'])) ?>" class="d-flex gap-2 mt-2">
+                        <?= csrf_field() ?>
+                        <input class="form-control form-control-sm" name="test_phone" value="<?= e((string) ($currentUser['telefon'] ?? '')) ?>" placeholder="07xx xxx xxx" required aria-label="Telefon pentru SMS de test">
+                        <button type="submit" class="btn btn-sm btn-outline-secondary text-nowrap" <?= $smsConfigured && $smsEnabled ? '' : 'disabled' ?>>
+                            <i class="bi bi-phone" aria-hidden="true"></i> SMS test
+                        </button>
+                    </form>
                 </div>
                 <div class="notification-status-card">
                     <div class="notification-status-card-title">Coada</div>
@@ -529,272 +591,366 @@ $lastWorkerAt = $stats['last_worker_at'] ?? null;
 </div>
 
 <?php if ($showForm): ?>
-    <div class="notification-drawer-backdrop"></div>
-    <aside class="notification-rule-drawer" role="dialog" aria-modal="true" aria-labelledby="notificationRuleDrawerTitle">
-        <div class="notification-drawer-header">
-            <h3 id="notificationRuleDrawerTitle"><?= $isEditing ? 'Editeaza regula notificare' : 'Adauga regula notificare' ?></h3>
-            <a href="<?= e(build_query_url(['page' => 'notificari'])) ?>" aria-label="Inchide">
-                <i class="bi bi-x-lg" aria-hidden="true"></i>
-            </a>
-        </div>
-        <form method="post" action="<?= e(build_query_url(['page' => 'notificari', 'action' => $isEditing ? 'update' : 'store'])) ?>" class="notification-rule-form">
+    <?php
+    $eventConditions = is_array($eventConditions ?? null) ? $eventConditions : [];
+    $eventHints = is_array($eventHints ?? null) ? $eventHints : [];
+    $hiddenEvents = is_array($hiddenEvents ?? null) ? $hiddenEvents : [];
+    $hiddenRecipientModes = is_array($hiddenRecipientModes ?? null) ? $hiddenRecipientModes : [];
+    $editingGroupSize = (int) ($editingGroupSize ?? 0);
+    $approvalEvent = (string) ($approvalEvent ?? 'inactive_approval_pending');
+    $selectedEvents = array_map('strval', (array) ($formData['event_types'] ?? []));
+    $selectedDocTypes = is_array($formData['doc_types'] ?? null) ? $formData['doc_types'] : [];
+    $docAll = is_array($formData['doc_all'] ?? null) ? $formData['doc_all'] : [];
+    $selectedApprovalTypes = array_map('strval', (array) ($formData['approval_resource_types'] ?? []));
+    $selectedApprovalReasons = array_map('strval', (array) ($formData['approval_reasons'] ?? []));
+    $currentChannel = (string) ($formData['channel'] ?? 'email');
+    $currentRecipientMode = (string) ($formData['recipient_mode'] ?? 'admins');
+
+    $entityIcons = [
+        'vehicle' => 'bi-truck',
+        'driver' => 'bi-person-badge',
+        'tire' => 'bi-record-circle',
+        'leave' => 'bi-calendar2-week',
+        'equipment' => 'bi-tools',
+        'approval' => 'bi-check2-square',
+        'revizie' => 'bi-wrench-adjustable',
+    ];
+
+    // Evenimentele pe entitati, in ordinea entitatilor din filtru.
+    $eventsByEntity = [];
+    foreach ($eventLabels as $eventValue => $eventLabel) {
+        if (in_array($eventValue, $hiddenEvents, true) && !in_array($eventValue, $selectedEvents, true)) {
+            continue;
+        }
+        $eventsByEntity[(string) ($eventEntityMap[$eventValue] ?? 'vehicle')][(string) $eventValue] = (string) $eventLabel;
+    }
+
+    $docFamilies = [
+        'vehicle' => ['label' => 'Documente vehicul', 'options' => $vehicleDocumentTypes],
+        'driver' => ['label' => 'Documente șofer', 'options' => $driverDocumentTypes],
+        'equipment' => ['label' => 'Dotări', 'options' => $equipmentTypes],
+    ];
+    foreach ($docFamilies as $family => $config) {
+        $options = array_map('strval', $config['options']);
+        foreach ((array) ($selectedDocTypes[$family] ?? []) as $selectedType) {
+            if (!in_array((string) $selectedType, $options, true)) {
+                $options[] = (string) $selectedType;
+            }
+        }
+        $docFamilies[$family]['options'] = $options;
+    }
+
+    $recipientDescriptions = [
+        'admins' => 'Toți administratorii activi',
+        'vehicle_responsible' => 'Momentan se trimite administratorilor',
+        'drivers' => 'Doar șoferul vizat, prin SMS',
+        'specific_users' => 'Alegi tu persoanele din listă',
+    ];
+    $recipientIcons = [
+        'admins' => 'bi-shield-check',
+        'vehicle_responsible' => 'bi-person-gear',
+        'drivers' => 'bi-person-vcard',
+        'specific_users' => 'bi-people',
+    ];
+    $fieldError = static function (string $key) use ($formErrors): string {
+        return isset($formErrors[$key]) ? '<div class="nrf-error"><i class="bi bi-exclamation-circle"></i> ' . e((string) $formErrors[$key]) . '</div>' : '';
+    };
+
+    $nrfConfig = [
+        'eventLabels' => $eventLabels,
+        'entityLabels' => $entityLabels,
+        'eventEntity' => $eventEntityMap,
+        'conditions' => $eventConditions,
+        'smsChannels' => array_values($smsChannels ?? ['sms', 'email_sms']),
+        'approvalEvent' => $approvalEvent,
+        'maxRules' => (int) ($maxRulesPerGroup ?? 60),
+        'isEditing' => $isEditing,
+        'groupSize' => $editingGroupSize,
+        'closeUrl' => build_query_url(['page' => 'notificari']),
+    ];
+    ?>
+    <link rel="stylesheet" href="<?= e(url('assets/css/notificari-regula.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/notificari-regula.css'))) ?>">
+    <div class="nrf-backdrop" data-nrf-close></div>
+    <aside class="nrf-modal" role="dialog" aria-modal="true" aria-labelledby="nrfTitle">
+        <header class="nrf-header">
+            <div>
+                <h3 id="nrfTitle"><?= $isEditing ? 'Editează regula de notificare' : 'Regulă nouă de notificare' ?></h3>
+                <p>
+                    <?php if ($isEditing && $editingGroupSize > 1): ?>
+                        Grup de <?= e((string) $editingGroupSize) ?> reguli salvate împreună — modificările se aplică tuturor.
+                    <?php else: ?>
+                        Bifează unul sau mai multe evenimente; se creează câte o regulă pentru fiecare.
+                    <?php endif; ?>
+                </p>
+            </div>
+            <a class="nrf-close" href="<?= e(build_query_url(['page' => 'notificari'])) ?>" aria-label="Închide"><i class="bi bi-x-lg" aria-hidden="true"></i></a>
+        </header>
+
+        <form method="post" action="<?= e(build_query_url(['page' => 'notificari', 'action' => $isEditing ? 'update' : 'store'])) ?>" class="nrf-form" data-nrf-form novalidate>
             <?= csrf_field() ?>
             <?php if ($isEditing): ?>
                 <input type="hidden" name="id" value="<?= e((string) $editingId) ?>">
             <?php endif; ?>
+            <script type="application/json" data-nrf-config><?= json_encode($nrfConfig, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>
 
-            <div class="notification-rule-grid">
-                <label>
-                    <span>Nume regula <em>*</em></span>
-                    <input class="form-control <?= isset($formErrors['name']) ? 'is-invalid' : '' ?>" name="name" value="<?= e((string) ($formData['name'] ?? '')) ?>" maxlength="190" placeholder="Ex: RCA expira in 30 zile" required>
-                    <?php if (isset($formErrors['name'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['name']) ?></small><?php endif; ?>
-                </label>
-                <label>
-                    <span>Tip entitate <em>*</em></span>
-                    <select class="form-select <?= isset($formErrors['entity_type']) ? 'is-invalid' : '' ?>" name="entity_type" data-rule-entity-select required>
-                        <?php foreach ($entityLabels as $value => $label): ?>
-                            <option value="<?= e((string) $value) ?>" <?= (string) ($formData['entity_type'] ?? '') === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option>
+            <div class="nrf-body">
+                <div class="nrf-main">
+                    <?php if ($formErrors !== []): ?>
+                        <div class="nrf-alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Verifică câmpurile marcate mai jos.</div>
+                    <?php endif; ?>
+
+                    <label class="nrf-name">
+                        <span class="nrf-label">Nume regulă <small>(opțional — gol = generat din evenimente)</small></span>
+                        <input class="form-control" name="name" value="<?= e((string) ($formData['name'] ?? '')) ?>" maxlength="190" placeholder="Ex: Documente vehicul" data-nrf-name>
+                        <?= $fieldError('name') ?>
+                    </label>
+
+                    <section class="nrf-section">
+                        <h4><span class="nrf-step">1</span> Ce urmărești?</h4>
+                        <p class="nrf-section-hint">Poți bifa evenimente din mai multe categorii.</p>
+                        <?= $fieldError('event_types') ?>
+                        <div class="nrf-entities">
+                            <?php foreach ($entityLabels as $entityValue => $entityLabel): ?>
+                                <?php if (empty($eventsByEntity[$entityValue])) { continue; } ?>
+                                <div class="nrf-entity" data-nrf-entity="<?= e((string) $entityValue) ?>">
+                                    <div class="nrf-entity-head">
+                                        <span><i class="bi <?= e($entityIcons[$entityValue] ?? 'bi-bell') ?>" aria-hidden="true"></i> <?= e((string) $entityLabel) ?></span>
+                                        <span class="nrf-entity-count" data-nrf-entity-count></span>
+                                    </div>
+                                    <?php foreach ($eventsByEntity[$entityValue] as $eventValue => $eventLabel): ?>
+                                        <label class="nrf-event">
+                                            <input type="checkbox" name="event_types[]" value="<?= e($eventValue) ?>" data-nrf-event <?= in_array($eventValue, $selectedEvents, true) ? 'checked' : '' ?>>
+                                            <span class="nrf-event-box" aria-hidden="true"><i class="bi bi-check-lg"></i></span>
+                                            <span class="nrf-event-text">
+                                                <strong><?= e($eventLabel) ?></strong>
+                                                <small><?= e((string) ($eventHints[$eventValue] ?? '')) ?></small>
+                                            </span>
+                                        </label>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </section>
+
+                    <section class="nrf-section">
+                        <h4><span class="nrf-step">2</span> Când se trimite?</h4>
+                        <p class="nrf-empty" data-nrf-conditions-empty>Bifează un eveniment mai sus ca să vezi condițiile lui.</p>
+
+                        <div class="nrf-cond" data-nrf-cond="days" hidden>
+                            <span class="nrf-label">Cu câte zile înainte</span>
+                            <div class="nrf-inline">
+                                <div class="input-group nrf-number">
+                                    <input class="form-control" name="days_before" type="number" min="0" max="365" step="1" value="<?= e((string) ($formData['days_before'] ?? 30)) ?>" data-nrf-days>
+                                    <span class="input-group-text">zile</span>
+                                </div>
+                                <div class="nrf-presets">
+                                    <?php foreach ([7, 15, 30, 60, 90] as $preset): ?>
+                                        <button type="button" class="nrf-chip" data-nrf-days-preset="<?= $preset ?>"><?= $preset ?></button>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                            <small class="nrf-help" data-nrf-days-for></small>
+                            <?= $fieldError('days_before') ?>
+                        </div>
+
+                        <?php foreach ($docFamilies as $family => $config): ?>
+                            <?php
+                            $familyAll = (int) ($docAll[$family] ?? 1) === 1;
+                            $familySelected = array_map('strval', (array) ($selectedDocTypes[$family] ?? []));
+                            ?>
+                            <div class="nrf-cond" data-nrf-cond="docs-<?= e($family) ?>" hidden>
+                                <span class="nrf-label"><?= e($config['label']) ?></span>
+                                <div class="nrf-segmented" role="radiogroup">
+                                    <label><input type="radio" name="doc_all[<?= e($family) ?>]" value="1" data-nrf-doc-all="<?= e($family) ?>" <?= $familyAll ? 'checked' : '' ?>><span>Toate tipurile</span></label>
+                                    <label><input type="radio" name="doc_all[<?= e($family) ?>]" value="0" data-nrf-doc-all="<?= e($family) ?>" <?= $familyAll ? '' : 'checked' ?>><span>Doar anumite</span></label>
+                                </div>
+                                <div class="nrf-doc-picker" data-nrf-doc-picker="<?= e($family) ?>" <?= $familyAll ? 'hidden' : '' ?>>
+                                    <div class="nrf-chips" data-nrf-doc-list="<?= e($family) ?>">
+                                        <?php foreach ($config['options'] as $docType): ?>
+                                            <label class="nrf-chip-check">
+                                                <input type="checkbox" name="doc_types[<?= e($family) ?>][]" value="<?= e($docType) ?>" <?= in_array($docType, $familySelected, true) ? 'checked' : '' ?>>
+                                                <span><?= e($docType) ?></span>
+                                            </label>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <div class="nrf-add-doc">
+                                        <input class="form-control form-control-sm" placeholder="Alt tip…" data-nrf-doc-new="<?= e($family) ?>" maxlength="120">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary" data-nrf-doc-add="<?= e($family) ?>"><i class="bi bi-plus-lg"></i> Adaugă</button>
+                                    </div>
+                                    <small class="nrf-help">Fiecare tip bifat devine o regulă separată.</small>
+                                </div>
+                                <?= $fieldError('doc_types_' . $family) ?>
+                            </div>
                         <?php endforeach; ?>
-                    </select>
-                    <?php if (isset($formErrors['entity_type'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['entity_type']) ?></small><?php endif; ?>
-                </label>
-                <label>
-                    <span>Tip eveniment <em>*</em></span>
-                    <select class="form-select <?= isset($formErrors['event_type']) ? 'is-invalid' : '' ?>" name="event_type" data-rule-event-select required>
-                        <?php foreach ($eventLabels as $value => $label): ?>
-                            <option value="<?= e((string) $value) ?>" data-entity="<?= e((string) ($eventEntityMap[$value] ?? 'vehicle')) ?>" <?= (string) ($formData['event_type'] ?? '') === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                    <?php if (isset($formErrors['event_type'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['event_type']) ?></small><?php endif; ?>
-                </label>
-                <?php
-                $revizieEvents = $revizieEvents ?? [];
-                $isRevizieRule = in_array((string) ($formData['event_type'] ?? ''), $revizieEvents, true);
-                $currentRevizieStatus = $isRevizieRule ? (string) ($formData['document_type'] ?? '') : '';
-                ?>
-                <label data-revizie-only hidden>
-                    <span>Notifica la</span>
-                    <select class="form-select" name="revizie_status">
-                        <?php foreach (($revizieStatusFilters ?? []) as $value => $label): ?>
-                            <option value="<?= e((string) $value) ?>" <?= $currentRevizieStatus === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </label>
-                <label data-not-revizie>
-                    <span>Tip document</span>
-                    <select class="form-select <?= isset($formErrors['document_type']) ? 'is-invalid' : '' ?>" name="document_type">
-                        <option value="">-</option>
-                        <?php foreach ($documentTypes as $documentType): ?>
-                            <option value="<?= e((string) $documentType) ?>" <?= $currentDocumentType === (string) $documentType ? 'selected' : '' ?>><?= e((string) $documentType) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                    <?php if (isset($formErrors['document_type'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['document_type']) ?></small><?php endif; ?>
-                </label>
-                <label data-not-revizie>
-                    <span>Zile inainte</span>
-                    <input class="form-control <?= isset($formErrors['days_before']) ? 'is-invalid' : '' ?>" name="days_before" type="number" min="0" max="365" step="1" value="<?= e((string) ($formData['days_before'] ?? 30)) ?>" placeholder="30">
-                    <?php if (isset($formErrors['days_before'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['days_before']) ?></small><?php endif; ?>
-                </label>
-                <div class="notification-wide" data-revizie-only hidden>
-                    <small class="text-muted d-block">
-                        Km rămași și pragul de notificare se iau din <a href="<?= e(build_query_url(['page' => 'revizii', 'tip' => 'prezentare'])) ?>">Revizii</a>,
-                        per componentă („Prag notificare (km rămași)” din Configurare; gol = pragul global).
-                        Fiecare ciclu nou (după „Înregistrează înlocuire”) și trecerea din „Se apropie” în „Necesită” trimit o notificare nouă.
-                    </small>
+
+                        <div class="nrf-cond-row">
+                            <div class="nrf-cond" data-nrf-cond="km" hidden>
+                                <span class="nrf-label">Anvelope: prag kilometri</span>
+                                <div class="input-group nrf-number">
+                                    <input class="form-control" name="threshold_km" type="number" min="0" step="1" value="<?= e((string) ($formData['threshold_km'] ?? '')) ?>" placeholder="15000">
+                                    <span class="input-group-text">km</span>
+                                </div>
+                                <?= $fieldError('threshold_km') ?>
+                            </div>
+                            <div class="nrf-cond" data-nrf-cond="tread" hidden>
+                                <span class="nrf-label">Anvelope: prag profil</span>
+                                <div class="input-group nrf-number">
+                                    <input class="form-control" name="threshold_tread_depth" type="number" min="0" step="0.1" value="<?= e((string) ($formData['threshold_tread_depth'] ?? '')) ?>" placeholder="3.0">
+                                    <span class="input-group-text">mm</span>
+                                </div>
+                                <?= $fieldError('threshold_tread_depth') ?>
+                            </div>
+                        </div>
+
+                        <div class="nrf-cond" data-nrf-cond="revizie" hidden>
+                            <span class="nrf-label">Revizii: notifică la</span>
+                            <div class="nrf-segmented">
+                                <?php foreach (($revizieStatusFilters ?? []) as $value => $label): ?>
+                                    <label><input type="radio" name="revizie_status" value="<?= e((string) $value) ?>" <?= (string) ($formData['revizie_status'] ?? '') === (string) $value ? 'checked' : '' ?>><span><?= e((string) $label) ?></span></label>
+                                <?php endforeach; ?>
+                            </div>
+                            <small class="nrf-help">
+                                Km rămași și pragul se iau din <a href="<?= e(build_query_url(['page' => 'revizii', 'tip' => 'prezentare'])) ?>" target="_blank" rel="noopener">Revizii</a>, per componentă.
+                                Fiecare ciclu nou și trecerea în „Necesită” trimit o notificare nouă.
+                            </small>
+                        </div>
+
+                        <div class="nrf-cond" data-nrf-cond="approval" hidden>
+                            <span class="nrf-label">Cereri de aprobare: tip resursă <small>(nimic bifat = toate)</small></span>
+                            <div class="nrf-chips">
+                                <?php foreach (($approvalResourceLabels ?? []) as $value => $label): ?>
+                                    <label class="nrf-chip-check">
+                                        <input type="checkbox" name="approval_resource_types[]" value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedApprovalTypes, true) ? 'checked' : '' ?>>
+                                        <span><?= e((string) $label) ?></span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                            <?php if (($approvalReasonOptions ?? []) !== []): ?>
+                                <span class="nrf-label mt-2">Motiv <small>(nimic bifat = toate)</small></span>
+                                <div class="nrf-chips">
+                                    <?php foreach ($approvalReasonOptions as $value => $label): ?>
+                                        <label class="nrf-chip-check">
+                                            <input type="checkbox" name="approval_reasons[]" value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedApprovalReasons, true) ? 'checked' : '' ?>>
+                                            <span><?= e((string) $label) ?></span>
+                                        </label>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                            <span class="nrf-label mt-2">Reamintește la</span>
+                            <div class="input-group nrf-number">
+                                <input class="form-control" name="approval_repeat_days" type="number" min="1" max="30" step="1" value="<?= e((string) ($formData['approval_repeat_days'] ?? 1)) ?>">
+                                <span class="input-group-text">zile</span>
+                            </div>
+                            <small class="nrf-help">Are efect doar cu „Repetă până la rezolvare”.</small>
+                        </div>
+                    </section>
+
+                    <section class="nrf-section">
+                        <h4><span class="nrf-step">3</span> Cine primește și cum?</h4>
+                        <span class="nrf-label">Canal</span>
+                        <div class="nrf-channel">
+                            <?php foreach ($channelLabels as $value => $label): ?>
+                                <label>
+                                    <input type="radio" name="channel" value="<?= e((string) $value) ?>" data-nrf-channel <?= $currentChannel === (string) $value ? 'checked' : '' ?>>
+                                    <span><i class="bi <?= e($channelIcon((string) $value)) ?>" aria-hidden="true"></i> <?= e((string) $label) ?></span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                        <?= $fieldError('channel') ?>
+
+                        <label class="nrf-switch" data-nrf-driver-option hidden>
+                            <input class="form-check-input" type="checkbox" role="switch" name="notify_driver" value="1" <?= (int) ($formData['notify_driver'] ?? 0) === 1 ? 'checked' : '' ?>>
+                            <span>
+                                <strong>Trimite SMS și șoferului</strong>
+                                <small>Șoferii alocați vehiculului (la documente de șofer, concedii și zile de naștere: șoferul respectiv), pe numărul din fișa lui. Se adaugă la destinatarii de mai jos.</small>
+                            </span>
+                        </label>
+
+                        <span class="nrf-label mt-3">Destinatari</span>
+                        <div class="nrf-recipients">
+                            <?php foreach ($recipientLabels as $value => $label): ?>
+                                <?php if (in_array($value, $hiddenRecipientModes, true) && $currentRecipientMode !== $value) { continue; } ?>
+                                <label class="nrf-recipient">
+                                    <input type="radio" name="recipient_mode" value="<?= e((string) $value) ?>" data-nrf-recipient <?= $currentRecipientMode === (string) $value ? 'checked' : '' ?>>
+                                    <span>
+                                        <i class="bi <?= e($recipientIcons[$value] ?? 'bi-person') ?>" aria-hidden="true"></i>
+                                        <strong><?= e((string) $label) ?></strong>
+                                        <small><?= e($recipientDescriptions[$value] ?? '') ?></small>
+                                    </span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                        <?= $fieldError('recipient_mode') ?>
+
+                        <div class="nrf-users" data-nrf-users hidden>
+                            <div class="nrf-users-toolbar">
+                                <div class="nrf-users-search">
+                                    <i class="bi bi-search" aria-hidden="true"></i>
+                                    <input class="form-control form-control-sm" type="search" placeholder="Caută utilizator…" data-nrf-user-search>
+                                </div>
+                                <span class="nrf-users-count" data-nrf-user-count></span>
+                                <button type="button" class="btn btn-sm btn-link" data-nrf-users-all>Toți</button>
+                                <button type="button" class="btn btn-sm btn-link" data-nrf-users-none>Niciunul</button>
+                            </div>
+                            <div class="nrf-users-list">
+                                <?php foreach ($users as $user): ?>
+                                    <?php
+                                    $userId = (int) ($user['id'] ?? 0);
+                                    $userEmail = trim((string) ($user['email'] ?? ''));
+                                    $userPhone = trim((string) ($user['telefon'] ?? ''));
+                                    ?>
+                                    <label class="nrf-user" data-nrf-user data-search="<?= e(mb_strtolower(($user['nume'] ?? '') . ' ' . $userEmail . ' ' . $userPhone, 'UTF-8')) ?>" data-has-email="<?= $userEmail !== '' ? '1' : '0' ?>" data-has-phone="<?= $userPhone !== '' ? '1' : '0' ?>">
+                                        <input class="form-check-input" type="checkbox" name="recipient_user_ids[]" value="<?= e((string) $userId) ?>" <?= in_array($userId, $selectedRecipientIds, true) ? 'checked' : '' ?>>
+                                        <span class="nrf-user-avatar"><?= e(mb_strtoupper(mb_substr((string) ($user['nume'] ?? '?'), 0, 1, 'UTF-8'), 'UTF-8')) ?></span>
+                                        <span class="nrf-user-text">
+                                            <strong><?= e((string) ($user['nume'] ?? '')) ?><?php if ((string) ($user['rol'] ?? '') === 'admin'): ?> <em>admin</em><?php endif; ?></strong>
+                                            <small>
+                                                <span class="<?= $userEmail === '' ? 'is-missing' : '' ?>" data-nrf-user-email><i class="bi bi-envelope"></i> <?= e($userEmail !== '' ? $userEmail : 'fără email') ?></span>
+                                                <span class="<?= $userPhone === '' ? 'is-missing' : '' ?>" data-nrf-user-phone><i class="bi bi-phone"></i> <?= e($userPhone !== '' ? $userPhone : 'fără telefon') ?></span>
+                                            </small>
+                                        </span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                            <?= $fieldError('recipient_user_ids') ?>
+                        </div>
+                    </section>
+
+                    <section class="nrf-section">
+                        <h4><span class="nrf-step">4</span> Opțiuni</h4>
+                        <div class="nrf-options">
+                            <label class="nrf-switch">
+                                <input class="form-check-input" type="checkbox" role="switch" name="enabled" value="1" <?= (int) ($formData['enabled'] ?? 0) === 1 ? 'checked' : '' ?>>
+                                <span><strong>Activă</strong><small>Worker-ul o verifică la fiecare rulare.</small></span>
+                            </label>
+                            <label class="nrf-switch">
+                                <input class="form-check-input" type="checkbox" role="switch" name="repeat_until_resolved" value="1" <?= (int) ($formData['repeat_until_resolved'] ?? 1) === 1 ? 'checked' : '' ?>>
+                                <span><strong>Repetă până la rezolvare</strong><small>Trimite din nou cât timp situația persistă.</small></span>
+                            </label>
+                            <label class="nrf-switch">
+                                <input class="form-check-input" type="checkbox" role="switch" name="daily_limit_enabled" value="1" <?= (int) ($formData['daily_limit_enabled'] ?? 1) === 1 ? 'checked' : '' ?>>
+                                <span><strong>Maxim o notificare pe zi</strong><small>Pentru același document / vehicul și destinatar.</small></span>
+                            </label>
+                        </div>
+                    </section>
                 </div>
-                <label data-not-revizie>
-                    <span>KM inainte</span>
-                    <input class="form-control <?= isset($formErrors['threshold_km']) ? 'is-invalid' : '' ?>" name="threshold_km" type="number" min="0" step="1" value="<?= e((string) ($formData['threshold_km'] ?? '')) ?>" placeholder="Ex: 15000" data-threshold-km>
-                    <?php if (isset($formErrors['threshold_km'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['threshold_km']) ?></small><?php endif; ?>
-                </label>
-                <label data-not-revizie>
-                    <span>Prag adancime profil (mm)</span>
-                    <input class="form-control <?= isset($formErrors['threshold_tread_depth']) ? 'is-invalid' : '' ?>" name="threshold_tread_depth" type="number" min="0" step="0.1" value="<?= e((string) ($formData['threshold_tread_depth'] ?? '')) ?>" placeholder="Ex: 3.0" data-threshold-tread>
-                    <?php if (isset($formErrors['threshold_tread_depth'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['threshold_tread_depth']) ?></small><?php endif; ?>
-                </label>
-                <label>
-                    <span>Canal notificare <em>*</em></span>
-                    <select class="form-select <?= isset($formErrors['channel']) ? 'is-invalid' : '' ?>" name="channel" required>
-                        <?php foreach ($channelLabels as $value => $label): ?>
-                            <option value="<?= e((string) $value) ?>" <?= (string) ($formData['channel'] ?? 'email') === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                    <?php if (isset($formErrors['channel'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['channel']) ?></small><?php endif; ?>
-                </label>
-                <?php
-                // Filtre specifice regulii de aprobare. Se salveaza in metadata_json,
-                // deci nu au coloane proprii in notification_rules.
-                $approvalEvent = $approvalEvent ?? 'inactive_approval_pending';
-                $selectedApprovalTypes = (array) ($formData['approval_resource_types'] ?? []);
-                $selectedApprovalReasons = (array) ($formData['approval_reasons'] ?? []);
-                ?>
-                <label class="notification-wide" data-approval-only hidden>
-                    <span>Tip resursa (gol = toate)</span>
-                    <select class="form-select" name="approval_resource_types[]" multiple size="4">
-                        <?php foreach (($approvalResourceLabels ?? []) as $value => $label): ?>
-                            <option value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedApprovalTypes, true) ? 'selected' : '' ?>><?= e((string) $label) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </label>
-                <label class="notification-wide" data-approval-only hidden>
-                    <span>Motiv (gol = toate)</span>
-                    <select class="form-select" name="approval_reasons[]" multiple size="4">
-                        <?php foreach (($approvalReasonOptions ?? []) as $value => $label): ?>
-                            <option value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedApprovalReasons, true) ? 'selected' : '' ?>><?= e((string) $label) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </label>
-                <label data-approval-only hidden>
-                    <span>Reaminteste la (zile)</span>
-                    <input class="form-control" name="approval_repeat_days" type="number" min="1" max="30" step="1" value="<?= e((string) ($formData['approval_repeat_days'] ?? 1)) ?>">
-                    <small class="text-muted">Are efect doar cu „Repeta pana la rezolvare" bifat.</small>
-                </label>
-                <label class="notification-wide">
-                    <span>Destinatari <em>*</em></span>
-                    <select class="form-select <?= isset($formErrors['recipient_mode']) ? 'is-invalid' : '' ?>" name="recipient_mode" data-notification-recipient-mode required>
-                        <?php foreach ($recipientLabels as $value => $label): ?>
-                            <option value="<?= e((string) $value) ?>" <?= (string) ($formData['recipient_mode'] ?? '') === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                    <?php if (isset($formErrors['recipient_mode'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['recipient_mode']) ?></small><?php endif; ?>
-                </label>
-                <label class="notification-wide" data-specific-users>
-                    <span>Utilizatori selectati (daca este cazul)</span>
-                    <select class="form-select <?= isset($formErrors['recipient_user_ids']) ? 'is-invalid' : '' ?>" name="recipient_user_ids[]" multiple size="4">
-                        <?php foreach ($users as $user): ?>
-                            <?php $userId = (int) ($user['id'] ?? 0); ?>
-                            <option value="<?= e((string) $userId) ?>" <?= in_array($userId, $selectedRecipientIds, true) ? 'selected' : '' ?>>
-                                <?= e((string) ($user['nume'] ?? '')) ?> &lt;<?= e((string) ($user['email'] ?? '')) ?>&gt;
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <?php if (isset($formErrors['recipient_user_ids'])): ?><small class="invalid-feedback d-block"><?= e((string) $formErrors['recipient_user_ids']) ?></small><?php endif; ?>
-                </label>
+
+                <aside class="nrf-summary">
+                    <div class="nrf-summary-card">
+                        <div class="nrf-summary-title">Rezumat</div>
+                        <p class="nrf-summary-sentence" data-nrf-sentence></p>
+                        <div class="nrf-summary-sub" data-nrf-count></div>
+                        <ul class="nrf-summary-list" data-nrf-preview></ul>
+                        <div class="nrf-summary-warnings" data-nrf-warnings></div>
+                    </div>
+                </aside>
             </div>
 
-            <div class="notification-rule-checks">
-                <label><input class="form-check-input" type="checkbox" name="enabled" value="1" <?= (int) ($formData['enabled'] ?? 0) === 1 ? 'checked' : '' ?>> Activ</label>
-                <label><input class="form-check-input" type="checkbox" name="repeat_until_resolved" value="1" <?= (int) ($formData['repeat_until_resolved'] ?? 1) === 1 ? 'checked' : '' ?>> Repeta pana la rezolvare</label>
-                <label><input class="form-check-input" type="checkbox" name="daily_limit_enabled" value="1" <?= (int) ($formData['daily_limit_enabled'] ?? 1) === 1 ? 'checked' : '' ?>> Maxim o notificare pe zi</label>
-            </div>
-
-            <div class="notification-drawer-footer">
-                <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'notificari'])) ?>">Anuleaza</a>
-                <button type="submit" class="btn btn-primary">Salveaza</button>
-            </div>
+            <footer class="nrf-footer">
+                <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'notificari'])) ?>">Anulează</a>
+                <button type="submit" class="btn btn-primary" data-nrf-submit><i class="bi bi-check2" aria-hidden="true"></i> <span data-nrf-submit-label>Salvează</span></button>
+            </footer>
         </form>
     </aside>
+    <script src="<?= e(url('assets/js/notificari-regula.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/notificari-regula.js'))) ?>"></script>
 <?php endif; ?>
-
-<script>
-(() => {
-    const modeSelect = document.querySelector('[data-notification-recipient-mode]');
-    const specificUsers = document.querySelector('[data-specific-users]');
-    const entitySelect = document.querySelector('[data-rule-entity-select]');
-    const eventSelect = document.querySelector('[data-rule-event-select]');
-    const kmInput = document.querySelector('[data-threshold-km]');
-    const treadInput = document.querySelector('[data-threshold-tread]');
-
-    const syncRecipients = () => {
-        if (!modeSelect || !specificUsers) {
-            return;
-        }
-        const enabled = modeSelect.value === 'specific_users';
-        specificUsers.classList.toggle('is-disabled', !enabled);
-        specificUsers.querySelectorAll('select, input').forEach((field) => {
-            field.disabled = !enabled;
-        });
-    };
-
-    const syncEvents = () => {
-        if (!entitySelect || !eventSelect) {
-            return;
-        }
-        const entity = entitySelect.value;
-        let selectedIsAvailable = false;
-        let firstAvailable = '';
-        eventSelect.querySelectorAll('option').forEach((option) => {
-            const matches = option.dataset.entity === entity;
-            option.hidden = !matches;
-            option.disabled = !matches;
-            if (matches && firstAvailable === '') {
-                firstAvailable = option.value;
-            }
-            if (matches && option.selected) {
-                selectedIsAvailable = true;
-            }
-        });
-        if (!selectedIsAvailable && firstAvailable !== '') {
-            eventSelect.value = firstAvailable;
-        }
-        syncThresholds();
-    };
-
-    const approvalFields = document.querySelectorAll('[data-approval-only]');
-    const approvalEvent = <?= json_encode($approvalEvent ?? 'inactive_approval_pending') ?>;
-
-    // Campurile de aprobare se ascund SI se dezactiveaza: altfel ar fi trimise
-    // la salvare si pentru reguli de alt tip.
-    const syncApprovalFields = () => {
-        if (!eventSelect) {
-            return;
-        }
-        const isApproval = eventSelect.value === approvalEvent;
-        approvalFields.forEach((field) => {
-            field.hidden = !isApproval;
-            field.querySelectorAll('select, input').forEach((control) => {
-                control.disabled = !isApproval;
-            });
-        });
-    };
-
-    const syncThresholds = () => {
-        if (!eventSelect) {
-            return;
-        }
-        if (kmInput) {
-            kmInput.disabled = eventSelect.value !== 'tire_km_limit';
-        }
-        if (treadInput) {
-            treadInput.disabled = eventSelect.value !== 'tire_tread_depth';
-        }
-        syncApprovalFields();
-        syncRevizieFields();
-    };
-
-    const revizieEvents = <?= json_encode(array_values($revizieEvents ?? [])) ?>;
-
-    // Revizii: pragul vine din pagina Revizii, deci zile / km / profil / tip document nu se aplica.
-    const syncRevizieFields = () => {
-        if (!eventSelect) {
-            return;
-        }
-        const isRevizie = revizieEvents.includes(eventSelect.value);
-        document.querySelectorAll('[data-revizie-only]').forEach((field) => {
-            field.hidden = !isRevizie;
-            field.querySelectorAll('select, input').forEach((control) => {
-                control.disabled = !isRevizie;
-            });
-        });
-        document.querySelectorAll('[data-not-revizie]').forEach((field) => {
-            field.hidden = isRevizie;
-        });
-    };
-
-    if (modeSelect) {
-        modeSelect.addEventListener('change', syncRecipients);
-    }
-    if (entitySelect) {
-        entitySelect.addEventListener('change', syncEvents);
-    }
-    if (eventSelect) {
-        eventSelect.addEventListener('change', syncThresholds);
-    }
-
-    syncRecipients();
-    syncEvents();
-    // syncEvents() iese devreme daca lipseste selectul de entitate; apelul asta
-    // garanteaza ca starea campurilor de aprobare e corecta la incarcare.
-    syncThresholds();
-})();
-</script>

@@ -4,6 +4,16 @@ The web app manages rules and shows status only. This worker scans the rules, qu
 
 Set `APP_URL` in `.env` on the VPS so email links point to the public site.
 
+## SMS (SMSAlert)
+
+Rules with channel `SMS` or `Email + SMS` are also sent as SMS through [SMSAlert](https://apidocs.smsalert.mobi) (`POST /v2/message/send`, Basic auth with username + API key). Each SMS is a separate row in `notification_deliveries` (`channel = 'sms'`, number in `recipient_phone`).
+
+- `.env`: `SMSALERT_ENABLED=true`, `SMSALERT_USERNAME`, `SMSALERT_API_KEY` (see `.env.example`). While SMS is disabled, no SMS deliveries are queued.
+- Recipients: the rule's users (`utilizatori.telefon`); with "Trimite SMS si soferului", also the drivers assigned to the vehicle (or the driver themself for driver documents, leave and birthdays), using `soferi.telefon`. Numbers are normalized to `+40...`.
+- The API allows 1 call every 2 seconds: the worker paces calls and sends at most `SMSALERT_MAX_SEND_PER_RUN` per run. The rest stays pending until the next run, and so does everything after an HTTP 429.
+- `SMSALERT_FORCE_TO`: test mode, where every SMS goes only to this number.
+- Approval requests: the email still comes from `approval_flow.py`; the SMS (an alert only, no approve/reject link) comes from the worker.
+
 ## Install dependencies
 
 ```powershell

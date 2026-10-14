@@ -10,7 +10,7 @@ declare(strict_types=1);
 return [
     'key'         => 'notificari',
     'label'       => 'Notificări',
-    'description' => 'Reguli de notificare pe email',
+    'description' => 'Reguli de notificare pe email si SMS',
     'section'     => 'administrare',
     'icon'        => 'bi-bell',
     'order'       => 360,
@@ -25,7 +25,7 @@ return [
         'view'         => ['label' => 'Vizualizare'],
         'manage_rules' => ['label' => 'Creare / editare reguli', 'group' => 'configurare'],
         'toggle'       => ['label' => 'Activare / dezactivare reguli', 'group' => 'configurare'],
-        'send_test'    => ['label' => 'Trimitere email de test', 'group' => 'operare'],
+        'send_test'    => ['label' => 'Trimitere email / SMS de test', 'group' => 'operare'],
     ],
     'endpoints'   => [
         'create'    => 'manage_rules',
@@ -36,5 +36,6 @@ return [
         'toggle'    => 'toggle',
         'send_test' => 'send_test',
         'run_test'  => 'send_test',
+        'send_test_sms' => 'send_test',
     ],
 ];

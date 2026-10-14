@@ -54,8 +54,9 @@ CREATE TABLE notification_deliveries (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     context VARCHAR(80) NOT NULL,
     context_id VARCHAR(160) NULL,
-    channel ENUM('email') NOT NULL DEFAULT 'email',
-    recipient_email VARCHAR(190) NOT NULL,
+    channel ENUM('email','sms') NOT NULL DEFAULT 'email',
+    recipient_email VARCHAR(190) NULL,
+    recipient_phone VARCHAR(32) NULL,
     recipient_name VARCHAR(190) NULL,
     subject VARCHAR(255) NOT NULL,
     message MEDIUMTEXT NOT NULL,
@@ -71,6 +72,7 @@ CREATE TABLE notification_deliveries (
     KEY idx_notification_deliveries_context (context, context_id),
     KEY idx_notification_deliveries_status (status, created_at),
     KEY idx_notification_deliveries_recipient (recipient_email, created_at),
+    KEY idx_notification_deliveries_phone (recipient_phone, created_at),
     KEY idx_notification_deliveries_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

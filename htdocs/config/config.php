@@ -49,6 +49,11 @@ define('MAIL_TIMEOUT', (int) (getenv('MAIL_TIMEOUT') ?: 45));
 define('MAIL_CONNECT_TIMEOUT', (int) (getenv('MAIL_CONNECT_TIMEOUT') ?: 15));
 define('MAIL_RETRY_ATTEMPTS', max(1, (int) (getenv('MAIL_RETRY_ATTEMPTS') ?: 2)));
 define('MAIL_RETRY_DELAY_MS', max(0, (int) (getenv('MAIL_RETRY_DELAY_MS') ?: 400)));
+// SMS prin SMSAlert: trimiterea o face worker-ul Python; aici doar pentru statusul din Notificari.
+define('SMSALERT_ENABLED', filter_var((string) (getenv('SMSALERT_ENABLED') ?: 'false'), FILTER_VALIDATE_BOOLEAN));
+define('SMSALERT_USERNAME', (string) (getenv('SMSALERT_USERNAME') ?: ''));
+define('SMSALERT_API_KEY_SET', trim((string) (getenv('SMSALERT_API_KEY') ?: '')) !== '');
+define('SMSALERT_FORCE_TO', trim((string) (getenv('SMSALERT_FORCE_TO') ?: '')));
 define('VEHICLE_REQUIRED_DOCUMENT_TYPES', ['RCA', 'ITP', 'Rovinieta']);
 define('DRIVER_REQUIRED_DOCUMENT_TYPES', ['Carte identitate', 'Atestat profesional', 'Aviz medical']);
 

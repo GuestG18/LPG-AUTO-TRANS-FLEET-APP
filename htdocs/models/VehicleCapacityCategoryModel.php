@@ -347,6 +347,101 @@ class VehicleCapacityCategoryModel extends BaseModel
     }
 
     /**
+     * Unitatile de transport, exact ca in Dispecer curse: camioanele, iar capul
+     * tractor + semiremorca cuplata activ ca O SINGURA unitate (semiremorca nu mai
+     * apare separat). Vehiculele usoare (autoturism / autoutilitara) nu transporta
+     * marfa si nu intra aici.
+     *
+     * Pentru ansamblu, categoria si capacitatea reala sunt ale semiremorcii (regula
+     * din DispecerCurseModel: COALESCE(semi.categorie, tractor.categorie)), deci
+     * `target_id` = semiremorca: acolo se scrie categoria aleasa. Doar citire.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function getTransportUnitsForAssignment(): array
+    {
+        $this->ensureSchema();
+
+        // Ultimul cuplaj activ per cap tractor (aceeasi regula ca Dispecer curse).
+        $latestCoupling = "
+            SELECT vc1.tractor_id, vc1.semiremorca_id
+            FROM vehicule_cuplaje vc1
+            INNER JOIN (
+                SELECT tractor_id, MAX(id) AS max_id
+                FROM vehicule_cuplaje
+                WHERE activ = 1
+                GROUP BY tractor_id
+            ) latest ON latest.max_id = vc1.id
+        ";
+
+        $rows = $this->db->query("
+            SELECT
+                v.id, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul, v.status, v.garaj,
+                v.capacitate_transport, v.capacitate_transport_confirmata, v.categorie_capacitate_id,
+                s.id AS semi_id, s.nr_inmatriculare AS semi_nr, s.marca AS semi_marca, s.model AS semi_model,
+                s.tip_vehicul AS semi_tip, s.status AS semi_status,
+                s.capacitate_transport AS semi_capacitate, s.capacitate_transport_confirmata AS semi_confirmata,
+                s.categorie_capacitate_id AS semi_categorie_id
+            FROM vehicule v
+            LEFT JOIN ({$latestCoupling}) vc ON vc.tractor_id = v.id AND v.tip_vehicul = 'cap_tractor'
+            LEFT JOIN vehicule s ON s.id = vc.semiremorca_id
+            WHERE v.tip_vehicul IN ('camion', 'cap_tractor', 'semiremorca', 'semiremorca_primar', 'semiremorca_distributie')
+              AND v.nr_inmatriculare <> 'STOC-ANVELOPE'
+              AND COALESCE(v.serie_sasiu, '') <> 'STOCANVELOPE00001'
+              AND v.id NOT IN (SELECT lc.semiremorca_id FROM ({$latestCoupling}) lc)
+            ORDER BY (v.status = 'activ') DESC, v.nr_inmatriculare ASC
+        ")->fetchAll();
+
+        $nullableInt = static fn(mixed $value): ?int => $value === null ? null : (int) $value;
+        $nullableFloat = static fn(mixed $value): ?float => $value === null ? null : (float) $value;
+
+        $units = [];
+        foreach ($rows as $row) {
+            $isAssembly = $row['semi_id'] !== null;
+            $type = (string) $row['tip_vehicul'];
+            if ($isAssembly) {
+                $unitType = 'ansamblu';
+            } elseif ($type === 'cap_tractor') {
+                $unitType = 'cap_tractor';
+            } elseif ($type === 'camion') {
+                $unitType = 'camion';
+            } else {
+                $unitType = 'semiremorca';
+            }
+
+            $tractorCategory = $nullableInt($row['categorie_capacitate_id']);
+            $semiCategory = $nullableInt($row['semi_categorie_id']);
+
+            $units[] = [
+                'key' => (string) $row['id'],
+                'unit_type' => $unitType,
+                'tip_vehicul' => $type,
+                'vehicle_id' => (int) $row['id'],
+                'nr_inmatriculare' => (string) $row['nr_inmatriculare'],
+                'marca' => (string) ($row['marca'] ?? ''),
+                'model' => (string) ($row['model'] ?? ''),
+                'garaj' => $row['garaj'],
+                'status' => (string) $row['status'],
+                'semi_id' => $nullableInt($row['semi_id']),
+                'semi_nr' => $isAssembly ? (string) $row['semi_nr'] : null,
+                'semi_marca' => $isAssembly ? trim((string) $row['semi_marca'] . ' ' . (string) $row['semi_model']) : null,
+                'semi_tip' => $isAssembly ? (string) $row['semi_tip'] : null,
+                'semi_status' => $isAssembly ? (string) $row['semi_status'] : null,
+                // Vehiculul pe care se scrie categoria si in a carui fisa sta capacitatea reala.
+                'target_id' => $isAssembly ? (int) $row['semi_id'] : (int) $row['id'],
+                'target_tip' => $isAssembly ? (string) $row['semi_tip'] : $type,
+                'capacitate_transport' => $isAssembly ? $nullableFloat($row['semi_capacitate']) : $nullableFloat($row['capacitate_transport']),
+                'capacitate_transport_confirmata' => (int) ($isAssembly ? $row['semi_confirmata'] : $row['capacitate_transport_confirmata']) === 1,
+                'categorie_capacitate_id' => $isAssembly ? ($semiCategory ?? $tractorCategory) : $tractorCategory,
+                // Cap tractor cu categorie proprie: trebuie aliniat si el, altfel ar castiga la "fara categorie".
+                'tractor_categorie_id' => $isAssembly ? $tractorCategory : null,
+            ];
+        }
+
+        return $units;
+    }
+
+    /**
      * Asignarea in masa: [vehicle_id => category_id|null]. Se scriu doar
      * vehiculele a caror categorie chiar se schimba, fiecare cu rand de audit.
      * Capacitatea reala si starea de verificare NU sunt atinse.

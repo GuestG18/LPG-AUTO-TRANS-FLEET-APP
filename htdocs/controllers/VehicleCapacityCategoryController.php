@@ -63,14 +63,15 @@ class VehicleCapacityCategoryController
         $verification = $this->model->getVerificationReport();
 
         render('categorii_capacitate/index.php', [
-            'pageTitle' => 'Categorii capacitate',
+            'pageTitle' => 'Management capacități',
             'currentPage' => self::PAGE,
             'categories' => $this->model->getCategories(),
             'migrationReport' => $this->model->getMigrationReport(),
             'verificationRows' => $verification['rows'],
             'verificationSummary' => $verification['summary'],
             'auditTrail' => $this->model->getAuditTrail(25),
-            'assignmentVehicles' => $this->model->getVehiclesForAssignment(),
+            // Unitati de transport (cap tractor + semiremorca cuplata = una), ca in Dispecer curse.
+            'transportUnits' => $this->model->getTransportUnitsForAssignment(),
             'formData' => $formData,
             'formErrors' => $formErrors,
             'editingId' => $editing !== null ? (int) $editing['id'] : 0,

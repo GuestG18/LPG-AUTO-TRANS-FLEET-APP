@@ -72,16 +72,66 @@ class NotificationRuleController
         'revizie_anvelope' => 'revizie',
     ];
 
+    /**
+     * Ce conditii se aplica fiecarui eveniment in formular:
+     * days = foloseste „zile inainte” (valoarea e cea implicita), docs = familia de tipuri
+     * filtrabile prin document_type, km / tread = praguri, revizie / approval = filtre proprii.
+     */
+    private const EVENT_CONDITIONS = [
+        'vehicle_document_expiry' => ['days' => 30, 'docs' => 'vehicle'],
+        'driver_document_expiry' => ['days' => 30, 'docs' => 'driver'],
+        'driver_birthday' => ['days' => 7],
+        'leave_starts_soon' => ['days' => 7],
+        'tire_km_limit' => ['km' => true],
+        'tire_tread_depth' => ['tread' => true],
+        'tire_dot_expiry' => ['days' => 90],
+        'equipment_expiry' => ['days' => 30, 'docs' => 'equipment'],
+        'equipment_inspection' => ['days' => 30, 'docs' => 'equipment'],
+        'document_missing' => ['docs' => 'vehicle'],
+        'inactive_approval_pending' => ['approval' => true],
+        'revizie_schimb_ulei' => ['revizie' => true],
+        'revizie_placute_frana' => ['revizie' => true],
+        'revizie_anvelope' => ['revizie' => true],
+    ];
+
+    private const EVENT_HINTS = [
+        'vehicle_document_expiry' => 'RCA, ITP, rovinietă, CASCO… înainte de expirare',
+        'driver_document_expiry' => 'Permis, atestat, card tahograf, fișă medicală…',
+        'driver_birthday' => 'Cu câteva zile înainte de ziua șoferului',
+        'leave_starts_soon' => 'Concediu care începe în curând',
+        'tire_km_limit' => 'Anvelopa se apropie de limita de km',
+        'tire_tread_depth' => 'Profilul a scăzut sub prag',
+        'tire_dot_expiry' => 'Vechimea DOT ajunge la limită',
+        'equipment_expiry' => 'Trusă, extinctor, vestă… înainte de expirare',
+        'equipment_inspection' => 'Următoarea inspecție a dotării',
+        'document_missing' => 'Nu este verificat încă de worker',
+        'inactive_approval_pending' => 'Cereri de aprobare nerezolvate',
+        'revizie_schimb_ulei' => 'Km rămași până la schimbul de ulei',
+        'revizie_placute_frana' => 'Km rămași până la plăcuțe',
+        'revizie_anvelope' => 'Km rămași până la anvelope',
+    ];
+
+    /** Evenimente / destinatari pe care worker-ul nu ii trateaza: apar doar daca o regula veche ii foloseste. */
+    private const HIDDEN_EVENTS = ['document_missing'];
+    private const HIDDEN_RECIPIENT_MODES = ['vehicle_responsible'];
+
+    private const MAX_RULES_PER_GROUP = 60;
+
     private const RECIPIENT_LABELS = [
         'admins' => 'Administratori',
         'vehicle_responsible' => 'Responsabil vehicul',
-        'drivers' => 'Sofer',
+        'drivers' => 'Doar soferul (SMS)',
         'specific_users' => 'Utilizatori selectati',
     ];
 
+    /** SMS-ul pleaca prin SMSAlert din worker-ul Python (SMSALERT_* in .env). */
     private const CHANNEL_LABELS = [
         'email' => 'Email',
+        'sms' => 'SMS',
+        'email_sms' => 'Email + SMS',
     ];
+
+    public const SMS_CHANNELS = ['sms', 'email_sms'];
 
     public function __construct(PDO $db)
     {
@@ -116,6 +166,9 @@ class NotificationRuleController
             case 'run_test':
                 $this->sendTestAction();
                 return;
+            case 'send_test_sms':
+                $this->sendTestSmsAction();
+                return;
             default:
                 http_response_code(404);
                 render('errors/404.php', [
@@ -130,6 +183,7 @@ class NotificationRuleController
     {
         $formFlash = consume_form_flash();
         $editingRule = null;
+        $editingGroup = [];
         $formData = $this->defaultFormData();
         $formErrors = $formFlash['errors'];
 
@@ -139,14 +193,19 @@ class NotificationRuleController
 
         if ($action === 'edit') {
             $id = max(0, (int) ($_GET['id'] ?? 0));
-            $editingRule = $id > 0 ? $this->model->getRuleById($id) : null;
+            $editingGroup = $id > 0 ? $this->model->getRuleGroupFor($id) : [];
+            foreach ($editingGroup as $member) {
+                if ((int) $member['id'] === $id) {
+                    $editingRule = $member;
+                }
+            }
             if ($editingRule === null) {
                 flash_set('warning', 'Regula selectata nu exista.');
                 redirect($this->indexUrl());
             }
 
             if ($formFlash['old'] === []) {
-                $formData = $this->mapRuleToFormData($editingRule);
+                $formData = $this->mapRulesToFormData($editingRule, $editingGroup);
             }
         }
 
@@ -199,9 +258,15 @@ class NotificationRuleController
             'showForm' => in_array($action, ['create', 'edit'], true),
             'isEditing' => $editingRule !== null,
             'editingId' => $editingRule !== null ? (int) $editingRule['id'] : 0,
+            'editingGroupSize' => count($editingGroup),
             'entityLabels' => self::ENTITY_LABELS,
             'eventLabels' => self::EVENT_LABELS,
             'eventEntityMap' => self::EVENT_ENTITY,
+            'eventConditions' => self::EVENT_CONDITIONS,
+            'eventHints' => self::EVENT_HINTS,
+            'hiddenEvents' => self::HIDDEN_EVENTS,
+            'hiddenRecipientModes' => self::HIDDEN_RECIPIENT_MODES,
+            'maxRulesPerGroup' => self::MAX_RULES_PER_GROUP,
             'recipientLabels' => self::RECIPIENT_LABELS,
             'channelLabels' => self::CHANNEL_LABELS,
             'users' => $this->model->getActiveEmailUsers(),
@@ -209,6 +274,7 @@ class NotificationRuleController
             'driverDocumentTypes' => $driverDocumentTypes,
             'equipmentTypes' => $equipmentTypes,
             'approvalEvent' => self::APPROVAL_EVENT,
+            'smsChannels' => self::SMS_CHANNELS,
             'revizieEvents' => self::REVIZIE_EVENTS,
             'revizieStatusFilters' => self::REVIZIE_STATUS_FILTERS,
             'approvalResourceLabels' => self::APPROVAL_RESOURCE_LABELS,
@@ -224,15 +290,18 @@ class NotificationRuleController
         }
 
         ensure_csrf_or_redirect($this->indexUrl());
-        [$data, $recipientUserIds, $errors, $old] = $this->validateRuleInput($_POST);
+        [$items, $recipientUserIds, $errors, $old] = $this->validateRuleInput($_POST);
 
         if ($errors !== []) {
             set_form_flash($old, $errors);
             redirect(build_query_url(['page' => 'notificari', 'action' => 'create']));
         }
 
-        $this->model->createRule($data, $recipientUserIds);
-        flash_set('success', 'Regula a fost adaugata.');
+        $group = count($items) > 1 ? $this->newGroupId() : null;
+        $counts = $this->model->syncRuleGroup([], $items, $recipientUserIds, $group);
+        flash_set('success', $counts['created'] === 1
+            ? 'Regula a fost adaugata.'
+            : 'Au fost adaugate ' . $counts['created'] . ' reguli (cate una pe eveniment / tip de document).');
         redirect($this->indexUrl());
     }
 
@@ -244,20 +313,43 @@ class NotificationRuleController
 
         ensure_csrf_or_redirect($this->indexUrl());
         $id = max(0, (int) ($_POST['id'] ?? 0));
-        if ($id <= 0 || $this->model->getRuleById($id) === null) {
+        $existing = $id > 0 ? $this->model->getRuleGroupFor($id) : [];
+        if ($existing === []) {
             flash_set('danger', 'Regula selectata nu exista.');
             redirect($this->indexUrl());
         }
 
-        [$data, $recipientUserIds, $errors, $old] = $this->validateRuleInput($_POST);
+        [$items, $recipientUserIds, $errors, $old] = $this->validateRuleInput($_POST);
         if ($errors !== []) {
             set_form_flash($old, $errors);
             redirect(build_query_url(['page' => 'notificari', 'action' => 'edit', 'id' => $id]));
         }
 
-        $this->model->updateRule($id, $data, $recipientUserIds);
-        flash_set('success', 'Regula a fost actualizata.');
+        $group = trim((string) ($existing[0]['rule_group'] ?? ''));
+        if ($group === '') {
+            $group = count($items) > 1 ? $this->newGroupId() : null;
+        }
+
+        $counts = $this->model->syncRuleGroup($existing, $items, $recipientUserIds, $group);
+        $parts = [];
+        if ($counts['updated'] > 0) {
+            $parts[] = $counts['updated'] . ' actualizate';
+        }
+        if ($counts['created'] > 0) {
+            $parts[] = $counts['created'] . ' adaugate';
+        }
+        if ($counts['deleted'] > 0) {
+            $parts[] = $counts['deleted'] . ' sterse';
+        }
+        flash_set('success', count($items) === 1 && $counts['updated'] === 1 && $counts['deleted'] === 0
+            ? 'Regula a fost actualizata.'
+            : 'Grupul de reguli a fost salvat: ' . implode(', ', $parts) . '.');
         redirect($this->indexUrl());
+    }
+
+    private function newGroupId(): string
+    {
+        return bin2hex(random_bytes(8));
     }
 
     private function toggleAction(): void
@@ -325,125 +417,273 @@ class NotificationRuleController
         redirect(build_query_url(['page' => 'notificari', 'tab' => 'queue']));
     }
 
-    private function validateRuleInput(array $input): array
+    private function sendTestSmsAction(): void
     {
-        $eventType = trim((string) ($input['event_type'] ?? ''));
-        $entityType = trim((string) ($input['entity_type'] ?? (self::EVENT_ENTITY[$eventType] ?? 'vehicle')));
-        if (isset(self::EVENT_ENTITY[$eventType])) {
-            $entityType = self::EVENT_ENTITY[$eventType];
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($this->indexUrl());
         }
 
-        $data = [
+        $statusUrl = build_query_url(['page' => 'notificari', 'tab' => 'status']);
+        ensure_csrf_or_redirect($statusUrl);
+        $currentUser = current_user() ?? [];
+        $phone = trim((string) ($_POST['test_phone'] ?? ''));
+
+        $result = $this->model->queueSms(
+            $phone,
+            trim((string) ($currentUser['nume'] ?? '')),
+            'Test SMS notificari',
+            'Test notificari ' . APP_NAME . ': SMS-ul functioneaza.',
+            'notification_test',
+            'manual-sms:' . date('YmdHis'),
+            ['triggered_by_user_id' => (int) ($currentUser['id'] ?? 0)]
+        );
+
+        if ((bool) ($result['queued'] ?? false)) {
+            flash_set('success', 'SMS-ul de test catre ' . (string) $result['phone'] . ' a fost pus in coada. Pleaca la urmatoarea rulare a worker-ului.');
+            redirect(build_query_url(['page' => 'notificari', 'tab' => 'queue']));
+        }
+
+        flash_set('danger', 'SMS-ul de test nu a putut fi pus in coada: ' . (string) ($result['error'] ?? 'eroare necunoscuta'));
+        redirect($statusUrl);
+    }
+
+    /**
+     * Formularul poate bifa mai multe evenimente si mai multe tipuri de document.
+     * Worker-ul lucreaza pe o regula = un eveniment, deci aici selectia se desface
+     * in cate o regula pentru fiecare pereche eveniment x tip document.
+     *
+     * @return array{0: array<int, array>, 1: int[], 2: array<string, string>, 3: array}
+     */
+    private function validateRuleInput(array $input): array
+    {
+        $eventTypes = $input['event_types'] ?? ($input['event_type'] ?? []);
+        $eventTypes = array_values(array_unique(array_filter(
+            array_map(static fn ($value): string => trim((string) $value), (array) $eventTypes),
+            static fn (string $value): bool => $value !== ''
+        )));
+
+        $docTypes = [];
+        $docAll = [];
+        foreach (['vehicle', 'driver', 'equipment'] as $family) {
+            $docAll[$family] = !empty($input['doc_all'][$family]) ? 1 : 0;
+            $docTypes[$family] = array_values(array_unique(array_filter(
+                array_map(static fn ($value): string => trim((string) $value), (array) ($input['doc_types'][$family] ?? [])),
+                static fn (string $value): bool => $value !== ''
+            )));
+        }
+
+        $shared = [
             'name' => trim((string) ($input['name'] ?? '')),
-            'entity_type' => $entityType,
-            'event_type' => $eventType,
-            'document_type' => trim((string) ($input['document_type'] ?? '')),
             'days_before' => max(0, (int) ($input['days_before'] ?? 30)),
             'threshold_km' => $this->nullablePositiveInt($input['threshold_km'] ?? null),
             'threshold_tread_depth' => $this->nullablePositiveFloat($input['threshold_tread_depth'] ?? null),
+            'revizie_status' => trim((string) ($input['revizie_status'] ?? '')),
             'channel' => trim((string) ($input['channel'] ?? 'email')),
             'recipient_mode' => trim((string) ($input['recipient_mode'] ?? 'admins')),
             'enabled' => isset($input['enabled']) ? 1 : 0,
             'repeat_until_resolved' => isset($input['repeat_until_resolved']) ? 1 : 0,
             'daily_limit_enabled' => isset($input['daily_limit_enabled']) ? 1 : 0,
-            'metadata' => [],
+            'notify_driver' => isset($input['notify_driver']) ? 1 : 0,
         ];
+        if (!array_key_exists($shared['revizie_status'], self::REVIZIE_STATUS_FILTERS)) {
+            $shared['revizie_status'] = '';
+        }
 
-        // Regula de aprobare nu foloseste tip document / zile inainte / praguri;
-        // filtrele ei proprii merg in metadata_json, ca sa nu adaug coloane noi.
-        if ($data['event_type'] === self::APPROVAL_EVENT) {
-            $resourceTypes = array_values(array_intersect(
+        $approvalMetadata = [
+            'approval_resource_types' => array_values(array_intersect(
                 array_map('strval', (array) ($input['approval_resource_types'] ?? [])),
                 array_keys(self::APPROVAL_RESOURCE_LABELS)
-            ));
-
-            $reasons = array_values(array_unique(array_filter(
+            )),
+            'approval_reasons' => array_values(array_unique(array_filter(
                 array_map(static fn ($value): string => trim((string) $value), (array) ($input['approval_reasons'] ?? [])),
                 static fn (string $value): bool => $value !== ''
-            )));
-
-            $data['metadata'] = [
-                'approval_resource_types' => $resourceTypes,
-                'approval_reasons' => $reasons,
-                'repeat_days' => max(1, min(30, (int) ($input['approval_repeat_days'] ?? 1))),
-            ];
-
-            $data['document_type'] = '';
-            $data['days_before'] = 0;
-            $data['threshold_km'] = null;
-            $data['threshold_tread_depth'] = null;
-        }
-
-        // Revizii: km ramasi si pragul de notificare vin din pagina Revizii (per componenta).
-        if (in_array($data['event_type'], self::REVIZIE_EVENTS, true)) {
-            $status = trim((string) ($input['revizie_status'] ?? ''));
-            $data['document_type'] = array_key_exists($status, self::REVIZIE_STATUS_FILTERS) ? $status : '';
-            $data['days_before'] = 0;
-            $data['threshold_km'] = null;
-            $data['threshold_tread_depth'] = null;
-        }
+            ))),
+            'repeat_days' => max(1, min(30, (int) ($input['approval_repeat_days'] ?? 1))),
+        ];
 
         $recipientUserIds = array_values(array_unique(array_filter(array_map(
             'intval',
             (array) ($input['recipient_user_ids'] ?? [])
         ), static fn (int $value): bool => $value > 0)));
 
+        $old = array_merge($shared, [
+            'event_types' => $eventTypes,
+            'doc_types' => $docTypes,
+            'doc_all' => $docAll,
+            'recipient_user_ids' => $recipientUserIds,
+            'approval_resource_types' => $approvalMetadata['approval_resource_types'],
+            'approval_reasons' => $approvalMetadata['approval_reasons'],
+            'approval_repeat_days' => $approvalMetadata['repeat_days'],
+        ]);
+
         $errors = [];
-        if ($data['name'] === '') {
-            $errors['name'] = 'Completeaza numele regulii.';
-        } elseif (strlen($data['name']) > 190) {
+        if (strlen($shared['name']) > 190) {
             $errors['name'] = 'Numele poate avea maxim 190 de caractere.';
         }
 
-        if (!array_key_exists($data['entity_type'], self::ENTITY_LABELS)) {
-            $errors['entity_type'] = 'Selecteaza entitatea.';
+        if ($eventTypes === []) {
+            $errors['event_types'] = 'Bifeaza cel putin un eveniment.';
+        }
+        foreach ($eventTypes as $eventType) {
+            if (!array_key_exists($eventType, self::EVENT_LABELS)) {
+                $errors['event_types'] = 'Evenimentul „' . $eventType . '” nu exista.';
+            }
         }
 
-        if (!array_key_exists($data['event_type'], self::EVENT_LABELS)) {
-            $errors['event_type'] = 'Selecteaza evenimentul.';
-        }
+        $usesCondition = fn (string $key): bool => array_filter(
+            $eventTypes,
+            static fn (string $event): bool => !empty(self::EVENT_CONDITIONS[$event][$key])
+        ) !== [];
 
-        if ($data['document_type'] !== '' && strlen($data['document_type']) > 120) {
-            $errors['document_type'] = 'Tipul de document poate avea maxim 120 de caractere.';
-        }
-
-        if ($data['days_before'] > 365) {
+        if ($usesCondition('days') && $shared['days_before'] > 365) {
             $errors['days_before'] = 'Alege cel mult 365 de zile.';
         }
-
-        if ($data['event_type'] === 'tire_km_limit' && (int) ($data['threshold_km'] ?? 0) <= 0) {
+        if (in_array('tire_km_limit', $eventTypes, true) && (int) ($shared['threshold_km'] ?? 0) <= 0) {
             $errors['threshold_km'] = 'Completeaza pragul de kilometri.';
         }
-
-        if ($data['event_type'] === 'tire_tread_depth' && (float) ($data['threshold_tread_depth'] ?? 0) <= 0) {
+        if (in_array('tire_tread_depth', $eventTypes, true) && (float) ($shared['threshold_tread_depth'] ?? 0) <= 0) {
             $errors['threshold_tread_depth'] = 'Completeaza pragul de profil.';
         }
 
-        if (!array_key_exists($data['channel'], self::CHANNEL_LABELS)) {
+        foreach (['vehicle', 'driver', 'equipment'] as $family) {
+            $familyUsed = array_filter(
+                $eventTypes,
+                static fn (string $event): bool => (self::EVENT_CONDITIONS[$event]['docs'] ?? '') === $family
+            ) !== [];
+            if (!$familyUsed || $docAll[$family] === 1) {
+                $docTypes[$family] = [];
+                continue;
+            }
+            if ($docTypes[$family] === []) {
+                $errors['doc_types_' . $family] = 'Bifeaza cel putin un tip sau alege „Toate”.';
+            }
+            foreach ($docTypes[$family] as $docType) {
+                if (strlen($docType) > 120) {
+                    $errors['doc_types_' . $family] = 'Tipul de document poate avea maxim 120 de caractere.';
+                }
+            }
+        }
+
+        if (!array_key_exists($shared['channel'], self::CHANNEL_LABELS)) {
             $errors['channel'] = 'Selecteaza canalul.';
         }
 
-        if (!array_key_exists($data['recipient_mode'], self::RECIPIENT_LABELS)) {
+        $hasApproval = in_array(self::APPROVAL_EVENT, $eventTypes, true);
+        if (!array_key_exists($shared['recipient_mode'], self::RECIPIENT_LABELS)) {
             $errors['recipient_mode'] = 'Selecteaza destinatarii.';
-        } elseif ($data['recipient_mode'] === 'specific_users' && $recipientUserIds === []) {
+        } elseif ($shared['recipient_mode'] === 'specific_users' && $recipientUserIds === []) {
             $errors['recipient_user_ids'] = 'Selecteaza cel putin un utilizator.';
+        } elseif ($shared['recipient_mode'] === 'drivers') {
+            if ($hasApproval) {
+                $errors['recipient_mode'] = 'Cererile de aprobare nu au un sofer destinatar: scoate-le din selectie sau alege alti destinatari.';
+            } elseif ($shared['channel'] !== 'sms') {
+                // Soferii nu au email in aplicatie, doar telefon.
+                $errors['channel'] = 'Pentru „Doar soferul” alege canalul SMS.';
+            }
         }
 
-        return [$data, $recipientUserIds, $errors, array_merge($data, [
-            'recipient_user_ids' => $recipientUserIds,
-        ])];
+        $baseName = $shared['name'] !== '' ? $shared['name'] : $this->suggestRuleName($eventTypes, $docTypes);
+        $items = [];
+        foreach ($eventTypes as $eventType) {
+            if (!isset(self::EVENT_LABELS[$eventType])) {
+                continue;
+            }
+            $conditions = self::EVENT_CONDITIONS[$eventType] ?? [];
+            $family = (string) ($conditions['docs'] ?? '');
+            $documentTypes = [''];
+            if (!empty($conditions['revizie'])) {
+                $documentTypes = [$shared['revizie_status']];
+            } elseif ($family !== '' && $docTypes[$family] !== []) {
+                $documentTypes = $docTypes[$family];
+            }
+
+            foreach ($documentTypes as $documentType) {
+                $metadata = [];
+                if ($eventType === self::APPROVAL_EVENT) {
+                    $metadata = $approvalMetadata;
+                } elseif (in_array($shared['channel'], self::SMS_CHANNELS, true) && $shared['notify_driver'] === 1) {
+                    // SMS si catre soferul vehiculului (sau soferul insusi, la evenimentele de sofer).
+                    $metadata['notify_driver'] = true;
+                }
+
+                $items[] = [
+                    'event_type' => $eventType,
+                    'entity_type' => self::EVENT_ENTITY[$eventType] ?? 'vehicle',
+                    'document_type' => $documentType,
+                    'days_before' => isset($conditions['days']) ? $shared['days_before'] : 0,
+                    'threshold_km' => $eventType === 'tire_km_limit' ? $shared['threshold_km'] : null,
+                    'threshold_tread_depth' => $eventType === 'tire_tread_depth' ? $shared['threshold_tread_depth'] : null,
+                    'channel' => $shared['channel'],
+                    'recipient_mode' => $shared['recipient_mode'],
+                    'enabled' => $shared['enabled'],
+                    'repeat_until_resolved' => $shared['repeat_until_resolved'],
+                    'daily_limit_enabled' => $shared['daily_limit_enabled'],
+                    'metadata' => $metadata,
+                ];
+            }
+        }
+
+        if (count($items) > self::MAX_RULES_PER_GROUP) {
+            $errors['event_types'] = 'Selectia ar crea ' . count($items) . ' reguli; maximul este ' . self::MAX_RULES_PER_GROUP . '. Imparte-o in mai multe reguli.';
+        }
+
+        // Numele fiecarei reguli: numele grupului + ce o deosebeste de celelalte.
+        $isGroup = count($items) > 1;
+        foreach ($items as &$item) {
+            $name = $baseName;
+            if ($isGroup) {
+                $name .= ' — ' . $this->eventDisplayLabel($item['event_type']);
+                if ($item['document_type'] !== '' && empty(self::EVENT_CONDITIONS[$item['event_type']]['revizie'])) {
+                    $name .= ' · ' . $item['document_type'];
+                }
+                $item['metadata']['group_name'] = $baseName;
+            }
+            $item['name'] = $this->truncate($name, 190);
+        }
+        unset($item);
+
+        return [$items, $recipientUserIds, $errors, $old];
+    }
+
+    private function suggestRuleName(array $eventTypes, array $docTypes): string
+    {
+        $labels = [];
+        foreach ($eventTypes as $eventType) {
+            if (!isset(self::EVENT_LABELS[$eventType])) {
+                continue;
+            }
+            $family = (string) (self::EVENT_CONDITIONS[$eventType]['docs'] ?? '');
+            $docs = $family !== '' ? ($docTypes[$family] ?? []) : [];
+            $labels[] = $docs !== [] && count($docs) <= 3
+                ? $this->eventDisplayLabel($eventType) . ' ' . implode(', ', $docs)
+                : $this->eventDisplayLabel($eventType);
+        }
+
+        return $labels === [] ? 'Regula notificare' : $this->truncate(implode(' + ', $labels), 150);
+    }
+
+    private function eventDisplayLabel(string $eventType): string
+    {
+        $entity = self::EVENT_ENTITY[$eventType] ?? 'vehicle';
+        return (self::ENTITY_LABELS[$entity] ?? $entity) . ': ' . (self::EVENT_LABELS[$eventType] ?? $eventType);
+    }
+
+    private function truncate(string $value, int $limit): string
+    {
+        return function_exists('mb_substr') ? mb_substr($value, 0, $limit, 'UTF-8') : substr($value, 0, $limit);
     }
 
     private function defaultFormData(): array
     {
         return [
             'name' => '',
-            'entity_type' => 'vehicle',
-            'event_type' => 'vehicle_document_expiry',
-            'document_type' => '',
+            'event_types' => [],
+            'doc_types' => ['vehicle' => [], 'driver' => [], 'equipment' => []],
+            'doc_all' => ['vehicle' => 1, 'driver' => 1, 'equipment' => 1],
             'days_before' => 30,
             'threshold_km' => null,
             'threshold_tread_depth' => null,
+            'revizie_status' => '',
             'channel' => 'email',
             'recipient_mode' => 'admins',
             'enabled' => 1,
@@ -453,6 +693,7 @@ class NotificationRuleController
             'approval_resource_types' => [],
             'approval_reasons' => [],
             'approval_repeat_days' => 1,
+            'notify_driver' => 0,
         ];
     }
 
@@ -466,37 +707,97 @@ class NotificationRuleController
         return (new InactiveResourceApprovalModel($this->db))->getReasonOptions();
     }
 
-    private function mapRuleToFormData(array $rule): array
+    /**
+     * Formularul unui grup: evenimentele si tipurile de document sunt reuniunea regulilor,
+     * restul setarilor vin de la regula pe care s-a dat click.
+     */
+    private function mapRulesToFormData(array $rule, array $group): array
     {
-        $eventType = (string) ($rule['event_type'] ?? 'vehicle_document_expiry');
+        $metadata = $this->decodeMetadata($rule);
+        $approvalMetadata = $metadata;
+        $eventTypes = [];
+        $docTypes = ['vehicle' => [], 'driver' => [], 'equipment' => []];
+        $docAll = ['vehicle' => 1, 'driver' => 1, 'equipment' => 1];
+        $revizieStatus = '';
+        $daysBefore = null;
+        $thresholdKm = null;
+        $thresholdTread = null;
+        $notifyDriver = false;
+        $anyEnabled = false;
 
+        foreach ($group as $member) {
+            $eventType = (string) ($member['event_type'] ?? '');
+            $documentType = trim((string) ($member['document_type'] ?? ''));
+            $conditions = self::EVENT_CONDITIONS[$eventType] ?? [];
+            $memberMetadata = $this->decodeMetadata($member);
+
+            if (!in_array($eventType, $eventTypes, true)) {
+                $eventTypes[] = $eventType;
+            }
+            $anyEnabled = $anyEnabled || (int) ($member['enabled'] ?? 0) === 1;
+            $notifyDriver = $notifyDriver || !empty($memberMetadata['notify_driver']);
+
+            $family = (string) ($conditions['docs'] ?? '');
+            if ($family !== '' && $documentType !== '' && !in_array($documentType, $docTypes[$family], true)) {
+                $docTypes[$family][] = $documentType;
+            }
+            if (!empty($conditions['revizie'])) {
+                $revizieStatus = $documentType;
+            }
+            if (isset($conditions['days']) && ($daysBefore === null || (int) $member['id'] === (int) $rule['id'])) {
+                $daysBefore = (int) ($member['days_before'] ?? $conditions['days']);
+            }
+            if ($eventType === 'tire_km_limit') {
+                $thresholdKm = $member['threshold_km'] ?? null;
+            }
+            if ($eventType === 'tire_tread_depth') {
+                $thresholdTread = $member['threshold_tread_depth'] ?? null;
+            }
+            if ($eventType === self::APPROVAL_EVENT) {
+                $approvalMetadata = $memberMetadata;
+            }
+        }
+
+        // „Toate” = nicio regula pe un tip anume din familia respectiva.
+        foreach (array_keys($docAll) as $family) {
+            $docAll[$family] = $docTypes[$family] === [] ? 1 : 0;
+        }
+
+        $name = count($group) > 1
+            ? (string) ($metadata['group_name'] ?? ($rule['name'] ?? ''))
+            : (string) ($rule['name'] ?? '');
+
+        return [
+            'name' => $name,
+            'event_types' => $eventTypes,
+            'doc_types' => $docTypes,
+            'doc_all' => $docAll,
+            'days_before' => $daysBefore ?? 30,
+            'threshold_km' => $thresholdKm,
+            'threshold_tread_depth' => $thresholdTread,
+            'revizie_status' => $revizieStatus,
+            'channel' => (string) ($rule['channel'] ?? 'email'),
+            'recipient_mode' => (string) ($rule['recipient_mode'] ?? 'admins'),
+            'enabled' => $anyEnabled ? 1 : 0,
+            'repeat_until_resolved' => (int) ($rule['repeat_until_resolved'] ?? 1),
+            'daily_limit_enabled' => (int) ($rule['daily_limit_enabled'] ?? 1),
+            'recipient_user_ids' => (array) ($rule['recipient_user_ids'] ?? []),
+            'approval_resource_types' => array_map('strval', (array) ($approvalMetadata['approval_resource_types'] ?? [])),
+            'approval_reasons' => array_map('strval', (array) ($approvalMetadata['approval_reasons'] ?? [])),
+            'approval_repeat_days' => max(1, (int) ($approvalMetadata['repeat_days'] ?? 1)),
+            'notify_driver' => $notifyDriver ? 1 : 0,
+        ];
+    }
+
+    private function decodeMetadata(array $rule): array
+    {
         $metadata = $rule['metadata'] ?? $rule['metadata_json'] ?? [];
         if (is_string($metadata)) {
             $decoded = json_decode($metadata, true);
             $metadata = is_array($decoded) ? $decoded : [];
         }
-        if (!is_array($metadata)) {
-            $metadata = [];
-        }
 
-        return [
-            'approval_resource_types' => array_map('strval', (array) ($metadata['approval_resource_types'] ?? [])),
-            'approval_reasons' => array_map('strval', (array) ($metadata['approval_reasons'] ?? [])),
-            'approval_repeat_days' => max(1, (int) ($metadata['repeat_days'] ?? 1)),
-            'name' => (string) ($rule['name'] ?? ''),
-            'entity_type' => (string) ($rule['entity_type'] ?? (self::EVENT_ENTITY[$eventType] ?? 'vehicle')),
-            'event_type' => $eventType,
-            'document_type' => (string) ($rule['document_type'] ?? ''),
-            'days_before' => (int) ($rule['days_before'] ?? 30),
-            'threshold_km' => $rule['threshold_km'] ?? null,
-            'threshold_tread_depth' => $rule['threshold_tread_depth'] ?? null,
-            'channel' => (string) ($rule['channel'] ?? 'email'),
-            'recipient_mode' => (string) ($rule['recipient_mode'] ?? 'admins'),
-            'enabled' => (int) ($rule['enabled'] ?? 0),
-            'repeat_until_resolved' => (int) ($rule['repeat_until_resolved'] ?? 1),
-            'daily_limit_enabled' => (int) ($rule['daily_limit_enabled'] ?? 1),
-            'recipient_user_ids' => (array) ($rule['recipient_user_ids'] ?? []),
-        ];
+        return is_array($metadata) ? $metadata : [];
     }
 
     private function nullablePositiveInt(mixed $value): ?int

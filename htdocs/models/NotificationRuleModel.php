@@ -7,6 +7,7 @@ class NotificationRuleModel extends BaseModel
     {
         parent::__construct($db);
         $this->ensureRuleSchemaExtensions();
+        $this->ensureSmsDeliverySchema();
     }
 
     public function getRules(array $filters = [], int $page = 1, int $perPage = 10): array
@@ -26,8 +27,9 @@ class NotificationRuleModel extends BaseModel
 
         $q = trim((string) ($filters['q'] ?? ''));
         if ($q !== '') {
-            $where[] = "(r.name LIKE :q OR COALESCE(r.document_type, '') LIKE :q OR COALESCE(rec.recipient_names, '') LIKE :q)";
-            $params[':q'] = '%' . $q . '%';
+            // EMULATE_PREPARES=false: fiecare aparitie are nevoie de propriul placeholder.
+            $where[] = "(r.name LIKE :q1 OR COALESCE(r.document_type, '') LIKE :q2 OR COALESCE(rec.recipient_names, '') LIKE :q3)";
+            $params += $this->likeParams($q, 3);
         }
 
         $entityType = trim((string) ($filters['entity_type'] ?? ''));
@@ -58,10 +60,15 @@ class NotificationRuleModel extends BaseModel
             INNER JOIN utilizatori u ON u.id = rr.user_id
             GROUP BY rr.rule_id
         ";
+        $hasGroups = isset($this->tableColumns('notification_rules')['rule_group']);
+        $groupJoinSql = $hasGroups
+            ? 'LEFT JOIN (SELECT rule_group, COUNT(*) AS group_size FROM notification_rules WHERE rule_group IS NOT NULL GROUP BY rule_group) grp ON grp.rule_group = r.rule_group'
+            : '';
         $whereSql = $where === [] ? '' : 'WHERE ' . implode(' AND ', $where);
         $fromSql = "
             FROM notification_rules r
             LEFT JOIN ({$recipientsSql}) rec ON rec.rule_id = r.id
+            {$groupJoinSql}
             {$whereSql}
         ";
 
@@ -78,7 +85,7 @@ class NotificationRuleModel extends BaseModel
             SELECT
                 r.*,
                 rec.recipient_names,
-                rec.recipient_emails
+                rec.recipient_emails" . ($hasGroups ? ', COALESCE(grp.group_size, 1) AS group_size' : ', 1 AS group_size') . "
             {$fromSql}
             ORDER BY r.enabled DESC, r.updated_at DESC, r.id DESC
             LIMIT :limit_rows OFFSET :offset_rows
@@ -116,11 +123,106 @@ class NotificationRuleModel extends BaseModel
         return $row;
     }
 
+    /**
+     * Regula si celelalte reguli din acelasi grup (salvate impreuna din formular).
+     * O regula fara grup se intoarce singura.
+     */
+    public function getRuleGroupFor(int $id): array
+    {
+        $rule = $this->getRuleById($id);
+        if ($rule === null) {
+            return [];
+        }
+
+        $group = trim((string) ($rule['rule_group'] ?? ''));
+        if ($group === '') {
+            return [$rule];
+        }
+
+        $stmt = $this->db->prepare('SELECT id FROM notification_rules WHERE rule_group = :rule_group ORDER BY id ASC');
+        $stmt->execute([':rule_group' => $group]);
+
+        $rules = [];
+        foreach (array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN)) as $memberId) {
+            $member = $memberId === $id ? $rule : $this->getRuleById($memberId);
+            if ($member !== null) {
+                $rules[] = $member;
+            }
+        }
+
+        return $rules !== [] ? $rules : [$rule];
+    }
+
+    /**
+     * Aduce grupul la lista $items: regulile cu aceeasi pereche eveniment|tip document
+     * se actualizeaza pe loc (pastreaza id-ul, deci si deduplicarea trimiterilor),
+     * cele noi se creeaza, cele scoase din selectie se sterg.
+     *
+     * @return array{created:int, updated:int, deleted:int}
+     */
+    public function syncRuleGroup(array $existingRules, array $items, array $recipientUserIds, ?string $group): array
+    {
+        $existingByKey = [];
+        foreach ($existingRules as $rule) {
+            $key = self::ruleKey((string) ($rule['event_type'] ?? ''), (string) ($rule['document_type'] ?? ''));
+            $existingByKey[$key] ??= (int) $rule['id'];
+        }
+
+        $counts = ['created' => 0, 'updated' => 0, 'deleted' => 0];
+        $keptIds = [];
+
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            foreach ($items as $item) {
+                $item['rule_group'] = $group;
+                $key = self::ruleKey((string) $item['event_type'], (string) ($item['document_type'] ?? ''));
+                if (isset($existingByKey[$key]) && !in_array($existingByKey[$key], $keptIds, true)) {
+                    $this->updateRule($existingByKey[$key], $item, $recipientUserIds);
+                    $keptIds[] = $existingByKey[$key];
+                    $counts['updated']++;
+                    continue;
+                }
+
+                $keptIds[] = $this->createRule($item, $recipientUserIds);
+                $counts['created']++;
+            }
+
+            foreach ($existingRules as $rule) {
+                $ruleId = (int) $rule['id'];
+                if (!in_array($ruleId, $keptIds, true)) {
+                    $this->deleteRule($ruleId);
+                    $counts['deleted']++;
+                }
+            }
+
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
+        } catch (Throwable $exception) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+
+        return $counts;
+    }
+
+    public static function ruleKey(string $eventType, string $documentType): string
+    {
+        return $eventType . '|' . mb_strtolower(trim($documentType), 'UTF-8');
+    }
+
     public function createRule(array $data, array $recipientUserIds): int
     {
         $now = date('Y-m-d H:i:s');
         $stmt = $this->db->prepare("
             INSERT INTO notification_rules (
+                rule_group,
                 name,
                 entity_type,
                 event_type,
@@ -137,6 +239,7 @@ class NotificationRuleModel extends BaseModel
                 created_at,
                 updated_at
             ) VALUES (
+                :rule_group,
                 :name,
                 :entity_type,
                 :event_type,
@@ -167,7 +270,8 @@ class NotificationRuleModel extends BaseModel
     {
         $stmt = $this->db->prepare("
             UPDATE notification_rules
-            SET name = :name,
+            SET rule_group = :rule_group,
+                name = :name,
                 entity_type = :entity_type,
                 event_type = :event_type,
                 document_type = :document_type,
@@ -213,11 +317,13 @@ class NotificationRuleModel extends BaseModel
     public function getActiveEmailUsers(): array
     {
         $stmt = $this->db->query("
-            SELECT id, nume, email, rol
+            SELECT id, nume, email, telefon, rol
             FROM utilizatori
             WHERE status = 'activ'
-              AND email IS NOT NULL
-              AND email <> ''
+              AND (
+                  (email IS NOT NULL AND email <> '')
+                  OR (telefon IS NOT NULL AND telefon <> '')
+              )
             ORDER BY rol = 'admin' DESC, nume ASC
         ");
 
@@ -288,8 +394,8 @@ class NotificationRuleModel extends BaseModel
         $params = [];
         $q = trim((string) ($filters['q'] ?? ''));
         if ($q !== '') {
-            $where[] = "(recipient_email LIKE :q OR subject LIKE :q OR COALESCE(error_message, '') LIKE :q)";
-            $params[':q'] = '%' . $q . '%';
+            $where[] = "(COALESCE(recipient_email, '') LIKE :q1 OR COALESCE(recipient_phone, '') LIKE :q2 OR subject LIKE :q3 OR COALESCE(error_message, '') LIKE :q4)";
+            $params += $this->likeParams($q, 4);
         }
 
         $status = trim((string) ($filters['status'] ?? ''));
@@ -352,8 +458,8 @@ class NotificationRuleModel extends BaseModel
 
         $q = trim((string) ($filters['q'] ?? ''));
         if ($q !== '') {
-            $where[] = "(d.recipient_email LIKE :q OR d.subject LIKE :q OR COALESCE(q.last_error, '') LIKE :q)";
-            $params[':q'] = '%' . $q . '%';
+            $where[] = "(COALESCE(d.recipient_email, '') LIKE :q1 OR COALESCE(d.recipient_phone, '') LIKE :q2 OR d.subject LIKE :q3 OR COALESCE(q.last_error, '') LIKE :q4)";
+            $params += $this->likeParams($q, 4);
         }
 
         $status = trim((string) ($filters['status'] ?? ''));
@@ -385,6 +491,7 @@ class NotificationRuleModel extends BaseModel
                 d.context_id,
                 d.channel,
                 d.recipient_email,
+                d.recipient_phone,
                 d.recipient_name,
                 d.subject,
                 d.status AS delivery_status,
@@ -479,6 +586,11 @@ class NotificationRuleModel extends BaseModel
     {
         $status = [
             'smtp_configured' => defined('MAIL_HOST') && trim((string) MAIL_HOST) !== '' && defined('MAIL_FROM_ADDRESS') && trim((string) MAIL_FROM_ADDRESS) !== '',
+            'sms_enabled' => defined('SMSALERT_ENABLED') && SMSALERT_ENABLED,
+            'sms_configured' => defined('SMSALERT_USERNAME') && trim((string) SMSALERT_USERNAME) !== ''
+                && defined('SMSALERT_API_KEY_SET') && SMSALERT_API_KEY_SET,
+            'sms_username' => defined('SMSALERT_USERNAME') ? (string) SMSALERT_USERNAME : '',
+            'sms_force_to' => defined('SMSALERT_FORCE_TO') ? (string) SMSALERT_FORCE_TO : '',
             'queue_counts' => [
                 'pending' => 0,
                 'processing' => 0,
@@ -563,6 +675,155 @@ class NotificationRuleModel extends BaseModel
 
             return ['queued' => false, 'error' => $exception->getMessage()];
         }
+    }
+
+    /**
+     * Pune un SMS in coada; trimiterea prin SMSAlert o face worker-ul Python.
+     * Numarul se normalizeaza la +40... ca in worker, ca deduplicarea sa fie aceeasi.
+     */
+    public function queueSms(
+        string $phone,
+        string $name,
+        string $subject,
+        string $text,
+        string $context,
+        string $contextId,
+        array $metadata = []
+    ): array {
+        $normalized = self::normalizePhone($phone);
+        if ($normalized === null) {
+            return ['queued' => false, 'error' => 'Numarul de telefon nu este valid.'];
+        }
+
+        if (!$this->tableExists('notification_deliveries') || !$this->tableExists('notification_queue')) {
+            return ['queued' => false, 'error' => 'Schema de notificari nu este instalata.'];
+        }
+
+        if (!isset($this->tableColumns('notification_deliveries')['recipient_phone'])) {
+            return ['queued' => false, 'error' => 'Schema SMS lipseste (database/migrations/2026_10_14_000001_notificari_sms.sql).'];
+        }
+
+        $startedTransaction = !$this->db->inTransaction();
+        if ($startedTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $stmt = $this->db->prepare("
+                INSERT INTO notification_deliveries (
+                    context, context_id, channel, recipient_email, recipient_phone, recipient_name,
+                    subject, message, status, provider, metadata_json, created_at
+                ) VALUES (
+                    :context, :context_id, 'sms', NULL, :recipient_phone, :recipient_name,
+                    :subject, :message, 'pending', 'smsalert', :metadata_json, NOW()
+                )
+            ");
+            $stmt->execute([
+                ':context' => $this->limitString($context, 80),
+                ':context_id' => $this->limitString($contextId, 160),
+                ':recipient_phone' => $normalized,
+                ':recipient_name' => $this->nullableLimitedString($name, 190),
+                ':subject' => $this->limitString($subject, 255),
+                ':message' => $text,
+                ':metadata_json' => $this->encodeJson($metadata),
+            ]);
+            $deliveryId = (int) $this->db->lastInsertId();
+            $this->createQueueJob($deliveryId, $this->deliveryDedupeKey($contextId, 'sms:' . $normalized));
+
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
+
+            return ['queued' => true, 'delivery_id' => $deliveryId, 'phone' => $normalized];
+        } catch (Throwable $exception) {
+            if ($startedTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            return ['queued' => false, 'error' => $exception->getMessage()];
+        }
+    }
+
+    /** Aceeasi regula ca normalize_phone() din worker.py: 07xx -> +407xx, 00 -> +. */
+    public static function normalizePhone(string $phone, string $countryCode = '40'): ?string
+    {
+        $raw = trim($phone);
+        if ($raw === '') {
+            return null;
+        }
+
+        $hasPlus = str_starts_with($raw, '+');
+        $digits = preg_replace('/\D+/', '', $raw) ?? '';
+        if ($digits === '') {
+            return null;
+        }
+
+        if (!$hasPlus) {
+            if (str_starts_with($digits, '00')) {
+                $digits = substr($digits, 2);
+            } elseif (str_starts_with($digits, '0')) {
+                $digits = $countryCode . substr($digits, 1);
+            } elseif (strlen($digits) === 9 && $digits[0] === '7') {
+                $digits = $countryCode . $digits;
+            }
+        }
+
+        if (strlen($digits) < 10 || strlen($digits) > 15) {
+            return null;
+        }
+
+        // Romania: 40 + 9 cifre; un numar cu o cifra lipsa nu trebuie sa plece.
+        if (str_starts_with($digits, '40') && strlen($digits) !== 11) {
+            return null;
+        }
+
+        return '+' . $digits;
+    }
+
+    private function likeParams(string $q, int $count): array
+    {
+        $params = [];
+        for ($i = 1; $i <= $count; $i++) {
+            $params[':q' . $i] = '%' . $q . '%';
+        }
+
+        return $params;
+    }
+
+    private function ensureSmsDeliverySchema(): void
+    {
+        if (!$this->tableExists('notification_deliveries')) {
+            return;
+        }
+
+        try {
+            $columns = $this->tableColumns('notification_deliveries');
+            if (isset($columns['channel']) && !str_contains(strtolower($columns['channel']), "'sms'")) {
+                $this->db->exec("ALTER TABLE notification_deliveries MODIFY channel ENUM('email','sms') NOT NULL DEFAULT 'email'");
+            }
+            if (isset($columns['recipient_email']) && $this->columnIsNotNull('notification_deliveries', 'recipient_email')) {
+                $this->db->exec('ALTER TABLE notification_deliveries MODIFY recipient_email VARCHAR(190) NULL');
+            }
+            if (!isset($columns['recipient_phone'])) {
+                $this->db->exec('ALTER TABLE notification_deliveries ADD COLUMN recipient_phone VARCHAR(32) NULL AFTER recipient_email, ADD KEY idx_notification_deliveries_phone (recipient_phone, created_at)');
+            }
+        } catch (Throwable $exception) {
+            error_log('[NotificationRuleModel] Nu am putut adauga schema SMS: ' . $exception->getMessage());
+        }
+    }
+
+    private function columnIsNotNull(string $table, string $column): bool
+    {
+        $stmt = $this->db->prepare("
+            SELECT IS_NULLABLE
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+              AND COLUMN_NAME = :column_name
+        ");
+        $stmt->execute([':table_name' => $table, ':column_name' => $column]);
+
+        return (string) $stmt->fetchColumn() === 'NO';
     }
 
     private function getEnabledRules(): array
@@ -936,6 +1197,7 @@ class NotificationRuleModel extends BaseModel
 
     private function bindRuleData(PDOStatement $stmt, array $data, string $now, bool $includeCreatedAt = true): void
     {
+        $this->bindNullableString($stmt, ':rule_group', $data['rule_group'] ?? null);
         $stmt->bindValue(':name', (string) $data['name']);
         $stmt->bindValue(':entity_type', (string) ($data['entity_type'] ?? 'vehicle'));
         $stmt->bindValue(':event_type', (string) $data['event_type']);
@@ -981,6 +1243,10 @@ class NotificationRuleModel extends BaseModel
             $this->addColumnIfMissing($columns, 'notification_rules', 'repeat_until_resolved', 'TINYINT(1) NOT NULL DEFAULT 1 AFTER enabled');
             $this->addColumnIfMissing($columns, 'notification_rules', 'daily_limit_enabled', 'TINYINT(1) NOT NULL DEFAULT 1 AFTER repeat_until_resolved');
             $this->addColumnIfMissing($columns, 'notification_rules', 'metadata_json', 'LONGTEXT NULL AFTER daily_limit_enabled');
+            if (!array_key_exists('rule_group', $columns)) {
+                // Regulile salvate impreuna (mai multe evenimente / tipuri de document) din acelasi formular.
+                $this->db->exec('ALTER TABLE notification_rules ADD COLUMN rule_group VARCHAR(40) NULL AFTER id, ADD KEY idx_notification_rules_group (rule_group)');
+            }
 
             $this->db->exec("
                 UPDATE notification_rules

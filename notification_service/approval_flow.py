@@ -239,7 +239,7 @@ def fetch_approval_rules(conn) -> list[dict[str, Any]]:
     cursor.execute(
         """
         SELECT id, name, recipient_mode, repeat_until_resolved,
-               daily_limit_enabled, metadata_json
+               daily_limit_enabled, metadata_json, channel
         FROM notification_rules
         WHERE enabled = 1
           AND event_type = %s
@@ -266,6 +266,8 @@ def fetch_approval_rules(conn) -> list[dict[str, Any]]:
         rules.append({
             "id": int(row["id"]),
             "name": str(row.get("name") or ""),
+            # Canalul 'sms' singur: SMS-ul il trimite worker.py, aici nu pleaca email.
+            "email": str(row.get("channel") or "email") in ("email", "email_sms"),
             "recipient_mode": str(row.get("recipient_mode") or "admins"),
             "repeat": int(row.get("repeat_until_resolved") or 0) == 1,
             "daily_limit": int(row.get("daily_limit_enabled") or 0) == 1,
@@ -996,6 +998,9 @@ def send_pending_approvals(conn, config: ApprovalConfig) -> dict[str, Any]:
     if not rules:
         rules = [default_rule()]
         summary["using_default_rule"] = True
+    else:
+        # Regula implicita doar cand nu exista nicio regula; una doar-SMS nu trebuie s-o reactiveze.
+        rules = [rule for rule in rules if rule["email"]]
     summary["rules"] = len(rules)
 
     approvals = fetch_pending_approvals(conn, 200)
