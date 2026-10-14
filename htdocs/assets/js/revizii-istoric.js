@@ -202,6 +202,9 @@
                 if ((urls.categorie || {})[row.categorie]) {
                     menu.push('<li><hr class="dropdown-divider"></li><li><a class="dropdown-item" href="' + esc(urls.categorie[row.categorie]) + '"><i class="bi bi-box-arrow-up-right me-2"></i>Deschide ' + esc(row.categorie_label) + '</a></li>');
                 }
+                if (can.delete) {
+                    menu.push('<li><hr class="dropdown-divider"></li><li><button type="button" class="dropdown-item text-danger" data-act="delete"><i class="bi bi-trash3 me-2"></i>Șterge din istoric</button></li>');
+                }
                 return '<tr class="rv-row' + (state.selected === row.id ? ' is-open' : '') + '" data-id="' + row.id + '" tabindex="0">' +
                     '<td>' + (offset + i + 1) + '</td>' +
                     '<td title="' + esc(dateTimeRo(row.data)) + '">' + esc(dateRo(row.data)) + '</td>' +
@@ -583,6 +586,21 @@
             if (window.bootstrap) { window.bootstrap.Modal.getOrCreateInstance(modal).show(); }
             return;
         }
+        if (act === 'delete') {
+            var target = rowById(id) || {};
+            var deleteModal = document.getElementById('rvDeleteModal');
+            if (!deleteModal) { return; }
+            document.getElementById('rvDeleteFor').textContent = (target.nr || '') + ' · ' + (target.categorie_label || '') +
+                (target.componenta && target.componenta !== target.categorie_label ? ' · ' + target.componenta : '') + ' · ' + dateTimeRo(target.data);
+            document.getElementById('rvDeleteEffect').textContent = 'Dacă este ultima intervenție a acestei componente, T0 revine la intervenția precedentă ' +
+                '(sau la momentul configurării) și km se recalculează de acolo; apoi poți înregistra revizia corectă, chiar dacă e mai veche. ' +
+                'O intervenție mai veche se șterge fără să schimbe calculul curent.';
+            document.getElementById('rvDeleteReason').value = '';
+            document.getElementById('rvDeleteError').hidden = true;
+            deleteModal.setAttribute('data-id', id);
+            if (window.bootstrap) { window.bootstrap.Modal.getOrCreateInstance(deleteModal).show(); }
+            return;
+        }
         if (act === 'upload' && fileInput) {
             uploadTarget = id;
             fileInput.value = '';
@@ -659,6 +677,36 @@
                     if (res.ok && window.bootstrap) { window.bootstrap.Modal.getOrCreateInstance(modal).hide(); }
                     afterChange(res);
                 });
+        });
+    }
+
+    var deleteForm = document.getElementById('rvDeleteForm');
+    if (deleteForm) {
+        deleteForm.addEventListener('submit', function (ev) {
+            ev.preventDefault();
+            var modal = document.getElementById('rvDeleteModal');
+            var id = Number(modal.getAttribute('data-id'));
+            var btn = document.getElementById('rvDeleteSubmit');
+            var err = document.getElementById('rvDeleteError');
+            btn.disabled = true;
+            err.hidden = true;
+            post('istoric_delete', { id: id, motiv: document.getElementById('rvDeleteReason').value })
+                .then(function (res) {
+                    if (!res.ok) {
+                        err.textContent = res.message || 'Intervenția nu a putut fi ștearsă.';
+                        err.hidden = false;
+                        return;
+                    }
+                    if (window.bootstrap) { window.bootstrap.Modal.getOrCreateInstance(modal).hide(); }
+                    if (state.selected === id && detailCard) {
+                        state.selected = null;
+                        detailCard.hidden = true;
+                    }
+                    showToast(res.message);
+                    load();
+                })
+                .catch(function () { err.textContent = 'Intervenția nu a putut fi ștearsă.'; err.hidden = false; })
+                .finally(function () { btn.disabled = false; });
         });
     }
 

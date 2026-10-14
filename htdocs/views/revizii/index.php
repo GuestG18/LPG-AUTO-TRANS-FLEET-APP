@@ -166,10 +166,16 @@ $pack = static function (array $component) use ($defaultInterval, $defaultWarn):
     ];
 };
 $jsRows = [];
+$capacityCategories = $capacityCategories ?? [];
 foreach ($rows as $index => $row) {
+    // Categoria de capacitate a randului: a semi-remorcii pentru ansamblu, altfel a vehiculului.
+    $semiId = $row['items']['semi'][0]['vehicle_id'] ?? null;
+    $leadId = $row['items']['tractor'][0]['vehicle_id'] ?? $semiId;
+    $capacity = ($semiId !== null ? ($capacityCategories[$semiId] ?? null) : null) ?? ($capacityCategories[$leadId] ?? null);
     $jsRows[] = [
         'key' => 'r' . $index,
         'kind' => $row['kind'],
+        'capacity' => $capacity,
         'label' => $row['label'],
         'tractor' => array_map($pack, $row['items']['tractor']),
         'semi' => array_map($pack, $row['items']['semi']),
@@ -567,19 +573,42 @@ $compactComponent = static function (array $component) use ($statusMeta, $fmtKm,
                     ? 'Intervalele de kilometri pentru ' . e(mb_strtolower($tabLabel)) . '. Fiecare componentă (cap tractor' . ($tab === 'placute_frana' ? ' față / spate' : '') . ', semi-remorcă) are configurare și evidență separate.'
                     : 'Intervalul de kilometri pentru schimbul de ulei, per cap tractor sau camion. Semi-remorcile nu au motor, deci nu au schimb de ulei.' ?></p>
                 <div class="row g-3 mb-3">
-                    <div class="col-md-5"<?= $withTrailers ? '' : ' hidden' ?>>
+                    <div class="col-md-5">
                         <label class="form-label" for="rvTipMonitorizare">Tip monitorizare</label>
                         <select class="form-select" id="rvTipMonitorizare">
                             <option value="individual">Vehicul individual</option>
-                            <option value="ansamblu">Ansamblu</option>
+                            <?php if ($withTrailers): ?><option value="ansamblu">Ansamblu</option><?php endif; ?>
+                            <option value="grup">Mai multe vehicule (pe categorii)</option>
                         </select>
                     </div>
-                    <div class="<?= $withTrailers ? 'col-md-7' : 'col-12' ?>">
+                    <div class="col-md-7" data-target-wrap>
                         <label class="form-label" for="rvTargetRow" data-target-label>Ansamblu</label>
                         <select class="form-select" id="rvTargetRow"></select>
                     </div>
                 </div>
+                <div class="rv-bulk mb-3" data-bulk hidden>
+                    <div class="rv-bulk-tools">
+                        <div class="btn-group btn-group-sm" role="group" aria-label="Grupare">
+                            <input type="radio" class="btn-check" name="rv_bulk_grouping" id="rvBulkByKind" value="kind" data-bulk-grouping checked>
+                            <label class="btn btn-outline-primary" for="rvBulkByKind">Tip vehicul</label>
+                            <input type="radio" class="btn-check" name="rv_bulk_grouping" id="rvBulkByCapacity" value="capacity" data-bulk-grouping>
+                            <label class="btn btn-outline-primary" for="rvBulkByCapacity">Categorie capacitate</label>
+                        </div>
+                        <div class="input-group input-group-sm rv-bulk-search">
+                            <span class="input-group-text"><i class="bi bi-search"></i></span>
+                            <input type="search" class="form-control" placeholder="Caută număr, marcă" data-bulk-search aria-label="Caută vehicul">
+                        </div>
+                        <div class="form-check form-check-inline mb-0">
+                            <input class="form-check-input" type="checkbox" id="rvBulkUnconfigured" data-bulk-unconfigured>
+                            <label class="form-check-label small" for="rvBulkUnconfigured">Doar neconfigurate</label>
+                        </div>
+                        <span class="rv-bulk-count" data-bulk-count></span>
+                    </div>
+                    <p class="form-text mt-1 mb-2">Bifează o categorie ca să selectezi toate vehiculele ei, apoi debifează-le pe cele pe care nu vrei să le modifici.</p>
+                    <div class="rv-bulk-list" data-bulk-list></div>
+                </div>
                 <div class="rv-config-components" data-config-items></div>
+                <div data-bulk-hidden hidden></div>
                 <?php if ($tabHours): ?>
                     <fieldset class="rv-hours" data-hours-fieldset>
                         <legend>Ore motor eligibile <small>(setare globală, doar pentru cap tractor / camion)</small></legend>
@@ -599,6 +628,7 @@ $compactComponent = static function (array $component) use ($statusMeta, $fmtKm,
                         </div>
                     </fieldset>
                 <?php endif; ?>
+                <p class="small text-muted mb-0 mt-2" data-bulk-note hidden>La „Mai multe vehicule” se modifică doar intervalul și pragul de notificare; T0 al fiecărui vehicul rămâne neschimbat (vehiculele neconfigurate pornesc de acum).</p>
                 <p class="small text-muted mb-0 mt-2">„Km la ultima revizie” gol păstrează T0 actual. Pentru un T0 exact (data și ora montajului / reviziei) folosește „<?= e($recordVerb) ?>”.</p>
                 <p class="small text-muted mb-0 mt-1">Cine primește emailul la atingerea pragului de notificare se setează în <a href="<?= e(build_query_url(['page' => 'notificari', 'action' => 'create'])) ?>">Notificări</a> (Tip entitate „Revizie (km)”).</p>
             </div>
@@ -646,5 +676,6 @@ $compactComponent = static function (array $component) use ($statusMeta, $fmtKm,
 endif; ?>
 
 <script type="application/json" id="rvPageData"><?= $pageJson ?: '{}' ?></script>
+<script src="<?= e(url('assets/js/datetime-picker-field.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/datetime-picker-field.js'))) ?>"></script>
 <script src="<?= e(url('assets/js/revizii.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/revizii.js'))) ?>"></script>
 <script src="<?= e(url('assets/js/revizii-common.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/revizii-common.js'))) ?>"></script>

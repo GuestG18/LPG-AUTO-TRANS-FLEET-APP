@@ -101,6 +101,11 @@ $eventEntity = static function (string $event) use ($eventEntityMap): string {
 
 $ruleThreshold = static function (array $rule): string {
     $event = (string) ($rule['event_type'] ?? '');
+    if ($event === ReviziiWeeklyReportService::EVENT) {
+        $ruleMetadata = json_decode((string) ($rule['metadata_json'] ?? ''), true);
+        $reportConfig = ReviziiWeeklyReportService::normalizeConfig(is_array($ruleMetadata['report'] ?? null) ? $ruleMetadata['report'] : []);
+        return 'Săptămânal: ' . ReviziiWeeklyReportService::scheduleLabel($reportConfig);
+    }
     if (str_starts_with($event, 'revizie_')) {
         return (string) ($rule['document_type'] ?? '') === 'necesita' ? 'Depășit (Revizii)' : 'Prag din Revizii';
     }
@@ -606,29 +611,72 @@ $deliveryRecipient = static function (array $row): string {
     $currentChannel = (string) ($formData['channel'] ?? 'email');
     $currentRecipientMode = (string) ($formData['recipient_mode'] ?? 'admins');
 
-    $entityIcons = [
-        'vehicle' => 'bi-truck',
-        'driver' => 'bi-person-badge',
-        'tire' => 'bi-record-circle',
-        'leave' => 'bi-calendar2-week',
-        'equipment' => 'bi-tools',
-        'approval' => 'bi-check2-square',
-        'revizie' => 'bi-wrench-adjustable',
+    // Doar afisare: ordinea si etichetele cu diacritice din macheta. Valorile salvate raman cele din controller.
+    $categoryOrder = ['vehicle', 'driver', 'tire', 'revizie', 'leave', 'equipment', 'approval'];
+    $categoryDisplay = [
+        'vehicle' => ['label' => 'Vehicul', 'icon' => 'bi-truck', 'events' => 'Evenimente vehicul'],
+        'driver' => ['label' => 'Șofer', 'icon' => 'bi-person', 'events' => 'Evenimente șofer'],
+        'tire' => ['label' => 'Anvelopă', 'icon' => 'bi-life-preserver', 'events' => 'Evenimente anvelopă'],
+        'revizie' => ['label' => 'Revizii', 'icon' => 'bi-wrench-adjustable', 'events' => 'Evenimente revizii (km)'],
+        'leave' => ['label' => 'Concediu', 'icon' => 'bi-calendar-week', 'events' => 'Evenimente concediu'],
+        'equipment' => ['label' => 'Dotare / Inventar', 'icon' => 'bi-box-seam', 'events' => 'Evenimente dotare / inventar'],
+        'approval' => ['label' => 'Solicitare aprobare', 'icon' => 'bi-file-earmark-text', 'events' => 'Evenimente solicitare aprobare'],
+    ];
+    $eventDisplayLabels = [
+        'vehicle_document_expiry' => 'Expirare document',
+        'driver_document_expiry' => 'Expirare document',
+        'driver_birthday' => 'Zi de naștere',
+        'leave_starts_soon' => 'Concediu începe în curând',
+        'tire_km_limit' => 'Limită kilometri',
+        'tire_tread_depth' => 'Adâncime profil',
+        'tire_dot_expiry' => 'DOT expiră',
+        'equipment_expiry' => 'Expirare dotare',
+        'equipment_inspection' => 'Inspecție dotare',
+        'document_missing' => 'Document lipsă',
+        'inactive_approval_pending' => 'Cerere aprobare în așteptare',
+        'revizie_schimb_ulei' => 'Schimb ulei',
+        'revizie_placute_frana' => 'Plăcuțe frână',
+        'revizie_anvelope' => 'Anvelope (revizie km)',
+        'revizie_raport_saptamanal' => 'Raport săptămânal (email)',
     ];
 
-    // Evenimentele pe entitati, in ordinea entitatilor din filtru.
+    // Evenimentele pe categorii (evenimentele ascunse apar doar daca regula editata le foloseste).
     $eventsByEntity = [];
     foreach ($eventLabels as $eventValue => $eventLabel) {
         if (in_array($eventValue, $hiddenEvents, true) && !in_array($eventValue, $selectedEvents, true)) {
             continue;
         }
-        $eventsByEntity[(string) ($eventEntityMap[$eventValue] ?? 'vehicle')][(string) $eventValue] = (string) $eventLabel;
+        $eventsByEntity[(string) ($eventEntityMap[$eventValue] ?? 'vehicle')][(string) $eventValue] = (string) ($eventDisplayLabels[$eventValue] ?? $eventLabel);
+    }
+    foreach (array_keys($eventsByEntity) as $entityKey) {
+        if (!in_array($entityKey, $categoryOrder, true)) {
+            $categoryOrder[] = $entityKey;
+            $categoryDisplay[$entityKey] = ['label' => (string) ($entityLabels[$entityKey] ?? $entityKey), 'icon' => 'bi-bell', 'events' => 'Evenimente'];
+        }
+    }
+
+    // Categoria deschisa initial: prima cu evenimente bifate, altfel Vehicul.
+    $activeCategory = '';
+    foreach ($categoryOrder as $entityKey) {
+        foreach (array_keys($eventsByEntity[$entityKey] ?? []) as $eventValue) {
+            if ($activeCategory === '' && in_array($eventValue, $selectedEvents, true)) {
+                $activeCategory = $entityKey;
+            }
+        }
+    }
+    if ($activeCategory === '') {
+        foreach ($categoryOrder as $entityKey) {
+            if (!empty($eventsByEntity[$entityKey])) {
+                $activeCategory = $entityKey;
+                break;
+            }
+        }
     }
 
     $docFamilies = [
-        'vehicle' => ['label' => 'Documente vehicul', 'options' => $vehicleDocumentTypes],
-        'driver' => ['label' => 'Documente șofer', 'options' => $driverDocumentTypes],
-        'equipment' => ['label' => 'Dotări', 'options' => $equipmentTypes],
+        'vehicle' => ['label' => 'Tipuri de document (vehicul)', 'options' => $vehicleDocumentTypes, 'active' => 'Doar vehicule active', 'activeHelp' => 'Se vor include doar vehiculele cu status activ.'],
+        'driver' => ['label' => 'Tipuri de document (șofer)', 'options' => $driverDocumentTypes, 'active' => 'Doar șoferi activi', 'activeHelp' => 'Se vor include doar șoferii cu status activ.'],
+        'equipment' => ['label' => 'Dotări', 'options' => $equipmentTypes, 'active' => 'Doar vehicule active', 'activeHelp' => 'Se vor include doar dotările vehiculelor active.'],
     ];
     foreach ($docFamilies as $family => $config) {
         $options = array_map('strval', $config['options']);
@@ -640,50 +688,55 @@ $deliveryRecipient = static function (array $row): string {
         $docFamilies[$family]['options'] = $options;
     }
 
-    $recipientDescriptions = [
-        'admins' => 'Toți administratorii activi',
-        'vehicle_responsible' => 'Momentan se trimite administratorilor',
-        'drivers' => 'Doar șoferul vizat, prin SMS',
-        'specific_users' => 'Alegi tu persoanele din listă',
+    $recipientDisplay = [
+        'admins' => ['label' => 'Administratori', 'icon' => 'bi-shield-check', 'help' => 'Toți administratorii activi'],
+        'vehicle_responsible' => ['label' => 'Responsabil vehicul', 'icon' => 'bi-person-gear', 'help' => 'Momentan se trimite administratorilor'],
+        'drivers' => ['label' => 'Doar șoferul (SMS)', 'icon' => 'bi-person-vcard', 'help' => 'Șoferul vizat sau șoferii aleși, prin SMS'],
+        'specific_users' => ['label' => 'Utilizatori selectați', 'icon' => 'bi-people', 'help' => 'Alegi tu persoanele din listă'],
     ];
-    $recipientIcons = [
-        'admins' => 'bi-shield-check',
-        'vehicle_responsible' => 'bi-person-gear',
-        'drivers' => 'bi-person-vcard',
-        'specific_users' => 'bi-people',
-    ];
+    $visibleRecipientModes = array_values(array_filter(
+        array_keys($recipientLabels),
+        static fn ($mode): bool => !in_array($mode, $hiddenRecipientModes, true) || $currentRecipientMode === $mode
+    ));
+
     $fieldError = static function (string $key) use ($formErrors): string {
-        return isset($formErrors[$key]) ? '<div class="nrf-error"><i class="bi bi-exclamation-circle"></i> ' . e((string) $formErrors[$key]) . '</div>' : '';
+        return isset($formErrors[$key]) ? '<div class="nrf-error"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> ' . e((string) $formErrors[$key]) . '</div>' : '';
     };
 
     $nrfConfig = [
+        // eventLabels / entityLabels = etichetele serverului (pentru numele generat, identic cu cel salvat).
         'eventLabels' => $eventLabels,
         'entityLabels' => $entityLabels,
+        'eventDisplay' => $eventDisplayLabels,
+        'entityDisplay' => array_map(static fn (array $item): string => $item['label'], $categoryDisplay),
         'eventEntity' => $eventEntityMap,
         'conditions' => $eventConditions,
+        'revizieStatus' => $revizieStatusFilters ?? [],
         'smsChannels' => array_values($smsChannels ?? ['sms', 'email_sms']),
         'approvalEvent' => $approvalEvent,
         'maxRules' => (int) ($maxRulesPerGroup ?? 60),
         'isEditing' => $isEditing,
         'groupSize' => $editingGroupSize,
+        'hasErrors' => $formErrors !== [],
         'closeUrl' => build_query_url(['page' => 'notificari']),
     ];
     ?>
     <link rel="stylesheet" href="<?= e(url('assets/css/notificari-regula.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/notificari-regula.css'))) ?>">
-    <div class="nrf-backdrop" data-nrf-close></div>
-    <aside class="nrf-modal" role="dialog" aria-modal="true" aria-labelledby="nrfTitle">
+    <div class="nrf-backdrop" data-nrf-backdrop></div>
+    <div class="nrf-modal" role="dialog" aria-modal="true" aria-labelledby="nrfTitle" aria-describedby="nrfSubtitle" data-nrf-modal>
         <header class="nrf-header">
-            <div>
-                <h3 id="nrfTitle"><?= $isEditing ? 'Editează regula de notificare' : 'Regulă nouă de notificare' ?></h3>
-                <p>
+            <span class="nrf-header-icon" aria-hidden="true"><i class="bi bi-bell"></i></span>
+            <div class="nrf-header-text">
+                <h3 id="nrfTitle" tabindex="-1"><?= $isEditing ? 'Editează regula de notificare' : 'Regulă nouă de notificare' ?></h3>
+                <p id="nrfSubtitle">
                     <?php if ($isEditing && $editingGroupSize > 1): ?>
                         Grup de <?= e((string) $editingGroupSize) ?> reguli salvate împreună — modificările se aplică tuturor.
                     <?php else: ?>
-                        Bifează unul sau mai multe evenimente; se creează câte o regulă pentru fiecare.
+                        Configurează evenimentele, condițiile și destinatarii pentru această regulă.
                     <?php endif; ?>
                 </p>
             </div>
-            <a class="nrf-close" href="<?= e(build_query_url(['page' => 'notificari'])) ?>" aria-label="Închide"><i class="bi bi-x-lg" aria-hidden="true"></i></a>
+            <a class="nrf-close" href="<?= e(build_query_url(['page' => 'notificari'])) ?>" aria-label="Închide" data-nrf-close><i class="bi bi-x-lg" aria-hidden="true"></i></a>
         </header>
 
         <form method="post" action="<?= e(build_query_url(['page' => 'notificari', 'action' => $isEditing ? 'update' : 'store'])) ?>" class="nrf-form" data-nrf-form novalidate>
@@ -693,264 +746,479 @@ $deliveryRecipient = static function (array $row): string {
             <?php endif; ?>
             <script type="application/json" data-nrf-config><?= json_encode($nrfConfig, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>
 
-            <div class="nrf-body">
-                <div class="nrf-main">
-                    <?php if ($formErrors !== []): ?>
-                        <div class="nrf-alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Verifică câmpurile marcate mai jos.</div>
-                    <?php endif; ?>
+            <div class="nrf-scroll" data-nrf-scroll>
+                <?php if ($formErrors !== []): ?>
+                    <div class="nrf-alert" role="alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Verifică câmpurile marcate mai jos.</div>
+                <?php endif; ?>
 
-                    <label class="nrf-name">
-                        <span class="nrf-label">Nume regulă <small>(opțional — gol = generat din evenimente)</small></span>
-                        <input class="form-control" name="name" value="<?= e((string) ($formData['name'] ?? '')) ?>" maxlength="190" placeholder="Ex: Documente vehicul" data-nrf-name>
-                        <?= $fieldError('name') ?>
-                    </label>
+                <div class="nrf-name">
+                    <label class="nrf-label" for="nrfName">Nume regulă</label>
+                    <div class="nrf-name-row">
+                        <input class="form-control" id="nrfName" name="name" value="<?= e((string) ($formData['name'] ?? '')) ?>" maxlength="190" placeholder="Ex: Documente vehicul" data-nrf-name>
+                        <button type="button" class="btn nrf-btn-ghost" data-nrf-generate-name><i class="bi bi-magic" aria-hidden="true"></i> Generează automat</button>
+                    </div>
+                    <small class="nrf-help">Lasă gol pentru generare automată în funcție de selecțiile făcute.</small>
+                    <?= $fieldError('name') ?>
+                </div>
 
-                    <section class="nrf-section">
-                        <h4><span class="nrf-step">1</span> Ce urmărești?</h4>
-                        <p class="nrf-section-hint">Poți bifa evenimente din mai multe categorii.</p>
-                        <?= $fieldError('event_types') ?>
-                        <div class="nrf-entities">
-                            <?php foreach ($entityLabels as $entityValue => $entityLabel): ?>
-                                <?php if (empty($eventsByEntity[$entityValue])) { continue; } ?>
-                                <div class="nrf-entity" data-nrf-entity="<?= e((string) $entityValue) ?>">
-                                    <div class="nrf-entity-head">
-                                        <span><i class="bi <?= e($entityIcons[$entityValue] ?? 'bi-bell') ?>" aria-hidden="true"></i> <?= e((string) $entityLabel) ?></span>
-                                        <span class="nrf-entity-count" data-nrf-entity-count></span>
-                                    </div>
-                                    <?php foreach ($eventsByEntity[$entityValue] as $eventValue => $eventLabel): ?>
-                                        <label class="nrf-event">
-                                            <input type="checkbox" name="event_types[]" value="<?= e($eventValue) ?>" data-nrf-event <?= in_array($eventValue, $selectedEvents, true) ? 'checked' : '' ?>>
-                                            <span class="nrf-event-box" aria-hidden="true"><i class="bi bi-check-lg"></i></span>
-                                            <span class="nrf-event-text">
-                                                <strong><?= e($eventLabel) ?></strong>
-                                                <small><?= e((string) ($eventHints[$eventValue] ?? '')) ?></small>
-                                            </span>
-                                        </label>
-                                    <?php endforeach; ?>
-                                </div>
-                            <?php endforeach; ?>
+                <section class="nrf-section" aria-labelledby="nrfStep1">
+                    <div class="nrf-section-head">
+                        <span class="nrf-step" aria-hidden="true">1</span>
+                        <div>
+                            <h4 id="nrfStep1">Ce urmărești?</h4>
+                            <p>Selectează categoria și evenimentul (poți selecta mai multe).</p>
                         </div>
-                    </section>
+                    </div>
 
-                    <section class="nrf-section">
-                        <h4><span class="nrf-step">2</span> Când se trimite?</h4>
-                        <p class="nrf-empty" data-nrf-conditions-empty>Bifează un eveniment mai sus ca să vezi condițiile lui.</p>
-
-                        <div class="nrf-cond" data-nrf-cond="days" hidden>
-                            <span class="nrf-label">Cu câte zile înainte</span>
-                            <div class="nrf-inline">
-                                <div class="input-group nrf-number">
-                                    <input class="form-control" name="days_before" type="number" min="0" max="365" step="1" value="<?= e((string) ($formData['days_before'] ?? 30)) ?>" data-nrf-days>
-                                    <span class="input-group-text">zile</span>
-                                </div>
-                                <div class="nrf-presets">
-                                    <?php foreach ([7, 15, 30, 60, 90] as $preset): ?>
-                                        <button type="button" class="nrf-chip" data-nrf-days-preset="<?= $preset ?>"><?= $preset ?></button>
-                                    <?php endforeach; ?>
-                                </div>
-                            </div>
-                            <small class="nrf-help" data-nrf-days-for></small>
-                            <?= $fieldError('days_before') ?>
-                        </div>
-
-                        <?php foreach ($docFamilies as $family => $config): ?>
-                            <?php
-                            $familyAll = (int) ($docAll[$family] ?? 1) === 1;
-                            $familySelected = array_map('strval', (array) ($selectedDocTypes[$family] ?? []));
-                            ?>
-                            <div class="nrf-cond" data-nrf-cond="docs-<?= e($family) ?>" hidden>
-                                <span class="nrf-label"><?= e($config['label']) ?></span>
-                                <div class="nrf-segmented" role="radiogroup">
-                                    <label><input type="radio" name="doc_all[<?= e($family) ?>]" value="1" data-nrf-doc-all="<?= e($family) ?>" <?= $familyAll ? 'checked' : '' ?>><span>Toate tipurile</span></label>
-                                    <label><input type="radio" name="doc_all[<?= e($family) ?>]" value="0" data-nrf-doc-all="<?= e($family) ?>" <?= $familyAll ? '' : 'checked' ?>><span>Doar anumite</span></label>
-                                </div>
-                                <div class="nrf-doc-picker" data-nrf-doc-picker="<?= e($family) ?>" <?= $familyAll ? 'hidden' : '' ?>>
-                                    <div class="nrf-chips" data-nrf-doc-list="<?= e($family) ?>">
-                                        <?php foreach ($config['options'] as $docType): ?>
-                                            <label class="nrf-chip-check">
-                                                <input type="checkbox" name="doc_types[<?= e($family) ?>][]" value="<?= e($docType) ?>" <?= in_array($docType, $familySelected, true) ? 'checked' : '' ?>>
-                                                <span><?= e($docType) ?></span>
-                                            </label>
-                                        <?php endforeach; ?>
-                                    </div>
-                                    <div class="nrf-add-doc">
-                                        <input class="form-control form-control-sm" placeholder="Alt tip…" data-nrf-doc-new="<?= e($family) ?>" maxlength="120">
-                                        <button type="button" class="btn btn-sm btn-outline-secondary" data-nrf-doc-add="<?= e($family) ?>"><i class="bi bi-plus-lg"></i> Adaugă</button>
-                                    </div>
-                                    <small class="nrf-help">Fiecare tip bifat devine o regulă separată.</small>
-                                </div>
-                                <?= $fieldError('doc_types_' . $family) ?>
-                            </div>
+                    <div class="nrf-categories" role="tablist" aria-label="Categorii de evenimente">
+                        <?php foreach ($categoryOrder as $entityKey): ?>
+                            <?php if (empty($eventsByEntity[$entityKey])) { continue; } ?>
+                            <?php $display = $categoryDisplay[$entityKey]; $eventCount = count($eventsByEntity[$entityKey]); ?>
+                            <button type="button" class="nrf-category <?= $entityKey === $activeCategory ? 'is-current' : '' ?>" role="tab"
+                                    id="nrfCat-<?= e($entityKey) ?>" aria-controls="nrfPanel-<?= e($entityKey) ?>"
+                                    aria-selected="<?= $entityKey === $activeCategory ? 'true' : 'false' ?>"
+                                    data-nrf-category="<?= e($entityKey) ?>" data-total="<?= $eventCount ?>">
+                                <span class="nrf-category-check" aria-hidden="true"><i class="bi bi-check"></i></span>
+                                <i class="bi <?= e($display['icon']) ?> nrf-category-icon" aria-hidden="true"></i>
+                                <strong><?= e($display['label']) ?></strong>
+                                <small data-nrf-entity-count><?= $eventCount ?> <?= $eventCount === 1 ? 'eveniment' : 'evenimente' ?></small>
+                            </button>
                         <?php endforeach; ?>
+                    </div>
 
-                        <div class="nrf-cond-row">
-                            <div class="nrf-cond" data-nrf-cond="km" hidden>
-                                <span class="nrf-label">Anvelope: prag kilometri</span>
-                                <div class="input-group nrf-number">
-                                    <input class="form-control" name="threshold_km" type="number" min="0" step="1" value="<?= e((string) ($formData['threshold_km'] ?? '')) ?>" placeholder="15000">
-                                    <span class="input-group-text">km</span>
-                                </div>
-                                <?= $fieldError('threshold_km') ?>
+                    <?php foreach ($categoryOrder as $entityKey): ?>
+                        <?php if (empty($eventsByEntity[$entityKey])) { continue; } ?>
+                        <div class="nrf-events-panel" role="tabpanel" id="nrfPanel-<?= e($entityKey) ?>" aria-labelledby="nrfCat-<?= e($entityKey) ?>"
+                             data-nrf-entity="<?= e($entityKey) ?>" <?= $entityKey === $activeCategory ? '' : 'hidden' ?>>
+                            <div class="nrf-subhead">
+                                <strong><?= e($categoryDisplay[$entityKey]['events']) ?></strong>
+                                <small>Selectează unul sau mai multe evenimente:</small>
                             </div>
-                            <div class="nrf-cond" data-nrf-cond="tread" hidden>
-                                <span class="nrf-label">Anvelope: prag profil</span>
-                                <div class="input-group nrf-number">
-                                    <input class="form-control" name="threshold_tread_depth" type="number" min="0" step="0.1" value="<?= e((string) ($formData['threshold_tread_depth'] ?? '')) ?>" placeholder="3.0">
-                                    <span class="input-group-text">mm</span>
-                                </div>
-                                <?= $fieldError('threshold_tread_depth') ?>
-                            </div>
-                        </div>
-
-                        <div class="nrf-cond" data-nrf-cond="revizie" hidden>
-                            <span class="nrf-label">Revizii: notifică la</span>
-                            <div class="nrf-segmented">
-                                <?php foreach (($revizieStatusFilters ?? []) as $value => $label): ?>
-                                    <label><input type="radio" name="revizie_status" value="<?= e((string) $value) ?>" <?= (string) ($formData['revizie_status'] ?? '') === (string) $value ? 'checked' : '' ?>><span><?= e((string) $label) ?></span></label>
-                                <?php endforeach; ?>
-                            </div>
-                            <small class="nrf-help">
-                                Km rămași și pragul se iau din <a href="<?= e(build_query_url(['page' => 'revizii', 'tip' => 'prezentare'])) ?>" target="_blank" rel="noopener">Revizii</a>, per componentă.
-                                Fiecare ciclu nou și trecerea în „Necesită” trimit o notificare nouă.
-                            </small>
-                        </div>
-
-                        <div class="nrf-cond" data-nrf-cond="approval" hidden>
-                            <span class="nrf-label">Cereri de aprobare: tip resursă <small>(nimic bifat = toate)</small></span>
-                            <div class="nrf-chips">
-                                <?php foreach (($approvalResourceLabels ?? []) as $value => $label): ?>
-                                    <label class="nrf-chip-check">
-                                        <input type="checkbox" name="approval_resource_types[]" value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedApprovalTypes, true) ? 'checked' : '' ?>>
-                                        <span><?= e((string) $label) ?></span>
-                                    </label>
-                                <?php endforeach; ?>
-                            </div>
-                            <?php if (($approvalReasonOptions ?? []) !== []): ?>
-                                <span class="nrf-label mt-2">Motiv <small>(nimic bifat = toate)</small></span>
-                                <div class="nrf-chips">
-                                    <?php foreach ($approvalReasonOptions as $value => $label): ?>
-                                        <label class="nrf-chip-check">
-                                            <input type="checkbox" name="approval_reasons[]" value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedApprovalReasons, true) ? 'checked' : '' ?>>
-                                            <span><?= e((string) $label) ?></span>
-                                        </label>
-                                    <?php endforeach; ?>
-                                </div>
-                            <?php endif; ?>
-                            <span class="nrf-label mt-2">Reamintește la</span>
-                            <div class="input-group nrf-number">
-                                <input class="form-control" name="approval_repeat_days" type="number" min="1" max="30" step="1" value="<?= e((string) ($formData['approval_repeat_days'] ?? 1)) ?>">
-                                <span class="input-group-text">zile</span>
-                            </div>
-                            <small class="nrf-help">Are efect doar cu „Repetă până la rezolvare”.</small>
-                        </div>
-                    </section>
-
-                    <section class="nrf-section">
-                        <h4><span class="nrf-step">3</span> Cine primește și cum?</h4>
-                        <span class="nrf-label">Canal</span>
-                        <div class="nrf-channel">
-                            <?php foreach ($channelLabels as $value => $label): ?>
-                                <label>
-                                    <input type="radio" name="channel" value="<?= e((string) $value) ?>" data-nrf-channel <?= $currentChannel === (string) $value ? 'checked' : '' ?>>
-                                    <span><i class="bi <?= e($channelIcon((string) $value)) ?>" aria-hidden="true"></i> <?= e((string) $label) ?></span>
-                                </label>
-                            <?php endforeach; ?>
-                        </div>
-                        <?= $fieldError('channel') ?>
-
-                        <label class="nrf-switch" data-nrf-driver-option hidden>
-                            <input class="form-check-input" type="checkbox" role="switch" name="notify_driver" value="1" <?= (int) ($formData['notify_driver'] ?? 0) === 1 ? 'checked' : '' ?>>
-                            <span>
-                                <strong>Trimite SMS și șoferului</strong>
-                                <small>Șoferii alocați vehiculului (la documente de șofer, concedii și zile de naștere: șoferul respectiv), pe numărul din fișa lui. Se adaugă la destinatarii de mai jos.</small>
-                            </span>
-                        </label>
-
-                        <span class="nrf-label mt-3">Destinatari</span>
-                        <div class="nrf-recipients">
-                            <?php foreach ($recipientLabels as $value => $label): ?>
-                                <?php if (in_array($value, $hiddenRecipientModes, true) && $currentRecipientMode !== $value) { continue; } ?>
-                                <label class="nrf-recipient">
-                                    <input type="radio" name="recipient_mode" value="<?= e((string) $value) ?>" data-nrf-recipient <?= $currentRecipientMode === (string) $value ? 'checked' : '' ?>>
-                                    <span>
-                                        <i class="bi <?= e($recipientIcons[$value] ?? 'bi-person') ?>" aria-hidden="true"></i>
-                                        <strong><?= e((string) $label) ?></strong>
-                                        <small><?= e($recipientDescriptions[$value] ?? '') ?></small>
-                                    </span>
-                                </label>
-                            <?php endforeach; ?>
-                        </div>
-                        <?= $fieldError('recipient_mode') ?>
-
-                        <div class="nrf-users" data-nrf-users hidden>
-                            <div class="nrf-users-toolbar">
-                                <div class="nrf-users-search">
-                                    <i class="bi bi-search" aria-hidden="true"></i>
-                                    <input class="form-control form-control-sm" type="search" placeholder="Caută utilizator…" data-nrf-user-search>
-                                </div>
-                                <span class="nrf-users-count" data-nrf-user-count></span>
-                                <button type="button" class="btn btn-sm btn-link" data-nrf-users-all>Toți</button>
-                                <button type="button" class="btn btn-sm btn-link" data-nrf-users-none>Niciunul</button>
-                            </div>
-                            <div class="nrf-users-list">
-                                <?php foreach ($users as $user): ?>
-                                    <?php
-                                    $userId = (int) ($user['id'] ?? 0);
-                                    $userEmail = trim((string) ($user['email'] ?? ''));
-                                    $userPhone = trim((string) ($user['telefon'] ?? ''));
-                                    ?>
-                                    <label class="nrf-user" data-nrf-user data-search="<?= e(mb_strtolower(($user['nume'] ?? '') . ' ' . $userEmail . ' ' . $userPhone, 'UTF-8')) ?>" data-has-email="<?= $userEmail !== '' ? '1' : '0' ?>" data-has-phone="<?= $userPhone !== '' ? '1' : '0' ?>">
-                                        <input class="form-check-input" type="checkbox" name="recipient_user_ids[]" value="<?= e((string) $userId) ?>" <?= in_array($userId, $selectedRecipientIds, true) ? 'checked' : '' ?>>
-                                        <span class="nrf-user-avatar"><?= e(mb_strtoupper(mb_substr((string) ($user['nume'] ?? '?'), 0, 1, 'UTF-8'), 'UTF-8')) ?></span>
-                                        <span class="nrf-user-text">
-                                            <strong><?= e((string) ($user['nume'] ?? '')) ?><?php if ((string) ($user['rol'] ?? '') === 'admin'): ?> <em>admin</em><?php endif; ?></strong>
-                                            <small>
-                                                <span class="<?= $userEmail === '' ? 'is-missing' : '' ?>" data-nrf-user-email><i class="bi bi-envelope"></i> <?= e($userEmail !== '' ? $userEmail : 'fără email') ?></span>
-                                                <span class="<?= $userPhone === '' ? 'is-missing' : '' ?>" data-nrf-user-phone><i class="bi bi-phone"></i> <?= e($userPhone !== '' ? $userPhone : 'fără telefon') ?></span>
-                                            </small>
+                            <div class="nrf-event-grid">
+                                <?php foreach ($eventsByEntity[$entityKey] as $eventValue => $eventLabel): ?>
+                                    <label class="nrf-event" title="<?= e((string) ($eventHints[$eventValue] ?? '')) ?>">
+                                        <input class="form-check-input" type="checkbox" name="event_types[]" value="<?= e($eventValue) ?>" data-nrf-event <?= in_array($eventValue, $selectedEvents, true) ? 'checked' : '' ?>>
+                                        <span class="nrf-event-text">
+                                            <span><?= e($eventLabel) ?></span>
+                                            <?php if (($eventHints[$eventValue] ?? '') !== ''): ?>
+                                                <small><?= e((string) $eventHints[$eventValue]) ?></small>
+                                            <?php endif; ?>
                                         </span>
                                     </label>
                                 <?php endforeach; ?>
                             </div>
-                            <?= $fieldError('recipient_user_ids') ?>
                         </div>
-                    </section>
+                    <?php endforeach; ?>
+                    <?= $fieldError('event_types') ?>
+                </section>
 
-                    <section class="nrf-section">
-                        <h4><span class="nrf-step">4</span> Opțiuni</h4>
-                        <div class="nrf-options">
-                            <label class="nrf-switch">
-                                <input class="form-check-input" type="checkbox" role="switch" name="enabled" value="1" <?= (int) ($formData['enabled'] ?? 0) === 1 ? 'checked' : '' ?>>
-                                <span><strong>Activă</strong><small>Worker-ul o verifică la fiecare rulare.</small></span>
-                            </label>
-                            <label class="nrf-switch">
-                                <input class="form-check-input" type="checkbox" role="switch" name="repeat_until_resolved" value="1" <?= (int) ($formData['repeat_until_resolved'] ?? 1) === 1 ? 'checked' : '' ?>>
-                                <span><strong>Repetă până la rezolvare</strong><small>Trimite din nou cât timp situația persistă.</small></span>
-                            </label>
-                            <label class="nrf-switch">
-                                <input class="form-check-input" type="checkbox" role="switch" name="daily_limit_enabled" value="1" <?= (int) ($formData['daily_limit_enabled'] ?? 1) === 1 ? 'checked' : '' ?>>
-                                <span><strong>Maxim o notificare pe zi</strong><small>Pentru același document / vehicul și destinatar.</small></span>
-                            </label>
+                <section class="nrf-section" aria-labelledby="nrfStep2">
+                    <div class="nrf-section-head">
+                        <span class="nrf-step" aria-hidden="true">2</span>
+                        <div>
+                            <h4 id="nrfStep2">Când se trimite?</h4>
+                            <p>Configurează condițiile de declanșare pentru evenimentele selectate.</p>
                         </div>
-                    </section>
-                </div>
-
-                <aside class="nrf-summary">
-                    <div class="nrf-summary-card">
-                        <div class="nrf-summary-title">Rezumat</div>
-                        <p class="nrf-summary-sentence" data-nrf-sentence></p>
-                        <div class="nrf-summary-sub" data-nrf-count></div>
-                        <ul class="nrf-summary-list" data-nrf-preview></ul>
-                        <div class="nrf-summary-warnings" data-nrf-warnings></div>
                     </div>
-                </aside>
+
+                    <div class="nrf-cond-card" data-nrf-cond-card>
+                        <div class="nrf-cond-card-head">
+                            <strong data-nrf-cond-title>Condiții</strong>
+                            <span class="nrf-pill" data-nrf-cond-badge></span>
+                            <button type="button" class="nrf-collapse" aria-expanded="true" aria-controls="nrfCondBody" aria-label="Restrânge condițiile" data-nrf-cond-toggle><i class="bi bi-chevron-up" aria-hidden="true"></i></button>
+                        </div>
+                        <div class="nrf-cond-body" id="nrfCondBody" data-nrf-cond-body>
+                            <p class="nrf-empty" data-nrf-conditions-empty>Bifează un eveniment mai sus ca să vezi condițiile lui.</p>
+
+                            <div class="nrf-cond-grid">
+                                <div class="nrf-field" data-nrf-cond="days" hidden>
+                                    <label class="nrf-label" for="nrfDays">Cu câte zile înainte</label>
+                                    <div class="nrf-days-row">
+                                        <input class="form-control" id="nrfDays" name="days_before" type="number" min="0" max="365" step="1" value="<?= e((string) ($formData['days_before'] ?? 30)) ?>" data-nrf-days>
+                                        <span class="nrf-unit">zile</span>
+                                    </div>
+                                    <div class="nrf-presets" aria-label="Valori rapide">
+                                        <?php foreach ([7, 15, 30, 60, 90] as $preset): ?>
+                                            <button type="button" class="nrf-preset" data-nrf-days-preset="<?= $preset ?>"><?= $preset ?></button>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <small class="nrf-help" data-nrf-days-for></small>
+                                    <?= $fieldError('days_before') ?>
+                                </div>
+
+                                <?php foreach ($docFamilies as $family => $config): ?>
+                                    <?php
+                                    $familyAll = (int) ($docAll[$family] ?? 1) === 1;
+                                    $familySelected = array_map('strval', (array) ($selectedDocTypes[$family] ?? []));
+                                    ?>
+                                    <div class="nrf-field" data-nrf-cond="docs-<?= e($family) ?>" hidden>
+                                        <label class="nrf-label" for="nrfDocAll-<?= e($family) ?>"><?= e($config['label']) ?></label>
+                                        <div class="nrf-select-icon">
+                                            <i class="bi bi-files" aria-hidden="true"></i>
+                                            <select class="form-select" id="nrfDocAll-<?= e($family) ?>" name="doc_all[<?= e($family) ?>]" data-nrf-doc-all="<?= e($family) ?>">
+                                                <option value="1" <?= $familyAll ? 'selected' : '' ?>>Toate tipurile</option>
+                                                <option value="0" <?= $familyAll ? '' : 'selected' ?>>Doar anumite tipuri</option>
+                                            </select>
+                                        </div>
+                                        <label class="nrf-fixed-check">
+                                            <input class="form-check-input" type="checkbox" checked disabled>
+                                            <span><strong><?= e($config['active']) ?></strong><small><?= e($config['activeHelp']) ?></small></span>
+                                        </label>
+                                    </div>
+                                    <div class="nrf-field nrf-field-wide" data-nrf-doc-picker="<?= e($family) ?>" hidden>
+                                        <span class="nrf-label">Alege tipurile <small>— fiecare tip bifat devine o regulă separată</small></span>
+                                        <div class="nrf-chips" data-nrf-doc-list="<?= e($family) ?>">
+                                            <?php foreach ($config['options'] as $docType): ?>
+                                                <label class="nrf-chip">
+                                                    <input type="checkbox" name="doc_types[<?= e($family) ?>][]" value="<?= e($docType) ?>" <?= in_array($docType, $familySelected, true) ? 'checked' : '' ?>>
+                                                    <span><?= e($docType) ?></span>
+                                                </label>
+                                            <?php endforeach; ?>
+                                        </div>
+                                        <div class="nrf-add-doc">
+                                            <input class="form-control form-control-sm" placeholder="Alt tip…" aria-label="Alt tip de document" data-nrf-doc-new="<?= e($family) ?>" maxlength="120">
+                                            <button type="button" class="btn btn-sm nrf-btn-ghost" data-nrf-doc-add="<?= e($family) ?>"><i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă</button>
+                                        </div>
+                                        <?= $fieldError('doc_types_' . $family) ?>
+                                    </div>
+                                <?php endforeach; ?>
+
+                                <div class="nrf-field" data-nrf-cond="km" hidden>
+                                    <label class="nrf-label" for="nrfKm">Anvelope: prag kilometri</label>
+                                    <div class="nrf-days-row">
+                                        <input class="form-control" id="nrfKm" name="threshold_km" type="number" min="0" step="1" value="<?= e((string) ($formData['threshold_km'] ?? '')) ?>" placeholder="15000">
+                                        <span class="nrf-unit">km</span>
+                                    </div>
+                                    <?= $fieldError('threshold_km') ?>
+                                </div>
+                                <div class="nrf-field" data-nrf-cond="tread" hidden>
+                                    <label class="nrf-label" for="nrfTread">Anvelope: prag profil</label>
+                                    <div class="nrf-days-row">
+                                        <input class="form-control" id="nrfTread" name="threshold_tread_depth" type="number" min="0" step="0.1" value="<?= e((string) ($formData['threshold_tread_depth'] ?? '')) ?>" placeholder="3.0">
+                                        <span class="nrf-unit">mm</span>
+                                    </div>
+                                    <?= $fieldError('threshold_tread_depth') ?>
+                                </div>
+
+                                <div class="nrf-field" data-nrf-cond="revizie" hidden>
+                                    <label class="nrf-label" for="nrfRevizie">Revizii: notifică la</label>
+                                    <div class="nrf-select-icon">
+                                        <i class="bi bi-speedometer2" aria-hidden="true"></i>
+                                        <select class="form-select" id="nrfRevizie" name="revizie_status" data-nrf-revizie>
+                                            <?php foreach (($revizieStatusFilters ?? []) as $value => $label): ?>
+                                                <option value="<?= e((string) $value) ?>" <?= (string) ($formData['revizie_status'] ?? '') === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+                                    <small class="nrf-help">
+                                        Km rămași și pragul se iau din <a href="<?= e(build_query_url(['page' => 'revizii', 'tip' => 'prezentare'])) ?>" target="_blank" rel="noopener">Revizii</a>, per componentă.
+                                    </small>
+                                </div>
+
+                                <?php
+                                $reportDays = is_array($reportDays ?? null) ? $reportDays : [];
+                                $reportCategories = is_array($reportCategories ?? null) ? $reportCategories : [];
+                                $selectedReportCategories = array_map('strval', (array) ($formData['report_categories'] ?? []));
+                                ?>
+                                <div class="nrf-field nrf-field-wide nrf-report" data-nrf-cond="report" hidden>
+                                    <div class="nrf-report-head">
+                                        <i class="bi bi-envelope-paper" aria-hidden="true"></i>
+                                        <div>
+                                            <strong>Raport săptămânal pe email</strong>
+                                            <small>Situația reviziilor (Necesită / Se apropie, pe categorii) trimisă automat o dată pe săptămână destinatarilor de la pasul 3. Se trimite doar pe email.</small>
+                                        </div>
+                                    </div>
+                                    <div class="nrf-report-grid">
+                                        <div>
+                                            <label class="nrf-label" for="nrfReportDay">Ziua</label>
+                                            <div class="nrf-select-icon">
+                                                <i class="bi bi-calendar-week" aria-hidden="true"></i>
+                                                <select class="form-select" id="nrfReportDay" name="report_day" data-nrf-report-day>
+                                                    <?php foreach ($reportDays as $value => $label): ?>
+                                                        <option value="<?= (int) $value ?>" <?= (int) ($formData['report_day'] ?? 1) === (int) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label class="nrf-label" for="nrfReportHour">Ora</label>
+                                            <div class="nrf-select-icon">
+                                                <i class="bi bi-clock" aria-hidden="true"></i>
+                                                <select class="form-select" id="nrfReportHour" name="report_hour" data-nrf-report-hour>
+                                                    <?php for ($hour = 0; $hour <= 23; $hour++): ?>
+                                                        <option value="<?= $hour ?>" <?= (int) ($formData['report_hour'] ?? 8) === $hour ? 'selected' : '' ?>><?= sprintf('%02d:00', $hour) ?></option>
+                                                    <?php endfor; ?>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="nrf-report-cats">
+                                            <span class="nrf-label">Categorii <small>(nimic bifat = toate)</small></span>
+                                            <div class="nrf-chips">
+                                                <?php foreach ($reportCategories as $value => $label): ?>
+                                                    <label class="nrf-chip">
+                                                        <input type="checkbox" name="report_categories[]" value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedReportCategories, true) ? 'checked' : '' ?>>
+                                                        <span><?= e((string) $label) ?></span>
+                                                    </label>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="form-check form-switch nrf-switch nrf-switch-inline">
+                                        <input class="form-check-input" type="checkbox" role="switch" id="nrfReportHistory" name="report_history" value="1" <?= (int) ($formData['report_history'] ?? 1) === 1 ? 'checked' : '' ?>>
+                                        <label class="form-check-label" for="nrfReportHistory">
+                                            <strong>Include reviziile efectuate în ultimele 7 zile</strong>
+                                            <small>Lista înlocuirilor înregistrate în Revizii în ultima săptămână.</small>
+                                        </label>
+                                    </div>
+                                    <div class="nrf-report-test">
+                                        <button type="submit" class="btn btn-sm nrf-btn-ghost" formaction="<?= e(build_query_url(['page' => 'notificari', 'action' => 'report_preview'])) ?>" formtarget="_blank" formnovalidate data-nrf-report-preview>
+                                            <i class="bi bi-eye" aria-hidden="true"></i> Previzualizează raportul
+                                        </button>
+                                        <button type="button" class="btn btn-sm nrf-btn-ghost nrf-btn-excel" data-nrf-report-excel data-url="<?= e(build_query_url(['page' => 'revizii', 'action' => 'raport_export'])) ?>">
+                                            <i class="bi bi-file-earmark-excel" aria-hidden="true"></i> Exportă Excel
+                                        </button>
+                                        <div class="nrf-report-send">
+                                            <select class="form-select form-select-sm" name="report_test_target" aria-label="Destinatar test" data-nrf-report-target>
+                                                <option value="me">către mine (<?= e((string) ($currentUser['email'] ?? '')) ?>)</option>
+                                                <option value="rule">către destinatarii de la pasul 3</option>
+                                            </select>
+                                            <button type="button" class="btn btn-sm nrf-btn-ghost" data-nrf-report-send data-url="<?= e(build_query_url(['page' => 'notificari', 'action' => 'report_test'])) ?>">
+                                                <i class="bi bi-send" aria-hidden="true"></i> Trimite test acum
+                                            </button>
+                                        </div>
+                                        <div class="nrf-report-result" data-nrf-report-result role="status" hidden></div>
+                                    </div>
+                                    <small class="nrf-help">Programarea rulează pe server din cron (<code>scripts/revizii_raport_saptamanal.php</code>); testul nu consumă trimiterea săptămânii.</small>
+                                </div>
+
+                                <div class="nrf-field nrf-field-wide" data-nrf-cond="approval" hidden>
+                                    <span class="nrf-label">Cereri de aprobare: tip resursă <small>(nimic bifat = toate)</small></span>
+                                    <div class="nrf-chips">
+                                        <?php foreach (($approvalResourceLabels ?? []) as $value => $label): ?>
+                                            <label class="nrf-chip">
+                                                <input type="checkbox" name="approval_resource_types[]" value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedApprovalTypes, true) ? 'checked' : '' ?>>
+                                                <span><?= e((string) $label) ?></span>
+                                            </label>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <?php if (($approvalReasonOptions ?? []) !== []): ?>
+                                        <span class="nrf-label nrf-label-gap">Motiv <small>(nimic bifat = toate)</small></span>
+                                        <div class="nrf-chips">
+                                            <?php foreach ($approvalReasonOptions as $value => $label): ?>
+                                                <label class="nrf-chip">
+                                                    <input type="checkbox" name="approval_reasons[]" value="<?= e((string) $value) ?>" <?= in_array((string) $value, $selectedApprovalReasons, true) ? 'checked' : '' ?>>
+                                                    <span><?= e((string) $label) ?></span>
+                                                </label>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                    <label class="nrf-label nrf-label-gap" for="nrfApprovalDays">Reamintește la</label>
+                                    <div class="nrf-days-row nrf-days-row-sm">
+                                        <input class="form-control" id="nrfApprovalDays" name="approval_repeat_days" type="number" min="1" max="30" step="1" value="<?= e((string) ($formData['approval_repeat_days'] ?? 1)) ?>">
+                                        <span class="nrf-unit">zile</span>
+                                    </div>
+                                    <small class="nrf-help">Are efect doar cu „Repetă până la rezolvare”.</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="nrf-section" aria-labelledby="nrfStep3">
+                    <div class="nrf-section-head">
+                        <span class="nrf-step" aria-hidden="true">3</span>
+                        <div>
+                            <h4 id="nrfStep3">Cine primește și cum?</h4>
+                            <p>Selectează canalul de trimitere și destinatarii.</p>
+                        </div>
+                    </div>
+
+                    <div class="nrf-delivery" style="--nrf-recipient-count: <?= max(1, count($visibleRecipientModes)) ?>">
+                        <div class="nrf-delivery-col" role="radiogroup" aria-labelledby="nrfChannelLabel">
+                            <span class="nrf-label" id="nrfChannelLabel">Canal</span>
+                            <div class="nrf-channels">
+                                <?php foreach ($channelLabels as $value => $label): ?>
+                                    <label class="nrf-channel">
+                                        <input type="radio" name="channel" value="<?= e((string) $value) ?>" data-nrf-channel <?= $currentChannel === (string) $value ? 'checked' : '' ?>>
+                                        <span><i class="bi <?= e($channelIcon((string) $value)) ?>" aria-hidden="true"></i> <?= e((string) $label) ?></span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                            <?= $fieldError('channel') ?>
+                        </div>
+                        <div class="nrf-delivery-col" role="radiogroup" aria-labelledby="nrfRecipientLabel">
+                            <span class="nrf-label" id="nrfRecipientLabel">Destinatari</span>
+                            <div class="nrf-recipients">
+                                <?php foreach ($visibleRecipientModes as $value): ?>
+                                    <?php $display = $recipientDisplay[$value] ?? ['label' => (string) $recipientLabels[$value], 'icon' => 'bi-person', 'help' => '']; ?>
+                                    <label class="nrf-recipient">
+                                        <input type="radio" name="recipient_mode" value="<?= e((string) $value) ?>" data-nrf-recipient <?= $currentRecipientMode === (string) $value ? 'checked' : '' ?>>
+                                        <span class="nrf-recipient-card">
+                                            <span class="nrf-radio-dot" aria-hidden="true"></span>
+                                            <i class="bi <?= e($display['icon']) ?>" aria-hidden="true"></i>
+                                            <strong><?= e($display['label']) ?></strong>
+                                            <small><?= e($display['help']) ?></small>
+                                        </span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                            <?= $fieldError('recipient_mode') ?>
+                        </div>
+                    </div>
+
+                    <div class="form-check form-switch nrf-switch nrf-switch-inline" data-nrf-driver-option hidden>
+                        <input class="form-check-input" type="checkbox" role="switch" id="nrfNotifyDriver" name="notify_driver" value="1" <?= (int) ($formData['notify_driver'] ?? 0) === 1 ? 'checked' : '' ?>>
+                        <label class="form-check-label" for="nrfNotifyDriver">
+                            <strong>Trimite SMS și șoferului</strong>
+                            <small>Șoferii alocați vehiculului (la documente de șofer, concedii, zile de naștere: șoferul respectiv), pe numărul din fișă. Se adaugă la destinatarii aleși.</small>
+                        </label>
+                    </div>
+
+                    <div class="nrf-users" data-nrf-users hidden>
+                        <div class="nrf-users-toolbar">
+                            <div class="nrf-users-search">
+                                <i class="bi bi-search" aria-hidden="true"></i>
+                                <input class="form-control form-control-sm" type="search" placeholder="Caută utilizator…" aria-label="Caută utilizator" data-nrf-user-search>
+                            </div>
+                            <span class="nrf-users-count" data-nrf-user-count></span>
+                            <button type="button" class="btn btn-sm btn-link" data-nrf-users-all>Toți</button>
+                            <button type="button" class="btn btn-sm btn-link" data-nrf-users-none>Niciunul</button>
+                        </div>
+                        <div class="nrf-users-list">
+                            <?php foreach ($users as $user): ?>
+                                <?php
+                                $userId = (int) ($user['id'] ?? 0);
+                                $userEmail = trim((string) ($user['email'] ?? ''));
+                                $userPhone = trim((string) ($user['telefon'] ?? ''));
+                                ?>
+                                <label class="nrf-user" data-nrf-user data-name="<?= e((string) ($user['nume'] ?? '')) ?>" data-search="<?= e(mb_strtolower(($user['nume'] ?? '') . ' ' . $userEmail . ' ' . $userPhone, 'UTF-8')) ?>" data-has-email="<?= $userEmail !== '' ? '1' : '0' ?>" data-has-phone="<?= $userPhone !== '' ? '1' : '0' ?>">
+                                    <input class="form-check-input" type="checkbox" name="recipient_user_ids[]" value="<?= e((string) $userId) ?>" <?= in_array($userId, $selectedRecipientIds, true) ? 'checked' : '' ?>>
+                                    <span class="nrf-user-avatar" aria-hidden="true"><?= e(mb_strtoupper(mb_substr((string) ($user['nume'] ?? '?'), 0, 1, 'UTF-8'), 'UTF-8')) ?></span>
+                                    <span class="nrf-user-text">
+                                        <strong><?= e((string) ($user['nume'] ?? '')) ?><?php if ((string) ($user['rol'] ?? '') === 'admin'): ?> <em>admin</em><?php endif; ?></strong>
+                                        <small>
+                                            <span class="<?= $userEmail === '' ? 'is-missing' : '' ?>" data-nrf-user-email><i class="bi bi-envelope" aria-hidden="true"></i> <?= e($userEmail !== '' ? $userEmail : 'fără email') ?></span>
+                                            <span class="<?= $userPhone === '' ? 'is-missing' : '' ?>" data-nrf-user-phone><i class="bi bi-phone" aria-hidden="true"></i> <?= e($userPhone !== '' ? $userPhone : 'fără telefon') ?></span>
+                                        </small>
+                                    </span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                        <?= $fieldError('recipient_user_ids') ?>
+                    </div>
+
+                    <?php
+                    $drivers = is_array($drivers ?? null) ? $drivers : [];
+                    $selectedDriverIds = array_map('intval', (array) ($formData['recipient_driver_ids'] ?? []));
+                    ?>
+                    <div class="nrf-users nrf-drivers needs-phone" data-nrf-drivers hidden>
+                        <div class="nrf-drivers-intro">
+                            <i class="bi bi-info-circle" aria-hidden="true"></i>
+                            <span data-nrf-driver-intro>Niciun șofer ales: SMS-ul merge la șoferii alocați vehiculului (sau șoferului vizat). Alege șoferi ca să primească ei mereu mesajul, indiferent de vehicul.</span>
+                        </div>
+                        <div class="nrf-users-toolbar">
+                            <div class="nrf-users-search">
+                                <i class="bi bi-search" aria-hidden="true"></i>
+                                <input class="form-control form-control-sm" type="search" placeholder="Caută șofer sau nr. auto…" aria-label="Caută șofer" data-nrf-driver-search>
+                            </div>
+                            <span class="nrf-users-count" data-nrf-driver-count></span>
+                            <button type="button" class="btn btn-sm btn-link" data-nrf-drivers-all>Toți</button>
+                            <button type="button" class="btn btn-sm btn-link" data-nrf-drivers-none>Niciunul</button>
+                        </div>
+                        <div class="nrf-users-list">
+                            <?php foreach ($drivers as $driver): ?>
+                                <?php
+                                $driverId = (int) ($driver['id'] ?? 0);
+                                $driverPhone = trim((string) ($driver['telefon'] ?? ''));
+                                $driverPlate = trim((string) ($driver['nr_inmatriculare'] ?? ''));
+                                ?>
+                                <label class="nrf-user" data-nrf-driver data-name="<?= e((string) ($driver['nume'] ?? '')) ?>" data-search="<?= e(mb_strtolower(($driver['nume'] ?? '') . ' ' . $driverPlate . ' ' . $driverPhone, 'UTF-8')) ?>" data-has-phone="<?= $driverPhone !== '' ? '1' : '0' ?>">
+                                    <input class="form-check-input" type="checkbox" name="recipient_driver_ids[]" value="<?= e((string) $driverId) ?>" <?= in_array($driverId, $selectedDriverIds, true) ? 'checked' : '' ?>>
+                                    <span class="nrf-user-avatar is-driver" aria-hidden="true"><?= e(mb_strtoupper(mb_substr((string) ($driver['nume'] ?? '?'), 0, 1, 'UTF-8'), 'UTF-8')) ?></span>
+                                    <span class="nrf-user-text">
+                                        <strong><?= e((string) ($driver['nume'] ?? '')) ?></strong>
+                                        <small>
+                                            <span class="<?= $driverPhone === '' ? 'is-missing' : '' ?>" data-nrf-user-phone><i class="bi bi-phone" aria-hidden="true"></i> <?= e($driverPhone !== '' ? $driverPhone : 'fără telefon') ?></span>
+                                            <span><i class="bi bi-truck" aria-hidden="true"></i> <?= e($driverPlate !== '' ? $driverPlate : 'fără vehicul') ?></span>
+                                        </small>
+                                    </span>
+                                </label>
+                            <?php endforeach; ?>
+                            <?php if ($drivers === []): ?>
+                                <p class="nrf-empty nrf-drivers-empty">Nu există șoferi activi.</p>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="nrf-section" aria-labelledby="nrfStep4">
+                    <div class="nrf-section-head">
+                        <span class="nrf-step" aria-hidden="true">4</span>
+                        <div>
+                            <h4 id="nrfStep4">Opțiuni</h4>
+                            <p>Setări suplimentare pentru această regulă.</p>
+                        </div>
+                    </div>
+                    <div class="nrf-options">
+                        <div class="form-check form-switch nrf-switch">
+                            <input class="form-check-input" type="checkbox" role="switch" id="nrfEnabled" name="enabled" value="1" data-nrf-option="Activă" <?= (int) ($formData['enabled'] ?? 0) === 1 ? 'checked' : '' ?>>
+                            <label class="form-check-label" for="nrfEnabled"><strong>Activă</strong><small>Worker-ul o verifică la fiecare rulare.</small></label>
+                        </div>
+                        <div class="form-check form-switch nrf-switch">
+                            <input class="form-check-input" type="checkbox" role="switch" id="nrfRepeat" name="repeat_until_resolved" value="1" data-nrf-option="Repetă până la rezolvare" <?= (int) ($formData['repeat_until_resolved'] ?? 1) === 1 ? 'checked' : '' ?>>
+                            <label class="form-check-label" for="nrfRepeat"><strong>Repetă până la rezolvare</strong><small>Trimite din nou cât timp situația persistă.</small></label>
+                        </div>
+                        <div class="form-check form-switch nrf-switch">
+                            <input class="form-check-input" type="checkbox" role="switch" id="nrfDaily" name="daily_limit_enabled" value="1" data-nrf-option="Maxim o notificare pe zi" <?= (int) ($formData['daily_limit_enabled'] ?? 1) === 1 ? 'checked' : '' ?>>
+                            <label class="form-check-label" for="nrfDaily"><strong>Maxim o notificare pe zi</strong><small>Pentru același document / vehicul și destinatar.</small></label>
+                        </div>
+                    </div>
+                </section>
             </div>
 
             <footer class="nrf-footer">
-                <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'notificari'])) ?>">Anulează</a>
-                <button type="submit" class="btn btn-primary" data-nrf-submit><i class="bi bi-check2" aria-hidden="true"></i> <span data-nrf-submit-label>Salvează</span></button>
+                <div class="nrf-summary" data-nrf-summary>
+                    <div class="nrf-summary-main">
+                        <span class="nrf-summary-icon" aria-hidden="true"><i class="bi bi-card-checklist"></i></span>
+                        <div class="nrf-summary-body">
+                            <div class="nrf-summary-head">
+                                <strong>Rezumat</strong>
+                                <span class="nrf-pill" data-nrf-count-badge></span>
+                                <button type="button" class="nrf-details-toggle" aria-expanded="false" data-nrf-details-toggle>Detalii <i class="bi bi-chevron-up" aria-hidden="true"></i></button>
+                            </div>
+                            <ul class="nrf-checklist" data-nrf-checklist aria-live="polite"></ul>
+                        </div>
+                    </div>
+                    <div class="nrf-summary-side">
+                        <div class="nrf-status" data-nrf-status aria-live="polite">
+                            <i class="bi" data-nrf-status-icon aria-hidden="true"></i>
+                            <div>
+                                <strong data-nrf-status-title></strong>
+                                <span data-nrf-count></span>
+                                <ul class="nrf-status-warnings" data-nrf-warnings></ul>
+                            </div>
+                        </div>
+                        <div class="nrf-name-preview">
+                            <i class="bi bi-info-circle-fill" aria-hidden="true"></i>
+                            <div>
+                                <strong>Previzualizare nume</strong>
+                                <span class="nrf-name-preview-value" data-nrf-name-preview></span>
+                                <small>Poate fi modificat manual în câmpul de sus.</small>
+                                <button type="button" class="nrf-link" aria-expanded="false" aria-controls="nrfPreviewList" data-nrf-preview-toggle hidden></button>
+                            </div>
+                        </div>
+                        <div class="nrf-preview-pop" id="nrfPreviewList" data-nrf-preview-pop hidden>
+                            <div class="nrf-preview-pop-head">Regulile care se vor salva</div>
+                            <ul data-nrf-preview></ul>
+                        </div>
+                        <div class="nrf-actions">
+                            <a class="btn nrf-btn-cancel" href="<?= e(build_query_url(['page' => 'notificari'])) ?>" data-nrf-cancel>Anulează</a>
+                            <button type="submit" class="btn btn-primary nrf-btn-save" data-nrf-submit><i class="bi bi-check2" aria-hidden="true"></i> <span data-nrf-submit-label>Salvează</span></button>
+                        </div>
+                    </div>
+                </div>
             </footer>
         </form>
-    </aside>
+    </div>
     <script src="<?= e(url('assets/js/notificari-regula.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/notificari-regula.js'))) ?>"></script>
 <?php endif; ?>

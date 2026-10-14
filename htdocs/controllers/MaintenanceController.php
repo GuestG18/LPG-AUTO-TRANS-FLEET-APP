@@ -59,6 +59,9 @@ class MaintenanceController
             case 'save_part':
                 $this->savePart();
                 return;
+            case 'delete_part':
+                $this->deletePart();
+                return;
             case 'save_auto_component_config':
                 $this->saveAutoComponentConfig();
                 return;
@@ -472,7 +475,11 @@ class MaintenanceController
             $repairInvoices = $this->model->getCorrectiveInvoices($filters);
             $repairInvoiceDetails = $this->model->getCorrectiveInvoiceDetails(array_column($repairInvoices, 'id'));
         } elseif ($section === 'stock') {
-            $parts = $this->model->getStockParts($filters);
+            $parts = array_map(function (array $part): array {
+                $part['image_url'] = $this->autoPartImageUrl((string) ($part['imagine_stocata'] ?? ''));
+                return $part;
+            }, $this->model->getStockParts(array_merge($filters, ['search' => ''])));
+            // Cautarea text se aplica in browser, pe tot ce se vede in rand (inclusiv locatia), pe masura ce tastezi.
             $stockKpis = $this->model->getStockKpis();
             $stockFilterOptions = $this->model->getStockFilterOptions();
             $scheduledInterventions = $this->model->getScheduledInterventions();
@@ -661,6 +668,19 @@ class MaintenanceController
             flash_set('danger', 'Factura nu a putut fi ștearsă.');
         }
         $this->redirectSection('repairs');
+    }
+
+    private function deletePart(): void
+    {
+        $this->requirePostAndCsrf('stock');
+        try {
+            $deleted = $this->model->archivePart((int) ($_POST['id'] ?? 0));
+            flash_set($deleted ? 'success' : 'warning', $deleted ? 'Piesa a fost ștearsă din stoc.' : 'Piesa nu mai există în stoc.');
+        } catch (Throwable $exception) {
+            error_log('[MaintenanceController][delete_part] ' . $exception->getMessage());
+            flash_set('danger', 'Piesa nu a putut fi ștearsă.');
+        }
+        $this->redirectSection('stock');
     }
 
     private function savePart(): void

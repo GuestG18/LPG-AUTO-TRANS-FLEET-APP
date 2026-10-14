@@ -17,6 +17,7 @@ require_once dirname(__DIR__) . '/services/InvoiceStorageService.php';
  *   istoric_doc_delete       POST JSON eliminare logica a unui document     [documents]
  *   istoric_verify           POST JSON marcheaza / anuleaza verificarea      [edit]
  *   istoric_reference        POST JSON referinta interventiei (ex. factura)  [edit]
+ *   istoric_delete           POST JSON sterge interventia (copie in revizii_istoric_sterse), T0 revine [delete_history]
  *   istoric_export           GET       Excel / PDF pe filtrele curente (fisier temporar) [export]
  *   istoric_report           POST JSON genereaza si salveaza un raport       [export]
  *   istoric_reports          GET JSON  toate rapoartele vizibile             [export]
@@ -61,6 +62,7 @@ class ReviziiIstoricController
             'canEdit' => can(self::PAGE, 'edit'),
             'canExport' => can(self::PAGE, 'export'),
             'canDocuments' => can(self::PAGE, 'documents'),
+            'canDelete' => can(self::PAGE, 'delete_history'),
         ]);
     }
 
@@ -238,6 +240,37 @@ class ReviziiIstoricController
         $this->model->setReference($id, $reference !== '' ? $reference : null, $this->userId());
 
         $this->json(['ok' => true, 'message' => 'Referința a fost salvată.', 'item' => $this->model->find($id)]);
+    }
+
+    // ---------------------------------------------------------------- stergere
+
+    public function deleteAction(): void
+    {
+        $this->requireJsonPost();
+        if (!can(self::PAGE, 'delete_history')) {
+            $this->json(['ok' => false, 'message' => 'Nu ai dreptul să ștergi intervenții din istoric.'], 403);
+        }
+        $reason = trim(preg_replace('/\s+/u', ' ', (string) ($_POST['motiv'] ?? '')) ?? '');
+        if (mb_strlen($reason) > 500) {
+            $this->json(['ok' => false, 'message' => 'Motivul poate avea cel mult 500 de caractere.'], 422);
+        }
+        try {
+            $result = $this->model->deleteIntervention((int) ($_POST['id'] ?? 0), $reason !== '' ? $reason : null, $this->userId());
+        } catch (InvalidArgumentException $exception) {
+            $this->json(['ok' => false, 'message' => $exception->getMessage()], 404);
+        } catch (Throwable $exception) {
+            error_log('[ReviziiIstoric][delete] ' . $exception->getMessage());
+            $this->json(['ok' => false, 'message' => 'Intervenția nu a putut fi ștearsă.'], 500);
+        }
+
+        $message = sprintf('Intervenția %s · %s a fost ștearsă din istoric.', $result['nr'], $result['componenta']);
+        if ($result['t0_restaurat'] !== null) {
+            $message .= ' T0 a revenit la ' . date('d.m.Y H:i', (int) strtotime($result['t0_restaurat'])) . ', iar calculul se reface de acolo.';
+            $_SESSION['revizii_autosync'] = true; // zilele de la noul T0 se completeaza din SasFleet pe pagina categoriei
+        } elseif ($result['plan_sters']) {
+            $message .= ' Componenta a revenit la „neconfigurat”.';
+        }
+        $this->json(['ok' => true, 'message' => $message]);
     }
 
     // ---------------------------------------------------------------- export / rapoarte

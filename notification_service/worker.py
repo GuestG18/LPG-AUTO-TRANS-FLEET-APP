@@ -898,6 +898,45 @@ def driver_recipients(conn, match: dict[str, Any], cache: dict[tuple[str, int], 
     return cache[key]
 
 
+def rule_driver_ids(rule: dict[str, Any]) -> list[int]:
+    """Soferii alesi in regula (metadata_json.driver_ids); gol = soferii alocati vehiculului."""
+    ids: list[int] = []
+    for value in rule_metadata(rule).get("driver_ids") or []:
+        try:
+            driver_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if driver_id > 0 and driver_id not in ids:
+            ids.append(driver_id)
+    return ids
+
+
+def picked_drivers(conn, driver_ids: list[int], cache: dict[tuple[str, int], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Soferii alesi in regula, activi si cu telefon (aceeasi forma ca driver_recipients)."""
+    drivers: list[dict[str, Any]] = []
+    missing = [driver_id for driver_id in driver_ids if ("picked", driver_id) not in cache]
+    if missing:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            f"""
+            SELECT id AS driver_id, nume, telefon
+            FROM soferi
+            WHERE id IN ({", ".join(["%s"] * len(missing))})
+              AND status = 'activ'
+              AND telefon IS NOT NULL
+              AND telefon <> ''
+            """,
+            tuple(missing),
+        )
+        found = {int(row["driver_id"]): dict(row, email="", is_driver=True) for row in cursor.fetchall()}
+        cursor.close()
+        for driver_id in missing:
+            cache[("picked", driver_id)] = [found[driver_id]] if driver_id in found else []
+    for driver_id in driver_ids:
+        drivers.extend(cache[("picked", driver_id)])
+    return drivers
+
+
 def delivery_context_id(rule: dict[str, Any], match: dict[str, Any]) -> str:
     parts = [
         "rule",
@@ -1258,9 +1297,13 @@ def delivery_targets(
         if "sms" in channels:
             add("sms", normalize_phone(user.get("telefon"), sms.country_code), user)
 
-    wants_driver = str(rule.get("recipient_mode") or "") == "drivers" or bool(rule_metadata(rule).get("notify_driver"))
+    is_drivers_mode = str(rule.get("recipient_mode") or "") == "drivers"
+    wants_driver = is_drivers_mode or bool(rule_metadata(rule).get("notify_driver"))
     if "sms" in channels and wants_driver:
-        for driver in driver_recipients(conn, match, driver_cache):
+        # „Doar soferul” cu soferi alesi in regula: ei primesc mereu SMS-ul, oricare ar fi vehiculul.
+        picked = rule_driver_ids(rule) if is_drivers_mode else []
+        drivers = picked_drivers(conn, picked, driver_cache) if picked else driver_recipients(conn, match, driver_cache)
+        for driver in drivers:
             add("sms", normalize_phone(driver.get("telefon"), sms.country_code), driver)
 
     return targets, skipped

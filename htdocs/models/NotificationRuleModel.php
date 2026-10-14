@@ -330,6 +330,24 @@ class NotificationRuleModel extends BaseModel
         return $stmt->fetchAll();
     }
 
+    /** Soferii activi pentru „Doar soferul (SMS)” cu soferi alesi; telefonul vine din fisa soferului. */
+    public function getActiveDrivers(): array
+    {
+        if (!$this->tableExists('soferi')) {
+            return [];
+        }
+
+        $stmt = $this->db->query("
+            SELECT s.id, s.nume, s.telefon, COALESCE(v.nr_inmatriculare, '') AS nr_inmatriculare
+            FROM soferi s
+            LEFT JOIN vehicule v ON v.id = s.vehicle_id
+            WHERE s.status = 'activ'
+            ORDER BY s.nume ASC
+        ");
+
+        return $stmt->fetchAll();
+    }
+
     public function getVehicleDocumentTypes(): array
     {
         if (!$this->tableExists('documente')) {

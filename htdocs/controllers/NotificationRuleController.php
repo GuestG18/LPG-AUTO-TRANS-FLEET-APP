@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once dirname(__DIR__) . '/services/ReviziiWeeklyReportService.php';
+
 class NotificationRuleController
 {
     private NotificationRuleModel $model;
@@ -53,6 +55,7 @@ class NotificationRuleController
         'revizie_schimb_ulei' => 'Schimb ulei',
         'revizie_placute_frana' => 'Plăcuțe frână',
         'revizie_anvelope' => 'Anvelope (revizie km)',
+        'revizie_raport_saptamanal' => 'Raport saptamanal revizii (email)',
     ];
 
     private const EVENT_ENTITY = [
@@ -70,6 +73,7 @@ class NotificationRuleController
         'revizie_schimb_ulei' => 'revizie',
         'revizie_placute_frana' => 'revizie',
         'revizie_anvelope' => 'revizie',
+        'revizie_raport_saptamanal' => 'revizie',
     ];
 
     /**
@@ -92,6 +96,8 @@ class NotificationRuleController
         'revizie_schimb_ulei' => ['revizie' => true],
         'revizie_placute_frana' => ['revizie' => true],
         'revizie_anvelope' => ['revizie' => true],
+        // Raportul saptamanal: il trimite scripts/revizii_raport_saptamanal.php (cron), doar pe email.
+        'revizie_raport_saptamanal' => ['revizie' => true, 'report' => true],
     ];
 
     private const EVENT_HINTS = [
@@ -109,6 +115,7 @@ class NotificationRuleController
         'revizie_schimb_ulei' => 'Km rămași până la schimbul de ulei',
         'revizie_placute_frana' => 'Km rămași până la plăcuțe',
         'revizie_anvelope' => 'Km rămași până la anvelope',
+        'revizie_raport_saptamanal' => 'Email săptămânal cu situația reviziilor',
     ];
 
     /** Evenimente / destinatari pe care worker-ul nu ii trateaza: apar doar daca o regula veche ii foloseste. */
@@ -168,6 +175,12 @@ class NotificationRuleController
                 return;
             case 'send_test_sms':
                 $this->sendTestSmsAction();
+                return;
+            case 'report_preview':
+                $this->reportPreviewAction();
+                return;
+            case 'report_test':
+                $this->reportTestAction();
                 return;
             default:
                 http_response_code(404);
@@ -270,6 +283,9 @@ class NotificationRuleController
             'recipientLabels' => self::RECIPIENT_LABELS,
             'channelLabels' => self::CHANNEL_LABELS,
             'users' => $this->model->getActiveEmailUsers(),
+            'drivers' => $this->model->getActiveDrivers(),
+            'reportDays' => ReviziiWeeklyReportService::DAYS,
+            'reportCategories' => array_map(static fn (array $tab): string => (string) $tab['label'], ReviziiModel::TABS),
             'vehicleDocumentTypes' => $vehicleDocumentTypes,
             'driverDocumentTypes' => $driverDocumentTypes,
             'equipmentTypes' => $equipmentTypes,
@@ -345,6 +361,86 @@ class NotificationRuleController
             ? 'Regula a fost actualizata.'
             : 'Grupul de reguli a fost salvat: ' . implode(', ', $parts) . '.');
         redirect($this->indexUrl());
+    }
+
+    /** Setarile raportului din formular (nesalvate), pentru previzualizare si test. */
+    private function reportConfigFromInput(array $input): array
+    {
+        return ReviziiWeeklyReportService::normalizeConfig([
+            'day' => $input['report_day'] ?? 1,
+            'hour' => $input['report_hour'] ?? 8,
+            'categories' => (array) ($input['report_categories'] ?? []),
+            'history' => isset($input['report_history']),
+        ], trim((string) ($input['revizie_status'] ?? '')));
+    }
+
+    /** Previzualizarea raportului saptamanal, cu setarile din formular (fara salvare, fara email). */
+    private function reportPreviewAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf_token($_POST['_token'] ?? null)) {
+            http_response_code(400);
+            echo 'Cerere invalida. Reincarca formularul si incearca din nou.';
+            return;
+        }
+
+        $report = (new ReviziiWeeklyReportService($this->db))->build($this->reportConfigFromInput($_POST));
+        header('Content-Type: text/html; charset=UTF-8');
+        header('X-Robots-Tag: noindex');
+        echo $report['html'];
+    }
+
+    /**
+     * Trimite acum raportul (setarile din formular) catre utilizatorul curent sau catre destinatarii
+     * din formular. Se inregistreaza ca test, deci nu consuma trimiterea programata a saptamanii.
+     */
+    private function reportTestAction(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf_token($_POST['_token'] ?? null)) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => 'Token CSRF invalid. Reîncarcă pagina.']);
+            return;
+        }
+
+        $service = new ReviziiWeeklyReportService($this->db);
+        $target = (string) ($_POST['report_test_target'] ?? 'me');
+        if ($target === 'rule') {
+            $mode = (string) ($_POST['recipient_mode'] ?? 'admins');
+            if (!in_array($mode, ['admins', 'specific_users'], true)) {
+                echo json_encode(['ok' => false, 'error' => 'Raportul se trimite pe email: alege Administratori sau Utilizatori selectați.']);
+                return;
+            }
+            $recipients = $service->resolveRecipients($mode, (array) ($_POST['recipient_user_ids'] ?? []));
+        } else {
+            $user = current_user() ?? [];
+            $recipients = trim((string) ($user['email'] ?? '')) !== ''
+                ? [['id' => (int) ($user['id'] ?? 0), 'nume' => (string) ($user['nume'] ?? ''), 'email' => (string) $user['email']]]
+                : [];
+        }
+
+        if ($recipients === []) {
+            echo json_encode(['ok' => false, 'error' => 'Nu există niciun destinatar cu adresă de email.']);
+            return;
+        }
+
+        $report = $service->build($this->reportConfigFromInput($_POST));
+        $sent = [];
+        $failed = [];
+        foreach ($recipients as $recipient) {
+            $result = $service->send($recipient, $report, ReviziiWeeklyReportService::CONTEXT_TEST, 'test:' . date('YmdHis'));
+            if (!empty($result['sent'])) {
+                $sent[] = (string) $recipient['email'];
+            } else {
+                $failed[] = (string) $recipient['email'] . ': ' . (string) ($result['error'] ?? 'eroare necunoscută');
+            }
+        }
+
+        echo json_encode([
+            'ok' => $failed === [],
+            'sent' => $sent,
+            'failed' => $failed,
+            'subject' => $report['subject'],
+        ], JSON_UNESCAPED_UNICODE);
     }
 
     private function newGroupId(): string
@@ -501,12 +597,34 @@ class NotificationRuleController
             'repeat_days' => max(1, min(30, (int) ($input['approval_repeat_days'] ?? 1))),
         ];
 
+        // Raportul saptamanal: ziua, ora, categoriile si istoricul merg in metadata_json.report.
+        $reportConfig = ReviziiWeeklyReportService::normalizeConfig([
+            'day' => $input['report_day'] ?? 1,
+            'hour' => $input['report_hour'] ?? 8,
+            'categories' => (array) ($input['report_categories'] ?? []),
+            'history' => isset($input['report_history']),
+        ]);
+        $reportMetadata = [
+            'day' => $reportConfig['day'],
+            'hour' => $reportConfig['hour'],
+            'categories' => $reportConfig['categories'],
+            'history' => $reportConfig['history'],
+        ];
+
         $recipientUserIds = array_values(array_unique(array_filter(array_map(
             'intval',
             (array) ($input['recipient_user_ids'] ?? [])
         ), static fn (int $value): bool => $value > 0)));
 
+        // „Doar soferul”: soferii alesi primesc mereu SMS-ul; gol = soferii alocati vehiculului.
+        $activeDriverIds = array_map(static fn (array $driver): int => (int) $driver['id'], $this->model->getActiveDrivers());
+        $recipientDriverIds = array_values(array_intersect(
+            array_values(array_unique(array_filter(array_map('intval', (array) ($input['recipient_driver_ids'] ?? [])), static fn (int $value): bool => $value > 0))),
+            $activeDriverIds
+        ));
+
         $old = array_merge($shared, [
+            'recipient_driver_ids' => $recipientDriverIds,
             'event_types' => $eventTypes,
             'doc_types' => $docTypes,
             'doc_all' => $docAll,
@@ -514,6 +632,10 @@ class NotificationRuleController
             'approval_resource_types' => $approvalMetadata['approval_resource_types'],
             'approval_reasons' => $approvalMetadata['approval_reasons'],
             'approval_repeat_days' => $approvalMetadata['repeat_days'],
+            'report_day' => $reportMetadata['day'],
+            'report_hour' => $reportMetadata['hour'],
+            'report_categories' => $reportMetadata['categories'],
+            'report_history' => $reportMetadata['history'] ? 1 : 0,
         ]);
 
         $errors = [];
@@ -569,12 +691,15 @@ class NotificationRuleController
         }
 
         $hasApproval = in_array(self::APPROVAL_EVENT, $eventTypes, true);
+        $hasReport = $usesCondition('report');
         if (!array_key_exists($shared['recipient_mode'], self::RECIPIENT_LABELS)) {
             $errors['recipient_mode'] = 'Selecteaza destinatarii.';
         } elseif ($shared['recipient_mode'] === 'specific_users' && $recipientUserIds === []) {
             $errors['recipient_user_ids'] = 'Selecteaza cel putin un utilizator.';
         } elseif ($shared['recipient_mode'] === 'drivers') {
-            if ($hasApproval) {
+            if ($hasReport) {
+                $errors['recipient_mode'] = 'Raportul saptamanal se trimite pe email: alege Administratori sau Utilizatori selectati.';
+            } elseif ($hasApproval) {
                 $errors['recipient_mode'] = 'Cererile de aprobare nu au un sofer destinatar: scoate-le din selectie sau alege alti destinatari.';
             } elseif ($shared['channel'] !== 'sms') {
                 // Soferii nu au email in aplicatie, doar telefon.
@@ -599,11 +724,17 @@ class NotificationRuleController
 
             foreach ($documentTypes as $documentType) {
                 $metadata = [];
-                if ($eventType === self::APPROVAL_EVENT) {
+                $isReport = !empty($conditions['report']);
+                if ($isReport) {
+                    $metadata = ['report' => $reportMetadata];
+                } elseif ($eventType === self::APPROVAL_EVENT) {
                     $metadata = $approvalMetadata;
                 } elseif (in_array($shared['channel'], self::SMS_CHANNELS, true) && $shared['notify_driver'] === 1) {
                     // SMS si catre soferul vehiculului (sau soferul insusi, la evenimentele de sofer).
                     $metadata['notify_driver'] = true;
+                }
+                if (!$isReport && $shared['recipient_mode'] === 'drivers' && $recipientDriverIds !== []) {
+                    $metadata['driver_ids'] = $recipientDriverIds;
                 }
 
                 $items[] = [
@@ -613,7 +744,8 @@ class NotificationRuleController
                     'days_before' => isset($conditions['days']) ? $shared['days_before'] : 0,
                     'threshold_km' => $eventType === 'tire_km_limit' ? $shared['threshold_km'] : null,
                     'threshold_tread_depth' => $eventType === 'tire_tread_depth' ? $shared['threshold_tread_depth'] : null,
-                    'channel' => $shared['channel'],
+                    // Raportul pleaca doar pe email, indiferent de canalul ales pentru celelalte evenimente.
+                    'channel' => $isReport ? 'email' : $shared['channel'],
                     'recipient_mode' => $shared['recipient_mode'],
                     'enabled' => $shared['enabled'],
                     'repeat_until_resolved' => $shared['repeat_until_resolved'],
@@ -690,6 +822,11 @@ class NotificationRuleController
             'repeat_until_resolved' => 1,
             'daily_limit_enabled' => 1,
             'recipient_user_ids' => [],
+            'recipient_driver_ids' => [],
+            'report_day' => 1,
+            'report_hour' => 8,
+            'report_categories' => [],
+            'report_history' => 1,
             'approval_resource_types' => [],
             'approval_reasons' => [],
             'approval_repeat_days' => 1,
@@ -756,7 +893,11 @@ class NotificationRuleController
             if ($eventType === self::APPROVAL_EVENT) {
                 $approvalMetadata = $memberMetadata;
             }
+            if (!empty($conditions['report']) && is_array($memberMetadata['report'] ?? null)) {
+                $reportConfig = ReviziiWeeklyReportService::normalizeConfig($memberMetadata['report']);
+            }
         }
+        $reportConfig ??= ReviziiWeeklyReportService::normalizeConfig(['history' => true]);
 
         // „Toate” = nicio regula pe un tip anume din familia respectiva.
         foreach (array_keys($docAll) as $family) {
@@ -782,6 +923,11 @@ class NotificationRuleController
             'repeat_until_resolved' => (int) ($rule['repeat_until_resolved'] ?? 1),
             'daily_limit_enabled' => (int) ($rule['daily_limit_enabled'] ?? 1),
             'recipient_user_ids' => (array) ($rule['recipient_user_ids'] ?? []),
+            'recipient_driver_ids' => array_values(array_map('intval', (array) ($metadata['driver_ids'] ?? []))),
+            'report_day' => $reportConfig['day'],
+            'report_hour' => $reportConfig['hour'],
+            'report_categories' => $reportConfig['categories'],
+            'report_history' => $reportConfig['history'] ? 1 : 0,
             'approval_resource_types' => array_map('strval', (array) ($approvalMetadata['approval_resource_types'] ?? [])),
             'approval_reasons' => array_map('strval', (array) ($approvalMetadata['approval_reasons'] ?? [])),
             'approval_repeat_days' => max(1, (int) ($approvalMetadata['repeat_days'] ?? 1)),

@@ -178,7 +178,7 @@ $pageSubtitle = match ($section) {
                     <i class="bi bi-plus-lg me-1"></i>Adaugă reparație / factură
                 </button>
             <?php else: ?>
-                <a class="btn btn-outline-secondary maintenance-secondary-button" href="<?= e(build_query_url(array_merge($_GET, ['page' => 'mentenanta', 'action' => 'export_v2', 'section' => $section]))) ?>">
+                <a class="btn btn-outline-secondary maintenance-secondary-button" href="<?= e(build_query_url(array_merge($_GET, ['page' => 'mentenanta', 'action' => 'export_v2', 'section' => $section]))) ?>" data-stock-export>
                     <i class="bi bi-download me-1"></i><?= $section === 'stock' ? 'Exportă' : 'Export CSV' ?>
                 </a>
             <?php endif; ?>
@@ -626,7 +626,7 @@ $pageSubtitle = match ($section) {
         </div>
         <form class="maintenance-filter-card maintenance-stock-filter" method="get">
             <input type="hidden" name="page" value="mentenanta"><input type="hidden" name="action" value="stock">
-            <div class="maintenance-filter-field maintenance-search-field"><label>Căutare</label><input class="form-control" type="search" name="search" value="<?= e((string) ($filters['search'] ?? '')) ?>" placeholder="Cod, denumire sau OEM"></div>
+            <div class="maintenance-filter-field maintenance-search-field"><label>Căutare</label><input class="form-control" type="search" name="search" value="<?= e((string) ($filters['search'] ?? '')) ?>" placeholder="Cod, denumire, OEM, locație, furnizor..." autocomplete="off" data-stock-search></div>
             <div class="maintenance-filter-field"><label>Categorie</label><select class="form-select" name="categorie"><option value="">Toate</option><?php foreach ((array) ($stockFilterOptions['categories'] ?? []) as $option): ?><option value="<?= e((string) $option) ?>" <?= ($filters['categorie'] ?? '') === $option ? 'selected' : '' ?>><?= e((string) $option) ?></option><?php endforeach; ?></select></div>
             <div class="maintenance-filter-field"><label>Tip vehicul</label><select class="form-select" name="vehicle_type"><option value="">Toate</option><?php foreach (['cap_tractor' => 'Cap Tractor', 'semiremorca' => 'Semiremorcă', 'camion' => 'Camion', 'autoutilitara' => 'Autoutilitară'] as $value => $label): ?><option value="<?= e($value) ?>" <?= ($filters['vehicle_type'] ?? '') === $value ? 'selected' : '' ?>><?= e($label) ?></option><?php endforeach; ?></select></div>
             <div class="maintenance-filter-field"><label>Status stoc</label><select class="form-select" name="stock_status"><option value="">Toate</option><option value="in_stock" <?= ($filters['stock_status'] ?? '') === 'in_stock' ? 'selected' : '' ?>>În stoc</option><option value="low" <?= ($filters['stock_status'] ?? '') === 'low' ? 'selected' : '' ?>>Stoc scăzut</option><option value="out" <?= ($filters['stock_status'] ?? '') === 'out' ? 'selected' : '' ?>>Stoc epuizat</option></select></div>
@@ -640,18 +640,28 @@ $pageSubtitle = match ($section) {
             </div>
         <?php endif; ?>
         <article class="maintenance-card maintenance-table-card"><div class="table-responsive"><table class="table maintenance-table align-middle mb-0">
-            <thead><tr><th>Cod piesă</th><th>Denumire piesă</th><th>Categorie</th><th>Tip vehicul compatibil</th><th>Stoc curent</th><th>Stoc minim</th><th>Preț achiziție</th><th>Valoare stoc</th><th>Furnizor</th><th>Stare</th><th>Garantie</th><th>Acțiuni</th></tr></thead>
-            <tbody><?php foreach ($parts as $part): ?><tr>
+            <thead><tr><th>Poză</th><th>Cod piesă</th><th>Denumire piesă</th><th>Categorie</th><th>Tip vehicul compatibil</th><th>Stoc curent</th><th>Stoc minim</th><th>Preț achiziție</th><th>Valoare stoc</th><th>Furnizor</th><th>Locație</th><th>Stare</th><th>Garantie</th><th>Acțiuni</th></tr></thead>
+            <tbody><?php foreach ($parts as $part): ?><tr data-stock-row>
+                <td><?php if (($part['image_url'] ?? '') !== ''): ?><a class="maintenance-part-thumb" href="#" data-bs-toggle="modal" data-bs-target="#partDetail<?= e((string) $part['id']) ?>" title="Vezi poza"><img src="<?= e((string) $part['image_url']) ?>" alt="<?= e((string) $part['denumire']) ?>" loading="lazy"></a><?php else: ?><span class="maintenance-part-thumb" title="Fără poză"><i class="bi bi-image"></i></span><?php endif; ?></td>
                 <td><strong><?= e((string) $part['cod_piesa']) ?></strong><?php if (!empty($part['cod_oem'])): ?><small>OEM / DOT: <?= e((string) $part['cod_oem']) ?></small><?php endif; ?></td>
                 <td><?= e((string) $part['denumire']) ?><?php if (($part['inventory_type'] ?? '') === 'tire'): ?><small><i class="bi bi-arrow-repeat"></i> Sincronizată din Anvelope</small><?php endif; ?></td><td><?= e((string) $part['categorie']) ?></td><td><?= e(str_replace(',', ', ', (string) ($part['tipuri_vehicul'] ?? '-'))) ?></td>
                 <td><strong><?= e(format_number_ro((float) $part['stoc_curent'], 2)) ?> <?= e((string) $part['unitate_masura']) ?></strong></td><td><?= e(format_number_ro((float) $part['stoc_minim'], 2)) ?></td>
                 <td><?= e($currency((float) $part['pret_achizitie'])) ?></td><td><strong><?= e($currency((float) $part['valoare_stoc'])) ?></strong></td><td><?= trim((string) ($part['furnizor'] ?? '')) !== '' ? e((string) $part['furnizor']) : '-' ?></td>
+                <td><?= trim((string) ($part['locatie_depozit'] ?? '')) !== '' ? e((string) $part['locatie_depozit']) : '-' ?></td>
                 <td><span class="maintenance-badge <?= $part['stock_status'] === 'in_stock' ? 'maintenance-badge-success' : ($part['stock_status'] === 'low' ? 'maintenance-badge-warning' : 'maintenance-badge-danger') ?>"><?= $part['stock_status'] === 'in_stock' ? 'În stoc' : ($part['stock_status'] === 'low' ? 'Stoc scăzut' : 'Stoc epuizat') ?></span></td>
                 <td><span class="maintenance-badge <?= e($warrantyBadgeClass((string) ($part['warranty_status'] ?? 'red'))) ?>"><?= e((string) ($part['warranty_label'] ?? 'Fara garantie')) ?></span></td>
-                <td><div class="maintenance-actions"><button class="btn" type="button" data-bs-toggle="modal" data-bs-target="#partDetail<?= e((string) $part['id']) ?>"><i class="bi bi-eye"></i></button><?php if (($part['inventory_type'] ?? '') === 'tire'): ?><a class="btn" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock'])) ?>" title="Deschide Anvelope"><i class="bi bi-life-preserver"></i></a><?php endif; ?></div></td>
-            </tr><?php endforeach; ?><?php if ($parts === []): ?><tr><td colspan="12" class="text-center text-muted py-5">Nu există piese pentru filtrele selectate.</td></tr><?php endif; ?></tbody>
+                <td><div class="dropdown maintenance-row-menu"><button class="btn" type="button" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" title="Acțiuni"><i class="bi bi-three-dots-vertical"></i></button><ul class="dropdown-menu dropdown-menu-end">
+                    <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#partDetail<?= e((string) $part['id']) ?>"><i class="bi bi-eye me-2"></i>Vezi detalii</button></li>
+                    <?php if (($part['inventory_type'] ?? '') === 'tire'): ?>
+                        <li><a class="dropdown-item" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock'])) ?>"><i class="bi bi-life-preserver me-2"></i>Deschide Anvelope</a></li>
+                    <?php else: ?>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><button class="dropdown-item text-danger" type="button" data-bs-toggle="modal" data-bs-target="#maintenancePartDeleteModal" data-part-id="<?= e((string) $part['id']) ?>" data-part-label="<?= e((string) $part['cod_piesa'] . ' - ' . (string) $part['denumire']) ?>"><i class="bi bi-trash me-2"></i>Șterge din stoc</button></li>
+                    <?php endif; ?>
+                </ul></div></td>
+            </tr><?php endforeach; ?><tr data-stock-empty <?= $parts !== [] ? 'hidden' : '' ?>><td colspan="14" class="text-center text-muted py-5">Nu există piese pentru filtrele selectate.</td></tr></tbody>
         </table></div></article>
-        <?php foreach ($parts as $part): ?><div class="modal fade" id="partDetail<?= e((string) $part['id']) ?>" tabindex="-1"><div class="modal-dialog modal-lg modal-dialog-centered"><div class="modal-content maintenance-modal"><div class="modal-header"><h2 class="modal-title fs-5"><?= e((string) $part['denumire']) ?></h2><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="maintenance-detail-grid"><div><span>Cod piesă</span><strong><?= e((string) $part['cod_piesa']) ?></strong></div><div><span>Categorie</span><strong><?= e((string) $part['categorie']) ?></strong></div><div><span>Stoc</span><strong><?= e(format_number_ro((float) $part['stoc_curent'], 2)) ?> <?= e((string) $part['unitate_masura']) ?></strong></div><div><span>Locație</span><strong><?= e((string) ($part['locatie_depozit'] ?? '-')) ?></strong></div><div><span>Compatibilitate</span><strong><?= e(str_replace(',', ', ', (string) ($part['modele_vehicul'] ?? '-'))) ?></strong></div><div><span>Sisteme</span><strong><?= e(str_replace(',', ', ', (string) ($part['sisteme_componente'] ?? '-'))) ?></strong></div><div><span>Garantie</span><strong><span class="maintenance-badge <?= e($warrantyBadgeClass((string) ($part['warranty_status'] ?? 'red'))) ?>"><?= e((string) ($part['warranty_label'] ?? 'Fara garantie')) ?></span></strong></div><div><span>Garantie piesa</span><strong><?= trim((string) ($part['garantie_piesa'] ?? '')) !== '' ? e((string) $part['garantie_piesa']) : '-' ?></strong></div><div><span>Garantie manopera</span><strong><?= trim((string) ($part['garantie_manopera'] ?? '')) !== '' ? e((string) $part['garantie_manopera']) : '-' ?></strong></div></div></div></div></div></div><?php endforeach; ?>
+        <?php foreach ($parts as $part): ?><div class="modal fade" id="partDetail<?= e((string) $part['id']) ?>" tabindex="-1"><div class="modal-dialog modal-lg modal-dialog-centered"><div class="modal-content maintenance-modal"><div class="modal-header"><h2 class="modal-title fs-5"><?= e((string) $part['denumire']) ?></h2><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><?php if (($part['image_url'] ?? '') !== ''): ?><img class="maintenance-part-photo-large" src="<?= e((string) $part['image_url']) ?>" alt="<?= e((string) $part['denumire']) ?>" loading="lazy"><?php endif; ?><div class="maintenance-detail-grid"><div><span>Cod piesă</span><strong><?= e((string) $part['cod_piesa']) ?></strong></div><div><span>Categorie</span><strong><?= e((string) $part['categorie']) ?></strong></div><div><span>Stoc</span><strong><?= e(format_number_ro((float) $part['stoc_curent'], 2)) ?> <?= e((string) $part['unitate_masura']) ?></strong></div><div><span>Locație</span><strong><?= e((string) ($part['locatie_depozit'] ?? '-')) ?></strong></div><div><span>Compatibilitate</span><strong><?= e(str_replace(',', ', ', (string) ($part['modele_vehicul'] ?? '-'))) ?></strong></div><div><span>Sisteme</span><strong><?= e(str_replace(',', ', ', (string) ($part['sisteme_componente'] ?? '-'))) ?></strong></div><div><span>Garantie</span><strong><span class="maintenance-badge <?= e($warrantyBadgeClass((string) ($part['warranty_status'] ?? 'red'))) ?>"><?= e((string) ($part['warranty_label'] ?? 'Fara garantie')) ?></span></strong></div><div><span>Garantie piesa</span><strong><?= trim((string) ($part['garantie_piesa'] ?? '')) !== '' ? e((string) $part['garantie_piesa']) : '-' ?></strong></div><div><span>Garantie manopera</span><strong><?= trim((string) ($part['garantie_manopera'] ?? '')) !== '' ? e((string) $part['garantie_manopera']) : '-' ?></strong></div></div></div></div></div></div><?php endforeach; ?>
     <?php endif; ?>
 
 </div>
@@ -731,6 +741,12 @@ $pageSubtitle = match ($section) {
     </div>
     <div class="modal-footer"><button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Anulează</button><button class="btn btn-primary" type="submit">Salvează piesa</button></div>
 </form></div></div></div>
+<div class="modal fade" id="maintenancePartDeleteModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content maintenance-modal"><form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'delete_part'])) ?>">
+    <?= csrf_field() ?><input type="hidden" name="id" value="" data-part-delete-id>
+    <div class="modal-header"><h2 class="modal-title fs-5">Șterge piesa din stoc</h2><button class="btn-close" type="button" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body"><p class="mb-2">Sigur vrei să ștergi piesa <strong data-part-delete-label></strong> din stoc?</p><p class="text-muted small mb-0">Reparațiile și facturile în care a fost folosită își păstrează istoricul. Dacă adaugi din nou o piesă cu același cod, va fi readusă în stoc.</p></div>
+    <div class="modal-footer"><button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Anulează</button><button class="btn btn-danger" type="submit"><i class="bi bi-trash me-1"></i>Șterge</button></div>
+</form></div></div></div>
 <?php endif; ?>
 
 <?php if ($viewRecord !== null): ?>
@@ -738,6 +754,76 @@ $pageSubtitle = match ($section) {
 <?php endif; ?>
 
 <?php $maintenanceScriptVersion = (string) @filemtime(BASE_PATH . '/assets/js/maintenance.js'); ?>
+<?php if ($section === 'stock'): ?>
+<script>
+(() => {
+    // Cautare live in Stoc Piese: fiecare cuvant tastat trebuie sa apara undeva in rand
+    // (cod, denumire, locatie, furnizor...), fara diferenta intre litere mari/mici sau diacritice.
+    const input = document.querySelector('[data-stock-search]');
+    const rows = Array.from(document.querySelectorAll('[data-stock-row]'));
+    const emptyRow = document.querySelector('[data-stock-empty]');
+    const exportLink = document.querySelector('[data-stock-export]');
+    if (!input) {
+        return;
+    }
+    const normalize = (value) => String(value || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const rowTexts = rows.map((row) => normalize(Array.from(row.cells)
+        .filter((cell) => !cell.querySelector('.maintenance-row-menu'))
+        .map((cell) => cell.textContent)
+        .join(' ')));
+
+    const apply = () => {
+        const terms = normalize(input.value).split(' ').filter(Boolean);
+        let visible = 0;
+        rows.forEach((row, index) => {
+            const match = terms.every((term) => rowTexts[index].includes(term));
+            row.hidden = !match;
+            if (match) {
+                visible += 1;
+            }
+        });
+        if (emptyRow) {
+            emptyRow.hidden = visible > 0;
+        }
+
+        const url = new URL(window.location.href);
+        if (input.value.trim() === '') {
+            url.searchParams.delete('search');
+        } else {
+            url.searchParams.set('search', input.value.trim());
+        }
+        window.history.replaceState(null, '', url);
+        if (exportLink) {
+            const exportUrl = new URL(exportLink.href, window.location.href);
+            if (input.value.trim() === '') {
+                exportUrl.searchParams.delete('search');
+            } else {
+                exportUrl.searchParams.set('search', input.value.trim());
+            }
+            exportLink.href = exportUrl.toString();
+        }
+    };
+
+    const deleteModal = document.getElementById('maintenancePartDeleteModal');
+    if (deleteModal) {
+        deleteModal.addEventListener('show.bs.modal', (event) => {
+            const trigger = event.relatedTarget;
+            deleteModal.querySelector('[data-part-delete-id]').value = trigger?.dataset.partId || '';
+            deleteModal.querySelector('[data-part-delete-label]').textContent = trigger?.dataset.partLabel || '';
+        });
+    }
+
+    input.addEventListener('input', apply);
+    input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            apply();
+        }
+    });
+    apply();
+})();
+</script>
+<?php endif; ?>
 <script>
 (() => {
     const categorySelects = document.querySelectorAll('[data-technical-category-select]');

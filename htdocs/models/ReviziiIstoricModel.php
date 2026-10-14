@@ -117,6 +117,21 @@ class ReviziiIstoricModel
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 KEY idx_revizii_rapoarte_user (created_by, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            // Interventiile sterse din istoric: copia completa (rand + meta + documente + plan), cine, cand, de ce.
+            "CREATE TABLE IF NOT EXISTS revizii_istoric_sterse (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                istoric_id INT UNSIGNED NOT NULL,
+                vehicle_id INT UNSIGNED NOT NULL,
+                tip_revizie VARCHAR(40) NOT NULL,
+                data_revizie DATETIME NOT NULL,
+                date_json MEDIUMTEXT NOT NULL,
+                plan_inainte TEXT NULL,
+                plan_dupa TEXT NULL,
+                motiv VARCHAR(500) NULL,
+                sters_de INT UNSIGNED NULL,
+                sters_la DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY idx_revizii_sterse_vehicul (vehicle_id, tip_revizie)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         ];
         foreach ($statements as $sql) {
             $this->db->exec($sql);
@@ -679,6 +694,137 @@ class ReviziiIstoricModel
         $at = $verified ? date('Y-m-d H:i:s') : null;
         $stmt->execute([$istoricId, $at, $verified ? $userId : null, $userId]);
         $this->audit($istoricId, $verified ? 'verificat' : 'verificare_anulata', $verified ? 'Intervenție marcată verificată' : 'Verificare anulată', $userId, $before, ['verificat_at' => $at]);
+    }
+
+    // ---------------------------------------------------------------- stergere
+
+    /**
+     * Sterge o interventie din istoric. Copia completa ramane in revizii_istoric_sterse.
+     *
+     * Daca T0-ul curent al planului vine chiar din aceasta revizie, planul revine la starea
+     * dinaintea ei: exact (plan_anterior, salvat la inregistrare) sau, pentru reviziile mai
+     * vechi decat coloana, la revizia precedenta ramasa / momentul configurarii. Altfel
+     * (revizie mai veche sau plan reconfigurat de atunci) planul nu se atinge.
+     *
+     * @return array{nr:string, componenta:string, t0_restaurat:?string}
+     */
+    public function deleteIntervention(int $id, ?string $reason, ?int $userId): array
+    {
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM revizii_istoric WHERE id = ? FOR UPDATE');
+            $stmt->execute([$id]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!is_array($row)) {
+                throw new InvalidArgumentException('Intervenția nu există sau a fost deja ștearsă.');
+            }
+            $vehicleId = (int) $row['vehicle_id'];
+            $tip = (string) $row['tip_revizie'];
+
+            $stmt = $this->db->prepare('SELECT * FROM revizii_planuri WHERE vehicle_id = ? AND tip_revizie = ? FOR UPDATE');
+            $stmt->execute([$vehicleId, $tip]);
+            $plan = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+            $stmt = $this->db->prepare('SELECT * FROM revizii_istoric_documente WHERE istoric_id = ? AND deleted_at IS NULL');
+            $stmt->execute([$id]);
+            $documents = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $copy = ['istoric' => $row, 'meta' => $this->meta($id), 'documente' => $documents];
+
+            $this->db->prepare('UPDATE revizii_istoric_documente SET deleted_at = NOW(), deleted_by = ? WHERE istoric_id = ? AND deleted_at IS NULL')
+                ->execute([$userId, $id]);
+            $this->db->prepare('DELETE FROM revizii_istoric_meta WHERE istoric_id = ?')->execute([$id]);
+            $this->db->prepare('DELETE FROM revizii_istoric WHERE id = ?')->execute([$id]);
+
+            $restored = null;
+            $planRemoved = false;
+            $anchored = $plan !== null
+                && (string) $plan['consum_initial_sursa'] === 'revizie'
+                && strtotime((string) $plan['baseline_at']) === strtotime((string) $row['data_revizie']);
+            $saved = json_decode((string) ($row['plan_anterior'] ?? ''), true);
+            if ($anchored && is_array($saved) && !empty($saved['fara_plan'])) {
+                // Revizia a creat planul (ulei fara configurare): componenta revine la „neconfigurat”.
+                $this->db->prepare('DELETE FROM revizii_planuri WHERE id = ?')->execute([(int) $plan['id']]);
+                $planRemoved = true;
+            } elseif ($anchored) {
+                $restored = $this->previousPlanState($row, $plan);
+                $this->db->prepare(
+                    'UPDATE revizii_planuri SET baseline_at = ?, km_ultima_revizie = ?, consum_initial_km = ?, consum_initial_sursa = ?, updated_by = ? WHERE id = ?'
+                )->execute([
+                    $restored['baseline_at'], $restored['km_ultima_revizie'], $restored['consum_initial_km'],
+                    $restored['consum_initial_sursa'], $userId, (int) $plan['id'],
+                ]);
+            }
+
+            $this->db->prepare(
+                'INSERT INTO revizii_istoric_sterse (istoric_id, vehicle_id, tip_revizie, data_revizie, date_json, plan_inainte, plan_dupa, motiv, sters_de)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            )->execute([
+                $id, $vehicleId, $tip, (string) $row['data_revizie'],
+                json_encode($copy, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE),
+                $plan !== null ? json_encode(ReviziiModel::planState($plan)) : null,
+                $restored !== null ? json_encode($restored) : ($planRemoved ? json_encode(['fara_plan' => true]) : null),
+                $reason, $userId,
+            ]);
+
+            $stmt = $this->db->prepare('SELECT nr_inmatriculare FROM vehicule WHERE id = ?');
+            $stmt->execute([$vehicleId]);
+            $nr = (string) ($stmt->fetchColumn() ?: '');
+            $tab = ReviziiModel::tabOfTip($tip);
+            $component = $tab !== null
+                ? trim(ReviziiModel::TABS[$tab]['label'] . ' · ' . (ReviziiModel::TAB_ITEMS[$tab]['motor'][$tip] ?? ReviziiModel::TAB_ITEMS[$tab]['trailer'][$tip] ?? ''), ' ·')
+                : $tip;
+
+            $this->audit($id, 'sters', sprintf('Intervenție ștearsă: %s %s din %s', $nr, $component, date('d.m.Y H:i', (int) strtotime((string) $row['data_revizie']))),
+                $userId, $copy + ['plan' => $plan !== null ? ReviziiModel::planState($plan) : null], ['motiv' => $reason, 'plan' => $restored]);
+
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
+        } catch (Throwable $exception) {
+            if ($ownTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+
+        return ['nr' => $nr, 'componenta' => $component, 't0_restaurat' => $restored['baseline_at'] ?? null, 'plan_sters' => $planRemoved];
+    }
+
+    /**
+     * Starea planului de dinaintea reviziei sterse (randul e deja scos din istoric).
+     *
+     * @param array<string, mixed> $row
+     * @param array<string, mixed> $plan
+     * @return array{baseline_at:string, km_ultima_revizie:?int, consum_initial_km:float, consum_initial_sursa:string}
+     */
+    private function previousPlanState(array $row, array $plan): array
+    {
+        $saved = json_decode((string) ($row['plan_anterior'] ?? ''), true);
+        if (is_array($saved) && isset($saved['baseline_at'], $saved['consum_initial_sursa'])) {
+            return [
+                'baseline_at' => (string) $saved['baseline_at'],
+                'km_ultima_revizie' => isset($saved['km_ultima_revizie']) ? (int) $saved['km_ultima_revizie'] : null,
+                'consum_initial_km' => (float) ($saved['consum_initial_km'] ?? 0),
+                'consum_initial_sursa' => (string) $saved['consum_initial_sursa'],
+            ];
+        }
+        $stmt = $this->db->prepare('SELECT data_revizie, km_bord FROM revizii_istoric WHERE vehicle_id = ? AND tip_revizie = ? ORDER BY data_revizie DESC, id DESC LIMIT 1');
+        $stmt->execute([(int) $row['vehicle_id'], (string) $row['tip_revizie']]);
+        $previous = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (is_array($previous)) {
+            return [
+                'baseline_at' => (string) $previous['data_revizie'],
+                'km_ultima_revizie' => $previous['km_bord'] !== null ? (int) $previous['km_bord'] : null,
+                'consum_initial_km' => 0.0,
+                'consum_initial_sursa' => 'revizie',
+            ];
+        }
+
+        // Revizie inregistrata inainte de plan_anterior si fara alta revizie: T0 revine la configurare.
+        return ['baseline_at' => (string) $plan['created_at'], 'km_ultima_revizie' => null, 'consum_initial_km' => 0.0, 'consum_initial_sursa' => 'niciunul'];
     }
 
     // ---------------------------------------------------------------- rapoarte

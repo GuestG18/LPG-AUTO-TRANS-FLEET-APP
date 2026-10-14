@@ -49,12 +49,58 @@ class ReviziiController
             'istoric_doc_delete' => $this->istoric()->deleteDocumentAction(),
             'istoric_verify' => $this->istoric()->verifyAction(),
             'istoric_reference' => $this->istoric()->referenceAction(),
+            'istoric_delete' => $this->istoric()->deleteAction(),
             'istoric_export' => $this->istoric()->exportAction(),
             'istoric_report' => $this->istoric()->reportAction(),
             'istoric_reports' => $this->istoric()->reportsAction(),
             'istoric_report_download' => $this->istoric()->reportDownloadAction(),
+            'raport_export' => $this->reportExportAction(),
             default => $this->index(),
         };
+    }
+
+    /**
+     * Raportul saptamanal Revizii ca Excel (butonul „Descarcă Excel” din email / previzualizare).
+     * Setarile vin din link (?cat=...&status=necesita&history=1); datele sunt cele de acum.
+     */
+    private function reportExportAction(): void
+    {
+        require_once dirname(__DIR__) . '/services/ReviziiWeeklyReportService.php';
+
+        $tmp = tempnam(sys_get_temp_dir(), 'rvr');
+        if ($tmp === false) {
+            http_response_code(500);
+            echo 'Nu s-a putut crea fișierul temporar.';
+            return;
+        }
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+        @set_time_limit(180);
+
+        try {
+            (new ReviziiWeeklyReportService($this->db))->writeXlsx(ReviziiWeeklyReportService::configFromQuery($_GET), $tmp);
+        } catch (Throwable $exception) {
+            @unlink($tmp);
+            error_log('[Revizii][raport_export] ' . $exception->getMessage());
+            http_response_code(500);
+            header('Content-Type: text/html; charset=utf-8');
+            echo '<!doctype html><meta charset="utf-8"><title>Export</title><p style="font-family:sans-serif;padding:2rem">Exportul nu a putut fi generat.</p>';
+            return;
+        }
+
+        $name = ReviziiWeeklyReportService::exportFileName();
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        header('Content-Disposition: attachment; filename="' . $name . '"');
+        header('Content-Length: ' . (string) filesize($tmp));
+        header('X-Content-Type-Options: nosniff');
+        header('Cache-Control: private, no-store');
+        readfile($tmp);
+        @unlink($tmp);
+        exit;
     }
 
     /** Revizii → Istoric revizii (?tip=istoric) are controller propriu. */
@@ -132,6 +178,7 @@ class ReviziiController
             'canEdit' => can(self::PAGE, 'edit'),
             'canSimulate' => can(self::PAGE, 'simulate'),
             'vehicles' => $this->service->vehicles(),
+            'capacityCategories' => $this->service->model()->getCapacityCategories(),
             'credentialsAvailable' => $sync->credentialsAvailable(),
             'autoSync' => $this->consumeAutoSync(),
         ]);
@@ -220,7 +267,11 @@ class ReviziiController
             return;
         }
 
-        flash_set('success', $plans === [] ? 'Setările orelor motor au fost salvate.' : 'Configurarea reviziei a fost salvată.');
+        flash_set('success', match (true) {
+            $plans === [] => 'Setările orelor motor au fost salvate.',
+            count($plans) === 1 => 'Configurarea reviziei a fost salvată.',
+            default => sprintf('Configurarea reviziei a fost salvată pentru %d componente.', count($plans)),
+        });
         $_SESSION['revizii_autosync'] = true;
         redirect($url);
     }

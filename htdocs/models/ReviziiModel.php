@@ -211,6 +211,8 @@ class ReviziiModel
         // Coloane adaugate dupa prima versiune a tabelelor.
         $this->ensureColumn('revizii_planuri', 'prag_avertizare_km', 'INT UNSIGNED NULL AFTER km_ultima_revizie');
         $this->ensureColumn('revizii_istoric', 'sursa_ore', 'VARCHAR(20) NULL AFTER factor_km_ora');
+        // T0-ul planului dinaintea reviziei: la stergerea reviziei, planul revine exact la el.
+        $this->ensureColumn('revizii_istoric', 'plan_anterior', 'TEXT NULL AFTER observatii');
 
         self::$schemaReady = true;
     }
@@ -277,6 +279,32 @@ class ReviziiModel
         }
 
         return $vehicles;
+    }
+
+    /**
+     * Categoria de capacitate a fiecarui vehicul (doar pentru gruparea din „Configurare revizie”).
+     * Fara tabela de categorii (instalare veche) intoarce [].
+     *
+     * @return array<int, array{id:int, nume:string, ordine:int}>
+     */
+    public function getCapacityCategories(): array
+    {
+        try {
+            $rows = $this->db->query(
+                'SELECT v.id, cc.id AS cat_id, cc.nume, cc.ordine_afisare
+                 FROM vehicule v
+                 INNER JOIN vehicule_categorii_capacitate cc ON cc.id = v.categorie_capacitate_id'
+            )->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $exception) {
+            return [];
+        }
+
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(int) $row['id']] = ['id' => (int) $row['cat_id'], 'nume' => (string) $row['nume'], 'ordine' => (int) $row['ordine_afisare']];
+        }
+
+        return $map;
     }
 
     /**
@@ -412,16 +440,18 @@ class ReviziiModel
         ?int $userId,
         string $tip = self::TIP_SCHIMB_ULEI
     ): void {
+        $previous = $this->getPlans($tip)[$vehicleId] ?? null;
+        $previousState = json_encode($previous !== null ? self::planState($previous) : ['fara_plan' => true]);
         $insert = $this->db->prepare(
             'INSERT INTO revizii_istoric (vehicle_id, tip_revizie, data_revizie, km_bord, interval_km, km_efectuati, ore_motor,
-                                          km_echivalenti, factor_km_ora, sursa_ore, date_complete, observatii, created_by)
-             VALUES (:v, :tip, :at, :km, :interval, :driven, :hours, :total, :factor, :source, :complete, :notes, :u)'
+                                          km_echivalenti, factor_km_ora, sursa_ore, date_complete, observatii, plan_anterior, created_by)
+             VALUES (:v, :tip, :at, :km, :interval, :driven, :hours, :total, :factor, :source, :complete, :notes, :prev, :u)'
         );
         $insert->execute([
             ':v' => $vehicleId, ':tip' => $tip, ':at' => $serviceAt, ':km' => $kmBord, ':interval' => $intervalKm,
             ':driven' => $snapshot['km_efectuati'] ?? null, ':hours' => $snapshot['ore_motor'] ?? null,
             ':total' => $snapshot['km_total'] ?? null, ':factor' => $factor, ':source' => $hourSource,
-            ':complete' => !empty($snapshot['complet']) ? 1 : 0, ':notes' => $notes, ':u' => $userId,
+            ':complete' => !empty($snapshot['complet']) ? 1 : 0, ':notes' => $notes, ':prev' => $previousState, ':u' => $userId,
         ]);
 
         $upsert = $this->db->prepare(
@@ -431,6 +461,22 @@ class ReviziiModel
                                      consum_initial_km = 0, consum_initial_sursa = 'revizie', updated_by = VALUES(updated_by)"
         );
         $upsert->execute([':v' => $vehicleId, ':tip' => $tip, ':interval' => $intervalKm, ':km' => $kmBord, ':at' => $serviceAt, ':u' => $userId]);
+    }
+
+    /**
+     * Partea din plan care tine de T0 (ce muta o revizie); intervalul si pragul nu intra.
+     *
+     * @param array<string, mixed> $plan
+     * @return array{baseline_at:string, km_ultima_revizie:?int, consum_initial_km:float, consum_initial_sursa:string}
+     */
+    public static function planState(array $plan): array
+    {
+        return [
+            'baseline_at' => (string) $plan['baseline_at'],
+            'km_ultima_revizie' => $plan['km_ultima_revizie'] !== null ? (int) $plan['km_ultima_revizie'] : null,
+            'consum_initial_km' => (float) $plan['consum_initial_km'],
+            'consum_initial_sursa' => (string) $plan['consum_initial_sursa'],
+        ];
     }
 
     /**

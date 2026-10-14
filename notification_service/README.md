@@ -14,6 +14,27 @@ Rules with channel `SMS` or `Email + SMS` are also sent as SMS through [SMSAlert
 - `SMSALERT_FORCE_TO`: test mode, where every SMS goes only to this number.
 - Approval requests: the email still comes from `approval_flow.py`; the SMS (an alert only, no approve/reject link) comes from the worker.
 
+## Weekly Revizii report (email)
+
+Rules with the event "Raport săptămânal (email)" (Revizii) are **not** sent by this worker. `scripts/revizii_raport_saptamanal.php` (PHP, the app's SMTP via `EmailService`) sends them, so the report uses exactly the same Revizii data as the page.
+
+- Schedule per rule: day + hour (Europe/Bucharest). Cron runs every 15 minutes; a report goes out after the scheduled time of the current ISO week, once per recipient per week. If the server was down, it catches up later in the same week. A rule created after this week's slot starts next week.
+- Recipients: Administratori or Utilizatori selectați (email only). Every send is logged in `notification_deliveries` (context `revizii_raport`; tests use `revizii_raport_test`).
+- Test from the form: "Previzualizează raportul" and "Trimite test acum" (to me / to the rule's recipients). Tests don't count as the week's send.
+
+```bash
+php scripts/revizii_raport_saptamanal.php --dry-run             # what would be sent now
+php scripts/revizii_raport_saptamanal.php --rule=12 --to=me@x.ro  # send rule 12 now to one address (test)
+php scripts/revizii_raport_saptamanal.php --rule=12 --force       # send rule 12 now to its recipients (test)
+php scripts/revizii_raport_saptamanal.php --rule=12 --html=r.html # save the HTML only
+```
+
+Cron (install manually on the VPS, `crontab -e`; adjust the project path and PHP binary):
+
+```cron
+*/15 * * * * cd /path/to/aplicatie_fleet && php scripts/revizii_raport_saptamanal.php >> notification_service/revizii_raport.log 2>&1
+```
+
 ## Install dependencies
 
 ```powershell

@@ -763,11 +763,11 @@ class MaintenanceModel extends BaseModel
 
     public function getStockParts(array $filters = []): array
     {
-        $where = ["p.mod_utilizare = 'stoc'"];
+        $where = ["p.mod_utilizare = 'stoc'", 'p.arhivat_la IS NULL'];
         $params = [];
         $search = trim((string) ($filters['search'] ?? ''));
         if ($search !== '') {
-            $where[] = "CONCAT_WS(' ', p.cod_piesa, p.denumire, p.cod_oem) LIKE :search";
+            $where[] = "CONCAT_WS(' ', p.cod_piesa, p.denumire, p.cod_oem, p.categorie, p.producator, p.furnizor, p.locatie_depozit) LIKE :search";
             $params[':search'] = '%' . $search . '%';
         }
         foreach (['categorie', 'furnizor'] as $field) {
@@ -820,6 +820,19 @@ class MaintenanceModel extends BaseModel
         return $row ? $this->decoratePartWarranty($row) : null;
     }
 
+    /** Scoate piesa din Stoc piese (arhivare); utilizarile si facturile care o refera raman neatinse. */
+    public function archivePart(int $id): bool
+    {
+        $stmt = $this->db->prepare(
+            "UPDATE mentenanta_piese
+             SET arhivat_la = :now, updated_at = :now_updated
+             WHERE id = :id AND mod_utilizare = 'stoc' AND arhivat_la IS NULL"
+        );
+        $now = date('Y-m-d H:i:s');
+        $stmt->execute([':now' => $now, ':now_updated' => $now, ':id' => $id]);
+        return $stmt->rowCount() > 0;
+    }
+
     public function getAutoComponentPartIndex(): array
     {
         $stmt = $this->db->query(
@@ -827,7 +840,7 @@ class MaintenanceModel extends BaseModel
                     garantie_piesa, garantie_manopera, interval_km, interval_luni, avertizare_km, avertizare_zile,
                     updated_at
              FROM mentenanta_piese
-             WHERE status_piesa = 'activa'
+             WHERE status_piesa = 'activa' AND arhivat_la IS NULL
              ORDER BY updated_at DESC, id DESC"
         );
 
@@ -1111,7 +1124,7 @@ class MaintenanceModel extends BaseModel
                 COALESCE(SUM(stoc_curent * pret_achizitie), 0) AS valoare_totala,
                 COUNT(*) AS total_piese,
                 SUM(CASE WHEN stoc_curent <= stoc_minim THEN 1 ELSE 0 END) AS sub_minim
-             FROM mentenanta_piese WHERE mod_utilizare = 'stoc'"
+             FROM mentenanta_piese WHERE mod_utilizare = 'stoc' AND arhivat_la IS NULL"
         )->fetch() ?: [];
         $tireTotals = $this->db->query(
             "SELECT COUNT(*) AS total_tires, COALESCE(SUM(COALESCE(purchase_price, 0)), 0) AS tire_value
@@ -1121,7 +1134,7 @@ class MaintenanceModel extends BaseModel
         $row['total_piese'] = (int) ($row['total_piese'] ?? 0) + (int) ($tireTotals['total_tires'] ?? 0);
         $row['fara_miscare'] = (int) $this->db->query(
             "SELECT COUNT(*) FROM mentenanta_piese p
-             WHERE p.mod_utilizare = 'stoc'
+             WHERE p.mod_utilizare = 'stoc' AND p.arhivat_la IS NULL
                AND NOT EXISTS (
                     SELECT 1 FROM mentenanta_piese_utilizari u
                     WHERE u.part_id = p.id AND u.created_at >= DATE_SUB(NOW(), INTERVAL 180 DAY)
@@ -1141,14 +1154,14 @@ class MaintenanceModel extends BaseModel
     public function getStockFilterOptions(): array
     {
         $categories = $this->db->query(
-                "SELECT DISTINCT categorie FROM mentenanta_piese WHERE categorie <> '' ORDER BY categorie"
+                "SELECT DISTINCT categorie FROM mentenanta_piese WHERE categorie <> '' AND arhivat_la IS NULL ORDER BY categorie"
             )->fetchAll(PDO::FETCH_COLUMN);
         $categories[] = 'Anvelope';
         $categories = array_values(array_unique(array_filter(array_map('strval', $categories))));
         sort($categories, SORT_NATURAL | SORT_FLAG_CASE);
 
         $suppliers = $this->db->query(
-                "SELECT DISTINCT furnizor FROM mentenanta_piese WHERE COALESCE(furnizor, '') <> '' ORDER BY furnizor"
+                "SELECT DISTINCT furnizor FROM mentenanta_piese WHERE COALESCE(furnizor, '') <> '' AND arhivat_la IS NULL ORDER BY furnizor"
             )->fetchAll(PDO::FETCH_COLUMN);
         $tireSuppliers = $this->db->query(
             "SELECT DISTINCT supplier FROM anvelope
@@ -1178,7 +1191,7 @@ class MaintenanceModel extends BaseModel
         $params = [];
         $search = trim((string) ($filters['search'] ?? ''));
         if ($search !== '') {
-            $where[] = "CONCAT_WS(' ', a.serial_number, a.brand, a.model, a.tire_size, a.dot_code) LIKE :tire_search";
+            $where[] = "CONCAT_WS(' ', a.serial_number, a.brand, a.model, a.tire_size, a.dot_code, a.supplier, a.location_label) LIKE :tire_search";
             $params[':tire_search'] = '%' . $search . '%';
         }
         $supplier = trim((string) ($filters['furnizor'] ?? ''));
@@ -1292,6 +1305,33 @@ class MaintenanceModel extends BaseModel
                 ':created_at' => date('Y-m-d H:i:s'),
                 ':updated_at' => date('Y-m-d H:i:s'),
             ];
+            $archivedStmt = $this->db->prepare(
+                "SELECT id FROM mentenanta_piese WHERE cod_piesa = :cod_piesa AND arhivat_la IS NOT NULL LIMIT 1 FOR UPDATE"
+            );
+            $archivedStmt->execute([':cod_piesa' => $values[':cod_piesa']]);
+            $archivedId = (int) ($archivedStmt->fetchColumn() ?: 0);
+            if ($archivedId > 0) {
+                // Codul apartine unei piese sterse din stoc: o readucem cu datele noi.
+                $restoreValues = $values;
+                unset($restoreValues[':created_at']);
+                $restoreValues[':id'] = $archivedId;
+                $this->db->prepare(
+                    "UPDATE mentenanta_piese SET
+                        cod_piesa = :cod_piesa, denumire = :denumire, categorie = :categorie, producator = :producator,
+                        cod_oem = :cod_oem, unitate_masura = :unitate_masura, descriere = :descriere,
+                        mod_utilizare = :mod_utilizare, stoc_curent = :stoc_curent, stoc_minim = :stoc_minim,
+                        pret_achizitie = :pret_achizitie, furnizor = :furnizor, locatie_depozit = :locatie_depozit,
+                        tipuri_vehicul = :tipuri_vehicul, modele_vehicul = :modele_vehicul, sisteme_componente = :sisteme_componente,
+                        pentru_mentenanta = :pentru_mentenanta, interval_km = :interval_km, interval_luni = :interval_luni,
+                        avertizare_km = :avertizare_km, avertizare_zile = :avertizare_zile,
+                        garantie_piesa = :garantie_piesa, garantie_manopera = :garantie_manopera,
+                        factura_original = :factura_original, factura_stocata = :factura_stocata,
+                        fisa_original = :fisa_original, fisa_stocata = :fisa_stocata,
+                        imagine_original = :imagine_original, imagine_stocata = :imagine_stocata,
+                        status_piesa = :status_piesa, arhivat_la = NULL, updated_at = :updated_at
+                     WHERE id = :id"
+                )->execute($restoreValues);
+            } else {
             $this->db->prepare(
                 "INSERT INTO mentenanta_piese
                     (cod_piesa, denumire, categorie, producator, cod_oem, unitate_masura, descriere,
@@ -1308,7 +1348,8 @@ class MaintenanceModel extends BaseModel
                      :factura_original, :factura_stocata, :fisa_original, :fisa_stocata,
                      :imagine_original, :imagine_stocata, :status_piesa, :created_at, :updated_at)"
             )->execute($values);
-            $partId = (int) $this->db->lastInsertId();
+            }
+            $partId = $archivedId > 0 ? $archivedId : (int) $this->db->lastInsertId();
 
             if ($mode === 'direct') {
                 $vehicleId = (int) ($data['mount_vehicle_id'] ?? 0);
@@ -1780,6 +1821,9 @@ class MaintenanceModel extends BaseModel
         $partColumns = [
             'garantie_piesa' => "VARCHAR(120) NULL AFTER avertizare_zile",
             'garantie_manopera' => "VARCHAR(120) NULL AFTER garantie_piesa",
+            // Stergere din Stoc piese = arhivare: randul ramane pentru istoricul utilizarilor
+            // si ca sincronizarea din catalogul Reparatii Auto sa nu-l recreeze.
+            'arhivat_la' => "DATETIME NULL AFTER status_piesa",
         ];
         foreach ($partColumns as $column => $definition) {
             if (!$this->columnExists('mentenanta_piese', $column)) {

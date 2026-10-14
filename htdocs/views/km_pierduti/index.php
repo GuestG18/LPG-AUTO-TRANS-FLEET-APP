@@ -12,6 +12,7 @@ $periodEnd = (string) ($periodEnd ?? date('Y-m-d'));
 $loadError = $loadError ?? null;
 // Perioada trebuie trimisa explicit: fara ea, endpointul GPS cade pe luna curenta.
 $gpsUrl = build_query_url(['page' => 'km_pierduti', 'action' => 'gps', 'start' => $periodStart, 'end' => $periodEnd]);
+$detailUrl = build_query_url(['page' => 'km_pierduti', 'action' => 'detail', 'start' => $periodStart, 'end' => $periodEnd]);
 // Coloana "Curse" deschide exact cursele numarate in Desfasurator curse (filtru ids).
 $racesUrl = (!function_exists('can') || can('dispecer_curse')) ? build_query_url(['page' => 'dispecer_curse']) : '';
 $vehiclesJson = json_encode($vehicles, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -38,23 +39,29 @@ if (!is_string($vehiclesJson)) {
     <div class="alert alert-danger py-2"><?= e((string) $loadError) ?></div>
 <?php endif; ?>
 
-<form method="get" class="card border-0 shadow-sm mb-3" id="kmp-period-form">
+<?php
+// Eticheta campului Perioada, ca in Carburanti: luna intreaga = "Octombrie 2026".
+$monthNamesRo = [1 => 'Ianuarie', 'Februarie', 'Martie', 'Aprilie', 'Mai', 'Iunie', 'Iulie', 'August', 'Septembrie', 'Octombrie', 'Noiembrie', 'Decembrie'];
+$periodStartObj = new DateTimeImmutable($periodStart);
+$periodEndObj = new DateTimeImmutable($periodEnd);
+$periodLabel = $periodStartObj->format('j') === '1'
+    && $periodEndObj->format('Y-m-d') === $periodStartObj->modify('last day of this month')->format('Y-m-d')
+    ? $monthNamesRo[(int) $periodStartObj->format('n')] . ' ' . $periodStartObj->format('Y')
+    : $periodStartObj->format('d.m.Y') . ' – ' . $periodEndObj->format('d.m.Y');
+?>
+<form method="get" class="card border-0 shadow-sm mb-3 fuel-filter-card" id="kmp-period-form">
     <input type="hidden" name="page" value="km_pierduti">
     <div class="card-body py-2 d-flex flex-wrap align-items-end gap-2">
-        <div class="btn-group btn-group-sm" role="group" id="kmp-presets">
-            <button type="button" class="btn btn-outline-secondary" data-preset="this-month">Luna aceasta</button>
-            <button type="button" class="btn btn-outline-secondary" data-preset="prev-month">Luna trecută</button>
-            <button type="button" class="btn btn-outline-secondary" data-preset="30d">Ultimele 30 zile</button>
+        <div style="min-width: 260px;">
+            <label class="form-label" for="kmp-period-display">Perioadă</label>
+            <div class="fuel-date-input">
+                <input type="text" class="form-control" id="kmp-period-display"
+                       value="<?= e($periodLabel) ?>" placeholder="Alege perioada" readonly>
+                <i class="bi bi-calendar3" aria-hidden="true"></i>
+            </div>
+            <input type="hidden" name="start" id="kmp-start" value="<?= e($periodStart) ?>">
+            <input type="hidden" name="end" id="kmp-end" value="<?= e($periodEnd) ?>">
         </div>
-        <div>
-            <label class="form-label small mb-0" for="kmp-start">De la</label>
-            <input type="date" class="form-control form-control-sm" id="kmp-start" name="start" value="<?= e($periodStart) ?>" max="<?= e(date('Y-m-d')) ?>">
-        </div>
-        <div>
-            <label class="form-label small mb-0" for="kmp-end">Până la</label>
-            <input type="date" class="form-control form-control-sm" id="kmp-end" name="end" value="<?= e($periodEnd) ?>" max="<?= e(date('Y-m-d')) ?>">
-        </div>
-        <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-search me-1"></i>Aplică</button>
         <div class="ms-auto text-muted small align-self-center" id="kmp-progress"></div>
     </div>
 </form>
@@ -109,7 +116,20 @@ if (!is_string($vehiclesJson)) {
         </table>
     </div>
     <div class="card-footer bg-white text-muted small">
-        <i class="bi bi-info-circle me-1"></i>Km pierduți = Km GPS reali − Km efectuați pe curse (Km totali / „Km efectuați” când e completat, altfel Km cursă) − Km service (drumuri la reparat, din Dispecer curse → Km service). „GPS − agreați” compară cu km facturați. O cursă intră în perioada în care s-a închis (data de sfârșit), ca în Dashboard Analitic V2. Valorile negative (curse înregistrate cu mai mulți km decât s-au rulat) pot apărea când o cursă închisă în interval a fost rulată parțial în perioada anterioară.
+        <i class="bi bi-info-circle me-1"></i>Click pe valoarea din „Km pierduți” arată de unde vin: deplasările GPS din SAS puse pe cursele și drumurile la service din Dispecer.
+        Km pierduți =Km GPS reali − Km efectuați pe curse (Km totali / „Km efectuați” când e completat, altfel Km cursă) − Km service (drumuri la reparat, din Dispecer curse → Km service). „GPS − agreați” compară cu km facturați. O cursă intră în perioada în care s-a închis (data de sfârșit), ca în Dashboard Analitic V2. Valorile negative (curse înregistrate cu mai mulți km decât s-au rulat) pot apărea când o cursă închisă în interval a fost rulată parțial în perioada anterioară.
+    </div>
+</div>
+
+<div class="modal fade" id="kmp-detail-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="kmp-detail-title">Km pierduți</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
+            </div>
+            <div class="modal-body" id="kmp-detail-body"></div>
+        </div>
     </div>
 </div>
 
@@ -124,8 +144,24 @@ if (!is_string($vehiclesJson)) {
     .kmp-races-link { display: inline-block; min-width: 2.2em; padding: 0 .4em; border-radius: .35rem; font-weight: 600; text-decoration: none; text-align: center; }
     .kmp-races-link:hover, .kmp-races-link:focus { background: #e7f1ff; text-decoration: underline; }
     #kmp-table td.text-end, #kmp-table th.text-end { font-variant-numeric: tabular-nums; }
+    .kmp-lost-link { cursor: pointer; border-bottom: 1px dashed currentColor; }
+    .kmp-lost-link:hover { background: #fdecee; }
+    .kmp-split { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: #e9ecef; }
+    .kmp-split > span { display: block; height: 100%; }
+    .kmp-dot { display: inline-block; width: .7em; height: .7em; border-radius: 50%; margin-right: .35em; vertical-align: baseline; }
+    .kmp-c-outside { background: #dc3545; }
+    .kmp-c-trips { background: #fd7e14; }
+    .kmp-c-service { background: #ffc107; }
+    .kmp-c-other { background: #6c757d; }
+    #kmp-detail-body table td, #kmp-detail-body table th { font-variant-numeric: tabular-nums; }
+    .kmp-gap-toggle { cursor: pointer; }
+    .kmp-gap-toggle:hover { background: #f8f9fa; }
+    .kmp-gap-segments td { background: #fafbfc; font-size: .85em; }
 </style>
 
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/l10n/ro.js"></script>
 <script>
 (function () {
     'use strict';
@@ -133,6 +169,7 @@ if (!is_string($vehiclesJson)) {
     var GPS_URL = <?= json_encode($gpsUrl, JSON_UNESCAPED_SLASHES) ?>;
     var VEHICLES = <?= $vehiclesJson ?>;
     var RACES_URL = <?= json_encode($racesUrl, JSON_UNESCAPED_SLASHES) ?>;
+    var DETAIL_URL = <?= json_encode($detailUrl, JSON_UNESCAPED_SLASHES) ?>;
     var PERIOD_START = <?= json_encode($periodStart) ?>;
     var PERIOD_END = <?= json_encode($periodEnd) ?>;
     var CONCURRENCY = 3;
@@ -164,6 +201,14 @@ if (!is_string($vehiclesJson)) {
         if (value == null) { return '<span class="kmp-pending">-</span>'; }
         var cls = value > 0 ? 'kmp-lost-pos' : 'kmp-lost-neg';
         return '<span class="' + cls + '">' + fmt(value) + '</span>';
+    }
+
+    // Km pierduti ca link spre detaliere (de unde vin), doar cand avem GPS.
+    function lostDetailCell(v, pending) {
+        var html = lostCell(v.lostc, pending);
+        if (pending || v.gps == null || !v.has_gps || Math.abs(v.lostc || 0) < 0.5) { return html; }
+        return '<span class="kmp-lost-link" role="button" tabindex="0" data-detail="' + v.sas_vehicle_id
+            + '" title="De unde vin acești km (deplasări GPS vs curse)">' + html + '</span>';
     }
 
     function roDate(value) {
@@ -230,7 +275,7 @@ if (!is_string($vehiclesJson)) {
                 + '<td class="text-end">' + fmt(v.km_efectuati) + '</td>'
                 + '<td class="text-end text-muted">' + fmt(v.km_cursa) + '</td>'
                 + '<td class="text-end">' + serviceCell(v) + '</td>'
-                + '<td class="text-end">' + lostCell(v.lostc, pending) + '</td>'
+                + '<td class="text-end">' + lostDetailCell(v, pending) + '</td>'
                 + '<td class="text-end">' + lostCell(v.lostt, pending) + '</td>'
                 + '</tr>';
         }).join('');
@@ -270,22 +315,71 @@ if (!is_string($vehiclesJson)) {
         for (var i = 0; i < CONCURRENCY; i++) { worker(); }
     }
 
-    // Presets perioada: seteaza inputurile si trimite formularul.
+    // Campul Perioada, ca in Carburanti: calendar de interval (flatpickr) cu
+    // scurtaturi de luna; selectarea completa a intervalului aplica imediat.
     function ymd(d) {
         return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
     }
-    document.querySelectorAll('#kmp-presets [data-preset]').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            var now = new Date(), start, end = now;
-            var preset = btn.getAttribute('data-preset');
-            if (preset === 'this-month') { start = new Date(now.getFullYear(), now.getMonth(), 1); }
-            else if (preset === 'prev-month') { start = new Date(now.getFullYear(), now.getMonth() - 1, 1); end = new Date(now.getFullYear(), now.getMonth(), 0); }
-            else { start = new Date(now.getTime() - 29 * 86400000); }
-            $('kmp-start').value = ymd(start);
-            $('kmp-end').value = ymd(end);
-            $('kmp-period-form').submit();
+    (function initPeriodPicker() {
+        var display = $('kmp-period-display');
+        var startInput = $('kmp-start');
+        var endInput = $('kmp-end');
+        var form = $('kmp-period-form');
+        var apply = function (start, end) {
+            if (ymd(start) === startInput.value && ymd(end) === endInput.value) { return; }
+            startInput.value = ymd(start);
+            endInput.value = ymd(end);
+            form.classList.add('is-reloading');
+            form.submit();
+        };
+
+        if (!window.flatpickr) {
+            // Fallback fara CDN: cele doua campuri devin calendare native vizibile.
+            display.closest('.fuel-date-input').hidden = true;
+            [startInput, endInput].forEach(function (input) {
+                input.type = 'date';
+                input.classList.add('form-control', 'mt-1');
+                input.addEventListener('change', function () {
+                    if (startInput.value && endInput.value && startInput.value <= endInput.value) { form.submit(); }
+                });
+            });
+            return;
+        }
+
+        flatpickr(display, {
+            mode: 'range',
+            locale: window.flatpickr.l10ns && window.flatpickr.l10ns.ro ? 'ro' : 'default',
+            dateFormat: 'Y-m-d',
+            defaultDate: [startInput.value, endInput.value],
+            onReady: function (selectedDates, dateStr, fp) {
+                var presets = document.createElement('div');
+                presets.className = 'fuel-fp-presets';
+                [['Luna aceasta', 0], ['Luna trecută', 1]].forEach(function (preset) {
+                    var button = document.createElement('button');
+                    button.type = 'button';
+                    button.textContent = preset[0];
+                    button.addEventListener('click', function () {
+                        var now = new Date();
+                        fp.setDate([
+                            new Date(now.getFullYear(), now.getMonth() - preset[1], 1),
+                            new Date(now.getFullYear(), now.getMonth() - preset[1] + 1, 0)
+                        ], false);
+                        fp.close();
+                    });
+                    presets.appendChild(button);
+                });
+                fp.calendarContainer.appendChild(presets);
+            },
+            onClose: function (selectedDates) {
+                if (selectedDates.length === 2) {
+                    apply(selectedDates[0], selectedDates[1]);
+                }
+                // flatpickr scrie "Y-m-d to Y-m-d"; pastram eticheta prietenoasa pana la reincarcare.
+                display.value = display.defaultValue;
+            }
         });
-    });
+        display.value = display.defaultValue;
+    })();
 
     document.querySelectorAll('.kmp-sort').forEach(function (th) {
         th.addEventListener('click', function () {
@@ -299,6 +393,167 @@ if (!is_string($vehiclesJson)) {
     });
 
     $('kmp-search').addEventListener('input', function () { state.search = this.value.trim().toLowerCase(); render(); });
+
+    // ---- Detaliere km pierduti (de unde vin) ----
+    var TIP_LABELS = { primar: 'Primar', primar_tona: 'Primar / tonă', distributie: 'Distribuție', primar_distributie: 'Primar + Distribuție', compresor: 'Compresor' };
+
+    function roDateTime(value) {
+        var parts = String(value || '').split(' ');
+        return roDate(parts[0]) + (parts[1] ? ' ' + parts[1] : '');
+    }
+    function km1(n) { return n == null ? '–' : new Intl.NumberFormat('ro-RO', { maximumFractionDigits: 1 }).format(n); }
+    function duration(from, to) {
+        var ms = new Date(to.replace(' ', 'T')) - new Date(from.replace(' ', 'T'));
+        if (!(ms > 0)) { return ''; }
+        var h = Math.round(ms / 3600000);
+        return h >= 48 ? Math.round(h / 24) + ' zile' : h + ' h';
+    }
+    function tripLink(id) {
+        if (!RACES_URL) { return '#' + id; }
+        var href = RACES_URL + '&ids=' + id + '&ids_label=' + encodeURIComponent('cursa #' + id + ' din Km pierduți');
+        return '<a href="' + esc(href) + '" target="_blank" rel="noopener">#' + id + '</a>';
+    }
+    function diffCell(value) {
+        if (Math.abs(value) < 0.5) { return '<span class="text-muted">0</span>'; }
+        return '<span class="' + (value > 0 ? 'kmp-lost-pos' : 'kmp-lost-neg') + '">' + (value > 0 ? '+' : '') + km1(value) + '</span>';
+    }
+
+    function renderDetail(v, d) {
+        var b = d.breakdown;
+        var parts = [
+            { key: 'outside', cls: 'kmp-c-outside', label: 'Rulat fără cursă (între curse)', km: b.outside_km },
+            { key: 'trips', cls: 'kmp-c-trips', label: 'Pe curse, peste km declarați', km: b.trips_over_km },
+            { key: 'service', cls: 'kmp-c-service', label: 'La service, peste km declarați', km: b.service_over_km },
+            { key: 'other', cls: 'kmp-c-other', label: 'Curse la marginea perioadei', km: b.other_km }
+        ];
+        var positive = parts.reduce(function (s, p) { return s + Math.max(0, p.km); }, 0) || 1;
+
+        var html = '<div class="row g-2 mb-3 text-center">'
+            + '<div class="col-6 col-md-3"><div class="border rounded py-2"><div class="h5 mb-0">' + km1(d.gps_km) + '</div><div class="small text-muted">Km GPS (SAS)</div></div></div>'
+            + '<div class="col-6 col-md-3"><div class="border rounded py-2"><div class="h5 mb-0">' + km1(d.declared_trips_km) + '</div><div class="small text-muted">Km efectuați pe curse</div></div></div>'
+            + '<div class="col-6 col-md-3"><div class="border rounded py-2"><div class="h5 mb-0">' + km1(d.declared_service_km) + '</div><div class="small text-muted">Km service</div></div></div>'
+            + '<div class="col-6 col-md-3"><div class="border rounded py-2 border-danger"><div class="h5 mb-0 text-danger">' + km1(d.lost_km) + '</div><div class="small text-muted">Km pierduți</div></div></div>'
+            + '</div>';
+
+        html += '<div class="kmp-split mb-2">' + parts.map(function (p) {
+            return p.km > 0 ? '<span class="' + p.cls + '" style="width:' + (p.km / positive * 100).toFixed(2) + '%" title="' + esc(p.label + ': ' + km1(p.km) + ' km') + '"></span>' : '';
+        }).join('') + '</div>';
+        html += '<div class="d-flex flex-wrap gap-3 small mb-3">' + parts.map(function (p) {
+            return '<span><span class="kmp-dot ' + p.cls + '"></span>' + esc(p.label) + ': <strong>' + km1(p.km) + '</strong> km</span>';
+        }).join('') + '</div>';
+
+        // 1. Perioadele fara cursa.
+        html += '<h6 class="mt-3"><span class="kmp-dot kmp-c-outside"></span>Perioade fără cursă în Dispecer, în care mașina a rulat</h6>';
+        if (!d.gaps.length) {
+            html += '<div class="text-muted small mb-3">Nicio deplasare GPS în afara curselor / drumurilor la service.</div>';
+        } else {
+            html += '<div class="table-responsive"><table class="table table-sm align-middle mb-3"><thead class="table-light"><tr>'
+                + '<th>De la</th><th>Până la</th><th>Între</th><th class="text-end">Deplasări</th><th class="text-end">Km GPS</th></tr></thead><tbody>';
+            d.gaps.slice().sort(function (a, c) { return c.km - a.km; }).forEach(function (g, i) {
+                var between = (g.after ? 'după ' + esc(g.after) : 'început perioadă') + ' → ' + (g.before ? 'înainte de ' + esc(g.before) : 'sfârșit perioadă');
+                html += '<tr class="kmp-gap-toggle" data-gap="' + i + '" title="Arată deplasările">'
+                    + '<td class="text-nowrap"><i class="bi bi-chevron-right small me-1"></i>' + esc(roDateTime(g.from)) + '</td>'
+                    + '<td class="text-nowrap">' + esc(roDateTime(g.to)) + ' <span class="text-muted small">(' + duration(g.from, g.to) + ')</span></td>'
+                    + '<td class="small">' + between + '</td>'
+                    + '<td class="text-end">' + g.segments.length + '</td>'
+                    + '<td class="text-end kmp-lost-pos">' + km1(g.km) + '</td></tr>';
+                html += '<tr class="kmp-gap-segments d-none" data-gap-rows="' + i + '"><td colspan="5"><table class="table table-sm mb-0"><tbody>'
+                    + g.segments.map(function (s) {
+                        return '<tr><td class="text-nowrap">' + esc(roDateTime(s.start)) + ' – ' + esc(String(s.end).split(' ')[1] || '') + '</td>'
+                            + '<td>' + esc(s.from || '?') + ' <i class="bi bi-arrow-right"></i> ' + esc(s.to || '?') + (s.partial ? ' <span class="badge text-bg-light">parțial</span>' : '') + '</td>'
+                            + '<td class="text-end text-nowrap">' + km1(s.km) + ' km</td></tr>';
+                    }).join('') + '</tbody></table></td></tr>';
+            });
+            html += '</tbody></table></div>';
+        }
+
+        // 2. Cursele: km GPS in fereastra cursei vs km declarati.
+        html += '<h6 class="mt-3"><span class="kmp-dot kmp-c-trips"></span>Curse din Dispecer în perioadă — km GPS în timpul cursei vs km declarați</h6>';
+        if (!d.trips.length) {
+            html += '<div class="text-muted small mb-3">Nicio cursă înregistrată pe acest vehicul în perioadă.</div>';
+        } else {
+            html += '<div class="table-responsive"><table class="table table-sm align-middle mb-3"><thead class="table-light"><tr>'
+                + '<th>Cursa</th><th>Tip / beneficiar</th><th>Plecare</th><th>Sosire</th><th class="text-end">Km declarați</th><th class="text-end">Km GPS</th><th class="text-end">GPS − declarați</th></tr></thead><tbody>';
+            d.trips.forEach(function (t) {
+                var notes = [];
+                if (t.segment) { notes.push('segment ' + t.segment); }
+                if (!t.counted) { notes.push('închisă după perioadă — nu intră în tabel'); }
+                if (t.starts_before) { notes.push('începută înainte de perioadă — GPS doar din perioadă'); }
+                html += '<tr' + (t.counted ? '' : ' class="text-muted"') + '>'
+                    + '<td>' + tripLink(t.id) + '</td>'
+                    + '<td class="small">' + esc(TIP_LABELS[t.tip] || t.tip) + (t.beneficiar ? '<br><span class="text-muted">' + esc(t.beneficiar) + '</span>' : '')
+                    + (notes.length ? '<br><span class="badge text-bg-light fw-normal">' + esc(notes.join(' · ')) + '</span>' : '') + '</td>'
+                    + '<td class="text-nowrap">' + esc(roDateTime(t.from)) + '</td>'
+                    + '<td class="text-nowrap">' + esc(roDateTime(t.to)) + '</td>'
+                    + '<td class="text-end">' + km1(t.declared_km) + '</td>'
+                    + '<td class="text-end">' + km1(t.gps_km) + '</td>'
+                    + '<td class="text-end">' + (t.counted && !t.starts_before ? diffCell(t.gps_km - t.declared_km) : '<span class="text-muted" title="Cursă la marginea perioadei">–</span>') + '</td></tr>';
+            });
+            html += '</tbody></table></div>';
+        }
+
+        // 3. Drumurile la service.
+        if (d.services.length) {
+            html += '<h6 class="mt-3"><span class="kmp-dot kmp-c-service"></span>Drumuri la service (Km service)</h6>'
+                + '<div class="table-responsive"><table class="table table-sm align-middle mb-3"><thead class="table-light"><tr>'
+                + '<th>Service</th><th>Plecare</th><th>Întoarcere</th><th class="text-end">Km declarați</th><th class="text-end">Km GPS</th><th class="text-end">GPS − declarați</th></tr></thead><tbody>';
+            d.services.forEach(function (s) {
+                html += '<tr' + (s.counted ? '' : ' class="text-muted"') + '>'
+                    + '<td>' + esc(s.service_nume || 'service') + (s.open ? ' <span class="badge text-bg-warning">încă în service</span>' : '') + '</td>'
+                    + '<td class="text-nowrap">' + esc(roDateTime(s.from)) + '</td>'
+                    + '<td class="text-nowrap">' + (s.open ? '–' : esc(roDateTime(s.to))) + '</td>'
+                    + '<td class="text-end">' + km1(s.declared_km) + '</td>'
+                    + '<td class="text-end">' + km1(s.gps_km) + '</td>'
+                    + '<td class="text-end">' + (s.counted && !s.starts_before ? diffCell(s.gps_km - s.declared_km) : '–') + '</td></tr>';
+            });
+            html += '</tbody></table></div>';
+        }
+
+        html += '<div class="small text-muted"><i class="bi bi-info-circle me-1"></i>Fiecare deplasare GPS din SAS e pusă pe intervalul cursei (data + ora de plecare / sosire din Dispecer) sau al drumului la service în care a avut loc; '
+            + 'ce cade în afara lor e rulat fără cursă. O cursă fără oră acoperă toată ziua. Deplasările care trec peste ora de plecare / sosire se împart proporțional cu timpul („parțial”). '
+            + '„Curse la marginea perioadei”: cursele începute înainte de perioadă (km declarați includ și zilele dinainte, fără GPS aici — valoare negativă) sau închise după ea (au rulat în perioadă, dar în tabel intră în luna în care s-au închis — valoare pozitivă).</div>';
+
+        $('kmp-detail-body').innerHTML = html;
+    }
+
+    function openDetail(v) {
+        $('kmp-detail-title').innerHTML = '<i class="bi bi-graph-down-arrow me-1"></i>Km pierduți — ' + esc(v.plate)
+            + ' <span class="text-muted small fw-normal">' + esc(roDate(PERIOD_START)) + ' – ' + esc(roDate(PERIOD_END)) + '</span>';
+        $('kmp-detail-body').innerHTML = '<div class="text-center text-muted py-5"><div class="spinner-border spinner-border-sm me-2"></div>Se încarcă deplasările GPS din SAS...</div>';
+        bootstrap.Modal.getOrCreateInstance($('kmp-detail-modal')).show();
+
+        fetch(DETAIL_URL + '&car_id=' + v.sas_vehicle_id + '&vehicle_id=' + (v.vehicle_id || 0), { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (!d || d.error) { throw new Error(d && d.error ? d.error : 'Răspuns invalid'); }
+                renderDetail(v, d);
+            })
+            .catch(function (err) {
+                $('kmp-detail-body').innerHTML = '<div class="alert alert-danger mb-0">' + esc(err.message || 'Eroare la încărcare.') + '</div>';
+            });
+    }
+
+    function findVehicle(carId) {
+        for (var i = 0; i < VEHICLES.length; i++) { if (String(VEHICLES[i].sas_vehicle_id) === String(carId)) { return VEHICLES[i]; } }
+        return null;
+    }
+    $('kmp-rows').addEventListener('click', function (e) {
+        var link = e.target.closest('[data-detail]');
+        if (link) { var v = findVehicle(link.getAttribute('data-detail')); if (v) { openDetail(v); } }
+    });
+    $('kmp-rows').addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') { return; }
+        var link = e.target.closest('[data-detail]');
+        if (link) { var v = findVehicle(link.getAttribute('data-detail')); if (v) { openDetail(v); } }
+    });
+    $('kmp-detail-body').addEventListener('click', function (e) {
+        var row = e.target.closest('.kmp-gap-toggle');
+        if (!row) { return; }
+        var seg = $('kmp-detail-body').querySelector('[data-gap-rows="' + row.getAttribute('data-gap') + '"]');
+        if (seg) { seg.classList.toggle('d-none'); }
+        var icon = row.querySelector('.bi');
+        if (icon) { icon.classList.toggle('bi-chevron-right'); icon.classList.toggle('bi-chevron-down'); }
+    });
 
     var initialTh = document.querySelector('.kmp-sort[data-sort="lostc"]');
     if (initialTh) { initialTh.classList.add('desc'); }

@@ -37,5 +37,7 @@ return [
         'send_test' => 'send_test',
         'run_test'  => 'send_test',
         'send_test_sms' => 'send_test',
+        'report_preview' => 'manage_rules',
+        'report_test' => 'send_test',
     ],
 ];

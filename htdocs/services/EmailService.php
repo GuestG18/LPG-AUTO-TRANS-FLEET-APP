@@ -141,8 +141,16 @@ class EmailService
                 $mailer = $this->buildMailer($config);
                 $mailer->addAddress($toEmail, $toName);
                 $mailer->Subject = $subject;
-                $mailer->Body = $body;
-                $mailer->isHTML(false);
+                $html = (string) ($options['html'] ?? '');
+                if ($html !== '') {
+                    // Email HTML cu varianta text pentru clientii fara HTML (ex. raportul Revizii).
+                    $mailer->isHTML(true);
+                    $mailer->Body = $html;
+                    $mailer->AltBody = $body;
+                } else {
+                    $mailer->Body = $body;
+                    $mailer->isHTML(false);
+                }
                 $mailer->addCustomHeader('X-Fleet-Notification-Context', (string) ($options['context'] ?? 'general'));
                 foreach ($attachments as $attachment) {
                     $mailer->addAttachment((string) $attachment['path'], (string) $attachment['name']);

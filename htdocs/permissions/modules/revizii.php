@@ -19,8 +19,9 @@ return [
         'view' => ['label' => 'Vizualizare și sincronizare SasFleet (inclusiv istoricul reviziilor și documentele atașate)'],
         'edit' => ['label' => 'Configurare intervale, înregistrare revizii, referință și verificare intervenții', 'default_admin' => true],
         'simulate' => ['label' => 'Simulare calcul revizie pe date istorice', 'default_admin' => true],
-        'export' => ['label' => 'Istoric revizii: export Excel / PDF, generare și descărcare rapoarte'],
+        'export' => ['label' => 'Istoric revizii și raportul săptămânal: export Excel / PDF, generare și descărcare rapoarte'],
         'documents' => ['label' => 'Istoric revizii: adăugare și eliminare documente atașate', 'default_admin' => true],
+        'delete_history' => ['label' => 'Istoric revizii: ștergere intervenții (T0 revine la starea anterioară)', 'default_admin' => true],
     ],
     'endpoints'   => [
         'save_config' => 'edit',
@@ -35,9 +36,12 @@ return [
         'istoric_report'          => 'export',
         'istoric_reports'         => 'export',
         'istoric_report_download' => 'export',
+        // Raportul saptamanal (butonul „Descarcă Excel” din email)
+        'raport_export'           => 'export',
         'istoric_doc_upload'      => 'documents',
         'istoric_doc_delete'      => 'documents',
         'istoric_verify'          => 'edit',
         'istoric_reference'       => 'edit',
+        'istoric_delete'          => 'delete_history',
     ],
 ];

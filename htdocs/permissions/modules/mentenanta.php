@@ -35,6 +35,7 @@ return [
         'save_intervention'          => 'interventions',
         'delete_intervention'        => 'interventions',
         'save_part'                  => 'parts_stock',
+        'delete_part'                => 'parts_stock',
         'save_auto_component_config' => 'auto_catalog',
         'auto_component_add'         => 'auto_catalog',
         'auto_component_rename'      => 'auto_catalog',

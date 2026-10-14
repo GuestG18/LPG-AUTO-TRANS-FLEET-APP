@@ -5,7 +5,7 @@
  * Datele vin din ReviziiIstoricController (prima pagina randata in JSON, restul prin
  * ?action=istoric_data); revizii-istoric.js deseneaza tot ce depinde de filtre.
  *
- * Asteapta: $filters, $options, $initial, $sort, $dir, $canEdit, $canExport, $canDocuments.
+ * Asteapta: $filters, $options, $initial, $sort, $dir, $canEdit, $canExport, $canDocuments, $canDelete.
  */
 $filters = is_array($filters ?? null) ? $filters : ReviziiIstoricModel::normalizeFilters([]);
 $options = is_array($options ?? null) ? $options : ['vehicule' => [], 'operatori' => [], 'ani' => [(int) date('Y')], 'fara_operator' => false];
@@ -13,6 +13,7 @@ $initial = is_array($initial ?? null) ? $initial : [];
 $canEdit = !empty($canEdit);
 $canExport = !empty($canExport);
 $canDocuments = !empty($canDocuments);
+$canDelete = !empty($canDelete);
 $kpi = $initial['kpi'] ?? ['total' => 0, 'finalizate' => 0, 'cu_documente' => 0, 'vehicule' => 0];
 $pct = static fn (int $n, int $total): string => $total > 0 ? round($n / $total * 100) . '% din total' : '— din total';
 $selectedCategory = $filters['categorii'][0] ?? '';
@@ -27,7 +28,7 @@ $pageJson = json_encode([
     'dir' => $dir ?? 'desc',
     'categorii' => array_map(static fn (array $tab): string => $tab['label'], ReviziiModel::TABS),
     'statusuri' => ReviziiIstoricModel::STATUSES,
-    'can' => ['edit' => $canEdit, 'export' => $canExport, 'documents' => $canDocuments],
+    'can' => ['edit' => $canEdit, 'export' => $canExport, 'documents' => $canDocuments, 'delete' => $canDelete],
     'token' => csrf_token(),
     'urls' => [
         'base' => build_query_url(['page' => 'revizii']),
@@ -325,6 +326,31 @@ $pageJson = json_encode([
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Renunță</button>
                     <button type="submit" class="btn btn-primary">Salvează</button>
+                </div>
+            </form>
+        </div>
+    </div>
+<?php endif; ?>
+
+<?php if ($canDelete): ?>
+    <div class="modal fade" id="rvDeleteModal" tabindex="-1" aria-labelledby="rvDeleteModalTitle" aria-hidden="true">
+        <div class="modal-dialog">
+            <form class="modal-content" id="rvDeleteForm">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="rvDeleteModalTitle"><i class="bi bi-trash3 text-danger me-1"></i>Șterge intervenția</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="rv-modal-intro mb-2"><strong id="rvDeleteFor"></strong></p>
+                    <div class="alert alert-warning small mb-3" id="rvDeleteEffect"></div>
+                    <label class="form-label" for="rvDeleteReason">Motiv (opțional)</label>
+                    <input type="text" class="form-control" id="rvDeleteReason" maxlength="500" placeholder="ex. înregistrată greșit, dată incorectă">
+                    <small class="text-muted">Intervenția dispare din istoric și din rapoarte; o copie (cu documentele atașate) rămâne în arhiva de ștergeri.</small>
+                    <div class="text-danger small mt-2" id="rvDeleteError" hidden></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Renunță</button>
+                    <button type="submit" class="btn btn-danger" id="rvDeleteSubmit"><i class="bi bi-trash3"></i> Șterge definitiv din istoric</button>
                 </div>
             </form>
         </div>

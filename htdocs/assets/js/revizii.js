@@ -24,10 +24,6 @@
             return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
         });
     }
-    function localInput(date) {
-        var d = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-        return d.toISOString().slice(0, 16);
-    }
     function storage(key, value) {
         try {
             if (value === undefined) { return window.localStorage.getItem(key); }
@@ -187,8 +183,273 @@
         var configTitle = configForm.querySelector('[data-config-title]');
         var hoursFieldset = configForm.querySelector('[data-hours-fieldset]');
         var itemsBox = configForm.querySelector('[data-config-items]');
+        var targetWrap = configForm.querySelector('[data-target-wrap]');
+        var bulkBox = configForm.querySelector('[data-bulk]');
+        var bulkList = configForm.querySelector('[data-bulk-list]');
+        var bulkSearch = configForm.querySelector('[data-bulk-search]');
+        var bulkUnconfigured = configForm.querySelector('[data-bulk-unconfigured]');
+        var bulkCount = configForm.querySelector('[data-bulk-count]');
+        var bulkHidden = configForm.querySelector('[data-bulk-hidden]');
+        var bulkNote = configForm.querySelector('[data-bulk-note]');
+        var isBulk = function () { return typeSelect.value === 'grup'; };
+
+        // ---------------- mod „Mai multe vehicule”: selectie pe categorii + valori comune per componenta
+        var KIND_LABELS = { ansamblu: 'Ansambluri (cap tractor + semi)', cap_tractor: 'Capete tractor', camion: 'Camioane', semiremorca: 'Semi-remorci' };
+        var KIND_ORDER = ['ansamblu', 'cap_tractor', 'camion', 'semiremorca'];
+        var bulkSelected = {}; // row.key -> true
+        var rowName = function (row) {
+            return [row.tractor[0] && row.tractor[0].nr, row.semi[0] && row.semi[0].nr].filter(Boolean).join(' + ');
+        };
+        var rowConfigured = function (row) {
+            return rowItems(row).some(function (c) { return c.configured; });
+        };
+        var rowMatches = function (row) {
+            var term = (bulkSearch.value || '').trim().toLowerCase();
+            if (bulkUnconfigured.checked && rowConfigured(row)) { return false; }
+            if (!term) { return true; }
+            var hay = (rowItems(row).map(function (c) { return c.nr + ' ' + (c.marca || ''); }).join(' ') + ' ' + (row.capacity ? row.capacity.nume : '')).toLowerCase();
+            return hay.indexOf(term) !== -1;
+        };
+
+        // Grupele listei: pe tip vehicul (ansamblu / cap tractor / camion / semi) sau pe categoria de
+        // capacitate (a semi-remorcii pentru ansamblu); vehiculele fara categorie ajung la final.
+        // In gruparea pe tip, fiecare tip e impartit mai departe pe categoria de capacitate.
+        var bulkGroupsOf = function () {
+            var byCapacity = (configForm.querySelector('[data-bulk-grouping]:checked') || {}).value === 'capacity';
+            if (!byCapacity) {
+                return KIND_ORDER.map(function (kind) {
+                    var rows = rowsData.filter(function (row) { return row.kind === kind; });
+                    var subs = capacityGroups(rows);
+                    return { id: kind, label: KIND_LABELS[kind] || kind, rows: rows, subs: subs.length > 1 || (subs[0] && subs[0].id !== 'cap0') ? subs : null };
+                });
+            }
+            return capacityGroups(rowsData);
+        };
+
+        var capacityGroups = function (rows) {
+            var groups = {};
+            rows.forEach(function (row) {
+                var cap = row.capacity;
+                var id = cap ? 'cap' + cap.id : 'cap0';
+                if (!groups[id]) {
+                    groups[id] = { id: id, label: cap ? cap.nume : 'Fără categorie de capacitate', order: cap ? cap.ordine : Infinity, rows: [] };
+                }
+                groups[id].rows.push(row);
+            });
+            return Object.keys(groups).map(function (id) { return groups[id]; }).sort(function (a, b) {
+                return a.order === b.order ? a.label.localeCompare(b.label, 'ro') : (a.order < b.order ? -1 : 1);
+            });
+        };
+
+        // O sectiune = antet cu bifa „toate” + vehicule (sau sub-sectiuni pe capacitate).
+        var bulkSection = function (def, className) {
+            var section = document.createElement('div');
+            section.className = 'rv-bulk-section ' + className;
+            section.setAttribute('data-kind', def.id);
+            var head = document.createElement('label');
+            head.className = 'rv-bulk-head';
+            head.innerHTML = '<input class="form-check-input" type="checkbox" data-bulk-kind> <span></span> <small></small>';
+            head.querySelector('span').textContent = def.label;
+            section.appendChild(head);
+            if (def.subs) {
+                def.subs.forEach(function (sub) { section.appendChild(bulkSection(sub, 'rv-bulk-sub')); });
+            } else {
+                section.appendChild(bulkItems(def.rows));
+            }
+            return section;
+        };
+
+        var buildBulkList = function () {
+            bulkList.innerHTML = '';
+            bulkGroupsOf().forEach(function (def) {
+                if (def.rows.length) { bulkList.appendChild(bulkSection(def, 'rv-bulk-group')); }
+            });
+            filterBulkList();
+        };
+
+        var bulkItems = function (rows) {
+                var body = document.createElement('div');
+                body.className = 'rv-bulk-items';
+                rows.forEach(function (row) {
+                    var item = document.createElement('label');
+                    item.className = 'rv-bulk-item';
+                    item.setAttribute('data-row-key', row.key);
+                    item.innerHTML = '<input class="form-check-input" type="checkbox" data-bulk-row> <span class="rv-bulk-nr"></span> <small></small>';
+                    item.querySelector('.rv-bulk-nr').textContent = rowName(row);
+                    var lead = row.tractor[0] || row.semi[0] || {};
+                    var configured = rowItems(row).filter(function (c) { return c.configured; });
+                    item.querySelector('small').textContent = (lead.marca ? lead.marca + ' · ' : '') +
+                        (configured.length ? 'interval ' + fmt(configured[0].interval) + ' km' : 'neconfigurat');
+                    item.title = (KIND_LABELS[row.kind] || row.kind) + ' · ' + (row.capacity ? row.capacity.nume : 'fără categorie de capacitate');
+                    item.querySelector('input').checked = !!bulkSelected[row.key];
+                    body.appendChild(item);
+                });
+                return body;
+        };
+
+        var filterBulkList = function () {
+            bulkList.querySelectorAll('.rv-bulk-item').forEach(function (item) {
+                item.hidden = !rowMatches(byKey[item.getAttribute('data-row-key')]);
+            });
+            bulkList.querySelectorAll('.rv-bulk-section').forEach(function (section) {
+                section.hidden = !section.querySelector('.rv-bulk-item:not([hidden])');
+            });
+            syncBulkHeads();
+        };
+
+        // Bifa sectiunii reflecta vehiculele ei vizibile (toate / unele / niciunul).
+        var syncBulkHeads = function () {
+            var total = 0;
+            bulkList.querySelectorAll('.rv-bulk-section').forEach(function (section) {
+                var items = Array.prototype.filter.call(section.querySelectorAll('.rv-bulk-item'), function (item) { return !item.hidden; });
+                var checked = items.filter(function (item) { return item.querySelector('input').checked; }).length;
+                var head = section.querySelector(':scope > .rv-bulk-head');
+                var box = head.querySelector('[data-bulk-kind]');
+                box.checked = items.length > 0 && checked === items.length;
+                box.indeterminate = checked > 0 && checked < items.length;
+                head.querySelector('small').textContent = checked + ' / ' + items.length;
+            });
+            Object.keys(bulkSelected).forEach(function (key) { if (bulkSelected[key]) { total++; } });
+            bulkCount.textContent = total === 1 ? '1 vehicul selectat' : total + ' vehicule selectate';
+        };
+
+        // Componentele selectate, grupate pe (motor / semi) x tip componenta, fara dubluri.
+        var bulkGroups = function () {
+            var groups = {};
+            var order = [];
+            var seen = {};
+            rowsData.forEach(function (row) {
+                if (!bulkSelected[row.key]) { return; }
+                rowItems(row).forEach(function (c) {
+                    var uid = c.id + ':' + c.tip;
+                    if (seen[uid]) { return; }
+                    seen[uid] = true;
+                    var key = (c.is_trailer ? 's' : 'm') + ':' + c.tip;
+                    if (!groups[key]) {
+                        groups[key] = { key: key, is_trailer: c.is_trailer, tip: c.tip, sub: c.sub, items: [], vtypes: {} };
+                        order.push(key);
+                    }
+                    groups[key].items.push(c);
+                    groups[key].vtypes[c.vtype === 'camion' ? 'camion' : (c.is_trailer ? 'semi' : 'cap')] = true;
+                });
+            });
+            order.sort(function (a, b) { return a.charAt(0) === b.charAt(0) ? 0 : (a.charAt(0) === 'm' ? -1 : 1); });
+            return order.map(function (key) { return groups[key]; });
+        };
+
+        // Valoarea comuna a grupului (sau '' daca vehiculele au valori diferite).
+        var commonValue = function (items, field) {
+            var values = items.map(function (c) { return c[field]; });
+            return values.every(function (v) { return String(v) === String(values[0]); }) ? values[0] : '';
+        };
+
+        var renderBulkPanels = function () {
+            var previous = {};
+            itemsBox.querySelectorAll('.rv-panel[data-group]').forEach(function (panel) { previous[panel.getAttribute('data-group')] = panel; });
+            itemsBox.innerHTML = '';
+            bulkGroups().forEach(function (g, index) {
+                var panel = previous[g.key] || null;
+                if (!panel) {
+                    panel = document.createElement('fieldset');
+                    panel.className = 'rv-panel ' + (g.is_trailer ? 'rv-panel-semi' : 'rv-panel-tractor');
+                    panel.setAttribute('data-group', g.key);
+                    panel.setAttribute('data-trailer', g.is_trailer ? '1' : '0');
+                    var id = 'rvBulk' + index + g.tip;
+                    panel.innerHTML =
+                        '<legend class="rv-panel-title"><input class="form-check-input" type="checkbox" value="1" id="' + id + '" data-field="enabled" checked>' +
+                        '<label for="' + id + '"><i class="bi ' + (g.is_trailer ? 'bi-truck-flatbed' : 'bi-truck-front-fill') + '"></i> <span></span></label><small></small></legend>' +
+                        '<div class="row g-2">' +
+                        '<div class="col-sm-6"><label class="form-label">Interval (km)</label><input type="number" min="500" max="300000" step="100" class="form-control" data-field="interval"></div>' +
+                        '<div class="col-sm-6"><label class="form-label">Prag notificare (km rămași)</label><input type="number" min="0" step="100" class="form-control" data-field="warn"></div>' +
+                        '</div><div class="invalid-feedback d-block" data-panel-error></div>';
+                    panel.querySelector('[data-field="enabled"]').addEventListener('change', function () {
+                        syncPanel(panel);
+                        syncHours();
+                    });
+                    panel.querySelectorAll('[data-field="interval"], [data-field="warn"]').forEach(function (input) {
+                        input.addEventListener('input', function () { input.setAttribute('data-dirty', '1'); });
+                    });
+                }
+                var base = g.is_trailer ? 'Semi-remorcă' : (g.vtypes.camion && g.vtypes.cap ? 'Cap tractor / camion' : (g.vtypes.camion ? 'Camion' : 'Cap tractor'));
+                panel.querySelector('legend span').textContent = base + (g.sub ? ' · ' + g.sub : '');
+                panel.querySelector('legend small').textContent = g.items.length === 1 ? '1 vehicul' : g.items.length + ' vehicule';
+                // Valorile introduse de utilizator raman; restul urmeaza selectia curenta.
+                [['interval', 'interval'], ['warn', 'warn']].forEach(function (pair) {
+                    var input = panel.querySelector('[data-field="' + pair[0] + '"]');
+                    if (input.getAttribute('data-dirty')) { return; }
+                    var value = commonValue(g.items, pair[1]);
+                    input.value = value === null || value === undefined ? '' : value;
+                    input.placeholder = value === '' ? 'valori diferite – completează' : '';
+                });
+                panel._bulkItems = g.items;
+                itemsBox.appendChild(panel);
+                syncPanel(panel);
+            });
+            if (!itemsBox.children.length) {
+                itemsBox.innerHTML = '<p class="text-muted small mb-2" data-bulk-empty>Selectează cel puțin un vehicul din listă.</p>';
+            }
+            syncHours();
+        };
+
+        bulkList.addEventListener('change', function (event) {
+            var input = event.target;
+            if (input.hasAttribute('data-bulk-kind')) {
+                var group = input.closest('.rv-bulk-section');
+                group.querySelectorAll('.rv-bulk-item').forEach(function (item) {
+                    if (item.hidden) { return; }
+                    item.querySelector('input').checked = input.checked;
+                    bulkSelected[item.getAttribute('data-row-key')] = input.checked;
+                });
+            } else if (input.hasAttribute('data-bulk-row')) {
+                bulkSelected[input.closest('.rv-bulk-item').getAttribute('data-row-key')] = input.checked;
+            } else {
+                return;
+            }
+            syncBulkHeads();
+            renderBulkPanels();
+        });
+        // Schimbarea gruparii pastreaza selectia (cheia e randul, nu grupa).
+        configForm.querySelectorAll('[data-bulk-grouping]').forEach(function (radio) {
+            radio.addEventListener('change', buildBulkList);
+        });
+        bulkSearch.addEventListener('input', filterBulkList);
+        bulkUnconfigured.addEventListener('change', filterBulkList);
+
+        // La trimitere, valorile comune se transforma in randuri items[] (cate unul per vehicul x componenta).
+        var writeBulkInputs = function () {
+            bulkHidden.innerHTML = '';
+            var index = 0;
+            itemsBox.querySelectorAll('.rv-panel[data-group]').forEach(function (panel) {
+                if (!panel.querySelector('[data-field="enabled"]').checked) { return; }
+                var interval = panel.querySelector('[data-field="interval"]').value;
+                var warn = panel.querySelector('[data-field="warn"]').value;
+                (panel._bulkItems || []).forEach(function (c) {
+                    var values = { enabled: '1', vehicle_id: c.id, tip: c.tip, interval_km: interval, km_ultima_revizie: '', prag_avertizare_km: warn };
+                    Object.keys(values).forEach(function (field) {
+                        var hidden = document.createElement('input');
+                        hidden.type = 'hidden';
+                        hidden.name = 'items[' + index + '][' + field + ']';
+                        hidden.value = values[field];
+                        bulkHidden.appendChild(hidden);
+                    });
+                    index++;
+                });
+            });
+        };
 
         var fillTargets = function () {
+            var bulk = isBulk();
+            targetWrap.hidden = bulk;
+            bulkBox.hidden = !bulk;
+            if (bulkNote) { bulkNote.hidden = !bulk; }
+            bulkHidden.innerHTML = '';
+            if (bulk) {
+                configTitle.textContent = 'Mai multe vehicule';
+                itemsBox.innerHTML = '';
+                buildBulkList();
+                renderBulkPanels();
+                return;
+            }
             var assembly = typeSelect.value === 'ansamblu';
             targetSelect.innerHTML = '';
             rowsData.forEach(function (row) {
@@ -286,6 +547,9 @@
         // Deschis din antet: formularul se reincarca din datele salvate (modificarile nesalvate se pierd la Renunță).
         configModal.addEventListener('show.bs.modal', function (event) {
             if (event.relatedTarget && event.relatedTarget.hasAttribute('data-config-open')) {
+                bulkSelected = {};
+                bulkSearch.value = '';
+                bulkUnconfigured.checked = false;
                 fillTargets();
             }
             if (hoursFieldset) {
@@ -305,7 +569,8 @@
                 any = true;
                 var interval = Number(panel.querySelector('[data-field="interval"]').value);
                 var warn = panel.querySelector('[data-field="warn"]').value;
-                var kmLast = panel.querySelector('[data-field="km_last"]').value;
+                var kmLastInput = panel.querySelector('[data-field="km_last"]');
+                var kmLast = kmLastInput ? kmLastInput.value : '';
                 var messages = [];
                 if (!interval || interval < 500 || interval > 300000) { messages.push('Completează intervalul (500 – 300.000 km).'); }
                 if (warn === '' || Number(warn) < 0 || Number(warn) >= interval) { messages.push('Pragul trebuie să fie între 0 și interval.'); }
@@ -325,7 +590,16 @@
                 ok = false;
                 panels[0].querySelector('[data-panel-error]').textContent = 'Bifează cel puțin o componentă.';
             }
-            if (!ok) { event.preventDefault(); }
+            if (isBulk() && !panels.length) {
+                ok = false;
+                bulkCount.textContent = 'Selectează cel puțin un vehicul.';
+            }
+            if (!ok) {
+                event.preventDefault();
+                event.stopPropagation(); // garda globala anti-dublu-submit din app.js ignora preventDefault
+                return;
+            }
+            if (isBulk()) { writeBulkInputs(); }
         });
 
         fillTargets();
@@ -343,7 +617,6 @@
             var row = byKey[button.getAttribute('data-row-key')];
             if (!row) { return; }
             recordLabel.textContent = row.label;
-            var maxMoment = localInput(new Date());
             container.innerHTML = '';
             rowItems(row).forEach(function (component, index) {
                 var id = 'rvRec' + index;
@@ -357,7 +630,17 @@
                     '<input type="hidden" data-f="vehicle_id"><input type="hidden" data-f="tip">' +
                     '<div class="row g-2">' +
                     '<div class="col-sm-7"><label class="form-label small mb-1" for="' + id + 'at">Data și ora (T0)</label>' +
-                    '<input type="datetime-local" class="form-control form-control-sm" id="' + id + 'at" required></div>' +
+                    // Acelasi selector ca „Data si ora inceput” din Adauga cursa (datetime-picker-field.js).
+                    '<div class="dispatcher-datetime-field" data-datetime-picker>' +
+                    '<div class="input-group dispatcher-datetime-input-group">' +
+                    '<input type="text" class="form-control" id="' + id + 'at" placeholder="dd/mm/yyyy HH:mm" inputmode="numeric" autocomplete="off" maxlength="16" data-dtp-display>' +
+                    '<button type="button" class="btn btn-outline-secondary" aria-label="Deschide calendarul" aria-expanded="false" data-dtp-toggle><i class="bi bi-calendar3" aria-hidden="true"></i></button>' +
+                    '</div>' +
+                    '<div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>' +
+                    '<input type="hidden" data-dtp-date><input type="hidden" data-dtp-time>' +
+                    '</div>' +
+                    '<input type="hidden" data-f="at">' +
+                    '<div class="invalid-feedback d-block" data-at-error></div></div>' +
                     '<div class="col-sm-5"><label class="form-label small mb-1" for="' + id + 'km">Km bord (opțional)</label>' +
                     '<input type="number" min="0" class="form-control form-control-sm" id="' + id + 'km"></div>' +
                     '</div>';
@@ -369,15 +652,23 @@
                 wrap.querySelector('[data-f="tip"]').value = component.tip;
                 wrap.querySelector('label.form-check-label').textContent = itemLabel(component) +
                     (component.configured ? ' — T0 actual ' + dateRo(component.t0) : ' — neconfigurat');
-                var at = wrap.querySelector('input[type="datetime-local"]');
+                // Selectorul tine data si ora separat; serverul primeste un singur „Y-m-d H:i”.
+                var at = wrap.querySelector('[data-f="at"]');
                 at.name = name('at');
-                at.max = maxMoment;
+                var picker = wrap.querySelector('[data-datetime-picker]');
+                var pickDate = picker.querySelector('[data-dtp-date]');
+                var pickTime = picker.querySelector('[data-dtp-time]');
+                picker.addEventListener('change', function () {
+                    at.value = pickDate.value && pickTime.value ? pickDate.value + ' ' + pickTime.value : '';
+                    wrap.querySelector('[data-at-error]').textContent = '';
+                });
                 var km = wrap.querySelector('input[type="number"]');
                 km.name = name('km');
                 km.placeholder = 'în aplicație: ' + fmt(component.km_bord);
                 var toggle = function () {
                     at.disabled = !check.checked;
                     km.disabled = !check.checked;
+                    picker.querySelectorAll('[data-dtp-display], [data-dtp-toggle]').forEach(function (el) { el.disabled = !check.checked; });
                 };
                 // Placutele / anvelopele fara interval configurat nu pot primi T0 (lipseste intervalul).
                 if (!component.configured && !tabHasHours) {
@@ -389,6 +680,34 @@
                 toggle();
                 container.appendChild(wrap);
             });
+            if (window.FleetDateTimePicker) { window.FleetDateTimePicker.init(container); }
+        });
+
+        // T0 obligatoriu (data + ora) si nu in viitor, pentru fiecare componenta bifata.
+        recordModal.querySelector('form').addEventListener('submit', function (event) {
+            var ok = true;
+            container.querySelectorAll('.rv-record-component').forEach(function (wrap) {
+                var check = wrap.querySelector('input[type="checkbox"]');
+                var error = wrap.querySelector('[data-at-error]');
+                var display = wrap.querySelector('[data-dtp-display]');
+                if (!check.checked || check.disabled) { return; }
+                var pickerBox = wrap.querySelector('[data-datetime-picker]');
+                if (pickerBox.fleetDateTimePicker) { pickerBox.fleetDateTimePicker.readTyped(false); }
+                var value = wrap.querySelector('[data-f="at"]').value;
+                var message = '';
+                if (!value) {
+                    message = 'Alege data și ora (T0), ex. 14/08/2026 15:10.';
+                } else if (new Date(value.replace(' ', 'T')).getTime() > Date.now() + 300000) {
+                    message = 'T0 nu poate fi în viitor.';
+                }
+                error.textContent = message;
+                display.classList.toggle('is-invalid', message !== '');
+                if (message) { ok = false; }
+            });
+            if (!ok) {
+                event.preventDefault();
+                event.stopPropagation(); // garda globala anti-dublu-submit din app.js ignora preventDefault
+            }
         });
     }
 
