@@ -305,6 +305,7 @@ require_once __DIR__ . '/includes/helpers.php';
 require_once __DIR__ . '/includes/csrf.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/access.php';
+require_once __DIR__ . '/includes/audit_context.php';
 require_once __DIR__ . '/includes/profile_helpers.php';
 require_once __DIR__ . '/includes/vehicle_capacity_groups.php';
 
@@ -342,6 +343,7 @@ require_once __DIR__ . '/models/DriverActivityHistoryModel.php';
 require_once __DIR__ . '/models/FuelModel.php';
 require_once __DIR__ . '/models/FuelKmCheckModel.php';
 require_once __DIR__ . '/models/UserActivityModel.php';
+require_once __DIR__ . '/models/ActivityReportModel.php';
 require_once __DIR__ . '/models/LeasingSchedulerModel.php';
 require_once __DIR__ . '/models/TransportTariffModel.php';
 require_once __DIR__ . '/models/OperationalCostModel.php';
@@ -360,6 +362,7 @@ require_once __DIR__ . '/services/SasFleetClient.php';
 require_once __DIR__ . '/services/FleetLivePositionService.php';
 require_once __DIR__ . '/services/SasTripPrefillService.php';
 require_once __DIR__ . '/services/SasDashboardService.php';
+require_once __DIR__ . '/services/RaceMonthSplitService.php';
 require_once __DIR__ . '/services/WebAuthnService.php';
 require_once __DIR__ . '/services/UserAvatarService.php';
 require_once __DIR__ . '/services/FuelPriceIndexService.php';
@@ -417,6 +420,7 @@ require_once __DIR__ . '/controllers/DriverActivityHistoryController.php';
 require_once __DIR__ . '/controllers/FuelController.php';
 require_once __DIR__ . '/controllers/AccessRightsController.php';
 require_once __DIR__ . '/controllers/UserActivityController.php';
+require_once __DIR__ . '/controllers/ActivityReportController.php';
 require_once __DIR__ . '/controllers/LeasingSchedulerController.php';
 require_once __DIR__ . '/controllers/TransportTariffController.php';
 require_once __DIR__ . '/controllers/OperationalCostController.php';
@@ -788,6 +792,11 @@ try {
         case 'activitate_utilizatori':
             require_auth();
             (new UserActivityController($db))->handle($action);
+            break;
+
+        case 'rapoarte_activitate':
+            require_auth();
+            (new ActivityReportController($db))->handle($action);
             break;
 
         // Sandbox experimental OCR (doar admin, nu apare in meniu, nu scrie in DB).

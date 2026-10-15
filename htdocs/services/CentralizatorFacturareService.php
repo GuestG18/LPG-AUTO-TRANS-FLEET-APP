@@ -1343,6 +1343,7 @@ class CentralizatorFacturareService
                 c.billing_part,
                 c.billing_counts,
                 c.billing_date,
+                c.billing_share,
                 li.nume AS loc_incarcare_nume,
                 zd.nume AS zona_distributie_nume,
                 bt.nume AS beneficiar_nume,
@@ -1475,16 +1476,14 @@ class CentralizatorFacturareService
 
     private function buildRefacturareWhere(array $filters, string $prefix): array
     {
+        // Luna refacturarii: dupa data ei, iar pentru cursele incepute din luna setata in
+        // Configurare transport, dupa luna cursei (vezi BillingMonthRule::sqlExpenseInPeriod).
         $where = [
             'c.deleted_at IS NULL',
             'COALESCE(e.refacturare_suma, 0) > 0',
-            'COALESCE(e.refacturare_data, e.data_cheltuiala) >= :' . $prefix . '_date_start',
-            'COALESCE(e.refacturare_data, e.data_cheltuiala) < :' . $prefix . '_date_next',
+            BillingMonthRule::sqlExpenseInPeriod($this->db, 'e', 'c', (string) $filters['date_start'], (string) $filters['date_next']),
         ];
-        $params = [
-            ':' . $prefix . '_date_start' => $filters['date_start'],
-            ':' . $prefix . '_date_next' => $filters['date_next'],
-        ];
+        $params = [];
 
         $types = $this->activityTypes($filters);
         if ($types !== []) {
@@ -3531,6 +3530,8 @@ class CentralizatorFacturareService
         return match ((string) ($row['billing_part'] ?? 'full')) {
             'km' => ' (partea km)',
             'tone' => ' (partea tone)',
+            // Regula „Impartit pe faze”: partea fazelor din luna, dupa km-ii lor.
+            'phase' => ' (faze din luna: ' . $this->formatNumber((float) ($row['billing_share'] ?? 1) * 100, 1) . '%)',
             default => '',
         };
     }

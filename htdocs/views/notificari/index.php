@@ -925,7 +925,7 @@ $deliveryRecipient = static function (array $row): string {
                                         <i class="bi bi-envelope-paper" aria-hidden="true"></i>
                                         <div>
                                             <strong>Raport săptămânal pe email</strong>
-                                            <small>Situația reviziilor (Necesită / Se apropie, pe categorii) trimisă automat o dată pe săptămână destinatarilor de la pasul 3. Se trimite doar pe email.</small>
+                                            <small>Situația reviziilor (Necesită / Se apropie, pe categorii) trimisă automat o dată pe săptămână destinatarilor de la pasul 3. Raportul pleacă pe email; opțional, șoferii primesc un SMS.</small>
                                         </div>
                                     </div>
                                     <div class="nrf-report-grid">
@@ -963,11 +963,39 @@ $deliveryRecipient = static function (array $row): string {
                                             </div>
                                         </div>
                                     </div>
+                                    <?php
+                                    $reportVehicles = is_array($reportVehicles ?? null) ? $reportVehicles : [];
+                                    $selectedReportVehicles = array_map('intval', (array) ($formData['report_vehicles'] ?? []));
+                                    ?>
+                                    <div class="nrf-report-vehicles">
+                                        <div class="nrf-report-vehicles-head">
+                                            <span class="nrf-label">Vehicule <small>(nimic bifat = toată flota; cu vehicule alese apar și componentele în regulă)</small></span>
+                                            <div class="nrf-users-search">
+                                                <i class="bi bi-search" aria-hidden="true"></i>
+                                                <input class="form-control form-control-sm" type="search" placeholder="Caută nr. auto…" aria-label="Caută vehicul" data-nrf-vehicle-search>
+                                            </div>
+                                        </div>
+                                        <div class="nrf-chips nrf-chips-scroll">
+                                            <?php foreach ($reportVehicles as $vehicle): ?>
+                                                <label class="nrf-chip" data-nrf-vehicle data-search="<?= e(strtolower((string) $vehicle['nr_inmatriculare'] . ' ' . str_replace(' ', '', (string) $vehicle['nr_inmatriculare']) . ' ' . (string) $vehicle['marca'])) ?>">
+                                                    <input type="checkbox" name="report_vehicles[]" value="<?= (int) $vehicle['id'] ?>" <?= in_array((int) $vehicle['id'], $selectedReportVehicles, true) ? 'checked' : '' ?>>
+                                                    <span><?= e((string) $vehicle['nr_inmatriculare']) ?></span>
+                                                </label>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
                                     <div class="form-check form-switch nrf-switch nrf-switch-inline">
                                         <input class="form-check-input" type="checkbox" role="switch" id="nrfReportHistory" name="report_history" value="1" <?= (int) ($formData['report_history'] ?? 1) === 1 ? 'checked' : '' ?>>
                                         <label class="form-check-label" for="nrfReportHistory">
                                             <strong>Include reviziile efectuate în ultimele 7 zile</strong>
                                             <small>Lista înlocuirilor înregistrate în Revizii în ultima săptămână.</small>
+                                        </label>
+                                    </div>
+                                    <div class="form-check form-switch nrf-switch nrf-switch-inline">
+                                        <input class="form-check-input" type="checkbox" role="switch" id="nrfReportNotifyDriver" name="report_notify_driver" value="1" <?= (int) ($formData['report_notify_driver'] ?? 0) === 1 ? 'checked' : '' ?>>
+                                        <label class="form-check-label" for="nrfReportNotifyDriver">
+                                            <strong>Trimite SMS șoferilor vehiculelor din raport</strong>
+                                            <small>O dată pe săptămână, odată cu raportul: șoferul e rugat să-l sune pe destinatarul raportului (primul cu telefon în cont) și să-i comunice km de la bord.</small>
                                         </label>
                                     </div>
                                     <div class="nrf-report-test">

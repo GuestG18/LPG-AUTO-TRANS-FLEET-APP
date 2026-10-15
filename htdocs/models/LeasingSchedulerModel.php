@@ -1223,6 +1223,9 @@ class LeasingSchedulerModel extends BaseModel
         $this->bindNullableInt($stmt, ':user_id', $userId);
         $stmt->bindValue(':created_at', date('Y-m-d H:i:s'));
         $stmt->execute();
+        if (function_exists('audit_stamp_request_context')) {
+            audit_stamp_request_context($this->db, 'audit_log', (int) $this->db->lastInsertId());
+        }
     }
 
     private function tableExists(string $table): bool

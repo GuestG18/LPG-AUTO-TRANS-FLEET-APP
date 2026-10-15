@@ -690,9 +690,7 @@ if ($configCreateMode) {
                     <div class="form-text mt-0 mb-2">Bifeaza tipurile pentru care beneficiarul are reguli active — fiecare tip isi arata setarile direct in cardul lui.</div>
                     <?php if (isset($beneficiaryFormErrors['tip_transport'])): ?><div class="invalid-feedback d-block mb-2"><?= e((string) $beneficiaryFormErrors['tip_transport']) ?></div><?php endif; ?>
                 <?php
-                // Luna de facturare: modificarile se aplica doar curselor incepute din luna aleasa,
-                // ca lunile deja facturate sa ramana neschimbate.
-                $billingMonthFrom = (string) ($beneficiaryFormData['luna_facturare_de_la'] ?? date('Y-m'));
+                // Luna de facturare: o regula schimbata se aplica tuturor curselor (fara luna de start).
                 $billingMonthHistory = is_array($beneficiaryFormData['luna_facturare_istoric'] ?? null) ? $beneficiaryFormData['luna_facturare_istoric'] : [];
                 $billingTypeLabels = [
                     'primar' => 'Primar km',
@@ -704,16 +702,31 @@ if ($configCreateMode) {
                 ?>
                 <div class="mb-3">
                     <div class="border rounded p-3 bg-body-tertiary">
-                        <div class="row g-3 align-items-end">
+                        <div class="fw-semibold mb-1">Luna de facturare</div>
+                        <div class="form-text mt-0">
+                            Un select „Luna de facturare” pe care il <strong>schimbi</strong> in cardurile de mai jos se aplica, la salvare, tuturor curselor beneficiarului pe tipul acela, <strong>inclusiv celor vechi</strong> (lunile deja facturate in Centralizator se pot schimba).
+                            Selecturile neatinse raman exact cum sunt.
+                        </div>
+                        <div class="form-text mt-2">
+                            <strong>Regulile:</strong> „Data inceput cursa” = toata cursa in luna in care a inceput;
+                            „Data sfarsit cursa” = toata cursa in luna in care s-a terminat (ex. Forvest: cursele 31.08 - 01.09 merg in septembrie);
+                            „Impartit pe faze (la miezul noptii)” = cursa care trece in luna urmatoare se imparte pe fazele ei de la miezul noptii,
+                            fiecare luna cu partea ei dupa km-ii fazelor (ex. Flaga: partea din 31.08 in august, restul in septembrie). Cursa fara ore de inceput / sfarsit nu are faze si ramane pe luna in care a inceput.
+                        </div>
+                        <?php $reinvoiceFollowsTrip = (string) ($beneficiaryFormData['refacturari_urmeaza_cursa'] ?? '0') === '1'; ?>
+                        <div class="row g-3 align-items-center mt-1 pt-3 border-top">
                             <div class="col-12 col-md-4">
-                                <label class="form-label" for="config_luna_facturare_de_la">Luna de facturare: aplica modificarile incepand cu luna</label>
-                                <input type="month" class="form-control <?= isset($beneficiaryFormErrors['luna_facturare_de_la']) ? 'is-invalid' : '' ?>" id="config_luna_facturare_de_la" name="luna_facturare_de_la" value="<?= e(substr($billingMonthFrom, 0, 7)) ?>" required>
-                                <?php if (isset($beneficiaryFormErrors['luna_facturare_de_la'])): ?><div class="invalid-feedback d-block"><?= e((string) $beneficiaryFormErrors['luna_facturare_de_la']) ?></div><?php endif; ?>
+                                <input type="hidden" name="refacturari_urmeaza_cursa_present" value="1">
+                                <div class="form-check form-switch mb-0">
+                                    <input class="form-check-input" type="checkbox" role="switch" id="config_refacturari_urmeaza_cursa" name="refacturari_urmeaza_cursa" value="1" <?= $reinvoiceFollowsTrip ? 'checked' : '' ?>>
+                                    <label class="form-check-label" for="config_refacturari_urmeaza_cursa">Refacturarile urmeaza luna cursei</label>
+                                </div>
                             </div>
                             <div class="col-12 col-md-8">
                                 <div class="form-text mt-0">
-                                    Doar selecturile „Luna de facturare” pe care le schimbi in cardurile de mai jos primesc luna aleasa; restul raman cum sunt.<br>Ele se aplica doar curselor <strong>incepute</strong> din luna aleasa.
-                                    Cursele mai vechi raman pe regula de atunci, deci lunile deja facturate nu se modifica.
+                                    <strong>Doar pentru acest beneficiar.</strong> Pornit: refacturarile (taxe acces, port, trecere...) intra in Centralizator in luna de facturare a cursei, pentru toate cursele lui (si cele vechi);
+                                    la „Impartit pe faze” fiecare refacturare ramane intreaga, in luna datei ei din intervalul cursei.
+                                    Oprit: refacturarile raman dupa data lor, ca pana acum.
                                 </div>
                             </div>
                         </div>
@@ -723,13 +736,13 @@ if ($configCreateMode) {
                                 <div class="table-responsive mt-2">
                                     <table class="table table-sm small mb-0">
                                         <thead>
-                                            <tr><th>Din luna</th><th>Tip transport</th><th>Componenta</th><th>Regula</th><th>Modificat</th></tr>
+                                            <tr><th>Se aplica la</th><th>Tip transport</th><th>Componenta</th><th>Regula</th><th>Modificat</th></tr>
                                         </thead>
                                         <tbody>
                                             <?php foreach ($billingMonthHistory as $historyRow): ?>
                                                 <?php $historySince = (string) ($historyRow['valabil_de_la'] ?? ''); ?>
                                                 <tr>
-                                                    <td><?= $historySince <= BillingMonthRule::SINCE_ALWAYS ? 'dintotdeauna' : e(date('m.Y', (int) strtotime($historySince))) ?></td>
+                                                    <td><?= $historySince <= BillingMonthRule::SINCE_ALWAYS ? 'toate cursele' : e(date('m.Y', (int) strtotime($historySince))) ?></td>
                                                     <td><?= e($billingTypeLabels[(string) ($historyRow['tip_transport'] ?? '')] ?? (string) ($historyRow['tip_transport'] ?? '')) ?></td>
                                                     <td><?= e(BillingMonthRule::COMPONENT_LABELS[(string) ($historyRow['componenta'] ?? '')] ?? (string) ($historyRow['componenta'] ?? '')) ?></td>
                                                     <td><?= e(BillingMonthRule::RULE_LABELS[(string) ($historyRow['regula'] ?? '')] ?? (string) ($historyRow['regula'] ?? '')) ?></td>

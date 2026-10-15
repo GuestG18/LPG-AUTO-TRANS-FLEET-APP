@@ -11,8 +11,10 @@ declare(strict_types=1);
  *   php scripts/revizii_raport_saptamanal.php --rule=12 --force           trimite acum regula 12 (test)
  *   php scripts/revizii_raport_saptamanal.php --rule=12 --to=eu@firma.ro  trimite acum doar la o adresa
  *   php scripts/revizii_raport_saptamanal.php --rule=12 --html=raport.html  salveaza HTML-ul, fara email
+ *   ... --no-sms   fara SMS-ul catre soferi (regulile cu „SMS șoferilor” bifat)
  *
  * Trimiterile cu --force / --to se inregistreaza ca test (nu consuma trimiterea saptamanii).
+ * SMS-urile catre soferi doar se pun in coada; le trimite worker-ul de notificari (SMSAlert).
  */
 
 if (PHP_SAPI !== 'cli') {
@@ -32,7 +34,7 @@ require_once $root . '/htdocs/models/NotificationDeliveryModel.php';
 require_once $root . '/htdocs/services/EmailService.php';
 require_once $root . '/htdocs/services/ReviziiWeeklyReportService.php';
 
-$options = getopt('', ['dry-run', 'force', 'rule:', 'to:', 'html:']);
+$options = getopt('', ['dry-run', 'force', 'rule:', 'to:', 'html:', 'no-sms']);
 
 try {
     $db = get_pdo();
@@ -56,6 +58,7 @@ try {
         'force' => isset($options['force']),
         'rule_id' => (int) ($options['rule'] ?? 0),
         'to' => (string) ($options['to'] ?? ''),
+        'no_sms' => isset($options['no-sms']),
     ]);
 
     if ($log === []) {

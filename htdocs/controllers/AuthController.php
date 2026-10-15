@@ -16,8 +16,11 @@ class AuthController
     private const VERIFY_CODE_RESEND_COOLDOWN_SECONDS = 30;
     private const VERIFY_MAX_ATTEMPTS = 5;
 
+    private PDO $db;
+
     public function __construct(PDO $db)
     {
+        $this->db = $db;
         $this->userModel = new UserModel($db);
         $this->loginEmailCodeModel = new LoginEmailCodeModel($db);
         $this->emailService = new EmailService($db);
@@ -93,8 +96,17 @@ class AuthController
 
         $this->clearPendingVerification();
         login_user($user);
+        $this->recordLogin($user, 'passkey', true);
         flash_set('success', 'Autentificat cu passkey. Bine ai venit, ' . (string) ($user['nume'] ?? 'utilizator') . '!');
         $this->json(['ok' => true, 'redirect' => url('index.php?page=dashboard')]);
+    }
+
+    /** Jurnalul de autentificari (Rapoarte activitate utilizatori). Nu salveaza parola sau codul. */
+    private function recordLogin(array $user, string $method, bool $success): void
+    {
+        if (function_exists('audit_record_login')) {
+            audit_record_login($this->db, (int) ($user['id'] ?? 0) ?: null, (string) ($user['email'] ?? '') ?: null, $method, $success);
+        }
     }
 
     public function index(): void
@@ -120,6 +132,7 @@ class AuthController
 
         $user = $this->userModel->findAuthUserByEmail($email);
         if (!$user || !password_verify($parola, (string) ($user['parola'] ?? ''))) {
+            $this->recordLogin($user ?: ['email' => $email], 'parola', false);
             flash_set('danger', 'Date de autentificare invalide.');
             redirect($this->loginPageUrl());
         }
@@ -137,6 +150,7 @@ class AuthController
 
         if (!$this->isEmailVerificationRequired()) {
             login_user($user);
+            $this->recordLogin($user, 'parola', true);
             flash_set('success', 'Bine ai venit, ' . (string) ($user['nume'] ?? 'utilizator') . '!');
             redirect(url('index.php?page=dashboard'));
         }
@@ -244,6 +258,7 @@ class AuthController
         if (!password_verify($code, (string) ($codeRow['code_hash'] ?? ''))) {
             $attempts = $this->loginEmailCodeModel->incrementAttempts((int) $codeRow['id']);
             $attemptsLeft = $maxAttempts - $attempts;
+            $this->recordLogin(['id' => (int) ($pending['user_id'] ?? 0), 'email' => (string) ($pending['email'] ?? '')], 'cod_email', false);
 
             if ($attemptsLeft <= 0) {
                 $this->loginEmailCodeModel->markCodeUsed((int) $codeRow['id']);
@@ -257,6 +272,7 @@ class AuthController
         }
 
         $this->loginEmailCodeModel->markCodeUsed((int) $codeRow['id']);
+        audit_stamp_request_context($this->db, 'login_email_codes', (int) $codeRow['id']);
 
         $user = $this->userModel->findAuthUserById((int) $pending['user_id']);
         if ($user === null || (string) ($user['status'] ?? 'inactiv') !== 'activ') {
@@ -267,6 +283,7 @@ class AuthController
 
         $this->clearPendingVerification();
         login_user($user);
+        $this->recordLogin($user, 'cod_email', true);
         flash_set('success', 'Cod verificat cu succes.');
         redirect(url('index.php?page=dashboard'));
     }

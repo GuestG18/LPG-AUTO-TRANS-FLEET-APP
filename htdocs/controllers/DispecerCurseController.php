@@ -311,6 +311,9 @@ class DispecerCurseController
             case 'service_km_gps':
                 $this->serviceKmGpsAction();
                 return;
+            case 'trip_gps_km':
+                $this->tripGpsKmAction();
+                return;
             case 'request_diurna_change':
                 $this->requestDiurnaChangeAction();
                 return;
@@ -1576,6 +1579,77 @@ class DispecerCurseController
     }
 
     /**
+     * JSON pentru formularul cursei (si al fazei): km GPS SAS ai vehiculului intre
+     * data+ora de inceput si data+ora de sfarsit. Completeaza „Km efectuati” singur,
+     * operatorul poate corecta valoarea. Doar citire.
+     */
+    private function tripGpsKmAction(): void
+    {
+        $vehicleId = (int) ($_GET['vehicle_id'] ?? 0);
+        $date = static function (string $key): ?string {
+            $value = trim((string) ($_GET[$key] ?? ''));
+            $parsed = DateTime::createFromFormat('!Y-m-d', $value);
+            return $parsed !== false && $parsed->format('Y-m-d') === $value ? $value : null;
+        };
+        $time = static function (string $key): ?string {
+            $value = substr(trim((string) ($_GET[$key] ?? '')), 0, 5);
+            return preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $value) === 1 ? $value : null;
+        };
+
+        $startDate = $date('data_inceput');
+        $endDate = $date('data_sfarsit');
+        $startTime = $time('ora_inceput');
+        $endTime = $time('ora_sfarsit');
+        if ($vehicleId <= 0 || $startDate === null || $endDate === null || $startTime === null || $endTime === null) {
+            $this->sendJson(['success' => false, 'error' => 'Alege vehiculul, data și ora de început și de sfârșit.'], 422);
+        }
+
+        $from = $startDate . ' ' . $startTime . ':00';
+        $to = $endDate . ' ' . $endTime . ':00';
+        if (strtotime($to) <= strtotime($from)) {
+            $this->sendJson(['success' => false, 'error' => 'Sfârșitul cursei trebuie să fie după început.'], 422);
+        }
+        if (strtotime($from) >= time()) {
+            $this->sendJson(['success' => false, 'error' => 'Cursa este în viitor: GPS-ul nu are încă km; completează manual.'], 422);
+        }
+        // Cursa inca in desfasurare: numaram pana acum.
+        $partial = strtotime($to) > time();
+        if ($partial) {
+            $to = date('Y-m-d H:i:s');
+        }
+
+        try {
+            $service = new SasDashboardService($this->db);
+            if (!$service->credentialsAvailable()) {
+                $this->sendJson(['success' => false, 'error' => 'Datele de acces SAS nu sunt configurate.'], 503);
+            }
+            $carId = 0;
+            foreach ($service->getFleetVehicles() as $car) {
+                if ((int) ($car['local_vehicle_id'] ?? 0) === $vehicleId) {
+                    $carId = (int) ($car['sas_vehicle_id'] ?? 0);
+                    break;
+                }
+            }
+            if ($carId <= 0) {
+                $this->sendJson(['success' => false, 'error' => 'Vehiculul nu are GPS SAS asociat; completează km manual.'], 404);
+            }
+
+            $km = $service->getGpsDistance($carId, $from, $to);
+            if ($km === null) {
+                $this->sendJson(['success' => false, 'error' => 'SAS nu a întors km pentru interval; completează manual.'], 502);
+            }
+            $this->sendJson([
+                'success' => true,
+                'total_km' => $km,
+                'partial' => $partial,
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][trip_gps_km] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'error' => 'Datele SAS nu au putut fi citite; completează km manual.'], 502);
+        }
+    }
+
+    /**
      * Km service (adaugare sau modificare cu `id`). Scrie doar in vehicule_service_km:
      * nu atinge cursele, tarifele, diurnele sau km-ii vehiculului.
      */
@@ -2195,6 +2269,32 @@ class DispecerCurseController
     }
 
     /**
+     * Cursa care trece peste granita de luna se imparte in faze la miezul noptii
+     * (km dupa GPS SAS, altfel dupa durata). Km-ii si tariful cursei nu se schimba;
+     * o eroare (ex. SAS) nu blocheaza salvarea. Vezi RaceMonthSplitService.
+     */
+    private function splitRaceByMonth(int $raceId): void
+    {
+        if ($raceId <= 0) {
+            return;
+        }
+
+        try {
+            $plan = (new RaceMonthSplitService($this->db, $this->model))->sync($raceId, $this->currentUserId());
+            if ($plan !== null && $plan['segments'] !== []) {
+                flash_set(
+                    'info',
+                    'Cursa #' . $raceId . ' trece peste luna: a fost impartita automat in ' . count($plan['segments'])
+                    . ' faze la miezul noptii (km ' . ($plan['source'] === 'gps' ? 'dupa GPS SAS' : 'estimati dupa durata')
+                    . '). Totalul cursei nu se schimba.'
+                );
+            }
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][split_month] #' . $raceId . ' ' . $exception->getMessage());
+        }
+    }
+
+    /**
      * Tariful unei curse calculat din valorile ei salvate, pe drumul salvarii
      * (validare, pastrarea campurilor, tarif versionat). Null daca datele nu trec
      * validarea.
@@ -2464,6 +2564,7 @@ class DispecerCurseController
             $result = $this->model->addRaceSegment($raceId, $segment, $this->currentUserId());
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
             $this->repriceRaceFromSegments($raceId);
+            $this->splitRaceByMonth($raceId);
             flash_set(
                 'success',
                 'Cursa #' . $raceId . ' a fost reluata: faza a fost inregistrata pe aceeasi cursa, '
@@ -2514,6 +2615,7 @@ class DispecerCurseController
             $result = $this->model->updateRaceSegment($segmentId, $segment, $this->currentUserId());
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
             $this->repriceRaceFromSegments($raceId);
+            $this->splitRaceByMonth($raceId);
             flash_set('success', 'Faza a fost actualizata.');
             // Ca la salvarea cursei: operatorul revine in Desfasurator cu filtrele lui.
             redirect($this->listReturnUrl($raceId));
@@ -2547,6 +2649,7 @@ class DispecerCurseController
             $result = $this->model->deleteRaceSegment($segmentId, $this->currentUserId());
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
             $this->repriceRaceFromSegments($raceId);
+            $this->splitRaceByMonth($raceId);
             flash_set('success', 'Faza a fost stearsa.');
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][segment_delete] ' . $exception->getMessage());
@@ -2673,6 +2776,7 @@ class DispecerCurseController
             $result = $this->model->createRaceAndSyncVehicleKm($data);
             $this->queueMaintenancePopupAlerts((array) ($result['maintenance_alerts'] ?? []));
             $raceId = (int) ($result['race_id'] ?? 0);
+            $this->splitRaceByMonth($raceId);
             // Cursa noua poate prelua cazari introduse inainte de ea (vezi modulul Cazare).
             $this->rematchAccommodationExpenses();
             $this->persistTariffTraceability($raceId, $data);
@@ -3078,6 +3182,7 @@ class DispecerCurseController
             $similarRaces = $confirmSimilar ? [] : $this->model->findSimilarRaces($data, $raceId);
 
             $result = $this->model->updateRaceAndSyncVehicleKm($raceId, $data, $this->currentUserId());
+            $this->splitRaceByMonth($raceId);
             // Perioada cursei se poate schimba: reevaluam cazarile in asteptare.
             $this->rematchAccommodationExpenses();
             if ((string) ($raceBeforeUpdate['status_facturare'] ?? '') !== 'facturat') {
@@ -4975,8 +5080,9 @@ class DispecerCurseController
             'pret_tona_aspirata_gazoasa' => '',
             'compresor_vehicle_ids' => [],
             'luna_facturare' => [],
-            'luna_facturare_de_la' => date('Y-m'),
             'luna_facturare_istoric' => [],
+            // Per beneficiar: refacturarile urmeaza luna cursei (altfel dupa data lor).
+            'refacturari_urmeaza_cursa' => '0',
             'activ' => '1',
         ];
 
@@ -5036,6 +5142,7 @@ class DispecerCurseController
                     'compresor_vehicle_ids' => array_values(array_unique(array_map('strval', $compressorVehicleIds))),
                     'luna_facturare' => BillingMonthRule::rulesForBeneficiary($this->db, (int) ($editBeneficiary['id'] ?? 0)),
                     'luna_facturare_istoric' => BillingMonthRule::history($this->db, (int) ($editBeneficiary['id'] ?? 0)),
+                    'refacturari_urmeaza_cursa' => BillingMonthRule::reinvoiceFollowsTrip($this->db, (int) ($editBeneficiary['id'] ?? 0)) ? '1' : '0',
                     'activ' => !empty($editBeneficiary['activ']) ? '1' : '0',
                 ]);
             }
@@ -6869,13 +6976,8 @@ class DispecerCurseController
         $supportsCompressor = in_array('compresor', $selectedTransportTypes, true);
         $active = isset($_POST['activ']) && (string) $_POST['activ'] === '1';
         $billingMonthRules = $this->billingMonthRulesFromInput($_POST['luna_facturare'] ?? []);
-        // Luna din care se aplica modificarile la Luna de facturare: cursele incepute din ea.
-        $billingMonthFromRaw = trim((string) ($_POST['luna_facturare_de_la'] ?? ''));
-        $billingMonthFrom = BillingMonthRule::normalizeMonth($billingMonthFromRaw);
+        // Luna de facturare nu mai are luna de start: o regula schimbata se aplica tuturor curselor.
         $errors = [];
-        if ($billingMonthFrom === null) {
-            $errors['luna_facturare_de_la'] = 'Alege luna din care se aplica regulile de luna de facturare.';
-        }
 
         if ($name === '') {
             $errors['nume'] = 'Numele beneficiarului este obligatoriu.';
@@ -7009,7 +7111,7 @@ class DispecerCurseController
                 'suporta_primar_distributie' => $supportsPrimaryDistribution ? '1' : '0',
                 'suporta_compresor' => $supportsCompressor ? '1' : '0',
                 'luna_facturare' => $billingMonthRules,
-                'luna_facturare_de_la' => $billingMonthFromRaw,
+                'refacturari_urmeaza_cursa' => (string) ($_POST['refacturari_urmeaza_cursa'] ?? '') === '1' ? '1' : '0',
                 'activ' => $active ? '1' : '0',
             ], $errors);
             $redirectQuery = ['page' => 'dispecer_curse', 'action' => 'config'];
@@ -7076,17 +7178,27 @@ class DispecerCurseController
                     $this->db,
                     $beneficiaryId,
                     $billingMonthRules,
-                    $this->currentUserId(),
-                    $billingMonthFrom
+                    $this->currentUserId()
                 );
                 if ($changedBillingRules > 0) {
                     flash_set('info', sprintf(
-                        'Luna de facturare: %d %s, aplicat%s curselor incepute din %s. Cursele mai vechi raman pe regula anterioara.',
+                        'Luna de facturare: %d %s, aplicat%s tuturor curselor beneficiarului pe tipul respectiv (si celor vechi).',
                         $changedBillingRules,
                         $changedBillingRules === 1 ? 'regula modificata' : 'reguli modificate',
-                        $changedBillingRules === 1 ? 'a' : 'e',
-                        date('m.Y', (int) strtotime((string) $billingMonthFrom))
+                        $changedBillingRules === 1 ? 'a' : 'e'
                     ));
+                }
+
+                // Per beneficiar: refacturarile urmeaza luna cursei (toate cursele lui), altfel dupa data lor.
+                // Campul ascuns *_present deosebeste comutatorul oprit de un formular fara el.
+                if (isset($_POST['refacturari_urmeaza_cursa_present'])) {
+                    $reinvoiceFollows = (string) ($_POST['refacturari_urmeaza_cursa'] ?? '') === '1';
+                    if ($reinvoiceFollows !== BillingMonthRule::reinvoiceFollowsTrip($this->db, $beneficiaryId)) {
+                        BillingMonthRule::saveReinvoiceFollowsTrip($this->db, $beneficiaryId, $reinvoiceFollows, $this->currentUserId());
+                        flash_set('info', $reinvoiceFollows
+                            ? 'Refacturarile acestui beneficiar urmeaza acum luna de facturare a cursei (toate cursele).'
+                            : 'Refacturarile acestui beneficiar se aduna din nou dupa data lor.');
+                    }
                 }
             }
         } catch (Throwable $exception) {

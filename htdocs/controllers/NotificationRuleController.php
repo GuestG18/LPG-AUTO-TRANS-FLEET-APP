@@ -286,6 +286,7 @@ class NotificationRuleController
             'drivers' => $this->model->getActiveDrivers(),
             'reportDays' => ReviziiWeeklyReportService::DAYS,
             'reportCategories' => array_map(static fn (array $tab): string => (string) $tab['label'], ReviziiModel::TABS),
+            'reportVehicles' => (new ReviziiModel($this->db))->getVehicles(),
             'vehicleDocumentTypes' => $vehicleDocumentTypes,
             'driverDocumentTypes' => $driverDocumentTypes,
             'equipmentTypes' => $equipmentTypes,
@@ -371,6 +372,8 @@ class NotificationRuleController
             'hour' => $input['report_hour'] ?? 8,
             'categories' => (array) ($input['report_categories'] ?? []),
             'history' => isset($input['report_history']),
+            'vehicles' => (array) ($input['report_vehicles'] ?? []),
+            'notify_driver' => isset($input['report_notify_driver']),
         ], trim((string) ($input['revizie_status'] ?? '')));
     }
 
@@ -423,15 +426,26 @@ class NotificationRuleController
             return;
         }
 
-        $report = $service->build($this->reportConfigFromInput($_POST));
+        $config = $this->reportConfigFromInput($_POST);
+        $report = $service->build($config);
+        $contextId = 'test:' . date('YmdHis');
         $sent = [];
         $failed = [];
         foreach ($recipients as $recipient) {
-            $result = $service->send($recipient, $report, ReviziiWeeklyReportService::CONTEXT_TEST, 'test:' . date('YmdHis'));
+            $result = $service->send($recipient, $report, ReviziiWeeklyReportService::CONTEXT_TEST, $contextId);
             if (!empty($result['sent'])) {
                 $sent[] = (string) $recipient['email'];
             } else {
                 $failed[] = (string) $recipient['email'] . ': ' . (string) ($result['error'] ?? 'eroare necunoscută');
+            }
+        }
+
+        // „SMS șoferilor” bifat: si testul pune in coada SMS-urile, cu destinatarul testului drept contact.
+        $sms = null;
+        if ($config['notify_driver']) {
+            $sms = $service->queueDriverSms($report, $service->contactFor($recipients), ReviziiWeeklyReportService::CONTEXT_TEST, $contextId);
+            foreach ($sms['failed'] as $error) {
+                $failed[] = 'SMS ' . $error;
             }
         }
 
@@ -440,6 +454,7 @@ class NotificationRuleController
             'sent' => $sent,
             'failed' => $failed,
             'subject' => $report['subject'],
+            'sms' => $sms,
         ], JSON_UNESCAPED_UNICODE);
     }
 
@@ -598,18 +613,7 @@ class NotificationRuleController
         ];
 
         // Raportul saptamanal: ziua, ora, categoriile si istoricul merg in metadata_json.report.
-        $reportConfig = ReviziiWeeklyReportService::normalizeConfig([
-            'day' => $input['report_day'] ?? 1,
-            'hour' => $input['report_hour'] ?? 8,
-            'categories' => (array) ($input['report_categories'] ?? []),
-            'history' => isset($input['report_history']),
-        ]);
-        $reportMetadata = [
-            'day' => $reportConfig['day'],
-            'hour' => $reportConfig['hour'],
-            'categories' => $reportConfig['categories'],
-            'history' => $reportConfig['history'],
-        ];
+        $reportMetadata = ReviziiWeeklyReportService::metadataFromConfig($this->reportConfigFromInput($input));
 
         $recipientUserIds = array_values(array_unique(array_filter(array_map(
             'intval',
@@ -636,6 +640,8 @@ class NotificationRuleController
             'report_hour' => $reportMetadata['hour'],
             'report_categories' => $reportMetadata['categories'],
             'report_history' => $reportMetadata['history'] ? 1 : 0,
+            'report_vehicles' => $reportMetadata['vehicles'],
+            'report_notify_driver' => $reportMetadata['notify_driver'] ? 1 : 0,
         ]);
 
         $errors = [];
@@ -827,6 +833,8 @@ class NotificationRuleController
             'report_hour' => 8,
             'report_categories' => [],
             'report_history' => 1,
+            'report_vehicles' => [],
+            'report_notify_driver' => 0,
             'approval_resource_types' => [],
             'approval_reasons' => [],
             'approval_repeat_days' => 1,
@@ -928,6 +936,8 @@ class NotificationRuleController
             'report_hour' => $reportConfig['hour'],
             'report_categories' => $reportConfig['categories'],
             'report_history' => $reportConfig['history'] ? 1 : 0,
+            'report_vehicles' => $reportConfig['vehicles'],
+            'report_notify_driver' => $reportConfig['notify_driver'] ? 1 : 0,
             'approval_resource_types' => array_map('strval', (array) ($approvalMetadata['approval_resource_types'] ?? [])),
             'approval_reasons' => array_map('strval', (array) ($approvalMetadata['approval_reasons'] ?? [])),
             'approval_repeat_days' => max(1, (int) ($approvalMetadata['repeat_days'] ?? 1)),

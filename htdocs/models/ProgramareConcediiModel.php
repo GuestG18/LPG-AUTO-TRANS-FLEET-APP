@@ -699,6 +699,9 @@ class ProgramareConcediiModel extends BaseModel
 
         $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
         $stmt->execute();
+        if (function_exists('audit_stamp_request_context')) {
+            audit_stamp_request_context($this->db, 'audit_log', (int) $this->db->lastInsertId());
+        }
     }
 
     private function ensureAvailabilityRulesSchema(): void

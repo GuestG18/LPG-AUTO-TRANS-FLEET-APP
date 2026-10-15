@@ -616,6 +616,7 @@ class ReviziiService
             $categories[$tab] = ['label' => $meta['label'], 'ore' => $meta['ore'], 'counts' => $emptyCounts(), 'componente' => 0];
         }
         $alerts = [];
+        $okRows = [];
         $simPlans = [];
 
         foreach ($this->vehicles as $vehicleId => $vehicle) {
@@ -642,8 +643,9 @@ class ReviziiService
                             't0' => $component['plan']['baseline_at'],
                         ];
                     }
-                    if (in_array($component['status'], [ReviziiCalculator::STATUS_DUE, ReviziiCalculator::STATUS_SOON], true)) {
-                        $alerts[] = [
+                    $isAlert = in_array($component['status'], [ReviziiCalculator::STATUS_DUE, ReviziiCalculator::STATUS_SOON], true);
+                    if ($isAlert || $component['status'] === ReviziiCalculator::STATUS_OK) {
+                        $row = [
                             'vehicle_id' => $vehicleId,
                             'nr' => $component['nr'],
                             'marca' => $component['marca'],
@@ -662,6 +664,12 @@ class ReviziiService
                             'plan_id' => (int) $component['plan']['id'],
                             'baseline_at' => (string) $component['plan']['baseline_at'],
                         ];
+                        // Cele in regula le foloseste doar raportul saptamanal filtrat pe vehicule.
+                        if ($isAlert) {
+                            $alerts[] = $row;
+                        } else {
+                            $okRows[] = $row;
+                        }
                     }
                 }
                 $categories[$tab]['counts'][$categoryWorst]++;
@@ -712,6 +720,7 @@ class ReviziiService
             'kpi' => $global,
             'categorii' => $categories,
             'alerte' => $alerts,
+            'in_regula' => $okRows,
             'istoric' => $history,
             'sim_plans' => $simPlans,
             'settings' => $this->settings,

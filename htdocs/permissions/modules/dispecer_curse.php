@@ -51,6 +51,8 @@ return [
         'service_km_store'             => 'service_km',
         'service_km_delete'            => 'service_km',
         'service_km_gps'               => 'service_km',
+        // Doar citire (km GPS SAS pe intervalul cursei), folosit de formularele de creare si editare.
+        'trip_gps_km'                  => 'view',
         'save_expense'                 => 'expenses',
         'delete_expense'               => 'expenses',
         'update_expense_status'        => 'expenses',

@@ -1355,6 +1355,8 @@ class ModuleController
                 }
             }
 
+            $this->logModuleAuditSafe($moduleKey, $module, 'create', $recordId, null, $currentRecordForStatus);
+
             $this->syncStatusesAfterMutation($moduleKey, $currentRecordForStatus, null);
 
             if ($moduleKey === 'vehicule') {
@@ -1810,6 +1812,8 @@ class ModuleController
                     $this->logVehicleCapacityChangeSafe($id, $existing, $updatedVehicle ?? ($data + $existing));
                 }
             }
+
+            $this->logModuleAuditSafe($moduleKey, $module, 'update', $id, $existing, null);
 
             $this->syncStatusesAfterMutation($moduleKey, $currentRecordForStatus, $existing);
 
@@ -4132,6 +4136,8 @@ class ModuleController
                 $this->deletePhotoPhysicalFileForModule($moduleKey, (string) $record['poza_stocata']);
             }
 
+            $this->logModuleAuditSafe($moduleKey, $module, 'delete', $id, $record, null);
+
             $this->syncStatusesAfterMutation($moduleKey, null, $record);
 
             flash_set('success', ucfirst($module['singular']) . ' sters cu succes.');
@@ -5693,6 +5699,69 @@ class ModuleController
             );
         } catch (Throwable $exception) {
             error_log('Audit log documente: ' . $exception->getMessage());
+        }
+    }
+
+    /**
+     * Jurnal generic (audit_log) pentru modulele care nu aveau inca audit:
+     * Vehicule, Soferi, Utilizatori. Pentru update, $after se citeste din baza dupa
+     * salvare, ca diferenta sa reflecte exact ce s-a scris. Parolele se ascund
+     * (audit_log_write -> audit_redact_snapshot).
+     */
+    private function logModuleAuditSafe(string $moduleKey, array $module, string $action, int $recordId, ?array $before, ?array $after): void
+    {
+        if (!in_array($moduleKey, ['vehicule', 'soferi', 'utilizatori'], true) || $recordId <= 0 || !function_exists('audit_log_write')) {
+            return;
+        }
+
+        try {
+            if ($action !== 'delete') {
+                $after = $this->moduleModel->findById($module, $recordId) ?? $after;
+            }
+            $snapshot = static function (?array $record): ?array {
+                if ($record === null) {
+                    return null;
+                }
+                $clean = [];
+                foreach ($record as $key => $value) {
+                    if (is_int($key) || in_array($key, ['created_at', 'updated_at', 'sidebar_order', 'harta_flota_ascunse', 'dashboard_v2_carduri'], true)) {
+                        continue;
+                    }
+                    if (is_scalar($value) || $value === null) {
+                        $clean[$key] = $value;
+                    }
+                }
+
+                return $clean;
+            };
+            $before = $snapshot($before);
+            $after = $snapshot($after);
+
+            if ($action === 'update' && $before !== null && $after !== null) {
+                $changed = false;
+                foreach ($after as $key => $value) {
+                    if ((string) ($before[$key] ?? '') !== (string) ($value ?? '')) {
+                        $changed = true;
+                        break;
+                    }
+                }
+                if (!$changed) {
+                    return;
+                }
+            }
+
+            $source = $after ?? $before ?? [];
+            $label = match ($moduleKey) {
+                'vehicule'    => (string) ($source['nr_inmatriculare'] ?? ('#' . $recordId)),
+                'soferi'      => (string) ($source['nume'] ?? ('#' . $recordId)),
+                'utilizatori' => trim((string) ($source['nume'] ?? ('#' . $recordId)) . (isset($source['email']) ? ' (' . $source['email'] . ')' : '')),
+            };
+            $noun = ['vehicule' => 'Vehicul', 'soferi' => 'Șofer', 'utilizatori' => 'Utilizator'][$moduleKey];
+            $verb = ['create' => 'adăugat', 'update' => 'modificat', 'delete' => 'șters'][$action] ?? $action;
+
+            audit_log_write($this->db, $moduleKey, $recordId, $action, $noun . ' ' . $verb . ': ' . $label, $before, $after, $this->currentUserId());
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][audit][' . $moduleKey . '] ' . $exception->getMessage());
         }
     }
 

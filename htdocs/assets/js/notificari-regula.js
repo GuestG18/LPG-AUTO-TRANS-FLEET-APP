@@ -528,9 +528,19 @@
                 credentials: 'same-origin',
             });
             const data = await response.json();
+            let smsLine = '';
+            if (data.sms) {
+                smsLine = data.sms.queued.length
+                    ? `<br>SMS șoferi în coadă (pleacă la următoarea rulare a worker-ului): ${escapeHtml(data.sms.queued.join(', '))}.`
+                    : '<br>SMS șoferi: niciun șofer cu telefon pe vehiculele din raport.';
+                if (data.sms.no_phone.length) {
+                    smsLine += `<br>Fără telefon: ${escapeHtml(data.sms.no_phone.join(', '))}.`;
+                }
+            }
             if (data.sent && data.sent.length) {
                 showResult(data.ok ? 'is-ok' : 'is-warn',
                     `<i class="bi bi-check-circle-fill" aria-hidden="true"></i> Raport trimis către ${escapeHtml(data.sent.join(', '))}.`
+                    + smsLine
                     + (data.failed && data.failed.length ? `<br>Eșuat: ${escapeHtml(data.failed.join('; '))}` : ''));
             } else {
                 showResult('is-error', `<i class="bi bi-x-circle-fill" aria-hidden="true"></i> ${escapeHtml(data.error || (data.failed || []).join('; ') || 'Trimiterea a eșuat.')}`);
@@ -579,9 +589,10 @@
 
     form.addEventListener('input', (event) => {
         dirty = true;
-        if (event.target.matches('[data-nrf-user-search], [data-nrf-driver-search]')) {
+        if (event.target.matches('[data-nrf-user-search], [data-nrf-driver-search], [data-nrf-vehicle-search]')) {
             const query = event.target.value.trim().toLowerCase();
-            const rows = event.target.matches('[data-nrf-driver-search]') ? '[data-nrf-driver]' : '[data-nrf-user]';
+            const rows = event.target.matches('[data-nrf-driver-search]') ? '[data-nrf-driver]'
+                : (event.target.matches('[data-nrf-vehicle-search]') ? '[data-nrf-vehicle]' : '[data-nrf-user]');
             $$(rows).forEach((row) => {
                 row.hidden = query !== '' && !(row.dataset.search || '').includes(query);
             });
@@ -629,6 +640,10 @@
             }
             if (form.elements.report_history?.checked) {
                 url.searchParams.set('history', '1');
+            }
+            const vehicles = $$('input[name="report_vehicles[]"]:checked').map((input) => input.value);
+            if (vehicles.length) {
+                url.searchParams.set('veh', vehicles.join(','));
             }
             window.location.href = url.toString();
             return;

@@ -28,12 +28,22 @@ final class BillingMonthRule
 {
     public const START = 'data_inceput';
     public const END = 'data_sfarsit';
+    /**
+     * Cursa care trece in luna urmatoare se imparte pe fazele ei de la miezul noptii
+     * (RaceMonthSplitService): fiecare luna primeste partea fazelor ei, dupa km (ex. Flaga).
+     * Fara faze in luni diferite (ex. cursa fara ore) se comporta ca Data inceput.
+     */
+    public const SPLIT = 'faze';
     public const DEFAULT_RULE = self::START;
 
     public const RULE_LABELS = [
         self::START => 'Data inceput cursa',
         self::END => 'Data sfarsit cursa',
+        self::SPLIT => 'Impartit pe faze (la miezul noptii)',
     ];
+
+    /** Per beneficiar: din ce luna refacturarile urmeaza luna cursei (vezi sqlExpenseInPeriod). */
+    private const REINVOICE_TABLE = 'configurare_beneficiari_refacturari';
 
     /** Componentele facturate ale fiecarui tip; prima este componenta principala. */
     public const COMPONENTS = [
@@ -56,10 +66,17 @@ final class BillingMonthRule
     private const KM_PRICE_COMPONENTS = ['pret_km', 'cost_extra_km'];
 
     private const TABLE = 'configurare_beneficiari_luna_facturare';
+    /** Jurnalul schimbarilor (istoricul afisat), pastrat si cand versiunile se inlocuiesc. */
+    private const LOG_TABLE = 'configurare_beneficiari_luna_facturare_jurnal';
 
     /** Coloanele cursei care se impart intre partea de km si cea de tone. */
     private const KM_COLUMNS = ['km_cursa', 'km_totali'];
     private const TON_COLUMNS = ['cantitate_incarcata', 'tona_livrata', 'nr_clienti'];
+    /** Celelalte coloane aditive, impartite doar pe faze (billing_part = 'phase'). */
+    private const PHASE_SCALED_COLUMNS = [
+        'km_dislocare', 'ore_functionare', 'ore_aspirare', 'cantitate_prelevata',
+        'tona_aspirata_lichida', 'tona_aspirata_gazoasa',
+    ];
 
     private static bool $schemaReady = false;
 
@@ -97,7 +114,7 @@ final class BillingMonthRule
                 tip_transport VARCHAR(32) NOT NULL,
                 componenta VARCHAR(16) NOT NULL DEFAULT \'total\',
                 valabil_de_la DATE NOT NULL DEFAULT \'' . self::SINCE_ALWAYS . '\',
-                regula ENUM(\'data_inceput\', \'data_sfarsit\') NOT NULL DEFAULT \'data_inceput\',
+                regula ENUM(\'data_inceput\', \'data_sfarsit\', \'faze\') NOT NULL DEFAULT \'data_inceput\',
                 updated_by INT UNSIGNED NULL,
                 updated_at DATETIME NOT NULL,
                 PRIMARY KEY (beneficiar_id, tip_transport, componenta, valabil_de_la)
@@ -116,12 +133,128 @@ final class BillingMonthRule
                 DROP PRIMARY KEY,
                 ADD PRIMARY KEY (beneficiar_id, tip_transport, componenta, valabil_de_la)");
         }
+        // Regula „Impartit pe faze” (migrarea 2026_10_15_000003).
+        $ruleType = (string) ($db->query('SHOW COLUMNS FROM ' . self::TABLE . " LIKE 'regula'")->fetch(PDO::FETCH_ASSOC)['Type'] ?? '');
+        if ($ruleType !== '' && !str_contains($ruleType, "'faze'")) {
+            $db->exec('ALTER TABLE ' . self::TABLE . " MODIFY regula ENUM('data_inceput', 'data_sfarsit', 'faze') NOT NULL DEFAULT 'data_inceput'");
+        }
+        // Jurnalul: la creare preia versiunile existente, ca istoricul vechi sa ramana vizibil.
+        if ($db->query("SHOW TABLES LIKE '" . self::LOG_TABLE . "'")->fetchColumn() === false) {
+            $db->exec('
+                CREATE TABLE ' . self::LOG_TABLE . ' (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    beneficiar_id INT UNSIGNED NOT NULL,
+                    tip_transport VARCHAR(32) NOT NULL,
+                    componenta VARCHAR(16) NOT NULL,
+                    valabil_de_la DATE NOT NULL,
+                    regula VARCHAR(16) NOT NULL,
+                    updated_by INT UNSIGNED NULL,
+                    updated_at DATETIME NOT NULL,
+                    KEY idx_jurnal_beneficiar (beneficiar_id, updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            ');
+            $db->exec('
+                INSERT INTO ' . self::LOG_TABLE . ' (beneficiar_id, tip_transport, componenta, valabil_de_la, regula, updated_by, updated_at)
+                SELECT beneficiar_id, tip_transport, componenta, valabil_de_la, regula, updated_by, updated_at FROM ' . self::TABLE . '
+            ');
+        }
         self::$schemaReady = true;
     }
 
     public static function normalizeRule(mixed $value): string
     {
-        return trim((string) $value) === self::END ? self::END : self::START;
+        $value = trim((string) $value);
+
+        return $value === self::END || $value === self::SPLIT ? $value : self::START;
+    }
+
+    /** Cursa urmeaza fazele (regula „Impartit pe faze” pe oricare componenta a tipului ei)? */
+    public static function usesPhases(PDO $db, int $beneficiaryId, string $transportType, ?string $tripStart): bool
+    {
+        foreach (self::COMPONENTS[$transportType] ?? [] as $component) {
+            if (self::ruleFor($db, $beneficiaryId, $transportType, $component, $tripStart) === self::SPLIT) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // ------------------------------------------------------------------ refacturari
+
+    /** Refacturarile beneficiarului urmeaza luna cursei (optiune din Configurare transport)? */
+    public static function reinvoiceFollowsTrip(PDO $db, int $beneficiaryId): bool
+    {
+        return in_array($beneficiaryId, self::reinvoiceFollowsTripBeneficiaries($db), true);
+    }
+
+    /** @return list<int> beneficiarii ale caror refacturari urmeaza luna cursei */
+    public static function reinvoiceFollowsTripBeneficiaries(PDO $db): array
+    {
+        if ($db->query("SHOW TABLES LIKE '" . self::REINVOICE_TABLE . "'")->fetchColumn() === false) {
+            return [];
+        }
+
+        return array_map('intval', $db->query('SELECT beneficiar_id FROM ' . self::REINVOICE_TABLE . ' WHERE urmeaza_cursa = 1')->fetchAll(PDO::FETCH_COLUMN) ?: []);
+    }
+
+    /** Porneste / opreste optiunea pentru beneficiar. DDL: in afara tranzactiilor. */
+    public static function saveReinvoiceFollowsTrip(PDO $db, int $beneficiaryId, bool $follows, ?int $userId = null): void
+    {
+        if ($beneficiaryId <= 0) {
+            return;
+        }
+        $db->exec('
+            CREATE TABLE IF NOT EXISTS ' . self::REINVOICE_TABLE . ' (
+                beneficiar_id INT UNSIGNED NOT NULL PRIMARY KEY,
+                urmeaza_cursa TINYINT(1) NOT NULL DEFAULT 0,
+                updated_by INT UNSIGNED NULL,
+                updated_at DATETIME NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ');
+        $stmt = $db->prepare('
+            INSERT INTO ' . self::REINVOICE_TABLE . ' (beneficiar_id, urmeaza_cursa, updated_by, updated_at) VALUES (?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE urmeaza_cursa = VALUES(urmeaza_cursa), updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)
+        ');
+        $stmt->execute([$beneficiaryId, $follows ? 1 : 0, $userId, date('Y-m-d H:i:s')]);
+    }
+
+    /**
+     * Conditia SQL „refacturarea intra in perioada [from, toExclusive)” pentru Centralizator.
+     *
+     * Implicit refacturarea intra dupa data ei. Beneficiarii cu optiunea „Refacturarile
+     * urmeaza luna cursei” (Configurare transport) o au, pentru toate cursele lor, in luna cursei:
+     *  - Data inceput / Data sfarsit: luna de facturare a cursei (partea principala);
+     *  - Impartit pe faze (cursa cu faze in luni diferite): linia ramane intreaga si
+     *    intra in luna datei ei, adusa in intervalul cursei (o taxa platita dupa
+     *    sfarsitul cursei merge pe ultima zi a cursei).
+     * Doar literali validati, deci se poate repeta in interogare.
+     */
+    public static function sqlExpenseInPeriod(PDO $db, string $expenseAlias, string $tripAlias, string $from, string $toExclusive): string
+    {
+        $e = self::cleanAlias($expenseAlias);
+        $c = self::cleanAlias($tripAlias);
+        $from = self::cleanDate($from, '1000-01-01');
+        $toExclusive = self::cleanDate($toExclusive, '9999-12-31');
+        $expenseDate = "COALESCE({$e}.refacturare_data, {$e}.data_cheltuiala)";
+        $periodDate = $expenseDate;
+
+        $beneficiaries = self::reinvoiceFollowsTripBeneficiaries($db);
+        if ($beneficiaries !== []) {
+            $tripStart = "COALESCE({$c}.data_inceput, {$c}.data_cursa)";
+            $tripEnd = "COALESCE({$c}.data_sfarsit, {$c}.data_inceput, {$c}.data_cursa)";
+            $splitIds = self::phaseShares($db, '1000-01-01', '9999-12-31', true)['all'];
+            $tripDate = self::sqlDateExpr($db, $c);
+            if ($splitIds !== []) {
+                $tripDate = "(CASE WHEN {$c}.id IN (" . implode(', ', array_map('intval', $splitIds)) . ")
+                    THEN LEAST(GREATEST(COALESCE({$expenseDate}, {$tripStart}), {$tripStart}), {$tripEnd})
+                    ELSE {$tripDate} END)";
+            }
+            $periodDate = "(CASE WHEN {$c}.beneficiar_id IN (" . implode(', ', array_map('intval', $beneficiaries))
+                . ") THEN {$tripDate} ELSE {$expenseDate} END)";
+        }
+
+        return "({$periodDate} >= '{$from}' AND {$periodDate} < '{$toExclusive}')";
     }
 
     public static function mainComponent(string $transportType): string
@@ -218,26 +351,32 @@ final class BillingMonthRule
     }
 
     /**
-     * Salveaza regulile cu efect de la luna data: pentru cursele INCEPUTE din luna aceea.
-     * Cursele mai vechi raman pe regula valabila la data lor. Se scrie o versiune noua doar
-     * pentru componentele a caror regula se schimba fata de cea valabila in luna aceea.
+     * Salveaza regulile (din 2026-10-15 fara luna de start, cerinta utilizatorului): o
+     * regula SCHIMBATA in formular se aplica tuturor curselor beneficiarului pe tipul
+     * acela, inclusiv celor vechi — versiunile ei anterioare se inlocuiesc cu una singura
+     * („toate cursele”). Un select neatins (aceeasi regula ca cea afisata) nu se scrie,
+     * deci versiunile lui vechi raman cum erau. Fiecare schimbare intra in jurnal (history).
      *
      * @param array<string, mixed> $rules tip => [componenta => regula]
      * @return int numarul de reguli modificate
      */
-    public static function saveRulesForBeneficiary(PDO $db, int $beneficiaryId, array $rules, ?int $userId = null, ?string $fromMonth = null): int
+    public static function saveRulesForBeneficiary(PDO $db, int $beneficiaryId, array $rules, ?int $userId = null): int
     {
         if ($beneficiaryId <= 0) {
             return 0;
         }
 
-        $since = $fromMonth === null ? self::SINCE_ALWAYS : (self::normalizeMonth($fromMonth) ?? self::SINCE_ALWAYS);
         self::ensureSchema($db);
-        $stmt = $db->prepare('
+        $delete = $db->prepare('DELETE FROM ' . self::TABLE . ' WHERE beneficiar_id = ? AND tip_transport = ? AND componenta = ?');
+        $insert = $db->prepare('
             INSERT INTO ' . self::TABLE . ' (beneficiar_id, tip_transport, componenta, valabil_de_la, regula, updated_by, updated_at)
-            VALUES (:beneficiar_id, :tip_transport, :componenta, :valabil_de_la, :regula, :updated_by, :updated_at)
-            ON DUPLICATE KEY UPDATE regula = VALUES(regula), updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         ');
+        $log = $db->prepare('
+            INSERT INTO ' . self::LOG_TABLE . ' (beneficiar_id, tip_transport, componenta, valabil_de_la, regula, updated_by, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ');
+        $now = date('Y-m-d H:i:s');
         $changed = 0;
         foreach (self::COMPONENTS as $type => $components) {
             $typeRules = $rules[$type] ?? null;
@@ -249,22 +388,13 @@ final class BillingMonthRule
                     continue;
                 }
                 $rule = self::normalizeRule($typeRules[$component]);
-                $versions = self::allRules($db)[$beneficiaryId][$type][$component] ?? [];
-                // Neschimbata in luna aleasa (si fara versiune proprie in luna aceea): nimic de scris.
-                if (!isset($versions[$since]) && self::ruleFor($db, $beneficiaryId, $type, $component, $since) === $rule) {
+                // Neschimbata fata de ce arata formularul (ultima versiune): nimic de scris.
+                if (self::ruleFor($db, $beneficiaryId, $type, $component, '9999-12-31') === $rule) {
                     continue;
                 }
-                if (isset($versions[$since]) && $versions[$since] === $rule) {
-                    continue;
-                }
-                $stmt->bindValue(':beneficiar_id', $beneficiaryId, PDO::PARAM_INT);
-                $stmt->bindValue(':tip_transport', $type, PDO::PARAM_STR);
-                $stmt->bindValue(':componenta', $component, PDO::PARAM_STR);
-                $stmt->bindValue(':valabil_de_la', $since, PDO::PARAM_STR);
-                $stmt->bindValue(':regula', $rule, PDO::PARAM_STR);
-                $stmt->bindValue(':updated_by', $userId, $userId === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
-                $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
-                $stmt->execute();
+                $delete->execute([$beneficiaryId, $type, $component]);
+                $insert->execute([$beneficiaryId, $type, $component, self::SINCE_ALWAYS, $rule, $userId, $now]);
+                $log->execute([$beneficiaryId, $type, $component, self::SINCE_ALWAYS, $rule, $userId, $now]);
                 $changed++;
             }
         }
@@ -274,24 +404,31 @@ final class BillingMonthRule
     }
 
     /**
-     * Istoricul modificarilor unui beneficiar, cele mai noi primele.
+     * Istoricul modificarilor unui beneficiar (jurnalul), cele mai noi primele.
      *
      * @return list<array{valabil_de_la: string, tip_transport: string, componenta: string, regula: string, updated_at: string, updated_by_name: string}>
      */
     public static function history(PDO $db, int $beneficiaryId): array
     {
-        if ($beneficiaryId <= 0 || $db->query("SHOW TABLES LIKE '" . self::TABLE . "'")->fetchColumn() === false
-            || !self::hasColumn($db, 'valabil_de_la')) {
+        if ($beneficiaryId <= 0) {
             return [];
+        }
+        // Inainte de prima salvare jurnalul nu exista inca: istoricul sunt versiunile salvate.
+        $source = self::LOG_TABLE;
+        if ($db->query("SHOW TABLES LIKE '" . self::LOG_TABLE . "'")->fetchColumn() === false) {
+            if ($db->query("SHOW TABLES LIKE '" . self::TABLE . "'")->fetchColumn() === false || !self::hasColumn($db, 'valabil_de_la')) {
+                return [];
+            }
+            $source = self::TABLE;
         }
 
         $stmt = $db->prepare('
             SELECT r.valabil_de_la, r.tip_transport, r.componenta, r.regula, r.updated_at,
                    COALESCE(u.nume, \'\') AS updated_by_name
-            FROM ' . self::TABLE . ' r
+            FROM ' . $source . ' r
             LEFT JOIN utilizatori u ON u.id = r.updated_by
             WHERE r.beneficiar_id = :beneficiar_id
-            ORDER BY r.valabil_de_la DESC, r.updated_at DESC, r.tip_transport, r.componenta
+            ORDER BY r.updated_at DESC, ' . ($source === self::LOG_TABLE ? 'r.id DESC' : 'r.valabil_de_la DESC') . '
         ');
         $stmt->execute([':beneficiar_id' => $beneficiaryId]);
 
@@ -507,11 +644,20 @@ final class BillingMonthRule
      *  - billing_part   'full' | 'km' | 'tone'
      *  - billing_counts 1 daca cursa se numara (si costurile ei intra) in perioada
      *  - billing_date   data de facturare a partii din perioada
+     *  - billing_share  partea din cursa care intra in perioada (1 = toata; < 1 doar pe faze)
+     *
+     * $byPhases (Dashboard Analitic V2): cursele cu faze in luni diferite (ex. 31.08 ->
+     * 01.09, impartita automat la miezul noptii, vezi RaceMonthSplitService) nu urmeaza
+     * regula de facturare: fiecare perioada primeste partea fazelor ei (dupa km-ii lor),
+     * din km, tone, valoare si cheltuieli (billing_part = 'phase'). Cursa se numara o
+     * data, in perioada primei faze. Fara $byPhases (Centralizator) se imparte asa doar
+     * cursa al carei beneficiar are regula „Impartit pe faze” (SPLIT) pentru tipul ei.
      */
-    public static function periodTripsSql(PDO $db, string $from, string $toExclusive): string
+    public static function periodTripsSql(PDO $db, string $from, string $toExclusive, bool $byPhases = false): string
     {
         $from = self::cleanDate($from, '1000-01-01');
         $toExclusive = self::cleanDate($toExclusive, '9999-12-31');
+        $phases = self::phaseShares($db, $from, $toExclusive, !$byPhases);
         $kmDate = self::sqlComponentDateExpr($db, 'p', 'km');
         $tonDate = self::sqlComponentDateExpr($db, 'p', 'tone');
         $mainDate = self::sqlComponentDateExpr($db, 'p', 'main');
@@ -546,10 +692,17 @@ final class BillingMonthRule
         // Lista goala = 0 (id-urile sunt pozitive). NU NULL: `id NOT IN (NULL)` e NULL si ar
         // elimina toate cursele.
         $inList = static fn (array $ids): string => $ids === [] ? '0' : implode(', ', array_map('intval', $ids));
-        $part = "(CASE WHEN p.id IN ({$inList($kmIds)}) THEN 'km' WHEN p.id IN ({$inList($tonIds)}) THEN 'tone' ELSE 'full' END)";
+        $phaseDates = [];
+        foreach ($phases['in'] as $id => $phase) {
+            $shares[$id] = $phase['share'];
+            $counts[$id] = $phase['counts'] ? 1 : 0;
+            $phaseDates[$id] = $phase['date'];
+        }
+        $phaseIn = array_keys($phases['in']);
+        $part = "(CASE WHEN p.id IN ({$inList($phaseIn)}) THEN 'phase' WHEN p.id IN ({$inList($kmIds)}) THEN 'km' WHEN p.id IN ({$inList($tonIds)}) THEN 'tone' ELSE 'full' END)";
         $shareCase = 'CASE p.id';
         foreach ($shares as $id => $share) {
-            $shareCase .= ' WHEN ' . (int) $id . ' THEN ' . sprintf('%.6F', $share);
+            $shareCase .= ' WHEN ' . (int) $id . ' THEN ' . sprintf('%.10F', $share);
         }
         $shareCase = $shares === [] ? '1' : $shareCase . ' ELSE 1 END';
         $countCase = 'CASE p.id';
@@ -558,13 +711,25 @@ final class BillingMonthRule
         }
         $countCase = $counts === [] ? '1' : $countCase . ' ELSE 1 END';
 
+        $phaseDateCase = "'1000-01-01'";
+        if ($phaseDates !== []) {
+            $phaseDateCase = 'CASE p.id';
+            foreach ($phaseDates as $id => $date) {
+                $phaseDateCase .= ' WHEN ' . (int) $id . " THEN '" . self::cleanDate($date, $from) . "'";
+            }
+            $phaseDateCase .= " ELSE '1000-01-01' END";
+        }
+
         $select = [];
         foreach (self::raceColumns($db) as $column) {
             $quoted = 'p.`' . $column . '`';
+            $phaseScaled = "{$quoted} * ({$shareCase})";
             if (in_array($column, self::KM_COLUMNS, true)) {
-                $select[] = "CASE WHEN {$part} = 'tone' THEN 0 ELSE {$quoted} END AS `{$column}`";
+                $select[] = "CASE WHEN {$part} = 'tone' THEN 0 WHEN {$part} = 'phase' THEN {$phaseScaled} ELSE {$quoted} END AS `{$column}`";
             } elseif (in_array($column, self::TON_COLUMNS, true)) {
-                $select[] = "CASE WHEN {$part} = 'km' THEN 0 ELSE {$quoted} END AS `{$column}`";
+                $select[] = "CASE WHEN {$part} = 'km' THEN 0 WHEN {$part} = 'phase' THEN {$phaseScaled} ELSE {$quoted} END AS `{$column}`";
+            } elseif (in_array($column, self::PHASE_SCALED_COLUMNS, true)) {
+                $select[] = "CASE WHEN {$part} = 'phase' THEN {$phaseScaled} ELSE {$quoted} END AS `{$column}`";
             } elseif ($column === 'capacitate_transport') {
                 // Partea doar de km nu intra in gradul de incarcare (nu are tone).
                 $select[] = "CASE WHEN {$part} = 'km' THEN NULL ELSE {$quoted} END AS `{$column}`";
@@ -576,11 +741,122 @@ final class BillingMonthRule
         }
         $select[] = "{$part} AS billing_part";
         $select[] = "({$countCase}) AS billing_counts";
-        $select[] = "(CASE {$part} WHEN 'km' THEN {$kmDate} WHEN 'tone' THEN {$tonDate} ELSE {$mainDate} END) AS billing_date";
+        $select[] = "(CASE {$part} WHEN 'km' THEN {$kmDate} WHEN 'tone' THEN {$tonDate} WHEN 'phase' THEN ({$phaseDateCase}) ELSE {$mainDate} END) AS billing_date";
+        $select[] = "(CASE WHEN {$part} = 'phase' THEN ({$shareCase}) ELSE 1 END) AS billing_share";
 
         return '(SELECT ' . implode(",\n ", $select) . "
             FROM curse_dispecer p
-            WHERE ({$inKm} OR {$inTon}) AND p.id NOT IN ({$inList($excluded)}))";
+            WHERE (({$inKm} OR {$inTon}) AND p.id NOT IN ({$inList($excluded)}) AND p.id NOT IN ({$inList($phases['all'])}))
+               OR p.id IN ({$inList($phaseIn)}))";
+    }
+
+    /**
+     * Cursele cu faze in mai multe luni si partea lor din perioada [from, toExclusive).
+     * O faza intra in perioada dupa data ei de inceput; ponderea ei = km-ii fazei (sau
+     * durata, cand fazele nu au km). $onlySplitRule: doar cursele cu regula „Impartit pe
+     * faze” (SPLIT) la beneficiarul si tipul lor, valabila la inceputul cursei.
+     *
+     * @return array{all: list<int>, in: array<int, array{share: float, counts: bool, date: string}>}
+     */
+    public static function phaseShares(PDO $db, string $from, string $toExclusive, bool $onlySplitRule = false): array
+    {
+        $result = ['all' => [], 'in' => []];
+        if ($db->query("SHOW TABLES LIKE 'curse_segmente'")->fetchColumn() === false) {
+            return $result;
+        }
+        if ($onlySplitRule && !self::anySplitRule($db)) {
+            return $result;
+        }
+
+        $stmt = $db->query("
+            SELECT seg.cursa_id, seg.data_inceput, seg.ora_inceput, seg.data_sfarsit, seg.ora_sfarsit, seg.km,
+                   p.beneficiar_id AS trip_beneficiar_id, p.tip_transport AS trip_tip_transport,
+                   COALESCE(p.data_inceput, p.data_cursa) AS trip_start
+            FROM curse_segmente seg
+            INNER JOIN curse_dispecer p ON p.id = seg.cursa_id AND p.deleted_at IS NULL
+            WHERE seg.deleted_at IS NULL
+              AND seg.cursa_id IN (
+                  SELECT cursa_id FROM curse_segmente
+                  WHERE deleted_at IS NULL AND data_inceput IS NOT NULL
+                  GROUP BY cursa_id
+                  HAVING COUNT(DISTINCT DATE_FORMAT(data_inceput, '%Y-%m')) > 1
+              )
+            ORDER BY seg.cursa_id, seg.data_inceput, seg.ora_inceput, seg.ordine
+        ");
+        $byTrip = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $byTrip[(int) $row['cursa_id']][] = $row;
+        }
+
+        foreach ($byTrip as $tripId => $segments) {
+            if ($onlySplitRule && !self::usesPhases(
+                $db,
+                (int) $segments[0]['trip_beneficiar_id'],
+                (string) $segments[0]['trip_tip_transport'],
+                (string) $segments[0]['trip_start']
+            )) {
+                continue;
+            }
+            $result['all'][] = $tripId;
+            $kmTotal = 0.0;
+            foreach ($segments as $segment) {
+                $kmTotal += max(0.0, (float) ($segment['km'] ?? 0));
+            }
+            $weightTotal = 0.0;
+            $weightIn = 0.0;
+            $date = '';
+            $first = true;
+            $counts = false;
+            foreach ($segments as $segment) {
+                $start = substr((string) ($segment['data_inceput'] ?? ''), 0, 10);
+                $weight = $kmTotal > 0 ? max(0.0, (float) ($segment['km'] ?? 0)) : self::segmentSeconds($segment);
+                $weightTotal += $weight;
+                $in = $start !== '' && $start >= $from && $start < $toExclusive;
+                if ($in) {
+                    $weightIn += $weight;
+                    $end = substr((string) (($segment['data_sfarsit'] ?? '') ?: $start), 0, 10);
+                    $date = max($date, $end);
+                    $counts = $counts || $first;
+                }
+                $first = false;
+            }
+            if ($date === '') {
+                continue;
+            }
+            $share = $weightTotal > 0 ? $weightIn / $weightTotal : 1.0 / count($segments);
+            $result['in'][$tripId] = ['share' => round($share, 10), 'counts' => $counts, 'date' => $date];
+        }
+
+        return $result;
+    }
+
+    /** Exista macar o regula „Impartit pe faze” (fara ea Centralizatorul nu citeste fazele)? */
+    private static function anySplitRule(PDO $db): bool
+    {
+        foreach (self::allRules($db) as $types) {
+            foreach ($types as $components) {
+                foreach ($components as $versions) {
+                    if (in_array(self::SPLIT, $versions, true)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /** Durata unei faze in secunde (23:59:59 = pana la miezul noptii). */
+    private static function segmentSeconds(array $segment): float
+    {
+        $start = strtotime(trim((string) ($segment['data_inceput'] ?? '')) . ' ' . (trim((string) ($segment['ora_inceput'] ?? '')) ?: '00:00:00'));
+        $endTime = trim((string) ($segment['ora_sfarsit'] ?? '')) ?: '00:00:00';
+        $end = strtotime(trim((string) ($segment['data_sfarsit'] ?? '')) . ' ' . $endTime);
+        if ($start === false || $end === false || $end <= $start) {
+            return 0.0;
+        }
+
+        return (float) ($end - $start + (substr($endTime, 0, 8) === '23:59:59' ? 1 : 0));
     }
 
     // ------------------------------------------------------------------ utilitare

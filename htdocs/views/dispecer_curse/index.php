@@ -3493,6 +3493,7 @@ document.addEventListener('DOMContentLoaded', function () {
 <?php endif; ?>
 
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
+<script src="<?= e(url('assets/js/dispecer-curse-gps-km.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse-gps-km.js'))) ?>" data-gps-km-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'trip_gps_km'])) ?>"></script>
 <script src="<?= e(url('assets/js/dispecer-diurna.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-diurna.js'))) ?>"></script>
 <link rel="stylesheet" href="<?= e(url('assets/css/race-view-overlay.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/race-view-overlay.css'))) ?>">
 <script src="<?= e(url('assets/js/race-view-overlay.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/race-view-overlay.js'))) ?>"></script>

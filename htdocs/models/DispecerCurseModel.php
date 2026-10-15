@@ -5261,7 +5261,7 @@ class DispecerCurseModel extends BaseModel
             $this->syncEdgeSegmentsWithRace($id, $data);
             // Id-ul insotieste datele noi ca sincronizarea sa vada segmentele cursei.
             $alerts = $this->syncVehicleKmForRaceChange($previousRace, $data + ['id' => $id]);
-            $this->logRaceAudit($id, 'updated', $userId);
+            $this->logRaceAudit($id, 'updated', $userId, $this->buildRaceChangeDetails($previousRace, $data));
 
             if ($ownTransaction) {
                 $this->db->commit();
@@ -5339,6 +5339,10 @@ class DispecerCurseModel extends BaseModel
             // se intorc la restaurarea ei. Vezi migrarea 2026_09_18_000004.
             'deleted_at' => 'ALTER TABLE curse_segmente ADD COLUMN deleted_at DATETIME NULL DEFAULT NULL AFTER updated_at, ADD KEY idx_segment_deleted (deleted_at)',
             'deleted_by' => 'ALTER TABLE curse_segmente ADD COLUMN deleted_by INT UNSIGNED NULL DEFAULT NULL AFTER deleted_at',
+            // Fazele create de impartirea automata pe luni (RaceMonthSplitService):
+            // 0 = faza operatorului, 1 = continuarea dupa miezul noptii, 2 = cursa
+            // insasi, materializata ca prima faza. Migrarea 2026_10_15_000002.
+            'auto_luna' => 'ALTER TABLE curse_segmente ADD COLUMN auto_luna TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER observatii',
         ];
 
         // Coloanele existente se citesc dintr-o singura interogare: verificarea lor
@@ -5598,6 +5602,12 @@ class DispecerCurseModel extends BaseModel
             $stmt->bindValue(':id', $segmentId, PDO::PARAM_INT);
             $stmt->execute();
 
+            // Operatorul a corectat o faza: fazele impartirii automate pe luni devin ale
+            // lui (km-ii lor nu se mai recalculeaza din cursa / GPS la salvari ulterioare).
+            $ownStmt = $this->db->prepare('UPDATE curse_segmente SET auto_luna = 0 WHERE cursa_id = :cursa_id AND auto_luna > 0');
+            $ownStmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+            $ownStmt->execute();
+
             $this->reorderRaceSegments($cursaId);
             $this->refreshRaceFromSegments($cursaId);
 
@@ -5758,6 +5768,101 @@ class DispecerCurseModel extends BaseModel
         $stmt->execute();
 
         return $stmt->rowCount();
+    }
+
+    /**
+     * Scrie fazele cursei dupa impartirea pe luni (RaceMonthSplitService::plan):
+     * fazele automate vechi se sterg, fazele operatorului primesc valorile din plan,
+     * iar bucatile noi se insereaza cu marcajul lor (auto_luna). Totalurile raman ale
+     * cursei (planul imparte exact km-ii si cantitatile ei), deci tariful nu se schimba.
+     *
+     * @param list<array<string, mixed>> $plan fazele dorite, in ordine; `id` = faza existenta
+     */
+    public function applyMonthSplitPlan(int $cursaId, array $plan, ?int $userId = null): void
+    {
+        $this->ensureRaceSegmentsTable();
+        $this->ensureRaceAuditLogSchema();
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $race = $this->getRaceSnapshotForUpdate($cursaId);
+            if ($race === null) {
+                throw new RuntimeException('Cursa nu exista.');
+            }
+            $kmBefore = $this->buildRaceKmDistribution($race);
+
+            $deleteStmt = $this->db->prepare('DELETE FROM curse_segmente WHERE cursa_id = :cursa_id AND auto_luna > 0');
+            $deleteStmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+            $deleteStmt->execute();
+
+            $updateStmt = $this->db->prepare("
+                UPDATE curse_segmente
+                SET vehicle_id = :vehicle_id, driver_id = :driver_id,
+                    loc_incarcare_id = :loc_incarcare_id, zona_distributie_id = :zona_distributie_id,
+                    loc_plecare = :loc_plecare, loc_livrare = :loc_livrare,
+                    data_inceput = :data_inceput, ora_inceput = :ora_inceput,
+                    data_sfarsit = :data_sfarsit, ora_sfarsit = :ora_sfarsit,
+                    km = :km, cantitate_incarcata = :cantitate_incarcata, tona_livrata = :tona_livrata,
+                    nr_clienti = :nr_clienti, ore_functionare = :ore_functionare,
+                    observatii = :observatii, updated_at = :updated_at
+                WHERE id = :id AND cursa_id = :cursa_id
+            ");
+            $markStmt = $this->db->prepare('UPDATE curse_segmente SET auto_luna = :auto_luna WHERE id = :id');
+            foreach ($plan as $segment) {
+                $segmentId = (int) ($segment['id'] ?? 0);
+                $auto = (int) ($segment['auto_luna'] ?? 0);
+                if ($segmentId > 0 && $auto === 0) {
+                    $this->bindRaceSegmentValues($updateStmt, $segment);
+                    $updateStmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
+                    $updateStmt->bindValue(':id', $segmentId, PDO::PARAM_INT);
+                    $updateStmt->bindValue(':cursa_id', $cursaId, PDO::PARAM_INT);
+                    $updateStmt->execute();
+                    continue;
+                }
+                $newId = $this->insertRaceSegment($cursaId, $segment, $userId);
+                $markStmt->bindValue(':auto_luna', $auto, PDO::PARAM_INT);
+                $markStmt->bindValue(':id', $newId, PDO::PARAM_INT);
+                $markStmt->execute();
+            }
+
+            if ($this->getRaceSegments($cursaId) !== []) {
+                $this->reorderRaceSegments($cursaId);
+                $this->refreshRaceFromSegments($cursaId);
+            } else {
+                // Cursa nu mai trece peste luna: redevine cursa simpla, cu durata ei
+                // (cea scrisa de editare era suma fazelor automate de atunci).
+                // Fara ora de inceput / sfarsit cursa nu are durata (ca in formular).
+                $duration = trim((string) ($race['ora_inceput'] ?? '')) === '' || trim((string) ($race['ora_sfarsit'] ?? '')) === ''
+                    ? null
+                    : self::sumSegmentDurationMinutes([[
+                        'data_inceput' => $race['data_inceput'] ?? null,
+                        'ora_inceput' => $race['ora_inceput'] ?? null,
+                        'data_sfarsit' => $race['data_sfarsit'] ?? null,
+                        'ora_sfarsit' => $race['ora_sfarsit'] ?? null,
+                    ]]);
+                $durationStmt = $this->db->prepare('UPDATE curse_dispecer SET durata_cursa_minute = :durata WHERE id = :id');
+                $durationStmt->bindValue(':durata', $duration, $duration === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+                $durationStmt->bindValue(':id', $cursaId, PDO::PARAM_INT);
+                $durationStmt->execute();
+            }
+
+            $raceAfter = $this->getRaceSnapshotForUpdate($cursaId);
+            $this->applyKmDistributionDelta($kmBefore, $this->buildRaceKmDistribution($raceAfter));
+            $this->logRaceAudit($cursaId, 'updated', $userId, ['impartire_pe_luni' => count($plan)]);
+
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
+        } catch (Throwable $exception) {
+            if ($ownTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+
+            throw $exception;
+        }
     }
 
     /**
@@ -5991,11 +6096,13 @@ class DispecerCurseModel extends BaseModel
             if ($start === false || $end === false || $end < $start) {
                 continue;
             }
-            $total += (int) floor(($end - $start) / 60);
+            // O faza oprita la 23:59:59 (impartirea pe luni) merge pana la miezul noptii:
+            // altfel cursa impartita ar pierde un minut din durata (si din diurna).
+            $total += ($end - $start) + (substr($endTime, 0, 8) === '23:59:59' ? 1 : 0);
             $counted = true;
         }
 
-        return $counted ? $total : null;
+        return $counted ? (int) floor($total / 60) : null;
     }
 
     private function refreshRaceFromSegments(int $cursaId): void
@@ -6271,6 +6378,7 @@ class DispecerCurseModel extends BaseModel
     public function updateRaceBillingStatus(int $id, string $billingStatus, string $updatedAt, ?int $userId = null): bool
     {
         $this->ensureRaceAuditLogSchema();
+        $previousStatus = $this->currentRaceColumnValue($id, 'status_facturare');
 
         $stmt = $this->db->prepare("
             UPDATE curse_dispecer
@@ -6287,6 +6395,7 @@ class DispecerCurseModel extends BaseModel
         if ($updated && $stmt->rowCount() > 0) {
             $this->logRaceAudit($id, 'status_changed', $userId, [
                 'status_facturare' => $billingStatus,
+                'status_facturare_anterior' => $previousStatus,
             ]);
         }
 
@@ -6319,6 +6428,7 @@ class DispecerCurseModel extends BaseModel
         $this->db->beginTransaction();
         try {
             foreach ($ids as $id) {
+                $previousStatus = $this->currentRaceColumnValue($id, 'status_facturare');
                 $stmt->bindValue(':status_facturare', $billingStatus, PDO::PARAM_STR);
                 $stmt->bindValue(':updated_at', $updatedAt, PDO::PARAM_STR);
                 $stmt->bindValue(':id', $id, PDO::PARAM_INT);
@@ -6328,6 +6438,7 @@ class DispecerCurseModel extends BaseModel
                     $changed++;
                     $this->logRaceAudit($id, 'status_changed', $userId, [
                         'status_facturare' => $billingStatus,
+                        'status_facturare_anterior' => $previousStatus,
                         'bulk' => true,
                     ]);
                 }
@@ -6349,6 +6460,7 @@ class DispecerCurseModel extends BaseModel
         if (!in_array($expenseStatus, ['pending', 'not_applicable'], true)) {
             $expenseStatus = 'pending';
         }
+        $previousExpenseStatus = $this->currentRaceColumnValue($id, 'cheltuieli_status');
 
         $stmt = $this->db->prepare("
             UPDATE curse_dispecer
@@ -6365,6 +6477,7 @@ class DispecerCurseModel extends BaseModel
         if ($updated && $stmt->rowCount() > 0) {
             $this->logRaceAudit($id, 'status_changed', $userId, [
                 'cheltuieli_status' => $expenseStatus,
+                'cheltuieli_status_anterior' => $previousExpenseStatus,
             ]);
         }
 
@@ -6634,6 +6747,67 @@ class DispecerCurseModel extends BaseModel
             $stmt->bindValue(':details_json', null, PDO::PARAM_NULL);
         }
         $stmt->execute();
+        if (function_exists('audit_stamp_request_context')) {
+            audit_stamp_request_context($this->db, 'cursa_audit_log', (int) $this->db->lastInsertId());
+        }
+    }
+
+    /**
+     * Campurile modificate la editarea cursei, pentru jurnalul de audit
+     * (Rapoarte activitate utilizatori): ['changes' => [camp => ['old' => .., 'new' => ..]]].
+     * Valorile raman brute (id-uri, coduri); raportul le traduce la afisare.
+     */
+    private function buildRaceChangeDetails(array $previousRace, array $data): array
+    {
+        $fields = [
+            'vehicle_id', 'driver_id', 'tip_transport', 'data_cursa', 'data_incarcare', 'data_inceput', 'data_sfarsit',
+            'ora_inceput', 'ora_sfarsit', 'loc_incarcare_id', 'loc_plecare', 'loc_intoarcere', 'loc_aspirare',
+            'loc_livrare', 'loc_livrare_cursa', 'beneficiar_id', 'tip_marfa', 'capacitate_transport',
+            'capacitate_transport_confirmata', 'cantitate_incarcata', 'cantitate_prelevata', 'nr_clienti', 'km_cursa',
+            'ore_functionare', 'km_totali', 'ore_aspirare', 'km_dislocare', 'tona_livrata', 'tona_aspirata_lichida',
+            'tona_aspirata_gazoasa', 'zona_distributie_id', 'status_facturare', 'pret_tarifare', 'total_facturare', 'observatii',
+        ];
+        $normalize = static function (mixed $value): ?string {
+            if ($value === null) {
+                return null;
+            }
+            $text = trim((string) $value);
+            if ($text === '') {
+                return null;
+            }
+            if (is_numeric($text)) {
+                // 18 / 18.00 / 18.0000 sunt aceeasi valoare.
+                $text = rtrim(rtrim(number_format((float) $text, 4, '.', ''), '0'), '.');
+            }
+
+            return mb_substr($text, 0, 500);
+        };
+
+        $changes = [];
+        foreach ($fields as $field) {
+            if (!array_key_exists($field, $data)) {
+                continue;
+            }
+            $old = $normalize($previousRace[$field] ?? null);
+            $new = $normalize($data[$field]);
+            if ($old !== $new) {
+                $changes[$field] = ['old' => $old, 'new' => $new];
+            }
+        }
+
+        return $changes === [] ? [] : ['changes' => $changes];
+    }
+
+    private function currentRaceColumnValue(int $raceId, string $column): ?string
+    {
+        if (!in_array($column, ['status_facturare', 'cheltuieli_status'], true)) {
+            return null;
+        }
+        $stmt = $this->db->prepare('SELECT ' . $column . ' FROM curse_dispecer WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $raceId]);
+        $value = $stmt->fetchColumn();
+
+        return $value === false || $value === null ? null : (string) $value;
     }
 
     public function getDeletedRaceFilterOptions(): array

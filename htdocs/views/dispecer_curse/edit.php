@@ -502,7 +502,13 @@ if ($phaseMode === 'noua') {
 
 // Totalurile cursei sunt suma fazelor, deci pe CURSA raman doar de citit; pe o
 // faza se completeaza normal, ele sunt sursa totalurilor.
-$raceHasSegments = $phaseMode === '' && $phaseCount > 1;
+// Exceptie: fazele doar din impartirea automata pe luni se refac din cursa la salvare
+// (RaceMonthSplitService), deci acolo totalurile cursei raman editabile.
+$phaseOnlyMonthSplit = $phaseCount > 0 && array_filter(
+    $phaseList,
+    static fn (array $phaseRow): bool => (int) ($phaseRow['auto_luna'] ?? 0) === 0
+) === [];
+$raceHasSegments = $phaseMode === '' && $phaseCount > 1 && !$phaseOnlyMonthSplit;
 $segmentTotalsNote = 'Se calculează din faze (umblă la ele cu săgețile din antet).';
 
 // Faza noua ("Reia cursa") arata doar ce se completeaza: datele, km-ii, clientii
@@ -2632,6 +2638,7 @@ document.addEventListener('DOMContentLoaded', function () {
 <?php endif; ?>
 
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
+<script src="<?= e(url('assets/js/dispecer-curse-gps-km.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse-gps-km.js'))) ?>" data-gps-km-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'trip_gps_km'])) ?>"></script>
 
 <?php if ($focusFieldId !== ''): ?>
 <script>

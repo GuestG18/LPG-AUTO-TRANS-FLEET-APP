@@ -1017,7 +1017,7 @@ class DashboardAnaliticV2Model extends BaseModel
             CASE
                 WHEN c.cantitate_incarcata IS NULL OR c.cantitate_incarcata <= 0 THEN 0
                 WHEN c.capacitate_transport IS NOT NULL AND c.capacitate_transport > 0
-                     AND c.cantitate_incarcata > (c.capacitate_transport * 3)
+                     AND c.cantitate_incarcata > (c.capacitate_transport * c.billing_share * 3)
                 THEN c.cantitate_incarcata / 1000
                 WHEN c.cantitate_incarcata >= 1000 THEN c.cantitate_incarcata / 1000
                 ELSE c.cantitate_incarcata
@@ -1052,7 +1052,7 @@ class DashboardAnaliticV2Model extends BaseModel
         $capacityForGrad = "
             CASE
                 WHEN c.capacitate_transport IS NULL OR c.capacitate_transport <= 0 THEN 0
-                ELSE c.capacitate_transport
+                ELSE c.capacitate_transport * c.billing_share
             END
         ";
         // Gradul la nivel de cursa. 0 pentru cursele fara capacitate, ca sa nu
@@ -1060,7 +1060,7 @@ class DashboardAnaliticV2Model extends BaseModel
         $gradIncarcare = "
             CASE
                 WHEN c.capacitate_transport IS NOT NULL AND c.capacitate_transport > 0
-                THEN GREATEST(0, ((" . $loadedTons . ") / c.capacitate_transport) * 100)
+                THEN GREATEST(0, ((" . $loadedTons . ") / (c.capacitate_transport * c.billing_share)) * 100)
                 ELSE 0
             END
         ";
@@ -1072,7 +1072,7 @@ class DashboardAnaliticV2Model extends BaseModel
             CASE
                 WHEN c.capacitate_transport IS NULL OR c.capacitate_transport <= 0 THEN NULL
                 ELSE GREATEST(0, (
-                    COALESCE(NULLIF((" . $loadedTons . "), 0), (" . $deliveredTons . ")) / c.capacitate_transport
+                    COALESCE(NULLIF((" . $loadedTons . "), 0), (" . $deliveredTons . ")) / (c.capacitate_transport * c.billing_share)
                 ) * 100)
             END
         ";
@@ -1090,11 +1090,11 @@ class DashboardAnaliticV2Model extends BaseModel
             'grad_incarcare_efectiv' => $gradIncarcareEfectiv,
             'tone_pentru_grad' => $tonsForGrad,
             'capacitate_aplicabila' => $capacityForGrad,
-            'facturare' => "(COALESCE(c.total_facturare, 0) + COALESCE(exp.total_refacturare_facturata, 0))",
-            'refacturare' => "COALESCE(exp.total_refacturare_pending, 0)",
+            'facturare' => "(COALESCE(c.total_facturare, 0) + COALESCE(exp.total_refacturare_facturata * c.billing_share, 0))",
+            'refacturare' => "COALESCE(exp.total_refacturare_pending * c.billing_share, 0)",
             // Cheltuiala totala a cursei: ce s-a inregistrat pe cursa + carburantul
             // calculat din km parcursi x consum x pretul motorinei la alimentare.
-            'cheltuieli' => "(COALESCE(exp.total_cheltuieli, 0) + {$carburant})",
+            'cheltuieli' => "(COALESCE(exp.total_cheltuieli * c.billing_share, 0) + {$carburant})",
             'carburant' => $carburant,
             'consum_l100' => $consum,
             'pret_motorina' => $pretMotorina,
@@ -1106,9 +1106,9 @@ class DashboardAnaliticV2Model extends BaseModel
              *   - partea fara cost inregistrat (randuri cu suma = 0) => NU apare in `cheltuieli`
              * Suma celor doua da exact `refacturare`.
              */
-            'cheltuieli_proprii' => "COALESCE(exp.total_cheltuieli_proprii, 0)",
-            'refacturare_fara_cost' => "COALESCE(exp.total_refacturare_fara_cost, 0)",
-            'refacturare_in_cheltuieli' => "GREATEST(0, COALESCE(exp.total_refacturare_pending, 0) - COALESCE(exp.total_refacturare_fara_cost, 0))",
+            'cheltuieli_proprii' => "COALESCE(exp.total_cheltuieli_proprii * c.billing_share, 0)",
+            'refacturare_fara_cost' => "COALESCE(exp.total_refacturare_fara_cost * c.billing_share, 0)",
+            'refacturare_in_cheltuieli' => "GREATEST(0, COALESCE(exp.total_refacturare_pending * c.billing_share, 0) - COALESCE(exp.total_refacturare_fara_cost * c.billing_share, 0))",
             'bucket' => "
                 CASE
                     WHEN c.tip_transport IN ('primar', 'primar_tona', 'primar_km') THEN 'primar'
@@ -2384,7 +2384,13 @@ class DashboardAnaliticV2Model extends BaseModel
             return $this->fromSql();
         }
 
-        $conditions = ['sg.cursa_id = sgt.cursa_id'];
+        [$periodFrom, $periodTo] = $this->phasePeriod;
+        $inPeriod = "data_inceput >= '{$periodFrom}' AND data_inceput < '{$periodTo}'";
+        // Cursa impartita pe luni (billing_part = 'phase') vine doar cu fazele perioadei.
+        $conditions = [
+            'sg.cursa_id = sgt.cursa_id',
+            "(c.billing_part <> 'phase' OR (sg.data_inceput >= '{$periodFrom}' AND sg.data_inceput < '{$periodTo}'))",
+        ];
         if ($driverParam !== null) {
             $conditions[] = 'sg.driver_id = ' . $driverParam;
         }
@@ -2397,7 +2403,9 @@ class DashboardAnaliticV2Model extends BaseModel
             FROM " . $this->billingTripsSource() . " c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
             LEFT JOIN (
-                SELECT cursa_id, SUM(COALESCE(km, 0)) AS weight_total
+                SELECT cursa_id, SUM(COALESCE(km, 0)) AS weight_total,
+                       SUM(CASE WHEN {$inPeriod} THEN COALESCE(km, 0) ELSE 0 END) AS weight_period,
+                       SUM(CASE WHEN {$inPeriod} THEN 1 ELSE 0 END) AS count_period
                   FROM curse_segmente
                  GROUP BY cursa_id
                 HAVING COUNT(*) >= 2 AND SUM(COALESCE(km, 0)) > 0
@@ -2416,7 +2424,11 @@ class DashboardAnaliticV2Model extends BaseModel
             return '1';
         }
 
-        return 'COALESCE(COALESCE(sg.km, 0) / sgt.weight_total, 1)';
+        // Cursa impartita pe luni: randul este deja partea perioadei, deci fazele ei se
+        // impart doar intre ele (fara km pe faze: in parti egale).
+        return "(CASE WHEN c.billing_part = 'phase'
+                    THEN COALESCE(COALESCE(sg.km, 0) / NULLIF(sgt.weight_period, 0), 1 / NULLIF(sgt.count_period, 0), 1)
+                    ELSE COALESCE(COALESCE(sg.km, 0) / sgt.weight_total, 1) END)";
     }
 
     /** Soferul randului: cel al segmentului, altfel cel al cursei. */
@@ -2476,7 +2488,7 @@ class DashboardAnaliticV2Model extends BaseModel
                         END) AS total_refacturare_fara_cost
                 FROM curse_cheltuieli
                 GROUP BY cursa_id
-            ) exp ON exp.cursa_id = c.id AND c.billing_counts = 1
+            ) exp ON exp.cursa_id = c.id AND (c.billing_counts = 1 OR c.billing_part = 'phase')
         ";
     }
 
@@ -2509,12 +2521,23 @@ class DashboardAnaliticV2Model extends BaseModel
             $endDate = $this->toDate($end);
             $next = $endDate !== null ? $endDate->modify('+1 day')->format('Y-m-d') : '';
         }
-        $this->billingTripsSql = BillingMonthRule::periodTripsSql($this->db, $start, $next);
+        $this->billingTripsSql = BillingMonthRule::periodTripsSql($this->db, $start, $next, true);
+        $this->phasePeriod = [$this->cleanSqlDate($start, '1000-01-01'), $this->cleanSqlDate($next, '9999-12-31')];
     }
 
     private function billingTripsSource(): string
     {
-        return $this->billingTripsSql ??= BillingMonthRule::periodTripsSql($this->db, '', '');
+        return $this->billingTripsSql ??= BillingMonthRule::periodTripsSql($this->db, '', '', true);
+    }
+
+    /** Perioada sursei [de la, pana la) — fazele unei curse impartite intra dupa ea. */
+    private array $phasePeriod = ['1000-01-01', '9999-12-31'];
+
+    private function cleanSqlDate(string $value, string $fallback): string
+    {
+        $value = substr(trim($value), 0, 10);
+
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) === 1 ? $value : $fallback;
     }
 
     private function buildWhere(array $filters): array

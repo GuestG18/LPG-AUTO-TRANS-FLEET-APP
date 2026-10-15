@@ -896,6 +896,9 @@ class ReviziiIstoricModel
                 $after !== null ? json_encode($after, JSON_UNESCAPED_UNICODE) : null,
                 $userId !== null && $userId > 0 ? $userId : null, date('Y-m-d H:i:s'),
             ]);
+            if (function_exists('audit_stamp_request_context')) {
+                audit_stamp_request_context($this->db, 'audit_log', (int) $this->db->lastInsertId());
+            }
         } catch (PDOException $exception) {
             // Auditul nu blocheaza operatia (ex. coloana descriere mai scurta pe instalari vechi).
             error_log('[ReviziiIstoricModel][audit] ' . $exception->getMessage());

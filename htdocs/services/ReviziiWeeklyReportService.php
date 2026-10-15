@@ -44,12 +44,35 @@ class ReviziiWeeklyReportService
             array_keys(ReviziiModel::TABS)
         ));
 
+        $vehicles = array_values(array_unique(array_filter(
+            array_map('intval', (array) ($report['vehicles'] ?? [])),
+            static fn (int $id): bool => $id > 0
+        )));
+        sort($vehicles);
+
         return [
             'day' => max(1, min(7, (int) ($report['day'] ?? 1))),
             'hour' => max(0, min(23, (int) ($report['hour'] ?? 8))),
             'categories' => $categories,
             'history' => !empty($report['history']),
             'status' => $statusFilter === 'necesita' ? 'necesita' : '',
+            // Gol = toata flota. Cu vehicule alese, raportul arata si componentele in regula.
+            'vehicles' => $vehicles,
+            // SMS saptamanal soferilor vehiculelor din raport: sa-l sune pe responsabil cu km de la bord.
+            'notify_driver' => !empty($report['notify_driver']),
+        ];
+    }
+
+    /** Partea din config care se salveaza in metadata_json.report (status-ul sta in document_type). */
+    public static function metadataFromConfig(array $config): array
+    {
+        return [
+            'day' => $config['day'],
+            'hour' => $config['hour'],
+            'categories' => $config['categories'],
+            'history' => $config['history'],
+            'vehicles' => $config['vehicles'],
+            'notify_driver' => $config['notify_driver'],
         ];
     }
 
@@ -91,7 +114,152 @@ class ReviziiWeeklyReportService
             // Pentru atasamentul Excel: aceleasi setari si acelasi moment ca emailul.
             'config' => $context['config'],
             'now' => $context['now'],
+            // Pentru SMS-ul catre soferi: toate componentele din raport, cea mai urgenta prima.
+            'rows' => array_merge($context['due'], $context['soon'], $context['ok']),
         ];
+    }
+
+    /**
+     * Soferii vehiculelor din raport (activi, cu telefon), cate unul per sofer si vehicul,
+     * cu componenta cea mai aproape de revizie.
+     *
+     * @return array<int, array{vehicle_id:int, nr:string, driver_id:int, driver:string, phone:string, row:array}>
+     */
+    public function driverSmsTargets(array $report): array
+    {
+        $worst = [];
+        foreach ($report['rows'] ?? [] as $row) {
+            $vehicleId = (int) $row['vehicle_id'];
+            if (!isset($worst[$vehicleId]) || (float) $row['km_ramasi'] < (float) $worst[$vehicleId]['km_ramasi']) {
+                $worst[$vehicleId] = $row;
+            }
+        }
+        if ($worst === []) {
+            return [];
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($worst), '?'));
+        $stmt = $this->db->prepare("
+            SELECT id, nume, telefon, vehicle_id
+            FROM soferi
+            WHERE vehicle_id IN ({$placeholders}) AND status = 'activ'
+            ORDER BY nume ASC
+        ");
+        $stmt->execute(array_keys($worst));
+
+        $targets = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $driver) {
+            $row = $worst[(int) $driver['vehicle_id']];
+            $targets[] = [
+                'vehicle_id' => (int) $driver['vehicle_id'],
+                'nr' => (string) $row['nr'],
+                'driver_id' => (int) $driver['id'],
+                'driver' => (string) $driver['nume'],
+                'phone' => trim((string) ($driver['telefon'] ?? '')),
+                'row' => $row,
+            ];
+        }
+
+        return $targets;
+    }
+
+    /**
+     * Pune in coada SMS-ul saptamanal pentru soferii vehiculelor din raport: sa-l sune pe
+     * responsabil si sa-i comunice km de la bord. Trimiterea o face worker-ul (SMSAlert).
+     *
+     * @param array{nume:string, telefon:string}|null $contact
+     * @return array{queued:string[], failed:string[], no_phone:string[]}
+     */
+    public function queueDriverSms(array $report, ?array $contact, string $context, string $contextId, int $ruleId = 0): array
+    {
+        require_once dirname(__DIR__) . '/models/NotificationRuleModel.php';
+        $model = new NotificationRuleModel($this->db);
+        $result = ['queued' => [], 'failed' => [], 'no_phone' => []];
+
+        foreach ($this->driverSmsTargets($report) as $target) {
+            if ($target['phone'] === '') {
+                $result['no_phone'][] = $target['driver'];
+                continue;
+            }
+            $queued = $model->queueSms(
+                $target['phone'],
+                $target['driver'],
+                'Revizie ' . $target['nr'] . ': comunică km de la bord',
+                self::driverSmsText($target['row'], $contact),
+                $context,
+                $contextId . ':veh:' . $target['vehicle_id'],
+                ['rule_id' => $ruleId, 'event_type' => self::EVENT, 'vehicle_id' => $target['vehicle_id'], 'driver_id' => $target['driver_id']]
+            );
+            if (!empty($queued['queued'])) {
+                $result['queued'][] = $target['driver'] . ' ' . $queued['phone'];
+            } else {
+                $result['failed'][] = $target['driver'] . ': ' . (string) ($queued['error'] ?? 'eroare necunoscută');
+            }
+        }
+
+        return $result;
+    }
+
+    /** Primul destinatar care are telefon valid: el e trecut in SMS ca persoana de contact. */
+    public function contactFor(array $recipients): ?array
+    {
+        $ids = array_values(array_filter(array_map(static fn (array $r): int => (int) ($r['id'] ?? 0), $recipients)));
+        if ($ids === []) {
+            return null;
+        }
+        $placeholders = implode(', ', array_fill(0, count($ids), '?'));
+        $stmt = $this->db->prepare("SELECT id, nume, telefon FROM utilizatori WHERE id IN ({$placeholders}) AND telefon IS NOT NULL AND telefon <> ''");
+        $stmt->execute($ids);
+        $phones = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $user) {
+            $phones[(int) $user['id']] = $user;
+        }
+        foreach ($ids as $id) {
+            if (isset($phones[$id])) {
+                return ['nume' => (string) $phones[$id]['nume'], 'telefon' => (string) $phones[$id]['telefon']];
+            }
+        }
+
+        return null;
+    }
+
+    /** Textul SMS-ului catre sofer, fara diacritice (GSM: 160 de caractere). */
+    public static function driverSmsText(array $row, ?array $contact): string
+    {
+        $left = (int) round((float) $row['km_ramasi']);
+        $state = $left < 0 ? 'depasit cu ' . abs($left) . ' km' : 'mai sunt ' . $left . ' km';
+        $call = $contact !== null
+            ? 'te rugam suna-l pe ' . $contact['nume'] . ' la ' . $contact['telefon'] . ' si comunica-i km de la bord.'
+            : 'te rugam comunica dispeceratului km de la bord.';
+        $text = 'Revizie ' . $row['nr'] . ': ' . $call . ' ' . $row['componenta'] . ': ' . $state . '.';
+
+        $folded = strtr($text, ['ă' => 'a', 'â' => 'a', 'î' => 'i', 'ș' => 's', 'ş' => 's', 'ț' => 't', 'ţ' => 't',
+            'Ă' => 'A', 'Â' => 'A', 'Î' => 'I', 'Ș' => 'S', 'Ş' => 'S', 'Ț' => 'T', 'Ţ' => 'T', '·' => '-', '—' => '-']);
+
+        return mb_strlen($folded) > 160 ? rtrim(mb_substr($folded, 0, 157)) . '...' : $folded;
+    }
+
+    /** SMS-urile saptamanii au fost deja puse in coada (o singura data pe saptamana per regula). */
+    private function driverSmsQueued(string $contextId): bool
+    {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM notification_deliveries
+            WHERE context = :context AND channel = 'sms' AND context_id LIKE :prefix AND status IN ('pending', 'sent')
+        ");
+        $stmt->execute([':context' => self::CONTEXT, ':prefix' => $contextId . ':veh:%']);
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    /** @return string[] */
+    private function vehiclePlates(array $vehicleIds): array
+    {
+        $placeholders = implode(', ', array_fill(0, count($vehicleIds), '?'));
+        $stmt = $this->db->prepare("SELECT nr_inmatriculare FROM vehicule WHERE id IN ({$placeholders}) ORDER BY nr_inmatriculare");
+        $stmt->execute(array_values($vehicleIds));
+
+        return array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
     }
 
     /** Linkul de export Excel din raport (pagina Revizii, cere autentificare). */
@@ -107,16 +275,20 @@ class ReviziiWeeklyReportService
         if ($config['history']) {
             $query['history'] = '1';
         }
+        if ($config['vehicles'] !== []) {
+            $query['veh'] = implode(',', $config['vehicles']);
+        }
 
         return absolute_url('index.php?' . http_build_query($query));
     }
 
-    /** Setarile raportului din parametrii linkului de export (?cat=a,b&status=necesita&history=1). */
+    /** Setarile raportului din parametrii linkului de export (?cat=a,b&status=necesita&history=1&veh=1,2). */
     public static function configFromQuery(array $query): array
     {
         return self::normalizeConfig([
             'categories' => array_filter(explode(',', (string) ($query['cat'] ?? ''))),
             'history' => !empty($query['history']),
+            'vehicles' => array_filter(explode(',', (string) ($query['veh'] ?? ''))),
         ], (string) ($query['status'] ?? ''));
     }
 
@@ -149,12 +321,17 @@ class ReviziiWeeklyReportService
         if ($c['config']['history']) {
             $xlsx->addRow($summary, [['v' => 'Efectuate în ultimele 7 zile', 's' => 'kpi_label'], ['v' => $stats['efectuate'], 's' => 'kpi_value']]);
         }
-        $xlsx->addRow($summary, [['v' => 'Vehicule monitorizate', 's' => 'kpi_label'], ['v' => $stats['vehicule'], 's' => 'kpi_value']]);
+        if ($c['ok'] !== []) {
+            $xlsx->addRow($summary, [['v' => 'În regulă', 's' => 'kpi_label'], ['v' => $stats['in_regula'], 's' => 'kpi_value']]);
+        }
+        $xlsx->addRow($summary, [['v' => $c['config']['vehicles'] !== [] ? 'Vehicule în raport' : 'Vehicule monitorizate', 's' => 'kpi_label'], ['v' => $stats['vehicule'], 's' => 'kpi_value']]);
         $xlsx->addRow($summary, []);
-        $xlsx->addRow($summary, [
-            ['v' => 'Pe categorii', 's' => 'th'], ['v' => 'Necesită', 's' => 'th_num'], ['v' => 'Se apropie', 's' => 'th_num'],
-            ['v' => 'Fără date', 's' => 'th_num'], ['v' => 'În regulă', 's' => 'th_num'],
-        ]);
+        if ($c['categories'] !== []) {
+            $xlsx->addRow($summary, [
+                ['v' => 'Pe categorii', 's' => 'th'], ['v' => 'Necesită', 's' => 'th_num'], ['v' => 'Se apropie', 's' => 'th_num'],
+                ['v' => 'Fără date', 's' => 'th_num'], ['v' => 'În regulă', 's' => 'th_num'],
+            ]);
+        }
         foreach ($c['categories'] as $category) {
             $counts = $category['counts'];
             $xlsx->addRow($summary, [
@@ -219,6 +396,9 @@ class ReviziiWeeklyReportService
         if ($c['config']['status'] !== 'necesita') {
             $alertSheet('Se apropie', $c['soon']);
         }
+        if ($c['ok'] !== []) {
+            $alertSheet('În regulă', $c['ok']);
+        }
 
         if ($c['config']['history']) {
             $sheet = $xlsx->addSheet('Efectuate 7 zile');
@@ -268,30 +448,45 @@ class ReviziiWeeklyReportService
         $overview = $this->overview();
         $categories = $config['categories'] !== [] ? $config['categories'] : array_keys(ReviziiModel::TABS);
 
+        $vehicles = $config['vehicles'];
+        $inScope = static fn (array $row): bool => in_array($row['categorie'], $categories, true)
+            && ($vehicles === [] || in_array((int) $row['vehicle_id'], $vehicles, true));
+
         $alerts = array_values(array_filter(
             $overview['alerte'],
-            static fn (array $alert): bool => in_array($alert['categorie'], $categories, true)
+            static fn (array $alert): bool => $inScope($alert)
                 && ($config['status'] !== 'necesita' || $alert['status'] === ReviziiCalculator::STATUS_DUE)
         ));
         $alerts = array_map(fn (array $alert): array => $this->withDetails($alert, $now), $alerts);
         $due = array_values(array_filter($alerts, static fn (array $alert): bool => $alert['status'] === ReviziiCalculator::STATUS_DUE));
         $soon = array_values(array_filter($alerts, static fn (array $alert): bool => $alert['status'] === ReviziiCalculator::STATUS_SOON));
 
+        // Componentele in regula apar doar cand raportul e pe vehicule alese (pe toata flota ar fi prea lung).
+        $ok = [];
+        if ($vehicles !== [] && $config['status'] !== 'necesita') {
+            $ok = array_values(array_filter($overview['in_regula'] ?? [], $inScope));
+            usort($ok, static fn (array $a, array $b): int => [$a['nr'], $a['km_ramasi']] <=> [$b['nr'], $b['km_ramasi']]);
+            $ok = array_map(fn (array $row): array => $this->withDetails($row, $now), $ok);
+        }
+
         $since = strtotime('-7 days', $now);
         $history = [];
         if ($config['history']) {
             $history = array_values(array_filter(
                 $overview['istoric'],
-                static fn (array $row): bool => in_array($row['categorie'], $categories, true) && strtotime((string) $row['data']) >= $since
+                static fn (array $row): bool => $inScope($row) && strtotime((string) $row['data']) >= $since
             ));
             usort($history, static fn (array $a, array $b): int => strcmp((string) $b['data'], (string) $a['data']));
         }
 
+        // Numaratorile pe categorii sunt pe toata flota; la un raport pe vehicule alese nu au sens.
         $categoryRows = [];
-        foreach ($categories as $tab) {
-            $category = $overview['categorii'][$tab] ?? null;
-            if ($category !== null) {
-                $categoryRows[] = ['label' => $category['label'], 'counts' => $category['counts']];
+        if ($vehicles === []) {
+            foreach ($categories as $tab) {
+                $category = $overview['categorii'][$tab] ?? null;
+                if ($category !== null) {
+                    $categoryRows[] = ['label' => $category['label'], 'counts' => $category['counts']];
+                }
             }
         }
 
@@ -299,12 +494,14 @@ class ReviziiWeeklyReportService
         $stats = [
             'necesita' => count($due),
             'se_apropie' => count($soon),
+            'in_regula' => count($ok),
             'efectuate' => count($history),
-            'vehicule' => (int) ($overview['kpi']['total'] ?? 0),
+            'vehicule' => $vehicles !== [] ? count($vehicles) : (int) ($overview['kpi']['total'] ?? 0),
             'saptamana' => $week,
         ];
 
         $subject = '[' . APP_NAME . '] Raport săptămânal revizii ' . str_replace('-W', ' / S', $week)
+            . ($vehicles !== [] ? ' · ' . implode(', ', $this->vehiclePlates($vehicles)) : '')
             . ' — ' . $stats['necesita'] . ' necesită'
             . ($config['status'] !== 'necesita' ? ', ' . $stats['se_apropie'] . ' se apropie' : '');
 
@@ -315,6 +512,7 @@ class ReviziiWeeklyReportService
             'since' => $since,
             'due' => $due,
             'soon' => $soon,
+            'ok' => $ok,
             'history' => $history,
             'categories' => $categoryRows,
             'stats' => $stats,
@@ -422,13 +620,14 @@ class ReviziiWeeklyReportService
                 }
                 $pending[] = $recipient;
             }
+            $smsDue = $config['notify_driver'] && empty($options['no_sms']) && ($force || !$this->driverSmsQueued($contextId));
 
-            if ($recipients === []) {
+            if ($recipients === [] && !$smsDue) {
                 $entry['status'] = 'Regula nu are niciun destinatar cu email.';
                 $log[] = $entry;
                 continue;
             }
-            if ($pending === []) {
+            if ($pending === [] && !$smsDue) {
                 $entry['status'] = 'Trimis deja săptămâna aceasta.';
                 $log[] = $entry;
                 continue;
@@ -437,8 +636,15 @@ class ReviziiWeeklyReportService
             $report = $this->build($config, $now);
             $entry['subject'] = $report['subject'];
             $entry['stats'] = $report['stats'];
+            // Persoana pe care o suna soferul: primul destinatar al regulii care are telefon.
+            $contact = $smsDue ? $this->contactFor($this->resolveRecipients((string) $rule['recipient_mode'], $this->ruleUserIds((int) $rule['id']))) : null;
             if ($dryRun) {
-                $entry['status'] = 'Dry-run: s-ar trimite către ' . implode(', ', array_column($pending, 'email')) . '.';
+                $smsTargets = $smsDue ? array_map(
+                    static fn (array $target): string => $target['driver'] . ' (' . $target['nr'] . ')',
+                    $this->driverSmsTargets($report)
+                ) : [];
+                $entry['status'] = 'Dry-run: email către ' . ($pending !== [] ? implode(', ', array_column($pending, 'email')) : '— (trimis deja)')
+                    . ($smsDue ? '; SMS șoferi: ' . ($smsTargets !== [] ? implode(', ', $smsTargets) : 'niciun șofer cu telefon') : '') . '.';
                 $log[] = $entry;
                 continue;
             }
@@ -453,6 +659,17 @@ class ReviziiWeeklyReportService
                 }
             }
             $entry['status'] = 'Trimis: ' . count($entry['sent']) . ', eșuat: ' . count($entry['failed']) . '.';
+
+            if ($smsDue) {
+                $sms = $this->queueDriverSms($report, $contact, $context, $force ? 'test:' . date('YmdHis', $now) : $contextId, (int) $rule['id']);
+                $entry['sms'] = $sms;
+                foreach ($sms['failed'] as $error) {
+                    $entry['failed'][] = 'SMS ' . $error;
+                }
+                $entry['status'] .= ' SMS șoferi în coadă: ' . count($sms['queued'])
+                    . ($sms['queued'] !== [] ? ' (' . implode(', ', $sms['queued']) . ')' : '')
+                    . ($sms['no_phone'] !== [] ? '; fără telefon: ' . implode(', ', $sms['no_phone']) : '') . '.';
+            }
             $log[] = $entry;
         }
 
@@ -594,7 +811,7 @@ class ReviziiWeeklyReportService
             . '<div style="font-size:12px;color:#475569;">' . self::h($label) . '</div></div></td>';
 
         // Un rand per componenta, cu calculul complet pe coloane (ca panoul de detalii din Revizii).
-        $alertTable = function (array $rows, string $title, string $accent) use ($head): string {
+        $alertTable = function (array $rows, string $title, string $accent, string $leftColor = '#b45309') use ($head): string {
             if ($rows === []) {
                 return '';
             }
@@ -642,7 +859,7 @@ class ReviziiWeeklyReportService
                     . '<td style="' . $num . 'font-weight:700;">' . ($calc !== null ? self::h($dec((float) $calc['km_total'])) : '—') . '</td>'
                     . '<td style="' . $num . '">' . self::h(self::km((float) $row['interval_km']))
                     . '<span style="' . $sub . '">prag ' . self::h(self::km((float) $row['prag_km'])) . '</span></td>'
-                    . '<td style="' . $num . 'font-weight:700;color:' . ($left < 0 ? '#b91c1c' : '#b45309') . ';">'
+                    . '<td style="' . $num . 'font-weight:700;color:' . ($left < 0 ? '#b91c1c' : $leftColor) . ';">'
                     . self::h((!empty($row['limita_superioara']) ? '≤ ' : '') . $dec($left))
                     . ($missing > 0 ? '<span style="' . $sub . 'color:#b45309;">⚠ ' . self::h($missing === 1 ? '1 zi' : $missing . ' zile') . ' fără telemetrie</span>' : '')
                     . '</td>'
@@ -668,8 +885,9 @@ class ReviziiWeeklyReportService
             . '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-top:18px;"><tr>'
             . $box('Necesită revizie', $stats['necesita'], '#b91c1c', '#fef2f2')
             . ($c['config']['status'] !== 'necesita' ? $box('Se apropie', $stats['se_apropie'], '#b45309', '#fffbeb') : '')
+            . ($c['config']['vehicles'] !== [] && $c['config']['status'] !== 'necesita' ? $box('În regulă', $stats['in_regula'], '#15803d', '#f0fdf4') : '')
             . ($c['config']['history'] ? $box('Efectuate (7 zile)', $stats['efectuate'], '#15803d', '#f0fdf4') : '')
-            . $box('Vehicule monitorizate', $stats['vehicule'], '#1d4ed8', '#eff6ff')
+            . $box($c['config']['vehicles'] !== [] ? 'Vehicule în raport' : 'Vehicule monitorizate', $stats['vehicule'], '#1d4ed8', '#eff6ff')
             . '</tr></table>';
 
         if ($c['categories'] !== []) {
@@ -692,6 +910,7 @@ class ReviziiWeeklyReportService
         if ($c['config']['status'] !== 'necesita') {
             $html .= $alertTable($c['soon'], 'Se apropie', '#b45309');
         }
+        $html .= $alertTable($c['ok'], 'În regulă', '#15803d', '#15803d');
         if ($c['due'] === [] && $c['soon'] === []) {
             $html .= '<p style="margin:24px 0 0;padding:12px 14px;background:#f0fdf4;border-radius:8px;color:#15803d;font-size:14px;">Nicio componentă nu necesită revizie și niciuna nu se apropie de prag.</p>';
         }
@@ -739,7 +958,10 @@ class ReviziiWeeklyReportService
         if ($c['config']['history']) {
             $lines[] = 'Efectuate în ultimele 7 zile: ' . $stats['efectuate'];
         }
-        $lines[] = 'Vehicule monitorizate: ' . $stats['vehicule'];
+        if ($c['ok'] !== []) {
+            $lines[] = 'În regulă: ' . $stats['in_regula'];
+        }
+        $lines[] = ($c['config']['vehicles'] !== [] ? 'Vehicule în raport: ' : 'Vehicule monitorizate: ') . $stats['vehicule'];
 
         $section = static function (array $rows, string $title) use (&$lines): void {
             if ($rows === []) {
@@ -770,6 +992,7 @@ class ReviziiWeeklyReportService
         if ($c['config']['status'] !== 'necesita') {
             $section($c['soon'], 'SE APROPIE');
         }
+        $section($c['ok'], 'ÎN REGULĂ');
         if ($c['config']['history'] && $c['history'] !== []) {
             $lines[] = '';
             $lines[] = 'EFECTUATE ÎN ULTIMELE 7 ZILE:';
