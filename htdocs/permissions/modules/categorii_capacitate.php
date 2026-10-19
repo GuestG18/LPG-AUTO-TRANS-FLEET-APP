@@ -27,5 +27,6 @@ return [
         'update' => 'manage',
         'delete' => 'manage',
         'assign' => 'manage',
+        'confirm_capacity' => 'manage',
     ],
 ];

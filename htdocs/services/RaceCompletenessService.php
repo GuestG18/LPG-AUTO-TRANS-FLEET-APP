@@ -123,8 +123,6 @@ final class RaceCompletenessService
             $compressorLocationDefinitions = [
                 ['loc_plecare', 'Loc plecare', 'departure_location'],
                 ['loc_aspirare', 'Loc aspirare', 'suction_location'],
-                ['loc_livrare', 'Loc livrare', 'delivery_location'],
-                ['loc_livrare_cursa', 'Loc închidere cursă', 'closing_location'],
             ];
             foreach ($compressorLocationDefinitions as [$locationField, $locationLabel, $locationFocus]) {
                 if ($isMissing($race[$locationField] ?? null)) {

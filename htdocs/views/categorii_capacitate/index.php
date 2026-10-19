@@ -702,10 +702,29 @@ $categoryPreviewLimit = 6;
             </div>
         </div>
 
+        <?php if ($canManage && $verificationRows !== []): ?>
+            <form method="post" action="<?= e(build_query_url(['page' => 'categorii_capacitate', 'action' => 'confirm_capacity'])) ?>" id="cmc_verify_confirm_form" data-verify-confirm-form>
+                <?= csrf_field() ?>
+            </form>
+            <div class="cmc-bulkbar">
+                <span class="cmc-bulk-count"><strong data-verify-selected-count>0</strong> selectate <span class="cmc-muted cmc-small" data-verify-selected-hint></span></span>
+                <button type="submit" form="cmc_verify_confirm_form" class="btn cmc-btn cmc-btn-soft" data-verify-confirm disabled title="Marchează capacitatea stocată ca verificată pentru vehiculele bifate">
+                    <i class="bi bi-check2-square" aria-hidden="true"></i> Confirmă capacitatea pe selectate
+                </button>
+                <button type="button" class="cmc-link-btn" data-verify-clear-selection>Deselectează</button>
+                <span class="cmc-muted cmc-small ms-auto">Vehiculele fără capacitate se completează în fișă.</span>
+            </div>
+        <?php endif; ?>
+
         <div class="cmc-table-wrap cmc-table-wrap-verify">
             <table class="cmc-table cmc-table-verify">
                 <thead>
                     <tr>
+                        <?php if ($canManage): ?>
+                            <th class="cmc-col-check">
+                                <input class="form-check-input" type="checkbox" data-verify-select-all aria-label="Selectează toate vehiculele afișate">
+                            </th>
+                        <?php endif; ?>
                         <th>Vehicul</th>
                         <th>Tip</th>
                         <th>Categorie</th>
@@ -717,8 +736,9 @@ $categoryPreviewLimit = 6;
                     </tr>
                 </thead>
                 <tbody>
+                <?php $verifyColspan = $canManage ? 9 : 8; ?>
                 <?php if ($verificationRows === []): ?>
-                    <tr><td colspan="8" class="cmc-muted text-center py-4">Toate capacitățile reale sunt verificate.</td></tr>
+                    <tr><td colspan="<?= $verifyColspan ?>" class="cmc-muted text-center py-4">Toate capacitățile reale sunt verificate.</td></tr>
                 <?php endif; ?>
                 <?php foreach ($verificationRows as $row): ?>
                     <?php
@@ -746,6 +766,15 @@ $categoryPreviewLimit = 6;
                             (string) $row['curse'],
                             $badgeLabel,
                         ], JSON_UNESCAPED_UNICODE)) ?>">
+                        <?php if ($canManage): ?>
+                            <td class="cmc-col-check">
+                                <?php if ($row['prioritate'] === 'lipsa'): ?>
+                                    <input class="form-check-input" type="checkbox" disabled title="Fără capacitate: completează valoarea în fișa vehiculului" aria-label="Fără capacitate, nu se poate confirma">
+                                <?php else: ?>
+                                    <input class="form-check-input" type="checkbox" name="vehicle_ids[]" value="<?= e((string) $row['id']) ?>" form="cmc_verify_confirm_form" data-verify-check aria-label="Selectează <?= e((string) $row['nr_inmatriculare']) ?>">
+                                <?php endif; ?>
+                            </td>
+                        <?php endif; ?>
                         <td>
                             <span class="cmc-plate"><?= e((string) $row['nr_inmatriculare']) ?></span>
                             <span class="cmc-sub"><?= e($brand !== '' ? $brand : '-') ?><?= $coupledTractor !== null ? ' · cuplată cu ' . e($coupledTractor) : '' ?><?= (string) $row['status'] !== 'activ' ? ' · inactiv' : '' ?></span>
@@ -763,7 +792,7 @@ $categoryPreviewLimit = 6;
                         </td>
                     </tr>
                 <?php endforeach; ?>
-                <tr data-verify-empty hidden><td colspan="8" class="cmc-muted text-center py-4">Niciun vehicul nu corespunde filtrelor.</td></tr>
+                <tr data-verify-empty hidden><td colspan="<?= $verifyColspan ?>" class="cmc-muted text-center py-4">Niciun vehicul nu corespunde filtrelor.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -772,7 +801,7 @@ $categoryPreviewLimit = 6;
             <?= e((string) $verificationContradicted) ?> contrazise de curse,
             <?= e((string) ($verificationSummary['fara_capacitate'] ?? 0)) ?> fără capacitate,
             <?= e((string) ($verificationSummary['doar_de_confirmat'] ?? 0)) ?> așteaptă doar confirmarea.
-            Corectarea se face în fișa vehiculului; categoria nu se schimbă.
+            Corectarea se face în fișa vehiculului; confirmarea în masă marchează capacitatea stocată ca verificată. Categoria nu se schimbă.
         </div>
     </section>
 

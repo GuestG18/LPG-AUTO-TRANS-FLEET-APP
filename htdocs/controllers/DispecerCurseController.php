@@ -1316,6 +1316,21 @@ class DispecerCurseController
         $formData = $this->defaultRaceFormData();
         if ($formFlash['old'] !== []) {
             $formData = array_merge($formData, $formFlash['old']);
+        } elseif ((string) ($_GET['prefill'] ?? '') === 'race') {
+            // Din Km pierduti: km rulati fara cursa -> cursa noua cu vehiculul si intervalul precompletate.
+            $prefillVehicleId = $this->positiveIntFromInput($_GET['vehicle_id'] ?? null);
+            if ($prefillVehicleId !== null) {
+                $formData['vehicle_id'] = (string) $prefillVehicleId;
+            }
+            foreach (['data_inceput', 'data_sfarsit'] as $key) {
+                $value = $this->normalizeRaceDate((string) ($_GET[$key] ?? ''));
+                if ($value !== null) {
+                    $formData[$key] = $value;
+                }
+            }
+            foreach (['ora_inceput', 'ora_sfarsit'] as $key) {
+                $formData[$key] = substr((string) $this->normalizeTime((string) ($_GET[$key] ?? '')), 0, 5);
+            }
         }
         $formData['tip_marfa'] = $this->normalizeGoodsTypeSelection($formData['tip_marfa'] ?? []);
         $incompleteConfirmItems = (array) ($_SESSION['_dispecer_incomplete_confirm_race_create'] ?? []);
@@ -7841,12 +7856,7 @@ class DispecerCurseController
             if ($suctionLocationRaw === '') {
                 $errors['loc_aspirare'] = 'Completeaza Loc aspirare.';
             }
-            if ($deliveryLocationRaw === '') {
-                $errors['loc_livrare'] = 'Completeaza Loc livrare.';
-            }
-            if ($routeDeliveryLocationRaw === '') {
-                $errors['loc_livrare_cursa'] = 'Completeaza Loc inchidere cursa.';
-            }
+            // Loc livrare / Loc inchidere cursa sunt optionale: cursa se poate inchide fara ele.
         }
 
         foreach ([

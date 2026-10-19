@@ -320,6 +320,9 @@ class KmPierdutiController
                 'to' => date('Y-m-d H:i', $gap['to_ts']),
                 'after' => $windowLabel($gap['after'] !== null ? $windows[$gap['after']] : null),
                 'before' => $windowLabel($gap['before'] !== null ? $windows[$gap['before']] : null),
+                // Pentru alegerea "Km service / Adauga cursa" de pe #cursa: golul de dupa / dinaintea ei.
+                'after_trip_id' => $gap['after'] !== null && $windows[$gap['after']]['kind'] === 'trip' ? (int) $windows[$gap['after']]['id'] : null,
+                'before_trip_id' => $gap['before'] !== null && $windows[$gap['before']]['kind'] === 'trip' ? (int) $windows[$gap['before']]['id'] : null,
                 'km' => round($gap['km'], 1),
                 'segments' => $gap['segments'],
             ];

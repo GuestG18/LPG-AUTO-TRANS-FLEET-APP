@@ -430,6 +430,21 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
         field(name).addEventListener('change', scheduleGpsKm);
     });
 
+    // Din Km pierduti (prefill=service): vehiculul si perioada rulata fara cursa vin in URL;
+    // formularul se deschide precompletat, iar km se calculeaza din GPS ca la o modificare manuala.
+    var query = new URLSearchParams(window.location.search);
+    if (query.get('prefill') === 'service' && query.get('vehicle_id')) {
+        var prefill = { id: '', vehicle_id: query.get('vehicle_id'), driver_id: driverMap[query.get('vehicle_id')] ? String(driverMap[query.get('vehicle_id')]) : '', km: '' };
+        ['data_plecare', 'ora_plecare', 'data_intoarcere', 'ora_intoarcere'].forEach(function (name) {
+            if (/^[\d:-]+$/.test(query.get(name) || '')) { prefill[name] = query.get(name); }
+        });
+        fill(prefill);
+        if (field('vehicle_id').value === prefill.vehicle_id) {
+            openForm();
+            fetchGpsKm();
+        }
+    }
+
     panel.querySelectorAll('[data-service-km-delete-form]').forEach(function (deleteForm) {
         var armed = false;
         // confirm() e blocat in browserul integrat: al doilea click confirma stergerea.

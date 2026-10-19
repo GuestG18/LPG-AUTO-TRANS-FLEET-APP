@@ -5730,6 +5730,10 @@
             // Doar pentru Distributie: "Data incarcare" se afiseaza inaintea "Data si ora inceput";
             // pentru celelalte tipuri ramane ordinea implicita (start inaintea datei de incarcare).
             var loadingDateWrapEl = form.querySelector('[data-role="field-data-incarcare"]');
+            var loadingDateLabelEl = form.querySelector('[data-role="loading-date-label"]');
+            if (loadingDateLabelEl) {
+                loadingDateLabelEl.textContent = isCompressor ? 'Data prelevare' : 'Data incarcare';
+            }
             var startDateTimeWrapEl = form.querySelector('[data-role="field-start-datetime"]');
             if (loadingDateWrapEl instanceof HTMLElement && startDateTimeWrapEl instanceof HTMLElement && loadingDateWrapEl.parentNode === startDateTimeWrapEl.parentNode) {
                 if (transportType === 'distributie') {
@@ -5771,7 +5775,7 @@
                 suctionHoursField.removeAttribute('required');
             }
 
-            [departureLocationField, suctionLocationField, deliveryLocationField, raceDeliveryLocationField].forEach(function (field) {
+            [departureLocationField, suctionLocationField].forEach(function (field) {
                 if (!(field instanceof HTMLInputElement)) {
                     return;
                 }

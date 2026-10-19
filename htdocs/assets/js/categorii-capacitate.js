@@ -347,7 +347,73 @@
             if (verifyCount) {
                 verifyCount.textContent = String(visible);
             }
+            // Nu confirmam vehicule ascunse de filtre: le debifam.
+            verifyRows.forEach(function (row) {
+                var check = row.querySelector('[data-verify-check]');
+                if (check && row.hidden) {
+                    check.checked = false;
+                }
+            });
+            refreshVerifySelection();
         };
+
+        // Selectia pentru confirmarea in masa (doar cu dreptul manage).
+        var verifySelectAll = verify.querySelector('[data-verify-select-all]');
+        var verifySelectedCount = verify.querySelector('[data-verify-selected-count]');
+        var verifySelectedHint = verify.querySelector('[data-verify-selected-hint]');
+        var verifyConfirm = verify.querySelector('[data-verify-confirm]');
+        var verifyClear = verify.querySelector('[data-verify-clear-selection]');
+
+        var visibleVerifyChecks = function () {
+            return verifyRows.filter(function (row) { return !row.hidden; })
+                .map(function (row) { return row.querySelector('[data-verify-check]'); })
+                .filter(Boolean);
+        };
+
+        var refreshVerifySelection = function () {
+            var checks = visibleVerifyChecks();
+            var selected = checks.filter(function (check) { return check.checked; });
+            var contradicted = selected.filter(function (check) {
+                return check.closest('[data-verify-row]').getAttribute('data-priority') === 'contrazisa';
+            }).length;
+            if (verifySelectedCount) {
+                verifySelectedCount.textContent = String(selected.length);
+            }
+            if (verifySelectedHint) {
+                verifySelectedHint.textContent = contradicted > 0
+                    ? '(dintre care ' + contradicted + ' contrazise de curse)'
+                    : '';
+                verifySelectedHint.classList.toggle('cmc-text-danger', contradicted > 0);
+            }
+            if (verifyConfirm) {
+                verifyConfirm.disabled = selected.length === 0;
+            }
+            if (verifySelectAll) {
+                verifySelectAll.disabled = checks.length === 0;
+                verifySelectAll.checked = checks.length > 0 && selected.length === checks.length;
+                verifySelectAll.indeterminate = selected.length > 0 && selected.length < checks.length;
+            }
+        };
+
+        if (verifySelectAll) {
+            verifySelectAll.addEventListener('change', function () {
+                var on = verifySelectAll.checked;
+                visibleVerifyChecks().forEach(function (check) { check.checked = on; });
+                refreshVerifySelection();
+            });
+        }
+        if (verifyClear) {
+            verifyClear.addEventListener('click', function () {
+                all('[data-verify-check]', verify).forEach(function (check) { check.checked = false; });
+                refreshVerifySelection();
+            });
+        }
+        verify.addEventListener('change', function (event) {
+            if (event.target.matches('[data-verify-check]')) {
+                refreshVerifySelection();
+            }
+        });
+        refreshVerifySelection();
 
         Object.keys(verifyFilters).forEach(function (name) {
             verifyFilters[name].addEventListener(name === 'search' ? 'input' : 'change', applyVerifyFilters);

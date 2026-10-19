@@ -542,6 +542,95 @@ class VehicleCapacityCategoryModel extends BaseModel
         ];
     }
 
+    /**
+     * Confirmarea in masa a capacitatii reale din raportul de verificare.
+     * Marcheaza doar valoarea existenta ca verificata (ca bifa din fisa
+     * vehiculului); capacitatea si categoria nu se schimba. Vehiculele fara
+     * capacitate sunt sarite: acolo trebuie completata valoarea in fisa.
+     *
+     * @param list<int> $vehicleIds
+     * @return array{0: bool, 1: string, 2: int}
+     */
+    public function confirmCapacities(array $vehicleIds, ?int $userId): array
+    {
+        $this->ensureSchema();
+
+        $vehicleIds = array_values(array_unique(array_filter(array_map('intval', $vehicleIds), static fn (int $id): bool => $id > 0)));
+        if ($vehicleIds === []) {
+            return [false, 'Nu ai selectat niciun vehicul.', 0];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($vehicleIds), '?'));
+        $stmt = $this->db->prepare("
+            SELECT id, capacitate_transport, capacitate_transport_confirmata, categorie_capacitate_id
+            FROM vehicule
+            WHERE id IN ({$placeholders})
+        ");
+        $stmt->execute($vehicleIds);
+        $vehicles = $stmt->fetchAll();
+
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        $confirmed = 0;
+        $skippedMissing = 0;
+        try {
+            $update = $this->db->prepare("UPDATE vehicule SET capacitate_transport_confirmata = 1 WHERE id = :id AND capacitate_transport_confirmata = 0");
+
+            foreach ($vehicles as $vehicle) {
+                if ((int) $vehicle['capacitate_transport_confirmata'] === 1) {
+                    continue;
+                }
+                $capacity = $vehicle['capacitate_transport'] === null ? null : (float) $vehicle['capacitate_transport'];
+                if ($capacity === null || $capacity <= 0) {
+                    $skippedMissing++;
+                    continue;
+                }
+
+                $update->bindValue(':id', (int) $vehicle['id'], PDO::PARAM_INT);
+                $update->execute();
+                if ($update->rowCount() === 0) {
+                    continue;
+                }
+
+                $categoryId = $vehicle['categorie_capacitate_id'] === null ? null : (int) $vehicle['categorie_capacitate_id'];
+                $this->logChange(
+                    (int) $vehicle['id'],
+                    $capacity,
+                    $capacity,
+                    $categoryId,
+                    $categoryId,
+                    false,
+                    true,
+                    'Confirmare in masa din raportul Capacitati reale de verificat.',
+                    $userId
+                );
+                $confirmed++;
+            }
+
+            if ($ownTransaction) {
+                $this->db->commit();
+            }
+        } catch (Throwable $exception) {
+            if ($ownTransaction) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+
+        $message = $confirmed === 0
+            ? 'Nicio capacitate nu a fost confirmata.'
+            : 'Capacitatea reala a fost confirmata pentru ' . $confirmed . ' ' . ($confirmed === 1 ? 'vehicul.' : 'vehicule.');
+        if ($skippedMissing > 0) {
+            $message .= ' ' . $skippedMissing . ' ' . ($skippedMissing === 1 ? 'vehicul sarit' : 'vehicule sarite')
+                . ' (fara capacitate - completeaza in fisa vehiculului).';
+        }
+
+        return [$confirmed > 0, $message, $confirmed];
+    }
+
     /** @return list<array<string, mixed>> */
     private function vehiclesInCategory(int $categoryId): array
     {

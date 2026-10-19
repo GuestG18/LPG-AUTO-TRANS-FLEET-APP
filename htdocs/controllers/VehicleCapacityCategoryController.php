@@ -44,6 +44,10 @@ class VehicleCapacityCategoryController
                 $this->requireManage();
                 $this->assignAction();
                 return;
+            case 'confirm_capacity':
+                $this->requireManage();
+                $this->confirmCapacityAction();
+                return;
             case 'index':
             case 'list':
             default:
@@ -152,6 +156,38 @@ class VehicleCapacityCategoryController
         } catch (Throwable $exception) {
             error_log('[VehicleCapacityCategoryController][assign] ' . $exception->getMessage());
             flash_set('danger', 'Categoriile nu au putut fi salvate.');
+            redirect($redirectUrl);
+            return;
+        }
+
+        flash_set($ok ? 'success' : 'warning', $message);
+        redirect($redirectUrl);
+    }
+
+    /**
+     * Confirmarea in masa din raportul "Capacitati reale de verificat":
+     * vehicle_ids[] = vehiculele bifate. Doar marcheaza capacitatea ca verificata.
+     */
+    private function confirmCapacityAction(): void
+    {
+        $this->requirePostWithCsrf();
+
+        $redirectUrl = build_query_url(['page' => self::PAGE]) . '#verificare-capacitati';
+        $raw = $_POST['vehicle_ids'] ?? [];
+        $vehicleIds = [];
+        if (is_array($raw)) {
+            foreach ($raw as $vehicleId) {
+                if (!is_array($vehicleId) && (int) $vehicleId > 0) {
+                    $vehicleIds[] = (int) $vehicleId;
+                }
+            }
+        }
+
+        try {
+            [$ok, $message] = $this->model->confirmCapacities($vehicleIds, $this->currentUserId());
+        } catch (Throwable $exception) {
+            error_log('[VehicleCapacityCategoryController][confirm_capacity] ' . $exception->getMessage());
+            flash_set('danger', 'Capacitatile nu au putut fi confirmate.');
             redirect($redirectUrl);
             return;
         }

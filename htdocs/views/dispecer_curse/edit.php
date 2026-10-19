@@ -784,7 +784,7 @@ if ($phaseCompact) {
                     <?php if (isset($raceFormErrors['ora_inceput'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['ora_inceput']) ?></div><?php endif; ?>
                 </div>
                 <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-data-incarcare">
-                    <label class="form-label" for="edit_race_data_incarcare">Data incarcare</label>
+                    <label class="form-label" for="edit_race_data_incarcare" data-role="loading-date-label"><?= $isCompressorSelected ? 'Data prelevare' : 'Data incarcare' ?></label>
                     <?php
                         $loadingDateDisplayValue = $formatRaceDateInput(trim((string) ($raceFormData['data_incarcare'] ?? '')));
                     ?>
@@ -890,13 +890,13 @@ if ($phaseCompact) {
                 </div>
 
                 <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-livrare">
-                    <label class="form-label" for="edit_race_loc_livrare">Loc livrare <span class="text-danger">*</span></label>
+                    <label class="form-label" for="edit_race_loc_livrare">Loc livrare</label>
                     <input type="text" class="form-control <?= isset($raceFormErrors['loc_livrare']) ? 'is-invalid' : '' ?>" id="edit_race_loc_livrare" name="loc_livrare" value="<?= e((string) ($raceFormData['loc_livrare'] ?? '')) ?>" data-role="loc-livrare">
                     <?php if (isset($raceFormErrors['loc_livrare'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['loc_livrare']) ?></div><?php endif; ?>
                 </div>
 
                 <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-livrare-cursa">
-                    <label class="form-label" for="edit_race_loc_livrare_cursa">Loc inchidere cursa <span class="text-danger">*</span></label>
+                    <label class="form-label" for="edit_race_loc_livrare_cursa">Loc inchidere cursa</label>
                     <input type="text" class="form-control <?= isset($raceFormErrors['loc_livrare_cursa']) ? 'is-invalid' : '' ?>" id="edit_race_loc_livrare_cursa" name="loc_livrare_cursa" value="<?= e((string) ($raceFormData['loc_livrare_cursa'] ?? '')) ?>" data-role="loc-livrare-cursa">
                     <?php if (isset($raceFormErrors['loc_livrare_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $raceFormErrors['loc_livrare_cursa']) ?></div><?php endif; ?>
                 </div>

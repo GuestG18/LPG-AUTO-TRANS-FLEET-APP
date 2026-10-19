@@ -198,7 +198,7 @@ if (!isset($formatRaceDateForDisplay) || !is_callable($formatRaceDateForDisplay)
                         </div>
                         <?php if (!$fieldIsPhase): ?>
                         <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-data-incarcare">
-                            <label class="form-label" for="<?= e($fieldPrefix) ?>_data_incarcare">Data incarcare</label>
+                            <label class="form-label" for="<?= e($fieldPrefix) ?>_data_incarcare" data-role="loading-date-label"><?= $isCompressorSelected ? 'Data prelevare' : 'Data incarcare' ?></label>
                             <?php $loadingDateDisplayValue = $formatRaceDateForDisplay((string) ($formData['data_incarcare'] ?? '')); ?>
                             <div class="dispatcher-datetime-field" data-role="loading-date-field">
                                 <div class="input-group dispatcher-datetime-input-group">
@@ -294,13 +294,13 @@ if (!isset($formatRaceDateForDisplay) || !is_callable($formatRaceDateForDisplay)
                         </div>
 
                         <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-livrare">
-                            <label class="form-label" for="<?= e($fieldPrefix) ?>_loc_livrare">Loc livrare <span class="text-danger">*</span></label>
+                            <label class="form-label" for="<?= e($fieldPrefix) ?>_loc_livrare">Loc livrare</label>
                             <input type="text" class="form-control <?= isset($formErrors['loc_livrare']) ? 'is-invalid' : '' ?>" id="<?= e($fieldPrefix) ?>_loc_livrare" name="loc_livrare" value="<?= e((string) ($formData['loc_livrare'] ?? '')) ?>" data-role="loc-livrare">
                             <?php if (isset($formErrors['loc_livrare'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['loc_livrare']) ?></div><?php endif; ?>
                         </div>
 
                         <div class="col-12 col-md-6 <?= $isCompressorSelected ? '' : 'd-none' ?> dispatcher-compressor-grid-field" data-role="field-loc-livrare-cursa">
-                            <label class="form-label" for="<?= e($fieldPrefix) ?>_loc_livrare_cursa">Loc inchidere cursa <span class="text-danger">*</span></label>
+                            <label class="form-label" for="<?= e($fieldPrefix) ?>_loc_livrare_cursa">Loc inchidere cursa</label>
                             <input type="text" class="form-control <?= isset($formErrors['loc_livrare_cursa']) ? 'is-invalid' : '' ?>" id="<?= e($fieldPrefix) ?>_loc_livrare_cursa" name="loc_livrare_cursa" value="<?= e((string) ($formData['loc_livrare_cursa'] ?? '')) ?>" data-role="loc-livrare-cursa">
                             <?php if (isset($formErrors['loc_livrare_cursa'])): ?><div class="invalid-feedback d-block"><?= e((string) $formErrors['loc_livrare_cursa']) ?></div><?php endif; ?>
                         </div>
