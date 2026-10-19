@@ -9,7 +9,6 @@ $allFillups = $fuelData['all_fillups'] ?? [];
 $unassociatedFillups = $fuelData['unassociated_fillups'] ?? [];
 $tripConsumption = $fuelData['trip_consumption'] ?? [];
 $transportConsumption = $fuelData['transport_consumption'] ?? [];
-$tripOptions = $fuelData['trip_options'] ?? [];
 $syncLogs = $fuelData['sync_logs'] ?? [];
 $lastSync = $fuelData['last_sync'] ?? null;
 $vehicleOptions = $fuelData['vehicle_options'] ?? [];
@@ -241,6 +240,18 @@ $changeBadge = static function (?float $value): string {
 };
 $associationLabel = static function (array $row): string {
     $tripId = (int) ($row['trip_id'] ?? 0);
+    $serviceKmId = (int) ($row['service_km_id'] ?? 0);
+    if ($serviceKmId > 0) {
+        // Alimentare facuta pe drumul la / de la service (Dispecer curse -> Km service).
+        $matchType = (string) ($row['match_type'] ?? 'automatic');
+        $period = format_date_ro((string) ($row['service_km_plecare'] ?? ''))
+            . ' – ' . (!empty($row['service_km_intoarcere']) ? format_date_ro((string) $row['service_km_intoarcere']) : 'încă în service');
+        $title = 'Km service ' . $period . (!empty($row['service_km_nume']) ? ' · ' . (string) $row['service_km_nume'] : '')
+            . ($matchType === 'manual' ? ' · asociere manuală' : ' · asociere automată');
+
+        return '<span class="fuel-pill ' . ($matchType === 'manual' ? 'fuel-pill-manual' : 'fuel-pill-auto') . '" title="' . e($title) . '">'
+            . '<i class="bi bi-tools" aria-hidden="true"></i> Km service #' . e((string) $serviceKmId) . '</span>';
+    }
     if ($tripId <= 0 && !empty($row['is_unregistered_vehicle'])) {
         return '<span class="fuel-pill fuel-pill-partial" title="Card fără număr sau număr care nu există în Vehicule: nu are curse, alimentarea nu se asociază">Neînregistrat</span>';
     }
@@ -272,7 +283,9 @@ $renderFillupRows = static function (array $rows, bool $compact = false, bool $w
         if (($row['is_full_manual'] ?? null) !== null) {
             $fullFilter .= '|Decizie manuală';
         }
-        if ($tripId > 0) {
+        if ((int) ($row['service_km_id'] ?? 0) > 0) {
+            $associationFilter = (((string) ($row['match_type'] ?? 'automatic')) === 'manual' ? 'Asociată manual' : 'Asociată automat') . '|Km service';
+        } elseif ($tripId > 0) {
             $associationFilter = (((string) ($row['match_type'] ?? 'automatic')) === 'manual' ? 'Asociată manual' : 'Asociată automat') . '|Cursa #' . $tripId;
         } else {
             $associationFilter = !empty($row['is_unregistered_vehicle']) ? 'Neînregistrat' : (!empty($row['is_light_vehicle']) ? 'Vehicul ușor' : 'Alimentare neasociată');
@@ -345,8 +358,9 @@ $renderFillupRows = static function (array $rows, bool $compact = false, bool $w
                 $fillupLabel = $formatDateTime((string) ($row['fillup_datetime'] ?? '')) . ' · ' . (string) ($row['vehicle_registration'] ?? '-') . ' · ' . $formatLiters((float) ($row['quantity_liters'] ?? 0));
                 // In lista compacta, un vehicul usor fara cursa nu are nicio actiune.
                 $hasActions = !$compact || $tripId > 0 || empty($row['is_light_vehicle']) || $isManualRow;
+                $rowServiceKmId = (int) ($row['service_km_id'] ?? 0);
                 ?>
-                <?php $showDiagnosis = $withDiagnosis && $tripId <= 0 && empty($row['is_light_vehicle']); ?>
+                <?php $showDiagnosis = $withDiagnosis && $tripId <= 0 && $rowServiceKmId <= 0 && empty($row['is_light_vehicle']); ?>
                 <?php if ($showDiagnosis): ?>
                 <div class="fuel-row-actions">
                     <button type="button" class="btn btn-sm btn-outline-secondary fuel-diagnosis-btn" data-fuel-diagnosis-open
@@ -374,7 +388,7 @@ $renderFillupRows = static function (array $rows, bool $compact = false, bool $w
                                 <button type="button" class="dropdown-item" data-fuel-link-open
                                         data-fillup-id="<?= e($fillupIdValue) ?>"
                                         data-fillup-label="<?= e($formatDateTime((string) ($row['fillup_datetime'] ?? '')) . ' - ' . (string) ($row['vehicle_registration'] ?? '-')) ?>">
-                                    <i class="bi bi-link-45deg" aria-hidden="true"></i> Asociază cu o cursă
+                                    <i class="bi bi-link-45deg" aria-hidden="true"></i> <?= $rowServiceKmId > 0 ? 'Schimbă asocierea (Km service #' . e((string) $rowServiceKmId) . ')' : 'Asociază cu o cursă' ?>
                                 </button>
                             </li>
                         <?php endif; ?>
@@ -2479,18 +2493,11 @@ $donutStyle = static function (array $items): string {
             <div class="modal-body">
                 <p class="fuel-modal-subtitle" id="fuelLinkFillupLabel">Alimentare neasociată</p>
                 <label class="form-label" for="fuelLinkTripId">Cursă</label>
-                <select class="form-select" id="fuelLinkTripId" name="trip_id" required>
+                <select class="form-select" id="fuelLinkTripId" name="trip_id" required
+                        data-endpoint="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'link_options'])) ?>">
                     <option value="">Selectează cursa</option>
-                    <?php foreach ($tripOptions as $trip): ?>
-                        <?php
-                        $tripId = (int) ($trip['id'] ?? 0);
-                        $tripLabel = '#' . $tripId . ' - ' . (string) ($trip['nr_inmatriculare'] ?? '-')
-                            . ' - ' . $transportLabel((string) ($trip['tip_transport'] ?? ''))
-                            . ' - ' . format_date_ro((string) ($trip['data_inceput'] ?? ''));
-                        ?>
-                        <option value="<?= e((string) $tripId) ?>"><?= e($tripLabel) ?></option>
-                    <?php endforeach; ?>
                 </select>
+                <div class="form-text" id="fuelLinkTripHint">Doar cursele vehiculului alimentării, ±10 zile; cele mai apropiate de alimentare sunt primele.</div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
@@ -3103,10 +3110,67 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     var modal = new bootstrap.Modal(modalElement);
+    var tripSelect = document.getElementById('fuelLinkTripId');
+    var linkRequest = 0;
+    var setTripPlaceholder = function (text) {
+        tripSelect.innerHTML = '';
+        var option = document.createElement('option');
+        option.value = '';
+        option.textContent = text;
+        tripSelect.appendChild(option);
+    };
+    // Doar cursele vehiculului alimentarii, aduse la deschiderea modalului.
+    var loadLinkOptions = function (fillupId) {
+        var requestId = ++linkRequest;
+        setTripPlaceholder('Se încarcă cursele…');
+        tripSelect.disabled = true;
+        var url = tripSelect.getAttribute('data-endpoint') + '&fillup_id=' + encodeURIComponent(fillupId);
+        fetch(url, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+            .then(function (response) { return response.json(); })
+            .then(function (payload) {
+                if (requestId !== linkRequest) {
+                    return;
+                }
+                if (!payload || !payload.ok) {
+                    setTripPlaceholder((payload && payload.error) || 'Cursele nu au putut fi încărcate.');
+                    return;
+                }
+                var data = payload.data || {};
+                var trips = data.trips || [];
+                var serviceKm = data.service_km || [];
+                setTripPlaceholder(trips.length || serviceKm.length
+                    ? 'Selectează cursa'
+                    : 'Nicio cursă pentru ' + (data.vehicle_registration || 'acest vehicul') + ' în ±10 zile');
+                trips.forEach(function (trip) {
+                    var option = document.createElement('option');
+                    option.value = String(trip.id);
+                    option.textContent = trip.label + (trip.contains ? ' ✓ în intervalul cursei' : '');
+                    tripSelect.appendChild(option);
+                });
+                if (serviceKm.length) {
+                    var group = document.createElement('optgroup');
+                    group.label = 'Km service (drum la / de la service)';
+                    serviceKm.forEach(function (entry) {
+                        var option = document.createElement('option');
+                        option.value = 'service:' + entry.id;
+                        option.textContent = entry.label;
+                        group.appendChild(option);
+                    });
+                    tripSelect.appendChild(group);
+                }
+                tripSelect.disabled = false;
+            })
+            .catch(function () {
+                if (requestId === linkRequest) {
+                    setTripPlaceholder('Cursele nu au putut fi încărcate.');
+                }
+            });
+    };
     document.querySelectorAll('[data-fuel-link-open]').forEach(function (button) {
         button.addEventListener('click', function () {
             fillupIdInput.value = button.getAttribute('data-fillup-id') || '';
             fillupLabel.textContent = button.getAttribute('data-fillup-label') || 'Alimentare neasociată';
+            loadLinkOptions(fillupIdInput.value);
             modal.show();
         });
     });

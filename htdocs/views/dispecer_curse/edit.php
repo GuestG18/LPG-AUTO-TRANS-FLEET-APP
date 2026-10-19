@@ -800,7 +800,7 @@ if ($phaseCompact) {
                 </div>
 
                 <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-end-datetime"<?= $phaseKeep ?>>
-                    <label class="form-label" for="edit_race_end_datetime">Data si ora sfarsit <span class="text-danger">*</span></label>
+                    <label class="form-label" for="edit_race_end_datetime">Data si ora sfarsit</label>
                     <?php
                         $endDateDisplayValue = $formatRaceDateInput($raceFormData['data_sfarsit'] ?? ($raceFormData['data_cursa'] ?? ''));
                         $endDateTimeDisplayValue = trim($endDateDisplayValue . ($formEndTimeValue !== '' ? ' ' . $formEndTimeValue : ''));
@@ -832,7 +832,6 @@ if ($phaseCompact) {
                             id="edit_race_data_sfarsit"
                             name="data_sfarsit"
                             value="<?= e($endDateDisplayValue) ?>"
-                            required
                         >
                         <input
                             type="hidden"

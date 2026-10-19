@@ -167,6 +167,7 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
                         <th scope="col">Întoarcere</th>
                         <th scope="col" class="text-end" title="Zile în care vehiculul a fost inactiv (inclusiv ziua plecării și a întoarcerii)">Zile inactiv</th>
                         <th scope="col" class="text-end">Km service</th>
+                        <th scope="col" class="text-end" title="Alimentări CardOil asociate în Carburanți cu această perioadă (aceeași regulă ca la curse: între plecare și întoarcere, ±12 h)">Alimentări</th>
                         <th scope="col">Service / motiv</th>
                         <?php if ($serviceKmCanManage): ?><th scope="col" class="text-end">Acțiuni</th><?php endif; ?>
                     </tr>
@@ -207,6 +208,16 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
                                 <?php if (!empty($entry['in_service'])): ?><span class="text-muted small">(până azi)</span><?php endif; ?>
                             </td>
                             <td class="text-end text-nowrap"><?= e(format_number_ro((float) $entry['km'], 0)) ?> km</td>
+                            <td class="text-end text-nowrap">
+                                <?php if (!empty($entry['alimentari'])): ?>
+                                    <a href="<?= e(build_query_url(['page' => 'carburanti', 'date_from' => date('Y-m-d', (int) strtotime($entry['data_plecare'] . ' -1 day')), 'date_to' => date('Y-m-d', (int) strtotime(($entry['data_intoarcere'] ?? date('Y-m-d')) . ' +1 day')), 'vehicle' => (string) $entry['nr_inmatriculare']])) ?>" title="<?= e(format_number_ro((float) $entry['alimentari']['valoare'], 2)) ?> lei · deschide în Carburanți">
+                                        <?= e(format_number_ro((float) $entry['alimentari']['litri'], 0)) ?> L
+                                    </a>
+                                    <div class="text-muted small"><?= (int) $entry['alimentari']['nr'] ?> alim.</div>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
                             <td>
                                 <?= e((string) ($entry['service_nume'] ?? '')) ?>
                                 <?php if (!empty($entry['motiv'])): ?>

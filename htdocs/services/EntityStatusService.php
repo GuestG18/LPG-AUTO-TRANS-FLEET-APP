@@ -151,11 +151,16 @@ class EntityStatusService
         $normalizedType = $this->normalizeVehicleTypeForDocumentConfig($vehicleType);
 
         try {
+            // `obligatoriu` se configureaza din Documente vehicule > Documente obligatorii;
+            // fara coloana (migrare neaplicata) ramane regula veche: obligatoriu = are expirare.
+            $requiredColumn = $this->columnExists('configurare_costuri_documente_vehicule', 'obligatoriu')
+                ? 'obligatoriu'
+                : 'requires_expiry';
             $stmt = $this->db->prepare('
                 SELECT document_type
                 FROM configurare_costuri_documente_vehicule
                 WHERE vehicle_type = :vehicle_type
-                  AND requires_expiry = 1
+                  AND ' . $requiredColumn . ' = 1
                 ORDER BY document_type ASC
             ');
             $stmt->bindValue(':vehicle_type', $normalizedType, PDO::PARAM_STR);

@@ -6,7 +6,6 @@ class CentralizatorFacturareService
     private const TRANSPORT_TYPES = [
         'primar' => ['label' => 'Primar km', 'short' => 'Primar km', 'color' => '#2f7df4'],
         'primar_tona' => ['label' => 'Primar tone', 'short' => 'Primar tone', 'color' => '#10b981'],
-        'primar_distributie' => ['label' => 'P+D (Primar+Distribuție)', 'short' => 'P+D', 'color' => '#f97316'],
         'distributie' => ['label' => 'Distribuție', 'short' => 'Distribuție', 'color' => '#8b5cf6'],
         'compresor' => ['label' => 'Compresor', 'short' => 'Compresor', 'color' => '#06b6d4'],
     ];
@@ -15,20 +14,30 @@ class CentralizatorFacturareService
         '' => 'Toate',
         'primar' => 'Primar km',
         'primar_tona' => 'Primar tone',
-        'primar_distributie' => 'P+D',
         'distributie' => 'Distribuție',
         'compresor' => 'Compresor',
     ];
 
-    private const DISTRIBUTION_TYPES = ['distributie', 'primar_distributie'];
-    private const PRIMARY_ROUTE_TYPES = ['primar', 'primar_distributie'];
+    /*
+     * Cursele Primar+Distributie nu mai sunt un tip separat in Centralizator: fiecare se
+     * imparte in partea de km (la Primar km) si partea de tone (la Distributie), vezi
+     * splitPrimarDistributieRows(). In Dispecer curse cursa ramane P+D - aici e doar
+     * citirea raportului.
+     */
+    private const PD_SOURCE_TYPE = 'primar_distributie';
+    /** Tipurile in care ajung partile unei curse P+D. */
+    private const PD_TARGET_TYPES = ['primar', 'distributie'];
+    private const PD_ROUTE_SUFFIX = ' (din P+D)';
+
+    private const DISTRIBUTION_TYPES = ['distributie'];
+    private const PRIMARY_ROUTE_TYPES = ['primar'];
     /*
      * Tipurile al caror calcul se reconstituie cu motorul de tarifare, la data cursei.
      * Formula difera pe beneficiar chiar la acelasi tip (ex. Vixon: cost fix pe ruta
      * pe 4 puncte in loc de km x pret/km), iar cursa pastreaza doar totalul - deci
      * toate tipurile trec prin motor, nu doar cele cu mai multe componente.
      */
-    private const COMPONENT_BILLING_TYPES = ['primar', 'primar_tona', 'distributie', 'primar_distributie', 'compresor'];
+    private const COMPONENT_BILLING_TYPES = ['primar', 'primar_tona', 'distributie', 'compresor'];
     private const PER_PAGE_OPTIONS = [10, 25, 50];
     private const ROAD_TAX_LABELS = [
         'taxa_acces' => 'Taxă acces',
@@ -157,6 +166,13 @@ class CentralizatorFacturareService
         $activities = [];
         foreach ($this->inputList($input['tip_activitate'] ?? []) as $activity) {
             $activity = strtolower($activity);
+            /* Link vechi cu P+D: partile lui sunt acum la Primar km si Distributie. */
+            if ($activity === self::PD_SOURCE_TYPE) {
+                foreach (self::PD_TARGET_TYPES as $target) {
+                    $activities[$target] = $target;
+                }
+                continue;
+            }
             if (isset(self::TRANSPORT_TYPES[$activity])) {
                 $activities[$activity] = $activity;
             }
@@ -216,8 +232,12 @@ class CentralizatorFacturareService
 
     private function buildCore(array $filters, bool $withBreakdown = true): array
     {
-        $tripRows = $this->fetchTripRows($filters, 'trip');
-        $refRows = $this->fetchRefacturareRows($filters, 'ref');
+        $tripRows = $this->splitPrimarDistributieRows($this->fetchTripRows($filters, 'trip'));
+        $refRows = $this->assignPrimarDistributieRefacturari($this->fetchRefacturareRows($filters, 'ref'), $tripRows);
+        /* SQL-ul aduce si P+D cand e ales Primar km sau Distributie; raman doar partile tipurilor alese. */
+        $types = $this->activityTypes($filters);
+        $tripRows = array_values(array_filter($tripRows, static fn (array $row): bool => in_array((string) ($row['tip_transport'] ?? ''), $types, true)));
+        $refRows = array_values(array_filter($refRows, static fn (array $row): bool => in_array((string) ($row['tip_transport'] ?? ''), $types, true)));
 
         $activity = $this->buildActivitySummary($tripRows, $withBreakdown);
         if ($withBreakdown) {
@@ -231,7 +251,8 @@ class CentralizatorFacturareService
         return [
             'trip_rows' => $tripRows,
             'ref_rows' => $refRows,
-            'trip_count' => count($tripRows),
+            /* O cursa P+D are doua parti (km si tone), dar se numara o singura data. */
+            'trip_count' => count(array_filter($tripRows, fn (array $row): bool => $this->rowCountsAsTrip($row))),
             'total_value' => round(array_sum(array_map(fn (array $row): float => $this->rowValue($row), $tripRows)), 2),
             'activity' => $activity,
             'distribution' => $distribution,
@@ -269,10 +290,6 @@ class CentralizatorFacturareService
             $add('primary_tone', 'Total tone Primar', (float) ($activity['primar_tona']['tone'] ?? 0), 'tone', 'blue', 'bi-box-seam-fill', (float) ($previous['primar_tona']['tone'] ?? 0));
             $add('primary_tone_trips', 'Total curse Primar tone', (float) ($activity['primar_tona']['trips'] ?? 0), 'curse', 'green', 'bi-truck-front-fill', (float) ($previous['primar_tona']['trips'] ?? 0));
             $add('primary_tone_value', 'Valoare Primar tone', (float) ($activity['primar_tona']['value'] ?? 0), 'RON', 'purple', 'bi-cash-stack', (float) ($previous['primar_tona']['value'] ?? 0));
-        } elseif ($mode === 'primar_distributie') {
-            $add('pd_km', 'Km Primar P+D', (float) ($activity['primar_distributie']['km'] ?? 0), 'km', 'blue', 'bi-signpost-split-fill', (float) ($previous['primar_distributie']['km'] ?? 0));
-            $add('pd_tone', 'Tone Distribuție P+D', (float) ($activity['primar_distributie']['tone'] ?? 0), 'tone', 'purple', 'bi-fuel-pump-fill', (float) ($previous['primar_distributie']['tone'] ?? 0));
-            $add('pd_trips', 'Total curse P+D', (float) ($activity['primar_distributie']['trips'] ?? 0), 'curse', 'green', 'bi-truck-front-fill', (float) ($previous['primar_distributie']['trips'] ?? 0));
         } elseif ($mode === 'distributie') {
             /*
              * Km parcursi apar mereu; tonele doar cand distributia se factureaza pe tona
@@ -372,6 +389,19 @@ class CentralizatorFacturareService
             ];
         }
 
+        /*
+         * Clasificarea Pret unic / mic / mare a Distributiei, aceeasi ca in sectiunea
+         * Distributie (distributionPriceBuckets pe aceleasi curse): sumarul pe vehicul
+         * din fiecare grup de tarif imparte tonele dupa ea, cursa cu cursa.
+         */
+        $priceClasses = [];
+        if ($withBreakdown) {
+            $distributionRows = array_values(array_filter($rows, static fn (array $row): bool => (string) ($row['tip_transport'] ?? '') === 'distributie'));
+            $classWarnings = [];
+            $classTrips = $this->distributionBillingTrips($distributionRows);
+            $priceClasses = $this->distributionPriceBuckets($classTrips, $this->distributionBillingProfile($classTrips), $classWarnings);
+        }
+
         foreach ($rows as $row) {
             $type = (string) ($row['tip_transport'] ?? '');
             if (!isset($summary[$type])) {
@@ -423,13 +453,15 @@ class CentralizatorFacturareService
             }
             $byPrice = $summary[$type]['group_by'] === 'price';
             $priceGroup = $byPrice ? $this->billingPriceGroup($row, $breakdown, $rate, $tripValue) : null;
-            $groupKey = $priceGroup !== null ? $priceGroup['key'] : $this->billingRouteKey($row);
+            /* Km-ii unei curse P+D au rand propriu langa rutele Primar, nu se amesteca cu ele. */
+            $fromPd = !$byPrice && $this->isPrimarDistributieRow($row);
+            $groupKey = $priceGroup !== null ? $priceGroup['key'] : $this->billingRouteKey($row) . ($fromPd ? '|pd' : '');
             $routeShort = $this->billingRouteShort($row);
             $tripId = (int) ($row['id'] ?? 0);
             $date = (string) (($row['data_inceput'] ?? '') ?: ($row['data_cursa'] ?? ''));
             $summary[$type]['routes'][$groupKey] ??= [
                 'key' => $groupKey,
-                'label' => $priceGroup !== null ? $priceGroup['label'] : $this->billingRouteLabel($row),
+                'label' => $priceGroup !== null ? $priceGroup['label'] : $this->billingRouteLabel($row) . ($fromPd ? self::PD_ROUTE_SUFFIX : ''),
                 'short' => $byPrice ? '' : $routeShort,
                 'trips' => 0,
                 'quantity' => 0.0,
@@ -476,8 +508,19 @@ class CentralizatorFacturareService
             if ($rate !== null) {
                 $route['rates'][$this->rateKey($rate)] = $rate;
             }
+            $priceClass = null;
+            if ($type === 'distributie' && $priceClasses !== []) {
+                $classKey = $this->distributionPriceKey($this->distributionBillingParts($row));
+                $priceClass = isset($priceClasses[$classKey]) ? $classKey : '_none';
+            }
             $route['trip_rows'][] = [
                 'trip_id' => $tripId,
+                'vehicle_id' => (int) ($row['vehicle_id'] ?? 0),
+                'price_class' => $priceClass,
+                'tone' => $type === 'distributie' ? $this->normalizedBilledTons($row) : 0.0,
+                'km' => $type === 'distributie' ? $this->rowKm($row) : 0.0,
+                /* Refacturarile cursei se leaga de partea care o numara (la P+D: tonele). */
+                'counts_trip' => $this->rowCountsAsTrip($row),
                 'sort_date' => $date,
                 'date_label' => $this->formatDateLabel($date),
                 'race_no' => $this->formatRaceNumber($tripId, $date) . $this->billingPartSuffix($row),
@@ -501,9 +544,6 @@ class CentralizatorFacturareService
                 $summary[$type]['km'] += $this->rowKm($row);
             } elseif ($type === 'primar_tona') {
                 $summary[$type]['tone'] += $this->normalizedBilledTons($row);
-            } elseif ($type === 'primar_distributie') {
-                $summary[$type]['km'] += $this->rowKm($row);
-                $summary[$type]['tone'] += $this->normalizedBilledTons($row);
             } elseif ($type === 'distributie') {
                 $summary[$type]['tone'] += $this->normalizedBilledTons($row);
                 /*
@@ -518,7 +558,8 @@ class CentralizatorFacturareService
             }
         }
 
-        $totalTrips = array_sum(array_column($summary, 'trips'));
+        /* Pe tip, cursa P+D apare si la Primar km si la Distributie; in total, o singura data. */
+        $totalTrips = count(array_filter($rows, fn (array $row): bool => isset($summary[(string) ($row['tip_transport'] ?? '')]) && $this->rowCountsAsTrip($row)));
         foreach ($summary as &$row) {
             $row['km'] = round((float) $row['km'], 2);
             $row['tone'] = round((float) $row['tone'], 4);
@@ -526,6 +567,9 @@ class CentralizatorFacturareService
             $row['value'] = round((float) $row['value'], 2);
             $row['share_percent'] = $totalTrips > 0 ? round(((int) $row['trips'] / $totalTrips) * 100, 2) : 0.0;
             $row['routes'] = $this->finalizeTypeRoutes((array) $row['routes'], $row['group_by'] === 'price');
+            if ($row['key'] === 'distributie') {
+                $row['price_split'] = $this->attachVehiclePriceSplit($row['routes'], $priceClasses);
+            }
         }
         unset($row);
 
@@ -848,9 +892,10 @@ class CentralizatorFacturareService
             if (!in_array((string) ($row['tip_transport'] ?? ''), $types, true)) {
                 continue;
             }
-            $routeKey = ((int) ($row['loc_incarcare_id'] ?? 0)) . ':' . ((int) ($row['zona_distributie_id'] ?? 0));
+            $fromPd = $this->isPrimarDistributieRow($row);
+            $routeKey = ((int) ($row['loc_incarcare_id'] ?? 0)) . ':' . ((int) ($row['zona_distributie_id'] ?? 0)) . ($fromPd ? ':pd' : '');
             $km = $this->rowKm($row);
-            $value = $this->primaryRouteValue($row, $warnings);
+            $value = $this->rowValue($row);
             $rate = $this->primaryRouteRate($row, $value, $km);
             $date = (string) (($row['data_inceput'] ?? null) ?: ($row['data_cursa'] ?? ''));
             $beneficiaryId = (int) ($row['beneficiar_id'] ?? 0);
@@ -860,7 +905,7 @@ class CentralizatorFacturareService
 
             $routeTotals[$routeKey] ??= [
                 'key' => $routeKey,
-                'route_label' => $this->routeLabel($row),
+                'route_label' => $this->routeLabel($row) . ($fromPd ? self::PD_ROUTE_SUFFIX : ''),
                 'route_short' => $this->routeShort($row),
                 'trips' => 0,
                 'km' => 0.0,
@@ -1184,7 +1229,9 @@ class CentralizatorFacturareService
             $km = $this->rowKm($row);
             $tone = $this->normalizedBilledTons($row);
             $value = $this->rowValue($row);
-            $vehicles[$key]['trips']++;
+            if ($this->rowCountsAsTrip($row)) {
+                $vehicles[$key]['trips']++;
+            }
             $vehicles[$key]['total_value'] += $value;
             $routeKey = $this->routeKeyFromRow($row);
             $vehicles[$key]['routes'][$routeKey] ??= [
@@ -1208,11 +1255,6 @@ class CentralizatorFacturareService
                 }
                 $vehicles[$key]['distributie']['tone'] += $tone;
                 $vehicles[$key]['distributie']['value'] += $value;
-            } elseif ($type === 'primar_distributie') {
-                $vehicles[$key]['primar_distributie']['_trips']++;
-                $vehicles[$key]['primar_distributie']['km'] += $km;
-                $vehicles[$key]['primar_distributie']['tone'] += $tone;
-                $vehicles[$key]['primar_distributie']['value'] += $value;
             } elseif ($type === 'compresor') {
                 $vehicles[$key]['compresor']['_trips']++;
                 $vehicles[$key]['compresor']['activity'] += $this->compressorActivityValue($row);
@@ -1308,7 +1350,7 @@ class CentralizatorFacturareService
 
     private function fetchTripRows(array $filters, string $prefix): array
     {
-        $where = $this->buildTripWhere($filters, $this->activityTypes($filters), $prefix);
+        $where = $this->buildTripWhere($filters, $this->queryTransportTypes($filters), $prefix);
         $sql = "
             SELECT
                 c.id,
@@ -1485,7 +1527,7 @@ class CentralizatorFacturareService
         ];
         $params = [];
 
-        $types = $this->activityTypes($filters);
+        $types = $this->queryTransportTypes($filters);
         if ($types !== []) {
             $placeholders = [];
             foreach (array_values($types) as $index => $type) {
@@ -1671,7 +1713,7 @@ class CentralizatorFacturareService
     private function cargoOptions(array $filters): array
     {
         $lookupFilters = array_merge($filters, ['tip_marfa_list' => []]);
-        $where = $this->buildTripWhere($lookupFilters, $this->activityTypes($filters), 'cargo');
+        $where = $this->buildTripWhere($lookupFilters, $this->queryTransportTypes($filters), 'cargo');
         $stmt = $this->db->prepare("SELECT DISTINCT c.tip_marfa " . $where['from'] . " " . $where['where'] . " AND COALESCE(TRIM(c.tip_marfa), '') <> '' ORDER BY c.tip_marfa ASC");
         $this->bindParams($stmt, $where['params']);
         $stmt->execute();
@@ -1689,7 +1731,7 @@ class CentralizatorFacturareService
     private function routeOptions(array $filters): array
     {
         $lookupFilters = array_merge($filters, ['rute' => []]);
-        $where = $this->buildTripWhere($lookupFilters, $this->activityTypes($filters), 'route');
+        $where = $this->buildTripWhere($lookupFilters, $this->queryTransportTypes($filters), 'route');
         $sql = "
             SELECT
                 c.loc_incarcare_id,
@@ -1720,7 +1762,7 @@ class CentralizatorFacturareService
     private function loadingLocationOptions(array $filters): array
     {
         $lookupFilters = array_merge($filters, ['loc_incarcare_ids' => [], 'rute' => []]);
-        $where = $this->buildTripWhere($lookupFilters, $this->activityTypes($filters), 'loc_lookup');
+        $where = $this->buildTripWhere($lookupFilters, $this->queryTransportTypes($filters), 'loc_lookup');
         $sql = "
             SELECT
                 c.loc_incarcare_id AS id,
@@ -1748,7 +1790,7 @@ class CentralizatorFacturareService
     private function unloadingZoneOptions(array $filters): array
     {
         $lookupFilters = array_merge($filters, ['zona_distributie_ids' => [], 'rute' => []]);
-        $where = $this->buildTripWhere($lookupFilters, $this->activityTypes($filters), 'zone_lookup');
+        $where = $this->buildTripWhere($lookupFilters, $this->queryTransportTypes($filters), 'zone_lookup');
         $sql = "
             SELECT
                 c.zona_distributie_id AS id,
@@ -1776,7 +1818,7 @@ class CentralizatorFacturareService
     private function vehicleOptions(array $filters): array
     {
         $lookupFilters = array_merge($filters, ['vehicle_ids' => []]);
-        $where = $this->buildTripWhere($lookupFilters, $this->activityTypes($filters), 'vehicle');
+        $where = $this->buildTripWhere($lookupFilters, $this->queryTransportTypes($filters), 'vehicle');
         $sql = "
             SELECT DISTINCT
                 v.id,
@@ -1841,7 +1883,7 @@ class CentralizatorFacturareService
             return ['rows' => []];
         }
 
-        $activityTypes = $this->activityTypes($filters);
+        $activityTypes = $this->queryTransportTypes($filters);
         $monthStart = (string) $filters['date_start'];
         $monthEnd = (string) $filters['date_end'];
         $rows = [];
@@ -1938,9 +1980,9 @@ class CentralizatorFacturareService
         return [
             /* Panoul pe tipuri apare si la filtrare: datele lui vin deja restranse de filtre. */
             'activity_summary' => true,
-            'primary_routes' => in_array($mode, ['primar', 'primar_distributie'], true),
-            'distribution' => in_array($mode, ['distributie', 'primar_distributie'], true),
-            'distribution_matrix' => in_array($mode, ['distributie', 'primar_distributie'], true),
+            'primary_routes' => $mode === 'primar',
+            'distribution' => $mode === 'distributie',
+            'distribution_matrix' => $mode === 'distributie',
             'vehicle_detail' => true,
             'refacturari' => true,
         ];
@@ -1954,6 +1996,172 @@ class CentralizatorFacturareService
         return $selected !== [] ? array_values($selected) : array_keys(self::TRANSPORT_TYPES);
     }
 
+    /**
+     * Tipurile de cursa citite din baza de date: cele din raport, plus P+D cand e in
+     * raport Primar km sau Distributie - acolo ajung partile curselor P+D.
+     */
+    private function queryTransportTypes(array $filters): array
+    {
+        $types = $this->activityTypes($filters);
+        if (array_intersect($types, self::PD_TARGET_TYPES) !== []) {
+            $types[] = self::PD_SOURCE_TYPE;
+        }
+
+        return $types;
+    }
+
+    /*
+     * Fiecare cursa P+D devine partea ei de km (Primar km) si partea ei de tone
+     * (Distributie), cu valoarea salvata impartita intre ele - suma partilor este
+     * valoarea cursei. Cursa la cost fix sau doar pe tona merge intreaga la
+     * Distributie, cea doar pe km intreaga la Primar km. Celelalte curse raman la fel.
+     */
+    private function splitPrimarDistributieRows(array $rows): array
+    {
+        $result = [];
+        foreach ($rows as $row) {
+            if ((string) ($row['tip_transport'] ?? '') !== self::PD_SOURCE_TYPE) {
+                $result[] = $row;
+                continue;
+            }
+            foreach ($this->primarDistributieParts($row) as $part) {
+                $result[] = $part;
+            }
+        }
+
+        return $result;
+    }
+
+    private function primarDistributieParts(array $row): array
+    {
+        $whole = static fn (string $type): array => array_merge($row, [
+            'tip_transport' => $type,
+            '_pd_source_type' => self::PD_SOURCE_TYPE,
+            '_pd_part' => '',
+            '_pd_counts' => true,
+        ]);
+
+        $units = $this->distributionBillingUnits($row);
+        if ($units === ['km']) {
+            return [$whole('primar')];
+        }
+        if ($units !== ['t', 'km']) {
+            return [$whole('distributie')];
+        }
+
+        $value = $this->rowValue($row);
+        $kmValue = $this->primarDistributieKmValue($row, $value);
+        if ($kmValue === null) {
+            return [$whole('distributie')];
+        }
+        $tonValue = round($value - $kmValue, 2);
+        $km = $this->rowKm($row);
+        $savedKmRate = round(max(0.0, (float) ($row['cost_km_primar'] ?? 0)), 4);
+
+        $kmPart = array_merge($row, [
+            'tip_transport' => 'primar',
+            'total_facturare' => $kmValue,
+            'cantitate_incarcata' => 0,
+            'tona_livrata' => 0,
+            'nr_clienti' => 0,
+            /* Pe partea de km pretul salvat este pretul pe km, nu tariful pe tona al cursei. */
+            'pret_tarifare' => $savedKmRate > 0 ? $savedKmRate : ($km > 0 && $kmValue > 0 ? round($kmValue / $km, 4) : 0),
+            /* Versiunea salvata pe cursa P+D e cea a tarifului pe tona. */
+            'tariff_version_id' => null,
+            '_pd_source_type' => self::PD_SOURCE_TYPE,
+            '_pd_part' => 'km',
+            '_pd_counts' => true,
+        ]);
+        $tonPart = array_merge($row, [
+            'tip_transport' => 'distributie',
+            'total_facturare' => $tonValue,
+            'km_cursa' => 0,
+            'km_totali' => 0,
+            '_pd_source_type' => self::PD_SOURCE_TYPE,
+            '_pd_part' => 't',
+            '_pd_counts' => true,
+        ]);
+
+        /* Cursa impartita pe luni poate aduce in luna doar km-ii sau doar tonele. */
+        $hasKm = $km > 0 || $kmValue > 0;
+        $hasTone = $this->normalizedBilledTons($row) > 0 || $tonValue > 0;
+        if ($hasKm && !$hasTone) {
+            return [$kmPart];
+        }
+        if (!$hasKm) {
+            return [$tonPart];
+        }
+        /* Cursa se numara o data, la partea de tone (ca la impartirea pe luni). */
+        $kmPart['_pd_counts'] = false;
+
+        return [$kmPart, $tonPart];
+    }
+
+    /*
+     * Valoarea km-ilor dintr-o cursa P+D tona + km. Intai din cursa salvata: tonele x
+     * tariful pe tona salvat (pret_tarifare), restul sunt km-ii. Cand tariful salvat nu
+     * explica valoarea, ponderea km-ilor in calculul motorului. null = nu se poate imparti.
+     */
+    private function primarDistributieKmValue(array $row, float $value): ?float
+    {
+        if ($value <= 0) {
+            return 0.0;
+        }
+        $tonValue = $this->normalizedBilledTons($row) * round((float) ($row['pret_tarifare'] ?? 0), 4);
+        if ($tonValue > 0 && $tonValue <= $value + 0.01) {
+            return round(max(0.0, $value - round($tonValue, 2)), 2);
+        }
+
+        $kmAmount = 0.0;
+        $total = 0.0;
+        foreach ((array) ($this->tripBillingBreakdown($row)['components'] ?? []) as $component) {
+            $amount = max(0.0, (float) $component['amount']);
+            $total += $amount;
+            if ((string) $component['quantity_unit'] === 'km') {
+                $kmAmount += $amount;
+            }
+        }
+        if ($total <= 0) {
+            return null;
+        }
+
+        return round($value * ($kmAmount / $total), 2);
+    }
+
+    /** Partea de km a unei curse P+D impartite nu se numara ca o cursa in plus. */
+    private function rowCountsAsTrip(array $row): bool
+    {
+        return (bool) ($row['_pd_counts'] ?? true);
+    }
+
+    /** Randul este partea de km a unei curse P+D (rand propriu in rutele Primar). */
+    private function isPrimarDistributieRow(array $row): bool
+    {
+        return ($row['_pd_source_type'] ?? '') === self::PD_SOURCE_TYPE;
+    }
+
+    /*
+     * Refacturarile unei curse P+D merg la tipul partii care o numara (de regula
+     * Distributie); cursa din alta luna, fara parte in raport, la Distributie.
+     */
+    private function assignPrimarDistributieRefacturari(array $refRows, array $tripRows): array
+    {
+        $typeByTrip = [];
+        foreach ($tripRows as $row) {
+            if ($this->isPrimarDistributieRow($row) && $this->rowCountsAsTrip($row)) {
+                $typeByTrip[(int) ($row['id'] ?? 0)] = (string) $row['tip_transport'];
+            }
+        }
+        foreach ($refRows as &$expense) {
+            if ((string) ($expense['tip_transport'] ?? '') === self::PD_SOURCE_TYPE) {
+                $expense['tip_transport'] = $typeByTrip[(int) ($expense['cursa_id'] ?? 0)] ?? 'distributie';
+            }
+        }
+        unset($expense);
+
+        return $refRows;
+    }
+
     private function distributionTypesForMode(string $mode): array
     {
         if ($mode === '') {
@@ -1961,9 +2169,6 @@ class CentralizatorFacturareService
         }
         if ($mode === 'distributie') {
             return ['distributie'];
-        }
-        if ($mode === 'primar_distributie') {
-            return ['primar_distributie'];
         }
 
         return [];
@@ -2001,7 +2206,6 @@ class CentralizatorFacturareService
             'primar' => ['_trips' => 0, 'km' => 0.0, 'value' => 0.0],
             'primar_tona' => ['_trips' => 0, 'tone' => 0.0, 'value' => 0.0],
             'distributie' => ['_trips' => 0, 'km' => 0.0, 'tone' => 0.0, 'value' => 0.0],
-            'primar_distributie' => ['_trips' => 0, 'km' => 0.0, 'tone' => 0.0, 'value' => 0.0],
             'compresor' => ['_trips' => 0, 'activity' => 0.0, 'tone' => 0.0, 'unit' => 'activ.', 'value' => 0.0],
             'total_value' => 0.0,
             'route_summary' => '-',
@@ -2014,7 +2218,7 @@ class CentralizatorFacturareService
 
     private function roundVehicleBucket(array &$vehicle): void
     {
-        foreach (['primar', 'primar_tona', 'distributie', 'primar_distributie', 'compresor'] as $type) {
+        foreach (['primar', 'primar_tona', 'distributie', 'compresor'] as $type) {
             foreach ($vehicle[$type] as $key => $value) {
                 if (is_numeric($value)) {
                     $vehicle[$type][$key] = round((float) $value, $key === 'value' ? 2 : 4);
@@ -2060,7 +2264,7 @@ class CentralizatorFacturareService
         foreach ($rows as $row) {
             $totals['trips'] += (int) $row['trips'];
             $totals['total_value'] += (float) $row['total_value'];
-            foreach (['primar', 'primar_tona', 'distributie', 'primar_distributie', 'compresor'] as $type) {
+            foreach (['primar', 'primar_tona', 'distributie', 'compresor'] as $type) {
                 foreach ($totals[$type] as $key => $value) {
                     if (is_numeric($value)) {
                         $totals[$type][$key] += (float) ($row[$type][$key] ?? 0);
@@ -2088,10 +2292,6 @@ class CentralizatorFacturareService
             $columns[] = ['key' => 'km', 'label' => 'Km', 'align' => 'right'];
             $columns[] = ['key' => 'value', 'label' => 'Valoare (RON)', 'align' => 'right'];
         } elseif ($mode === 'primar_tona') {
-            $columns[] = ['key' => 'tone', 'label' => 'Tone', 'align' => 'right'];
-            $columns[] = ['key' => 'value', 'label' => 'Valoare (RON)', 'align' => 'right'];
-        } elseif ($mode === 'primar_distributie') {
-            $columns[] = ['key' => 'km', 'label' => 'Km', 'align' => 'right'];
             $columns[] = ['key' => 'tone', 'label' => 'Tone', 'align' => 'right'];
             $columns[] = ['key' => 'value', 'label' => 'Valoare (RON)', 'align' => 'right'];
         } elseif ($mode === 'compresor') {
@@ -2161,17 +2361,14 @@ class CentralizatorFacturareService
         if ($mode === 'primar_tona') {
             return ['trips' => (float) (($vehicle['primar_tona']['tone'] ?? 0) > 0 || ($vehicle['primar_tona']['value'] ?? 0) > 0 ? $this->estimateVehicleTrips($vehicle, 'primar_tona') : 0), 'tone' => (float) $vehicle['primar_tona']['tone'], 'value' => (float) $vehicle['primar_tona']['value']];
         }
-        if ($mode === 'primar_distributie') {
-            return ['trips' => (float) (($vehicle['primar_distributie']['km'] ?? 0) > 0 || ($vehicle['primar_distributie']['tone'] ?? 0) > 0 ? $this->estimateVehicleTrips($vehicle, 'primar_distributie') : 0), 'km' => (float) $vehicle['primar_distributie']['km'], 'tone' => (float) $vehicle['primar_distributie']['tone'], 'value' => (float) $vehicle['primar_distributie']['value']];
-        }
         if ($mode === 'compresor') {
             return ['trips' => (float) (($vehicle['compresor']['activity'] ?? 0) > 0 || ($vehicle['compresor']['value'] ?? 0) > 0 ? $this->estimateVehicleTrips($vehicle, 'compresor') : 0), 'activity' => (float) $vehicle['compresor']['activity'], 'value' => (float) $vehicle['compresor']['value']];
         }
         if ($mode === '') {
             return [
                 'trips' => (float) ($vehicle['trips'] ?? 0),
-                'km' => (float) (($vehicle['primar']['km'] ?? 0) + ($vehicle['primar_distributie']['km'] ?? 0) + ($vehicle['distributie']['km'] ?? 0)),
-                'tone' => (float) (($vehicle['primar_tona']['tone'] ?? 0) + ($vehicle['distributie']['tone'] ?? 0) + ($vehicle['primar_distributie']['tone'] ?? 0) + ($vehicle['compresor']['tone'] ?? 0)),
+                'km' => (float) (($vehicle['primar']['km'] ?? 0) + ($vehicle['distributie']['km'] ?? 0)),
+                'tone' => (float) (($vehicle['primar_tona']['tone'] ?? 0) + ($vehicle['distributie']['tone'] ?? 0) + ($vehicle['compresor']['tone'] ?? 0)),
                 'value' => (float) ($vehicle['total_value'] ?? 0),
             ];
         }
@@ -2208,8 +2405,9 @@ class CentralizatorFacturareService
         $tariff = round((float) ($row['pret_tarifare'] ?? 0), 4);
         $isDistributionTrip = in_array($type, self::DISTRIBUTION_TYPES, true);
         $tariffClass = '-';
-        $tariffLabel = $tariff > 0 ? $this->formatNumber($tariff, 2) . ' RON/t' : '';
-        $billedKm = in_array($type, ['primar', 'primar_distributie'], true);
+        $tariffUnit = ($row['_pd_part'] ?? '') === 'km' ? ' RON/km' : ' RON/t';
+        $tariffLabel = $tariff > 0 ? $this->formatNumber($tariff, 2) . $tariffUnit : '';
+        $billedKm = $type === 'primar';
         if ($isDistributionTrip) {
             $parts = $this->distributionBillingParts($row);
             $tariffClass = (string) ($tariffBuckets[$this->distributionPriceKey($parts)]['label'] ?? 'Tarif neidentificat');
@@ -2233,7 +2431,7 @@ class CentralizatorFacturareService
             'route_label' => $this->routeAuditLabel($row),
             'cargo_label' => $this->cargoDisplayLabel((string) ($row['tip_marfa'] ?? '')),
             'km' => $billedKm ? $km : 0.0,
-            'tone' => in_array($type, ['primar_tona', 'distributie', 'primar_distributie'], true) || ($type === 'compresor' && $tone > 0) ? $tone : 0.0,
+            'tone' => in_array($type, ['primar_tona', 'distributie'], true) ||($type === 'compresor' && $tone > 0) ? $tone : 0.0,
             'price_km' => $this->tripPricePerKm($row, $km, $value),
             'tariff' => $tariff > 0 ? $tariff : null,
             'tariff_label' => $tariffLabel,
@@ -2353,20 +2551,6 @@ class CentralizatorFacturareService
 
             return $columns;
         }
-        if ($mode === 'primar_distributie') {
-            return [
-                ['key' => 'date_label', 'label' => 'Data', 'align' => 'left'],
-                ['key' => 'race_no', 'label' => 'Nr. cursă', 'align' => 'left'],
-                ['key' => 'loc_label', 'label' => 'Loc încărcare', 'align' => 'left'],
-                ['key' => 'zone_label', 'label' => 'Zonă descărcare', 'align' => 'left'],
-                ['key' => 'route_label', 'label' => 'Rută', 'align' => 'left'],
-                ['key' => 'cargo_label', 'label' => 'Tip marfă', 'align' => 'left'],
-                ['key' => 'km', 'label' => 'Km Primar', 'align' => 'right', 'format' => 'km'],
-                ['key' => 'tone', 'label' => 'Tone Distribuție', 'align' => 'right', 'format' => 'tone'],
-                ['key' => 'tariff_label', 'label' => 'Tarif', 'align' => 'right'],
-                ['key' => 'value', 'label' => 'Valoare (RON)', 'align' => 'right', 'format' => 'money'],
-            ];
-        }
         if ($mode === 'compresor') {
             return [
                 ['key' => 'date_label', 'label' => 'Data', 'align' => 'left'],
@@ -2406,8 +2590,6 @@ class CentralizatorFacturareService
         $expectedPrimaryKm = 0.0;
         $expectedDistributionTone = 0.0;
         $expectedPrimaryTone = 0.0;
-        $expectedPdKm = 0.0;
-        $expectedPdTone = 0.0;
         foreach ($tripRows as $row) {
             $type = (string) ($row['tip_transport'] ?? '');
             if ($type === 'primar') {
@@ -2416,17 +2598,12 @@ class CentralizatorFacturareService
                 $expectedPrimaryTone += $this->normalizedBilledTons($row);
             } elseif ($type === 'distributie') {
                 $expectedDistributionTone += $this->normalizedBilledTons($row);
-            } elseif ($type === 'primar_distributie') {
-                $expectedPdKm += $this->rowKm($row);
-                $expectedPdTone += $this->normalizedBilledTons($row);
             }
         }
 
         $actualPrimaryKm = array_sum(array_map(static fn (array $v): float => (float) ($v['primar']['km'] ?? 0), $vehicleRows));
         $actualDistributionTone = array_sum(array_map(static fn (array $v): float => (float) ($v['distributie']['tone'] ?? 0), $vehicleRows));
         $actualPrimaryTone = array_sum(array_map(static fn (array $v): float => (float) ($v['primar_tona']['tone'] ?? 0), $vehicleRows));
-        $actualPdKm = array_sum(array_map(static fn (array $v): float => (float) ($v['primar_distributie']['km'] ?? 0), $vehicleRows));
-        $actualPdTone = array_sum(array_map(static fn (array $v): float => (float) ($v['primar_distributie']['tone'] ?? 0), $vehicleRows));
 
         if (!$this->nearlyEqual($expectedPrimaryKm, $actualPrimaryKm)) {
             $warnings[] = 'Reconcilierea km Primar pe vehicule nu este exactă.';
@@ -2436,9 +2613,6 @@ class CentralizatorFacturareService
         }
         if (!$this->nearlyEqual($expectedPrimaryTone, $actualPrimaryTone)) {
             $warnings[] = 'Reconcilierea tonajului Primar tone pe vehicule nu este exactă.';
-        }
-        if (!$this->nearlyEqual($expectedPdKm, $actualPdKm) || !$this->nearlyEqual($expectedPdTone, $actualPdTone)) {
-            $warnings[] = 'Reconcilierea P+D pe vehicule nu este exactă.';
         }
 
         return $warnings;
@@ -2586,7 +2760,7 @@ class CentralizatorFacturareService
                 $groupLines = [];
                 foreach ((array) $group['trip_rows'] as $trip) {
                     $tripId = (int) ($trip['trip_id'] ?? 0);
-                    if (isset($linesByTrip[$tripId])) {
+                    if (isset($linesByTrip[$tripId]) && ($trip['counts_trip'] ?? true)) {
                         array_push($groupLines, ...$linesByTrip[$tripId]);
                         unset($linesByTrip[$tripId]);
                     }
@@ -2747,21 +2921,6 @@ class CentralizatorFacturareService
         }
     }
 
-    private function primaryRouteValue(array $row, array &$warnings): float
-    {
-        $type = (string) ($row['tip_transport'] ?? '');
-        $km = $this->rowKm($row);
-        if ($type === 'primar_distributie') {
-            $cost = max(0.0, (float) ($row['cost_km_primar'] ?? 0));
-            if ($cost > 0 && $km > 0) {
-                return round($cost * $km, 2);
-            }
-            $warnings[] = 'Există P+D fără cost_km_primar istoric; valoarea rutei folosește total_facturare salvat.';
-        }
-
-        return $this->rowValue($row);
-    }
-
     /*
      * Tariful chiar aplicat pe cursa: valoare / km facturati. Snapshot-ul salvat
      * cost_km_primar ramane doar rezerva - poate fi invechit fata de valoarea
@@ -2806,16 +2965,52 @@ class CentralizatorFacturareService
     private function tripBillingBreakdown(array $row): array
     {
         $tripId = (int) ($row['id'] ?? 0);
-        if ($tripId > 0 && isset($this->breakdownCache[$tripId])) {
-            return $this->breakdownCache[$tripId];
+        $cacheKey = $this->rowCacheKey($row);
+        if ($tripId > 0 && isset($this->breakdownCache[$cacheKey])) {
+            return $this->breakdownCache[$cacheKey];
         }
 
         $breakdown = $this->computeTripBillingBreakdown($row);
+        $part = (string) ($row['_pd_part'] ?? '');
+        if ($part !== '') {
+            $breakdown = $this->primarDistributiePartBreakdown($breakdown, $part);
+        }
         if ($tripId > 0) {
-            $this->breakdownCache[$tripId] = $breakdown;
+            $this->breakdownCache[$cacheKey] = $breakdown;
         }
 
         return $breakdown;
+    }
+
+    /*
+     * Calculul unei parti P+D: doar componenta ei (km la Primar, tona la Distributie).
+     * Motorul de tarifare calculeaza cursa ca P+D; partea de tone nu are km, dar motorul
+     * poate lua km tarifare ai rutei - de aceea filtram pe unitate, nu doar pe cantitate.
+     */
+    private function primarDistributiePartBreakdown(array $breakdown, string $part): array
+    {
+        $components = array_values(array_filter(
+            (array) ($breakdown['components'] ?? []),
+            static fn (array $component): bool => (string) $component['quantity_unit'] === $part
+        ));
+        $breakdown['components'] = $components;
+        $breakdown['total'] = round(array_sum(array_column($components, 'amount')), 2);
+        $breakdown['rated_units'] = in_array($part, (array) ($breakdown['rated_units'] ?? []), true) ? [$part] : [];
+        $breakdown['tariff_mode'] = $part === 'km' ? 'km' : 'tona';
+
+        return $breakdown;
+    }
+
+    /** Cheia de cache a unui rand: cursa, plus partea P+D (km / tone are calcul propriu). */
+    private function rowCacheKey(array $row): string
+    {
+        return (int) ($row['id'] ?? 0) . '|' . (string) ($row['_pd_part'] ?? '');
+    }
+
+    /** Tipul cursei in Dispecer curse: la partile P+D, tot P+D (asa o calculeaza motorul). */
+    private function sourceTransportType(array $row): string
+    {
+        return (string) (($row['_pd_source_type'] ?? '') ?: ($row['tip_transport'] ?? ''));
     }
 
     private function computeTripBillingBreakdown(array $row): array
@@ -2824,7 +3019,7 @@ class CentralizatorFacturareService
             $this->pricing ??= new TransportPricingService($this->db);
             $quote = $this->pricing->quote([
                 'beneficiar_id' => (int) ($row['beneficiar_id'] ?? 0),
-                'tip_transport' => (string) ($row['tip_transport'] ?? ''),
+                'tip_transport' => $this->sourceTransportType($row),
                 'data_cursa' => (string) ($row['data_cursa'] ?? ''),
                 'vehicle_id' => (int) ($row['vehicle_id'] ?? 0),
                 'loc_incarcare_id' => (int) ($row['loc_incarcare_id'] ?? 0),
@@ -2889,12 +3084,19 @@ class CentralizatorFacturareService
      */
     private function distributionBillingUnits(array $row): array
     {
-        if (!in_array((string) ($row['tip_transport'] ?? ''), self::DISTRIBUTION_TYPES, true)) {
+        $type = (string) ($row['tip_transport'] ?? '');
+        /* Cursa P+D se citeste aici inainte de impartire, ca sa stim ce parti are. */
+        if (!in_array($type, self::DISTRIBUTION_TYPES, true) && $type !== self::PD_SOURCE_TYPE) {
             return [];
         }
+        /* Partea de tone a unei curse P+D se factureaza doar pe tona. */
+        if (($row['_pd_part'] ?? '') === 't') {
+            return ['t'];
+        }
         $tripId = (int) ($row['id'] ?? 0);
-        if ($tripId > 0 && isset($this->billingUnitsCache[$tripId])) {
-            return $this->billingUnitsCache[$tripId];
+        $cacheKey = $this->rowCacheKey($row);
+        if ($tripId > 0 && isset($this->billingUnitsCache[$cacheKey])) {
+            return $this->billingUnitsCache[$cacheKey];
         }
 
         $breakdown = $this->tripBillingBreakdown($row);
@@ -2923,7 +3125,7 @@ class CentralizatorFacturareService
         usort($units, static fn (string $a, string $b): int => ($order[$a] ?? 9) <=> ($order[$b] ?? 9));
 
         if ($tripId > 0) {
-            $this->billingUnitsCache[$tripId] = $units;
+            $this->billingUnitsCache[$cacheKey] = $units;
         }
 
         return $units;
@@ -2994,7 +3196,7 @@ class CentralizatorFacturareService
     /** Cantitatea facturata a cursei si unitatea ei: km, tone sau activitate de compresor. */
     private function tripBillingQuantity(array $row, string $type): array
     {
-        if (in_array($type, ['primar', 'primar_distributie'], true)) {
+        if ($type === 'primar') {
             return [$this->rowKm($row), 'km'];
         }
         if ($type === 'compresor') {
@@ -3015,12 +3217,12 @@ class CentralizatorFacturareService
     }
 
     /*
-     * Pretul unitar al cursei: pretul/km salvat pentru Primar si P+D, tariful pe tona
+     * Pretul unitar al cursei: pretul/km salvat pentru Primar (si partea de km a unei curse P+D), tariful pe tona
      * pentru Primar tone si Distributie. Fara pret salvat, il deducem din valoare.
      */
     private function tripBillingRate(array $row, string $type, float $quantity, float $value): ?float
     {
-        if (in_array($type, ['primar', 'primar_distributie'], true)) {
+        if ($type === 'primar') {
             return $this->tripPricePerKm($row, $quantity, $value);
         }
         if (in_array($type, ['primar_tona', 'distributie'], true)) {
@@ -3074,6 +3276,7 @@ class CentralizatorFacturareService
                 : ($route['quantity'] > 0 && $route['value'] > 0 ? round($route['value'] / $route['quantity'], 4) : null);
             $route['rate_multiple'] = count($rates) > 1;
             usort($route['trip_rows'], static fn (array $a, array $b): int => strcmp((string) $a['sort_date'], (string) $b['sort_date']) ?: ((int) $a['trip_id'] <=> (int) $b['trip_id']));
+            $route['vehicles'] = $this->groupVehicleSummaries((array) $route['trip_rows']);
             unset($route['units'], $route['rates']);
         }
         unset($route);
@@ -3090,6 +3293,158 @@ class CentralizatorFacturareService
             ?: strcmp((string) $a['label'], (string) $b['label']));
 
         return $routes;
+    }
+
+    /*
+     * Sumarul pe vehicul al unui grup de facturare (ruta sau tarif): cursele grupului
+     * adunate pe vehicul, fara alt calcul - valoarea este suma valorilor facturate ale
+     * curselor, calculul (cantitate x pret) aceleasi componente ca la grup, adunate pe
+     * unitate + pret, deci doua tarife raman doua parti. La Distributie, tonele se
+     * impart pe clasa de pret a fiecarei curse (price_class).
+     */
+    private function groupVehicleSummaries(array $tripRows): array
+    {
+        $vehicles = [];
+        foreach ($tripRows as $trip) {
+            $vehicleId = (int) ($trip['vehicle_id'] ?? 0);
+            $label = (string) ($trip['vehicle_label'] ?? '');
+            $key = $vehicleId > 0 ? 'v' . $vehicleId : 'n' . substr(md5($label), 0, 8);
+            $vehicles[$key] ??= [
+                'key' => $key,
+                'vehicle_id' => $vehicleId,
+                'vehicle_label' => $label !== '' ? $label : 'Vehicul nealocat',
+                'trips' => 0,
+                'value' => 0.0,
+                'components' => [],
+                'component_billing' => false,
+                'missing_count' => 0,
+                'differs_count' => 0,
+                'classes' => [],
+                'trip_rows' => [],
+            ];
+            $vehicle = &$vehicles[$key];
+            $vehicle['trips']++;
+            $vehicle['value'] += (float) ($trip['value'] ?? 0);
+            $vehicle['trip_rows'][] = $trip;
+            $vehicle['differs_count'] += !empty($trip['differs']) ? 1 : 0;
+
+            $components = (array) ($trip['components'] ?? []);
+            if (($trip['recomputed_total'] ?? null) !== null) {
+                $vehicle['component_billing'] = true;
+                $vehicle['missing_count'] += $components === [] ? 1 : 0;
+            } elseif ((float) ($trip['quantity'] ?? 0) > 0 && ($trip['rate'] ?? null) !== null) {
+                /* Fara motor de tarifare: cantitatea si pretul cursei, ca in randul ei. */
+                $components = [[
+                    'label' => '',
+                    'quantity_unit' => (string) ($trip['unit'] ?? ''),
+                    'quantity' => (float) $trip['quantity'],
+                    'rate' => (float) $trip['rate'],
+                    'amount' => (float) ($trip['value'] ?? 0),
+                ]];
+            }
+            foreach ($components as $component) {
+                $componentKey = (string) $component['quantity_unit'] . ':' . $this->rateKey((float) $component['rate']);
+                $vehicle['components'][$componentKey] ??= [
+                    'key' => $componentKey,
+                    'label' => (string) ($component['label'] ?? ''),
+                    'quantity_unit' => (string) $component['quantity_unit'],
+                    'quantity' => 0.0,
+                    'amount' => 0.0,
+                    'rate' => (float) $component['rate'],
+                    'rate_average' => false,
+                ];
+                $vehicle['components'][$componentKey]['quantity'] += (float) $component['quantity'];
+                $vehicle['components'][$componentKey]['amount'] += (float) $component['amount'];
+            }
+
+            $classKey = $trip['price_class'] ?? null;
+            if ($classKey !== null) {
+                $vehicle['classes'][$classKey] ??= ['tone' => 0.0, 'km' => 0.0, 'trips' => 0];
+                $vehicle['classes'][$classKey]['tone'] += (float) ($trip['tone'] ?? 0);
+                $vehicle['classes'][$classKey]['km'] += (float) ($trip['km'] ?? 0);
+                $vehicle['classes'][$classKey]['trips']++;
+            }
+            unset($vehicle);
+        }
+
+        foreach ($vehicles as &$vehicle) {
+            $vehicle['value'] = round((float) $vehicle['value'], 2);
+            foreach ($vehicle['components'] as &$component) {
+                $component['quantity'] = round((float) $component['quantity'], 4);
+                $component['amount'] = round((float) $component['amount'], 2);
+            }
+            unset($component);
+            $vehicle['components'] = array_values($vehicle['components']);
+            foreach ($vehicle['classes'] as &$class) {
+                $class['tone'] = round((float) $class['tone'], 4);
+                $class['km'] = round((float) $class['km'], 2);
+            }
+            unset($class);
+        }
+        unset($vehicle);
+
+        $vehicles = array_values($vehicles);
+        usort($vehicles, static fn (array $a, array $b): int => ((float) $b['value'] <=> (float) $a['value'])
+            ?: strnatcasecmp((string) $a['vehicle_label'], (string) $b['vehicle_label']));
+
+        return $vehicles;
+    }
+
+    /*
+     * Tonele pe clasa de pret din sumarul pe vehicul al Distributiei. Clasa e cea din
+     * sectiunea Distributie (distributionPriceBuckets): Pret mic si Pret mare au coloana
+     * lor; restul (tarife intermediare, Pret unic, tarife pe km cand unitatile difera,
+     * tarif neidentificat) se aduna separat, cu eticheta lor, fara sa fie mutate in
+     * mic / mare. Fara Pret mic / mare in raport nu exista impartire (has_split = false).
+     */
+    private function attachVehiclePriceSplit(array &$routes, array $priceClasses): array
+    {
+        $low = null;
+        $high = null;
+        foreach ($priceClasses as $key => $bucket) {
+            if ($bucket['label'] === 'Preț mic') {
+                $low = (string) $key;
+            } elseif ($bucket['label'] === 'Preț mare') {
+                $high = (string) $key;
+            }
+        }
+        $info = ['has_split' => $low !== null || $high !== null, 'has_other' => false];
+
+        foreach ($routes as &$route) {
+            foreach ($route['vehicles'] as &$vehicle) {
+                $split = ['low_tone' => 0.0, 'high_tone' => 0.0, 'other_tone' => 0.0, 'other_km' => 0.0, 'other_labels' => []];
+                foreach ((array) $vehicle['classes'] as $classKey => $class) {
+                    $classKey = (string) $classKey;
+                    if ($classKey === $low) {
+                        $split['low_tone'] += (float) $class['tone'];
+                        continue;
+                    }
+                    if ($classKey === $high) {
+                        $split['high_tone'] += (float) $class['tone'];
+                        continue;
+                    }
+                    /* Clasa facturata doar pe km (sau la cost fix) se citeste in km, nu in tone. */
+                    $units = (array) ($priceClasses[$classKey]['units'] ?? ['t']);
+                    if (in_array('t', $units, true)) {
+                        $split['other_tone'] += (float) $class['tone'];
+                    } elseif (in_array('km', $units, true)) {
+                        $split['other_km'] += (float) $class['km'];
+                    }
+                    $split['other_labels'][] = (string) ($priceClasses[$classKey]['label'] ?? 'Neclasificat');
+                }
+                $split['low_tone'] = round($split['low_tone'], 4);
+                $split['high_tone'] = round($split['high_tone'], 4);
+                $split['other_tone'] = round($split['other_tone'], 4);
+                $split['other_km'] = round($split['other_km'], 2);
+                $split['other_labels'] = array_values(array_unique($split['other_labels']));
+                $info['has_other'] = $info['has_other'] || $split['other_tone'] > 0 || $split['other_km'] > 0;
+                $vehicle['price_split'] = $split;
+            }
+            unset($vehicle);
+        }
+        unset($route);
+
+        return $info;
     }
 
     private function rowKm(array $row): float
@@ -3527,7 +3882,14 @@ class CentralizatorFacturareService
      */
     private function billingPartSuffix(array $row): string
     {
-        return match ((string) ($row['billing_part'] ?? 'full')) {
+        /* Cursa P+D impartita: partea de km (la Primar km) sau de tone (la Distributie). */
+        $pdSuffix = match ((string) ($row['_pd_part'] ?? '')) {
+            'km' => ' (P+D · km)',
+            't' => ' (P+D · tone)',
+            default => $this->isPrimarDistributieRow($row) ? ' (P+D)' : '',
+        };
+
+        return $pdSuffix . match ((string) ($row['billing_part'] ?? 'full')) {
             'km' => ' (partea km)',
             'tone' => ' (partea tone)',
             // Regula „Impartit pe faze”: partea fazelor din luna, dupa km-ii lor.

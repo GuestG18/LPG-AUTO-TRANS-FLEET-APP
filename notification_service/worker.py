@@ -1609,6 +1609,25 @@ def run_approval_flow() -> dict[str, Any] | None:
         return {"error": normalize_error(exc)}
 
 
+def run_support_mail() -> dict[str, Any] | None:
+    """Suportul soferilor (tichete WhatsApp -> email, raspunsuri email -> WhatsApp), daca e activat.
+
+    Ca run_approval_flow(): import lazy si erori izolate.
+    """
+    if os.getenv("SUPPORT_EMAIL_ENABLED", "").strip().lower() not in {"1", "true", "yes", "on", "da"}:
+        return None
+
+    try:
+        import support_mail
+    except ImportError as exc:
+        return {"error": f"support_mail indisponibil: {exc}"}
+
+    try:
+        return support_mail.run()
+    except Exception as exc:
+        return {"error": normalize_error(exc)}
+
+
 class SmsSender:
     """Trimite SMS-urile unei rulari respectand limita SMSAlert (1 apel / 2 s)."""
 
@@ -1726,6 +1745,10 @@ def process_jobs(limit: int, enqueue: bool = True, send: bool = True) -> dict[st
     approvals = run_approval_flow()
     if approvals is not None:
         summary["approvals"] = approvals
+
+    support = run_support_mail()
+    if support is not None:
+        summary["support"] = support
 
     return summary
 

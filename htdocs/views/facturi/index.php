@@ -288,7 +288,7 @@ require __DIR__ . '/_status.php';
                         <?php if ($row['data_document'] !== null): ?>
                             <?= e(format_date_ro((string) $row['data_document'])) ?>
                         <?php elseif ($status === 'in_procesare' && $row['email_primit_la'] !== null): ?>
-                            <span class="fw-normal text-secondary" title="Primită pe email"><?= e($whenLabel((string) $row['email_primit_la'])) ?></span>
+                            <span class="fw-normal text-secondary" title="<?= (string) ($row['canal'] ?? '') === InvoiceModel::CANAL_WHATSAPP ? 'Primită pe WhatsApp' : 'Primită pe email' ?>"><?= e($whenLabel((string) $row['email_primit_la'])) ?></span>
                         <?php else: ?>
                             <span class="text-secondary">—</span>
                         <?php endif; ?>

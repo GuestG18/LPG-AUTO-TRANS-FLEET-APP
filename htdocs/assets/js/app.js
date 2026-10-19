@@ -1624,6 +1624,13 @@ function initOperatorActivity() {
             headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
         })
             .then(function (response) {
+                // Sesiune expirata (redirect la login) sau pagina de eroare HTML: nu e JSON.
+                var contentType = response.headers.get('Content-Type') || '';
+                if (contentType.indexOf('application/json') === -1) {
+                    throw new Error(/page=login/.test(response.url)
+                        ? 'Sesiunea a expirat — reincarca pagina si autentifica-te.'
+                        : 'Serverul a raspuns cu o eroare (' + response.status + ') — reincarca pagina.');
+                }
                 return response.json().then(function (payload) {
                     if (!response.ok || !payload || payload.success !== true) {
                         throw new Error((payload && payload.message) || 'Eroare la incarcare.');

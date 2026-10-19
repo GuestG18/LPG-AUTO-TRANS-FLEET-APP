@@ -213,7 +213,7 @@ if (!isset($formatRaceDateForDisplay) || !is_callable($formatRaceDateForDisplay)
                         <?php endif; ?>
 
                         <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-end-datetime">
-                            <label class="form-label" for="<?= e($fieldPrefix) ?>_end_datetime">Data si ora sfarsit <span class="text-danger">*</span></label>
+                            <label class="form-label" for="<?= e($fieldPrefix) ?>_end_datetime">Data si ora sfarsit</label>
                             <?php
                                 $endDateValue = (string) ($formData['data_sfarsit'] ?? ($formData['data_cursa'] ?? ''));
                                 $endDateDisplayValue = $formatRaceDateForDisplay($endDateValue);
@@ -246,7 +246,6 @@ if (!isset($formatRaceDateForDisplay) || !is_callable($formatRaceDateForDisplay)
                                     id="<?= e($fieldPrefix) ?>_data_sfarsit"
                                     name="data_sfarsit"
                                     value="<?= e($endDateDisplayValue) ?>"
-                                    required
                                 >
                                 <input
                                     type="hidden"

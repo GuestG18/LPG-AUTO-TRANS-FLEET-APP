@@ -798,7 +798,7 @@
         }
 
         // timeField === null => picker doar pentru data (fara selectorul de ora).
-        function createDateTimePickerContext(field, displayField, toggleButton, popover, dateField, timeField, state) {
+        function createDateTimePickerContext(field, displayField, toggleButton, popover, dateField, timeField, state, optional) {
             var dateOnly = timeField === null;
             if (
                 !(field instanceof HTMLElement)
@@ -819,6 +819,7 @@
                 dateField: dateField,
                 timeField: timeField,
                 dateOnly: dateOnly,
+                optional: dateOnly || optional === true,
                 state: state
             };
         }
@@ -978,14 +979,20 @@
             }
 
             var parsedValue = parseStartDateTimeDisplayValue(getActiveDateTimePicker().displayField.value);
-            if (getActiveDateTimePicker().dateOnly) {
-                // Campul doar-data este optional: gol => se goleste valoarea; ora tastata se ignora.
-                if (getActiveDateTimePicker().displayField.value.trim() === '') {
-                    getActiveDateTimePicker().dateField.value = '';
-                    dispatchFieldUpdate(getActiveDateTimePicker().dateField);
-                    setStartDateTimeDisplayInvalid(false);
-                    return true;
+            // Campurile optionale (doar-data, sfarsitul cursei): gol => se golesc valorile.
+            // Cursa fara sfarsit ramane in desfasurare; serverul pune data de inceput.
+            if (getActiveDateTimePicker().optional && getActiveDateTimePicker().displayField.value.trim() === '') {
+                getActiveDateTimePicker().dateField.value = '';
+                dispatchFieldUpdate(getActiveDateTimePicker().dateField);
+                if (getActiveDateTimePicker().timeField instanceof HTMLInputElement) {
+                    getActiveDateTimePicker().timeField.value = '';
+                    dispatchFieldUpdate(getActiveDateTimePicker().timeField);
                 }
+                setStartDateTimeDisplayInvalid(false);
+                return true;
+            }
+            if (getActiveDateTimePicker().dateOnly) {
+                // Ora tastata intr-un camp doar-data se ignora.
                 if (parsedValue !== null) {
                     parsedValue.timeValue = '';
                 }
@@ -6244,7 +6251,8 @@
                 endDateTimePopover,
                 endDateField,
                 endTimeField,
-                endDateTimePickerState
+                endDateTimePickerState,
+                true
             ),
             createDateTimePickerContext(
                 loadingDateField,

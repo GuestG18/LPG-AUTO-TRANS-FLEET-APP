@@ -21,6 +21,13 @@ declare(strict_types=1);
  *
  * Nucleul (decide) e pur: primeste factura si cursele deja incarcate, deci se poate
  * testa fara baza de date (scripts/test_invoice_matcher.php).
+ *
+ * La potrivirea unica rezultatul spune si pe ce s-a sprijinit, fara sa schimbe decizia:
+ *   basis     'data' | 'data+nr_auto' | 'data+sofer' | 'data+nr_auto+sofer' (filtrele care au
+ *             restrans lista);
+ *   identity  pentru cursa aleasa: nr_auto / sofer = true (se regaseste pe cursa la acea data),
+ *             false (e pe factura, dar nu pe cursa), null (nu e pe factura).
+ * Le foloseste InvoiceModel::runMatching() pentru verificarea facturilor de pe WhatsApp.
  */
 class InvoiceTripMatcher
 {
@@ -156,6 +163,7 @@ class InvoiceTripMatcher
         // Mai multe curse in aceeasi zi: numarul / soferul de pe factura arata cursa,
         // comparate doar cu cine era pe cursele din ziua respectiva.
         $basis = 'data documentului';
+        $basisKeys = ['data'];
         if (count($matches) > 1) {
             foreach ($this->identityFilters($invoice) as [$label, $filter]) {
                 $narrowed = array_values(array_filter($matches, static function (array $m) use ($filter): bool {
@@ -174,6 +182,7 @@ class InvoiceTripMatcher
                 if (count($narrowed) < count($matches)) {
                     $matches = $narrowed;
                     $basis = 'data documentului + ' . $label;
+                    $basisKeys[] = self::IDENTITY_KEYS[$label];
                 }
             }
         }
@@ -182,16 +191,26 @@ class InvoiceTripMatcher
         $candidates = array_map(fn(array $m): array => $this->candidateSummary($m, $basis), $matches);
 
         if (count($matches) === 1) {
+            $identity = array_fill_keys(array_values(self::IDENTITY_KEYS), null);
+            foreach ($this->identityFilters($invoice) as [$label, $filter]) {
+                $identity[self::IDENTITY_KEYS[$label]] = array_filter($matches[0]['participants'], $filter) !== [];
+            }
+
             return [
                 'status' => 'asociata_auto',
                 'cursa_id' => (int) $matches[0]['trip']['id'],
                 'candidates' => $candidates,
                 'reason' => 'Potrivire unica: ' . $basis . $suffix . '.',
+                'basis' => implode('+', $basisKeys),
+                'identity' => $identity,
             ];
         }
 
         return $this->result('de_verificat', $candidates, count($matches) . ' curse posibile: ' . $basis . $suffix . '. Alege cursa.');
     }
+
+    /** Eticheta filtrului (din identityFilters) => cheia din basis / identity. */
+    private const IDENTITY_KEYS = ['nr. auto' => 'nr_auto', 'sofer' => 'sofer'];
 
     /**
      * Ce identifica vehiculul / soferul pe factura, in ordinea in care se aplica:
@@ -247,6 +266,24 @@ class InvoiceTripMatcher
         }
 
         return true;
+    }
+
+    /**
+     * Aceeasi regula ca participantsOn(), pentru alte module (ex. notificarile WhatsApp catre
+     * soferi: cine conduce vehiculul in ziua D). $trip vine din loadCandidateTrips().
+     *
+     * @return array<int, array{vehicle_id: ?int, driver_id: ?int, nr_inmatriculare: string, sofer: string}>
+     */
+    public function participantsOnDate(array $trip, string $date): array
+    {
+        $day = $this->parseDate($date);
+        $start = $this->parseDate($trip['data_inceput'] ?? null);
+        $end = $this->parseDate($trip['data_sfarsit'] ?? null) ?? $start;
+        if ($day === null || $start === null || $end === null) {
+            return [];
+        }
+
+        return $this->participantsOn($trip, $day, $start, $end);
     }
 
     /**

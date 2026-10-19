@@ -22,6 +22,10 @@ declare(strict_types=1);
  * 3. Piese: scanarile cu subiectul "piese" / "reparatii" / "service" / "revizie" nu intra in
  *    Facturi, ci in registrul de piese (?page=ocr_piese), citite cu PartsInvoiceOcrService:
  *    antet + articole + vehicule / km / garantie, cat apare pe factura (OcrPartsScanService).
+ * 4. WhatsApp: agentul local (whatsapp-agent-lab) scrie perechi in aceeasi coada, cu
+ *    "canal": "whatsapp" si descrierea mesajului in email_subiect (deci aceleasi reguli de
+ *    categorie si de piese). In plus se pastreaza Message ID / grup / expeditor si acelasi
+ *    mesaj nu se preia de doua ori. Perechile Gmail trec exact ca inainte.
  */
 
 if (PHP_SAPI !== 'cli') {
@@ -134,6 +138,19 @@ foreach (glob($inboxDir . '/*.json') ?: [] as $metaPath) {
             continue;
         }
 
+        // null pentru perechile Gmail; coloanele canal_* pentru cele de pe WhatsApp.
+        // Acelasi mesaj WhatsApp se verifica INAINTE de salvare: alt continut sub acelasi
+        // Message ID ar lasa altfel un fisier nefolosit in storage/invoices.
+        $channel = InvoiceModel::channelFromInboxMeta($meta);
+        if ($channel !== null && $channel['canal_mesaj_id'] !== null
+            && $model->findByChannelMessage($channel['canal'], $channel['canal_mesaj_id']) !== null) {
+            $summary['duplicate']++;
+            $log('Duplicat (acelasi mesaj WhatsApp a fost deja preluat): ' . $channel['canal_mesaj_id']);
+            @unlink($filePath);
+            @unlink($metaPath);
+            continue;
+        }
+
         [$document, $error] = $storage->storeFromPath($filePath, (string) ($meta['nume_original'] ?? basename($filePath)));
         if ($document === null) {
             throw new RuntimeException((string) $error);
@@ -154,9 +171,9 @@ foreach (glob($inboxDir . '/*.json') ?: [] as $metaPath) {
                 'email_message_id' => mb_substr((string) ($meta['email_message_id'] ?? ''), 0, 255) ?: null,
                 'email_subiect' => mb_substr((string) ($meta['email_subiect'] ?? ''), 0, 255) ?: null,
                 'email_primit_la' => $received,
-            ]);
+            ] + ($channel ?? []));
             $summary['preluate']++;
-            $log("Preluata scanarea #$id: " . ($meta['email_subiect'] ?? '') . ' (' . ($meta['nume_original'] ?? '') . ')');
+            $log("Preluata scanarea #$id" . ($channel !== null ? ' (WhatsApp)' : '') . ': ' . ($meta['email_subiect'] ?? '') . ' (' . ($meta['nume_original'] ?? '') . ')');
         }
 
         // Fisierul e acum in storage/invoices/YYYY/MM (sau era deja): perechea din inbox pleaca.

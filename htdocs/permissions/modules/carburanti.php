@@ -27,6 +27,7 @@ return [
     'endpoints'   => [
         'sync_now'     => 'sync',
         'link_fillup'  => 'link',
+        'link_options' => 'link',
         'set_full'     => 'set_full',
         'set_odometer' => 'set_full',
         'set_t0'       => 'set_full',

@@ -114,6 +114,15 @@ class ModuleController
             case 'manage_document_type_config':
                 $this->manageDocumentTypeConfigAction($moduleKey, $module);
                 return;
+            case 'required_documents':
+                $this->vehicleRequiredDocumentsAction($moduleKey, $module);
+                return;
+            case 'required_documents_api':
+                $this->vehicleRequiredDocumentsApiAction($moduleKey);
+                return;
+            case 'required_documents_history':
+                $this->vehicleRequiredDocumentsHistoryAction($moduleKey);
+                return;
             case 'update_document_type_expiry':
                 $this->updateDocumentTypeExpiryAction($moduleKey, $module);
                 return;
@@ -3313,12 +3322,15 @@ class ModuleController
 
         $now = date('Y-m-d H:i:s');
         try {
+            // `obligatoriu` are DEFAULT 1: fara el, un document fara expirare adaugat de aici ar deveni obligatoriu.
+            $this->documentModel->ensureVehicleRequiredDocumentSchema();
             $this->moduleModel->insertRecord('configurare_costuri_documente_vehicule', [
                 'vehicle_type' => $vehicleTypeRaw,
                 'document_type' => $documentType,
                 'document_cost' => $documentCost,
                 'validity_days' => $validityDays,
                 'requires_expiry' => $requiresExpiry ? 1 : 0,
+                'obligatoriu' => $requiresExpiry ? 1 : 0,
                 'created_at' => $now,
                 'updated_at' => $now,
             ]);
@@ -3390,6 +3402,288 @@ class ModuleController
             'search' => $search,
             'backUrl' => build_query_url(['page' => 'configurare_costuri_documente_vehicule_override']),
         ]);
+    }
+
+    private function vehicleRequiredDocumentsAction(string $moduleKey, array $module): void
+    {
+        if ($moduleKey !== 'documente') {
+            redirect(build_query_url(['page' => 'documente']));
+        }
+
+        $state = null;
+        try {
+            $this->documentModel->ensureVehicleRequiredDocumentSchema();
+            $state = $this->buildVehicleRequiredDocumentsState();
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][required_documents] ' . $exception->getMessage());
+            flash_set('danger', 'Nu s-a putut incarca configurarea documentelor obligatorii. Ruleaza database/migrations/2026_10_19_000001_documente_vehicule_obligatorii.sql si incearca din nou.');
+        }
+
+        if ((string) ($_GET['format'] ?? '') === 'json') {
+            $this->sendRequiredDocumentsJson($state !== null
+                ? ['success' => true, 'state' => $state]
+                : ['success' => false, 'message' => 'Nu s-a putut incarca configurarea.'], $state !== null ? 200 : 500);
+        }
+
+        render('module/vehicle_required_documents.php', [
+            'pageTitle' => 'Documente obligatorii vehicule',
+            'currentPage' => $this->resolveCurrentPage($moduleKey, $module),
+            'moduleKey' => $moduleKey,
+            'module' => $module,
+            'state' => $state,
+            'canManage' => function_exists('is_admin') && is_admin(),
+        ]);
+    }
+
+    /**
+     * Starea completa a paginii Documente obligatorii (aceeasi pentru tabel, matrice si KPI).
+     * KPI: categorii = tipuri de vehicul cu cel putin un document configurat; tipuri = documente
+     * distincte; asignari = celule cu obligatoriu = 1; atentie = vehicule cu document obligatoriu
+     * lipsa sau expirat (aceeasi regula ca alertele din Dashboard).
+     */
+    private function buildVehicleRequiredDocumentsState(): array
+    {
+        $matrix = $this->documentModel->getVehicleRequiredDocumentMatrix();
+        $counts = $this->documentModel->getVehicleDocumentTypeUsageCounts();
+        $vehicleCounts = $this->documentModel->countVehiclesByDocumentConfigType();
+
+        $typeLabels = [
+            'cap_tractor' => 'Cap tractor',
+            'camion' => 'Camion',
+            'semiremorca_primar' => 'Semiremorcă primar',
+            'semiremorca_distributie' => 'Semiremorcă distribuție',
+            'autovehicul' => 'Autoturism / autoutilitară',
+        ];
+
+        $groups = [];
+        $categories = [];
+        foreach (DocumentModel::VEHICLE_DOCUMENT_CATEGORIES as $groupKey => $group) {
+            $groups[] = ['key' => $groupKey, 'label' => $group['label'], 'types' => $group['types']];
+            foreach ($group['types'] as $type) {
+                $categories[] = [
+                    'key' => $type,
+                    'label' => $typeLabels[$type] ?? vehicle_type_label($type),
+                    'group' => $groupKey,
+                    'vehicles' => (int) ($vehicleCounts[$type] ?? 0),
+                ];
+            }
+        }
+
+        $documents = [];
+        $configuredTypes = [];
+        $requiredAssignments = 0;
+        foreach ($matrix as $key => $entry) {
+            $cells = [];
+            foreach ($entry['cells'] as $type => $cell) {
+                $configuredTypes[$type] = true;
+                if ($cell['required']) {
+                    $requiredAssignments++;
+                }
+                $cells[$type] = $cell + ['prices' => (int) ($counts['prices_by_type'][$key][$type] ?? 0)];
+            }
+            $documents[] = [
+                'key' => (string) $key,
+                'label' => $entry['label'],
+                'uploaded' => (int) ($counts['usage'][$key]['uploaded'] ?? 0),
+                'prices' => (int) ($counts['usage'][$key]['prices'] ?? 0),
+                'cells' => (object) $cells,
+            ];
+        }
+
+        $issues = $this->documentModel->getVehicleRequiredDocumentIssueSummary();
+
+        return [
+            'groups' => $groups,
+            'categories' => $categories,
+            'documents' => $documents,
+            'kpis' => [
+                'categories' => count($configuredTypes),
+                'document_types' => count($documents),
+                'required_assignments' => $requiredAssignments,
+                'attention_vehicles' => $issues['vehicles'],
+                'attention_missing' => $issues['missing'],
+                'attention_expired' => $issues['expired'],
+            ],
+        ];
+    }
+
+    private function sendRequiredDocumentsJson(array $payload, int $statusCode = 200): never
+    {
+        http_response_code($statusCode);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+
+    /**
+     * Modificarile din pagina Documente obligatorii (fetch, JSON). Fiecare operatie lucreaza pe
+     * aceeasi tabela ca matricea veche, recalculeaza statusul vehiculelor afectate si scrie in audit_log.
+     */
+    private function vehicleRequiredDocumentsApiAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'documente' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Cerere invalida.'], 405);
+        }
+        if (!verify_csrf_token($_POST['_token'] ?? null)) {
+            $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Sesiunea a expirat. Reincarca pagina si incearca din nou.'], 403);
+        }
+        if (!function_exists('is_admin') || !is_admin()) {
+            $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Doar administratorii pot modifica documentele obligatorii.'], 403);
+        }
+
+        $vehicleTypes = [];
+        foreach (DocumentModel::VEHICLE_DOCUMENT_CATEGORIES as $group) {
+            array_push($vehicleTypes, ...$group['types']);
+        }
+
+        $op = (string) ($_POST['op'] ?? '');
+        $documentType = trim((string) preg_replace('/\s+/u', ' ', (string) ($_POST['document'] ?? '')));
+        $vehicleType = (string) ($_POST['vehicle_type'] ?? '');
+        $flag = static fn(string $name): bool => (string) ($_POST[$name] ?? '') === '1';
+
+        if ($documentType === '' || mb_strlen($documentType, 'UTF-8') > 120) {
+            $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Numele documentului lipseste sau are peste 120 de caractere.'], 422);
+        }
+        if (in_array($op, ['toggle_required', 'set_expiry', 'add_to_category', 'remove_from_category'], true) && !in_array($vehicleType, $vehicleTypes, true)) {
+            $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Tipul de vehicul selectat nu este valid.'], 422);
+        }
+
+        $changedTypes = [];
+        $message = '';
+        try {
+            $this->documentModel->ensureVehicleRequiredDocumentSchema();
+            switch ($op) {
+                case 'toggle_required':
+                    $result = $this->documentModel->setVehicleRequiredDocumentCell($documentType, $vehicleType, ['required' => $flag('required')], true);
+                    $changedTypes[] = $vehicleType;
+                    $message = $flag('required') ? 'Documentul este acum obligatoriu.' : 'Documentul nu mai este obligatoriu.';
+                    $this->auditRequiredDocuments($result['before'] === null ? 'adaugare' : 'modificare', $documentType . ' / ' . $this->requiredDocumentTypeLabel($vehicleType) . ': ' . ($flag('required') ? 'obligatoriu' : 'neobligatoriu'), $result['before'], $result['after']);
+                    break;
+
+                case 'set_expiry':
+                    $result = $this->documentModel->setVehicleRequiredDocumentCell($documentType, $vehicleType, ['requires_expiry' => $flag('requires_expiry')], false);
+                    if ($result['before'] === null) {
+                        $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Documentul nu este configurat pentru aceasta categorie.'], 404);
+                    }
+                    $changedTypes[] = $vehicleType;
+                    $message = $flag('requires_expiry') ? 'Formularul Documente va cere data de expirare.' : 'Formularul Documente nu mai cere data de expirare.';
+                    $this->auditRequiredDocuments('modificare', $documentType . ' / ' . $this->requiredDocumentTypeLabel($vehicleType) . ': ' . ($flag('requires_expiry') ? 'cere expirare' : 'fara expirare'), $result['before'], $result['after']);
+                    break;
+
+                case 'add_to_category':
+                    if ($this->documentModel->findVehicleRequiredDocumentCell($documentType, $vehicleType) !== null) {
+                        $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Documentul este deja configurat pentru aceasta categorie.'], 409);
+                    }
+                    $result = $this->documentModel->setVehicleRequiredDocumentCell($documentType, $vehicleType, ['required' => $flag('required'), 'requires_expiry' => $flag('requires_expiry')], true);
+                    $changedTypes[] = $vehicleType;
+                    $message = 'Documentul a fost adaugat in categorie.';
+                    $this->auditRequiredDocuments('adaugare', $documentType . ' / ' . $this->requiredDocumentTypeLabel($vehicleType) . ': adaugat in categorie', null, $result['after']);
+                    break;
+
+                case 'create_type':
+                    if ($this->documentModel->findVehicleDocumentTypeLabel($documentType) !== null) {
+                        $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Tipul de document „' . $documentType . '” exista deja. Adauga-l in categorie din tabel.'], 409);
+                    }
+                    $selected = array_values(array_intersect($vehicleTypes, array_map('strval', (array) ($_POST['vehicle_types'] ?? []))));
+                    if ($selected === []) {
+                        $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Bifeaza cel putin o categorie de vehicule.'], 422);
+                    }
+                    $this->db->beginTransaction();
+                    try {
+                        foreach ($selected as $type) {
+                            $this->documentModel->setVehicleRequiredDocumentCell($documentType, $type, ['required' => $flag('required'), 'requires_expiry' => $flag('requires_expiry')], true);
+                        }
+                        $this->db->commit();
+                    } catch (Throwable $exception) {
+                        if ($this->db->inTransaction()) {
+                            $this->db->rollBack();
+                        }
+                        throw $exception;
+                    }
+                    $changedTypes = $selected;
+                    $message = 'Tipul de document „' . $documentType . '” a fost creat.';
+                    $this->auditRequiredDocuments('adaugare', $documentType . ': tip nou pe ' . implode(', ', array_map([$this, 'requiredDocumentTypeLabel'], $selected)), null, ['document_type' => $documentType, 'vehicle_types' => $selected, 'obligatoriu' => $flag('required') ? 1 : 0, 'requires_expiry' => $flag('requires_expiry') ? 1 : 0]);
+                    break;
+
+                case 'remove_from_category':
+                    $before = $this->documentModel->removeVehicleRequiredDocumentCell($documentType, $vehicleType);
+                    if ($before === null) {
+                        $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Documentul nu era configurat pentru aceasta categorie.'], 404);
+                    }
+                    $changedTypes[] = $vehicleType;
+                    $message = 'Documentul a fost scos din categorie.';
+                    $this->auditRequiredDocuments('stergere', $documentType . ' / ' . $this->requiredDocumentTypeLabel($vehicleType) . ': scos din categorie', $before, null);
+                    break;
+
+                case 'delete_type':
+                    $usage = $this->documentModel->countVehicleDocumentTypeUsage($documentType);
+                    $changedTypes = $this->documentModel->deleteVehicleDocumentTypeEverywhere($documentType);
+                    if ($changedTypes === []) {
+                        $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Tipul de document nu mai era configurat.'], 404);
+                    }
+                    $message = 'Tipul de document „' . $documentType . '” a fost sters de pe toate categoriile.';
+                    $this->auditRequiredDocuments('stergere', $documentType . ': sters de pe ' . implode(', ', array_map([$this, 'requiredDocumentTypeLabel'], $changedTypes)), ['document_type' => $documentType, 'vehicle_types' => $changedTypes, 'preturi_pe_vehicul' => $usage['prices']], null);
+                    break;
+
+                default:
+                    $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Operatie necunoscuta.'], 422);
+            }
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][required_documents_api][' . $op . '] ' . $exception->getMessage());
+            $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Modificarea nu a putut fi salvata.'], 500);
+        }
+
+        foreach (array_unique($changedTypes) as $type) {
+            try {
+                $this->entityStatusService->syncVehicleStatusesByConfiguredType($type);
+            } catch (Throwable $exception) {
+                error_log('[ModuleController][required_documents_api][sync] ' . $type . ' ' . $exception->getMessage());
+            }
+        }
+
+        $this->sendRequiredDocumentsJson(['success' => true, 'message' => $message, 'state' => $this->buildVehicleRequiredDocumentsState()]);
+    }
+
+    private function requiredDocumentTypeLabel(string $vehicleType): string
+    {
+        return $vehicleType === 'autovehicul' ? 'Autoturism / autoutilitara' : vehicle_type_label($vehicleType);
+    }
+
+    private function auditRequiredDocuments(string $action, string $description, ?array $before, ?array $after): void
+    {
+        if (function_exists('audit_log_write')) {
+            audit_log_write($this->db, 'documente_obligatorii', (int) ($after['id'] ?? $before['id'] ?? 0), $action, $description, $before, $after, $this->currentUserId());
+        }
+    }
+
+    /** Istoricul modificarilor (audit_log, modul documente_obligatorii), cel mai nou primul. */
+    private function vehicleRequiredDocumentsHistoryAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'documente') {
+            $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Cerere invalida.'], 404);
+        }
+
+        try {
+            $stmt = $this->db->query("
+                SELECT a.actiune, a.descriere, a.created_at, u.nume AS user_name
+                FROM audit_log a
+                LEFT JOIN utilizatori u ON u.id = a.user_id
+                WHERE a.modul = 'documente_obligatorii'
+                ORDER BY a.created_at DESC, a.id DESC
+                LIMIT 200
+            ");
+            $rows = $stmt->fetchAll();
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][required_documents_history] ' . $exception->getMessage());
+            $this->sendRequiredDocumentsJson(['success' => false, 'message' => 'Istoricul nu a putut fi incarcat.'], 500);
+        }
+
+        $this->sendRequiredDocumentsJson(['success' => true, 'rows' => array_map(static fn(array $row): array => [
+            'action' => (string) $row['actiune'],
+            'description' => (string) $row['descriere'],
+            'created_at' => format_date_ro((string) $row['created_at']) . ' ' . substr((string) $row['created_at'], 11, 5),
+            'user' => (string) ($row['user_name'] ?? '-'),
+        ], $rows)]);
     }
 
     private function updateDocumentTypeExpiryAction(string $moduleKey, array $module): void

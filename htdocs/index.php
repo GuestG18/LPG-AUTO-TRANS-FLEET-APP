@@ -11,6 +11,14 @@ if (PHP_SAPI !== 'cli' && str_starts_with($requestPath, $assistantApiPrefix)) {
     $assistantApiPath = substr($requestPath, strlen($assistantApiPrefix));
 }
 
+// BaileyBot (/api/whatsapp-bot/...): outbox si mesajele soferilor, tot server-to-server.
+$whatsAppBotApiPath = null;
+$whatsAppBotApiPrefix = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/') . '/api/whatsapp-bot/';
+if (PHP_SAPI !== 'cli' && str_starts_with($requestPath, $whatsAppBotApiPrefix)) {
+    define('FLEET_STATELESS_REQUEST', true);
+    $whatsAppBotApiPath = substr($requestPath, strlen($whatsAppBotApiPrefix));
+}
+
 require_once __DIR__ . '/config/config.php';
 require_once __DIR__ . '/config/database.php';
 $composerAutoload = dirname(__DIR__) . '/vendor/autoload.php';
@@ -432,6 +440,13 @@ if ($assistantApiPath !== null) {
     require_once __DIR__ . '/models/AssistantDownloadTokenModel.php';
     require_once __DIR__ . '/controllers/AssistantApiController.php';
     (new AssistantApiController())->handle($assistantApiPath);
+    exit;
+}
+
+if ($whatsAppBotApiPath !== null) {
+    require_once __DIR__ . '/models/BaseModel.php';
+    require_once __DIR__ . '/controllers/WhatsAppBotApiController.php';
+    (new WhatsAppBotApiController())->handle($whatsAppBotApiPath);
     exit;
 }
 

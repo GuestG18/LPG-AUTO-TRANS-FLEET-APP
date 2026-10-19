@@ -94,6 +94,9 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
 };
 ?>
 
+<?php if ($usesDocumentCompactRows): ?>
+    <?php $vehicleDocumentsActiveTab = 'documente'; require __DIR__ . '/_vehicle_documents_tabs.php'; ?>
+<?php endif; ?>
 <?php if ($isDocumentCostOverrideList): ?><div class="doc-cost-page"><?php endif; ?>
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3<?= $isDocumentCostOverrideList ? ' document-cost-header' : '' ?>">
     <h2 class="h4 mb-0"><?= e($module['title']) ?></h2>
@@ -105,9 +108,9 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
             <a class="btn btn-outline-secondary" href="<?= e(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'manage_document_type_config'])) ?>">
                 Gestionare tipuri documente
             </a>
-            <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addDocumentTypeConfigModal">
-                Tip document nou pe tip vehicul
-            </button>
+            <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'documente', 'action' => 'required_documents'])) ?>">
+                Documente obligatorii pe tip vehicul
+            </a>
         <?php endif; ?>
         <?php if ($isMaintenanceList && !$isMaintenanceTireStockPage): ?>
             <a class="btn btn-outline-primary" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_stock'])) ?>">Anvelope</a>
@@ -615,58 +618,6 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
 <?php endif; ?>
 
 <?php if ($isDocumentCostOverrideList && function_exists('is_admin') && is_admin()): ?>
-    <div class="modal fade" id="addDocumentTypeConfigModal" tabindex="-1" aria-labelledby="addDocumentTypeConfigModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <form method="post" action="<?= e(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override', 'action' => 'add_document_type_config'])) ?>">
-                    <?= csrf_field() ?>
-                    <div class="modal-header">
-                        <h3 class="modal-title fs-5" id="addDocumentTypeConfigModalLabel">Adauga tip document pe tip vehicul</h3>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="mb-3">
-                            <label class="form-label" for="doc_cfg_vehicle_type">Tip vehicul *</label>
-                            <select class="form-select" id="doc_cfg_vehicle_type" name="doc_cfg_vehicle_type" required>
-                                <?php foreach ($documentTypeVehicleOptions as $typeValue => $typeLabel): ?>
-                                    <option value="<?= e((string) $typeValue) ?>"><?= e((string) $typeLabel) ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-
-                        <div class="mb-3">
-                            <label class="form-label" for="doc_cfg_document_type">Tip document *</label>
-                            <input
-                                type="text"
-                                class="form-control"
-                                id="doc_cfg_document_type"
-                                name="doc_cfg_document_type"
-                                maxlength="120"
-                                placeholder="Ex: CASCO"
-                                required
-                            >
-                        </div>
-
-                        <div class="form-text mt-2">
-                            Dupa salvare, noul tip document apare automat in formularele de adaugare documente.
-                        </div>
-
-                        <div class="form-check mt-3">
-                            <input class="form-check-input" type="checkbox" value="1" id="doc_cfg_requires_expiry" name="doc_cfg_requires_expiry" checked>
-                            <label class="form-check-label" for="doc_cfg_requires_expiry">
-                                Cere data de expirare in formularul Documente
-                            </label>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Renunta</button>
-                        <button type="submit" class="btn btn-primary">Salveaza tipul</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
     <div class="modal fade" id="addDriverDocumentTypeConfigModal" tabindex="-1" aria-labelledby="addDriverDocumentTypeConfigModalLabel" aria-hidden="true">
         <div class="modal-dialog">
             <div class="modal-content">

@@ -202,6 +202,35 @@ try {
     $dashBoth = $dashboardRows('2099-07-01', '2099-08-31');
     check('3i. Ambele luni (iul + aug) = toata cursa', ($dashBoth[$pdTrip]['billing_part'] ?? '') === 'full');
 
+    echo "\n-- Centralizator: P+D impartita in Primar km (km) si Distributie (tone) --\n";
+    /* Valoarea si numarul partilor cursei P+D de test, pe tipuri, din raportul lunii. */
+    $pdParts = static function (string $month) use ($db, $beneficiaryId, $pdTrip): array {
+        $report = (new CentralizatorFacturareService($db))->getReport(['month' => $month, 'beneficiar_id' => [$beneficiaryId]]);
+        $parts = [];
+        foreach ($report['activity']['by_type'] as $type => $typeRow) {
+            foreach ($typeRow['routes'] as $group) {
+                foreach ($group['trip_rows'] as $tripRow) {
+                    if ((int) $tripRow['trip_id'] === $pdTrip) {
+                        $parts[$type] = (float) $tripRow['value'];
+                    }
+                }
+            }
+        }
+
+        return ['parts' => $parts, 'types' => array_keys($report['activity']['by_type']), 'trip_count' => (int) $report['summary']['trip_count']];
+    };
+    $cfJul = $pdParts('2099-07');
+    $cfAug = $pdParts('2099-08');
+    check('3j. P+D nu mai e tip in Centralizator', !in_array('primar_distributie', $cfJul['types'], true));
+    check('3k. Iulie: doar partea de km, la Primar km', array_keys($cfJul['parts']) === ['primar'] && abs($cfJul['parts']['primar'] - (float) ($jul['total_facturare'] ?? -1)) < 0.02, json_encode($cfJul['parts']));
+    check('3l. August: doar partea de tone, la Distributie', array_keys($cfAug['parts']) === ['distributie'] && abs($cfAug['parts']['distributie'] - (float) ($aug['total_facturare'] ?? -1)) < 0.02, json_encode($cfAug['parts']));
+
+    $setRules([]);
+    $cfFull = $pdParts('2099-07');
+    $cfFullSum = array_sum($cfFull['parts']);
+    check('3m. Aceeasi luna: km la Primar km + tone la Distributie = valoarea cursei', isset($cfFull['parts']['primar'], $cfFull['parts']['distributie']) && abs($cfFullSum - 2135.0) <= 0.01, json_encode($cfFull['parts']));
+    $setRules(['primar_distributie' => ['km' => BillingMonthRule::START, 'tone' => BillingMonthRule::END]]);
+
     echo "\n-- Istoric activitati sofer --\n";
     $pdRow = $db->query("SELECT * FROM curse_dispecer WHERE id = {$pdTrip}")->fetch(PDO::FETCH_ASSOC);
     $pdRow += ['transported_tons' => 0.0, 'delivered_tons' => 20.0, 'clients' => 3, 'total_refacturare' => 50.0, 'total_refacturare_facturata' => 50.0];

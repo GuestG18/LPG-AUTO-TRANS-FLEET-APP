@@ -86,14 +86,15 @@ require __DIR__ . '/_status.php';
 <?php endif; ?>
 
 <?php if ($isScan): ?>
+    <?php $fromWhatsApp = (string) ($invoice['canal'] ?? '') === InvoiceModel::CANAL_WHATSAPP; ?>
     <div class="alert alert-light small d-flex flex-wrap gap-3 align-items-center py-2">
-        <span><i class="bi bi-envelope-paper" aria-hidden="true"></i> Scanare primită pe email
+        <span><i class="bi <?= $fromWhatsApp ? 'bi-whatsapp' : 'bi-envelope-paper' ?>" aria-hidden="true"></i> <?= $fromWhatsApp ? 'Primită pe WhatsApp' : 'Scanare primită pe email' ?>
             <?= $invoice['email_primit_la'] !== null ? 'la <strong>' . e(date('d.m.Y H:i', strtotime((string) $invoice['email_primit_la']))) . '</strong>' : '' ?></span>
         <?php if (trim((string) ($invoice['email_subiect'] ?? '')) !== ''): ?>
-            <span>Subiect: <strong><?= e((string) $invoice['email_subiect']) ?></strong>
+            <span><?= $fromWhatsApp ? 'Descriere' : 'Subiect' ?>: <strong><?= e((string) $invoice['email_subiect']) ?></strong>
                 <?php $subjectType = InvoiceModel::typeFromSubject((string) $invoice['email_subiect']); ?>
                 <?php if ($subjectType !== null): ?>
-                    <span class="badge bg-info-subtle text-info-emphasis" title="Categoria a fost aleasă după subiectul emailului">→ <?= e(InvoiceModel::TYPES[$subjectType]['label']) ?></span>
+                    <span class="badge bg-info-subtle text-info-emphasis" title="Categoria a fost aleasă după <?= $fromWhatsApp ? 'descrierea mesajului' : 'subiectul emailului' ?>">→ <?= e(InvoiceModel::TYPES[$subjectType]['label']) ?></span>
                 <?php endif; ?>
             </span>
         <?php endif; ?>

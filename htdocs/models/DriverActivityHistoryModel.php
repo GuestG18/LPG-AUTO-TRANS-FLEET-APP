@@ -1223,7 +1223,8 @@ class DriverActivityHistoryModel extends BaseModel
             ];
             $sql = $select . ' AND f.fillup_datetime BETWEEN :fuel_date_start AND :fuel_date_end';
             if ($hasLinks) {
-                $sql .= ' AND l.id IS NULL';
+                // Fara cursa: neasociate sau asociate cu Km service (trip_id NULL).
+                $sql .= ' AND l.trip_id IS NULL';
             }
             if ((int) ($filters['vehicle_id'] ?? 0) > 0) {
                 $sql .= ' AND v.id = :fuel_vehicle_id';

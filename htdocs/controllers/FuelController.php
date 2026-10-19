@@ -79,6 +79,9 @@ class FuelController
             case 'unassociated_diagnosis':
                 $this->unassociatedDiagnosisAction();
                 return;
+            case 'link_options':
+                $this->linkOptionsAction();
+                return;
             case 'km_calibration_save':
                 $this->kmCalibrationSaveAction();
                 return;
@@ -129,7 +132,6 @@ class FuelController
                 'unassociated_fillups' => [],
                 'trip_consumption' => [],
                 'transport_consumption' => [],
-                'trip_options' => [],
                 'sync_logs' => [],
                 'last_sync' => null,
                 'vehicle_options' => [],
@@ -330,6 +332,28 @@ class FuelController
         exit;
     }
 
+    /** JSON: cursele + Km service ale vehiculului alimentarii, pentru asocierea manuala. */
+    private function linkOptionsAction(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store');
+
+        try {
+            $options = $this->model->getLinkOptions((int) ($_GET['fillup_id'] ?? 0));
+            if ($options === null) {
+                http_response_code(404);
+                echo json_encode(['ok' => false, 'error' => 'Alimentarea nu exista.']);
+                exit;
+            }
+            echo json_encode(['ok' => true, 'data' => $options], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $exception) {
+            error_log('[FuelController][link_options] ' . $exception->getMessage());
+            http_response_code(500);
+            echo json_encode(['ok' => false, 'error' => 'Cursele nu au putut fi incarcate.']);
+        }
+        exit;
+    }
+
     /** Citire de incredere a odometrului (bord / service / ITP / tahograf) pentru calibrarea GPS. */
     private function kmCalibrationSaveAction(): void
     {
@@ -503,15 +527,24 @@ class FuelController
         ensure_csrf_or_redirect(build_query_url(['page' => 'carburanti']));
 
         $fillupId = (int) ($_POST['fillup_id'] ?? 0);
-        $tripId = (int) ($_POST['trip_id'] ?? 0);
+        // Selectorul trimite "123" pentru o cursa sau "service:45" pentru Km service.
+        $target = trim((string) ($_POST['trip_id'] ?? ''));
+        $serviceKmId = str_starts_with($target, 'service:') ? (int) substr($target, 8) : 0;
+        $tripId = $serviceKmId > 0 ? 0 : (int) $target;
 
-        if ($fillupId <= 0 || $tripId <= 0) {
+        if ($fillupId <= 0 || ($tripId <= 0 && $serviceKmId <= 0)) {
             flash_set('warning', 'Selecteaza alimentarea si cursa pentru asociere manuala.');
             redirect($this->safeReturnUrl($_POST['return_url'] ?? null));
         }
 
         try {
-            if ($this->model->linkFillupToTrip($fillupId, $tripId)) {
+            if ($serviceKmId > 0) {
+                if ($this->model->linkFillupToServiceKm($fillupId, $serviceKmId)) {
+                    flash_set('success', 'Alimentarea a fost asociata manual cu perioada din Km service.');
+                } else {
+                    flash_set('warning', 'Alimentarea nu a putut fi asociata.');
+                }
+            } elseif ($this->model->linkFillupToTrip($fillupId, $tripId)) {
                 flash_set('success', 'Alimentarea a fost asociata manual cu cursa selectata.');
             } else {
                 flash_set('warning', 'Alimentarea nu a putut fi asociata.');

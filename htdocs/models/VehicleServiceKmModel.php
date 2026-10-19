@@ -39,8 +39,56 @@ class VehicleServiceKmModel extends BaseModel
             ORDER BY (s.data_intoarcere IS NULL) DESC, s.data_plecare DESC, s.id DESC
         ");
         $stmt->execute([':since' => date('Y-m-d', strtotime('-' . max(1, $days) . ' days'))]);
+        $rows = array_map([self::class, 'withDuration'], $stmt->fetchAll(PDO::FETCH_ASSOC));
 
-        return array_map([self::class, 'withDuration'], $stmt->fetchAll(PDO::FETCH_ASSOC));
+        $fuel = $this->fuelByEntryId(array_map(static fn (array $row): int => (int) $row['id'], $rows));
+        foreach ($rows as &$row) {
+            $row['alimentari'] = $fuel[(int) $row['id']] ?? null;
+        }
+        unset($row);
+
+        return $rows;
+    }
+
+    /**
+     * Alimentarile asociate in Carburanti cu fiecare intrare (fuel_trip_links.service_km_id,
+     * automat dupa interval ±12h sau manual). Coloana apare la prima deschidere a paginii
+     * Carburanti / la sync; pana atunci nu exista asocieri.
+     *
+     * @param int[] $ids
+     * @return array<int, array{nr: int, litri: float, valoare: float}>
+     */
+    private function fuelByEntryId(array $ids): array
+    {
+        $ids = array_values(array_filter(array_unique($ids)));
+        if ($ids === []) {
+            return [];
+        }
+
+        try {
+            $stmt = $this->db->query("
+                SELECT l.service_km_id, COUNT(*) AS nr,
+                       COALESCE(SUM(CASE WHEN f.fuel_type <> 'adblue' THEN f.quantity_liters ELSE 0 END), 0) AS litri,
+                       COALESCE(SUM(f.total_value), 0) AS valoare
+                FROM fuel_trip_links l
+                INNER JOIN fuel_fillups f ON f.id = l.fillup_id
+                WHERE l.service_km_id IN (" . implode(',', array_map('intval', $ids)) . ")
+                GROUP BY l.service_km_id
+            ");
+        } catch (PDOException) {
+            return [];
+        }
+
+        $map = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $map[(int) $row['service_km_id']] = [
+                'nr' => (int) $row['nr'],
+                'litri' => (float) $row['litri'],
+                'valoare' => (float) $row['valoare'],
+            ];
+        }
+
+        return $map;
     }
 
     public function find(int $id): ?array

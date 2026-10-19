@@ -896,7 +896,13 @@ def send_mail(
     text_body: str,
     html_body: str | None = None,
     headers: dict[str, str] | None = None,
+    message_id: str | None = None,
 ) -> str:
+    """Trimite un email si intoarce Message-ID-ul lui.
+
+    message_id: Message-ID ales de apelant (ex. tichetele de suport il salveaza inainte de
+    trimitere, ca o reincercare sa pastreze firul de discutie); implicit unul nou.
+    """
     if not config.smtp_host or not config.from_address:
         raise RuntimeError("SMTP neconfigurat (MAIL_HOST / MAIL_FROM_ADDRESS).")
 
@@ -904,7 +910,7 @@ def send_mail(
     message["Subject"] = subject
     message["From"] = formataddr((config.from_name, config.from_address))
     message["To"] = formataddr((to_name, to_email)) if to_name else to_email
-    message["Message-ID"] = make_msgid()
+    message["Message-ID"] = message_id or make_msgid()
     if config.return_path:
         message["Return-Path"] = config.return_path
     for key, value in (headers or {}).items():

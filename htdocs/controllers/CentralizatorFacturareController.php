@@ -209,7 +209,7 @@ class CentralizatorFacturareController
         fputcsv($out, [], ';');
 
         fputcsv($out, ['Activity by vehicle'], ';');
-        fputcsv($out, ['Vehicul', 'Capacitate', 'Nr. curse', 'Primar km', 'Primar valoare', 'Primar tone', 'Distribuție tone', 'Distribuție km facturați', 'P+D km', 'P+D tone', 'Compresor activ.', 'Total valoare'], ';');
+        fputcsv($out, ['Vehicul', 'Capacitate', 'Nr. curse', 'Primar km', 'Primar valoare', 'Primar tone', 'Distribuție tone', 'Distribuție km facturați', 'Compresor activ.', 'Total valoare'], ';');
         foreach ((array) ($report['vehicles']['rows'] ?? []) as $row) {
             fputcsv($out, [
                 (string) ($row['nr_inmatriculare'] ?? ''),
@@ -220,8 +220,6 @@ class CentralizatorFacturareController
                 (string) ($row['primar_tona']['tone'] ?? 0),
                 (string) ($row['distributie']['tone'] ?? 0),
                 (string) ($row['distributie']['km'] ?? 0),
-                (string) ($row['primar_distributie']['km'] ?? 0),
-                (string) ($row['primar_distributie']['tone'] ?? 0),
                 (string) ($row['compresor']['activity'] ?? 0),
                 (string) ($row['total_value'] ?? 0),
             ], ';');

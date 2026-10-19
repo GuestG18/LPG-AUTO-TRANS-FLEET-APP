@@ -67,6 +67,13 @@ class InvoiceModel extends BaseModel
         'legacy_cazare' => 'Cazare (import)',
     ];
 
+    /**
+     * Canalul prin care a venit o scanare (coloana `canal`). NULL = email (Gmail),
+     * ca inainte. Facturile de pe WhatsApp au tot sursa 'scan' (acelasi drum prin
+     * coada, citire si asociere); canalul doar le marcheaza proveniența.
+     */
+    public const CANAL_WHATSAPP = 'whatsapp';
+
     /** @var array<string, ?int> */
     private array $categoryIdCache = [];
 
@@ -164,11 +171,28 @@ class InvoiceModel extends BaseModel
             'email_message_id' => 'ADD COLUMN email_message_id VARCHAR(255) NULL AFTER ocr_incercari',
             'email_subiect' => 'ADD COLUMN email_subiect VARCHAR(255) NULL AFTER email_message_id',
             'email_primit_la' => 'ADD COLUMN email_primit_la DATETIME NULL AFTER email_subiect',
+            // Scanarile venite pe WhatsApp (agentul local scrie in aceeasi coada)
+            'canal' => 'ADD COLUMN canal VARCHAR(20) NULL AFTER email_primit_la',
+            'canal_mesaj_id' => 'ADD COLUMN canal_mesaj_id VARCHAR(255) NULL AFTER canal',
+            'canal_grup' => 'ADD COLUMN canal_grup VARCHAR(150) NULL AFTER canal_mesaj_id',
+            'canal_expeditor' => 'ADD COLUMN canal_expeditor VARCHAR(150) NULL AFTER canal_grup',
+            'ocr_incredere' => 'ADD COLUMN ocr_incredere VARCHAR(10) NULL AFTER ocr_incercari',
         ];
         foreach ($missing as $column => $ddl) {
             if (!in_array($column, $columns, true)) {
                 $this->db->exec('ALTER TABLE facturi ' . $ddl);
             }
+        }
+
+        $index = $this->db->query("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'facturi'
+              AND INDEX_NAME = 'idx_facturi_canal'
+        ")->fetchColumn();
+        if ((int) $index === 0) {
+            $this->db->exec('ALTER TABLE facturi ADD INDEX idx_facturi_canal (canal, canal_mesaj_id)');
         }
     }
 
@@ -299,6 +323,11 @@ class InvoiceModel extends BaseModel
         'email_message_id' => PDO::PARAM_STR,
         'email_subiect' => PDO::PARAM_STR,
         'email_primit_la' => PDO::PARAM_STR,
+        'canal' => PDO::PARAM_STR,
+        'canal_mesaj_id' => PDO::PARAM_STR,
+        'canal_grup' => PDO::PARAM_STR,
+        'canal_expeditor' => PDO::PARAM_STR,
+        'ocr_incredere' => PDO::PARAM_STR,
     ];
 
     /**
@@ -355,6 +384,48 @@ class InvoiceModel extends BaseModel
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
         return $row === false ? null : $row;
+    }
+
+    /**
+     * Factura (oricare, si stearsa logic) venita din acelasi mesaj al unui canal,
+     * ex. acelasi Message ID WhatsApp. Ca sursa_key, opreste reimportul.
+     */
+    public function findByChannelMessage(string $channel, string $messageId): ?array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM facturi WHERE canal = :canal AND canal_mesaj_id = :mesaj ORDER BY id ASC LIMIT 1');
+        $stmt->bindValue(':canal', $channel, PDO::PARAM_STR);
+        $stmt->bindValue(':mesaj', $messageId, PDO::PARAM_STR);
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row === false ? null : $row;
+    }
+
+    /**
+     * Coloanele de proveniență dintr-un .json al cozii scris de agentul WhatsApp
+     * (schema "fleet-inbox/1"), sau null pentru orice alt .json (Gmail).
+     *
+     * @param array<string, mixed> $meta
+     * @return array{canal: string, canal_mesaj_id: ?string, canal_grup: ?string, canal_expeditor: ?string}|null
+     */
+    public static function channelFromInboxMeta(array $meta): ?array
+    {
+        if (($meta['canal'] ?? null) !== self::CANAL_WHATSAPP) {
+            return null;
+        }
+        $whatsapp = is_array($meta['whatsapp'] ?? null) ? $meta['whatsapp'] : [];
+        $text = static function (mixed $value, int $max): ?string {
+            $value = is_scalar($value) ? trim((string) $value) : '';
+
+            return $value === '' ? null : mb_substr($value, 0, $max);
+        };
+
+        return [
+            'canal' => self::CANAL_WHATSAPP,
+            'canal_mesaj_id' => $text($whatsapp['message_id'] ?? null, 255),
+            'canal_grup' => $text($whatsapp['group_id'] ?? null, 150),
+            'canal_expeditor' => $text($whatsapp['sender_id'] ?? null, 150),
+        ];
     }
 
     public function getById(int $id): ?array
@@ -831,9 +902,60 @@ class InvoiceModel extends BaseModel
                 . ($result['status'] === 'de_verificat' ? ' ' . $result['reason'] : '');
         }
 
+        // Facturile de pe WhatsApp se leaga automat doar cand nimic nu e nesigur; altfel
+        // raman "de verificat", cu cursa propusa in lista de candidati (o confirma operatorul).
+        if ($status === 'asociata_auto' && (string) ($row['canal'] ?? '') === self::CANAL_WHATSAPP) {
+            $doubts = self::whatsAppDoubts($row, $result);
+            if ($doubts !== []) {
+                $status = 'de_verificat';
+                $raceId = null;
+                $reason = 'WhatsApp, de confirmat: ' . implode('; ', $doubts) . '. ' . $reason;
+            }
+        }
+
         $this->applyAssociation($id, $status, $raceId, $result['candidates'], $reason, $result['vehicle_id'], $result['driver_id'], false);
 
         return ['status' => $status, 'cursa_id' => $raceId, 'reason' => $reason];
+    }
+
+    /**
+     * De ce o potrivire unica a unei facturi de pe WhatsApp nu e destul de sigura pentru
+     * asocierea automata (lista goala = e sigura):
+     *   - descrierea mesajului nu numeste o categorie cunoscuta (ex. "Carburant", gol);
+     *   - citirea automata nu are incredere "mare";
+     *   - cursa nu e confirmata de nr. auto sau de sofer (doar data), ori nr. auto / soferul
+     *     de pe factura nu sunt pe cursa aleasa.
+     *
+     * @param array<string, mixed> $row
+     * @param array<string, mixed> $match rezultatul InvoiceTripMatcher::match()
+     * @return array<int, string>
+     */
+    public static function whatsAppDoubts(array $row, array $match): array
+    {
+        $doubts = [];
+        if (self::typeFromSubject($row['email_subiect'] ?? null) === null) {
+            $doubts[] = 'categoria din descriere nu e recunoscuta';
+        }
+        $confidence = (string) ($row['ocr_incredere'] ?? '');
+        if ($confidence !== 'mare') {
+            $doubts[] = 'citire cu incredere ' . ($confidence !== '' ? $confidence : 'necunoscuta');
+        }
+
+        $identity = is_array($match['identity'] ?? null) ? $match['identity'] : [];
+        $labels = ['nr_auto' => 'nr. auto', 'sofer' => 'soferul'];
+        $confirmed = false;
+        foreach ($labels as $key => $label) {
+            if (($identity[$key] ?? null) === true) {
+                $confirmed = true;
+            } elseif (($identity[$key] ?? null) === false) {
+                $doubts[] = $label . ' de pe factura nu e pe cursa propusa';
+            }
+        }
+        if (!$confirmed && !in_array(false, $identity, true)) {
+            $doubts[] = 'cursa gasita doar dupa data (fara nr. auto / sofer)';
+        }
+
+        return $doubts;
     }
 
     /**
@@ -1008,16 +1130,18 @@ class InvoiceModel extends BaseModel
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
     }
 
-    /** Raspunsul OCR (brut) si paginile din scanare ale acestei facturi. */
-    public function saveOcrResult(int $id, string $rawJson, ?string $pages): void
+    /** Raspunsul OCR (brut), paginile din scanare si increderea citirii pentru aceasta factura. */
+    public function saveOcrResult(int $id, string $rawJson, ?string $pages, ?string $confidence = null): void
     {
         $stmt = $this->db->prepare('
             UPDATE facturi
-            SET ocr_raw = :ocr_raw, document_pagini = :document_pagini, ocr_incercari = ocr_incercari + 1, updated_at = :updated_at
+            SET ocr_raw = :ocr_raw, document_pagini = :document_pagini, ocr_incredere = :ocr_incredere,
+                ocr_incercari = ocr_incercari + 1, updated_at = :updated_at
             WHERE id = :id
         ');
         $stmt->bindValue(':ocr_raw', $rawJson, PDO::PARAM_STR);
         $this->bindNullable($stmt, ':document_pagini', $pages, PDO::PARAM_STR);
+        $this->bindNullable($stmt, ':ocr_incredere', $confidence, PDO::PARAM_STR);
         $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
         $stmt->bindValue(':id', $id, PDO::PARAM_INT);
         $stmt->execute();
@@ -1080,8 +1204,11 @@ class InvoiceModel extends BaseModel
                 ])),
             ];
 
+            $confidence = isset($invoice['incredere']) && is_string($invoice['incredere']) ? mb_substr($invoice['incredere'], 0, 10) : null;
+
             if ($index === 0) {
-                $this->saveOcrResult($id, $raw, $invoice['pagini'] ?? null);
+                // Inainte de update(): asocierea pornita de update() citeste increderea.
+                $this->saveOcrResult($id, $raw, $invoice['pagini'] ?? null, $confidence);
                 // update() muta factura din "in_procesare" in asocierea automata.
                 $this->update($id, $fields);
                 $ids[] = $id;
@@ -1107,9 +1234,15 @@ class InvoiceModel extends BaseModel
                 'email_message_id' => $row['email_message_id'],
                 'email_subiect' => $row['email_subiect'],
                 'email_primit_la' => $row['email_primit_la'],
+                'canal' => $row['canal'],
+                'canal_mesaj_id' => $row['canal_mesaj_id'],
+                'canal_grup' => $row['canal_grup'],
+                'canal_expeditor' => $row['canal_expeditor'],
+                // La creare: create() ruleaza asocierea imediat si o citeste.
+                'ocr_incredere' => $confidence,
                 'created_by' => $row['created_by'],
             ]);
-            $this->saveOcrResult($newId, $raw, $invoice['pagini'] ?? null);
+            $this->saveOcrResult($newId, $raw, $invoice['pagini'] ?? null, $confidence);
             $ids[] = $newId;
         }
 

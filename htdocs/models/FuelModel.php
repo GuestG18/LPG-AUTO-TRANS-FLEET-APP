@@ -43,11 +43,14 @@ class FuelModel extends BaseModel
      * plecarii, cand momentul alimentarii cade in afara intervalului strict.
      */
     private const TRIP_MATCH_TOLERANCE_HOURS = 12;
+    /** Fereastra (zile, de o parte si de alta a alimentarii) pentru cursele oferite la asocierea manuala. */
+    private const LINK_OPTIONS_WINDOW_DAYS = 10;
     /** Taburile Alimentari / neasociate filtreaza din antet in browser, deci trebuie sa primeasca toata perioada. */
     public const ALL_FILLUPS_LIMIT = 3000;
 
     private bool $schemaEnsured = false;
     private ?bool $raceSoftDeleteAvailable = null;
+    private bool $serviceKmLinksAvailable = false;
 
     public function ensureSchema(): void
     {
@@ -236,7 +239,49 @@ class FuelModel extends BaseModel
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
+        $this->ensureServiceKmLinkSchema();
+
         $this->schemaEnsured = true;
+    }
+
+    /**
+     * O alimentare se poate asocia si cu o intrare din Km service (Dispecer curse),
+     * nu doar cu o cursa: fuel_trip_links.trip_id devine optional, iar
+     * service_km_id arata spre vehicule_service_km. Exact una dintre ele e setata;
+     * UNIQUE(fillup_id) ramane, deci "neasociata" = fara rand in fuel_trip_links.
+     * Interogarile de consum fac INNER JOIN pe curse_dispecer, deci alimentarile
+     * de service nu intra in consumul / costul curselor.
+     */
+    private function ensureServiceKmLinkSchema(): void
+    {
+        if (!$this->tableExists('vehicule_service_km')) {
+            $this->serviceKmLinksAvailable = false;
+            return;
+        }
+
+        if (!$this->columnExists('fuel_trip_links', 'service_km_id')) {
+            $this->db->exec('ALTER TABLE fuel_trip_links MODIFY trip_id INT UNSIGNED NULL');
+            $this->db->exec('
+                ALTER TABLE fuel_trip_links
+                    ADD COLUMN service_km_id BIGINT UNSIGNED NULL AFTER trip_id,
+                    ADD INDEX idx_fuel_trip_links_service_km (service_km_id),
+                    ADD CONSTRAINT fk_fuel_trip_links_service_km
+                        FOREIGN KEY (service_km_id) REFERENCES vehicule_service_km(id) ON DELETE CASCADE
+            ');
+        }
+        $this->serviceKmLinksAvailable = true;
+    }
+
+    private function tableExists(string $table): bool
+    {
+        $stmt = $this->db->prepare('
+            SELECT COUNT(*) FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name
+        ');
+        $stmt->bindValue(':table_name', $table);
+        $stmt->execute();
+
+        return (int) $stmt->fetchColumn() > 0;
     }
 
     /** @return array<string,string> vehicle_key => numar, pentru vehiculele excluse de la import */
@@ -1335,7 +1380,16 @@ class FuelModel extends BaseModel
             WHERE fillup_id = :fillup_id
               AND match_type = 'automatic'
         ");
-        $insertStmt = $this->db->prepare("
+        $insertStmt = $this->db->prepare($this->serviceKmLinksAvailable ? "
+            INSERT INTO fuel_trip_links (fillup_id, trip_id, service_km_id, match_type, confidence, created_at)
+            VALUES (:fillup_id, :trip_id, :service_km_id, 'automatic', :confidence, :created_at)
+            ON DUPLICATE KEY UPDATE
+                trip_id = VALUES(trip_id),
+                service_km_id = VALUES(service_km_id),
+                match_type = VALUES(match_type),
+                confidence = VALUES(confidence),
+                created_at = VALUES(created_at)
+        " : "
             INSERT INTO fuel_trip_links (fillup_id, trip_id, match_type, confidence, created_at)
             VALUES (:fillup_id, :trip_id, 'automatic', :confidence, :created_at)
             ON DUPLICATE KEY UPDATE
@@ -1346,6 +1400,7 @@ class FuelModel extends BaseModel
         ");
 
         $matched = 0;
+        $matchedService = 0;
         $unmatched = 0;
         foreach ($fillups as $fillup) {
             $fillupId = (int) ($fillup['id'] ?? 0);
@@ -1357,20 +1412,68 @@ class FuelModel extends BaseModel
             $deleteAutoStmt->execute();
 
             $trip = $this->findMatchingTrip($fillup);
-            if ($trip === null) {
+            $service = $this->findMatchingServiceKm($fillup);
+            // Aceeasi regula pentru amandoua: castiga marginea cea mai apropiata;
+            // la egalitate (ambele contin alimentarea) ramane cursa.
+            if ($service !== null && ($trip === null || (int) $service['boundary_distance'] < (int) $trip['boundary_distance'])) {
+                $trip = null;
+            } else {
+                $service = null;
+            }
+            if ($trip === null && $service === null) {
                 $unmatched++;
                 continue;
             }
 
             $insertStmt->bindValue(':fillup_id', $fillupId, PDO::PARAM_INT);
-            $insertStmt->bindValue(':trip_id', (int) $trip['id'], PDO::PARAM_INT);
-            $insertStmt->bindValue(':confidence', (float) ($trip['confidence'] ?? 0.95));
+            if ($trip !== null) {
+                $insertStmt->bindValue(':trip_id', (int) $trip['id'], PDO::PARAM_INT);
+            } else {
+                $insertStmt->bindValue(':trip_id', null, PDO::PARAM_NULL);
+            }
+            if ($this->serviceKmLinksAvailable) {
+                if ($service !== null) {
+                    $insertStmt->bindValue(':service_km_id', (int) $service['id'], PDO::PARAM_INT);
+                } else {
+                    $insertStmt->bindValue(':service_km_id', null, PDO::PARAM_NULL);
+                }
+            }
+            $insertStmt->bindValue(':confidence', (float) (($trip ?? $service)['confidence'] ?? 0.95));
             $insertStmt->bindValue(':created_at', date('Y-m-d H:i:s'));
             $insertStmt->execute();
-            $matched++;
+            if ($service !== null) {
+                $matchedService++;
+            } else {
+                $matched++;
+            }
         }
 
-        return ['matched' => $matched, 'unmatched' => $unmatched];
+        return ['matched' => $matched, 'matched_service_km' => $matchedService, 'unmatched' => $unmatched];
+    }
+
+    /** Asociere manuala cu o intrare din Km service (Dispecer curse). */
+    public function linkFillupToServiceKm(int $fillupId, int $serviceKmId): bool
+    {
+        $this->ensureSchema();
+        if ($fillupId <= 0 || $serviceKmId <= 0 || !$this->serviceKmLinksAvailable) {
+            return false;
+        }
+
+        $stmt = $this->db->prepare("
+            INSERT INTO fuel_trip_links (fillup_id, trip_id, service_km_id, match_type, confidence, created_at)
+            VALUES (:fillup_id, NULL, :service_km_id, 'manual', 1.00, :created_at)
+            ON DUPLICATE KEY UPDATE
+                trip_id = NULL,
+                service_km_id = VALUES(service_km_id),
+                match_type = 'manual',
+                confidence = 1.00,
+                created_at = VALUES(created_at)
+        ");
+        $stmt->bindValue(':fillup_id', $fillupId, PDO::PARAM_INT);
+        $stmt->bindValue(':service_km_id', $serviceKmId, PDO::PARAM_INT);
+        $stmt->bindValue(':created_at', date('Y-m-d H:i:s'));
+
+        return $stmt->execute();
     }
 
     public function linkFillupToTrip(int $fillupId, int $tripId): bool
@@ -1385,6 +1488,7 @@ class FuelModel extends BaseModel
             VALUES (:fillup_id, :trip_id, 'manual', 1.00, :created_at)
             ON DUPLICATE KEY UPDATE
                 trip_id = VALUES(trip_id),
+                " . ($this->serviceKmLinksAvailable ? 'service_km_id = NULL,' : '') . "
                 match_type = 'manual',
                 confidence = 1.00,
                 created_at = VALUES(created_at)
@@ -1695,7 +1799,6 @@ class FuelModel extends BaseModel
             'unassociated_fillups' => $this->getUnassociatedFillups($filters, self::ALL_FILLUPS_LIMIT),
             'trip_consumption' => $this->getConsumptionByTrip($filters),
             'transport_consumption' => $this->getConsumptionByTransport($filters),
-            'trip_options' => $this->getTripOptions($filters),
             'sync_logs' => $this->getSyncLogs(10),
             'last_sync' => $this->getLastSyncLog(),
             'vehicle_options' => $this->getVehicleOptions(),
@@ -2011,6 +2114,7 @@ class FuelModel extends BaseModel
                 f.*,
                 l.trip_id,
                 l.match_type,
+                " . ($this->serviceKmLinksAvailable ? 'l.service_km_id, sk.data_plecare AS service_km_plecare, sk.data_intoarcere AS service_km_intoarcere, sk.service_nume AS service_km_nume,' : 'NULL AS service_km_id,') . "
                 c.tip_transport,
                 c.data_inceput,
                 c.data_sfarsit,
@@ -2036,6 +2140,7 @@ class FuelModel extends BaseModel
             FROM fuel_fillups f
             LEFT JOIN fuel_trip_links l ON l.fillup_id = f.id
             LEFT JOIN curse_dispecer c ON c.id = l.trip_id
+            " . ($this->serviceKmLinksAvailable ? 'LEFT JOIN vehicule_service_km sk ON sk.id = l.service_km_id' : '') . "
             " . $where['where'] . "
             ORDER BY f.fillup_datetime DESC, f.id DESC
             LIMIT :limit_rows
@@ -2101,7 +2206,7 @@ class FuelModel extends BaseModel
         $startExpr = $this->tripIntervalStartExpr('c');
         $endExpr = $this->tripIntervalEndExpr('c');
 
-        $linkStmt = $this->db->prepare('SELECT trip_id, match_type FROM fuel_trip_links WHERE fillup_id = :id LIMIT 1');
+        $linkStmt = $this->db->prepare('SELECT trip_id, ' . ($this->serviceKmLinksAvailable ? 'service_km_id' : 'NULL AS service_km_id') . ', match_type FROM fuel_trip_links WHERE fillup_id = :id LIMIT 1');
         $linkStmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
         $linkStmt->execute();
         $currentLink = $linkStmt->fetch() ?: null;
@@ -2116,7 +2221,8 @@ class FuelModel extends BaseModel
                 'driver_name' => (string) ($fillup['driver_name'] ?? ''),
             ],
             'tolerance_hours' => $toleranceHours,
-            'current_trip_id' => $currentLink ? (int) $currentLink['trip_id'] : null,
+            'current_trip_id' => $currentLink && $currentLink['trip_id'] !== null ? (int) $currentLink['trip_id'] : null,
+            'current_service_km_id' => $currentLink && $currentLink['service_km_id'] !== null ? (int) $currentLink['service_km_id'] : null,
             'vehicle_found' => false,
             'last_linked' => null,
             'previous_trip' => null,
@@ -2238,6 +2344,8 @@ class FuelModel extends BaseModel
 
         if ($result['current_trip_id'] !== null) {
             $result['reasons'][] = 'Alimentarea este acum asociată cu cursa #' . $result['current_trip_id'] . ' (reîncarcă pagina).';
+        } elseif ($result['current_service_km_id'] !== null) {
+            $result['reasons'][] = 'Alimentarea este acum asociată cu Km service #' . $result['current_service_km_id'] . ' (reîncarcă pagina).';
         } elseif (!$result['vehicle_found']) {
             $result['reasons'][] = 'Numărul ' . $registration . ' nu există în lista de vehicule, deci nu are curse în Dispecer curse. '
                 . 'Dacă șoferul a alimentat cu cardul altei mașini, folosește „Schimbă vehiculul”.';
@@ -2252,7 +2360,8 @@ class FuelModel extends BaseModel
                 $closest[] = 'cursa #' . (int) $next['id'] . ' începe la ' . format_number_ro((float) $next['gap_hours'], 1) . ' h după';
             }
             $result['reasons'][] = 'Nicio cursă a vehiculului nu acoperă momentul alimentării: ' . implode(', iar ', $closest)
-                . '. Asocierea automată acceptă cel mult ' . $toleranceHours . ' h față de începutul sau sfârșitul cursei.';
+                . '. Asocierea automată acceptă cel mult ' . $toleranceHours . ' h față de începutul sau sfârșitul cursei'
+                . ($this->serviceKmLinksAvailable ? ' (sau al unei perioade din Km service)' : '') . '.';
         }
         foreach ($result['inverted_trips'] as $inverted) {
             $result['reasons'][] = 'Cursa #' . (int) $inverted['id'] . ' are data de sfârșit ('
@@ -2894,47 +3003,100 @@ class FuelModel extends BaseModel
         return $rows;
     }
 
-    private function getTripOptions(array $filters): array
+    /**
+     * Optiunile pentru asocierea manuala a unei alimentari: doar cursele si
+     * perioadele Km service ale vehiculului alimentarii, din fereastra
+     * ±LINK_OPTIONS_WINDOW_DAYS, cele mai apropiate de momentul alimentarii primele.
+     */
+    public function getLinkOptions(int $fillupId): ?array
     {
-        $dateFrom = (new DateTimeImmutable((string) $filters['date_from']))->modify('-7 days')->format('Y-m-d 00:00:00');
-        $dateTo = (new DateTimeImmutable((string) $filters['date_to']))->modify('+7 days')->format('Y-m-d 23:59:59');
-        $where = [
-            $this->activeRaceCondition('c'),
-            $this->tripIntervalEndExpr('c') . ' >= :date_from',
-            $this->tripIntervalStartExpr('c') . ' <= :date_to',
-        ];
-        $params = [
-            ':date_from' => $dateFrom,
-            ':date_to' => $dateTo,
-        ];
+        $this->ensureSchema();
 
-        if (trim((string) ($filters['vehicle'] ?? '')) !== '') {
-            $where[] = "REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = REPLACE(UPPER(:vehicle), ' ', '')";
-            $params[':vehicle'] = (string) $filters['vehicle'];
+        $stmt = $this->db->prepare('SELECT id, vehicle_registration, fillup_datetime FROM fuel_fillups WHERE id = :id');
+        $stmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
+        $stmt->execute();
+        $fillup = $stmt->fetch();
+        if (!$fillup) {
+            return null;
         }
 
-        $sql = "
+        $registration = $this->normalizeRegistration((string) ($fillup['vehicle_registration'] ?? ''));
+        $datetime = (string) ($fillup['fillup_datetime'] ?? '');
+        $result = ['vehicle_registration' => $registration, 'trips' => [], 'service_km' => []];
+        if ($registration === '' || $datetime === '') {
+            return $result;
+        }
+
+        $windowDays = self::LINK_OPTIONS_WINDOW_DAYS;
+        $startExpr = $this->tripIntervalStartExpr('c');
+        $endExpr = $this->tripIntervalEndExpr('c');
+        $tripStmt = $this->db->prepare("
             SELECT
                 c.id,
                 v.nr_inmatriculare,
                 c.tip_transport,
                 c.data_inceput,
                 c.data_sfarsit,
-                c.ora_inceput,
-                c.ora_sfarsit,
-                " . $this->effectiveKmExpr('c') . " AS km
+                GREATEST(
+                    0,
+                    TIMESTAMPDIFF(SECOND, :fd_before, {$startExpr}),
+                    TIMESTAMPDIFF(SECOND, {$endExpr}, :fd_after)
+                ) AS boundary_distance
             FROM curse_dispecer c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
-            WHERE " . implode(' AND ', $where) . "
-            ORDER BY c.data_inceput DESC, c.id DESC
-            LIMIT 500
-        ";
+            WHERE REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = REPLACE(UPPER(:registration), ' ', '')
+              AND " . $this->activeRaceCondition('c') . "
+              AND {$endExpr} >= DATE_SUB(:fd_from, INTERVAL {$windowDays} DAY)
+              AND {$startExpr} <= DATE_ADD(:fd_to, INTERVAL {$windowDays} DAY)
+            ORDER BY boundary_distance ASC, c.data_inceput DESC, c.id DESC
+            LIMIT 100
+        ");
+        $tripStmt->bindValue(':registration', $registration);
+        $tripStmt->bindValue(':fd_before', $datetime);
+        $tripStmt->bindValue(':fd_after', $datetime);
+        $tripStmt->bindValue(':fd_from', $datetime);
+        $tripStmt->bindValue(':fd_to', $datetime);
+        $tripStmt->execute();
+        foreach ($tripStmt->fetchAll() as $trip) {
+            $result['trips'][] = [
+                'id' => (int) $trip['id'],
+                'label' => '#' . (int) $trip['id'] . ' - ' . (string) ($trip['nr_inmatriculare'] ?? '-')
+                    . ' - ' . (self::TRANSPORT_LABELS[$trip['tip_transport'] === 'primar_tona' ? 'primar' : (string) $trip['tip_transport']] ?? ((string) $trip['tip_transport'] ?: '-'))
+                    . ' - ' . format_date_ro((string) ($trip['data_inceput'] ?? ''))
+                    . (!empty($trip['data_sfarsit']) && $trip['data_sfarsit'] !== $trip['data_inceput'] ? ' → ' . format_date_ro((string) $trip['data_sfarsit']) : ''),
+                'contains' => (int) $trip['boundary_distance'] === 0,
+            ];
+        }
 
-        $stmt = $this->db->prepare($sql);
-        $this->bindParams($stmt, $params);
-        $stmt->execute();
+        if ($this->serviceKmLinksAvailable) {
+            $skStart = $this->serviceKmIntervalStartExpr('sk');
+            $skEnd = $this->serviceKmIntervalEndExpr('sk');
+            $skStmt = $this->db->prepare("
+                SELECT sk.id, v.nr_inmatriculare, sk.data_plecare, sk.data_intoarcere, sk.service_nume
+                FROM vehicule_service_km sk
+                INNER JOIN vehicule v ON v.id = sk.vehicle_id
+                WHERE REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = REPLACE(UPPER(:registration), ' ', '')
+                  AND {$skEnd} >= DATE_SUB(:fd_from, INTERVAL {$windowDays} DAY)
+                  AND {$skStart} <= DATE_ADD(:fd_to, INTERVAL {$windowDays} DAY)
+                ORDER BY sk.data_plecare DESC, sk.id DESC
+                LIMIT 50
+            ");
+            $skStmt->bindValue(':registration', $registration);
+            $skStmt->bindValue(':fd_from', $datetime);
+            $skStmt->bindValue(':fd_to', $datetime);
+            $skStmt->execute();
+            foreach ($skStmt->fetchAll() as $serviceKm) {
+                $result['service_km'][] = [
+                    'id' => (int) $serviceKm['id'],
+                    'label' => 'Service #' . (int) $serviceKm['id'] . ' - ' . (string) ($serviceKm['nr_inmatriculare'] ?? '-')
+                        . ' - ' . format_date_ro((string) ($serviceKm['data_plecare'] ?? ''))
+                        . ' → ' . (!empty($serviceKm['data_intoarcere']) ? format_date_ro((string) $serviceKm['data_intoarcere']) : 'în service')
+                        . (!empty($serviceKm['service_nume']) ? ' - ' . (string) $serviceKm['service_nume'] : ''),
+                ];
+            }
+        }
 
-        return $stmt->fetchAll();
+        return $result;
     }
 
     private function findMatchingTrip(array $fillup): ?array
@@ -2987,6 +3149,69 @@ class FuelModel extends BaseModel
 
         return $row ?: null;
     }
+
+    /**
+     * Aceeasi regula ca findMatchingTrip(), pe perioadele din Km service: interval
+     * Data + Ora plecarii -> Data + Ora intoarcerii (ora lipsa = 00:00 / 23:59:59),
+     * toleranta ±TRIP_MATCH_TOLERANCE_HOURS. Vehiculul inca in service (fara
+     * intoarcere) are intervalul deschis pana acum.
+     */
+    private function findMatchingServiceKm(array $fillup): ?array
+    {
+        if (!$this->serviceKmLinksAvailable) {
+            return null;
+        }
+        $registration = $this->normalizeRegistration((string) ($fillup['vehicle_registration'] ?? ''));
+        $datetime = (string) ($fillup['fillup_datetime'] ?? '');
+        if ($registration === '' || $datetime === '') {
+            return null;
+        }
+
+        $startExpr = $this->serviceKmIntervalStartExpr('sk');
+        $endExpr = $this->serviceKmIntervalEndExpr('sk');
+        $toleranceHours = self::TRIP_MATCH_TOLERANCE_HOURS;
+        $stmt = $this->db->prepare("
+            SELECT
+                sk.id,
+                CASE
+                    WHEN :fd_conf BETWEEN {$startExpr} AND {$endExpr} THEN 0.95
+                    ELSE 0.70
+                END AS confidence,
+                GREATEST(
+                    0,
+                    TIMESTAMPDIFF(SECOND, :fd_before, {$startExpr}),
+                    TIMESTAMPDIFF(SECOND, {$endExpr}, :fd_after)
+                ) AS boundary_distance,
+                TIMESTAMPDIFF(SECOND, {$startExpr}, {$endExpr}) AS interval_seconds
+            FROM vehicule_service_km sk
+            INNER JOIN vehicule v ON v.id = sk.vehicle_id
+            WHERE REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = REPLACE(UPPER(:registration), ' ', '')
+              AND :fillup_datetime BETWEEN DATE_SUB({$startExpr}, INTERVAL {$toleranceHours} HOUR)
+                                       AND DATE_ADD({$endExpr}, INTERVAL {$toleranceHours} HOUR)
+            ORDER BY boundary_distance ASC, interval_seconds ASC, sk.id DESC
+            LIMIT 1
+        ");
+        $stmt->bindValue(':registration', $registration);
+        $stmt->bindValue(':fillup_datetime', $datetime);
+        $stmt->bindValue(':fd_conf', $datetime);
+        $stmt->bindValue(':fd_before', $datetime);
+        $stmt->bindValue(':fd_after', $datetime);
+        $stmt->execute();
+        $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    private function serviceKmIntervalStartExpr(string $alias): string
+    {
+        return "TIMESTAMP({$alias}.data_plecare, COALESCE({$alias}.ora_plecare, '00:00:00'))";
+    }
+
+    private function serviceKmIntervalEndExpr(string $alias): string
+    {
+        return "COALESCE(TIMESTAMP({$alias}.data_intoarcere, COALESCE({$alias}.ora_intoarcere, '23:59:59')), NOW())";
+    }
+
 
     // =================================================================
     // Mecanismul T0

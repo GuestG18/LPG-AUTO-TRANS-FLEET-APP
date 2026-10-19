@@ -35,6 +35,19 @@ Cron (install manually on the VPS, `crontab -e`; adjust the project path and PHP
 */15 * * * * cd /path/to/aplicatie_fleet && php scripts/revizii_raport_saptamanal.php >> notification_service/revizii_raport.log 2>&1
 ```
 
+## Driver support (WhatsApp tickets by email)
+
+`support_mail.py` runs after the approval flow when `SUPPORT_EMAIL_ENABLED=1`. It emails new support tickets (created by drivers on WhatsApp through BaileyBot) to `SUPPORT_EMAIL_TO`. Each email has its own Message-ID and a `Reply-To` tagged with the ticket (`inbox+sup-000123@domain`). The module then reads the support mailbox and forwards each human reply to the driver's WhatsApp, using `whatsapp_outbox`, which BaileyBot sends.
+
+- Matching: `In-Reply-To` / `References`, then the `+sup-NNNNNN` address tag, then `SUP-NNNNNN` in the subject. Only `SUPPORT_REPLY_ALLOWED_SENDERS` (default `SUPPORT_EMAIL_TO`) can reply. Auto-replies, bounces and our own emails are ignored.
+- Each email is handled once (UNIQUE Message-ID). The mailbox is opened read-only, so approval mail is not touched.
+- The driver's "ticket registered" WhatsApp reply is released only after the email is sent. After `SUPPORT_EMAIL_MAX_ATTEMPTS` failures, a variant without "sent to support" is released instead.
+
+```powershell
+notification_service\.venv\Scripts\python.exe notification_service\support_mail.py --send-only
+notification_service\.venv\Scripts\python.exe notification_service\support_mail.py --poll-only
+```
+
 ## Install dependencies
 
 ```powershell

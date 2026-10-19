@@ -330,7 +330,7 @@ $renderRefundPanel = static function (array $lines, string $title, string $idBas
         . '</table></div>';
 };
 
-$renderTypeRoutes = static function (string $type, array $routes, string $groupBy = 'route', array $leftoverRefunds = []) use ($fmtSmart, $fmtMoney, $renderBillingCalc, $renderComponentCalc, $renderRefundToggle, $renderRefundPanel, $filters): string {
+$renderTypeRoutes = static function (string $type, array $routes, string $groupBy = 'route', array $leftoverRefunds = [], array $priceSplit = []) use ($fmt, $fmtSmart, $fmtMoney, $renderBillingCalc, $renderComponentCalc, $renderRefundToggle, $renderRefundPanel, $filters): string {
     /*
      * Avertizarea de calcul duce la cursele cu problema, in Dispecer curse (unde se
      * corecteaza tariful / valoarea): pe grup lista exacta a curselor, pe cursa cursa ei.
@@ -352,6 +352,169 @@ $renderTypeRoutes = static function (string $type, array $routes, string $groupB
         . '<th>Calcul facturare</th><th>' . ($byPrice ? 'Tarif / rute' : 'Rută') . '</th><th class="is-number">Curse</th>'
         /* Ultima coloana: comutatorul refacturarilor, doar pe randurile care au refacturari. */
         . '<th class="is-number">Valoare RON</th><th class="cf-expand-th"></th></tr></thead><tbody>';
+
+    /* Randul unei curse, neschimbat: Data / Vehicul / Ruta / Calcul facturare / Valoare RON. */
+    $renderTripRow = static function (array $trip, string $short, string $unit) use ($byPrice, $canOpenTrips, $warnIcon, $fmtMoney, $renderBillingCalc, $renderComponentCalc): string {
+        $tripId = (int) ($trip['trip_id'] ?? 0);
+        $date = '<td>' . e((string) ($trip['date_label'] ?? '-')) . '</td>';
+        $vehicle = '<td class="cf-vehicle-cell">' . e((string) ($trip['vehicle_label'] ?? '-')) . '</td>';
+        $tripComponentCalc = $renderComponentCalc((array) ($trip['components'] ?? []));
+        /* P+D / Compresor fara componente: nu inventam o formula din totalul salvat. */
+        $noComponents = $tripComponentCalc === '' && ($trip['recomputed_total'] ?? null) !== null;
+        $tripCalc = e($noComponents
+            ? 'calcul indisponibil'
+            : ($tripComponentCalc !== '' ? $tripComponentCalc : $renderBillingCalc($trip['quantity'] ?? 0, (string) ($trip['unit'] ?? $unit), $trip['rate'] ?? null)));
+        $warnParts = [];
+        if (!empty($trip['differs'])) {
+            $warnParts[] = 'Valoare salvată ' . $fmtMoney($trip['value'] ?? 0) . ' RON; recalculat cu tarifele din data cursei: '
+                . $fmtMoney($trip['recomputed_total'] ?? 0) . ' RON.';
+        }
+        if (!empty($trip['differs']) || $noComponents) {
+            foreach ((array) ($trip['pricing_warnings'] ?? []) as $pricingWarning) {
+                $warnParts[] = (string) $pricingWarning;
+            }
+        }
+        if ($noComponents && $warnParts === []) {
+            $warnParts[] = 'Cursa nu are cantități facturabile (sau tarife pentru ele) din care să se reconstituie calculul.';
+        }
+        if ($warnParts !== []) {
+            $tripCalc .= $warnIcon(
+                implode(' ', $warnParts),
+                $canOpenTrips && $tripId > 0 ? build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $tripId]) : ''
+            );
+        }
+        if (($trip['calc_source'] ?? '') === 'saved') {
+            $infoText = 'Calcul din prețul salvat pe cursă: motorul de tarifare nu reproduce valoarea (regulă lipsă sau tarif modificat';
+            $infoText .= ($trip['engine_total'] ?? null) !== null
+                ? '; recalculat cu tarifele din data cursei: ' . $fmtMoney($trip['engine_total']) . ' RON).'
+                : ').';
+            foreach ((array) ($trip['pricing_warnings'] ?? []) as $pricingWarning) {
+                $infoText .= ' ' . $pricingWarning;
+            }
+            $tripCalc .= ' <i class="bi bi-info-circle cf-calc-info" title="' . e($infoText) . '"></i>';
+        }
+        $routeCell = $byPrice
+            ? '<td class="cf-vehicle-cell">' . e((string) ($trip['route_label'] ?? '-')) . ' <span class="cf-route-code">' . e((string) ($trip['route_short'] ?? '')) . '</span></td>'
+            : '<td><span class="cf-route-code">' . e($short) . '</span></td>';
+
+        /* Randul deschide cursa in Dispecer curse, ca in Istoric activitati sofer. */
+        $rowAttrs = $canOpenTrips && $tripId > 0
+            ? ' class="cf-trip-link" data-row-href="' . e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $tripId])) . '" tabindex="0" title="Deschide cursa în Dispecer curse"'
+            : '';
+        return '<tr' . $rowAttrs . '>'
+            . ($byPrice ? $date . $routeCell . $vehicle : $date . $vehicle . $routeCell)
+            . '<td class="is-number cf-calc">' . $tripCalc . '</td>'
+            . '<td class="is-number">' . e($fmtMoney($trip['value'] ?? 0)) . '</td>'
+            . '</tr>';
+    };
+    $tripHead = ($byPrice
+            ? '<thead><tr><th>Data</th><th>Rută</th><th>Vehicul</th>'
+            : '<thead><tr><th>Data</th><th>Vehicul</th><th>Rută</th>')
+        . '<th class="is-number">Calcul facturare</th><th class="is-number">Valoare RON</th></tr></thead>';
+
+    /*
+     * Nivelul vehicul din grupul de facturare: un rand per vehicul cu cursele lui din
+     * grupul acesta (sumarul vine din serviciu - groupVehicleSummaries), iar sub el, la
+     * desfasurare, chiar cursele lui. La Distributie, tonele pe clasele de pret existente
+     * (Pret mic / Pret mare, plus "Alte tarife" cand exista); fara clasificare mic / mare
+     * in raport si la celelalte tipuri, calculul adunat al vehiculului.
+     */
+    $splitColumns = [];
+    if ($type === 'distributie' && !empty($priceSplit['has_split'])) {
+        $splitColumns = ['low' => 'Tone preț mic', 'high' => 'Tone preț mare'];
+        if (!empty($priceSplit['has_other'])) {
+            $splitColumns['other'] = 'Alte tarife';
+        }
+    }
+    $splitCell = static function (array $split, string $column) use ($fmt, $fmtSmart): string {
+        if ($column !== 'other') {
+            return e($fmt($split[$column . '_tone'] ?? 0, 2) . ' t');
+        }
+        $parts = [];
+        if ((float) ($split['other_tone'] ?? 0) > 0 || (float) ($split['other_km'] ?? 0) <= 0) {
+            $parts[] = $fmt($split['other_tone'] ?? 0, 2) . ' t';
+        }
+        if ((float) ($split['other_km'] ?? 0) > 0) {
+            $parts[] = $fmtSmart($split['other_km'], 0) . ' km';
+        }
+        $labels = (array) ($split['other_labels'] ?? []);
+        $text = e(implode(' + ', $parts));
+
+        return $labels !== [] ? '<span title="' . e(implode(', ', $labels)) . '">' . $text . '</span>' : $text;
+    };
+    $renderGroupVehicles = static function (array $route, string $tripsId, string $short, string $unit) use ($type, $splitColumns, $splitCell, $tripHead, $renderTripRow, $renderComponentCalc, $fmtSmart, $fmtMoney, $warnIcon, $canOpenTrips, $filters): string {
+        $vehicles = (array) ($route['vehicles'] ?? []);
+        $columnCount = 3 + ($splitColumns !== [] ? count($splitColumns) : 1);
+        $html = '<div class="cf-breakdown cf-group-vehicles"><div class="cf-type-routes"><table class="cf-table">'
+            . '<thead><tr><th class="cf-expand-th"></th><th>Vehicul</th>';
+        if ($splitColumns !== []) {
+            foreach ($splitColumns as $columnLabel) {
+                $html .= '<th class="is-number">' . e($columnLabel) . '</th>';
+            }
+        } else {
+            $html .= '<th>' . ($type === 'primar' ? 'Km × Tarif' : 'Calcul facturare') . '</th>';
+        }
+        $html .= '<th class="is-number">Valoare RON</th></tr></thead><tbody>';
+
+        if ($vehicles === []) {
+            $html .= '<tr><td colspan="' . $columnCount . '"><div class="cf-empty">Nu există curse în acest grup.</div></td></tr>';
+        }
+        foreach ($vehicles as $vehicle) {
+            $plate = (string) ($vehicle['vehicle_label'] ?? '-');
+            $vehicleTrips = (int) ($vehicle['trips'] ?? 0);
+            /* Id stabil: grupul parinte + vehiculul, ca fiecare vehicul sa se deschida independent. */
+            $detailId = $tripsId . '__' . preg_replace('/[^A-Za-z0-9_-]+/', '_', (string) ($vehicle['key'] ?? ''));
+
+            $cells = '';
+            if ($splitColumns !== []) {
+                foreach (array_keys($splitColumns) as $column) {
+                    $cells .= '<td class="is-number cf-calc">' . $splitCell((array) ($vehicle['price_split'] ?? []), $column) . '</td>';
+                }
+            } else {
+                $calc = $renderComponentCalc((array) ($vehicle['components'] ?? []));
+                $missing = (int) ($vehicle['missing_count'] ?? 0);
+                if ($calc === '' && !empty($vehicle['component_billing'])) {
+                    $calc = 'calcul indisponibil';
+                } elseif ($calc !== '' && $missing > 0) {
+                    $calc .= ' + ' . $missing . ($missing === 1 ? ' cursă' : ' curse') . ' fără calcul';
+                }
+                $differs = (int) ($vehicle['differs_count'] ?? 0);
+                $warn = '';
+                if ($differs > 0) {
+                    $differIds = [];
+                    foreach ((array) ($vehicle['trip_rows'] ?? []) as $trip) {
+                        if (!empty($trip['differs']) && (int) ($trip['trip_id'] ?? 0) > 0) {
+                            $differIds[] = (int) $trip['trip_id'];
+                        }
+                    }
+                    $warn = $warnIcon(
+                        $differs . ($differs === 1 ? ' cursă are' : ' curse au') . ' valoarea salvată diferită de recalcularea cu tarifele din data cursei.',
+                        $canOpenTrips && $differIds !== [] ? build_query_url([
+                            'page' => 'dispecer_curse',
+                            'ids' => implode(',', $differIds),
+                            'ids_label' => 'cursele cu valoare diferită de recalculare - ' . $plate . ', ' . (string) ($filters['month_label'] ?? ''),
+                        ]) : ''
+                    );
+                }
+                $cells .= '<td class="cf-calc">' . e($calc !== '' ? $calc : '-') . $warn . '</td>';
+            }
+
+            $html .= '<tr class="cf-vehicle-parent cf-group-vehicle" data-vehicle-row>'
+                . '<td class="cf-expand-cell"><button class="cf-expand-btn" type="button" aria-expanded="false" aria-controls="' . e($detailId) . '" aria-label="Curse ' . e($plate) . '" data-vehicle-toggle data-nested-toggle><i class="bi bi-chevron-right" aria-hidden="true"></i></button></td>'
+                . '<td class="cf-vehicle-cell">' . e($plate) . ' <span class="cf-vehicle-trips">' . e($fmtSmart($vehicleTrips, 0) . ($vehicleTrips === 1 ? ' cursă' : ' curse')) . '</span></td>'
+                . $cells
+                . '<td class="is-number">' . e($fmtMoney($vehicle['value'] ?? 0)) . '</td>'
+                . '</tr>'
+                . '<tr class="cf-vehicle-detail-row" id="' . e($detailId) . '" hidden><td colspan="' . $columnCount . '" class="cf-trip-detail-cell">'
+                . '<div class="cf-breakdown"><div class="cf-type-routes"><table class="cf-table">' . $tripHead . '<tbody>';
+            foreach ((array) ($vehicle['trip_rows'] ?? []) as $trip) {
+                $html .= $renderTripRow($trip, $short, $unit);
+            }
+            $html .= '</tbody></table></div></div></td></tr>';
+        }
+
+        return $html . '</tbody></table></div></div>';
+    };
 
     foreach ($routes as $route) {
         $short = (string) ($route['short'] ?? '');
@@ -402,67 +565,8 @@ $renderTypeRoutes = static function (string $type, array $routes, string $groupB
             . '<td class="cf-expand-cell">' . ($routeRefunds !== [] ? $renderRefundToggle($refundsId, 'Refacturări ' . $label) : '') . '</td>'
             . '</tr>'
             . '<tr class="cf-vehicle-detail-row" id="' . e($tripsId) . '" hidden><td colspan="6" class="cf-trip-detail-cell">'
-            . '<div class="cf-breakdown"><div class="cf-type-routes"><table class="cf-table">'
-            . ($byPrice
-                ? '<thead><tr><th>Data</th><th>Rută</th><th>Vehicul</th>'
-                : '<thead><tr><th>Data</th><th>Vehicul</th><th>Rută</th>')
-            . '<th class="is-number">Calcul facturare</th><th class="is-number">Valoare RON</th></tr></thead><tbody>';
-
-        foreach ((array) ($route['trip_rows'] ?? []) as $trip) {
-            $tripId = (int) ($trip['trip_id'] ?? 0);
-            $date = '<td>' . e((string) ($trip['date_label'] ?? '-')) . '</td>';
-            $vehicle = '<td class="cf-vehicle-cell">' . e((string) ($trip['vehicle_label'] ?? '-')) . '</td>';
-            $tripComponentCalc = $renderComponentCalc((array) ($trip['components'] ?? []));
-            /* P+D / Compresor fara componente: nu inventam o formula din totalul salvat. */
-            $noComponents = $tripComponentCalc === '' && ($trip['recomputed_total'] ?? null) !== null;
-            $tripCalc = e($noComponents
-                ? 'calcul indisponibil'
-                : ($tripComponentCalc !== '' ? $tripComponentCalc : $renderBillingCalc($trip['quantity'] ?? 0, (string) ($trip['unit'] ?? $unit), $trip['rate'] ?? null)));
-            $warnParts = [];
-            if (!empty($trip['differs'])) {
-                $warnParts[] = 'Valoare salvată ' . $fmtMoney($trip['value'] ?? 0) . ' RON; recalculat cu tarifele din data cursei: '
-                    . $fmtMoney($trip['recomputed_total'] ?? 0) . ' RON.';
-            }
-            if (!empty($trip['differs']) || $noComponents) {
-                foreach ((array) ($trip['pricing_warnings'] ?? []) as $pricingWarning) {
-                    $warnParts[] = (string) $pricingWarning;
-                }
-            }
-            if ($noComponents && $warnParts === []) {
-                $warnParts[] = 'Cursa nu are cantități facturabile (sau tarife pentru ele) din care să se reconstituie calculul.';
-            }
-            if ($warnParts !== []) {
-                $tripCalc .= $warnIcon(
-                    implode(' ', $warnParts),
-                    $canOpenTrips && $tripId > 0 ? build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $tripId]) : ''
-                );
-            }
-            if (($trip['calc_source'] ?? '') === 'saved') {
-                $infoText = 'Calcul din prețul salvat pe cursă: motorul de tarifare nu reproduce valoarea (regulă lipsă sau tarif modificat';
-                $infoText .= ($trip['engine_total'] ?? null) !== null
-                    ? '; recalculat cu tarifele din data cursei: ' . $fmtMoney($trip['engine_total']) . ' RON).'
-                    : ').';
-                foreach ((array) ($trip['pricing_warnings'] ?? []) as $pricingWarning) {
-                    $infoText .= ' ' . $pricingWarning;
-                }
-                $tripCalc .= ' <i class="bi bi-info-circle cf-calc-info" title="' . e($infoText) . '"></i>';
-            }
-            $routeCell = $byPrice
-                ? '<td class="cf-vehicle-cell">' . e((string) ($trip['route_label'] ?? '-')) . ' <span class="cf-route-code">' . e((string) ($trip['route_short'] ?? '')) . '</span></td>'
-                : '<td><span class="cf-route-code">' . e($short) . '</span></td>';
-
-            /* Randul deschide cursa in Dispecer curse, ca in Istoric activitati sofer. */
-            $rowAttrs = $canOpenTrips && $tripId > 0
-                ? ' class="cf-trip-link" data-row-href="' . e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $tripId])) . '" tabindex="0" title="Deschide cursa în Dispecer curse"'
-                : '';
-            $html .= '<tr' . $rowAttrs . '>'
-                . ($byPrice ? $date . $routeCell . $vehicle : $date . $vehicle . $routeCell)
-                . '<td class="is-number cf-calc">' . $tripCalc . '</td>'
-                . '<td class="is-number">' . e($fmtMoney($trip['value'] ?? 0)) . '</td>'
-                . '</tr>';
-        }
-
-        $html .= '</tbody></table></div></div></td></tr>';
+            . $renderGroupVehicles($route, $tripsId, $short, $unit)
+            . '</td></tr>';
 
         /* Refacturarile randului: sectiune proprie, direct sub rand, pe toata latimea tabelului. */
         if ($routeRefunds !== []) {
@@ -1590,6 +1694,12 @@ button.cf-ref-row:hover { background: #fff6f1; }
     text-align: center;
 }
 .cf-calc { font-variant-numeric: tabular-nums; }
+/* Nivelul vehicul dintr-un grup de facturare: acelasi rand ca grupul, usor indentat. */
+.cf-group-vehicle > td:nth-child(2) {
+    box-shadow: inset 2px 0 0 #dbe6f6;
+    padding-left: 14px;
+}
+.cf-vehicle-trips { margin-left: 6px; color: #51617f; font-size: 11px; font-weight: 800; }
 .cf-route-codes { margin-left: 6px; color: #51617f; font-size: 11px; font-weight: 800; }
 /* Calculul pe componente poate fi lung (P+D, Compresor): se rupe pe randuri. */
 .cf-type-routes td.cf-calc { white-space: normal; min-width: 170px; }
@@ -2621,7 +2731,7 @@ a.cf-calc-warn.is-link:focus-visible {
                                 </tr>
                                 <?php if ($typeExpandable): ?>
                                     <tr class="cf-vehicle-detail-row" id="<?= e($typeDetailId) ?>" hidden>
-                                        <td colspan="6" class="cf-trip-detail-cell"><?= $renderTypeRoutes($typeKey, $typeRoutes, (string) ($row['group_by'] ?? 'route'), $typeLeftoverRefunds) ?></td>
+                                        <td colspan="6" class="cf-trip-detail-cell"><?= $renderTypeRoutes($typeKey, $typeRoutes, (string) ($row['group_by'] ?? 'route'), $typeLeftoverRefunds, (array) ($row['price_split'] ?? [])) ?></td>
                                     </tr>
                                 <?php endif; ?>
                             <?php endforeach; ?>
@@ -3189,6 +3299,12 @@ a.cf-calc-warn.is-link:focus-visible {
         var expanded = button.getAttribute('aria-expanded') === 'true';
         button.setAttribute('aria-expanded', expanded ? 'false' : 'true');
         detailRow.hidden = expanded;
+        if (expanded) {
+            /* Grupul restrans isi inchide si vehiculele: la redeschidere, cursele pornesc ascunse. */
+            detailRow.querySelectorAll('[data-nested-toggle][aria-expanded="true"]').forEach(function (inner) {
+                toggleVehicleDetail(inner);
+            });
+        }
         var parentRow = button.closest('tr');
         if (parentRow) {
             parentRow.classList.toggle('is-expanded', !expanded);

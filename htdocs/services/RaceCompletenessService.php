@@ -144,9 +144,7 @@ final class RaceCompletenessService
                     $hasPricingGap = true;
                 }
             }
-            if ($isMissing($race['cantitate_prelevata'] ?? null)) {
-                $add('cantitate_prelevata', 'Cantitate prelevată', 'minor', 'Cantitatea prelevată lipsește din raportarea operațională.', '');
-            }
+            // cantitate_prelevata nu se verifica: formularul nu are camp pentru ea.
         }
 
         // --- Simptom financiar: total 0 cauzat de date de tarifare lipsa ---

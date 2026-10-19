@@ -7780,7 +7780,12 @@ class DispecerCurseController
             $errors['data_inceput'] = 'Data de inceput este invalida.';
         }
 
-        $endDateRaw = trim((string) ($input['data_sfarsit'] ?? $startDateRaw));
+        // Sfarsitul este optional: fara data, cursa ramane in desfasurare (data de
+        // inceput, fara ora de sfarsit).
+        $endDateRaw = trim((string) ($input['data_sfarsit'] ?? ''));
+        if ($endDateRaw === '' && trim((string) ($input['ora_sfarsit'] ?? '')) === '') {
+            $endDateRaw = $startDateRaw;
+        }
         $endDateNormalized = $this->normalizeRaceDate($endDateRaw);
         $endDate = $endDateNormalized ?? $endDateRaw;
         if ($endDateNormalized === null) {

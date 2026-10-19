@@ -1345,9 +1345,14 @@ class DashboardModel extends BaseModel
 
         $params = [];
         $condition = $this->inCondition('v.id', $vehicleIds, $params, 'vehicle_doc');
+        // Documentele obligatorii se aleg din Documente vehicule > Documente obligatorii.
+        $requiredColumn = $this->columnExists('configurare_costuri_documente_vehicule', 'obligatoriu')
+            ? 'obligatoriu'
+            : 'requires_expiry';
         $sql = "
             SELECT v.id AS vehicle_id,
                    cfg.document_type,
+                   MAX(cfg.requires_expiry) AS requires_expiry,
                    COUNT(d.id) AS document_count,
                    MAX(d.data_expirare) AS latest_expiry
             FROM vehicule v
@@ -1360,7 +1365,7 @@ class DashboardModel extends BaseModel
                         ELSE v.tip_vehicul
                     END
                )
-               AND cfg.requires_expiry = 1
+               AND cfg.{$requiredColumn} = 1
             LEFT JOIN documente d
                 ON d.vehicle_id = v.id
                AND LOWER(TRIM(d.tip_document)) = LOWER(TRIM(cfg.document_type))
@@ -1393,7 +1398,8 @@ class DashboardModel extends BaseModel
                 continue;
             }
 
-            if ($latestExpiry === null || $latestExpiry < $today) {
+            $requiresExpiry = (int) ($row['requires_expiry'] ?? 1) === 1;
+            if (($latestExpiry === null && $requiresExpiry) || ($latestExpiry !== null && $latestExpiry < $today)) {
                 $this->mergeReasonDate($issues['expired'], $vehicleId, $latestExpiry);
                 $issues['documents'][$vehicleId][] = ['key' => 'expired_documents', 'document' => $documentType, 'date' => $latestExpiry];
             }
@@ -1857,6 +1863,25 @@ class DashboardModel extends BaseModel
     private function fuelFillupsTableExists(): bool
     {
         return $this->tableExists('fuel_fillups');
+    }
+
+    private function columnExists(string $tableName, string $columnName): bool
+    {
+        static $cache = [];
+        $key = $tableName . '.' . $columnName;
+        if (array_key_exists($key, $cache)) {
+            return $cache[$key];
+        }
+
+        $sql = '
+            SELECT COUNT(*)
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+              AND COLUMN_NAME = :column_name
+        ';
+
+        return $cache[$key] = (int) $this->fetchScalar($sql, [':table_name' => $tableName, ':column_name' => $columnName]) > 0;
     }
 
     private function tableExists(string $tableName): bool

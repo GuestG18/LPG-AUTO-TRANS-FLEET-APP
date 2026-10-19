@@ -892,6 +892,344 @@ class DocumentModel extends BaseModel
         return $stmt->fetchAll();
     }
 
+    /**
+     * Tipurile de vehicul din configurarea documentelor, grupate ca in meniu:
+     * Vehicule grele / Vehicule usoare (autoturismele si autoutilitarele = autovehicul).
+     */
+    public const VEHICLE_DOCUMENT_CATEGORIES = [
+        'grele' => [
+            'label' => 'Vehicule grele',
+            'types' => ['cap_tractor', 'camion', 'semiremorca_primar', 'semiremorca_distributie'],
+        ],
+        'usoare' => [
+            'label' => 'Vehicule ușoare',
+            'types' => ['autovehicul'],
+        ],
+    ];
+
+    /** Adauga coloana `obligatoriu` (idempotent); vezi migrarea 2026_10_19_000001. */
+    public function ensureVehicleRequiredDocumentSchema(): void
+    {
+        if ($this->vehicleRequiredColumnExists()) {
+            return;
+        }
+
+        $this->db->exec('ALTER TABLE configurare_costuri_documente_vehicule ADD COLUMN obligatoriu TINYINT(1) NOT NULL DEFAULT 1 AFTER requires_expiry');
+        $this->db->exec('UPDATE configurare_costuri_documente_vehicule SET obligatoriu = requires_expiry');
+    }
+
+    private function vehicleRequiredColumnExists(): bool
+    {
+        $stmt = $this->db->query("
+            SELECT COUNT(*)
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'configurare_costuri_documente_vehicule'
+              AND COLUMN_NAME = 'obligatoriu'
+        ");
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    /**
+     * Matricea document x tip vehicul. Tipurile de document se potrivesc fara
+     * diferente de litere mari/mici (ex. „Adr” si „ADR” sunt acelasi rand).
+     *
+     * @return array<string, array{label: string, cells: array<string, array{id: int, required: bool, requires_expiry: bool}>}>
+     */
+    public function getVehicleRequiredDocumentMatrix(): array
+    {
+        $stmt = $this->db->query('
+            SELECT id, vehicle_type, document_type, document_cost, validity_days, requires_expiry, obligatoriu, updated_at
+            FROM configurare_costuri_documente_vehicule
+            ORDER BY document_type ASC
+        ');
+
+        $matrix = [];
+        $labelVotes = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $label = trim((string) ($row['document_type'] ?? ''));
+            if ($label === '') {
+                continue;
+            }
+
+            $key = mb_strtoupper($label, 'UTF-8');
+            $labelVotes[$key][$label] = ($labelVotes[$key][$label] ?? 0) + 1;
+            $matrix[$key]['cells'][(string) $row['vehicle_type']] = [
+                'id' => (int) $row['id'],
+                'required' => (int) ($row['obligatoriu'] ?? 0) === 1,
+                'requires_expiry' => (int) ($row['requires_expiry'] ?? 1) === 1,
+                'cost' => (float) ($row['document_cost'] ?? 0),
+                'validity_days' => (int) ($row['validity_days'] ?? 0),
+                'updated_at' => (string) ($row['updated_at'] ?? ''),
+            ];
+        }
+
+        foreach ($matrix as $key => &$entry) {
+            arsort($labelVotes[$key]);
+            $entry['label'] = (string) array_key_first($labelVotes[$key]);
+        }
+        unset($entry);
+
+        uasort($matrix, static fn(array $a, array $b): int => strcasecmp($a['label'], $b['label']));
+
+        return $matrix;
+    }
+
+    /** @return array{uploaded: int, prices: int} documente incarcate / preturi pe vehicul pentru acel tip */
+    public function countVehicleDocumentTypeUsage(string $documentType): array
+    {
+        $documentType = trim($documentType);
+        $uploaded = $this->db->prepare('SELECT COUNT(*) FROM documente WHERE UPPER(TRIM(tip_document)) = UPPER(:document_type)');
+        $uploaded->execute([':document_type' => $documentType]);
+        $prices = $this->db->prepare('SELECT COUNT(*) FROM configurare_costuri_documente_vehicule_override WHERE UPPER(TRIM(document_type)) = UPPER(:document_type)');
+        $prices->execute([':document_type' => $documentType]);
+
+        return ['uploaded' => (int) $uploaded->fetchColumn(), 'prices' => (int) $prices->fetchColumn()];
+    }
+
+    /**
+     * Scoate tipul de document de pe toate tipurile de vehicul, plus preturile lui pe vehicul.
+     * Documentele deja incarcate in Documente raman (istoric), doar nu mai sunt cerute.
+     *
+     * @return string[] tipurile de vehicul de pe care a fost scos
+     */
+    public function deleteVehicleDocumentTypeEverywhere(string $documentType): array
+    {
+        $documentType = trim($documentType);
+        if ($documentType === '') {
+            return [];
+        }
+
+        $types = $this->db->prepare('SELECT DISTINCT vehicle_type FROM configurare_costuri_documente_vehicule WHERE UPPER(TRIM(document_type)) = UPPER(:document_type)');
+        $types->execute([':document_type' => $documentType]);
+        $vehicleTypes = array_map('strval', $types->fetchAll(PDO::FETCH_COLUMN));
+
+        $this->db->beginTransaction();
+        try {
+            $this->db->prepare('DELETE FROM configurare_costuri_documente_vehicule WHERE UPPER(TRIM(document_type)) = UPPER(:document_type)')
+                ->execute([':document_type' => $documentType]);
+            $this->db->prepare('DELETE FROM configurare_costuri_documente_vehicule_override WHERE UPPER(TRIM(document_type)) = UPPER(:document_type)')
+                ->execute([':document_type' => $documentType]);
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+
+        return $vehicleTypes;
+    }
+
+    /** Tipul de vehicul din configurarea documentelor, pentru coloana vehicule.tip_vehicul. */
+    private function vehicleDocumentConfigTypeSql(string $column): string
+    {
+        return "(CASE
+            WHEN {$column} IN ('autoturism', 'autoutilitara') THEN 'autovehicul'
+            WHEN {$column} = 'semiremorca' THEN 'semiremorca_primar'
+            ELSE {$column}
+        END)";
+    }
+
+    /**
+     * Numaratori pe tip de document (cheie UPPER): documente incarcate si preturi pe vehicul,
+     * plus preturile pe vehicul defalcate pe tipul de vehicul din configurare.
+     *
+     * @return array{usage: array<string, array{uploaded: int, prices: int}>, prices_by_type: array<string, array<string, int>>}
+     */
+    public function getVehicleDocumentTypeUsageCounts(): array
+    {
+        $usage = [];
+        foreach ($this->db->query('SELECT UPPER(TRIM(tip_document)) AS doc_key, COUNT(*) AS total FROM documente GROUP BY UPPER(TRIM(tip_document))')->fetchAll() as $row) {
+            $usage[(string) $row['doc_key']]['uploaded'] = (int) $row['total'];
+        }
+
+        $pricesByType = [];
+        $typeSql = $this->vehicleDocumentConfigTypeSql('v.tip_vehicul');
+        $stmt = $this->db->query("
+            SELECT UPPER(TRIM(o.document_type)) AS doc_key, {$typeSql} AS config_type, COUNT(*) AS total
+            FROM configurare_costuri_documente_vehicule_override o
+            INNER JOIN vehicule v ON v.id = o.vehicle_id
+            GROUP BY doc_key, config_type
+        ");
+        foreach ($stmt->fetchAll() as $row) {
+            $key = (string) $row['doc_key'];
+            $pricesByType[$key][(string) $row['config_type']] = (int) $row['total'];
+            $usage[$key]['prices'] = ($usage[$key]['prices'] ?? 0) + (int) $row['total'];
+        }
+
+        foreach ($usage as &$entry) {
+            $entry += ['uploaded' => 0, 'prices' => 0];
+        }
+        unset($entry);
+
+        return ['usage' => $usage, 'prices_by_type' => $pricesByType];
+    }
+
+    /**
+     * Vehicule (fara stocul de anvelope) carora le lipseste sau le-a expirat cel putin un
+     * document obligatoriu, dupa aceeasi regula ca alertele din Dashboard (ultimul document de acel tip).
+     *
+     * @return array{vehicles: int, missing: int, expired: int}
+     */
+    public function getVehicleRequiredDocumentIssueSummary(): array
+    {
+        $typeSql = $this->vehicleDocumentConfigTypeSql('v.tip_vehicul');
+        $stmt = $this->db->query("
+            SELECT v.id AS vehicle_id,
+                   cfg.requires_expiry,
+                   COUNT(d.id) AS document_count,
+                   MAX(d.data_expirare) AS latest_expiry
+            FROM vehicule v
+            INNER JOIN configurare_costuri_documente_vehicule cfg
+                ON cfg.vehicle_type = {$typeSql}
+               AND cfg.obligatoriu = 1
+            LEFT JOIN documente d
+                ON d.vehicle_id = v.id
+               AND UPPER(TRIM(d.tip_document)) = UPPER(TRIM(cfg.document_type))
+            WHERE v.nr_inmatriculare <> 'STOC-ANVELOPE'
+            GROUP BY v.id, cfg.id, cfg.requires_expiry
+        ");
+
+        $today = date('Y-m-d');
+        $missing = [];
+        $expired = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $vehicleId = (int) $row['vehicle_id'];
+            if ((int) $row['document_count'] === 0) {
+                $missing[$vehicleId] = true;
+                continue;
+            }
+            $latestExpiry = $row['latest_expiry'] !== null ? substr((string) $row['latest_expiry'], 0, 10) : null;
+            if (($latestExpiry === null && (int) $row['requires_expiry'] === 1) || ($latestExpiry !== null && $latestExpiry < $today)) {
+                $expired[$vehicleId] = true;
+            }
+        }
+
+        return [
+            'vehicles' => count($missing + $expired),
+            'missing' => count($missing),
+            'expired' => count($expired),
+        ];
+    }
+
+    public function findVehicleRequiredDocumentCell(string $documentType, string $vehicleType): ?array
+    {
+        $stmt = $this->db->prepare('
+            SELECT id, vehicle_type, document_type, document_cost, validity_days, requires_expiry, obligatoriu
+            FROM configurare_costuri_documente_vehicule
+            WHERE vehicle_type = :vehicle_type
+              AND UPPER(TRIM(document_type)) = UPPER(:document_type)
+            LIMIT 1
+        ');
+        $stmt->execute([':vehicle_type' => $vehicleType, ':document_type' => trim($documentType)]);
+        $row = $stmt->fetch();
+
+        return $row ?: null;
+    }
+
+    /** Eticheta existenta a tipului de document (fara diferente de litere mari/mici), sau null. */
+    public function findVehicleDocumentTypeLabel(string $documentType): ?string
+    {
+        $stmt = $this->db->prepare('
+            SELECT document_type
+            FROM configurare_costuri_documente_vehicule
+            WHERE UPPER(TRIM(document_type)) = UPPER(:document_type)
+            GROUP BY document_type
+            ORDER BY COUNT(*) DESC
+            LIMIT 1
+        ');
+        $stmt->execute([':document_type' => trim($documentType)]);
+        $label = $stmt->fetchColumn();
+
+        return $label === false ? null : (string) $label;
+    }
+
+    /**
+     * Modifica o singura celula (document x tip vehicul). Lipsa randului + $createIfMissing
+     * il creeaza cu valorile implicite din matrice (cost 0, 365 zile).
+     *
+     * @param array{required?: bool, requires_expiry?: bool} $changes
+     * @return array{before: ?array, after: ?array}
+     */
+    public function setVehicleRequiredDocumentCell(string $documentType, string $vehicleType, array $changes, bool $createIfMissing): array
+    {
+        $before = $this->findVehicleRequiredDocumentCell($documentType, $vehicleType);
+        $now = date('Y-m-d H:i:s');
+
+        if ($before === null) {
+            if (!$createIfMissing) {
+                return ['before' => null, 'after' => null];
+            }
+            $stmt = $this->db->prepare('
+                INSERT INTO configurare_costuri_documente_vehicule
+                    (vehicle_type, document_type, document_cost, validity_days, requires_expiry, obligatoriu, created_at, updated_at)
+                VALUES (:vehicle_type, :document_type, 0.00, 365, :requires_expiry, :obligatoriu, :created_at, :updated_at)
+            ');
+            $stmt->execute([
+                ':vehicle_type' => $vehicleType,
+                ':document_type' => $this->findVehicleDocumentTypeLabel($documentType) ?? trim($documentType),
+                ':requires_expiry' => ($changes['requires_expiry'] ?? true) ? 1 : 0,
+                ':obligatoriu' => ($changes['required'] ?? true) ? 1 : 0,
+                ':created_at' => $now,
+                ':updated_at' => $now,
+            ]);
+
+            return ['before' => null, 'after' => $this->findVehicleRequiredDocumentCell($documentType, $vehicleType)];
+        }
+
+        $sets = [];
+        $params = [':id' => (int) $before['id'], ':updated_at' => $now];
+        if (array_key_exists('required', $changes)) {
+            $sets[] = 'obligatoriu = :obligatoriu';
+            $params[':obligatoriu'] = $changes['required'] ? 1 : 0;
+        }
+        if (array_key_exists('requires_expiry', $changes)) {
+            $sets[] = 'requires_expiry = :requires_expiry';
+            $params[':requires_expiry'] = $changes['requires_expiry'] ? 1 : 0;
+        }
+        if ($sets !== []) {
+            $this->db->prepare('UPDATE configurare_costuri_documente_vehicule SET ' . implode(', ', $sets) . ', updated_at = :updated_at WHERE id = :id')
+                ->execute($params);
+        }
+
+        return ['before' => $before, 'after' => $this->findVehicleRequiredDocumentCell($documentType, $vehicleType)];
+    }
+
+    /** Scoate documentul de pe un singur tip de vehicul (ca stergerea din Gestionare tipuri documente). */
+    public function removeVehicleRequiredDocumentCell(string $documentType, string $vehicleType): ?array
+    {
+        $before = $this->findVehicleRequiredDocumentCell($documentType, $vehicleType);
+        if ($before !== null) {
+            $this->deleteConfiguredDocumentType((int) $before['id']);
+        }
+
+        return $before;
+    }
+
+    /** @return array<string, int> tip vehicul (configurare) => numar vehicule */
+    public function countVehiclesByDocumentConfigType(): array
+    {
+        $stmt = $this->db->query("
+            SELECT tip_vehicul, COUNT(*) AS total
+            FROM vehicule
+            WHERE nr_inmatriculare <> 'STOC-ANVELOPE'
+            GROUP BY tip_vehicul
+        ");
+
+        $counts = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $type = normalize_vehicle_type_for_form_select((string) ($row['tip_vehicul'] ?? ''));
+            if ($type === 'autoutilitara') {
+                $type = 'autovehicul';
+            }
+            $counts[$type] = ($counts[$type] ?? 0) + (int) $row['total'];
+        }
+
+        return $counts;
+    }
+
     public function getConfiguredDocumentTypeById(int $id): ?array
     {
         if ($id <= 0) {
