@@ -50,6 +50,10 @@ class InactiveResourceApprovalController
                 $this->missingFeesAction();
                 return;
 
+            case 'fee_purchase_alarm':
+                $this->feePurchaseAlarmAction();
+                return;
+
             case 'dismiss_missing_fee':
                 $this->dismissMissingFeeAction();
                 return;
@@ -328,6 +332,27 @@ class InactiveResourceApprovalController
                 'success' => false,
                 'message' => 'Taxele lipsa nu au putut fi incarcate.',
             ], 500);
+        }
+    }
+
+    /**
+     * Alarma pe toate paginile: cate treceri refacturate n-au primit inca raspuns la
+     * "A fost cumparata taxa?". Interogat des, deci fara calculul taxelor lipsa.
+     */
+    private function feePurchaseAlarmAction(): void
+    {
+        try {
+            $model = new ReinvoiceFeeExpectationModel(get_pdo());
+            $pending = 0;
+            foreach ($model->getPurchaseChecks()['rows'] as $row) {
+                if (!$row['not_bought']) {
+                    $pending++;
+                }
+            }
+            $this->sendJson(['success' => true, 'pending' => $pending]);
+        } catch (Throwable $exception) {
+            error_log('[InactiveResourceApprovalController][fee_purchase_alarm] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'pending' => 0], 500);
         }
     }
 

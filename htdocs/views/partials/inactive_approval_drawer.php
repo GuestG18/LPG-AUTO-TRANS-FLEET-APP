@@ -182,6 +182,9 @@ $statusIcons = [
 <div
     class="fleet-approval-drawer <?= $drawerIsAdmin ? 'is-admin-mode' : 'is-user-mode' ?>"
     data-global-approval-drawer
+    <?php // Alarma: o trecere refacturata fara raspuns la "A fost cumparata taxa?" blocheaza pagina tuturor. ?>
+    data-fee-alarm-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'fee_purchase_alarm'])) ?>"
+    data-fee-alarm-sound="<?= e(url('assets/audio/purge-siren.mp3')) ?>"
     <?php if (!$drawerIsAdmin): ?>
         <?php // Deciziile vazute in panou ies din el la urmatoarea incarcare (raman in "Vezi toate solicitarile mele"). ?>
         data-approval-seen-url="<?= e(build_query_url(['page' => 'inactive_approvals', 'action' => 'mark_seen'])) ?>"
