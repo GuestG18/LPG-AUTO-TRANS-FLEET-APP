@@ -157,6 +157,7 @@ class DispecerCurseModel extends BaseModel
         'diurna' => 'Diurna',
         'service' => 'Reparatii',
         'alte' => 'Alte cheltuieli',
+        'toll' => 'Toll',
     ];
 
     /**
@@ -2751,7 +2752,7 @@ class DispecerCurseModel extends BaseModel
         // fiecare cu locatia, cantitatea si pretul unitar pe randul propriu.
         // Coloanele de tip sunt ENUM, deci trebuie sa cunoasca noile valori;
         // 'taxe_drum' ramane in enum pentru cheltuielile deja salvate.
-        $expenseTypeEnum = "enum('motorina','taxa_acces','port','trece','taxe_drum','diurna','service','alte')";
+        $expenseTypeEnum = "enum('motorina','taxa_acces','port','trece','taxe_drum','diurna','service','alte','toll')";
         $enumCheck = $this->db->prepare("
             SELECT COLUMN_TYPE
             FROM INFORMATION_SCHEMA.COLUMNS
@@ -2763,7 +2764,7 @@ class DispecerCurseModel extends BaseModel
             $enumCheck->bindValue(':column_name', $enumColumn, PDO::PARAM_STR);
             $enumCheck->execute();
             $currentType = (string) ($enumCheck->fetchColumn() ?: '');
-            if ($currentType !== '' && !str_contains($currentType, "'taxa_acces'")) {
+            if ($currentType !== '' && !str_contains($currentType, "'toll'")) {
                 $this->db->exec(
                     "ALTER TABLE curse_cheltuieli MODIFY COLUMN " . $enumColumn . ' ' . $expenseTypeEnum . ' ' . $nullability
                 );
@@ -9491,6 +9492,7 @@ class DispecerCurseModel extends BaseModel
                 WHEN 'diurna' THEN 'Diurna'
                 WHEN 'service' THEN 'Reparatii'
                 WHEN 'alte' THEN 'Alte cheltuieli'
+                WHEN 'toll' THEN 'Toll'
                 ELSE " . $expenseAlias . ".tip_cheltuiala
             END
         )";

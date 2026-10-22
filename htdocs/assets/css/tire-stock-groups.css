@@ -1,0 +1,85 @@
+/* Stoc anvelope: inventar grupat (produs / vehicul -> locatie / axa -> anvelopa). */
+
+/* Tab-uri vedere */
+.tire-view-bar { display: flex; align-items: flex-end; justify-content: space-between; gap: .75rem; padding: .25rem 1rem 0; border-bottom: 1px solid #e9eef5; flex-wrap: wrap; }
+.tire-view-tabs { display: flex; gap: .25rem; }
+.tire-view-tab { border: 0; background: transparent; padding: .7rem .9rem .6rem; font-size: .875rem; font-weight: 600; color: #52627a; border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; align-items: center; gap: .4rem; }
+.tire-view-tab:hover { color: #0f172a; }
+.tire-view-tab.is-active { color: #0d6efd; border-bottom-color: #0d6efd; }
+.tire-view-tab:focus-visible { outline: 2px solid rgba(13, 110, 253, .4); outline-offset: -2px; border-radius: 6px 6px 0 0; }
+.tire-view-count { background: #eef2f7; color: #334155; border-radius: 999px; padding: .05rem .5rem; font-size: .72rem; font-weight: 700; }
+.tire-view-tab.is-active .tire-view-count { background: #e7f0ff; color: #0d6efd; }
+.tire-view-tools { display: flex; gap: .25rem; padding-bottom: .35rem; }
+.tire-view-tools .btn-link { color: #52627a; text-decoration: none; font-size: .8rem; }
+.tire-view-tools .btn-link:hover { color: #0d6efd; }
+
+/* Coloanele de control */
+.tire-table .tire-cell-expander { width: 44px; padding-left: 1rem; padding-right: 0; }
+.tire-table .tire-cell-check { width: 36px; padding-left: .25rem; padding-right: .25rem; }
+.tire-expander { width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; display: grid; place-items: center; color: #334155; font-size: 1rem; }
+.tire-expander:hover { background: #eef2f7; }
+.tire-expander:focus-visible { outline: 2px solid rgba(13, 110, 253, .45); }
+.tire-expander .bi { transition: transform .15s ease; }
+.tire-expander[aria-expanded="true"] .bi { transform: rotate(90deg); }
+.tire-expander-sm { width: 22px; height: 22px; font-size: .8rem; }
+.tire-expander.is-loading .bi { animation: tireSpin .8s linear infinite; }
+@keyframes tireSpin { to { transform: rotate(360deg); } }
+
+/* Randul unui grup */
+.tire-table tr.tire-group-row > td { background: #fff; padding-top: .8rem; padding-bottom: .8rem; border-bottom: 1px solid #e5ebf3; }
+.tire-table tr.tire-group-row { cursor: pointer; }
+.tire-table tr.tire-group-row:hover > td { background: #fafcff; }
+.tire-table tr.tire-group-row.is-expanded > td { border-bottom-color: #dbe5f3; }
+.tire-table tr.tire-group-row.is-selected > td { background: rgba(13, 110, 253, .04); }
+.tire-group-check { width: 1.15rem; height: 1.15rem; }
+.tire-group-title { font-weight: 700; color: #0f172a; text-transform: uppercase; font-size: .875rem; line-height: 1.25; }
+.tire-group-plate { font-size: 1.05rem; text-transform: none; letter-spacing: .01em; }
+.tire-vehicle-thumb { width: 54px; height: 54px; border-radius: 12px; background: #111827; color: #fff; display: grid; place-items: center; font-size: 1.6rem; flex: 0 0 54px; }
+.tire-fact-label { font-size: .75rem; color: #64748b; margin-bottom: .1rem; }
+.tire-fact-value { font-weight: 700; color: #0f172a; }
+.tire-fact-link { font-size: .8rem; text-decoration: none; }
+.tire-fact-sub { max-width: 240px; }
+.tire-group-badges { display: flex; flex-wrap: wrap; gap: .4rem; justify-content: flex-end; }
+.tire-count-badge { display: inline-flex; align-items: center; border-radius: 6px; padding: .28rem .55rem; font-size: .75rem; font-weight: 700; white-space: nowrap; background: #eef2f7; color: #334155; border: 1px solid #d9e2ec; }
+.tire-count-badge.is-green { background: #e8f8ef; color: #168753; border-color: #bde8cd; }
+.tire-count-badge.is-blue { background: #eef4ff; color: #0d6efd; border-color: #bcd2ff; }
+.tire-count-badge.is-yellow { background: #fff6dc; color: #9a6b00; border-color: #f5dc8f; }
+.tire-count-badge.is-red { background: #fff1f2; color: #dc3545; border-color: #ffc9cf; }
+.tire-count-badge.is-soft { background: #eef3fb; color: #475569; border-color: #dbe5f3; font-weight: 600; }
+.tire-group-caret { color: #475569; margin-left: .55rem; vertical-align: middle; transition: transform .15s ease; display: inline-block; }
+.tire-group-row.is-expanded .tire-group-caret { transform: rotate(180deg); }
+
+/* Subgrup: locatie / axa */
+.tire-table tr.tire-sub-row > td { background: #f3f7fd; padding-top: .45rem; padding-bottom: .45rem; border-bottom: 1px solid #e3ebf6; font-size: .85rem; }
+.tire-table tr.tire-sub-row > td:first-child { box-shadow: inset 3px 0 0 #cfe0fb; }
+.tire-sub-title { color: #26364f; margin-right: 1rem; }
+.tire-sub-facts { display: inline-flex; flex-wrap: wrap; gap: .25rem 1rem; color: #64748b; font-size: .8rem; }
+
+/* Anvelopele din grup */
+.tire-table tr.tire-child-row > td { background: #fff; }
+.tire-table tr.tire-child-row > td:first-child { box-shadow: inset 3px 0 0 #e5edf9; }
+.tire-table tr.tire-child-row > td:nth-child(3) { padding-left: 1rem; }
+.tire-table tr.tire-child-row:hover > td { background: #fbfdff; }
+.tire-table tr.tire-child-row.is-hidden-by-sub, .tire-table tr.is-collapsed-child { display: none; }
+
+/* Bara de actiuni pentru selectie */
+.tire-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; padding: .6rem 1rem; border-bottom: 1px solid #dbe5f3; background: #f3f7fd; }
+.tire-bulk-bar.d-none { display: none !important; }
+.tire-bulk-main { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .6rem; font-size: .875rem; }
+.tire-bulk-count { color: #0f172a; }
+.tire-bulk-scope { color: #52627a; font-size: .82rem; }
+.tire-bulk-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-left: auto; }
+.tire-bulk-note { flex-basis: 100%; font-size: .8rem; color: #7a5600; background: #fff8e6; border: 1px solid #f5dc8f; border-radius: 6px; padding: .4rem .6rem; }
+.tire-hidden-menu { width: 340px; max-height: 360px; overflow-y: auto; padding: .4rem 0 .6rem; }
+.tire-hidden-head { font-size: .75rem; font-weight: 700; color: #52627a; padding: .25rem 1rem .4rem; }
+.tire-hidden-item { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .35rem 1rem; font-size: .82rem; }
+.tire-hidden-item + .tire-hidden-item { border-top: 1px solid #f1f5f9; }
+
+@media (max-width: 1400px) {
+    .tire-fact-sub { max-width: 160px; }
+}
+
+/* Bara de filtre: cautare + 7 filtre + Reseteaza filtrele pe un rand, pe ecrane late */
+@media (min-width: 1401px) {
+    .tire-filter-bar { grid-template-columns: minmax(200px, 1.4fr) repeat(7, minmax(0, 1fr)) auto; }
+}

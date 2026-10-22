@@ -372,12 +372,18 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
 // "Reia cursa" duce acolo (vezi resume_id in DispecerCurseController).
 ?>
 <div class="row g-3 align-items-start">
-    <div class="col-12">
-        <div class="card border-0 shadow-sm" id="add-race-form">
+    <div class="col-12 col-xl-8 align-self-stretch">
+        <div class="card border-0 shadow-sm h-100 dispatcher-add-compact" id="add-race-form">
             <div class="card-header bg-white">
                 <h3 class="h6 mb-0">Adaugă Cursă</h3>
             </div>
             <div class="card-body">
+                <?php if ((string) ($_GET['prefill'] ?? '') === 'race' && empty($formErrors)): ?>
+                    <div class="alert alert-info py-2 small">
+                        <i class="bi bi-graph-down-arrow me-1" aria-hidden="true"></i>
+                        Precompletat din <strong>Km pierduți</strong>: perioada rulată fără cursă. Alege beneficiarul și tipul transportului — vehiculul se selectează singur.
+                    </div>
+                <?php endif; ?>
                 <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store'])) ?>" class="dispatcher-race-form" <?php include __DIR__ . '/_race_form_attrs.php'; ?> data-inactive-trip-id="" novalidate>
                     <?= csrf_field() ?>
                     <input type="hidden" name="vehicle_config_decision" value="" data-vehicle-config-decision>
@@ -408,6 +414,10 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                 </form>
             </div>
         </div>
+    </div>
+
+    <div class="col-12 col-xl-4 align-self-stretch">
+        <?php include __DIR__ . '/_insights_cards.php'; ?>
     </div>
 
     <div class="col-12">
@@ -3495,5 +3505,7 @@ document.addEventListener('DOMContentLoaded', function () {
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
 <script src="<?= e(url('assets/js/dispecer-curse-gps-km.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse-gps-km.js'))) ?>" data-gps-km-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'trip_gps_km'])) ?>"></script>
 <script src="<?= e(url('assets/js/dispecer-diurna.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-diurna.js'))) ?>"></script>
+<link rel="stylesheet" href="<?= e(url('assets/css/dispatcher-insights.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/dispatcher-insights.css'))) ?>">
+<script src="<?= e(url('assets/js/dispatcher-insights.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispatcher-insights.js'))) ?>"></script>
 <link rel="stylesheet" href="<?= e(url('assets/css/race-view-overlay.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/race-view-overlay.css'))) ?>">
 <script src="<?= e(url('assets/js/race-view-overlay.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/race-view-overlay.js'))) ?>"></script>

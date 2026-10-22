@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * Taxe de refacturat (taxa acces, port, trecere, taxe drum) pe rute.
+ * Taxe de refacturat (taxa acces, port, trecere, toll, taxe drum) pe rute.
  *
  * Regulile stau in reguli_taxe_refacturare si se administreaza din pagina
  * "Reguli taxe refacturare": loc descarcare (obligatoriu) + loc incarcare si tip
@@ -27,6 +27,7 @@ class ReinvoiceFeeExpectationModel extends BaseModel
         'port' => 'Port',
         'trece' => 'Trecere',
         'taxe_drum' => 'Taxe drum',
+        'toll' => 'Toll',
     ];
 
     public const TRANSPORT_TYPES = [

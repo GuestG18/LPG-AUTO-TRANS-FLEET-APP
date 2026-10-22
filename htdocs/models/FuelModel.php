@@ -34,8 +34,8 @@ class FuelModel extends BaseModel
      * gresit la pompa si intervalul este exclus din medii (randul ramane
      * vizibil in tabel, cu avertisment, si poate fi corectat manual).
      */
-    private const MIN_PLAUSIBLE_L100 = 4.0;
-    private const MAX_PLAUSIBLE_L100 = 120.0;
+    public const MIN_PLAUSIBLE_L100 = 4.0;
+    public const MAX_PLAUSIBLE_L100 = 120.0;
 
     /**
      * Toleranta (ore) in jurul intervalului cursei la asocierea automata a
@@ -2773,6 +2773,15 @@ class FuelModel extends BaseModel
         return ['items' => $items, 'total' => round($total, 2)];
     }
 
+    /** Plafon de luni pentru vederea T0 pe mai multe luni (intervale foarte lungi). */
+    private const NORMATIVE_MAX_MONTHS = 12;
+
+    /**
+     * Consumul normat pentru vehiculul filtrat. Campurile de la radacina descriu
+     * prima luna din filtru (ca inainte); `months` contine cate un rezultat
+     * T0 -> urmatorul FULL pentru FIECARE luna din interval, ca operatorul sa
+     * poata vedea si seta T0 pe fiecare granita de luna.
+     */
     private function getNormativeInterval(array $filters): array
     {
         $vehicle = trim((string) ($filters['vehicle'] ?? ''));
@@ -2780,7 +2789,37 @@ class FuelModel extends BaseModel
             $vehicle = $this->firstVehicleForNormative($filters);
         }
 
-        $monthStart = $this->monthStartFor((string) $filters['date_from']);
+        $months = [];
+        foreach ($this->normativeMonthStarts($filters) as $monthStart) {
+            $months[] = $this->getNormativeForMonth($vehicle, $monthStart);
+        }
+
+        $result = $months[0];
+        $result['months'] = $months;
+        $result['multi_month'] = count($months) > 1;
+
+        return $result;
+    }
+
+    /** @return list<DateTimeImmutable> prima zi a fiecarei luni din filtru */
+    private function normativeMonthStarts(array $filters): array
+    {
+        $first = $this->monthStartFor((string) ($filters['date_from'] ?? ''));
+        $last = $this->monthStartFor((string) ($filters['date_to'] ?? ''));
+        if ($last < $first) {
+            $last = $first;
+        }
+
+        $starts = [];
+        for ($cursor = $first; $cursor <= $last && count($starts) < self::NORMATIVE_MAX_MONTHS; $cursor = $cursor->modify('+1 month')) {
+            $starts[] = $cursor;
+        }
+
+        return $starts;
+    }
+
+    private function getNormativeForMonth(string $vehicle, DateTimeImmutable $monthStart): array
+    {
         $window = $this->t0Window($monthStart);
         $base = [
             'vehicle' => $vehicle,

@@ -564,6 +564,15 @@
         var vehicleListExpanded = false;
         var vehicleListContextKey = '';
         var lastEligibleVehicleSet = {};
+        // Din Km pierduti (prefill=race): vehiculul vine in URL, dar lista de vehicule apare abia dupa
+        // beneficiar + tip transport; il tinem in asteptare si il selectam cand intra in lista.
+        var pendingPrefillVehicleId = '';
+        if (form.querySelector('[data-vehicle-config-decision]') !== null) {
+            var prefillQuery = new URLSearchParams(window.location.search);
+            if (prefillQuery.get('prefill') === 'race') {
+                pendingPrefillVehicleId = String(prefillQuery.get('vehicle_id') || '').replace(/\D/g, '');
+            }
+        }
 
         var defaultDistributionLocationNoteText = distributionLocationNote
             ? String(distributionLocationNote.textContent || '').trim()
@@ -2643,7 +2652,7 @@
 
             var beneficiaryId = String(beneficiaryField ? (beneficiaryField.value || '') : '').trim();
             var transportType = String(tipField ? (tipField.value || '') : '').trim();
-            var selectedVehicleId = String(vehicleField.value || '').trim();
+            var selectedVehicleId = String(vehicleField.value || '').trim() || pendingPrefillVehicleId;
             var allowedVehicleOptions = getEligibleVehicleOptions(beneficiaryId, transportType);
 
             var placeholderLabel = '-- Selecteaza --';
@@ -2694,6 +2703,10 @@
             }
 
             rebuildVehicleSelectOptions(displayVehicleOptions, selectedVehicleId, placeholderLabel);
+            if (pendingPrefillVehicleId !== '' && String(vehicleField.value || '') === pendingPrefillVehicleId) {
+                pendingPrefillVehicleId = '';
+                vehicleField.dispatchEvent(new Event('change', { bubbles: true }));
+            }
         }
 
         // Sandbox: decizia adminului pentru un vehicul neconfigurat pe ruta curenta.
@@ -6139,6 +6152,7 @@
         });
         if (vehicleField) {
             vehicleField.addEventListener('change', function () {
+                pendingPrefillVehicleId = '';
                 if (String(vehicleField.value || '') === SHOW_ALL_VEHICLES_VALUE) {
                     // Extinde lista cu toate vehiculele active; alegerea unui vehicul neconfigurat cere decizia adminului.
                     vehicleListExpanded = true;

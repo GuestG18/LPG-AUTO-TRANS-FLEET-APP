@@ -288,7 +288,8 @@ class TransportTariffModel extends BaseModel
         }
 
         $placeholders = [];
-        $params = ['d1' => $businessDate, 'd2' => $businessDate];
+        // Fiecare placeholder o singură dată (EMULATE_PREPARES=false nu acceptă repetarea).
+        $params = ['d1' => $businessDate, 'd2' => $businessDate, 'd3' => $businessDate, 'd4' => $businessDate];
         foreach ($signatures as $index => $signature) {
             $key = 'sig' . $index;
             $placeholders[] = ':' . $key;
@@ -305,7 +306,7 @@ class TransportTariffModel extends BaseModel
                   AND (valid_to IS NULL OR valid_to >= :d2)
                 GROUP BY rule_signature
             ) p ON p.rule_signature = t.rule_signature AND p.mx = t.valid_from
-            WHERE t.valid_from <= :d1 AND (t.valid_to IS NULL OR t.valid_to >= :d2)
+            WHERE t.valid_from <= :d3 AND (t.valid_to IS NULL OR t.valid_to >= :d4)
         ');
         $stmt->execute($params);
 

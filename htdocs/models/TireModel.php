@@ -2449,146 +2449,375 @@ class TireModel extends BaseModel
         ]);
     }
 
-    private function getInventoryRows(array $filters, int $page, int $perPage): array
+    public const INVENTORY_VIEWS = ['all', 'spare', 'mounted'];
+
+    /**
+     * Inventarul grupat din Stoc anvelope. Fiecare anvelopa ramane o inregistrare separata;
+     * grupurile sunt doar o vedere peste ele:
+     *  - nemontate: produs = marca + model + dimensiune (cheie "p:..."), cu locatiile in interior;
+     *  - montate: vehicul (cheie "v:<id>") -> axa -> pozitie, din alocarile active.
+     * Filtrele sunt cele existente (buildInventoryWhere), aplicate pe tot inventarul; raman doar
+     * grupurile cu anvelope care corespund. "view" (tab-ul) se aplica la final, ca numaratorile
+     * tab-urilor sa reflecte celelalte filtre.
+     *
+     * @return array{groups:list<array>,counts:array{all:int,spare:int,mounted:int},match_ids:list<int>}
+     */
+    public function buildInventoryGroupSet(array $filters): array
     {
+        $this->ensureLifecycleSchema();
+
+        $view = in_array((string) ($filters['view'] ?? 'all'), self::INVENTORY_VIEWS, true) ? (string) ($filters['view'] ?? 'all') : 'all';
         $params = [];
         $whereSql = $this->buildInventoryWhere($filters, $params);
-
-        $countSql = 'SELECT COUNT(*)
-                     FROM anvelope t
-                     LEFT JOIN anvelope_alocari a ON a.tire_id = t.id AND a.data_end IS NULL
-                     LEFT JOIN vehicule v ON v.id = a.vehicle_id
-                     LEFT JOIN vehicule_anvelope_pozitii p ON p.id = a.position_id
-                     WHERE ' . $whereSql;
-        $countStmt = $this->db->prepare($countSql);
-        foreach ($params as $key => $value) {
-            $countStmt->bindValue($key, $value);
-        }
-        $countStmt->execute();
-        $totalRows = (int) $countStmt->fetchColumn();
-
-        $offset = max(0, ($page - 1) * $perPage);
-        $sql = 'SELECT
-                    t.*,
-                    t.axle_type AS tire_axle_type,
-                    a.id AS active_allocation_id,
-                    a.vehicle_id AS active_vehicle_id,
-                    a.position_id AS active_position_id,
-                    a.km_start AS active_km_start,
-                    a.data_start AS active_data_start,
-                    v.nr_inmatriculare,
-                    v.marca AS vehicle_marca,
-                    v.model AS vehicle_model,
-                    v.tip_vehicul AS vehicle_type,
-                    v.formula_axelor AS vehicle_layout,
-                    v.km_bord AS vehicle_km_bord,
-                    p.position_code,
-                    p.position_label,
-                    p.axle_no,
-                    p.axle_type AS position_axle_type
-                FROM anvelope t
-                LEFT JOIN anvelope_alocari a ON a.tire_id = t.id AND a.data_end IS NULL
-                LEFT JOIN vehicule v ON v.id = a.vehicle_id
-                LEFT JOIN vehicule_anvelope_pozitii p ON p.id = a.position_id
-                WHERE ' . $whereSql . '
-                ORDER BY t.updated_at DESC, t.id DESC
-                LIMIT :limit OFFSET :offset';
-
-        $stmt = $this->db->prepare($sql);
+        $stmt = $this->db->prepare(
+            'SELECT
+                t.*,
+                t.axle_type AS tire_axle_type,
+                a.id AS active_allocation_id,
+                a.vehicle_id AS active_vehicle_id,
+                a.position_id AS active_position_id,
+                a.km_start AS active_km_start,
+                a.data_start AS active_data_start,
+                v.nr_inmatriculare,
+                v.marca AS vehicle_marca,
+                v.model AS vehicle_model,
+                v.tip_vehicul AS vehicle_type,
+                v.formula_axelor AS vehicle_layout,
+                v.km_bord AS vehicle_km_bord,
+                p.position_code,
+                p.position_label,
+                p.position_order,
+                p.side_code,
+                p.axle_no,
+                p.axle_type AS position_axle_type
+            FROM anvelope t
+            LEFT JOIN anvelope_alocari a ON a.tire_id = t.id AND a.data_end IS NULL
+            LEFT JOIN vehicule v ON v.id = a.vehicle_id
+            LEFT JOIN vehicule_anvelope_pozitii p ON p.id = a.position_id
+            WHERE ' . $whereSql . '
+            ORDER BY t.id ASC'
+        );
         foreach ($params as $key => $value) {
             $stmt->bindValue($key, $value);
         }
-        $stmt->bindValue(':limit', $perPage, PDO::PARAM_INT);
-        $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
         $stmt->execute();
 
-        $rows = [];
-        foreach ($stmt->fetchAll() as $row) {
-            $rows[] = $this->prepareInventoryRow($row);
+        $counts = ['all' => 0, 'spare' => 0, 'mounted' => 0];
+        $groups = [];
+        $matchIds = [];
+        foreach ($stmt->fetchAll() as $raw) {
+            $row = $this->prepareInventoryRow($raw);
+            $isMounted = !empty($row['is_mounted']) && (int) ($row['active_vehicle_id'] ?? 0) > 0;
+            $counts['all']++;
+            $counts[$isMounted ? 'mounted' : 'spare']++;
+            if (($view === 'spare' && $isMounted) || ($view === 'mounted' && !$isMounted)) {
+                continue;
+            }
+            $matchIds[] = (int) $row['id'];
+            $key = $isMounted ? 'v:' . (int) $row['active_vehicle_id'] : $this->inventoryProductKey($row);
+            if (!isset($groups[$key])) {
+                $groups[$key] = ['key' => $key, 'kind' => $isMounted ? 'vehicle' : 'product', 'members' => []];
+            }
+            $groups[$key]['members'][] = $row;
         }
 
+        $groups = array_values($groups);
+        usort($groups, static function (array $left, array $right): int {
+            if ($left['kind'] !== $right['kind']) {
+                return $left['kind'] === 'product' ? -1 : 1;
+            }
+            $a = $left['members'][0];
+            $b = $right['members'][0];
+            if ($left['kind'] === 'vehicle') {
+                return strnatcasecmp((string) ($a['nr_inmatriculare'] ?? ''), (string) ($b['nr_inmatriculare'] ?? ''));
+            }
+            return strnatcasecmp(
+                trim((string) ($a['brand'] ?? '') . ' ' . ($a['model'] ?? '') . ' ' . ($a['tire_size'] ?? '')),
+                trim((string) ($b['brand'] ?? '') . ' ' . ($b['model'] ?? '') . ' ' . ($b['tire_size'] ?? ''))
+            );
+        });
+
+        return ['groups' => $groups, 'counts' => $counts, 'match_ids' => $matchIds];
+    }
+
+    /** O pagina de grupuri (paginarea se face pe grupuri, nu pe anvelope), cu sumarul fiecarui grup. */
+    public function getInventoryGroupPage(array $filters): array
+    {
+        $set = $this->buildInventoryGroupSet($filters);
+        $page = max(1, (int) ($filters['page'] ?? 1));
+        $perPage = (int) ($filters['per_page'] ?? 10);
+        $perPage = in_array($perPage, [5, 10, 25, 50], true) ? $perPage : 10;
+        $totalGroups = count($set['groups']);
+        $totalPages = max(1, (int) ceil($totalGroups / $perPage));
+        $page = min($page, $totalPages);
+        $pageGroups = array_slice($set['groups'], ($page - 1) * $perPage, $perPage);
+
         return [
-            'rows' => $rows,
+            'groups' => $this->summarizeInventoryGroups($pageGroups, $filters),
+            'counts' => $set['counts'],
+            'match_ids' => $set['match_ids'],
             'pagination' => [
                 'page' => $page,
                 'per_page' => $perPage,
-                'total_rows' => $totalRows,
-                'total_pages' => max(1, (int) ceil($totalRows / max(1, $perPage))),
+                'total_rows' => $totalGroups,
+                'total_pages' => $totalPages,
+                'total_tires' => count($set['match_ids']),
             ],
         ];
     }
 
-    private function getMoveTargetOptions(array $vehicles): array
+    /** Grupurile cerute (dupa cheie), sumarizate, cu randurile anvelopelor: incarcarea la extindere. */
+    public function getInventoryGroupsByKeys(array $filters, array $keys): array
     {
-        $targets = [];
+        $wanted = array_flip(array_slice(array_map('strval', $keys), 0, 100));
+        $set = $this->buildInventoryGroupSet($filters);
+        $found = array_values(array_filter($set['groups'], static fn (array $group): bool => isset($wanted[$group['key']])));
 
-        foreach ($vehicles as $vehicle) {
-            $vehicleId = (int) ($vehicle['id'] ?? 0);
-            if ($vehicleId <= 0) {
+        $result = [];
+        foreach ($this->summarizeInventoryGroups($found, $filters) as $group) {
+            $result[$group['key']] = $group;
+        }
+        return $result;
+    }
+
+    /**
+     * Datele de selectie: anvelopele unui grup ($groupKey) sau toate rezultatele ($groupKey null).
+     * $ignoreFilters = tot grupul, fara filtrele curente (selectie explicita "tot grupul").
+     */
+    public function getInventorySelectionMeta(array $filters, ?string $groupKey, bool $ignoreFilters): array
+    {
+        $set = $this->buildInventoryGroupSet($ignoreFilters ? [] : $filters);
+        $meta = [];
+        foreach ($set['groups'] as $group) {
+            if ($groupKey !== null && $group['key'] !== $groupKey && !str_starts_with($groupKey, $group['key'] . '|')) {
                 continue;
             }
+            foreach ($group['members'] as $row) {
+                // Subgrup de axa: "v:<id>|a:<nr>".
+                if ($groupKey !== null && preg_match('/\|a:(\d+)$/', $groupKey, $axleMatch) === 1 && (int) ($row['axle_no'] ?? 0) !== (int) $axleMatch[1]) {
+                    continue;
+                }
+                $meta[] = $this->tireSelectionMeta($row);
+            }
+        }
+        return $meta;
+    }
 
-            try {
-                $this->syncVehiclePositions(
-                    $vehicleId,
-                    (string) ($vehicle['tip_vehicul'] ?? 'autovehicul'),
-                    (string) ($vehicle['formula_axelor'] ?? '')
-                );
-            } catch (Throwable $exception) {
-                error_log('[TireModel][move-target-sync] ' . $exception->getMessage());
+    public function tireSelectionMeta(array $row): array
+    {
+        $isMounted = !empty($row['is_mounted']);
+        return [
+            'id' => (int) $row['id'],
+            'mounted' => $isMounted,
+            'mountable' => !$isMounted && in_array((string) ($row['status'] ?? ''), [self::STATUS_IN_STOCK, self::STATUS_SPARE, self::STATUS_RETREADED], true),
+            'label' => trim((string) (($row['brand'] ?? '') . ' ' . ($row['model'] ?? ''))) ?: 'Anvelopa #' . (int) $row['id'],
+            'size' => (string) ($row['tire_size'] ?? ''),
+            'serial' => (string) ($row['serial_number'] ?? ''),
+            'status' => (string) ($row['status_meta']['label'] ?? ''),
+            'type' => (string) ($row['tire_type_label'] ?? ''),
+            'vehicle' => $isMounted ? (string) ($row['nr_inmatriculare'] ?? '') : '',
+        ];
+    }
+
+    private function inventoryProductKey(array $row): string
+    {
+        $normalize = static fn ($value): string => mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', (string) $value)));
+        return 'p:' . substr(md5($normalize($row['brand'] ?? '') . '|' . $normalize($row['model'] ?? '') . '|' . $normalize($row['tire_size'] ?? '')), 0, 16);
+    }
+
+    /** Anvelopa care cere atentie: aceeasi regula ca indicatorul "Inlocuire necesara". */
+    private function inventoryRowNeedsReplacement(array $row): bool
+    {
+        return in_array((string) ($row['status'] ?? ''), [self::STATUS_DAMAGED, self::STATUS_MISSING, self::STATUS_SCRAPPED], true)
+            || in_array((string) ($row['condition_value'] ?? ''), ['high_wear', 'critical', 'missing'], true);
+    }
+
+    private function worstCondition(array $rows): string
+    {
+        $rank = ['good' => 0, 'acceptable' => 1, 'high_wear' => 2, 'critical' => 3, 'missing' => 4];
+        $worst = 'good';
+        foreach ($rows as $row) {
+            $value = (string) ($row['condition_value'] ?? 'good');
+            if (($rank[$value] ?? 0) > ($rank[$worst] ?? 0)) {
+                $worst = $value;
+            }
+        }
+        return $worst;
+    }
+
+    /** Medii etichetate explicit ca medii in interfata; valorile individuale raman pe randuri. */
+    private function inventoryAverages(array $rows): array
+    {
+        $wear = array_values(array_filter(array_map(static fn (array $row) => $row['wear_percent'], $rows), static fn ($value) => $value !== null));
+        $remaining = array_values(array_filter(array_map(static fn (array $row) => $row['remaining_km'], $rows), static fn ($value) => $value !== null));
+        return [
+            'wear_avg' => $wear !== [] ? array_sum($wear) / count($wear) : null,
+            'wear_min' => $wear !== [] ? min($wear) : null,
+            'wear_max' => $wear !== [] ? max($wear) : null,
+            'remaining_avg' => $remaining !== [] ? (int) round(array_sum($remaining) / count($remaining)) : null,
+        ];
+    }
+
+    private function summarizeInventoryGroups(array $groups, array $filters): array
+    {
+        if ($groups === []) {
+            return [];
+        }
+
+        $query = mb_strtolower(trim((string) ($filters['q'] ?? '')));
+
+        // Totaluri fara filtre pentru grupurile din pagina, fara interogari per grup.
+        $productTotals = [];
+        $vehicleIds = [];
+        foreach ($groups as $group) {
+            if ($group['kind'] === 'product') {
+                $productTotals[$group['key']] = ['unmounted' => 0, 'mounted' => 0];
+            } else {
+                $vehicleIds[] = (int) substr($group['key'], 2);
+            }
+        }
+        if ($productTotals !== []) {
+            $lightStmt = $this->db->query(
+                'SELECT t.brand, t.model, t.tire_size, (a.id IS NOT NULL) AS is_mounted
+                 FROM anvelope t
+                 LEFT JOIN anvelope_alocari a ON a.tire_id = t.id AND a.data_end IS NULL'
+            );
+            foreach ($lightStmt->fetchAll() as $light) {
+                $key = $this->inventoryProductKey($light);
+                if (isset($productTotals[$key])) {
+                    $productTotals[$key][(int) $light['is_mounted'] === 1 ? 'mounted' : 'unmounted']++;
+                }
+            }
+        }
+        $vehicleMounted = [];
+        if ($vehicleIds !== []) {
+            $placeholders = [];
+            $vehicleParams = [];
+            foreach ($vehicleIds as $index => $vehicleId) {
+                $placeholders[] = ':vehicle_' . $index;
+                $vehicleParams[':vehicle_' . $index] = $vehicleId;
+            }
+            $vehicleStmt = $this->db->prepare(
+                'SELECT vehicle_id, COUNT(*) AS mounted FROM anvelope_alocari
+                 WHERE data_end IS NULL AND vehicle_id IN (' . implode(', ', $placeholders) . ')
+                 GROUP BY vehicle_id'
+            );
+            $vehicleStmt->execute($vehicleParams);
+            foreach ($vehicleStmt->fetchAll() as $vehicleRow) {
+                $vehicleMounted[(int) $vehicleRow['vehicle_id']] = (int) $vehicleRow['mounted'];
             }
         }
 
-        $stmt = $this->db->query(
-            'SELECT
-                v.id AS vehicle_id,
-                v.nr_inmatriculare,
-                v.marca,
-                v.model,
-                v.tip_vehicul,
-                v.formula_axelor,
-                p.id AS position_id,
-                p.position_code,
-                p.position_label,
-                p.axle_no,
-                p.axle_type,
-                active_t.id AS mounted_tire_id,
-                active_t.brand AS mounted_brand,
-                active_t.model AS mounted_model
-             FROM vehicule v
-             INNER JOIN vehicule_anvelope_pozitii p ON p.vehicle_id = v.id AND p.is_active = 1
-             LEFT JOIN anvelope_alocari active_alloc ON active_alloc.position_id = p.id AND active_alloc.data_end IS NULL
-             LEFT JOIN anvelope active_t ON active_t.id = active_alloc.tire_id
-             WHERE v.status = "activ"
-             ORDER BY v.nr_inmatriculare ASC, p.position_order ASC, p.id ASC'
-        );
+        $summaries = [];
+        foreach ($groups as $group) {
+            $members = $group['members'];
+            $first = $members[0];
+            $warnings = 0;
+            $autoExpand = false;
+            foreach ($members as $row) {
+                if ($this->inventoryRowNeedsReplacement($row)) {
+                    $warnings++;
+                }
+                if ($query !== '' && ($query === mb_strtolower(trim((string) ($row['serial_number'] ?? ''))) || $query === (string) (int) $row['id'])) {
+                    $autoExpand = true;
+                }
+            }
 
-        foreach ($stmt->fetchAll() as $row) {
-            $vehicleId = (int) ($row['vehicle_id'] ?? 0);
-            if (!isset($targets[$vehicleId])) {
-                $vehicleName = trim((string) (($row['marca'] ?? '') . ' ' . ($row['model'] ?? '')));
-                $targets[$vehicleId] = [
+            $summary = [
+                'key' => $group['key'],
+                'kind' => $group['kind'],
+                'members' => $members,
+                'member_meta' => array_map([$this, 'tireSelectionMeta'], $members),
+                'count' => count($members),
+                'condition_meta' => $this->conditionMeta($this->worstCondition($members)),
+                'warnings' => $warnings,
+                'auto_expand' => $autoExpand,
+            ] + $this->inventoryAverages($members);
+
+            if ($group['kind'] === 'product') {
+                $locations = [];
+                $statusCounts = [];
+                $typeLabels = [];
+                $compatLabels = [];
+                $photo = null;
+                foreach ($members as $row) {
+                    $locations[(string) ($row['location_display'] ?? 'Depozit')][] = $row;
+                    $statusCounts[(string) $row['status']] = ($statusCounts[(string) $row['status']] ?? 0) + 1;
+                    $typeLabels[(string) ($row['tire_type_label'] ?? '')] = true;
+                    $compatLabels[(string) ($row['compatibility_label'] ?? '')] = true;
+                    if ($photo === null && trim((string) ($row['profile_photo_path'] ?? '')) !== '') {
+                        $photo = (string) $row['profile_photo_path'];
+                    }
+                }
+                uksort($locations, static fn ($a, $b): int => (count($locations[$b]) <=> count($locations[$a])) ?: strnatcasecmp((string) $a, (string) $b));
+                $locationGroups = [];
+                foreach ($locations as $label => $rows) {
+                    $locationGroups[] = [
+                        'key' => $group['key'] . '|l:' . substr(md5(mb_strtolower((string) $label)), 0, 10),
+                        'label' => (string) $label,
+                        'members' => $rows,
+                        'member_meta' => array_map([$this, 'tireSelectionMeta'], $rows),
+                    ];
+                }
+                $totals = $productTotals[$group['key']] ?? ['unmounted' => count($members), 'mounted' => 0];
+                $summary += [
+                    'brand' => (string) ($first['brand'] ?? ''),
+                    'model' => (string) ($first['model'] ?? ''),
+                    'size' => (string) ($first['tire_size'] ?? ''),
+                    'season_label' => (string) ($first['season_label'] ?? 'All season'),
+                    'photo_path' => $photo,
+                    'locations' => $locationGroups,
+                    'status_counts' => $statusCounts,
+                    'in_stock' => (int) ($statusCounts[self::STATUS_IN_STOCK] ?? 0),
+                    'spare' => (int) ($statusCounts[self::STATUS_SPARE] ?? 0),
+                    'tire_type_label' => count($typeLabels) === 1 ? (string) array_key_first($typeLabels) : 'Mixt (' . implode(', ', array_keys($typeLabels)) . ')',
+                    'compatibility_label' => count($compatLabels) === 1 ? (string) array_key_first($compatLabels) : 'Compatibilitati diferite',
+                    'total_unfiltered' => $totals['unmounted'],
+                    'mounted_elsewhere' => $totals['mounted'],
+                ];
+            } else {
+                $vehicleId = (int) substr($group['key'], 2);
+                $byAxle = [];
+                foreach ($members as $row) {
+                    $byAxle[(int) ($row['axle_no'] ?? 0)][] = $row;
+                }
+                ksort($byAxle);
+                $axleTypeOptions = $this->getAxleTypeOptions();
+                $axleGroups = [];
+                foreach ($byAxle as $axleNo => $axleRows) {
+                    // Pozitiile fizice in ordinea din configuratia vehiculului.
+                    usort($axleRows, static fn (array $a, array $b): int => ((int) ($a['position_order'] ?? 0)) <=> ((int) ($b['position_order'] ?? 0)));
+                    $axleType = (string) ($axleRows[0]['position_axle_type'] ?? '');
+                    $axleGroups[] = [
+                        'key' => $group['key'] . '|a:' . $axleNo,
+                        'axle_no' => $axleNo,
+                        'label' => $axleNo > 0 ? 'Axa ' . $axleNo : 'Fara axa',
+                        'type_label' => ucfirst((string) preg_replace('/^Axa\s+/i', '', (string) ($axleTypeOptions[$axleType] ?? $axleType))),
+                        'members' => $axleRows,
+                        'member_meta' => array_map([$this, 'tireSelectionMeta'], $axleRows),
+                        'condition_meta' => $this->conditionMeta($this->worstCondition($axleRows)),
+                    ] + $this->inventoryAverages($axleRows);
+                }
+                $descriptor = $this->describeVehicleLayout((string) ($first['vehicle_type'] ?? 'autovehicul'), (string) ($first['vehicle_layout'] ?? ''));
+                $mountedTotal = (int) ($vehicleMounted[$vehicleId] ?? count($members));
+                $summary += [
                     'vehicle_id' => $vehicleId,
-                    'label' => trim((string) ($row['nr_inmatriculare'] ?? '-') . ($vehicleName !== '' ? ' / ' . $vehicleName : '')),
-                    'vehicle_type' => $this->normalizeVehicleType((string) ($row['tip_vehicul'] ?? 'autovehicul')),
-                    'layout' => (string) ($row['formula_axelor'] ?? ''),
-                    'positions' => [],
+                    'plate' => (string) ($first['nr_inmatriculare'] ?? '-'),
+                    'vehicle_name' => trim((string) (($first['vehicle_marca'] ?? '') . ' ' . ($first['vehicle_model'] ?? ''))),
+                    'vehicle_type_label' => $this->vehicleTypeLabel((string) ($first['vehicle_type'] ?? 'autovehicul')),
+                    'vehicle_type' => $this->normalizeVehicleType((string) ($first['vehicle_type'] ?? 'autovehicul')),
+                    'layout' => (string) ($first['vehicle_layout'] ?? ''),
+                    'axles' => $axleGroups,
+                    'expected_tires' => (int) ($descriptor['expected_tires'] ?? 0),
+                    'total_unfiltered' => $mountedTotal,
+                    'missing_positions' => max(0, (int) ($descriptor['expected_tires'] ?? 0) - $mountedTotal),
                 ];
             }
 
-            $mountedTire = trim((string) (($row['mounted_brand'] ?? '') . ' ' . ($row['mounted_model'] ?? '')));
-            $axleType = (string) ($row['axle_type'] ?? self::AXLE_STEERING);
-            $targets[$vehicleId]['positions'][] = [
-                'position_id' => (int) ($row['position_id'] ?? 0),
-                'label' => trim('Axa ' . (int) ($row['axle_no'] ?? 0) . ' - ' . (string) ($row['position_label'] ?? '-')),
-                'axle_type' => $axleType,
-                'axle_type_label' => $this->getAxleTypeOptions()[$axleType] ?? $axleType,
-                'mounted_tire_id' => (int) ($row['mounted_tire_id'] ?? 0),
-                'mounted_tire_label' => $mountedTire,
-            ];
+            $summaries[] = $summary;
         }
 
-        return array_values($targets);
+        return $summaries;
     }
 
     public function buildMaintenanceStockContext(array $filters = []): array
@@ -2705,10 +2934,7 @@ class TireModel extends BaseModel
         );
         $totals['replacement_required'] = (int) $replacementStmt->fetchColumn();
 
-        $page = max(1, (int) ($filters['page'] ?? 1));
-        $perPage = (int) ($filters['per_page'] ?? 10);
-        $perPage = in_array($perPage, [5, 10, 25, 50], true) ? $perPage : 10;
-        $inventory = $this->getInventoryRows($filters, $page, $perPage);
+        $inventory = $this->getInventoryGroupPage($filters);
 
         $locationStmt = $this->db->query(
             'SELECT DISTINCT location_label
@@ -2754,11 +2980,22 @@ class TireModel extends BaseModel
             'ready_stock_by_type' => $readyStockByType,
             'needs_by_type' => array_values($typeNeeds),
             'vehicle_needs' => $vehicleNeeds,
-            'stock_preview' => $inventory['rows'],
-            'inventory_rows' => $inventory['rows'],
+            'stock_preview' => [],
+            'inventory_rows' => [],
+            'inventory_groups' => $inventory['groups'],
+            'inventory_counts' => $inventory['counts'],
+            'inventory_match_ids' => $inventory['match_ids'],
             'pagination' => $inventory['pagination'],
             'filters' => $filters,
-            'move_targets' => $this->getMoveTargetOptions($vehicles),
+            'location_options' => $locationOptions,
+            'axle_config_options' => $axleConfigOptions,
+        ] + $this->getTireRowFormOptions();
+    }
+
+    /** Optiunile folosite de formularele unui rand de anvelopa (pagina si randurile incarcate la extindere). */
+    public function getTireRowFormOptions(): array
+    {
+        return [
             'target_type_options' => $this->getTargetVehicleTypeOptions(),
             'tire_type_options' => $this->getTireTypeOptions(),
             'tire_type_options_by_axle_type' => $this->getTireTypeOptionsByAxleType(),
@@ -2768,8 +3005,6 @@ class TireModel extends BaseModel
             'season_options' => $this->getSeasonOptions(),
             'axle_type_options' => $this->getAxleTypeOptions(),
             'target_layout_options_by_type' => $this->getTargetLayoutOptionsByType(),
-            'location_options' => $locationOptions,
-            'axle_config_options' => $axleConfigOptions,
         ];
     }
 
@@ -3023,112 +3258,11 @@ class TireModel extends BaseModel
     ): void {
         $this->ensureLifecycleSchema();
 
-        $this->db->beginTransaction();
+        $this->beginTireMountTransaction();
 
         try {
-            $position = $this->getVehiclePositionById($positionId);
-            if ($position === null || (int) ($position['vehicle_id'] ?? 0) !== $vehicleId || (int) ($position['is_active'] ?? 0) !== 1) {
-                throw new RuntimeException('Pozitia selectata nu este valida pentru acest vehicul.');
-            }
-
-            $vehicle = $this->getVehicleForTireOperation($vehicleId);
-            if ($vehicle === null) {
-                throw new RuntimeException('Vehiculul selectat nu exista.');
-            }
-
-            $tire = $this->getTireById($tireId);
-            if ($tire === null) {
-                throw new RuntimeException('Anvelopa selectata nu exista.');
-            }
-
-            if (!$this->isTireCompatibleWithPosition($tire, $vehicle, $position)) {
-                throw new RuntimeException('Anvelopa selectata nu este compatibila cu axa aleasa.');
-            }
-
-            $existingTireAllocation = $this->getActiveAllocationForTire($tireId);
-            $existingPositionAllocation = $this->getActiveAllocationForPosition($positionId);
-
-            if (is_array($existingTireAllocation)) {
-                $allocationVehicleId = (int) ($existingTireAllocation['vehicle_id'] ?? 0);
-                if ($allocationVehicleId === $vehicleId && (int) ($existingTireAllocation['position_id'] ?? 0) === $positionId) {
-                    $this->db->commit();
-                    return;
-                }
-            }
-
-            if (is_array($existingPositionAllocation) && (int) ($existingPositionAllocation['tire_id'] ?? 0) !== $tireId) {
-                if (!$allowSwap) {
-                    throw new RuntimeException('Pozitia aleasa este ocupata. Bifeaza optiunea Schimba pozitiile pentru a face schimbul.');
-                }
-
-                if (!is_array($existingTireAllocation)) {
-                    throw new RuntimeException('Pozitia aleasa este ocupata si anvelopa curenta nu are o pozitie de schimb.');
-                }
-
-                $sourcePosition = $this->getPositionContext((int) ($existingTireAllocation['position_id'] ?? 0));
-                if ($sourcePosition === null) {
-                    throw new RuntimeException('Pozitia curenta a anvelopei nu mai exista.');
-                }
-
-                $targetTireId = (int) ($existingPositionAllocation['tire_id'] ?? 0);
-                $targetTire = $this->getTireById($targetTireId);
-                $sourceVehicle = $this->getVehicleForTireOperation((int) ($sourcePosition['vehicle_id'] ?? 0));
-                if ($targetTire === null || $sourceVehicle === null || !$this->isTireCompatibleWithPosition($targetTire, $sourceVehicle, $sourcePosition)) {
-                    throw new RuntimeException('Schimbul nu se poate face: anvelopa de pe pozitia tinta nu este compatibila cu pozitia curenta.');
-                }
-
-                $sourceKmEnd = max(0, (int) ($sourcePosition['km_bord'] ?? $vehicleKmBord));
-                $this->closeAllocation($existingTireAllocation, $sourceKmEnd, $mountDate, 'moved', $mountDateTime);
-                $this->closeAllocation($existingPositionAllocation, $vehicleKmBord, $mountDate, 'moved', $mountDateTime);
-
-                $this->insertAllocation($tireId, $vehicleId, $positionId, $vehicleKmBord, $mountDate, $mountDateTime, $userId);
-                $this->insertAllocation($targetTireId, (int) ($sourcePosition['vehicle_id'] ?? 0), (int) ($sourcePosition['id'] ?? 0), $sourceKmEnd, $mountDate, $mountDateTime, $userId);
-
-                $updateTire = $this->db->prepare('UPDATE anvelope SET status = :status, mount_date = :mount_date, updated_at = :updated_at WHERE id = :id');
-                foreach ([$tireId, $targetTireId] as $swapTireId) {
-                    $updateTire->execute([
-                        ':status' => self::STATUS_ACTIVE,
-                        ':mount_date' => $mountDate,
-                        ':updated_at' => $mountDateTime,
-                        ':id' => $swapTireId,
-                    ]);
-                }
-
-                $this->recordTireHistory($tireId, $sourcePosition, $position, (string) ($tire['status'] ?? self::STATUS_IN_STOCK), self::STATUS_ACTIVE, $reason ?? 'Schimb pozitii', $observation, $userId, $mountDateTime);
-                $this->recordTireHistory($targetTireId, $position, $sourcePosition, (string) ($targetTire['status'] ?? self::STATUS_ACTIVE), self::STATUS_ACTIVE, $reason ?? 'Schimb pozitii', $observation, $userId, $mountDateTime);
-
-                $this->db->commit();
-                return;
-            }
-
-            $oldPosition = null;
-            if (is_array($existingTireAllocation)) {
-                $oldPosition = $this->getPositionContext((int) ($existingTireAllocation['position_id'] ?? 0));
-                $kmEnd = $vehicleKmBord;
-                if ($oldPosition !== null) {
-                    $kmEnd = max(0, (int) ($oldPosition['km_bord'] ?? $vehicleKmBord));
-                }
-                $this->closeAllocation($existingTireAllocation, $kmEnd, $mountDate, 'moved', $mountDateTime);
-            }
-
-            $this->insertAllocation($tireId, $vehicleId, $positionId, $vehicleKmBord, $mountDate, $mountDateTime, $userId);
-
-            $updateTire = $this->db->prepare(
-                'UPDATE anvelope
-                 SET status = :status,
-                     mount_date = :mount_date,
-                     updated_at = :updated_at
-                 WHERE id = :id'
-            );
-            $updateTire->execute([
-                ':status' => self::STATUS_ACTIVE,
-                ':mount_date' => $mountDate,
-                ':updated_at' => $mountDateTime,
-                ':id' => $tireId,
-            ]);
-
-            $this->recordTireHistory($tireId, $oldPosition, $position, (string) ($tire['status'] ?? self::STATUS_IN_STOCK), self::STATUS_ACTIVE, $reason ?? 'Montaj / mutare anvelopa', $observation, $userId, $mountDateTime);
-
+            $this->lockTireMountRows([$tireId], [$positionId]);
+            $this->applyTireMount($tireId, $vehicleId, $positionId, $vehicleKmBord, $mountDate, $mountDateTime, $userId, $allowSwap, $reason, $observation);
             $this->db->commit();
         } catch (Throwable $exception) {
             if ($this->db->inTransaction()) {
@@ -3137,6 +3271,531 @@ class TireModel extends BaseModel
 
             throw $exception;
         }
+    }
+
+    /**
+     * Blocheaza (SELECT ... FOR UPDATE) pozitiile tinta, pozitiile curente ale anvelopelor
+     * si randurile anvelopelor, ca doua cereri simultane sa nu poata ocupa aceeasi pozitie.
+     * Trebuie apelata prima in tranzactie: citirile de dupa vad astfel datele confirmate
+     * de cererea care a tinut blocarea.
+     */
+    private function lockTireMountRows(array $tireIds, array $positionIds): void
+    {
+        $tireIds = array_values(array_unique(array_filter(array_map('intval', $tireIds), static fn (int $id): bool => $id > 0)));
+        $positionIds = array_values(array_unique(array_filter(array_map('intval', $positionIds), static fn (int $id): bool => $id > 0)));
+
+        $lockIds = function (string $sql, array $ids): array {
+            if ($ids === []) {
+                return [];
+            }
+            sort($ids);
+            $placeholders = [];
+            $params = [];
+            foreach ($ids as $index => $id) {
+                $placeholders[] = ':lock_id_' . $index;
+                $params[':lock_id_' . $index] = $id;
+            }
+            $stmt = $this->db->prepare(str_replace('{ids}', implode(', ', $placeholders), $sql));
+            $stmt->execute($params);
+            return $stmt->fetchAll(PDO::FETCH_COLUMN);
+        };
+
+        $lockIds('SELECT id FROM anvelope WHERE id IN ({ids}) FOR UPDATE', $tireIds);
+        $sourcePositionIds = $lockIds('SELECT position_id FROM anvelope_alocari WHERE tire_id IN ({ids}) AND data_end IS NULL FOR UPDATE', $tireIds);
+        $lockIds('SELECT id FROM vehicule_anvelope_pozitii WHERE id IN ({ids}) FOR UPDATE', array_values(array_unique(array_merge($positionIds, array_map('intval', $sourcePositionIds)))));
+    }
+
+    /**
+     * Tranzactiile de montaj ruleaza in READ COMMITTED: fara gap locks (care dadeau deadlock
+     * cu INSERT-uri in anvelope_alocari) si cu citiri care vad ce a confirmat cererea
+     * concurenta dupa ce s-a eliberat blocarea pozitiei. Se aplica doar tranzactiei urmatoare.
+     */
+    private function beginTireMountTransaction(): void
+    {
+        $this->db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        $this->db->beginTransaction();
+    }
+
+    /**
+     * Logica unui montaj / mutari, fara tranzactie proprie: folosita de mountTire (o anvelopa)
+     * si de bulkMountTires (mai multe anvelope intr-o singura tranzactie).
+     */
+    private function applyTireMount(
+        int $tireId,
+        int $vehicleId,
+        int $positionId,
+        int $vehicleKmBord,
+        string $mountDate,
+        string $mountDateTime,
+        ?int $userId,
+        bool $allowSwap,
+        ?string $reason,
+        ?string $observation
+    ): void {
+        $position = $this->getVehiclePositionById($positionId);
+        if ($position === null || (int) ($position['vehicle_id'] ?? 0) !== $vehicleId || (int) ($position['is_active'] ?? 0) !== 1) {
+            throw new RuntimeException('Pozitia selectata nu este valida pentru acest vehicul.');
+        }
+
+        $vehicle = $this->getVehicleForTireOperation($vehicleId);
+        if ($vehicle === null) {
+            throw new RuntimeException('Vehiculul selectat nu exista.');
+        }
+
+        $tire = $this->getTireById($tireId);
+        if ($tire === null) {
+            throw new RuntimeException('Anvelopa selectata nu exista.');
+        }
+
+        if (!$this->isTireCompatibleWithPosition($tire, $vehicle, $position)) {
+            throw new RuntimeException('Anvelopa selectata nu este compatibila cu axa aleasa.');
+        }
+
+        $existingTireAllocation = $this->getActiveAllocationForTire($tireId);
+        $existingPositionAllocation = $this->getActiveAllocationForPosition($positionId);
+
+        if (is_array($existingTireAllocation)) {
+            $allocationVehicleId = (int) ($existingTireAllocation['vehicle_id'] ?? 0);
+            if ($allocationVehicleId === $vehicleId && (int) ($existingTireAllocation['position_id'] ?? 0) === $positionId) {
+                return;
+            }
+        }
+
+        if (is_array($existingPositionAllocation) && (int) ($existingPositionAllocation['tire_id'] ?? 0) !== $tireId) {
+            if (!$allowSwap) {
+                throw new RuntimeException('Pozitia aleasa este ocupata. Bifeaza optiunea Schimba pozitiile pentru a face schimbul.');
+            }
+
+            if (!is_array($existingTireAllocation)) {
+                throw new RuntimeException('Pozitia aleasa este ocupata si anvelopa curenta nu are o pozitie de schimb.');
+            }
+
+            $sourcePosition = $this->getPositionContext((int) ($existingTireAllocation['position_id'] ?? 0));
+            if ($sourcePosition === null) {
+                throw new RuntimeException('Pozitia curenta a anvelopei nu mai exista.');
+            }
+
+            $targetTireId = (int) ($existingPositionAllocation['tire_id'] ?? 0);
+            $targetTire = $this->getTireById($targetTireId);
+            $sourceVehicle = $this->getVehicleForTireOperation((int) ($sourcePosition['vehicle_id'] ?? 0));
+            if ($targetTire === null || $sourceVehicle === null || !$this->isTireCompatibleWithPosition($targetTire, $sourceVehicle, $sourcePosition)) {
+                throw new RuntimeException('Schimbul nu se poate face: anvelopa de pe pozitia tinta nu este compatibila cu pozitia curenta.');
+            }
+
+            $sourceKmEnd = max(0, (int) ($sourcePosition['km_bord'] ?? $vehicleKmBord));
+            $this->closeAllocation($existingTireAllocation, $sourceKmEnd, $mountDate, 'moved', $mountDateTime);
+            $this->closeAllocation($existingPositionAllocation, $vehicleKmBord, $mountDate, 'moved', $mountDateTime);
+
+            $this->insertAllocation($tireId, $vehicleId, $positionId, $vehicleKmBord, $mountDate, $mountDateTime, $userId);
+            $this->insertAllocation($targetTireId, (int) ($sourcePosition['vehicle_id'] ?? 0), (int) ($sourcePosition['id'] ?? 0), $sourceKmEnd, $mountDate, $mountDateTime, $userId);
+
+            $updateTire = $this->db->prepare('UPDATE anvelope SET status = :status, mount_date = :mount_date, updated_at = :updated_at WHERE id = :id');
+            foreach ([$tireId, $targetTireId] as $swapTireId) {
+                $updateTire->execute([
+                    ':status' => self::STATUS_ACTIVE,
+                    ':mount_date' => $mountDate,
+                    ':updated_at' => $mountDateTime,
+                    ':id' => $swapTireId,
+                ]);
+            }
+
+            $this->recordTireHistory($tireId, $sourcePosition, $position, (string) ($tire['status'] ?? self::STATUS_IN_STOCK), self::STATUS_ACTIVE, $reason ?? 'Schimb pozitii', $observation, $userId, $mountDateTime);
+            $this->recordTireHistory($targetTireId, $position, $sourcePosition, (string) ($targetTire['status'] ?? self::STATUS_ACTIVE), self::STATUS_ACTIVE, $reason ?? 'Schimb pozitii', $observation, $userId, $mountDateTime);
+
+            return;
+        }
+
+        $oldPosition = null;
+        if (is_array($existingTireAllocation)) {
+            $oldPosition = $this->getPositionContext((int) ($existingTireAllocation['position_id'] ?? 0));
+            $kmEnd = $vehicleKmBord;
+            if ($oldPosition !== null) {
+                $kmEnd = max(0, (int) ($oldPosition['km_bord'] ?? $vehicleKmBord));
+            }
+            $this->closeAllocation($existingTireAllocation, $kmEnd, $mountDate, 'moved', $mountDateTime);
+        }
+
+        $this->insertAllocation($tireId, $vehicleId, $positionId, $vehicleKmBord, $mountDate, $mountDateTime, $userId);
+
+        $updateTire = $this->db->prepare(
+            'UPDATE anvelope
+             SET status = :status,
+                 mount_date = :mount_date,
+                 updated_at = :updated_at
+             WHERE id = :id'
+        );
+        $updateTire->execute([
+            ':status' => self::STATUS_ACTIVE,
+            ':mount_date' => $mountDate,
+            ':updated_at' => $mountDateTime,
+            ':id' => $tireId,
+        ]);
+
+        $this->recordTireHistory($tireId, $oldPosition, $position, (string) ($tire['status'] ?? self::STATUS_IN_STOCK), self::STATUS_ACTIVE, $reason ?? 'Montaj / mutare anvelopa', $observation, $userId, $mountDateTime);
+    }
+
+    /** Statusurile cu care o anvelopa nemontata poate fi montata in masa (aceleasi ca getAvailableTires). */
+    public function isTireReadyForBulkMount(array $tire): bool
+    {
+        return in_array((string) ($tire['status'] ?? ''), [self::STATUS_IN_STOCK, self::STATUS_SPARE, self::STATUS_RETREADED], true);
+    }
+
+    /**
+     * Cautare vehicule active pentru montaj: nr. de inmatriculare (fara spatii / cratime),
+     * marca, model. Fiecare cuvant din cautare trebuie sa se regaseasca in vehicul.
+     * Cu $tireIds, intoarce doar vehiculele pe care cel putin una dintre anvelope se poate
+     * monta (tip vehicul, formula axelor, tipul axei — aceeasi regula ca la montaj).
+     *
+     * @return array{vehicles:list<array>,hidden_incompatible:int}
+     */
+    public function searchVehiclesForTireMount(string $query, array $tireIds = [], int $limit = 30): array
+    {
+        $this->ensureLifecycleSchema();
+
+        $tires = [];
+        foreach (array_slice(array_unique(array_filter(array_map('intval', $tireIds), static fn (int $id): bool => $id > 0)), 0, 100) as $tireId) {
+            $tire = $this->getTireById($tireId);
+            if ($tire !== null) {
+                $tires[$tireId] = $tire;
+            }
+        }
+
+        $limit = max(1, min(50, $limit));
+        $query = trim(preg_replace('/\s+/', ' ', $query) ?? '');
+        $compact = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $query) ?? '');
+        $plateSql = 'REPLACE(REPLACE(REPLACE(UPPER(v.nr_inmatriculare), " ", ""), "-", ""), ".", "")';
+
+        $where = ['v.status = "activ"'];
+        $params = [];
+        $rankSql = '';
+        if ($query !== '') {
+            $tokenClauses = [];
+            foreach (array_slice(explode(' ', $query), 0, 5) as $index => $token) {
+                $tokenCompact = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $token) ?? '');
+                $clauses = [
+                    'v.marca LIKE :tok_marca_' . $index,
+                    'v.model LIKE :tok_model_' . $index,
+                    'v.tip_vehicul LIKE :tok_tip_' . $index,
+                ];
+                $params[':tok_marca_' . $index] = '%' . $token . '%';
+                $params[':tok_model_' . $index] = '%' . $token . '%';
+                $params[':tok_tip_' . $index] = '%' . str_replace(' ', '_', $token) . '%';
+                if ($tokenCompact !== '') {
+                    $clauses[] = $plateSql . ' LIKE :tok_plate_' . $index;
+                    $params[':tok_plate_' . $index] = '%' . $tokenCompact . '%';
+                }
+                $tokenClauses[] = '(' . implode(' OR ', $clauses) . ')';
+            }
+            $anyTokens = '(' . implode(' AND ', $tokenClauses) . ')';
+            if ($compact !== '') {
+                $where[] = '(' . $plateSql . ' LIKE :plate_all OR ' . $anyTokens . ')';
+                $params[':plate_all'] = '%' . $compact . '%';
+                $rankSql = 'CASE WHEN ' . $plateSql . ' LIKE :plate_prefix THEN 0 WHEN ' . $plateSql . ' LIKE :plate_any THEN 1 ELSE 2 END';
+                $params[':plate_prefix'] = $compact . '%';
+                $params[':plate_any'] = '%' . $compact . '%';
+            } else {
+                $where[] = $anyTokens;
+            }
+        }
+
+        $stmt = $this->db->prepare(
+            'SELECT v.id, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul, v.formula_axelor
+             FROM vehicule v
+             WHERE ' . implode(' AND ', $where) . '
+             ORDER BY ' . ($rankSql !== '' ? $rankSql . ', ' : '') . 'v.nr_inmatriculare ASC'
+            . ($tires === [] ? ' LIMIT ' . $limit : '')
+        );
+        $stmt->execute($params);
+
+        $result = [];
+        $hidden = 0;
+        $compatibilityCache = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $vehicleType = $this->normalizeVehicleType((string) ($row['tip_vehicul'] ?? 'autovehicul'));
+            $compatibleTireIds = [];
+            if ($tires !== []) {
+                // Pozitiile din formula axelor (aceeasi sursa ca syncVehiclePositions); rezultatul
+                // depinde doar de tip + formula + anvelopa, deci se calculeaza o data pe combinatie.
+                $descriptor = $this->describeVehicleLayout($vehicleType, (string) ($row['formula_axelor'] ?? ''));
+                foreach ($tires as $tireId => $tire) {
+                    $cacheKey = $tireId . '|' . (string) ($row['tip_vehicul'] ?? '') . '|' . (string) ($descriptor['layout_value'] ?? '');
+                    if (!array_key_exists($cacheKey, $compatibilityCache)) {
+                        $compatibilityCache[$cacheKey] = false;
+                        $checkedAxleTypes = [];
+                        foreach ($descriptor['positions'] as $position) {
+                            $axleType = (string) ($position['axle_type'] ?? '');
+                            if (isset($checkedAxleTypes[$axleType])) {
+                                continue;
+                            }
+                            $checkedAxleTypes[$axleType] = true;
+                            if ($this->isTireCompatibleWithPosition($tire, $row, $position)) {
+                                $compatibilityCache[$cacheKey] = true;
+                                break;
+                            }
+                        }
+                    }
+                    if ($compatibilityCache[$cacheKey]) {
+                        $compatibleTireIds[] = $tireId;
+                    }
+                }
+                if ($compatibleTireIds === []) {
+                    $hidden++;
+                    continue;
+                }
+                if (count($result) >= $limit) {
+                    continue;
+                }
+            }
+            $result[] = [
+                'id' => (int) $row['id'],
+                'plate' => (string) ($row['nr_inmatriculare'] ?? '-'),
+                'name' => trim((string) (($row['marca'] ?? '') . ' ' . ($row['model'] ?? ''))),
+                'type_label' => $this->vehicleTypeLabel((string) ($row['tip_vehicul'] ?? $vehicleType)),
+                'layout' => (string) ($row['formula_axelor'] ?? ''),
+                'compatible_tire_ids' => $compatibleTireIds,
+            ];
+        }
+
+        return ['vehicles' => $result, 'hidden_incompatible' => $hidden];
+    }
+
+    /**
+     * Axele si pozitiile configurate ale unui vehicul, cu ocuparea curenta si, optional,
+     * compatibilitatea fiecarei anvelope date cu fiecare axa (aceeasi regula ca la montaj).
+     */
+    public function getVehicleMountLayout(int $vehicleId, array $tireIds = []): ?array
+    {
+        $this->ensureLifecycleSchema();
+
+        $vehicle = $this->getVehicleForTireOperation($vehicleId);
+        if ($vehicle === null || (string) ($vehicle['status'] ?? '') !== 'activ') {
+            return null;
+        }
+
+        try {
+            $this->syncVehiclePositions($vehicleId, (string) ($vehicle['tip_vehicul'] ?? 'autovehicul'), (string) ($vehicle['formula_axelor'] ?? ''));
+        } catch (Throwable $exception) {
+            error_log('[TireModel][mount-layout-sync] ' . $exception->getMessage());
+        }
+
+        $stmt = $this->db->prepare(
+            'SELECT p.*, t.id AS mounted_tire_id, t.brand AS mounted_brand, t.model AS mounted_model, t.serial_number AS mounted_serial
+             FROM vehicule_anvelope_pozitii p
+             LEFT JOIN anvelope_alocari a ON a.position_id = p.id AND a.data_end IS NULL
+             LEFT JOIN anvelope t ON t.id = a.tire_id
+             WHERE p.vehicle_id = :vehicle_id AND p.is_active = 1
+             ORDER BY p.axle_no ASC, p.position_order ASC, p.id ASC'
+        );
+        $stmt->execute([':vehicle_id' => $vehicleId]);
+
+        $tires = [];
+        foreach (array_slice(array_unique(array_filter(array_map('intval', $tireIds), static fn (int $id): bool => $id > 0)), 0, 100) as $tireId) {
+            $tire = $this->getTireById($tireId);
+            if ($tire !== null) {
+                $tires[$tireId] = $tire;
+            }
+        }
+
+        $axleTypeOptions = $this->getAxleTypeOptions();
+        $axles = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $axleNo = (int) ($row['axle_no'] ?? 0);
+            if (!isset($axles[$axleNo])) {
+                $axleType = (string) ($row['axle_type'] ?? '');
+                $compatibleTireIds = [];
+                foreach ($tires as $tireId => $tire) {
+                    if ($this->isTireCompatibleWithPosition($tire, $vehicle, $row)) {
+                        $compatibleTireIds[] = $tireId;
+                    }
+                }
+                $axles[$axleNo] = [
+                    'axle_no' => $axleNo,
+                    'axle_type' => $axleType,
+                    'label' => 'Axa ' . $axleNo . ' — ' . ucfirst((string) preg_replace('/^Axa\s+/i', '', (string) ($axleTypeOptions[$axleType] ?? $axleType))),
+                    'wheel_kind' => (string) ($row['wheel_kind'] ?? 'single'),
+                    'compatible_tire_ids' => $compatibleTireIds,
+                    'positions' => [],
+                ];
+            }
+
+            $positionLabel = (string) ($row['position_label'] ?? '');
+            $shortLabel = trim((string) preg_replace('/^Axa\s+\d+\s*-\s*/i', '', $positionLabel));
+            $mountedTireId = (int) ($row['mounted_tire_id'] ?? 0);
+            $axles[$axleNo]['positions'][] = [
+                'position_id' => (int) $row['id'],
+                'code' => (string) ($row['position_code'] ?? ''),
+                'side_code' => (string) ($row['side_code'] ?? ''),
+                'label' => $shortLabel !== '' ? $shortLabel : $positionLabel,
+                'full_label' => $positionLabel,
+                'occupied_by' => $mountedTireId > 0 ? [
+                    'tire_id' => $mountedTireId,
+                    'label' => trim((string) (($row['mounted_brand'] ?? '') . ' ' . ($row['mounted_model'] ?? ''))) ?: ('#' . $mountedTireId),
+                    'serial' => (string) ($row['mounted_serial'] ?? ''),
+                ] : null,
+            ];
+        }
+
+        return [
+            'vehicle' => [
+                'id' => $vehicleId,
+                'plate' => (string) ($vehicle['nr_inmatriculare'] ?? '-'),
+                'name' => trim((string) (($vehicle['marca'] ?? '') . ' ' . ($vehicle['model'] ?? ''))),
+                'type_label' => $this->vehicleTypeLabel((string) ($vehicle['tip_vehicul'] ?? 'autovehicul')),
+                'layout' => (string) ($vehicle['formula_axelor'] ?? ''),
+            ],
+            'axles' => array_values($axles),
+        ];
+    }
+
+    /**
+     * Montaj in masa: o actiune, mai multe anvelope, fiecare cu pozitia ei. Totul intr-o
+     * singura tranzactie: ori se monteaza toate, ori niciuna. Doar anvelope nemontate,
+     * fara schimb de pozitii (o anvelopa din stoc nu are o pozitie de schimb).
+     *
+     * @param list<array{tire_id:int,vehicle_id:int,position_id:int,observation?:?string}> $assignments
+     * @return array{ok:bool,mounted:int,errors:array<int,string>,general:list<string>}
+     */
+    public function bulkMountTires(array $assignments, string $mountDate, string $mountDateTime, ?int $userId, string $reason, ?string $observation): array
+    {
+        $this->ensureLifecycleSchema();
+
+        $errors = [];
+        $general = [];
+        $rows = [];
+        $positionOwners = [];
+        foreach ($assignments as $assignment) {
+            $tireId = (int) ($assignment['tire_id'] ?? 0);
+            if ($tireId <= 0) {
+                $general[] = 'Exista o anvelopa invalida in selectie.';
+                continue;
+            }
+            if (isset($rows[$tireId])) {
+                $errors[$tireId] = 'Anvelopa apare de doua ori in operatiune.';
+                continue;
+            }
+            $rows[$tireId] = [
+                'tire_id' => $tireId,
+                'vehicle_id' => (int) ($assignment['vehicle_id'] ?? 0),
+                'position_id' => (int) ($assignment['position_id'] ?? 0),
+                'observation' => trim((string) ($assignment['observation'] ?? '')),
+            ];
+            $positionId = $rows[$tireId]['position_id'];
+            if ($rows[$tireId]['vehicle_id'] <= 0 || $positionId <= 0) {
+                $errors[$tireId] = 'Alege vehiculul, axa si pozitia.';
+                continue;
+            }
+            $positionOwners[$positionId][] = $tireId;
+        }
+
+        foreach ($positionOwners as $owners) {
+            if (count($owners) > 1) {
+                foreach ($owners as $tireId) {
+                    $errors[$tireId] = 'Aceeasi pozitie a fost aleasa pentru mai multe anvelope.';
+                }
+            }
+        }
+
+        if ($rows === [] && $general === []) {
+            $general[] = 'Nu exista anvelope de montat.';
+        }
+        if ($errors !== [] || $general !== []) {
+            return ['ok' => false, 'mounted' => 0, 'errors' => $errors, 'general' => $general];
+        }
+
+        // Un deadlock (cerere concurenta pe aceleasi randuri) se reia o data, de la zero.
+        for ($attempt = 1; ; $attempt++) {
+            $errors = [];
+            $currentTireId = 0;
+            $this->beginTireMountTransaction();
+            try {
+                $this->lockTireMountRows(array_keys($rows), array_column($rows, 'position_id'));
+
+                // Reverificare in tranzactie, dupa blocare: eligibilitate, apartenenta, ocupare, compatibilitate.
+                foreach ($rows as $tireId => $row) {
+                    $tire = $this->getTireById($tireId);
+                    if ($tire === null) {
+                        $errors[$tireId] = 'Anvelopa nu mai exista.';
+                        continue;
+                    }
+                    if ($this->getActiveAllocationForTire($tireId) !== null) {
+                        $errors[$tireId] = 'Anvelopa este deja montata. Foloseste Muta anvelopa pentru mutare.';
+                        continue;
+                    }
+                    if (!$this->isTireReadyForBulkMount($tire)) {
+                        $errors[$tireId] = 'Anvelopa are statusul „' . tire_status_label((string) ($tire['status'] ?? '')) . '” si nu poate fi montata.';
+                        continue;
+                    }
+                    $vehicle = $this->getVehicleForTireOperation($row['vehicle_id']);
+                    if ($vehicle === null || (string) ($vehicle['status'] ?? '') !== 'activ') {
+                        $errors[$tireId] = 'Vehiculul ales nu exista sau nu este activ.';
+                        continue;
+                    }
+                    $position = $this->getVehiclePositionById($row['position_id']);
+                    if ($position === null || (int) ($position['vehicle_id'] ?? 0) !== $row['vehicle_id'] || (int) ($position['is_active'] ?? 0) !== 1) {
+                        $errors[$tireId] = 'Pozitia aleasa nu apartine vehiculului.';
+                        continue;
+                    }
+                    $occupant = $this->getActiveAllocationForPosition($row['position_id']);
+                    if ($occupant !== null) {
+                        $occupantTire = $this->getTireById((int) ($occupant['tire_id'] ?? 0));
+                        $errors[$tireId] = 'Pozitia ' . (string) ($position['position_label'] ?? '') . ' este ocupata'
+                            . ($occupantTire !== null ? ' de ' . trim((string) (($occupantTire['brand'] ?? '') . ' ' . ($occupantTire['model'] ?? ''))) : '')
+                            . '. Demonteaza mai intai anvelopa existenta.';
+                        continue;
+                    }
+                    if (!$this->isTireCompatibleWithPosition($tire, $vehicle, $position)) {
+                        $errors[$tireId] = 'Anvelopa nu este compatibila cu axa aleasa.';
+                        continue;
+                    }
+                    $rows[$tireId]['km_bord'] = max(0, (int) ($vehicle['km_bord'] ?? 0));
+                }
+
+                if ($errors !== []) {
+                    $this->db->rollBack();
+                    return ['ok' => false, 'mounted' => 0, 'errors' => $errors, 'general' => []];
+                }
+
+                foreach ($rows as $tireId => $row) {
+                    $currentTireId = $tireId;
+                    $this->applyTireMount(
+                        $tireId,
+                        $row['vehicle_id'],
+                        $row['position_id'],
+                        $row['km_bord'],
+                        $mountDate,
+                        $mountDateTime,
+                        $userId,
+                        false,
+                        $reason,
+                        $row['observation'] !== '' ? $row['observation'] : $observation
+                    );
+                }
+
+                $this->db->commit();
+                break;
+            } catch (Throwable $exception) {
+                if ($this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                $isDeadlock = $exception instanceof PDOException && in_array((int) ($exception->errorInfo[1] ?? 0), [1213, 1205], true);
+                if ($isDeadlock && $attempt < 2) {
+                    continue;
+                }
+                error_log('[TireModel][bulk-mount] ' . $exception->getMessage());
+
+                $message = $exception instanceof RuntimeException
+                    ? $exception->getMessage()
+                    : ($isDeadlock ? 'Alt utilizator modifica aceleasi pozitii. Reincearca.' : 'Eroare la salvare. Nicio anvelopa nu a fost montata.');
+                return [
+                    'ok' => false,
+                    'mounted' => 0,
+                    'errors' => $currentTireId > 0 ? [$currentTireId => $message] : [],
+                    'general' => $currentTireId > 0 ? ['Operatiunea a fost anulata integral; nicio anvelopa nu a fost montata.'] : [$message],
+                ];
+            }
+        }
+
+        return ['ok' => true, 'mounted' => count($rows), 'errors' => [], 'general' => []];
     }
 
     public function unmountTire(

@@ -308,8 +308,25 @@ $periodLabel = $periodStartObj->format('j') === '1'
     }
 
     // Incarcare esalonata a km GPS (o cerere per vehicul cu carId), CONCURRENCY in paralel.
+    // Intai, intr-o singura cerere, tot ce serverul are deja pe disc (fara SAS); apoi doar ce lipseste.
     function loadGps() {
-        var queue = VEHICLES.filter(function (v) { return v.has_gps; }).slice();
+        var tracked = VEHICLES.filter(function (v) { return v.has_gps; });
+        fetch(GPS_URL.replace('action=gps', 'action=gps_cached') + '&car_ids=' + tracked.map(function (v) { return v.sas_vehicle_id; }).join(','), { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .catch(function () { return {}; })
+            .then(function (batch) {
+                var cached = (batch && batch.cached) || {};
+                var missing = [];
+                tracked.forEach(function (v) {
+                    var value = cached[String(v.sas_vehicle_id)];
+                    if (value !== undefined) { v.gps = typeof value === 'number' ? value : 0; computeLost(v); } else { missing.push(v); }
+                });
+                render();
+                renderKpis();
+                loadMissingGps(missing);
+            });
+    }
+    function loadMissingGps(queue) {
         function worker() {
             var v = queue.shift();
             if (!v) { return; }
@@ -573,7 +590,10 @@ $periodLabel = $periodStartObj->format('j') === '1'
         host.appendChild(menu);
         var a = anchor.getBoundingClientRect(), h = host.getBoundingClientRect();
         menu.style.left = Math.max(8, Math.min(a.left - h.left, h.width - menu.offsetWidth - 8)) + 'px';
-        menu.style.top = (a.bottom - h.top + 4) + 'px';
+        // Fara loc dedesubt (randurile de jos ale modalului): meniul se deschide deasupra.
+        var top = a.bottom - h.top + 4;
+        if (top + menu.offsetHeight > h.height - 8) { top = Math.max(8, a.top - h.top - menu.offsetHeight - 4); }
+        menu.style.top = top + 'px';
     }
     function tripMenu(anchor, tripId) {
         var html = '<a class="list-group-item list-group-item-action" target="_blank" rel="noopener" href="' + esc(tripUrl(tripId)) + '">'

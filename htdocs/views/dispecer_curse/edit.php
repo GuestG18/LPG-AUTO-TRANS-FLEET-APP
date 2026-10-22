@@ -204,7 +204,7 @@ if (!isset($expenseEntryTypes[$selectedRefacturareExpenseType])) {
 
 // Taxele de drum (Taxa acces / Port / Trecere) se completeaza cu locatie, bucati si pret unitar;
 // restul tipurilor pastreaza suma introdusa manual plus observatii.
-$tollExpenseTypes = is_array($tollExpenseTypes ?? null) ? $tollExpenseTypes : ['taxa_acces', 'port', 'trece'];
+$tollExpenseTypes = is_array($tollExpenseTypes ?? null) ? $tollExpenseTypes : ['taxa_acces', 'port', 'trece', 'toll'];
 
 // Locatiile propuse la taxele de drum se invata din cursele anterioare: lista e cea
 // scrisa de operatori, nu cea din Configurare transport, si vine insotita de ultimul

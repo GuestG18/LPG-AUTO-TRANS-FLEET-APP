@@ -39,8 +39,6 @@ unset($expenseEntryTypes['motorina']);
 $refacturareTypeLabels = [
     'taxe_drum' => 'Taxe drum',
     'diurna' => 'Diurnă',
-    'service' => 'Reparații',
-    'alte' => 'Alte cheltuieli',
 ];
 $refacturareFilterTypes = [];
 foreach ($expenseEntryTypes as $typeKey => $typeLabel) {

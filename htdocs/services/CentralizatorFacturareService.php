@@ -45,7 +45,7 @@ class CentralizatorFacturareService
         'trece' => 'Trecere',
     ];
     /** Tipurile de taxe de drum inregistrate ca randuri separate, cu locatie proprie. */
-    private const TOLL_EXPENSE_TYPES = ['taxa_acces', 'port', 'trece'];
+    private const TOLL_EXPENSE_TYPES = ['taxa_acces', 'port', 'trece', 'toll'];
     private const DONUT_COLORS = ['#2f7df4', '#10b981', '#f97316', '#8b5cf6', '#06b6d4', '#ef4444', '#64748b'];
     /*
      * Capul tractor nu are capacitate proprie: o preia de la semiremorca cuplata
@@ -246,6 +246,9 @@ class CentralizatorFacturareService
         $distribution = $this->buildDistributionSection($tripRows, $filters);
         $primaryRoutes = $this->buildPrimaryRoutes($tripRows, $filters);
         $vehicles = $this->buildVehicleSection($tripRows, $filters);
+        if ($withBreakdown) {
+            $vehicles['detail']['rows'] = $this->attachVehicleBillingGroups((array) ($vehicles['detail']['rows'] ?? []), $activity);
+        }
         $refacturari = $this->buildRefacturareSection($refRows, $filters);
 
         return [
@@ -3391,6 +3394,84 @@ class CentralizatorFacturareService
     }
 
     /*
+     * Grupurile de facturare ale fiecarui vehicul din "Activitate pe vehicule - Detaliat":
+     * aceleasi grupuri (ruta sau tarif) ca in "Activitati pe tipuri de transport", luate
+     * din sumarul pe vehicul al fiecarui grup (groupVehicleSummaries), deci fara alt
+     * calcul. Fiecare grup tine cheile curselor (tip + id; la P+D partile au tipuri
+     * diferite), ca randul lui sa deschida doar cursele proprii, si refacturarile
+     * grupului care apartin acelor curse.
+     */
+    private function attachVehicleBillingGroups(array $detailRows, array $activity): array
+    {
+        $groupsByVehicle = [];
+        foreach ((array) ($activity['by_type'] ?? []) as $type => $typeRow) {
+            foreach ((array) ($typeRow['routes'] ?? []) as $route) {
+                $routeRefunds = (array) ($route['refunds'] ?? []);
+                foreach ((array) ($route['vehicles'] ?? []) as $vehicle) {
+                    $vehicleId = (int) ($vehicle['vehicle_id'] ?? 0);
+                    $tripRows = (array) ($vehicle['trip_rows'] ?? []);
+                    $tripKeys = [];
+                    $tripIds = [];
+                    $codes = [];
+                    $units = [];
+                    $rates = [];
+                    $quantity = 0.0;
+                    foreach ($tripRows as $trip) {
+                        $tripId = (int) ($trip['trip_id'] ?? 0);
+                        $tripKeys[] = $type . ':' . $tripId;
+                        $tripIds[$tripId] = true;
+                        $codes[(string) ($trip['route_short'] ?? '')] = true;
+                        $units[(string) ($trip['unit'] ?? '')] = true;
+                        $quantity += (float) ($trip['quantity'] ?? 0);
+                        if (($trip['rate'] ?? null) !== null) {
+                            $rates[$this->rateKey((float) $trip['rate'])] = (float) $trip['rate'];
+                        }
+                    }
+                    $codes = array_values(array_filter(array_map('strval', array_keys($codes)), static fn (string $code): bool => $code !== ''));
+                    sort($codes, SORT_NATURAL);
+                    $quantity = round($quantity, 4);
+                    $value = (float) ($vehicle['value'] ?? 0);
+
+                    $groupsByVehicle[$vehicleId > 0 ? 'v' . $vehicleId : 'unassigned'][] = [
+                        'key' => $type . '|' . (string) ($route['key'] ?? ''),
+                        'type' => (string) $type,
+                        'type_label' => (string) ($typeRow['label'] ?? $type),
+                        'color' => (string) ($typeRow['color'] ?? ''),
+                        'group_by' => (string) ($typeRow['group_by'] ?? 'route'),
+                        'label' => (string) ($route['label'] ?? '-'),
+                        'short' => (string) ($route['short'] ?? ''),
+                        'route_codes' => $codes,
+                        'trips' => (int) ($vehicle['trips'] ?? 0),
+                        'value' => $value,
+                        'components' => (array) ($vehicle['components'] ?? []),
+                        'component_billing' => !empty($vehicle['component_billing']),
+                        'missing_count' => (int) ($vehicle['missing_count'] ?? 0),
+                        'differs_count' => (int) ($vehicle['differs_count'] ?? 0),
+                        /* Ca la grup: cantitatea adunata, pret unic sau mediu (finalizeTypeRoutes). */
+                        'quantity' => $quantity,
+                        'unit' => count($units) === 1 ? (string) array_key_first($units) : 'activ.',
+                        'rate' => count($rates) === 1
+                            ? (float) reset($rates)
+                            : ($quantity > 0 && $value > 0 ? round($value / $quantity, 4) : null),
+                        'rate_multiple' => count($rates) > 1,
+                        'trip_rows' => $tripRows,
+                        'trip_keys' => $tripKeys,
+                        'refunds' => array_values(array_filter($routeRefunds, static fn (array $line): bool => isset($tripIds[(int) ($line['cursa_id'] ?? 0)]))),
+                    ];
+                }
+            }
+        }
+
+        foreach ($detailRows as &$row) {
+            $vehicleId = (int) ($row['vehicle_id'] ?? 0);
+            $row['billing_groups'] = $groupsByVehicle[$vehicleId > 0 ? 'v' . $vehicleId : 'unassigned'] ?? [];
+        }
+        unset($row);
+
+        return $detailRows;
+    }
+
+    /*
      * Tonele pe clasa de pret din sumarul pe vehicul al Distributiei. Clasa e cea din
      * sectiunea Distributie (distributionPriceBuckets): Pret mic si Pret mare au coloana
      * lor; restul (tarife intermediare, Pret unic, tarife pe km cand unitatile difera,
@@ -3873,6 +3954,7 @@ class CentralizatorFacturareService
             'diurna' => 'Diurnă',
             'service' => 'Service',
             'alte' => 'Alte treceri',
+            'toll' => 'Toll',
         ][$type] ?? mb_convert_case(str_replace('_', ' ', $type), MB_CASE_TITLE, 'UTF-8');
     }
 

@@ -953,7 +953,7 @@ class CentralizatorFacturareExcelExport
         $x = $this->xlsx;
         $labels = [
             'taxa_acces' => 'Taxă acces', 'port' => 'Port', 'trece' => 'Trecere', 'motorina' => 'Motorină',
-            'taxe_drum' => 'Taxe drum', 'diurna' => 'Diurnă', 'service' => 'Service', 'alte' => 'Alte treceri',
+            'taxe_drum' => 'Taxe drum', 'diurna' => 'Diurnă', 'service' => 'Service', 'alte' => 'Alte treceri', 'toll' => 'Toll',
             'difference' => 'Diferență nealocată',
         ];
         $byType = [];

@@ -17624,6 +17624,127 @@ a.fuel-split-card.is-active {
     cursor: pointer;
 }
 
+/* Cardul de consum normat „pe luni” (filtru pe mai multe luni). */
+.fuel-t0-months-head {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex-wrap: wrap;
+    margin-bottom: .55rem;
+}
+
+.fuel-t0-months-table td {
+    vertical-align: top;
+}
+
+.fuel-t0-months-table td .fuel-pill {
+    margin-top: .2rem;
+}
+
+.fuel-t0-months-table tr.is-missing > td {
+    background: #fffbeb;
+}
+
+.fuel-t0-months-table tr.is-missing > td:first-child {
+    box-shadow: inset 4px 0 0 #d97706;
+}
+
+.fuel-t0-months-table .fuel-t0-actions {
+    margin-top: 0;
+    flex-wrap: nowrap;
+}
+
+/*
+ * Containerul nu se lateste dupa tabel (inline-size): in cardul ingust din
+ * Prezentare generala (si pe telefon) fiecare luna devine un mini-card pe doua
+ * coloane, cu eticheta deasupra valorii; in tab-ul Consum normat ramane tabel.
+ */
+.fuel-t0-months {
+    container: fuel-t0-months / inline-size;
+    min-width: 0;
+}
+
+/* In Prezentare generala lunile se deruleaza in card, nu intind randul de grafice. */
+.fuel-norm-card .fuel-t0-months .fuel-table-wrap {
+    max-height: 520px;
+    overflow-y: auto;
+}
+
+@container fuel-t0-months (max-width: 820px) {
+    .fuel-t0-months-table thead {
+        display: none;
+    }
+
+    .fuel-table.fuel-t0-months-table,
+    .fuel-t0-months-table tbody {
+        display: block;
+        width: 100%;
+        min-width: 0;
+    }
+
+    .fuel-t0-months-table tr {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: .15rem .75rem;
+        margin-bottom: .6rem;
+        padding: .55rem .65rem;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        background: #fff;
+    }
+
+    .fuel-t0-months-table tr.is-missing {
+        border-color: #fde68a;
+        border-left: 4px solid #d97706;
+        background: #fffbeb;
+    }
+
+    .fuel-t0-months-table tr > td,
+    .fuel-t0-months-table tr.is-missing > td {
+        display: block;
+        min-width: 0;
+        padding: .25rem 0;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .fuel-t0-months-table td::before {
+        content: attr(data-label);
+        display: block;
+        color: #64748b;
+        font-size: .7rem;
+        font-weight: 700;
+        letter-spacing: .03em;
+        text-transform: uppercase;
+    }
+
+    /* Antetul mini-cardului: luna in stanga, actiunile in dreapta. */
+    .fuel-t0-months-table td[data-label="Luna"] {
+        order: -2;
+        align-self: center;
+        font-size: 1rem;
+    }
+
+    .fuel-t0-months-table td[data-label="Acțiuni"] {
+        order: -1;
+        justify-self: end;
+        align-self: center;
+    }
+
+    .fuel-t0-months-table td[data-label="Luna"]::before,
+    .fuel-t0-months-table td[data-label="Acțiuni"]::before {
+        content: none;
+    }
+
+    .fuel-t0-months-table .fuel-t0-actions {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+}
+
 .fuel-t0-confirm {
     margin-top: .9rem;
     padding: .6rem .75rem;

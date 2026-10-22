@@ -76,6 +76,9 @@ class FuelController
             case 'km_check_fetch':
                 $this->kmCheckFetchAction();
                 return;
+            case 'normative_gps_km':
+                $this->normativeGpsKmAction();
+                return;
             case 'unassociated_diagnosis':
                 $this->unassociatedDiagnosisAction();
                 return;
@@ -247,6 +250,65 @@ class FuelController
         $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
 
         return $date !== false && $date->format('Y-m-d') === $value ? $value : null;
+    }
+
+    /**
+     * JSON: km GPS (travelsheet SAS) pentru intervalele T0 -> urmatorul FULL din
+     * cardul „Consum normat”. Primeste from[] / to[] in aceeasi ordine si
+     * intoarce km[] (null = fara date GPS pe acel interval).
+     */
+    private function normativeGpsKmAction(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store');
+
+        $plateKey = strtoupper(str_replace(' ', '', trim((string) ($_GET['vehicle'] ?? ''))));
+        $from = array_values(array_slice((array) ($_GET['from'] ?? []), 0, 12));
+        $to = array_values(array_slice((array) ($_GET['to'] ?? []), 0, 12));
+        if ($plateKey === '' || $from === [] || count($from) !== count($to)) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => 'Parametri invalizi.']);
+            exit;
+        }
+
+        try {
+            $service = new SasDashboardService($this->db);
+            if (!$service->credentialsAvailable()) {
+                throw new RuntimeException('Datele de acces SAS nu sunt configurate.');
+            }
+
+            $carId = null;
+            foreach ($service->getFleetVehicles() as $car) {
+                if (strtoupper(str_replace(' ', '', (string) ($car['registration'] ?? ''))) === $plateKey) {
+                    $carId = (int) ($car['sas_vehicle_id'] ?? 0) ?: null;
+                    break;
+                }
+            }
+            if ($carId === null) {
+                echo json_encode(['ok' => false, 'error' => 'Vehiculul nu are GPS în SAS.']);
+                exit;
+            }
+
+            $km = [];
+            foreach ($from as $index => $start) {
+                $start = (string) $start;
+                $end = (string) $to[$index];
+                try {
+                    $km[] = strtotime($start) !== false && strtotime($end) !== false
+                        ? $service->getGpsDistance($carId, $start, $end)
+                        : null;
+                } catch (Throwable $exception) {
+                    error_log('[FuelController][normative_gps_km] ' . $exception->getMessage());
+                    $km[] = null;
+                }
+            }
+
+            echo json_encode(['ok' => true, 'km' => $km]);
+        } catch (Throwable $exception) {
+            error_log('[FuelController][normative_gps_km] ' . $exception->getMessage());
+            echo json_encode(['ok' => false, 'error' => 'Datele SAS nu au putut fi citite.']);
+        }
+        exit;
     }
 
     /**

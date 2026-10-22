@@ -89,7 +89,23 @@ class SasDashboardService
      */
     public function getVehicleKm(int $carId, ?string $startDate = null, ?string $endDate = null): array
     {
-        $range = $this->getVehicleRange($carId, $startDate, $endDate);
+        $range = $this->getVehicleRangeIncremental($carId, (string) $startDate, (string) $endDate);
+        return $this->kmSummary($carId, (array) $range);
+    }
+
+    /**
+     * Ca getVehicleKm, dar NUMAI din cache (fara niciun apel SAS): null daca lipseste ceva.
+     * Raportul / cardul Km pierduti cer intai tot ce e deja pe disc intr-o singura cerere,
+     * apoi aduc din SAS doar vehiculele care lipsesc.
+     */
+    public function getCachedVehicleKm(int $carId, string $startDate, string $endDate): ?array
+    {
+        $range = $this->getVehicleRangeIncremental($carId, $startDate, $endDate, true);
+        return $range === null ? null : $this->kmSummary($carId, $range);
+    }
+
+    private function kmSummary(int $carId, array $range): array
+    {
         return [
             'sas_vehicle_id' => $carId,
             'total_km' => $range['total_km'] ?? null,
@@ -378,6 +394,177 @@ class SasDashboardService
             return $cache['day'];
         }
 
+        $day = $this->fetchRangeFromSas($carId, $start, $end, $includesToday);
+        $this->writeJson($cacheFile, ['day' => $day, 'fetched_at_ts' => time()]);
+
+        return $day;
+    }
+
+    /**
+     * Km pierduti pe o luna, fara sa recitim din SAS zilele deja aduse:
+     *  - zilele INCHISE (pana ieri) nu se mai schimba: raman pe disc; cand se inchide o zi noua
+     *    se cere din SAS doar ce lipseste dupa ultima zi din cache si se lipeste;
+     *  - ziua de AZI se reciteste cel mult o data la TODAY_TTL_SECONDS.
+     * Cu $cacheOnly = true nu face niciun apel SAS: intoarce null daca lipseste ceva.
+     */
+    public const TODAY_TTL_SECONDS = 600;
+    // Ieri se mai poate completa (GPS-uri care trimit cu intarziere): se reciteste dupa 6 ore.
+    private const YESTERDAY_TTL_SECONDS = 21600;
+    private const CLOSED_TTL_SECONDS = 5184000;
+
+    public function getVehicleRangeIncremental(int $carId, string $startDate, string $endDate, bool $cacheOnly = false): ?array
+    {
+        if ($carId <= 0) {
+            throw new InvalidArgumentException('Identificator vehicul invalid.');
+        }
+        [$start, $end] = $this->validateRange($startDate, $endDate);
+        $today = new DateTimeImmutable('today');
+        $yesterday = $today->modify('-1 day');
+
+        $closed = null;
+        if ($start <= $yesterday) {
+            $closed = $this->closedRange($carId, $start, $end < $today ? $end : $yesterday, $cacheOnly);
+            if ($closed === null) {
+                return null;
+            }
+        }
+        if ($end < $today) {
+            return $closed;
+        }
+
+        $todayFile = $this->rangeCacheFile($carId, $today, $today);
+        $cache = $this->readJson($todayFile);
+        if ($cache !== null && is_array($cache['day'] ?? null) && (time() - (int) ($cache['fetched_at_ts'] ?? 0)) < self::TODAY_TTL_SECONDS) {
+            $todayPart = $cache['day'];
+        } elseif ($cacheOnly) {
+            return null;
+        } else {
+            $todayPart = $this->fetchRangeFromSas($carId, $today, $today, true);
+            $this->writeJson($todayFile, ['day' => $todayPart, 'fetched_at_ts' => time()]);
+        }
+
+        return $closed === null ? $todayPart : $this->mergeRanges($closed, $todayPart);
+    }
+
+    private function rangeCacheFile(int $carId, DateTimeImmutable $start, DateTimeImmutable $end): string
+    {
+        return $this->cacheDir . '/sas_dash_range_' . $carId . '_' . $start->format('Ymd') . '_' . $end->format('Ymd') . '.json';
+    }
+
+    private function closedRangeIsFresh(?array $cache, DateTimeImmutable $end): bool
+    {
+        if ($cache === null || !is_array($cache['day'] ?? null)) {
+            return false;
+        }
+        $fetchedAt = (int) ($cache['fetched_at_ts'] ?? 0);
+        // Citit inainte ca ultima zi sa se fi inchis = incomplet.
+        if ($fetchedAt < $end->modify('+1 day')->getTimestamp()) {
+            return false;
+        }
+        $ttl = $end->format('Y-m-d') === date('Y-m-d', strtotime('yesterday')) ? self::YESTERDAY_TTL_SECONDS : self::CLOSED_TTL_SECONDS;
+
+        return time() - $fetchedAt < $ttl;
+    }
+
+    /** start..end, toate zilele inchise: din cache, altfel cea mai lunga bucata din cache + restul din SAS. */
+    private function closedRange(int $carId, DateTimeImmutable $start, DateTimeImmutable $end, bool $cacheOnly): ?array
+    {
+        $file = $this->rangeCacheFile($carId, $start, $end);
+        $cache = $this->readJson($file);
+        if ($this->closedRangeIsFresh($cache, $end)) {
+            return $cache['day'];
+        }
+        if ($cacheOnly) {
+            return null;
+        }
+
+        // Cea mai lunga bucata deja adusa care incepe tot la $start (ex. 1..17 cand cerem 1..18).
+        $prefix = null;
+        $prefixEnd = null;
+        foreach (glob($this->cacheDir . '/sas_dash_range_' . $carId . '_' . $start->format('Ymd') . '_*.json') ?: [] as $candidate) {
+            if (preg_match('/_(\d{8})\.json$/', $candidate, $match) !== 1) {
+                continue;
+            }
+            $candidateEnd = DateTimeImmutable::createFromFormat('!Ymd', $match[1]);
+            if (!$candidateEnd instanceof DateTimeImmutable || $candidateEnd >= $end || ($prefixEnd !== null && $candidateEnd <= $prefixEnd)) {
+                continue;
+            }
+            $candidateCache = $this->readJson($candidate);
+            if ($this->closedRangeIsFresh($candidateCache, $candidateEnd)) {
+                $prefix = $candidateCache['day'];
+                $prefixEnd = $candidateEnd;
+            }
+        }
+
+        $day = $prefix !== null
+            ? $this->mergeRanges($prefix, $this->fetchRangeFromSas($carId, $prefixEnd->modify('+1 day'), $end, false))
+            : $this->fetchRangeFromSas($carId, $start, $end, false);
+        $this->writeJson($file, ['day' => $day, 'fetched_at_ts' => time()]);
+
+        return $day;
+    }
+
+    /**
+     * Lipeste doua intervale consecutive (a inaintea lui b). O deplasare peste miezul noptii
+     * poate aparea in amandoua: se pastreaza o singura data, iar km ei se scad din totalul lui b.
+     */
+    private function mergeRanges(array $a, array $b): array
+    {
+        $seen = [];
+        foreach ((array) ($a['segments'] ?? []) as $segment) {
+            $seen[(string) ($segment['start_time'] ?? '')] = true;
+        }
+        $bStart = (string) ($b['start_date'] ?? '') . 'T00:00:00';
+        $segments = (array) ($a['segments'] ?? []);
+        $duplicateKm = 0.0;
+        foreach ((array) ($b['segments'] ?? []) as $segment) {
+            $startTime = str_replace(' ', 'T', (string) ($segment['start_time'] ?? ''));
+            if (isset($seen[(string) ($segment['start_time'] ?? '')]) || ($startTime !== '' && $startTime < $bStart)) {
+                $duplicateKm += (float) ($segment['distance_km'] ?? 0);
+                continue;
+            }
+            $segments[] = $segment;
+        }
+
+        $sum = static fn (string $key): ?float => ($a[$key] ?? null) === null && ($b[$key] ?? null) === null
+            ? null
+            : (float) ($a[$key] ?? 0) + (float) ($b[$key] ?? 0);
+        $totalKm = $sum('total_km');
+        if ($totalKm !== null) {
+            $totalKm = round(max(0.0, $totalKm - $duplicateKm), 1);
+        }
+        $workSeconds = $sum('work_seconds');
+        $idleSeconds = $sum('idle_seconds');
+        $canFuel = $sum('can_fuel_l');
+        $canL100 = $canFuel !== null && $totalKm !== null && $totalKm >= self::L100_MIN_KM ? round($canFuel / $totalKm * 100, 1) : null;
+        if ($canL100 !== null && ($canL100 < self::L100_MIN || $canL100 > self::L100_MAX)) {
+            $canL100 = null;
+        }
+        $startDate = (string) ($a['start_date'] ?? '');
+        $endDate = (string) ($b['end_date'] ?? '');
+
+        return [
+            'sas_vehicle_id' => $a['sas_vehicle_id'] ?? $b['sas_vehicle_id'] ?? null,
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'days' => $startDate !== '' && $endDate !== '' ? (int) (new DateTimeImmutable($startDate))->diff(new DateTimeImmutable($endDate))->days + 1 : null,
+            'registration' => $b['registration'] ?? $a['registration'] ?? null,
+            'vehicle_name' => $b['vehicle_name'] ?? $a['vehicle_name'] ?? null,
+            'total_km' => $totalKm,
+            'average_speed' => $totalKm !== null && $workSeconds ? round($totalKm / ($workSeconds / 3600), 1) : null,
+            'work_seconds' => $workSeconds !== null ? (int) $workSeconds : null,
+            'idle_seconds' => $idleSeconds !== null ? (int) $idleSeconds : null,
+            'has_can' => !empty($a['has_can']) || !empty($b['has_can']),
+            'can_fuel_l' => $canFuel !== null ? round($canFuel, 1) : null,
+            'can_l100' => $canL100,
+            'odometer_km' => $b['odometer_km'] ?? $a['odometer_km'] ?? null,
+            'segments' => $segments,
+        ];
+    }
+
+    /** Un travelsheet SAS pe start..end, transformat in sumarul folosit de dashboard / Km pierduti. */
+    private function fetchRangeFromSas(int $carId, DateTimeImmutable $start, DateTimeImmutable $end, bool $includesToday): array
+    {
         $this->restoreSasSession();
         $sheet = $this->client->getTravelSheet(
             $carId,
@@ -420,7 +607,7 @@ class SasDashboardService
             $lastKmIndex = is_numeric($stored) ? (float) $stored : null;
         }
 
-        $day = [
+        return [
             'sas_vehicle_id' => $carId,
             'start_date' => $start->format('Y-m-d'),
             'end_date' => $end->format('Y-m-d'),
@@ -437,10 +624,6 @@ class SasDashboardService
             'odometer_km' => $lastKmIndex !== null ? (int) round($lastKmIndex) : null,
             'segments' => $segments,
         ];
-
-        $this->writeJson($cacheFile, ['day' => $day, 'fetched_at_ts' => time()]);
-
-        return $day;
     }
 
     /**

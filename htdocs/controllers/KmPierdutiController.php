@@ -46,6 +46,14 @@ class KmPierdutiController
             $this->detailAction();
             return;
         }
+        if ($action === 'gps_cached') {
+            $this->gpsCachedAction();
+            return;
+        }
+        if ($action === 'vehicles') {
+            $this->vehiclesAction();
+            return;
+        }
 
         $this->index();
     }
@@ -74,6 +82,33 @@ class KmPierdutiController
             'periodEnd' => $end,
             'loadError' => $loadError,
         ]);
+    }
+
+    /**
+     * JSON cu randurile raportului (fara km GPS), pentru cardul "Km pierduti" din Dispecer curse:
+     * cardul incarca apoi km GPS per vehicul prin action=gps, ca pagina.
+     */
+    private function vehiclesAction(): void
+    {
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store');
+        [$start, $end] = $this->resolvePeriod();
+        if (!$this->service->credentialsAvailable()) {
+            echo json_encode(['success' => false, 'error' => 'Credențialele SAS nu sunt configurate.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        try {
+            echo json_encode([
+                'success' => true,
+                'start' => $start,
+                'end' => $end,
+                'vehicles' => $this->buildVehicleRows($start, $end),
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        } catch (Throwable $exception) {
+            error_log('[KmPierdutiController][vehicles] ' . $exception->getMessage());
+            echo json_encode(['success' => false, 'error' => 'Structura flotei nu a putut fi încărcată din SAS.'], JSON_UNESCAPED_UNICODE);
+        }
+        exit;
     }
 
     /**
@@ -241,7 +276,7 @@ class KmPierdutiController
         [$start, $end] = $this->resolvePeriod();
 
         try {
-            $range = $this->service->getVehicleRange($carId, $start, $end);
+            $range = (array) $this->service->getVehicleRangeIncremental($carId, $start, $end);
         } catch (InvalidArgumentException $exception) {
             http_response_code(400);
             $this->sendJson(['error' => $exception->getMessage()]);
@@ -316,7 +351,8 @@ class KmPierdutiController
             }
             $outsideKm += $gap['km'];
             $gapRows[] = [
-                'from' => date('Y-m-d H:i', $gap['from_ts']),
+                // Rotunjit in sus la minut: o cursa fara ora se termina la 23:59:59, iar alocarea golului nu are voie sa o atinga.
+                'from' => date('Y-m-d H:i', (int) (ceil($gap['from_ts'] / 60) * 60)),
                 'to' => date('Y-m-d H:i', $gap['to_ts']),
                 'after' => $windowLabel($gap['after'] !== null ? $windows[$gap['after']] : null),
                 'before' => $windowLabel($gap['before'] !== null ? $windows[$gap['before']] : null),
@@ -616,6 +652,33 @@ class KmPierdutiController
         }
 
         return $parts;
+    }
+
+    /**
+     * O singura cerere pentru toate vehiculele: km GPS deja pe disc (fara niciun apel SAS).
+     * Frontendul cere apoi prin action=gps doar vehiculele din `missing`.
+     */
+    private function gpsCachedAction(): void
+    {
+        [$start, $end] = $this->resolvePeriod();
+        $cached = [];
+        $missing = [];
+        foreach (array_unique(array_map('intval', explode(',', (string) ($_GET['car_ids'] ?? '')))) as $carId) {
+            if ($carId <= 0) {
+                continue;
+            }
+            try {
+                $km = $this->service->getCachedVehicleKm($carId, $start, $end);
+            } catch (Throwable $exception) {
+                $km = null;
+            }
+            if ($km === null) {
+                $missing[] = $carId;
+            } else {
+                $cached[(string) $carId] = $km['total_km'];
+            }
+        }
+        $this->sendJson(['cached' => (object) $cached, 'missing' => $missing, 'today_ttl' => SasDashboardService::TODAY_TTL_SECONDS]);
     }
 
     private function gpsAction(): void

@@ -370,6 +370,8 @@ require_once __DIR__ . '/services/SasFleetClient.php';
 require_once __DIR__ . '/services/FleetLivePositionService.php';
 require_once __DIR__ . '/services/SasTripPrefillService.php';
 require_once __DIR__ . '/services/SasDashboardService.php';
+require_once __DIR__ . '/models/OdometerCenterModel.php';
+require_once __DIR__ . '/services/OdometerCenterService.php';
 require_once __DIR__ . '/services/RaceMonthSplitService.php';
 require_once __DIR__ . '/services/WebAuthnService.php';
 require_once __DIR__ . '/services/UserAvatarService.php';
@@ -413,6 +415,7 @@ require_once __DIR__ . '/controllers/FleetMonitoringController.php';
 require_once __DIR__ . '/controllers/DispecerSasSandboxController.php';
 require_once __DIR__ . '/controllers/SasDashboardSandboxController.php';
 require_once __DIR__ . '/controllers/KmPierdutiController.php';
+require_once __DIR__ . '/controllers/OdometerCenterController.php';
 require_once __DIR__ . '/controllers/ReviziiController.php';
 require_once __DIR__ . '/controllers/CourseExpenseHistoryController.php';
 require_once __DIR__ . '/controllers/CentralizatorFacturareController.php';
@@ -431,6 +434,7 @@ require_once __DIR__ . '/controllers/UserActivityController.php';
 require_once __DIR__ . '/controllers/ActivityReportController.php';
 require_once __DIR__ . '/controllers/LeasingSchedulerController.php';
 require_once __DIR__ . '/controllers/TransportTariffController.php';
+require_once __DIR__ . '/controllers/FuelFxAdjustmentController.php';
 require_once __DIR__ . '/controllers/OperationalCostController.php';
 require_once __DIR__ . '/controllers/DevOcrTestController.php';
 require_once __DIR__ . '/controllers/OcrPartsController.php';
@@ -699,6 +703,11 @@ try {
             (new KmPierdutiController($db))->handle($action);
             break;
 
+        case 'centru_kilometraj':
+            require_auth();
+            (new OdometerCenterController($db))->handle($action);
+            break;
+
         case 'revizii':
             require_auth();
             (new ReviziiController($db))->handle($action);
@@ -707,6 +716,11 @@ try {
         case 'tarife_transport':
             require_auth();
             (new TransportTariffController($db))->handle($action);
+            break;
+
+        case 'ajustare_tarife':
+            require_auth();
+            (new FuelFxAdjustmentController($db))->handle($action);
             break;
 
         case 'carburanti':

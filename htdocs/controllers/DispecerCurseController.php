@@ -37,6 +37,7 @@ class DispecerCurseController
         'service' => 'Reparatii',
         'alte' => 'Alte cheltuieli',
         'taxe_drum' => 'Taxe drum',
+        'toll' => 'Toll',
     ];
     private const FUEL_EXPENSE_TYPE = 'motorina';
 
@@ -44,7 +45,13 @@ class DispecerCurseController
      * Taxele de drum: fiecare se inregistreaza pe randul ei, cu locatie, bucati si pret unitar.
      * Suma nu se scrie manual, ci rezulta din bucati x pret.
      */
-    private const TOLL_EXPENSE_TYPES = ['taxa_acces', 'port', 'trece'];
+    private const TOLL_EXPENSE_TYPES = ['taxa_acces', 'port', 'trece', 'toll'];
+
+    /**
+     * Tipuri care nu se mai refactureaza: raman cheltuieli de cursa (si eticheta pentru
+     * refacturarile vechi), dar nu mai apar in selectorul / filtrul de refacturare.
+     */
+    private const NON_REFACTURARE_TYPES = ['service', 'alte'];
 
     /**
      * Tipuri scoase din uz: raman doar ca eticheta pentru cheltuielile deja salvate,
@@ -103,7 +110,7 @@ class DispecerCurseController
     {
         $types = self::EXPENSE_TYPES;
         unset($types[self::FUEL_EXPENSE_TYPE]);
-        foreach (self::RETIRED_EXPENSE_TYPES as $retiredType) {
+        foreach (array_merge(self::RETIRED_EXPENSE_TYPES, self::NON_REFACTURARE_TYPES) as $retiredType) {
             unset($types[$retiredType]);
         }
 
@@ -313,6 +320,15 @@ class DispecerCurseController
                 return;
             case 'trip_gps_km':
                 $this->tripGpsKmAction();
+                return;
+            case 'insights_fuel':
+                $this->insightsFuelAction();
+                return;
+            case 'insights_fuel_detail':
+                $this->insightsFuelDetailAction();
+                return;
+            case 'insights_fuel_link':
+                $this->insightsFuelLinkAction();
                 return;
             case 'request_diurna_change':
                 $this->requestDiurnaChangeAction();
@@ -4425,6 +4441,7 @@ class DispecerCurseController
             'diurna' => 'Diurnă',
             'service' => 'Reparații',
             'alte' => 'Alte cheltuieli',
+            'toll' => 'Toll',
         ]);
         $money = static fn (float $value): string => number_format($value, 2, ',', '.');
 
@@ -9463,6 +9480,121 @@ class DispecerCurseController
         }
 
         return str_contains(strtolower((string) ($_SERVER['HTTP_ACCEPT'] ?? '')), 'application/json');
+    }
+
+    /**
+     * Cardul "Alimentari neasociate" de langa Adauga cursa: alimentarile CardOil (source_type=api)
+     * din ultimele INSIGHTS_FUEL_DAYS zile care nu au cursa / Km service. Inainte de listare se
+     * reface asocierea automata pe interval (ca la deschiderea paginii Carburanti), ca o cursa
+     * adaugata intre timp sa scoata alimentarea din lista.
+     */
+    private const INSIGHTS_FUEL_DAYS = 30;
+
+    private function insightsFuelAction(): void
+    {
+        try {
+            $model = new FuelModel($this->db);
+            $dateTo = date('Y-m-d');
+            $dateFrom = date('Y-m-d', strtotime('-' . self::INSIGHTS_FUEL_DAYS . ' days'));
+            $model->refreshAutomaticAssociations($dateFrom, $dateTo);
+            $rows = $model->getUnassociatedFillups(['date_from' => $dateFrom, 'date_to' => $dateTo], 500);
+
+            $vehicleIds = [];
+            foreach ($this->db->query('SELECT id, nr_inmatriculare FROM vehicule')->fetchAll() as $vehicle) {
+                $vehicleIds[str_replace(' ', '', strtoupper((string) $vehicle['nr_inmatriculare']))] = (int) $vehicle['id'];
+            }
+
+            $items = [];
+            foreach ($rows as $row) {
+                if ((string) ($row['source_type'] ?? 'api') !== 'api') {
+                    continue;
+                }
+                $regKey = str_replace(' ', '', strtoupper((string) ($row['vehicle_registration'] ?? '')));
+                $items[] = [
+                    'id' => (int) $row['id'],
+                    'plate' => (string) ($row['vehicle_registration'] ?? ''),
+                    'vehicle_id' => $vehicleIds[$regKey] ?? null,
+                    'datetime' => substr((string) ($row['fillup_datetime'] ?? ''), 0, 16),
+                    'fuel_type' => (string) ($row['fuel_type'] ?? ''),
+                    'liters' => round((float) ($row['quantity_liters'] ?? 0), 2),
+                    'value' => round((float) ($row['total_value'] ?? 0), 2),
+                    'driver' => (string) ($row['driver_name'] ?? ''),
+                    'station' => (string) ($row['station_name'] ?? ''),
+                ];
+            }
+
+            $this->sendJson([
+                'success' => true,
+                'date_from' => $dateFrom,
+                'date_to' => $dateTo,
+                'can_link' => !function_exists('can') || can('carburanti', 'link'),
+                'items' => $items,
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][insights_fuel] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'error' => 'Alimentările CardOil nu au putut fi încărcate.'], 500);
+        }
+    }
+
+    /** De ce a ramas alimentarea neasociata + cursele / Km service la care se poate lega manual. */
+    private function insightsFuelDetailAction(): void
+    {
+        $fillupId = (int) ($_GET['fillup_id'] ?? 0);
+        try {
+            $model = new FuelModel($this->db);
+            $diagnosis = $model->getUnassociatedDiagnosis($fillupId);
+            if ($diagnosis === null) {
+                $this->sendJson(['success' => false, 'error' => 'Alimentarea nu există.'], 404);
+            }
+            $this->sendJson([
+                'success' => true,
+                'diagnosis' => $diagnosis,
+                'options' => $model->getLinkOptions($fillupId) ?? ['trips' => [], 'service_km' => []],
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][insights_fuel_detail] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'error' => 'Explicația nu a putut fi încărcată.'], 500);
+        }
+    }
+
+    /**
+     * Asociere manuala din card (acelasi efect ca in Carburanti), cu dreptul carburanti.link.
+     * Tinta trebuie sa fie una din optiunile vehiculului alimentarii, nu orice cursa.
+     */
+    private function insightsFuelLinkAction(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' || !verify_csrf_token($_POST['_token'] ?? null)) {
+            $this->sendJson(['success' => false, 'error' => 'Cerere invalidă. Reîncarcă pagina.'], 400);
+        }
+        if (function_exists('can') && !can('carburanti', 'link')) {
+            $this->sendJson(['success' => false, 'error' => 'Nu ai dreptul de asociere manuală a alimentărilor.'], 403);
+        }
+
+        $fillupId = (int) ($_POST['fillup_id'] ?? 0);
+        $target = trim((string) ($_POST['target'] ?? ''));
+        $serviceKmId = str_starts_with($target, 'service:') ? (int) substr($target, 8) : 0;
+        $tripId = $serviceKmId > 0 ? 0 : (int) $target;
+
+        try {
+            $model = new FuelModel($this->db);
+            $options = $model->getLinkOptions($fillupId);
+            if ($options === null) {
+                $this->sendJson(['success' => false, 'error' => 'Alimentarea nu există.'], 404);
+            }
+            $allowed = $serviceKmId > 0
+                ? in_array($serviceKmId, array_column($options['service_km'], 'id'), true)
+                : $tripId > 0 && in_array($tripId, array_column($options['trips'], 'id'), true);
+            if (!$allowed) {
+                $this->sendJson(['success' => false, 'error' => 'Cursa / perioada aleasă nu aparține vehiculului alimentării.'], 422);
+            }
+            $ok = $serviceKmId > 0 ? $model->linkFillupToServiceKm($fillupId, $serviceKmId) : $model->linkFillupToTrip($fillupId, $tripId);
+            $this->sendJson($ok
+                ? ['success' => true, 'message' => $serviceKmId > 0 ? 'Alimentarea a fost asociată cu Km service #' . $serviceKmId . '.' : 'Alimentarea a fost asociată cu cursa #' . $tripId . '.']
+                : ['success' => false, 'error' => 'Alimentarea nu a putut fi asociată.'], $ok ? 200 : 500);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][insights_fuel_link] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'error' => 'A apărut o eroare la asociere.'], 500);
+        }
     }
 
     private function sendJson(array $payload, int $statusCode = 200): void

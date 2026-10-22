@@ -108,6 +108,21 @@ class ModuleController
             case 'bulk_unmount_tire_stock':
                 $this->bulkUnmountMaintenanceTireStockAction($moduleKey, $module);
                 return;
+            case 'bulk_mount_tire_stock':
+                $this->bulkMountMaintenanceTireStockAction($moduleKey);
+                return;
+            case 'tire_mount_vehicles':
+                $this->tireMountVehiclesAction($moduleKey);
+                return;
+            case 'tire_mount_layout':
+                $this->tireMountLayoutAction($moduleKey);
+                return;
+            case 'tire_stock_children':
+                $this->tireStockChildrenAction($moduleKey);
+                return;
+            case 'tire_stock_selection':
+                $this->tireStockSelectionAction($moduleKey);
+                return;
             case 'add_document_type_config':
                 $this->addDocumentTypeConfigAction($moduleKey, $module);
                 return;
@@ -2505,6 +2520,7 @@ class ModuleController
             'condition',
             'location',
             'mounted',
+            'view',
         ];
 
         $filters = [];
@@ -3187,6 +3203,169 @@ class ModuleController
         }
 
         redirect($stockRedirectUrl);
+    }
+
+    private function tireMountJson(array $payload, int $status = 200): void
+    {
+        http_response_code($status);
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store');
+        echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        exit;
+    }
+
+    /**
+     * JSON: randurile din interiorul grupurilor (anvelope pe locatii / axe) pentru grupurile
+     * extinse, cu filtrele curente. Se incarca la cerere, nu odata cu pagina.
+     */
+    private function tireStockChildrenAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'mentenanta') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Modul invalid.'], 404);
+        }
+
+        $keys = array_values(array_filter(array_map('strval', (array) ($_GET['keys'] ?? [])), static fn (string $key): bool => preg_match('/^(p:[0-9a-f]{16}|v:\d+)$/', $key) === 1));
+        if ($keys === []) {
+            $this->tireMountJson(['ok' => true, 'html' => []]);
+        }
+
+        try {
+            $groups = $this->tireModel->getInventoryGroupsByKeys($this->collectTireStockFilters(), $keys);
+            $vars = ['tireStockFormOptions' => $this->tireModel->getTireRowFormOptions(), 'tireStockPickerPrefix' => 'tireVehiclePickerX' . bin2hex(random_bytes(3))];
+            $html = [];
+            foreach ($groups as $key => $group) {
+                $html[$key] = $this->renderTireStockPartial('_group_children.php', $vars + ['group' => $group]);
+            }
+            $this->tireMountJson(['ok' => true, 'html' => $html]);
+        } catch (Throwable $exception) {
+            error_log('[tire_stock_children] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Anvelopele grupului nu au putut fi incarcate.'], 500);
+        }
+    }
+
+    /**
+     * JSON: anvelopele (id + date pentru bara de actiuni) dintr-un grup sau din toate rezultatele.
+     * scope=all ignora filtrele: selectia explicita a intregului grup.
+     */
+    private function tireStockSelectionAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'mentenanta') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Modul invalid.'], 404);
+        }
+
+        $groupKey = trim((string) ($_GET['group'] ?? ''));
+        if ($groupKey !== '' && preg_match('/^(p:[0-9a-f]{16}(\|l:[0-9a-f]{10})?|v:\d+(\|a:\d+)?)$/', $groupKey) !== 1) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Grup invalid.'], 422);
+        }
+
+        try {
+            $tires = $this->tireModel->getInventorySelectionMeta(
+                $this->collectTireStockFilters(),
+                $groupKey !== '' ? preg_replace('/\|l:[0-9a-f]{10}$/', '', $groupKey) : null,
+                ($_GET['scope'] ?? '') === 'all'
+            );
+            $this->tireMountJson(['ok' => true, 'tires' => $tires]);
+        } catch (Throwable $exception) {
+            error_log('[tire_stock_selection] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Selectia nu a putut fi citita.'], 500);
+        }
+    }
+
+    private function renderTireStockPartial(string $partial, array $vars): string
+    {
+        extract($vars, EXTR_SKIP);
+        ob_start();
+        include BASE_PATH . '/views/module/tire_stock/' . $partial;
+        return (string) ob_get_clean();
+    }
+
+    /** JSON: vehicule active pentru selectorul de destinatie (montaj / mutare anvelope). */
+    private function tireMountVehiclesAction(string $moduleKey): void
+    {
+        if (!in_array($moduleKey, ['mentenanta', 'vehicule'], true)) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Modul invalid.'], 404);
+        }
+
+        try {
+            $tireIds = array_map('intval', (array) ($_GET['tire_ids'] ?? []));
+            $this->tireMountJson(['ok' => true] + $this->tireModel->searchVehiclesForTireMount((string) ($_GET['q'] ?? ''), $tireIds, 30));
+        } catch (Throwable $exception) {
+            error_log('[tire_mount_vehicles] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Cautarea vehiculelor a esuat.'], 500);
+        }
+    }
+
+    /** JSON: axele si pozitiile unui vehicul, cu ocuparea si compatibilitatea anvelopelor date. */
+    private function tireMountLayoutAction(string $moduleKey): void
+    {
+        if (!in_array($moduleKey, ['mentenanta', 'vehicule'], true)) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Modul invalid.'], 404);
+        }
+
+        $vehicleId = (int) ($_GET['vehicle_id'] ?? 0);
+        $tireIds = array_map('intval', (array) ($_GET['tire_ids'] ?? []));
+        try {
+            $layout = $vehicleId > 0 ? $this->tireModel->getVehicleMountLayout($vehicleId, $tireIds) : null;
+        } catch (Throwable $exception) {
+            error_log('[tire_mount_layout] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Pozitiile vehiculului nu au putut fi citite.'], 500);
+        }
+        if ($layout === null) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Vehiculul nu exista sau nu este activ.'], 404);
+        }
+
+        $this->tireMountJson(['ok' => true] + $layout);
+    }
+
+    /**
+     * Montaj in masa din Stoc anvelope (POST, raspuns JSON): fiecare anvelopa cu vehiculul
+     * si pozitia ei, salvate impreuna intr-o singura tranzactie.
+     */
+    private function bulkMountMaintenanceTireStockAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'mentenanta' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->tireMountJson(['ok' => false, 'general' => ['Cerere invalida.']], 405);
+        }
+        if (!verify_csrf_token($_POST['_token'] ?? null)) {
+            $this->tireMountJson(['ok' => false, 'general' => ['Token CSRF invalid. Reincarca pagina si reincearca.']], 419);
+        }
+
+        $mountDate = trim((string) ($_POST['mount_date'] ?? ''));
+        if (!$this->isValidDate($mountDate)) {
+            $this->tireMountJson(['ok' => false, 'general' => ['Data montarii nu este valida.']], 422);
+        }
+
+        $assignments = [];
+        foreach ((array) ($_POST['assignments'] ?? []) as $assignment) {
+            if (!is_array($assignment)) {
+                continue;
+            }
+            $assignments[] = [
+                'tire_id' => (int) ($assignment['tire_id'] ?? 0),
+                'vehicle_id' => (int) ($assignment['vehicle_id'] ?? 0),
+                'position_id' => (int) ($assignment['position_id'] ?? 0),
+                'observation' => mb_substr(trim((string) ($assignment['observation'] ?? '')), 0, 1000),
+            ];
+        }
+        if (count($assignments) > 100) {
+            $this->tireMountJson(['ok' => false, 'general' => ['Poti monta cel mult 100 de anvelope intr-o operatiune.']], 422);
+        }
+
+        $reason = mb_substr(trim((string) ($_POST['reason'] ?? '')), 0, 255);
+        $observation = mb_substr(trim((string) ($_POST['observation'] ?? '')), 0, 1000);
+        $result = $this->tireModel->bulkMountTires(
+            $assignments,
+            $mountDate,
+            date('Y-m-d H:i:s'),
+            $this->currentUserId(),
+            $reason !== '' ? $reason : 'Montaj in masa din Stoc anvelope',
+            $observation !== '' ? $observation : null
+        );
+
+        if ($result['ok']) {
+            flash_set('success', 'Au fost montate ' . (int) $result['mounted'] . ' anvelope.');
+        }
+        $this->tireMountJson($result, $result['ok'] ? 200 : 422);
     }
 
     private function bulkUnmountMaintenanceTireStockAction(string $moduleKey, array $module): void

@@ -764,6 +764,7 @@ class DashboardAnaliticV2Model extends BaseModel
         'service' => 'Reparatii',
         'alte' => 'Alte cheltuieli',
         'taxe_drum' => 'Taxe drum',
+        'toll' => 'Toll',
     ];
 
     /**

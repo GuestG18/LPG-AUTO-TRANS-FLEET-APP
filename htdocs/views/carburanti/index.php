@@ -97,46 +97,113 @@ $normKmSource = match ((string) ($normative['km_source'] ?? '')) {
 // Starea T0 (mecanismul FULL / T0)
 // ---------------------------------------------------------------------
 $canManageFull = (bool) ($canManageFull ?? false);
-$t0Mode = (string) ($normative['t0_mode'] ?? 'missing');
+// O intrare per luna din filtru; prima luna = campurile de la radacina.
+$normativeMonths = is_array($normative['months'] ?? null) && $normative['months'] !== []
+    ? $normative['months']
+    : [$normative];
+$normativeMultiMonth = count($normativeMonths) > 1;
 $t0Vehicle = (string) ($normative['vehicle'] ?? '');
-$t0MonthStart = (string) ($normative['month_start'] ?? '');
-$t0Candidates = is_array($normative['candidates'] ?? null) ? $normative['candidates'] : [];
-$t0WindowLabel = '';
-if (($normative['t0_window_start'] ?? '') !== '' && ($normative['t0_window_end'] ?? '') !== '') {
-    $t0WindowLabel = (new DateTimeImmutable((string) $normative['t0_window_start']))->format('d.m.Y')
+$t0MonthKey = static fn (array $month): string => str_replace('-', '', substr((string) ($month['month_start'] ?? ''), 0, 7));
+$t0MonthLabelOf = static fn (array $month): string => ($month['month_start'] ?? '') !== ''
+    ? (new DateTimeImmutable((string) $month['month_start']))->format('m.Y')
+    : '';
+$t0WindowLabelOf = static function (array $month): string {
+    if (($month['t0_window_start'] ?? '') === '' || ($month['t0_window_end'] ?? '') === '') {
+        return '';
+    }
+
+    return (new DateTimeImmutable((string) $month['t0_window_start']))->format('d.m.Y')
         . ' – '
-        . (new DateTimeImmutable((string) $normative['t0_window_end']))->format('d.m.Y');
-}
-$t0MonthLabel = $t0MonthStart !== '' ? (new DateTimeImmutable($t0MonthStart))->format('m.Y') : '';
+        . (new DateTimeImmutable((string) $month['t0_window_end']))->format('d.m.Y');
+};
+$t0PillOf = static function (string $mode): array {
+    return [
+        match ($mode) {
+            'manual' => 'fuel-pill-manual',
+            'auto' => 'fuel-pill-auto',
+            default => 'fuel-pill-warning',
+        },
+        match ($mode) {
+            'manual' => 'Setat manual',
+            'auto' => 'Determinat automat',
+            'no_vehicle' => 'Fără vehicul',
+            default => 'Lipsă',
+        },
+    ];
+};
 
 /**
- * Blocul de stare T0, reutilizat in tab-ul General si in tab-ul Consum normat.
+ * Atributele din care JS-ul cere km GPS (SAS) pe intervalul T0 -> urmatorul
+ * FULL al lunii; gol cand intervalul nu are capat.
+ */
+$gpsIntervalAttrs = static function (array $month) use ($t0Vehicle): string {
+    $from = (string) ($month['start_full']['fillup_datetime'] ?? '');
+    $to = (string) ($month['next_full']['fillup_datetime'] ?? '');
+    if ($t0Vehicle === '' || $from === '' || $to === '') {
+        return '';
+    }
+
+    return ' data-gps-vehicle="' . e($t0Vehicle) . '"'
+        . ' data-gps-from="' . e($from) . '"'
+        . ' data-gps-to="' . e($to) . '"'
+        . ' data-gps-liters="' . e((string) round((float) ($month['motorina_liters'] ?? 0), 2)) . '"';
+};
+
+/** Butoanele „Setează T0 manual” / „Revino la automat” pentru o luna. */
+$renderT0Actions = static function (array $month, bool $compact = false) use (
+    $t0Vehicle,
+    $t0MonthKey,
+    $canManageFull,
+    $currentUrl
+): void {
+    $monthStart = (string) ($month['month_start'] ?? '');
+    if (!$canManageFull || $t0Vehicle === '' || $monthStart === '') {
+        return;
+    }
+    $mode = (string) ($month['t0_mode'] ?? 'missing');
+    ?>
+    <div class="fuel-t0-actions">
+        <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal"
+                data-bs-target="#fuelT0Modal-<?= e($t0MonthKey($month)) ?>"
+                <?= $compact ? 'title="Setează T0 manual"' : '' ?>>
+            <i class="bi bi-pin-map" aria-hidden="true"></i> <?= $compact ? 'Setează' : 'Setează T0 manual' ?>
+        </button>
+        <?php if ($mode === 'manual'): ?>
+            <form method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'clear_t0'])) ?>" class="d-inline">
+                <?= csrf_field() ?>
+                <input type="hidden" name="vehicle" value="<?= e($t0Vehicle) ?>">
+                <input type="hidden" name="month_start" value="<?= e($monthStart) ?>">
+                <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
+                <button type="submit" class="btn btn-sm btn-outline-secondary"
+                        <?= $compact ? 'title="Revino la automat"' : '' ?>
+                        onclick="return confirm('Elimini T0 manual si revii la selectia automata?');">
+                    <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> <?= $compact ? 'Automat' : 'Revino la automat' ?>
+                </button>
+            </form>
+        <?php endif; ?>
+    </div>
+    <?php
+};
+
+/**
+ * Blocul de stare T0, reutilizat in tab-ul General si in tab-ul Consum normat
+ * (doar cand filtrul acopera o singura luna).
  */
 $renderT0Status = static function () use (
     $normative,
-    $t0Mode,
-    $t0Vehicle,
-    $t0MonthStart,
-    $t0MonthLabel,
-    $t0WindowLabel,
-    $canManageFull,
-    $currentUrl,
+    $t0MonthLabelOf,
+    $t0WindowLabelOf,
+    $t0PillOf,
+    $renderT0Actions,
     $formatDateTime,
     $formatLiters,
     $formatKm
 ): void {
+    $t0Mode = (string) ($normative['t0_mode'] ?? 'missing');
+    $t0MonthLabel = $t0MonthLabelOf($normative);
+    $t0WindowLabel = $t0WindowLabelOf($normative);
     $startFull = is_array($normative['start_full'] ?? null) ? $normative['start_full'] : null;
-    $pillClass = match ($t0Mode) {
-        'manual' => 'fuel-pill-manual',
-        'auto' => 'fuel-pill-auto',
-        default => 'fuel-pill-warning',
-    };
-    $pillLabel = match ($t0Mode) {
-        'manual' => 'Setat manual',
-        'auto' => 'Determinat automat',
-        'no_vehicle' => 'Fără vehicul',
-        default => 'Lipsă',
-    };
+    [$pillClass, $pillLabel] = $t0PillOf($t0Mode);
     ?>
     <div class="fuel-t0-block <?= $t0Mode === 'missing' ? 'is-missing' : '' ?>">
         <div class="fuel-t0-head">
@@ -169,25 +236,134 @@ $renderT0Status = static function () use (
             <div class="fuel-t0-meta">Nu există FULL în fereastra ±4 zile (<?= e($t0WindowLabel) ?>).</div>
         <?php endif; ?>
 
-        <?php if ($canManageFull && $t0Vehicle !== '' && $t0MonthStart !== ''): ?>
-            <div class="fuel-t0-actions">
-                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#fuelT0Modal">
-                    <i class="bi bi-pin-map" aria-hidden="true"></i> Setează T0 manual
-                </button>
-                <?php if ($t0Mode === 'manual'): ?>
-                    <form method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'clear_t0'])) ?>" class="d-inline">
-                        <?= csrf_field() ?>
-                        <input type="hidden" name="vehicle" value="<?= e($t0Vehicle) ?>">
-                        <input type="hidden" name="month_start" value="<?= e($t0MonthStart) ?>">
-                        <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
-                        <button type="submit" class="btn btn-sm btn-outline-secondary"
-                                onclick="return confirm('Elimini T0 manual si revii la selectia automata?');">
-                            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Revino la automat
-                        </button>
-                    </form>
-                <?php endif; ?>
-            </div>
-        <?php endif; ?>
+        <?php $renderT0Actions($normative); ?>
+    </div>
+    <?php
+};
+
+/** Randul „GPS” din cardul pe o singura luna; valorile vin din SAS dupa incarcare. */
+$renderNormativeGpsLine = static function () use ($normative, $gpsIntervalAttrs): void {
+    $attrs = $gpsIntervalAttrs($normative);
+    if ($attrs === '') {
+        return;
+    }
+    ?>
+    <p class="fuel-norm-status fuel-norm-gps"<?= $attrs ?>>
+        <i class="bi bi-geo-alt-fill" aria-hidden="true"></i>
+        Pe km GPS (SAS): <strong data-gps-km><span class="text-muted">se încarcă…</span></strong>
+        · <strong data-gps-l100>—</strong>
+    </p>
+    <?php
+};
+
+/**
+ * Varianta „pe luni” a cardului de consum normat: cand filtrul acopera mai
+ * multe luni, fiecare luna are propriul T0 (automat / manual / lipsa) si
+ * propriul interval T0 -> urmatorul FULL, cu actiunile de setare pe rand.
+ */
+$renderNormativeMonths = static function () use (
+    $normative,
+    $normativeMonths,
+    $t0MonthLabelOf,
+    $t0WindowLabelOf,
+    $t0PillOf,
+    $renderT0Actions,
+    $gpsIntervalAttrs,
+    $formatDateTime,
+    $formatLiters,
+    $formatPercent
+): void {
+    $missingCount = 0;
+    foreach ($normativeMonths as $month) {
+        if (($month['t0_mode'] ?? 'missing') === 'missing') {
+            $missingCount++;
+        }
+    }
+    ?>
+    <div class="fuel-t0-months">
+        <div class="fuel-t0-months-head">
+            <span class="fuel-t0-label">T0 pe luni · <?= e((string) ($normative['vehicle'] ?? '-')) ?></span>
+            <?php if ($missingCount > 0): ?>
+                <span class="fuel-pill fuel-pill-warning"><?= e((string) $missingCount) ?> <?= $missingCount === 1 ? 'lună fără T0' : 'luni fără T0' ?></span>
+            <?php else: ?>
+                <span class="fuel-pill fuel-pill-full">T0 pe toate lunile</span>
+            <?php endif; ?>
+        </div>
+        <div class="fuel-table-wrap">
+            <table class="fuel-table fuel-t0-months-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Luna</th>
+                        <th scope="col">T0</th>
+                        <th scope="col">Următor full</th>
+                        <th scope="col">Km</th>
+                        <th scope="col">Motorină</th>
+                        <th scope="col">L/100 km</th>
+                        <th scope="col" title="Km din GPS (SAS) pe același interval T0 → următor full">Km GPS</th>
+                        <th scope="col" title="Motorina intervalului raportată la km GPS">L/100 GPS</th>
+                        <th scope="col">AdBlue</th>
+                        <th scope="col"><span class="visually-hidden">Acțiuni</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($normativeMonths as $month): ?>
+                        <?php
+                        $mode = (string) ($month['t0_mode'] ?? 'missing');
+                        [$pillClass, $pillLabel] = $t0PillOf($mode);
+                        $startFull = is_array($month['start_full'] ?? null) ? $month['start_full'] : null;
+                        $nextFull = is_array($month['next_full'] ?? null) ? $month['next_full'] : null;
+                        $isValid = ($month['status'] ?? '') === 'valid';
+                        $kmSource = match ((string) ($month['km_source'] ?? '')) {
+                            'alimentari' => 'alimentări',
+                            'dispecer' => 'dispecer',
+                            default => '',
+                        };
+                        ?>
+                        <tr class="<?= $mode === 'missing' ? 'is-missing' : '' ?>"<?= $gpsIntervalAttrs($month) ?>>
+                            <td data-label="Luna"><strong><?= e($t0MonthLabelOf($month)) ?></strong></td>
+                            <td data-label="T0">
+                                <?php if ($startFull !== null): ?>
+                                    <?= e($formatDateTime((string) ($startFull['fillup_datetime'] ?? ''))) ?>
+                                    <small class="d-block text-muted"><?= e($formatLiters((float) ($startFull['quantity_liters'] ?? 0))) ?></small>
+                                <?php else: ?>
+                                    <span class="text-muted" title="Fereastră ±4 zile: <?= e($t0WindowLabelOf($month)) ?>">—</span>
+                                <?php endif; ?>
+                                <span class="fuel-pill <?= e($pillClass) ?>"><?= e($pillLabel) ?></span>
+                                <?php if ($mode === 'manual' && ($month['t0_manual_note'] ?? null) !== null): ?>
+                                    <small class="d-block text-muted">Notă: <?= e((string) $month['t0_manual_note']) ?></small>
+                                <?php endif; ?>
+                            </td>
+                            <td data-label="Următor full">
+                                <?php if ($nextFull !== null): ?>
+                                    <?= e($formatDateTime((string) ($nextFull['fillup_datetime'] ?? ''))) ?>
+                                <?php elseif ($startFull !== null): ?>
+                                    <span class="text-muted"><?= e((string) ($month['message'] ?? '')) ?></span>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td data-label="Km">
+                                <?= $isValid ? e(format_number_ro((float) ($month['km'] ?? 0), 0)) . ' km' : '—' ?>
+                                <?php if ($isValid && $kmSource !== ''): ?><small class="d-block text-muted"><?= e($kmSource) ?></small><?php endif; ?>
+                            </td>
+                            <td data-label="Motorină"><?= $isValid ? e($formatLiters((float) ($month['motorina_liters'] ?? 0))) : '—' ?></td>
+                            <td data-label="L/100 km">
+                                <?php if ($isValid): ?>
+                                    <strong class="text-success"><?= e(format_number_ro((float) ($month['norm_l100'] ?? 0), 2)) ?></strong>
+                                <?php else: ?>—<?php endif; ?>
+                                <?php if (!empty($month['odometer_warning'])): ?>
+                                    <i class="bi bi-exclamation-triangle-fill text-warning" title="<?= e((string) $month['odometer_warning']) ?>" aria-label="<?= e((string) $month['odometer_warning']) ?>"></i>
+                                <?php endif; ?>
+                            </td>
+                            <td data-label="Km GPS" data-gps-km><?= $nextFull !== null ? '<span class="text-muted">…</span>' : '—' ?></td>
+                            <td data-label="L/100 GPS" data-gps-l100><?= $nextFull !== null ? '<span class="text-muted">…</span>' : '—' ?></td>
+                            <td data-label="AdBlue"><?= $isValid ? e($formatPercent((float) ($month['adblue_percent'] ?? 0))) : '—' ?></td>
+                            <td data-label="Acțiuni"><?php $renderT0Actions($month, true); ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
     </div>
     <?php
 };
@@ -1250,11 +1426,16 @@ $donutStyle = static function (array $items): string {
 
                     <article class="fuel-card fuel-norm-card">
                         <div class="fuel-card-header">
-                            <h2>Consum normat (interval curent)</h2>
+                            <h2><?= $normativeMultiMonth ? 'Consum normat pe luni' : 'Consum normat (interval curent)' ?></h2>
+                            <?php if (!$normativeMultiMonth): ?>
                             <span class="fuel-status-badge <?= ($normative['status'] ?? '') === 'valid' ? 'is-valid' : 'is-invalid' ?>">
                                 <?= e((string) ($normative['message'] ?? 'Interval invalid')) ?>
                             </span>
+                            <?php endif; ?>
                         </div>
+                        <?php if ($normativeMultiMonth): ?>
+                            <?php $renderNormativeMonths(); ?>
+                        <?php else: ?>
                         <?php $renderT0Status(); ?>
                         <div class="fuel-norm-grid">
                             <div>
@@ -1294,6 +1475,8 @@ $donutStyle = static function (array $items): string {
                                 <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
                                 <?= e((string) $normative['odometer_warning']) ?>
                             </p>
+                        <?php endif; ?>
+                        <?php $renderNormativeGpsLine(); ?>
                         <?php endif; ?>
                     </article>
                 </div>
@@ -1514,9 +1697,14 @@ $donutStyle = static function (array $items): string {
             <section class="tab-pane fade" id="fuel-norm" role="tabpanel" aria-labelledby="fuel-norm-tab" tabindex="0">
                 <article class="fuel-card fuel-norm-details">
                     <div class="fuel-card-header">
-                        <h2>Consum normat</h2>
+                        <h2><?= $normativeMultiMonth ? 'Consum normat pe luni' : 'Consum normat' ?></h2>
+                        <?php if (!$normativeMultiMonth): ?>
                         <span class="fuel-status-badge <?= ($normative['status'] ?? '') === 'valid' ? 'is-valid' : 'is-invalid' ?>"><?= e((string) ($normative['message'] ?? 'Interval invalid')) ?></span>
+                        <?php endif; ?>
                     </div>
+                    <?php if ($normativeMultiMonth): ?>
+                        <?php $renderNormativeMonths(); ?>
+                    <?php else: ?>
                     <?php $renderT0Status(); ?>
                     <div class="fuel-norm-grid is-wide">
                         <div><small>Vehicul</small><strong><?= e((string) ($normative['vehicle'] ?? '-')) ?></strong></div>
@@ -1532,6 +1720,8 @@ $donutStyle = static function (array $items): string {
                             <?php endif; ?>
                         </div>
                     </div>
+                    <?php $renderNormativeGpsLine(); ?>
+                    <?php endif; ?>
                 </article>
             </section>
 
@@ -2056,21 +2246,31 @@ $donutStyle = static function (array $items): string {
     </div>
 </div>
 
-<?php if ($canManageFull && $t0Vehicle !== '' && $t0MonthStart !== ''): ?>
-<div class="modal fade" id="fuelT0Modal" tabindex="-1" aria-labelledby="fuelT0ModalTitle" aria-hidden="true">
+<?php if ($canManageFull && $t0Vehicle !== ''): ?>
+<?php foreach ($normativeMonths as $t0ModalMonth): ?>
+<?php
+if ((string) ($t0ModalMonth['month_start'] ?? '') === '') {
+    continue;
+}
+$t0ModalKey = $t0MonthKey($t0ModalMonth);
+$t0ModalMonthLabel = $t0MonthLabelOf($t0ModalMonth);
+$t0ModalWindowLabel = $t0WindowLabelOf($t0ModalMonth);
+$t0Candidates = is_array($t0ModalMonth['candidates'] ?? null) ? $t0ModalMonth['candidates'] : [];
+?>
+<div class="modal fade fuel-t0-modal" id="fuelT0Modal-<?= e($t0ModalKey) ?>" tabindex="-1" aria-labelledby="fuelT0ModalTitle-<?= e($t0ModalKey) ?>" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
         <form class="modal-content" method="post" action="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'set_t0'])) ?>">
             <?= csrf_field() ?>
             <input type="hidden" name="return_url" value="<?= e($currentUrl) ?>">
             <input type="hidden" name="vehicle" value="<?= e($t0Vehicle) ?>">
-            <input type="hidden" name="month_start" value="<?= e($t0MonthStart) ?>">
+            <input type="hidden" name="month_start" value="<?= e((string) $t0ModalMonth['month_start']) ?>">
             <div class="modal-header">
-                <h5 class="modal-title" id="fuelT0ModalTitle">Setează T0 manual — <?= e($t0Vehicle) ?> · <?= e($t0MonthLabel) ?></h5>
+                <h5 class="modal-title" id="fuelT0ModalTitle-<?= e($t0ModalKey) ?>">Setează T0 manual — <?= e($t0Vehicle) ?> · <?= e($t0ModalMonthLabel) ?></h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
             </div>
             <div class="modal-body">
                 <p class="fuel-modal-subtitle">
-                    Fereastra automată ±4 zile este <strong><?= e($t0WindowLabel) ?></strong>.
+                    Fereastra automată ±4 zile este <strong><?= e($t0ModalWindowLabel) ?></strong>.
                     Alimentările din fereastră sunt marcate cu <span class="fuel-pill fuel-pill-auto">în fereastră</span>.
                     Poți alege și o alimentare din afara ferestrei — decizia rămâne înregistrată ca manuală.
                 </p>
@@ -2098,16 +2298,17 @@ $donutStyle = static function (array $items): string {
                                     $candidateIsFull = !empty($candidate['is_full']);
                                     $candidateOdo = (int) ($candidate['odometer_km'] ?? 0);
                                     $candidateSource = (string) ($candidate['full_source'] ?? 'api');
+                                    $candidateInputId = 'fuelT0Pick' . $t0ModalKey . '-' . $candidateId;
                                     ?>
                                     <tr class="<?= !empty($candidate['in_t0_window']) ? 'is-in-window' : '' ?>">
                                         <td>
                                             <input class="form-check-input" type="radio" name="fillup_id"
-                                                   id="fuelT0Pick<?= e((string) $candidateId) ?>"
+                                                   id="<?= e($candidateInputId) ?>"
                                                    value="<?= e((string) $candidateId) ?>"
                                                    data-is-full="<?= $candidateIsFull ? '1' : '0' ?>" required>
                                         </td>
                                         <td>
-                                            <label class="mb-0" for="fuelT0Pick<?= e((string) $candidateId) ?>">
+                                            <label class="mb-0" for="<?= e($candidateInputId) ?>">
                                                 <?= e($formatDateTime((string) ($candidate['fillup_datetime'] ?? ''))) ?>
                                             </label>
                                             <?php if (!empty($candidate['in_t0_window'])): ?>
@@ -2135,17 +2336,17 @@ $donutStyle = static function (array $items): string {
                         </table>
                     </div>
 
-                    <div class="fuel-t0-confirm" id="fuelT0Confirm" hidden>
+                    <div class="fuel-t0-confirm" data-t0-confirm hidden>
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" value="1" id="fuelT0ConfirmFull" name="confirm_mark_full">
-                            <label class="form-check-label" for="fuelT0ConfirmFull">
+                            <input class="form-check-input" type="checkbox" value="1" id="fuelT0ConfirmFull-<?= e($t0ModalKey) ?>" name="confirm_mark_full" data-t0-confirm-box>
+                            <label class="form-check-label" for="fuelT0ConfirmFull-<?= e($t0ModalKey) ?>">
                                 Alimentarea selectată este <strong>Parțială</strong>. Confirm transformarea ei în FULL pentru a o folosi ca T0.
                             </label>
                         </div>
                     </div>
 
-                    <label class="form-label mt-3" for="fuelT0Note">Notă (opțional)</label>
-                    <input type="text" class="form-control" id="fuelT0Note" name="note" maxlength="255"
+                    <label class="form-label mt-3" for="fuelT0Note-<?= e($t0ModalKey) ?>">Notă (opțional)</label>
+                    <input type="text" class="form-control" id="fuelT0Note-<?= e($t0ModalKey) ?>" name="note" maxlength="255"
                            placeholder="Motivul setării manuale">
                 <?php endif; ?>
             </div>
@@ -2156,6 +2357,7 @@ $donutStyle = static function (array $items): string {
         </form>
     </div>
 </div>
+<?php endforeach; ?>
 <?php endif; ?>
 
 <?php if ($canManageFull): ?>
@@ -3085,10 +3287,79 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // T0 manual: cere confirmare explicita cand alimentarea aleasa nu e FULL.
     // Nicio alimentare partiala nu devine FULL in tacere.
-    var t0Confirm = document.getElementById('fuelT0Confirm');
-    if (t0Confirm) {
-        var t0ConfirmBox = document.getElementById('fuelT0ConfirmFull');
-        document.querySelectorAll('#fuelT0Modal input[name="fillup_id"]').forEach(function (radio) {
+    // Consum normat: km GPS (SAS) pe intervalele T0 -> urmatorul FULL, cerute o
+    // singura data pentru toate lunile (acelasi interval apare in ambele tab-uri).
+    (function loadNormativeGpsKm() {
+        var holders = Array.prototype.slice.call(document.querySelectorAll('[data-gps-from][data-gps-to]'));
+        if (holders.length === 0) {
+            return;
+        }
+        var keyOf = function (el) { return el.getAttribute('data-gps-from') + '|' + el.getAttribute('data-gps-to'); };
+        var intervals = [];
+        holders.forEach(function (el) {
+            if (intervals.indexOf(keyOf(el)) === -1) {
+                intervals.push(keyOf(el));
+            }
+        });
+        var fmt = function (value, digits) {
+            return Number(value).toLocaleString('ro-RO', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+        };
+        var fill = function (el, kmText, l100Text) {
+            var kmCell = el.querySelector('[data-gps-km]');
+            var l100Cell = el.querySelector('[data-gps-l100]');
+            if (kmCell) { kmCell.innerHTML = kmText; }
+            if (l100Cell) { l100Cell.innerHTML = l100Text; }
+        };
+        var params = new URLSearchParams();
+        params.set('vehicle', holders[0].getAttribute('data-gps-vehicle') || '');
+        intervals.forEach(function (key) {
+            var parts = key.split('|');
+            params.append('from[]', parts[0]);
+            params.append('to[]', parts[1]);
+        });
+        var endpoint = <?= json_encode(build_query_url(['page' => 'carburanti', 'action' => 'normative_gps_km']), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) ?>;
+        var minL100 = <?= json_encode(FuelModel::MIN_PLAUSIBLE_L100) ?>;
+        var maxL100 = <?= json_encode(FuelModel::MAX_PLAUSIBLE_L100) ?>;
+
+        fetch(endpoint + '&' + params.toString(), { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (!data || !data.ok || !Array.isArray(data.km)) {
+                    var reason = (data && data.error) ? data.error : 'GPS indisponibil';
+                    holders.forEach(function (el) { fill(el, '<span class="text-muted" title="' + reason.replace(/"/g, '&quot;') + '">n/a</span>', '—'); });
+                    return;
+                }
+                holders.forEach(function (el) {
+                    var km = data.km[intervals.indexOf(keyOf(el))];
+                    var liters = parseFloat(el.getAttribute('data-gps-liters') || '0');
+                    if (km === null || km === undefined || !(km > 0)) {
+                        fill(el, '<span class="text-muted">fără date</span>', '—');
+                        return;
+                    }
+                    var l100 = '—';
+                    if (liters > 0) {
+                        var value = liters / km * 100;
+                        // Aceeasi garda de plauzibilitate ca la consumul din alimentari.
+                        l100 = value >= minL100 && value <= maxL100
+                            ? '<span class="text-success">' + fmt(value, 2) + ' L/100 km</span>'
+                            : '<span class="text-warning" title="În afara intervalului plauzibil ' + minL100 + '–' + maxL100 + ' L/100 km: interval prea scurt sau FULL marcat greșit">'
+                                + fmt(value, 2) + ' L/100 km <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span>';
+                    }
+                    fill(el, fmt(km, 0) + ' km', l100);
+                });
+            })
+            .catch(function () {
+                holders.forEach(function (el) { fill(el, '<span class="text-muted">n/a</span>', '—'); });
+            });
+    })();
+
+    document.querySelectorAll('.fuel-t0-modal').forEach(function (t0Modal) {
+        var t0Confirm = t0Modal.querySelector('[data-t0-confirm]');
+        if (!t0Confirm) {
+            return;
+        }
+        var t0ConfirmBox = t0Modal.querySelector('[data-t0-confirm-box]');
+        t0Modal.querySelectorAll('input[name="fillup_id"]').forEach(function (radio) {
             radio.addEventListener('change', function () {
                 var needsConfirm = radio.checked && radio.getAttribute('data-is-full') !== '1';
                 t0Confirm.hidden = !needsConfirm;
@@ -3100,7 +3371,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             });
         });
-    }
+    });
 
     var modalElement = document.getElementById('fuelLinkModal');
     var fillupIdInput = document.getElementById('fuelLinkFillupId');

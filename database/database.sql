@@ -1086,6 +1086,7 @@ INSERT INTO categorii_cheltuieli_curse (nume, descriere, activ, legacy_key, crea
 ('Diurna', 'Categorie implicita pentru cheltuieli curse.', 1, 'diurna', NOW(), NOW()),
 ('Reparatii', 'Categorie implicita pentru cheltuieli curse.', 1, 'service', NOW(), NOW()),
 ('Alte cheltuieli', 'Categorie implicita pentru cheltuieli curse.', 1, 'alte', NOW(), NOW()),
+('Toll', 'Categorie implicita pentru cheltuieli curse.', 1, 'toll', NOW(), NOW()),
 ('Cazare', 'Cheltuieli de cazare sofer. Se introduc pe pagina Cazare si se asociaza automat la cursa.', 1, NULL, NOW(), NOW());
 
 -- Registrul de cazari: se introduce pe Data / Sofer / Total / Total cu TVA, iar
@@ -1132,7 +1133,7 @@ CREATE TABLE cheltuieli_cazare_documente (
 CREATE TABLE curse_cheltuieli (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     cursa_id INT UNSIGNED NOT NULL,
-    tip_cheltuiala ENUM('motorina', 'taxa_acces', 'port', 'trece', 'taxe_drum', 'diurna', 'service', 'alte') NOT NULL,
+    tip_cheltuiala ENUM('motorina', 'taxa_acces', 'port', 'trece', 'taxe_drum', 'diurna', 'service', 'alte', 'toll') NOT NULL,
     categorie_id INT UNSIGNED NULL,
     -- Setat doar pe randurile-oglinda generate de modulul Cazare; NU se editeaza
     -- din Dispecer curse (sursa de adevar este tabelul cheltuieli_cazare).
@@ -1141,7 +1142,7 @@ CREATE TABLE curse_cheltuieli (
     locatie VARCHAR(190) NULL,
     bucati DECIMAL(12,2) NULL,
     pret_unitar DECIMAL(12,2) NULL,
-    refacturare_tip_cheltuiala ENUM('motorina', 'taxa_acces', 'port', 'trece', 'taxe_drum', 'diurna', 'service', 'alte') NULL,
+    refacturare_tip_cheltuiala ENUM('motorina', 'taxa_acces', 'port', 'trece', 'taxe_drum', 'diurna', 'service', 'alte', 'toll') NULL,
     refacturare_locatie VARCHAR(190) NULL,
     refacturare_bucati DECIMAL(12,2) NULL,
     refacturare_pret_unitar DECIMAL(12,2) NULL,

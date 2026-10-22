@@ -432,17 +432,24 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
 
     // Din Km pierduti (prefill=service): vehiculul si perioada rulata fara cursa vin in URL;
     // formularul se deschide precompletat, iar km se calculeaza din GPS ca la o modificare manuala.
-    var query = new URLSearchParams(window.location.search);
-    if (query.get('prefill') === 'service' && query.get('vehicle_id')) {
-        var prefill = { id: '', vehicle_id: query.get('vehicle_id'), driver_id: driverMap[query.get('vehicle_id')] ? String(driverMap[query.get('vehicle_id')]) : '', km: '' };
+    // Acelasi lucru din cardul "Km pierduti" de pe pagina (dispatcher-insights.js), fara reincarcare.
+    function prefillFrom(source) {
+        var vehicleId = String(source.vehicle_id || '');
+        if (!vehicleId) { return false; }
+        var prefill = { id: '', vehicle_id: vehicleId, driver_id: driverMap[vehicleId] ? String(driverMap[vehicleId]) : '', km: '', service_nume: '', motiv: '', observatii: '' };
         ['data_plecare', 'ora_plecare', 'data_intoarcere', 'ora_intoarcere'].forEach(function (name) {
-            if (/^[\d:-]+$/.test(query.get(name) || '')) { prefill[name] = query.get(name); }
+            prefill[name] = /^[\d:-]+$/.test(source[name] || '') ? source[name] : '';
         });
         fill(prefill);
-        if (field('vehicle_id').value === prefill.vehicle_id) {
-            openForm();
-            fetchGpsKm();
-        }
+        if (field('vehicle_id').value !== vehicleId) { return false; }
+        openForm();
+        fetchGpsKm();
+        return true;
+    }
+    window.DispatcherServiceKm = { prefill: prefillFrom };
+    var query = new URLSearchParams(window.location.search);
+    if (query.get('prefill') === 'service') {
+        prefillFrom(Object.fromEntries(query.entries()));
     }
 
     panel.querySelectorAll('[data-service-km-delete-form]').forEach(function (deleteForm) {

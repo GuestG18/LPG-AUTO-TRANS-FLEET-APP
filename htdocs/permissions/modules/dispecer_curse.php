@@ -53,6 +53,10 @@ return [
         'service_km_gps'               => 'service_km',
         // Doar citire (km GPS SAS pe intervalul cursei), folosit de formularele de creare si editare.
         'trip_gps_km'                  => 'view',
+        // Cardul "Alimentari neasociate" de langa Adauga cursa (asocierea cere si carburanti.link).
+        'insights_fuel'                => 'view',
+        'insights_fuel_detail'         => 'view',
+        'insights_fuel_link'           => 'view',
         'save_expense'                 => 'expenses',
         'delete_expense'               => 'expenses',
         'update_expense_status'        => 'expenses',

@@ -175,6 +175,7 @@ Reguli:
   trece = taxa de pod sau de trecere (ex. Fetesti-Cernavoda, bac, vama);
   taxa_acces = taxa de acces / intrare (depozit, rafinarie, terminal, parcare platita);
   port = taxe portuare;
+  toll = taxa de drum / peaj de autostrada (ex. HU-GO, Toll Collect, Viapass, e-vigneta), alta decat pod sau bac;
   service = reparatii, piese, manopera, revizie;
   spalatorie = spalatorie auto;
   vulcanizare = vulcanizare, anvelope, echilibrare;

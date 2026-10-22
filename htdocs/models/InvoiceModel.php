@@ -40,6 +40,7 @@ class InvoiceModel extends BaseModel
         'trece' => ['label' => 'Trecere', 'tip_cheltuiala' => 'trece', 'categorie' => 'Trecere'],
         'taxa_acces' => ['label' => 'Taxa acces', 'tip_cheltuiala' => 'taxa_acces', 'categorie' => 'Taxa acces'],
         'port' => ['label' => 'Port', 'tip_cheltuiala' => 'port', 'categorie' => 'Port'],
+        'toll' => ['label' => 'Toll', 'tip_cheltuiala' => 'toll', 'categorie' => 'Toll'],
         'service' => ['label' => 'Reparatii', 'tip_cheltuiala' => 'service', 'categorie' => 'Reparatii'],
         'spalatorie' => ['label' => 'Spalatorie', 'tip_cheltuiala' => 'alte', 'categorie' => 'Spalatorie'],
         'vulcanizare' => ['label' => 'Vulcanizare', 'tip_cheltuiala' => 'alte', 'categorie' => 'Vulcanizare'],
@@ -229,6 +230,7 @@ class InvoiceModel extends BaseModel
         'trece' => ['trecere', 'treceri', 'trece', 'pod', 'poduri', 'bac'],
         'taxa_acces' => ['taxa acces', 'taxe acces', 'taxa de acces', 'taxe de acces', 'acces'],
         'port' => ['port', 'porturi', 'taxa port', 'taxe port', 'taxe portuare'],
+        'toll' => ['toll', 'tolls', 'peaj', 'peaje', 'autostrada', 'taxa drum', 'taxe drum', 'taxa de drum', 'taxe de drum'],
         'service' => ['reparatii', 'reparatie', 'service', 'piese', 'revizie', 'revizii'],
         'spalatorie' => ['spalatorie', 'spalatorii', 'spalare', 'spalari'],
         'vulcanizare' => ['vulcanizare', 'vulcanizari', 'anvelope', 'cauciucuri'],
@@ -1701,7 +1703,7 @@ class InvoiceModel extends BaseModel
     // -------------------------------------------------------------------------
 
     /** Taxele care in curse_cheltuieli se tin ca bucati x pret unitar, cu locatie. */
-    private const TOLL_EXPENSE_TYPES = ['taxa_acces', 'port', 'trece'];
+    private const TOLL_EXPENSE_TYPES = ['taxa_acces', 'port', 'trece', 'toll'];
 
     /**
      * Aduce randul din curse_cheltuieli in sincron cu factura: il creeaza / muta /

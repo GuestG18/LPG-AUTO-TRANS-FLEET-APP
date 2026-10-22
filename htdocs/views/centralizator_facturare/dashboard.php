@@ -156,7 +156,8 @@ $tripDetailValue = static function (array $row, array $col) use ($fmtMoney, $fmt
     return trim((string) $value) !== '' ? (string) $value : '-';
 };
 
-$renderTripDetails = static function (array $rows, array $columns) use ($tripDetailValue): string {
+/* $footerRow: un rand <tr> optional, afisat ca <tfoot> (totalul unui grup de facturare). */
+$renderTripDetails = static function (array $rows, array $columns, string $footerRow = '') use ($tripDetailValue): string {
     ob_start();
     ?>
     <div class="cf-trip-detail">
@@ -178,6 +179,7 @@ $renderTripDetails = static function (array $rows, array $columns) use ($tripDet
                     <?php endforeach; ?>
                 <?php endif; ?>
                 </tbody>
+                <?php if ($footerRow !== ''): ?><tfoot><?= $footerRow ?></tfoot><?php endif; ?>
             </table>
         </div>
     </div>
@@ -330,20 +332,70 @@ $renderRefundPanel = static function (array $lines, string $title, string $idBas
         . '</table></div>';
 };
 
-$renderTypeRoutes = static function (string $type, array $routes, string $groupBy = 'route', array $leftoverRefunds = [], array $priceSplit = []) use ($fmt, $fmtSmart, $fmtMoney, $renderBillingCalc, $renderComponentCalc, $renderRefundToggle, $renderRefundPanel, $filters): string {
+/* Avertizarea de calcul: duce la cursele cu problema in Dispecer curse, cand exista acces. */
+$calcWarnIcon = static function (string $title, string $href = ''): string {
+    $icon = '<i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>';
+
+    return $href !== ''
+        ? ' <a class="cf-calc-warn is-link" href="' . e($href) . '" title="' . e($title . ' Click: deschide în Dispecer curse.') . '" aria-label="' . e($title) . '">' . $icon . '</a>'
+        : ' <span class="cf-calc-warn" title="' . e($title) . '">' . $icon . '</span>';
+};
+
+/*
+ * Celula "Calcul facturare" a unui grup de facturare (ruta sau tarif), comuna pentru
+ * "Activitati pe tipuri de transport" si pentru grupurile unui vehicul din
+ * "Activitate pe vehicule - Detaliat": componentele adunate sau cantitate x pret,
+ * cu avertizarea pentru cursele a caror valoare difera de recalculare.
+ */
+$renderGroupCalc = static function (array $group, string $label) use ($renderComponentCalc, $renderBillingCalc, $calcWarnIcon, $filters): string {
+    $groupCalc = $renderComponentCalc((array) ($group['components'] ?? []));
+    $missingCount = (int) ($group['missing_count'] ?? 0);
+    if ($groupCalc === '' && !empty($group['component_billing'])) {
+        $groupCalc = 'calcul indisponibil';
+    } elseif ($groupCalc !== '' && $missingCount > 0) {
+        /* Calculul adunat acopera doar cursele reconstituite; restul sunt semnalate. */
+        $groupCalc .= ' + ' . $missingCount . ($missingCount === 1 ? ' cursă' : ' curse') . ' fără calcul';
+    }
+    $differsCount = (int) ($group['differs_count'] ?? 0);
+    $groupWarn = '';
+    if ($differsCount > 0) {
+        $differIds = [];
+        foreach ((array) ($group['trip_rows'] ?? []) as $trip) {
+            if (!empty($trip['differs']) && (int) ($trip['trip_id'] ?? 0) > 0) {
+                $differIds[] = (int) $trip['trip_id'];
+            }
+        }
+        $groupWarn = $calcWarnIcon(
+            $differsCount . ($differsCount === 1 ? ' cursă are' : ' curse au') . ' valoarea salvată diferită de recalcularea cu tarifele din data cursei.',
+            can_route('dispecer_curse') && $differIds !== [] ? build_query_url([
+                'page' => 'dispecer_curse',
+                'ids' => implode(',', $differIds),
+                'ids_label' => 'cursele cu valoare diferită de recalculare - ' . $label . ', ' . (string) ($filters['month_label'] ?? ''),
+            ]) : ''
+        );
+    }
+    $isAverage = !empty($group['rate_multiple']);
+    $calcTitle = $isAverage ? ' title="Preț mediu: cursele rutei au prețuri diferite"' : '';
+    $calcContent = e($groupCalc !== '' ? $groupCalc : $renderBillingCalc($group['quantity'] ?? 0, (string) ($group['unit'] ?? ''), $group['rate'] ?? null, $isAverage)) . $groupWarn;
+
+    return '<td class="cf-calc"' . $calcTitle . '>' . $calcContent . '</td>';
+};
+
+/* Ruta (cod + eticheta) sau, la gruparea pe tarif, tariful + codurile rutelor lui. */
+$renderGroupLabel = static function (array $group, bool $byPrice): string {
+    return $byPrice
+        ? e((string) ($group['label'] ?? '-')) . ' <span class="cf-route-codes">' . e(implode(', ', (array) ($group['route_codes'] ?? []))) . '</span>'
+        : '<span class="cf-route-code">' . e((string) ($group['short'] ?? '')) . '</span>' . e((string) ($group['label'] ?? '-'));
+};
+
+$renderTypeRoutes = static function (string $type, array $routes, string $groupBy = 'route', array $leftoverRefunds = [], array $priceSplit = []) use ($fmt, $fmtSmart, $fmtMoney, $renderBillingCalc, $renderComponentCalc, $renderRefundToggle, $renderRefundPanel, $calcWarnIcon, $renderGroupCalc, $renderGroupLabel, $filters): string {
     /*
      * Avertizarea de calcul duce la cursele cu problema, in Dispecer curse (unde se
      * corecteaza tariful / valoarea): pe grup lista exacta a curselor, pe cursa cursa ei.
      * Fara acces la Dispecer curse ramane doar iconita cu explicatia.
      */
     $canOpenTrips = can_route('dispecer_curse');
-    $warnIcon = static function (string $title, string $href = ''): string {
-        $icon = '<i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>';
-
-        return $href !== ''
-            ? ' <a class="cf-calc-warn is-link" href="' . e($href) . '" title="' . e($title . ' Click: deschide în Dispecer curse.') . '" aria-label="' . e($title) . '">' . $icon . '</a>'
-            : ' <span class="cf-calc-warn" title="' . e($title) . '">' . $icon . '</span>';
-    };
+    $warnIcon = $calcWarnIcon;
     $byPrice = $groupBy === 'price';
     $idPrefix = 'cf_route_trips_' . preg_replace('/[^A-Za-z0-9_-]+/', '_', $type) . '_';
     $html = '<div class="cf-breakdown"><div class="cf-type-routes"><table class="cf-table">'
@@ -520,47 +572,16 @@ $renderTypeRoutes = static function (string $type, array $routes, string $groupB
         $short = (string) ($route['short'] ?? '');
         $label = (string) ($route['label'] ?? '-');
         $unit = (string) ($route['unit'] ?? '');
-        $isAverage = !empty($route['rate_multiple']);
         $tripsId = $idPrefix . preg_replace('/[^A-Za-z0-9_-]+/', '_', (string) ($route['key'] ?? ''));
-        $groupCalc = $renderComponentCalc((array) ($route['components'] ?? []));
-        $missingCount = (int) ($route['missing_count'] ?? 0);
-        if ($groupCalc === '' && !empty($route['component_billing'])) {
-            $groupCalc = 'calcul indisponibil';
-        } elseif ($groupCalc !== '' && $missingCount > 0) {
-            /* Calculul adunat acopera doar cursele reconstituite; restul sunt semnalate. */
-            $groupCalc .= ' + ' . $missingCount . ($missingCount === 1 ? ' cursă' : ' curse') . ' fără calcul';
-        }
-        $differsCount = (int) ($route['differs_count'] ?? 0);
-        $groupWarn = '';
-        if ($differsCount > 0) {
-            $differIds = [];
-            foreach ((array) ($route['trip_rows'] ?? []) as $trip) {
-                if (!empty($trip['differs']) && (int) ($trip['trip_id'] ?? 0) > 0) {
-                    $differIds[] = (int) $trip['trip_id'];
-                }
-            }
-            $groupWarn = $warnIcon(
-                $differsCount . ($differsCount === 1 ? ' cursă are' : ' curse au') . ' valoarea salvată diferită de recalcularea cu tarifele din data cursei.',
-                $canOpenTrips && $differIds !== [] ? build_query_url([
-                    'page' => 'dispecer_curse',
-                    'ids' => implode(',', $differIds),
-                    'ids_label' => 'cursele cu valoare diferită de recalculare - ' . $label . ', ' . (string) ($filters['month_label'] ?? ''),
-                ]) : ''
-            );
-        }
-        $groupCell = $byPrice
-            ? e($label) . ' <span class="cf-route-codes">' . e(implode(', ', (array) ($route['route_codes'] ?? []))) . '</span>'
-            : '<span class="cf-route-code">' . e($short) . '</span>' . e($label);
+        $groupCell = $renderGroupLabel($route, $byPrice);
         $routeRefunds = (array) ($route['refunds'] ?? []);
         /* Tinta separata de cea a curselor, ca cele doua sectiuni sa se deschida independent. */
         $refundsId = 'reinvoice-details-' . preg_replace('/[^A-Za-z0-9_-]+/', '_', $type . '-' . (string) ($route['key'] ?? ''));
         $tripsCell = '<td class="is-number">' . e($fmtSmart($route['trips'] ?? 0, 0)) . '</td>';
-        $calcTitle = $isAverage ? ' title="Preț mediu: cursele rutei au prețuri diferite"' : '';
-        $calcContent = e($groupCalc !== '' ? $groupCalc : $renderBillingCalc($route['quantity'] ?? 0, $unit, $route['rate'] ?? null, $isAverage)) . $groupWarn;
 
         $html .= '<tr class="cf-vehicle-parent" data-vehicle-row>'
             . '<td class="cf-expand-cell"><button class="cf-expand-btn" type="button" aria-expanded="false" aria-controls="' . e($tripsId) . '" aria-label="Curse ' . e($label) . '" data-vehicle-toggle><i class="bi bi-chevron-right" aria-hidden="true"></i></button></td>'
-            . '<td class="cf-calc"' . $calcTitle . '>' . $calcContent . '</td><td>' . $groupCell . '</td>' . $tripsCell
+            . $renderGroupCalc($route, $label) . '<td>' . $groupCell . '</td>' . $tripsCell
             . '<td class="is-number">' . e($fmtMoney($route['value'] ?? 0)) . '</td>'
             . '<td class="cf-expand-cell">' . ($routeRefunds !== [] ? $renderRefundToggle($refundsId, 'Refacturări ' . $label) : '') . '</td>'
             . '</tr>'
@@ -643,6 +664,88 @@ $renderVehicleBreakdown = static function (array $activity, array $extra, string
         . $renderStatTiles($activity, $extra)
         . $tripsHtml
         . '</div>';
+};
+
+/*
+ * Nivelul "rezumat calcul facturare" al unui vehicul din "Activitate pe vehicule -
+ * Detaliat": aceleasi randuri ca la desfasurarea unui tip de transport (calcul, tarif /
+ * ruta, curse, valoare, refacturari), dar doar cu cursele vehiculului. Fiecare rand
+ * deschide, sub el, tabelul de curse existent al vehiculului, filtrat pe cursele grupului.
+ */
+$renderVehicleBillingGroups = static function (array $groups, string $idBase, array $detailRows, array $detailColumns) use ($fmtSmart, $fmtMoney, $fmtKm, $fmtTone, $renderGroupCalc, $renderGroupLabel, $renderRefundToggle, $renderRefundPanel, $renderTripDetails): string {
+    /* Un vehicul cu mai multe tipuri de transport: punctul tipului arata de unde vine grupul. */
+    $mixedTypes = count(array_unique(array_column($groups, 'type'))) > 1;
+    /*
+     * Totalul grupului, ca rand <tfoot> al tabelului lui de curse: aliniat pe aceleasi
+     * coloane, adunat din valorile numerice ale curselor grupului (nu din textul afisat).
+     * Primele coloane (pana la prima coloana numerica) poarta eticheta: ruta sau tariful
+     * grupului si numarul de curse. Refacturarile nu intra, ca si in randul grupului.
+     */
+    $renderGroupFooter = static function (array $group, array $trips) use ($detailColumns, $fmtSmart, $fmtMoney, $fmtKm, $fmtTone): string {
+        $labelSpan = 0;
+        foreach ($detailColumns as $col) {
+            if (($col['align'] ?? '') === 'right') {
+                break;
+            }
+            $labelSpan++;
+        }
+        $labelSpan = max(1, $labelSpan);
+        $context = ($group['group_by'] ?? 'route') === 'price'
+            ? trim((string) ($group['label'] ?? '-') . ' · ' . implode(', ', (array) ($group['route_codes'] ?? [])), ' ·')
+            : (string) ($group['label'] ?? '-');
+        $count = count($trips);
+        $sum = static fn (string $key): float => array_sum(array_map(static fn (array $trip): float => (float) ($trip[$key] ?? 0), $trips));
+
+        $cells = '<td colspan="' . $labelSpan . '"><span class="cf-group-total-label">TOTAL</span> — ' . e($context)
+            . ' <span class="cf-group-total-trips">' . e($fmtSmart($count, 0) . ($count === 1 ? ' cursă' : ' curse')) . '</span></td>';
+        foreach (array_slice($detailColumns, $labelSpan) as $col) {
+            $key = (string) ($col['key'] ?? '');
+            $class = ($col['align'] ?? '') === 'right' ? ' class="is-number"' : '';
+            $text = match ($key) {
+                'km' => $fmtKm($sum('km')),
+                'tone' => $fmtTone($sum('tone')),
+                'value' => $fmtMoney(round($sum('value'), 2)),
+                'compressor_activity_label' => $sum('compressor_activity') > 0
+                    ? $fmtSmart($sum('compressor_activity'), 2) . ' ' . (string) ($trips[0]['compressor_unit'] ?? '')
+                    : '-',
+                default => '',
+            };
+            $cells .= '<td' . $class . '>' . e($text) . '</td>';
+        }
+
+        return '<tr class="cf-group-total">' . $cells . '</tr>';
+    };
+    $html = '<div class="cf-breakdown cf-vehicle-billing"><div class="cf-type-routes"><table class="cf-table"><tbody>';
+    foreach ($groups as $group) {
+        $label = (string) ($group['label'] ?? '-');
+        /* Id stabil din cheia grupului (tip + ruta / tarif), nu din pozitia lui. */
+        $groupId = $idBase . '__' . preg_replace('/[^A-Za-z0-9_-]+/', '_', (string) ($group['key'] ?? ''));
+        $refunds = (array) ($group['refunds'] ?? []);
+        $refundsId = 'reinvoice-details-' . $groupId;
+        $tripKeys = array_flip((array) ($group['trip_keys'] ?? []));
+        $groupTrips = array_values(array_filter($detailRows, static fn (array $trip): bool => isset($tripKeys[(string) ($trip['type'] ?? '') . ':' . (int) ($trip['trip_id'] ?? 0)])));
+        /* Direct tabelul de curse (ruta e deja pe randul grupului si in coloana Rută), cu totalul grupului dedesubt. */
+        $tripsHtml = $renderTripDetails($groupTrips, $detailColumns, $groupTrips !== [] ? $renderGroupFooter($group, $groupTrips) : '');
+        $typeDot = $mixedTypes
+            ? '<span class="cf-dot" style="--dot: ' . e((string) ($group['color'] ?? '#2f7df4')) . '" title="' . e((string) ($group['type_label'] ?? '')) . '"></span>'
+            : '';
+
+        $html .= '<tr class="cf-vehicle-parent" data-vehicle-row>'
+            . '<td class="cf-expand-cell"><button class="cf-expand-btn" type="button" aria-expanded="false" aria-controls="' . e($groupId) . '" aria-label="Curse ' . e($label) . '" data-vehicle-toggle data-nested-toggle><i class="bi bi-chevron-right" aria-hidden="true"></i></button></td>'
+            . $renderGroupCalc($group, $label)
+            . '<td>' . $typeDot . $renderGroupLabel($group, ($group['group_by'] ?? 'route') === 'price') . '</td>'
+            . '<td class="is-number">' . e($fmtSmart($group['trips'] ?? 0, 0)) . '</td>'
+            . '<td class="is-number">' . e($fmtMoney($group['value'] ?? 0)) . '</td>'
+            . '<td class="cf-expand-cell">' . ($refunds !== [] ? str_replace('data-vehicle-toggle', 'data-vehicle-toggle data-nested-toggle', $renderRefundToggle($refundsId, 'Refacturări ' . $label)) : '') . '</td>'
+            . '</tr>'
+            . '<tr class="cf-vehicle-detail-row" id="' . e($groupId) . '" hidden><td colspan="6" class="cf-trip-detail-cell">' . $tripsHtml . '</td></tr>';
+        if ($refunds !== []) {
+            $html .= '<tr class="cf-vehicle-detail-row cf-refund-detail-row" id="' . e($refundsId) . '" hidden>'
+                . '<td colspan="6" class="cf-trip-detail-cell">' . $renderRefundPanel($refunds, 'Refacturări', $refundsId) . '</td></tr>';
+        }
+    }
+
+    return $html . '</tbody></table></div></div>';
 };
 
 /*
@@ -1789,10 +1892,42 @@ a.cf-calc-warn.is-link:focus-visible {
  * lat de pe primul nivel. In sectiunile imbricate (curse) ar mosteni latimea
  * tabelului exterior si continutul s-ar taia in stanga.
  */
-.cf-type-routes .cf-trip-detail-cell > .cf-breakdown {
+.cf-type-routes .cf-trip-detail-cell > .cf-breakdown,
+.cf-type-routes .cf-trip-detail-cell > .cf-trip-detail {
     position: static;
     width: auto;
 }
+/*
+ * Grupurile de facturare ale unui vehicul (Activitate pe vehicule - Detaliat): randuri
+ * compacte direct sub vehicul, fara antet si fara card propriu, legate de vehicul
+ * printr-o linie fina in stanga.
+ */
+.cf-trip-detail-cell > .cf-breakdown.cf-vehicle-billing {
+    padding: 0 0 0 10px;
+    border-left: 0;
+    background: #fff;
+}
+.cf-vehicle-billing > .cf-type-routes {
+    border: 0;
+    border-left: 1px solid var(--cf-border);
+    border-radius: 0;
+}
+.cf-vehicle-billing > .cf-type-routes > .cf-table > tbody > tr.cf-vehicle-parent > td {
+    border-bottom: 1px solid var(--cf-border);
+}
+/* In compact tabelul vehiculelor e centrat; randurile de facturare raman ca in tabelul pe tipuri. */
+.cf-vehicle-billing > .cf-type-routes > .cf-table > tbody > tr.cf-vehicle-parent,
+.cf-vehicle-billing .cf-trip-table { text-align: left; }
+/* Totalul unui grup: randul <tfoot> al tabelului de curse, fundal discret. */
+.cf-trip-table tr.cf-group-total > td {
+    background: #f4f8fe;
+    border-top: 1px solid #cfdff3;
+    border-bottom: 0;
+    font-weight: 800;
+}
+.cf-group-total-label { font-weight: 900; }
+.cf-group-total-trips { margin-left: 6px; color: #51617f; font-size: 11px; font-weight: 800; }
+.cf-vehicle-billing .cf-dot { margin-right: 6px; }
 .cf-table-wrap {
     overflow-x: auto;
     border: 1px solid var(--cf-border);
@@ -1967,8 +2102,8 @@ a.cf-calc-warn.is-link:focus-visible {
     white-space: nowrap;
 }
 /* Indentarea subtila care separa nivelul vehicul de nivelul capacitate. */
-.cf-cap-body .cf-vehicle-parent > td:first-child { padding-left: 26px; }
-.cf-cap-body .cf-vehicle-parent > td:nth-child(2) {
+.cf-cap-body > .cf-vehicle-parent > td:first-child { padding-left: 26px; }
+.cf-cap-body > .cf-vehicle-parent > td:nth-child(2) {
     box-shadow: inset 2px 0 0 #dbe6f6;
     padding-left: 14px;
 }
@@ -2981,26 +3116,18 @@ a.cf-calc-warn.is-link:focus-visible {
             <?php if (!empty($visibility['vehicle_detail'])): ?>
                 <section class="cf-panel cf-vehicle-detail">
                     <?php
-                    /* In compact scoatem coloana de ruta din tabel: ajunge in randul expandat. */
-                    $detailColumns = (array) ($vehicleDetail['columns'] ?? []);
-                    if ($isCompact) {
-                        $detailColumns = array_values(array_filter(
-                            $detailColumns,
-                            static fn (array $col): bool => (string) ($col['key'] ?? '') !== 'route_summary'
-                        ));
-                    }
                     /*
-                     * Tabelul e grupat pe CATEGORIA de capacitate, deci primele doua coloane
-                     * au doua intelesuri: pe randul de grup arata categoria si numarul de
-                     * vehicule, pe randul de vehicul numarul de inmatriculare si capacitatea
-                     * tehnica reala (care poate diferi de numele categoriei).
+                     * Fara coloana de capacitate (numarul de vehicule al grupului sta langa
+                     * categorie); in compact scoatem si coloana de ruta: ajunge in randul expandat.
                      */
+                    $detailColumns = array_values(array_filter(
+                        (array) ($vehicleDetail['columns'] ?? []),
+                        static fn (array $col): bool => !in_array((string) ($col['key'] ?? ''), $isCompact ? ['capacity', 'route_summary'] : ['capacity'], true)
+                    ));
+                    /* Grupat pe CATEGORIA de capacitate: prima coloana e categoria sau vehiculul. */
                     $detailColumns = array_map(static function (array $col): array {
-                        $key = (string) ($col['key'] ?? '');
-                        if ($key === 'vehicle') {
+                        if ((string) ($col['key'] ?? '') === 'vehicle') {
                             $col['label'] = 'Categorie / Vehicul';
-                        } elseif ($key === 'capacity') {
-                            $col['label'] = 'Vehicule / Capacitate reala';
                         }
 
                         return $col;
@@ -3048,7 +3175,7 @@ a.cf-calc-warn.is-link:focus-visible {
                                             <?php $key = (string) ($col['key'] ?? ''); ?>
                                             <td class="<?= ($col['align'] ?? '') === 'right' ? 'is-number' : '' ?>">
                                                 <?php if ($key === 'toggle'): ?><button class="cf-expand-btn" type="button" aria-expanded="false" aria-controls="<?= e($groupId) ?>" data-cap-toggle><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
-                                                <?php elseif ($key === 'vehicle'): ?><span class="cf-cap-label"><?= e($groupLabel) ?></span>
+                                                <?php elseif ($key === 'vehicle'): ?><span class="cf-cap-label"><?= e($groupLabel) ?></span> <span class="cf-cap-count"><?= e($fmtSmart($vehicleCount, 0)) ?> <?= $vehicleCount === 1 ? 'vehicul' : 'vehicule' ?></span>
                                                 <?php elseif ($key === 'capacity'): ?><span class="cf-cap-count"><?= e($fmtSmart($vehicleCount, 0)) ?> <?= $vehicleCount === 1 ? 'vehicul' : 'vehicule' ?></span>
                                                 <?php elseif ($key === 'route_summary'): ?>-
                                                 <?php elseif ($key === 'value'): ?><?= e($fmtMoney($groupSums[$key] ?? 0)) ?>
@@ -3083,6 +3210,10 @@ a.cf-calc-warn.is-link:focus-visible {
                                         </tr>
                                         <tr class="cf-vehicle-detail-row" id="<?= e($detailId) ?>" hidden>
                                             <td colspan="<?= e((string) $detailColCount) ?>" class="cf-trip-detail-cell">
+                                                <?php $vehicleBillingGroups = (array) ($row['billing_groups'] ?? []); ?>
+                                                <?php if ($vehicleBillingGroups !== []): ?>
+                                                    <?= $renderVehicleBillingGroups($vehicleBillingGroups, $detailId, (array) ($row['detail_rows'] ?? []), (array) ($row['detail_columns'] ?? $vehicleTripColumns)) ?>
+                                                <?php else: ?>
                                                 <?php $tripsHtml = $renderTripDetails((array) ($row['detail_rows'] ?? []), (array) ($row['detail_columns'] ?? $vehicleTripColumns)); ?>
                                                 <?php if ($isCompact): ?>
                                                     <?= $renderVehicleBreakdown([], [
@@ -3090,6 +3221,7 @@ a.cf-calc-warn.is-link:focus-visible {
                                                     ], $tripsHtml) ?>
                                                 <?php else: ?>
                                                     <?= $tripsHtml ?>
+                                                <?php endif; ?>
                                                 <?php endif; ?>
                                             </td>
                                         </tr>
@@ -3395,7 +3527,8 @@ a.cf-calc-warn.is-link:focus-visible {
             return;
         }
         var note = panel.querySelector('[data-vehicle-filter-note]');
-        var totalRow = panel.querySelector('.cf-total-row');
+        /* Doar randurile tabelului principal: grupurile de facturare au tabelul lor in randul expandat. */
+        var totalRow = panel.querySelector('table.cf-grouped > tbody > tr.cf-total-row');
         var heads = Array.prototype.slice.call(panel.querySelectorAll('.cf-cap-head'));
 
         function bodyOf(head) {
@@ -3414,7 +3547,7 @@ a.cf-calc-warn.is-link:focus-visible {
                 var body = bodyOf(head);
                 var button = head.querySelector('[data-cap-toggle]');
                 var groupRow = head.querySelector('.cf-cap-group');
-                var rows = body ? Array.prototype.slice.call(body.querySelectorAll('tr.cf-vehicle-parent')) : [];
+                var rows = body ? Array.prototype.slice.call(body.querySelectorAll(':scope > tr.cf-vehicle-parent')) : [];
                 total += rows.length;
 
                 if (!filtering) {
@@ -3425,7 +3558,7 @@ a.cf-calc-warn.is-link:focus-visible {
                 }
 
                 /*
-                 * Cautam doar in celulele de identitate (capacitate, nr. inmatriculare),
+                 * Cautam doar in celulele de identitate (categorie, nr. inmatriculare),
                  * nu in tot randul: altfel "20" ar corespunde si unui "1.200 km".
                  */
                 var groupLabel = groupRow ? groupRow.querySelector('.cf-cap-label') : null;
@@ -3433,8 +3566,7 @@ a.cf-calc-warn.is-link:focus-visible {
                 var hits = 0;
                 rows.forEach(function (row) {
                     var plate = row.querySelector('.cf-vehicle-cell');
-                    var capacity = row.children[2];
-                    var identity = normalizeText((plate ? plate.textContent : '') + ' ' + (capacity ? capacity.textContent : ''));
+                    var identity = normalizeText(plate ? plate.textContent : '');
                     var hit = groupHit || identity.indexOf(query) !== -1;
                     row.hidden = !hit;
                     if (hit) {
