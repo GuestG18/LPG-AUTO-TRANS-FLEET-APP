@@ -26398,3 +26398,48 @@ body.fee-alarm-active {
         animation: none;
     }
 }
+
+/* Desfasurator curse incadrat pe pagina de editare (iframe ?embed=race, _race_embed_panel.php):
+   pagina din iframe are doar tabelul, pe fundal transparent; iframe-ul ia inaltimea continutului. */
+html:has(> body.is-embedded),
+body.is-embedded {
+    background: transparent;
+    min-height: 0;
+}
+body.is-embedded .embed-main {
+    padding: 2px 4px 4px;
+}
+/* Un singur rand: fara "Afisate 1 din 1 curse". */
+body.is-embedded .dispatcher-row-window {
+    display: none !important;
+}
+.dispatcher-races-embed-frame {
+    display: block;
+    width: calc(100% + 8px);
+    height: 190px;
+    margin: 0 -4px;
+    border: 0;
+}
+
+/* "Curse deja inregistrate" se strange din antet (pe editare porneste strans). */
+.race-day-panel-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+.race-day-panel-chevron {
+    font-size: 0.8em;
+    transition: transform 0.2s ease;
+}
+.race-day-panel-toggle[aria-expanded="false"] .race-day-panel-chevron {
+    transform: rotate(-90deg);
+}
+.race-day-panel:has(.race-day-panel-toggle[aria-expanded="false"]) > .card-header {
+    border-bottom: 0;
+}

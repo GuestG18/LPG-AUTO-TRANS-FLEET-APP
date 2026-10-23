@@ -26,7 +26,8 @@ class DriverWhatsAppConversationService
     public const ACTION_CONFIRMED = 'driver_app_confirmed';
     public const ACTION_SUPPORT = 'driver_support_requested';
 
-    public const MOVEMENT_PROMPT = 'Vă rugăm deschideți aplicația și verificați că sesiunea este activă.';
+    /** *...* = bold in WhatsApp. */
+    public const MOVEMENT_PROMPT = "*Bună ziua!*\nVehiculul dumneavoastră a înregistrat prima deplasare a zilei.\nVă rugăm să deschideți aplicația și să verificați dacă sesiunea este activă.";
     public const CONFIRMED_REPLY = 'Vă mulțumim! Confirmarea dumneavoastră a fost înregistrată.';
     public const ALREADY_CONFIRMED_REPLY = 'Confirmarea dumneavoastră pentru astăzi a fost deja înregistrată. Vă mulțumim!';
     public const SUPPORT_PROMPT = 'Vă rugăm să descrieți problema întâmpinată cu aplicația. Mesajul dumneavoastră va fi transmis echipei de suport.';
@@ -54,8 +55,9 @@ class DriverWhatsAppConversationService
     public static function movementOptions(): array
     {
         return [
-            ['id' => self::ACTION_CONFIRMED, 'title' => 'Am deschis aplicația'],
-            ['id' => self::ACTION_SUPPORT, 'title' => 'Am nevoie de ajutor'],
+            // Emoji-ul face parte din eticheta afisata; normalizeAction() il ignora la raspunsul scris.
+            ['id' => self::ACTION_CONFIRMED, 'title' => '✅ Am deschis aplicația'],
+            ['id' => self::ACTION_SUPPORT, 'title' => '🆘 Am nevoie de ajutor'],
         ];
     }
 

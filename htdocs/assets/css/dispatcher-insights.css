@@ -8,12 +8,57 @@
 .dispatcher-add-compact .input-group > .btn { padding-top: .2rem; padding-bottom: .2rem; }
 .dispatcher-add-compact .row.g-3 { --bs-gutter-y: .6rem; }
 
+/* Layout redimensionabil: formular | splitter | carduri (>= xl). Latimea coloanei vine din
+   --dins-side (px, setat din dispatcher-insights.js), limitata si in CSS ca sa nu se suprapuna nimic. */
+.dins-layout { --dins-form-min: 420px; --dins-side-min: 280px; --dins-card-min: 150px; display: flex; flex-direction: column; gap: 1rem; }
+.dins-layout-main { min-width: 0; container: dins-form / inline-size; }
+.dins-splitter { display: none; position: relative; touch-action: none; outline: none; -webkit-user-select: none; user-select: none; }
+.dins-grip { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border-radius: 999px; background: #cbd5e1; opacity: .35; transition: opacity .15s, background-color .15s, box-shadow .15s; }
+.dins-splitter--col { cursor: col-resize; }
+.dins-splitter--col .dins-grip { width: 5px; height: 44px; }
+.dins-splitter--row { cursor: row-resize; }
+.dins-splitter--row .dins-grip { width: 44px; height: 5px; }
+.dins-layout:hover .dins-grip { opacity: .6; }
+.dins-splitter:hover .dins-grip, .dins-splitter.is-dragging .dins-grip { opacity: 1; background: #3b82f6; }
+.dins-splitter:focus-visible .dins-grip { opacity: 1; background: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, .3); }
+html.dins-resizing-col, html.dins-resizing-col * { cursor: col-resize !important; -webkit-user-select: none !important; user-select: none !important; }
+html.dins-resizing-row, html.dins-resizing-row * { cursor: row-resize !important; -webkit-user-select: none !important; user-select: none !important; }
+
+@media (min-width: 1200px) {
+    .dins-layout {
+        display: grid; gap: 0;
+        grid-template-columns: minmax(var(--dins-form-min), 1fr) 1rem clamp(var(--dins-side-min), var(--dins-side, 33.333%), calc(100% - var(--dins-form-min) - 1rem));
+    }
+    .dins-splitter { display: block; }
+    /* Cardurile nu dicteaza inaltimea randului: ocupa exact inaltimea formularului. */
+    .dins-layout-side { position: relative; min-width: 0; min-height: calc(var(--dins-card-min) * 2 + 1rem); }
+    .dins-layout .dins-stack {
+        position: absolute; inset: 0; display: grid; gap: 0;
+        grid-template-rows: minmax(var(--dins-card-min), var(--dins-top-fr, 1fr)) 1rem minmax(var(--dins-card-min), var(--dins-bottom-fr, 1fr));
+    }
+    .dins-layout .dins-card { min-height: 0; }
+    .dins-layout .dins-card-body { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+    .dins-layout.is-resizing .dins-card { transform: none; transition: none; }
+}
+
+/* Campurile formularului se rearanjeaza dupa latimea lui reala, nu dupa viewport. */
+@container dins-form (max-width: 880px) {
+    .dispatcher-race-form .row.g-3 > [class*='col-md-6'].dispatcher-schedule-field { width: 25% !important; }
+}
+@container dins-form (max-width: 600px) {
+    .dispatcher-race-form .row.g-3 > [class*='col-md-6'] { width: 50% !important; }
+}
+@container dins-form (max-width: 380px) {
+    .dispatcher-race-form .row.g-3 > [class*='col-md-6'] { width: 100% !important; }
+}
+
 .dins-stack { display: flex; flex-direction: column; gap: 1rem; height: 100%; }
 .dins-card {
     flex: 1 1 0; min-height: 200px; display: flex; flex-direction: column; text-align: left; width: 100%;
     background: #fff; border: 0; border-radius: .6rem; padding: 1rem 1.1rem;
     box-shadow: 0 .125rem .25rem rgba(0, 0, 0, .075); position: relative; overflow: hidden;
     transition: transform .18s ease, box-shadow .18s ease; color: inherit;
+    container: dins-card / inline-size;
 }
 .dins-card::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--dins-accent); }
 .dins-card--km { --dins-accent: #dc3545; --dins-soft: #fdecee; }
@@ -39,6 +84,39 @@
 .dins-top .dins-bar > span { display: block; height: 100%; background: var(--dins-accent); opacity: .75; }
 .dins-top b { font-variant-numeric: tabular-nums; }
 .dins-hint { margin-top: auto; padding-top: .5rem; font-size: .75rem; color: #6c757d; }
+
+/* Topul vine cu pana la 6 randuri; cate se vad depinde de inaltimea cardului (data-dins-rows, ResizeObserver). */
+.dins-top li:nth-child(n+4) { display: none; }
+.dins-card[data-dins-rows="4"] .dins-top li:nth-child(-n+4),
+.dins-card[data-dins-rows="5"] .dins-top li:nth-child(-n+5),
+.dins-card[data-dins-rows="6"] .dins-top li:nth-child(-n+6) { display: grid; }
+.dins-card[data-dins-size="short"] .dins-card-body { margin-top: .5rem; }
+.dins-card[data-dins-size="short"] .dins-top { margin-top: .45rem; gap: .25rem; }
+.dins-card[data-dins-size="short"] .dins-hint { display: none; }
+.dins-card[data-dins-size="tall"] .dins-card-body { margin-top: 1rem; }
+.dins-card[data-dins-size="tall"] .dins-top { margin-top: 1rem; gap: .5rem; }
+
+/* Card ingust: aceleasi informatii, spatiere mai mica, textul secundar se rupe pe randuri. */
+@container dins-card (max-width: 330px) {
+    .dins-card-head { gap: .45rem; }
+    .dins-chip { width: 1.8rem; height: 1.8rem; }
+    .dins-card-title { font-size: .92rem; }
+    .dins-big { font-size: 1.45rem; }
+    .dins-big small { display: block; margin-top: .2rem; font-size: .78rem; }
+    .dins-sub { font-size: .75rem; }
+    .dins-top { font-size: .78rem; }
+    .dins-top li { grid-template-columns: minmax(0, 5.2rem) 1fr auto; gap: .4rem; }
+}
+/* Card lat: etichetele lungi au loc, barele si valorile se distribuie pe latime. */
+@container dins-card (min-width: 460px) {
+    .dins-top { font-size: .85rem; }
+    .dins-top li { grid-template-columns: 8.5rem 1fr minmax(3.5rem, auto); gap: .75rem; }
+    .dins-top b { text-align: right; }
+}
+@container dins-card (min-width: 620px) {
+    .dins-big { font-size: 2rem; }
+    .dins-top li { grid-template-columns: 11rem 1fr minmax(4rem, auto); gap: 1rem; }
+}
 
 /* Panoul extins: porneste exact peste card si creste pana la centrul ecranului. */
 .dins-backdrop { position: fixed; inset: 0; background: rgba(16, 24, 40, .45); opacity: 0; transition: opacity .32s ease; z-index: 1055; }

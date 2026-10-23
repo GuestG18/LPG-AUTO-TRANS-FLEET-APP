@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../models/DriverWhatsAppModel.php';
 require_once __DIR__ . '/../services/DriverWhatsAppConversationService.php';
 require_once __DIR__ . '/../services/DriverFirstMovementService.php';
+require_once __DIR__ . '/../services/ApprovalWhatsAppService.php';
 
 /**
  * API server-to-server pentru BaileyBot (whatsapp-agent-lab), fara sesiune de browser.
@@ -42,6 +43,16 @@ class WhatsAppBotApiController
 
             switch ($route) {
                 case 'v1/outbox/claim':
+                    // Solicitarile de aprobare noi intra in coada inainte de revendicare (fara cron separat).
+                    $approvals = new ApprovalWhatsAppService($this->db(), $model);
+                    if (ApprovalWhatsAppService::config()['enabled']) {
+                        try {
+                            $approvals->ensureSchema();
+                            $approvals->enqueuePending();
+                        } catch (Throwable $exception) {
+                            error_log('[whatsapp_bot_api][approvals] ' . $exception->getMessage());
+                        }
+                    }
                     $claim = $model->claimOutbox((int) ($input['limit'] ?? 5));
                     $this->sendJson(['success' => true] + $claim);
                     // no break: sendJson iese
@@ -57,6 +68,23 @@ class WhatsAppBotApiController
                     $this->sendJson(['success' => $ok, 'error' => $ok ? null : 'lock_lost'], $ok ? 200 : 409);
                     // no break
                 case 'v1/inbound':
+                    $message = [
+                        'wa_message_id' => (string) ($input['wa_message_id'] ?? ''),
+                        'phone' => (string) ($input['phone'] ?? ''),
+                        'kind' => in_array($input['kind'] ?? '', ['text', 'button', 'media', 'other'], true) ? (string) $input['kind'] : 'other',
+                        'action_id' => isset($input['action_id']) ? mb_substr((string) $input['action_id'], 0, 40) : null,
+                        'text' => isset($input['text']) ? mb_substr((string) $input['text'], 0, 4000) : null,
+                        'received_at' => isset($input['received_at']) ? (string) $input['received_at'] : null,
+                    ];
+                    // Aprobarile au ID-uri proprii (approval:123:approve) sau "APROB 123": nu se confunda cu soferii.
+                    $approvals = new ApprovalWhatsAppService($this->db(), $model);
+                    if ($approvals->isApprovalMessage($message)) {
+                        $approvals->ensureSchema();
+                        $result = $approvals->handleInbound($message);
+                        if ($result['handled']) {
+                            $this->sendJson(['success' => true] + $result);
+                        }
+                    }
                     $service = new DriverWhatsAppConversationService($this->db(), $model);
                     $this->sendJson(['success' => true] + $service->handleInbound([
                         'wa_message_id' => (string) ($input['wa_message_id'] ?? ''),

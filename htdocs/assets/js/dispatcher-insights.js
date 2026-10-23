@@ -140,7 +140,8 @@
             + '<span class="dins-sub">' + ranked.length + ' vehicule · ' + roDate(kmState.start) + ' – ' + roDate(kmState.end)
             + (pct < 100 ? ' · GPS ' + kmState.loaded + '/' + kmState.total : '') + '</span>'
             + (pct < 100 ? '<span class="dins-progress"><span style="width:' + pct + '%"></span></span>' : '');
-        html += '<ul class="dins-top">' + ranked.slice(0, 3).map(function (v) {
+        // Pana la 6 randuri; CSS-ul arata cate incap in inaltimea cardului (data-dins-rows).
+        html += '<ul class="dins-top">' + ranked.slice(0, 6).map(function (v) {
             return '<li><span class="text-truncate fw-semibold">' + esc(v.plate) + '</span><span class="dins-bar"><span style="width:'
                 + Math.max(4, kmLost(v) / max * 100).toFixed(1) + '%"></span></span><b>' + km(kmLost(v)) + '</b></li>';
         }).join('') + '</ul>';
@@ -291,7 +292,7 @@
         var max = byPlate[plates[0]];
         fuelBody.innerHTML = '<span class="dins-big">' + items.length + ' <small>alimentări fără cursă</small></span>'
             + '<span class="dins-sub">' + km(liters) + ' L carburant · ' + NF.format(Math.round(value)) + ' lei · ' + plates.length + ' vehicule</span>'
-            + '<ul class="dins-top">' + plates.slice(0, 3).map(function (p) {
+            + '<ul class="dins-top">' + plates.slice(0, 6).map(function (p) {
                 return '<li><span class="text-truncate fw-semibold">' + esc(p) + '</span><span class="dins-bar"><span style="width:' + (byPlate[p] / max * 100).toFixed(1) + '%"></span></span><b>' + byPlate[p] + '</b></li>';
             }).join('') + '</ul>'
             + '<span class="dins-hint"><i class="bi bi-hand-index me-1"></i>Click pentru motiv și asociere cu o cursă / Km service</span>';
@@ -437,4 +438,210 @@
     // Datele vin dupa randarea paginii, ca Desfasuratorul sa nu astepte SAS / CardOil.
     function start() { setTimeout(function () { loadFuel(); loadKm(); }, 600); }
     if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', start); } else { start(); }
+})();
+
+/**
+ * Layout redimensionabil: splitter vertical formular | carduri si splitter orizontal intre cele doua
+ * carduri. Pozitiile se salveaza in localStorage (dublu-click / Enter = implicit). Cardurile isi
+ * adapteaza continutul la dimensiune: latimea prin container queries (CSS), inaltimea prin
+ * ResizeObserver (data-dins-size / data-dins-rows). Doar UI, fara legatura cu datele.
+ */
+(function () {
+    'use strict';
+
+    var layout = document.querySelector('[data-dins-layout]');
+    if (!layout) { return; }
+    var colSplit = layout.querySelector('[data-dins-split="col"]');
+    var rowSplit = layout.querySelector('[data-dins-split="row"]');
+    var side = layout.querySelector('.dins-layout-side');
+    var stack = layout.querySelector('.dins-stack');
+    if (!colSplit || !side || !stack) { return; }
+
+    var KEY_SIDE = 'fleet.dispatcher.insights.sideWidth';
+    var KEY_TOP = 'fleet.dispatcher.insights.topRatio';
+    var wide = window.matchMedia('(min-width: 1200px)');
+
+    function cssPx(name) { return parseFloat(getComputedStyle(layout).getPropertyValue(name)) || 0; }
+    function store(key, value) {
+        try { if (value == null) { localStorage.removeItem(key); } else { localStorage.setItem(key, String(value)); } } catch (e) { /* stocare indisponibila */ }
+    }
+    function load(key) {
+        try { var v = parseFloat(localStorage.getItem(key)); return isFinite(v) ? v : null; } catch (e) { return null; }
+    }
+    function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
+
+    // ---------------------------------------------------------------- latime coloana carduri
+    var sideWidth = load(KEY_SIDE);
+    function sideBounds() {
+        var free = layout.clientWidth - colSplit.offsetWidth;
+        var min = cssPx('--dins-side-min');
+        return { min: min, max: free - cssPx('--dins-form-min'), fits: free - cssPx('--dins-form-min') >= min };
+    }
+    function applySide(save) {
+        var b = sideBounds();
+        if (sideWidth == null || !b.fits) {
+            // Fara preferinta sau ecran prea ingust: latimea implicita din CSS (o treime).
+            layout.style.removeProperty('--dins-side');
+        } else {
+            // Preferinta ramane neatinsa la o micsorare temporara a ferestrei; doar ce se aplica e limitat.
+            if (save) { sideWidth = clamp(sideWidth, b.min, b.max); }
+            layout.style.setProperty('--dins-side', Math.round(clamp(sideWidth, b.min, b.max)) + 'px');
+        }
+        if (save) { store(KEY_SIDE, sideWidth == null ? null : Math.round(sideWidth)); }
+        var now = Math.round(side.getBoundingClientRect().width);
+        colSplit.setAttribute('aria-valuemin', String(Math.round(b.min)));
+        colSplit.setAttribute('aria-valuemax', String(Math.round(Math.max(b.min, b.max))));
+        colSplit.setAttribute('aria-valuenow', String(now));
+        colSplit.setAttribute('aria-valuetext', 'Coloana cu carduri: ' + now + ' px');
+    }
+
+    // ---------------------------------------------------------------- impartire verticala carduri
+    var topRatio = load(KEY_TOP);
+    function rowBounds() {
+        var avail = stack.clientHeight - (rowSplit ? rowSplit.offsetHeight : 0);
+        var min = avail > 0 ? cssPx('--dins-card-min') / avail : 0.5;
+        return { avail: avail, min: Math.min(0.5, min), max: Math.max(0.5, 1 - min) };
+    }
+    function applyRow(save) {
+        if (!rowSplit) { return; }
+        var b = rowBounds();
+        if (topRatio == null) {
+            stack.style.removeProperty('--dins-top-fr');
+            stack.style.removeProperty('--dins-bottom-fr');
+        } else {
+            if (save) { topRatio = clamp(topRatio, b.min, b.max); }
+            var applied = clamp(topRatio, b.min, b.max);
+            stack.style.setProperty('--dins-top-fr', applied.toFixed(4) + 'fr');
+            stack.style.setProperty('--dins-bottom-fr', (1 - applied).toFixed(4) + 'fr');
+        }
+        if (save) { store(KEY_TOP, topRatio == null ? null : topRatio.toFixed(4)); }
+        var pct = Math.round((topRatio == null ? 0.5 : clamp(topRatio, b.min, b.max)) * 100);
+        rowSplit.setAttribute('aria-valuemin', String(Math.round(b.min * 100)));
+        rowSplit.setAttribute('aria-valuemax', String(Math.round(b.max * 100)));
+        rowSplit.setAttribute('aria-valuenow', String(pct));
+        rowSplit.setAttribute('aria-valuetext', 'Km pierduți ' + pct + '%, Alimentări ' + (100 - pct) + '%');
+    }
+
+    // ---------------------------------------------------------------- tragere (pointer events)
+    // O singura scriere de stil pe cadru; restul (continut, animatii) urmeaza prin CSS / ResizeObserver.
+    function bindDrag(handle, axis, onMove, onEnd) {
+        var frame = 0, last = null;
+        function move(e) {
+            last = e;
+            if (frame) { return; }
+            frame = requestAnimationFrame(function () { frame = 0; if (last) { onMove(last); } });
+        }
+        function end(e) {
+            if (!handle.hasPointerCapture(e.pointerId)) { return; }
+            handle.releasePointerCapture(e.pointerId);
+            if (frame) { cancelAnimationFrame(frame); frame = 0; }
+            if (last) { onMove(last); }
+            last = null;
+            handle.classList.remove('is-dragging');
+            layout.classList.remove('is-resizing');
+            document.documentElement.classList.remove('dins-resizing-' + axis);
+            handle.removeEventListener('pointermove', move);
+            onEnd();
+        }
+        handle.addEventListener('pointerdown', function (e) {
+            if (!wide.matches || (e.pointerType === 'mouse' && e.button !== 0)) { return; }
+            e.preventDefault();
+            e.stopPropagation();
+            handle.setPointerCapture(e.pointerId);
+            handle.classList.add('is-dragging');
+            layout.classList.add('is-resizing');
+            document.documentElement.classList.add('dins-resizing-' + axis);
+            handle.addEventListener('pointermove', move);
+        });
+        handle.addEventListener('pointerup', end);
+        handle.addEventListener('pointercancel', end);
+        handle.addEventListener('lostpointercapture', function () {
+            handle.classList.remove('is-dragging');
+            layout.classList.remove('is-resizing');
+            document.documentElement.classList.remove('dins-resizing-' + axis);
+            handle.removeEventListener('pointermove', move);
+        });
+        // Splitterul nu e in card, dar nici click-ul de dupa tragere nu trebuie sa ajunga la carduri.
+        handle.addEventListener('click', function (e) { e.stopPropagation(); });
+    }
+
+    bindDrag(colSplit, 'col', function (e) {
+        var rect = layout.getBoundingClientRect();
+        sideWidth = rect.right - e.clientX - colSplit.offsetWidth / 2;
+        applySide(false);
+    }, function () { applySide(true); });
+
+    if (rowSplit) {
+        bindDrag(rowSplit, 'row', function (e) {
+            var rect = stack.getBoundingClientRect();
+            var b = rowBounds();
+            if (b.avail <= 0) { return; }
+            topRatio = (e.clientY - rect.top - rowSplit.offsetHeight / 2) / b.avail;
+            applyRow(false);
+        }, function () { applyRow(true); });
+    }
+
+    // ---------------------------------------------------------------- tastatura + reset
+    colSplit.addEventListener('keydown', function (e) {
+        var step = e.shiftKey ? 64 : 16;
+        var b = sideBounds();
+        var current = side.getBoundingClientRect().width;
+        if (e.key === 'ArrowLeft') { sideWidth = current + step; }
+        else if (e.key === 'ArrowRight') { sideWidth = current - step; }
+        else if (e.key === 'Home') { sideWidth = b.max; }
+        else if (e.key === 'End') { sideWidth = b.min; }
+        else if (e.key === 'Enter') { sideWidth = null; }
+        else { return; }
+        e.preventDefault();
+        applySide(true);
+    });
+    colSplit.addEventListener('dblclick', function () { sideWidth = null; applySide(true); });
+
+    if (rowSplit) {
+        rowSplit.addEventListener('keydown', function (e) {
+            var b = rowBounds();
+            var step = (e.shiftKey ? 64 : 16) / Math.max(1, b.avail);
+            var current = topRatio == null ? 0.5 : topRatio;
+            if (e.key === 'ArrowUp') { topRatio = current - step; }
+            else if (e.key === 'ArrowDown') { topRatio = current + step; }
+            else if (e.key === 'Home') { topRatio = b.min; }
+            else if (e.key === 'End') { topRatio = b.max; }
+            else if (e.key === 'Enter') { topRatio = null; }
+            else { return; }
+            e.preventDefault();
+            applyRow(true);
+        });
+        rowSplit.addEventListener('dblclick', function () { topRatio = null; applyRow(true); });
+    }
+
+    // ---------------------------------------------------------------- continut dupa inaltimea cardului
+    // Doar praguri: atributul se rescrie numai cand se schimba pragul (fara reflow la fiecare pixel).
+    function sizeCard(card, height) {
+        // Sub xl cardurile au inaltimea data de continut (fara splittere): aspectul obisnuit.
+        if (!wide.matches) { height = 260; }
+        var size = height < 215 ? 'short' : (height >= 330 ? 'tall' : 'normal');
+        var rows = height < 270 ? 3 : Math.min(6, 3 + Math.floor((height - 270) / 28));
+        if (card.getAttribute('data-dins-size') !== size) { card.setAttribute('data-dins-size', size); }
+        if (card.getAttribute('data-dins-rows') !== String(rows)) { card.setAttribute('data-dins-rows', String(rows)); }
+    }
+    var cards = stack.querySelectorAll('.dins-card');
+    if (window.ResizeObserver) {
+        var cardObserver = new ResizeObserver(function (entries) {
+            entries.forEach(function (entry) {
+                var box = entry.borderBoxSize && entry.borderBoxSize[0];
+                sizeCard(entry.target, box ? box.blockSize : entry.target.getBoundingClientRect().height);
+            });
+        });
+        cards.forEach(function (card) { cardObserver.observe(card); });
+        // Latimea/inaltimea disponibila se schimba si fara tragere (fereastra, sidebar, campuri noi in formular).
+        var layoutObserver = new ResizeObserver(function () { applySide(false); applyRow(false); });
+        layoutObserver.observe(layout);
+        layoutObserver.observe(stack);
+    } else {
+        cards.forEach(function (card) { sizeCard(card, card.getBoundingClientRect().height); });
+        window.addEventListener('resize', function () { applySide(false); applyRow(false); });
+    }
+
+    applySide(false);
+    applyRow(false);
 })();

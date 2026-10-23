@@ -1,13 +1,6 @@
 -- Notificari WhatsApp catre soferi (prima miscare a zilei > 1 km, din GPS-ul SAS) si suport
 -- prin WhatsApp + email (tichete #SUP-000123, raspunsurile din email ajung inapoi pe WhatsApp).
--- Aditiv si idempotent: doar tabele noi (CREATE TABLE IF NOT EXISTS).
---
--- Copie de referinta: aceeasi schema se aplica si singura la runtime prin
--- DriverWhatsAppModel::ensureSchema() (scripts/driver_first_movement.php, API-ul BaileyBot)
--- si prin notification_service/support_mail.py (doar le citeste).
-SET NAMES utf8mb4;
-
-CREATE TABLE IF NOT EXISTS vehicle_movement_days (
+-- Aditiv si idempotent: doar tabele noi (CREATE TABLE IF NOT EXISTS vehicle_movement_days (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     vehicle_id INT UNSIGNED NOT NULL,
     local_date DATE NOT NULL,
@@ -54,7 +47,8 @@ CREATE TABLE IF NOT EXISTS whatsapp_outbox (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     dedupe_key VARCHAR(120) NOT NULL,
     purpose VARCHAR(40) NOT NULL,
-    driver_id INT UNSIGNED NOT NULL,
+    driver_id INT UNSIGNED NULL,
+    user_id INT UNSIGNED NULL,
     body TEXT NOT NULL,
     options_json JSON NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'pending',

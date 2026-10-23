@@ -2580,7 +2580,8 @@ document.addEventListener('DOMContentLoaded', function () {
     </script>
 <?php endif; ?>
 
-<?php include __DIR__ . '/_race_day_panel.php'; ?>
+<?php $raceDayPanelCollapsed = true; include __DIR__ . '/_race_day_panel.php'; ?>
+<?php include __DIR__ . '/_race_embed_panel.php'; ?>
 <?php include __DIR__ . '/_inactive_resource_modal.php'; ?>
 <?php include __DIR__ . '/_trip_conflict_modal.php'; ?>
 
@@ -2638,6 +2639,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
 <script src="<?= e(url('assets/js/dispecer-curse.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse.js'))) ?>"></script>
 <script src="<?= e(url('assets/js/dispecer-curse-gps-km.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse-gps-km.js'))) ?>" data-gps-km-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'trip_gps_km'])) ?>"></script>
+<?php // Fisa cursei deschisa din Desfasuratorul incadrat (clic pe rand). ?>
+<script src="<?= e(url('assets/js/race-view-overlay.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/race-view-overlay.js'))) ?>"></script>
+<link rel="stylesheet" href="<?= e(url('assets/css/race-view-overlay.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/race-view-overlay.css'))) ?>">
 
 <?php if ($focusFieldId !== ''): ?>
 <script>

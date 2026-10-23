@@ -1,13 +1,16 @@
 <?php
 $user = function_exists('current_user') ? current_user() : null;
-$alerts = flash_messages();
-$showSidebar = !empty($showSidebar);
+// Pagina incadrata in alta pagina (iframe, ex. cursa din Desfasurator pe pagina de
+// editare): fara meniu si fara mesaje flash, care raman pentru pagina principala.
+$embedMode = !empty($embedMode);
+$alerts = $embedMode ? [] : flash_messages();
+$showSidebar = !$embedMode && !empty($showSidebar);
 $currentAction = (string) ($_GET['action'] ?? 'index');
 $currentRoutePage = (string) ($_GET['page'] ?? ($currentPage ?? ''));
 $styleVersion = (string) @filemtime(BASE_PATH . '/assets/css/style.css');
 // Meniul lateral porneste ascuns (off-canvas) si apare cand mouse-ul ajunge la
 // marginea din stanga. Butonul din bara de sus il poate fixa deschis.
-$bodyClasses = ['sidebar-collapsed'];
+$bodyClasses = $embedMode ? ['is-embedded'] : ['sidebar-collapsed'];
 $showGlobalApprovalDrawer = false;
 $globalApprovalDrawerMode = 'user';
 $canReviewInactiveApprovals = false;
@@ -60,9 +63,12 @@ if (
     <link rel="stylesheet" href="<?= e(url('assets/css/style.css?v=' . $styleVersion)) ?>">
     <?php // Primitivele de avatar sunt folosite si in bara de sus, pe toate paginile. ?>
     <link rel="stylesheet" href="<?= e(url('assets/css/avatar.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/avatar.css'))) ?>">
+    <?php if ($embedMode): ?><base target="_top"><?php endif; ?>
 </head>
 <body class="<?= e(implode(' ', $bodyClasses)) ?>">
-<?php if ($showSidebar && is_logged_in()): ?>
+<?php if ($embedMode): ?>
+    <main class="embed-main">
+<?php elseif ($showSidebar && is_logged_in()): ?>
     <div class="app-shell">
         <div class="fleet-sidebar-edge" data-sidebar-edge aria-hidden="true"></div>
         <aside class="sidebar p-3">

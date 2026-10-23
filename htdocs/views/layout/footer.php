@@ -1,4 +1,6 @@
-<?php if ($showSidebar && is_logged_in()): ?>
+<?php if (!empty($embedMode)): ?>
+    </main>
+<?php elseif ($showSidebar && is_logged_in()): ?>
             </main>
         </div>
     </div>
@@ -10,7 +12,7 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 <?php $appScriptVersion = (string) @filemtime(BASE_PATH . '/assets/js/app.js'); ?>
 <script src="<?= e(url('assets/js/app.js?v=' . $appScriptVersion)) ?>"></script>
-<?php if (is_logged_in()): ?>
+<?php if (is_logged_in() && empty($embedMode)): ?>
 <?php
     // Aprobari live: popup Aproba / Respinge pentru administrator, statusul curselor
     // trimise spre aprobare pentru operator (vezi InactiveResourceApprovalController::liveAction).

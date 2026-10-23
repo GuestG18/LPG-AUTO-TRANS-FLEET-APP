@@ -81,7 +81,8 @@ class DriverWhatsAppModel extends BaseModel
                 id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 dedupe_key VARCHAR(120) NOT NULL,
                 purpose VARCHAR(40) NOT NULL,
-                driver_id INT UNSIGNED NOT NULL,
+                driver_id INT UNSIGNED NULL,
+                user_id INT UNSIGNED NULL,
                 body TEXT NOT NULL,
                 options_json JSON NULL,
                 status VARCHAR(20) NOT NULL DEFAULT 'pending',
@@ -175,6 +176,14 @@ class DriverWhatsAppModel extends BaseModel
         }
         foreach (self::schemaStatements() as $statement) {
             $this->db->exec($statement);
+        }
+        // Outbox creat inainte de mesajele catre utilizatori (aprobari): destinatar sofer SAU utilizator.
+        $hasUserId = (int) $this->db->query("
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'whatsapp_outbox' AND COLUMN_NAME = 'user_id'
+        ")->fetchColumn();
+        if ($hasUserId === 0) {
+            $this->db->exec('ALTER TABLE whatsapp_outbox MODIFY driver_id INT UNSIGNED NULL, ADD COLUMN user_id INT UNSIGNED NULL AFTER driver_id');
         }
         self::$schemaEnsured = true;
     }
@@ -428,14 +437,26 @@ class DriverWhatsAppModel extends BaseModel
      */
     public function enqueue(string $purpose, int $driverId, string $body, array $options, string $dedupeKey, ?string $relatedType = null, ?int $relatedId = null, string $status = 'pending'): int
     {
+        return $this->insertOutbox($purpose, $driverId, null, $body, $options, $dedupeKey, $relatedType, $relatedId, $status);
+    }
+
+    /** Mesaj catre un utilizator al aplicatiei (ex. administratorul care aproba), telefonul din utilizatori. */
+    public function enqueueForUser(string $purpose, int $userId, string $body, array $options, string $dedupeKey, ?string $relatedType = null, ?int $relatedId = null): int
+    {
+        return $this->insertOutbox($purpose, null, $userId, $body, $options, $dedupeKey, $relatedType, $relatedId, 'pending');
+    }
+
+    private function insertOutbox(string $purpose, ?int $driverId, ?int $userId, string $body, array $options, string $dedupeKey, ?string $relatedType, ?int $relatedId, string $status): int
+    {
+        // Fara ensureSchema() aici: poate rula in tranzactie, iar DDL ar face commit implicit.
         $now = self::now();
         $stmt = $this->db->prepare('
             INSERT IGNORE INTO whatsapp_outbox
-                (dedupe_key, purpose, driver_id, body, options_json, status, attempts, max_attempts, next_attempt_at, related_type, related_id, created_at, updated_at)
-            VALUES (:key, :purpose, :driver, :body, :options, :status, 0, :max, :now, :rtype, :rid, :now2, :now3)
+                (dedupe_key, purpose, driver_id, user_id, body, options_json, status, attempts, max_attempts, next_attempt_at, related_type, related_id, created_at, updated_at)
+            VALUES (:key, :purpose, :driver, :user, :body, :options, :status, 0, :max, :now, :rtype, :rid, :now2, :now3)
         ');
         $stmt->execute([
-            ':key' => mb_substr($dedupeKey, 0, 120), ':purpose' => $purpose, ':driver' => $driverId, ':body' => $body,
+            ':key' => mb_substr($dedupeKey, 0, 120), ':purpose' => $purpose, ':driver' => $driverId, ':user' => $userId, ':body' => $body,
             ':status' => $status === 'held' ? 'held' : 'pending',
             ':options' => $options === [] ? null : json_encode($options, JSON_UNESCAPED_UNICODE), ':max' => self::OUTBOX_MAX_ATTEMPTS,
             ':now' => $now, ':rtype' => $relatedType, ':rid' => $relatedId, ':now2' => $now, ':now3' => $now,
@@ -471,9 +492,11 @@ class DriverWhatsAppModel extends BaseModel
         $stmt->execute([':token' => $token, ':now' => $now, ':now2' => $now, ':now3' => $now, ':now4' => $now]);
 
         $rows = $this->db->prepare('
-            SELECT o.id, o.purpose, o.driver_id, o.body, o.options_json, o.attempts, o.max_attempts, s.telefon
+            SELECT o.id, o.purpose, o.driver_id, o.user_id, o.body, o.options_json, o.attempts, o.max_attempts,
+                   COALESCE(s.telefon, u.telefon) AS telefon
             FROM whatsapp_outbox o
             LEFT JOIN soferi s ON s.id = o.driver_id
+            LEFT JOIN utilizatori u ON u.id = o.user_id
             WHERE o.lock_token = :token
             ORDER BY o.id ASC
         ');
@@ -484,7 +507,8 @@ class DriverWhatsAppModel extends BaseModel
             $messages[] = [
                 'id' => (int) $row['id'],
                 'purpose' => (string) $row['purpose'],
-                'driver_id' => (int) $row['driver_id'],
+                'driver_id' => $row['driver_id'] !== null ? (int) $row['driver_id'] : null,
+                'user_id' => $row['user_id'] !== null ? (int) $row['user_id'] : null,
                 'phone' => NotificationRuleModel::normalizePhone((string) ($row['telefon'] ?? '')),
                 'body' => (string) $row['body'],
                 'options' => $row['options_json'] !== null ? (json_decode((string) $row['options_json'], true) ?: []) : [],

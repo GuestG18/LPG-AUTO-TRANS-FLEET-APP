@@ -36,6 +36,10 @@ $insightsConfig = [
         </span>
     </button>
 
+    <div class="dins-splitter dins-splitter--row" data-dins-split="row" role="separator" tabindex="0"
+         aria-orientation="horizontal" aria-label="Înălțimea cardurilor (săgeți sus/jos, dublu-click pentru implicit)"
+         title="Trage pentru a redimensiona · dublu-click = implicit"><span class="dins-grip" aria-hidden="true"></span></div>
+
     <button type="button" class="dins-card dins-card--fuel" data-dins-card="fuel" aria-haspopup="dialog">
         <span class="dins-card-head">
             <span class="dins-chip"><i class="bi bi-fuel-pump" aria-hidden="true"></i></span>

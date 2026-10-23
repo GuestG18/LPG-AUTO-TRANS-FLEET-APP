@@ -1328,7 +1328,12 @@ class DispecerCurseController
         $search = trim((string) ($_GET['q'] ?? ''));
         $filters = $this->collectFilters();
         $page = 1;
-        $formFlash = $this->consumeFormFlash('race_create');
+        // Pagina de editare arata cursa ei in Desfasurator printr-un iframe
+        // (?embed=race&ids=ID): doar tabelul, fara sa consume mesajele flash si
+        // fara sa schimbe lista la care revine operatorul dupa salvare.
+        $embedIds = (string) ($filters['ids'] ?? '');
+        $embedRaceId = (string) ($_GET['embed'] ?? '') === 'race' && ctype_digit($embedIds) ? (int) $embedIds : 0;
+        $formFlash = $embedRaceId > 0 ? ['old' => [], 'errors' => []] : $this->consumeFormFlash('race_create');
         $formData = $this->defaultRaceFormData();
         if ($formFlash['old'] !== []) {
             $formData = array_merge($formData, $formFlash['old']);
@@ -1349,8 +1354,11 @@ class DispecerCurseController
             }
         }
         $formData['tip_marfa'] = $this->normalizeGoodsTypeSelection($formData['tip_marfa'] ?? []);
-        $incompleteConfirmItems = (array) ($_SESSION['_dispecer_incomplete_confirm_race_create'] ?? []);
-        unset($_SESSION['_dispecer_incomplete_confirm_race_create']);
+        $incompleteConfirmItems = [];
+        if ($embedRaceId === 0) {
+            $incompleteConfirmItems = (array) ($_SESSION['_dispecer_incomplete_confirm_race_create'] ?? []);
+            unset($_SESSION['_dispecer_incomplete_confirm_race_create']);
+        }
 
         // Reluarea unei curse NU creeaza o cursa noua: cursa ramane una singura (un
         // singur tarif, un singur rand in centralizator), iar portiunea condusa de alt
@@ -1372,12 +1380,14 @@ class DispecerCurseController
             ]) . '#race-form');
         }
 
-        $postCreateExpensePrompt = $this->consumePostCreateExpensePrompt();
+        $postCreateExpensePrompt = $embedRaceId > 0 ? null : $this->consumePostCreateExpensePrompt();
 
         // Lista vazuta ultima data (cu filtrele din URL): dupa editarea unei curse
         // operatorul revine aici, nu la o pagina goala. restore_view = intoarcere din
         // editare: Desfasuratorul isi reaplica si filtrele / sortarea din antet.
-        $_SESSION[self::LAST_LIST_URL_SESSION_KEY] = $this->buildListUrl($search, $filters);
+        if ($embedRaceId === 0) {
+            $_SESSION[self::LAST_LIST_URL_SESSION_KEY] = $this->buildListUrl($search, $filters);
+        }
         $restoreListViewRaceId = max(0, (int) ($_GET['restore_view'] ?? 0));
 
         try {
@@ -1521,12 +1531,14 @@ class DispecerCurseController
             'formErrors' => $formFlash['errors'],
             'postCreateExpensePrompt' => $postCreateExpensePrompt,
             'openRacesOverview' => $openRacesOverview,
-            'maintenancePopupMessages' => $this->consumeMaintenancePopupMessages(),
+            'maintenancePopupMessages' => $embedRaceId > 0 ? [] : $this->consumeMaintenancePopupMessages(),
             'raceSegments' => $raceSegments,
             'diurnaHistoryByDriver' => $diurnaHistoryByDriver,
             'serviceKmEntries' => $serviceKmEntries,
             'restoreListViewRaceId' => $restoreListViewRaceId,
-            'serviceKmFlash' => $this->consumeFormFlash('service_km'),
+            'serviceKmFlash' => $embedRaceId > 0 ? ['old' => [], 'errors' => []] : $this->consumeFormFlash('service_km'),
+            'embedMode' => $embedRaceId > 0,
+            'embedRaceId' => $embedRaceId,
         ]);
     }
 

@@ -463,8 +463,32 @@
             return;
         }
         clearPreviewedMarks(); // marcajul vechi dispare cand deschizi alta cursa
+        // Tabelul din iframe-ul paginii de editare: fisa se deschide peste pagina
+        // intreaga, crescand din iframe, nu inchisa in inaltimea unui rand.
+        var host = embedHost();
+        if (host !== null) {
+            host.overlay.open(raceId, host.frame);
+            markPreviewed(raceId, false);
+            return;
+        }
         open(raceViewUrl(raceId), rowEl, raceId);
     });
+
+    var embedHost = function () {
+        try {
+            var frameEl = window.frameElement;
+            var overlay = frameEl && window.parent !== window ? window.parent.RaceViewOverlay : null;
+            return overlay && typeof overlay.open === 'function' ? { overlay: overlay, frame: frameEl } : null;
+        } catch (error) {
+            return null; // alt domeniu: fisa ramane in pagina curenta
+        }
+    };
+
+    window.RaceViewOverlay = {
+        open: function (raceId, originEl) {
+            open(raceViewUrl(raceId), originEl, raceId);
+        }
+    };
 
     document.addEventListener('keydown', function (event) {
         if (active === null) {

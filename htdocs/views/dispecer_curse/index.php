@@ -19,6 +19,14 @@ $baseQuery = [
     'ids_label' => $filters['ids_label'] ?? '',
 ];
 $currentListUrl = build_query_url($baseQuery);
+// Incadrata in pagina de editare (iframe): doar tabelul Desfasurator cu cursa editata.
+// Formularele si linkurile care se intorc "in lista" se intorc la editarea cursei.
+$embedMode = !empty($embedMode);
+$embedRaceId = (int) ($embedRaceId ?? 0);
+$embedEditUrl = $embedMode ? build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $embedRaceId]) : '';
+if ($embedMode) {
+    $currentListUrl = $embedEditUrl;
+}
 $hasActiveFilters = $search !== '';
 foreach (['tip_transport', 'vehicle_id', 'loc_incarcare_id', 'beneficiar_id', 'zona_distributie_id', 'data_start', 'data_end', 'ids'] as $filterKey) {
     if (trim((string) ($filters[$filterKey] ?? '')) !== '') {
@@ -344,8 +352,11 @@ foreach ($openRacesRows as $openRacesSeverityRow) {
         }
     }
 }
-$dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dispecer_curse']));
+$dispecerReturnUrl = $embedMode ? $embedEditUrl : (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page' => 'dispecer_curse']));
 ?>
+
+<?php /* In iframe restul paginii ramane in DOM (scriptul paginii il asteapta), dar ascuns. */ ?>
+<?php if ($embedMode): ?><div class="d-none" aria-hidden="true"><?php endif; ?>
 
 <?php /* Titlul, butonul "informatii lipsa" si Configurare pe acelasi rand; Km service imediat dedesubt. */ ?>
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 dispatcher-page-head">
@@ -365,14 +376,15 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
 
 <?php $serviceKmCardSpacing = 'mb-3'; include __DIR__ . '/_service_km_panel.php'; ?>
 
-<?php include __DIR__ . '/_live_gps_panel.php'; ?>
+<?php if (!$embedMode) { include __DIR__ . '/_live_gps_panel.php'; } ?>
 
 <?php
 // Reluarea cursei se face in formularul cursei, pe pagina de editare: meniul
 // "Reia cursa" duce acolo (vezi resume_id in DispecerCurseController).
+// Cardul formularului e capturat ca sa poata sta fie in coloanele clasice (embed), fie in
+// layout-ul redimensionabil cu cardurile Km pierduti / Alimentari (dispatcher-insights.js).
+ob_start();
 ?>
-<div class="row g-3 align-items-start">
-    <div class="col-12 col-xl-8 align-self-stretch">
         <div class="card border-0 shadow-sm h-100 dispatcher-add-compact" id="add-race-form">
             <div class="card-header bg-white">
                 <h3 class="h6 mb-0">Adaugă Cursă</h3>
@@ -414,11 +426,23 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                 </form>
             </div>
         </div>
-    </div>
-
-    <div class="col-12 col-xl-4 align-self-stretch">
-        <?php include __DIR__ . '/_insights_cards.php'; ?>
-    </div>
+<?php $addRaceCardHtml = (string) ob_get_clean(); ?>
+<div class="row g-3 align-items-start">
+    <?php if ($embedMode): ?>
+        <div class="col-12 col-xl-8 align-self-stretch"><?= $addRaceCardHtml ?></div>
+        <div class="col-12 col-xl-4 align-self-stretch"></div>
+    <?php else: ?>
+        <div class="col-12">
+            <div class="dins-layout" data-dins-layout>
+                <div class="dins-layout-main" id="dins-layout-main"><?= $addRaceCardHtml ?></div>
+                <div class="dins-splitter dins-splitter--col" data-dins-split="col" role="separator" tabindex="0"
+                     aria-orientation="vertical" aria-controls="dins-layout-main dins-layout-side"
+                     aria-label="Lățimea coloanei cu carduri (săgeți stânga/dreapta, dublu-click pentru implicit)"
+                     title="Trage pentru a redimensiona · dublu-click = implicit"><span class="dins-grip" aria-hidden="true"></span></div>
+                <div class="dins-layout-side" id="dins-layout-side"><?php include __DIR__ . '/_insights_cards.php'; ?></div>
+            </div>
+        </div>
+    <?php endif; ?>
 
     <div class="col-12">
         <div class="card border-0 shadow-sm">
@@ -560,9 +584,10 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
         <a class="btn btn-sm btn-outline-secondary" href="<?= e(build_query_url(['page' => 'dispecer_curse'])) ?>">Arata toate cursele</a>
     </div>
 <?php endif; ?>
+<?php if ($embedMode): ?></div><?php endif; ?>
 
 <?php $awaitingApprovalCount = (int) ($awaitingApprovalCount ?? 0); ?>
-<div class="card border-0 shadow-sm mt-3 dispatcher-races-card" data-races-tabs>
+<div class="card border-0 shadow-sm <?= $embedMode ? 'dispatcher-races-card-embedded' : 'mt-3' ?> dispatcher-races-card" data-races-tabs>
     <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2 flex-wrap dispatcher-races-card-header">
         <h3 class="h6 mb-0 d-flex align-items-center gap-2">
             <?php // Tab-uri: lista normala si cursele trimise spre aprobare (populate live de assets/js/approval-live.js). ?>
@@ -570,7 +595,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                 <button type="button" class="dispatcher-races-tab is-active" role="tab" aria-selected="true" data-races-tab="active">
                     Desfasurator curse
                 </button>
-                <button type="button" class="dispatcher-races-tab" role="tab" aria-selected="false" data-races-tab="awaiting" title="Curse trimise administratorului spre aprobare">
+                <button type="button" class="dispatcher-races-tab<?= $embedMode ? ' d-none' : '' ?>" role="tab" aria-selected="false" data-races-tab="awaiting" title="Curse trimise administratorului spre aprobare">
                     <i class="bi bi-hourglass-split" aria-hidden="true"></i>
                     In asteptare aprobare
                     <span class="badge rounded-pill <?= $awaitingApprovalCount > 0 ? 'text-bg-warning' : 'text-bg-light' ?>" data-awaiting-trips-count><?= e((string) $awaitingApprovalCount) ?></span>
@@ -622,7 +647,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                     </div>
                 </div>
             </div>
-            <?php if ($dispCanDeleteBulk): ?>
+            <?php if ($dispCanDeleteBulk && !$embedMode): ?>
             <button
                 type="submit"
                 class="btn btn-sm btn-outline-danger"
@@ -643,7 +668,9 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                 <i class="bi bi-funnel" aria-hidden="true"></i>
                 Reseteaza filtre
             </button>
+            <?php if (!$embedMode): ?>
             <small class="text-muted">Total: <?= e((string) $pagination['total_rows']) ?> curse</small>
+            <?php endif; ?>
         </div>
         <small class="text-muted d-none" data-races-tab-tools="awaiting">Se actualizeaza automat. Cursele apar in Desfasurator dupa aprobare.</small>
     </div>
@@ -706,7 +733,7 @@ $dispecerReturnUrl = (string) ($_SERVER['REQUEST_URI'] ?? build_query_url(['page
                 <tbody>
                 <?php if ($rows === []): ?>
                     <tr>
-                        <td colspan="16" class="text-center text-muted py-4">Nu există curse înregistrate.</td>
+                        <td colspan="16" class="text-center text-muted py-4"><?= $embedMode ? 'Cursa nu mai este in Desfasurator (trimisa la facturare sau stearsa).' : 'Nu există curse înregistrate.' ?></td>
                     </tr>
                 <?php else: ?>
                     <?php $canEditDiurna = !function_exists('can') || can('dispecer_curse', 'edit'); ?>
@@ -1957,6 +1984,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 return -1;
             };
             const saveHeaderState = function () {
+                // In iframe (pagina de editare) nu suprascriem starea Desfasuratorului principal.
+                if (document.body.classList.contains('is-embedded')) {
+                    return;
+                }
                 const state = { filters: {}, status: Array.from(statusFilter), sort: null };
                 Object.keys(columnFilters).forEach(function (key) {
                     const allowed = columnFilters[key];
@@ -3506,6 +3537,8 @@ document.addEventListener('DOMContentLoaded', function () {
 <script src="<?= e(url('assets/js/dispecer-curse-gps-km.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-curse-gps-km.js'))) ?>" data-gps-km-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'trip_gps_km'])) ?>"></script>
 <script src="<?= e(url('assets/js/dispecer-diurna.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispecer-diurna.js'))) ?>"></script>
 <link rel="stylesheet" href="<?= e(url('assets/css/dispatcher-insights.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/dispatcher-insights.css'))) ?>">
+<?php if (!$embedMode): ?>
 <script src="<?= e(url('assets/js/dispatcher-insights.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/dispatcher-insights.js'))) ?>"></script>
+<?php endif; ?>
 <link rel="stylesheet" href="<?= e(url('assets/css/race-view-overlay.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/race-view-overlay.css'))) ?>">
 <script src="<?= e(url('assets/js/race-view-overlay.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/race-view-overlay.js'))) ?>"></script>
