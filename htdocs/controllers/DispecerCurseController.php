@@ -9515,6 +9515,7 @@ class DispecerCurseController
             foreach ($this->db->query('SELECT id, nr_inmatriculare FROM vehicule')->fetchAll() as $vehicle) {
                 $vehicleIds[str_replace(' ', '', strtoupper((string) $vehicle['nr_inmatriculare']))] = (int) $vehicle['id'];
             }
+            $hiddenPlates = $this->insightsHiddenPlates();
 
             $items = [];
             foreach ($rows as $row) {
@@ -9522,6 +9523,9 @@ class DispecerCurseController
                     continue;
                 }
                 $regKey = str_replace(' ', '', strtoupper((string) ($row['vehicle_registration'] ?? '')));
+                if (isset($hiddenPlates[$regKey])) {
+                    continue;
+                }
                 $items[] = [
                     'id' => (int) $row['id'],
                     'plate' => (string) ($row['vehicle_registration'] ?? ''),
@@ -9545,6 +9549,39 @@ class DispecerCurseController
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][insights_fuel] ' . $exception->getMessage());
             $this->sendJson(['success' => false, 'error' => 'Alimentările CardOil nu au putut fi încărcate.'], 500);
+        }
+    }
+
+    /**
+     * Numerele (normalizate) ale vehiculelor scoase de utilizator din formularul Harta Flota,
+     * ca acestea sa lipseasca si din cardul Alimentari, ca din banda "Curse in desfasurare".
+     * Selectia e pe carId SAS; numerele vin din structura flotei (cache 10 min). Fara selectie
+     * sau daca SAS nu raspunde: nimic ascuns.
+     *
+     * @return array<string, true>
+     */
+    private function insightsHiddenPlates(): array
+    {
+        $hidden = array_flip(FleetMapController::hiddenCarIdsForCurrentUser($this->db));
+        if ($hidden === []) {
+            return [];
+        }
+        try {
+            $service = new SasDashboardService($this->db);
+            if (!$service->credentialsAvailable()) {
+                return [];
+            }
+            $plates = [];
+            foreach ($service->getFleetVehicles() as $car) {
+                if (isset($hidden[(int) ($car['sas_vehicle_id'] ?? 0)])) {
+                    $plates[str_replace(' ', '', strtoupper((string) ($car['registration'] ?? '')))] = true;
+                }
+            }
+            unset($plates['']);
+            return $plates;
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][insights_hidden] ' . $exception->getMessage());
+            return [];
         }
     }
 

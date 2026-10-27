@@ -56,7 +56,7 @@ $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 $approvals = new InactiveResourceApprovalModel($db);
 $approvals->ensureSchema();
 $state = is_file($stateFile) ? (json_decode((string) file_get_contents($stateFile), true) ?: []) : [];
-$state += ['approval_ids' => [], 'route_rules' => []];
+$state += ['approval_ids' => [], 'route_rules' => [], 'route_additions' => []];
 $saveState = static function () use (&$state, $stateFile): void {
     @mkdir(dirname($stateFile), 0775, true);
     file_put_contents($stateFile, json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
@@ -101,10 +101,23 @@ if ($mode === 'cleanup') {
         $deleted = $db->exec("DELETE FROM inactive_resource_approvals WHERE id IN ($in) AND resource_label LIKE '" . TEST_PREFIX . "%'");
         $log("Solicitari de test sterse: $deleted.");
     }
-    foreach ($state['route_rules'] as $rule) {
-        // O ruta aprobata adauga vehiculul in regula: o readucem la valoarea de dinainte.
-        $db->prepare("UPDATE {$rule['table']} SET vehicle_ids = :v WHERE id = :id")->execute([':v' => $rule['vehicle_ids'], ':id' => $rule['id']]);
-        $log("Regula {$rule['table']} #{$rule['id']} readusa la vehiculele initiale.");
+    // O ruta aprobata adauga vehiculul in una sau mai multe reguli (aceeasi ruta, mai multe zone).
+    // Scoatem vehiculul doar din regulile care NU il aveau la crearea scenariului.
+    foreach ($state['route_additions'] as $addition) {
+        $vehicleId = (int) $addition['vehicle_id'];
+        foreach ($addition['rules_without'] as [$table, $ruleId]) {
+            if (!in_array($table, ['configurare_rute_distributie', 'configurare_rute_primar'], true)) {
+                continue;
+            }
+            $current = $one("SELECT vehicle_ids FROM $table WHERE id = :id", [':id' => $ruleId]);
+            $ids = array_values(array_filter(array_map('intval', explode(',', (string) ($current['vehicle_ids'] ?? '')))));
+            if (!in_array($vehicleId, $ids, true)) {
+                continue;
+            }
+            $kept = array_values(array_filter($ids, static fn(int $id): bool => $id !== $vehicleId));
+            $db->prepare("UPDATE $table SET vehicle_ids = :v WHERE id = :id")->execute([':v' => implode(',', $kept), ':id' => $ruleId]);
+            $log("Vehiculul #$vehicleId scos din $table #$ruleId (adaugat de ruta aprobata in test).");
+        }
     }
     $db->commit();
     @unlink($stateFile);
@@ -205,8 +218,17 @@ foreach ($only !== null ? [$only] : TYPES as $type) {
                 trim(($names['loc'] ?? 'Loc incarcare') . ' → ' . ($names['zona'] ?? 'Zona')), (string) ($names['beneficiar'] ?? 'Beneficiar'));
             $db->prepare("UPDATE inactive_resource_approvals SET resource_label = CONCAT(:p, resource_label) WHERE id = :id AND resource_label NOT LIKE :like")
                 ->execute([':p' => TEST_PREFIX, ':id' => $id, ':like' => TEST_PREFIX . '%']);
-            // Regula, asa cum era: --cleanup o reface daca ruta e aprobata.
-            $state['route_rules'][] = ['table' => 'configurare_rute_distributie', 'id' => (int) $rule['id'], 'vehicle_ids' => (string) $rule['vehicle_ids']];
+            // Toate regulile (distributie + primar) care nu au vehiculul acum: daca ruta e aprobata,
+            // aplicarea il poate adauga in mai multe dintre ele; --cleanup il scoate doar de acolo.
+            $without = [];
+            foreach (['configurare_rute_distributie', 'configurare_rute_primar'] as $table) {
+                $stmt = $db->prepare("SELECT id FROM $table WHERE NOT FIND_IN_SET(:v, COALESCE(vehicle_ids, ''))");
+                $stmt->execute([':v' => (int) $v['id']]);
+                foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $ruleId) {
+                    $without[] = [$table, (int) $ruleId];
+                }
+            }
+            $state['route_additions'][] = ['vehicle_id' => (int) $v['id'], 'approval_id' => $id, 'rules_without' => $without];
             $created[] = [$id, "Ruta: {$v['nr_inmatriculare']} → " . ($names['beneficiar'] ?? '')];
             break;
     }

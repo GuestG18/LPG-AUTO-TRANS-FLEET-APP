@@ -98,11 +98,17 @@ class KmPierdutiController
             exit;
         }
         try {
+            // Ca banda "Curse in desfasurare": vehiculele scoase din formularul Harta Flota nu apar in card.
+            $hidden = array_flip(FleetMapController::hiddenCarIdsForCurrentUser($this->db));
+            $rows = array_values(array_filter(
+                $this->buildVehicleRows($start, $end),
+                static fn (array $row): bool => !isset($hidden[(int) $row['sas_vehicle_id']])
+            ));
             echo json_encode([
                 'success' => true,
                 'start' => $start,
                 'end' => $end,
-                'vehicles' => $this->buildVehicleRows($start, $end),
+                'vehicles' => $rows,
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         } catch (Throwable $exception) {
             error_log('[KmPierdutiController][vehicles] ' . $exception->getMessage());

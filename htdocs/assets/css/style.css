@@ -26314,60 +26314,7 @@ a.driver-history-kpi-card.is-link small {
     }
 }
 
-/* Alarma "Treceri refacturate": pagina gri si blocata pentru toti pana se confirma achizitia taxei.
-   Sub panoul de aprobari (z-index 1065), ca doar panoul sa ramana utilizabil. */
-body.fee-alarm-active {
-    overflow: hidden;
-}
-
-.fee-alarm-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 1064;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 16px;
-    background: rgba(71, 85, 105, 0.55);
-    -webkit-backdrop-filter: grayscale(1);
-    backdrop-filter: grayscale(1);
-    cursor: pointer;
-}
-
-.fee-alarm-overlay[hidden] {
-    display: none;
-}
-
-.fee-alarm-message {
-    display: grid;
-    justify-items: center;
-    gap: 8px;
-    max-width: 420px;
-    padding: 22px 26px;
-    border: 2px solid #ef4444;
-    border-radius: 10px;
-    color: #0f172a;
-    background: #ffffff;
-    box-shadow: 0 24px 64px rgba(15, 23, 42, 0.35);
-    text-align: center;
-}
-
-.fee-alarm-message i {
-    color: #dc2626;
-    font-size: 34px;
-    line-height: 1;
-}
-
-.fee-alarm-message strong {
-    color: #b91c1c;
-    font-size: 17px;
-}
-
-.fee-alarm-message span {
-    color: #475569;
-    font-size: 14px;
-}
-
+/* Alarma "Treceri refacturate": butonul panoului clipeste rosu pana se confirma achizitia taxei. */
 .fleet-approval-drawer-toggle.is-fee-alarm,
 .fleet-approval-drawer-toggle.is-fee-alarm:hover,
 .fleet-approval-drawer-toggle.is-fee-alarm:focus-visible {

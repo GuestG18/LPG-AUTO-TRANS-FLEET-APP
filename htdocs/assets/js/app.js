@@ -2179,8 +2179,8 @@ function initMissingFees() {
 }
 
 // Alarma "Treceri refacturate": cat timp o trecere n-are raspuns la "A fost cumparata taxa?",
-// toti utilizatorii autentificati au pagina gri si blocata, butonul panoului clipeste rosu si
-// suna sirena. Doar panoul ramane accesibil; alarma se opreste la primul raspuns salvat.
+// butonul panoului de aprobari clipeste rosu la toti utilizatorii autentificati.
+// Se opreste la primul raspuns salvat.
 var feeAlarmApply = null;
 
 function setFeePurchaseAlarm(pending) {
@@ -2196,93 +2196,16 @@ function initFeePurchaseAlarm() {
     }
 
     var url = drawer.getAttribute('data-fee-alarm-url') || '';
-    var soundUrl = drawer.getAttribute('data-fee-alarm-sound') || '';
     var toggle = drawer.querySelector('[data-global-approval-toggle]');
     if (url === '' || !(toggle instanceof HTMLElement)) {
         return;
     }
 
     var POLL_MS = 15000;
-    var active = false;
-    var audio = null;
-    var overlay = document.createElement('div');
-    overlay.className = 'fee-alarm-overlay';
-    overlay.hidden = true;
-    overlay.setAttribute('aria-hidden', 'true');
-    overlay.appendChild(document.createElement('div')).className = 'fee-alarm-message';
-    overlay.firstChild.innerHTML = '<i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i>'
-        + '<strong>Trecere refacturata neconfirmata</strong>'
-        + '<span>Confirma daca taxa a fost cumparata (panoul din dreapta). Pagina ramane blocata pana atunci.</span>';
-    document.body.appendChild(overlay);
-
-    // Deschide panoul direct pe lista trecerilor de confirmat.
-    function openPurchaseList() {
-        if (!drawer.classList.contains('is-open')) {
-            toggle.click();
-        }
-        var tab = drawer.querySelector('[data-dashboard-approval-tab="operators"], [data-dashboard-approval-tab="fees"]');
-        if (tab instanceof HTMLElement && tab.getAttribute('aria-selected') !== 'true') {
-            tab.click();
-        }
-        var purchaseToggle = drawer.querySelector('[data-fee-purchase-toggle]');
-        if (purchaseToggle instanceof HTMLElement && purchaseToggle.getAttribute('aria-expanded') !== 'true') {
-            purchaseToggle.click();
-        }
-    }
-
-    overlay.addEventListener('click', function (event) {
-        event.stopPropagation();
-        openPurchaseList();
-    });
-
-    // Sirena se opreste cat timp panoul e deschis (cine confirma lucreaza linistit).
-    function syncSound() {
-        if (soundUrl === '') {
-            return;
-        }
-        var shouldPlay = active && !drawer.classList.contains('is-open');
-        if (!shouldPlay) {
-            if (audio) {
-                audio.pause();
-            }
-            return;
-        }
-        if (!audio) {
-            audio = new Audio(soundUrl);
-            audio.loop = true;
-        }
-        // Volumul din pagina mereu la maxim; volumul / mute-ul din Windows nu pot fi schimbate din browser.
-        audio.muted = false;
-        audio.volume = 1;
-        if (audio.paused) {
-            var played = audio.play();
-            if (played && typeof played.catch === 'function') {
-                // Browserul blocheaza sunetul pana la prima interactiune cu pagina.
-                played.catch(function () {});
-            }
-        }
-    }
 
     feeAlarmApply = function (pending) {
-        active = Number(pending) > 0;
-        overlay.hidden = !active;
-        document.body.classList.toggle('fee-alarm-active', active);
-        toggle.classList.toggle('is-fee-alarm', active);
-        syncSound();
+        toggle.classList.toggle('is-fee-alarm', Number(pending) > 0);
     };
-
-    ['pointerdown', 'keydown'].forEach(function (type) {
-        document.addEventListener(type, syncSound, true);
-    });
-    // Pagina "inghetata": tastatura nu ajunge la nimic din afara panoului.
-    document.addEventListener('keydown', function (event) {
-        var target = event.target instanceof Element ? event.target : null;
-        if (active && !(target && drawer.contains(target))) {
-            event.preventDefault();
-            event.stopPropagation();
-        }
-    }, true);
-    new MutationObserver(syncSound).observe(drawer, { attributes: true, attributeFilter: ['class'] });
 
     function poll() {
         fetch(url, {
