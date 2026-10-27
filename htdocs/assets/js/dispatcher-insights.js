@@ -32,11 +32,129 @@
         return cfg.dispatcherUrl + '&ids=' + id + '&ids_label=' + encodeURIComponent('cursa #' + id);
     }
 
+    // ---------------------------------------------------------------- filtre garaj / categorie
+    // Garajul si categoria de capacitate vin din Management capacitati (aceleasi reguli ca acolo).
+    // Filtrul se aplica si pe card (totaluri, top), sortarea doar pe lista din panoul extins.
+    var FILTERS_KEY = 'fleet.dispatcher.insights.filters';
+    var SORTS = {
+        km: [['lost', 'Km pierduți (desc.)'], ['category', 'Categorie capacitate'], ['garage', 'Garaj'], ['plate', 'Nr. înmatriculare']],
+        fuel: [['date', 'Data (recente)'], ['category', 'Categorie capacitate'], ['garage', 'Garaj'], ['plate', 'Nr. înmatriculare'], ['liters', 'Litri (desc.)']]
+    };
+    var filters = { km: { garage: '', category: '', sort: 'lost' }, fuel: { garage: '', category: '', sort: 'date' } };
+    try {
+        var savedFilters = JSON.parse(localStorage.getItem(FILTERS_KEY) || '{}');
+        ['km', 'fuel'].forEach(function (k) { if (savedFilters && savedFilters[k]) { Object.assign(filters[k], savedFilters[k]); } });
+    } catch (e) { /* stocare indisponibila */ }
+    function saveFilters() { try { localStorage.setItem(FILTERS_KEY, JSON.stringify(filters)); } catch (e) { /* ignorat */ } }
+
+    function garageKey(g) { return g ? String(g).trim().toUpperCase() : ''; }
+    // In fisele vehiculelor acelasi garaj e scris diferit ("LUGOJ" / "Lugoj"): se grupeaza pe cheie,
+    // afisat mereu cu prima forma intalnita.
+    var garageNames = {};
+    function garageName(g) {
+        var key = garageKey(g);
+        if (key && !garageNames[key]) { garageNames[key] = String(g).trim(); }
+        return key ? garageNames[key] : '';
+    }
+    // Cap tractor + semiremorca = o unitate: intra la garajul oricaruia dintre cele doua vehicule.
+    function garagesOf(item) { return (item.garaje && item.garaje.length ? item.garaje : (item.garaj ? [item.garaj] : [])); }
+    function matchesFilter(item, f) {
+        var keys = garagesOf(item).map(garageKey);
+        if (f.garage && (f.garage === '__none' ? keys.length > 0 : keys.indexOf(f.garage) === -1)) { return false; }
+        if (f.category && (f.category === '__none' ? item.categorie_id != null : String(item.categorie_id) !== f.category)) { return false; }
+        return true;
+    }
+    function categoryOrder(item) { return item.categorie_id == null ? Infinity : (item.categorie_ordine || 0); }
+    // Sortare stabila: in cadrul aceluiasi garaj / aceleiasi categorii ramane ordinea primita (km sau data).
+    function sortItems(list, sort, extra) {
+        var copy = list.slice();
+        if (sort === 'category') {
+            copy.sort(function (a, b) { return (categoryOrder(a) - categoryOrder(b)) || String(a.categorie || '').localeCompare(String(b.categorie || ''), 'ro'); });
+        } else if (sort === 'garage') {
+            copy.sort(function (a, b) {
+                var ga = garageKey(a.garaj), gb = garageKey(b.garaj);
+                return (ga === '') - (gb === '') || ga.localeCompare(gb, 'ro');
+            });
+        } else if (sort === 'plate') {
+            copy.sort(function (a, b) { return String(a.plate).localeCompare(String(b.plate), 'ro', { numeric: true }); });
+        } else if (extra && extra[sort]) {
+            copy.sort(extra[sort]);
+        }
+        return copy;
+    }
+    // Antet de grup cand lista e ordonata pe categorie sau garaj.
+    function groupLabel(item, sort) {
+        if (sort === 'category') { return item.categorie || 'Fără categorie'; }
+        if (sort === 'garage') { return garageName(item.garaj) || 'Fără garaj'; }
+        return null;
+    }
+    function filterOptions(items) {
+        var garages = {}, categories = {};
+        items.forEach(function (i) {
+            garagesOf(i).forEach(function (name) {
+                var g = garageKey(name);
+                if (g && !garages[g]) { garages[g] = garageName(name); }
+            });
+            if (i.categorie_id != null && !categories[i.categorie_id]) { categories[i.categorie_id] = { id: i.categorie_id, name: i.categorie, order: i.categorie_ordine || 0 }; }
+        });
+        return {
+            garages: Object.keys(garages).sort(function (a, b) { return a.localeCompare(b, 'ro'); }).map(function (k) { return [k, garages[k]]; }),
+            categories: Object.keys(categories).map(function (k) { return categories[k]; })
+                .sort(function (a, b) { return (a.order - b.order) || String(a.name).localeCompare(String(b.name), 'ro'); })
+                .map(function (c) { return [String(c.id), c.name]; })
+        };
+    }
+    function selectHtml(kind, field, label, options, value, allLabel) {
+        var active = allLabel && value ? ' is-active' : '';
+        var html = '<label class="dins-filter' + active + '"><span>' + label + '</span><select class="form-select form-select-sm" data-dins-filter="' + field + '" data-dins-kind="' + kind + '">';
+        if (allLabel) { html += '<option value="">' + allLabel + '</option>'; }
+        options.forEach(function (o) { html += '<option value="' + esc(o[0]) + '"' + (o[0] === value ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; });
+        return html + '</select></label>';
+    }
+    function renderFilterBar(kind, items) {
+        var bar = morph && morph.panel.querySelector('[data-dins-filters]');
+        if (!bar) { return; }
+        var f = filters[kind];
+        var opts = filterOptions(items);
+        // O valoare salvata care nu mai exista (garaj redenumit, categorie stearsa) nu ascunde tot.
+        if (f.garage && f.garage !== '__none' && !opts.garages.some(function (o) { return o[0] === f.garage; })) { f.garage = ''; }
+        if (f.category && f.category !== '__none' && !opts.categories.some(function (o) { return o[0] === f.category; })) { f.category = ''; }
+        bar.innerHTML = '<div class="dins-filter-row">'
+            + selectHtml(kind, 'garage', 'Filtrează garaj', opts.garages.concat([['__none', 'Fără garaj']]), f.garage, 'Toate garajele')
+            + selectHtml(kind, 'category', 'Filtrează categorie', opts.categories.concat([['__none', 'Fără categorie']]), f.category, 'Toate categoriile')
+            + selectHtml(kind, 'sort', 'Ordonează / grupează lista', SORTS[kind], f.sort, '')
+            + '</div><div class="dins-filter-sum" data-dins-filter-sum></div>';
+    }
+    function filterNote(kind) {
+        var f = filters[kind], parts = [];
+        if (f.garage) { parts.push(f.garage === '__none' ? 'fără garaj' : (garageNames[f.garage] || f.garage)); }
+        if (f.category) {
+            var source = kind === 'km' ? kmState.vehicles : fuelState.items;
+            var hit = source.filter(function (i) { return String(i.categorie_id) === f.category; })[0];
+            parts.push(f.category === '__none' ? 'fără categorie' : (hit ? hit.categorie : 'categorie'));
+        }
+        return parts.length ? '<span class="dins-sub dins-filter-note"><i class="bi bi-funnel-fill me-1"></i>' + esc(parts.join(' · ')) + '</span>' : '';
+    }
+    function tagsHtml(item) {
+        var tags = [];
+        var garages = garagesOf(item).map(garageName);
+        if (garages.length) { tags.push('<i class="bi bi-house-door"></i> ' + esc(garages.join(' / '))); }
+        tags.push(item.categorie ? '<i class="bi bi-box-seam"></i> ' + esc(item.categorie) : '<span class="text-muted">fără categorie</span>');
+        return '<span class="dins-li-tags">' + tags.join('<span class="dins-dot">·</span>') + '</span>';
+    }
+    // Numarul afisat in lista: la ansamblu, capul tractor + semiremorca cuplata.
+    function plateHtml(item) {
+        return '<span class="fw-semibold">' + esc(item.plate)
+            + (item.combinatie && item.combinatie !== item.plate ? ' <span class="dins-combo">+ ' + esc(item.combinatie) + '</span>' : '') + '</span>';
+    }
+
     // ---------------------------------------------------------------- alocare
     // Km service: formularul de pe aceeasi pagina (fara reincarcare); cursa: Adauga cursa precompletat.
-    function allocateService(vehicleId, from, to) {
+    // km (optional) = km-ii alesi de operator din deplasarile bifate; fara km, formularul ii ia din GPS pe interval.
+    function allocateService(vehicleId, from, to, kmValue) {
         var a = splitDt(from), b = splitDt(to);
         var values = { vehicle_id: String(vehicleId), data_plecare: a.date, ora_plecare: a.time, data_intoarcere: b.date, ora_intoarcere: b.time };
+        if (kmValue) { values.km = String(kmValue); }
         if (window.DispatcherServiceKm && typeof window.DispatcherServiceKm.prefill === 'function') {
             closeMorph();
             setTimeout(function () { window.DispatcherServiceKm.prefill(values); }, 380);
@@ -44,11 +162,11 @@
         }
         window.location.href = cfg.dispatcherUrl + '&' + new URLSearchParams(Object.assign({ prefill: 'service' }, values)).toString() + '#service-km-panel';
     }
-    function allocateRace(vehicleId, from, to) {
+    function allocateRace(vehicleId, from, to, kmValue) {
         var a = splitDt(from), b = splitDt(to);
-        window.location.href = cfg.dispatcherUrl + '&' + new URLSearchParams({
-            prefill: 'race', vehicle_id: String(vehicleId), data_inceput: a.date, ora_inceput: a.time, data_sfarsit: b.date, ora_sfarsit: b.time
-        }).toString() + '#add-race-form';
+        var values = { prefill: 'race', vehicle_id: String(vehicleId), data_inceput: a.date, ora_inceput: a.time, data_sfarsit: b.date, ora_sfarsit: b.time };
+        if (kmValue) { values.km = String(kmValue); }
+        window.location.href = cfg.dispatcherUrl + '&' + new URLSearchParams(values).toString() + '#add-race-form';
     }
     function allocateButtons(vehicleId, from, to, small) {
         if (!vehicleId) { return '<span class="dins-muted small">vehicul necunoscut în flotă</span>'; }
@@ -125,9 +243,10 @@
 
     function kmLost(v) { return v.gps == null ? null : v.gps - (v.km_efectuati || 0) - (v.km_service || 0); }
     function kmRanked() {
-        return kmState.vehicles.filter(function (v) { return v.gps != null && kmLost(v) > 0.5; })
+        return kmState.vehicles.filter(function (v) { return v.gps != null && kmLost(v) >= MIN_SEGMENT_KM && matchesFilter(v, filters.km); })
             .sort(function (a, b) { return kmLost(b) - kmLost(a); });
     }
+    function kmListed() { return sortItems(kmRanked(), filters.km.sort); }
     function renderKmCard() {
         if (!cfg.canKm) { return; }
         if (kmState.error) { kmBody.innerHTML = '<span class="dins-muted">' + esc(kmState.error) + '</span>'; return; }
@@ -139,6 +258,7 @@
         var html = '<span class="dins-big">' + km(total) + ' <small>km fără cursă</small></span>'
             + '<span class="dins-sub">' + ranked.length + ' vehicule · ' + roDate(kmState.start) + ' – ' + roDate(kmState.end)
             + (pct < 100 ? ' · GPS ' + kmState.loaded + '/' + kmState.total : '') + '</span>'
+            + filterNote('km')
             + (pct < 100 ? '<span class="dins-progress"><span style="width:' + pct + '%"></span></span>' : '');
         // Pana la 6 randuri; CSS-ul arata cate incap in inaltimea cardului (data-dins-rows).
         html += '<ul class="dins-top">' + ranked.slice(0, 6).map(function (v) {
@@ -160,6 +280,7 @@
             var tracked = kmState.vehicles.filter(function (v) { return (v.sas_vehicle_id || 0) > 0; });
             kmState.total = tracked.length;
             kmState.ready = true;
+            if (morph && morph.kind === 'km') { renderFilterBar('km', kmState.vehicles); }
             renderKmCard();
             var period = '&start=' + data.start + '&end=' + data.end;
             // Intai tot ce serverul are deja pe disc (o cerere, fara SAS); din SAS doar ce lipseste.
@@ -194,14 +315,53 @@
     function renderKmList() {
         var list = morph.panel.querySelector('.dins-list');
         if (!list) { return; }
-        var ranked = kmRanked();
+        var ranked = kmListed();
         var pending = kmState.total - kmState.loaded;
+        var sort = filters.km.sort;
+        var totals = {};
+        ranked.forEach(function (v) { var g = groupLabel(v, sort); if (g !== null) { totals[g] = (totals[g] || 0) + kmLost(v); } });
+        var lastGroup = null;
         list.innerHTML = (pending > 0 ? '<div class="dins-muted small px-3 py-2"><span class="spinner-border spinner-border-sm me-1"></span>GPS încărcat ' + kmState.loaded + '/' + kmState.total + '</div>' : '')
             + (ranked.length ? ranked.map(function (v) {
-                return '<button type="button" class="dins-list-item' + (kmState.selected === v.sas_vehicle_id ? ' is-active' : '') + '" data-km-vehicle="' + v.sas_vehicle_id + '">'
-                    + '<span class="fw-semibold">' + esc(v.plate) + '</span><b class="dins-lost">' + km(kmLost(v)) + ' km</b>'
-                    + '<span class="dins-li-meta">GPS ' + km(v.gps) + ' · curse ' + km(v.km_efectuati) + ' · service ' + km(v.km_service) + '</span></button>';
-            }).join('') : '<div class="dins-empty">' + (pending > 0 ? 'Se încarcă…' : 'Niciun vehicul cu km neacoperiți.') + '</div>');
+                var g = groupLabel(v, sort), head = '';
+                if (g !== null && g !== lastGroup) { lastGroup = g; head = '<div class="dins-group"><span>' + esc(g) + '</span><b>' + km(totals[g]) + ' km</b></div>'; }
+                return head + '<button type="button" class="dins-list-item' + (kmState.selected === v.sas_vehicle_id ? ' is-active' : '') + '" data-km-vehicle="' + v.sas_vehicle_id + '">'
+                    + plateHtml(v) + '<b class="dins-lost">' + km(kmLost(v)) + ' km</b>'
+                    + '<span class="dins-li-meta">GPS ' + km(v.gps) + ' · curse ' + km(v.km_efectuati) + ' · service ' + km(v.km_service) + '</span>'
+                    + tagsHtml(v) + '</button>';
+            }).join('') : '<div class="dins-empty">' + (pending > 0 ? 'Se încarcă…' : (filters.km.garage || filters.km.category ? 'Niciun vehicul cu km neacoperiți pentru filtrul ales.' : 'Niciun vehicul cu km neacoperiți.')) + '</div>');
+        var sum = morph.panel.querySelector('[data-dins-filter-sum]');
+        if (sum) { sum.textContent = ranked.length + ' vehicule · ' + km(ranked.reduce(function (s, v) { return s + kmLost(v); }, 0)) + ' km pierduți'; }
+    }
+
+    // Deplasarile sub 1 km (repozitionari in parcare, zgomot GPS) nu se afiseaza separat: km-ii lor
+    // se adauga la deplasarea cea mai apropiata in timp din aceeasi perioada, care isi extinde
+    // intervalul. Perioadele care au in total sub 1 km nu se mai listeaza. Doar afisare: totalurile
+    // vehiculului (Km pierduti din server) raman neschimbate.
+    var MIN_SEGMENT_KM = 1;
+    function dtMs(value) { return Date.parse(String(value || '').replace(' ', 'T')) || 0; }
+    function consolidateSegments(segments) {
+        var list = segments.map(function (s) { return Object.assign({}, s, { km: Number(s.km) || 0, absorbed: 0, absorbedKm: 0 }); });
+        while (list.length > 1) {
+            var i = -1;
+            list.forEach(function (s, k) { if (s.km < MIN_SEGMENT_KM && (i === -1 || s.km < list[i].km)) { i = k; } });
+            if (i === -1) { break; }
+            var tiny = list[i], prev = list[i - 1], next = list[i + 1];
+            var toPrev = prev ? dtMs(tiny.start) - dtMs(prev.end) : Infinity;
+            var toNext = next ? dtMs(next.start) - dtMs(tiny.end) : Infinity;
+            var host = toPrev <= toNext ? prev : next;
+            var first = host === prev ? prev : tiny, last = host === prev ? tiny : next;
+            host.absorbed += 1 + tiny.absorbed;
+            host.absorbedKm += tiny.km + tiny.absorbedKm;
+            host.km += tiny.km;
+            host.from = first.from;
+            host.to = last.to;
+            host.start = first.start;
+            host.end = last.end;
+            host.partial = host.partial || tiny.partial;
+            list.splice(i, 1);
+        }
+        return list;
     }
 
     function renderKmDetail(v, d) {
@@ -212,25 +372,45 @@
             + '<div><b>' + km1(d.declared_service_km) + '</b><span>Km service</span></div><div><b class="dins-lost">' + km1(d.lost_km) + '</b><span>Km pierduți</span></div></div>';
 
         html += '<h6><i class="bi bi-exclamation-circle text-danger me-1"></i>Perioade rulate fără cursă — alocă-le</h6>';
-        var gaps = (d.gaps || []).slice().sort(function (a, b) { return b.km - a.km; });
+        var allGaps = (d.gaps || []).map(function (g) { return Object.assign({}, g, { segments: consolidateSegments(g.segments || []) }); });
+        var gaps = allGaps.filter(function (g) { return Number(g.km) >= MIN_SEGMENT_KM; }).sort(function (a, b) { return b.km - a.km; });
+        var hiddenGaps = allGaps.length - gaps.length;
+        var hiddenKm = allGaps.reduce(function (s, g) { return s + (Number(g.km) >= MIN_SEGMENT_KM ? 0 : Number(g.km) || 0); }, 0);
         if (!gaps.length) {
-            html += '<div class="dins-muted small">Nicio deplasare GPS în afara curselor / drumurilor la service.</div>';
+            html += '<div class="dins-muted small">Nicio deplasare GPS de peste 1 km în afara curselor / drumurilor la service.</div>';
         } else {
-            html += '<div class="table-responsive"><table class="table table-sm align-middle mb-2"><thead class="table-light"><tr><th>Interval</th><th>Între</th><th class="text-end">Km GPS</th><th class="text-end">Alocă</th></tr></thead><tbody>';
+            var canSelect = !!v.vehicle_id && (cfg.canService || cfg.canRace);
+            if (canSelect) {
+                html += '<div class="dins-muted small mb-2"><i class="bi bi-check2-square me-1"></i>Bifează deplasările dintr-o perioadă ca să aloci doar km-ii lor (sau toată perioada din bifa ei). '
+                    + '<b>Ține apăsat și trage</b> peste rânduri ca să bifezi mai multe deodată (rotița derulează în timpul tragerii); <b>Shift+click</b> bifează un interval.</div>';
+            }
+            html += '<div class="table-responsive"><table class="table table-sm align-middle mb-2"><thead class="table-light"><tr>' + (canSelect ? '<th class="dins-check-col"></th>' : '')
+                + '<th>Interval</th><th>Între</th><th class="text-end">Km GPS</th><th class="text-end">Alocă</th></tr></thead><tbody>';
             gaps.forEach(function (g, i) {
                 var between = (g.after ? 'după ' + esc(g.after) : 'început perioadă') + ' → ' + (g.before ? 'înainte de ' + esc(g.before) : 'sfârșit perioadă');
-                html += '<tr><td class="text-nowrap"><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none" data-km-gap-toggle="' + i + '"><i class="bi bi-chevron-right"></i></button> '
+                html += '<tr>' + (canSelect ? '<td class="dins-check-col"><input class="form-check-input" type="checkbox" data-km-gap-all="' + i + '" aria-label="Toate deplasările din perioadă"></td>' : '')
+                    + '<td class="text-nowrap"><button type="button" class="btn btn-link btn-sm p-0 text-decoration-none" data-km-gap-toggle="' + i + '"><i class="bi bi-chevron-right"></i></button> '
                     + esc(roDt(g.from)) + ' → ' + esc(roDt(g.to)) + '<div class="dins-muted small">' + g.segments.length + ' deplasări</div></td>'
                     + '<td class="small">' + between + '</td><td class="text-end dins-lost">' + km1(g.km) + '</td>'
-                    + '<td>' + allocateButtons(v.vehicle_id, g.from, g.to) + '</td></tr>';
-                g.segments.forEach(function (s) {
-                    html += '<tr class="dins-seg-row d-none" data-km-gap="' + i + '"><td class="ps-4 text-nowrap">' + esc(roDt(s.start)) + ' – ' + esc(splitDt(s.end).time) + '</td>'
+                    + '<td>' + allocateButtons(v.vehicle_id, g.from, g.to)
+                    + (phaseAllowed(g) ? '<div class="dins-actions mt-1"><button type="button" class="btn btn-sm btn-outline-success" data-km-phase-gap="' + i + '"><i class="bi bi-signpost-split me-1"></i>Fază</button></div>' : '')
+                    + '</td></tr>';
+                g.segments.forEach(function (s, j) {
+                    html += '<tr class="dins-seg-row d-none" data-km-gap="' + i + '">' + (canSelect ? '<td class="dins-check-col"><input class="form-check-input" type="checkbox" data-km-seg="' + i + ':' + j + '" aria-label="Alege deplasarea"></td>' : '')
+                        + '<td class="ps-4 text-nowrap">' + esc(roDt(s.start)) + ' – ' + esc(splitDt(s.start).date === splitDt(s.end).date ? splitDt(s.end).time : roDt(s.end)) + '</td>'
                         + '<td>' + esc(s.from || '?') + ' <i class="bi bi-arrow-right"></i> ' + esc(s.to || '?') + (s.partial ? ' <span class="badge text-bg-light">parțial</span>' : '') + '</td>'
-                        + '<td class="text-end">' + km1(s.km) + '</td><td>' + allocateButtons(v.vehicle_id, s.start, s.end, true) + '</td></tr>';
+                        + '<td class="text-end">' + km1(s.km) + (s.absorbed ? '<div class="dins-absorbed" title="Deplasări sub 1 km adăugate la aceasta: ' + km1(s.absorbedKm) + ' km">+' + s.absorbed + ' sub 1 km</div>' : '') + '</td>'
+                        + '<td>' + allocateButtons(v.vehicle_id, s.start, s.end, true) + '</td></tr>';
                 });
             });
             html += '</tbody></table></div>';
+            if (canSelect) { html += '<div class="dins-alloc-bar" data-km-alloc-bar hidden></div>'; }
         }
+        if (hiddenGaps > 0) {
+            html += '<div class="dins-muted small mb-2"><i class="bi bi-eye-slash me-1"></i>' + hiddenGaps + (hiddenGaps === 1 ? ' perioadă' : ' perioade')
+                + ' cu sub 1 km în total (' + km1(hiddenKm) + ' km) nu ' + (hiddenGaps === 1 ? 'este afișată' : 'sunt afișate') + '. Deplasările sub 1 km sunt adăugate la cea mai apropiată deplasare.</div>';
+        }
+        kmSelection = { vehicleId: v.vehicle_id, gaps: gaps, gap: null, segs: {} };
 
         var over = (d.trips || []).filter(function (t) { return t.counted && !t.starts_before && t.gps_km - t.declared_km > 0.5; });
         if (over.length) {
@@ -243,6 +423,218 @@
         }
         html += '<div class="dins-muted small mt-2"><i class="bi bi-info-circle me-1"></i>„Km service” completează formularul Km service de pe această pagină; „Cursă” deschide Adaugă cursă cu vehiculul și intervalul precompletate. Nimic nu se salvează fără confirmarea ta.</div>';
         pane.innerHTML = html;
+    }
+
+    // ---------------------------------------------------------------- alocare pe deplasari alese
+    // Operatorul bifeaza deplasarile dintr-o singura perioada fara cursa: intervalul alocat merge de
+    // la prima la ultima deplasare bifata, iar km = suma lor (editabila, ex. doar o parte din drum).
+    // O perioada se intinde intre doua curse, deci deplasari din perioade diferite nu se amesteca.
+    var kmSelection = null;
+    function selectedSegments() {
+        if (!kmSelection || kmSelection.gap === null) { return []; }
+        var gap = kmSelection.gaps[kmSelection.gap];
+        return gap.segments.filter(function (s, j) { return kmSelection.segs[j]; });
+    }
+    function renderAllocBar() {
+        var bar = morph && morph.panel.querySelector('[data-km-alloc-bar]');
+        if (!bar) { return; }
+        var segs = selectedSegments();
+        morph.panel.querySelectorAll('[data-km-seg]').forEach(function (box) {
+            var p = box.getAttribute('data-km-seg').split(':');
+            box.checked = kmSelection.gap === +p[0] && !!kmSelection.segs[+p[1]];
+            box.closest('tr').classList.toggle('is-picked', box.checked);
+        });
+        morph.panel.querySelectorAll('[data-km-gap-all]').forEach(function (box) {
+            var i = +box.getAttribute('data-km-gap-all');
+            var total = kmSelection.gaps[i].segments.length;
+            var picked = kmSelection.gap === i ? segs.length : 0;
+            box.checked = picked > 0 && picked === total;
+            box.indeterminate = picked > 0 && picked < total;
+        });
+        if (!segs.length) { bar.hidden = true; bar.innerHTML = ''; return; }
+        var sum = segs.reduce(function (s, x) { return s + (Number(x.km) || 0); }, 0);
+        var from = segs[0].start, to = segs[segs.length - 1].end;
+        var gap = kmSelection.gaps[kmSelection.gap];
+        var skipped = gap.segments.slice(gap.segments.indexOf(segs[0]), gap.segments.indexOf(segs[segs.length - 1]) + 1).length - segs.length;
+        bar.hidden = false;
+        bar.innerHTML = '<div class="dins-alloc-info"><b>' + segs.length + ' ' + (segs.length === 1 ? 'deplasare aleasă' : 'deplasări alese') + '</b>'
+            + '<span>' + esc(roDt(from)) + ' → ' + esc(roDt(to)) + ' · GPS ' + km1(sum) + ' km</span>'
+            + (skipped > 0 ? '<span class="text-warning-emphasis"><i class="bi bi-info-circle me-1"></i>Intervalul cuprinde și ' + skipped + ' deplasări nebifate; km alocați rămân doar cei de mai jos.</span>' : '')
+            + '</div><label class="dins-alloc-km"><span>Km de alocat</span><input type="number" class="form-control form-control-sm" min="1" step="1" value="' + Math.max(1, Math.round(sum)) + '" data-km-alloc-value></label>'
+            + '<div class="dins-actions">'
+            + (cfg.canService ? '<button type="button" class="btn btn-sm btn-warning" data-km-alloc-go="service"><i class="bi bi-tools me-1"></i>Km service</button>' : '')
+            + (cfg.canRace ? '<button type="button" class="btn btn-sm btn-primary" data-km-alloc-go="race"><i class="bi bi-plus-lg me-1"></i>Cursă</button>' : '')
+            + (phaseAllowed(gap) ? '<button type="button" class="btn btn-sm btn-success" data-km-alloc-go="phase"><i class="bi bi-signpost-split me-1"></i>Fază</button>' : '')
+            + '<button type="button" class="btn btn-sm btn-link text-secondary" data-km-alloc-clear>Golește</button></div>';
+    }
+    function toggleSegment(gapIndex, segIndex, on) {
+        if (kmSelection.gap !== gapIndex) { kmSelection.gap = gapIndex; kmSelection.segs = {}; }
+        if (on) { kmSelection.segs[segIndex] = true; } else { delete kmSelection.segs[segIndex]; }
+        if (!Object.keys(kmSelection.segs).length) { kmSelection.gap = null; }
+        renderAllocBar();
+    }
+    // ---------------------------------------------------------------- selectie cu mouse-ul
+    // Apasa pe o deplasare si trage peste celelalte: toate primesc starea primei (bifat / debifat).
+    // Shift+click bifeaza intervalul de la ultima deplasare atinsa. Panoul se deruleaza singur la
+    // margini, iar rotita mouse-ului continua selectia in timpul tragerii.
+    var drag = null;
+    var anchor = null;
+    function segFromRow(row) {
+        var box = row && row.querySelector('[data-km-seg]');
+        if (!box) { return null; }
+        var p = box.getAttribute('data-km-seg').split(':');
+        return { gap: +p[0], seg: +p[1] };
+    }
+    function paintRange(gapIndex, base, from, to, on) {
+        var segs = Object.assign({}, base);
+        for (var j = Math.min(from, to); j <= Math.max(from, to); j++) {
+            if (on) { segs[j] = true; } else { delete segs[j]; }
+        }
+        kmSelection.gap = Object.keys(segs).length ? gapIndex : null;
+        kmSelection.segs = segs;
+        renderAllocBar();
+    }
+    function dragTo(clientX, clientY) {
+        if (!drag) { return; }
+        var el = document.elementFromPoint(clientX, clientY);
+        var hit = segFromRow(el && el.closest('tr.dins-seg-row'));
+        if (!hit || hit.gap !== drag.gap || hit.seg === drag.last) { return; }
+        drag.last = hit.seg;
+        paintRange(drag.gap, drag.base, drag.start, hit.seg, drag.on);
+    }
+    function autoScroll() {
+        if (!drag) { return; }
+        var pane = drag.pane, rect = pane.getBoundingClientRect(), edge = 48, speed = 0;
+        // Bara de alocare acopera josul panoului: derularea porneste deasupra ei.
+        var bar = pane.querySelector('[data-km-alloc-bar]');
+        var bottom = bar && !bar.hidden ? bar.getBoundingClientRect().top : rect.bottom;
+        if (drag.y < rect.top + edge) { speed = -Math.ceil((rect.top + edge - drag.y) / 4); }
+        else if (drag.y > bottom - edge) { speed = Math.ceil((drag.y - bottom + edge) / 4); }
+        if (speed) { pane.scrollTop += speed; dragTo(drag.x, drag.y); }
+        drag.frame = requestAnimationFrame(autoScroll);
+    }
+    function endDrag() {
+        if (!drag) { return; }
+        cancelAnimationFrame(drag.frame);
+        drag.pane.classList.remove('is-drag-selecting');
+        drag = null;
+    }
+    document.addEventListener('pointerdown', function (e) {
+        if (!morph || !kmSelection || e.button !== 0) { return; }
+        var row = e.target.closest('tr.dins-seg-row');
+        if (!row || !morph.panel.contains(row) || e.target.closest('button, a, [data-alloc]')) { return; }
+        var hit = segFromRow(row);
+        if (!hit) { return; }
+        e.preventDefault();
+        var sameGap = kmSelection.gap === hit.gap;
+        var base = sameGap ? Object.assign({}, kmSelection.segs) : {};
+        if (e.shiftKey && anchor && anchor.sel === kmSelection && anchor.gap === hit.gap) {
+            paintRange(hit.gap, base, anchor.seg, hit.seg, true);
+            anchor = { sel: kmSelection, gap: hit.gap, seg: hit.seg };
+            return;
+        }
+        var on = !(sameGap && kmSelection.segs[hit.seg]);
+        anchor = { sel: kmSelection, gap: hit.gap, seg: hit.seg };
+        drag = { gap: hit.gap, start: hit.seg, last: hit.seg, base: base, on: on, pane: row.closest('.dins-pane'), x: e.clientX, y: e.clientY, frame: 0 };
+        drag.pane.classList.add('is-drag-selecting');
+        paintRange(hit.gap, base, hit.seg, hit.seg, on);
+        drag.frame = requestAnimationFrame(autoScroll);
+    });
+    document.addEventListener('pointermove', function (e) {
+        if (!drag) { return; }
+        drag.x = e.clientX;
+        drag.y = e.clientY;
+        dragTo(e.clientX, e.clientY);
+    });
+    document.addEventListener('pointerup', endDrag);
+    document.addEventListener('pointercancel', endDrag);
+    // Rotita in timpul tragerii: randul de sub cursor se schimba fara pointermove.
+    document.addEventListener('scroll', function () { if (drag) { dragTo(drag.x, drag.y); } }, true);
+    // Bifa a fost deja schimbata la pointerdown; click-ul mouse-ului nu o mai inverseaza o data.
+    // Din tastatura (Spatiu, detail = 0) bifa merge ca inainte, prin evenimentul change.
+    document.addEventListener('click', function (e) {
+        if (e.detail > 0 && e.target.matches && e.target.matches('[data-km-seg]')) { e.preventDefault(); }
+    }, true);
+
+    function toggleGap(gapIndex, on) {
+        kmSelection.gap = on ? gapIndex : null;
+        kmSelection.segs = {};
+        if (on) {
+            kmSelection.gaps[gapIndex].segments.forEach(function (s, j) { kmSelection.segs[j] = true; });
+            // Deplasarile bifate trebuie sa se vada: perioada se deschide.
+            var toggle = morph.panel.querySelector('[data-km-gap-toggle="' + gapIndex + '"]');
+            var rows = morph.panel.querySelectorAll('[data-km-gap="' + gapIndex + '"]');
+            if (toggle && rows.length && rows[0].classList.contains('d-none')) { toggle.click(); }
+        }
+        renderAllocBar();
+    }
+    function allocateSelection(kind) {
+        var segs = selectedSegments();
+        if (!segs.length) { return; }
+        var input = morph.panel.querySelector('[data-km-alloc-value]');
+        var value = Math.round(Number(input && input.value));
+        if (!(value > 0)) { input.classList.add('is-invalid'); input.focus(); return; }
+        var from = segs[0].start, to = segs[segs.length - 1].end;
+        if (kind === 'phase') { openPhasePicker(kmSelection.gaps[kmSelection.gap], from, to, value); return; }
+        if (kind === 'service') { allocateService(kmSelection.vehicleId, from, to, value); } else { allocateRace(kmSelection.vehicleId, from, to, value); }
+    }
+
+    // ---------------------------------------------------------------- km pe o faza
+    // O perioada fara cursa sta intre doua curse: km-ii ei se pot pune pe cursa dinainte sau pe
+    // cea de dupa — ca faza noua, adaugati la o faza existenta sau la cursa (cand nu are faze).
+    // Alegerea deschide fisa cursei precompletata (kmp_*); se salveaza doar la Salveaza.
+    function phaseAllowed(gap) { return !!(cfg.canPhase && cfg.kmTripsUrl && gap && (gap.after_trip_id || gap.before_trip_id)); }
+    function phaseHref(trip, faza, from, to, value) {
+        var params = { kmp_from: String(from).slice(0, 16), kmp_to: String(to).slice(0, 16), kmp_km: String(value) };
+        if (faza) { params.faza = String(faza); }
+        if (faza === 'noua' && kmSelection && kmSelection.vehicleId) { params.kmp_vehicle = String(kmSelection.vehicleId); }
+        return trip.edit_url + '&' + new URLSearchParams(params).toString() + '#race-form';
+    }
+    function closePhasePicker() {
+        var old = morph && morph.panel.querySelector('.dins-phase-picker');
+        if (old) { old.remove(); }
+    }
+    function openPhasePicker(gap, from, to, value) {
+        if (!phaseAllowed(gap) || !morph) { return; }
+        closePhasePicker();
+        var picker = document.createElement('div');
+        picker.className = 'dins-phase-picker';
+        picker.setAttribute('role', 'dialog');
+        picker.setAttribute('aria-label', 'Alege cursa și faza');
+        picker.innerHTML = '<div class="dins-phase-card"><div class="dins-phase-head"><div><b>Pune ' + esc(String(value)) + ' km pe o fază</b>'
+            + '<span>' + esc(roDt(from)) + ' → ' + esc(roDt(to)) + '</span></div>'
+            + '<button type="button" class="btn-close" data-km-phase-close aria-label="Închide"></button></div>'
+            + '<div class="dins-phase-body"><div class="dins-empty"><span class="spinner-border spinner-border-sm me-2"></span>Se încarcă cursele…</div></div></div>';
+        morph.panel.querySelector('.dins-morph-content').appendChild(picker);
+        var ids = [gap.after_trip_id, gap.before_trip_id].filter(Boolean);
+        getJson(cfg.kmTripsUrl + '&ids=' + ids.join(',')).then(function (d) {
+            if (!d || !d.success) { throw new Error(d && d.error ? d.error : 'Cursele nu au putut fi încărcate.'); }
+            var body = picker.querySelector('.dins-phase-body');
+            if (!d.trips.length) { body.innerHTML = '<div class="dins-empty">Cursele de lângă această perioadă nu mai există.</div>'; return; }
+            body.innerHTML = d.trips.map(function (t) {
+                var where = t.id === gap.after_trip_id ? 'cursa dinaintea perioadei' : 'cursa de după perioadă';
+                var html = '<div class="dins-phase-trip' + (t.billed ? ' is-billed' : '') + '"><div class="dins-phase-trip-head">'
+                    + '<div><a href="' + esc(tripHref(t.id)) + '" target="_blank" rel="noopener" class="fw-semibold">#' + t.id + '</a> '
+                    + esc(t.beneficiar) + ' · ' + esc(t.tip_label) + ' <span class="badge text-bg-light fw-normal">' + where + '</span>'
+                    + (t.billed ? ' <span class="badge text-bg-secondary">facturată</span>' : '')
+                    + '<div class="dins-muted small">' + esc(roDt(t.from)) + ' → ' + esc(roDt(t.to)) + ' · ' + km1(t.km) + ' km' + (t.phases.length ? ' · ' + t.phases.length + ' faze' : '') + '</div></div>';
+                if (t.billed) { return html + '</div><div class="dins-muted small">Cursa e facturată: km-ii nu se mai pot pune pe ea.</div></div>'; }
+                html += '<a class="btn btn-sm btn-success" href="' + esc(phaseHref(t, 'noua', from, to, value)) + '"><i class="bi bi-plus-lg me-1"></i>Fază nouă</a></div>';
+                if (t.phases.length) {
+                    html += '<div class="dins-phase-list">' + t.phases.map(function (p) {
+                        return '<div class="dins-phase-row"><span><b>Faza ' + p.nr + '</b> · ' + esc(roDt(p.from)) + ' → ' + esc(roDt(p.to)) + ' · ' + km1(p.km) + ' km'
+                            + (p.plate ? ' · ' + esc(p.plate) : '') + '</span>'
+                            + '<a class="btn btn-sm btn-outline-success" href="' + esc(phaseHref(t, p.id, from, to, value)) + '">+' + esc(String(value)) + ' km aici</a></div>';
+                    }).join('') + '</div>';
+                } else {
+                    html += '<div class="dins-phase-list"><div class="dins-phase-row"><span>Cursa nu are faze: adaugă km-ii direct pe cursă (' + km1(t.km) + ' → ' + km1(t.km + value) + ' km).</span>'
+                        + '<a class="btn btn-sm btn-outline-success" href="' + esc(phaseHref(t, '', from, to, value)) + '">+' + esc(String(value)) + ' km la cursă</a></div></div>';
+                }
+                return html + '</div>';
+            }).join('') + '<div class="dins-muted small mt-2"><i class="bi bi-info-circle me-1"></i>Se deschide fișa cursei precompletată; nimic nu se salvează până nu apeși Salvează.</div>';
+        }).catch(function (err) {
+            picker.querySelector('.dins-phase-body').innerHTML = '<div class="alert alert-danger m-0">' + esc(err.message) + '</div>';
+        });
     }
 
     function selectKmVehicle(carId) {
@@ -265,11 +657,12 @@
     function openKm(card) {
         if (!cfg.canKm || kmState.error) { return; }
         openMorph(card, 'Km pierduți', 'Km GPS (SAS) rulați fără cursă sau service · ' + roDate(kmState.start) + ' – ' + roDate(kmState.end), 'dins-card--km', function (content) {
-            content.innerHTML = '<div class="dins-split"><div class="dins-list"></div><div class="dins-pane"><div class="dins-empty">Alege un vehicul din stânga.</div></div></div>';
+            content.innerHTML = '<div class="dins-split"><div class="dins-side-col"><div class="dins-filters" data-dins-filters></div><div class="dins-list"></div></div><div class="dins-pane"><div class="dins-empty">Alege un vehicul din stânga.</div></div></div>';
         });
         morph.kind = 'km';
+        renderFilterBar('km', kmState.vehicles);
         renderKmList();
-        var first = kmRanked()[0];
+        var first = kmListed()[0];
         if (first) { selectKmVehicle(first.sas_vehicle_id); }
     }
 
@@ -277,11 +670,21 @@
     var fuelState = { items: [], loaded: false, error: '', canLink: false, selected: null };
     var fuelBody = root.querySelector('[data-dins-body="fuel"]');
 
+    function fuelFiltered() { return fuelState.items.filter(function (i) { return matchesFilter(i, filters.fuel); }); }
+    function fuelListed() {
+        return sortItems(fuelFiltered(), filters.fuel.sort, {
+            date: function (a, b) { return String(b.datetime).localeCompare(String(a.datetime)); },
+            liters: function (a, b) { return b.liters - a.liters; }
+        });
+    }
+
     function renderFuelCard() {
         if (fuelState.error) { fuelBody.innerHTML = '<span class="dins-muted">' + esc(fuelState.error) + '</span>'; return; }
-        var items = fuelState.items;
+        var items = fuelFiltered();
         if (!items.length) {
-            fuelBody.innerHTML = '<span class="dins-big">0</span><span class="dins-sub">Toate alimentările CardOil din ultimele 30 de zile au cursă sau Km service.</span>';
+            fuelBody.innerHTML = '<span class="dins-big">0</span><span class="dins-sub">' + (fuelState.items.length
+                ? 'Nicio alimentare neasociată pentru filtrul ales (' + fuelState.items.length + ' în total).'
+                : 'Toate alimentările CardOil din ultimele 30 de zile au cursă sau Km service.') + '</span>' + filterNote('fuel');
             return;
         }
         var liters = items.reduce(function (s, i) { return s + (i.fuel_type === 'adblue' ? 0 : i.liters); }, 0);
@@ -292,6 +695,7 @@
         var max = byPlate[plates[0]];
         fuelBody.innerHTML = '<span class="dins-big">' + items.length + ' <small>alimentări fără cursă</small></span>'
             + '<span class="dins-sub">' + km(liters) + ' L carburant · ' + NF.format(Math.round(value)) + ' lei · ' + plates.length + ' vehicule</span>'
+            + filterNote('fuel')
             + '<ul class="dins-top">' + plates.slice(0, 6).map(function (p) {
                 return '<li><span class="text-truncate fw-semibold">' + esc(p) + '</span><span class="dins-bar"><span style="width:' + (byPlate[p] / max * 100).toFixed(1) + '%"></span></span><b>' + byPlate[p] + '</b></li>';
             }).join('') + '</ul>'
@@ -305,17 +709,30 @@
             fuelState.canLink = !!data.can_link;
             fuelState.loaded = true;
             renderFuelCard();
-            if (morph && morph.kind === 'fuel') { renderFuelList(); }
+            if (morph && morph.kind === 'fuel') { renderFilterBar('fuel', fuelState.items); renderFuelList(); }
         }).catch(function (err) { fuelState.error = err.message; renderFuelCard(); });
     }
 
     function renderFuelList() {
         var list = morph.panel.querySelector('.dins-list');
-        list.innerHTML = fuelState.items.length ? fuelState.items.map(function (i) {
-            return '<button type="button" class="dins-list-item' + (fuelState.selected === i.id ? ' is-active' : '') + '" data-fuel-id="' + i.id + '">'
-                + '<span class="fw-semibold">' + esc(i.plate) + '</span><b>' + km1(i.liters) + ' L</b>'
-                + '<span class="dins-li-meta">' + esc(roDt(i.datetime)) + ' · ' + esc(FUEL_LABELS[i.fuel_type] || i.fuel_type) + (i.driver ? ' · ' + esc(i.driver) : '') + '</span></button>';
-        }).join('') : '<div class="dins-empty">Nicio alimentare neasociată.</div>';
+        var items = fuelListed();
+        var sort = filters.fuel.sort;
+        var counts = {};
+        items.forEach(function (i) { var g = groupLabel(i, sort); if (g !== null) { counts[g] = (counts[g] || 0) + 1; } });
+        var lastGroup = null;
+        list.innerHTML = items.length ? items.map(function (i) {
+            var g = groupLabel(i, sort), head = '';
+            if (g !== null && g !== lastGroup) { lastGroup = g; head = '<div class="dins-group"><span>' + esc(g) + '</span><b>' + counts[g] + '</b></div>'; }
+            return head + '<button type="button" class="dins-list-item' + (fuelState.selected === i.id ? ' is-active' : '') + '" data-fuel-id="' + i.id + '">'
+                + plateHtml(i) + '<b>' + km1(i.liters) + ' L</b>'
+                + '<span class="dins-li-meta">' + esc(roDt(i.datetime)) + ' · ' + esc(FUEL_LABELS[i.fuel_type] || i.fuel_type) + (i.driver ? ' · ' + esc(i.driver) : '') + '</span>'
+                + tagsHtml(i) + '</button>';
+        }).join('') : '<div class="dins-empty">' + (fuelState.items.length ? 'Nicio alimentare neasociată pentru filtrul ales.' : 'Nicio alimentare neasociată.') + '</div>';
+        var sum = morph.panel.querySelector('[data-dins-filter-sum]');
+        if (sum) {
+            var liters = items.reduce(function (s, i) { return s + (i.fuel_type === 'adblue' ? 0 : i.liters); }, 0);
+            sum.textContent = items.length + ' alimentări · ' + km(liters) + ' L';
+        }
     }
 
     function tripLine(label, trip, suffix) {
@@ -389,7 +806,7 @@
                 renderFuelCard();
                 renderFuelList();
                 pane.innerHTML = '<div class="dins-empty text-success"><i class="bi bi-check-circle fs-3 d-block mb-2"></i>' + esc(d.message) + '</div>';
-                var next = fuelState.items[0];
+                var next = fuelListed()[0];
                 if (next) { setTimeout(function () { if (morph && fuelState.selected === id) { selectFuel(next.id); } }, 1200); }
             })
             .catch(function (err) { button.disabled = false; msg.className = 'small mt-1 text-danger'; msg.textContent = err.message; });
@@ -398,15 +815,17 @@
     function openFuel(card) {
         if (fuelState.error) { return; }
         openMorph(card, 'Alimentări neasociate', 'CardOil · alimentări din API fără cursă sau Km service, ultimele 30 de zile', 'dins-card--fuel', function (content) {
-            content.innerHTML = '<div class="dins-split"><div class="dins-list"></div><div class="dins-pane"><div class="dins-empty">Alege o alimentare din stânga.</div></div></div>';
+            content.innerHTML = '<div class="dins-split"><div class="dins-side-col"><div class="dins-filters" data-dins-filters></div><div class="dins-list"></div></div><div class="dins-pane"><div class="dins-empty">Alege o alimentare din stânga.</div></div></div>';
         });
         morph.kind = 'fuel';
         if (!fuelState.loaded) {
             morph.panel.querySelector('.dins-list').innerHTML = '<div class="dins-empty"><span class="spinner-border spinner-border-sm"></span></div>';
             return;
         }
+        renderFilterBar('fuel', fuelState.items);
         renderFuelList();
-        if (fuelState.items[0]) { selectFuel(fuelState.items[0].id); }
+        var first = fuelListed()[0];
+        if (first) { selectFuel(first.id); }
     }
 
     // ---------------------------------------------------------------- evenimente
@@ -429,9 +848,48 @@
             icon.classList.toggle('bi-chevron-down');
             return;
         }
+        if ((t = e.target.closest('[data-km-alloc-go]'))) { allocateSelection(t.getAttribute('data-km-alloc-go')); return; }
+        if ((t = e.target.closest('[data-km-phase-close]'))) { closePhasePicker(); return; }
+        if ((t = e.target.closest('[data-km-phase-gap]'))) {
+            var pg = kmSelection && kmSelection.gaps[+t.getAttribute('data-km-phase-gap')];
+            if (pg) { openPhasePicker(pg, pg.from, pg.to, Math.max(1, Math.round(pg.km))); }
+            return;
+        }
+        if ((t = e.target.closest('[data-km-alloc-clear]'))) { kmSelection.gap = null; kmSelection.segs = {}; renderAllocBar(); return; }
         if ((t = e.target.closest('[data-alloc]'))) {
             var args = [t.getAttribute('data-vehicle'), t.getAttribute('data-from'), t.getAttribute('data-to')];
             if (t.getAttribute('data-alloc') === 'service') { allocateService.apply(null, args); } else { allocateRace.apply(null, args); }
+        }
+    });
+
+    document.addEventListener('change', function (e) {
+        if (morph && kmSelection && morph.panel.contains(e.target)) {
+            if (e.target.matches('[data-km-seg]')) {
+                var p = e.target.getAttribute('data-km-seg').split(':');
+                toggleSegment(+p[0], +p[1], e.target.checked);
+                return;
+            }
+            if (e.target.matches('[data-km-gap-all]')) { toggleGap(+e.target.getAttribute('data-km-gap-all'), e.target.checked); return; }
+            if (e.target.matches('[data-km-alloc-value]')) { e.target.classList.remove('is-invalid'); return; }
+        }
+        var select = e.target.closest('[data-dins-filter]');
+        if (!select || !morph || !morph.panel.contains(select)) { return; }
+        var kind = select.getAttribute('data-dins-kind');
+        filters[kind][select.getAttribute('data-dins-filter')] = select.value;
+        saveFilters();
+        var wrap = select.closest('.dins-filter');
+        if (select.getAttribute('data-dins-filter') !== 'sort') { wrap.classList.toggle('is-active', select.value !== ''); }
+        // Daca vehiculul / alimentarea deschisa in dreapta a iesit din filtru, se deschide primul din lista.
+        if (kind === 'km') {
+            renderKmCard();
+            renderKmList();
+            var kmList = kmListed();
+            if (kmList.length && !kmList.some(function (v) { return v.sas_vehicle_id === kmState.selected; })) { selectKmVehicle(kmList[0].sas_vehicle_id); }
+        } else {
+            renderFuelCard();
+            renderFuelList();
+            var fuelList = fuelListed();
+            if (fuelList.length && !fuelList.some(function (i) { return i.id === fuelState.selected; })) { selectFuel(fuelList[0].id); }
         }
     });
 

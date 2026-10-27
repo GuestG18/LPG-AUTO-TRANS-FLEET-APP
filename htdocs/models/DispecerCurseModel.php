@@ -6120,6 +6120,16 @@ class DispecerCurseModel extends BaseModel
         $startTime = trim((string) ($first['ora_inceput'] ?? ''));
         $endDate = trim((string) ($last['data_sfarsit'] ?? ''));
         $endTime = trim((string) ($last['ora_sfarsit'] ?? ''));
+        // Ultima faza fara sfarsit = cursa in desfasurare. Ca la cursa salvata fara
+        // sfarsit (validateRaceInput): data de sfarsit = inceputul fazei, fara ora
+        // (curse_dispecer.data_sfarsit este NOT NULL).
+        if ($endDate === '') {
+            $endDate = trim((string) ($last['data_inceput'] ?? ''));
+            if ($endDate === '') {
+                $endDate = $startDate;
+            }
+            $endTime = '';
+        }
 
         $durationMinutes = self::sumSegmentDurationMinutes($segments);
 

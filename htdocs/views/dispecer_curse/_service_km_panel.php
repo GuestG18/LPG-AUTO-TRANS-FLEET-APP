@@ -362,6 +362,9 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
     var gpsHintDefault = gpsHint.textContent;
     var gpsTimer = null;
     var gpsRequest = 0;
+    // Km alesi in Km pierduti (doar deplasarile bifate): GPS-ul intervalului nu ii suprascrie,
+    // pana cand operatorul schimba vehiculul sau perioada.
+    var lockedKm = null;
     function setGpsHint(text, isWarning) {
         gpsHint.textContent = text || gpsHintDefault;
         gpsHint.classList.toggle('text-warning-emphasis', !!isWarning);
@@ -412,6 +415,11 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
                     setGpsHint((data && data.error) || 'Datele SAS nu au putut fi citite; completează km manual.', true);
                     return;
                 }
+                if (lockedKm !== null) {
+                    field('km').value = lockedKm;
+                    setGpsHint('Km aleși din Km pierduți (deplasările bifate): ' + lockedKm + ' km. GPS pe tot intervalul: ' + String(Math.round(Number(data.total_km) || 0)) + ' km.');
+                    return;
+                }
                 field('km').value = String(Math.round(data.total_km == null ? 0 : Number(data.total_km)));
                 setGpsHint('');
             })
@@ -422,6 +430,7 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
     }
 
     function scheduleGpsKm() {
+        lockedKm = null;
         window.clearTimeout(gpsTimer);
         gpsTimer = window.setTimeout(fetchGpsKm, 500);
     }
@@ -442,6 +451,9 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
         });
         fill(prefill);
         if (field('vehicle_id').value !== vehicleId) { return false; }
+        var chosenKm = parseInt(String(source.km || ''), 10);
+        lockedKm = chosenKm > 0 ? String(chosenKm) : null;
+        if (lockedKm !== null) { field('km').value = lockedKm; }
         openForm();
         fetchGpsKm();
         return true;

@@ -37,12 +37,22 @@
         return !!element && element.offsetParent !== null;
     }
 
+    // Din Km pierduti cu deplasari bifate (prefill=race&km=N): formularul Adauga cursa primeste
+    // km-ii alesi, nu GPS-ul intregului interval. Valabil pana cand operatorul schimba vehiculul
+    // sau intervalul precompletat.
+    var query = new URLSearchParams(window.location.search);
+    var chosenKm = query.get('prefill') === 'race' ? parseInt(query.get('km') || '', 10) : NaN;
+    chosenKm = chosenKm > 0 ? chosenKm : null;
+
     function initForm(form) {
         var field = function (name) { return form.querySelector('[name="' + name + '"]'); };
         var timer = 0;
         var requestId = 0;
         var lastKey = null;
         var hint = null;
+        var isCreateForm = /action=store/.test(form.getAttribute('action') || '');
+        var lockedKm = isCreateForm ? chosenKm : null;
+        var lockedFor = null;
 
         function targetField() {
             var typeField = form.querySelector('[data-role="tip-transport"]') || field('tip_transport');
@@ -99,6 +109,17 @@
             if (!target || target.readOnly || target.disabled) {
                 return;
             }
+            // Prima cerere completa e cea a intervalului precompletat: de acolo km raman cei alesi.
+            if (lockedKm !== null && lockedFor === null) { lockedFor = keyOf(values); }
+            if (lockedKm !== null && lockedFor === keyOf(values)) {
+                ++requestId;
+                target.value = String(lockedKm);
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+                target.dispatchEvent(new Event('change', { bubbles: true }));
+                setHint(target, 'Km aleși din Km pierduți (deplasările bifate): ' + lockedKm + ' km. Poți corecta valoarea.', false);
+                return;
+            }
+            lockedKm = null;
             var current = ++requestId;
             var query = new URLSearchParams(values).toString();
             setHint(target, 'Se calculează km din GPS (SAS)…', false);

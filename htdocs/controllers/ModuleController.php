@@ -2567,6 +2567,7 @@ class ModuleController
         $locationLabel = trim((string) ($_POST['stock_location_label'] ?? 'Depozit'));
         $manufacturingYearRaw = trim((string) ($_POST['stock_manufacturing_year'] ?? ''));
         $purchaseDate = trim((string) ($_POST['stock_purchase_date'] ?? ''));
+        $purchaseTime = trim((string) ($_POST['stock_purchase_time'] ?? ''));
         $purchasePriceRaw = trim((string) ($_POST['stock_purchase_price'] ?? ''));
         $supplier = trim((string) ($_POST['stock_supplier'] ?? ''));
         $invoiceNumber = trim((string) ($_POST['stock_invoice_number'] ?? ''));
@@ -2619,8 +2620,12 @@ class ModuleController
             $estimatedRemainingKm = max(0, (int) $estimatedRemainingRaw);
         }
 
-        if ($currentMileageRaw === '' || !preg_match('/^\d+$/', $currentMileageRaw)) {
-            flash_set('danger', 'Kilometrajul curent trebuie sa fie numeric.');
+        // Noua => contorul porneste de la 0; Folosita => km deja parcursi sunt obligatorii.
+        $isUsedTire = !in_array(strtolower($initialConditionRaw), ['new', 'noua', 'good', 'buna', ''], true);
+        if (!$isUsedTire) {
+            $currentMileageRaw = '0';
+        } elseif ($currentMileageRaw === '' || !preg_match('/^\d+$/', $currentMileageRaw) || (int) $currentMileageRaw <= 0) {
+            flash_set('danger', 'Pentru o anvelopa folosita completeaza km deja parcursi (numar mai mare decat 0).');
             redirect($stockRedirectUrl);
         }
 
@@ -2636,6 +2641,13 @@ class ModuleController
         if ($purchaseDate !== '' && !$this->isValidDate($purchaseDate)) {
             flash_set('danger', 'Data achizitiei este invalida (format YYYY-MM-DD).');
             redirect($stockRedirectUrl);
+        }
+        if ($purchaseTime !== '' && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $purchaseTime) !== 1) {
+            flash_set('danger', 'Ora achizitiei este invalida (format HH:MM).');
+            redirect($stockRedirectUrl);
+        }
+        if ($purchaseDate === '') {
+            $purchaseTime = '';
         }
 
         $purchasePrice = null;
@@ -2720,6 +2732,7 @@ class ModuleController
                 'location_photo_path' => $locationPhotoUpload['location_photo_path'] ?? null,
                 'manufacturing_year' => $manufacturingYear,
                 'purchase_date' => $purchaseDate !== '' ? $purchaseDate : null,
+                'purchase_time' => $purchaseTime !== '' ? $purchaseTime : null,
                 'purchase_price' => $purchasePrice,
                 'supplier' => $supplier !== '' ? $supplier : null,
                 'invoice_number' => $invoiceNumber !== '' ? $invoiceNumber : null,

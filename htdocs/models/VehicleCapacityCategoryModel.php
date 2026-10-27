@@ -379,7 +379,7 @@ class VehicleCapacityCategoryModel extends BaseModel
                 v.id, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul, v.status, v.garaj,
                 v.capacitate_transport, v.capacitate_transport_confirmata, v.categorie_capacitate_id,
                 s.id AS semi_id, s.nr_inmatriculare AS semi_nr, s.marca AS semi_marca, s.model AS semi_model,
-                s.tip_vehicul AS semi_tip, s.status AS semi_status,
+                s.tip_vehicul AS semi_tip, s.status AS semi_status, s.garaj AS semi_garaj,
                 s.capacitate_transport AS semi_capacitate, s.capacitate_transport_confirmata AS semi_confirmata,
                 s.categorie_capacitate_id AS semi_categorie_id
             FROM vehicule v
@@ -427,6 +427,7 @@ class VehicleCapacityCategoryModel extends BaseModel
                 'semi_marca' => $isAssembly ? trim((string) $row['semi_marca'] . ' ' . (string) $row['semi_model']) : null,
                 'semi_tip' => $isAssembly ? (string) $row['semi_tip'] : null,
                 'semi_status' => $isAssembly ? (string) $row['semi_status'] : null,
+                'semi_garaj' => $isAssembly ? $row['semi_garaj'] : null,
                 // Vehiculul pe care se scrie categoria si in a carui fisa sta capacitatea reala.
                 'target_id' => $isAssembly ? (int) $row['semi_id'] : (int) $row['id'],
                 'target_tip' => $isAssembly ? (string) $row['semi_tip'] : $type,
@@ -439,6 +440,56 @@ class VehicleCapacityCategoryModel extends BaseModel
         }
 
         return $units;
+    }
+
+    /**
+     * Garajul, categoria de capacitate si capacitatea reala per vehicul, dupa aceleasi reguli
+     * ca tabelul "Alocare vehicule pe categorii" (ansamblu = categoria / capacitatea semiremorcii).
+     * Cheie = id-ul capului tractor / camionului; semiremorca cuplata primeste aceleasi date.
+     * Pentru filtrele si sortarea din cardurile Km pierduti / Alimentari din Dispecer curse.
+     *
+     * Ansamblul cap tractor + semiremorca e o singura unitate: apartine garajelor AMBELOR
+     * vehicule (`garaje`, pentru filtrare), iar `garaj` (grupare / eticheta) e cel al
+     * semiremorcii, apoi al capului - aceeasi prioritate ca la categorie.
+     *
+     * @return array<int, array{garaj: ?string, garaje: list<string>, combinatie: ?string, categorie_id: ?int, categorie: ?string, categorie_ordine: ?int, capacitate: ?float}>
+     */
+    public function getCapacityMetaByVehicleId(): array
+    {
+        $categories = [];
+        foreach ($this->getCategories() as $category) {
+            $categories[$category['id']] = $category;
+        }
+
+        $meta = [];
+        foreach ($this->getTransportUnitsForAssignment() as $unit) {
+            $categoryId = $unit['categorie_capacitate_id'];
+            $category = $categoryId !== null ? ($categories[$categoryId] ?? null) : null;
+            $garages = [];
+            foreach ([$unit['semi_garaj'] ?? null, $unit['garaj'] ?? null] as $garage) {
+                $garage = trim((string) $garage);
+                // "LUGOJ" si "Lugoj" sunt acelasi garaj.
+                if ($garage !== '' && !isset($garages[mb_strtoupper($garage)])) {
+                    $garages[mb_strtoupper($garage)] = $garage;
+                }
+            }
+            $garages = array_values($garages);
+            $row = [
+                'garaj' => $garages[0] ?? null,
+                'garaje' => $garages,
+                'combinatie' => $unit['semi_nr'],
+                'categorie_id' => $category !== null ? $categoryId : null,
+                'categorie' => $category !== null ? (string) $category['nume'] : null,
+                'categorie_ordine' => $category !== null ? (int) $category['ordine_afisare'] : null,
+                'capacitate' => $unit['capacitate_transport'],
+            ];
+            $meta[$unit['vehicle_id']] = $row;
+            if ($unit['semi_id'] !== null) {
+                $meta[$unit['semi_id']] = $row;
+            }
+        }
+
+        return $meta;
     }
 
     /**

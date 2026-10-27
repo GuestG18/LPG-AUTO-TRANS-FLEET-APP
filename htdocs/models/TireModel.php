@@ -5,6 +5,11 @@ class TireModel extends BaseModel
 {
     private const STOCK_VEHICLE_PLATE = 'STOC-ANVELOPE';
     private const STOCK_VEHICLE_CHASSIS = 'STOCANVELOPE00001';
+    // Km parcursi in montarile inchise, pe anvelopa (aceeasi regula ca km_past din buildVehicleTireContext).
+    private const PAST_MOUNTED_KM_SQL = 'SELECT tire_id, SUM(GREATEST(0, COALESCE(km_end, 0) - COALESCE(km_start, 0))) AS km_past
+        FROM anvelope_alocari
+        WHERE data_end IS NOT NULL
+        GROUP BY tire_id';
 
     public const STATUS_ACTIVE = 'active';
     public const STATUS_IN_STOCK = 'in_stock';
@@ -67,7 +72,8 @@ class TireModel extends BaseModel
         $this->addColumnIfMissing('anvelope', 'location_photo_path', 'VARCHAR(190) NULL AFTER location_photo_original_name');
         $this->addColumnIfMissing('anvelope', 'manufacturing_year', 'SMALLINT UNSIGNED NULL AFTER dot_code');
         $this->addColumnIfMissing('anvelope', 'purchase_date', 'DATE NULL AFTER manufacturing_year');
-        $this->addColumnIfMissing('anvelope', 'purchase_price', 'DECIMAL(12,2) NULL AFTER purchase_date');
+        $this->addColumnIfMissing('anvelope', 'purchase_time', 'TIME NULL AFTER purchase_date');
+        $this->addColumnIfMissing('anvelope', 'purchase_price', 'DECIMAL(12,2) NULL AFTER purchase_time');
         $this->addColumnIfMissing('anvelope', 'supplier', 'VARCHAR(190) NULL AFTER purchase_price');
         $this->addColumnIfMissing('anvelope', 'invoice_number', 'VARCHAR(120) NULL AFTER supplier');
         $this->addColumnIfMissing('anvelope', 'invoice_document_original_name', 'VARCHAR(190) NULL AFTER invoice_number');
@@ -1416,9 +1422,9 @@ class TireModel extends BaseModel
         }
 
         $sql = 'INSERT INTO anvelope
-            (brand, model, tire_size, dot_code, serial_number, target_vehicle_type, target_vehicle_types, target_axle_config, axle_type, tire_type, usage_compatibility, location_label, profile_photo_original_name, profile_photo_path, location_photo_original_name, location_photo_path, manufacturing_year, purchase_date, purchase_price, supplier, invoice_number, invoice_document_original_name, invoice_document_path, mount_date, km_initial, current_mileage, estimated_life_km, estimated_remaining_km, tread_depth_mm, min_tread_depth_mm, initial_condition, condition_status, season, directional, rotation_direction, status, notes, created_at, updated_at)
+            (brand, model, tire_size, dot_code, serial_number, target_vehicle_type, target_vehicle_types, target_axle_config, axle_type, tire_type, usage_compatibility, location_label, profile_photo_original_name, profile_photo_path, location_photo_original_name, location_photo_path, manufacturing_year, purchase_date, purchase_time, purchase_price, supplier, invoice_number, invoice_document_original_name, invoice_document_path, mount_date, km_initial, current_mileage, estimated_life_km, estimated_remaining_km, tread_depth_mm, min_tread_depth_mm, initial_condition, condition_status, season, directional, rotation_direction, status, notes, created_at, updated_at)
             VALUES
-            (:brand, :model, :tire_size, :dot_code, :serial_number, :target_vehicle_type, :target_vehicle_types, :target_axle_config, :axle_type, :tire_type, :usage_compatibility, :location_label, :profile_photo_original_name, :profile_photo_path, :location_photo_original_name, :location_photo_path, :manufacturing_year, :purchase_date, :purchase_price, :supplier, :invoice_number, :invoice_document_original_name, :invoice_document_path, :mount_date, :km_initial, :current_mileage, :estimated_life_km, :estimated_remaining_km, :tread_depth_mm, :min_tread_depth_mm, :initial_condition, :condition_status, :season, :directional, :rotation_direction, :status, :notes, :created_at, :updated_at)';
+            (:brand, :model, :tire_size, :dot_code, :serial_number, :target_vehicle_type, :target_vehicle_types, :target_axle_config, :axle_type, :tire_type, :usage_compatibility, :location_label, :profile_photo_original_name, :profile_photo_path, :location_photo_original_name, :location_photo_path, :manufacturing_year, :purchase_date, :purchase_time, :purchase_price, :supplier, :invoice_number, :invoice_document_original_name, :invoice_document_path, :mount_date, :km_initial, :current_mileage, :estimated_life_km, :estimated_remaining_km, :tread_depth_mm, :min_tread_depth_mm, :initial_condition, :condition_status, :season, :directional, :rotation_direction, :status, :notes, :created_at, :updated_at)';
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
@@ -1440,6 +1446,7 @@ class TireModel extends BaseModel
             ':location_photo_path' => $data['location_photo_path'] ?? null,
             ':manufacturing_year' => $data['manufacturing_year'] ?? null,
             ':purchase_date' => $data['purchase_date'] ?? null,
+            ':purchase_time' => $data['purchase_time'] ?? null,
             ':purchase_price' => $data['purchase_price'] ?? null,
             ':supplier' => $data['supplier'] ?? null,
             ':invoice_number' => $data['invoice_number'] ?? null,
@@ -1535,6 +1542,7 @@ class TireModel extends BaseModel
                 'location_photo_path' => ($data['location_photo_path'] ?? null) !== null && trim((string) $data['location_photo_path']) !== '' ? trim((string) $data['location_photo_path']) : null,
                 'manufacturing_year' => $data['manufacturing_year'] ?? null,
                 'purchase_date' => $data['purchase_date'] ?? null,
+                'purchase_time' => $data['purchase_time'] ?? null,
                 'purchase_price' => $data['purchase_price'] ?? null,
                 'supplier' => ($data['supplier'] ?? null) !== null && trim((string) $data['supplier']) !== '' ? trim((string) $data['supplier']) : null,
                 'invoice_number' => ($data['invoice_number'] ?? null) !== null && trim((string) $data['invoice_number']) !== '' ? trim((string) $data['invoice_number']) : null,
@@ -2061,6 +2069,7 @@ class TireModel extends BaseModel
             'location_photo_path',
             'manufacturing_year',
             'purchase_date',
+            'purchase_time',
             'purchase_price',
             'supplier',
             'invoice_number',
@@ -2376,7 +2385,9 @@ class TireModel extends BaseModel
         $vehicleKm = is_numeric((string) ($row['vehicle_km_bord'] ?? null)) ? (int) $row['vehicle_km_bord'] : 0;
         $allocationKmStart = is_numeric((string) ($row['active_km_start'] ?? null)) ? (int) $row['active_km_start'] : $vehicleKm;
         $currentSegmentKm = $isMounted ? max(0, $vehicleKm - $allocationKmStart) : 0;
-        $usedKm = $currentMileage + $currentSegmentKm;
+        // Montarile anterioare (inchise) se aduna, ca dupa o remontare contorul sa continue.
+        $pastMountedKm = max(0, (int) ($row['past_mounted_km'] ?? 0));
+        $usedKm = $currentMileage + $pastMountedKm + $currentSegmentKm;
         $remainingKm = $storedRemaining;
 
         // Fara durata estimata explicita: durata = km la introducere + km ramasi declarati.
@@ -2484,6 +2495,7 @@ class TireModel extends BaseModel
                 v.tip_vehicul AS vehicle_type,
                 v.formula_axelor AS vehicle_layout,
                 v.km_bord AS vehicle_km_bord,
+                COALESCE(h.km_past, 0) AS past_mounted_km,
                 p.position_code,
                 p.position_label,
                 p.position_order,
@@ -2494,6 +2506,7 @@ class TireModel extends BaseModel
             LEFT JOIN anvelope_alocari a ON a.tire_id = t.id AND a.data_end IS NULL
             LEFT JOIN vehicule v ON v.id = a.vehicle_id
             LEFT JOIN vehicule_anvelope_pozitii p ON p.id = a.position_id
+            LEFT JOIN (' . self::PAST_MOUNTED_KM_SQL . ') h ON h.tire_id = t.id
             WHERE ' . $whereSql . '
             ORDER BY t.id ASC'
         );
@@ -2919,12 +2932,14 @@ class TireModel extends BaseModel
              FROM anvelope t
              LEFT JOIN anvelope_alocari a ON a.tire_id = t.id AND a.data_end IS NULL
              LEFT JOIN vehicule v ON v.id = a.vehicle_id
+             LEFT JOIN (' . self::PAST_MOUNTED_KM_SQL . ') h ON h.tire_id = t.id
              WHERE t.status IN ("damaged", "missing", "scrapped")
                 OR COALESCE(t.condition_status, "good") IN ("high_wear", "critical", "missing")
                 OR (
                     COALESCE(t.estimated_life_km, 0) > 0
                     AND (
                         COALESCE(t.current_mileage, 0)
+                        + COALESCE(h.km_past, 0)
                         + CASE
                             WHEN a.id IS NOT NULL THEN GREATEST(0, COALESCE(v.km_bord, 0) - COALESCE(a.km_start, COALESCE(v.km_bord, 0)))
                             ELSE 0

@@ -18,6 +18,9 @@ $racesUrl = (!function_exists('can') || can('dispecer_curse')) ? build_query_url
 // Km neacoperiti -> "Adauga km service" / "Adauga cursa" in Dispecer, cu vehiculul si intervalul precompletate.
 $canAddRace = $racesUrl !== '' && (!function_exists('can') || can('dispecer_curse', 'create'));
 $canAddService = $racesUrl !== '' && (!function_exists('can') || can('dispecer_curse', 'service_km'));
+// Km pierduti -> faza noua / km adaugati la o faza (sau cursa) existenta: fisa cursei precompletata.
+$canAddPhase = $racesUrl !== '' && (!function_exists('can') || can('dispecer_curse', 'edit'));
+$kmTripsUrl = $canAddPhase ? build_query_url(['page' => 'dispecer_curse', 'action' => 'insights_km_trips']) : '';
 $vehiclesJson = json_encode($vehicles, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 if (!is_string($vehiclesJson)) {
     $vehiclesJson = '[]';
@@ -179,6 +182,8 @@ $periodLabel = $periodStartObj->format('j') === '1'
     var PERIOD_END = <?= json_encode($periodEnd) ?>;
     var CAN_ADD_RACE = <?= $canAddRace ? 'true' : 'false' ?>;
     var CAN_ADD_SERVICE = <?= $canAddService ? 'true' : 'false' ?>;
+    var CAN_ADD_PHASE = <?= $canAddPhase ? 'true' : 'false' ?>;
+    var KM_TRIPS_URL = <?= json_encode($kmTripsUrl, JSON_UNESCAPED_SLASHES) ?>;
     var CONCURRENCY = 3;
     var NF = new Intl.NumberFormat('ro-RO');
 
@@ -444,6 +449,43 @@ $periodLabel = $periodStartObj->format('j') === '1'
         return '<span class="' + (value > 0 ? 'kmp-lost-pos' : 'kmp-lost-neg') + '">' + (value > 0 ? '+' : '') + km1(value) + '</span>';
     }
 
+    // Deplasarile sub 1 km (repozitionari, zgomot GPS) nu apar separat: km-ii lor se adauga la
+    // deplasarea cea mai apropiata in timp din aceeasi perioada, care isi extinde intervalul.
+    // Perioadele cu sub 1 km in total nu se listeaza. Doar afisare: totalurile raman cele din server.
+    // Aceeasi regula ca in panoul Km pierduti din Dispecer curse (dispatcher-insights.js).
+    var MIN_SEGMENT_KM = 1;
+    function dtMs(value) { return Date.parse(String(value || '').replace(' ', 'T')) || 0; }
+    function consolidateSegments(segments) {
+        var list = segments.map(function (s) { return Object.assign({}, s, { km: Number(s.km) || 0, absorbed: 0, absorbedKm: 0 }); });
+        while (list.length > 1) {
+            var i = -1;
+            list.forEach(function (s, k) { if (s.km < MIN_SEGMENT_KM && (i === -1 || s.km < list[i].km)) { i = k; } });
+            if (i === -1) { break; }
+            var tiny = list[i], prev = list[i - 1], next = list[i + 1];
+            var toPrev = prev ? dtMs(tiny.start) - dtMs(prev.end) : Infinity;
+            var toNext = next ? dtMs(next.start) - dtMs(tiny.end) : Infinity;
+            var host = toPrev <= toNext ? prev : next;
+            var first = host === prev ? prev : tiny, last = host === prev ? tiny : next;
+            host.absorbed += 1 + tiny.absorbed;
+            host.absorbedKm += tiny.km + tiny.absorbedKm;
+            host.km += tiny.km;
+            host.from = first.from;
+            host.to = last.to;
+            host.start = first.start;
+            host.end = last.end;
+            host.partial = host.partial || tiny.partial;
+            list.splice(i, 1);
+        }
+        return list;
+    }
+    function consolidateDetail(d) {
+        var all = (d.gaps || []).map(function (g) { return Object.assign({}, g, { segments: consolidateSegments(g.segments || []) }); });
+        d.gaps = all.filter(function (g) { return Number(g.km) >= MIN_SEGMENT_KM; });
+        d.hidden_gaps = all.length - d.gaps.length;
+        d.hidden_gaps_km = all.reduce(function (s, g) { return s + (Number(g.km) >= MIN_SEGMENT_KM ? 0 : Number(g.km) || 0); }, 0);
+        return d;
+    }
+
     function renderDetail(v, d) {
         var b = d.breakdown;
         var parts = [
@@ -471,7 +513,7 @@ $periodLabel = $periodStartObj->format('j') === '1'
         // 1. Perioadele fara cursa.
         html += '<h6 class="mt-3"><span class="kmp-dot kmp-c-outside"></span>Perioade fără cursă în Dispecer, în care mașina a rulat</h6>';
         if (!d.gaps.length) {
-            html += '<div class="text-muted small mb-3">Nicio deplasare GPS în afara curselor / drumurilor la service.</div>';
+            html += '<div class="text-muted small mb-3">Nicio deplasare GPS de peste 1 km în afara curselor / drumurilor la service.</div>';
         } else {
             html += '<div class="table-responsive"><table class="table table-sm align-middle mb-3"><thead class="table-light"><tr>'
                 + '<th>De la</th><th>Până la</th><th>Între</th><th class="text-end">Deplasări</th><th class="text-end">Km GPS</th><th></th></tr></thead><tbody>';
@@ -486,13 +528,20 @@ $periodLabel = $periodStartObj->format('j') === '1'
                     + '<td class="text-end">' + assignButton('data-assign-gap="' + i + '"', 'Atribuie') + '</td></tr>';
                 html += '<tr class="kmp-gap-segments d-none" data-gap-rows="' + i + '"><td colspan="6"><table class="table table-sm mb-0"><tbody>'
                     + g.segments.map(function (s, j) {
-                        return '<tr><td class="text-nowrap">' + esc(roDateTime(s.start)) + ' – ' + esc(String(s.end).split(' ')[1] || '') + '</td>'
+                        var sameDay = String(s.start).split(' ')[0] === String(s.end).split(' ')[0];
+                        return '<tr><td class="text-nowrap">' + esc(roDateTime(s.start)) + ' – ' + esc(sameDay ? (String(s.end).split(' ')[1] || '') : roDateTime(s.end)) + '</td>'
                             + '<td>' + esc(s.from || '?') + ' <i class="bi bi-arrow-right"></i> ' + esc(s.to || '?') + (s.partial ? ' <span class="badge text-bg-light">parțial</span>' : '') + '</td>'
-                            + '<td class="text-end text-nowrap">' + km1(s.km) + ' km</td>'
+                            + '<td class="text-end text-nowrap">' + km1(s.km) + ' km'
+                            + (s.absorbed ? '<div class="small text-muted" title="Deplasări sub 1 km adăugate la aceasta: ' + km1(s.absorbedKm) + ' km">+' + s.absorbed + ' sub 1 km</div>' : '') + '</td>'
                             + '<td class="text-end">' + assignButton('data-assign-gap="' + i + '" data-assign-seg="' + j + '"', '') + '</td></tr>';
                     }).join('') + '</tbody></table></td></tr>';
             });
             html += '</tbody></table></div>';
+        }
+        if (d.hidden_gaps > 0) {
+            html += '<div class="text-muted small mb-3"><i class="bi bi-eye-slash me-1"></i>' + d.hidden_gaps + (d.hidden_gaps === 1 ? ' perioadă' : ' perioade')
+                + ' cu sub 1 km în total (' + km1(d.hidden_gaps_km) + ' km) nu ' + (d.hidden_gaps === 1 ? 'este afișată' : 'sunt afișate')
+                + '. Deplasările sub 1 km sunt adăugate la cea mai apropiată deplasare.</div>';
         }
 
         // 2. Cursele: km GPS in fereastra cursei vs km declarati.
@@ -548,7 +597,7 @@ $periodLabel = $periodStartObj->format('j') === '1'
     // ---- Km neacoperiti -> Km service sau cursa noua in Dispecer (formular precompletat) ----
     var current = null;
     function assignButton(attrs, label) {
-        if (!CAN_ADD_RACE && !CAN_ADD_SERVICE) { return ''; }
+        if (!CAN_ADD_RACE && !CAN_ADD_SERVICE && !CAN_ADD_PHASE) { return ''; }
         return '<button type="button" class="btn btn-sm btn-outline-primary py-0" ' + attrs + ' title="Adaugă ca Km service sau cursă în Dispecer">'
             + '<i class="bi bi-plus-lg"></i>' + (label ? ' ' + label : '') + '</button>';
     }
@@ -568,7 +617,53 @@ $periodLabel = $periodStartObj->format('j') === '1'
         var old = document.querySelector('.kmp-assign-menu');
         if (old) { old.remove(); }
     }
-    function intervalBlock(interval, title) {
+    // Faza: perioada sta intre doua curse; km-ii ei se pot pune pe cursa dinainte sau pe cea de dupa
+    // (faza noua, adaugati la o faza existenta sau la cursa fara faze). Lista se incarca la cerere.
+    function phaseItem(gap, interval) {
+        if (!CAN_ADD_PHASE || !KM_TRIPS_URL || !gap || !(gap.after_trip_id || gap.before_trip_id)) { return ''; }
+        return '<button type="button" class="list-group-item list-group-item-action" data-phase-load'
+            + ' data-ids="' + esc([gap.after_trip_id, gap.before_trip_id].filter(Boolean).join(',')) + '" data-after="' + esc(gap.after_trip_id || '') + '"'
+            + ' data-from="' + esc(interval.from) + '" data-to="' + esc(interval.to) + '" data-km="' + Math.max(1, Math.round(interval.km)) + '">'
+            + '<i class="bi bi-signpost-split me-2 text-success"></i>Pune pe o <strong>fază</strong> a cursei…</button>';
+    }
+    function phaseHref(trip, faza, from, to, value) {
+        var params = { kmp_from: String(from).slice(0, 16), kmp_to: String(to).slice(0, 16), kmp_km: String(value) };
+        if (faza) { params.faza = String(faza); }
+        if (faza === 'noua' && current && current.v.vehicle_id) { params.kmp_vehicle = String(current.v.vehicle_id); }
+        return trip.edit_url + '&' + new URLSearchParams(params).toString() + '#race-form';
+    }
+    function loadPhaseItems(button) {
+        var from = button.getAttribute('data-from'), to = button.getAttribute('data-to'), value = parseInt(button.getAttribute('data-km'), 10);
+        var afterId = parseInt(button.getAttribute('data-after'), 10) || 0;
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Se încarcă cursele…';
+        fetch(KM_TRIPS_URL + '&ids=' + encodeURIComponent(button.getAttribute('data-ids')), { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (!d || !d.success) { throw new Error(d && d.error ? d.error : 'Cursele nu au putut fi încărcate.'); }
+                var link = function (href, label) { return '<a class="list-group-item list-group-item-action small ps-4" target="_blank" rel="noopener" href="' + esc(href) + '">' + label + '</a>'; };
+                button.outerHTML = d.trips.map(function (t) {
+                    var html = '<div class="list-group-item bg-light small"><i class="bi bi-signpost-split me-1 text-success"></i>Cursa <strong>#' + t.id + '</strong> ' + esc(t.beneficiar)
+                        + ' · ' + (t.id === afterId ? 'dinaintea perioadei' : 'de după perioadă') + '<br>' + esc(roDateTime(t.from)) + ' → ' + esc(roDateTime(t.to)) + ' · ' + km1(t.km) + ' km'
+                        + (t.billed ? ' · <span class="badge text-bg-secondary">facturată</span>' : '') + '</div>';
+                    if (t.billed) { return html; }
+                    html += link(phaseHref(t, 'noua', from, to, value), '<i class="bi bi-plus-lg me-2 text-success"></i>Fază nouă cu ' + value + ' km');
+                    if (t.phases.length) {
+                        html += t.phases.map(function (p) {
+                            return link(phaseHref(t, p.id, from, to, value), '+' + value + ' km la <strong>Faza ' + p.nr + '</strong> <span class="text-muted">(' + esc(roDateTime(p.from)) + ' → ' + esc(roDateTime(p.to)) + ', ' + km1(p.km) + ' km)</span>');
+                        }).join('');
+                    } else {
+                        html += link(phaseHref(t, '', from, to, value), '+' + value + ' km la cursă <span class="text-muted">(' + km1(t.km) + ' → ' + km1(t.km + value) + ' km)</span>');
+                    }
+                    return html;
+                }).join('') || '<div class="list-group-item small text-muted">Cursele de lângă perioadă nu mai există.</div>';
+            })
+            .catch(function (err) {
+                button.disabled = false;
+                button.innerHTML = '<i class="bi bi-exclamation-triangle me-2 text-danger"></i>' + esc(err.message) + ' Reîncearcă.';
+            });
+    }
+    function intervalBlock(interval, title, gap) {
         var html = '<div class="list-group-item bg-light small">' + esc(title) + '<br><strong>' + esc(roDateTime(interval.from)) + ' → ' + esc(roDateTime(interval.to)) + '</strong>'
             + ' · <span class="kmp-lost-pos">' + km1(interval.km) + ' km GPS</span></div>';
         if (CAN_ADD_SERVICE) {
@@ -579,7 +674,7 @@ $periodLabel = $periodStartObj->format('j') === '1'
             html += '<a class="list-group-item list-group-item-action" target="_blank" rel="noopener" href="' + esc(prefillUrl('race', interval)) + '">'
                 + '<i class="bi bi-signpost-2 me-2 text-primary"></i><strong>Adaugă cursă</strong> în Dispecer curse</a>';
         }
-        return html;
+        return html + phaseItem(gap, interval);
     }
     function openAssignMenu(anchor, content) {
         closeAssignMenu();
@@ -598,14 +693,14 @@ $periodLabel = $periodStartObj->format('j') === '1'
     function tripMenu(anchor, tripId) {
         var html = '<a class="list-group-item list-group-item-action" target="_blank" rel="noopener" href="' + esc(tripUrl(tripId)) + '">'
             + '<i class="bi bi-box-arrow-up-right me-2"></i>Deschide cursa #' + tripId + '</a>';
-        if (CAN_ADD_RACE || CAN_ADD_SERVICE) {
+        if (CAN_ADD_RACE || CAN_ADD_SERVICE || CAN_ADD_PHASE) {
             // Km neacoperiti de langa cursa: golul de dupa ea si cel dinaintea ei.
             var gaps = current.d.gaps.filter(function (g) { return g.after_trip_id === tripId || g.before_trip_id === tripId; });
             if (!gaps.length) {
                 html += '<div class="list-group-item small text-muted">Nicio perioadă rulată fără cursă lângă această cursă.</div>';
             }
             gaps.forEach(function (g) {
-                html += intervalBlock(g, g.after_trip_id === tripId ? 'Rulat fără cursă după #' + tripId + ':' : 'Rulat fără cursă înainte de #' + tripId + ':');
+                html += intervalBlock(g, g.after_trip_id === tripId ? 'Rulat fără cursă după #' + tripId + ':' : 'Rulat fără cursă înainte de #' + tripId + ':', g);
             });
         }
         openAssignMenu(anchor, html);
@@ -621,7 +716,7 @@ $periodLabel = $periodStartObj->format('j') === '1'
             .then(function (r) { return r.json(); })
             .then(function (d) {
                 if (!d || d.error) { throw new Error(d && d.error ? d.error : 'Răspuns invalid'); }
-                renderDetail(v, d);
+                renderDetail(v, consolidateDetail(d));
             })
             .catch(function (err) {
                 $('kmp-detail-body').innerHTML = '<div class="alert alert-danger mb-0">' + esc(err.message || 'Eroare la încărcare.') + '</div>';
@@ -645,6 +740,10 @@ $periodLabel = $periodStartObj->format('j') === '1'
         if (!e.target.closest('.kmp-assign-menu, [data-assign-trip], [data-assign-gap]')) { closeAssignMenu(); }
         else if (e.target.closest('.kmp-assign-menu a')) { setTimeout(closeAssignMenu, 0); }
     });
+    $('kmp-detail-modal').addEventListener('click', function (e) {
+        var load = e.target.closest('.kmp-assign-menu [data-phase-load]');
+        if (load && !load.disabled) { loadPhaseItems(load); }
+    });
     $('kmp-detail-modal').addEventListener('hide.bs.modal', closeAssignMenu);
     $('kmp-detail-body').addEventListener('scroll', closeAssignMenu);
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeAssignMenu(); } });
@@ -664,9 +763,9 @@ $periodLabel = $periodStartObj->format('j') === '1'
             var segIndex = assign.getAttribute('data-assign-seg');
             if (segIndex !== null) {
                 var s = gap.segments[parseInt(segIndex, 10)];
-                openAssignMenu(assign, intervalBlock({ from: s.start, to: s.end, km: s.km }, 'Deplasare ' + (s.from || '?') + ' → ' + (s.to || '?') + ':'));
+                openAssignMenu(assign, intervalBlock({ from: s.start, to: s.end, km: s.km }, 'Deplasare ' + (s.from || '?') + ' → ' + (s.to || '?') + ':', gap));
             } else {
-                openAssignMenu(assign, intervalBlock(gap, 'Perioadă rulată fără cursă:'));
+                openAssignMenu(assign, intervalBlock(gap, 'Perioadă rulată fără cursă:', gap));
             }
             return;
         }

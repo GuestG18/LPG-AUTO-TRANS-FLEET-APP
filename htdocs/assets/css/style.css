@@ -6262,6 +6262,12 @@ tr:hover .diurna-edit-btn,
     white-space: nowrap;
 }
 
+/* Primar tone: culoare proprie, ca sa nu se confunde cu Primar km (albastru). */
+.transport-badge-primar-tona {
+    background-color: #7c3aed;
+    color: #fff;
+}
+
 .dispatcher-races-table .col-location {
     min-width: 240px;
 }

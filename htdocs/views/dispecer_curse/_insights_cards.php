@@ -18,6 +18,9 @@ $insightsConfig = [
     'canKm' => $insightsCanKm,
     'canRace' => !function_exists('can') || can('dispecer_curse', 'create'),
     'canService' => !function_exists('can') || can('dispecer_curse', 'service_km'),
+    // Km pierduti -> faza noua / km adaugati la o faza (sau cursa) existenta.
+    'canPhase' => !function_exists('can') || can('dispecer_curse', 'edit'),
+    'kmTripsUrl' => build_query_url(['page' => 'dispecer_curse', 'action' => 'insights_km_trips']),
 ];
 ?>
 <div class="dins-stack" data-dins='<?= e((string) json_encode($insightsConfig, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)) ?>'>

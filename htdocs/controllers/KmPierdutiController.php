@@ -104,6 +104,12 @@ class KmPierdutiController
                 $this->buildVehicleRows($start, $end),
                 static fn (array $row): bool => !isset($hidden[(int) $row['sas_vehicle_id']])
             ));
+            // Garaj + categorie capacitate (ca in Management capacitati), pentru filtrele din card.
+            $capacityMeta = (new VehicleCapacityCategoryModel($this->db))->getCapacityMetaByVehicleId();
+            foreach ($rows as &$row) {
+                $row += $capacityMeta[(int) $row['vehicle_id']] ?? ['garaj' => null, 'garaje' => [], 'combinatie' => null, 'categorie_id' => null, 'categorie' => null, 'categorie_ordine' => null, 'capacitate' => null];
+            }
+            unset($row);
             echo json_encode([
                 'success' => true,
                 'start' => $start,

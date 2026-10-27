@@ -569,6 +569,31 @@ if ($phaseCompact) {
         </h3>
     </div>
     <div class="card-body">
+        <?php $kmpPrefill = isset($kmPierdutiPrefill) && is_array($kmPierdutiPrefill) ? $kmPierdutiPrefill : null; ?>
+        <?php if ($kmpPrefill !== null): ?>
+            <?php $kmpDt = static fn (string $v): string => date('d.m.Y H:i', (int) strtotime($v)); ?>
+            <?php if ($kmpPrefill['mode'] === 'blocked'): ?>
+                <div class="alert alert-warning py-2 small">
+                    <i class="bi bi-lock me-1" aria-hidden="true"></i>
+                    Cursa este <strong>facturată</strong>: cei <?= e((string) $kmpPrefill['km']) ?> km din Km pierduți nu au fost precompletați.
+                </div>
+            <?php else: ?>
+                <div class="alert alert-info py-2 small" data-kmp-prefill>
+                    <i class="bi bi-graph-down-arrow me-1" aria-hidden="true"></i>
+                    Precompletat din <strong>Km pierduți</strong> (<?= e($kmpDt($kmpPrefill['from'])) ?> → <?= e($kmpDt($kmpPrefill['to'])) ?>):
+                    <?php if ($kmpPrefill['mode'] === 'noua'): ?>
+                        faza nouă cu <strong><?= e((string) $kmpPrefill['km']) ?> km</strong> și intervalul ales.
+                    <?php else: ?>
+                        <strong>+<?= e((string) $kmpPrefill['km']) ?> km</strong> la <?= $kmpPrefill['mode'] === 'editare' ? 'această fază' : 'cursă' ?>
+                        (<?= e(number_format((float) $kmpPrefill['previous'], 1, ',', '.')) ?> → <strong><?= e((string) $kmpPrefill['total']) ?> km</strong>).
+                        <?= $kmpPrefill['extended']
+                            ? 'Intervalul a fost extins peste perioada aleasă.'
+                            : 'Intervalul a rămas neschimbat: extins s-ar fi suprapus cu altă fază.' ?>
+                    <?php endif; ?>
+                    Verifică valorile și apasă <strong>Salvează</strong> — nimic nu s-a salvat încă.
+                </div>
+            <?php endif; ?>
+        <?php endif; ?>
         <form method="post"
               action="<?= e($phaseFormAction) ?>"
               class="dispatcher-race-form<?= $phaseCompact ? ' dispatcher-phase-compact' : '' ?>"

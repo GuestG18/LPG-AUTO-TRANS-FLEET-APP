@@ -1618,6 +1618,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
     <script src="<?= e(url('assets/js/tire-mount.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/tire-mount.js'))) ?>"></script>
     <script src="<?= e(url('assets/js/tire-stock-groups.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/tire-stock-groups.js'))) ?>"></script>
     <script src="<?= e(url('assets/js/tire-stock-filters.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/tire-stock-filters.js'))) ?>"></script>
+    <script src="<?= e(url('assets/js/datetime-picker-field.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/datetime-picker-field.js'))) ?>"></script>
 
     <div class="modal fade tire-add-modal" id="addTireModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-lg modal-dialog-scrollable">
@@ -1645,12 +1646,27 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                             <div class="col-md-6"><label class="form-label">Locatie</label><input class="form-control" name="stock_location_label" placeholder="Depozit" value="Depozit"></div>
                             <div class="col-md-6"><label class="form-label">Poza locatie</label><input type="file" class="form-control" name="stock_location_photo_upload" accept=".jpg,.jpeg,.png,.webp"><div class="form-text">JPG, PNG, WEBP. Maxim 5 MB.</div></div>
                             <div class="col-md-3"><label class="form-label">Furnizor</label><input class="form-control" name="stock_supplier"></div>
-                            <div class="col-md-3"><label class="form-label">Data achizitiei</label><input type="date" class="form-control" name="stock_purchase_date"></div>
+                            <?php /* Acelasi selector data + ora ca in "Adauga cursa" (assets/js/datetime-picker-field.js). */ ?>
+                            <div class="col-md-3">
+                                <label class="form-label" for="stock_purchase_datetime">Data &amp; ora achizitiei</label>
+                                <div class="dispatcher-datetime-field" data-datetime-picker>
+                                    <div class="input-group dispatcher-datetime-input-group">
+                                        <input type="text" class="form-control" id="stock_purchase_datetime" placeholder="dd/mm/yyyy HH:mm" inputmode="numeric" autocomplete="off" maxlength="16" aria-label="Data si ora achizitiei" data-dtp-display>
+                                        <button type="button" class="btn btn-outline-secondary" aria-label="Deschide calendarul pentru achizitie" aria-expanded="false" data-dtp-toggle>
+                                            <i class="bi bi-calendar3" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                    <div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>
+                                    <input type="hidden" name="stock_purchase_date" data-dtp-date>
+                                    <input type="hidden" name="stock_purchase_time" data-dtp-time>
+                                </div>
+                            </div>
                             <div class="col-md-3"><label class="form-label">Cost / buc</label><input class="form-control" name="stock_purchase_price" placeholder="Ex: 1200"></div>
                             <div class="col-md-3"><label class="form-label">Factura</label><input type="file" class="form-control" name="stock_invoice_upload" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"><div class="form-text">PDF, JPG, PNG, WEBP, DOC, DOCX. Maxim 5 MB.</div></div>
-                            <div class="col-md-6"><label class="form-label">Km curent</label><input type="number" class="form-control" name="stock_current_mileage" value="0" min="0"></div>
+                            <?php /* Noua => contorul porneste de la 0 (blocat); Folosita => se cer km deja parcursi. */ ?>
+                            <div class="col-md-6"><label class="form-label" for="stock_initial_condition">Conditie initiala</label><select class="form-select" id="stock_initial_condition" name="stock_initial_condition" data-tire-initial-condition><?php foreach ($initialConditionOptions as $value => $label): ?><option value="<?= e((string) $value) ?>"><?= e((string) $label) ?></option><?php endforeach; ?></select></div>
+                            <div class="col-md-6"><label class="form-label" for="stock_current_mileage" data-tire-km-label>Km deja parcursi</label><input type="number" class="form-control" id="stock_current_mileage" name="stock_current_mileage" value="0" min="0" step="1" data-tire-km-used><div class="form-text" data-tire-km-hint>Anvelopa noua porneste de la 0 km.</div></div>
                             <div class="col-md-6"><label class="form-label">Km ramasi</label><input type="number" class="form-control" name="stock_estimated_remaining_km" min="0"></div>
-                            <div class="col-md-6"><label class="form-label">Conditie initiala</label><select class="form-select" name="stock_initial_condition"><?php foreach ($initialConditionOptions as $value => $label): ?><option value="<?= e((string) $value) ?>"><?= e((string) $label) ?></option><?php endforeach; ?></select></div>
                             <div class="col-md-6"><label class="form-label">Cantitate *</label><input type="number" class="form-control" name="stock_quantity" value="1" min="1" max="1000" step="1" required><div class="form-text">Se creeaza cate o inregistrare separata pentru fiecare anvelopa, cu serie unica.</div></div>
                             <div class="col-12"><label class="form-label">Observatii</label><textarea class="form-control" name="stock_notes" rows="3" placeholder="Observatii optionale..."></textarea></div>
                         </div>
@@ -1664,6 +1680,48 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
             </div>
         </div>
     </div>
+    <script>
+    (function () {
+        const formEl = document.querySelector('#addTireModal form');
+        const conditionEl = formEl ? formEl.querySelector('[data-tire-initial-condition]') : null;
+        const kmEl = formEl ? formEl.querySelector('[data-tire-km-used]') : null;
+        if (!conditionEl || !kmEl) {
+            return;
+        }
+        const labelEl = formEl.querySelector('[data-tire-km-label]');
+        const hintEl = formEl.querySelector('[data-tire-km-hint]');
+
+        const applyCondition = function () {
+            const isUsed = conditionEl.value === 'used';
+            if (isUsed) {
+                // Fara 0 precompletat: operatorul trebuie sa scrie km-ii reali.
+                if (kmEl.readOnly && kmEl.value === '0') {
+                    kmEl.value = '';
+                }
+                kmEl.readOnly = false;
+                kmEl.required = true;
+                kmEl.min = '1';
+                kmEl.placeholder = 'Ex: 35000';
+            } else {
+                kmEl.value = '0';
+                kmEl.readOnly = true;
+                kmEl.required = false;
+                kmEl.min = '0';
+                kmEl.placeholder = '';
+            }
+            labelEl.textContent = isUsed ? 'Km deja parcursi *' : 'Km deja parcursi';
+            hintEl.textContent = isUsed
+                ? 'Contorul anvelopei continua de la acesti km.'
+                : 'Anvelopa noua porneste de la 0 km.';
+        };
+
+        conditionEl.addEventListener('change', applyCondition);
+        formEl.addEventListener('reset', function () {
+            window.setTimeout(applyCondition, 0);
+        });
+        applyCondition();
+    })();
+    </script>
 
     <?php return; ?>
 <?php endif; ?>

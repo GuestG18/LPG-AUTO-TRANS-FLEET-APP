@@ -394,6 +394,9 @@ ob_start();
                     <div class="alert alert-info py-2 small">
                         <i class="bi bi-graph-down-arrow me-1" aria-hidden="true"></i>
                         Precompletat din <strong>Km pierduți</strong>: perioada rulată fără cursă. Alege beneficiarul și tipul transportului — vehiculul se selectează singur.
+                        <?php if ((int) ($_GET['km'] ?? 0) > 0): ?>
+                            Km efectuați: <strong><?= e((string) (int) $_GET['km']) ?> km</strong>, doar deplasările bifate (nu tot GPS-ul intervalului).
+                        <?php endif; ?>
                     </div>
                 <?php endif; ?>
                 <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'store'])) ?>" class="dispatcher-race-form" <?php include __DIR__ . '/_race_form_attrs.php'; ?> data-inactive-trip-id="" novalidate>
@@ -745,7 +748,8 @@ ob_start();
                         $transportBadgeClass = match ($transportType) {
                             'distributie' => 'bg-warning text-dark',
                             'compresor' => 'bg-success',
-                            'primar', 'primar_tona', 'primar_km' => 'bg-primary',
+                            'primar', 'primar_km' => 'bg-primary',
+                            'primar_tona' => 'transport-badge-primar-tona',
                             'primar_distributie', 'mixt' => 'bg-info text-dark',
                             default => 'bg-secondary',
                         };

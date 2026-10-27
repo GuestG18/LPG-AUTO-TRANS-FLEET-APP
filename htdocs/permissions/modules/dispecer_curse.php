@@ -57,6 +57,8 @@ return [
         'insights_fuel'                => 'view',
         'insights_fuel_detail'         => 'view',
         'insights_fuel_link'           => 'view',
+        // Cardul "Km pierduti": cursele dintre care e golul, cu fazele lor (doar citire; salvarea fazei cere edit).
+        'insights_km_trips'            => 'view',
         'save_expense'                 => 'expenses',
         'delete_expense'               => 'expenses',
         'update_expense_status'        => 'expenses',

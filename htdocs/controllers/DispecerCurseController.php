@@ -330,6 +330,9 @@ class DispecerCurseController
             case 'insights_fuel_link':
                 $this->insightsFuelLinkAction();
                 return;
+            case 'insights_km_trips':
+                $this->insightsKmTripsAction();
+                return;
             case 'request_diurna_change':
                 $this->requestDiurnaChangeAction();
                 return;
@@ -2580,6 +2583,117 @@ class DispecerCurseController
         ];
     }
 
+    /**
+     * Precompletarea fisei cursei din Km pierduti (?kmp_from=&kmp_to=&kmp_km=[&kmp_vehicle=]):
+     *  - faza noua: intervalul ales si km-ii alesi (vehiculul din Km pierduti);
+     *  - faza existenta: km-ii se ADAUGA la ai fazei; intervalul se extinde peste perioada aleasa
+     *    doar daca asa nu se suprapune cu alta faza a cursei (altfel raman doar km-ii);
+     *  - cursa fara faze: la fel, pe cursa, in campul de km reali dupa tipul de transport.
+     * Cursele facturate nu se precompleteaza. Intoarce ce s-a aplicat, pentru mesajul din fisa.
+     *
+     * @param array<string, mixed> $formData
+     * @param array<string, mixed> $race
+     * @param array<int, array<string, mixed>> $segments
+     * @param array<string, mixed>|null $phaseSegment
+     * @return array<string, mixed>|null
+     */
+    private function applyKmPierdutiPrefill(array &$formData, array $race, array $segments, string $phaseMode, ?array $phaseSegment): ?array
+    {
+        $km = (int) ($_GET['kmp_km'] ?? 0);
+        $from = $this->parseInsightsDateTime((string) ($_GET['kmp_from'] ?? ''));
+        $to = $this->parseInsightsDateTime((string) ($_GET['kmp_to'] ?? ''));
+        if ($km <= 0 || $from === null || $to === null || $to < $from) {
+            return null;
+        }
+        if ((string) ($race['status_facturare'] ?? '') === 'facturat') {
+            return ['mode' => 'blocked', 'km' => $km];
+        }
+        if ($phaseMode === '' && count($segments) > 1) {
+            // Cursa are faze: km-ii se pun pe o faza, nu pe totalul cursei (care e suma fazelor).
+            return null;
+        }
+
+        $setInterval = static function (array &$data, DateTimeImmutable $start, DateTimeImmutable $end): void {
+            $data['data_inceput'] = $start->format('Y-m-d');
+            $data['ora_inceput'] = $start->format('H:i');
+            $data['data_sfarsit'] = $end->format('Y-m-d');
+            $data['ora_sfarsit'] = $end->format('H:i');
+        };
+
+        if ($phaseMode === 'noua') {
+            $setInterval($formData, $from, $to);
+            $formData['km_cursa'] = $formData['km_totali'] = $formData['km_dislocare'] = (string) $km;
+            $vehicleId = (int) ($_GET['kmp_vehicle'] ?? 0);
+            if ($vehicleId > 0) {
+                $formData['vehicle_id'] = (string) $vehicleId;
+            }
+
+            return ['mode' => 'noua', 'km' => $km, 'total' => $km, 'from' => $from->format('Y-m-d H:i'), 'to' => $to->format('Y-m-d H:i'), 'extended' => true];
+        }
+
+        $kmField = $this->raceRealKmField((string) ($race['tip_transport'] ?? ''));
+        $current = $phaseMode === 'editare' ? (float) ($phaseSegment['km'] ?? 0) : (float) ($race[$kmField] ?? 0);
+        $total = (int) round($current + $km);
+        if ($phaseMode === 'editare') {
+            $formData['km_cursa'] = $formData['km_totali'] = $formData['km_dislocare'] = (string) $total;
+        } else {
+            $formData[$kmField] = (string) $total;
+        }
+
+        // Intervalul fazei / cursei se extinde peste perioada aleasa, fara sa acopere alta faza.
+        // Se scrie doar capatul care chiar se muta; o ora lipsa inseamna toata ziua (sfarsit 23:59).
+        $ownStart = $this->parseInsightsDateTime($this->insightsDateTime($formData['data_inceput'] ?? '', $formData['ora_inceput'] ?? ''));
+        $endTime = trim((string) ($formData['ora_sfarsit'] ?? ''));
+        $ownEnd = $this->parseInsightsDateTime($this->insightsDateTime($formData['data_sfarsit'] ?? '', $endTime !== '' ? $endTime : '23:59'));
+        $moveStart = $ownStart === null || $from < $ownStart;
+        $moveEnd = $ownEnd === null || $to > $ownEnd;
+        $newStart = $moveStart ? $from : $ownStart;
+        $newEnd = $moveEnd ? $to : $ownEnd;
+        $extended = true;
+        foreach ($segments as $segment) {
+            if ($phaseMode !== 'editare' || (int) $segment['id'] === (int) ($phaseSegment['id'] ?? 0)) {
+                continue;
+            }
+            $segStart = $this->parseInsightsDateTime($this->insightsDateTime($segment['data_inceput'] ?? '', $segment['ora_inceput'] ?? ''));
+            $segEnd = $this->parseInsightsDateTime($this->insightsDateTime($segment['data_sfarsit'] ?? '', $segment['ora_sfarsit'] ?? ''));
+            if ($segStart !== null && $segEnd !== null && $segStart < $newEnd && $segEnd > $newStart) {
+                $extended = false;
+                break;
+            }
+        }
+        if ($extended) {
+            if ($moveStart) {
+                $formData['data_inceput'] = $newStart->format('Y-m-d');
+                $formData['ora_inceput'] = $newStart->format('H:i');
+            }
+            if ($moveEnd) {
+                $formData['data_sfarsit'] = $newEnd->format('Y-m-d');
+                $formData['ora_sfarsit'] = $newEnd->format('H:i');
+            }
+        }
+
+        return [
+            'mode' => $phaseMode === 'editare' ? 'editare' : 'cursa',
+            'km' => $km,
+            'previous' => round($current, 1),
+            'total' => $total,
+            'from' => $from->format('Y-m-d H:i'),
+            'to' => $to->format('Y-m-d H:i'),
+            'extended' => $extended,
+        ];
+    }
+
+    private function parseInsightsDateTime(string $value): ?DateTimeImmutable
+    {
+        $value = trim($value);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$/', $value) !== 1) {
+            return null;
+        }
+        $parsed = DateTimeImmutable::createFromFormat('!Y-m-d H:i', substr($value . (strlen($value) === 10 ? ' 00:00' : ''), 0, 16));
+
+        return $parsed === false ? null : $parsed;
+    }
+
     private function storeRaceSegmentAction(): void
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -2998,6 +3112,11 @@ class DispecerCurseController
         } elseif ($phaseMode === 'noua') {
             $raceFormData = array_merge($raceFormData, $this->raceFormDataForNewSegment($race, $raceSegments));
         }
+        // Din Km pierduti (kmp_*): km rulati fara cursa, pusi pe o faza noua, adaugati la o faza
+        // existenta sau la cursa. Doar precompletare: nimic nu se salveaza fara Salveaza.
+        $kmPierdutiPrefill = $raceFlash['old'] === []
+            ? $this->applyKmPierdutiPrefill($raceFormData, $race, $raceSegments, $phaseMode, $phaseSegment)
+            : null;
 
         // Valorile tastate la o salvare respinsa (cursa sau faza) castiga peste cele salvate.
         if ($raceFlash['old'] !== []) {
@@ -3075,6 +3194,7 @@ class DispecerCurseController
             // o faza noua ('noua').
             'phaseMode' => $phaseMode,
             'phaseSegment' => $phaseSegment,
+            'kmPierdutiPrefill' => $kmPierdutiPrefill,
             'allActiveDrivers' => $this->model->getDriverOptions(true),
             'raceFormData' => $raceFormData,
             'raceFormErrors' => $raceFlash['errors'],
@@ -9516,6 +9636,9 @@ class DispecerCurseController
                 $vehicleIds[str_replace(' ', '', strtoupper((string) $vehicle['nr_inmatriculare']))] = (int) $vehicle['id'];
             }
             $hiddenPlates = $this->insightsHiddenPlates();
+            // Garaj + categorie capacitate (ca in Management capacitati), pentru filtrele din card.
+            $capacityMeta = (new VehicleCapacityCategoryModel($this->db))->getCapacityMetaByVehicleId();
+            $noMeta = ['garaj' => null, 'garaje' => [], 'combinatie' => null, 'categorie_id' => null, 'categorie' => null, 'categorie_ordine' => null, 'capacitate' => null];
 
             $items = [];
             foreach ($rows as $row) {
@@ -9526,10 +9649,11 @@ class DispecerCurseController
                 if (isset($hiddenPlates[$regKey])) {
                     continue;
                 }
-                $items[] = [
+                $vehicleId = $vehicleIds[$regKey] ?? null;
+                $items[] = ($capacityMeta[(int) $vehicleId] ?? $noMeta) + [
                     'id' => (int) $row['id'],
                     'plate' => (string) ($row['vehicle_registration'] ?? ''),
-                    'vehicle_id' => $vehicleIds[$regKey] ?? null,
+                    'vehicle_id' => $vehicleId,
                     'datetime' => substr((string) ($row['fillup_datetime'] ?? ''), 0, 16),
                     'fuel_type' => (string) ($row['fuel_type'] ?? ''),
                     'liters' => round((float) ($row['quantity_liters'] ?? 0), 2),
@@ -9583,6 +9707,82 @@ class DispecerCurseController
             error_log('[DispecerCurseController][insights_hidden] ' . $exception->getMessage());
             return [];
         }
+    }
+
+    /**
+     * Km pierduti -> faza: cursele dintre care e golul (cea dinainte si cea de dupa), cu fazele lor,
+     * ca operatorul sa aleaga unde pune km-ii: faza noua pe cursa, adaugati la o faza existenta sau
+     * la cursa (cand nu are faze). Doar citire; scrierea se face din fisa cursei, la Salveaza.
+     */
+    private function insightsKmTripsAction(): void
+    {
+        $ids = array_slice(array_values(array_unique(array_filter(
+            array_map('intval', explode(',', (string) ($_GET['ids'] ?? ''))),
+            static fn (int $id): bool => $id > 0
+        ))), 0, 4);
+        try {
+            $trips = [];
+            foreach ($ids as $id) {
+                $race = $this->model->getRaceById($id);
+                if ($race === null) {
+                    continue;
+                }
+                $type = (string) ($race['tip_transport'] ?? '');
+                $phases = [];
+                foreach ($this->model->getRaceSegments($id) as $index => $segment) {
+                    $phases[] = [
+                        'id' => (int) $segment['id'],
+                        'nr' => $index + 1,
+                        'from' => $this->insightsDateTime($segment['data_inceput'] ?? '', $segment['ora_inceput'] ?? ''),
+                        'to' => $this->insightsDateTime($segment['data_sfarsit'] ?? '', $segment['ora_sfarsit'] ?? ''),
+                        'km' => $segment['km'] !== null ? round((float) $segment['km'], 1) : null,
+                        'plate' => (string) ($segment['nr_inmatriculare'] ?? ''),
+                        'driver' => (string) ($segment['sofer_nume'] ?? ''),
+                    ];
+                }
+                $trips[] = [
+                    'id' => $id,
+                    'beneficiar' => (string) ($race['beneficiar_nume'] ?? ''),
+                    'tip' => $type,
+                    'tip_label' => (string) (self::TRANSPORT_TYPES[$type] ?? $type),
+                    'from' => $this->insightsDateTime($race['data_inceput'] ?? '', $race['ora_inceput'] ?? ''),
+                    'to' => $this->insightsDateTime($race['data_sfarsit'] ?? '', $race['ora_sfarsit'] ?? ''),
+                    'km' => round((float) ($race[$this->raceRealKmField($type)] ?? 0), 1),
+                    'billed' => (string) ($race['status_facturare'] ?? '') === 'facturat',
+                    'phases' => count($phases) > 1 ? $phases : [],
+                    'edit_url' => build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => $id]),
+                ];
+            }
+            $this->sendJson([
+                'success' => true,
+                'can_edit' => !function_exists('can') || can('dispecer_curse', 'edit'),
+                'trips' => $trips,
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][insights_km_trips] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'error' => 'Cursele nu au putut fi încărcate.'], 500);
+        }
+    }
+
+    private function insightsDateTime(mixed $date, mixed $time): string
+    {
+        $date = trim((string) $date);
+
+        return $date === '' ? '' : trim($date . ' ' . substr(trim((string) $time), 0, 5));
+    }
+
+    /**
+     * Campul cu km-ii reali rulati ai cursei / fazei, dupa tipul de transport (aceeasi regula ca
+     * la faze): primar / P+D -> km_totali (km_cursa sunt km-ii agreati pe ruta), compresor ->
+     * km_dislocare, restul -> km_cursa.
+     */
+    private function raceRealKmField(string $type): string
+    {
+        if ($type === 'primar' || $type === 'primar_distributie') {
+            return 'km_totali';
+        }
+
+        return $type === 'compresor' ? 'km_dislocare' : 'km_cursa';
     }
 
     /** De ce a ramas alimentarea neasociata + cursele / Km service la care se poate lega manual. */
