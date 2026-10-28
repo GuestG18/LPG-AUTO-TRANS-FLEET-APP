@@ -157,10 +157,12 @@ class CentralizatorFacturareController
         $report = $this->centralizerService->getExportData($this->collectReportFilters());
         $filters = $report['filters'] ?? [];
         $fileMonth = preg_replace('/[^0-9\-]/', '', (string) ($filters['month'] ?? date('Y-m')));
+        /* Exportul urmeaza tipul de raport ales in pagina (Raport scurt / Raport detaliat). */
+        $short = ($_GET['view'] ?? '') === 'scurt';
 
         /* Excel formatat ca pagina; CSV-ul plat ramane doar ca rezerva fara extensia zip. */
         if (class_exists(ZipArchive::class)) {
-            $this->exportExcel($report, 'centralizator_facturare_' . $fileMonth . '_' . date('Ymd_His') . '.xlsx');
+            $this->exportExcel($report, 'centralizator_facturare_' . ($short ? 'scurt_' : '') . $fileMonth . '_' . date('Ymd_His') . '.xlsx', $short);
             return;
         }
 
@@ -311,7 +313,7 @@ class CentralizatorFacturareController
         exit;
     }
 
-    private function exportExcel(array $report, string $filename): void
+    private function exportExcel(array $report, string $filename, bool $short = false): void
     {
         require_once __DIR__ . '/../services/CentralizatorFacturareExcelExport.php';
 
@@ -322,7 +324,7 @@ class CentralizatorFacturareController
         }
 
         try {
-            (new CentralizatorFacturareExcelExport($report))->save($path);
+            (new CentralizatorFacturareExcelExport($report, $short))->save($path);
 
             header_remove('Content-Type');
             header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

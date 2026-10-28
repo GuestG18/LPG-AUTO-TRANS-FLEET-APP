@@ -457,7 +457,7 @@ class InactiveResourceStatusService
                 FROM mentenanta_interventii_programate i" . $serviceJoin . "
                 WHERE i.vehicle_id = :vehicle_id
                   AND i.tip_interventie = 'reparatie'
-                  AND (i.status_interventie IN ('programata', 'confirmata', 'in_lucru')" . $serviceWhere . ")
+                  AND (i.status_interventie IN ('de_verificat', 'programata', 'confirmata', 'in_lucru', 'in_asteptare')" . $serviceWhere . ")
                 ORDER BY i.data_programata ASC, i.id ASC
             ");
             $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);

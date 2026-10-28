@@ -103,6 +103,7 @@ final class OdometerCenterService
         $sasReadings = $this->model->getRecentReadingsByVehicle('sas', 80);
         $fillups = $this->cardOil->fillupsByPlate();
         $cardOilSync = $this->cardOil->lastSync();
+        $manualReadings = $this->model->getManualReadings();
 
         $components = [];
         foreach ($vehicles as $id => $vehicle) {
@@ -113,7 +114,8 @@ final class OdometerCenterService
                 $baselines[$id] ?? [],
                 $sasReadings[$id] ?? [],
                 $fillups[self::plateKey((string) $vehicle['nr_inmatriculare'])] ?? [],
-                $cardOilSync
+                $cardOilSync,
+                $manualReadings[$id] ?? []
             );
         }
 
@@ -157,10 +159,13 @@ final class OdometerCenterService
         array $baselines,
         array $sasRows,
         array $fillups,
-        ?array $cardOilSync
+        ?array $cardOilSync,
+        array $manualRows = []
     ): array {
         $id = (int) $vehicle['id'];
         $type = (string) $vehicle['tip_vehicul'];
+        // Semiremorca nu alimenteaza: a doua sursa e citirea manuala a hubodometrului, nu CardOil.
+        $manual = self::acceptsManual($type) ? $this->buildManualSource($manualRows, $baselines['manual'] ?? null) : null;
         $photo = (string) ($vehicle['poza_stocata'] ?? '');
         $thumb = function_exists('upload_image_thumb_url') ? upload_image_thumb_url('vehicule', $photo, 480) : null;
         $capacity = is_numeric($vehicle['capacitate_transport'] ?? null) && (float) $vehicle['capacitate_transport'] > 0
@@ -172,6 +177,12 @@ final class OdometerCenterService
         $sasKm = $sas['distance']['km'] ?? null;
         $cardKm = $cardOil['distance']['km'] ?? null;
         $official = OdometerCalculator::officialDistance((string) $settings['politica_total'], $sasKm, $cardKm);
+        // Semiremorca are un singur odometru (manual): el e km oficiali, oricare ar fi politica SAS/CardOil.
+        if ($manual !== null) {
+            $official = $manual['distance']['km'] !== null
+                ? ['km' => $manual['distance']['km'], 'source' => 'manual', 'reason' => null]
+                : ['km' => null, 'source' => null, 'reason' => $manual['distance']['note'] ?? 'Fără distanță manuală validă de la T0.'];
+        }
 
         $requested = null;
         $version = null;
@@ -184,12 +195,13 @@ final class OdometerCenterService
             }
         }
         // O sursa conteaza doar daca are cel putin o citire reala (maparea singura nu ajunge).
-        $availableCount = (int) ($sas['available'] && $sas['current'] !== null)
-            + (int) ($cardOil['available'] && $cardOil['current'] !== null);
+        $availableCount = $manual !== null
+            ? (int) ($manual['current'] !== null)
+            : (int) ($sas['available'] && $sas['current'] !== null) + (int) ($cardOil['available'] && $cardOil['current'] !== null);
 
         $comparison = $this->compareSources($id, $sas, $cardOil, $sources['sas'] ?? null, $settings);
 
-        $anomalies = array_merge($sas['anomalies'], $cardOil['anomalies']);
+        $anomalies = array_merge($sas['anomalies'], $cardOil['anomalies'], $manual['anomalies'] ?? []);
         if ($comparison['alert']) {
             $anomalies[] = ['source' => 'diferenta', 'at' => null, 'note' => sprintf(
                 'Diferență SAS − CardOil de %s km (%s%%) pe aceeași fereastră.',
@@ -212,7 +224,9 @@ final class OdometerCenterService
             'capacity_confirmed' => (int) ($vehicle['capacitate_transport_confirmata'] ?? 0) === 1,
             'category_id' => $vehicle['categorie_capacitate_id'] !== null ? (int) $vehicle['categorie_capacitate_id'] : null,
             'photo' => $thumb,
-            'sources' => ['sas' => $sas, 'cardoil' => $cardOil],
+            'sources' => ['sas' => $sas, 'cardoil' => $cardOil] + ($manual !== null ? ['manual' => $manual] : []),
+            // Odometrele afisate (card, T0, istoric): semiremorca are unul singur, cel manual.
+            'odometers' => $manual !== null ? ['manual'] : ['sas', 'cardoil'],
             't0' => [
                 'requested_at' => $requested,
                 'version' => $version,
@@ -315,6 +329,63 @@ final class OdometerCenterService
         }
 
         return $result;
+    }
+
+    /** Seria manuala in forma comuna (id, measured_at, km) pentru flagAnomalies si T0. */
+    private static function manualSeries(array $rows): array
+    {
+        return array_map(static fn (array $row): array => [
+            'id' => 'm' . (int) $row['id'],
+            'reading_id' => (int) $row['id'],
+            'measured_at' => (string) $row['measured_at'],
+            'km' => (float) $row['odometer_km'],
+            'note' => $row['note'],
+            'created_by' => $row['created_by_name'] ?? null,
+            'created_at' => (string) $row['created_at'],
+            'canceled_at' => $row['canceled_at'] ?? null,
+            'canceled_by' => $row['canceled_by_name'] ?? null,
+            'cancel_reason' => $row['cancel_reason'] ?? null,
+        ], $rows);
+    }
+
+    private function buildManualSource(array $rows, ?array $baseline): array
+    {
+        $result = $this->emptySource('manual', $baseline);
+        // Sursa e mereu „disponibila” pentru semiremorci: se poate adauga oricand o citire.
+        $result['available'] = true;
+        $result['freshness'] = 'eveniment';
+        if ($rows === []) {
+            $result['reason'] = 'Nicio citire manuală. Adaugă kilometrajul citit pe semiremorcă (hubodometru).';
+            return $result;
+        }
+
+        $series = OdometerCalculator::flagAnomalies(self::manualSeries($rows));
+        $current = null;
+        foreach ($series as $reading) {
+            if ($reading['anomaly'] === null) {
+                $current = $reading;
+            }
+        }
+        $result['current'] = $current !== null ? [
+            'km' => $current['km'], 'measured_at' => $current['measured_at'], 'id' => $current['id'],
+            'created_by' => $current['created_by'],
+        ] : null;
+        $result['last_checked_at'] = $current['measured_at'] ?? null;
+        if ($current === null) {
+            $result['reason'] = 'Toate citirile manuale sunt marcate ca anomalie.';
+        }
+        $result['anomalies'] = $this->recentAnomalies('manual', $series);
+        $result['distance'] = $this->distanceFor($result['current'], $result['baseline']);
+        if ($result['distance']['anomaly'] !== null) {
+            $result['anomalies'][] = ['source' => 'manual', 'at' => null, 'note' => $result['distance']['anomaly']];
+        }
+
+        return $result;
+    }
+
+    public static function acceptsManual(string $type): bool
+    {
+        return str_starts_with($type, 'semiremorca');
     }
 
     private function emptySource(string $provider, ?array $baseline): array
@@ -718,10 +789,14 @@ final class OdometerCenterService
                 throw new InvalidArgumentException('Vehicul inexistent: ' . $vehicleId);
             }
             $plateKey = self::plateKey((string) $vehicles[$vehicleId]['nr_inmatriculare']);
-            $results[$vehicleId] = [
-                'sas' => $this->lookupSasT0($vehicleId, $sources[$vehicleId]['sas'] ?? null, $t0, $settings),
-                'cardoil' => $this->lookupCardOilT0($plateKey, (string) $vehicles[$vehicleId]['tip_vehicul'], $t0, $settings),
-            ];
+            $type = (string) $vehicles[$vehicleId]['tip_vehicul'];
+            // Semiremorca: doar odometrul manual (fara apel SAS / cautare CardOil).
+            $results[$vehicleId] = self::acceptsManual($type)
+                ? ['manual' => $this->lookupManualT0($vehicleId, $t0, $settings)]
+                : [
+                    'sas' => $this->lookupSasT0($vehicleId, $sources[$vehicleId]['sas'] ?? null, $t0, $settings),
+                    'cardoil' => $this->lookupCardOilT0($plateKey, $type, $t0, $settings),
+                ];
             $this->rememberLookup($vehicleId, $t0, $results[$vehicleId]);
         }
 
@@ -780,6 +855,93 @@ final class OdometerCenterService
             $t0,
             (int) $settings['cardoil_varsta_max_ore']
         );
+    }
+
+    private function lookupManualT0(int $vehicleId, string $t0, array $settings): array
+    {
+        $rows = $this->model->getManualReadings($vehicleId)[$vehicleId] ?? [];
+        if ($rows === []) {
+            return ['status' => OdometerCalculator::STATUS_NO_SOURCE, 'reading' => null, 'precision' => null,
+                'note' => 'Nicio citire manuală pentru această semiremorcă: adaug-o întâi.'];
+        }
+
+        return OdometerCalculator::manualReadingAt(
+            OdometerCalculator::flagAnomalies(self::manualSeries($rows)),
+            $t0,
+            (int) $settings['manual_varsta_max_ore']
+        );
+    }
+
+    // ================================================================ citiri manuale
+
+    /**
+     * Adauga citirea odometrului unei semiremorci, tastata de operator. Se refuza o
+     * valoare care nu se potriveste cu seria (scade sau sare neplauzibil). Cu $setT0,
+     * citirea devine imediat referinta T0 (versiune noua) la momentul ei.
+     *
+     * @return array{id:int, t0_version:?int}
+     */
+    public function addManualReading(int $vehicleId, string $measuredAt, string $km, ?string $note, bool $setT0, ?int $userId): array
+    {
+        $vehicles = $this->model->getVehicles();
+        if (!isset($vehicles[$vehicleId])) {
+            throw new InvalidArgumentException('Vehicul inexistent.');
+        }
+        if (!self::acceptsManual((string) $vehicles[$vehicleId]['tip_vehicul'])) {
+            throw new InvalidArgumentException('Citirile manuale se adaugă doar pentru semiremorci.');
+        }
+        try {
+            $measuredAt = self::normalizeT0($measuredAt, $this->now());
+        } catch (InvalidArgumentException) {
+            throw new InvalidArgumentException('Data/ora citirii este invalidă sau în viitor.');
+        }
+        $value = (float) str_replace([' ', '.', ','], ['', '', '.'], trim($km));
+        if (!preg_match('/\d/', $km) || $value <= 0 || $value >= 10000000) {
+            throw new InvalidArgumentException('Kilometrajul trebuie să fie un număr pozitiv.');
+        }
+
+        $existing = $this->model->getManualReadings($vehicleId)[$vehicleId] ?? [];
+        foreach ($existing as $row) {
+            if ((string) $row['measured_at'] === $measuredAt) {
+                throw new InvalidArgumentException('Există deja o citire la ' . date('d.m.Y H:i', strtotime($measuredAt)) . '. Anuleaz-o întâi dacă e greșită.');
+            }
+        }
+        // Fata de vecinii validi (cu 2 citiri, seria nu stie care e gresita: o refuzam pe cea noua).
+        $previous = null;
+        $next = null;
+        foreach (OdometerCalculator::flagAnomalies(self::manualSeries($existing)) as $reading) {
+            if ($reading['anomaly'] !== null) {
+                continue;
+            }
+            if ($reading['measured_at'] < $measuredAt) {
+                $previous = $reading;
+            } elseif ($next === null) {
+                $next = $reading;
+            }
+        }
+        $ts = OdometerCalculator::ts($measuredAt);
+        $fmt = static fn (array $r): string => number_format((float) $r['km'], 0, ',', '.') . ' km la ' . date('d.m.Y H:i', OdometerCalculator::ts($r['measured_at']));
+        if ($previous !== null && !OdometerCalculator::plausibleStep($previous['km'], OdometerCalculator::ts($previous['measured_at']), $value, $ts)) {
+            throw new InvalidArgumentException('Valoarea nu se potrivește cu citirea anterioară (' . $fmt($previous) . '): odometrul nu poate scădea și nici sări atât în timpul scurs.');
+        }
+        if ($next !== null && !OdometerCalculator::plausibleStep($value, $ts, $next['km'], OdometerCalculator::ts($next['measured_at']))) {
+            throw new InvalidArgumentException('Valoarea nu se potrivește cu citirea următoare (' . $fmt($next) . ').');
+        }
+
+        $id = $this->model->insertManualReading($vehicleId, $measuredAt, $value, $note, $userId);
+        $version = null;
+        if ($setT0) {
+            $version = $this->saveT0([$vehicleId], $measuredAt, $userId, $note ?: 'Citire manuală semiremorcă')[$vehicleId]['version'] ?? null;
+        }
+
+        return ['id' => $id, 't0_version' => $version];
+    }
+
+    public function cancelManualReading(int $vehicleId, int $readingId, ?string $reason, ?int $userId): void
+    {
+        if (!$this->model->cancelManualReading($vehicleId, $readingId, $userId, $reason)) {
+            throw new InvalidArgumentException('Citirea nu există sau a fost deja anulată.');
+        }
     }
 
     /**
@@ -885,7 +1047,22 @@ final class OdometerCenterService
         $plateKey = self::plateKey((string) $vehicle['nr_inmatriculare']);
         $cardOil = OdometerCalculator::flagAnomalies($this->cardOil->fillupsByPlate([$plateKey])[$plateKey] ?? []);
 
+        // Manual: toate citirile; cele anulate apar in istoric, dar nu intra in seria validata.
+        $manual = [];
+        if (self::acceptsManual((string) $vehicle['tip_vehicul'])) {
+            $all = self::manualSeries($this->model->getManualReadings($vehicleId, true)[$vehicleId] ?? []);
+            $flagged = [];
+            foreach (OdometerCalculator::flagAnomalies(array_values(array_filter($all, static fn (array $r): bool => $r['canceled_at'] === null))) as $r) {
+                $flagged[$r['id']] = $r['anomaly'];
+            }
+            foreach ($all as $r) {
+                $r['anomaly'] = $r['canceled_at'] === null ? ($flagged[$r['id']] ?? null) : null;
+                $manual[] = $r;
+            }
+        }
+
         return [
+            'manual' => array_values(array_reverse($manual)),
             'vehicle_id' => $vehicleId,
             'plate' => (string) $vehicle['nr_inmatriculare'],
             'days' => $days,

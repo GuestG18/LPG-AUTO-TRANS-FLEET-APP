@@ -26,13 +26,18 @@ $generatedAt = (string) ($report['generated_at'] ?? date('Y-m-d H:i:s'));
 $mode = (string) ($filters['tip_activitate'] ?? '');
 
 /*
- * Densitatea tabelelor. "compact" (implicit) agrega coloanele pe tipuri de
- * transport intr-o singura coloana "Activitate" si muta restul in randul
- * expandabil; "detaliat" pastreaza tabelele late, cu toate coloanele.
+ * Tipul raportului. "detaliat" (implicit) are toate panourile, rutele, vehiculele
+ * si refacturarile pe curse; "scurt" pastreaza doar cardurile si totalurile pe
+ * tipuri de transport (curse, km, tone, valoare). Exportul Excel urmeaza alegerea.
  * Este strict o optiune de afisare, deci se citeste direct din query string.
  */
-$tableView = ($_GET['view'] ?? '') === 'detaliat' ? 'detaliat' : 'compact';
-$isCompact = $tableView === 'compact';
+$tableView = ($_GET['view'] ?? '') === 'scurt' ? 'scurt' : 'detaliat';
+$isShort = $tableView === 'scurt';
+if ($isShort) {
+    foreach (['distribution', 'primary_routes', 'distribution_matrix', 'vehicle_detail'] as $detailPanel) {
+        $visibility[$detailPanel] = false;
+    }
+}
 
 $filterValue = static fn (string $key): string => trim((string) ($filters[$key] ?? ''));
 $fmt = static function (float|int|string|null $value, int $decimals = 2): string {
@@ -634,38 +639,6 @@ $renderTypeRoutes = static function (string $type, array $routes, string $groupB
     return $html . '</tbody></table></div></div>';
 };
 
-$renderStatTiles = static function (array $activity, array $extra = []) use ($fmtMoney): string {
-    if ($activity === [] && $extra === []) {
-        return '';
-    }
-
-    $html = '<div class="cf-tiles">';
-    foreach ($activity as $item) {
-        $html .= '<div class="cf-tile is-' . e((string) $item['tone']) . '">'
-            . '<span class="cf-tile-label">' . e((string) $item['label']) . '</span>'
-            . '<strong>' . e((string) $item['metric']) . '</strong>'
-            . '<span class="cf-tile-foot">' . e($fmtMoney($item['value'] ?? 0)) . ' RON</span>'
-            . '</div>';
-    }
-    foreach ($extra as $item) {
-        $html .= '<div class="cf-tile">'
-            . '<span class="cf-tile-label">' . e((string) ($item['label'] ?? '')) . '</span>'
-            . '<strong>' . e((string) ($item['value'] ?? '-')) . '</strong>'
-            . ((string) ($item['foot'] ?? '') !== '' ? '<span class="cf-tile-foot">' . e((string) $item['foot']) . '</span>' : '')
-            . '</div>';
-    }
-
-    return $html . '</div>';
-};
-
-/* Randul expandat al unui vehicul: sinteza pe tipuri + rute + lista de curse. */
-$renderVehicleBreakdown = static function (array $activity, array $extra, string $tripsHtml) use ($renderStatTiles): string {
-    return '<div class="cf-breakdown">'
-        . $renderStatTiles($activity, $extra)
-        . $tripsHtml
-        . '</div>';
-};
-
 /*
  * Nivelul "rezumat calcul facturare" al unui vehicul din "Activitate pe vehicule -
  * Detaliat": aceleasi randuri ca la desfasurarea unui tip de transport (calcul, tarif /
@@ -1245,6 +1218,12 @@ $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
         "distTable distTable distTable distTable distTable distTable distTable"
         "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
         "refTable refTable refTable refTable refTable refTable refTable";
+}
+/* Raportul scurt randeaza doar cardurile si rezumatul pe tipuri, indiferent de mod. */
+.cf-main-grid.is-short {
+    grid-template-areas:
+        "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3 ref"
+        "activity activity activity activity activity activity activity";
 }
 .cf-card,
 .cf-panel {
@@ -2066,6 +2045,9 @@ a.cf-calc-warn.is-link:focus-visible {
     background: #f4f7fc;
 }
 .cf-view-switch a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     padding: 5px 13px;
     border-radius: 5px;
     color: #51617f;
@@ -2342,10 +2324,9 @@ a.cf-calc-warn.is-link:focus-visible {
     color: #172850;
     font-weight: 800;
 }
-/* Latimile minime tin doar de modul detaliat; in compact tabelele incap singure. */
+/* Latimi minime pentru tabelele late din raportul detaliat. */
 .is-detailed .cf-vehicle-detail > .cf-table-wrap > .cf-table { min-width: 760px; }
 .is-detailed .cf-refact-table .cf-table { min-width: 1240px; }
-.is-compact .cf-vehicle-detail > .cf-table-wrap > .cf-table,
 .cf-empty {
     padding: 20px 12px;
     color: var(--cf-muted);
@@ -2466,6 +2447,12 @@ a.cf-calc-warn.is-link:focus-visible {
             "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
             "refTable refTable refTable refTable refTable refTable";
     }
+    .cf-main-grid.is-short {
+        grid-template-areas:
+            "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3"
+            "ref ref ref ref ref ref"
+            "activity activity activity activity activity activity";
+    }
 }
 
 /*
@@ -2481,7 +2468,8 @@ a.cf-calc-warn.is-link:focus-visible {
     .cf-main-grid.mode-primar-tona,
     .cf-main-grid.mode-distributie,
     .cf-main-grid.mode-primar-distributie,
-    .cf-main-grid.mode-compresor {
+    .cf-main-grid.mode-compresor,
+    .cf-main-grid.is-short {
         grid-template-columns: repeat(6, minmax(0, 1fr));
         grid-template-areas: none;
     }
@@ -2608,7 +2596,7 @@ a.cf-calc-warn.is-link:focus-visible {
 }
 </style>
 
-<div class="cf-page <?= $isCompact ? 'is-compact' : 'is-detailed' ?>">
+<div class="cf-page <?= $isShort ? 'is-short' : 'is-detailed' ?>">
     <div class="cf-shell">
         <header class="cf-header">
             <div class="cf-title">
@@ -2619,9 +2607,9 @@ a.cf-calc-warn.is-link:focus-visible {
                 </div>
             </div>
             <div class="cf-header-actions">
-                <div class="cf-view-switch" role="group" aria-label="Densitate tabele">
-                    <a class="<?= $isCompact ? 'is-active' : '' ?>" href="<?= e($queryFor(['view' => 'compact'])) ?>" aria-current="<?= $isCompact ? 'true' : 'false' ?>">Compact</a>
-                    <a class="<?= $isCompact ? '' : 'is-active' ?>" href="<?= e($queryFor(['view' => 'detaliat'])) ?>" aria-current="<?= $isCompact ? 'false' : 'true' ?>">Detaliat</a>
+                <div class="cf-view-switch" role="group" aria-label="Tip raport">
+                    <a class="<?= $isShort ? 'is-active' : '' ?>" href="<?= e($queryFor(['view' => 'scurt', 'p' => null])) ?>" aria-current="<?= $isShort ? 'true' : 'false' ?>"><i class="bi bi-list-ul" aria-hidden="true"></i> Raport scurt</a>
+                    <a class="<?= $isShort ? '' : 'is-active' ?>" href="<?= e($queryFor(['view' => 'detaliat'])) ?>" aria-current="<?= $isShort ? 'false' : 'true' ?>"><i class="bi bi-list-nested" aria-hidden="true"></i> Raport detaliat</a>
                 </div>
                 <a class="cf-export" href="<?= e($exportUrl) ?>"><i class="bi bi-file-earmark-excel-fill" aria-hidden="true"></i> Export Excel</a>
             </div>
@@ -2675,7 +2663,7 @@ a.cf-calc-warn.is-link:focus-visible {
             </div>
         </div>
 
-        <main class="cf-main-grid <?= e($gridMode) ?>">
+        <main class="cf-main-grid <?= e($gridMode) ?><?= $isShort ? ' is-short' : '' ?>">
             <?php foreach (array_values($kpiCards) as $index => $card): ?>
                 <?php
                 $cardUnit = (string) ($card['unit'] ?? '');
@@ -2818,7 +2806,7 @@ a.cf-calc-warn.is-link:focus-visible {
                             </table>
                         </div>
                     </div>
-                    <a class="cf-ref-all" href="<?= e($isCompact ? $queryFor(['view' => 'detaliat']) . '#cf_ref_table' : '#cf_ref_table') ?>">Vezi toate refacturările <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></a>
+                    <a class="cf-ref-all" href="<?= e($isShort ? $queryFor(['view' => 'detaliat']) . '#cf_ref_table' : '#cf_ref_table') ?>">Vezi toate refacturările <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></a>
                 </div>
             </article>
 
@@ -2834,13 +2822,14 @@ a.cf-calc-warn.is-link:focus-visible {
                     : $activityRows;
                 ?>
                 <section class="cf-panel cf-activity-summary">
-                    <h2>Activități pe tipuri de transport <i class="bi bi-info-circle" aria-hidden="true"></i></h2>
+                    <h2><?= $isShort ? 'Rezumat pe tipuri de transport' : 'Activități pe tipuri de transport' ?> <i class="bi bi-info-circle" aria-hidden="true"></i></h2>
+                    <?php $activityCols = $isShort ? 7 : 6; ?>
                     <div class="cf-table-wrap">
                         <table class="cf-table">
-                            <thead><tr><th class="cf-expand-th"></th><th>Tip transport</th><th class="is-number">Curse</th><th class="is-number">Km</th><th class="is-number">Tone/Activ.</th><th class="is-number">% din total curse</th></tr></thead>
+                            <thead><tr><th class="cf-expand-th"></th><th>Tip transport</th><th class="is-number">Curse</th><th class="is-number">Km</th><th class="is-number">Tone/Activ.</th><?php if ($isShort): ?><th class="is-number">Valoare (RON)</th><?php endif; ?><th class="is-number">% din total curse</th></tr></thead>
                             <tbody>
                             <?php if ($activityVisibleRows === []): ?>
-                                <tr><td colspan="6"><div class="cf-empty">Nu există curse pentru filtrul curent.</div></td></tr>
+                                <tr><td colspan="<?= e((string) $activityCols) ?>"><div class="cf-empty">Nu există curse pentru filtrul curent.</div></td></tr>
                             <?php endif; ?>
                             <?php foreach ($activityVisibleRows as $row): ?>
                                 <?php
@@ -2849,7 +2838,7 @@ a.cf-calc-warn.is-link:focus-visible {
                                 $typeRoutes = (array) ($row['routes'] ?? []);
                                 $typeLeftoverRefunds = (array) ($row['refund_leftovers'] ?? []);
                                 /* Un tip fara curse in luna dar cu refacturari pe curse din alte luni ramane desfasurabil. */
-                                $typeExpandable = $typeRoutes !== [] || $typeLeftoverRefunds !== [];
+                                $typeExpandable = !$isShort && ($typeRoutes !== [] || $typeLeftoverRefunds !== []);
                                 $typeDetailId = 'cf_type_routes_' . preg_replace('/[^A-Za-z0-9_-]+/', '_', $typeKey);
                                 ?>
                                 <tr<?= $typeExpandable ? ' class="cf-vehicle-parent" data-vehicle-row' : '' ?>>
@@ -2862,6 +2851,7 @@ a.cf-calc-warn.is-link:focus-visible {
                                     <td class="is-number"><?= e($fmtSmart($row['trips'] ?? 0, 0)) ?></td>
                                     <td class="is-number"><?= e($fmtKm($row['km'] ?? 0)) ?></td>
                                     <td class="is-number"><?= e($metricTone) ?></td>
+                                    <?php if ($isShort): ?><td class="is-number"><?= e($fmtMoney($row['value'] ?? 0)) ?></td><?php endif; ?>
                                     <td class="is-number"><?= $renderShare($row['share_percent'] ?? 0, (string) ($row['color'] ?? '#2f7df4')) ?></td>
                                 </tr>
                                 <?php if ($typeExpandable): ?>
@@ -2876,12 +2866,17 @@ a.cf-calc-warn.is-link:focus-visible {
                                 <td class="is-number"><?= e($fmtSmart($activityTotals['trips'] ?? 0, 0)) ?></td>
                                 <td class="is-number"><?= e($fmtKm($activityTotals['km'] ?? 0)) ?></td>
                                 <td class="is-number"><?= e($fmtTone($activityTotals['tone'] ?? 0)) ?></td>
+                                <?php if ($isShort): ?><td class="is-number"><?= e($fmtMoney($activityTotals['value'] ?? array_sum(array_map(static fn (array $row): float => (float) ($row['value'] ?? 0), $activityVisibleRows)))) ?></td><?php endif; ?>
                                 <td class="is-number"><?= (int) ($activityTotals['trips'] ?? 0) > 0 ? '100%' : '0%' ?></td>
                             </tr>
                             </tbody>
                         </table>
                     </div>
+                    <?php if ($isShort): ?>
+                    <p class="cf-note">Raport scurt: doar totalurile. Pentru rute, vehicule, curse și refacturări pe curse deschide <a href="<?= e($queryFor(['view' => 'detaliat'])) ?>">Raportul detaliat</a>.</p>
+                    <?php else: ?>
                     <p class="cf-note">Deschide un tip de transport pentru rutele facturate (cantitate × preț), apoi o rută pentru cursele ei sau rândul de refacturări pentru fiecare refacturare.</p>
+                    <?php endif; ?>
                 </section>
             <?php endif; ?>
 
@@ -3116,13 +3111,10 @@ a.cf-calc-warn.is-link:focus-visible {
             <?php if (!empty($visibility['vehicle_detail'])): ?>
                 <section class="cf-panel cf-vehicle-detail">
                     <?php
-                    /*
-                     * Fara coloana de capacitate (numarul de vehicule al grupului sta langa
-                     * categorie); in compact scoatem si coloana de ruta: ajunge in randul expandat.
-                     */
+                    /* Fara coloana de capacitate: numarul de vehicule al grupului sta langa categorie. */
                     $detailColumns = array_values(array_filter(
                         (array) ($vehicleDetail['columns'] ?? []),
-                        static fn (array $col): bool => !in_array((string) ($col['key'] ?? ''), $isCompact ? ['capacity', 'route_summary'] : ['capacity'], true)
+                        static fn (array $col): bool => (string) ($col['key'] ?? '') !== 'capacity'
                     ));
                     /* Grupat pe CATEGORIA de capacitate: prima coloana e categoria sau vehiculul. */
                     $detailColumns = array_map(static function (array $col): array {
@@ -3214,14 +3206,7 @@ a.cf-calc-warn.is-link:focus-visible {
                                                 <?php if ($vehicleBillingGroups !== []): ?>
                                                     <?= $renderVehicleBillingGroups($vehicleBillingGroups, $detailId, (array) ($row['detail_rows'] ?? []), (array) ($row['detail_columns'] ?? $vehicleTripColumns)) ?>
                                                 <?php else: ?>
-                                                <?php $tripsHtml = $renderTripDetails((array) ($row['detail_rows'] ?? []), (array) ($row['detail_columns'] ?? $vehicleTripColumns)); ?>
-                                                <?php if ($isCompact): ?>
-                                                    <?= $renderVehicleBreakdown([], [
-                                                        ['label' => 'Rută', 'value' => (string) ($row['route_summary'] ?? '-')],
-                                                    ], $tripsHtml) ?>
-                                                <?php else: ?>
-                                                    <?= $tripsHtml ?>
-                                                <?php endif; ?>
+                                                    <?= $renderTripDetails((array) ($row['detail_rows'] ?? []), (array) ($row['detail_columns'] ?? $vehicleTripColumns)) ?>
                                                 <?php endif; ?>
                                             </td>
                                         </tr>
@@ -3256,7 +3241,7 @@ a.cf-calc-warn.is-link:focus-visible {
                 </section>
             <?php endif; ?>
 
-            <?php if (!$isCompact): ?>
+            <?php if (!$isShort): ?>
             <section class="cf-panel cf-refact-table" id="cf_ref_table">
                 <h2>Refacturări - sumar pe curse</h2>
                 <?php $refCols = 10; $canOpenRefTrips = can_route('dispecer_curse'); ?>
@@ -3297,7 +3282,7 @@ a.cf-calc-warn.is-link:focus-visible {
 
         <footer class="cf-footer">
             <span>Ultima actualizare: <?= e($fmtDate($generatedAt)) ?></span>
-            <?php if (!$isCompact): ?>
+            <?php if (!$isShort): ?>
             <div class="cf-pagination">
                 <form method="get">
                     <input type="hidden" name="page" value="centralizator_facturare">

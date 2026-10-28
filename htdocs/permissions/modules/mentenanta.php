@@ -24,6 +24,9 @@ return [
     'actions'     => [
         'view'          => ['label' => 'Prezentare generală'],
         'interventions' => ['label' => 'Intervenții programate', 'group' => 'operare'],
+        // Coordonatorul tehnic: diagnostic, lucrari pe componente, status, documente, finalizare.
+        'interventions_technical' => ['label' => 'Coordonare tehnică intervenții', 'group' => 'operare'],
+        'interventions_costs'   => ['label' => 'Costuri intervenții (vizualizare și editare)', 'group' => 'operare'],
         'maintenance'   => ['label' => 'Întreținere', 'group' => 'operare'],
         'repairs'       => ['label' => 'Reparații & facturi', 'group' => 'operare'],
         'auto_catalog'  => ['label' => 'Auto catalog (config componente)', 'group' => 'configurare'],
@@ -34,6 +37,16 @@ return [
     'endpoints'   => [
         'save_intervention'          => 'interventions',
         'delete_intervention'        => 'interventions',
+        'intervention_list'          => 'interventions',
+        'intervention_detail'        => 'interventions',
+        'intervention_vehicle_components' => 'interventions',
+        'intervention_document'      => 'interventions',
+        'intervention_update'        => 'interventions_technical',
+        'intervention_item_save'     => 'interventions_technical',
+        'intervention_item_delete'   => 'interventions_technical',
+        'intervention_finalize'      => 'interventions_technical',
+        'intervention_document_upload' => 'interventions_technical',
+        'intervention_document_delete' => 'interventions_technical',
         'save_part'                  => 'parts_stock',
         'delete_part'                => 'parts_stock',
         'save_auto_component_config' => 'auto_catalog',

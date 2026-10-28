@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/InterventionWorkflowModel.php';
+
 class MaintenanceModel extends BaseModel
 {
     public const COST_CENTERS = [
@@ -636,8 +638,10 @@ class MaintenanceModel extends BaseModel
      * cu costul real, ramane decizia operatorului de mentenanta.
      *
      * $previous = randul de service inainte de modificare (recunoaste textul copiat anterior).
+     * $linkInterventionId = interventie deschisa a aceluiasi vehicul, inca fara Km service, de care
+     * dispecerul leaga plecarea la service in loc sa se creeze una noua (doar la prima sincronizare).
      */
-    public function syncFromServiceKm(array $entry, ?int $userId = null, ?array $previous = null): int
+    public function syncFromServiceKm(array $entry, ?int $userId = null, ?array $previous = null, ?int $linkInterventionId = null): int
     {
         $serviceKmId = (int) ($entry['id'] ?? 0);
         if ($serviceKmId <= 0) {
@@ -648,6 +652,7 @@ class MaintenanceModel extends BaseModel
         $supplier = $this->nullIfEmpty((string) ($entry['service_nume'] ?? ''));
         $driverId = !empty($entry['driver_id']) ? (int) $entry['driver_id'] : null;
         $description = $this->serviceKmDescription($entry);
+        $priority = in_array(($entry['prioritate'] ?? ''), ['scazuta', 'normala', 'ridicata', 'critica'], true) ? (string) $entry['prioritate'] : 'normala';
         $now = date('Y-m-d H:i:s');
 
         $stmt = $this->db->prepare(
@@ -656,29 +661,50 @@ class MaintenanceModel extends BaseModel
         $stmt->execute([':service_km_id' => $serviceKmId]);
         $existing = $stmt->fetch();
 
+        if (!$existing && $linkInterventionId !== null && $linkInterventionId > 0) {
+            $linked = $this->linkServiceKm($linkInterventionId, $entry, $leftAlready, $userId);
+            if ($linked > 0) {
+                return $linked;
+            }
+        }
+
         if (!$existing) {
+            // Sesizarea dispecerului se pastreaza ca instantaneu (sesizare_initiala); o programare
+            // viitoare asteapta revizuirea coordonatorului tehnic (De verificat).
+            $status = $leftAlready ? 'in_lucru' : 'de_verificat';
             $this->db->prepare(
                 "INSERT INTO mentenanta_interventii_programate
-                    (vehicle_id, tip_interventie, data_programata, cost_estimat, furnizor,
-                     driver_id, descriere, status_interventie, service_km_id,
-                     created_by, created_at, updated_at)
+                    (vehicle_id, tip_interventie, prioritate, data_programata, ora_programata, cost_estimat, furnizor,
+                     driver_id, descriere, sesizare_initiala, sesizare_la, sesizare_de,
+                     status_interventie, service_km_id, created_by, created_at, updated_at)
                  VALUES
-                    (:vehicle_id, 'reparatie', :data_programata, 0, :furnizor,
-                     :driver_id, :descriere, :status, :service_km_id,
-                     :created_by, :created_at, :updated_at)"
+                    (:vehicle_id, 'reparatie', :prioritate, :data_programata, :ora_programata, 0, :furnizor,
+                     :driver_id, :descriere, :sesizare, :sesizare_la, :sesizare_de,
+                     :status, :service_km_id, :created_by, :created_at, :updated_at)"
             )->execute([
                 ':vehicle_id' => (int) $entry['vehicle_id'],
+                ':prioritate' => $priority,
                 ':data_programata' => $departure,
+                ':ora_programata' => !empty($entry['ora_plecare']) ? (string) $entry['ora_plecare'] : null,
                 ':furnizor' => $supplier,
                 ':driver_id' => $driverId,
                 ':descriere' => $description,
-                ':status' => $leftAlready ? 'in_lucru' : 'programata',
+                ':sesizare' => $this->serviceKmReport($entry),
+                ':sesizare_la' => (string) ($entry['created_at'] ?? $now),
+                ':sesizare_de' => !empty($entry['created_by']) ? (int) $entry['created_by'] : $userId,
+                ':status' => $status,
                 ':service_km_id' => $serviceKmId,
                 ':created_by' => $userId,
                 ':created_at' => $now,
                 ':updated_at' => $now,
             ]);
-            return (int) $this->db->lastInsertId();
+            $interventionId = (int) $this->db->lastInsertId();
+            $this->logInterventionEvent($interventionId, 'creare', 'Intervenție creată din Km Service (Dispecer curse)', [
+                'service_km_id' => $serviceKmId,
+                'status' => $status,
+                'sesizare' => $description,
+            ], $userId);
+            return $interventionId;
         }
 
         // Interventia finalizata/anulata in Mentenanta nu se mai modifica din dispecerat.
@@ -686,22 +712,26 @@ class MaintenanceModel extends BaseModel
         if (!empty($existing['converted_maintenance_id']) || in_array($status, ['finalizata', 'anulata'], true)) {
             return (int) $existing['id'];
         }
-        if ($status === 'programata' && $leftAlready) {
+        if (in_array($status, ['programata', 'de_verificat'], true) && $leftAlready) {
             $status = 'in_lucru';
         }
         $currentDescription = trim((string) $existing['descriere']);
         $copiedDescription = $previous !== null ? $this->serviceKmDescription($previous) : $description;
         $currentSupplier = trim((string) ($existing['furnizor'] ?? ''));
         $copiedSupplier = trim((string) ($previous['service_nume'] ?? ''));
+        // Prioritatea dispecerului se copiaza doar cat timp coordonatorul nu a schimbat-o.
+        $copiedPriority = (string) ($previous['prioritate'] ?? '') !== '' ? (string) $previous['prioritate'] : 'normala';
+        $priorityAfter = (string) $existing['prioritate'] === $copiedPriority ? $priority : (string) $existing['prioritate'];
 
         $this->db->prepare(
             "UPDATE mentenanta_interventii_programate SET
                 vehicle_id = :vehicle_id, data_programata = :data_programata, driver_id = :driver_id,
-                furnizor = :furnizor, descriere = :descriere,
+                furnizor = :furnizor, descriere = :descriere, prioritate = :prioritate,
                 status_interventie = :status, updated_at = :updated_at
              WHERE id = :id"
         )->execute([
             ':vehicle_id' => (int) $entry['vehicle_id'],
+            ':prioritate' => $priorityAfter,
             ':data_programata' => $departure,
             ':driver_id' => $driverId,
             ':furnizor' => $currentSupplier === '' || $currentSupplier === $copiedSupplier ? $supplier : $currentSupplier,
@@ -710,7 +740,94 @@ class MaintenanceModel extends BaseModel
             ':updated_at' => $now,
             ':id' => (int) $existing['id'],
         ]);
+        $changed = [];
+        if ((string) $existing['data_programata'] !== $departure) {
+            $changed[] = 'data plecării ' . date('d.m.Y', (int) strtotime((string) $existing['data_programata'])) . ' → ' . date('d.m.Y', (int) strtotime($departure));
+        }
+        if ($status !== (string) $existing['status_interventie']) {
+            $changed[] = 'status → ' . ($status === 'in_lucru' ? 'În service' : $status);
+        }
+        if ($previous !== null && trim((string) ($previous['motiv'] ?? '')) !== trim((string) ($entry['motiv'] ?? ''))) {
+            $changed[] = 'motiv „' . trim((string) ($previous['motiv'] ?? '')) . '” → „' . trim((string) ($entry['motiv'] ?? '')) . '”';
+        }
+        if ($previous !== null && trim((string) ($previous['observatii'] ?? '')) !== trim((string) ($entry['observatii'] ?? ''))) {
+            $changed[] = 'observații dispecer „' . trim((string) ($entry['observatii'] ?? '')) . '”';
+        }
+        if ($priorityAfter !== (string) $existing['prioritate']) {
+            $changed[] = 'prioritate → ' . $priorityAfter;
+        }
+        if ((int) $existing['vehicle_id'] !== (int) $entry['vehicle_id']) {
+            $changed[] = 'vehicul schimbat';
+        }
+        // Intoarcerea din service e doar deplasarea: statusul tehnic al interventiei ramane.
+        if ($previous !== null && empty($previous['data_intoarcere']) && !empty($entry['data_intoarcere'])) {
+            $changed[] = 'vehiculul s-a întors din service la ' . date('d.m.Y', (int) strtotime((string) $entry['data_intoarcere']))
+                . (!empty($entry['ora_intoarcere']) ? ' ' . substr((string) $entry['ora_intoarcere'], 0, 5) : '')
+                . ' (intervenția nu se finalizează automat)';
+        }
+        if ($changed !== []) {
+            $this->logInterventionEvent((int) $existing['id'], 'km_service', 'Actualizat din Km Service: ' . implode(', ', $changed), null, $userId);
+        }
         return (int) $existing['id'];
+    }
+
+    /**
+     * Leaga Km service de o interventie existenta (acelasi vehicul, deschisa, fara alt Km service).
+     * Sesizarea, descrierea si diagnosticul ei raman; cererea dispecerului ajunge in istoric.
+     */
+    private function linkServiceKm(int $interventionId, array $entry, bool $leftAlready, ?int $userId): int
+    {
+        $stmt = $this->db->prepare(
+            "SELECT * FROM mentenanta_interventii_programate
+             WHERE id = :id AND vehicle_id = :vehicle_id AND service_km_id IS NULL
+               AND status_interventie NOT IN ('finalizata', 'anulata')"
+        );
+        $stmt->execute([':id' => $interventionId, ':vehicle_id' => (int) $entry['vehicle_id']]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            return 0;
+        }
+        $status = (string) $row['status_interventie'];
+        if (in_array($status, ['programata', 'confirmata', 'de_verificat'], true) && $leftAlready) {
+            $status = 'in_lucru';
+        }
+        $this->db->prepare(
+            "UPDATE mentenanta_interventii_programate
+             SET service_km_id = :service_km_id, status_interventie = :status,
+                 furnizor = COALESCE(furnizor, :furnizor), driver_id = COALESCE(driver_id, :driver_id), updated_at = :updated_at
+             WHERE id = :id"
+        )->execute([
+            ':service_km_id' => (int) $entry['id'],
+            ':status' => $status,
+            ':furnizor' => $this->nullIfEmpty((string) ($entry['service_nume'] ?? '')),
+            ':driver_id' => !empty($entry['driver_id']) ? (int) $entry['driver_id'] : null,
+            ':updated_at' => date('Y-m-d H:i:s'),
+            ':id' => $interventionId,
+        ]);
+        $this->logInterventionEvent($interventionId, 'km_service', 'Legată de Km Service #' . (int) $entry['id']
+            . ' (plecare la service ' . date('d.m.Y', (int) strtotime((string) $entry['data_plecare'])) . ')'
+            . ($status !== (string) $row['status_interventie'] ? '; status → În service' : ''), [
+                'service_km_id' => (int) $entry['id'],
+                'motiv' => (string) ($entry['motiv'] ?? ''),
+                'observatii' => (string) ($entry['observatii'] ?? ''),
+            ], $userId);
+        return $interventionId;
+    }
+
+    /** Sesizarea originala din Km service: motivul plus observatiile dispecerului. */
+    private function serviceKmReport(array $entry): string
+    {
+        $observations = trim((string) ($entry['observatii'] ?? ''));
+        return $this->serviceKmDescription($entry) . ($observations !== '' ? "\n" . $observations : '');
+    }
+
+    private function logInterventionEvent(int $interventionId, string $type, string $description, ?array $details, ?int $userId): void
+    {
+        try {
+            (new InterventionWorkflowModel($this->db))->logEvent($interventionId, $type, $description, $details, $userId);
+        } catch (Throwable $exception) {
+            error_log('[MaintenanceModel][intervention_history] ' . $exception->getMessage());
+        }
     }
 
     /**
@@ -722,11 +839,15 @@ class MaintenanceModel extends BaseModel
         if ($serviceKmId <= 0) {
             return;
         }
+        // "Neatinsa" = fara cost, responsabil, diagnostic, lucrari sau documente adaugate in Mentenanta.
         $this->db->prepare(
             "DELETE FROM mentenanta_interventii_programate
              WHERE service_km_id = :service_km_id AND converted_maintenance_id IS NULL
-               AND status_interventie IN ('programata', 'confirmata', 'in_lucru')
-               AND cost_estimat = 0"
+               AND status_interventie IN ('de_verificat', 'programata', 'confirmata', 'in_lucru')
+               AND cost_estimat = 0 AND cost_suplimentar = 0
+               AND responsabil_user_id IS NULL AND diagnostic_tehnic IS NULL
+               AND NOT EXISTS (SELECT 1 FROM mentenanta_interventii_lucrari l WHERE l.intervention_id = mentenanta_interventii_programate.id)
+               AND NOT EXISTS (SELECT 1 FROM mentenanta_interventii_documente d WHERE d.intervention_id = mentenanta_interventii_programate.id)"
         )->execute([':service_km_id' => $serviceKmId]);
         $this->db->prepare(
             "UPDATE mentenanta_interventii_programate SET service_km_id = NULL, updated_at = :updated_at
@@ -1882,6 +2003,8 @@ class MaintenanceModel extends BaseModel
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
         $this->ensureCorrectiveInvoiceSchema();
+        // Interventii V2: lucrari pe componente, istoric, documente, sesizare / diagnostic separate.
+        InterventionWorkflowModel::ensureSchema($this->db);
         $technicalRecordColumns = [
             'technical_category_id' => "INT UNSIGNED NULL AFTER centru_cost",
             'technical_component_id' => "INT UNSIGNED NULL AFTER technical_category_id",
@@ -2353,7 +2476,7 @@ class MaintenanceModel extends BaseModel
 
     private function normalizeScheduleStatus(string $value): string
     {
-        return in_array($value, ['programata', 'confirmata', 'in_lucru', 'finalizata', 'anulata'], true) ? $value : 'programata';
+        return in_array($value, ['de_verificat', 'programata', 'confirmata', 'in_lucru', 'in_asteptare', 'finalizata', 'anulata'], true) ? $value : 'programata';
     }
 
     private function normalizeList(mixed $value): array

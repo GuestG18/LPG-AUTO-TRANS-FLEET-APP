@@ -149,7 +149,8 @@ $recordForm = array_merge($defaultRecord, $editRecord ?? []);
 $defaultSchedule = [
     'id' => '', 'vehicle_id' => '', 'tip_interventie' => 'intretinere', 'data_programata' => date('Y-m-d'),
     'cost_estimat' => '', 'furnizor' => '', 'driver_id' => '', 'client' => '', 'centru_cost' => '',
-    'descriere' => '', 'status_interventie' => 'programata',
+    'descriere' => '', 'status_interventie' => 'de_verificat', 'prioritate' => 'normala', 'ora_programata' => '',
+    'responsabil_user_id' => '', 'sesizare_initiala' => '',
 ];
 $scheduleForm = array_merge($defaultSchedule, $editIntervention ?? []);
 $pageHeading = match ($section) {
@@ -159,7 +160,7 @@ $pageHeading = match ($section) {
 };
 $pageSubtitle = match ($section) {
     'repairs' => 'Defecțiuni, diagnoze și reparații neplanificate.',
-    'interventions' => 'Planifică și urmărește intervențiile înainte de înregistrarea finală.',
+    'interventions' => 'Planifică și urmărește intervențiile tehnice ale flotei.',
     default => '',
 };
 ?>
@@ -392,45 +393,7 @@ $pageSubtitle = match ($section) {
     <?php endif; ?>
 
     <?php if ($section === 'interventions'): ?>
-        <form class="maintenance-filter-card maintenance-compact-filter" method="get">
-            <input type="hidden" name="page" value="mentenanta"><input type="hidden" name="action" value="interventions">
-            <div class="maintenance-filter-field"><label>Vehicul</label><select class="form-select" name="vehicle_id"><option value="">Toate</option><?php foreach ($vehicles as $vehicle): ?><option value="<?= e((string) $vehicle['id']) ?>" <?= (int) ($filters['vehicle_id'] ?? 0) === (int) $vehicle['id'] ? 'selected' : '' ?>><?= e((string) $vehicle['nr_inmatriculare']) ?></option><?php endforeach; ?></select></div>
-            <div class="maintenance-filter-field"><label>Status</label><select class="form-select" name="status"><option value="">Toate</option><?php foreach ($scheduleStatusLabels as $value => $label): ?><option value="<?= e($value) ?>" <?= ($filters['status'] ?? '') === $value ? 'selected' : '' ?>><?= e($label) ?></option><?php endforeach; ?></select></div>
-            <div class="maintenance-filter-actions"><button class="btn btn-primary" type="submit">Filtrează</button><a class="btn btn-outline-secondary" href="<?= e($sectionUrl('interventions')) ?>">Resetează</a></div>
-        </form>
-        <article class="maintenance-card maintenance-table-card">
-            <div class="maintenance-card-heading"><h2>Intervenții planificate</h2><span><?= e((string) count($scheduledInterventions)) ?> înregistrări</span></div>
-            <div class="table-responsive"><table class="table maintenance-table align-middle mb-0">
-                <thead><tr><th>Data programată</th><th>Vehicul</th><th>Tip</th><th>Centru de cost</th><th>Descriere</th><th>Furnizor / Service</th><th>Șofer</th><th>Cost estimat</th><th>Status</th><th>Acțiuni</th></tr></thead>
-                <tbody>
-                <?php foreach ($scheduledInterventions as $row): ?><tr>
-                    <td><?= e(format_date_ro((string) $row['data_programata'])) ?>
-                        <?php if (!empty($row['service_km_id']) && !empty($row['service_data_plecare'])): ?>
-                            <span class="maintenance-badge maintenance-badge-blue d-inline-block mt-1" title="Programare trimisă din Dispecer curse → Km service"><i class="bi bi-truck"></i> Dispecer</span>
-                            <small class="d-block text-muted mt-1">
-                                Plecat: <?= e(date('d.m.Y', (int) strtotime((string) $row['service_data_plecare'])) . (!empty($row['service_ora_plecare']) ? ' ' . substr((string) $row['service_ora_plecare'], 0, 5) : '')) ?><br>
-                                <?php if (!empty($row['service_data_intoarcere'])): ?>
-                                    Întors: <?= e(date('d.m.Y', (int) strtotime((string) $row['service_data_intoarcere'])) . (!empty($row['service_ora_intoarcere']) ? ' ' . substr((string) $row['service_ora_intoarcere'], 0, 5) : '')) ?>
-                                <?php else: ?>
-                                    <span class="text-warning fw-semibold">În service acum</span>
-                                <?php endif; ?>
-                                <?php if ((float) ($row['service_km'] ?? 0) > 0): ?><br><?= e(number_format((float) $row['service_km'], 0, ',', '.')) ?> km service<?php endif; ?>
-                            </small>
-                        <?php endif; ?>
-                    </td>
-                    <td><strong><?= e((string) $row['nr_inmatriculare']) ?></strong><small><?= e($vehicleTypeLabels[$row['tip_vehicul']] ?? (string) $row['tip_vehicul']) ?></small></td>
-                    <td><span class="maintenance-badge <?= $row['tip_interventie'] === 'reparatie' ? 'maintenance-badge-danger' : 'maintenance-badge-success' ?>"><?= $row['tip_interventie'] === 'reparatie' ? 'Reparație' : 'Întreținere' ?></span></td>
-                    <td><span class="maintenance-badge <?= e($centerClass((string) ($row['centru_cost'] ?? ''))) ?>"><?= e((string) ($row['centru_cost'] ?? 'Altele')) ?></span></td>
-                    <td class="maintenance-description-cell"><?= e((string) $row['descriere']) ?><?php if (!empty($row['client'])): ?><small>Client: <?= e((string) $row['client']) ?></small><?php endif; ?></td>
-                    <td><?= e((string) ($row['furnizor'] ?? '-')) ?></td><td><?= e((string) ($row['sofer_nume'] ?? '-')) ?></td>
-                    <td><?= e($currency((float) $row['cost_estimat'])) ?></td>
-                    <td><span class="maintenance-badge <?= e($statusClass((string) $row['status_interventie'])) ?>"><?= e($scheduleStatusLabels[$row['status_interventie']] ?? (string) $row['status_interventie']) ?></span><?php if (!empty($row['converted_maintenance_id'])): ?><small class="d-block text-success mt-1">Convertită</small><?php endif; ?></td>
-                    <td><div class="maintenance-actions"><a class="btn" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'interventions', 'edit_intervention_id' => $row['id']])) ?>"><i class="bi bi-pencil"></i></a><form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'delete_intervention'])) ?>"><?= csrf_field() ?><input type="hidden" name="id" value="<?= e((string) $row['id']) ?>"><button class="btn danger" type="submit" data-confirm="Ștergi intervenția programată?"><i class="bi bi-trash"></i></button></form></div></td>
-                </tr><?php endforeach; ?>
-                <?php if ($scheduledInterventions === []): ?><tr><td colspan="10" class="text-center text-muted py-5">Nu există intervenții planificate pentru filtrele selectate.</td></tr><?php endif; ?>
-                </tbody>
-            </table></div>
-        </article>
+        <?php require __DIR__ . '/_interventions_v2.php'; ?>
     <?php endif; ?>
 
     <?php if ($section === 'repairs'): ?>
@@ -667,27 +630,7 @@ $pageSubtitle = match ($section) {
 </div>
 
 <?php if ($section !== 'stock'): ?>
-<div class="modal fade" id="maintenanceScheduleModal" tabindex="-1" data-auto-open="<?= $editIntervention !== null ? '1' : '0' ?>">
-    <div class="modal-dialog modal-lg modal-dialog-centered"><div class="modal-content maintenance-modal">
-        <form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'save_intervention'])) ?>">
-            <?= csrf_field() ?><input type="hidden" name="id" value="<?= e((string) ($scheduleForm['id'] ?? '')) ?>">
-            <div class="modal-header"><div><h2 class="modal-title fs-5"><?= $editIntervention !== null ? 'Editează intervenția' : 'Adaugă intervenție' ?></h2><p>Planificare înainte de înregistrarea finală.</p></div><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-            <div class="modal-body"><div class="row g-3">
-                <div class="col-md-6"><label class="form-label">Vehicul <span>*</span></label><select class="form-select" name="vehicle_id" data-maintenance-vehicle-select required><option value="">Selectează vehiculul</option><?php foreach ($vehicles as $vehicle): ?><option value="<?= e((string) $vehicle['id']) ?>" data-vehicle-type="<?= e((string) ($vehicle['tip_vehicul'] ?? '')) ?>" <?= (int) ($scheduleForm['vehicle_id'] ?? 0) === (int) $vehicle['id'] ? 'selected' : '' ?>><?= e((string) $vehicle['nr_inmatriculare'] . ' - ' . (string) $vehicle['marca'] . ' ' . (string) $vehicle['model']) ?></option><?php endforeach; ?></select></div>
-                <div class="col-md-6"><label class="form-label">Tip intervenție <span>*</span></label><select class="form-select" name="tip_interventie"><option value="intretinere" <?= ($scheduleForm['tip_interventie'] ?? '') === 'intretinere' ? 'selected' : '' ?>>Întreținere</option><option value="reparatie" <?= ($scheduleForm['tip_interventie'] ?? '') === 'reparatie' ? 'selected' : '' ?>>Reparație</option></select></div>
-                <div class="col-md-6"><label class="form-label">Data programată <span>*</span></label><input class="form-control" type="date" name="data_programata" value="<?= e((string) $scheduleForm['data_programata']) ?>" required></div>
-                <div class="col-md-6"><label class="form-label">Cost estimat</label><input class="form-control" type="number" name="cost_estimat" min="0" step="0.01" value="<?= e((string) $scheduleForm['cost_estimat']) ?>"></div>
-                <div class="col-md-6"><label class="form-label">Furnizor / Service</label><input class="form-control" name="furnizor" value="<?= e((string) ($scheduleForm['furnizor'] ?? '')) ?>"></div>
-                <div class="col-md-6"><label class="form-label">Șofer</label><select class="form-select" name="driver_id"><option value="">Fără șofer</option><?php foreach ($drivers as $driver): ?><option value="<?= e((string) $driver['id']) ?>" <?= (int) ($scheduleForm['driver_id'] ?? 0) === (int) $driver['id'] ? 'selected' : '' ?>><?= e((string) $driver['nume']) ?></option><?php endforeach; ?></select></div>
-                <div class="col-md-6"><label class="form-label">Client (opțional)</label><input class="form-control" name="client" value="<?= e((string) ($scheduleForm['client'] ?? '')) ?>"></div>
-                <div class="col-md-6"><label class="form-label">Grupa componenta</label><select class="form-select" name="centru_cost" data-maintenance-cost-center-select><?php $renderCostCenterOptions($costCenterOptions, (string) ($scheduleForm['centru_cost'] ?? ''), true); ?></select></div>
-                <div class="col-12"><label class="form-label">Descriere <span>*</span></label><textarea class="form-control" name="descriere" rows="3" required><?= e((string) $scheduleForm['descriere']) ?></textarea></div>
-                <div class="col-md-6"><label class="form-label">Status</label><select class="form-select" name="status_interventie"><?php foreach ($scheduleStatusLabels as $value => $label): ?><option value="<?= e($value) ?>" <?= ($scheduleForm['status_interventie'] ?? '') === $value ? 'selected' : '' ?>><?= e($label) ?></option><?php endforeach; ?></select><div class="form-text">La „Finalizată”, intervenția este convertită automat în Întreținere sau Reparație.</div></div>
-            </div></div>
-            <div class="modal-footer"><button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Anulează</button><button class="btn btn-primary" type="submit">Salvează intervenția</button></div>
-        </form>
-    </div></div>
-</div>
+<?php require __DIR__ . '/_intervention_form.php'; ?>
 <?php endif; ?>
 
 <?php if (in_array($section, ['maintenance', 'repairs'], true)): ?>
@@ -857,3 +800,7 @@ $pageSubtitle = match ($section) {
 })();
 </script>
 <script src="<?= e(url('assets/js/maintenance.js?v=' . $maintenanceScriptVersion)) ?>"></script>
+<?php if ($section !== 'stock'): ?>
+<link rel="stylesheet" href="<?= e(url('assets/css/interventii-v2.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/interventii-v2.css'))) ?>">
+<script src="<?= e(url('assets/js/interventii-v2.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/interventii-v2.js'))) ?>"></script>
+<?php endif; ?>

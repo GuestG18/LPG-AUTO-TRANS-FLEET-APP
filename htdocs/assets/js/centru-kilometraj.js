@@ -189,6 +189,14 @@
     function componentsOf(unit) {
         return unit.components || [];
     }
+    /** Odometrele afisate pentru o componenta: semiremorca are unul singur, cel manual. */
+    function odometersOf(comp) {
+        return comp.odometers || ['sas', 'cardoil'];
+    }
+    function hasManual(comp) {
+        return odometersOf(comp).includes('manual');
+    }
+    const SOURCE_SHORT = { sas: 'SAS', cardoil: 'CardOil', manual: 'Manual' };
     function sourceFresh(source) {
         if (!source.available) {
             return null;
@@ -200,7 +208,7 @@
         let error = false;
         let stale = false;
         componentsOf(unit).forEach((comp) => {
-            ['sas', 'cardoil'].forEach((p) => {
+            odometersOf(comp).forEach((p) => {
                 const s = comp.sources[p];
                 if (!s.available || !s.current) {
                     return;
@@ -392,7 +400,46 @@
         node.dataset.animatedAt = String(Date.now());
     }
 
+    function manualAddButton(comp, compact) {
+        if (!state.perms.manual) {
+            return '';
+        }
+        return '<button type="button" class="kmc-link kmc-odo__add" data-kmc-manual="' + comp.id + '" title="Adaugă kilometrajul citit pe semiremorcă">'
+            + '<i class="bi bi-plus-circle"></i>' + (compact ? 'Citire nouă' : 'Adaugă citire') + '</button>';
+    }
+
+    function manualOdoHtml(comp) {
+        const source = comp.sources.manual;
+        const key = comp.id + ':manual';
+        const current = source.current;
+        const anomalies = (source.anomalies || []).length;
+        const flag = anomalies ? '<i class="bi bi-exclamation-diamond-fill kmc-odo__flag" title="' + esc(source.anomalies.map((a) => a.note).join('\n')) + '"></i>' : '';
+        const label = '<div class="kmc-odo__label"><i class="bi bi-pencil-square" aria-hidden="true"></i>Odometru semiremorcă' + flag + '</div>';
+        if (!current) {
+            return '<div class="kmc-odo kmc-odo--manual kmc-odo--off" data-odo-key="' + key + '" title="' + esc(source.reason || '') + '">'
+                + label
+                + '<div class="kmc-odo__row">' + drumsHtml(null) + '<span class="kmc-odo__unit">km</span></div>'
+                + '<div class="kmc-odo__na">' + esc(source.reason || 'Nicio citire manuală.') + '</div>'
+                + manualAddButton(comp, false)
+                + '</div>';
+        }
+        return '<div class="kmc-odo kmc-odo--manual" data-odo-key="' + key + '" data-km="' + current.km + '" title="Kilometrajul citit pe semiremorcă și introdus de operator.">'
+            + label
+            + '<div class="kmc-odo__row">' + drumsHtml(state.shownKm.has(key) ? state.shownKm.get(key) : current.km) + '<span class="kmc-odo__unit">km</span></div>'
+            + '<div class="kmc-odo__meta">Ultima citire manuală:<br><b>' + esc(fmtDT(current.measured_at)) + '</b></div>'
+            + '<div class="kmc-odo__src"><span class="kmc-dot kmc-dot--event"></span>' + esc(ago(current.measured_at)) + (current.created_by ? ' · ' + esc(current.created_by) : '') + '</div>'
+            + manualAddButton(comp, true)
+            + '</div>';
+    }
+
+    function odosHtml(comp) {
+        return '<div class="kmc-odos' + (hasManual(comp) ? ' kmc-odos--single' : '') + '">' + odometersOf(comp).map((p) => odoHtml(comp, p)).join('') + '</div>';
+    }
+
     function odoHtml(comp, provider) {
+        if (provider === 'manual') {
+            return manualOdoHtml(comp);
+        }
         const source = comp.sources[provider];
         const key = comp.id + ':' + provider;
         const isSas = provider === 'sas';
@@ -448,7 +495,7 @@
         });
         // Odometrele ascunse de filtre isi pastreaza ultima valoare afisata.
         allComponents().forEach((comp) => {
-            ['sas', 'cardoil'].forEach((p) => {
+            odometersOf(comp).forEach((p) => {
                 const key = comp.id + ':' + p;
                 const current = comp.sources[p].current;
                 if (!seen.has(key) && current && !state.shownKm.has(key)) {
@@ -522,9 +569,12 @@
         const diff = comp.comparison && comp.comparison.comparable
             ? '<div class="kmc-since__src" title="' + esc(comp.comparison.note) + '">Δ SAS − CardOil: ' + esc(signedKm(comp.comparison.diff_km)) + '</div>' : '';
         if (comp.official.km !== null) {
-            const src = comp.official.source === 'sas' ? 'SAS Fleet' : 'CardOil Refill';
+            const src = { sas: 'SAS Fleet', cardoil: 'CardOil Refill', manual: 'citire manuală' }[comp.official.source] || comp.official.source;
             return '<div class="kmc-since"><div class="kmc-since__label">De la T0:</div><div class="kmc-since__value">' + esc(signedKm(comp.official.km))
                 + '</div><div class="kmc-since__src">Sursă oficială: ' + src + '</div>' + diff + '</div>';
+        }
+        if (hasManual(comp)) {
+            return '<div class="kmc-since"><div class="kmc-since__label">De la T0:</div><div class="kmc-since__value">—</div><div class="kmc-since__src">' + esc(comp.official.reason || '') + '</div></div>';
         }
         const line = (label, km, note) => '<div class="kmc-since__line"><span>' + label + '</span>' + (km !== null ? '<b>' + esc(signedKm(km)) + '</b>' : '<span class="kmc-since__src" title="' + esc(note || '') + '">—</span>') + '</div>';
         return '<div class="kmc-since"><div class="kmc-since__label">De la T0:</div>'
@@ -550,7 +600,7 @@
             + '<div class="kmc-plates">' + plateHtml(comp.plate) + '</div>'
             + '<div class="kmc-chips">' + chips.join('') + '</div></div>'
             + metaHtml(unit) + '</div>'
-            + '<div class="kmc-card__body"><div class="kmc-odos">' + odoHtml(comp, 'sas') + odoHtml(comp, 'cardoil') + '</div>' + sinceHtml(comp) + '</div>'
+            + '<div class="kmc-card__body">' + odosHtml(comp) + sinceHtml(comp) + '</div>'
             + '</article>';
     }
 
@@ -559,19 +609,22 @@
         return '<div class="kmc-sub' + (isTrailer ? ' kmc-sub--trailer' : '') + '">'
             + '<div class="kmc-sub__title"><i class="bi ' + (isTrailer ? 'bi-truck-flatbed' : 'bi-truck-front-fill') + '"></i>'
             + (isTrailer ? 'Semiremorcă' : 'Cap tractor') + ' – ' + esc(comp.plate) + (comp.label ? ' <span>(' + esc(comp.label) + ')</span>' : '') + '</div>'
-            + '<div class="kmc-odos">' + odoHtml(comp, 'sas') + odoHtml(comp, 'cardoil') + '</div></div>';
+            + odosHtml(comp) + '</div>';
     }
 
     function assemblyTotal(tractor, trailer) {
         const part = (comp, label) => {
             if (!comp.monitored) {
-                return '<span>' + label + ': <span class="kmc-muted">fără citiri proprii</span></span>';
+                return '<span>' + label + ': <span class="kmc-muted">' + (hasManual(comp) ? 'nicio citire manuală' : 'fără citiri proprii') + '</span></span>';
             }
             if (!comp.t0.configured) {
                 return '<span>' + label + ': <span class="kmc-muted">T0 nesetat</span></span>';
             }
             if (comp.official.km !== null) {
-                return '<span>' + label + ': <b>' + esc(signedKm(comp.official.km)) + '</b> <span class="kmc-muted">(' + (comp.official.source === 'sas' ? 'SAS' : 'CardOil') + ')</span></span>';
+                return '<span>' + label + ': <b>' + esc(signedKm(comp.official.km)) + '</b> <span class="kmc-muted">(' + esc(SOURCE_SHORT[comp.official.source] || comp.official.source) + ')</span></span>';
+            }
+            if (hasManual(comp)) {
+                return '<span>' + label + ': <span class="kmc-muted" title="' + esc(comp.official.reason || '') + '">—</span></span>';
             }
             const s = comp.sources.sas.distance.km;
             const c = comp.sources.cardoil.distance.km;
@@ -616,14 +669,21 @@
                 return '<td class="kmc-num"><span class="' + (p === 'sas' ? 'kmc-sas' : 'kmc-card-oil') + '">' + esc(fmtKm(s.current.km)) + ' km</span><small>' + esc(fmtDT(s.current.measured_at)) + '</small></td>';
             };
             const dist = (p) => '<td class="kmc-num">' + (comp.sources[p].distance.km !== null ? esc(signedKm(comp.sources[p].distance.km)) : '—') + '</td>';
+            const manual = hasManual(comp);
+            const manualCell = () => {
+                const s = comp.sources.manual;
+                return '<td class="kmc-num" colspan="2">' + (s.current
+                    ? '<span class="kmc-manual">' + esc(fmtKm(s.current.km)) + ' km</span><small>manual · ' + esc(fmtDT(s.current.measured_at)) + '</small>'
+                    : '<span class="kmc-muted" title="' + esc(s.reason || '') + '">nicio citire manuală</span>') + '</td>';
+            };
             const first = index === 0;
             const category = categoryById(unit.category_id);
             return '<tr data-unit="' + esc(unit.key) + '">'
                 + '<td>' + (first ? '' : '<i class="bi bi-arrow-return-right kmc-muted"></i> ') + '<strong>' + esc(comp.plate) + '</strong><small>' + esc(comp.label) + ' · ' + esc(comp.type_label) + '</small></td>'
                 + '<td>' + (first ? esc(category ? category.name : '—') : '') + '<small>' + esc(capacityLabel(comp.capacity_t) || '') + '</small></td>'
-                + cell('sas') + cell('cardoil')
+                + (manual ? manualCell() : cell('sas') + cell('cardoil'))
                 + '<td>' + (comp.t0.requested_at ? esc(fmtDT(comp.t0.requested_at)) : '<span class="kmc-muted">—</span>') + '</td>'
-                + dist('sas') + dist('cardoil')
+                + (manual ? '<td class="kmc-num" colspan="2">' + (comp.sources.manual.distance.km !== null ? esc(signedKm(comp.sources.manual.distance.km)) : '—') + '</td>' : dist('sas') + dist('cardoil'))
                 + '<td class="kmc-num">' + (comp.official.km !== null ? '<b>' + esc(signedKm(comp.official.km)) + '</b>' : '—') + '</td>'
                 + '<td>' + (first ? metaActions(unit) : '') + '</td>'
                 + '</tr>';
@@ -797,7 +857,21 @@
             return;
         }
         const t0 = defaultT0(unit);
-        state.panel = { unitKey, tab: tab === 'history' ? 'history' : 't0', comp: 0, lookup: null, lookupT0: null, date: t0.date, time: t0.time, busy: false, error: null, history: {} };
+        const now = new Date();
+        const manualComp = componentsOf(unit).find(hasManual) || null;
+        state.panel = {
+            unitKey, tab: ['history', 'manual'].includes(tab) ? tab : 't0', comp: 0, lookup: null, lookupT0: null, date: t0.date, time: t0.time, busy: false, error: null, history: {},
+            manual: manualComp ? {
+                compId: manualComp.id,
+                date: now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()),
+                time: pad(now.getHours()) + ':' + pad(now.getMinutes()),
+                setT0: !manualComp.t0.configured,
+            } : null,
+            cancelId: null,
+        };
+        if (state.panel.tab === 'manual' && !state.panel.manual) {
+            state.panel.tab = 't0';
+        }
         root.dataset.panel = 'open';
         $('[data-kmc-panel]').hidden = false;
         $$('.kmc-card.is-selected').forEach((c) => c.classList.remove('is-selected'));
@@ -821,9 +895,8 @@
     }
 
     function hitHtml(provider, result) {
-        const isSas = provider === 'sas';
-        const title = isSas ? 'Citire istorică SAS Fleet' : 'Citire istorică CardOil Refill';
-        const icon = isSas ? 'bi-broadcast' : 'bi-fuel-pump';
+        const title = { sas: 'Citire istorică SAS Fleet', cardoil: 'Citire istorică CardOil Refill', manual: 'Citire manuală semiremorcă' }[provider];
+        const icon = { sas: 'bi-broadcast', cardoil: 'bi-fuel-pump', manual: 'bi-pencil-square' }[provider];
         if (!result || result.status === 'fara_sursa') {
             return '<div class="kmc-hit kmc-hit--off kmc-hit--' + provider + '"><span class="kmc-hit__icon"><i class="bi ' + icon + '"></i></span><div><b>' + title + '</b>Date indisponibile pentru această sursă'
                 + (result && result.note ? '<div class="kmc-hit__note">' + esc(result.note) + '</div>' : '') + '</div></div>';
@@ -837,12 +910,12 @@
     }
 
     function activeBaselineHtml(comp) {
-        const parts = ['sas', 'cardoil'].map((p) => {
+        const parts = odometersOf(comp).map((p) => {
             const b = comp.sources[p].baseline;
             if (!b) {
                 return null;
             }
-            const name = p === 'sas' ? 'SAS' : 'CardOil';
+            const name = SOURCE_SHORT[p];
             return b.status === 'ok'
                 ? name + ': ' + fmtKm(b.km) + ' km la ' + fmtDT(b.measured_at)
                 : name + ': fără citire validă';
@@ -863,16 +936,20 @@
         }
         const comps = componentsOf(unit);
         const main = comps[0];
-        const title = (p.tab === 't0' ? 'Setează T0 – ' : 'Istoric – ') + comps.map((c) => c.plate).join(' + ');
+        const title = ({ t0: 'Setează T0 – ', history: 'Istoric – ', manual: 'Citire manuală – ' }[p.tab]) + comps.map((c) => c.plate).join(' + ');
         const tabs = '<div class="kmc-tabs" role="tablist">'
             + '<button type="button" data-kmc-tab="t0" class="' + (p.tab === 't0' ? 'is-active' : '') + '"><i class="bi bi-table"></i>Citiri</button>'
+            + (p.manual && state.perms.manual ? '<button type="button" data-kmc-tab="manual" class="' + (p.tab === 'manual' ? 'is-active' : '') + '"><i class="bi bi-pencil-square"></i>Semiremorcă</button>' : '')
             + (state.perms.history ? '<button type="button" data-kmc-tab="history" class="' + (p.tab === 'history' ? 'is-active' : '') + '"><i class="bi bi-list-ul"></i>Istoric</button>' : '')
             + '</div>';
 
         const vehicle = '<div class="kmc-panel__veh">' + photoHtml(comps.length > 1 ? comps : [main])
             + '<div><h3>' + esc(unitLabel(unit) || main.plate) + '</h3><div class="kmc-plates">' + comps.map((c) => plateHtml(c.plate) + ' <small class="kmc-muted">' + esc(c.type_label) + '</small>').join('') + '</div>'
             + '<div class="kmc-chips" style="margin-top:6px">' + (unit.capacity_t !== null ? '<span><i class="bi bi-box-seam"></i>' + esc(capacityLabel(unit.capacity_t)) + '</span>' : '') + '<span>' + (unit.kind === 'ansamblu' ? 'Ansamblu' : esc(main.type_label)) + '</span></div>'
-            + '<div>' + comps.map((c) => ['sas', 'cardoil'].map((prov) => '<span class="kmc-srcchip kmc-srcchip--' + (c.sources[prov].available ? prov : 'off') + '" title="' + esc(c.plate + ': ' + (c.sources[prov].available ? 'sursă disponibilă' : (c.sources[prov].reason || 'indisponibil'))) + '"><i class="bi ' + (prov === 'sas' ? 'bi-broadcast' : 'bi-fuel-pump') + '"></i>' + (prov === 'sas' ? 'SAS Fleet' : 'CardOil Refill') + (comps.length > 1 ? ' · ' + esc(c.plate) : '') + '</span>').join('')).join('') + '</div>'
+            + '<div>' + comps.map((c) => odometersOf(c).map((prov) => {
+                const on = c.sources[prov].available && (prov !== 'manual' || c.sources[prov].current);
+                return '<span class="kmc-srcchip kmc-srcchip--' + (on ? prov : 'off') + '" title="' + esc(c.plate + ': ' + (on ? 'sursă disponibilă' : (c.sources[prov].reason || 'indisponibil'))) + '"><i class="bi ' + ({ sas: 'bi-broadcast', cardoil: 'bi-fuel-pump', manual: 'bi-pencil-square' }[prov]) + '"></i>' + ({ sas: 'SAS Fleet', cardoil: 'CardOil Refill', manual: 'Odometru manual' }[prov]) + (comps.length > 1 ? ' · ' + esc(c.plate) : '') + '</span>';
+            }).join('')).join('') + '</div>'
             + '</div></div>';
 
         let body;
@@ -883,10 +960,10 @@
                 const lookup = p.lookup ? p.lookup[comp.id] : null;
                 return '<div class="kmc-result' + (i === 1 ? ' kmc-result--trailer' : '') + '">'
                     + '<div class="kmc-result__title"><i class="bi ' + (i === 1 ? 'bi-truck-flatbed' : 'bi-truck-front-fill') + '"></i>' + (comps.length > 1 ? (i === 0 ? 'Cap tractor' : 'Semiremorcă') : esc(comp.type_label)) + ' – ' + esc(comp.plate) + '</div>'
-                    + (lookup ? '<div class="kmc-result__cols">' + hitHtml('sas', lookup.sas) + hitHtml('cardoil', lookup.cardoil) + '</div>' : activeBaselineHtml(comp))
+                    + (lookup ? '<div class="kmc-result__cols">' + odometersOf(comp).map((prov) => hitHtml(prov, lookup[prov])).join('') + '</div>' : activeBaselineHtml(comp))
                     + '</div>';
             }).join('');
-            const okCount = p.lookup ? comps.reduce((n, c) => n + ['sas', 'cardoil'].filter((prov) => p.lookup[c.id] && p.lookup[c.id][prov] && p.lookup[c.id][prov].status === 'ok').length, 0) : 0;
+            const okCount = p.lookup ? comps.reduce((n, c) => n + odometersOf(c).filter((prov) => p.lookup[c.id] && p.lookup[c.id][prov] && p.lookup[c.id][prov].status === 'ok').length, 0) : 0;
             body = vehicle
                 + (canEdit
                     ? '<p class="kmc-step">1. Selectează data și ora</p><div class="kmc-dt"><label><i class="bi bi-calendar3"></i><input type="date" data-kmc-t0-date value="' + esc(p.date) + '" max="' + new Date().toISOString().slice(0, 10) + '"></label>'
@@ -898,9 +975,26 @@
                 + (p.lookup && okCount === 0 ? '<div class="kmc-alert">Nicio sursă nu are o citire validă la acest T0. Alege alt moment (de preferat când vehiculul stătea parcat).</div>' : '')
                 + (p.error ? '<div class="kmc-alert kmc-alert--err">' + esc(p.error) + '</div>' : '')
                 + (canEdit && p.lookup ? '<input type="text" class="kmc-reason" data-kmc-reason maxlength="255" placeholder="Motiv (opțional), ex. început de lună, schimb anvelope">' : '')
-                + '<p class="kmc-note">SAS: citirea de la sfârșitul ultimei deplasări înainte de T0; acceptată dacă vehiculul stătea parcat sau în toleranța de ' + esc(state.data.settings.sas_toleranta_minute) + ' min. CardOil: ultima alimentare înainte de T0, maxim ' + esc(state.data.settings.cardoil_varsta_max_ore) + ' ore. Nicio valoare nu se interpolează. Versiunile T0 anterioare rămân în istoric.</p>';
+                + '<p class="kmc-note">SAS: citirea de la sfârșitul ultimei deplasări înainte de T0; acceptată dacă vehiculul stătea parcat sau în toleranța de ' + esc(state.data.settings.sas_toleranta_minute) + ' min. CardOil: ultima alimentare înainte de T0, maxim ' + esc(state.data.settings.cardoil_varsta_max_ore) + ' ore.'
+                    + (comps.some(hasManual) ? ' Semiremorcă: cea mai apropiată citire manuală, înainte sau după T0, la maxim ' + esc(state.data.settings.manual_varsta_max_ore) + ' ore.' : '') + ' Nicio valoare nu se interpolează. Versiunile T0 anterioare rămân în istoric.</p>';
             foot = '<button type="button" class="kmc-btn" data-kmc-close>Anulează</button>'
                 + (canEdit ? '<button type="button" class="kmc-btn kmc-btn--primary' + (p.busy === 'save' ? ' is-busy' : '') + '" data-kmc-save' + (!p.lookup || okCount === 0 || p.busy ? ' disabled' : '') + '>' + (p.busy === 'save' ? '<i class="bi bi-arrow-repeat"></i>' : '') + 'Salvează T0</button>' : '');
+        } else if (p.tab === 'manual') {
+            const comp = comps.find((c) => c.id === p.manual.compId);
+            const m = p.manual;
+            const last = comp.sources.manual.current;
+            body = vehicle
+                + '<div class="kmc-result kmc-result--trailer"><div class="kmc-result__title"><i class="bi bi-truck-flatbed"></i>Semiremorcă – ' + esc(comp.plate) + '</div>'
+                + '<p class="kmc-note">' + (last ? 'Ultima citire: <b>' + esc(fmtKm(last.km)) + ' km</b> la ' + esc(fmtDT(last.measured_at)) : 'Nicio citire manuală până acum.') + '</p></div>'
+                + '<p class="kmc-step">1. Când ai citit odometrul</p><div class="kmc-dt"><label><i class="bi bi-calendar3"></i><input type="date" data-kmc-m="date" value="' + esc(m.date) + '" max="' + new Date().toISOString().slice(0, 10) + '"></label>'
+                + '<label><i class="bi bi-clock"></i><input type="time" data-kmc-m="time" value="' + esc(m.time) + '"></label></div>'
+                + '<p class="kmc-step">2. Kilometrajul citit</p><label class="kmc-dt"><span style="flex:1"><input type="text" inputmode="numeric" class="kmc-reason" data-kmc-m="km" placeholder="ex. 412.580" value="' + esc(m.km || '') + '"></span><span class="kmc-odo__unit">km</span></label>'
+                + '<input type="text" class="kmc-reason" data-kmc-m="note" maxlength="255" placeholder="Notă (opțional), ex. citit la încărcare Ploiești" value="' + esc(m.note || '') + '">'
+                + (state.perms.t0 ? '<label class="kmc-note" style="display:flex;gap:8px;align-items:center;cursor:pointer"><input type="checkbox" data-kmc-m="setT0"' + (m.setT0 ? ' checked' : '') + '>Setează T0 la această citire</label>' : '')
+                + (p.error ? '<div class="kmc-alert kmc-alert--err">' + esc(p.error) + '</div>' : '')
+                + '<p class="kmc-note">Valoarea trebuie să fie cel puțin egală cu citirea anterioară și plauzibilă față de timpul scurs. O citire greșită se anulează din Istoric (rămâne în jurnal).</p>';
+            foot = '<button type="button" class="kmc-btn" data-kmc-close>Anulează</button>'
+                + '<button type="button" class="kmc-btn kmc-btn--primary' + (p.busy === 'manual' ? ' is-busy' : '') + '" data-kmc-manual-save' + (p.busy ? ' disabled' : '') + '>' + (p.busy === 'manual' ? '<i class="bi bi-arrow-repeat"></i>' : '') + 'Salvează citirea</button>';
         } else {
             const compTabs = comps.length > 1
                 ? '<div class="kmc-comptabs">' + comps.map((c, i) => '<button type="button" data-kmc-comp="' + i + '" class="' + (p.comp === i ? 'is-active' : '') + '">' + (i === 0 ? 'Cap tractor' : 'Semiremorcă') + ' · ' + esc(c.plate) + '</button>').join('') + '</div>'
@@ -927,7 +1021,7 @@
 
         const versions = h.baselines.length
             ? '<table class="kmc-table"><thead><tr><th>Ver.</th><th>T0 cerut</th><th>Sursă</th><th>Citire la</th><th class="kmc-num">km</th><th>Stare</th><th>De</th></tr></thead><tbody>'
-                + h.baselines.map((b) => '<tr class="' + (Number(b.is_active) === 1 ? '' : 'is-old') + '"><td>v' + esc(b.baseline_version) + (Number(b.is_active) === 1 ? ' <span class="kmc-pill kmc-pill--ok">activ</span>' : '') + '</td><td>' + esc(fmtDT(b.requested_t0_at)) + '</td><td>' + (b.provider_code === 'sas' ? 'SAS' : 'CardOil') + '</td><td>' + esc(fmtDT(b.measured_t0_at)) + '</td><td class="kmc-num">' + esc(b.baseline_value_km !== null ? fmtKm(b.baseline_value_km) : '—') + '</td><td title="' + esc(b.status_note || '') + '">' + statusPill(b.retrieval_status) + '</td><td>' + esc(b.created_by_name || '—') + '<small>' + esc(fmtDT(b.created_at)) + '</small></td></tr>').join('')
+                + h.baselines.map((b) => '<tr class="' + (Number(b.is_active) === 1 ? '' : 'is-old') + '"><td>v' + esc(b.baseline_version) + (Number(b.is_active) === 1 ? ' <span class="kmc-pill kmc-pill--ok">activ</span>' : '') + '</td><td>' + esc(fmtDT(b.requested_t0_at)) + '</td><td>' + esc(SOURCE_SHORT[b.provider_code] || b.provider_code) + '</td><td>' + esc(fmtDT(b.measured_t0_at)) + '</td><td class="kmc-num">' + esc(b.baseline_value_km !== null ? fmtKm(b.baseline_value_km) : '—') + '</td><td title="' + esc(b.status_note || '') + '">' + statusPill(b.retrieval_status) + '</td><td>' + esc(b.created_by_name || '—') + '<small>' + esc(fmtDT(b.created_at)) + '</small></td></tr>').join('')
                 + '</tbody></table>'
             : '<p class="kmc-note">Nicio referință T0 salvată.</p>';
 
@@ -953,13 +1047,41 @@
         const diff = comp.comparison && comp.comparison.comparable
             ? '<div class="kmc-alert ' + (comp.comparison.alert ? '' : 'kmc-alert--ok') + '">Diferență SAS − CardOil: <b>' + esc(signedKm(comp.comparison.diff_km)) + '</b>' + (comp.comparison.diff_pct !== null ? ' (' + esc(pctFormat.format(comp.comparison.diff_pct)) + '% din distanța SAS)' : '') + '. ' + esc(comp.comparison.note) + ' Diagnostic, nu km în plus.</div>'
             : '';
-        const since = '<p class="kmc-note">De la T0 — SAS: <b>' + esc(signedKm(comp.sources.sas.distance.km)) + '</b> · CardOil: <b>' + esc(signedKm(comp.sources.cardoil.distance.km)) + '</b></p>';
-
         const audit = h.audit
             ? '<h4><i class="bi bi-journal-text"></i>Jurnal de audit</h4>' + (h.audit.length
                 ? '<table class="kmc-table"><tbody>' + h.audit.map((a) => '<tr><td>' + esc(fmtDT(a.created_at)) + '</td><td>' + esc(a.action) + '</td><td>' + esc(a.user_name || '—') + '</td><td><small>' + esc(a.reason || '') + '</small></td></tr>').join('') + '</tbody></table>'
                 : '<p class="kmc-note">Nicio modificare.</p>')
             : '';
+
+        if (hasManual(comp)) {
+            const rows = h.manual || [];
+            const p = state.panel;
+            const manualRows = rows.length
+                ? '<table class="kmc-table"><thead><tr><th>Citit la</th><th class="kmc-num">Odometru</th><th>Introdus de</th><th></th></tr></thead><tbody>'
+                    + rows.map((r) => {
+                        const canceled = !!r.canceled_at;
+                        let action = '';
+                        if (!canceled && state.perms.manual) {
+                            action = p && p.cancelId === r.reading_id
+                                ? '<input type="text" class="kmc-reason" data-kmc-cancel-reason maxlength="255" placeholder="Motiv anulare" style="margin:4px 0"><button type="button" class="kmc-btn kmc-btn--sm" data-kmc-cancel-confirm="' + r.reading_id + '">Confirmă anularea</button> <button type="button" class="kmc-link" data-kmc-cancel="">Renunță</button>'
+                                : '<button type="button" class="kmc-link" data-kmc-cancel="' + r.reading_id + '">Anulează</button>';
+                        }
+                        return '<tr class="' + (canceled ? 'is-old' : (r.anomaly ? 'is-anomaly' : '')) + '"><td>' + esc(fmtDT(r.measured_at)) + (r.note ? '<small>' + esc(r.note) + '</small>' : '') + '</td>'
+                            + '<td class="kmc-num">' + (canceled ? '<s>' + esc(fmtKm(r.km)) + '</s>' : esc(fmtKm(r.km))) + '</td>'
+                            + '<td>' + esc(r.created_by || '—') + '<small>' + esc(fmtDT(r.created_at)) + '</small></td>'
+                            + '<td>' + (canceled ? '<span class="kmc-pill" title="' + esc(r.cancel_reason || '') + '">anulată</span><small>' + esc((r.canceled_by || '') + ' ' + fmtDT(r.canceled_at)) + '</small>' : '')
+                            + (r.anomaly ? '<span class="kmc-pill kmc-pill--anom">anomalie</span> <small>' + esc(r.anomaly) + '</small>' : '') + action + '</td></tr>';
+                    }).join('') + '</tbody></table>'
+                : '<p class="kmc-note">Nicio citire manuală.</p>';
+            const add = state.perms.manual ? ' <button type="button" class="kmc-link" data-kmc-tab="manual"><i class="bi bi-plus-circle"></i> Adaugă citire</button>' : '';
+            return '<div class="kmc-hist">'
+                + '<h4><i class="bi bi-flag"></i>Referințe T0 (toate versiunile)</h4>' + versions
+                + '<p class="kmc-note">De la T0: <b>' + esc(signedKm(comp.sources.manual.distance.km)) + '</b></p>'
+                + '<h4><i class="bi bi-pencil-square"></i>Citiri manuale odometru semiremorcă</h4>' + add + manualRows
+                + audit + '</div>';
+        }
+
+        const since = '<p class="kmc-note">De la T0 — SAS: <b>' + esc(signedKm(comp.sources.sas.distance.km)) + '</b> · CardOil: <b>' + esc(signedKm(comp.sources.cardoil.distance.km)) + '</b></p>';
 
         const fuelLink = state.perms.fuel ? ' <a class="kmc-link" href="' + esc(page.urls.fuel) + '">Corectezi în Carburanți</a>' : '';
         return '<div class="kmc-hist">'
@@ -1050,6 +1172,53 @@
             p.busy = false;
             p.error = error.message;
             renderPanel();
+        }
+    }
+
+    async function saveManual() {
+        const p = state.panel;
+        const m = p.manual;
+        p.busy = 'manual';
+        p.error = null;
+        renderPanel();
+        try {
+            const json = await post(page.urls.manual_add, {
+                vehicle_id: m.compId,
+                measured_at: m.date + ' ' + m.time,
+                km: m.km || '',
+                note: m.note || '',
+                set_t0: m.setT0 && state.perms.t0 ? '1' : '0',
+            });
+            if (!json.ok) {
+                throw new Error(json.message || 'Salvarea a eșuat.');
+            }
+            toast(json.message);
+            closePanel();
+            applyDashboard(json.dashboard);
+        } catch (error) {
+            p.busy = false;
+            p.error = error.message;
+            if (state.panel === p) {
+                renderPanel();
+            }
+        }
+    }
+
+    async function cancelManual(readingId) {
+        const p = state.panel;
+        const reasonNode = $('[data-kmc-cancel-reason]');
+        try {
+            const json = await post(page.urls.manual_cancel, { vehicle_id: p.manual.compId, reading_id: readingId, reason: reasonNode ? reasonNode.value : '' });
+            if (!json.ok) {
+                throw new Error(json.message || 'Anularea a eșuat.');
+            }
+            toast(json.message);
+            p.cancelId = null;
+            delete p.history[p.manual.compId];
+            applyDashboard(json.dashboard);
+            loadHistory();
+        } catch (error) {
+            toast(error.message, true);
         }
     }
 
@@ -1153,6 +1322,30 @@
                 openPanel(open.dataset.unit, open.dataset.kmcOpen);
                 return;
             }
+            const manualOpen = event.target.closest('[data-kmc-manual]');
+            if (manualOpen) {
+                const compId = Number(manualOpen.dataset.kmcManual);
+                const unit = (state.data.units || []).find((u) => componentsOf(u).some((c) => c.id === compId));
+                if (unit) {
+                    openPanel(unit.key, 'manual');
+                }
+                return;
+            }
+            if (event.target.closest('[data-kmc-manual-save]')) {
+                saveManual();
+                return;
+            }
+            const cancelConfirm = event.target.closest('[data-kmc-cancel-confirm]');
+            if (cancelConfirm && state.panel) {
+                cancelManual(Number(cancelConfirm.dataset.kmcCancelConfirm));
+                return;
+            }
+            const cancel = event.target.closest('[data-kmc-cancel]');
+            if (cancel && state.panel) {
+                state.panel.cancelId = cancel.dataset.kmcCancel ? Number(cancel.dataset.kmcCancel) : null;
+                renderPanel();
+                return;
+            }
             if (event.target.closest('[data-kmc-close]')) {
                 closePanel();
                 return;
@@ -1205,8 +1398,20 @@
                 closePanel();
             }
         });
+        // Campurile formularului manual se pastreaza in stare (panoul se redeseneaza la reimprospatare).
+        root.addEventListener('input', (event) => {
+            const field = event.target.closest('[data-kmc-m]');
+            if (field && state.panel && state.panel.manual) {
+                state.panel.manual[field.dataset.kmcM] = field.type === 'checkbox' ? field.checked : field.value;
+            }
+        });
         root.addEventListener('change', async (event) => {
             const p = state.panel;
+            const field = event.target.closest('[data-kmc-m]');
+            if (field && p && p.manual) {
+                p.manual[field.dataset.kmcM] = field.type === 'checkbox' ? field.checked : field.value;
+                return;
+            }
             if (event.target.matches('[data-kmc-t0-date]') && p) {
                 p.date = event.target.value;
                 p.lookup = null;
@@ -1232,7 +1437,7 @@
 
         // Reimprospatare din baza de date (fara apeluri API): cron-ul sau alt utilizator a adus citiri noi.
         setInterval(() => {
-            if (document.visibilityState === 'visible' && !state.syncing && !(state.panel && state.panel.busy)) {
+            if (document.visibilityState === 'visible' && !state.syncing && !(state.panel && (state.panel.busy || state.panel.tab === 'manual'))) {
                 refreshData(true);
             }
         }, REFRESH_MS);

@@ -318,6 +318,9 @@ class DispecerCurseController
             case 'service_km_gps':
                 $this->serviceKmGpsAction();
                 return;
+            case 'service_km_vehicle_info':
+                $this->serviceKmVehicleInfoAction();
+                return;
             case 'trip_gps_km':
                 $this->tripGpsKmAction();
                 return;
@@ -1470,11 +1473,28 @@ class DispecerCurseController
         }
 
         // Km service: formular si lista separate de curse (nu intra in tarifare).
+        $serviceKmContext = ['catalog' => null, 'vehicles' => [], 'services' => []];
         try {
-            $serviceKmEntries = (new VehicleServiceKmModel($this->db))->getRecentEntries();
+            $serviceKmModel = new VehicleServiceKmModel($this->db);
+            $serviceKmEntries = $serviceKmModel->getRecentEntries();
+            $serviceKmContext['services'] = $serviceKmModel->knownServiceNames();
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][index][service_km] ' . $exception->getMessage());
             $serviceKmEntries = [];
+        }
+        // Km service V2: componentele (Registru piese & lucrari) si interventia legata (Interventii V2).
+        try {
+            new MaintenanceModel($this->db); // schema Mentenanta + Interventii V2, inainte de citiri
+            $workflow = new InterventionWorkflowModel($this->db);
+            $summaries = $workflow->serviceKmSummaries(array_column($serviceKmEntries, 'id'));
+            foreach ($serviceKmEntries as &$serviceKmEntry) {
+                $serviceKmEntry['interventie'] = $summaries[(int) $serviceKmEntry['id']] ?? null;
+            }
+            unset($serviceKmEntry);
+            $serviceKmContext['catalog'] = $workflow->componentCatalog();
+            $serviceKmContext['vehicles'] = $workflow->vehicleContext();
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][index][service_km_v2] ' . $exception->getMessage());
         }
 
         // Tab-ul "In asteptare aprobare": numarul initial; lista vine live (approval-live.js).
@@ -1538,6 +1558,7 @@ class DispecerCurseController
             'raceSegments' => $raceSegments,
             'diurnaHistoryByDriver' => $diurnaHistoryByDriver,
             'serviceKmEntries' => $serviceKmEntries,
+            'serviceKmContext' => $serviceKmContext ?? ['catalog' => null, 'vehicles' => [], 'services' => []],
             'restoreListViewRaceId' => $restoreListViewRaceId,
             'serviceKmFlash' => $embedRaceId > 0 ? ['old' => [], 'errors' => []] : $this->consumeFormFlash('service_km'),
             'embedMode' => $embedRaceId > 0,
@@ -1785,10 +1806,33 @@ class DispecerCurseController
             }
         }
 
+        // Km service V2: prioritate + componentele suspectate (optionale) pentru Interventii V2.
+        $priority = in_array(($_POST['prioritate'] ?? ''), ['scazuta', 'normala', 'ridicata', 'critica'], true) ? (string) $_POST['prioritate'] : 'normala';
+        $componentRows = json_decode((string) ($_POST['components_json'] ?? '[]'), true);
+        $componentRows = is_array($componentRows) ? $componentRows : [];
+        $components = [];
+        $linkInterventionId = max(0, (int) ($_POST['link_intervention_id'] ?? 0));
+        $workflow = null;
+        if ($errors === [] && $vehicleId > 0) {
+            try {
+                new MaintenanceModel($this->db); // schema (DDL) inainte de orice scriere
+                $workflow = new InterventionWorkflowModel($this->db);
+                $components = $workflow->normalizeDispatcherComponents($vehicleId, $componentRows);
+                // Scopul tehnic confirmat de coordonator e legat de vehicul: nu se muta pe altul din Km service.
+                $current = $id > 0 ? $model->find($id) : null;
+                $linked = $id > 0 ? $workflow->findByServiceKm($id) : null;
+                if ($current !== null && $linked !== null && (int) $current['vehicle_id'] !== $vehicleId && $workflow->hasTechnicalScope((int) $linked['id'])) {
+                    $errors['vehicle_id'] = 'Intervenția #' . (int) $linked['id'] . ' are deja lucrări evaluate de coordonator pentru acest vehicul; vehiculul nu se mai poate schimba din Km service.';
+                }
+            } catch (InvalidArgumentException $exception) {
+                $errors['components'] = $exception->getMessage();
+            }
+        }
+
         if ($errors !== []) {
             $this->setFormFlash('service_km', array_intersect_key($_POST, array_flip([
                 'id', 'vehicle_id', 'driver_id', 'data_plecare', 'ora_plecare', 'data_intoarcere',
-                'ora_intoarcere', 'km', 'service_nume', 'motiv', 'observatii',
+                'ora_intoarcere', 'km', 'service_nume', 'motiv', 'observatii', 'prioritate', 'components_json', 'link_intervention_id',
             ])), $errors);
             flash_set('danger', 'Km service nu au fost salvați: ' . implode(' ', $errors));
             redirect($listUrl);
@@ -1807,11 +1851,27 @@ class DispecerCurseController
                 'service_nume' => $text('service_nume', 150),
                 'motiv' => $text('motiv', 255),
                 'observatii' => $text('observatii', 2000),
+                'prioritate' => $priority,
             ], $this->currentUserId(), $id);
             $saved = $model->find($savedId);
-            $synced = $saved !== null && $this->syncServiceKmToMaintenance($saved, $previous);
-            flash_set('success', ($id > 0 ? 'Intrarea de service a fost actualizată.' : 'Km service au fost adăugați.')
-                . ($synced ? ' Programarea apare în Mentenanță → Intervenții planificate.' : ''));
+            audit_log_write($this->db, 'vehicule_service_km', $savedId, $id > 0 ? 'update' : 'create',
+                ($id > 0 ? 'Km service actualizat' : 'Km service adăugat') . ' #' . $savedId, $previous, $saved, $this->currentUserId());
+            $interventionId = $saved !== null ? $this->syncServiceKmToMaintenance($saved, $previous, $id > 0 ? null : $linkInterventionId) : 0;
+            $requestNote = '';
+            if ($interventionId > 0 && $workflow !== null) {
+                try {
+                    $request = $workflow->applyDispatcherRequest($interventionId, $components, $this->currentUserId());
+                    if ($request['locked'] > 0) {
+                        $requestNote = ' ' . $request['locked'] . ' componente sunt deja evaluate de coordonator și nu s-au modificat.';
+                    }
+                } catch (Throwable $exception) {
+                    error_log('[DispecerCurseController][service_km_store][componente] ' . $exception->getMessage());
+                    $requestNote = ' Componentele nu au putut fi trimise intervenției; adaugă-le din Mentenanță → Intervenții.';
+                }
+            }
+            flash_set($requestNote !== '' && str_contains($requestNote, 'nu au putut') ? 'warning' : 'success',
+                ($id > 0 ? 'Intrarea de service a fost actualizată.' : 'Km service au fost adăugați.')
+                . ($interventionId > 0 ? ' Intervenția asociată: #' . $interventionId . '.' : '') . $requestNote);
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][service_km_store] ' . $exception->getMessage());
             flash_set('danger', 'Km service nu au putut fi salvați.');
@@ -1824,14 +1884,36 @@ class DispecerCurseController
      * Perioada de service devine interventie planificata in Mentenanta, ca operatorul
      * de mentenanta sa o preia. Esecul nu blocheaza salvarea km-ilor de service.
      */
-    private function syncServiceKmToMaintenance(array $entry, ?array $previous): bool
+    private function syncServiceKmToMaintenance(array $entry, ?array $previous, ?int $linkInterventionId = null): int
     {
         try {
-            (new MaintenanceModel($this->db))->syncFromServiceKm($entry, $this->currentUserId(), $previous);
-            return true;
+            return (new MaintenanceModel($this->db))->syncFromServiceKm($entry, $this->currentUserId(), $previous, $linkInterventionId);
         } catch (Throwable $exception) {
             error_log('[DispecerCurseController][service_km_store][mentenanta] ' . $exception->getMessage());
-            return false;
+            return 0;
+        }
+    }
+
+    /**
+     * Km service V2, la alegerea vehiculului: componentele configurate pe el / pe semiremorca
+     * cuplata (marcaj in selector) si interventiile lui deschise de care se poate lega plecarea.
+     */
+    private function serviceKmVehicleInfoAction(): void
+    {
+        $vehicleId = max(0, (int) ($_GET['vehicle_id'] ?? 0));
+        try {
+            new MaintenanceModel($this->db);
+            $workflow = new InterventionWorkflowModel($this->db);
+            $trailerId = (int) ($workflow->vehicleContext()[$vehicleId]['trailer']['id'] ?? 0);
+            $this->sendJson([
+                'success' => true,
+                'configured' => $workflow->configuredComponentKeys($vehicleId),
+                'configured_trailer' => $trailerId > 0 ? $workflow->configuredComponentKeys($trailerId) : [],
+                'open_interventions' => $workflow->openUnlinkedForVehicle($vehicleId),
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][service_km_vehicle_info] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'error' => 'Informațiile vehiculului nu au putut fi încărcate.'], 500);
         }
     }
 
@@ -1845,7 +1927,12 @@ class DispecerCurseController
 
         try {
             $serviceKmId = (int) ($_POST['id'] ?? 0);
-            $deleted = (new VehicleServiceKmModel($this->db))->delete($serviceKmId);
+            $serviceKmModel = new VehicleServiceKmModel($this->db);
+            $before = $serviceKmModel->find($serviceKmId);
+            $deleted = $serviceKmModel->delete($serviceKmId);
+            if ($deleted) {
+                audit_log_write($this->db, 'vehicule_service_km', $serviceKmId, 'delete', 'Km service #' . $serviceKmId . ' șters', $before, null, $this->currentUserId());
+            }
             if ($deleted) {
                 try {
                     (new MaintenanceModel($this->db))->detachServiceKm($serviceKmId);

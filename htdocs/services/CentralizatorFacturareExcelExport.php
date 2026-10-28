@@ -11,12 +11,15 @@ require_once __DIR__ . '/SimpleXlsxWriter.php';
  *
  * Primeste raportul deja calculat de CentralizatorFacturareService::getExportData(),
  * deci cifrele sunt exact cele din pagina, pentru aceleasi filtre.
+ *
+ * Raportul scurt ($short) are, ca in pagina, doar sumarul si totalurile pe tipuri de
+ * transport, intr-o singura foaie, fara rute, vehicule, curse si refacturari pe curse.
  */
 class CentralizatorFacturareExcelExport
 {
     private SimpleXlsxWriter $xlsx;
 
-    public function __construct(private array $report)
+    public function __construct(private array $report, private bool $short = false)
     {
         $this->xlsx = new SimpleXlsxWriter();
     }
@@ -24,9 +27,11 @@ class CentralizatorFacturareExcelExport
     public function save(string $path): void
     {
         $this->buildMainSheet();
-        $this->buildVehicleSheet();
-        $this->buildRefundsSheet();
-        $this->buildTripsSheet();
+        if (!$this->short) {
+            $this->buildVehicleSheet();
+            $this->buildRefundsSheet();
+            $this->buildTripsSheet();
+        }
         $this->xlsx->save($path);
     }
 
@@ -137,7 +142,7 @@ class CentralizatorFacturareExcelExport
         $width = self::MAIN_WIDTH;
 
         $filters = (array) ($this->report['filters'] ?? []);
-        $x->addRow($s, [self::c('Centralizator facturare', 'title')], ['height' => 24]);
+        $x->addRow($s, [self::c('Centralizator facturare' . ($this->short ? ' - raport scurt' : ''), 'title')], ['height' => 24]);
         $x->addRow($s, [self::c('Raport pentru: ' . $this->scopeBeneficiary() . '  ·  ' . (string) ($filters['month_label'] ?? ''), 'muted')]);
         $active = $this->activeFilterLabels();
         $x->addRow($s, [self::c($active !== [] ? 'Filtre: ' . implode(' · ', $active) : ($this->isAllBeneficiaries() ? 'Situația generală - toate activitățile, toți beneficiarii' : 'Fără alte filtre - toate activitățile acestui beneficiar'), 'muted')]);
@@ -147,6 +152,12 @@ class CentralizatorFacturareExcelExport
 
         $this->writeKpis($s, $width);
         $visibility = (array) ($this->report['visibility'] ?? []);
+        if ($this->short) {
+            if (!empty($visibility['activity_summary'])) {
+                $this->writeActivity($s, $width);
+            }
+            return;
+        }
         if (!empty($visibility['activity_summary'])) {
             $this->writeActivity($s, $width);
         }
@@ -224,7 +235,7 @@ class CentralizatorFacturareExcelExport
             $rows = array_values(array_filter($rows, static fn (array $row): bool => (int) ($row['trips'] ?? 0) > 0 || (array) ($row['refund_leftovers'] ?? []) !== []));
         }
 
-        $this->section($s, 'Activități pe tipuri de transport', $width);
+        $this->section($s, $this->short ? 'Rezumat pe tipuri de transport' : 'Activități pe tipuri de transport', $width);
         $x->addRow($s, self::cols([
             'A' => self::c('Tip transport', 'th'), 'D' => self::c('Curse', 'th_num'), 'E' => self::c('Valoare RON', 'th_num'),
             'F' => self::c('Km', 'th_num'), 'G' => self::c('Tone/Activ.', 'th_num'), 'H' => self::c('% din total curse', 'th_num'),
@@ -245,7 +256,7 @@ class CentralizatorFacturareExcelExport
             $typeValue = self::num($row['value'] ?? 0);
             $typeValueSum += $typeValue;
             $typeRowNumber = $x->nextRowNumber($s);
-            $hasDetail = $routes !== [] || $leftovers !== [];
+            $hasDetail = !$this->short && ($routes !== [] || $leftovers !== []);
             /* Valoarea tipului vine din randul lui TOTAL (formula), completat dupa ce il scriem. */
             $typeRows[] = $typeRowNumber;
             $typeCells = self::cols([
@@ -278,7 +289,9 @@ class CentralizatorFacturareExcelExport
             'G' => self::c(self::fmtTone($totals['tone'] ?? 0), 'total_text_num'),
             'H' => self::c((int) ($totals['trips'] ?? 0) > 0 ? 100.0 : 0.0, 'total_percent'),
         ], 'total'));
-        $x->addRow($s, [self::c('Apasă + din stânga unui tip de transport pentru rutele facturate; Valoare RON = Activitate × Preț activitate (formulă). Apoi + pe o rută pentru cursele și refacturările ei.', 'muted')]);
+        $x->addRow($s, [self::c($this->short
+            ? 'Raport scurt: doar totalurile. Rutele, vehiculele, cursele și refacturările pe curse sunt în exportul raportului detaliat.'
+            : 'Apasă + din stânga unui tip de transport pentru rutele facturate; Valoare RON = Activitate × Preț activitate (formulă). Apoi + pe o rută pentru cursele și refacturările ei.', 'muted')]);
         $x->addRow($s);
     }
 

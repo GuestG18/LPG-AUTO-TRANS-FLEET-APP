@@ -146,6 +146,7 @@ class VehicleServiceKmModel extends BaseModel
             ':service_nume' => $data['service_nume'],
             ':motiv' => $data['motiv'],
             ':observatii' => $data['observatii'],
+            ':prioritate' => $data['prioritate'] ?? 'normala',
         ];
 
         if ($id > 0) {
@@ -155,7 +156,7 @@ class VehicleServiceKmModel extends BaseModel
                     data_plecare = :data_plecare, ora_plecare = :ora_plecare,
                     data_intoarcere = :data_intoarcere, ora_intoarcere = :ora_intoarcere,
                     km = :km, service_nume = :service_nume, motiv = :motiv, observatii = :observatii,
-                    updated_by = :updated_by, updated_at = :updated_at
+                    prioritate = :prioritate, updated_by = :updated_by, updated_at = :updated_at
                 WHERE id = :id
             ');
             $params[':updated_by'] = $userId;
@@ -169,16 +170,26 @@ class VehicleServiceKmModel extends BaseModel
         $stmt = $this->db->prepare('
             INSERT INTO vehicule_service_km
                 (vehicle_id, driver_id, data_plecare, ora_plecare, data_intoarcere, ora_intoarcere,
-                 km, service_nume, motiv, observatii, created_by, created_at)
+                 km, service_nume, motiv, observatii, prioritate, created_by, created_at)
             VALUES
                 (:vehicle_id, :driver_id, :data_plecare, :ora_plecare, :data_intoarcere, :ora_intoarcere,
-                 :km, :service_nume, :motiv, :observatii, :created_by, :created_at)
+                 :km, :service_nume, :motiv, :observatii, :prioritate, :created_by, :created_at)
         ');
         $params[':created_by'] = $userId;
         $params[':created_at'] = date('Y-m-d H:i:s');
         $stmt->execute($params);
 
         return (int) $this->db->lastInsertId();
+    }
+
+    /** Service-urile folosite deja (sugestii in formular), cele mai recente primele. */
+    public function knownServiceNames(int $limit = 40): array
+    {
+        return $this->db->query(
+            "SELECT service_nume FROM vehicule_service_km
+             WHERE service_nume IS NOT NULL AND service_nume <> ''
+             GROUP BY service_nume ORDER BY MAX(id) DESC LIMIT " . max(1, $limit)
+        )->fetchAll(PDO::FETCH_COLUMN);
     }
 
     public function delete(int $id): bool
@@ -312,6 +323,17 @@ class VehicleServiceKmModel extends BaseModel
                 CONSTRAINT fk_service_km_updated_by FOREIGN KEY (updated_by) REFERENCES utilizatori(id) ON DELETE SET NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
+        // Km service V2: prioritatea ceruta de dispecer (cea din interventie o poate schimba coordonatorul).
+        $column = $this->db->query(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vehicule_service_km' AND COLUMN_NAME = 'prioritate'"
+        )->fetchColumn();
+        if ((int) $column === 0) {
+            $this->db->exec(
+                "ALTER TABLE vehicule_service_km
+                 ADD COLUMN prioritate ENUM('scazuta','normala','ridicata','critica') NOT NULL DEFAULT 'normala' AFTER observatii"
+            );
+        }
         self::$schemaReady = true;
     }
 }

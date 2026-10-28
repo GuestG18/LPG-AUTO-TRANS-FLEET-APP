@@ -346,6 +346,7 @@ require_once __DIR__ . '/models/StaffAccountancyModel.php';
 require_once __DIR__ . '/models/PayrollModel.php';
 require_once __DIR__ . '/models/ExpenseModel.php';
 require_once __DIR__ . '/models/MaintenanceModel.php';
+require_once __DIR__ . '/models/InterventionWorkflowModel.php';
 require_once __DIR__ . '/models/TechnicalHealthModel.php';
 require_once __DIR__ . '/models/DriverActivityHistoryModel.php';
 require_once __DIR__ . '/models/FuelModel.php';

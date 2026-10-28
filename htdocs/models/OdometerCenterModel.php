@@ -22,6 +22,8 @@ class OdometerCenterModel extends BaseModel
         'sas_istoric_zile' => '31',
         'cardoil_varsta_max_ore' => '72',
         'cardoil_sync_max_ore' => '26',
+        // O citire manuala (semiremorca) devine referinta T0 doar daca e la cel mult atatea ore de T0.
+        'manual_varsta_max_ore' => '24',
     ];
 
     private bool $schemaEnsured = false;
@@ -107,9 +109,34 @@ class OdometerCenterModel extends BaseModel
                 updated_by INT UNSIGNED NULL,
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            // Citirile tastate de operator (hubodometrul semiremorcii): nu vin de la niciun API.
+            "CREATE TABLE IF NOT EXISTS vehicle_odometer_manual_readings (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                vehicle_id INT UNSIGNED NOT NULL,
+                measured_at DATETIME NOT NULL,
+                odometer_km DECIMAL(12,1) NOT NULL,
+                note VARCHAR(255) NULL,
+                created_by INT UNSIGNED NULL,
+                created_at DATETIME NOT NULL,
+                canceled_at DATETIME NULL,
+                canceled_by INT UNSIGNED NULL,
+                cancel_reason VARCHAR(255) NULL,
+                KEY idx_odo_manual_vehicle (vehicle_id, measured_at),
+                CONSTRAINT fk_odo_manual_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE,
+                CONSTRAINT fk_odo_manual_user FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL,
+                CONSTRAINT fk_odo_manual_cancel_user FOREIGN KEY (canceled_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         ];
         foreach ($statements as $sql) {
             $this->db->exec($sql);
+        }
+        // T0 poate avea si o referinta manuala (tabelul exista dinainte cu ENUM('sas','cardoil')).
+        $column = $this->db->query(
+            "SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vehicle_odometer_baselines' AND COLUMN_NAME = 'provider_code'"
+        )->fetchColumn();
+        if ($column !== false && !str_contains((string) $column, "'manual'")) {
+            $this->db->exec("ALTER TABLE vehicle_odometer_baselines MODIFY provider_code ENUM('sas','cardoil','manual') NOT NULL");
         }
         $this->ensureVehicleCapacityCategorySchema();
         $this->schemaEnsured = true;
@@ -455,6 +482,80 @@ class OdometerCenterModel extends BaseModel
         return $row;
     }
 
+    // ---------------------------------------------------------------- citiri manuale
+
+    /**
+     * Citirile manuale, crescator, grupate pe vehicul. Cele anulate raman in tabel
+     * (pentru istoric) si se intorc doar cu $withCanceled.
+     *
+     * @return array<int, list<array<string, mixed>>>
+     */
+    public function getManualReadings(?int $vehicleId = null, bool $withCanceled = false): array
+    {
+        $this->ensureSchema();
+        $where = [];
+        $params = [];
+        if ($vehicleId !== null) {
+            $where[] = 'm.vehicle_id = :v';
+            $params[':v'] = $vehicleId;
+        }
+        if (!$withCanceled) {
+            $where[] = 'm.canceled_at IS NULL';
+        }
+        $stmt = $this->db->prepare(
+            'SELECT m.*, u.nume AS created_by_name, uc.nume AS canceled_by_name
+             FROM vehicle_odometer_manual_readings m
+             LEFT JOIN utilizatori u ON u.id = m.created_by
+             LEFT JOIN utilizatori uc ON uc.id = m.canceled_by'
+            . ($where !== [] ? ' WHERE ' . implode(' AND ', $where) : '')
+            . ' ORDER BY m.measured_at ASC, m.id ASC'
+        );
+        $stmt->execute($params);
+        $result = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $result[(int) $row['vehicle_id']][] = $row;
+        }
+
+        return $result;
+    }
+
+    public function insertManualReading(int $vehicleId, string $measuredAt, float $km, ?string $note, ?int $userId): int
+    {
+        $stmt = $this->db->prepare(
+            'INSERT INTO vehicle_odometer_manual_readings (vehicle_id, measured_at, odometer_km, note, created_by, created_at)
+             VALUES (:v, :m, :km, :n, :u, :c)'
+        );
+        $stmt->execute([
+            ':v' => $vehicleId, ':m' => $measuredAt, ':km' => round($km, 1),
+            ':n' => $note !== null && trim($note) !== '' ? mb_substr(trim($note), 0, 255) : null,
+            ':u' => $userId, ':c' => date('Y-m-d H:i:s'),
+        ]);
+        $id = (int) $this->db->lastInsertId();
+        $this->logAudit($vehicleId, $userId, 'manual_reading', null, ['id' => $id, 'measured_at' => $measuredAt, 'km' => round($km, 1)], $note);
+
+        return $id;
+    }
+
+    /** Anulare non-distructiva: citirea ramane in istoric, dar nu mai conteaza nicaieri. */
+    public function cancelManualReading(int $vehicleId, int $readingId, ?int $userId, ?string $reason): bool
+    {
+        $stmt = $this->db->prepare(
+            'UPDATE vehicle_odometer_manual_readings SET canceled_at = :c, canceled_by = :u, cancel_reason = :r
+             WHERE id = :id AND vehicle_id = :v AND canceled_at IS NULL'
+        );
+        $stmt->execute([
+            ':c' => date('Y-m-d H:i:s'), ':u' => $userId,
+            ':r' => $reason !== null && trim($reason) !== '' ? mb_substr(trim($reason), 0, 255) : null,
+            ':id' => $readingId, ':v' => $vehicleId,
+        ]);
+        if ($stmt->rowCount() === 0) {
+            return false;
+        }
+        $this->logAudit($vehicleId, $userId, 'manual_reading_cancel', ['id' => $readingId], null, $reason);
+
+        return true;
+    }
+
     // ---------------------------------------------------------------- T0
 
     /** @return array<int, array<string, array<string, mixed>>> [vehicle_id][provider] => baseline activ */
@@ -533,7 +634,8 @@ class OdometerCenterModel extends BaseModel
                     ':km' => $reading !== null ? round((float) $reading['km'], 1) : null,
                     ':ov' => $reading !== null ? (float) ($reading['original_value'] ?? $reading['km']) : null,
                     ':ou' => $reading !== null ? 'km' : null,
-                    ':type' => $reading !== null ? ($provider === 'sas' ? 'gps_km_index' : 'pump_odometer') : null,
+                    ':type' => $reading !== null
+                        ? (['sas' => 'gps_km_index', 'manual' => 'manual_odometer'][$provider] ?? 'pump_odometer') : null,
                     ':sid' => $reading['id'] ?? null,
                     ':st' => (string) ($result['status'] ?? OdometerCalculator::STATUS_UNAVAILABLE),
                     ':note' => isset($result['note']) ? mb_substr((string) $result['note'], 0, 255) : null,

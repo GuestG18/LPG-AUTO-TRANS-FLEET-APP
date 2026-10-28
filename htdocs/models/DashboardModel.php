@@ -1298,7 +1298,7 @@ class DashboardModel extends BaseModel
                 FROM mentenanta_interventii_programate i
                 WHERE {$condition}
                   AND i.tip_interventie = 'reparatie'
-                  AND i.status_interventie IN ('programata', 'confirmata', 'in_lucru')
+                  AND i.status_interventie IN ('de_verificat', 'programata', 'confirmata', 'in_lucru', 'in_asteptare')
                   AND i.data_programata <= CURDATE()
                 GROUP BY i.vehicle_id
             ";

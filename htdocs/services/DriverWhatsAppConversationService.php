@@ -251,7 +251,8 @@ class DriverWhatsAppConversationService
         }
 
         // 3. Mesaj liber: se adauga la un tichet deschis, altfel se ignora (alt flux / conversatie obisnuita).
-        if ($kind === 'text' && $text !== null && $text !== '') {
+        // Un numar singur ("4") e o alegere ratata dintr-un meniu, nu un mesaj pentru suport.
+        if ($kind === 'text' && $text !== null && $text !== '' && preg_match('/^\d{1,2}\.?$/', $text) !== 1) {
             $ticket = $this->model->openTicketForDriver($driverId, self::FOLLOWUP_WINDOW_DAYS);
             if ($ticket !== null) {
                 $messageId = $this->model->addSupportMessage((int) $ticket['id'], 'whatsapp_to_email', $waMessageId, 'driver:' . $driverId, mb_substr($text, 0, self::MAX_DESCRIPTION_CHARS), 'pending');

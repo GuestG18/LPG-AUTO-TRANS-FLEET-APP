@@ -1,0 +1,241 @@
+/* Dispecer curse -> Km service V2: formularul pe trei sectiuni + indicatorii din tabel. */
+
+.service-km-card .ksv2-body {
+    padding: 18px 18px 20px;
+    border-bottom: 1px solid #e3e8ef;
+    background: #fff;
+}
+
+.ksv2-form { color: #172033; }
+.ksv2-form .form-label { margin-bottom: 6px; color: #344054; font-size: .86rem; font-weight: 500; }
+.ksv2-form .form-control,
+.ksv2-form .form-select { min-height: 38px; border-color: #d5dce6; border-radius: 6px; font-size: .88rem; }
+.ksv2-form .form-text { font-size: .76rem; }
+.ksv2-form .input-group-text { border-color: #d5dce6; background: #f6f8fb; font-size: .86rem; }
+
+.ksv2-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ksv2-section { min-width: 0; padding: 4px 22px 8px; }
+.ksv2-section:first-child { padding-left: 0; }
+.ksv2-section:last-child { padding-right: 0; }
+.ksv2-section + .ksv2-section { border-left: 1px solid #e6ebf2; }
+
+.ksv2-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 16px; }
+.ksv2-head h4 { margin: 4px 0 4px; font-size: 1.05rem; font-weight: 700; }
+.ksv2-head p { margin: 0; color: #667085; font-size: .8rem; }
+.ksv2-num {
+    display: inline-flex;
+    flex: 0 0 36px;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #e8f0fe;
+    color: #1c64f2;
+    font-size: .86rem;
+    font-weight: 700;
+}
+
+.ksv2-select-like {
+    padding-right: 2.25rem;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right .75rem center;
+    background-size: 16px 12px;
+}
+
+.ksv2-clearable { position: relative; }
+.ksv2-clearable .form-control { padding-right: 34px; }
+.ksv2-clear {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    padding: 2px 4px;
+    border: 0;
+    background: transparent;
+    color: #475467;
+    transform: translateY(-50%);
+}
+.ksv2-clear:hover { color: #d52838; }
+
+.ksv2-target { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; font-size: .78rem; }
+.ksv2-target-label { color: #667085; }
+.ksv2-target button {
+    padding: 4px 10px;
+    border: 1px solid #d5dce6;
+    border-radius: 14px;
+    background: #fff;
+    color: #344054;
+    font-size: .76rem;
+}
+.ksv2-target button.is-active { border-color: #1c64f2; background: #e8f0fe; color: #1c64f2; font-weight: 600; }
+.ksv2-target button small { color: inherit; opacity: .75; }
+
+.ksv2-search { position: relative; }
+.ksv2-search > i { position: absolute; top: 50%; left: 13px; color: #475467; transform: translateY(-50%); }
+.ksv2-search .form-control { padding-left: 38px; }
+.ksv2-results {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    left: 0;
+    z-index: 30;
+    max-height: 280px;
+    overflow-y: auto;
+    padding: 4px;
+    border: 1px solid #d5dce6;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, .14);
+}
+.ksv2-result {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #172033;
+    text-align: left;
+    font-size: .84rem;
+}
+.ksv2-result > i { color: #667085; }
+.ksv2-result span { min-width: 0; flex: 1 1 auto; }
+.ksv2-result strong { display: block; font-weight: 600; }
+.ksv2-result small { display: block; color: #667085; font-size: .74rem; }
+.ksv2-result code { color: #475467; font-size: .74rem; }
+.ksv2-result.is-active,
+.ksv2-result:hover { background: #eef4ff; }
+.ksv2-cfg { flex: 0 0 auto !important; padding: 1px 6px; border-radius: 3px; background: #e3f6e7; color: #1f8a3b; font-size: .66rem; font-weight: 600; }
+.ksv2-result-empty { padding: 12px; color: #667085; font-size: .82rem; text-align: center; }
+
+.ksv2-rows { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.ksv2-rows:empty { display: none; }
+.ksv2-row {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) minmax(112px, 132px) auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid #e3e8ef;
+    border-radius: 8px;
+    background: #fff;
+}
+.ksv2-row.is-locked { background: #f8fafc; }
+.ksv2-row-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    color: #344054;
+    font-size: 1.05rem;
+}
+.ksv2-row-main { min-width: 0; }
+.ksv2-row-main strong { display: block; overflow: hidden; font-size: .86rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.ksv2-row-main small { display: block; overflow: hidden; color: #667085; font-size: .74rem; text-overflow: ellipsis; white-space: nowrap; }
+.ksv2-pos { margin-top: 5px; min-height: 28px !important; padding: 2px 8px; font-size: .76rem !important; }
+.ksv2-row-field span:first-child { display: block; margin-bottom: 3px; color: #667085; font-size: .7rem; }
+.ksv2-row-field .form-select { min-height: 32px; font-size: .8rem; }
+.ksv2-row-field .iv2-badge { padding: 7px 10px; font-size: .74rem; }
+.ksv2-row-del,
+.ksv2-row-lock {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid #f3b4b9;
+    border-radius: 6px;
+    background: #fff;
+    color: #d52838;
+}
+.ksv2-row-del:hover { background: #fff1f2; }
+.ksv2-row-lock { border-color: #d5dce6; color: #667085; cursor: help; }
+
+.ksv2-btn { min-height: 34px; padding: 5px 14px; border-radius: 6px; font-size: .84rem; }
+
+.ksv2-notice { margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: #f0f6ff; color: #1849a9; font-size: .78rem; }
+.ksv2-notice.is-warning { background: #fffaeb; color: #93370d; }
+
+.ksv2-info {
+    display: flex;
+    gap: 10px;
+    padding: 10px 14px;
+    border: 1px solid #d4e4fb;
+    border-radius: 8px;
+    background: #f0f6ff;
+    color: #1d3d74;
+    font-size: .8rem;
+}
+.ksv2-info > i { margin-top: 1px; color: #1c64f2; font-size: 1rem; }
+.ksv2-info > div,
+.ksv2-info > span { min-width: 0; flex: 1 1 auto; }
+.ksv2-info-doc { margin-top: 14px; }
+.ksv2-info-doc > i { color: #475467; }
+
+.ksv2-notes { min-height: 104px; resize: vertical; }
+.ksv2-counter { margin-top: 4px; color: #667085; font-size: .74rem; text-align: right; }
+
+.ksv2-linked {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 14px;
+    padding: 10px 14px;
+    border: 1px solid #f3dfb2;
+    border-radius: 8px;
+    background: #fff9ec;
+    font-size: .84rem;
+    font-weight: 600;
+}
+.ksv2-linked > i { color: #d97706; font-size: 1.1rem; }
+.ksv2-linked a[data-ksv2-linked-link] { color: #1c64f2; text-decoration: none; }
+.ksv2-linked .btn { font-size: .78rem; font-weight: 500; border-radius: 6px; }
+
+.ksv2-actions { display: flex; gap: 10px; margin-top: 18px; }
+.ksv2-actions .btn { min-height: 40px; padding: 7px 18px; border-radius: 6px; }
+
+.ksv2-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border: 1px solid #e3e8ef;
+    border-radius: 14px;
+    background: #f6f8fb;
+    color: #344054;
+    font-size: .76rem;
+    cursor: default;
+}
+.service-km-card .iv2-badge { margin-left: 4px; }
+
+@media (max-width: 1399.98px) {
+    .ksv2-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ksv2-section:nth-child(3) { grid-column: 1 / -1; padding: 18px 0 0; border-left: 0; border-top: 1px solid #e6ebf2; margin-top: 12px; }
+}
+
+@media (max-width: 991.98px) {
+    .ksv2-grid { grid-template-columns: 1fr; }
+    .ksv2-section,
+    .ksv2-section:first-child,
+    .ksv2-section:last-child { padding: 16px 0 0; }
+    .ksv2-section + .ksv2-section { margin-top: 12px; border-top: 1px solid #e6ebf2; border-left: 0; }
+}
+
+@media (max-width: 575.98px) {
+    .service-km-card .ksv2-body { padding: 14px 12px 16px; }
+    .ksv2-row { grid-template-columns: 30px minmax(0, 1fr) auto; }
+    .ksv2-row-field { grid-column: 2 / 3; }
+    .ksv2-row-del,
+    .ksv2-row-lock { grid-row: 1; grid-column: 3; }
+    .ksv2-actions { flex-direction: column; }
+}

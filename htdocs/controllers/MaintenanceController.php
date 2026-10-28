@@ -47,6 +47,32 @@ class MaintenanceController
             case 'delete_intervention':
                 $this->deleteIntervention();
                 return;
+            case 'intervention_list':
+                $this->interventionList();
+                return;
+            case 'intervention_detail':
+                $this->interventionDetail();
+                return;
+            case 'intervention_vehicle_components':
+                $this->interventionVehicleComponents();
+                return;
+            case 'intervention_update':
+                $this->interventionUpdate();
+                return;
+            case 'intervention_item_save':
+            case 'intervention_item_delete':
+                $this->interventionItem($action);
+                return;
+            case 'intervention_finalize':
+                $this->interventionFinalize();
+                return;
+            case 'intervention_document':
+                $this->interventionDocument();
+                return;
+            case 'intervention_document_upload':
+            case 'intervention_document_delete':
+                $this->interventionDocumentChange($action);
+                return;
             case 'save_record':
                 $this->saveRecord();
                 return;
@@ -499,6 +525,25 @@ class MaintenanceController
         $interventionId = (int) ($_GET['edit_intervention_id'] ?? 0);
         if ($interventionId > 0 && $section === 'interventions') {
             $editIntervention = $this->model->getScheduledIntervention($interventionId);
+            if ($editIntervention !== null) {
+                $editIntervention['lucrari'] = $this->workflow()->items($interventionId);
+            }
+        }
+        // Formularul de interventie (toate sectiunile in afara de Stoc) si pagina Interventii V2.
+        $interventionBoot = null;
+        if ($section !== 'stock') {
+            $workflow = $this->workflow();
+            $interventionBoot = [
+                'coordinators' => $workflow->getCoordinators(),
+                'catalog' => $workflow->componentCatalog(),
+                'can' => $this->interventionPermissions(),
+            ];
+            if ($section === 'interventions') {
+                $listFilters = $this->collectInterventionFilters($_GET);
+                $interventionBoot['filters'] = $listFilters;
+                $interventionBoot['list'] = $workflow->listInterventions($listFilters, max(1, (int) ($_GET['p'] ?? 1)), (int) ($_GET['per_page'] ?? 10));
+                $interventionBoot['open_id'] = max(0, (int) ($_GET['intervention_id'] ?? 0));
+            }
         }
 
         render('maintenance/index.php', [
@@ -528,7 +573,260 @@ class MaintenanceController
             'editRecord' => $editRecord,
             'viewRecord' => $viewRecord,
             'editIntervention' => $editIntervention,
+            'interventionBoot' => $interventionBoot,
         ]);
+    }
+
+    // ------------------------------------------------------------------ Interventii V2
+
+    private ?InterventionWorkflowModel $workflowModel = null;
+
+    private function workflow(): InterventionWorkflowModel
+    {
+        return $this->workflowModel ??= new InterventionWorkflowModel($this->db);
+    }
+
+    private function interventionPermissions(): array
+    {
+        return [
+            'edit' => can('mentenanta', 'interventions'),
+            'technical' => can('mentenanta', 'interventions_technical'),
+            'costs' => can('mentenanta', 'interventions_costs'),
+            'export' => can('mentenanta', 'export'),
+        ];
+    }
+
+    private function collectInterventionFilters(array $source): array
+    {
+        $status = (string) ($source['status'] ?? '');
+        $responsible = (string) ($source['responsabil'] ?? '');
+        return [
+            'search' => mb_substr(trim((string) ($source['search'] ?? '')), 0, 120),
+            'vehicle_id' => max(0, (int) ($source['vehicle_id'] ?? 0)),
+            'tip' => in_array(($source['tip'] ?? ''), ['intretinere', 'reparatie'], true) ? (string) $source['tip'] : '',
+            'status' => isset(InterventionWorkflowModel::STATUS_LABELS[$status]) ? $status : '',
+            'date_from' => $this->isDate((string) ($source['date_from'] ?? '')) ? (string) $source['date_from'] : '',
+            'date_to' => $this->isDate((string) ($source['date_to'] ?? '')) ? (string) $source['date_to'] : '',
+            'responsabil' => $responsible === 'nealocat' ? 'nealocat' : ((int) $responsible > 0 ? (string) (int) $responsible : ''),
+            'sursa' => in_array(($source['sursa'] ?? ''), ['km_service', 'manual'], true) ? (string) $source['sursa'] : '',
+        ];
+    }
+
+    private function interventionList(): void
+    {
+        $filters = $this->collectInterventionFilters($_GET);
+        $this->json(['ok' => true] + $this->workflow()->listInterventions($filters, max(1, (int) ($_GET['p'] ?? 1)), (int) ($_GET['per_page'] ?? 10)));
+    }
+
+    private function interventionDetail(): void
+    {
+        $detail = $this->workflow()->detail((int) ($_GET['id'] ?? 0), can('mentenanta', 'interventions_costs'));
+        if ($detail === null) {
+            $this->json(['ok' => false, 'message' => 'Intervenția nu mai există.'], 404);
+        }
+        $this->json(['ok' => true, 'can' => $this->interventionPermissions()] + $detail);
+    }
+
+    private function interventionVehicleComponents(): void
+    {
+        $vehicleId = max(0, (int) ($_GET['vehicle_id'] ?? 0));
+        $this->json(['ok' => true, 'configured' => $this->workflow()->configuredComponentKeys($vehicleId)]);
+    }
+
+    private function interventionUpdate(): void
+    {
+        $this->requireJsonPost();
+        $id = (int) ($_POST['id'] ?? 0);
+        $allowed = ['data_programata', 'ora_programata', 'furnizor', 'prioritate', 'tip_interventie', 'disponibilitate_vehicul',
+            'responsabil_user_id', 'diagnostic_tehnic', 'status', 'cost_estimat', 'cost_suplimentar'];
+        $fields = array_intersect_key($_POST, array_flip($allowed));
+        $canCosts = can('mentenanta', 'interventions_costs');
+        if (!$canCosts && (isset($fields['cost_estimat']) || isset($fields['cost_suplimentar']))) {
+            $this->json(['ok' => false, 'message' => 'Nu ai dreptul să modifici costurile intervenției.'], 403);
+        }
+        foreach (['cost_estimat', 'cost_suplimentar'] as $costField) {
+            if (isset($fields[$costField])) {
+                $fields[$costField] = $this->decimal($fields[$costField]);
+            }
+        }
+        $this->runJson(function () use ($id, $fields, $canCosts): array {
+            $changes = $this->workflow()->updateFromPanel($id, $fields, $this->userId(), $canCosts);
+            if ($changes !== []) {
+                audit_log_write($this->db, 'mentenanta_interventii', $id, 'update', 'Intervenție #' . $id . ' actualizată din panou', null, $changes, $this->userId());
+            }
+            return ['changed' => array_keys($changes)];
+        }, $id);
+    }
+
+    private function interventionItem(string $action): void
+    {
+        $this->requireJsonPost();
+        $id = (int) ($_POST['intervention_id'] ?? 0);
+        $itemId = (int) ($_POST['item_id'] ?? 0);
+        $canCosts = can('mentenanta', 'interventions_costs');
+        $this->runJson(function () use ($action, $id, $itemId, $canCosts): array {
+            $workflow = $this->workflow();
+            if ($action === 'intervention_item_delete') {
+                $workflow->deleteItem($id, $itemId, $this->userId());
+                return [];
+            }
+            // Mai multe componente din registru intr-o singura cerere ("Selecteaza din registru").
+            $batch = json_decode((string) ($_POST['components_json'] ?? ''), true);
+            if (is_array($batch) && $batch !== [] && $itemId <= 0) {
+                $added = 0;
+                foreach (array_slice($batch, 0, 50) as $component) {
+                    if (!is_array($component)) {
+                        continue;
+                    }
+                    $workflow->saveItem($id, 0, [
+                        'component_key' => (string) ($component['key'] ?? ''),
+                        'ramura_principala' => (string) ($component['primary'] ?? ''),
+                        'pozitie' => (string) ($component['position'] ?? ''),
+                        'operatiune' => (string) ($component['operation'] ?? 'verificare'),
+                        'stare_evaluare' => 'suspectata',
+                    ], $this->userId(), $canCosts);
+                    $added++;
+                }
+                return ['added' => $added];
+            }
+            $fields = array_intersect_key($_POST, array_flip([
+                'component_key', 'ramura_principala', 'denumire_libera', 'pozitie', 'stare_evaluare', 'operatiune', 'diagnostic',
+                'progres', 'rezultat', 'piesa_montata', 'piesa_demontata', 'data_montare', 'km_montare', 'cost_piese',
+                'cost_manopera', 'garantie_luni', 'garantie_pana_la', 'observatii',
+            ]));
+            foreach (['cost_piese', 'cost_manopera'] as $costField) {
+                if (isset($fields[$costField])) {
+                    $fields[$costField] = $this->decimal($fields[$costField]);
+                }
+            }
+            return ['item_id' => $workflow->saveItem($id, $itemId, $fields, $this->userId(), $canCosts)];
+        }, $id);
+    }
+
+    private function interventionFinalize(): void
+    {
+        $this->requireJsonPost();
+        $id = (int) ($_POST['id'] ?? 0);
+        $outcomes = json_decode((string) ($_POST['outcomes_json'] ?? '[]'), true);
+        $outcomes = is_array($outcomes) ? $outcomes : [];
+        $normalized = [];
+        foreach ($outcomes as $itemId => $outcome) {
+            if (is_array($outcome)) {
+                foreach (['cost_piese', 'cost_manopera'] as $costField) {
+                    if (isset($outcome[$costField])) {
+                        $outcome[$costField] = $this->decimal($outcome[$costField]);
+                    }
+                }
+                $normalized[(int) $itemId] = $outcome;
+            }
+        }
+        $options = [
+            'data_executie' => (string) ($_POST['data_executie'] ?? ''),
+            'km' => (string) ($_POST['km'] ?? ''),
+            'creeaza_continuare' => !empty($_POST['creeaza_continuare']),
+            'data_continuare' => (string) ($_POST['data_continuare'] ?? ''),
+        ];
+        $this->runJson(function () use ($id, $normalized, $options): array {
+            $result = $this->workflow()->finalize($id, $normalized, $options, $this->userId(), can('mentenanta', 'interventions_costs'), $this->model);
+            if (!$result['already']) {
+                audit_log_write($this->db, 'mentenanta_interventii', $id, 'finalize', 'Intervenție #' . $id . ' finalizată', null, $result, $this->userId());
+            }
+            return $result;
+        }, $id);
+    }
+
+    private function interventionDocument(): void
+    {
+        $source = ($_GET['sursa'] ?? '') === 'inregistrare' ? 'inregistrare' : 'interventie';
+        $file = $this->workflow()->documentFile((int) ($_GET['id'] ?? 0), $source);
+        $stored = $file !== null ? basename(str_replace('\\', '/', (string) $file['stored'])) : '';
+        $path = $stored !== '' ? BASE_PATH . '/uploads/' . $file['dir'] . '/' . $stored : '';
+        if ($path === '' || !is_file($path)) {
+            http_response_code(404);
+            exit('Documentul nu mai există.');
+        }
+        $extension = strtolower(pathinfo($stored, PATHINFO_EXTENSION));
+        $types = ['pdf' => 'application/pdf', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp'];
+        $inline = isset($types[$extension]) && empty($_GET['download']);
+        header('Content-Type: ' . ($types[$extension] ?? 'application/octet-stream'));
+        header('X-Content-Type-Options: nosniff');
+        header('Content-Length: ' . (string) filesize($path));
+        header('Content-Disposition: ' . ($inline ? 'inline' : 'attachment') . '; filename="' . str_replace('"', '', (string) $file['original']) . '"');
+        readfile($path);
+        exit;
+    }
+
+    private function interventionDocumentChange(string $action): void
+    {
+        $this->requireJsonPost();
+        $id = (int) ($_POST['intervention_id'] ?? 0);
+        $this->runJson(function () use ($action, $id): array {
+            $workflow = $this->workflow();
+            if ($action === 'intervention_document_delete') {
+                $file = $workflow->deleteDocument((int) ($_POST['document_id'] ?? 0), $this->userId());
+                if ($file === null) {
+                    throw new InvalidArgumentException('Documentul nu mai există.');
+                }
+                $path = BASE_PATH . '/uploads/mentenanta_interventii/' . basename((string) $file['stored']);
+                if (is_file($path)) {
+                    @unlink($path);
+                }
+                return [];
+            }
+            if ($workflow->getIntervention($id) === null) {
+                throw new InvalidArgumentException('Intervenția nu mai există.');
+            }
+            $upload = $_FILES['document'] ?? null;
+            try {
+                $stored = $this->storeUpload($upload, 'interventie_' . $id, ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'doc', 'docx', 'xls', 'xlsx'], 'mentenanta_interventii');
+            } catch (RuntimeException $exception) {
+                throw new InvalidArgumentException($exception->getMessage()); // tip / marime nepermise: mesajul ajunge la utilizator
+            }
+            if ($stored === []) {
+                throw new InvalidArgumentException('Alege fișierul de încărcat.');
+            }
+            return ['document_id' => $workflow->addDocument($id, (string) ($_POST['tip'] ?? 'altul'), $stored, (int) ($upload['size'] ?? 0), $this->userId())];
+        }, $id);
+    }
+
+    /** Ruleaza o modificare si raspunde cu detaliile proaspete ale interventiei. */
+    private function runJson(callable $operation, int $interventionId): never
+    {
+        try {
+            $result = $operation();
+        } catch (InvalidArgumentException $exception) {
+            $this->json(['ok' => false, 'message' => $exception->getMessage()], 422);
+        } catch (Throwable $exception) {
+            error_log('[MaintenanceController][interventions_v2] ' . $exception->getMessage());
+            $this->json(['ok' => false, 'message' => 'Modificarea nu a putut fi salvată. Reîncearcă.'], 500);
+        }
+        $detail = $interventionId > 0 ? $this->workflow()->detail($interventionId, can('mentenanta', 'interventions_costs')) : null;
+        $this->json(['ok' => true, 'result' => $result, 'can' => $this->interventionPermissions()] + ($detail ?? []));
+    }
+
+    private function requireJsonPost(): void
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->json(['ok' => false, 'message' => 'Metodă nepermisă.'], 405);
+        }
+        if (!verify_csrf_token($_POST['_token'] ?? null)) {
+            $this->json(['ok' => false, 'message' => 'Sesiunea a expirat. Reîncarcă pagina și reîncearcă.'], 419);
+        }
+    }
+
+    private function json(array $payload, int $status = 200): never
+    {
+        http_response_code($status);
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: no-store');
+        echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        exit;
+    }
+
+    private function userId(): ?int
+    {
+        $id = (int) (current_user()['id'] ?? 0);
+        return $id > 0 ? $id : null;
     }
 
     private function saveIntervention(): void
@@ -543,32 +841,59 @@ class MaintenanceController
             $this->redirectSection('interventions');
         }
 
+        // Formularul V2 trimite cheia de afisare (status); cel vechi trimitea status_interventie salvat.
+        $statusKey = trim((string) ($_POST['status'] ?? ''));
+        if ($statusKey === '' && isset($_POST['status_interventie'])) {
+            $statusKey = InterventionWorkflowModel::statusKey((string) $_POST['status_interventie']);
+        }
+        $components = json_decode((string) ($_POST['components_json'] ?? '[]'), true);
+        $canCosts = can('mentenanta', 'interventions_costs');
+        $existing = $id > 0 ? $this->workflow()->getIntervention($id) : null;
+
         try {
-            $this->model->saveScheduledIntervention([
+            $savedId = $this->workflow()->saveFromForm([
                 'vehicle_id' => $vehicleId,
                 'tip_interventie' => (string) ($_POST['tip_interventie'] ?? 'intretinere'),
+                'prioritate' => (string) ($_POST['prioritate'] ?? 'normala'),
                 'data_programata' => $date,
-                'cost_estimat' => $this->decimal($_POST['cost_estimat'] ?? 0),
+                'ora_programata' => (string) ($_POST['ora_programata'] ?? ''),
+                // Fara dreptul de costuri, costul estimat existent ramane neatins.
+                'cost_estimat' => $canCosts ? $this->decimal($_POST['cost_estimat'] ?? 0) : (float) ($existing['cost_estimat'] ?? 0),
                 'furnizor' => (string) ($_POST['furnizor'] ?? ''),
                 'driver_id' => (int) ($_POST['driver_id'] ?? 0),
+                'responsabil_user_id' => (int) ($_POST['responsabil_user_id'] ?? 0),
                 'client' => (string) ($_POST['client'] ?? ''),
                 'centru_cost' => (string) ($_POST['centru_cost'] ?? ''),
                 'descriere' => $description,
-                'status_interventie' => (string) ($_POST['status_interventie'] ?? 'programata'),
-            ], $id, (int) (current_user()['id'] ?? 0));
-            flash_set('success', $id > 0 ? 'Intervenția a fost actualizată.' : 'Intervenția a fost programată.');
+                'status' => $statusKey,
+            ], $id, is_array($components) ? array_slice(array_values(array_filter($components, 'is_array')), 0, 50) : [], $this->userId());
+            audit_log_write($this->db, 'mentenanta_interventii', $savedId, $id > 0 ? 'update' : 'create',
+                ($id > 0 ? 'Intervenție actualizată' : 'Intervenție creată') . ' #' . $savedId, $existing, $this->workflow()->getIntervention($savedId), $this->userId());
+            flash_set('success', $id > 0 ? 'Intervenția #' . $savedId . ' a fost actualizată.' : 'Intervenția #' . $savedId . ' a fost înregistrată.');
+            redirect(build_query_url(['page' => 'mentenanta', 'action' => 'interventions', 'intervention_id' => $savedId]));
+        } catch (InvalidArgumentException $exception) {
+            flash_set('danger', $exception->getMessage());
         } catch (Throwable $exception) {
             error_log('[MaintenanceController][save_intervention] ' . $exception->getMessage());
             flash_set('danger', 'Intervenția nu a putut fi salvată: ' . $exception->getMessage());
         }
-        $this->redirectSection('interventions');
+        redirect(build_query_url(array_filter([
+            'page' => 'mentenanta',
+            'action' => 'interventions',
+            'edit_intervention_id' => $id > 0 ? $id : null,
+        ])));
     }
 
     private function deleteIntervention(): void
     {
         $this->requirePostAndCsrf('interventions');
         try {
-            $deleted = $this->model->deleteScheduledIntervention((int) ($_POST['id'] ?? 0));
+            $deletedId = (int) ($_POST['id'] ?? 0);
+            $before = $this->workflow()->getIntervention($deletedId);
+            $deleted = $this->model->deleteScheduledIntervention($deletedId);
+            if ($deleted) {
+                audit_log_write($this->db, 'mentenanta_interventii', $deletedId, 'delete', 'Intervenție #' . $deletedId . ' ștearsă', $before, null, $this->userId());
+            }
             flash_set($deleted ? 'success' : 'warning', $deleted
                 ? 'Intervenția programată a fost ștearsă.'
                 : 'Intervenția finalizată nu poate fi ștearsă din planificare. Înregistrarea finală a fost păstrată.');
@@ -815,9 +1140,21 @@ class MaintenanceController
                 fputcsv($output, [$row['cod_piesa'], $row['denumire'], $row['categorie'], $row['stoc_curent'], $row['stoc_minim'], $row['pret_achizitie'], $row['valoare_stoc'], $row['furnizor']], ';');
             }
         } elseif ($section === 'interventions') {
-            fputcsv($output, ['Data programată', 'Vehicul', 'Tip', 'Centru cost', 'Descriere', 'Furnizor', 'Cost estimat', 'Status'], ';');
-            foreach ($this->model->getScheduledInterventions($filters) as $row) {
-                fputcsv($output, [$row['data_programata'], $row['nr_inmatriculare'], $row['tip_interventie'], $row['centru_cost'], $row['descriere'], $row['furnizor'], $row['cost_estimat'], $row['status_interventie']], ';');
+            // Aceleasi filtre ca tabelul Interventii V2 (cautare, vehicul, tip, status, perioada, responsabil).
+            $withCosts = can('mentenanta', 'interventions_costs');
+            fputcsv($output, array_merge(
+                ['ID', 'Sursă', 'Data sesizării', 'Data programată', 'Ora', 'Vehicul', 'Tip vehicul', 'Tip', 'Prioritate', 'Centru cost',
+                    'Descriere', 'Componente', 'Furnizor', 'Responsabil tehnic', 'Șofer'],
+                $withCosts ? ['Cost estimat'] : [],
+                ['Status']
+            ), ';');
+            foreach ($this->workflow()->exportRows($this->collectInterventionFilters($_GET)) as $row) {
+                fputcsv($output, array_merge([
+                    $row['id'], $row['sursa'] === 'km_service' ? 'Km Service' : 'Manual', $row['data_sesizare'], $row['data_programata'],
+                    $row['ora_programata'] ?? '', $row['nr_inmatriculare'], $row['vehicul_tip_label'],
+                    $row['tip_interventie'] === 'reparatie' ? 'Reparație' : 'Întreținere', $row['prioritate_label'], $row['centru_cost'],
+                    $row['descriere'], $row['componente_lista'] ?? '', $row['furnizor'], $row['responsabil_nume'] ?? 'Nealocat', $row['sofer_nume'],
+                ], $withCosts ? [$row['cost_estimat']] : [], [$row['status_label']]), ';');
             }
         } elseif ($section === 'repairs') {
             fputcsv($output, ['Data factura', 'Numar factura', 'Furnizor', 'Data scadenta', 'Vehicule', 'Reparatii', 'Piese', 'Cost manopera', 'Cost piese', 'Cost total', 'Status'], ';');
@@ -867,7 +1204,7 @@ class MaintenanceController
         ];
     }
 
-    private function storeUpload(mixed $file, string $prefix, array $allowed = ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'doc', 'docx']): array
+    private function storeUpload(mixed $file, string $prefix, array $allowed = ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'doc', 'docx'], string $folder = 'mentenanta_piese'): array
     {
         if (!is_array($file) || (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
             return [];
@@ -883,9 +1220,13 @@ class MaintenanceController
         if (!in_array($extension, $allowed, true)) {
             throw new RuntimeException('Tipul fișierului nu este permis.');
         }
-        $directory = BASE_PATH . '/uploads/mentenanta_piese';
+        $directory = BASE_PATH . '/uploads/' . $folder;
         if (!is_dir($directory) && !mkdir($directory, 0775, true) && !is_dir($directory)) {
             throw new RuntimeException('Directorul pentru documente nu poate fi creat.');
+        }
+        // Documentele interventiilor se servesc doar prin controller (cu verificarea dreptului).
+        if ($folder === 'mentenanta_interventii' && !is_file($directory . '/.htaccess')) {
+            file_put_contents($directory . '/.htaccess', "Require all denied\n");
         }
         $stored = $prefix . '_' . date('YmdHis') . '_' . bin2hex(random_bytes(5)) . '.' . $extension;
         if (!move_uploaded_file((string) $file['tmp_name'], $directory . '/' . $stored)) {

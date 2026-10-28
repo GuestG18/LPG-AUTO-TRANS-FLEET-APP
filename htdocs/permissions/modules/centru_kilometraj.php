@@ -19,6 +19,7 @@ return [
         'view'     => ['label' => 'Vizualizare și actualizare citiri SAS'],
         'history'  => ['label' => 'Istoricul citirilor și al referințelor T0'],
         't0'       => ['label' => 'Setare / modificare T0 (păstrează versiunile anterioare)', 'default_admin' => true],
+        'manual'   => ['label' => 'Citiri manuale odometru semiremorci (adăugare / anulare)', 'default_admin' => true],
         'settings' => ['label' => 'Politica sursei oficiale pentru totaluri', 'default_admin' => true],
         'audit'    => ['label' => 'Jurnalul de audit al modulului', 'default_admin' => true],
     ],
@@ -29,6 +30,8 @@ return [
         't0_lookup'   => 't0',
         't0_save'     => 't0',
         'save_policy' => 'settings',
+        'manual_add'    => 'manual',
+        'manual_cancel' => 'manual',
         'audit'       => 'audit',
     ],
 ];

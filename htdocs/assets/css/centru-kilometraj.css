@@ -247,6 +247,16 @@
 .kmc-odo--cardoil .kmc-odo__src i { color: var(--kmc-purple); }
 .kmc-odo__na { font-size: 11.5px; color: var(--kmc-muted); line-height: 1.35; }
 
+/* semiremorca: un singur odometru, introdus manual */
+.kmc-odos--single { grid-template-columns: 1fr; }
+.kmc-odo--manual { background: #fff8f0; border-color: #f6dcc0; }
+.kmc-odo--manual .kmc-odo__label { color: #c2410c; }
+.kmc-odo--manual.kmc-odo--off { background: #f8fafc; border-color: #d5dce6; }
+.kmc-odo--manual.kmc-odo--off .kmc-odo__label { color: var(--kmc-muted); }
+.kmc-odo__add { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; color: #c2410c; }
+.kmc-table .kmc-manual { color: #c2410c; font-weight: 700; }
+.kmc-srcchip--manual { background: #fff1e6; color: #c2410c; }
+
 /* tamburii: fiecare cifra e o coloana 0-9 (dublata pentru rularea peste 9 -> 0) */
 .kmc-drums {
     display: inline-flex; gap: 2px; padding: 2px; border-radius: 4px;

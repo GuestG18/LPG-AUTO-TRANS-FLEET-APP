@@ -4,7 +4,10 @@
  * Formular separat de "Adauga Cursa": nu trece prin tarifare, diurne sau km-ii
  * vehiculului, scrie doar in vehicule_service_km (VehicleServiceKmModel).
  *
- * Asteapta: $serviceKmEntries, $serviceKmFlash, $raceVehicles, $allActiveDrivers, $driversByVehicle.
+ * Km service V2: sectiunea "Solicitare interventie" trimite componentele suspectate (Registru
+ * piese & lucrari) si prioritatea catre Interventii V2 (sursa de adevar pentru partea tehnica).
+ *
+ * Asteapta: $serviceKmEntries, $serviceKmFlash, $raceVehicles, $allActiveDrivers, $driversByVehicle, $serviceKmContext.
  */
 $serviceKmEntries = is_array($serviceKmEntries ?? null) ? $serviceKmEntries : [];
 $serviceKmOld = (array) ($serviceKmFlash['old'] ?? []);
@@ -22,7 +25,32 @@ foreach (($driversByVehicle ?? []) as $vehicleKey => $vehicleDrivers) {
 $serviceKmValue = static fn (string $key): string => (string) ($serviceKmOld[$key] ?? '');
 $serviceKmDate = static fn (?string $value): string => $value ? date('d.m.Y', (int) strtotime($value)) : '';
 $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0, 5) : '';
+$serviceKmContext = is_array($serviceKmContext ?? null) ? $serviceKmContext : [];
+$serviceKmInterventionUrl = static fn (int $id): string => build_query_url(['page' => 'mentenanta', 'action' => 'interventions', 'intervention_id' => $id]);
+// Lucrarile interventiei -> randurile formularului (cele atinse de coordonator raman blocate).
+$serviceKmComponents = static function (?array $intervention): array {
+    $rows = [];
+    foreach ((array) ($intervention['items'] ?? []) as $item) {
+        $rows[] = [
+            'item_id' => (int) $item['id'],
+            'key' => (string) ($item['component_key'] ?? ''),
+            'primary' => (string) ($item['ramura'] ?? ''),
+            'position' => (string) ($item['pozitie'] ?? ''),
+            'operation' => (string) $item['operatiune'],
+            'vehicle_id' => $item['vehicle_id'] ?? null,
+            'locked' => empty($item['dispecer_editabila']),
+            'stare' => (string) $item['stare_evaluare'],
+            'name' => (string) $item['nume'],
+            'category' => (string) ($item['categorie'] ?? ''),
+            'code' => (string) ($item['cod'] ?? ''),
+            'vehicle_plate' => (string) ($item['vehicul_componenta'] ?? ''),
+        ];
+    }
+    return $rows;
+};
 ?>
+<link rel="stylesheet" href="<?= e(url('assets/css/interventii-v2.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/interventii-v2.css'))) ?>">
+<link rel="stylesheet" href="<?= e(url('assets/css/km-service-v2.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/km-service-v2.css'))) ?>">
 <div class="card border-0 shadow-sm <?= e((string) ($serviceKmCardSpacing ?? 'mt-3')) ?> service-km-card" id="service-km-panel" data-service-km-panel data-driver-map="<?= e((string) json_encode($serviceKmDriversByVehicle)) ?>" data-gps-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'service_km_gps'])) ?>">
     <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2 flex-wrap">
         <h3 class="h6 mb-0 d-flex align-items-center gap-2">
@@ -55,97 +83,204 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
 
     <?php if ($serviceKmCanManage): ?>
         <div class="collapse<?= $serviceKmOpen ? ' show' : '' ?>" id="service-km-form-wrap">
-            <div class="card-body border-bottom">
-                <p class="text-muted small mb-3">
-                    Km parcurși până la / de la service și perioada în care vehiculul a stat la reparat.
-                    Nu sunt curse: nu se tarifează, nu se facturează și nu modifică km-ii vehiculului.
-                    Lasă <strong>Data întoarcerii</strong> goală cât timp vehiculul este încă în service.
-                </p>
-                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'service_km_store'])) ?>" data-service-km-form novalidate>
+            <div class="ksv2-body">
+                <form method="post" action="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'service_km_store'])) ?>" class="ksv2-form" data-service-km-form novalidate>
                     <?= csrf_field() ?>
                     <input type="hidden" name="id" value="<?= e($serviceKmValue('id')) ?>" data-service-km-field="id">
-                    <div class="row g-3">
-                        <div class="col-md-3">
-                            <label class="form-label" for="service_km_vehicle">Vehicul <span class="text-danger">*</span></label>
-                            <select class="form-select<?= isset($serviceKmErrors['vehicle_id']) ? ' is-invalid' : '' ?>" id="service_km_vehicle" name="vehicle_id" required data-service-km-field="vehicle_id">
-                                <option value="">Alege vehiculul</option>
-                                <?php foreach (($raceVehicles ?? []) as $vehicle): ?>
-                                    <option value="<?= e((string) $vehicle['id']) ?>" <?= $serviceKmValue('vehicle_id') === (string) $vehicle['id'] ? 'selected' : '' ?>>
-                                        <?= e(trim((string) $vehicle['nr_inmatriculare'] . ' ' . (string) ($vehicle['marca'] ?? '') . ' ' . (string) ($vehicle['model'] ?? ''))) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label" for="service_km_driver">Șofer</label>
-                            <select class="form-select" id="service_km_driver" name="driver_id" data-service-km-field="driver_id">
-                                <option value="">— fără șofer —</option>
-                                <?php foreach (($allActiveDrivers ?? []) as $driver): ?>
-                                    <option value="<?= e((string) $driver['id']) ?>" <?= $serviceKmValue('driver_id') === (string) $driver['id'] ? 'selected' : '' ?>><?= e((string) $driver['nume']) ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label" for="service_km_service">Service</label>
-                            <input type="text" class="form-control" id="service_km_service" name="service_nume" maxlength="150" placeholder="ex. Service Iveco Ploiești" value="<?= e($serviceKmValue('service_nume')) ?>" data-service-km-field="service_nume">
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label" for="service_km_km">Km service</label>
-                            <div class="input-group">
-                                <input type="number" class="form-control<?= isset($serviceKmErrors['km']) ? ' is-invalid' : '' ?>" id="service_km_km" name="km" min="0" step="0.01" inputmode="decimal" value="<?= e($serviceKmValue('km')) ?>" data-service-km-field="km">
-                                <span class="input-group-text">km</span>
-                            </div>
-                            <div class="form-text" data-service-km-gps-hint>Se completează din GPS (SAS) după vehicul, plecare și întoarcere.</div>
-                        </div>
-                        <?php /* Acelasi selector data + ora ca in "Adauga cursa" (assets/js/datetime-picker-field.js);
-                                 valorile trimise raman Y-m-d / HH:MM in campurile ascunse. */ ?>
-                        <div class="col-md-3">
-                            <label class="form-label" for="service_km_departure">Data plecării la service <span class="text-danger">*</span></label>
-                            <div class="dispatcher-datetime-field" data-datetime-picker<?= isset($serviceKmErrors['data_plecare']) ? ' data-dtp-server-error' : '' ?>>
-                                <div class="input-group dispatcher-datetime-input-group">
-                                    <input type="text" class="form-control<?= isset($serviceKmErrors['data_plecare']) ? ' is-invalid' : '' ?>" id="service_km_departure" placeholder="dd/mm/yyyy HH:mm" inputmode="numeric" autocomplete="off" maxlength="16" aria-label="Data și ora plecării la service" data-dtp-display>
-                                    <button type="button" class="btn btn-outline-secondary" aria-label="Deschide calendarul pentru plecarea la service" aria-expanded="false" data-dtp-toggle>
-                                        <i class="bi bi-calendar3" aria-hidden="true"></i>
-                                    </button>
+                    <input type="hidden" name="components_json" value="<?= e($serviceKmValue('components_json') !== '' ? $serviceKmValue('components_json') : '[]') ?>" data-ksv2-components-json>
+                    <div class="ksv2-grid">
+                        <section class="ksv2-section" aria-labelledby="ksv2-s1">
+                            <header class="ksv2-head">
+                                <span class="ksv2-num" aria-hidden="true">01</span>
+                                <div>
+                                    <h4 id="ksv2-s1">Deplasare la service</h4>
+                                    <p>Informații despre deplasarea vehiculului la service și perioada în care este în service.</p>
                                 </div>
-                                <div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>
-                                <input type="hidden" name="data_plecare" value="<?= e($serviceKmValue('data_plecare') !== '' ? $serviceKmValue('data_plecare') : date('Y-m-d')) ?>" data-dtp-date data-service-km-field="data_plecare">
-                                <input type="hidden" name="ora_plecare" value="<?= e($serviceKmValue('ora_plecare')) ?>" data-dtp-time data-service-km-field="ora_plecare">
-                            </div>
-                            <?php if (isset($serviceKmErrors['data_plecare'])): ?><div class="invalid-feedback d-block"><?= e((string) $serviceKmErrors['data_plecare']) ?></div><?php endif; ?>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label" for="service_km_return">Data întoarcerii</label>
-                            <div class="dispatcher-datetime-field" data-datetime-picker<?= isset($serviceKmErrors['data_intoarcere']) ? ' data-dtp-server-error' : '' ?>>
-                                <div class="input-group dispatcher-datetime-input-group">
-                                    <input type="text" class="form-control<?= isset($serviceKmErrors['data_intoarcere']) ? ' is-invalid' : '' ?>" id="service_km_return" placeholder="dd/mm/yyyy HH:mm" inputmode="numeric" autocomplete="off" maxlength="16" aria-label="Data și ora întoarcerii" data-dtp-display>
-                                    <button type="button" class="btn btn-outline-secondary" aria-label="Deschide calendarul pentru întoarcere" aria-expanded="false" data-dtp-toggle>
-                                        <i class="bi bi-calendar3" aria-hidden="true"></i>
-                                    </button>
+                            </header>
+                            <div class="row g-3">
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="service_km_vehicle">Vehicul <span class="text-danger">*</span></label>
+                                    <select class="form-select<?= isset($serviceKmErrors['vehicle_id']) ? ' is-invalid' : '' ?>" id="service_km_vehicle" name="vehicle_id" required data-service-km-field="vehicle_id">
+                                        <option value="">Alege vehiculul</option>
+                                        <?php foreach (($raceVehicles ?? []) as $vehicle): ?>
+                                            <option value="<?= e((string) $vehicle['id']) ?>" <?= $serviceKmValue('vehicle_id') === (string) $vehicle['id'] ? 'selected' : '' ?>>
+                                                <?= e(trim((string) $vehicle['nr_inmatriculare'] . ' - ' . trim((string) ($vehicle['marca'] ?? '') . ' ' . (string) ($vehicle['model'] ?? '')), ' -')) ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <?php if (isset($serviceKmErrors['vehicle_id'])): ?><div class="invalid-feedback d-block"><?= e((string) $serviceKmErrors['vehicle_id']) ?></div><?php endif; ?>
                                 </div>
-                                <div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>
-                                <input type="hidden" name="data_intoarcere" value="<?= e($serviceKmValue('data_intoarcere')) ?>" data-dtp-date data-service-km-field="data_intoarcere">
-                                <input type="hidden" name="ora_intoarcere" value="<?= e($serviceKmValue('ora_intoarcere')) ?>" data-dtp-time data-service-km-field="ora_intoarcere">
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="service_km_driver">Șofer</label>
+                                    <select class="form-select" id="service_km_driver" name="driver_id" data-service-km-field="driver_id">
+                                        <option value="">— fără șofer —</option>
+                                        <?php foreach (($allActiveDrivers ?? []) as $driver): ?>
+                                            <option value="<?= e((string) $driver['id']) ?>" <?= $serviceKmValue('driver_id') === (string) $driver['id'] ? 'selected' : '' ?>><?= e((string) $driver['nume']) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label" for="service_km_service">Service</label>
+                                    <input type="text" class="form-control ksv2-select-like" id="service_km_service" name="service_nume" maxlength="150" list="service_km_services" placeholder="Alege sau scrie service-ul (ex. Interactiv Bragadiru)" value="<?= e($serviceKmValue('service_nume')) ?>" data-service-km-field="service_nume" autocomplete="off">
+                                    <datalist id="service_km_services">
+                                        <?php foreach ((array) ($serviceKmContext['services'] ?? []) as $serviceName): ?>
+                                            <option value="<?= e((string) $serviceName) ?>"></option>
+                                        <?php endforeach; ?>
+                                    </datalist>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label" for="service_km_km">Km service</label>
+                                    <div class="input-group">
+                                        <input type="number" class="form-control<?= isset($serviceKmErrors['km']) ? ' is-invalid' : '' ?>" id="service_km_km" name="km" min="0" step="0.01" inputmode="decimal" value="<?= e($serviceKmValue('km')) ?>" data-service-km-field="km">
+                                        <span class="input-group-text">km</span>
+                                    </div>
+                                    <div class="form-text" data-service-km-gps-hint>Se completează din GPS (SAS) după vehicul, plecare și întoarcere.</div>
+                                </div>
+                                <?php /* Acelasi selector data + ora ca in "Adauga cursa" (assets/js/datetime-picker-field.js);
+                                         valorile trimise raman Y-m-d / HH:MM in campurile ascunse. */ ?>
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="service_km_departure">Data plecării la service <span class="text-danger">*</span></label>
+                                    <div class="dispatcher-datetime-field" data-datetime-picker<?= isset($serviceKmErrors['data_plecare']) ? ' data-dtp-server-error' : '' ?>>
+                                        <div class="input-group dispatcher-datetime-input-group">
+                                            <input type="text" class="form-control<?= isset($serviceKmErrors['data_plecare']) ? ' is-invalid' : '' ?>" id="service_km_departure" placeholder="dd/mm/yyyy HH:mm" inputmode="numeric" autocomplete="off" maxlength="16" aria-label="Data și ora plecării la service" data-dtp-display>
+                                            <button type="button" class="btn btn-outline-secondary" aria-label="Deschide calendarul pentru plecarea la service" aria-expanded="false" data-dtp-toggle>
+                                                <i class="bi bi-calendar3" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                        <div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>
+                                        <input type="hidden" name="data_plecare" value="<?= e($serviceKmValue('data_plecare') !== '' ? $serviceKmValue('data_plecare') : date('Y-m-d')) ?>" data-dtp-date data-service-km-field="data_plecare">
+                                        <input type="hidden" name="ora_plecare" value="<?= e($serviceKmValue('ora_plecare')) ?>" data-dtp-time data-service-km-field="ora_plecare">
+                                    </div>
+                                    <?php if (isset($serviceKmErrors['data_plecare'])): ?><div class="invalid-feedback d-block"><?= e((string) $serviceKmErrors['data_plecare']) ?></div><?php endif; ?>
+                                </div>
+                                <div class="col-sm-6">
+                                    <label class="form-label" for="service_km_return">Data întoarcerii</label>
+                                    <div class="dispatcher-datetime-field" data-datetime-picker<?= isset($serviceKmErrors['data_intoarcere']) ? ' data-dtp-server-error' : '' ?>>
+                                        <div class="input-group dispatcher-datetime-input-group">
+                                            <input type="text" class="form-control<?= isset($serviceKmErrors['data_intoarcere']) ? ' is-invalid' : '' ?>" id="service_km_return" placeholder="dd/mm/yyyy HH:mm" inputmode="numeric" autocomplete="off" maxlength="16" aria-label="Data și ora întoarcerii" data-dtp-display>
+                                            <button type="button" class="btn btn-outline-secondary" aria-label="Deschide calendarul pentru întoarcere" aria-expanded="false" data-dtp-toggle>
+                                                <i class="bi bi-calendar3" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                        <div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>
+                                        <input type="hidden" name="data_intoarcere" value="<?= e($serviceKmValue('data_intoarcere')) ?>" data-dtp-date data-service-km-field="data_intoarcere">
+                                        <input type="hidden" name="ora_intoarcere" value="<?= e($serviceKmValue('ora_intoarcere')) ?>" data-dtp-time data-service-km-field="ora_intoarcere">
+                                    </div>
+                                    <?php if (isset($serviceKmErrors['data_intoarcere'])): ?><div class="invalid-feedback d-block"><?= e((string) $serviceKmErrors['data_intoarcere']) ?></div><?php else: ?><div class="form-text">Goală = vehiculul este încă în service.</div><?php endif; ?>
+                                </div>
                             </div>
-                            <?php if (isset($serviceKmErrors['data_intoarcere'])): ?><div class="invalid-feedback d-block"><?= e((string) $serviceKmErrors['data_intoarcere']) ?></div><?php else: ?><div class="form-text">Goală = vehiculul este încă în service.</div><?php endif; ?>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label" for="service_km_reason">Motiv / reparație</label>
-                            <input type="text" class="form-control" id="service_km_reason" name="motiv" maxlength="255" placeholder="ex. schimb ambreiaj" value="<?= e($serviceKmValue('motiv')) ?>" data-service-km-field="motiv">
-                        </div>
-                        <div class="col-md-3">
+                            <div class="text-danger small mt-2" hidden data-service-km-overlap></div>
+                        </section>
+
+                        <section class="ksv2-section" aria-labelledby="ksv2-s2">
+                            <header class="ksv2-head">
+                                <span class="ksv2-num" aria-hidden="true">02</span>
+                                <div>
+                                    <h4 id="ksv2-s2">Solicitare intervenție</h4>
+                                    <p>Detalii despre motivul intervenției și componentele suspectate.</p>
+                                </div>
+                            </header>
+                            <div class="mb-3">
+                                <label class="form-label" for="service_km_reason">Motiv / reparație</label>
+                                <div class="ksv2-clearable">
+                                    <input type="text" class="form-control" id="service_km_reason" name="motiv" maxlength="255" placeholder="ex. Reglat pivoți și bară direcție axa 4" value="<?= e($serviceKmValue('motiv')) ?>" data-service-km-field="motiv">
+                                    <button type="button" class="ksv2-clear" data-ksv2-clear="motiv" aria-label="Golește motivul"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                                </div>
+                            </div>
+                            <div class="mb-3" data-ksv2-components>
+                                <label class="form-label d-flex align-items-center gap-1" for="ksv2-search">Componente suspectate
+                                    <i class="bi bi-info-circle text-primary" tabindex="0" data-bs-toggle="tooltip" title="Opțional. Dispecerul indică piesele bănuite; coordonatorul tehnic le confirmă sau le exclude în Mentenanță → Intervenții." aria-label="Componentele sunt opționale; coordonatorul tehnic le confirmă sau le exclude."></i>
+                                </label>
+                                <div class="ksv2-target" data-ksv2-target hidden role="group" aria-label="Vehiculul componentei"></div>
+                                <div class="ksv2-search">
+                                    <i class="bi bi-search" aria-hidden="true"></i>
+                                    <input type="search" class="form-control" id="ksv2-search" placeholder="Caută piesă după nume, cod sau categorie..." autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ksv2-results" data-ksv2-search>
+                                    <div class="ksv2-results" id="ksv2-results" role="listbox" hidden data-ksv2-results></div>
+                                </div>
+                                <div class="ksv2-rows" data-ksv2-rows aria-live="polite"></div>
+                                <div class="ksv2-notice" hidden data-ksv2-notice></div>
+                                <?php if (isset($serviceKmErrors['components'])): ?><div class="invalid-feedback d-block"><?= e((string) $serviceKmErrors['components']) ?></div><?php endif; ?>
+                                <div class="d-flex flex-wrap gap-2 mt-2">
+                                    <button type="button" class="btn btn-outline-primary btn-sm ksv2-btn" data-ksv2-add><i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă componentă</button>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm ksv2-btn" data-ksv2-registry><i class="bi bi-database" aria-hidden="true"></i> Selectează din registru</button>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="service_km_priority">Prioritate</label>
+                                <select class="form-select" id="service_km_priority" name="prioritate" data-service-km-field="prioritate">
+                                    <?php foreach (InterventionWorkflowModel::PRIORITY_LABELS as $priorityKey => $priorityLabel): ?>
+                                        <option value="<?= e($priorityKey) ?>" <?= ($serviceKmValue('prioritate') !== '' ? $serviceKmValue('prioritate') : 'normala') === $priorityKey ? 'selected' : '' ?>><?= e($priorityLabel) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div class="ksv2-info" data-ksv2-link-wrap>
+                                <i class="bi bi-info-circle-fill" aria-hidden="true"></i>
+                                <div>
+                                    <span data-ksv2-link-text>Se va genera o intervenție în Mentenanță pe baza acestor informații, sau se va lega la o intervenție existentă.</span>
+                                    <select class="form-select form-select-sm mt-2" name="link_intervention_id" hidden data-ksv2-link data-ksv2-initial="<?= e($serviceKmValue('link_intervention_id')) ?>" aria-label="Leagă de o intervenție existentă">
+                                        <option value="">Creează o intervenție nouă</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="ksv2-section" aria-labelledby="ksv2-s3">
+                            <header class="ksv2-head">
+                                <span class="ksv2-num" aria-hidden="true">03</span>
+                                <div>
+                                    <h4 id="ksv2-s3">Observații</h4>
+                                    <p>Observații și detalii suplimentare din partea dispecerului.</p>
+                                </div>
+                            </header>
                             <label class="form-label" for="service_km_notes">Observații</label>
-                            <input type="text" class="form-control" id="service_km_notes" name="observatii" value="<?= e($serviceKmValue('observatii')) ?>" data-service-km-field="observatii">
-                        </div>
+                            <textarea class="form-control ksv2-notes" id="service_km_notes" name="observatii" rows="4" maxlength="2000" data-service-km-field="observatii" placeholder="Ce a observat șoferul, când apare problema, alte detalii utile pentru service..."><?= e($serviceKmValue('observatii')) ?></textarea>
+                            <div class="ksv2-counter" aria-live="polite"><span data-ksv2-count>0</span>/2000</div>
+                            <div class="ksv2-info ksv2-info-doc">
+                                <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
+                                <span>Aceste observații se păstrează ca raportul original al dispecerului și vor fi incluse în intervenția din Mentenanță.</span>
+                            </div>
+                            <div class="ksv2-linked" hidden data-ksv2-linked>
+                                <i class="bi bi-link-45deg" aria-hidden="true"></i>
+                                <span>Intervenție asociată: <a href="#" data-ksv2-linked-link></a></span>
+                                <a class="btn btn-outline-primary btn-sm ms-auto" href="#" data-ksv2-linked-open><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Deschide intervenția</a>
+                            </div>
+                        </section>
                     </div>
-                    <div class="text-danger small mt-2" hidden data-service-km-overlap></div>
-                    <div class="mt-3 d-flex gap-2">
+                    <div class="ksv2-actions">
                         <button type="submit" class="btn btn-primary" data-service-km-submit><?= $serviceKmValue('id') !== '' ? 'Salvează modificarea' : 'Adaugă km service' ?></button>
                         <button type="button" class="btn btn-outline-secondary" data-service-km-reset>Renunță</button>
                     </div>
                 </form>
             </div>
         </div>
+
+        <div class="modal fade" id="ksv2RegistryModal" tabindex="-1" aria-labelledby="ksv2RegistryTitle" aria-hidden="true">
+            <div class="modal-dialog modal-xl modal-dialog-scrollable">
+                <div class="modal-content iv2-modal">
+                    <div class="modal-header">
+                        <div>
+                            <h2 class="modal-title fs-5" id="ksv2RegistryTitle">Selectează din registru</h2>
+                            <p class="text-muted small mb-0">Registru piese &amp; lucrări: Tip vehicul → Vehicul → Categorie principală → Subcategorie → Componentă.</p>
+                        </div>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
+                    </div>
+                    <div class="modal-body iv2" data-ksv2-registry-host></div>
+                    <div class="modal-footer">
+                        <span class="me-auto text-muted small" data-ksv2-registry-count></span>
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Renunță</button>
+                        <button type="button" class="btn btn-primary" data-ksv2-registry-add><i class="bi bi-plus-lg me-1" aria-hidden="true"></i>Adaugă componentele</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <script type="application/json" id="km-service-boot"><?= json_encode([
+            'catalog' => $serviceKmContext['catalog'] ?? null,
+            'vehicles' => $serviceKmContext['vehicles'] ?? [],
+            'operations' => InterventionWorkflowModel::OPERATION_LABELS,
+            'assessment' => InterventionWorkflowModel::ASSESSMENT_LABELS,
+            'info_url' => build_query_url(['page' => 'dispecer_curse', 'action' => 'service_km_vehicle_info']),
+            'intervention_url' => build_query_url(['page' => 'mentenanta', 'action' => 'interventions']),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_INVALID_UTF8_SUBSTITUTE) ?></script>
     <?php endif; ?>
 
     <?php if ($serviceKmEntries === []): ?>
@@ -169,6 +304,8 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
                         <th scope="col" class="text-end">Km service</th>
                         <th scope="col" class="text-end" title="Alimentări CardOil asociate în Carburanți cu această perioadă (aceeași regulă ca la curse: între plecare și întoarcere, ±12 h)">Alimentări</th>
                         <th scope="col">Service / motiv</th>
+                        <th scope="col" title="Componente suspectate trimise intervenției (fără cele excluse de coordonator)">Componente</th>
+                        <th scope="col" title="Intervenția din Mentenanță → Intervenții (statusul tehnic, separat de întoarcerea din service)">Intervenție</th>
                         <?php if ($serviceKmCanManage): ?><th scope="col" class="text-end">Acțiuni</th><?php endif; ?>
                     </tr>
                 </thead>
@@ -187,7 +324,15 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
                             'service_nume' => (string) ($entry['service_nume'] ?? ''),
                             'motiv' => (string) ($entry['motiv'] ?? ''),
                             'observatii' => (string) ($entry['observatii'] ?? ''),
+                            'prioritate' => (string) ($entry['prioritate'] ?? 'normala'),
+                            'interventie' => !empty($entry['interventie']) ? [
+                                'id' => (int) $entry['interventie']['id'],
+                                'status_key' => (string) $entry['interventie']['status_key'],
+                                'status_label' => (string) $entry['interventie']['status_label'],
+                            ] : null,
+                            'components' => $serviceKmComponents($entry['interventie'] ?? null),
                         ], JSON_UNESCAPED_UNICODE);
+                        $entryIntervention = is_array($entry['interventie'] ?? null) ? $entry['interventie'] : null;
                         ?>
                         <tr class="<?= !empty($entry['in_service']) ? 'table-warning' : '' ?>">
                             <td>
@@ -227,6 +372,21 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
                                     <div class="text-muted small fst-italic"><?= e((string) $entry['observatii']) ?></div>
                                 <?php endif; ?>
                             </td>
+                            <td class="text-nowrap">
+                                <?php if ($entryIntervention !== null && $entryIntervention['componente'] > 0): ?>
+                                    <span class="ksv2-pill" title="<?= e(implode(', ', array_map(static fn (array $item): string => $item['nume'] . ($item['pozitie'] !== '' ? ' (' . $item['pozitie'] . ')' : ''), array_filter($entryIntervention['items'], static fn (array $item): bool => $item['stare_evaluare'] !== 'exclusa')))) ?>"><i class="bi bi-gear" aria-hidden="true"></i> <?= (int) $entryIntervention['componente'] ?> comp.</span>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td class="text-nowrap">
+                                <?php if ($entryIntervention !== null): ?>
+                                    <a class="fw-semibold" href="<?= e($serviceKmInterventionUrl((int) $entryIntervention['id'])) ?>" title="Deschide intervenția în Mentenanță → Intervenții">#<?= (int) $entryIntervention['id'] ?></a>
+                                    <span class="iv2-badge st-<?= e((string) $entryIntervention['status_key']) ?>"><?= e((string) $entryIntervention['status_label']) ?></span>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
                             <?php if ($serviceKmCanManage): ?>
                                 <td class="text-end text-nowrap">
                                     <button type="button" class="btn btn-sm btn-outline-primary" data-service-km-edit="<?= e((string) $entryJson) ?>" data-service-km-return="<?= !empty($entry['in_service']) ? '1' : '' ?>" title="<?= !empty($entry['in_service']) ? 'Completează întoarcerea din service' : 'Modifică' ?>">
@@ -254,6 +414,8 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
 </div>
 
 <script src="<?= e(url('assets/js/datetime-picker-field.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/datetime-picker-field.js'))) ?>"></script>
+<script src="<?= e(url('assets/js/interventii-v2.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/interventii-v2.js'))) ?>"></script>
+<script src="<?= e(url('assets/js/km-service-v2.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/km-service-v2.js'))) ?>"></script>
 <script>
 (function () {
     'use strict';
@@ -311,6 +473,7 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
             if (input) { input.value = values[key] == null ? '' : values[key]; }
         });
         submitBtn.textContent = values.id ? 'Salvează modificarea' : 'Adaugă km service';
+        if (window.KmServiceV2) { window.KmServiceV2.load(values); }
         // Datele stau in campuri ascunse: refacem textul afisat in selectoarele de data.
         if (window.FleetDateTimePicker) { window.FleetDateTimePicker.sync(form); }
         // Un calcul GPS pornit inainte nu mai are voie sa scrie peste valorile incarcate acum.
@@ -349,7 +512,7 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
     form.querySelector('[data-service-km-reset]').addEventListener('click', function () {
         form.reset();
         // form.reset() nu reface campurile ascunse, deci data plecarii revine explicit la azi.
-        fill({ id: '', vehicle_id: '', driver_id: '', data_plecare: todayIso(), data_intoarcere: '', ora_plecare: '', ora_intoarcere: '', km: '', service_nume: '', motiv: '', observatii: '' });
+        fill({ id: '', vehicle_id: '', driver_id: '', data_plecare: todayIso(), data_intoarcere: '', ora_plecare: '', ora_intoarcere: '', km: '', service_nume: '', motiv: '', observatii: '', prioritate: 'normala', interventie: null, components: [] });
         form.querySelectorAll('.is-invalid').forEach(function (el) { el.classList.remove('is-invalid'); });
     });
 
@@ -445,7 +608,7 @@ $serviceKmTime = static fn (?string $value): string => $value ? substr($value, 0
     function prefillFrom(source) {
         var vehicleId = String(source.vehicle_id || '');
         if (!vehicleId) { return false; }
-        var prefill = { id: '', vehicle_id: vehicleId, driver_id: driverMap[vehicleId] ? String(driverMap[vehicleId]) : '', km: '', service_nume: '', motiv: '', observatii: '' };
+        var prefill = { id: '', vehicle_id: vehicleId, driver_id: driverMap[vehicleId] ? String(driverMap[vehicleId]) : '', km: '', service_nume: '', motiv: '', observatii: '', prioritate: 'normala', interventie: null, components: [] };
         ['data_plecare', 'ora_plecare', 'data_intoarcere', 'ora_intoarcere'].forEach(function (name) {
             prefill[name] = /^[\d:-]+$/.test(source[name] || '') ? source[name] : '';
         });

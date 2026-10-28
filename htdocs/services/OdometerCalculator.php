@@ -164,6 +164,45 @@ final class OdometerCalculator
     }
 
     /**
+     * Citirea manuala (hubodometrul semiremorcii) valabila ca referinta la $at: cea mai
+     * apropiata citire valida, inainte SAU dupa $at, la cel mult $maxAgeHours. Operatorul
+     * citeste odometrul cand ajunge la semiremorca, nu exact la T0; momentul real ramane afisat.
+     *
+     * @param list<array{id:string, measured_at:string, km:float, anomaly?:?string}> $readings
+     * @return array{status:string, reading:?array, precision:?string, note:string}
+     */
+    public static function manualReadingAt(array $readings, string $at, int $maxAgeHours): array
+    {
+        $atTs = self::ts($at);
+        $best = null;
+        $bestGap = null;
+        foreach ($readings as $reading) {
+            if (!empty($reading['anomaly'])) {
+                continue;
+            }
+            $gap = abs(self::ts($reading['measured_at']) - $atTs);
+            if ($bestGap === null || $gap < $bestGap) {
+                $best = $reading;
+                $bestGap = $gap;
+            }
+        }
+        if ($best === null) {
+            return ['status' => self::STATUS_UNAVAILABLE, 'reading' => null, 'precision' => null,
+                'note' => 'Nicio citire manuală validă.'];
+        }
+
+        $minutes = (int) floor($bestGap / 60);
+        $side = self::ts($best['measured_at']) <= $atTs ? 'înainte de' : 'după';
+        if ($minutes > $maxAgeHours * 60) {
+            return ['status' => self::STATUS_OUT_OF_TOLERANCE, 'reading' => $best, 'precision' => null,
+                'note' => sprintf('Cea mai apropiată citire manuală e cu %s %s T0 (maxim %d ore). Adaugă o citire făcută aproape de T0.', self::humanMinutes($minutes), $side, $maxAgeHours)];
+        }
+
+        return ['status' => self::STATUS_OK, 'reading' => $best, 'precision' => 'eveniment',
+            'note' => $minutes <= 1 ? 'Citire manuală chiar la T0.' : sprintf('Citire manuală cu %s %s T0.', self::humanMinutes($minutes), $side)];
+    }
+
+    /**
      * Marcheaza citirile neplauzibile dintr-o serie (o singura sursa, un singur vehicul).
      *
      * Seria valida = cel mai lung lant de citiri in care odometrul nu scade si fiecare
@@ -233,7 +272,7 @@ final class OdometerCalculator
         return $series;
     }
 
-    private static function plausibleStep(float $fromKm, int $fromTs, float $toKm, int $toTs): bool
+    public static function plausibleStep(float $fromKm, int $fromTs, float $toKm, int $toTs): bool
     {
         $hours = max(0.0, ($toTs - $fromTs) / 3600);
 

@@ -12,6 +12,8 @@ declare(strict_types=1);
  *   action=t0_save      POST: salveaza T0 (versiune noua; cele vechi raman in istoric)
  *   action=history      JSON: istoricul citirilor si al T0 pentru un vehicul
  *   action=save_policy  POST: politica sursei oficiale pentru totaluri
+ *   action=manual_add   POST: citire manuala a odometrului unei semiremorci (optional si T0)
+ *   action=manual_cancel POST: anuleaza o citire manuala (ramane in istoric)
  *   action=audit        JSON: jurnalul de audit al modulului
  * Toate actiunile sunt verificate si in router (permissions/modules/centru_kilometraj.php).
  */
@@ -40,6 +42,8 @@ class OdometerCenterController
             't0_save' => $this->t0SaveAction(),
             'history' => $this->historyAction(),
             'save_policy' => $this->savePolicyAction(),
+            'manual_add' => $this->manualAddAction(),
+            'manual_cancel' => $this->manualCancelAction(),
             'audit' => $this->auditAction(),
             default => $this->indexAction(),
         };
@@ -126,6 +130,47 @@ class OdometerCenterController
         $this->json(['ok' => true, 'message' => 'Politica a fost salvată.', 'dashboard' => $this->service->buildDashboard()]);
     }
 
+    private function manualAddAction(): void
+    {
+        $this->requireAction('manual');
+        $this->requirePostWithCsrf();
+        $note = trim((string) ($_POST['note'] ?? ''));
+        $setT0 = ($_POST['set_t0'] ?? '') === '1';
+        if ($setT0 && !can(self::PAGE, 't0')) {
+            $this->json(['ok' => false, 'message' => 'Nu ai dreptul să setezi T0.'], 403);
+        }
+        try {
+            $added = $this->service->addManualReading(
+                (int) ($_POST['vehicle_id'] ?? 0),
+                (string) ($_POST['measured_at'] ?? ''),
+                (string) ($_POST['km'] ?? ''),
+                $note !== '' ? $note : null,
+                $setT0,
+                $this->userId()
+            );
+        } catch (InvalidArgumentException $exception) {
+            $this->json(['ok' => false, 'message' => $exception->getMessage()], 422);
+        }
+        $this->json([
+            'ok' => true,
+            'message' => $added['t0_version'] !== null ? 'Citire salvată și setată ca T0.' : 'Citire salvată.',
+            'dashboard' => $this->service->buildDashboard(),
+        ]);
+    }
+
+    private function manualCancelAction(): void
+    {
+        $this->requireAction('manual');
+        $this->requirePostWithCsrf();
+        $reason = trim((string) ($_POST['reason'] ?? ''));
+        try {
+            $this->service->cancelManualReading((int) ($_POST['vehicle_id'] ?? 0), (int) ($_POST['reading_id'] ?? 0), $reason !== '' ? $reason : null, $this->userId());
+        } catch (InvalidArgumentException $exception) {
+            $this->json(['ok' => false, 'message' => $exception->getMessage()], 422);
+        }
+        $this->json(['ok' => true, 'message' => 'Citirea a fost anulată (rămâne în istoric).', 'dashboard' => $this->service->buildDashboard()]);
+    }
+
     private function auditAction(): void
     {
         $this->requireAction('audit');
@@ -140,6 +185,7 @@ class OdometerCenterController
         return [
             'history' => can(self::PAGE, 'history'),
             't0' => can(self::PAGE, 't0'),
+            'manual' => can(self::PAGE, 'manual'),
             'settings' => can(self::PAGE, 'settings'),
             'audit' => can(self::PAGE, 'audit'),
             'fuel' => can('carburanti'),

@@ -201,6 +201,7 @@ function cleanup(PDO $db, ?string $since = null): void
         $db->exec("DELETE FROM vehicle_odometer_audit WHERE vehicle_id IN ({$in})");
         $db->exec("DELETE FROM vehicle_odometer_baselines WHERE vehicle_id IN ({$in})");
         $db->exec("DELETE FROM vehicle_odometer_readings WHERE vehicle_id IN ({$in})");
+        $db->exec("DELETE FROM vehicle_odometer_manual_readings WHERE vehicle_id IN ({$in})");
         $db->exec("DELETE FROM vehicle_odometer_sources WHERE vehicle_id IN ({$in})");
         $db->exec("DELETE FROM vehicule_cuplaje WHERE tractor_id IN ({$in}) OR semiremorca_id IN ({$in})");
         $db->exec("DELETE FROM vehicule WHERE id IN ({$in})");
@@ -311,10 +312,52 @@ try {
     $lookup = $service->lookupT0([$tractor, $trailer], '2026-10-01 08:00');
     check('T0: SAS gaseste citirea de la 06:00 (parcat pana la T0)', $lookup[$tractor]['sas']['status'] === 'ok' && $lookup[$tractor]['sas']['reading']['km'] === 100080.0, $lookup[$tractor]['sas']);
     check('T0: CardOil gaseste alimentarea de la 30.09 20:00, cu ora ei reala', $lookup[$tractor]['cardoil']['status'] === 'ok' && $lookup[$tractor]['cardoil']['reading']['measured_at'] === '2026-09-30 20:00:00', $lookup[$tractor]['cardoil']);
-    check('T0: semiremorca -> fara sursa pentru ambele, fara valori', $lookup[$trailer]['sas']['status'] === 'fara_sursa' && $lookup[$trailer]['cardoil']['status'] === 'fara_sursa');
+    check('T0: semiremorca -> doar odometrul manual (fara SAS/CardOil), inca fara citiri', array_keys($lookup[$trailer]) === ['manual'] && $lookup[$trailer]['manual']['status'] === 'fara_sursa', $lookup[$trailer]);
 
     $saved = $service->saveT0([$tractor, $trailer], '2026-10-01 08:00', null, 'test');
     check('T0: tractorul primeste versiunea 1; semiremorca fara surse e sarita', $saved[$tractor]['version'] === 1 && $saved[$trailer]['version'] === null, $saved);
+
+    // --- Semiremorca: un singur odometru, introdus manual
+    $trailerComp = static function () use ($service, $trailer): ?array {
+        foreach ($service->buildDashboard()['units'] as $unit) {
+            foreach ($unit['components'] as $comp) {
+                if ($comp['id'] === $trailer) {
+                    return $comp;
+                }
+            }
+        }
+        return null;
+    };
+    $comp = $trailerComp();
+    check('Manual: semiremorca afiseaza doar odometrul manual, nemonitorizata fara citiri', $comp['odometers'] === ['manual'] && !$comp['monitored'] && $comp['sources']['manual']['available'], $comp['odometers'] ?? null);
+    $added = $service->addManualReading($trailer, '2026-10-01 09:30', '412.580', 'test', true, null);
+    $comp = $trailerComp();
+    check('Manual: citire salvata + T0 la momentul ei', $added['t0_version'] === 1 && $comp['sources']['manual']['baseline']['km'] === 412580.0 && $comp['t0']['configured'], $comp['sources']['manual']['baseline'] ?? null);
+    $rejectedLower = false;
+    try {
+        $service->addManualReading($trailer, '2026-10-05 10:00', '412000', null, false, null);
+    } catch (InvalidArgumentException) {
+        $rejectedLower = true;
+    }
+    check('Manual: valoare mai mica decat citirea anterioara respinsa', $rejectedLower);
+    $rejectedTractor = false;
+    try {
+        $service->addManualReading($tractor, '2026-10-05 10:00', '100500', null, false, null);
+    } catch (InvalidArgumentException) {
+        $rejectedTractor = true;
+    }
+    check('Manual: refuzat pentru cap tractor', $rejectedTractor);
+    $second = $service->addManualReading($trailer, '2026-10-05 10:00', '413100', null, false, null);
+    $comp = $trailerComp();
+    check('Manual: km de la T0 = 520, sunt km oficiali ai semiremorcii', $comp['sources']['manual']['distance']['km'] === 520.0 && $comp['official']['km'] === 520.0 && $comp['official']['source'] === 'manual', $comp['official']);
+    $manualLookup = $service->lookupT0([$trailer], '2026-10-05 08:00')[$trailer]['manual'];
+    check('Manual T0: cea mai apropiata citire (2h dupa T0) acceptata', $manualLookup['status'] === 'ok' && $manualLookup['reading']['km'] === 413100.0, $manualLookup);
+    $farLookup = $service->lookupT0([$trailer], '2026-10-03 08:00')[$trailer]['manual'];
+    check('Manual T0: citire la peste 24h -> in afara tolerantei', $farLookup['status'] === 'in_afara_tolerantei', $farLookup);
+    $service->cancelManualReading($trailer, $second['id'], 'tastat gresit', null);
+    $comp = $trailerComp();
+    $history = $service->vehicleHistory($trailer, 30, true);
+    check('Manual: anularea scoate citirea din calcul, dar o pastreaza in istoric', $comp['sources']['manual']['current']['km'] === 412580.0 && count($history['manual']) === 2 && $history['manual'][0]['canceled_at'] !== null, $history['manual']);
     $truckLookup = $service->lookupT0([$truck], '2026-10-01 08:00');
     check('T0 camion: CardOil lipsa nu blocheaza SAS', $truckLookup[$truck]['sas']['status'] === 'ok' && $truckLookup[$truck]['cardoil']['status'] === 'fara_sursa', $truckLookup[$truck]);
     $service->saveT0([$truck], '2026-10-01 08:00', null, null);
@@ -346,7 +389,7 @@ try {
     }
     check('Politica SAS: totalul = suma per vehicul fizic, o singura data', abs((float) $dash['kpis']['official_km'] - round($expected, 1)) < 0.01 && count($counted) === count(array_unique($counted)), [$dash['kpis']['official_km'], $expected]);
     [$t, $s] = $findUnit($dash, $tractor)['components'];
-    check('Politica SAS: tractorul contribuie 400 (nu 400 + 390), semiremorca nimic', $t['official']['km'] === 400.0 && $s['official']['km'] === null);
+    check('Politica SAS: tractorul contribuie 400 (nu 400 + 390), semiremorca doar din odometrul ei manual', $t['official']['km'] === 400.0 && $s['official']['source'] === 'manual' && $s['official']['km'] === 0.0, $s['official']);
 
     // --- T0 schimbat: revizia veche ramane
     $service->saveT0([$tractor], '2026-10-05 12:30', null, 'mutare T0');
@@ -386,7 +429,7 @@ try {
     // --- ACL
     $registry = permission_registry();
     $module = $registry->module('centru_kilometraj');
-    check('ACL: modulul e in registru cu actiunile view/history/t0/settings/audit', $module !== null && array_keys($module['actions']) === ['view', 'history', 't0', 'settings', 'audit'], $module['actions'] ?? null);
+    check('ACL: modulul e in registru cu actiunile view/history/t0/manual/settings/audit', $module !== null && array_keys($module['actions']) === ['view', 'history', 't0', 'manual', 'settings', 'audit'], $module['actions'] ?? null);
     check('ACL: t0_save cere dreptul t0, save_policy cere settings', $registry->endpointAction('centru_kilometraj', 't0_save') === 't0' && $registry->endpointAction('centru_kilometraj', 'save_policy') === 'settings');
     check('ACL: operator neconfigurat vede pagina, dar nu poate seta T0', access_evaluate('operator', false, [], 'centru_kilometraj', 'view') && !access_evaluate('operator', false, [], 'centru_kilometraj', 't0'));
     check('ACL: drept configurat fara t0 -> refuzat', !access_evaluate('operator', true, ['centru_kilometraj' => ['view' => true]], 'centru_kilometraj', 't0'));

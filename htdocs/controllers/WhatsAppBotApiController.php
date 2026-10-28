@@ -5,6 +5,7 @@ require_once __DIR__ . '/../models/DriverWhatsAppModel.php';
 require_once __DIR__ . '/../services/DriverWhatsAppConversationService.php';
 require_once __DIR__ . '/../services/DriverFirstMovementService.php';
 require_once __DIR__ . '/../services/ApprovalWhatsAppService.php';
+require_once __DIR__ . '/../services/MaintenanceWhatsAppService.php';
 
 /**
  * API server-to-server pentru BaileyBot (whatsapp-agent-lab), fara sesiune de browser.
@@ -53,6 +54,17 @@ class WhatsAppBotApiController
                             error_log('[whatsapp_bot_api][approvals] ' . $exception->getMessage());
                         }
                     }
+                    // Programari service: schimbarile facute din pagina Interventii ajung si la sofer.
+                    if (MaintenanceWhatsAppService::config()['enabled']) {
+                        try {
+                            $maintenance = new MaintenanceWhatsAppService($this->db(), $model);
+                            $maintenance->ensureSchema();
+                            $maintenance->syncDriverNotifications();
+                            $maintenance->notifyAssignments();
+                        } catch (Throwable $exception) {
+                            error_log('[whatsapp_bot_api][maintenance] ' . $exception->getMessage());
+                        }
+                    }
                     $claim = $model->claimOutbox((int) ($input['limit'] ?? 5));
                     $this->sendJson(['success' => true] + $claim);
                     // no break: sendJson iese
@@ -83,6 +95,17 @@ class WhatsAppBotApiController
                         $result = $approvals->handleInbound($message);
                         if ($result['handled']) {
                             $this->sendJson(['success' => true] + $result);
+                        }
+                    }
+                    // Programari service: comenzile (PROGRAMARE SERVICE, MENIU...), butoanele mnt: si conversatia in curs.
+                    if (MaintenanceWhatsAppService::config()['enabled']) {
+                        $maintenance = new MaintenanceWhatsAppService($this->db(), $model);
+                        $maintenance->ensureSchema();
+                        if ($maintenance->claims($message)) {
+                            $result = $maintenance->handleInbound($message);
+                            if ($result['handled']) {
+                                $this->sendJson(['success' => true] + $result);
+                            }
                         }
                     }
                     $service = new DriverWhatsAppConversationService($this->db(), $model);
