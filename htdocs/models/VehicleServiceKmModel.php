@@ -229,6 +229,9 @@ class VehicleServiceKmModel extends BaseModel
      * in km service din GPS). Suprapunere stricta: o cursa care se termina exact la plecare
      * nu conteaza. Ora lipsa = 00:00 la inceput / 23:59:59 la sfarsit; sfarsit lipsa = ziua
      * de inceput. $to null = vehiculul inca in service (interval deschis).
+     * O cursa cu faze se verifica doar pe faze (faza 1 e si ea in curse_segmente): randul
+     * cursei acopera de la prima faza la ultima, inclusiv pauza dintre ele, cand vehiculul
+     * poate fi chiar in service.
      *
      * @return array<int, array{id: int, start: string, end: string}>
      */
@@ -243,6 +246,9 @@ class VehicleServiceKmModel extends BaseModel
                        TIMESTAMP(COALESCE(c.data_sfarsit, c.data_inceput), COALESCE(c.ora_sfarsit, '23:59:59')) AS trip_end
                 FROM curse_dispecer c
                 WHERE c.deleted_at IS NULL AND c.vehicle_id = :vehicle_main AND c.data_inceput IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM curse_segmente sx WHERE sx.cursa_id = c.id AND sx.deleted_at IS NULL
+                  )
                 UNION ALL
                 SELECT s.cursa_id,
                        TIMESTAMP(s.data_inceput, COALESCE(s.ora_inceput, '00:00:00')),
