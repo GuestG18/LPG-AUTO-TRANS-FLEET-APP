@@ -18,6 +18,12 @@ class DispecerCurseController
     // Banda GPS live: masinile in mers raporteaza la ~60-90s, deci o pozitie
     // "in miscare" mai veche de 3 minute nu mai confirma miscarea acum.
     private const LIVE_FRESH_SECONDS = 180;
+    // "Deschide cursa noua": ora de pornire se cauta in foaia de parcurs SAS doar dupa o cursa
+    // incheiata in ultimele 72 h; segmentele sub 0,5 km sunt zgomot GPS / manevre (ca
+    // SasTripPrefillService), iar unul care incepe in primele 5 min e taiat de capatul intervalului.
+    private const LIVE_MOVEMENT_LOOKBACK_SECONDS = 72 * 3600;
+    private const LIVE_MOVEMENT_MIN_KM = 0.5;
+    private const LIVE_MOVEMENT_CLIPPED_SECONDS = 300;
 
     private const LIVE_VEHICLE_TYPES = [
         'cap_tractor' => 'Cap tractor',
@@ -302,6 +308,9 @@ class DispecerCurseController
                 return;
             case 'live_gps':
                 $this->liveGpsAction();
+                return;
+            case 'live_gps_movement':
+                $this->liveGpsMovementAction();
                 return;
             case 'request_inactive_vehicle_approval':
                 $this->requestInactiveVehicleApprovalAction();
@@ -589,9 +598,13 @@ class DispecerCurseController
 
     /**
      * JSON pentru banda "Curse in desfasurare (GPS live)" de pe lista de curse:
-     * vehiculele active acum conform SAS (in miscare sau oprite de putin timp),
-     * fiecare legat de cursa deschisa din aplicatie daca exista una recenta.
-     * Doar citire; refoloseste cache-ul SAS partajat (min. 20s intre interogari).
+     * vehiculele active acum conform SAS (in miscare sau oprite de putin timp).
+     *  A. vehiculul are cursa DESCHISA (fara ora de sfarsit, oricat de veche) ->
+     *     "Revino la cursa"; mai multe deschise -> dispecerul alege, nu ghicim;
+     *  B. nicio cursa deschisa -> "Deschide cursa noua" doar daca GPS confirma
+     *     miscare ACUM (pozitie proaspata) cu ora de dupa sfarsitul ultimei curse.
+     * Banda nu inchide si nu modifica nicio cursa. Doar citire; refoloseste
+     * cache-ul SAS partajat (min. 20s intre interogari).
      */
     private function liveGpsAction(): void
     {
@@ -619,7 +632,8 @@ class DispecerCurseController
             ))));
             // Toate lookup-urile din aplicatie sunt pe lot (cate o interogare),
             // nu per vehicul: curse deschise, ultima cursa, fisa vehiculului, soferi.
-            $openRaces = $this->ongoingRacesByVehicleId($localIds);
+            $openRaces = $this->openRacesByVehicleId($localIds);
+            $lastEnds = $this->lastClosedEndByVehicleId($localIds);
             $latestRaces = $this->latestRacesByVehicleId($localIds);
             $localVehicles = $this->liveVehicleDetailsById($localIds);
             $drivers = $this->liveDriverDirectory();
@@ -630,26 +644,28 @@ class DispecerCurseController
             $counts = ['active' => 0, 'with_trip' => 0, 'without_trip' => 0, 'stationary' => 0];
             foreach ($active as $vehicle) {
                 $localId = (int) ($vehicle['local_vehicle_id'] ?? 0);
-                $race = $openRaces[$localId] ?? null;
+                $vehicleOpenRaces = $openRaces[$localId] ?? [];
+                // O singura cursa deschisa = asociere sigura; mai multe = conflict,
+                // dispecerul alege din lista (nicio cursa nu e aleasa in locul lui).
+                $race = count($vehicleOpenRaces) === 1 ? $vehicleOpenRaces[0] : null;
+                $hasOpenRace = $vehicleOpenRaces !== [];
                 // Sablon de precompletare pentru "adauga": ultima cursa a
                 // vehiculului da beneficiarul/tipul/soferul cu care lucreaza de obicei.
-                $latest = $race === null ? ($latestRaces[$localId] ?? null) : null;
+                $latest = !$hasOpenRace ? ($latestRaces[$localId] ?? null) : null;
+                $lastEnd = $lastEnds[$localId] ?? null;
                 $local = $localVehicles[$localId] ?? null;
                 $age = is_numeric($vehicle['age_seconds'] ?? null) ? (int) $vehicle['age_seconds'] : null;
                 $status = (string) $vehicle['status'];
+                $timestamp = strtotime((string) ($vehicle['timestamp'] ?? ''));
 
                 // GPS spune doar ce face fizic vehiculul; cursa vine din aplicatie.
                 // "In miscare" = viteza > 0 si pozitie proaspata; altfel (oprit
                 // recent sau raportare intarziata) starea e neutra, nu confirmata.
                 $isFreshMoving = $status === 'moving' && $age !== null && $age <= self::LIVE_FRESH_SECONDS;
-                if ($isFreshMoving) {
-                    $state = $race !== null ? 'trip' : 'no_trip';
-                } else {
-                    $state = 'stale';
-                }
+                $state = self::liveVehicleState($hasOpenRace, $isFreshMoving, $timestamp !== false ? $timestamp : null, $lastEnd['ts'] ?? null);
 
                 $counts['active']++;
-                $counts[$race !== null ? 'with_trip' : 'without_trip']++;
+                $counts[$hasOpenRace ? 'with_trip' : 'without_trip']++;
                 if ($state === 'stale') {
                     $counts['stationary']++;
                 }
@@ -666,7 +682,6 @@ class DispecerCurseController
                 $capacity = $local !== null && is_numeric($local['capacitate_transport'] ?? null) && (float) $local['capacitate_transport'] > 0
                     ? (float) $local['capacitate_transport']
                     : null;
-                $timestamp = strtotime((string) ($vehicle['timestamp'] ?? ''));
 
                 $rows[] = [
                     'key' => (string) ((int) ($vehicle['sas_vehicle_id'] ?? 0) ?: ($vehicle['registration'] ?? '')),
@@ -687,14 +702,12 @@ class DispecerCurseController
                     'longitude' => is_numeric($vehicle['longitude'] ?? null) ? (float) $vehicle['longitude'] : null,
                     'position_ts' => $timestamp !== false ? $timestamp : null,
                     'age_seconds' => $age,
-                    'race' => $race !== null ? [
-                        'id' => (int) $race['id'],
-                        'url' => $this->raceEditUrl((int) $race['id']),
-                        'tip_transport' => self::TRANSPORT_TYPES[(string) $race['tip_transport']] ?? (string) $race['tip_transport'],
-                        'route' => $this->liveRaceRouteLabel($race),
-                        'start_label' => $this->liveRaceStartLabel($race),
-                        'beneficiar' => ($race['beneficiar_nume'] ?? '') !== '' ? $race['beneficiar_nume'] : null,
-                    ] : null,
+                    'race' => $race !== null ? $this->liveRacePayload($race) : null,
+                    // Doua sau mai multe curse deschise pe vehicul: toate, ca dispecerul sa aleaga.
+                    'open_races' => count($vehicleOpenRaces) > 1
+                        ? array_map(fn (array $openRace): array => $this->liveRacePayload($openRace), $vehicleOpenRaces)
+                        : [],
+                    'last_end' => $lastEnd !== null ? ['ts' => $lastEnd['ts'], 'label' => date('d.m.Y H:i', $lastEnd['ts'])] : null,
                     'prefill' => $latest !== null ? [
                         'beneficiar_id' => (int) ($latest['beneficiar_id'] ?? 0) ?: null,
                         'tip_transport' => (string) ($latest['tip_transport'] ?? '') ?: null,
@@ -728,15 +741,17 @@ class DispecerCurseController
     }
 
     /**
-     * Cursa "in desfasurare" per vehicul: cea mai recenta cursa nestearsa
-     * inceputa in ultimele 3 zile si fara ora de sfarsit completata (sau cu
-     * sfarsitul azi/in viitor). Fereastra scurta evita legarea de curse vechi
-     * ramase deschise din lipsa de completare.
+     * Cursele DESCHISE per vehicul, oricat de vechi: nesterse si fara ora de
+     * sfarsit. data_sfarsit este NOT NULL (o cursa salvata fara sfarsit primeste
+     * data de inceput, fara ora — validateRaceInput / refreshRaceFromSegments),
+     * deci ora de sfarsit este singurul semn ca dispecerul a inchis cursa.
+     * La o cursa cu faze vehiculul care conteaza e al ultimei faze (cea deschisa);
+     * curse_dispecer.vehicle_id ramane al primei faze.
      *
      * @param array<int, int> $vehicleIds
-     * @return array<int, array<string, mixed>> vehicle_id -> cursa
+     * @return array<int, array<int, array<string, mixed>>> vehicle_id -> curse (cea mai recenta prima)
      */
-    private function ongoingRacesByVehicleId(array $vehicleIds): array
+    private function openRacesByVehicleId(array $vehicleIds): array
     {
         $vehicleIds = array_values(array_filter(array_map('intval', $vehicleIds), static fn (int $id): bool => $id > 0));
         if ($vehicleIds === []) {
@@ -744,6 +759,10 @@ class DispecerCurseController
         }
 
         $placeholders = implode(',', array_fill(0, count($vehicleIds), '?'));
+        $hasSegments = $this->liveSegmentsTableExists();
+        $segmentClause = $hasSegments
+            ? " OR c.id IN (SELECT sg.cursa_id FROM curse_segmente sg WHERE sg.deleted_at IS NULL AND sg.vehicle_id IN ($placeholders))"
+            : '';
         $statement = $this->db->prepare(
             "SELECT c.id, c.vehicle_id, c.driver_id, c.tip_transport, c.data_inceput, c.ora_inceput,
                     c.loc_plecare, c.loc_aspirare, c.loc_livrare, c.loc_livrare_cursa,
@@ -757,23 +776,237 @@ class DispecerCurseController
              LEFT JOIN configurare_locuri_incarcare li ON li.id = c.loc_incarcare_id
              LEFT JOIN configurare_zone_distributie zd ON zd.id = c.zona_distributie_id
              WHERE c.deleted_at IS NULL
-               AND c.vehicle_id IN ($placeholders)
-               AND c.data_inceput >= DATE_SUB(CURDATE(), INTERVAL 3 DAY)
-               AND c.data_inceput <= CURDATE()
-               AND (c.ora_sfarsit IS NULL OR c.data_sfarsit IS NULL OR c.data_sfarsit >= CURDATE())
-             ORDER BY c.data_inceput DESC, c.id DESC"
+               AND c.ora_sfarsit IS NULL
+               AND (c.vehicle_id IN ($placeholders)$segmentClause)
+             ORDER BY c.data_inceput DESC, COALESCE(c.ora_inceput, '00:00:00') DESC, c.id DESC"
         );
-        $statement->execute($vehicleIds);
+        $statement->execute($hasSegments ? array_merge($vehicleIds, $vehicleIds) : $vehicleIds);
+        $races = $statement->fetchAll(PDO::FETCH_ASSOC);
 
+        // Vehiculul ultimei faze nesterse, pentru cursele cu faze.
+        $lastSegmentVehicle = [];
+        if ($hasSegments && $races !== []) {
+            $raceIds = array_map(static fn (array $race): int => (int) $race['id'], $races);
+            $segmentStatement = $this->db->prepare(
+                'SELECT cursa_id, vehicle_id FROM curse_segmente
+                 WHERE deleted_at IS NULL AND cursa_id IN (' . implode(',', array_fill(0, count($raceIds), '?')) . ')
+                 ORDER BY cursa_id, ordine'
+            );
+            $segmentStatement->execute($raceIds);
+            foreach ($segmentStatement->fetchAll(PDO::FETCH_ASSOC) as $segment) {
+                $lastSegmentVehicle[(int) $segment['cursa_id']] = (int) ($segment['vehicle_id'] ?? 0);
+            }
+        }
+
+        $wanted = array_flip($vehicleIds);
         $byVehicle = [];
-        foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $race) {
-            $vehicleId = (int) $race['vehicle_id'];
-            if (!isset($byVehicle[$vehicleId])) {
-                $byVehicle[$vehicleId] = $race;
+        foreach ($races as $race) {
+            $raceId = (int) $race['id'];
+            $vehicleId = ($lastSegmentVehicle[$raceId] ?? 0) > 0 ? $lastSegmentVehicle[$raceId] : (int) $race['vehicle_id'];
+            if (isset($wanted[$vehicleId])) {
+                $byVehicle[$vehicleId][] = $race;
             }
         }
 
         return $byVehicle;
+    }
+
+    /**
+     * Sfarsitul celei mai recente curse INCHISE (data + ora de sfarsit) per vehicul,
+     * ca reper pentru "miscare noua". La cursele cu faze conteaza fazele incheiate,
+     * fiecare pe vehiculul ei.
+     *
+     * @param array<int, int> $vehicleIds
+     * @return array<int, array{ts: int}> vehicle_id -> sfarsit
+     */
+    private function lastClosedEndByVehicleId(array $vehicleIds): array
+    {
+        $vehicleIds = array_values(array_filter(array_map('intval', $vehicleIds), static fn (int $id): bool => $id > 0));
+        if ($vehicleIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($vehicleIds), '?'));
+        $hasSegments = $this->liveSegmentsTableExists();
+
+        $statement = $this->db->prepare(
+            "SELECT c.vehicle_id, MAX(TIMESTAMP(c.data_sfarsit, c.ora_sfarsit)) AS last_end
+             FROM curse_dispecer c
+             WHERE c.deleted_at IS NULL
+               AND c.ora_sfarsit IS NOT NULL
+               AND c.vehicle_id IN ($placeholders)"
+            . ($hasSegments ? ' AND NOT EXISTS (SELECT 1 FROM curse_segmente sg WHERE sg.cursa_id = c.id AND sg.deleted_at IS NULL)' : '')
+            . ' GROUP BY c.vehicle_id'
+        );
+        $statement->execute($vehicleIds);
+        $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+
+        if ($hasSegments) {
+            $segmentStatement = $this->db->prepare(
+                "SELECT sg.vehicle_id, MAX(TIMESTAMP(sg.data_sfarsit, sg.ora_sfarsit)) AS last_end
+                 FROM curse_segmente sg
+                 INNER JOIN curse_dispecer c ON c.id = sg.cursa_id AND c.deleted_at IS NULL
+                 WHERE sg.deleted_at IS NULL
+                   AND sg.data_sfarsit IS NOT NULL
+                   AND sg.ora_sfarsit IS NOT NULL
+                   AND sg.vehicle_id IN ($placeholders)
+                 GROUP BY sg.vehicle_id"
+            );
+            $segmentStatement->execute($vehicleIds);
+            $rows = array_merge($rows, $segmentStatement->fetchAll(PDO::FETCH_ASSOC));
+        }
+
+        $byVehicle = [];
+        foreach ($rows as $row) {
+            $ts = strtotime((string) ($row['last_end'] ?? ''));
+            $vehicleId = (int) $row['vehicle_id'];
+            if ($ts !== false && (!isset($byVehicle[$vehicleId]) || $ts > $byVehicle[$vehicleId]['ts'])) {
+                $byVehicle[$vehicleId] = ['ts' => $ts];
+            }
+        }
+
+        return $byVehicle;
+    }
+
+    private function liveSegmentsTableExists(): bool
+    {
+        static $exists = null;
+        if ($exists === null) {
+            try {
+                $exists = $this->db->query("SHOW TABLES LIKE 'curse_segmente'")->fetchColumn() !== false;
+            } catch (Throwable $exception) {
+                $exists = false;
+            }
+        }
+
+        return $exists;
+    }
+
+    /**
+     * Starea unui vehicul pe banda GPS:
+     *  trip            = are cursa deschisa si merge acum (pozitie proaspata);
+     *  no_trip         = fara cursa deschisa, merge acum, iar pozitia e de DUPA sfarsitul
+     *                    ultimei curse incheiate (fara curse anterioare ajunge pozitia proaspata);
+     *  before_last_end = merge, dar inainte de sfarsitul trecut pe ultima cursa: nu e plecare noua;
+     *  stale           = oprit / pozitie veche: nu confirma nimic (cursa deschisa ramane asociata).
+     */
+    public static function liveVehicleState(bool $hasOpenRace, bool $isFreshMoving, ?int $positionTs, ?int $lastEndTs): string
+    {
+        if (!$isFreshMoving) {
+            return 'stale';
+        }
+        if ($hasOpenRace) {
+            return 'trip';
+        }
+        if ($positionTs !== null && ($lastEndTs === null || $positionTs > $lastEndTs)) {
+            return 'no_trip';
+        }
+
+        return 'before_last_end';
+    }
+
+    /** Cursa deschisa asa cum o afiseaza banda GPS (link spre fisa existenta a cursei). */
+    private function liveRacePayload(array $race): array
+    {
+        return [
+            'id' => (int) $race['id'],
+            'url' => $this->raceEditUrl((int) $race['id']),
+            'tip_transport' => self::TRANSPORT_TYPES[(string) $race['tip_transport']] ?? (string) $race['tip_transport'],
+            'route' => $this->liveRaceRouteLabel($race),
+            'start_label' => $this->liveRaceStartLabel($race),
+            // Fara ora de inceput cursa ramane deschisa, dar dispecerul trebuie sa vada ca e incompleta.
+            'start_time_missing' => trim((string) ($race['ora_inceput'] ?? '')) === '',
+            'beneficiar' => ($race['beneficiar_nume'] ?? '') !== '' ? $race['beneficiar_nume'] : null,
+        ];
+    }
+
+    /**
+     * "Deschide cursa noua" din banda GPS: ora propusa de inceput = inceputul primei
+     * deplasari reale (segment SAS >= 0,5 km) de DUPA sfarsitul ultimei curse incheiate.
+     * Foaia de parcurs se cere doar la click, pentru un singur vehicul. Fara un astfel
+     * de segment nu se propune nicio ora (nu se foloseste ora ultimei pozitii).
+     * Doar citire: nu salveaza nimic.
+     */
+    private function liveGpsMovementAction(): void
+    {
+        $vehicleId = $this->positiveIntFromInput($_GET['vehicle_id'] ?? null);
+        if ($vehicleId === null) {
+            $this->sendJson(['success' => false, 'message' => 'Vehicul invalid.'], 422);
+            return;
+        }
+
+        try {
+            if (($this->openRacesByVehicleId([$vehicleId])[$vehicleId] ?? []) !== []) {
+                $this->sendJson(['success' => true, 'start' => null, 'reason' => 'open_race',
+                    'message' => 'Vehiculul are deja o cursă deschisă.']);
+                return;
+            }
+
+            $service = new SasDashboardService($this->db);
+            if (!$service->credentialsAvailable()) {
+                $this->sendJson(['success' => true, 'start' => null, 'reason' => 'no_gps', 'message' => 'GPS indisponibil.']);
+                return;
+            }
+            $carId = 0;
+            foreach ($service->getLiveOverview()['vehicles'] as $position) {
+                if ((int) ($position['local_vehicle_id'] ?? 0) === $vehicleId) {
+                    $carId = (int) ($position['sas_vehicle_id'] ?? 0);
+                    break;
+                }
+            }
+            if ($carId <= 0) {
+                $this->sendJson(['success' => true, 'start' => null, 'reason' => 'no_gps', 'message' => 'Vehiculul nu apare în GPS.']);
+                return;
+            }
+
+            $now = time();
+            $lastEnd = $this->lastClosedEndByVehicleId([$vehicleId])[$vehicleId]['ts'] ?? null;
+            // Fara o cursa incheiata recent nu exista reper: prima deplasare dintr-o fereastra
+            // oarecare nu e neaparat plecarea cursei noi, deci nu se propune nicio ora.
+            if ($lastEnd === null || $lastEnd < $now - self::LIVE_MOVEMENT_LOOKBACK_SECONDS) {
+                $hours = (int) (self::LIVE_MOVEMENT_LOOKBACK_SECONDS / 3600);
+                $this->sendJson(['success' => true, 'start' => null, 'reason' => 'no_reference',
+                    'message' => $lastEnd === null
+                        ? 'Vehiculul nu are curse încheiate, deci ora de pornire nu poate fi stabilită sigur din GPS.'
+                        : 'Ultima cursă încheiată (' . date('d.m.Y H:i', $lastEnd) . ') e mai veche de ' . $hours . ' h, deci ora de pornire nu poate fi stabilită sigur din GPS.']);
+                return;
+            }
+            $from = $lastEnd;
+            if ($from >= $now - 60) {
+                $this->sendJson(['success' => true, 'start' => null, 'reason' => 'no_movement',
+                    'message' => 'Nu există încă o deplasare GPS după ultima cursă.']);
+                return;
+            }
+
+            $trips = $service->getIntervalTrips($carId, date('Y-m-d H:i:s', $from), date('Y-m-d H:i:s', $now));
+            $start = null;
+            foreach ($trips['trips'] as $trip) {
+                $tripStart = strtotime((string) ($trip['start'] ?? ''));
+                // SAS taie la capatul intervalului un segment inceput inainte (in timpul cursei
+                // anterioare) si il raporteaza cu primul punct de dupa capat, la cateva secunde:
+                // ora lui nu e o pornire reala.
+                if ($tripStart === false || $tripStart <= $from + self::LIVE_MOVEMENT_CLIPPED_SECONDS || (float) ($trip['km'] ?? 0) < self::LIVE_MOVEMENT_MIN_KM) {
+                    continue;
+                }
+                $start = $tripStart;
+                break;
+            }
+
+            if ($start === null) {
+                $this->sendJson(['success' => true, 'start' => null, 'reason' => 'no_movement',
+                    'message' => 'GPS-ul nu arată o pornire clară după ultima cursă; completează ora de început manual.']);
+                return;
+            }
+
+            $this->sendJson([
+                'success' => true,
+                'start' => ['date' => date('Y-m-d', $start), 'time' => date('H:i', $start), 'label' => date('d.m.Y H:i', $start)],
+                'last_end_label' => date('d.m.Y H:i', $lastEnd),
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][live_gps_movement] ' . $exception->getMessage());
+            $this->sendJson(['success' => false, 'message' => 'Ora de pornire din GPS nu a putut fi citită.'], 502);
+        }
     }
 
     /**
@@ -7664,7 +7897,8 @@ class DispecerCurseController
             'tip_transport' => '',
             'data_incarcare' => '',
             'data_inceput' => date('Y-m-d'),
-            'data_sfarsit' => date('Y-m-d'),
+            // Gol: cursa noua ramane in desfasurare pana cand dispecerul completeaza sfarsitul.
+            'data_sfarsit' => '',
             'ora_inceput' => '',
             'ora_sfarsit' => '',
             'durata_cursa_minute' => '',
@@ -8034,7 +8268,8 @@ class DispecerCurseController
         // Sfarsitul este optional: fara data, cursa ramane in desfasurare (data de
         // inceput, fara ora de sfarsit).
         $endDateRaw = trim((string) ($input['data_sfarsit'] ?? ''));
-        if ($endDateRaw === '' && trim((string) ($input['ora_sfarsit'] ?? '')) === '') {
+        $endLeftBlank = $endDateRaw === '' && trim((string) ($input['ora_sfarsit'] ?? '')) === '';
+        if ($endLeftBlank) {
             $endDateRaw = $startDateRaw;
         }
         $endDateNormalized = $this->normalizeRaceDate($endDateRaw);
@@ -8804,7 +9039,8 @@ class DispecerCurseController
             'tip_transport' => $transportType,
             'data_incarcare' => $loadingDate,
             'data_inceput' => $startDate,
-            'data_sfarsit' => $endDate,
+            // La reafisarea dupa o eroare, sfarsitul lasat gol ramane gol.
+            'data_sfarsit' => $endLeftBlank ? '' : $endDate,
             'ora_inceput' => $startTimeRaw,
             'ora_sfarsit' => $endTimeRaw,
             'durata_cursa_minute' => $durationMinutes !== null ? (string) $durationMinutes : '',

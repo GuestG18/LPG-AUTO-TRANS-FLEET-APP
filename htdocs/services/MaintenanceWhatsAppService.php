@@ -55,6 +55,9 @@ class MaintenanceWhatsAppService
     private array $config;
     /** @var array<int, array{id:int, nume:string, phone:string, user:array}>|null */
     private ?array $reviewersCache = null;
+    private ?array $bossesCache = null;
+    /** Expeditorul mesajului curent, daca e din conducere (setat in dispatch). */
+    private ?array $bossActor = null;
     /** Mesajele trimise ca raspuns la mesajul primit curent (cheie de deduplicare). */
     private string $replyKey = '';
     private int $replyCount = 0;
@@ -65,7 +68,7 @@ class MaintenanceWhatsAppService
         $this->workflow = $workflow ?? new InterventionWorkflowModel($db);
     }
 
-    /** @return array{enabled: bool, user_ids: array<int,int>, session_minutes: int, driver_test_mode: bool, driver_ids: array<int,int>} */
+    /** @return array{enabled: bool, user_ids: array<int,int>, session_minutes: int, voice_user_ids: array<int,int>, driver_test_mode: bool, driver_ids: array<int,int>} */
     public static function config(): array
     {
         $env = static fn(string $name, string $default = ''): string => is_string($v = getenv($name)) && trim($v) !== '' ? trim($v) : $default;
@@ -75,6 +78,8 @@ class MaintenanceWhatsAppService
             'enabled' => in_array(strtolower($env('MAINT_WA_ENABLED', '0')), ['1', 'true', 'yes', 'on', 'da'], true),
             'user_ids' => array_values(array_filter(array_map('intval', preg_split('/[\s,]+/', $env('MAINT_WA_USER_IDS')) ?: []))),
             'session_minutes' => max(5, (int) $env('MAINT_WA_SESSION_MINUTES', '30')),
+            // Conducerea: vede in meniu "Inregistreaza mesaj" (anunt vocal catre soferi).
+            'voice_user_ids' => array_values(array_filter(array_map('intval', preg_split('/[\s,]+/', $env('VOICE_WA_USER_IDS')) ?: []))),
             'driver_test_mode' => $drivers['test_mode'],
             'driver_ids' => $drivers['test_driver_ids'],
         ];
@@ -110,7 +115,116 @@ class MaintenanceWhatsAppService
                 created_at DATETIME NOT NULL,
                 PRIMARY KEY (intervention_id, user_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            // Anunturile vocale ale conducerii: mesajul vocal si lista celor care vor fi sunati.
+            "CREATE TABLE IF NOT EXISTS whatsapp_voice_broadcasts (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                created_by_user_id INT UNSIGNED NOT NULL,
+                category VARCHAR(20) NOT NULL,
+                audio_wa_message_id VARCHAR(64) NOT NULL,
+                audio_seconds INT UNSIGNED NULL,
+                scheduled_at DATETIME NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                created_at DATETIME NOT NULL,
+                KEY idx_whatsapp_voice_broadcasts_status (status, scheduled_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "CREATE TABLE IF NOT EXISTS whatsapp_voice_broadcast_recipients (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                broadcast_id INT UNSIGNED NOT NULL,
+                recipient_type VARCHAR(10) NOT NULL,
+                recipient_id INT UNSIGNED NOT NULL,
+                nume VARCHAR(120) NOT NULL,
+                phone VARCHAR(20) NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                lock_token VARCHAR(32) NULL,
+                attempts INT UNSIGNED NOT NULL DEFAULT 0,
+                result_detail VARCHAR(120) NULL,
+                called_at DATETIME NULL,
+                updated_at DATETIME NOT NULL,
+                UNIQUE KEY uq_whatsapp_voice_recipient (broadcast_id, phone)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         ];
+    }
+
+    /** Categoriile de destinatari pentru anunturile vocale [cheie => eticheta]. */
+    public const VOICE_CATEGORIES = ['drivers' => '🚚 Șoferi', 'users' => '🧑‍💼 Operatori', 'all' => '👥 Toți', 'other' => '📱 Alt număr'];
+
+    /**
+     * Numere scrise de conducere (persoane din afara aplicatiei): "0722 123 456 Ion Popescu, +40733..."
+     *
+     * @return array{people: array<int, array{type:string, id:int, nume:string, phone:string}>, invalid: array<int,string>}
+     */
+    public static function parseExtraNumbers(?string $text): array
+    {
+        $people = [];
+        $invalid = [];
+        foreach (preg_split('/[,;\n]+/', (string) $text) ?: [] as $entry) {
+            $entry = trim($entry);
+            if ($entry === '') {
+                continue;
+            }
+            if (preg_match('/^(\+?[\d\s().\/-]{9,20}?)\s*([^\d+].*)?$/u', $entry, $m) !== 1
+                || ($phone = NotificationRuleModel::normalizePhone(trim($m[1]))) === null) {
+                $invalid[] = $entry;
+                continue;
+            }
+            $name = trim((string) ($m[2] ?? ''));
+            $people[$phone] = ['type' => 'external', 'id' => 0, 'nume' => $name !== '' ? mb_substr($name, 0, 60) : $phone, 'phone' => $phone];
+        }
+
+        return ['people' => array_values($people), 'invalid' => $invalid];
+    }
+
+    /**
+     * Cine primeste anuntul vocal: soferii activi si/sau utilizatorii activi Fleet, cu telefon valid,
+     * fara dubluri de telefon. In modul test doar soferii de test (utilizatorii: toti, vezi mai jos).
+     *
+     * @return array<int, array{type:string, id:int, nume:string, phone:string}>
+     */
+    public function voiceRecipients(string $category): array
+    {
+        $rows = [];
+        if ($category === 'drivers' || $category === 'all') {
+            $sql = "SELECT id, nume, telefon FROM soferi WHERE status = 'activ' AND (employment_status IS NULL OR employment_status = 'active')";
+            $ids = $this->config['driver_test_mode'] ? ($this->config['driver_ids'] ?: [0]) : null;
+            foreach ($this->selectPeople($sql, $ids) as $r) {
+                $rows[] = ['type' => 'driver'] + $r;
+            }
+        }
+        if ($category === 'users' || $category === 'all') {
+            // Toti utilizatorii activi din aplicatie (ca in pagina Utilizatori). In test, apelantul vocal
+            // suna oricum doar numerele din WA_CALL_ALLOWED_TO; restul apar in rezumat ca sarite.
+            $sql = "SELECT id, nume, telefon FROM utilizatori WHERE status = 'activ'";
+            foreach ($this->selectPeople($sql, null) as $r) {
+                $rows[] = ['type' => 'user'] + $r;
+            }
+        }
+        $byPhone = [];
+        foreach ($rows as $r) {
+            $byPhone[$r['phone']] ??= $r;
+        }
+
+        return array_values($byPhone);
+    }
+
+    /** @return array<int, array{id:int, nume:string, phone:string}> */
+    private function selectPeople(string $sql, ?array $ids): array
+    {
+        $params = [];
+        if ($ids !== null) {
+            $sql .= ' AND id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+            $params = array_map('intval', $ids);
+        }
+        $stmt = $this->db->prepare($sql . ' ORDER BY nume');
+        $stmt->execute($params);
+        $out = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $phone = NotificationRuleModel::normalizePhone((string) ($row['telefon'] ?? ''));
+            if ($phone !== null) {
+                $out[] = ['id' => (int) $row['id'], 'nume' => (string) $row['nume'], 'phone' => $phone];
+            }
+        }
+
+        return $out;
     }
 
     /** DDL: doar in afara unei tranzactii. */
@@ -124,6 +238,21 @@ class MaintenanceWhatsAppService
         InterventionWorkflowModel::ensureSchema($this->db);
         foreach (self::schemaStatements() as $statement) {
             $this->db->exec($statement);
+        }
+        // Tabele create inainte de programare / apelant: coloanele lipsa se adauga o singura data.
+        $columns = [
+            ['whatsapp_voice_broadcasts', 'scheduled_at', 'DATETIME NULL AFTER audio_seconds'],
+            ['whatsapp_voice_broadcast_recipients', 'lock_token', 'VARCHAR(32) NULL AFTER status'],
+            ['whatsapp_voice_broadcast_recipients', 'attempts', 'INT UNSIGNED NOT NULL DEFAULT 0 AFTER lock_token'],
+            ['whatsapp_voice_broadcast_recipients', 'result_detail', 'VARCHAR(120) NULL AFTER attempts'],
+            ['whatsapp_voice_broadcast_recipients', 'called_at', 'DATETIME NULL AFTER result_detail'],
+        ];
+        $exists = $this->db->prepare('SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c');
+        foreach ($columns as [$table, $column, $definition]) {
+            $exists->execute([':t' => $table, ':c' => $column]);
+            if ((int) $exists->fetchColumn() === 0) {
+                $this->db->exec("ALTER TABLE $table ADD COLUMN $column $definition");
+            }
         }
         $done = true;
     }
@@ -169,6 +298,9 @@ class MaintenanceWhatsAppService
         }
         if (in_array($plain, ['interventiile mele', 'interventii', 'lucrari', 'lucrarile mele'], true)) {
             return ['command' => 'mine'];
+        }
+        if (in_array($plain, ['inregistreaza mesaj', 'mesaj vocal', 'anunt vocal'], true)) {
+            return ['command' => 'voice'];
         }
         if (preg_match('/^(cerere|interventie) #?\s*(\d+)$/', $plain, $m) === 1) {
             return ['command' => 'request_card', 'arg' => (int) $m[2]];
@@ -292,6 +424,31 @@ class MaintenanceWhatsAppService
     public function reviewerByPhone(string $phone): ?array
     {
         $matches = array_values(array_filter($this->reviewers(), static fn(array $r): bool => $r['phone'] === $phone));
+
+        return count($matches) === 1 ? $matches[0] : null;
+    }
+
+    /** @return array{id:int, nume:string, phone:string}|null utilizatorul din VOICE_WA_USER_IDS cu acest telefon */
+    public function bossByPhone(string $phone): ?array
+    {
+        if ($this->bossesCache === null) {
+            $this->bossesCache = [];
+            $ids = $this->config['voice_user_ids'] ?? [];
+            if ($ids !== []) {
+                $placeholders = implode(',', array_fill(0, count($ids), '?'));
+                $stmt = $this->db->prepare("SELECT id, telefon FROM utilizatori WHERE id IN ($placeholders) ORDER BY id");
+                $stmt->execute($ids);
+                $users = new UserModel($this->db);
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                    $bossPhone = NotificationRuleModel::normalizePhone((string) ($row['telefon'] ?? ''));
+                    $user = $users->findAuthUserById((int) $row['id']);
+                    if ($bossPhone !== null && $user !== null) {
+                        $this->bossesCache[] = ['id' => (int) $user['id'], 'nume' => (string) $user['nume'], 'phone' => $bossPhone];
+                    }
+                }
+            }
+        }
+        $matches = array_values(array_filter($this->bossesCache, static fn(array $b): bool => $b['phone'] === $phone));
 
         return count($matches) === 1 ? $matches[0] : null;
     }
@@ -433,7 +590,7 @@ class MaintenanceWhatsAppService
         }
         $command = self::parseCommand($message['text'] ?? null);
         if ($command !== null) {
-            return $this->driverByPhone($phone) !== null || $this->reviewerByPhone($phone) !== null;
+            return $this->driverByPhone($phone) !== null || $this->reviewerByPhone($phone) !== null || $this->bossByPhone($phone) !== null;
         }
         $session = preg_match('/^\+\d{10,15}$/', $phone) === 1 ? $this->loadSession($phone) : null;
 
@@ -456,7 +613,8 @@ class MaintenanceWhatsAppService
         }
         $driver = $this->driverByPhone($phone);
         $reviewer = $this->reviewerByPhone($phone);
-        if ($driver === null && $reviewer === null) {
+        $boss = $this->bossByPhone($phone);
+        if ($driver === null && $reviewer === null && $boss === null) {
             // Nici sofer permis, nici operator: nimic nu se salveaza si nu raspundem.
             return ['handled' => false, 'outcome' => 'unknown_sender'];
         }
@@ -473,7 +631,8 @@ class MaintenanceWhatsAppService
         $this->replyCount = 0;
 
         try {
-            $result = $this->dispatch($phone, $driver, $reviewer, $kind, $actionId, $text, $waMessageId);
+            $media = ['type' => isset($message['media_type']) ? (string) $message['media_type'] : null, 'seconds' => isset($message['media_seconds']) ? (int) $message['media_seconds'] : null];
+            $result = $this->dispatch($phone, $driver, $reviewer, $kind, $actionId, $text, $waMessageId, $boss, $media);
         } catch (Throwable $exception) {
             // Mesajul se poate relua (botul reincearca): nu ramane marcat ca primit.
             $this->db->prepare('DELETE FROM whatsapp_inbound_messages WHERE id = :id')->execute([':id' => $inboundId]);
@@ -484,11 +643,13 @@ class MaintenanceWhatsAppService
         return ['handled' => true] + $result;
     }
 
-    private function dispatch(string $phone, ?array $driver, ?array $reviewer, string $kind, ?string $actionId, ?string $text, string $waMessageId): array
+    private function dispatch(string $phone, ?array $driver, ?array $reviewer, string $kind, ?string $actionId, ?string $text, string $waMessageId, ?array $boss = null, array $media = []): array
     {
         $driverActor = $driver !== null ? ['role' => 'driver', 'id' => $driver['id'], 'nume' => $driver['nume'], 'phone' => $phone] : null;
         $userActor = $reviewer !== null ? ['role' => 'user', 'id' => $reviewer['id'], 'nume' => $reviewer['nume'], 'phone' => $phone] : null;
-        $fallback = $driverActor ?? $userActor;
+        $bossActor = $boss !== null ? ['role' => 'user', 'id' => $boss['id'], 'nume' => $boss['nume'], 'phone' => $phone] : null;
+        $this->bossActor = $bossActor;
+        $fallback = $driverActor ?? $userActor ?? $bossActor;
 
         // 1. Butoanele cardului de cerere (operator)
         if ($actionId !== null && preg_match('/^mnt:r:(\d+):(ok|no|more):(\d+)$/', $actionId, $m) === 1) {
@@ -504,8 +665,12 @@ class MaintenanceWhatsAppService
             }
             return $this->coordAction($userActor, (int) $m[1], $m[2], (int) $m[3]);
         }
+        // Anunt vocal salvat: ✏️ Modifica / 🗑️ Anuleaza (conducerea)
+        if ($actionId !== null && preg_match('/^mnt:v:(\d+):(edit|cancel)$/', $actionId, $m) === 1) {
+            return $this->voiceBroadcastAction($bossActor, (int) $m[1], $m[2]);
+        }
         // 2. Meniul (butoane din versiunea fara sesiune)
-        if ($actionId !== null && preg_match('/^mnt:m:(request|status|requests|mine)$/', $actionId, $m) === 1) {
+        if ($actionId !== null && preg_match('/^mnt:m:(request|status|requests|mine|voice)$/', $actionId, $m) === 1) {
             return $this->command(['command' => $m[1], 'arg' => ''], $driverActor, $userActor, $phone);
         }
         // 3. Comenzi scrise (incep o conversatie noua)
@@ -531,18 +696,18 @@ class MaintenanceWhatsAppService
                 $result = $this->command(['command' => $choice, 'arg' => ''], $driverActor, $userActor, $phone);
                 // Raspunsurile doar informative (status, liste) lasa meniul deschis: urmatorul "4" e tot o alegere
                 // din meniu, nu un mesaj liber (care altfel ar ajunge, de ex., la tichetul de suport deschis).
-                if (in_array($result['outcome'], ['status', 'status_empty', 'requests', 'requests_empty', 'mine', 'mine_empty', 'not_a_driver', 'not_a_reviewer'], true)) {
+                if (in_array($result['outcome'], ['status', 'status_empty', 'requests', 'requests_empty', 'mine', 'mine_empty', 'not_a_driver', 'not_a_reviewer', 'not_a_boss'], true)) {
                     $this->restoreSession($session);
                 }
                 return $result;
             }
             if ($actionId !== null && str_starts_with($actionId, 'mnt:s:')) {
-                return $this->say($driverActor ?? $userActor, 'Această opțiune nu mai este valabilă. Scrieți *MENIU* pentru a începe din nou.', 'stale_option');
+                return $this->say($fallback, 'Această opțiune nu mai este valabilă. Scrieți *MENIU* pentru a începe din nou.', 'stale_option');
             }
             $this->clearSession($phone);
             return ['outcome' => 'no_session'];
         }
-        $actor = $session['role'] === 'driver' ? $driverActor : $userActor;
+        $actor = $session['role'] === 'driver' ? $driverActor : ($session['flow'] === 'voice' ? $bossActor : $userActor);
         if ($actor === null || $actor['id'] !== $session['actor_id']) {
             // Dreptul s-a pierdut intre timp (sofer dezactivat, operator scos din lista).
             $this->clearSession($phone);
@@ -559,8 +724,508 @@ class MaintenanceWhatsAppService
         return match ($session['flow']) {
             'review' => $this->reviewStep($actor, $session, $kind, $actionId, $text),
             'coord' => $this->coordStep($actor, $session, $kind, $actionId, $text),
+            'voice' => $this->voiceStep($actor, $session, $kind, $actionId, $text, $media, $waMessageId),
             default => $this->driverStep($actor, $session, $kind, $actionId, $text, $waMessageId),
         };
+    }
+
+    /**
+     * Anuntul vocal al conducerii: mesajul vocal -> categoria de personal -> confirmare -> lista salvata.
+     * Pasii: record, category, confirm.
+     */
+    private function voiceStep(array $actor, array $session, string $kind, ?string $actionId, ?string $text, array $media, string $waMessageId): array
+    {
+        $choice = self::choice($session, $actionId, $text);
+        if ($choice === 'cancel') {
+            $this->clearSession($actor['phone']);
+            return $this->say($actor, 'Am anulat. Mesajul vocal nu a fost trimis nimănui.', 'cancelled');
+        }
+        $data = $session['data'];
+        unset($data['choices']);
+
+        if ($session['step'] === 'record') {
+            if ($kind === 'media' && ($media['type'] ?? null) === 'audio') {
+                $data['audio_wa_message_id'] = $waMessageId;
+                $data['audio_seconds'] = (int) ($media['seconds'] ?? 0) ?: null;
+                return $this->askVoiceCategory($actor, $data, '✅ Am primit mesajul vocal' . ($data['audio_seconds'] ? ' (' . $data['audio_seconds'] . ' s)' : '') . '.');
+            }
+            if ($kind === 'media' && ($media['type'] ?? null) === 'audio_failed') {
+                $this->restoreSession($session);
+                return $this->say($actor, 'Nu am putut salva mesajul vocal. Vă rog să îl trimiteți din nou.', 'voice_save_failed');
+            }
+            // Text, poza sau fisier: conversatia ramane deschisa pentru mesajul vocal.
+            $this->restoreSession($session);
+            return $this->say($actor, 'Aștept un *mesaj vocal*: țineți apăsat butonul 🎤 și vorbiți, apoi trimiteți. Pentru a renunța, scrieți *ANULEAZĂ*.', 'voice_waiting');
+        }
+
+        if ($session['step'] === 'category') {
+            if ($choice === null || !isset(self::VOICE_CATEGORIES[$choice])) {
+                return $this->askVoiceCategory($actor, $data, 'Alegeți una dintre opțiuni.');
+            }
+            if ($choice === 'other') {
+                $data['category'] = 'other';
+                unset($data['picked']);
+                $data['extra'] = [];
+                return $this->askVoiceNumber($actor, $data, '');
+            }
+            unset($data['extra']);
+            $recipients = $this->voiceRecipients($choice);
+            if ($recipients === []) {
+                return $this->askVoiceCategory($actor, $data, 'Nu există nicio persoană activă cu telefon în categoria *' . self::VOICE_CATEGORIES[$choice] . '*. Alegeți alta.');
+            }
+            $data['category'] = $choice;
+            unset($data['picked']);
+            if ($choice !== 'all') {
+                // Operatori / Soferi: lista din aplicatie, conducerea bifeaza pe cine suna.
+                $data['picked'] = [];
+                $data['page'] = 0;
+                return $this->askVoicePeople($actor, $data, '');
+            }
+            return $this->askVoiceDay($actor, $data, '*' . self::VOICE_CATEGORIES[$choice] . '*: ' . self::people(count($recipients)) . '.');
+        }
+
+        if ($session['step'] === 'people') {
+            $everyone = $this->voiceRecipients((string) $data['category']);
+            $keys = array_map(static fn(array $r): string => $r['type'][0] . $r['id'], $everyone);
+            if ($choice === 'everyone') {
+                $data['picked'] = $keys;
+            } elseif ($choice === 'extra') {
+                return $this->askVoiceNumber($actor, $data, '');
+            } elseif ($choice === 'next') {
+                $data['page'] = (int) ($data['page'] ?? 0) + 1;
+                return $this->askVoicePeople($actor, $data, '');
+            } elseif ($choice !== null && preg_match('/^p([du]\d+)$/', $choice, $m) === 1 && in_array($m[1], $keys, true)) {
+                $picked = $data['picked'] ?? [];
+                $picked = in_array($m[1], $picked, true) ? array_values(array_diff($picked, [$m[1]])) : [...$picked, $m[1]];
+                $data['picked'] = $picked;
+                return $this->askVoicePeople($actor, $data, '');
+            } elseif ($choice !== 'done') {
+                return $this->askVoicePeople($actor, $data, 'Atingeți un nume pentru a-l bifa, apoi *✅ Continuă*.');
+            }
+            if ($this->selectedRecipients($data) === []) {
+                return $this->askVoicePeople($actor, $data, 'Bifați cel puțin o persoană.');
+            }
+            unset($data['page']);
+            return $this->askVoiceDay($actor, $data, self::chosenLabel($this->selectedRecipients($data)));
+        }
+
+        if ($session['step'] === 'number') {
+            $back = $data['category'] === 'other' ? null : 'people';
+            if ($choice === 'back') {
+                return $back === 'people' ? $this->askVoicePeople($actor, $data, '') : $this->askVoiceCategory($actor, array_diff_key($data, ['category' => 1, 'extra' => 1]), 'Alegeți categoria.');
+            }
+            if ($choice === 'done' && ($data['extra'] ?? []) !== []) {
+                return $back === 'people' ? $this->askVoicePeople($actor, $data, '') : $this->askVoiceDay($actor, $data, self::chosenLabel($this->selectedRecipients($data)));
+            }
+            $parsed = self::parseExtraNumbers($text);
+            if ($parsed['people'] === []) {
+                return $this->askVoiceNumber($actor, $data, $parsed['invalid'] !== [] ? 'Numărul *' . $parsed['invalid'][0] . '* nu este valid.' : '');
+            }
+            $byPhone = [];
+            foreach ([...($data['extra'] ?? []), ...$parsed['people']] as $p) {
+                $byPhone[$p['phone']] = $p;
+            }
+            $data['extra'] = array_values($byPhone);
+            $note = '✅ Adăugat: *' . implode(', ', array_column($parsed['people'], 'nume')) . '*'
+                . ($parsed['invalid'] !== [] ? "\n⚠️ Nevalid (ignorat): " . implode(', ', $parsed['invalid']) : '');
+            return $this->askVoiceNumber($actor, $data, $note);
+        }
+
+        if ($session['step'] === 'day') {
+            if ($choice === 'now') {
+                $data['scheduled_at'] = null;
+                return $this->askVoiceConfirm($actor, $data);
+            }
+            if ($choice !== null && preg_match('/^d(\d{8})$/', $choice, $m) === 1) {
+                $data['day'] = substr($m[1], 0, 4) . '-' . substr($m[1], 4, 2) . '-' . substr($m[1], 6, 2);
+                return $this->askVoiceHour($actor, $data, '');
+            }
+            // Data scrisa: "30.10" sau "30.10 14:00" (cu ora, sare peste alegerea orei).
+            $parsed = self::parseDate($text);
+            if (isset($parsed['error'])) {
+                return $this->askVoiceDay($actor, $data, $parsed['error']);
+            }
+            $data['day'] = $parsed['date'];
+            if ($parsed['time'] !== null) {
+                return $this->scheduleAt($actor, $data, $parsed['time']);
+            }
+            return $this->askVoiceHour($actor, $data, '');
+        }
+
+        if ($session['step'] === 'hour') {
+            if ($choice === 'back') {
+                unset($data['day']);
+                return $this->askVoiceDay($actor, $data, 'Alegeți altă zi.');
+            }
+            if ($choice !== null && preg_match('/^h(\d{2})(\d{2})$/', $choice, $m) === 1) {
+                return $this->scheduleAt($actor, $data, $m[1] . ':' . $m[2]);
+            }
+            if (preg_match('/^(\d{1,2})[:.](\d{2})$/', trim((string) $text), $m) === 1 && (int) $m[1] < 24 && (int) $m[2] < 60) {
+                return $this->scheduleAt($actor, $data, sprintf('%02d:%02d', $m[1], $m[2]));
+            }
+            return $this->askVoiceHour($actor, $data, 'Alegeți o oră din listă sau scrieți-o, de exemplu *14:30*.');
+        }
+
+        // confirm
+        if ($choice === 'back') {
+            unset($data['category'], $data['picked'], $data['extra'], $data['day'], $data['scheduled_at']);
+            return $this->askVoiceCategory($actor, $data, 'Alegeți altă categorie.');
+        }
+        if ($choice === 'when') {
+            unset($data['day'], $data['scheduled_at']);
+            return $this->askVoiceDay($actor, $data, 'Alegeți altă zi.');
+        }
+        if ($choice !== 'send') {
+            $this->restoreSession($session);
+            return $this->say($actor, 'Alegeți una dintre opțiuni: ✅ Confirmă, 🗓️ Altă dată, ↩️ Altă categorie sau ❌ Anulează.', 'voice_waiting');
+        }
+        if (($data['scheduled_at'] ?? null) !== null && strtotime((string) $data['scheduled_at']) <= time()) {
+            unset($data['scheduled_at']);
+            return $this->askVoiceHour($actor, $data, 'Ora aleasă a trecut între timp. Alegeți altă oră.');
+        }
+        // Lista se recalculeaza la confirmare: cineva dezactivat intre timp nu mai e sunat.
+        $recipients = $this->selectedRecipients($data);
+        if ($recipients === []) {
+            return $this->askVoiceCategory($actor, $data, 'Între timp nu a mai rămas nimeni în această categorie. Alegeți alta.');
+        }
+        $now = date('Y-m-d H:i:s');
+        $this->db->beginTransaction();
+        try {
+            $this->db->prepare('INSERT INTO whatsapp_voice_broadcasts (created_by_user_id, category, audio_wa_message_id, audio_seconds, scheduled_at, status, created_at)
+                VALUES (:u, :c, :a, :s, :at, \'pending\', :now)')
+                ->execute([':u' => $actor['id'], ':c' => $data['category'], ':a' => $data['audio_wa_message_id'], ':s' => $data['audio_seconds'],
+                    ':at' => $data['scheduled_at'] ?? $now, ':now' => $now]);
+            $broadcastId = (int) $this->db->lastInsertId();
+            $insert = $this->db->prepare('INSERT INTO whatsapp_voice_broadcast_recipients (broadcast_id, recipient_type, recipient_id, nume, phone, status, updated_at)
+                VALUES (:b, :t, :i, :n, :p, \'pending\', :now)');
+            foreach ($recipients as $r) {
+                $insert->execute([':b' => $broadcastId, ':t' => $r['type'], ':i' => $r['id'], ':n' => $r['nume'], ':p' => $r['phone'], ':now' => $now]);
+            }
+            audit_log_write($this->db, 'whatsapp_voice_broadcasts', $broadcastId, 'create', 'Anunț vocal #' . $broadcastId . ' (WhatsApp, ' . $actor['nume'] . ')', null,
+                ['category' => $data['category'], 'recipients' => count($recipients)], $actor['id']);
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            $this->db->rollBack();
+            throw $exception;
+        }
+        $this->clearSession($actor['phone']);
+        $count = count($recipients);
+
+        $when = ($data['scheduled_at'] ?? null) !== null ? 'programat ' . self::whenLabel((string) $data['scheduled_at']) : 'în curs de trimitere (apelăm acum)';
+
+        // Butoanele raman valabile si dupa inchiderea conversatiei (fara sesiune): mnt:v:<id>:edit|cancel.
+        $this->send($actor, 'maintenance_prompt', '✅ Anunțul #' . $broadcastId . ' este ' . $when . ', către ' . self::people($count)
+            . ".\nVeți primi aici rezultatul după ultimul apel.\n\nV-ați răzgândit? Îl puteți modifica sau anula cât timp apelurile nu au pornit.",
+            [['id' => self::ACTION_PREFIX . 'v:' . $broadcastId . ':edit', 'title' => '✏️ Modifică'], ['id' => self::ACTION_PREFIX . 'v:' . $broadcastId . ':cancel', 'title' => '🗑️ Anulează anunțul']]);
+
+        return ['broadcast_id' => $broadcastId, 'outcome' => 'voice_saved'];
+    }
+
+    /**
+     * ✏️ Modifica / 🗑️ Anuleaza pe un anunt salvat. Doar cine l-a creat; doar apelurile care n-au pornit.
+     * Modifica = opreste anuntul si reia alegerea (cui, cand) cu aceeasi inregistrare.
+     */
+    private function voiceBroadcastAction(?array $boss, int $broadcastId, string $action): array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM whatsapp_voice_broadcasts WHERE id = :id');
+        $stmt->execute([':id' => $broadcastId]);
+        $broadcast = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($boss === null || $broadcast === false || (int) $broadcast['created_by_user_id'] !== $boss['id']) {
+            return $this->say($boss, 'Nu puteți modifica acest anunț.', 'voice_not_owner');
+        }
+        if (!in_array($broadcast['status'], ['pending', 'calling'], true)) {
+            $state = $broadcast['status'] === 'cancelled' ? 'a fost deja anulat' : 's-a încheiat deja';
+            return $this->say($boss, 'Anunțul #' . $broadcastId . ' ' . $state . '.', 'voice_not_editable');
+        }
+        $now = date('Y-m-d H:i:s');
+        $this->db->beginTransaction();
+        try {
+            $stop = $this->db->prepare("UPDATE whatsapp_voice_broadcast_recipients SET status = 'cancelled', updated_at = :now WHERE broadcast_id = :b AND status = 'pending'");
+            $stop->execute([':now' => $now, ':b' => $broadcastId]);
+            $stopped = $stop->rowCount();
+            $left = $this->db->prepare("SELECT COUNT(*) FROM whatsapp_voice_broadcast_recipients WHERE broadcast_id = :b AND status = 'calling'");
+            $left->execute([':b' => $broadcastId]);
+            $inCall = (int) $left->fetchColumn();
+            $answeredOrRung = $this->db->prepare("SELECT COUNT(*) FROM whatsapp_voice_broadcast_recipients WHERE broadcast_id = :b AND status NOT IN ('pending', 'calling', 'cancelled')");
+            $answeredOrRung->execute([':b' => $broadcastId]);
+            $alreadyCalled = (int) $answeredOrRung->fetchColumn();
+            if ($inCall === 0 && $alreadyCalled === 0) {
+                // Nimeni sunat inca: anuntul dispare complet, fara rezumat.
+                $this->db->prepare("UPDATE whatsapp_voice_broadcasts SET status = 'cancelled' WHERE id = :id")->execute([':id' => $broadcastId]);
+            }
+            audit_log_write($this->db, 'whatsapp_voice_broadcasts', $broadcastId, 'update', 'Anunț vocal #' . $broadcastId . ' ' . ($action === 'edit' ? 'oprit pentru modificare' : 'anulat') . ' (WhatsApp)', null,
+                ['apeluri_oprite' => $stopped], $boss['id']);
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            $this->db->rollBack();
+            throw $exception;
+        }
+        if ($inCall === 0 && $alreadyCalled > 0) {
+            $this->finishVoiceBroadcast($broadcastId); // rezumat pentru cei sunati deja
+        }
+        if ($stopped === 0) {
+            return $this->say($boss, 'Prea târziu: toate apelurile anunțului #' . $broadcastId . ' au pornit deja.', 'voice_too_late');
+        }
+        $partial = $inCall + $alreadyCalled > 0 ? ' Apelurile deja pornite nu pot fi oprite; ' . self::people($stopped) . ' nu vor mai fi sunate.' : '';
+        if ($action === 'cancel') {
+            return $this->say($boss, '🗑️ Anunțul #' . $broadcastId . ' a fost anulat.' . $partial, 'voice_cancelled');
+        }
+        $data = ['audio_wa_message_id' => $broadcast['audio_wa_message_id'], 'audio_seconds' => $broadcast['audio_seconds'] !== null ? (int) $broadcast['audio_seconds'] : null];
+
+        return ['outcome' => 'voice_edit'] + $this->askVoiceCategory($boss, $data, '✏️ Anunțul #' . $broadcastId . ' a fost oprit.' . $partial
+            . "\nAlegeți din nou cui și când îl trimitem (același mesaj vocal). Dacă renunțați acum, nu se mai trimite nimic.");
+    }
+
+    /** Rezultatele pe care le poate raporta apelantul vocal. */
+    public const VOICE_RESULTS = ['answered', 'no_answer', 'busy', 'failed', 'skipped'];
+    private const VOICE_CALL_TIMEOUT_MINUTES = 10;
+
+    /**
+     * Apelantul vocal ia urmatoarele apeluri ajunse la ora lor (cu lock, ca la outbox).
+     *
+     * @return array<int, array{id:int, lock_token:string, broadcast_id:int, phone:string, nume:string, audio_wa_message_id:string, audio_seconds:?int}>
+     */
+    public function claimVoiceCalls(int $limit = 1): array
+    {
+        $limit = max(1, min(5, $limit));
+        $now = date('Y-m-d H:i:s');
+        // Un apel ramas "in curs" (apelantul a cazut) se incheie ca eroare, nu se repeta la nesfarsit.
+        $this->db->prepare("UPDATE whatsapp_voice_broadcast_recipients SET status = 'failed', result_detail = 'caller_timeout', lock_token = NULL, updated_at = :now
+            WHERE status = 'calling' AND updated_at < :stale")
+            ->execute([':now' => $now, ':stale' => date('Y-m-d H:i:s', time() - 60 * self::VOICE_CALL_TIMEOUT_MINUTES)]);
+
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare("SELECT r.id, r.broadcast_id, r.phone, r.nume, b.audio_wa_message_id, b.audio_seconds
+                FROM whatsapp_voice_broadcast_recipients r JOIN whatsapp_voice_broadcasts b ON b.id = r.broadcast_id
+                WHERE r.status = 'pending' AND b.status IN ('pending', 'calling') AND COALESCE(b.scheduled_at, b.created_at) <= :now
+                ORDER BY COALESCE(b.scheduled_at, b.created_at), r.id LIMIT $limit FOR UPDATE");
+            $stmt->execute([':now' => $now]);
+            $calls = [];
+            $lock = $this->db->prepare("UPDATE whatsapp_voice_broadcast_recipients SET status = 'calling', lock_token = :t, attempts = attempts + 1, updated_at = :now WHERE id = :id");
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $token = bin2hex(random_bytes(16));
+                $lock->execute([':t' => $token, ':now' => $now, ':id' => $row['id']]);
+                $this->db->prepare("UPDATE whatsapp_voice_broadcasts SET status = 'calling' WHERE id = :id AND status = 'pending'")->execute([':id' => $row['broadcast_id']]);
+                $calls[] = ['id' => (int) $row['id'], 'lock_token' => $token, 'broadcast_id' => (int) $row['broadcast_id'], 'phone' => (string) $row['phone'],
+                    'nume' => (string) $row['nume'], 'audio_wa_message_id' => (string) $row['audio_wa_message_id'],
+                    'audio_seconds' => $row['audio_seconds'] !== null ? (int) $row['audio_seconds'] : null];
+            }
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            $this->db->rollBack();
+            throw $exception;
+        }
+
+        return $calls;
+    }
+
+    /** Rezultatul unui apel; cand anuntul nu mai are apeluri ramase, conducerea primeste rezumatul. */
+    public function reportVoiceCall(int $id, string $lockToken, string $status, ?string $detail = null): bool
+    {
+        if (!in_array($status, self::VOICE_RESULTS, true) || $lockToken === '') {
+            return false;
+        }
+        $now = date('Y-m-d H:i:s');
+        $stmt = $this->db->prepare("UPDATE whatsapp_voice_broadcast_recipients SET status = :s, result_detail = :d, called_at = :now, lock_token = NULL, updated_at = :now2
+            WHERE id = :id AND lock_token = :t AND status = 'calling'");
+        $stmt->execute([':s' => $status, ':d' => $detail !== null ? mb_substr($detail, 0, 120) : null, ':now' => $now, ':now2' => $now, ':id' => $id, ':t' => $lockToken]);
+        if ($stmt->rowCount() !== 1) {
+            return false;
+        }
+        $broadcastId = (int) $this->db->query('SELECT broadcast_id FROM whatsapp_voice_broadcast_recipients WHERE id = ' . $id)->fetchColumn();
+        $this->finishVoiceBroadcast($broadcastId);
+
+        return true;
+    }
+
+    private function finishVoiceBroadcast(int $broadcastId): void
+    {
+        $left = $this->db->prepare("SELECT COUNT(*) FROM whatsapp_voice_broadcast_recipients WHERE broadcast_id = :b AND status IN ('pending', 'calling')");
+        $left->execute([':b' => $broadcastId]);
+        if ((int) $left->fetchColumn() > 0) {
+            return;
+        }
+        $done = $this->db->prepare("UPDATE whatsapp_voice_broadcasts SET status = 'done' WHERE id = :id AND status <> 'done'");
+        $done->execute([':id' => $broadcastId]);
+        if ($done->rowCount() !== 1) {
+            return; // rezumatul a plecat deja
+        }
+        $broadcast = $this->db->query('SELECT * FROM whatsapp_voice_broadcasts WHERE id = ' . $broadcastId)->fetch(PDO::FETCH_ASSOC);
+        $rows = $this->db->query('SELECT nume, status FROM whatsapp_voice_broadcast_recipients WHERE broadcast_id = ' . $broadcastId . ' ORDER BY nume')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $labels = ['answered' => '✅ a răspuns și a ascultat mesajul', 'no_answer' => '❌ nu a răspuns', 'busy' => '⛔ a respins / ocupat', 'failed' => '⚠️ apelul nu a putut fi făcut',
+            'skipped' => '⏸️ nesunat – numărul nu e în lista de test (WA_CALL_ALLOWED_TO)', 'cancelled' => '🚫 nesunat – anunț oprit'];
+        $lines = ['📞 *Anunțul #' . $broadcastId . '* s-a încheiat'];
+        foreach ($rows as $row) {
+            $lines[] = '• ' . $row['nume'] . ' – ' . ($labels[$row['status']] ?? $row['status']);
+        }
+        $answered = count(array_filter($rows, static fn(array $r): bool => $r['status'] === 'answered'));
+        $lines[] = '';
+        $lines[] = $answered . ' din ' . count($rows) . ' au ascultat mesajul.';
+        $this->outbox->enqueueForUser('voice_broadcast_summary', (int) $broadcast['created_by_user_id'], implode("\n", $lines), [], 'voice:summary:' . $broadcastId);
+    }
+
+    private static function people(int $count): string
+    {
+        return $count . ($count === 1 ? ' persoană' : ' persoane');
+    }
+
+    private const RO_DAYS = ['duminică', 'luni', 'marți', 'miercuri', 'joi', 'vineri', 'sâmbătă'];
+
+    /** "azi, ora 14:00" / "mâine, ora 9:30" / "vineri 30.10, ora 14:00" */
+    public static function whenLabel(string $dateTime, ?int $now = null): string
+    {
+        $ts = strtotime($dateTime);
+        $now ??= time();
+        $days = (int) round((strtotime(date('Y-m-d', $ts)) - strtotime(date('Y-m-d', $now))) / 86400);
+        $day = match ($days) {
+            0 => 'azi',
+            1 => 'mâine',
+            default => self::RO_DAYS[(int) date('w', $ts)] . ' ' . date('d.m', $ts),
+        };
+
+        return $day . ', ora ' . date('H:i', $ts);
+    }
+
+    /** Calendarul: "Acum" si urmatoarele 7 zile; se poate scrie si o data ("30.10" sau "30.10 14:00"). */
+    private function askVoiceDay(array $actor, array $data, string $intro): array
+    {
+        $choices = [['now', '📞 Acum']];
+        for ($i = 0; $i < 7; $i++) {
+            $ts = strtotime('+' . $i . ' days', strtotime(date('Y-m-d')));
+            $name = $i === 0 ? 'Azi' : ($i === 1 ? 'Mâine' : mb_convert_case(self::RO_DAYS[(int) date('w', $ts)], MB_CASE_TITLE));
+            $choices[] = ['d' . date('Ymd', $ts), '📅 ' . $name . ', ' . date('d.m', $ts)];
+        }
+        $choices[] = ['cancel', '❌ Anulează'];
+        $this->ask($actor, 'voice', 'day', $data, trim($intro . "\n\n*Când facem apelul?*\nAlegeți ziua sau scrieți data, de exemplu *30.10* sau *30.10 14:00*."), $choices);
+
+        return ['outcome' => 'voice_day'];
+    }
+
+    /** Ora pentru ziua aleasa; azi doar orele care n-au trecut. Se poate scrie si o ora ("14:30"). */
+    private function askVoiceHour(array $actor, array $data, string $intro): array
+    {
+        $choices = [];
+        foreach (['08:00', '09:00', '10:00', '11:00', '12:00', '14:00', '16:00', '18:00'] as $hour) {
+            if (strtotime($data['day'] . ' ' . $hour) > time() + 300) {
+                $choices[] = ['h' . str_replace(':', '', $hour), '🕐 ' . $hour];
+            }
+        }
+        $choices[] = ['back', '↩️ Altă zi'];
+        $choices[] = ['cancel', '❌ Anulează'];
+        $dayLabel = substr(self::whenLabel($data['day'] . ' 00:00'), 0, -strlen(', ora 00:00'));
+        $this->ask($actor, 'voice', 'hour', $data, trim($intro . "\n\n*La ce oră, " . $dayLabel . '?*' . "\nAlegeți ora sau scrieți-o, de exemplu *14:30*."), $choices);
+
+        return ['outcome' => 'voice_hour'];
+    }
+
+    private function scheduleAt(array $actor, array $data, string $time): array
+    {
+        $at = strtotime($data['day'] . ' ' . $time);
+        if ($at === false || $at <= time() + 60) {
+            return $this->askVoiceHour($actor, $data, 'Ora ' . $time . ' a trecut. Alegeți o oră din viitor.');
+        }
+        $data['scheduled_at'] = date('Y-m-d H:i:00', $at);
+
+        return $this->askVoiceConfirm($actor, $data);
+    }
+
+    private function askVoiceConfirm(array $actor, array $data): array
+    {
+        $recipients = $this->selectedRecipients($data);
+        $names = array_map(static fn(array $r): string => '• ' . $r['nume'], array_slice($recipients, 0, 8));
+        if (count($recipients) > 8) {
+            $names[] = '• … și încă ' . (count($recipients) - 8);
+        }
+        $when = ($data['scheduled_at'] ?? null) !== null ? self::whenLabel((string) $data['scheduled_at']) : 'acum';
+        $body = '*' . self::VOICE_CATEGORIES[$data['category']] . '*: ' . self::people(count($recipients)) . "\n" . implode("\n", $names)
+            . "\n🗓️ Când: *" . $when . "*\n\nTrimitem mesajul vocal acestor persoane?";
+        $this->ask($actor, 'voice', 'confirm', $data, $body, [['send', '✅ Confirmă'], ['when', '🗓️ Altă dată'], ['back', '↩️ Altă categorie'], ['cancel', '❌ Anulează']]);
+
+        return ['outcome' => 'voice_confirm'];
+    }
+
+    private const VOICE_PEOPLE_PAGE = 5;
+
+    /**
+     * Persoanele categoriei (doar cele bifate daca s-a ales din lista: "u1", "d48"),
+     * plus numerele scrise de mana; fiecare telefon o singura data.
+     */
+    private function selectedRecipients(array $data): array
+    {
+        $recipients = $this->voiceRecipients((string) $data['category']);
+        if (isset($data['picked'])) {
+            $recipients = array_values(array_filter($recipients, static fn(array $r): bool => in_array($r['type'][0] . $r['id'], $data['picked'], true)));
+        }
+        $byPhone = [];
+        foreach ([...$recipients, ...($data['extra'] ?? [])] as $r) {
+            $byPhone[$r['phone']] ??= $r;
+        }
+
+        return array_values($byPhone);
+    }
+
+    private static function chosenLabel(array $recipients): string
+    {
+        return 'Aleși: *' . self::people(count($recipients)) . '*.';
+    }
+
+    /** Numar din afara aplicatiei: il scrie conducerea (unul sau mai multe, optional cu nume). */
+    private function askVoiceNumber(array $actor, array $data, string $intro): array
+    {
+        $extra = $data['extra'] ?? [];
+        $body = "📱 *Alt număr*\nScrieți numărul de telefon, opțional urmat de nume, de exemplu:\n*0722 123 456 Ion Popescu*\nPuteți scrie mai multe, separate prin virgulă."
+            . ($extra !== [] ? "\n\nNumere adăugate: *" . implode(', ', array_column($extra, 'nume')) . '*' : '');
+        $choices = [];
+        if ($extra !== []) {
+            $choices[] = ['done', $data['category'] === 'other' ? '✅ Continuă (' . count($extra) . ')' : '✅ Gata, înapoi la listă'];
+        }
+        $choices[] = ['back', '↩️ Înapoi'];
+        $choices[] = ['cancel', '❌ Anulează'];
+        $this->ask($actor, 'voice', 'number', $data, trim($intro . "\n\n" . $body), $choices);
+
+        return ['outcome' => 'voice_number'];
+    }
+
+    /** Lista din aplicatie: fiecare atingere bifeaza / debifeaza o persoana; cate 6 pe pagina. */
+    private function askVoicePeople(array $actor, array $data, string $intro): array
+    {
+        $everyone = $this->voiceRecipients((string) $data['category']);
+        $picked = $data['picked'] ?? [];
+        $pages = max(1, (int) ceil(count($everyone) / self::VOICE_PEOPLE_PAGE));
+        $data['page'] = ((int) ($data['page'] ?? 0)) % $pages;
+        $choices = [['everyone', '👥 Toți (' . count($everyone) . ')']];
+        foreach (array_slice($everyone, $data['page'] * self::VOICE_PEOPLE_PAGE, self::VOICE_PEOPLE_PAGE) as $r) {
+            $key = $r['type'][0] . $r['id'];
+            $choices[] = ['p' . $key, (in_array($key, $picked, true) ? '☑️ ' : '⬜ ') . $r['nume']];
+        }
+        if ($pages > 1) {
+            $choices[] = ['next', '➡️ Următorii (pagina ' . ($data['page'] + 1) . '/' . $pages . ')'];
+        }
+        $choices[] = ['extra', '➕ Alt număr (din afara listei)'];
+        $selected = count($this->selectedRecipients($data));
+        if ($selected > 0) {
+            $choices[] = ['done', '✅ Continuă (' . $selected . ' aleși)'];
+        }
+        $choices[] = ['cancel', '❌ Anulează'];
+        $names = array_map(static fn(array $r): string => $r['nume'], $this->selectedRecipients($data));
+        $body = '*' . self::VOICE_CATEGORIES[$data['category']] . "* – pe cine sunăm?\nAtingeți un nume pentru a-l bifa; atingeți din nou pentru a-l scoate."
+            . "\n\nAleși: " . ($names === [] ? 'nimeni încă' : '*' . implode(', ', $names) . '*');
+        $this->ask($actor, 'voice', 'people', $data, trim($intro . "\n\n" . $body), $choices);
+
+        return ['outcome' => 'voice_people'];
+    }
+
+    private function askVoiceCategory(array $actor, array $data, string $intro): array
+    {
+        $choices = [];
+        foreach (self::VOICE_CATEGORIES as $key => $label) {
+            $choices[] = [$key, $label];
+        }
+        $choices[] = ['cancel', '❌ Anulează'];
+        $this->ask($actor, 'voice', 'category', $data, $intro . "\n\n*Cui trimitem mesajul?*", $choices);
+
+        return ['outcome' => 'voice_category'];
     }
 
     private function say(?array $to, string $body, string $outcome): array
@@ -574,7 +1239,8 @@ class MaintenanceWhatsAppService
 
     private function command(array $command, ?array $driverActor, ?array $userActor, string $phone): array
     {
-        $fallback = $driverActor ?? $userActor;
+        $bossActor = $this->bossActor;
+        $fallback = $driverActor ?? $userActor ?? $bossActor;
         switch ($command['command']) {
             case 'menu':
                 // In sesiune: peste 3 optiuni meniul devine lista numerotata, iar "1", "2"... trebuie citite.
@@ -587,8 +1253,17 @@ class MaintenanceWhatsAppService
                     $choices[] = ['requests', '📥 Cereri service'];
                     $choices[] = ['mine', '🛠️ Intervențiile mele'];
                 }
+                if ($bossActor !== null) {
+                    $choices[] = ['voice', '🎙️ Înregistrează mesaj'];
+                }
                 $this->ask($fallback, 'menu', 'menu', [], "*Meniu service*\nAlegeți o opțiune sau scrieți comanda (de ex. *PROGRAMARE SERVICE*).", $choices);
                 return ['outcome' => 'menu'];
+            case 'voice':
+                if ($bossActor === null) {
+                    return $this->say($fallback, 'Mesajele vocale către șoferi pot fi trimise doar de conducere.', 'not_a_boss');
+                }
+                $this->ask($bossActor, 'voice', 'record', [], "🎙️ *Înregistrează mesaj*\nȚineți apăsat butonul 🎤 din WhatsApp și înregistrați mesajul pentru șoferi, apoi trimiteți-l aici.\n\nPentru a renunța, scrieți *ANULEAZĂ*.", [['cancel', '❌ Anulează']]);
+                return ['outcome' => 'voice_prompt'];
             case 'mine':
                 if ($userActor === null) {
                     return $this->say($fallback, 'Nu aveți dreptul de coordonare a intervențiilor.', 'not_a_reviewer');

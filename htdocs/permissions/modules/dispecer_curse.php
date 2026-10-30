@@ -54,6 +54,8 @@ return [
         'service_km_vehicle_info'      => 'service_km',
         // Doar citire (km GPS SAS pe intervalul cursei), folosit de formularele de creare si editare.
         'trip_gps_km'                  => 'view',
+        // "Deschide cursa noua" din banda GPS live: ora primei deplasari dupa ultima cursa (doar citire SAS).
+        'live_gps_movement'            => 'create',
         // Cardul "Alimentari neasociate" de langa Adauga cursa (asocierea cere si carburanti.link).
         'insights_fuel'                => 'view',
         'insights_fuel_detail'         => 'view',

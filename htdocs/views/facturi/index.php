@@ -33,6 +33,7 @@ $sourceIcon = [
     'scan' => ['bi-envelope-paper', 'Scanare din email'],
     'manual' => ['bi-upload', 'Încărcată manual'],
     'legacy_cazare' => ['bi-house-heart', 'Din registrul Cazare'],
+    'etoll' => ['bi-signpost-split', 'Import automat eToll'],
 ];
 
 $money = static fn(mixed $value, string $currency = 'RON'): string => $value === null || $value === ''

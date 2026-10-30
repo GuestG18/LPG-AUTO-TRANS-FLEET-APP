@@ -22,6 +22,8 @@ putenv('DRIVER_WA_ENABLED=1');
 putenv('DRIVER_WA_TEST_MODE=1');
 putenv('DRIVER_WA_TEST_DRIVER_IDS=48');
 putenv('DRIVER_WA_SUPPORT_SESSION_MINUTES=30');
+// Fara apeluri eToll reale: testele eToll primesc explicit EtollSessionService::fixed().
+putenv('DRIVER_WA_ETOLL_CHECK=0');
 
 $root = dirname(__DIR__);
 require_once $root . '/htdocs/config/config.php';
@@ -282,6 +284,59 @@ try {
         && $db->query('SELECT delivered_at IS NOT NULL FROM driver_support_messages WHERE id = ' . (int) $supportMessageId)->fetchColumn() == 1);
     $again = $model->enqueue('support_reply', 48, 'x', [], 'support_reply:' . $supportMessageId, 'support_message', $supportMessageId);
     check('acelasi raspuns pus din nou in coada -> acelasi mesaj, nu unul nou', $again === $replyOutbox);
+
+    echo "\nSAS + eToll: notificare doar cand camionul merge fara sesiune\n";
+    $plate = EtollSessionService::plateOfVehicle($db, 48);
+    check('vehiculul de test are nr. de inmatriculare', $plate !== '', 'vehiculul 48 fara nr.');
+    $etollOn = ['etoll_check' => true] + $config;
+    $bodyOf = static fn(?array $notification): ?string => $notification === null ? null
+        : (($v = $db->query("SELECT body FROM whatsapp_outbox WHERE related_type = 'notification' AND related_id = " . (int) $notification['id'])->fetchColumn()) === false ? null : (string) $v);
+    $movedOn = static fn(string $date): array => [$seg("$date 07:00:00", "$date 07:20:00", 3.5)];
+
+    $svc = new DriverFirstMovementService($db, $model, null, null, $etollOn, null, EtollSessionService::fixed([strtolower(str_replace(' ', '', $plate))]));
+    $r = $svc->processVehicle(48, 9110, '2031-03-12', $movedOn('2031-03-12'), true);
+    $mday = $model->getMovementDay(48, '2031-03-12');
+    check('merge + sesiune eToll activa (nr. scris altfel) -> nicio notificare', $r['notifications'] === 0 && $model->findNotification(48, 48, '2031-03-12') === null && ($r['etoll']['stare'] ?? '') === 'activa', json_encode($r['etoll'] ?? null));
+    check('ziua e inchisa (triggered) cu motivul eToll salvat', $mday['status'] === 'triggered' && str_contains((string) $mday['detail'], 'Sesiune eToll activa')
+        && (json_decode((string) $mday['trigger_json'], true)['etoll']['stare'] ?? '') === 'activa');
+    $r = $svc->processVehicle(48, 9110, '2031-03-12', $movedOn('2031-03-12'), false);
+    check('rularea urmatoare nu mai intreaba nimic pentru aceeasi zi', $r['notifications'] === 0 && !isset($r['etoll']));
+
+    $svc = new DriverFirstMovementService($db, $model, null, null, $etollOn, null, EtollSessionService::fixed(['B999ZZZ']));
+    $r = $svc->processVehicle(48, 9110, '2031-03-13', $movedOn('2031-03-13'), true);
+    $n13 = $model->findNotification(48, 48, '2031-03-13');
+    check('merge + fara sesiune eToll -> soferul e notificat', $r['notifications'] === 1 && $n13 !== null && ($r['etoll']['stare'] ?? '') === 'inactiva');
+    check('mesajul spune ca nu are sesiune eToll, cu nr. auto, si are butoanele', $bodyOf($n13) === DriverWhatsAppConversationService::noSessionPrompt($plate)
+        && str_contains((string) $bodyOf($n13), $plate));
+    check('verificarea eToll e salvata pe notificare', (json_decode((string) $n13['trigger_json'], true)['etoll']['stare'] ?? '') === 'inactiva');
+
+    $svc = new DriverFirstMovementService($db, $model, null, null, $etollOn, null, EtollSessionService::fixed(null));
+    $r = $svc->processVehicle(48, 9110, '2031-03-14', $movedOn('2031-03-14'), true);
+    $n14 = $model->findNotification(48, 48, '2031-03-14');
+    check('eToll indisponibil -> mesajul obisnuit (nu ramane nimeni neanuntat)', $r['notifications'] === 1 && $bodyOf($n14) === DriverWhatsAppConversationService::MOVEMENT_PROMPT
+        && ($r['etoll']['stare'] ?? '') === 'necunoscut');
+
+    $svc = new DriverFirstMovementService($db, $model, null, null, ['etoll_check' => false] + $config, null, EtollSessionService::fixed([$plate]));
+    $r = $svc->processVehicle(48, 9110, '2031-03-15', $movedOn('2031-03-15'), true);
+    check('DRIVER_WA_ETOLL_CHECK=0 -> ca inainte (notificat chiar daca sesiunea e activa)', $r['notifications'] === 1 && ($r['etoll']['stare'] ?? '') === 'dezactivata');
+
+    echo "\n\"Am deschis aplicația\" verificat in eToll\n";
+    $db->exec("UPDATE driver_movement_notifications SET status = 'sent', confirmed_at = NULL, response_action = NULL WHERE id = " . (int) $n['id']);
+    $db->exec("UPDATE driver_whatsapp_conversations SET state = 'idle', notification_id = NULL, expires_at = NULL WHERE driver_id = 48");
+    $convNone = new DriverWhatsAppConversationService($db, $model, null, EtollSessionService::fixed([]));
+    $r = $convNone->handleInbound($msg('T-E1', 'Am deschis aplicația', 'driver_app_confirmed'));
+    $noSessionReply = $db->query("SELECT body, options_json FROM whatsapp_outbox WHERE dedupe_key = 'reply:T-E1'")->fetch(PDO::FETCH_ASSOC);
+    check('confirma, dar eToll nu vede sesiunea -> neconfirmat', $r['outcome'] === 'confirm_no_etoll_session' && $model->getNotification((int) $n['id'])['status'] === 'sent');
+    check('i se cere sa porneasca sesiunea, cu nr. auto si butoanele din nou', $noSessionReply !== false && str_contains((string) $noSessionReply['body'], $plate)
+        && array_column(json_decode((string) $noSessionReply['options_json'], true), 'id') === ['driver_app_confirmed', 'driver_support_requested']);
+    $convActive = new DriverWhatsAppConversationService($db, $model, null, EtollSessionService::fixed([$plate]));
+    $r = $convActive->handleInbound($msg('T-E2', '1'));
+    check('dupa ce porneste sesiunea, "1" -> confirmat', $r['outcome'] === 'confirmed' && $model->getNotification((int) $n['id'])['status'] === 'confirmed'
+        && $replyFor('T-E2') === DriverWhatsAppConversationService::CONFIRMED_REPLY);
+    $db->exec("UPDATE driver_movement_notifications SET status = 'sent', confirmed_at = NULL, response_action = NULL WHERE id = " . (int) $n['id']);
+    $convUnknown = new DriverWhatsAppConversationService($db, $model, null, EtollSessionService::fixed(null));
+    $r = $convUnknown->handleInbound($msg('T-E3', '1'));
+    check('eToll indisponibil la confirmare -> confirmat, ca inainte', $r['outcome'] === 'confirmed');
 } finally {
     $db->rollBack();
 }

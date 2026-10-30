@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../models/DriverWhatsAppModel.php';
 require_once __DIR__ . '/InvoiceTripMatcher.php';
 require_once __DIR__ . '/DriverWhatsAppConversationService.php';
+require_once __DIR__ . '/EtollSessionService.php';
 
 /**
  * Prima miscare a zilei (> 1 km) pe vehicul, din GPS-ul SAS, si notificarea WhatsApp a soferului.
@@ -18,7 +19,11 @@ require_once __DIR__ . '/DriverWhatsAppConversationService.php';
  *      SasTripPrefillService::MIN_MOVING_SEGMENT_KM), un segment care trece de miezul noptii
  *      se numara doar cu partea din ziua curenta (proportional cu timpul);
  *   4. la prag atins: vehicle_movement_days = 'triggered' (o data pe zi) si cate o notificare
- *      pe soferul care conduce vehiculul in ziua respectiva (UNIQUE sofer + vehicul + zi).
+ *      pe soferul care conduce vehiculul in ziua respectiva (UNIQUE sofer + vehicul + zi);
+ *   5. verificarea eToll (DRIVER_WA_ETOLL_CHECK, implicit activa): camionul merge (SAS) si
+ *      are sesiune eToll in curs -> nu se trimite nimic; nu are -> soferul nu a pornit sesiunea
+ *      in aplicatie, primeste mesajul cu nr. auto; eToll indisponibil -> mesajul de dinainte.
+ *      Rezultatul se salveaza in trigger_json['etoll'] si in detail.
  *
  * Mod de test (DRIVER_WA_TEST_MODE, implicit activ): se verifica doar vehiculele soferilor din
  * DRIVER_WA_TEST_DRIVER_IDS si se notifica doar acesti soferi.
@@ -37,6 +42,7 @@ class DriverFirstMovementService
     /**
      * @param array<string, mixed>|null $config null = din .env (self::config())
      * @param SasDashboardService|null $sas null = nu se apeleaza SAS (doar simulari / teste)
+     * @param EtollSessionService|null $etoll null = din .env la prima nevoie (teste: EtollSessionService::fixed())
      */
     public function __construct(
         private PDO $db,
@@ -45,13 +51,14 @@ class DriverFirstMovementService
         private ?FleetLivePositionService $positions = null,
         private ?array $config = null,
         ?callable $log = null,
+        private ?EtollSessionService $etoll = null,
     ) {
         $this->config ??= self::config();
         $this->log = $log ?? static function (string $message): void {
         };
     }
 
-    /** @return array{enabled: bool, test_mode: bool, test_driver_ids: array<int, int>, min_km: float, recheck_minutes: int} */
+    /** @return array{enabled: bool, test_mode: bool, test_driver_ids: array<int, int>, min_km: float, recheck_minutes: int, etoll_check: bool} */
     public static function config(): array
     {
         $env = static function (string $name, string $default = ''): string {
@@ -68,6 +75,8 @@ class DriverFirstMovementService
             'test_driver_ids' => array_values(array_filter(array_map('intval', preg_split('/[\s,]+/', $env('DRIVER_WA_TEST_DRIVER_IDS')) ?: []))),
             'min_km' => max(0.1, (float) $env('DRIVER_WA_MIN_KM', '1')),
             'recheck_minutes' => max(1, (int) $env('DRIVER_WA_RECHECK_MINUTES', '3')),
+            // Notifica doar camioanele care merg fara sesiune eToll in curs (cheile ETOLL_* din .env).
+            'etoll_check' => $flag($env('DRIVER_WA_ETOLL_CHECK', '1')),
         ];
     }
 
@@ -292,7 +301,7 @@ class DriverFirstMovementService
      *
      * @param array<int, array<string, mixed>> $segments ['start','end','km'] (din SAS sau simulate)
      * @param int|null $onlyDriverId simulare: notifica doar acest sofer (trebuie sa fie in lista de test)
-     * @return array{triggered: bool, notifications: int, movement: array<string, mixed>, skipped: array<int, string>}
+     * @return array{triggered: bool, notifications: int, movement: array<string, mixed>, skipped: array<int, string>, etoll?: ?array<string, mixed>}
      */
     public function processVehicle(int $vehicleId, ?int $carId, string $date, array $segments, bool $isSimulation, ?int $onlyDriverId = null): array
     {
@@ -318,14 +327,32 @@ class DriverFirstMovementService
             'sas_car_id' => $carId,
             'simulare' => $isSimulation,
         ];
+        $notifying = !$alreadyTriggered || $onlyDriverId !== null;
+        $etoll = $notifying ? $this->etollStatus($vehicleId) : null;
+        if ($etoll !== null) {
+            $trigger['etoll'] = $etoll;
+        }
         $dayId = $this->model->saveMovementDay($vehicleId, $date, [
             'status' => 'triggered', 'movement_km' => $movement['km'], 'first_movement_at' => $movement['first_movement_at'],
             'threshold_reached_at' => $movement['threshold_reached_at'], 'trigger' => $trigger, 'sas_car_id' => $carId,
             'is_simulation' => $isSimulation,
         ]);
-        if ($alreadyTriggered && $onlyDriverId === null) {
+        if (!$notifying) {
             return ['triggered' => false, 'notifications' => 0, 'movement' => $movement, 'skipped' => []];
         }
+
+        // Camionul merge si sesiunea eToll e pornita: soferul a facut ce trebuia, nu-l deranjam.
+        if ($etoll['stare'] === 'activa') {
+            $detail = 'Sesiune eToll activa pentru ' . $etoll['nr_auto'] . ($etoll['din'] !== null ? ' (din ' . date('d.m H:i', strtotime($etoll['din'])) . ')' : '') . '; nu se trimite notificare.';
+            $this->model->saveMovementDay($vehicleId, $date, ['status' => 'triggered', 'detail' => $detail]);
+            ($this->log)('Vehicul #' . $vehicleId . ': ' . $detail);
+
+            return ['triggered' => true, 'notifications' => 0, 'movement' => $movement, 'skipped' => ['Vehicul #' . $vehicleId . ': ' . $detail], 'etoll' => $etoll];
+        }
+        // Fara sesiune: mesajul spune explicit; eToll necunoscut / dezactivat: mesajul de dinainte.
+        $prompt = $etoll['stare'] === 'inactiva'
+            ? DriverWhatsAppConversationService::noSessionPrompt($etoll['nr_auto'])
+            : DriverWhatsAppConversationService::MOVEMENT_PROMPT;
 
         $skipped = [];
         if ($onlyDriverId !== null) {
@@ -351,17 +378,42 @@ class DriverFirstMovementService
                 $date,
                 $dayId,
                 $trigger + ['sofer_din' => $resolved['source']],
-                DriverWhatsAppConversationService::MOVEMENT_PROMPT,
+                $prompt,
                 DriverWhatsAppConversationService::movementOptions(),
                 $isSimulation
             );
             if ($id !== null) {
                 $sent++;
-                ($this->log)(sprintf('Notificare #%d: sofer #%d, vehicul #%d, %.2f km de la %s%s', $id, $driverId, $vehicleId, $movement['km'], $movement['first_movement_at'], $isSimulation ? ' (simulare)' : ''));
+                ($this->log)(sprintf('Notificare #%d: sofer #%d, vehicul #%d, %.2f km de la %s, eToll: %s%s', $id, $driverId, $vehicleId, $movement['km'], $movement['first_movement_at'], $etoll['stare'], $isSimulation ? ' (simulare)' : ''));
             }
         }
 
-        return ['triggered' => true, 'notifications' => $sent, 'movement' => $movement, 'skipped' => $skipped];
+        return ['triggered' => true, 'notifications' => $sent, 'movement' => $movement, 'skipped' => $skipped, 'etoll' => $etoll];
+    }
+
+    /**
+     * Are camionul o sesiune eToll in curs?
+     *
+     * @return array{stare: string, nr_auto: string, din: ?string, motiv: ?string}
+     *         stare: activa | inactiva | necunoscut (eToll indisponibil, vehicul fara nr.) | dezactivata
+     */
+    public function etollStatus(int $vehicleId): array
+    {
+        $plate = EtollSessionService::plateOfVehicle($this->db, $vehicleId);
+        if (empty($this->config['etoll_check'])) {
+            return ['stare' => 'dezactivata', 'nr_auto' => $plate, 'din' => null, 'motiv' => 'DRIVER_WA_ETOLL_CHECK=0'];
+        }
+        if ($plate === '') {
+            return ['stare' => 'necunoscut', 'nr_auto' => '', 'din' => null, 'motiv' => 'vehicul fara nr. de inmatriculare'];
+        }
+
+        $this->etoll ??= EtollSessionService::fromEnv();
+        $active = $this->etoll->isActive($plate);
+        if ($active === null) {
+            return ['stare' => 'necunoscut', 'nr_auto' => $plate, 'din' => null, 'motiv' => mb_substr((string) $this->etoll->error(), 0, 150)];
+        }
+
+        return ['stare' => $active ? 'activa' : 'inactiva', 'nr_auto' => $plate, 'din' => $this->etoll->activeSince($plate), 'motiv' => null];
     }
 
     /** De ce soferul nu poate fi notificat, sau null. */

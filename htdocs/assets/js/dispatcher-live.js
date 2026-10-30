@@ -4,9 +4,12 @@
  * GPS (SAS) spune ce face fizic vehiculul acum; aplicatia spune daca exista o
  * cursa inregistrata. Starea per vehicul vine gata calculata din backend
  * (?page=dispecer_curse&action=live_gps):
- *   trip    = in miscare + cursa asociata      (verde)
- *   no_trip = in miscare fara cursa             (portocaliu, cere atentie)
- *   stale   = oprit recent / pozitie intarziata (neutru)
+ *   trip            = in miscare + cursa deschisa asociata          (verde)
+ *   no_trip         = miscare noua dupa ultima cursa incheiata      (portocaliu, cere atentie)
+ *   before_last_end = in miscare inainte de sfarsitul ultimei curse (neutru, nu e plecare noua)
+ *   stale           = oprit recent / pozitie intarziata             (neutru)
+ * Cursa deschisa = fara ora de sfarsit: "Revino la cursa" (mai multe -> dispecerul alege).
+ * Fara cursa deschisa si cu miscare noua: "Deschide cursa noua" (formularul existent).
  *
  * Tot ce e interactiv foloseste delegare de evenimente pe containerul
  * randurilor, legata o singura data; refresh-ul reface doar HTML-ul randurilor.
@@ -29,6 +32,7 @@
         panel.setAttribute('data-dl-ready', '1');
 
         var endpoint = panel.getAttribute('data-endpoint') || '';
+        var movementEndpoint = panel.getAttribute('data-movement-endpoint') || '';
         var rowsEl = panel.querySelector('[data-dl-rows]');
         var emptyEl = panel.querySelector('[data-dl-empty]');
         var errorEl = panel.querySelector('[data-dl-error]');
@@ -128,6 +132,15 @@
                 && !!document.getElementById('add-race-form');
         }
 
+        function openRaces(vehicle) {
+            if (vehicle.race) { return [vehicle.race]; }
+            return Array.isArray(vehicle.open_races) ? vehicle.open_races : [];
+        }
+
+        function hasOpenRace(vehicle) {
+            return openRaces(vehicle).length > 0;
+        }
+
         function canMap(vehicle) {
             return !!(state.data && state.data.permissions && state.data.permissions.map) && mapHref(vehicle) !== '';
         }
@@ -135,8 +148,8 @@
         // ------------------------------------------------------------ filtrare
         function matchesFilter(vehicle) {
             switch (state.filter) {
-                case 'with_trip': return !!vehicle.race;
-                case 'without_trip': return !vehicle.race;
+                case 'with_trip': return hasOpenRace(vehicle);
+                case 'without_trip': return !hasOpenRace(vehicle);
                 case 'stationary': return vehicle.state === 'stale';
                 default: return true;
             }
@@ -149,7 +162,7 @@
                 vehicle.vehicle_label,
                 vehicle.driver ? vehicle.driver.name : '',
                 vehicle.place,
-                vehicle.race ? '#' + vehicle.race.id + ' ' + (vehicle.race.route || '') : ''
+                openRaces(vehicle).map(function (race) { return '#' + race.id + ' ' + (race.route || ''); }).join(' ')
             ].join(' '));
             var compactHaystack = haystack.replace(/ /g, '');
             return state.search.split(' ').every(function (token) {
@@ -166,6 +179,11 @@
                 return '<span class="dispatcher-live-pill dispatcher-live-pill--no_trip"><i class="bi bi-clock-history" aria-hidden="true"></i>În mișcare · fără cursă</span>';
             }
             var label;
+            if (vehicle.state === 'before_last_end') {
+                // Merge, dar inainte de sfarsitul trecut pe ultima cursa: nu e o plecare noua.
+                var endTitle = vehicle.last_end ? ' title="Sfârșitul ultimei curse: ' + esc(vehicle.last_end.label) + '"' : '';
+                return '<span class="dispatcher-live-pill dispatcher-live-pill--stale"' + endTitle + '><i class="bi bi-cursor" aria-hidden="true"></i>În mișcare · înainte de sfârșitul ultimei curse</span>';
+            }
             if (vehicle.status === 'moving') {
                 var minutes = Math.round((state.data && state.data.fresh_seconds ? state.data.fresh_seconds : 180) / 60);
                 label = 'Ultima poziție > ' + minutes + ' min';
@@ -214,8 +232,22 @@
                 + (vehicle.state !== 'stale' ? '<i class="bi bi-speedometer2 dispatcher-live-speed-gauge" aria-hidden="true" data-dl-expanded-only></i>' : '');
         }
 
+        function startTimeMissingNote(race) {
+            return race.start_time_missing
+                ? '<span class="dispatcher-live-trip-line text-warning-emphasis"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>Fără oră de început</span>'
+                : '';
+        }
+
         function tripCell(vehicle, expanded) {
             var race = vehicle.race;
+            var conflict = !race && Array.isArray(vehicle.open_races) ? vehicle.open_races : [];
+            if (conflict.length) {
+                return '<div class="dispatcher-live-trip">'
+                    + '<i class="bi bi-exclamation-triangle-fill dispatcher-live-pin text-warning" aria-hidden="true"></i>'
+                    + '<div class="dispatcher-live-cell"><span class="dispatcher-live-trip-title">' + esc(conflict.length) + ' curse deschise</span>'
+                    + '<span class="dispatcher-live-trip-line">' + conflict.map(function (r) { return '#' + esc(r.id); }).join(', ') + ' · alege cursa</span></div>'
+                    + '</div>';
+            }
             if (!race) { return '<span class="dispatcher-live-none">—</span>'; }
             var lines = '';
             if (expanded && race.route) {
@@ -227,18 +259,43 @@
             if (race.start_label) {
                 lines += '<span class="dispatcher-live-trip-line">' + (expanded ? '<i class="bi bi-calendar3" aria-hidden="true"></i>' : '') + 'Început: ' + esc(race.start_label) + '</span>';
             }
+            lines += startTimeMissingNote(race);
             return '<div class="dispatcher-live-trip">'
                 + '<i class="bi bi-geo-alt-fill dispatcher-live-pin" aria-hidden="true"></i>'
                 + '<div class="dispatcher-live-cell"><span class="dispatcher-live-trip-title">Cursă #' + esc(race.id) + '</span>' + lines + '</div>'
                 + '</div>';
         }
 
-        function actionsCell(vehicle) {
-            var html = '';
+        function raceLabel(race) {
+            return '#' + race.id + (race.start_label ? ' · ' + race.start_label : '') + (race.route ? ' · ' + race.route : '');
+        }
+
+        // "Revino la cursa": o cursa deschisa -> link direct; mai multe -> lista din care alege dispecerul.
+        function returnToRaceHtml(vehicle, extraClass) {
             if (vehicle.race && vehicle.race.url) {
-                html += '<a class="dispatcher-live-btn" href="' + esc(vehicle.race.url) + '">Vezi cursa</a>';
-            } else if (canCreate(vehicle)) {
-                html += '<button type="button" class="dispatcher-live-btn" data-dl-add="' + esc(vehicle.key) + '"><i class="bi bi-plus-lg" aria-hidden="true"></i>Adaugă cursă</button>';
+                return '<a class="dispatcher-live-btn' + (extraClass || '') + '" href="' + esc(vehicle.race.url) + '"><i class="bi bi-arrow-return-left" aria-hidden="true"></i>Revino la cursă</a>';
+            }
+            var conflict = Array.isArray(vehicle.open_races) ? vehicle.open_races : [];
+            if (!conflict.length) { return ''; }
+            var items = conflict.map(function (race) {
+                return '<li><a class="dropdown-item" href="' + esc(race.url) + '">' + esc(raceLabel(race))
+                    + (race.start_time_missing ? ' <span class="text-warning-emphasis">(fără oră de început)</span>' : '') + '</a></li>';
+            }).join('');
+            return '<div class="dropdown">'
+                + '<button type="button" class="dispatcher-live-btn' + (extraClass || '') + ' dropdown-toggle" data-bs-toggle="dropdown" data-bs-popper-config=\'{"strategy":"fixed"}\' aria-expanded="false"><i class="bi bi-arrow-return-left" aria-hidden="true"></i>Revino la cursă</button>'
+                + '<ul class="dropdown-menu dropdown-menu-end"><li><h6 class="dropdown-header">' + esc(conflict.length) + ' curse deschise — alege cursa</h6></li>' + items + '</ul>'
+                + '</div>';
+        }
+
+        // "Deschide cursa noua" doar cand GPS confirma miscare noua dupa ultima cursa incheiata.
+        function canOpenNewRace(vehicle) {
+            return vehicle.state === 'no_trip' && !hasOpenRace(vehicle) && canCreate(vehicle);
+        }
+
+        function actionsCell(vehicle) {
+            var html = returnToRaceHtml(vehicle, '');
+            if (!html && canOpenNewRace(vehicle)) {
+                html += '<button type="button" class="dispatcher-live-btn" data-dl-add="' + esc(vehicle.key) + '"><i class="bi bi-plus-lg" aria-hidden="true"></i>Deschide cursă nouă</button>';
             }
 
             if (canMap(vehicle)) {
@@ -318,12 +375,23 @@
                 if (vehicle.race.tip_transport) { tripFacts += '<li><i class="bi bi-truck" aria-hidden="true"></i><span>Tip: ' + esc(vehicle.race.tip_transport) + '</span></li>'; }
                 if (vehicle.race.beneficiar) { tripFacts += '<li><i class="bi bi-building" aria-hidden="true"></i><span>' + esc(vehicle.race.beneficiar) + '</span></li>'; }
                 if (vehicle.race.start_label) { tripFacts += '<li><i class="bi bi-calendar3" aria-hidden="true"></i><span>Început: ' + esc(vehicle.race.start_label) + '</span></li>'; }
+                if (vehicle.race.start_time_missing) { tripFacts += '<li><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>Cursa nu are oră de început</span></li>'; }
+                tripFacts += '<li><i class="bi bi-hourglass-split" aria-hidden="true"></i><span>Deschisă — fără oră de sfârșit</span></li>';
                 tripBody = '<ul class="dispatcher-live-facts">' + tripFacts + '</ul>'
-                    + '<a class="dispatcher-live-btn dispatcher-live-btn--plain" href="' + esc(vehicle.race.url) + '"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>Deschide cursa</a>';
+                    + returnToRaceHtml(vehicle, ' dispatcher-live-btn--plain');
+            } else if (hasOpenRace(vehicle)) {
+                tripBody = '<div class="dispatcher-live-warning"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>Vehiculul are '
+                    + esc(vehicle.open_races.length) + ' curse deschise. Alege cursa la care revii.</span></div>'
+                    + returnToRaceHtml(vehicle, ' dispatcher-live-btn--plain');
             } else {
-                tripBody = '<div class="dispatcher-live-warning"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>Nicio cursă activă asociată acestui vehicul.</span></div>';
-                if (canCreate(vehicle)) {
-                    tripBody += '<button type="button" class="dispatcher-live-btn" data-dl-add="' + esc(vehicle.key) + '"><i class="bi bi-plus-lg" aria-hidden="true"></i>Adaugă cursă</button>';
+                var lastEndText = vehicle.last_end ? 'Ultima cursă încheiată: ' + vehicle.last_end.label + '.' : 'Vehiculul nu are curse încheiate.';
+                if (vehicle.state === 'no_trip') {
+                    tripBody = '<div class="dispatcher-live-warning"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>Nicio cursă deschisă. GPS arată deplasare nouă. ' + esc(lastEndText) + '</span></div>';
+                } else {
+                    tripBody = '<div class="dispatcher-live-warning"><i class="bi bi-info-circle" aria-hidden="true"></i><span>Nicio cursă deschisă. ' + esc(lastEndText) + ' Deplasare nouă neconfirmată de GPS.</span></div>';
+                }
+                if (canOpenNewRace(vehicle)) {
+                    tripBody += '<button type="button" class="dispatcher-live-btn" data-dl-add="' + esc(vehicle.key) + '"><i class="bi bi-plus-lg" aria-hidden="true"></i>Deschide cursă nouă</button>';
                 }
             }
             var sectionTrip = '<div class="dispatcher-live-section dispatcher-live-detail-trip">'
@@ -683,6 +751,58 @@
             formEl.classList.remove('dispatcher-live-form-flash');
             void formEl.offsetWidth;
             formEl.classList.add('dispatcher-live-form-flash');
+
+            prefillStartFromGps(formEl, vehicle);
+        }
+
+        // Ora de inceput propusa = pornirea reala din foaia de parcurs SAS de dupa ultima
+        // cursa incheiata (cerere separata, doar la click). Fara o pornire clara campul
+        // ramane cum e: ora ultimei pozitii GPS nu e prezentata drept ora de plecare.
+        var movementRequestSeq = 0;
+
+        function setPrefillNote(formEl, text, tone) {
+            var note = formEl.querySelector('[data-dl-prefill-note]');
+            if (!text) {
+                if (note) { note.remove(); }
+                return;
+            }
+            if (!note) {
+                note = document.createElement('div');
+                note.setAttribute('data-dl-prefill-note', '');
+                note.setAttribute('role', 'status');
+                formEl.insertBefore(note, formEl.firstChild);
+            }
+            note.className = 'alert alert-' + (tone || 'info') + ' py-2 px-3 small mb-3';
+            note.textContent = text;
+        }
+
+        function prefillStartFromGps(formEl, vehicle) {
+            var seq = ++movementRequestSeq;
+            if (!movementEndpoint) { setPrefillNote(formEl, ''); return; }
+            setPrefillNote(formEl, 'Se caută ora de pornire în GPS pentru ' + vehicle.plate + '...', 'secondary');
+            var url = movementEndpoint + (movementEndpoint.indexOf('?') === -1 ? '?' : '&') + 'vehicle_id=' + encodeURIComponent(vehicle.local_vehicle_id);
+            fetch(url, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+                .then(function (response) { return response.json(); })
+                .then(function (data) {
+                    if (seq !== movementRequestSeq) { return; }
+                    if (!data || !data.success) { throw new Error('payload'); }
+                    if (!data.start) {
+                        setPrefillNote(formEl, (data.message || 'Ora de pornire nu poate fi stabilită din GPS.') + ' Completează ora de început manual.', 'warning');
+                        return;
+                    }
+                    var display = document.getElementById('race_start_datetime');
+                    if (display instanceof HTMLInputElement) {
+                        var parts = data.start.date.split('-');
+                        display.value = parts[2] + '/' + parts[1] + '/' + parts[0] + ' ' + data.start.time;
+                        display.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    setPrefillNote(formEl, 'Început propus: ' + data.start.label + ' — prima deplasare GPS după sfârșitul ultimei curse ('
+                        + data.last_end_label + '). Verifică și corectează înainte de salvare; cursa nu se salvează până nu apeși „Adaugă Cursă”.', 'info');
+                })
+                .catch(function () {
+                    if (seq !== movementRequestSeq) { return; }
+                    setPrefillNote(formEl, 'Ora de pornire din GPS nu a putut fi citită. Completează ora de început manual.', 'warning');
+                });
         }
 
         // ------------------------------------------------------------ evenimente (o singura data)

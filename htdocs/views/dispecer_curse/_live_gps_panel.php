@@ -8,16 +8,18 @@
  *  - aplicatia (curse_dispecer): daca activitatea e inregistrata ca cursa.
  * Datele vin din ?page=dispecer_curse&action=live_gps; randarea, filtrarea,
  * cautarea si detaliile expandabile sunt in assets/js/dispatcher-live.js.
- * "Adauga cursa" precompleteaza formularul existent de mai jos, fara sa-i
- * ocoleasca validarile.
+ * "Revino la cursa" deschide fisa cursei deschise (fara ora de sfarsit); "Deschide
+ * cursa noua" precompleteaza formularul existent de mai jos, fara sa-i ocoleasca
+ * validarile si fara sa salveze nimic.
  */
 $liveGpsUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'live_gps']);
+$liveGpsMovementUrl = build_query_url(['page' => 'dispecer_curse', 'action' => 'live_gps_movement']);
 $liveCssVersion = (string) @filemtime(BASE_PATH . '/assets/css/dispatcher-live.css');
 $liveJsVersion = (string) @filemtime(BASE_PATH . '/assets/js/dispatcher-live.js');
 ?>
 <link rel="stylesheet" href="<?= e(url('assets/css/dispatcher-live.css?v=' . $liveCssVersion)) ?>">
 
-<section class="dispatcher-live is-collapsed d-none" id="dispatcher-live" data-endpoint="<?= e($liveGpsUrl) ?>" aria-labelledby="dispatcher-live-title">
+<section class="dispatcher-live is-collapsed d-none" id="dispatcher-live" data-endpoint="<?= e($liveGpsUrl) ?>" data-movement-endpoint="<?= e($liveGpsMovementUrl) ?>" aria-labelledby="dispatcher-live-title">
     <header class="dispatcher-live-header">
         <div class="dispatcher-live-heading">
             <button type="button" class="dispatcher-live-title-btn" id="dispatcher-live-toggle"

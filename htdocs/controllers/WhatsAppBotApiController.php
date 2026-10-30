@@ -29,7 +29,7 @@ class WhatsAppBotApiController
     {
         try {
             $route = trim($path, '/');
-            if (!in_array($route, ['v1/outbox/claim', 'v1/outbox/result', 'v1/inbound'], true)) {
+            if (!in_array($route, ['v1/outbox/claim', 'v1/outbox/result', 'v1/inbound', 'v1/voice/claim', 'v1/voice/result'], true)) {
                 $this->sendJson(['success' => false, 'error' => 'not_found'], 404);
             }
             if (strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') {
@@ -43,6 +43,21 @@ class WhatsAppBotApiController
             $model->ensureSchema();
 
             switch ($route) {
+                // Apelantul vocal (voice-caller): anunturile conducerii ajunse la ora lor.
+                case 'v1/voice/claim':
+                case 'v1/voice/result':
+                    if (!MaintenanceWhatsAppService::config()['enabled']) {
+                        $this->sendJson(['success' => false, 'error' => 'disabled'], 409);
+                    }
+                    $voice = new MaintenanceWhatsAppService($this->db(), $model);
+                    $voice->ensureSchema();
+                    if ($route === 'v1/voice/claim') {
+                        $this->sendJson(['success' => true, 'calls' => $voice->claimVoiceCalls((int) ($input['limit'] ?? 1))]);
+                    }
+                    $ok = $voice->reportVoiceCall((int) ($input['id'] ?? 0), (string) ($input['lock_token'] ?? ''), (string) ($input['status'] ?? ''),
+                        isset($input['detail']) ? (string) $input['detail'] : null);
+                    $this->sendJson(['success' => $ok, 'error' => $ok ? null : 'lock_lost'], $ok ? 200 : 409);
+                    // no break: sendJson iese
                 case 'v1/outbox/claim':
                     // Solicitarile de aprobare noi intra in coada inainte de revendicare (fara cron separat).
                     $approvals = new ApprovalWhatsAppService($this->db(), $model);
@@ -87,6 +102,9 @@ class WhatsAppBotApiController
                         'action_id' => isset($input['action_id']) ? mb_substr((string) $input['action_id'], 0, 40) : null,
                         'text' => isset($input['text']) ? mb_substr((string) $input['text'], 0, 4000) : null,
                         'received_at' => isset($input['received_at']) ? (string) $input['received_at'] : null,
+                        // Mesaj vocal (pentru anunturile conducerii): tipul si durata, fara continut.
+                        'media_type' => in_array($input['media_type'] ?? '', ['audio', 'audio_failed', 'image', 'video', 'document', 'sticker'], true) ? (string) $input['media_type'] : null,
+                        'media_seconds' => isset($input['media_seconds']) ? max(0, min(3600, (int) $input['media_seconds'])) : null,
                     ];
                     // Aprobarile au ID-uri proprii (approval:123:approve) sau "APROB 123": nu se confunda cu soferii.
                     $approvals = new ApprovalWhatsAppService($this->db(), $model);

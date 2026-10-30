@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../models/DriverWhatsAppModel.php';
 require_once __DIR__ . '/DriverFirstMovementService.php';
+require_once __DIR__ . '/EtollSessionService.php';
 
 /**
  * Raspunsurile soferilor pe WhatsApp (mesaje directe primite de BaileyBot).
@@ -18,8 +19,9 @@ require_once __DIR__ . '/DriverFirstMovementService.php';
  *   awaiting_problem_description  urmatorul mesaj text devine descrierea tichetului;
  *                                 "anulează" renunta, starea expira dupa DRIVER_WA_SUPPORT_SESSION_MINUTES.
  *
- * Confirmarea "Am deschis aplicația" este doar declaratia soferului: Fleet nu are un API care
- * sa verifice independent sesiunea aplicatiei.
+ * Confirmarea "Am deschis aplicația" se verifica in eToll (EtollSessionService), cand verificarea
+ * e activa (DRIVER_WA_ETOLL_CHECK): sesiune in curs -> confirmat; nicio sesiune -> soferul e rugat
+ * sa porneasca sesiunea si primeste din nou butoanele; eToll indisponibil -> confirmat, ca inainte.
  */
 class DriverWhatsAppConversationService
 {
@@ -36,6 +38,8 @@ class DriverWhatsAppConversationService
     public const DESCRIPTION_NEEDS_TEXT = 'Vă rugăm să descrieți problema în scris, într-un mesaj text (pentru a renunța, scrieți „anulează”).';
     public const DESCRIPTION_TOO_SHORT = 'Vă rugăm să descrieți problema în câteva cuvinte, ca echipa de suport să vă poată ajuta.';
     public const FOLLOWUP_ADDED = 'Mesajul a fost adăugat la solicitarea #%s și transmis echipei de suport.';
+    public const NO_SESSION_PROMPT = "*Bună ziua!*\nVehiculul %s a pornit la drum, dar nu are o sesiune eToll activă.\nVă rugăm să deschideți aplicația eToll și să porniți sesiunea.";
+    public const CONFIRM_NO_SESSION_REPLY = "Nu vedem încă o sesiune eToll activă pentru %s.\nVă rugăm să porniți sesiunea în aplicația eToll, apoi apăsați din nou „Am deschis aplicația”. Dacă nu reușiți, alegeți „Am nevoie de ajutor”.";
 
     public const STATE_IDLE = 'idle';
     public const STATE_AWAITING_DESCRIPTION = 'awaiting_problem_description';
@@ -46,9 +50,16 @@ class DriverWhatsAppConversationService
     private const MIN_DESCRIPTION_CHARS = 5;
     private const MAX_DESCRIPTION_CHARS = 2000;
 
-    public function __construct(private PDO $db, private DriverWhatsAppModel $model, private ?int $sessionMinutes = null)
+    /** @param EtollSessionService|null $etoll null = din .env, doar daca DRIVER_WA_ETOLL_CHECK e activ */
+    public function __construct(private PDO $db, private DriverWhatsAppModel $model, private ?int $sessionMinutes = null, private ?EtollSessionService $etoll = null)
     {
         $this->sessionMinutes ??= max(5, (int) (getenv('DRIVER_WA_SUPPORT_SESSION_MINUTES') ?: 30));
+    }
+
+    /** Notificarea cand camionul merge (SAS) fara sesiune eToll in curs. */
+    public static function noSessionPrompt(string $plate): string
+    {
+        return sprintf(self::NO_SESSION_PROMPT, $plate);
     }
 
     /** @return array<int, array{id: string, title: string}> optiunile notificarii (butoane + raspuns numeric) */
@@ -278,6 +289,13 @@ class DriverWhatsAppConversationService
 
             return ['outcome' => 'already_confirmed', 'notification_id' => (int) $notification['id']];
         }
+        // "Am deschis aplicația", dar eToll nu vede sesiunea: nu inregistram confirmarea.
+        $plate = EtollSessionService::plateOfVehicle($this->db, (int) $notification['vehicle_id']);
+        if ($plate !== '' && $this->etollSession()?->isActive($plate) === false) {
+            $this->model->enqueue('confirmation_no_session', $driverId, sprintf(self::CONFIRM_NO_SESSION_REPLY, $plate), self::movementOptions(), 'reply:' . $waMessageId, 'inbound', null);
+
+            return ['outcome' => 'confirm_no_etoll_session', 'notification_id' => (int) $notification['id']];
+        }
         $this->model->recordNotificationResponse((int) $notification['id'], self::ACTION_CONFIRMED, $text);
         $this->reply($driverId, 'confirmation_ack', self::CONFIRMED_REPLY, $waMessageId);
 
@@ -302,6 +320,15 @@ class DriverWhatsAppConversationService
         $this->model->enqueue('support_ack', $driverId, self::ticketReplyEmailFailed($ticket['reference']), [], 'support_ack_failed:' . $ticket['id'], 'ticket', $ticket['id'], 'held');
 
         return ['outcome' => 'ticket_created', 'ticket_id' => $ticket['id'], 'reference' => $ticket['reference'], 'notification_id' => $notificationId];
+    }
+
+    private function etollSession(): ?EtollSessionService
+    {
+        if ($this->etoll === null && DriverFirstMovementService::config()['etoll_check']) {
+            $this->etoll = EtollSessionService::fromEnv();
+        }
+
+        return $this->etoll;
     }
 
     private function extendSession(int $driverId, ?int $notificationId): void

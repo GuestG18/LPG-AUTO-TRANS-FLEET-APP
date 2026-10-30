@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../services/TripExpenseMirrorService.php';
 require_once __DIR__ . '/../services/InvoiceTripMatcher.php';
+require_once __DIR__ . '/../services/EtollTripMatcher.php';
 require_once __DIR__ . '/../services/InvoiceStorageService.php';
 require_once __DIR__ . '/AccommodationExpenseModel.php';
 
@@ -15,9 +16,11 @@ require_once __DIR__ . '/AccommodationExpenseModel.php';
  *   legacy_cazare  proiectie a randurilor din cheltuieli_cazare. Acele randuri raman
  *                  ale modulului Cazare (importul din Google Sheet scrie tot acolo), iar
  *                  asocierea lor la cursa e facuta tot de AccommodationExpenseModel.
+ *   etoll          sesiunile de taxare per km inchise in eToll (scripts/import_etoll.php),
+ *                  cu PDF-ul CNAIR; asocierea foloseste EtollTripMatcher (nr. auto + ora).
  *
  * Deduplicarea se face pe `sursa_key` (UNIQUE): 'scan:<sha256>', 'manual:<sha256>',
- * 'legacy_cazare:<id>'.
+ * 'legacy_cazare:<id>', 'etoll:<session_id>'.
  *
  * Cand o factura are cursa, ii corespunde UN rand in curse_cheltuieli (doar partea
  * de cheltuiala; refacturarea o completeaza operatorul), legat prin
@@ -66,6 +69,7 @@ class InvoiceModel extends BaseModel
         'scan' => 'Scanare',
         'manual' => 'Manual',
         'legacy_cazare' => 'Cazare (import)',
+        'etoll' => 'eToll',
     ];
 
     /**
@@ -114,7 +118,7 @@ class InvoiceModel extends BaseModel
                 match_candidates JSON NULL,
                 match_reason VARCHAR(255) NULL,
                 fara_asociere_auto TINYINT(1) NOT NULL DEFAULT 0,
-                sursa ENUM('scan', 'manual', 'legacy_cazare') NOT NULL,
+                sursa ENUM('scan', 'manual', 'legacy_cazare', 'etoll') NOT NULL,
                 sursa_key VARCHAR(120) NOT NULL,
                 legacy_cazare_id INT UNSIGNED NULL,
                 document_path VARCHAR(255) NULL,
@@ -194,6 +198,18 @@ class InvoiceModel extends BaseModel
         ")->fetchColumn();
         if ((int) $index === 0) {
             $this->db->exec('ALTER TABLE facturi ADD INDEX idx_facturi_canal (canal, canal_mesaj_id)');
+        }
+
+        // Sursa 'etoll' (importul eToll); doar se adauga valoarea in ENUM.
+        $sourceType = (string) $this->db->query("
+            SELECT COLUMN_TYPE
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'facturi'
+              AND COLUMN_NAME = 'sursa'
+        ")->fetchColumn();
+        if ($sourceType !== '' && !str_contains($sourceType, "'etoll'")) {
+            $this->db->exec("ALTER TABLE facturi MODIFY COLUMN sursa ENUM('scan', 'manual', 'legacy_cazare', 'etoll') NOT NULL");
         }
     }
 
@@ -871,14 +887,17 @@ class InvoiceModel extends BaseModel
         }
 
         $matcher ??= new InvoiceTripMatcher($this->db);
-        $result = $matcher->match([
-            'tip' => (string) $row['tip'],
-            'data_document' => $row['data_document'],
-            'vehicle_id' => $row['vehicle_id'] !== null ? (int) $row['vehicle_id'] : null,
-            'driver_id' => $row['driver_id'] !== null ? (int) $row['driver_id'] : null,
-            'nr_inmatriculare_extras' => $row['nr_inmatriculare_extras'],
-            'sofer_extras' => $row['sofer_extras'],
-        ]);
+        // eToll: camionul si ora inchiderii sesiunii sunt sigure, deci alta regula (strict pe camion).
+        $result = (string) $row['sursa'] === 'etoll'
+            ? (new EtollTripMatcher($this->db))->match($row)
+            : $matcher->match([
+                'tip' => (string) $row['tip'],
+                'data_document' => $row['data_document'],
+                'vehicle_id' => $row['vehicle_id'] !== null ? (int) $row['vehicle_id'] : null,
+                'driver_id' => $row['driver_id'] !== null ? (int) $row['driver_id'] : null,
+                'nr_inmatriculare_extras' => $row['nr_inmatriculare_extras'],
+                'sofer_extras' => $row['sofer_extras'],
+            ]);
 
         $status = $result['status'];
         $raceId = $result['cursa_id'];

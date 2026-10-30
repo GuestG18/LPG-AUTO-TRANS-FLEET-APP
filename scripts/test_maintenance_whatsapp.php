@@ -101,7 +101,7 @@ $driver = $outbox->getActiveDriver(48);
 $phone = (string) $driver['phone_e164'];
 // mentenanta_piese: piesele-componenta din stoc pe care finalize() le creeaza la nevoie.
 $tables = ['mentenanta_interventii_programate', 'mentenanta_interventii_istoric', 'mentenanta_interventii_lucrari', 'whatsapp_outbox', 'whatsapp_inbound_messages', 'audit_log',
-    'mentenanta', 'mentenanta_piese_utilizari', 'mentenanta_piese'];
+    'mentenanta', 'mentenanta_piese_utilizari', 'mentenanta_piese', 'whatsapp_voice_broadcasts', 'whatsapp_voice_broadcast_recipients'];
 $max = [];
 foreach ($tables as $table) {
     $max[$table] = (int) $db->query("SELECT COALESCE(MAX(id), 0) FROM $table")->fetchColumn();
@@ -491,6 +491,261 @@ try {
     $r = $send(null, 'mnt:c:' . $id3 . ':work:1', $noReviewer);
     check('fara drept: butoanele coordonatorului refuzate', $r['outcome'] === 'not_a_reviewer');
     check('fara drept: nicio notificare de responsabil', $noReviewer->notifyAssignments() === 0);
+
+    echo "\nConducere: Inregistreaza mesaj\n";
+    $boss = new MaintenanceWhatsAppService($db, $outbox, $workflow, ['voice_user_ids' => [1]] + $config);
+    $media = static function (string $type, ?int $seconds) use (&$seq, $boss, $phone): array {
+        return $boss->handleInbound(['wa_message_id' => 'TESTMNT' . getmypid() . '-' . (++$seq), 'phone' => $phone, 'kind' => 'media',
+            'action_id' => null, 'text' => null, 'media_type' => $type, 'media_seconds' => $seconds]);
+    };
+    $mark = $lastOutId();
+    $send('MENIU');
+    $menu = $outSince($mark)[0] ?? ['options' => []];
+    check('fara VOICE_WA_USER_IDS: optiunea lipseste din meniu', $optionId($menu, ':voice') === null);
+    $mark = $lastOutId();
+    $send('MENIU', null, $boss);
+    $menu = $outSince($mark)[0] ?? ['options' => []];
+    $voiceOption = $optionId($menu, ':voice');
+    check('conducerea: „Inregistreaza mesaj” langa celelalte optiuni', $voiceOption !== null && count($menu['options']) === 5, json_encode(array_column($menu['options'], 'title'), JSON_UNESCAPED_UNICODE));
+    $mark = $lastOutId();
+    $r = $send(null, $voiceOption, $boss);
+    $prompt = $outSince($mark)[0] ?? ['body' => '', 'options' => []];
+    check('alegerea -> mesaj ca poate inregistra', $r['outcome'] === 'voice_prompt' && str_contains($prompt['body'], 'înregistrați mesajul') && $optionId($prompt, ':cancel') !== null, json_encode($r));
+    $r = $send('salut', null, $boss);
+    check('text in loc de vocal -> cerut din nou mesajul vocal', $r['outcome'] === 'voice_waiting');
+    $r = $media('image', null);
+    check('poza in loc de vocal -> cerut din nou', $r['outcome'] === 'voice_waiting');
+    $mark = $lastOutId();
+    $r = $media('audio', 12);
+    $ask = $outSince($mark)[0] ?? ['body' => '', 'options' => []];
+    check('mesaj vocal primit, cu durata -> „Cui trimitem mesajul?”', $r['outcome'] === 'voice_category' && str_contains($ask['body'], '(12 s)') && str_contains($ask['body'], 'Cui trimitem'), json_encode($r));
+    check('categorii: Soferi, Operatori, Toti, Anuleaza', array_column($ask['options'], 'title') === ['🚚 Șoferi', '🧑‍💼 Operatori', '👥 Toți', '📱 Alt număr', '❌ Anulează'], json_encode(array_column($ask['options'], 'title'), JSON_UNESCAPED_UNICODE));
+    check('modul test: soferi = doar soferul de test', array_column($boss->voiceRecipients('drivers'), 'id') === [48]);
+    $activeUsers = $db->query("SELECT id, nume FROM utilizatori WHERE status = 'activ' AND telefon IS NOT NULL AND telefon <> '' ORDER BY nume")->fetchAll(PDO::FETCH_ASSOC);
+    $userIds = array_map(static fn(array $u): int => (int) $u['id'], $activeUsers);
+    check('operatori = toti utilizatorii activi din aplicatie (ca pagina Utilizatori)', array_column($boss->voiceRecipients('users'), 'id') === $userIds && in_array(1, $userIds, true),
+        json_encode(array_column($boss->voiceRecipients('users'), 'id')));
+    check('toti: acelasi telefon o singura data', count($boss->voiceRecipients('all')) === count(array_unique(array_column($boss->voiceRecipients('all'), 'phone'))));
+    $last = static fn(int $mark): array => ($o = $outSince($mark)) !== [] ? end($o) : ['body' => '', 'options' => []];
+    $mark = $lastOutId();
+    $r = $send(null, $optionId($ask, ':users'), $boss);
+    $people = $last($mark);
+    check('operatori -> lista din aplicatie (nebifata, fara Continua)', $r['outcome'] === 'voice_people' && str_contains($people['body'], 'pe cine sunăm')
+        && array_column($people['options'], 'title') === array_merge(['👥 Toți (' . count($userIds) . ')'],
+            array_map(static fn(array $u): string => '⬜ ' . $u['nume'], array_slice($activeUsers, 0, 5)), count($userIds) > 5 ? ['➡️ Următorii (pagina 1/' . (int) ceil(count($userIds) / 5) . ')'] : [], ['➕ Alt număr (din afara listei)', '❌ Anulează']),
+        json_encode(array_column($people['options'], 'title'), JSON_UNESCAPED_UNICODE));
+    $r = $send(null, $optionId($people, ':done') ?? 'mnt:s:0:done', $boss);
+    $r = $send('Gata', null, $boss);
+    check('fara nimeni bifat nu se poate continua', $r['outcome'] === 'voice_people');
+    $mark = $lastOutId();
+    $send(null, $optionId($last($mark - 1), ':pu1'), $boss);
+    $people = $last($mark);
+    check('atingere -> bifat ☑️ + „Continua (1 alesi)”', str_contains(json_encode(array_column($people['options'], 'title'), JSON_UNESCAPED_UNICODE), '☑️ Administrator Sistem')
+        && $optionId($people, ':done') !== null && str_contains($people['body'], 'Aleși: *Administrator Sistem*'), json_encode(array_column($people['options'], 'title'), JSON_UNESCAPED_UNICODE));
+    $mark = $lastOutId();
+    $send(null, $optionId($people, ':pu1'), $boss);
+    $people = $last($mark);
+    check('atingere din nou -> debifat', str_contains(json_encode(array_column($people['options'], 'title'), JSON_UNESCAPED_UNICODE), '⬜ Administrator Sistem') && $optionId($people, ':done') === null);
+    $send('2', null, $boss); // numarul randului: Administrator Sistem
+    $mark = $lastOutId();
+    $people = $outSince($mark - 1)[0];
+    $r = $send(null, $optionId($people, ':done'), $boss);
+    $day = $last($mark);
+    check('numar scris bifeaza, ✅ Continua -> „Cand facem apelul?”', $r['outcome'] === 'voice_day' && str_contains($day['body'], 'Aleși: *1 persoană*') && str_contains($day['body'], 'Când facem apelul'), json_encode($r));
+    check('calendar: Acum + 7 zile (Azi, Maine, ...) + Anuleaza', count($day['options']) === 9 && $day['options'][0]['title'] === '📞 Acum'
+        && str_starts_with($day['options'][1]['title'], '📅 Azi, ' . date('d.m')) && str_starts_with($day['options'][2]['title'], '📅 Mâine, ' . date('d.m', strtotime('+1 day'))),
+        json_encode(array_column($day['options'], 'title'), JSON_UNESCAPED_UNICODE));
+    $mark = $lastOutId();
+    $r = $send(null, $optionId($day, ':now'), $boss);
+    $confirm = $last($mark);
+    check('📞 Acum -> confirmare „Cand: acum”', $r['outcome'] === 'voice_confirm' && str_contains($confirm['body'], 'Când: *acum*') && $optionId($confirm, ':when') !== null, json_encode($r));
+    $r = $send(null, $optionId($confirm, ':back'), $boss);
+    check('↩️ Alta categorie -> intrebarea din nou', $r['outcome'] === 'voice_category');
+    $r = $send('1', null, $boss); // numarul optiunii: Soferi
+    check('alegere scrisa ca numar: Soferi -> lista soferilor', $r['outcome'] === 'voice_people', json_encode($r));
+    $r = $send('1', null, $boss); // 👥 Toti
+    check('👥 Toti din lista -> direct calendarul', $r['outcome'] === 'voice_day', json_encode($r));
+    // Lista lunga (fara modul test, doar afisare, nimeni nu e sunat): cate 6 pe pagina, max 10 randuri.
+    $wide = new MaintenanceWhatsAppService($db, $outbox, $workflow, ['voice_user_ids' => [1], 'driver_test_mode' => false] + $config);
+    $allDrivers = count($wide->voiceRecipients('drivers'));
+    if ($allDrivers > 5) {
+        $wphone = '+40000000' . str_pad((string) random_int(0, 999), 3, '0', STR_PAD_LEFT);
+        $ref = new ReflectionMethod($wide, 'askVoicePeople');
+        $wmark = $lastOutId();
+        $ref->invoke($wide, ['role' => 'user', 'id' => 1, 'nume' => 'Test', 'phone' => $phone], ['category' => 'drivers', 'picked' => [], 'page' => 0], '');
+        $page = $last($wmark);
+        $pages = (int) ceil($allDrivers / 5);
+        check('lista lunga: 5 pe pagina + „Urmatorii (pagina 1/' . $pages . ')” + ➕, max 10 randuri', count($page['options']) <= 10
+            && count(array_filter($page['options'], static fn(array $o): bool => str_contains($o['id'], ':pd'))) === 5 && $optionId($page, ':next') !== null && $optionId($page, ':extra') !== null,
+            json_encode(array_column($page['options'], 'title'), JSON_UNESCAPED_UNICODE));
+        $db->prepare('DELETE FROM whatsapp_maintenance_sessions WHERE phone = :p')->execute([':p' => $phone]);
+        $send('MENIU', null, $boss); // inapoi in conversatia testului
+        $send('INREGISTREAZA MESAJ', null, $boss);
+        $media('audio', 12);
+        $send('1', null, $boss);
+        $send('1', null, $boss);
+    } else {
+        check('lista lunga: prea putini soferi in baza de test, verificare sarita', true);
+    }
+    $mark = $lastOutId();
+    $r = $send(null, 'mnt:s:' . (int) $db->query("SELECT version FROM whatsapp_maintenance_sessions WHERE phone = " . $db->quote($phone))->fetchColumn() . ':d' . date('Ymd', strtotime('+1 day')), $boss);
+    $hours = $last($mark);
+    check('Maine -> lista de ore (08:00 ... 18:00)', $r['outcome'] === 'voice_hour' && str_contains($hours['body'], 'mâine') && $optionId($hours, ':h1400') !== null && $optionId($hours, ':h0800') !== null, json_encode($r));
+    $mark = $lastOutId();
+    $r = $send('14:30', null, $boss);
+    check('ora scrisa 14:30 -> confirmare „maine, ora 14:30”', $r['outcome'] === 'voice_confirm' && str_contains($last($mark)['body'], 'mâine, ora 14:30'), json_encode($r));
+    $r = $send(null, $optionId($last($mark), ':when'), $boss);
+    check('🗓️ Alta data -> calendarul din nou', $r['outcome'] === 'voice_day');
+    $r = $send(null, 'mnt:s:' . (int) $db->query("SELECT version FROM whatsapp_maintenance_sessions WHERE phone = " . $db->quote($phone))->fetchColumn() . ':d' . date('Ymd'), $boss);
+    $r = $send('00:00', null, $boss);
+    check('azi, ora trecuta -> cerut alta ora', $r['outcome'] === 'voice_hour', json_encode($r));
+    $r = $send(null, $optionId($last($lastOutId() - 1), ':back'), $boss);
+    check('↩️ Alta zi -> calendarul', $r['outcome'] === 'voice_day', json_encode($r));
+    $target = strtotime('+2 days 16:00');
+    $mark = $lastOutId();
+    $r = $send(date('d.m', $target) . ' 16:00', null, $boss);
+    $confirm = $last($mark);
+    check('data + ora scrise („dd.mm 16:00”) -> direct confirmarea', $r['outcome'] === 'voice_confirm' && str_contains($confirm['body'], date('d.m', $target) . ', ora 16:00'), json_encode($r));
+    $before = (int) $db->query('SELECT COUNT(*) FROM whatsapp_voice_broadcasts')->fetchColumn();
+    $r = $send(null, $optionId($confirm, ':send'), $boss);
+    $saved = $db->query('SELECT * FROM whatsapp_voice_broadcasts ORDER BY id DESC LIMIT 1')->fetch(PDO::FETCH_ASSOC);
+    $recipients = $db->query('SELECT recipient_type, recipient_id, status FROM whatsapp_voice_broadcast_recipients WHERE broadcast_id = ' . (int) ($saved['id'] ?? 0))->fetchAll(PDO::FETCH_ASSOC);
+    check('✅ Confirma -> anunt salvat (soferi, 12 s, programat, in asteptare)', $r['outcome'] === 'voice_saved' && (int) $db->query('SELECT COUNT(*) FROM whatsapp_voice_broadcasts')->fetchColumn() === $before + 1
+        && $saved['category'] === 'drivers' && (int) $saved['audio_seconds'] === 12 && $saved['status'] === 'pending' && (int) $saved['created_by_user_id'] === 1
+        && $saved['scheduled_at'] === date('Y-m-d 16:00:00', $target), json_encode($saved));
+    check('destinatarii salvati: soferul 48, in asteptare', count($recipients) === 1 && $recipients[0]['recipient_type'] === 'driver' && (int) $recipients[0]['recipient_id'] === 48 && $recipients[0]['status'] === 'pending', json_encode($recipients));
+    $bid = (int) $saved['id'];
+    $mine = static fn(array $calls): array => array_values(array_filter($calls, static fn(array $c): bool => $c['broadcast_id'] === $bid));
+    check('apelantul: anuntul programat peste 2 zile nu e luat inca', $mine($boss->claimVoiceCalls(5)) === []);
+    $db->exec("UPDATE whatsapp_voice_broadcasts SET scheduled_at = DATE_SUB(NOW(), INTERVAL 1 MINUTE) WHERE id = $bid");
+    $calls = $mine($boss->claimVoiceCalls(5));
+    check('la ora lui: apelul e dat apelantului (telefon + mesajul vocal)', count($calls) === 1 && $calls[0]['phone'] === $phone && $calls[0]['audio_wa_message_id'] !== '' && $calls[0]['audio_seconds'] === 12, json_encode($calls));
+    check('luat o data: al doilea apelant nu il mai primeste', $mine($boss->claimVoiceCalls(5)) === []);
+    check('rezultat cu lock gresit: refuzat', $boss->reportVoiceCall($calls[0]['id'], 'gresit', 'answered') === false);
+    check('rezultat necunoscut: refuzat', $boss->reportVoiceCall($calls[0]['id'], $calls[0]['lock_token'], 'maybe') === false);
+    $mark = $lastOutId();
+    check('rezultat „a raspuns” acceptat', $boss->reportVoiceCall($calls[0]['id'], $calls[0]['lock_token'], 'answered', 'played') === true);
+    $summary = $outSince($mark);
+    check('ultimul apel -> anunt incheiat + rezumat catre conducere', $db->query("SELECT status FROM whatsapp_voice_broadcasts WHERE id = $bid")->fetchColumn() === 'done'
+        && count($summary) === 1 && (int) $summary[0]['user_id'] === 1 && str_contains($summary[0]['body'], 'a răspuns') && str_contains($summary[0]['body'], '1 din 1'), json_encode($summary, JSON_UNESCAPED_UNICODE));
+    check('acelasi rezultat din nou: ignorat, fara al doilea rezumat', $boss->reportVoiceCall($calls[0]['id'], $calls[0]['lock_token'], 'answered') === false && count($outSince($mark)) === 1);
+    $db->exec("UPDATE whatsapp_voice_broadcasts SET status = 'calling' WHERE id = $bid");
+    $db->exec("UPDATE whatsapp_voice_broadcast_recipients SET status = 'calling', lock_token = 'x', updated_at = DATE_SUB(NOW(), INTERVAL 11 MINUTE) WHERE broadcast_id = $bid");
+    $boss->claimVoiceCalls(1);
+    check('apel blocat peste 10 min (apelantul a cazut) -> eroare, nu se repeta', $db->query("SELECT CONCAT(status, '/', result_detail) FROM whatsapp_voice_broadcast_recipients WHERE broadcast_id = $bid")->fetchColumn() === 'failed/caller_timeout');
+    $db->exec("UPDATE whatsapp_voice_broadcasts SET status = 'done' WHERE id = $bid");
+    $r = $send(null, $optionId($confirm, ':send'), $boss);
+    check('apasat din nou: nimic dublat', (int) $db->query('SELECT COUNT(*) FROM whatsapp_voice_broadcasts')->fetchColumn() === $before + 1, json_encode($r));
+    $r = $send('4', null, $boss);
+    check('dupa confirmare conversatia e inchisa (un "4" nu mai e alegere)', ($r['outcome'] ?? '') === 'no_session', json_encode($r));
+
+    echo "\nConducere: numar din afara aplicatiei\n";
+    $p = MaintenanceWhatsAppService::parseExtraNumbers('0722 123 456 Ion Popescu, +40733111222; 123, 0722-123-456 Dublu');
+    check('numere scrise: 07.. -> +40, nume optional, duplicate o data, nevalid separat', array_column($p['people'], 'phone') === ['+40722123456', '+40733111222']
+        && $p['people'][0]['nume'] === 'Dublu' && $p['people'][1]['nume'] === '+40733111222' && $p['invalid'] === ['123'], json_encode($p, JSON_UNESCAPED_UNICODE));
+    $send('INREGISTREAZA MESAJ', null, $boss);
+    $mark = $lastOutId();
+    $media('audio', 7);
+    $cat = $last($mark);
+    check('categoria „📱 Alt numar” langa celelalte', $optionId($cat, ':other') !== null, json_encode(array_column($cat['options'], 'title'), JSON_UNESCAPED_UNICODE));
+    $mark = $lastOutId();
+    $r = $send(null, $optionId($cat, ':other'), $boss);
+    $num = $last($mark);
+    check('Alt numar -> cere numarul (fara Continua inca)', $r['outcome'] === 'voice_number' && str_contains($num['body'], '0722 123 456 Ion Popescu') && $optionId($num, ':done') === null, json_encode($r));
+    $r = $send('12345', null, $boss);
+    check('numar nevalid -> cerut din nou', $r['outcome'] === 'voice_number' && str_contains($last($lastOutId() - 1)['body'], 'nu este valid'));
+    $mark = $lastOutId();
+    $r = $send('0722 123 456 Ion Popescu, 0733111222', null, $boss);
+    $num = $last($mark);
+    check('doua numere adaugate -> „Continua (2)”', $r['outcome'] === 'voice_number' && str_contains($num['body'], 'Ion Popescu') && str_contains(json_encode(array_column($num['options'], 'title'), JSON_UNESCAPED_UNICODE), 'Continuă (2)'));
+    $mark = $lastOutId();
+    $r = $send(null, $optionId($num, ':done'), $boss);
+    check('Continua -> calendar, „2 persoane”', $r['outcome'] === 'voice_day' && str_contains($last($mark)['body'], '2 persoane'), json_encode($r));
+    $mark = $lastOutId();
+    $r = $send(null, 'mnt:s:' . (int) $db->query("SELECT version FROM whatsapp_maintenance_sessions WHERE phone = " . $db->quote($phone))->fetchColumn() . ':now', $boss);
+    $confirm = $last($mark);
+    check('confirmarea arata numele scrise', $r['outcome'] === 'voice_confirm' && str_contains($confirm['body'], '• Ion Popescu') && str_contains($confirm['body'], '+40733111222'), json_encode($r));
+    $r = $send(null, $optionId($confirm, ':send'), $boss);
+    $ext = $db->query('SELECT recipient_type, recipient_id, phone FROM whatsapp_voice_broadcast_recipients WHERE broadcast_id = ' . (int) ($r['broadcast_id'] ?? 0) . ' ORDER BY phone')->fetchAll(PDO::FETCH_ASSOC);
+    check('salvate ca „external”, cu telefonul scris', $r['outcome'] === 'voice_saved' && count($ext) === 2 && $ext[0]['recipient_type'] === 'external' && $ext[0]['phone'] === '+40722123456' && (int) $ext[0]['recipient_id'] === 0, json_encode($ext));
+    $db->exec("UPDATE whatsapp_voice_broadcasts SET status = 'done' WHERE id = " . (int) ($r['broadcast_id'] ?? 0));
+
+    echo "\nConducere: ✏️ Modifica / 🗑️ Anuleaza anuntul\n";
+    $saveAnnouncement = static function () use ($send, $media, $boss, $db, $phone, $lastOutId, $last): array {
+        $send('INREGISTREAZA MESAJ', null, $boss);
+        $media('audio', 4);
+        $send('4', null, $boss); // 📱 Alt numar
+        $send('0722 000 111 Test Extern', null, $boss);
+        $send('1', null, $boss); // ✅ Continua
+        $send(null, 'mnt:s:' . (int) $db->query("SELECT version FROM whatsapp_maintenance_sessions WHERE phone = " . $db->quote($phone))->fetchColumn() . ':d' . date('Ymd', strtotime('+1 day')), $boss);
+        $send('14:00', null, $boss);
+        $mark = $lastOutId();
+        $r = $send('1', null, $boss); // ✅ Confirma
+        return [$r, $last($mark)];
+    };
+    [$r, $savedMsg] = $saveAnnouncement();
+    $vid = (int) ($r['broadcast_id'] ?? 0);
+    check('mesajul „Anuntul #N este programat” are ✏️ Modifica si 🗑️ Anuleaza', $r['outcome'] === 'voice_saved' && $vid > 0
+        && $optionId($savedMsg, 'v:' . $vid . ':edit') !== null && $optionId($savedMsg, 'v:' . $vid . ':cancel') !== null, json_encode(array_column($savedMsg['options'], 'title'), JSON_UNESCAPED_UNICODE));
+    $other = new MaintenanceWhatsAppService($db, $outbox, $workflow, ['voice_user_ids' => [1]] + $config);
+    $db->exec("UPDATE whatsapp_voice_broadcasts SET created_by_user_id = 999999 WHERE id = $vid");
+    $r = $send(null, 'mnt:v:' . $vid . ':cancel', $other);
+    check('doar cine a creat anuntul il poate anula', $r['outcome'] === 'voice_not_owner' && $db->query("SELECT status FROM whatsapp_voice_broadcasts WHERE id = $vid")->fetchColumn() === 'pending');
+    $db->exec("UPDATE whatsapp_voice_broadcasts SET created_by_user_id = 1 WHERE id = $vid");
+    $r = $send(null, 'mnt:v:' . $vid . ':cancel', $boss);
+    check('🗑️ Anuleaza -> anunt anulat, nimeni nu mai e sunat', $r['outcome'] === 'voice_cancelled' && $db->query("SELECT status FROM whatsapp_voice_broadcasts WHERE id = $vid")->fetchColumn() === 'cancelled'
+        && $db->query("SELECT GROUP_CONCAT(DISTINCT status) FROM whatsapp_voice_broadcast_recipients WHERE broadcast_id = $vid")->fetchColumn() === 'cancelled', json_encode($r));
+    $db->exec("UPDATE whatsapp_voice_broadcasts SET scheduled_at = DATE_SUB(NOW(), INTERVAL 1 MINUTE) WHERE id = $vid");
+    check('anuntul anulat nu ajunge la apelant', array_filter($boss->claimVoiceCalls(5), static fn(array $c): bool => $c['broadcast_id'] === $vid) === []);
+    $r = $send(null, 'mnt:v:' . $vid . ':cancel', $boss);
+    check('anulat din nou -> „a fost deja anulat”', $r['outcome'] === 'voice_not_editable');
+
+    [$r] = $saveAnnouncement();
+    $vid = (int) ($r['broadcast_id'] ?? 0);
+    $audio = $db->query("SELECT audio_wa_message_id FROM whatsapp_voice_broadcasts WHERE id = $vid")->fetchColumn();
+    $mark = $lastOutId();
+    $r = $send(null, 'mnt:v:' . $vid . ':edit', $boss);
+    check('✏️ Modifica -> anuntul oprit + alegerea din nou (cui)', $r['outcome'] === 'voice_edit' && $db->query("SELECT status FROM whatsapp_voice_broadcasts WHERE id = $vid")->fetchColumn() === 'cancelled'
+        && str_contains($last($mark)['body'], 'Cui trimitem'), json_encode($r));
+    $send('4', null, $boss);
+    $send('0722 000 222 Alt Test', null, $boss);
+    $send('1', null, $boss);
+    $send(null, 'mnt:s:' . (int) $db->query("SELECT version FROM whatsapp_maintenance_sessions WHERE phone = " . $db->quote($phone))->fetchColumn() . ':now', $boss);
+    $r = $send('1', null, $boss);
+    $new = (int) ($r['broadcast_id'] ?? 0);
+    check('anunt nou cu aceeasi inregistrare', $r['outcome'] === 'voice_saved' && $new > $vid && $db->query("SELECT audio_wa_message_id FROM whatsapp_voice_broadcasts WHERE id = $new")->fetchColumn() === $audio, json_encode($r));
+    $calls = array_values(array_filter($boss->claimVoiceCalls(5), static fn(array $c): bool => $c['broadcast_id'] === $new));
+    $r = $send(null, 'mnt:v:' . $new . ':cancel', $boss);
+    check('apelul a pornit deja -> „Prea tarziu”', $r['outcome'] === 'voice_too_late' && count($calls) === 1, json_encode($r));
+    $boss->reportVoiceCall($calls[0]['id'], $calls[0]['lock_token'], 'answered');
+
+    // ➕ din lista de operatori: colegi bifati + un numar din afara, in acelasi anunt
+    $send('INREGISTREAZA MESAJ', null, $boss);
+    $media('audio', 5);
+    $mark = $lastOutId();
+    $send('2', null, $boss); // Operatori
+    $people = $last($mark);
+    check('lista operatorilor are „➕ Alt numar”, max 10 randuri', $optionId($people, ':extra') !== null && count($people['options']) <= 10, json_encode(array_column($people['options'], 'title'), JSON_UNESCAPED_UNICODE));
+    $send(null, $optionId($people, ':pu1'), $boss);
+    $mark = $lastOutId();
+    $send(null, $optionId($last($mark - 1), ':extra'), $boss);
+    $send('0744 555 666 Vecinul', null, $boss);
+    $num = $last($lastOutId() - 1);
+    $mark = $lastOutId();
+    $r = $send(null, $optionId($num, ':done'), $boss);
+    $people = $last($mark);
+    check('„Gata” -> inapoi la lista, alesi: coleg + numarul scris', $r['outcome'] === 'voice_people' && str_contains($people['body'], 'Vecinul') && str_contains(json_encode(array_column($people['options'], 'title'), JSON_UNESCAPED_UNICODE), 'Continuă (2'), json_encode($r));
+    $r = $send(null, $optionId($people, ':done'), $boss);
+    check('Continua -> calendar cu 2 persoane', $r['outcome'] === 'voice_day', json_encode($r));
+    $send('ANULEAZA', null, $boss);
+
+    $mark = $lastOutId();
+    $send('INREGISTREAZA MESAJ', null, $boss);
+    $prompt = $outSince($mark)[0] ?? ['options' => []];
+    $r = $send(null, $optionId($prompt, ':cancel'), $boss);
+    check('comanda scrisa + ❌ Anuleaza', $r['outcome'] === 'cancelled', json_encode($r));
+    $r = $send('INREGISTREAZA MESAJ');
+    check('fara drept: comanda scrisa refuzata', $r['outcome'] === 'not_a_boss', json_encode($r));
     check('Km service neatins (etapa 2)', (int) $db->query('SELECT COUNT(*) FROM vehicule_service_km')->fetchColumn() === $kmBefore);
 } finally {
     // Curatenie: doar randurile create de acest test.
