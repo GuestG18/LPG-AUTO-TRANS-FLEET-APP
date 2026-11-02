@@ -5,6 +5,9 @@
     --sidebar-active-bg: #1e293b;
     --body-bg: #f5f7fb;
     --content-max-width: 1680px;
+    /* Inaltimea barei de sus (.topbar); app.js o tine la zi (bara isi schimba inaltimea, ex. tema de Craciun).
+       Elementele lipite de pagina (position: sticky / fixed) pornesc de sub ea, nu peste ea. */
+    --app-topbar-height: 54px;
     /* Culori severitate informatii lipsa (sursa unica: meniul Critice/Importante/Minore + randurile din Desfasurator curse) */
     --orx-severity-critical: #dc2626;
     --orx-severity-important: #f59e0b;
@@ -457,7 +460,8 @@ body {
 .topbar {
     position: sticky;
     top: 0;
-    z-index: 10;
+    /* peste antetele lipicioase ale paginilor (ex. Dispecer curse, 1025), sub meniul lateral si modale */
+    z-index: 1030;
     min-height: 54px;
     box-shadow: 0 1px 8px rgba(15, 23, 42, 0.04);
 }
@@ -5234,7 +5238,7 @@ a.race-status-dot:focus-visible {
 
 .dispatcher-races-card-header {
     position: sticky;
-    top: 0;
+    top: var(--app-topbar-height);
     z-index: 1025;
     border-bottom: 1px solid #dfe6f0;
     box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
@@ -7046,7 +7050,7 @@ tr:hover .diurna-edit-btn,
     width: 100%;
     margin-bottom: 0.9rem;
     position: sticky;
-    top: 4.5rem;
+    top: calc(var(--app-topbar-height) + 1.125rem);
     z-index: 6;
 }
 
@@ -7760,7 +7764,7 @@ tr:hover .diurna-edit-btn,
 
 .driver-inactive-launcher-row {
     position: sticky;
-    top: calc(54px + 1rem);
+    top: calc(var(--app-topbar-height) + 1rem);
     z-index: 1040;
     display: flex;
     justify-content: flex-end;
@@ -8296,7 +8300,7 @@ tr:hover .diurna-edit-btn,
 
 .vehicle-inactive-launcher-row {
     position: sticky;
-    top: calc(54px + 1rem);
+    top: calc(var(--app-topbar-height) + 1rem);
     z-index: 1040;
     display: flex;
     justify-content: flex-end;
@@ -15021,9 +15025,9 @@ tr:hover .diurna-edit-btn,
 .technical-health-ring { --tone: #64748b; width: 74px; height: 74px; border-radius: 50%; display: inline-grid; place-items: center; background: conic-gradient(var(--tone) calc(var(--health, 0) * 1%), #e5e7eb 0); position: relative; color: #0f172a; }
 .technical-health-ring::before { content: ""; position: absolute; inset: 8px; border-radius: 50%; background: #fff; box-shadow: inset 0 0 0 1px #e2e8f0; }
 .technical-health-ring strong { position: relative; font-size: 1rem; font-weight: 950; }
-.technical-panel-toggle { position: sticky; top: 1rem; z-index: 6; display: inline-grid; place-items: center; width: 2.35rem; height: 2.35rem; border: 1px solid #dbe3ef; border-radius: 999px; color: #1d4ed8; background: #fff; box-shadow: 0 10px 24px rgba(15, 23, 42, .09); }
+.technical-panel-toggle { position: sticky; top: calc(var(--app-topbar-height) + 1rem); z-index: 6; display: inline-grid; place-items: center; width: 2.35rem; height: 2.35rem; border: 1px solid #dbe3ef; border-radius: 999px; color: #1d4ed8; background: #fff; box-shadow: 0 10px 24px rgba(15, 23, 42, .09); }
 .technical-panel-toggle:hover { border-color: #93c5fd; background: #eff6ff; }
-.technical-detail-panel { position: sticky; top: 1rem; min-height: 640px; padding: 1rem; border: 1px solid #dbe3ef; border-radius: .85rem; background: #fff; box-shadow: 0 10px 28px rgba(15, 23, 42, .055); }
+.technical-detail-panel { position: sticky; top: calc(var(--app-topbar-height) + 1rem); min-height: 640px; padding: 1rem; border: 1px solid #dbe3ef; border-radius: .85rem; background: #fff; box-shadow: 0 10px 28px rgba(15, 23, 42, .055); }
 .technical-health-layout.is-detail-collapsed .technical-detail-panel { display: none; }
 .technical-panel-loading { display: flex; align-items: center; gap: .5rem; color: #64748b; font-weight: 800; }
 .technical-panel-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; padding-bottom: .85rem; border-bottom: 1px solid #e2e8f0; }
@@ -17874,7 +17878,7 @@ a.fuel-split-card.is-active {
 /* Taburile Alimentari / neasociate: tabelul deruleaza in propria zona, cu antetul fixat sus.
    Inaltimea lasa loc barei de sus (.topbar) si subsolului paginii, ca antetul sa nu ajunga sub bara. */
 .fuel-table-scroll {
-    max-height: calc(100vh - 230px);
+    max-height: calc(100vh - 164px - var(--app-topbar-height));
     overflow: auto;
 }
 
@@ -18522,8 +18526,8 @@ a.fuel-split-card.is-active {
 
 .deleted-races-details {
     position: sticky;
-    top: 20px;
-    max-height: calc(100vh - 120px);
+    top: calc(var(--app-topbar-height) + 20px);
+    max-height: calc(100vh - var(--app-topbar-height) - 66px);
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -19612,11 +19616,11 @@ a.dashboard-stat:hover span {
 
 .dashboard-approval-panel {
     position: sticky;
-    top: 84px;
+    top: calc(var(--app-topbar-height) + 30px);
     display: flex;
     flex-direction: column;
     gap: 12px;
-    max-height: calc(100vh - 108px);
+    max-height: calc(100vh - var(--app-topbar-height) - 54px);
     padding: 18px;
     overflow: auto;
     border-left: 1px solid #dbe3ef;

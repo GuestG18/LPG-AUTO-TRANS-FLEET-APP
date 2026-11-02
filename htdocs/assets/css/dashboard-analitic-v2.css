@@ -2129,7 +2129,7 @@
     padding: 5px;
     box-shadow: var(--da2-shadow);
     position: sticky;
-    top: 8px;
+    top: calc(var(--app-topbar-height) + 8px);
     z-index: 20;
 }
 

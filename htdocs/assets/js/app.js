@@ -749,6 +749,29 @@ function initFleetSidebarSearch() {
     syncSearchState();
 }
 
+// --app-topbar-height = inaltimea reala a barei de sus. Antetele lipicioase din pagini (CSS) pornesc
+// de sub bara; inaltimea se schimba (ex. tema de Craciun o face mai inalta), deci o urmarim live.
+(function syncAppTopbarHeight() {
+    var root = document.documentElement;
+    var topbar = document.querySelector('.topbar');
+
+    if (!(topbar instanceof HTMLElement)) {
+        root.style.setProperty('--app-topbar-height', '0px');
+        return;
+    }
+
+    var apply = function () {
+        root.style.setProperty('--app-topbar-height', Math.ceil(topbar.getBoundingClientRect().height) + 'px');
+    };
+
+    apply();
+    if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(apply).observe(topbar);
+    } else {
+        window.addEventListener('resize', apply);
+    }
+})();
+
 var fleetStickyDocumentTables = [];
 var fleetStickyDocumentTableFrame = null;
 

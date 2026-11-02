@@ -40,7 +40,7 @@ a.facturi-stat:hover {
 /* Preview-ul ramane vizibil cat timp lucrezi pe coloana din dreapta. */
 .facturi-preview-card {
     position: sticky;
-    top: 1rem;
+    top: calc(var(--app-topbar-height) + 1rem);
 }
 
 .facturi-preview {

@@ -98,12 +98,12 @@
 /* ============================ Sidebar utilizatori ============================ */
 .dax-users {
     position: sticky;
-    top: 88px;
+    top: calc(var(--app-topbar-height) + 34px);
     display: flex;
     flex-direction: column;
     gap: 14px;
     padding: 18px 14px;
-    max-height: calc(100vh - 110px);
+    max-height: calc(100vh - var(--app-topbar-height) - 56px);
     background: var(--dax-surface);
     border: 1px solid var(--dax-line);
     border-radius: var(--dax-radius);

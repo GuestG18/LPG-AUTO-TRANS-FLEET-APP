@@ -907,7 +907,7 @@ $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
 /* Contextul raportului: ce beneficiar / luna / filtre stau in spatele cifrelor. */
 .cf-scope {
     position: sticky;
-    top: 54px;
+    top: var(--app-topbar-height);
     z-index: 6;
     display: flex;
     align-items: center;

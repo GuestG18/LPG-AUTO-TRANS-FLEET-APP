@@ -122,12 +122,6 @@
   .xt-tree.lit .xt-rays { animation: none; }
 }
 
-/* ---------- fleet app adjustments ---------- */
-/* the fuel tables size themselves around a ~66px topbar; give back the extra height */
-body:has(.xt-festive) .fuel-table-scroll {
-  max-height: calc(100vh - 230px - (var(--xt-height, 104px) - 66px));
-}
-
 /* ---------- sidebar lights (assets/js/xmas-sidebar.js) ---------- */
 /* a zero-height sticky anchor inside the scrolling sidebar: it stays put while the menu scrolls,
    takes no space and lets every click through; the canvas hangs from it at full screen height */

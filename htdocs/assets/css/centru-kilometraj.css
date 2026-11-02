@@ -334,7 +334,7 @@
 /* ------------------------------------------------------------------ panou T0 / istoric */
 .kmc-panel {
     background: #fff; border: 1px solid var(--kmc-line); border-radius: var(--kmc-radius); box-shadow: 0 8px 28px rgba(16, 24, 40, .12);
-    position: sticky; top: 12px; max-height: calc(100vh - 24px); display: flex; flex-direction: column; overflow: hidden;
+    position: sticky; top: calc(var(--app-topbar-height) + 12px); max-height: calc(100vh - var(--app-topbar-height) - 24px); display: flex; flex-direction: column; overflow: hidden;
 }
 .kmc-panel__head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--kmc-line); }
 .kmc-panel__head h2 { font-size: 17px; font-weight: 700; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
