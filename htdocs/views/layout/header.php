@@ -8,6 +8,10 @@ $showSidebar = !$embedMode && !empty($showSidebar);
 $currentAction = (string) ($_GET['action'] ?? 'index');
 $currentRoutePage = (string) ($_GET['page'] ?? ($currentPage ?? ''));
 $styleVersion = (string) @filemtime(BASE_PATH . '/assets/css/style.css');
+// Tema de Craciun in bara de sus (camionul LPG cu Mos Craciun): activa 1 noiembrie - 7 ianuarie.
+// Scena e desenata de assets/js/xmas-topbar.js in spatele continutului barei, fara sa blocheze click-urile.
+$xmasMonth = (int) date('n');
+$xmasTopbar = !$embedMode && ($xmasMonth >= 11 || ($xmasMonth === 1 && (int) date('j') <= 7));
 // Meniul lateral porneste ascuns (off-canvas) si apare cand mouse-ul ajunge la
 // marginea din stanga. Butonul din bara de sus il poate fixa deschis.
 $bodyClasses = $embedMode ? ['is-embedded'] : ['sidebar-collapsed'];
@@ -63,6 +67,7 @@ if (
     <link rel="stylesheet" href="<?= e(url('assets/css/style.css?v=' . $styleVersion)) ?>">
     <?php // Primitivele de avatar sunt folosite si in bara de sus, pe toate paginile. ?>
     <link rel="stylesheet" href="<?= e(url('assets/css/avatar.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/avatar.css'))) ?>">
+    <?php if ($xmasTopbar): ?><link rel="stylesheet" href="<?= e(url('assets/css/xmas-topbar.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/xmas-topbar.css'))) ?>"><?php endif; ?>
     <?php if ($embedMode): ?><base target="_top"><?php endif; ?>
 </head>
 <body class="<?= e(implode(' ', $bodyClasses)) ?>">
@@ -329,7 +334,7 @@ $navAttrs = static fn(string $key, ?string $group = null): string => function_ex
         </aside>
 
         <div class="app-content">
-            <header class="topbar d-flex justify-content-between align-items-center px-4 py-3 border-bottom bg-white">
+            <header class="topbar d-flex justify-content-between align-items-center px-4 py-3 border-bottom bg-white"<?= $xmasTopbar ? ' data-xmas-topbar="' . e(url('assets/img/lpg-auto-trans-logo.png')) . '"' : '' ?>>
                 <div class="d-flex align-items-center gap-2"></div>
                 <div class="topbar-user-area">
                     <a class="topbar-icon-button" href="<?= e(build_query_url(['page' => 'notificari'])) ?>" aria-label="Notificari">

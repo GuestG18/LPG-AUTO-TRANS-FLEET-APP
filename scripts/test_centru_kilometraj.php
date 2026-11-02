@@ -121,6 +121,24 @@ function fill(int $id, string $at, float $km): array
 echo "\n1. Reguli pure\n";
 // =====================================================================
 
+// Semiremorca vs cap tractor: odometrul SAS la un moment = interval, fara interpolare.
+$tractorSeries = [
+    ['measured_at' => '2026-08-31 16:57:42', 'segment_started_at' => '2026-08-31 16:57:27', 'km' => 1142724.0],
+    ['measured_at' => '2026-08-31 18:06:31', 'segment_started_at' => '2026-08-31 17:44:10', 'km' => 1142724.5],
+    ['measured_at' => '2026-09-30 18:24:21', 'segment_started_at' => '2026-09-30 18:24:09', 'km' => 1151574.0],
+];
+$inMotion = OdometerCalculator::sasOdometerRange($tractorSeries, '2026-08-31 17:45:00', '2026-10-01 00:00:00');
+check('Cap tractor in mers la citire -> interval [inainte, dupa]', $inMotion === ['min' => 1142724.0, 'max' => 1142724.5, 'parked' => false], $inMotion);
+$parkedAt = OdometerCalculator::sasOdometerRange($tractorSeries, '2026-09-30 20:00:00', '2026-10-01 00:00:00');
+check('Cap tractor parcat dupa ultima deplasare -> o singura valoare', $parkedAt === ['min' => 1151574.0, 'max' => 1151574.0, 'parked' => true], $parkedAt);
+check('Fara citire SAS inainte -> nu se poate verifica', OdometerCalculator::sasOdometerRange($tractorSeries, '2026-08-01 10:00:00', null) === null);
+$ok = OdometerCalculator::trailerTractorDifference(8838.0, 8849.5, 8850.0, 20.0);
+check('B 905 vs B 402: 8.838 vs 8.849,5–8.850 -> Δ −11,5 km, sub pragul de 20', $ok === ['diff_km' => -11.5, 'problem' => false], $ok);
+$inside = OdometerCalculator::trailerTractorDifference(8325.0, 8303.0, 8340.0, 20.0);
+check('Semiremorca in intervalul capului tractor -> Δ 0', $inside === ['diff_km' => 0.0, 'problem' => false], $inside);
+$bad = OdometerCalculator::trailerTractorDifference(8325.0, 8799.0, 8816.0, 20.0);
+check('Diferenta de 474 km -> problema', $bad === ['diff_km' => -474.0, 'problem' => true], $bad);
+
 $readings = [
     ['id' => 'a', 'measured_at' => '2026-10-01 06:00:00', 'segment_started_at' => '2026-10-01 05:00:00', 'km' => 1000.0],
     ['id' => 'b', 'measured_at' => '2026-10-01 10:00:00', 'segment_started_at' => '2026-10-01 09:00:00', 'km' => 1080.0],
@@ -202,6 +220,7 @@ function cleanup(PDO $db, ?string $since = null): void
         $db->exec("DELETE FROM vehicle_odometer_baselines WHERE vehicle_id IN ({$in})");
         $db->exec("DELETE FROM vehicle_odometer_readings WHERE vehicle_id IN ({$in})");
         $db->exec("DELETE FROM vehicle_odometer_manual_readings WHERE vehicle_id IN ({$in})");
+        $db->exec("DELETE FROM vehicle_odometer_audit WHERE vehicle_id IS NULL AND action = 'set_manual_tolerance' AND user_id IS NULL");
         $db->exec("DELETE FROM vehicle_odometer_sources WHERE vehicle_id IN ({$in})");
         $db->exec("DELETE FROM vehicule_cuplaje WHERE tractor_id IN ({$in}) OR semiremorca_id IN ({$in})");
         $db->exec("DELETE FROM vehicule WHERE id IN ({$in})");
@@ -347,7 +366,22 @@ try {
         $rejectedTractor = true;
     }
     check('Manual: refuzat pentru cap tractor', $rejectedTractor);
+    $firstCheck = $service->model()->getManualChecks($trailer)[$added['id']] ?? null;
+    check('Verificare: prima citire nu are cu ce se compara', ($firstCheck['status'] ?? null) === 'fara_precedent', $firstCheck);
+    // Cuplajul de test e creat „acum”: il mutam inainte de perioada citirilor.
+    $db->prepare('UPDATE vehicule_cuplaje SET data_start = :d WHERE semiremorca_id = :s')->execute([':d' => '2026-09-01 00:00:00', ':s' => $trailer]);
     $second = $service->addManualReading($trailer, '2026-10-05 10:00', '413100', null, false, null);
+    // Capul: parcat la 01.10 09:30 (100.080), in mers la 05.10 10:00 (100.080–100.480) -> 0–400 km; semiremorca 520.
+    $comp = $trailerComp();
+    $check = $comp['sources']['manual']['current']['check'] ?? null;
+    check('Verificare: 520 km semiremorca vs 0–400 km cap tractor -> Δ +120, problema', $check !== null && $check['status'] === 'calculat'
+        && $check['tractor_min'] === 0.0 && $check['tractor_max'] === 400.0 && $check['diff_km'] === 120.0 && $check['problem']
+        && $check['tractor_plate'] === 'KMCTEST-T1', $check);
+    check('Verificare: diferenta peste prag apare la anomalii', in_array('manual', array_column($comp['anomalies'], 'source'), true), $comp['anomalies']);
+    $service->saveManualTolerance('150', null);
+    $comp = $trailerComp();
+    check('Verificare: pragul se aplica la afisare (150 km -> fara problema)', $comp['sources']['manual']['current']['check']['problem'] === false, $comp['sources']['manual']['current']['check']);
+    $service->saveManualTolerance('20', null);
     $comp = $trailerComp();
     check('Manual: km de la T0 = 520, sunt km oficiali ai semiremorcii', $comp['sources']['manual']['distance']['km'] === 520.0 && $comp['official']['km'] === 520.0 && $comp['official']['source'] === 'manual', $comp['official']);
     $manualLookup = $service->lookupT0([$trailer], '2026-10-05 08:00')[$trailer]['manual'];

@@ -439,3 +439,11 @@
     .kmc-head h1 { font-size: 20px; }
     .kmc-dt { grid-template-columns: 1fr; }
 }
+
+/* verificarea semiremorcii fata de km SAS ai capului tractor cuplat */
+.kmc-check { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; line-height: 1.35; }
+.kmc-check small { flex-basis: 100%; font-weight: 400; color: var(--kmc-muted); }
+.kmc-check--ok { color: #15803d; }
+.kmc-check--bad { color: #b91c1c; }
+.kmc-check--na { color: var(--kmc-muted); font-weight: 400; }
+.kmc-tol { width: 70px; padding: 2px 6px; border: 1px solid #d5dce6; border-radius: 6px; }

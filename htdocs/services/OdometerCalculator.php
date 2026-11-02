@@ -203,6 +203,59 @@ final class OdometerCalculator
     }
 
     /**
+     * Intervalul in care se afla odometrul SAS la momentul $at, fara interpolare:
+     * [ultima citire <= $at, prima citire de dupa $at]. Daca vehiculul statea parcat
+     * la $at (segmentul urmator incepe dupa $at, sau datele acopera $at fara alt segment),
+     * intervalul se strange la o singura valoare.
+     *
+     * @param list<array{measured_at:string, segment_started_at:?string, km:float}> $readings valide, crescator
+     * @return array{min:float, max:float, parked:bool}|null
+     */
+    public static function sasOdometerRange(array $readings, string $at, ?string $coverageEnd): ?array
+    {
+        $atTs = self::ts($at);
+        $previous = null;
+        $next = null;
+        foreach ($readings as $reading) {
+            if (self::ts($reading['measured_at']) <= $atTs) {
+                $previous = $reading;
+            } elseif ($next === null) {
+                $next = $reading;
+            }
+        }
+        if ($previous === null) {
+            return null;
+        }
+        if ($next === null) {
+            return $coverageEnd !== null && self::ts($coverageEnd) >= $atTs
+                ? ['min' => (float) $previous['km'], 'max' => (float) $previous['km'], 'parked' => true]
+                : null;
+        }
+        $parked = $next['segment_started_at'] !== null && self::ts((string) $next['segment_started_at']) >= $atTs;
+
+        return [
+            'min' => (float) $previous['km'],
+            'max' => $parked ? (float) $previous['km'] : max((float) $previous['km'], (float) $next['km']),
+            'parked' => $parked,
+        ];
+    }
+
+    /**
+     * Diferenta dintre km semiremorcii si km capului tractor (interval [min, max] cand
+     * una dintre citiri cade in timpul unei deplasari). 0 daca valoarea semiremorcii
+     * intra in interval; altfel distanta pana la cea mai apropiata margine, cu semn
+     * (+ = semiremorca are mai multi km). Problema = |diferenta| > prag.
+     *
+     * @return array{diff_km:float, problem:bool}
+     */
+    public static function trailerTractorDifference(float $trailerKm, float $tractorMin, float $tractorMax, float $toleranceKm): array
+    {
+        $diff = $trailerKm < $tractorMin ? $trailerKm - $tractorMin : ($trailerKm > $tractorMax ? $trailerKm - $tractorMax : 0.0);
+
+        return ['diff_km' => round($diff, 1), 'problem' => abs($diff) > $toleranceKm];
+    }
+
+    /**
      * Marcheaza citirile neplauzibile dintr-o serie (o singura sursa, un singur vehicul).
      *
      * Seria valida = cel mai lung lant de citiri in care odometrul nu scade si fiecare

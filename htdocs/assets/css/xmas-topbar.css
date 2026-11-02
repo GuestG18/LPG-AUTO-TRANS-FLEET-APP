@@ -1,0 +1,145 @@
+/* LPG Christmas topbar
+   Add  data-xmas-topbar="path/to/lpg-logo.png"  to the topbar <header>, then load this file
+   and xmas-topbar.js. Remove the attribute (or the two files) to switch it off. */
+
+/* ---------- the app's topbar while the scene is on ---------- */
+.xt-festive {
+  min-height: var(--xt-height, 104px);   /* taller than usual so the truck and Santa are visible */
+}
+.xt-festive > :not(.xt-scene) { position: relative; z-index: 1; }
+/* bell + profile sit on a white pill so they stay readable on the night sky */
+.xt-festive .topbar-user-area {
+  background: rgba(255, 255, 255, .95);
+  border-radius: 999px;
+  padding: 6px 12px 6px 14px;
+  box-shadow: 0 4px 14px rgba(5, 12, 35, .35);
+}
+
+/* ---------- the scene ---------- */
+.xt-scene {
+  position: absolute; inset: 0; z-index: 0;
+  overflow: hidden;
+  contain: strict;                  /* keep the scene's work from affecting the rest of the page */
+  pointer-events: none;             /* clicks go straight through to the topbar buttons */
+  border-radius: inherit;
+  background: linear-gradient(#2c4a86 0%, #5577b8 50%, #a8c0e6 100%);   /* winter twilight */
+}
+.xt-stage { pointer-events: none; }
+.xt-stage {
+  position: absolute; left: 0; top: 0;
+  height: 230px;
+  transform-origin: 0 0;
+}
+.xt-layer { position: absolute; inset: 0; }
+.xt-snow { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 40; }
+
+/* every twinkling light (road bulbs, tree lights, sky stars) is drawn on a canvas by the
+   animation loop: a few canvases are far cheaper than hundreds of separately animated elements */
+.xt-cv { position: absolute; left: 0; top: 0; pointer-events: none; }
+
+/* sky */
+.xt-moon {
+  position: absolute; top: 18px; width: 38px; height: 38px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fffbe8, #f3e7b5 70%);
+  box-shadow: 0 0 25px 6px rgba(255, 246, 200, .35);
+}
+
+/* ground / road */
+.xt-ground { position: absolute; left: 0; right: 0; top: 0; height: 230px; }
+
+
+/* tree */
+.xt-tree { position: absolute; left: 14px; top: 4px; width: 132px; height: 176px; z-index: 5; }
+.xt-tree-art { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.xt-tree .xt-treestar { transition: fill .4s; fill: #6b6440; }
+.xt-tree.lit .xt-treestar { fill: #ffd94a; filter: drop-shadow(0 0 4px #fff2a6) drop-shadow(0 0 10px #ffcc33); }
+.xt-tree .xt-rays { position: absolute; left: 16px; top: -36px; width: 100px; height: 100px; opacity: 0; transition: opacity .6s; }
+.xt-tree.lit .xt-rays { opacity: 1; animation: xt-spin 8s linear infinite; }
+.xt-flash {
+  position: absolute; left: 80px; top: 18px; width: 0; height: 0; z-index: 6;
+}
+.xt-flash.go::after {
+  content: ""; position: absolute; left: -40px; top: -40px; width: 80px; height: 80px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,240,170,.95), rgba(255,210,60,0) 65%);
+  animation: xt-flash .9s ease-out forwards;
+}
+
+/* gifts */
+.xt-gift {
+  position: absolute; z-index: 7;
+  border-radius: 2px;
+  background:
+    linear-gradient(90deg, transparent calc(50% - 2px), var(--r) calc(50% - 2px), var(--r) calc(50% + 2px), transparent calc(50% + 2px)),
+    linear-gradient(0deg, transparent calc(50% - 2px), var(--r) calc(50% - 2px), var(--r) calc(50% + 2px), transparent calc(50% + 2px)),
+    var(--b);
+  box-shadow: inset -3px -3px 0 rgba(0,0,0,.18);
+}
+.xt-gift::before, .xt-gift::after {
+  content: ""; position: absolute; top: -6px; width: 7px; height: 6px;
+  border: 2px solid var(--r); border-radius: 50% 50% 0 50%;
+}
+.xt-gift::before { left: calc(50% - 9px); transform: rotate(10deg); }
+.xt-gift::after  { left: calc(50% + 0px); transform: scaleX(-1) rotate(10deg); }
+.xt-gift.new { opacity: 0; transform: scale(.2); transform-origin: 50% 100%; transition: opacity .35s, transform .45s cubic-bezier(.3,1.8,.5,1); }
+.xt-gift.new.show { opacity: 1; transform: scale(1); }
+
+.xt-spark {
+  position: absolute; width: 5px; height: 5px; z-index: 30;
+  background: #fff6b0; border-radius: 50%;
+  box-shadow: 0 0 6px 2px #ffd84a;
+  animation: xt-spark .8s ease-out forwards;
+}
+
+/* truck */
+.xt-truck { position: absolute; z-index: 10; will-change: transform; }
+.xt-truck > * { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.xt-truck img { display: block; }
+/* the logo is drawn twice: the outline (with the lettering cut out) and the lettering alone,
+   so the truck can turn around without the text reading backwards */
+.xt-logo-body { clip-path: polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, 28.75% 16.5%, 75% 16.5%, 75% 88.3%, 28.75% 88.3%, 28.75% 16.5%); }
+.xt-logo-text { clip-path: inset(16.5% 25% 11.7% 28.75%); }
+.xt-wheel { position: absolute; width: 9.333%; height: 24.724%; will-change: transform; }
+.xt-wheel svg { display: block; width: 100%; height: 100%; }
+.xt-truck.flip .xt-logo-body, .xt-truck.flip .xt-wheels { transform: scaleX(-1); }
+.xt-truck.flip .xt-logo-text { transform: translateX(-3.75%); }
+.xt-truck.flip .xt-cab { left: 5.2%; }
+.xt-cab {
+  left: 81.4%; top: 17.5%; width: 13.4%; height: 37%;
+  overflow: hidden; border-radius: 6px 8px 4px 4px;
+  transition: opacity .3s;
+}
+.xt-cab svg { position: absolute; left: 50%; bottom: -55%; width: 105%; transform: translateX(-50%); }
+
+/* walking santa */
+.xt-santa { position: absolute; width: 46px; z-index: 25; display: none; }
+.xt-santa svg { display: block; width: 100%; overflow: visible; }
+
+@keyframes xt-spin { to { transform: rotate(360deg) } }
+@keyframes xt-flash { from { transform: scale(.3); opacity: 1 } to { transform: scale(2.4); opacity: 0 } }
+@keyframes xt-spark { from { transform: translate(0,0) scale(1); opacity: 1 } to { transform: translate(var(--x), var(--y)) scale(.2); opacity: 0 } }
+
+@media (prefers-reduced-motion: reduce) {
+  .xt-tree.lit .xt-rays { animation: none; }
+}
+
+/* ---------- fleet app adjustments ---------- */
+/* the fuel tables size themselves around a ~66px topbar; give back the extra height */
+body:has(.xt-festive) .fuel-table-scroll {
+  max-height: calc(100vh - 230px - (var(--xt-height, 104px) - 66px));
+}
+
+/* ---------- sidebar lights (assets/js/xmas-sidebar.js) ---------- */
+/* a zero-height sticky anchor inside the scrolling sidebar: it stays put while the menu scrolls,
+   takes no space and lets every click through; the canvas hangs from it at full screen height */
+.xs-lights {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 0;
+  pointer-events: none;
+}
+.xs-lights canvas {
+  position: absolute;
+  top: -1rem;                  /* sticky stops inside the sidebar's 1rem top padding: reach back over it */
+  right: -1rem;                /* sits in the sidebar's right padding, next to the scrollbar */
+}

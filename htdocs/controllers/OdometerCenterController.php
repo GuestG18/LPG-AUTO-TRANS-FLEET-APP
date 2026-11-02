@@ -14,6 +14,8 @@ declare(strict_types=1);
  *   action=save_policy  POST: politica sursei oficiale pentru totaluri
  *   action=manual_add   POST: citire manuala a odometrului unei semiremorci (optional si T0)
  *   action=manual_cancel POST: anuleaza o citire manuala (ramane in istoric)
+ *   action=manual_check POST: reface verificarea citirii manuale cu km SAS ai capului tractor
+ *   action=manual_tolerance POST: pragul (km) peste care diferenta semiremorca/cap tractor e problema
  *   action=audit        JSON: jurnalul de audit al modulului
  * Toate actiunile sunt verificate si in router (permissions/modules/centru_kilometraj.php).
  */
@@ -44,6 +46,8 @@ class OdometerCenterController
             'save_policy' => $this->savePolicyAction(),
             'manual_add' => $this->manualAddAction(),
             'manual_cancel' => $this->manualCancelAction(),
+            'manual_check' => $this->manualCheckAction(),
+            'manual_tolerance' => $this->manualToleranceAction(),
             'audit' => $this->auditAction(),
             default => $this->indexAction(),
         };
@@ -169,6 +173,35 @@ class OdometerCenterController
             $this->json(['ok' => false, 'message' => $exception->getMessage()], 422);
         }
         $this->json(['ok' => true, 'message' => 'Citirea a fost anulată (rămâne în istoric).', 'dashboard' => $this->service->buildDashboard()]);
+    }
+
+    private function manualCheckAction(): void
+    {
+        $this->requireAction('manual');
+        $this->requirePostWithCsrf();
+        session_write_close();
+        try {
+            $check = $this->service->checkManualReading((int) ($_POST['vehicle_id'] ?? 0), (int) ($_POST['reading_id'] ?? 0));
+        } catch (InvalidArgumentException $exception) {
+            $this->json(['ok' => false, 'message' => $exception->getMessage()], 422);
+        }
+        $this->json([
+            'ok' => true,
+            'message' => $check['status'] === 'calculat' ? 'Verificare refăcută cu km SAS ai capului tractor.' : (string) ($check['note'] ?? 'Verificare refăcută.'),
+            'dashboard' => $this->service->buildDashboard(),
+        ]);
+    }
+
+    private function manualToleranceAction(): void
+    {
+        $this->requireAction('settings');
+        $this->requirePostWithCsrf();
+        try {
+            $this->service->saveManualTolerance((string) ($_POST['km'] ?? ''), $this->userId());
+        } catch (InvalidArgumentException $exception) {
+            $this->json(['ok' => false, 'message' => $exception->getMessage()], 422);
+        }
+        $this->json(['ok' => true, 'message' => 'Pragul a fost salvat.', 'dashboard' => $this->service->buildDashboard()]);
     }
 
     private function auditAction(): void

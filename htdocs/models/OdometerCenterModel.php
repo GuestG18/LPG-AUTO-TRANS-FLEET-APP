@@ -24,6 +24,8 @@ class OdometerCenterModel extends BaseModel
         'cardoil_sync_max_ore' => '26',
         // O citire manuala (semiremorca) devine referinta T0 doar daca e la cel mult atatea ore de T0.
         'manual_varsta_max_ore' => '24',
+        // Diferenta maxima (km) intre km semiremorcii (manual) si km SAS ai capului tractor cuplat.
+        'manual_toleranta_km' => '20',
     ];
 
     private bool $schemaEnsured = false;
@@ -125,6 +127,24 @@ class OdometerCenterModel extends BaseModel
                 CONSTRAINT fk_odo_manual_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE,
                 CONSTRAINT fk_odo_manual_user FOREIGN KEY (created_by) REFERENCES utilizatori(id) ON DELETE SET NULL,
                 CONSTRAINT fk_odo_manual_cancel_user FOREIGN KEY (canceled_by) REFERENCES utilizatori(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            // Verificarea unei citiri manuale fata de citirea anterioara: km semiremorcii vs km SAS
+            // ai capului tractor cuplat, pe aceeasi fereastra. Se pastreaza intervalele brute;
+            // diferenta si pragul se aplica la afisare (pragul se poate schimba).
+            "CREATE TABLE IF NOT EXISTS vehicle_odometer_manual_checks (
+                reading_id INT UNSIGNED NOT NULL PRIMARY KEY,
+                previous_reading_id INT UNSIGNED NULL,
+                tractor_id INT UNSIGNED NULL,
+                status VARCHAR(24) NOT NULL,
+                trailer_km DECIMAL(12,1) NULL,
+                sas_from_min DECIMAL(12,1) NULL,
+                sas_from_max DECIMAL(12,1) NULL,
+                sas_to_min DECIMAL(12,1) NULL,
+                sas_to_max DECIMAL(12,1) NULL,
+                note VARCHAR(255) NULL,
+                checked_at DATETIME NOT NULL,
+                CONSTRAINT fk_odo_check_reading FOREIGN KEY (reading_id) REFERENCES vehicle_odometer_manual_readings(id) ON DELETE CASCADE,
+                CONSTRAINT fk_odo_check_tractor FOREIGN KEY (tractor_id) REFERENCES vehicule(id) ON DELETE SET NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         ];
         foreach ($statements as $sql) {
@@ -534,6 +554,63 @@ class OdometerCenterModel extends BaseModel
         $this->logAudit($vehicleId, $userId, 'manual_reading', null, ['id' => $id, 'measured_at' => $measuredAt, 'km' => round($km, 1)], $note);
 
         return $id;
+    }
+
+    /** @return array<int, array<string, mixed>> [reading_id] => verificarea, cu numarul capului tractor */
+    public function getManualChecks(?int $trailerId = null): array
+    {
+        $this->ensureSchema();
+        $sql = 'SELECT c.*, v.nr_inmatriculare AS tractor_plate, p.measured_at AS previous_measured_at, p.odometer_km AS previous_km
+                FROM vehicle_odometer_manual_checks c
+                INNER JOIN vehicle_odometer_manual_readings m ON m.id = c.reading_id
+                LEFT JOIN vehicle_odometer_manual_readings p ON p.id = c.previous_reading_id
+                LEFT JOIN vehicule v ON v.id = c.tractor_id';
+        $params = [];
+        if ($trailerId !== null) {
+            $sql .= ' WHERE m.vehicle_id = :v';
+            $params[':v'] = $trailerId;
+        }
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        $result = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $result[(int) $row['reading_id']] = $row;
+        }
+
+        return $result;
+    }
+
+    public function saveManualCheck(int $readingId, array $check): void
+    {
+        $stmt = $this->db->prepare(
+            'REPLACE INTO vehicle_odometer_manual_checks
+                (reading_id, previous_reading_id, tractor_id, status, trailer_km, sas_from_min, sas_from_max, sas_to_min, sas_to_max, note, checked_at)
+             VALUES (:r, :p, :t, :s, :km, :fmin, :fmax, :tmin, :tmax, :n, :c)'
+        );
+        $stmt->execute([
+            ':r' => $readingId, ':p' => $check['previous_reading_id'] ?? null, ':t' => $check['tractor_id'] ?? null,
+            ':s' => (string) $check['status'], ':km' => $check['trailer_km'] ?? null,
+            ':fmin' => $check['sas_from_min'] ?? null, ':fmax' => $check['sas_from_max'] ?? null,
+            ':tmin' => $check['sas_to_min'] ?? null, ':tmax' => $check['sas_to_max'] ?? null,
+            ':n' => isset($check['note']) ? mb_substr((string) $check['note'], 0, 255) : null,
+            ':c' => date('Y-m-d H:i:s'),
+        ]);
+    }
+
+    public function deleteManualCheck(int $readingId): void
+    {
+        $this->db->prepare('DELETE FROM vehicle_odometer_manual_checks WHERE reading_id = :r')->execute([':r' => $readingId]);
+    }
+
+    /** Toate cuplajele (si cele inchise) ale unei semiremorci, cu intervalul lor. */
+    public function getTrailerCouplings(int $trailerId): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT tractor_id, data_start, data_end, activ FROM vehicule_cuplaje WHERE semiremorca_id = :s ORDER BY data_start ASC, id ASC'
+        );
+        $stmt->execute([':s' => $trailerId]);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /** Anulare non-distructiva: citirea ramane in istoric, dar nu mai conteaza nicaieri. */

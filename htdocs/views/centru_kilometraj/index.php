@@ -22,6 +22,8 @@ $pageJson = json_encode([
         'save_policy' => build_query_url(['page' => 'centru_kilometraj', 'action' => 'save_policy']),
         'manual_add' => build_query_url(['page' => 'centru_kilometraj', 'action' => 'manual_add']),
         'manual_cancel' => build_query_url(['page' => 'centru_kilometraj', 'action' => 'manual_cancel']),
+        'manual_check' => build_query_url(['page' => 'centru_kilometraj', 'action' => 'manual_check']),
+        'manual_tolerance' => build_query_url(['page' => 'centru_kilometraj', 'action' => 'manual_tolerance']),
         'fuel' => build_query_url(['page' => 'carburanti']),
     ],
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_PRESERVE_ZERO_FRACTION);

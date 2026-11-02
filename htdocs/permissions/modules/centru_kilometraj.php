@@ -32,6 +32,8 @@ return [
         'save_policy' => 'settings',
         'manual_add'    => 'manual',
         'manual_cancel' => 'manual',
+        'manual_check'  => 'manual',
+        'manual_tolerance' => 'settings',
         'audit'       => 'audit',
     ],
 ];

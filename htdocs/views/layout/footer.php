@@ -12,6 +12,10 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
 <?php $appScriptVersion = (string) @filemtime(BASE_PATH . '/assets/js/app.js'); ?>
 <script src="<?= e(url('assets/js/app.js?v=' . $appScriptVersion)) ?>"></script>
+<?php if (!empty($xmasTopbar)): ?>
+<script src="<?= e(url('assets/js/xmas-topbar.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/xmas-topbar.js'))) ?>" defer></script>
+<script src="<?= e(url('assets/js/xmas-sidebar.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/xmas-sidebar.js'))) ?>" defer></script>
+<?php endif; ?>
 <?php if (is_logged_in() && empty($embedMode)): ?>
 <?php
     // Aprobari live: popup Aproba / Respinge pentru administrator, statusul curselor

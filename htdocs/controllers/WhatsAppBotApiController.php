@@ -6,6 +6,7 @@ require_once __DIR__ . '/../services/DriverWhatsAppConversationService.php';
 require_once __DIR__ . '/../services/DriverFirstMovementService.php';
 require_once __DIR__ . '/../services/ApprovalWhatsAppService.php';
 require_once __DIR__ . '/../services/MaintenanceWhatsAppService.php';
+require_once __DIR__ . '/../services/VoiceCommandWhatsAppService.php';
 
 /**
  * API server-to-server pentru BaileyBot (whatsapp-agent-lab), fara sesiune de browser.
@@ -15,7 +16,8 @@ require_once __DIR__ . '/../services/MaintenanceWhatsAppService.php';
  *
  *   POST v1/outbox/claim   {limit}                                   mesajele de trimis (lock)
  *   POST v1/outbox/result  {id, lock_token, status, wa_message_id, error, retryable}
- *   POST v1/inbound        {wa_message_id, phone, kind, action_id, text, received_at}
+ *   POST v1/outbox/file    {id, lock_token}                          fisierul unui document cerut (comenzi vocale)
+ *   POST v1/inbound        {wa_message_id, phone, kind, action_id, text, received_at, media_type, transcript}
  *
  * Botul nu decide nimic: Fleet alege destinatarii, textele si starea conversatiei.
  */
@@ -29,7 +31,7 @@ class WhatsAppBotApiController
     {
         try {
             $route = trim($path, '/');
-            if (!in_array($route, ['v1/outbox/claim', 'v1/outbox/result', 'v1/inbound', 'v1/voice/claim', 'v1/voice/result'], true)) {
+            if (!in_array($route, ['v1/outbox/claim', 'v1/outbox/result', 'v1/outbox/file', 'v1/inbound', 'v1/voice/claim', 'v1/voice/result'], true)) {
                 $this->sendJson(['success' => false, 'error' => 'not_found'], 404);
             }
             if (strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') {
@@ -83,6 +85,11 @@ class WhatsAppBotApiController
                     $claim = $model->claimOutbox((int) ($input['limit'] ?? 5));
                     $this->sendJson(['success' => true] + $claim);
                     // no break: sendJson iese
+                // Comenzi vocale: fisierul documentului cerut ("talon 435"), doar pentru lock-ul randului.
+                case 'v1/outbox/file':
+                    $file = (new VoiceCommandWhatsAppService($this->db(), $model))->outboxFile((int) ($input['id'] ?? 0), (string) ($input['lock_token'] ?? ''));
+                    $this->sendJson($file !== null ? ['success' => true] + $file : ['success' => false, 'error' => 'not_found'], $file !== null ? 200 : 404);
+                    // no break
                 case 'v1/outbox/result':
                     $ok = $model->reportOutboxResult(
                         (int) ($input['id'] ?? 0),
@@ -105,6 +112,8 @@ class WhatsAppBotApiController
                         // Mesaj vocal (pentru anunturile conducerii): tipul si durata, fara continut.
                         'media_type' => in_array($input['media_type'] ?? '', ['audio', 'audio_failed', 'image', 'video', 'document', 'sticker'], true) ? (string) $input['media_type'] : null,
                         'media_seconds' => isset($input['media_seconds']) ? max(0, min(3600, (int) $input['media_seconds'])) : null,
+                        // Textul mesajului vocal, transcris local de bot (comenzi vocale).
+                        'transcript' => isset($input['transcript']) ? mb_substr((string) $input['transcript'], 0, 500) : null,
                     ];
                     // Aprobarile au ID-uri proprii (approval:123:approve) sau "APROB 123": nu se confunda cu soferii.
                     $approvals = new ApprovalWhatsAppService($this->db(), $model);
@@ -114,6 +123,11 @@ class WhatsAppBotApiController
                         if ($result['handled']) {
                             $this->sendJson(['success' => true] + $result);
                         }
+                    }
+                    // Comenzi vocale ("talon 435"): inaintea conversatiilor, dar nu in pasul "inregistreaza mesaj".
+                    $voiceCommands = new VoiceCommandWhatsAppService($this->db(), $model);
+                    if ($voiceCommands->claims($message)) {
+                        $this->sendJson(['success' => true] + $voiceCommands->handleInbound($message));
                     }
                     // Programari service: comenzile (PROGRAMARE SERVICE, MENIU...), butoanele mnt: si conversatia in curs.
                     if (MaintenanceWhatsAppService::config()['enabled']) {

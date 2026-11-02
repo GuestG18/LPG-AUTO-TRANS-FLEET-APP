@@ -408,6 +408,27 @@
             + '<i class="bi bi-plus-circle"></i>' + (compact ? 'Citire nouă' : 'Adaugă citire') + '</button>';
     }
 
+    /** Verificarea citirii manuale fata de km SAS ai capului tractor cuplat. */
+    function checkText(check) {
+        const range = check.tractor_min === check.tractor_max ? fmtKm(check.tractor_min) : fmtKm(check.tractor_min) + '–' + fmtKm(check.tractor_max);
+        return 'Semiremorcă ' + fmtKm(check.trailer_km) + ' km · ' + (check.tractor_plate || 'cap tractor') + ' (SAS) ' + range + ' km, de la ' + fmtDT(check.from);
+    }
+    function checkBadge(check, withDetail) {
+        if (!check || check.status === 'fara_precedent') {
+            return '';
+        }
+        if (check.status !== 'calculat') {
+            return '<div class="kmc-check kmc-check--na" title="' + esc(check.note || '') + '"><i class="bi bi-dash-circle"></i>Verificare cap tractor: ' + esc(check.note || 'indisponibilă') + '</div>';
+        }
+        const diff = check.diff_km === 0 ? '0 km' : signedKm(check.diff_km);
+        const title = checkText(check) + '. Prag: ' + fmtKm(check.tolerance_km) + ' km.';
+        return '<div class="kmc-check ' + (check.problem ? 'kmc-check--bad' : 'kmc-check--ok') + '" title="' + esc(title) + '">'
+            + '<i class="bi ' + (check.problem ? 'bi-exclamation-triangle-fill' : 'bi-check-circle-fill') + '"></i>'
+            + 'vs ' + esc(check.tractor_plate || 'cap tractor') + ': Δ ' + esc(diff) + (check.problem ? ' (peste ' + esc(fmtKm(check.tolerance_km)) + ' km)' : '')
+            + (withDetail ? '<small>' + esc(checkText(check)) + '</small>' : '')
+            + '</div>';
+    }
+
     function manualOdoHtml(comp) {
         const source = comp.sources.manual;
         const key = comp.id + ':manual';
@@ -428,6 +449,7 @@
             + '<div class="kmc-odo__row">' + drumsHtml(state.shownKm.has(key) ? state.shownKm.get(key) : current.km) + '<span class="kmc-odo__unit">km</span></div>'
             + '<div class="kmc-odo__meta">Ultima citire manuală:<br><b>' + esc(fmtDT(current.measured_at)) + '</b></div>'
             + '<div class="kmc-odo__src"><span class="kmc-dot kmc-dot--event"></span>' + esc(ago(current.measured_at)) + (current.created_by ? ' · ' + esc(current.created_by) : '') + '</div>'
+            + checkBadge(current.check, false)
             + manualAddButton(comp, true)
             + '</div>';
     }
@@ -1057,7 +1079,7 @@
             const rows = h.manual || [];
             const p = state.panel;
             const manualRows = rows.length
-                ? '<table class="kmc-table"><thead><tr><th>Citit la</th><th class="kmc-num">Odometru</th><th>Introdus de</th><th></th></tr></thead><tbody>'
+                ? '<table class="kmc-table"><thead><tr><th>Citit la</th><th class="kmc-num">Odometru</th><th>Introdus de</th><th>Verificare cap tractor (SAS)</th><th></th></tr></thead><tbody>'
                     + rows.map((r) => {
                         const canceled = !!r.canceled_at;
                         let action = '';
@@ -1069,6 +1091,8 @@
                         return '<tr class="' + (canceled ? 'is-old' : (r.anomaly ? 'is-anomaly' : '')) + '"><td>' + esc(fmtDT(r.measured_at)) + (r.note ? '<small>' + esc(r.note) + '</small>' : '') + '</td>'
                             + '<td class="kmc-num">' + (canceled ? '<s>' + esc(fmtKm(r.km)) + '</s>' : esc(fmtKm(r.km))) + '</td>'
                             + '<td>' + esc(r.created_by || '—') + '<small>' + esc(fmtDT(r.created_at)) + '</small></td>'
+                            + '<td>' + (canceled ? '' : (r.check && r.check.status !== 'fara_precedent' ? checkBadge(r.check, true) : '<span class="kmc-muted">' + esc(r.check ? r.check.note : '—') + '</span>')
+                                + (state.perms.manual && r.check && r.check.status !== 'fara_precedent' ? ' <button type="button" class="kmc-link" data-kmc-recheck="' + r.reading_id + '" title="Reia odometrul capului tractor din SAS">Reverifică</button>' : '')) + '</td>'
                             + '<td>' + (canceled ? '<span class="kmc-pill" title="' + esc(r.cancel_reason || '') + '">anulată</span><small>' + esc((r.canceled_by || '') + ' ' + fmtDT(r.canceled_at)) + '</small>' : '')
                             + (r.anomaly ? '<span class="kmc-pill kmc-pill--anom">anomalie</span> <small>' + esc(r.anomaly) + '</small>' : '') + action + '</td></tr>';
                     }).join('') + '</tbody></table>'
@@ -1077,7 +1101,12 @@
             return '<div class="kmc-hist">'
                 + '<h4><i class="bi bi-flag"></i>Referințe T0 (toate versiunile)</h4>' + versions
                 + '<p class="kmc-note">De la T0: <b>' + esc(signedKm(comp.sources.manual.distance.km)) + '</b></p>'
-                + '<h4><i class="bi bi-pencil-square"></i>Citiri manuale odometru semiremorcă</h4>' + add + manualRows
+                + '<h4><i class="bi bi-pencil-square"></i>Citiri manuale odometru semiremorcă</h4>' + add
+                + '<p class="kmc-note">Fiecare citire se compară cu cea anterioară: km semiremorcii vs km SAS ai capului tractor cuplat pe toată perioada. '
+                + (state.perms.settings
+                    ? 'Diferență acceptată: <input type="number" min="0" step="1" class="kmc-tol" data-kmc-tolerance value="' + esc(state.data.settings.manual_toleranta_km) + '"> km <button type="button" class="kmc-btn kmc-btn--sm" data-kmc-tolerance-save>Salvează pragul</button> <small>(pentru toate semiremorcile)</small>'
+                    : 'Diferență acceptată: <b>' + esc(state.data.settings.manual_toleranta_km) + ' km</b>.')
+                + '</p>' + manualRows
                 + audit + '</div>';
         }
 
@@ -1201,6 +1230,43 @@
             if (state.panel === p) {
                 renderPanel();
             }
+        }
+    }
+
+    async function recheckManual(readingId, button) {
+        const p = state.panel;
+        button.disabled = true;
+        button.textContent = 'Verific în SAS…';
+        try {
+            const json = await post(page.urls.manual_check, { vehicle_id: p.manual.compId, reading_id: readingId });
+            if (!json.ok) {
+                throw new Error(json.message || 'Verificarea a eșuat.');
+            }
+            toast(json.message);
+            delete p.history[p.manual.compId];
+            applyDashboard(json.dashboard);
+            loadHistory();
+        } catch (error) {
+            toast(error.message, true);
+            button.disabled = false;
+            button.textContent = 'Reverifică';
+        }
+    }
+
+    async function saveTolerance() {
+        const p = state.panel;
+        const input = $('[data-kmc-tolerance]');
+        try {
+            const json = await post(page.urls.manual_tolerance, { km: input ? input.value : '' });
+            if (!json.ok) {
+                throw new Error(json.message || 'Salvarea a eșuat.');
+            }
+            toast(json.message);
+            delete p.history[p.manual.compId];
+            applyDashboard(json.dashboard);
+            loadHistory();
+        } catch (error) {
+            toast(error.message, true);
         }
     }
 
@@ -1333,6 +1399,15 @@
             }
             if (event.target.closest('[data-kmc-manual-save]')) {
                 saveManual();
+                return;
+            }
+            const recheck = event.target.closest('[data-kmc-recheck]');
+            if (recheck && state.panel) {
+                recheckManual(Number(recheck.dataset.kmcRecheck), recheck);
+                return;
+            }
+            if (event.target.closest('[data-kmc-tolerance-save]') && state.panel) {
+                saveTolerance();
                 return;
             }
             const cancelConfirm = event.target.closest('[data-kmc-cancel-confirm]');

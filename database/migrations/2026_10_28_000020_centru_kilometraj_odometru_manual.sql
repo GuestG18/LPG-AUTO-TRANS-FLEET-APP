@@ -25,3 +25,23 @@ CREATE TABLE IF NOT EXISTS `vehicle_odometer_manual_readings` (
 
 ALTER TABLE `vehicle_odometer_baselines`
   MODIFY `provider_code` enum('sas','cardoil','manual') COLLATE utf8mb4_unicode_ci NOT NULL;
+
+-- Verificarea fiecarei citiri manuale fata de cea anterioara: km semiremorcii vs km SAS ai
+-- capului tractor cuplat. Intervalele brute raman aici; pragul (km_center_setari.manual_toleranta_km,
+-- implicit 20) se aplica la afisare.
+CREATE TABLE IF NOT EXISTS `vehicle_odometer_manual_checks` (
+  `reading_id` int unsigned NOT NULL,
+  `previous_reading_id` int unsigned DEFAULT NULL,
+  `tractor_id` int unsigned DEFAULT NULL,
+  `status` varchar(24) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `trailer_km` decimal(12,1) DEFAULT NULL,
+  `sas_from_min` decimal(12,1) DEFAULT NULL,
+  `sas_from_max` decimal(12,1) DEFAULT NULL,
+  `sas_to_min` decimal(12,1) DEFAULT NULL,
+  `sas_to_max` decimal(12,1) DEFAULT NULL,
+  `note` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `checked_at` datetime NOT NULL,
+  PRIMARY KEY (`reading_id`),
+  CONSTRAINT `fk_odo_check_reading` FOREIGN KEY (`reading_id`) REFERENCES `vehicle_odometer_manual_readings` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_odo_check_tractor` FOREIGN KEY (`tractor_id`) REFERENCES `vehicule` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

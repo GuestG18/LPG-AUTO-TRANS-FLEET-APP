@@ -52,6 +52,9 @@ final class OdometerCenterService
     /** @var callable|null */
     private $logger;
     private ?int $nowTs;
+    /** Verificarile citirilor manuale si pragul, incarcate o data per buildDashboard. */
+    private array $manualChecks = [];
+    private float $manualTolerance = 20.0;
 
     public function __construct(
         PDO $db,
@@ -104,6 +107,8 @@ final class OdometerCenterService
         $fillups = $this->cardOil->fillupsByPlate();
         $cardOilSync = $this->cardOil->lastSync();
         $manualReadings = $this->model->getManualReadings();
+        $this->manualChecks = $this->model->getManualChecks();
+        $this->manualTolerance = (float) $settings['manual_toleranta_km'];
 
         $components = [];
         foreach ($vehicles as $id => $vehicle) {
@@ -369,12 +374,20 @@ final class OdometerCenterService
         $result['current'] = $current !== null ? [
             'km' => $current['km'], 'measured_at' => $current['measured_at'], 'id' => $current['id'],
             'created_by' => $current['created_by'],
+            'check' => self::evaluateCheck($this->manualChecks[(int) $current['reading_id']] ?? null, $this->manualTolerance),
         ] : null;
         $result['last_checked_at'] = $current['measured_at'] ?? null;
         if ($current === null) {
             $result['reason'] = 'Toate citirile manuale sunt marcate ca anomalie.';
         }
         $result['anomalies'] = $this->recentAnomalies('manual', $series);
+        $check = $result['current']['check'] ?? null;
+        if ($check !== null && $check['problem']) {
+            $result['anomalies'][] = ['source' => 'manual', 'at' => $result['current']['measured_at'], 'note' => sprintf(
+                'Km semiremorcă diferă cu %s km de km SAS ai capului tractor %s (prag %s km).',
+                number_format($check['diff_km'], 0, ',', '.'), (string) $check['tractor_plate'], number_format($check['tolerance_km'], 0, ',', '.')
+            )];
+        }
         $result['distance'] = $this->distanceFor($result['current'], $result['baseline']);
         if ($result['distance']['anomaly'] !== null) {
             $result['anomalies'][] = ['source' => 'manual', 'at' => null, 'note' => $result['distance']['anomaly']];
@@ -929,6 +942,12 @@ final class OdometerCenterService
         }
 
         $id = $this->model->insertManualReading($vehicleId, $measuredAt, $value, $note, $userId);
+        // Verificarea cu capul tractor (si a citirii urmatoare, daca noua citire s-a intercalat).
+        $this->checkManualReading($vehicleId, $id);
+        $next = $this->nextManualReadingId($vehicleId, $id);
+        if ($next !== null) {
+            $this->checkManualReading($vehicleId, $next);
+        }
         $version = null;
         if ($setT0) {
             $version = $this->saveT0([$vehicleId], $measuredAt, $userId, $note ?: 'Citire manuală semiremorcă')[$vehicleId]['version'] ?? null;
@@ -939,9 +958,170 @@ final class OdometerCenterService
 
     public function cancelManualReading(int $vehicleId, int $readingId, ?string $reason, ?int $userId): void
     {
+        $next = $this->nextManualReadingId($vehicleId, $readingId);
         if (!$this->model->cancelManualReading($vehicleId, $readingId, $userId, $reason)) {
             throw new InvalidArgumentException('Citirea nu există sau a fost deja anulată.');
         }
+        $this->model->deleteManualCheck($readingId);
+        // Citirea urmatoare se compara acum cu alta citire anterioara.
+        if ($next !== null) {
+            $this->checkManualReading($vehicleId, $next);
+        }
+    }
+
+    /** Urmatoarea citire manuala valida (dupa $readingId, in timp), sau null. */
+    private function nextManualReadingId(int $vehicleId, int $readingId): ?int
+    {
+        $found = false;
+        foreach (OdometerCalculator::flagAnomalies(self::manualSeries($this->model->getManualReadings($vehicleId)[$vehicleId] ?? [])) as $reading) {
+            if ($found && $reading['anomaly'] === null) {
+                return (int) $reading['reading_id'];
+            }
+            $found = $found || (int) $reading['reading_id'] === $readingId;
+        }
+
+        return null;
+    }
+
+    /**
+     * Verifica o citire manuala fata de citirea valida anterioara: km semiremorcii in
+     * fereastra vs km SAS ai capului tractor cuplat pe TOATA fereastra. Odometrul SAS la
+     * fiecare capat e un interval (fara interpolare) cand capul era in mers. Rezultatul
+     * se salveaza; o eroare SAS nu blocheaza nimic (stare „indisponibil”, se poate reverifica).
+     *
+     * @return array<string, mixed> verificarea salvata
+     */
+    public function checkManualReading(int $vehicleId, int $readingId): array
+    {
+        $series = OdometerCalculator::flagAnomalies(self::manualSeries($this->model->getManualReadings($vehicleId)[$vehicleId] ?? []));
+        $current = null;
+        $previous = null;
+        foreach ($series as $reading) {
+            if ((int) $reading['reading_id'] === $readingId) {
+                $current = $reading;
+                break;
+            }
+            if ($reading['anomaly'] === null) {
+                $previous = $reading;
+            }
+        }
+        if ($current === null) {
+            throw new InvalidArgumentException('Citirea nu există sau a fost anulată.');
+        }
+
+        $check = ['previous_reading_id' => $previous['reading_id'] ?? null, 'tractor_id' => null, 'trailer_km' => null];
+        if ($current['anomaly'] !== null) {
+            $check += ['status' => 'anomalie', 'note' => 'Citirea e marcată ca anomalie: nu se verifică.'];
+        } elseif ($previous === null) {
+            $check += ['status' => 'fara_precedent', 'note' => 'Prima citire: nu are cu ce se compara.'];
+        } else {
+            $check['trailer_km'] = round($current['km'] - $previous['km'], 1);
+            $check = array_merge($check, $this->tractorWindow($vehicleId, (string) $previous['measured_at'], (string) $current['measured_at']));
+        }
+        $this->model->saveManualCheck($readingId, $check);
+
+        return $check;
+    }
+
+    /** Capul tractor cuplat pe toata fereastra si odometrul lui SAS la cele doua capete. */
+    private function tractorWindow(int $trailerId, string $from, string $to): array
+    {
+        $tractorId = null;
+        foreach ($this->model->getTrailerCouplings($trailerId) as $coupling) {
+            $start = (string) $coupling['data_start'];
+            $end = $coupling['data_end'] !== null ? (string) $coupling['data_end'] : null;
+            if ($start <= $from && ($end === null || $end >= $to)) {
+                $tractorId = (int) $coupling['tractor_id'];
+            }
+        }
+        if ($tractorId === null) {
+            return ['status' => 'fara_cuplaj', 'note' => 'Semiremorca nu a fost cuplată la același cap tractor pe toată perioada dintre citiri.'];
+        }
+
+        $result = ['tractor_id' => $tractorId];
+        $source = $this->model->getSources()[$tractorId]['sas'] ?? null;
+        if ($source === null || (int) $source['enabled'] !== 1) {
+            return $result + ['status' => 'indisponibil', 'note' => 'Capul tractor nu este în SAS Fleet.'];
+        }
+        if (!$this->sas->credentialsAvailable()) {
+            return $result + ['status' => 'indisponibil', 'note' => 'Credențialele SAS nu sunt configurate.'];
+        }
+
+        $ranges = [];
+        foreach (['from' => $from, 'to' => $to] as $key => $moment) {
+            $ts = OdometerCalculator::ts($moment);
+            // Inapoi cat istoricul SAS (ca la T0): capul poate sta parcat zile intregi inainte.
+            // Fereastra e oricum de peste o zi: SAS da kmIndex doar asa (vezi syncSas).
+            $windowFrom = date('Y-m-d H:i:s', $ts - max(1, (int) $this->model->getSettings()['sas_istoric_zile']) * 86400);
+            $windowTo = date('Y-m-d H:i:s', min($this->now(), $ts + 86400));
+            try {
+                $data = $this->sas->fetchReadings((int) $source['external_provider_vehicle_id'], $windowFrom, $windowTo);
+            } catch (Throwable $exception) {
+                $this->log('Verificare semiremorca, carId=' . $source['external_provider_vehicle_id'] . ': ' . $exception->getMessage());
+                return $result + ['status' => 'indisponibil', 'note' => 'SAS Fleet nu a răspuns: ' . $exception->getMessage()];
+            }
+            $this->model->storeReadings($tractorId, 'sas', $data['readings']);
+            $valid = array_values(array_filter(OdometerCalculator::flagAnomalies(array_map(static fn (array $r): array => [
+                'measured_at' => (string) $r['measured_at'],
+                'segment_started_at' => $r['segment_started_at'],
+                'km' => (float) $r['odometer_km'],
+            ], $data['readings'])), static fn (array $r): bool => $r['anomaly'] === null));
+            $range = OdometerCalculator::sasOdometerRange($valid, $moment, $windowTo);
+            if ($range === null) {
+                return $result + ['status' => 'indisponibil', 'note' => 'SAS nu are odometrul capului tractor la ' . date('d.m.Y H:i', $ts) . '.'];
+            }
+            $ranges[$key] = $range;
+        }
+
+        return $result + [
+            'status' => 'calculat',
+            'sas_from_min' => $ranges['from']['min'], 'sas_from_max' => $ranges['from']['max'],
+            'sas_to_min' => $ranges['to']['min'], 'sas_to_max' => $ranges['to']['max'],
+            'note' => null,
+        ];
+    }
+
+    /** Verificarea salvata, evaluata cu pragul curent (pentru card si istoric). */
+    private static function evaluateCheck(?array $row, float $toleranceKm): ?array
+    {
+        if ($row === null) {
+            return null;
+        }
+        $result = [
+            'status' => (string) $row['status'],
+            'tractor_plate' => $row['tractor_plate'] ?? null,
+            'from' => $row['previous_measured_at'] ?? null,
+            'trailer_km' => $row['trailer_km'] !== null ? (float) $row['trailer_km'] : null,
+            'tractor_min' => null, 'tractor_max' => null, 'diff_km' => null, 'problem' => false,
+            'tolerance_km' => $toleranceKm,
+            'note' => $row['note'],
+            'checked_at' => (string) $row['checked_at'],
+        ];
+        if ($row['status'] === 'calculat') {
+            // Cel mai putin si cel mai mult cat a putut merge capul tractor intre cele doua capete.
+            $result['tractor_min'] = round(max(0.0, (float) $row['sas_to_min'] - (float) $row['sas_from_max']), 1);
+            $result['tractor_max'] = round((float) $row['sas_to_max'] - (float) $row['sas_from_min'], 1);
+            $diff = OdometerCalculator::trailerTractorDifference((float) $row['trailer_km'], $result['tractor_min'], $result['tractor_max'], $toleranceKm);
+            $result['diff_km'] = $diff['diff_km'];
+            $result['problem'] = $diff['problem'];
+        }
+
+        return $result;
+    }
+
+    public function saveManualTolerance(string $km, ?int $userId): void
+    {
+        $value = (float) str_replace(',', '.', trim($km));
+        if (!is_numeric(str_replace(',', '.', trim($km))) || $value < 0 || $value > 100000) {
+            throw new InvalidArgumentException('Pragul trebuie să fie un număr de km ≥ 0.');
+        }
+        $old = $this->model->getSettings()['manual_toleranta_km'];
+        $new = (string) round($value, 1);
+        if ($old === $new) {
+            return;
+        }
+        $this->model->saveSetting('manual_toleranta_km', $new, $userId);
+        $this->model->logAudit(null, $userId, 'set_manual_tolerance', ['manual_toleranta_km' => $old], ['manual_toleranta_km' => $new]);
     }
 
     /**
@@ -1051,12 +1231,15 @@ final class OdometerCenterService
         $manual = [];
         if (self::acceptsManual((string) $vehicle['tip_vehicul'])) {
             $all = self::manualSeries($this->model->getManualReadings($vehicleId, true)[$vehicleId] ?? []);
+            $checks = $this->model->getManualChecks($vehicleId);
+            $tolerance = (float) $this->model->getSettings()['manual_toleranta_km'];
             $flagged = [];
             foreach (OdometerCalculator::flagAnomalies(array_values(array_filter($all, static fn (array $r): bool => $r['canceled_at'] === null))) as $r) {
                 $flagged[$r['id']] = $r['anomaly'];
             }
             foreach ($all as $r) {
                 $r['anomaly'] = $r['canceled_at'] === null ? ($flagged[$r['id']] ?? null) : null;
+                $r['check'] = $r['canceled_at'] === null ? self::evaluateCheck($checks[$r['reading_id']] ?? null, $tolerance) : null;
                 $manual[] = $r;
             }
         }
