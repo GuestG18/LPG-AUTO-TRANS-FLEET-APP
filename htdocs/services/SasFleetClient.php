@@ -24,14 +24,19 @@ class SasFleetClient
     private ?string $host = null;
     private ?string $token = null;
 
-    public function __construct()
+    /**
+     * Implicit credentialele din .env. Cu $username/$password explicite (sandbox) se
+     * ignora contul si serverul din .env: serverul vine din $host sau din loginservice.
+     */
+    public function __construct(?string $username = null, ?string $password = null, ?string $host = null)
     {
-        $this->username = trim((string) (self::env('SAS_API_USERNAME') ?: ''));
-        $this->password = trim((string) (self::env('SAS_API_PASSWORD') ?: ''));
+        $explicit = $username !== null;
+        $this->username = trim($explicit ? $username : (string) (self::env('SAS_API_USERNAME') ?: ''));
+        $this->password = trim($explicit ? (string) $password : (string) (self::env('SAS_API_PASSWORD') ?: ''));
         $this->culture = trim((string) (self::env('SAS_API_CULTURE') ?: 'ro-RO'));
         $this->loginServiceUrl = rtrim(trim((string) (self::env('SAS_API_LOGIN_SERVICE_URL')
             ?: 'https://fleetlogin-webapp.azurewebsites.net/LoginService.svc')), '/');
-        $this->configuredHost = trim((string) (self::env('SAS_API_HOST') ?: ''));
+        $this->configuredHost = trim($explicit ? (string) $host : (string) ($host ?? (self::env('SAS_API_HOST') ?: '')));
         $this->timeoutSeconds = max(3, min(60, (int) (self::env('SAS_API_TIMEOUT') ?: 15)));
     }
 
@@ -280,6 +285,36 @@ class SasFleetClient
         }
 
         return $decoded;
+    }
+
+    /**
+     * Rapoartele web SAS (/SASGWebReports/*.aspx) nu sunt in API-ul public si nu accepta
+     * tokenul: cer un SessionId (GUID) obtinut cu tokenul prin PrivateAPI/getreportssessionid,
+     * exact ca SAS Fleet Web. Aplicatia web il reinnoieste la 15 minute.
+     */
+    public function getReportsSessionId(): string
+    {
+        $body = $this->authenticatedRequest('POST', '/SASFleetService/PrivateAPI/getreportssessionid', []);
+        $decoded = json_decode($body, true);
+        $sessionId = is_array($decoded) ? trim((string) ($decoded['SessionId'] ?? '')) : '';
+        if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $sessionId)) {
+            throw new RuntimeException('SAS nu a returnat un SessionId valid pentru rapoarte.');
+        }
+
+        return $sessionId;
+    }
+
+    /**
+     * GET pe o pagina de raport web SAS (HTML). $query fara SessionId/Culture: se adauga aici.
+     */
+    public function fetchWebReport(string $page, array $query): string
+    {
+        $query['SessionId'] = $this->getReportsSessionId();
+        $query['Culture'] = 'ro-RO';
+        $url = 'https://' . $this->resolveHost() . '/SASGWebReports/' . rawurlencode($page) . '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        $result = $this->httpRequest('GET', $url, null, ['Accept: text/html']);
+
+        return $result['body'];
     }
 
     /**

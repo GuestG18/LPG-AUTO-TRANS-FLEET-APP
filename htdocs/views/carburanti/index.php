@@ -3330,7 +3330,12 @@ document.addEventListener('DOMContentLoaded', function () {
                     return;
                 }
                 holders.forEach(function (el) {
-                    var km = data.km[intervals.indexOf(keyOf(el))];
+                    var intervalIndex = intervals.indexOf(keyOf(el));
+                    var km = data.km[intervalIndex];
+                    // SAS indisponibil: serverul a intors ultima valoare cunoscuta (din cache).
+                    var staleMark = Array.isArray(data.stale) && data.stale[intervalIndex]
+                        ? ' <i class="bi bi-clock-history text-warning" title="SAS nu a răspuns: ultima valoare citită, posibil neactualizată" aria-label="valoare posibil neactualizată"></i>'
+                        : '';
                     var liters = parseFloat(el.getAttribute('data-gps-liters') || '0');
                     if (km === null || km === undefined || !(km > 0)) {
                         fill(el, '<span class="text-muted">fără date</span>', '—');
@@ -3345,7 +3350,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             : '<span class="text-warning" title="În afara intervalului plauzibil ' + minL100 + '–' + maxL100 + ' L/100 km: interval prea scurt sau FULL marcat greșit">'
                                 + fmt(value, 2) + ' L/100 km <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span>';
                     }
-                    fill(el, fmt(km, 0) + ' km', l100);
+                    fill(el, fmt(km, 0) + ' km' + staleMark, l100);
                 });
             })
             .catch(function () {

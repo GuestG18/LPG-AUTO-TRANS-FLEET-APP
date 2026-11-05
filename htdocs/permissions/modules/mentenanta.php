@@ -32,6 +32,8 @@ return [
         'auto_catalog'  => ['label' => 'Auto catalog (config componente)', 'group' => 'configurare'],
         'parts_stock'   => ['label' => 'Stoc piese', 'group' => 'stoc'],
         'tire_stock'    => ['label' => 'Stoc anvelope & config axe', 'group' => 'stoc'],
+        // Exploratorul din Stoc Anvelope: montare / inlocuire / demontare pe loc, inspectii, atribute axe.
+        'components_manage' => ['label' => 'Componente vehicul (montare, inspecție, atribute axe)', 'group' => 'stoc'],
         'export'        => ['label' => 'Export CSV', 'group' => 'export'],
     ],
     'endpoints'   => [
@@ -59,6 +61,14 @@ return [
         'tire_mount_layout'          => 'tire_stock',
         'tire_stock_children'        => 'tire_stock',
         'tire_stock_selection'       => 'tire_stock',
+        'tire_fleet_unit'            => 'tire_stock',
+        'tire_position_candidates'   => 'tire_stock',
+        'tire_fleet_component'       => 'tire_stock',
+        'tire_fleet_component_inspector' => 'tire_stock',
+        'component_mount'            => 'components_manage',
+        'component_unmount'          => 'components_manage',
+        'component_inspect'          => 'components_manage',
+        'axle_attributes_save'       => 'components_manage',
         'export'                     => 'export',
         'export_v2'                  => 'export',
     ],

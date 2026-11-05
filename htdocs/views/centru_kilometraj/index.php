@@ -70,6 +70,7 @@ $pageJson = json_encode([
                 <select data-kmc-filter="category" aria-label="Categorie de capacitate"><option value="">Toate categoriile</option></select>
                 <select data-kmc-filter="provider" aria-label="Furnizor">
                     <option value="">Toți furnizorii API</option>
+                    <option value="can">Cu odometru CAN</option>
                     <option value="sas">Cu SAS Fleet</option>
                     <option value="cardoil">Cu CardOil Refill</option>
                     <option value="both">Cu ambele surse</option>

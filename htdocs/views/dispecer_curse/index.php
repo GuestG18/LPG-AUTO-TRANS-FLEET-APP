@@ -548,12 +548,12 @@ ob_start();
                     </div>
 
                     <div class="col-12 col-md-6 col-xl-2">
-                        <label class="form-label" for="filter_data_start">Data de la</label>
+                        <label class="form-label" for="filter_data_start">Data început de la</label>
                         <input type="date" class="form-control" id="filter_data_start" name="data_start" value="<?= e((string) ($filters['data_start'] ?? '')) ?>">
                     </div>
 
                     <div class="col-12 col-md-6 col-xl-2">
-                        <label class="form-label" for="filter_data_end">Data până la</label>
+                        <label class="form-label" for="filter_data_end">Data început până la</label>
                         <input type="date" class="form-control" id="filter_data_end" name="data_end" value="<?= e((string) ($filters['data_end'] ?? '')) ?>">
                     </div>
 

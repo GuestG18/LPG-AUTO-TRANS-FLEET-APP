@@ -191,12 +191,12 @@
     }
     /** Odometrele afisate pentru o componenta: semiremorca are unul singur, cel manual. */
     function odometersOf(comp) {
-        return comp.odometers || ['sas', 'cardoil'];
+        return comp.odometers || ['can', 'sas', 'cardoil'];
     }
     function hasManual(comp) {
         return odometersOf(comp).includes('manual');
     }
-    const SOURCE_SHORT = { sas: 'SAS', cardoil: 'CardOil', manual: 'Manual' };
+    const SOURCE_SHORT = { can: 'CAN', sas: 'SAS', cardoil: 'CardOil', manual: 'Manual' };
     function sourceFresh(source) {
         if (!source.available) {
             return null;
@@ -256,9 +256,9 @@
         if (f.provider) {
             const has = (p) => comps.some((c) => c.sources[p].available);
             const ok = {
-                sas: has('sas'), cardoil: has('cardoil'),
+                can: has('can'), sas: has('sas'), cardoil: has('cardoil'),
                 both: comps.some((c) => c.sources.sas.available && c.sources.cardoil.available),
-                none: !has('sas') && !has('cardoil'),
+                none: !has('can') && !has('sas') && !has('cardoil'),
             }[f.provider];
             if (!ok) {
                 return false;
@@ -464,13 +464,16 @@
         }
         const source = comp.sources[provider];
         const key = comp.id + ':' + provider;
-        const isSas = provider === 'sas';
-        const name = isSas ? 'Odometru SAS' : 'Odometru CardOil';
-        const icon = isSas ? 'bi-patch-check-fill' : 'bi-fuel-pump-fill';
+        // CAN si GPS vin din aceeasi sincronizare SAS: aceeasi stare „verificat”, citiri pe deplasari.
+        const isSas = provider === 'sas' || provider === 'can';
+        const name = { can: 'Odometru CAN', sas: 'Odometru GPS', cardoil: 'Odometru CardOil' }[provider];
+        const icon = { can: 'bi-cpu-fill', sas: 'bi-patch-check-fill', cardoil: 'bi-fuel-pump-fill' }[provider];
         const current = source.current;
-        const title = isSas
-            ? 'Odometru GPS SAS Fleet (kmIndex la sfârșitul ultimei deplasări). Nu e calibrat pe bord.'
-            : 'Odometrul tastat la pompă la ultima alimentare CardOil.';
+        const title = {
+            can: 'Odometrul de bord citit din CAN (raportul SAS „Foaie de parcurs cu distanțe din CAN”), la sfârșitul ultimei deplasări.',
+            sas: 'Odometru GPS SAS Fleet (kmIndex la sfârșitul ultimei deplasări). Nu e calibrat pe bord.',
+            cardoil: 'Odometrul tastat la pompă la ultima alimentare CardOil.',
+        }[provider];
         if (!source.available || !current) {
             const reason = source.reason || 'Date indisponibile pentru această sursă';
             return '<div class="kmc-odo kmc-odo--' + provider + ' kmc-odo--off" data-odo-key="' + key + '" title="' + esc(reason) + '">'
@@ -486,7 +489,7 @@
             const dot = { actual: 'kmc-dot--ok', eroare: 'kmc-dot--err' }[source.freshness] || 'kmc-dot--warn';
             const checkedTitle = source.freshness === 'eroare'
                 ? 'Ultima verificare SAS a eșuat: ' + (source.last_error || '')
-                : 'Verificat în SAS: ' + fmtDT(source.last_checked_at) + (current.measured_at < (source.last_checked_at || '') ? ' — nicio deplasare de la ultima citire' : '');
+                : (provider === 'can' ? 'Raport CAN verificat în SAS: ' : 'Verificat în SAS: ') + fmtDT(source.last_checked_at) + (current.measured_at < (source.last_checked_at || '') ? ' — nicio deplasare de la ultima citire' : '');
             src = '<div class="kmc-odo__src" title="' + esc(checkedTitle) + '"><span class="kmc-dot ' + dot + '"></span>'
                 + (source.freshness === 'eroare' ? 'Eroare SAS' : 'verificat ' + esc(ago(source.last_checked_at))) + '</div>';
         } else {
@@ -580,6 +583,7 @@
     }
 
     function sinceHtml(comp) {
+        const can = comp.sources.can ? comp.sources.can.distance.km : null;
         const sas = comp.sources.sas.distance.km;
         const card = comp.sources.cardoil.distance.km;
         if (!comp.monitored) {
@@ -591,7 +595,7 @@
         const diff = comp.comparison && comp.comparison.comparable
             ? '<div class="kmc-since__src" title="' + esc(comp.comparison.note) + '">Δ SAS − CardOil: ' + esc(signedKm(comp.comparison.diff_km)) + '</div>' : '';
         if (comp.official.km !== null) {
-            const src = { sas: 'SAS Fleet', cardoil: 'CardOil Refill', manual: 'citire manuală' }[comp.official.source] || comp.official.source;
+            const src = { can: 'CAN (bord)', sas: 'SAS Fleet (GPS)', cardoil: 'CardOil Refill', manual: 'citire manuală' }[comp.official.source] || comp.official.source;
             return '<div class="kmc-since"><div class="kmc-since__label">De la T0:</div><div class="kmc-since__value">' + esc(signedKm(comp.official.km))
                 + '</div><div class="kmc-since__src">Sursă oficială: ' + src + '</div>' + diff + '</div>';
         }
@@ -600,7 +604,8 @@
         }
         const line = (label, km, note) => '<div class="kmc-since__line"><span>' + label + '</span>' + (km !== null ? '<b>' + esc(signedKm(km)) + '</b>' : '<span class="kmc-since__src" title="' + esc(note || '') + '">—</span>') + '</div>';
         return '<div class="kmc-since"><div class="kmc-since__label">De la T0:</div>'
-            + line('SAS', sas, comp.sources.sas.distance.note)
+            + line('CAN', can, comp.sources.can ? comp.sources.can.distance.note : null)
+            + line('GPS', sas, comp.sources.sas.distance.note)
             + line('CardOil', card, comp.sources.cardoil.distance.note)
             + '<div class="kmc-since__src">' + (state.data.policy.code ? esc(comp.official.reason || '') : 'Sursa oficială neconfigurată') + '</div>' + diff + '</div>';
     }
@@ -648,9 +653,10 @@
             if (hasManual(comp)) {
                 return '<span>' + label + ': <span class="kmc-muted" title="' + esc(comp.official.reason || '') + '">—</span></span>';
             }
+            const k = comp.sources.can ? comp.sources.can.distance.km : null;
             const s = comp.sources.sas.distance.km;
             const c = comp.sources.cardoil.distance.km;
-            return '<span>' + label + ': SAS <b>' + esc(signedKm(s)) + '</b> · CardOil <b>' + esc(signedKm(c)) + '</b></span>';
+            return '<span>' + label + ': CAN <b>' + esc(signedKm(k)) + '</b> · GPS <b>' + esc(signedKm(s)) + '</b> · CardOil <b>' + esc(signedKm(c)) + '</b></span>';
         };
         return '<div class="kmc-total" title="Km per componentă: nu se adună între cap tractor și semiremorcă și nici între surse.">'
             + '<span class="kmc-dot kmc-dot--ok"></span><strong>De la T0:</strong>'
@@ -688,13 +694,13 @@
                 if (!s.available || !s.current) {
                     return '<td class="kmc-num"><span class="kmc-muted" title="' + esc(s.reason || '') + '">indisponibil</span></td>';
                 }
-                return '<td class="kmc-num"><span class="' + (p === 'sas' ? 'kmc-sas' : 'kmc-card-oil') + '">' + esc(fmtKm(s.current.km)) + ' km</span><small>' + esc(fmtDT(s.current.measured_at)) + '</small></td>';
+                return '<td class="kmc-num"><span class="' + ({ can: 'kmc-can', sas: 'kmc-sas' }[p] || 'kmc-card-oil') + '">' + esc(fmtKm(s.current.km)) + ' km</span><small>' + esc(fmtDT(s.current.measured_at)) + '</small></td>';
             };
             const dist = (p) => '<td class="kmc-num">' + (comp.sources[p].distance.km !== null ? esc(signedKm(comp.sources[p].distance.km)) : '—') + '</td>';
             const manual = hasManual(comp);
             const manualCell = () => {
                 const s = comp.sources.manual;
-                return '<td class="kmc-num" colspan="2">' + (s.current
+                return '<td class="kmc-num" colspan="3">' + (s.current
                     ? '<span class="kmc-manual">' + esc(fmtKm(s.current.km)) + ' km</span><small>manual · ' + esc(fmtDT(s.current.measured_at)) + '</small>'
                     : '<span class="kmc-muted" title="' + esc(s.reason || '') + '">nicio citire manuală</span>') + '</td>';
             };
@@ -703,9 +709,9 @@
             return '<tr data-unit="' + esc(unit.key) + '">'
                 + '<td>' + (first ? '' : '<i class="bi bi-arrow-return-right kmc-muted"></i> ') + '<strong>' + esc(comp.plate) + '</strong><small>' + esc(comp.label) + ' · ' + esc(comp.type_label) + '</small></td>'
                 + '<td>' + (first ? esc(category ? category.name : '—') : '') + '<small>' + esc(capacityLabel(comp.capacity_t) || '') + '</small></td>'
-                + (manual ? manualCell() : cell('sas') + cell('cardoil'))
+                + (manual ? manualCell() : cell('can') + cell('sas') + cell('cardoil'))
                 + '<td>' + (comp.t0.requested_at ? esc(fmtDT(comp.t0.requested_at)) : '<span class="kmc-muted">—</span>') + '</td>'
-                + (manual ? '<td class="kmc-num" colspan="2">' + (comp.sources.manual.distance.km !== null ? esc(signedKm(comp.sources.manual.distance.km)) : '—') + '</td>' : dist('sas') + dist('cardoil'))
+                + (manual ? '<td class="kmc-num" colspan="3">' + (comp.sources.manual.distance.km !== null ? esc(signedKm(comp.sources.manual.distance.km)) : '—') + '</td>' : dist('can') + dist('sas') + dist('cardoil'))
                 + '<td class="kmc-num">' + (comp.official.km !== null ? '<b>' + esc(signedKm(comp.official.km)) + '</b>' : '—') + '</td>'
                 + '<td>' + (first ? metaActions(unit) : '') + '</td>'
                 + '</tr>';
@@ -735,7 +741,7 @@
             totalSub = 'sursă oficială: ' + esc(policy.label) + (k.official_excluded ? ' · ' + k.official_excluded + ' excluse' : '');
         } else {
             totalValue = '<div class="kmc-kpi__value kmc-kpi__value--muted">Politică neconfigurată</div>';
-            totalSub = 'SAS ' + esc(fmtKm(k.per_source_km ? k.per_source_km.sas : 0)) + ' km · CardOil ' + esc(fmtKm(k.per_source_km ? k.per_source_km.cardoil : 0)) + ' km';
+            totalSub = 'CAN ' + esc(fmtKm(k.per_source_km ? k.per_source_km.can || 0 : 0)) + ' km · GPS ' + esc(fmtKm(k.per_source_km ? k.per_source_km.sas : 0)) + ' km · CardOil ' + esc(fmtKm(k.per_source_km ? k.per_source_km.cardoil : 0)) + ' km';
         }
         if (state.perms.settings) {
             const options = Object.entries(policy.options || {}).map(([code, label]) => '<option value="' + esc(code) + '"' + (code === policy.code ? ' selected' : '') + '>' + esc(code === '' ? 'Sursă oficială: neconfigurată' : 'Sursă oficială: ' + label) + '</option>').join('');
@@ -813,8 +819,8 @@
             let body;
             if (state.view === 'list') {
                 body = '<div class="kmc-group__body kmc-group__body--list"><div class="kmc-table-wrap"><table class="kmc-table"><thead><tr>'
-                    + '<th>Vehicul</th><th>Categorie / cap.</th><th class="kmc-num">Odometru SAS</th><th class="kmc-num">Odometru CardOil</th><th>T0</th>'
-                    + '<th class="kmc-num">SAS de la T0</th><th class="kmc-num">CardOil de la T0</th><th class="kmc-num">Oficial</th><th></th></tr></thead><tbody>'
+                    + '<th>Vehicul</th><th>Categorie / cap.</th><th class="kmc-num">Odometru CAN</th><th class="kmc-num">Odometru GPS</th><th class="kmc-num">Odometru CardOil</th><th>T0</th>'
+                    + '<th class="kmc-num">CAN de la T0</th><th class="kmc-num">GPS de la T0</th><th class="kmc-num">CardOil de la T0</th><th class="kmc-num">Oficial</th><th></th></tr></thead><tbody>'
                     + group.units.map(listRows).join('') + '</tbody></table></div></div>';
             } else {
                 body = '<div class="kmc-group__body' + (wide ? ' kmc-group__body--wide' : '') + '">'
@@ -917,8 +923,8 @@
     }
 
     function hitHtml(provider, result) {
-        const title = { sas: 'Citire istorică SAS Fleet', cardoil: 'Citire istorică CardOil Refill', manual: 'Citire manuală semiremorcă' }[provider];
-        const icon = { sas: 'bi-broadcast', cardoil: 'bi-fuel-pump', manual: 'bi-pencil-square' }[provider];
+        const title = { can: 'Citire istorică CAN (bord)', sas: 'Citire istorică SAS Fleet (GPS)', cardoil: 'Citire istorică CardOil Refill', manual: 'Citire manuală semiremorcă' }[provider];
+        const icon = { can: 'bi-cpu', sas: 'bi-broadcast', cardoil: 'bi-fuel-pump', manual: 'bi-pencil-square' }[provider];
         if (!result || result.status === 'fara_sursa') {
             return '<div class="kmc-hit kmc-hit--off kmc-hit--' + provider + '"><span class="kmc-hit__icon"><i class="bi ' + icon + '"></i></span><div><b>' + title + '</b>Date indisponibile pentru această sursă'
                 + (result && result.note ? '<div class="kmc-hit__note">' + esc(result.note) + '</div>' : '') + '</div></div>';
@@ -970,7 +976,7 @@
             + '<div class="kmc-chips" style="margin-top:6px">' + (unit.capacity_t !== null ? '<span><i class="bi bi-box-seam"></i>' + esc(capacityLabel(unit.capacity_t)) + '</span>' : '') + '<span>' + (unit.kind === 'ansamblu' ? 'Ansamblu' : esc(main.type_label)) + '</span></div>'
             + '<div>' + comps.map((c) => odometersOf(c).map((prov) => {
                 const on = c.sources[prov].available && (prov !== 'manual' || c.sources[prov].current);
-                return '<span class="kmc-srcchip kmc-srcchip--' + (on ? prov : 'off') + '" title="' + esc(c.plate + ': ' + (on ? 'sursă disponibilă' : (c.sources[prov].reason || 'indisponibil'))) + '"><i class="bi ' + ({ sas: 'bi-broadcast', cardoil: 'bi-fuel-pump', manual: 'bi-pencil-square' }[prov]) + '"></i>' + ({ sas: 'SAS Fleet', cardoil: 'CardOil Refill', manual: 'Odometru manual' }[prov]) + (comps.length > 1 ? ' · ' + esc(c.plate) : '') + '</span>';
+                return '<span class="kmc-srcchip kmc-srcchip--' + (on ? prov : 'off') + '" title="' + esc(c.plate + ': ' + (on ? 'sursă disponibilă' : (c.sources[prov].reason || 'indisponibil'))) + '"><i class="bi ' + ({ can: 'bi-cpu', sas: 'bi-broadcast', cardoil: 'bi-fuel-pump', manual: 'bi-pencil-square' }[prov]) + '"></i>' + ({ can: 'CAN (bord)', sas: 'SAS Fleet (GPS)', cardoil: 'CardOil Refill', manual: 'Odometru manual' }[prov]) + (comps.length > 1 ? ' · ' + esc(c.plate) : '') + '</span>';
             }).join('')).join('') + '</div>'
             + '</div></div>';
 
@@ -990,14 +996,14 @@
                 + (canEdit
                     ? '<p class="kmc-step">1. Selectează data și ora</p><div class="kmc-dt"><label><i class="bi bi-calendar3"></i><input type="date" data-kmc-t0-date value="' + esc(p.date) + '" max="' + new Date().toISOString().slice(0, 10) + '"></label>'
                         + '<label><i class="bi bi-clock"></i><input type="time" data-kmc-t0-time value="' + esc(p.time) + '"></label></div>'
-                        + '<p class="kmc-step">2. Preia citirile istorice din ambele API</p>'
-                        + '<button type="button" class="kmc-btn kmc-btn--primary kmc-btn--block' + (p.busy === 'lookup' ? ' is-busy' : '') + '" data-kmc-lookup' + (p.busy ? ' disabled' : '') + '><i class="bi ' + (p.busy === 'lookup' ? 'bi-arrow-repeat' : 'bi-search') + '"></i>' + (p.busy === 'lookup' ? 'Caut în SAS și CardOil…' : 'Caută citiri istorice') + '</button>'
+                        + '<p class="kmc-step">2. Preia citirile istorice (SAS CAN + GPS, CardOil)</p>'
+                        + '<button type="button" class="kmc-btn kmc-btn--primary kmc-btn--block' + (p.busy === 'lookup' ? ' is-busy' : '') + '" data-kmc-lookup' + (p.busy ? ' disabled' : '') + '><i class="bi ' + (p.busy === 'lookup' ? 'bi-arrow-repeat' : 'bi-search') + '"></i>' + (p.busy === 'lookup' ? 'Caut în SAS (CAN + GPS) și CardOil…' : 'Caută citiri istorice') + '</button>'
                     : '<p class="kmc-note">Nu ai dreptul să modifici T0.</p>')
                 + results
                 + (p.lookup && okCount === 0 ? '<div class="kmc-alert">Nicio sursă nu are o citire validă la acest T0. Alege alt moment (de preferat când vehiculul stătea parcat).</div>' : '')
                 + (p.error ? '<div class="kmc-alert kmc-alert--err">' + esc(p.error) + '</div>' : '')
                 + (canEdit && p.lookup ? '<input type="text" class="kmc-reason" data-kmc-reason maxlength="255" placeholder="Motiv (opțional), ex. început de lună, schimb anvelope">' : '')
-                + '<p class="kmc-note">SAS: citirea de la sfârșitul ultimei deplasări înainte de T0; acceptată dacă vehiculul stătea parcat sau în toleranța de ' + esc(state.data.settings.sas_toleranta_minute) + ' min. CardOil: ultima alimentare înainte de T0, maxim ' + esc(state.data.settings.cardoil_varsta_max_ore) + ' ore.'
+                + '<p class="kmc-note">CAN și GPS (SAS): citirea de la sfârșitul ultimei deplasări înainte de T0; acceptată dacă vehiculul stătea parcat sau în toleranța de ' + esc(state.data.settings.sas_toleranta_minute) + ' min. CardOil: ultima alimentare înainte de T0, maxim ' + esc(state.data.settings.cardoil_varsta_max_ore) + ' ore.'
                     + (comps.some(hasManual) ? ' Semiremorcă: cea mai apropiată citire manuală, înainte sau după T0, la maxim ' + esc(state.data.settings.manual_varsta_max_ore) + ' ore.' : '') + ' Nicio valoare nu se interpolează. Versiunile T0 anterioare rămân în istoric.</p>';
             foot = '<button type="button" class="kmc-btn" data-kmc-close>Anulează</button>'
                 + (canEdit ? '<button type="button" class="kmc-btn kmc-btn--primary' + (p.busy === 'save' ? ' is-busy' : '') + '" data-kmc-save' + (!p.lookup || okCount === 0 || p.busy ? ' disabled' : '') + '>' + (p.busy === 'save' ? '<i class="bi bi-arrow-repeat"></i>' : '') + 'Salvează T0</button>' : '');
@@ -1110,11 +1116,12 @@
                 + audit + '</div>';
         }
 
-        const since = '<p class="kmc-note">De la T0 — SAS: <b>' + esc(signedKm(comp.sources.sas.distance.km)) + '</b> · CardOil: <b>' + esc(signedKm(comp.sources.cardoil.distance.km)) + '</b></p>';
+        const since = '<p class="kmc-note">De la T0 — CAN: <b>' + esc(signedKm(comp.sources.can ? comp.sources.can.distance.km : null)) + '</b> · GPS: <b>' + esc(signedKm(comp.sources.sas.distance.km)) + '</b> · CardOil: <b>' + esc(signedKm(comp.sources.cardoil.distance.km)) + '</b></p>';
 
         const fuelLink = state.perms.fuel ? ' <a class="kmc-link" href="' + esc(page.urls.fuel) + '">Corectezi în Carburanți</a>' : '';
         return '<div class="kmc-hist">'
             + '<h4><i class="bi bi-flag"></i>Referințe T0 (toate versiunile)</h4>' + versions + since + diff
+            + '<h4 style="color:var(--kmc-teal)"><i class="bi bi-cpu"></i>Citiri CAN <small class="kmc-muted">(odometrul de bord, din raportul SAS cu distanțe din CAN, ultimele ' + esc(h.days) + ' zile)</small></h4>' + series(h.can || [], 'can')
             + '<h4 style="color:var(--kmc-blue)"><i class="bi bi-broadcast"></i>Citiri SAS Fleet <small class="kmc-muted">(odometru GPS, ultimele ' + esc(h.days) + ' zile)</small></h4>' + series(h.sas, 'sas')
             + '<h4 style="color:var(--kmc-purple)"><i class="bi bi-fuel-pump"></i>Citiri CardOil Refill <small class="kmc-muted">(pe eveniment: alimentări)</small></h4>'
             + '<p class="kmc-note">Fiecare rând e o alimentare: odometrul tastat la pompă. Între alimentări nu există citiri.' + fuelLink + '</p>' + series(h.cardoil, 'cardoil')

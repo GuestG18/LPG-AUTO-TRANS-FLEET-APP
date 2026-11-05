@@ -958,6 +958,7 @@ class MaintenanceModel extends BaseModel
     {
         $stmt = $this->db->query(
             "SELECT id, cod_piesa, denumire, categorie, descriere, imagine_original, imagine_stocata,
+                    stoc_curent, stoc_minim, pret_achizitie, unitate_masura, producator, cod_oem, furnizor, locatie_depozit,
                     garantie_piesa, garantie_manopera, interval_km, interval_luni, avertizare_km, avertizare_zile,
                     updated_at
              FROM mentenanta_piese
@@ -1426,6 +1427,12 @@ class MaintenanceModel extends BaseModel
                 ':created_at' => date('Y-m-d H:i:s'),
                 ':updated_at' => date('Y-m-d H:i:s'),
             ];
+            $existingPartId = max(0, (int) ($data['existing_part_id'] ?? 0));
+            if ($existingPartId > 0) {
+                // Componenta aleasa din catalogul Reparatii Auto are deja piesa ei in stoc: o completam, nu o dublam.
+                $values[':denumire'] = $this->updateCatalogPart($existingPartId, $mode, $data, $documents);
+                $partId = $existingPartId;
+            } else {
             $archivedStmt = $this->db->prepare(
                 "SELECT id FROM mentenanta_piese WHERE cod_piesa = :cod_piesa AND arhivat_la IS NOT NULL LIMIT 1 FOR UPDATE"
             );
@@ -1471,6 +1478,7 @@ class MaintenanceModel extends BaseModel
             )->execute($values);
             }
             $partId = $archivedId > 0 ? $archivedId : (int) $this->db->lastInsertId();
+            }
 
             if ($mode === 'direct') {
                 $vehicleId = (int) ($data['mount_vehicle_id'] ?? 0);
@@ -1544,6 +1552,71 @@ class MaintenanceModel extends BaseModel
             }
             throw $exception;
         }
+    }
+
+    /**
+     * Piesa existenta a unei componente din catalog: „Adauga in stoc” creste cantitatea,
+     * „Monteaza direct” doar o foloseste. Campurile lasate goale nu suprascriu datele piesei.
+     */
+    private function updateCatalogPart(int $partId, string $mode, array $data, array $documents): string
+    {
+        $stmt = $this->db->prepare(
+            'SELECT id, denumire FROM mentenanta_piese WHERE id = :id AND arhivat_la IS NULL FOR UPDATE'
+        );
+        $stmt->execute([':id' => $partId]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            throw new RuntimeException('Piesa componentei alese nu mai există în stoc.');
+        }
+
+        $sets = ['updated_at = :updated_at'];
+        $params = [':id' => $partId, ':updated_at' => date('Y-m-d H:i:s')];
+        if ($mode === 'stoc') {
+            $quantity = (float) ($data['stoc_initial'] ?? 0);
+            if ($quantity <= 0) {
+                throw new RuntimeException('Introdu cantitatea adăugată în stoc.');
+            }
+            $sets[] = 'stoc_curent = stoc_curent + :quantity';
+            $params[':quantity'] = $quantity;
+        }
+
+        $text = ['producator', 'cod_oem', 'garantie_piesa', 'garantie_manopera', 'descriere'];
+        $numeric = ['interval_km', 'interval_luni', 'avertizare_km', 'avertizare_zile'];
+        if ($mode === 'stoc') {
+            $text = array_merge($text, ['furnizor', 'locatie_depozit']);
+            $numeric = array_merge($numeric, ['stoc_minim', 'pret_achizitie']);
+        }
+        foreach ($text as $field) {
+            $value = trim((string) ($data[$field] ?? ''));
+            if ($value !== '') {
+                $sets[] = $field . ' = :' . $field;
+                $params[':' . $field] = $value;
+            }
+        }
+        foreach ($numeric as $field) {
+            $raw = trim((string) ($data[$field] ?? ''));
+            if ($raw !== '' && is_numeric($raw) && (float) $raw >= 0) {
+                $sets[] = $field . ' = :' . $field;
+                $params[':' . $field] = (float) $raw;
+            }
+        }
+        $unit = trim((string) ($data['unitate_masura'] ?? ''));
+        if ($unit !== '') {
+            $sets[] = 'unitate_masura = :unitate_masura';
+            $params[':unitate_masura'] = $unit;
+        }
+        foreach (['invoice' => 'factura', 'technical' => 'fisa', 'image' => 'imagine'] as $key => $column) {
+            if (!empty($documents[$key]['stored'])) {
+                $sets[] = $column . '_original = :' . $column . '_original';
+                $sets[] = $column . '_stocata = :' . $column . '_stocata';
+                $params[':' . $column . '_original'] = $documents[$key]['original'] ?? null;
+                $params[':' . $column . '_stocata'] = $documents[$key]['stored'];
+            }
+        }
+
+        $this->db->prepare('UPDATE mentenanta_piese SET ' . implode(', ', $sets) . ' WHERE id = :id')->execute($params);
+
+        return (string) $row['denumire'];
     }
 
     private function convertScheduledIntervention(int $id): void

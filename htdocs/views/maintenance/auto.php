@@ -472,7 +472,7 @@ if ($componentPage && $selectedCategory !== []) {
                         $isSelected = (string) ($component['id'] ?? '') === (string) ($selectedComponent['id'] ?? '');
                         $wearRaw = $payload['wear'] ?? null;
                         $wear = is_numeric($wearRaw) ? (int) $wearRaw : null;
-                        $wearTone = $wear === null ? 'is-empty' : ($wear >= 60 ? 'is-orange' : 'is-green');
+                        $wearTone = $wear === null ? 'is-empty' : ($wear >= AutoComponentStateService::WEAR_ATTENTION_PERCENT ? 'is-orange' : 'is-green');
                         $payloadCode = trim((string) ($payload['stock_code'] ?? '')) !== ''
                             ? (string) $payload['stock_code']
                             : (string) ($payload['code'] ?? '');

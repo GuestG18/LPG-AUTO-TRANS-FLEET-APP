@@ -4211,4 +4211,439 @@ class TireModel extends BaseModel
             'history' => $historyRows,
         ];
     }
+
+    private const FLEET_SIDE_LABELS = [
+        'L' => 'Stânga',
+        'R' => 'Dreapta',
+        'LO' => 'Stânga ext.',
+        'LI' => 'Stânga int.',
+        'RI' => 'Dreapta int.',
+        'RO' => 'Dreapta ext.',
+    ];
+
+    private const FLEET_AXLE_LABELS = [
+        self::AXLE_STEERING => 'Direcție',
+        self::AXLE_TRACTION => 'Tracțiune',
+        self::AXLE_TRAILER => 'Remorcă',
+        self::AXLE_UNIVERSAL_BALLOON => 'Universală / balon',
+    ];
+
+    private const FLEET_KIND_LABELS = [
+        'ansamblu' => 'Ansamblu (cap + semiremorcă)',
+        'cap_tractor' => 'Cap tractor',
+        'camion' => 'Camion',
+        'semiremorca' => 'Semiremorcă',
+        'autovehicul' => 'Autovehicul',
+    ];
+
+    /** Vehiculele active din vederea pe vehicule a paginii Anvelope (fara vehiculul tehnic de stoc). */
+    public function getFleetTireVehicles(): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT id, nr_inmatriculare, marca, model, tip_vehicul, formula_axelor, km_bord, an_fabricatie, mma
+             FROM vehicule
+             WHERE status = "activ"
+               AND nr_inmatriculare <> :stock_plate
+               AND COALESCE(serie_sasiu, "") <> :stock_chassis
+             ORDER BY nr_inmatriculare ASC'
+        );
+        $stmt->execute([':stock_plate' => self::STOCK_VEHICLE_PLATE, ':stock_chassis' => self::STOCK_VEHICLE_CHASSIS]);
+
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Starea unei anvelope in vederea pe vehicule, din aceleasi date ca inventarul
+     * (prepareInventoryRow): Critic = regula "Inlocuire necesara", Atentie = uzura acceptabila
+     * (galben), OK = buna. Interfata nu recalculeaza nimic.
+     */
+    public function fleetTireStatus(array $row): string
+    {
+        if ($this->inventoryRowNeedsReplacement($row)) {
+            return 'crit';
+        }
+
+        return (string) ($row['condition_value'] ?? 'good') === 'acceptable' ? 'warn' : 'ok';
+    }
+
+    /**
+     * Pagina Anvelope, vederea pe vehicule: un rand per vehicul sau per ansamblu (cap tractor +
+     * semiremorca dintr-un cuplaj activ), cu pozitiile din vehicule_anvelope_pozitii si anvelopa
+     * montata pe fiecare (alocarea activa). Km / uzura / km ramasi vin din prepareInventoryRow,
+     * prin buildInventoryGroupSet, ca in inventar. Fiecare vehicul isi pastreaza anvelopele:
+     * ansamblul e doar o vedere.
+     *
+     * @param list<array> $vehicles getFleetTireVehicles()
+     * @param array<int,array> $couplings VehicleCouplingModel::getActiveAssemblyStatusByVehicleIds()
+     * @return array{units:list<array>,kpi:array,kind_options:array<string,string>}
+     */
+    public function buildFleetTireOverview(array $vehicles, array $couplings): array
+    {
+        $this->ensureLifecycleSchema();
+
+        $vehiclesById = [];
+        foreach ($vehicles as $vehicle) {
+            $vehiclesById[(int) $vehicle['id']] = $vehicle;
+        }
+
+        $positionsByVehicle = [];
+        if ($vehiclesById !== []) {
+            $placeholders = [];
+            $params = [];
+            foreach (array_keys($vehiclesById) as $index => $vehicleId) {
+                $placeholders[] = ':vehicle_' . $index;
+                $params[':vehicle_' . $index] = $vehicleId;
+            }
+            $stmt = $this->db->prepare(
+                'SELECT id, vehicle_id, position_code, position_label, axle_no, axle_type, side_code, wheel_kind, position_order
+                 FROM vehicule_anvelope_pozitii
+                 WHERE is_active = 1 AND vehicle_id IN (' . implode(', ', $placeholders) . ')
+                 ORDER BY axle_no ASC, position_order ASC, id ASC'
+            );
+            $stmt->execute($params);
+            foreach ($stmt->fetchAll() as $position) {
+                $positionsByVehicle[(int) $position['vehicle_id']][] = $position;
+            }
+        }
+
+        // Toate anvelopele, pregatite ca in inventar; cele montate se leaga de pozitie prin alocarea activa.
+        $set = $this->buildInventoryGroupSet(['view' => 'all']);
+        $tiresByPosition = [];
+        $orphanTiresByVehicle = [];
+        $kpi = ['vehicles' => count($vehiclesById), 'total_tires' => 0, 'mounted_tires' => 0, 'warn_tires' => 0, 'crit_tires' => 0, 'expected_positions' => 0, 'free_positions' => 0];
+        foreach ($set['groups'] as $group) {
+            foreach ($group['members'] as $row) {
+                $kpi['total_tires']++;
+                $status = $this->fleetTireStatus($row);
+                if ($status !== 'ok') {
+                    $kpi[$status . '_tires']++;
+                }
+                if (empty($row['is_mounted'])) {
+                    continue;
+                }
+                $kpi['mounted_tires']++;
+                $positionId = (int) ($row['active_position_id'] ?? 0);
+                // O pozitie are o singura anvelopa afisata; o a doua alocare activa pe aceeasi pozitie
+                // (date vechi) ramane vizibila in tabel, marcata, nu se suprapune in schema.
+                if ($positionId > 0 && !isset($tiresByPosition[$positionId])) {
+                    $tiresByPosition[$positionId] = $row;
+                } else {
+                    $orphanTiresByVehicle[(int) ($row['active_vehicle_id'] ?? 0)][] = $row;
+                }
+            }
+        }
+
+        // Ansambluri din cuplajele active existente (ambele vehicule active si prezente in lista).
+        $trailerOfTractor = [];
+        $coupledTrailers = [];
+        foreach ($vehiclesById as $vehicleId => $vehicle) {
+            if ($this->normalizeVehicleType((string) ($vehicle['tip_vehicul'] ?? '')) !== 'cap_tractor') {
+                continue;
+            }
+            $coupling = $couplings[$vehicleId] ?? null;
+            $trailerId = (int) ($coupling['semiremorca_id'] ?? 0);
+            if ($coupling === null || (int) ($coupling['tractor_id'] ?? 0) !== $vehicleId || ($coupling['status'] ?? '') !== 'activ'
+                || !isset($vehiclesById[$trailerId]) || isset($coupledTrailers[$trailerId])) {
+                continue;
+            }
+            $trailerOfTractor[$vehicleId] = $trailerId;
+            $coupledTrailers[$trailerId] = $vehicleId;
+        }
+
+        $units = [];
+        foreach ($vehiclesById as $vehicleId => $vehicle) {
+            if (isset($coupledTrailers[$vehicleId])) {
+                continue;
+            }
+            $memberIds = [$vehicleId];
+            if (isset($trailerOfTractor[$vehicleId])) {
+                $memberIds[] = $trailerOfTractor[$vehicleId];
+            }
+
+            $members = [];
+            foreach ($memberIds as $index => $memberId) {
+                $role = count($memberIds) > 1 ? ($index === 0 ? 'tractor' : 'trailer') : 'single';
+                $members[] = $this->buildFleetUnitMember($vehiclesById[$memberId], $role, $positionsByVehicle[$memberId] ?? [], $tiresByPosition, $orphanTiresByVehicle[$memberId] ?? []);
+            }
+            $units[] = $this->summarizeFleetUnit($members);
+        }
+
+        $kindOptions = [];
+        foreach ($units as $unit) {
+            $kindOptions[$unit['kind']] = self::FLEET_KIND_LABELS[$unit['kind']] ?? $unit['kind'];
+            $kpi['expected_positions'] += $unit['expected'];
+            $kpi['free_positions'] += $unit['expected'] - $unit['mounted_positions'];
+        }
+        $kindOrder = array_flip(array_keys(self::FLEET_KIND_LABELS));
+        uksort($kindOptions, static fn (string $a, string $b): int => ($kindOrder[$a] ?? 99) <=> ($kindOrder[$b] ?? 99));
+
+        return ['units' => $units, 'kpi' => $kpi, 'kind_options' => $kindOptions];
+    }
+
+    /** Un vehicul din ansamblu / rand: pozitiile lui, fiecare cu anvelopa montata (sau libera). */
+    private function buildFleetUnitMember(array $vehicle, string $role, array $positionRows, array $tiresByPosition, array $orphanTires): array
+    {
+        $vehicleType = $this->normalizeVehicleType((string) ($vehicle['tip_vehicul'] ?? 'autovehicul'));
+        $descriptor = $this->describeVehicleLayout($vehicleType, (string) ($vehicle['formula_axelor'] ?? ''));
+        // Vehicul fara pozitii sincronizate: se arata configuratia teoretica, fara montaj posibil
+        // pana la sincronizarea din Configuratie Axe.
+        $configured = $positionRows !== [];
+        if (!$configured) {
+            $positionRows = array_map(static fn (array $position): array => $position + ['id' => 0], $descriptor['positions']);
+        }
+
+        $positions = [];
+        foreach ($positionRows as $position) {
+            $positionId = (int) ($position['id'] ?? 0);
+            $tire = $positionId > 0 ? ($tiresByPosition[$positionId] ?? null) : null;
+            $axleType = (string) ($position['axle_type'] ?? '');
+            $sideCode = strtoupper((string) ($position['side_code'] ?? ''));
+            $positions[] = [
+                'id' => $positionId,
+                'code' => (string) ($position['position_code'] ?? ''),
+                'display_code' => $this->fleetDisplayCode((string) ($position['position_code'] ?? '')),
+                'label' => (string) ($position['position_label'] ?? ''),
+                'axle_no' => (int) ($position['axle_no'] ?? 0),
+                'axle_type' => $axleType,
+                'axle_label' => self::FLEET_AXLE_LABELS[$axleType] ?? 'Axă',
+                'side_code' => $sideCode,
+                'side_label' => self::FLEET_SIDE_LABELS[$sideCode] ?? $sideCode,
+                'wheel_kind' => (string) ($position['wheel_kind'] ?? 'single'),
+                'status' => $tire !== null ? $this->fleetTireStatus($tire) : 'empty',
+                'tire_row' => $tire,
+            ];
+        }
+
+        $plate = (string) ($vehicle['nr_inmatriculare'] ?? '-');
+
+        return [
+            'vehicle_id' => (int) $vehicle['id'],
+            'role' => $role,
+            'role_label' => $role === 'tractor' ? 'Cap tractor' : ($role === 'trailer' ? 'Semiremorcă' : (self::FLEET_KIND_LABELS[$vehicleType] ?? 'Vehicul')),
+            'plate' => $plate,
+            'make' => trim((string) (($vehicle['marca'] ?? '') . ' ' . ($vehicle['model'] ?? ''))),
+            'year' => is_numeric((string) ($vehicle['an_fabricatie'] ?? null)) ? (int) $vehicle['an_fabricatie'] : null,
+            'mma' => is_numeric((string) ($vehicle['mma'] ?? null)) && (float) $vehicle['mma'] > 0 ? (float) $vehicle['mma'] : null,
+            'vehicle_type' => $vehicleType,
+            'vehicle_type_raw' => (string) ($vehicle['tip_vehicul'] ?? ''),
+            'vehicle_type_label' => $this->vehicleTypeLabel((string) ($vehicle['tip_vehicul'] ?? '')),
+            'layout' => (string) ($descriptor['layout_value'] ?? ''),
+            'axle_count' => (int) ($descriptor['axle_count'] ?? 0),
+            'km_bord' => is_numeric((string) ($vehicle['km_bord'] ?? null)) ? (int) $vehicle['km_bord'] : null,
+            'configured' => $configured,
+            'positions' => $positions,
+            'orphan_tires' => $orphanTires,
+        ];
+    }
+
+    /**
+     * Eticheta afisata a pozitiei: la rotile duble codul salvat (A2-LO / A2-LI) devine A2-L-OUT / A2-L-IN.
+     * Codul din vehicule_anvelope_pozitii ramane neschimbat (alocarile se leaga de id-ul pozitiei).
+     */
+    public function fleetDisplayCode(string $code): string
+    {
+        return (string) preg_replace_callback(
+            '/^(A\d+)-([LR])([IO])$/',
+            static fn (array $match): string => $match[1] . '-' . $match[2] . '-' . ($match[3] === 'I' ? 'IN' : 'OUT'),
+            strtoupper(trim($code))
+        );
+    }
+
+    private function summarizeFleetUnit(array $members): array
+    {
+        $first = $members[0];
+        $kind = count($members) > 1 ? 'ansamblu' : $first['vehicle_type'];
+        $expected = 0;
+        $mounted = 0;
+        $statusCounts = ['ok' => 0, 'warn' => 0, 'crit' => 0, 'empty' => 0];
+        $rows = [];
+        foreach ($members as $member) {
+            foreach ($member['positions'] as $position) {
+                $expected++;
+                $statusCounts[$position['status']]++;
+                if ($position['tire_row'] !== null) {
+                    $mounted++;
+                    $rows[] = $position['tire_row'];
+                }
+            }
+            foreach ($member['orphan_tires'] as $row) {
+                $rows[] = $row;
+                $status = $this->fleetTireStatus($row);
+                $statusCounts[$status]++;
+            }
+        }
+
+        $averages = $this->inventoryAverages($rows);
+        if ($statusCounts['crit'] > 0) {
+            $status = 'crit';
+        } elseif ($mounted === 0) {
+            $status = 'none';
+        } elseif ($statusCounts['warn'] > 0 || $statusCounts['empty'] > 0) {
+            $status = 'warn';
+        } else {
+            $status = 'ok';
+        }
+
+        if ($kind === 'ansamblu') {
+            $configLabel = $first['layout'] . ' + ' . $members[1]['axle_count'];
+        } elseif ($kind === 'semiremorca') {
+            $configLabel = $first['axle_count'] . ' axe';
+        } else {
+            $configLabel = $first['layout'];
+        }
+
+        $searchParts = [self::FLEET_KIND_LABELS[$kind] ?? '', $configLabel];
+        foreach ($members as $member) {
+            array_push($searchParts, $member['plate'], str_replace(' ', '', $member['plate']), $member['make'], $member['vehicle_type_label'], $member['role_label']);
+        }
+
+        return [
+            'key' => implode('-', array_map(static fn (array $member): string => (string) $member['vehicle_id'], $members)),
+            'kind' => $kind,
+            'kind_label' => self::FLEET_KIND_LABELS[$kind] ?? 'Vehicul',
+            'plate' => $first['plate'],
+            'make' => $first['make'],
+            'config_label' => $configLabel,
+            'members' => $members,
+            'expected' => $expected,
+            'mounted_positions' => $mounted,
+            'tire_count' => count($rows),
+            'wear_avg' => $averages['wear_avg'],
+            'status' => $status,
+            'status_counts' => $statusCounts,
+            'search' => mb_strtolower(implode(' ', array_filter($searchParts, static fn ($part): bool => (string) $part !== ''))),
+        ];
+    }
+
+    /** Datele unui rand pentru schema din pagina (fara campurile folosite doar de formulare). */
+    public function fleetUnitClientData(array $unit): array
+    {
+        $members = [];
+        foreach ($unit['members'] as $member) {
+            $positions = [];
+            foreach ($member['positions'] as $position) {
+                $row = $position['tire_row'];
+                $positions[] = [
+                    'id' => $position['id'],
+                    'code' => $position['display_code'],
+                    'axle' => $position['axle_no'],
+                    'axle_type' => $position['axle_type'],
+                    'axle_label' => $position['axle_label'],
+                    'side' => $position['side_code'],
+                    'side_label' => $position['side_label'],
+                    'dual' => $position['wheel_kind'] === 'dual',
+                    'status' => $position['status'],
+                    'tire' => $row === null ? null : $this->fleetTireClientData($row),
+                ];
+            }
+            $members[] = [
+                'vehicle_id' => $member['vehicle_id'],
+                'role' => $member['role'],
+                'role_label' => $member['role_label'],
+                'plate' => $member['plate'],
+                'make' => $member['make'],
+                'year' => $member['year'] ?? null,
+                'mma' => $member['mma'] ?? null,
+                'type' => $member['vehicle_type'],
+                'layout' => $member['layout'],
+                'axles' => $member['axle_count'],
+                'configured' => $member['configured'],
+                'positions' => $positions,
+            ];
+        }
+
+        return ['key' => $unit['key'], 'kind' => $unit['kind'], 'members' => $members];
+    }
+
+    private function fleetTireClientData(array $row): array
+    {
+        return [
+            'id' => (int) $row['id'],
+            'label' => trim((string) (($row['brand'] ?? '') . ' ' . ($row['model'] ?? ''))) ?: 'Anvelopa #' . (int) $row['id'],
+            'size' => (string) ($row['tire_size'] ?? ''),
+            'serial' => (string) ($row['serial_number'] ?? ''),
+            'dot' => (string) ($row['dot_code'] ?? ''),
+            'type' => (string) ($row['tire_type_label'] ?? ''),
+            'condition' => (string) ($row['condition_meta']['label'] ?? ''),
+            'status_label' => (string) ($row['status_meta']['label'] ?? ''),
+            'wear' => $row['wear_percent'] !== null ? round((float) $row['wear_percent'], 1) : null,
+            'used_km' => $row['used_km'] !== null ? (int) $row['used_km'] : null,
+            'remaining_km' => $row['remaining_km'] !== null ? (int) $row['remaining_km'] : null,
+            'tread' => is_numeric((string) ($row['tread_depth_mm'] ?? null)) ? (float) $row['tread_depth_mm'] : null,
+            'mounted_at' => (string) ($row['active_data_start'] ?? ''),
+            'allocation_id' => (int) ($row['active_allocation_id'] ?? 0),
+        ];
+    }
+
+    /** Montarile (alocarile) vehiculelor si anvelopelor date, cele mai noi primele. */
+    public function getFleetAllocationHistory(array $vehicleIds, array $tireIds, int $limit = 120): array
+    {
+        $vehicleIds = array_values(array_unique(array_filter(array_map('intval', $vehicleIds))));
+        $tireIds = array_values(array_unique(array_filter(array_map('intval', $tireIds))));
+        if ($vehicleIds === [] && $tireIds === []) {
+            return [];
+        }
+
+        $conditions = [];
+        $params = [];
+        foreach (['vehicle_id' => $vehicleIds, 'tire_id' => $tireIds] as $column => $ids) {
+            if ($ids === []) {
+                continue;
+            }
+            $placeholders = [];
+            foreach ($ids as $index => $id) {
+                $placeholders[] = ':' . $column . '_' . $index;
+                $params[':' . $column . '_' . $index] = $id;
+            }
+            $conditions[] = 'a.' . $column . ' IN (' . implode(', ', $placeholders) . ')';
+        }
+
+        $stmt = $this->db->prepare(
+            'SELECT a.id, a.tire_id, a.vehicle_id, a.data_start, a.data_end, a.km_start, a.km_end, a.status_end,
+                    p.position_code, v.nr_inmatriculare, t.brand, t.model, t.serial_number
+             FROM anvelope_alocari a
+             LEFT JOIN vehicule_anvelope_pozitii p ON p.id = a.position_id
+             LEFT JOIN vehicule v ON v.id = a.vehicle_id
+             LEFT JOIN anvelope t ON t.id = a.tire_id
+             WHERE ' . implode(' OR ', $conditions) . '
+             ORDER BY a.data_start DESC, a.id DESC
+             LIMIT ' . max(1, min(500, $limit))
+        );
+        $stmt->execute($params);
+
+        return $stmt->fetchAll();
+    }
+
+    /** Anvelopele din stoc care se pot monta pe o pozitie (aceleasi reguli ca la montaj). */
+    public function getMountCandidatesForPosition(int $positionId): ?array
+    {
+        $position = $this->getVehiclePositionById($positionId);
+        if ($position === null || (int) ($position['is_active'] ?? 1) !== 1) {
+            return null;
+        }
+        $vehicle = $this->getVehicleForTireOperation((int) ($position['vehicle_id'] ?? 0));
+        if ($vehicle === null) {
+            return null;
+        }
+
+        $candidates = [];
+        foreach ($this->getAvailableTires((string) ($vehicle['tip_vehicul'] ?? ''), (string) ($vehicle['formula_axelor'] ?? '')) as $tire) {
+            if (!$this->isTireCompatibleWithPosition($tire, $vehicle, $position)) {
+                continue;
+            }
+            $candidates[] = [
+                'id' => (int) $tire['id'],
+                'label' => trim((string) (($tire['brand'] ?? '') . ' ' . ($tire['model'] ?? ''))) ?: 'Anvelopa #' . (int) $tire['id'],
+                'size' => (string) ($tire['tire_size'] ?? ''),
+                'serial' => (string) ($tire['serial_number'] ?? ''),
+                'status' => $this->tireStatusMeta((string) ($tire['status'] ?? ''))['label'],
+            ];
+        }
+
+        return [
+            'position' => ['id' => $positionId, 'code' => (string) ($position['position_code'] ?? ''), 'label' => (string) ($position['position_label'] ?? '')],
+            'vehicle' => ['id' => (int) $vehicle['id'], 'plate' => (string) ($vehicle['nr_inmatriculare'] ?? '')],
+            'tires' => $candidates,
+        ];
+    }
 }

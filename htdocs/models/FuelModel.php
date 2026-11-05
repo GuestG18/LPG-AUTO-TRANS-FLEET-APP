@@ -51,10 +51,83 @@ class FuelModel extends BaseModel
     private bool $schemaEnsured = false;
     private ?bool $raceSoftDeleteAvailable = null;
     private bool $serviceKmLinksAvailable = false;
+    /**
+     * Memo pe durata cererii: numar normalizat -> id-urile vehiculelor (acelasi predicat SQL ca
+     * join-ul din findMatchingTrip). Lasa cautarea cursei sa foloseasca indexul pe vehicle_id in loc
+     * de scanarea intregului curse_dispecer pentru fiecare alimentare.
+     *
+     * @var array<string, list<int>>
+     */
+    private array $vehicleIdsByRegistration = [];
+    /** @var array<string, PDOStatement> instructiuni pregatite refolosite in bucla de asociere */
+    private array $matchStatements = [];
+    /**
+     * Memo de citire pe durata unei cereri GET (null = oprit). Pagina Carburanti cere de mai multe
+     * ori aceleasi agregate (KPI-urile perioadei curente / precedente apar si in carduri si in
+     * comparatie, randurile de odometru in KPI, grafic si tabelul pe vehicule). Se porneste doar
+     * explicit, DUPA refreshAutomaticAssociations, intr-o cerere care nu mai scrie nimic; orice
+     * scriere prin model il goleste (vezi invalidateReadCache()).
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $readCache = null;
+    /**
+     * Index pentru „odometrul alimentarii precedente": cheie de vehicul (greutatea de colatie a
+     * REPLACE(UPPER(numar), ' ', '')) -> lista [datetime, id, odometer_km] crescator. Inlocuieste
+     * subinterogarea corelata (scanare completa a fuel_fillups PER RAND) cu o singura citire.
+     *
+     * @var array<string, list<array{0:string,1:int,2:int}>>|null
+     */
+    private ?array $previousOdometerIndex = null;
+
+    /**
+     * Porneste memo-ul de citire pentru restul cererii. Apelat de pagina Carburanti dupa ce
+     * asocierile automate au fost recalculate; de aici incolo cererea doar citeste.
+     */
+    public function enableRequestReadCache(): void
+    {
+        $this->readCache = [];
+        $this->previousOdometerIndex = null;
+    }
+
+    /** Goleste memo-ul (orice scriere care poate schimba cifrele). */
+    public function invalidateReadCache(): void
+    {
+        if ($this->readCache !== null) {
+            $this->readCache = [];
+        }
+        $this->previousOdometerIndex = null;
+    }
+
+    /**
+     * @template T
+     * @param callable():T $compute
+     * @return T
+     */
+    private function memoRead(string $bucket, array $key, callable $compute): mixed
+    {
+        if ($this->readCache === null) {
+            return $compute();
+        }
+        $cacheKey = $bucket . ':' . md5(serialize($key));
+        if (!array_key_exists($cacheKey, $this->readCache)) {
+            $this->readCache[$cacheKey] = $compute();
+        }
+
+        return $this->readCache[$cacheKey];
+    }
 
     public function ensureSchema(): void
     {
         if ($this->schemaEnsured) {
+            return;
+        }
+
+        // Calea rapida: o singura interogare confirma ca tabelele si coloanele adaugate de pasii de
+        // mai jos exista deja (cazul normal dupa primul deploy). Altfel se ruleaza tot ce urmeaza.
+        if ($this->schemaAlreadyCurrent()) {
+            $this->backfillDriverNamesFromRawPayload();
+            $this->schemaEnsured = true;
             return;
         }
 
@@ -272,6 +345,53 @@ class FuelModel extends BaseModel
         $this->serviceKmLinksAvailable = true;
     }
 
+    /**
+     * True cand tot ce creeaza/altereaza ensureSchema() exista deja. Seteaza si
+     * serviceKmLinksAvailable, exact ca ensureServiceKmLinkSchema().
+     */
+    private function schemaAlreadyCurrent(): bool
+    {
+        $tables = ['fuel_fillups', 'fuel_month_t0', 'fuel_trip_links', 'fuel_sync_logs', 'fuel_sync_state', 'fuel_vehicle_exclusions'];
+        $columns = [
+            'odometer_km', 'driver_name', 'unit_price', 'unit_price_source', 'source_type', 'receipt_path',
+            'receipt_original_name', 'receipt_mime', 'payment_method', 'is_full_manual', 'full_source',
+            'odometer_km_manual', 'vehicle_registration_manual', 'vehicle_registration_api',
+        ];
+        $quote = fn (array $names): string => implode(', ', array_map(fn (string $name): string => $this->db->quote($name), $names));
+        try {
+            $row = $this->db->query("
+                SELECT
+                    (SELECT COUNT(*) FROM information_schema.TABLES
+                      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (" . $quote($tables) . ")) AS table_count,
+                    (SELECT COUNT(*) FROM information_schema.COLUMNS
+                      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fuel_fillups'
+                        AND COLUMN_NAME IN (" . $quote($columns) . ")) AS column_count,
+                    (SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+                      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fuel_fillups' AND COLUMN_NAME = 'fuel_type') AS fuel_type_column,
+                    (SELECT COUNT(*) FROM information_schema.TABLES
+                      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vehicule_service_km') AS service_km_table,
+                    (SELECT COUNT(*) FROM information_schema.COLUMNS
+                      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fuel_trip_links' AND COLUMN_NAME = 'service_km_id') AS service_km_column
+            ")->fetch(PDO::FETCH_ASSOC);
+        } catch (Throwable $exception) {
+            return false;
+        }
+        if (!is_array($row)
+            || (int) $row['table_count'] !== count($tables)
+            || (int) $row['column_count'] !== count($columns)
+            || !str_contains((string) $row['fuel_type_column'], "'gpl'")) {
+            return false;
+        }
+        $serviceKmTable = (int) $row['service_km_table'] > 0;
+        $serviceKmColumn = (int) $row['service_km_column'] > 0;
+        if ($serviceKmTable && !$serviceKmColumn) {
+            return false; // migrarea service_km_id inca neaplicata: o face calea completa
+        }
+        $this->serviceKmLinksAvailable = $serviceKmTable;
+
+        return true;
+    }
+
     private function tableExists(string $table): bool
     {
         $stmt = $this->db->prepare('
@@ -306,6 +426,7 @@ class FuelModel extends BaseModel
     public function saveExcludedVehicles(array $registrations, ?int $userId): void
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         $rows = [];
         foreach ($registrations as $registration) {
@@ -386,6 +507,7 @@ class FuelModel extends BaseModel
     public function deleteExcludedFillups(string $dateFrom): int
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
         if ($this->getExcludedVehicles() === []) {
             return 0;
         }
@@ -891,6 +1013,7 @@ class FuelModel extends BaseModel
     public function deleteFillups(?DateTimeInterface $dateFrom = null, ?DateTimeInterface $dateTo = null): int
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         if ($dateFrom === null && $dateTo === null) {
             return (int) $this->db->exec('DELETE FROM fuel_fillups');
@@ -939,6 +1062,7 @@ class FuelModel extends BaseModel
     public function upsertFillups(array $records): array
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         if ($records === []) {
             return ['inserted' => 0, 'updated' => 0];
@@ -1136,6 +1260,7 @@ class FuelModel extends BaseModel
     public function createManualFillup(array $input, ?int $userId = null): array
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         $vehicle = $this->normalizeRegistration((string) ($input['vehicle_registration'] ?? ''));
         if ($vehicle === '') {
@@ -1314,6 +1439,7 @@ class FuelModel extends BaseModel
     public function deleteManualFillup(int $fillupId): array
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         $stmt = $this->db->prepare('SELECT * FROM fuel_fillups WHERE id = :id LIMIT 1');
         $stmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
@@ -1344,9 +1470,112 @@ class FuelModel extends BaseModel
         ];
     }
 
+    /** Creste cand se schimba regula de potrivire: amprentele vechi devin invalide. */
+    private const AUTO_LINK_FINGERPRINT_VERSION = 1;
+
+    /**
+     * Ca refreshAutomaticAssociations(), dar sare recalcularea cand NIMIC din ce citeste
+     * potrivirea nu s-a schimbat de la ultima recalculare pe acelasi interval: alimentarile din
+     * interval, toate asocierile (manuale si automate), cursele, vehiculele, intrarile Km service.
+     * Amprenta = COUNT + BIT_XOR(CRC32(rand)) pe fiecare sursa, deci orice INSERT / UPDATE /
+     * DELETE / stergere logica schimba amprenta. Daca exista intrari Km service deschise
+     * (interval pana la NOW()), amprenta include si ora curenta, ca rezultatul sa nu ramana in
+     * urma timpului. Folosita la deschiderea paginii; scrierile apeleaza varianta neconditionata.
+     *
+     * @return array{skipped: bool}
+     */
+    public function refreshAutomaticAssociationsIfStale(string $dateFrom, string $dateTo): array
+    {
+        $this->ensureSchema();
+        $stateKey = 'auto_links_fp:' . $dateFrom . ':' . $dateTo;
+        try {
+            $before = $this->autoLinkInputsFingerprint($dateFrom, $dateTo);
+            $stmt = $this->db->prepare('SELECT state_value FROM fuel_sync_state WHERE state_key = :state_key');
+            $stmt->bindValue(':state_key', $stateKey);
+            $stmt->execute();
+            if ((string) $stmt->fetchColumn() === $before) {
+                return ['skipped' => true];
+            }
+        } catch (Throwable $exception) {
+            error_log('[FuelModel][autoLinkFingerprint] ' . $exception->getMessage());
+            $this->refreshAutomaticAssociations($dateFrom, $dateTo);
+            return ['skipped' => false];
+        }
+
+        $this->refreshAutomaticAssociations($dateFrom, $dateTo);
+
+        // Amprenta DUPA recalculare (asocierile automate tocmai scrise fac parte din ea).
+        try {
+            $after = $this->autoLinkInputsFingerprint($dateFrom, $dateTo);
+            $stmt = $this->db->prepare('
+                INSERT INTO fuel_sync_state (state_key, state_value, updated_at)
+                VALUES (:state_key, :state_value, :updated_at)
+                ON DUPLICATE KEY UPDATE state_value = VALUES(state_value), updated_at = VALUES(updated_at)
+            ');
+            $stmt->bindValue(':state_key', $stateKey);
+            $stmt->bindValue(':state_value', $after);
+            $stmt->bindValue(':updated_at', date('Y-m-d H:i:s'));
+            $stmt->execute();
+        } catch (Throwable $exception) {
+            error_log('[FuelModel][autoLinkFingerprint] ' . $exception->getMessage());
+        }
+
+        return ['skipped' => false];
+    }
+
+    private function autoLinkInputsFingerprint(string $dateFrom, string $dateTo): string
+    {
+        // Fiecare coloana citita de findMatchingTrip / findMatchingServiceKm / selectia alimentarilor.
+        $rowHash = static function (array $columns): string {
+            $parts = array_map(static fn (string $column): string => "COALESCE(CAST({$column} AS CHAR), '\\0')", $columns);
+            return 'COUNT(*), COALESCE(BIT_XOR(CRC32(CONCAT_WS(\'|\', ' . implode(', ', $parts) . '))), 0)';
+        };
+        $tripColumns = ['c.id', 'c.vehicle_id', 'c.data_inceput', 'c.data_cursa', 'c.ora_inceput', 'c.data_sfarsit', 'c.ora_sfarsit'];
+        if ($this->activeRaceCondition('c') !== '1=1') {
+            $tripColumns[] = 'c.deleted_at';
+        }
+        $parts = [
+            'v' . self::AUTO_LINK_FINGERPRINT_VERSION,
+            'service:' . ($this->serviceKmLinksAvailable ? '1' : '0'),
+        ];
+
+        $stmt = $this->db->prepare('SELECT ' . $rowHash(['f.id', 'f.vehicle_registration', 'f.fillup_datetime']) . '
+            FROM fuel_fillups f WHERE f.fillup_datetime >= :date_from AND f.fillup_datetime <= :date_to');
+        $stmt->bindValue(':date_from', $dateFrom . ' 00:00:00');
+        $stmt->bindValue(':date_to', $dateTo . ' 23:59:59');
+        $stmt->execute();
+        $parts[] = implode(':', $stmt->fetch(PDO::FETCH_NUM) ?: []);
+
+        $linkColumns = ['l.id', 'l.fillup_id', 'l.trip_id', 'l.match_type', 'l.confidence'];
+        if ($this->serviceKmLinksAvailable) {
+            $linkColumns[] = 'l.service_km_id';
+        }
+        $queries = [
+            'SELECT ' . $rowHash($linkColumns) . ' FROM fuel_trip_links l',
+            'SELECT ' . $rowHash($tripColumns) . ' FROM curse_dispecer c',
+            'SELECT ' . $rowHash(['v.id', 'v.nr_inmatriculare']) . ' FROM vehicule v',
+        ];
+        if ($this->serviceKmLinksAvailable) {
+            $queries[] = 'SELECT ' . $rowHash(['sk.id', 'sk.vehicle_id', 'sk.data_plecare', 'sk.ora_plecare', 'sk.data_intoarcere', 'sk.ora_intoarcere']) . ',
+                SUM(sk.data_intoarcere IS NULL) FROM vehicule_service_km sk';
+        }
+        foreach ($queries as $sql) {
+            $row = $this->db->query($sql)->fetch(PDO::FETCH_NUM) ?: [];
+            $parts[] = implode(':', array_map('strval', $row));
+        }
+        // Intrare Km service fara intoarcere = interval deschis pana la NOW(): recalculare cel putin orar.
+        $serviceRow = $this->serviceKmLinksAvailable ? explode(':', (string) end($parts)) : [];
+        if ((int) ($serviceRow[2] ?? 0) > 0) {
+            $parts[] = 'open:' . date('YmdH');
+        }
+
+        return sha1(implode('|', $parts));
+    }
+
     public function refreshAutomaticAssociations(?string $dateFrom = null, ?string $dateTo = null): array
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         $where = [];
         $params = [];
@@ -1359,12 +1588,23 @@ class FuelModel extends BaseModel
             $params[':date_to'] = $dateTo . ' 23:59:59';
         }
 
+        // has_auto_link: DELETE-ul de mai jos se trimite doar cand chiar exista o asociere automata
+        // (altfel nu ar sterge nimic) — aceeasi stare finala, cu o interogare mai putin per alimentare.
+        // Doar coloanele folosite la potrivire (fara raw_payload LONGTEXT) + asocierea automata
+        // existenta: daca potrivirea calculata e identica, randul ramane neatins (zero scrieri).
         $sql = "
-            SELECT f.*
+            SELECT f.id, f.vehicle_registration, f.fillup_datetime,
+                   (auto_link.id IS NOT NULL) AS has_auto_link,
+                   auto_link.trip_id AS auto_trip_id,
+                   " . ($this->serviceKmLinksAvailable ? 'auto_link.service_km_id' : 'NULL') . " AS auto_service_km_id,
+                   auto_link.confidence AS auto_confidence
             FROM fuel_fillups f
             LEFT JOIN fuel_trip_links manual_link
               ON manual_link.fillup_id = f.id
              AND manual_link.match_type = 'manual'
+            LEFT JOIN fuel_trip_links auto_link
+              ON auto_link.fillup_id = f.id
+             AND auto_link.match_type = 'automatic'
             WHERE manual_link.id IS NULL
             " . ($where !== [] ? ' AND ' . implode(' AND ', $where) : '') . "
             ORDER BY f.fillup_datetime ASC, f.id ASC
@@ -1402,50 +1642,89 @@ class FuelModel extends BaseModel
         $matched = 0;
         $matchedService = 0;
         $unmatched = 0;
-        foreach ($fillups as $fillup) {
-            $fillupId = (int) ($fillup['id'] ?? 0);
-            if ($fillupId <= 0) {
-                continue;
-            }
+        // O singura tranzactie pentru toate scrierile (un singur commit/fsync in loc de unul per
+        // rand). Potrivirile citesc doar curse_dispecer / vehicule / vehicule_service_km, deci
+        // ordinea calcul -> scriere nu schimba rezultatul.
+        $ownTransaction = !$this->db->inTransaction();
+        if ($ownTransaction) {
+            $this->db->beginTransaction();
+        }
+        try {
+            foreach ($fillups as $fillup) {
+                $fillupId = (int) ($fillup['id'] ?? 0);
+                if ($fillupId <= 0) {
+                    continue;
+                }
 
-            $deleteAutoStmt->bindValue(':fillup_id', $fillupId, PDO::PARAM_INT);
-            $deleteAutoStmt->execute();
+                $hasAutoLink = (int) ($fillup['has_auto_link'] ?? 1) === 1;
 
-            $trip = $this->findMatchingTrip($fillup);
-            $service = $this->findMatchingServiceKm($fillup);
-            // Aceeasi regula pentru amandoua: castiga marginea cea mai apropiata;
-            // la egalitate (ambele contin alimentarea) ramane cursa.
-            if ($service !== null && ($trip === null || (int) $service['boundary_distance'] < (int) $trip['boundary_distance'])) {
-                $trip = null;
-            } else {
-                $service = null;
-            }
-            if ($trip === null && $service === null) {
-                $unmatched++;
-                continue;
-            }
-
-            $insertStmt->bindValue(':fillup_id', $fillupId, PDO::PARAM_INT);
-            if ($trip !== null) {
-                $insertStmt->bindValue(':trip_id', (int) $trip['id'], PDO::PARAM_INT);
-            } else {
-                $insertStmt->bindValue(':trip_id', null, PDO::PARAM_NULL);
-            }
-            if ($this->serviceKmLinksAvailable) {
-                if ($service !== null) {
-                    $insertStmt->bindValue(':service_km_id', (int) $service['id'], PDO::PARAM_INT);
+                $trip = $this->findMatchingTrip($fillup);
+                $service = $this->findMatchingServiceKm($fillup);
+                // Aceeasi regula pentru amandoua: castiga marginea cea mai apropiata;
+                // la egalitate (ambele contin alimentarea) ramane cursa.
+                if ($service !== null && ($trip === null || (int) $service['boundary_distance'] < (int) $trip['boundary_distance'])) {
+                    $trip = null;
                 } else {
-                    $insertStmt->bindValue(':service_km_id', null, PDO::PARAM_NULL);
+                    $service = null;
+                }
+
+                // Asocierea automata existenta e deja exact cea calculata: nimic de scris.
+                if ($hasAutoLink && ($trip !== null || $service !== null)) {
+                    $newTripId = $trip !== null ? (int) $trip['id'] : null;
+                    $newServiceId = $service !== null ? (int) $service['id'] : null;
+                    $oldTripId = $fillup['auto_trip_id'] !== null ? (int) $fillup['auto_trip_id'] : null;
+                    $oldServiceId = $fillup['auto_service_km_id'] !== null ? (int) $fillup['auto_service_km_id'] : null;
+                    $newConfidence = round((float) (($trip ?? $service)['confidence'] ?? 0.95), 2);
+                    if ($newTripId === $oldTripId && $newServiceId === $oldServiceId
+                        && abs($newConfidence - round((float) $fillup['auto_confidence'], 2)) < 0.001) {
+                        if ($service !== null) {
+                            $matchedService++;
+                        } else {
+                            $matched++;
+                        }
+                        continue;
+                    }
+                }
+
+                if ($hasAutoLink) {
+                    $deleteAutoStmt->bindValue(':fillup_id', $fillupId, PDO::PARAM_INT);
+                    $deleteAutoStmt->execute();
+                }
+                if ($trip === null && $service === null) {
+                    $unmatched++;
+                    continue;
+                }
+
+                $insertStmt->bindValue(':fillup_id', $fillupId, PDO::PARAM_INT);
+                if ($trip !== null) {
+                    $insertStmt->bindValue(':trip_id', (int) $trip['id'], PDO::PARAM_INT);
+                } else {
+                    $insertStmt->bindValue(':trip_id', null, PDO::PARAM_NULL);
+                }
+                if ($this->serviceKmLinksAvailable) {
+                    if ($service !== null) {
+                        $insertStmt->bindValue(':service_km_id', (int) $service['id'], PDO::PARAM_INT);
+                    } else {
+                        $insertStmt->bindValue(':service_km_id', null, PDO::PARAM_NULL);
+                    }
+                }
+                $insertStmt->bindValue(':confidence', (float) (($trip ?? $service)['confidence'] ?? 0.95));
+                $insertStmt->bindValue(':created_at', date('Y-m-d H:i:s'));
+                $insertStmt->execute();
+                if ($service !== null) {
+                    $matchedService++;
+                } else {
+                    $matched++;
                 }
             }
-            $insertStmt->bindValue(':confidence', (float) (($trip ?? $service)['confidence'] ?? 0.95));
-            $insertStmt->bindValue(':created_at', date('Y-m-d H:i:s'));
-            $insertStmt->execute();
-            if ($service !== null) {
-                $matchedService++;
-            } else {
-                $matched++;
+            if ($ownTransaction) {
+                $this->db->commit();
             }
+        } catch (Throwable $exception) {
+            if ($ownTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
         }
 
         return ['matched' => $matched, 'matched_service_km' => $matchedService, 'unmatched' => $unmatched];
@@ -1455,6 +1734,7 @@ class FuelModel extends BaseModel
     public function linkFillupToServiceKm(int $fillupId, int $serviceKmId): bool
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
         if ($fillupId <= 0 || $serviceKmId <= 0 || !$this->serviceKmLinksAvailable) {
             return false;
         }
@@ -1479,6 +1759,7 @@ class FuelModel extends BaseModel
     public function linkFillupToTrip(int $fillupId, int $tripId): bool
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
         if ($fillupId <= 0 || $tripId <= 0) {
             return false;
         }
@@ -1510,6 +1791,7 @@ class FuelModel extends BaseModel
     public function setFillupFull(int $fillupId, bool $isFull): bool
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         $stmt = $this->db->prepare("
             UPDATE fuel_fillups
@@ -1549,6 +1831,7 @@ class FuelModel extends BaseModel
     public function setFillupOdometer(int $fillupId, int $odometerKm): bool
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         if ($fillupId <= 0 || $odometerKm <= 0) {
             return false;
@@ -1585,6 +1868,7 @@ class FuelModel extends BaseModel
     public function clearFillupOdometerOverride(int $fillupId): bool
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         $rowStmt = $this->db->prepare('SELECT raw_payload FROM fuel_fillups WHERE id = :id');
         $rowStmt->bindValue(':id', $fillupId, PDO::PARAM_INT);
@@ -1628,6 +1912,7 @@ class FuelModel extends BaseModel
     public function setFillupVehicle(int $fillupId, ?string $registration): bool
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         if ($fillupId <= 0) {
             return false;
@@ -1753,6 +2038,7 @@ class FuelModel extends BaseModel
     public function clearFillupFullOverride(int $fillupId): bool
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         $stmt = $this->db->prepare("
             UPDATE fuel_fillups
@@ -2121,22 +2407,11 @@ class FuelModel extends BaseModel
                 c.ora_inceput,
                 c.ora_sfarsit,
                 " . $this->effectiveKmExpr('c') . " AS trip_km,
-                " . $this->lightVehicleExpr('f') . " AS is_light_vehicle,
-                NOT " . $this->registeredVehicleExpr('f') . " AS is_unregistered_vehicle,
-                (
-                    SELECT fp.odometer_km
-                    FROM fuel_fillups fp
-                    WHERE REPLACE(UPPER(fp.vehicle_registration), ' ', '') = REPLACE(UPPER(f.vehicle_registration), ' ', '')
-                      AND fp.fuel_type = 'motorina'
-                      AND fp.odometer_km IS NOT NULL
-                      AND fp.odometer_km > 0
-                      AND (
-                          fp.fillup_datetime < f.fillup_datetime
-                          OR (fp.fillup_datetime = f.fillup_datetime AND fp.id < f.id)
-                      )
-                    ORDER BY fp.fillup_datetime DESC, fp.id DESC
-                    LIMIT 1
-                ) AS previous_odometer_km
+                -- completate in PHP din vehicleClassByRegistration() (aceleasi EXISTS, o data per numar)
+                NULL AS is_light_vehicle,
+                NULL AS is_unregistered_vehicle,
+                HEX(WEIGHT_STRING(f.vehicle_registration)) AS _class_key,
+                " . $this->odometerKeyExpr('f') . " AS _odo_key
             FROM fuel_fillups f
             LEFT JOIN fuel_trip_links l ON l.fillup_id = f.id
             LEFT JOIN curse_dispecer c ON c.id = l.trip_id
@@ -2146,12 +2421,140 @@ class FuelModel extends BaseModel
             LIMIT :limit_rows
         ";
 
-        $stmt = $this->db->prepare($sql);
-        $this->bindParams($stmt, $where['params']);
-        $stmt->bindValue(':limit_rows', $limit, PDO::PARAM_INT);
-        $stmt->execute();
+        return $this->memoRead('fillups', [$filters, $limit], function () use ($sql, $where, $limit): array {
+            $stmt = $this->db->prepare($sql);
+            $this->bindParams($stmt, $where['params']);
+            $stmt->bindValue(':limit_rows', $limit, PDO::PARAM_INT);
+            $stmt->execute();
 
-        return $stmt->fetchAll();
+            $rows = $stmt->fetchAll();
+            $classes = $rows !== [] ? $this->vehicleClassByRegistration() : [];
+            foreach ($rows as $i => $row) {
+                $class = $classes[(string) $row['_class_key']] ?? null;
+                if ($class === null) {
+                    // Nu ar trebui sa se intample (harta acopera toate numerele); cadem pe EXISTS.
+                    $class = $this->vehicleClassForRegistration((string) $row['vehicle_registration']);
+                }
+                $rows[$i]['is_light_vehicle'] = $class[0];
+                $rows[$i]['is_unregistered_vehicle'] = $class[1] ? 0 : 1;
+                unset($rows[$i]['_class_key']);
+            }
+
+            return $this->attachPreviousOdometer($rows);
+        });
+    }
+
+    /**
+     * Categoria fiecarui numar distinct din fuel_fillups: cheie = greutatea de colatie a numarului
+     * brut (doua numere au aceeasi cheie exact cand sunt egale in colatia coloanei), valoare =
+     * [is_light 0/1, is_registered 0/1] din aceleasi EXISTS ca lightVehicleExpr / registeredVehicleExpr.
+     *
+     * @return array<string, array{0:int,1:int}>
+     */
+    private function vehicleClassByRegistration(): array
+    {
+        return $this->memoRead('vehicle_class', [], function (): array {
+            $stmt = $this->db->query("
+                SELECT HEX(WEIGHT_STRING(dr.vehicle_registration)) AS class_key,
+                       " . $this->lightVehicleExpr('dr') . " AS is_light,
+                       " . $this->registeredVehicleExpr('dr') . " AS is_registered
+                FROM (SELECT DISTINCT vehicle_registration FROM fuel_fillups) dr
+            ");
+            $map = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_NUM) as [$key, $light, $registered]) {
+                $map[(string) $key] = [(int) $light, (int) $registered];
+            }
+
+            return $map;
+        });
+    }
+
+    /** @return array{0:int,1:int} */
+    private function vehicleClassForRegistration(string $registration): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT " . $this->lightVehicleExpr('dr') . ", " . $this->registeredVehicleExpr('dr') . "
+            FROM (SELECT :registration AS vehicle_registration) dr
+        ");
+        $stmt->bindValue(':registration', $registration);
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_NUM) ?: [0, 0];
+
+        return [(int) $row[0], (int) $row[1]];
+    }
+
+    /** Cheia de vehicul pentru indexul de odometru: egala exact cand predicatul SQL REPLACE(UPPER()) = ... e adevarat. */
+    private function odometerKeyExpr(string $alias): string
+    {
+        // WEIGHT_STRING da cheia de comparatie a colatiei coloanei: doua numere au aceeasi cheie
+        // exact cand vechea conditie REPLACE(UPPER(a), ' ', '') = REPLACE(UPPER(b), ' ', '') era adevarata.
+        return "HEX(WEIGHT_STRING(REPLACE(UPPER({$alias}.vehicle_registration), ' ', '')))";
+    }
+
+    /**
+     * Completeaza previous_odometer_km pe fiecare rand (si scoate coloana tehnica _odo_key):
+     * odometrul ultimei alimentari cu motorina (odometru > 0) a aceluiasi vehicul strict inaintea
+     * randului, ordonat dupa (fillup_datetime, id) — exact semantica vechii subinterogari corelate.
+     *
+     * @param list<array<string,mixed>> $rows
+     * @return list<array<string,mixed>>
+     */
+    private function attachPreviousOdometer(array $rows): array
+    {
+        if ($rows === []) {
+            return $rows;
+        }
+        $index = $this->previousOdometerIndex();
+        foreach ($rows as $i => $row) {
+            $entries = $index[(string) ($row['_odo_key'] ?? '')] ?? [];
+            $datetime = (string) ($row['fillup_datetime'] ?? '');
+            $id = (int) ($row['id'] ?? 0);
+            // Cautare binara: ultima intrare cu (datetime, id) < (datetime randului, id randului).
+            $low = 0;
+            $high = count($entries) - 1;
+            $found = null;
+            while ($low <= $high) {
+                $mid = ($low + $high) >> 1;
+                [$entryDatetime, $entryId] = $entries[$mid];
+                if ($entryDatetime < $datetime || ($entryDatetime === $datetime && $entryId < $id)) {
+                    $found = $mid;
+                    $low = $mid + 1;
+                } else {
+                    $high = $mid - 1;
+                }
+            }
+            unset($row['_odo_key']);
+            $row['previous_odometer_km'] = $found !== null ? $entries[$found][2] : null;
+            $rows[$i] = $row;
+        }
+
+        return $rows;
+    }
+
+    /** @return array<string, list<array{0:string,1:int,2:int}>> */
+    private function previousOdometerIndex(): array
+    {
+        if ($this->readCache !== null && $this->previousOdometerIndex !== null) {
+            return $this->previousOdometerIndex;
+        }
+        $stmt = $this->db->query("
+            SELECT " . $this->odometerKeyExpr('fp') . " AS odo_key, fp.fillup_datetime, fp.id, fp.odometer_km
+            FROM fuel_fillups fp
+            WHERE fp.fuel_type = 'motorina'
+              AND fp.odometer_km IS NOT NULL
+              AND fp.odometer_km > 0
+            ORDER BY fp.fillup_datetime ASC, fp.id ASC
+        ");
+        $index = [];
+        while ($entry = $stmt->fetch(PDO::FETCH_NUM)) {
+            $index[(string) $entry[0]][] = [(string) $entry[1], (int) $entry[2], $entry[3]];
+        }
+        $stmt->closeCursor();
+        if ($this->readCache !== null) {
+            $this->previousOdometerIndex = $index;
+        }
+
+        return $index;
     }
 
     public function getUnassociatedFillups(array $filters, int $limit = 100): array
@@ -2406,9 +2809,17 @@ class FuelModel extends BaseModel
 
     private function getKpiSummary(array $filters): array
     {
+        return $this->memoRead('kpi', $filters, fn (): array => $this->computeKpiSummary($filters));
+    }
+
+    private function computeKpiSummary(array $filters): array
+    {
         $where = $this->buildFillupWhere($filters, 'kpi', true);
-        $lightExpr = $this->lightVehicleExpr('f');
-        $unregisteredExpr = 'NOT ' . $this->registeredVehicleExpr('f');
+        // Categoria (usor / neinregistrat) se calculeaza o data per numar distinct (aceleasi
+        // EXISTS ca inainte, ~50 de numere) in loc de 6 subinterogari pe vehicule PER alimentare.
+        // Join-ul pe coloana bruta, in colatia ei: fiecare alimentare are exact un rand in vc.
+        $lightExpr = 'vc.is_light = 1';
+        $unregisteredExpr = 'vc.is_registered = 0';
         $stmt = $this->db->prepare("
             SELECT
                 COALESCE(SUM(CASE WHEN {$unregisteredExpr} THEN f.total_value ELSE 0 END), 0) AS unregistered_value,
@@ -2423,6 +2834,7 @@ class FuelModel extends BaseModel
                 COALESCE(SUM(f.quantity_liters), 0) AS total_liters,
                 COUNT(*) AS total_fillups
             FROM fuel_fillups f
+            " . $this->vehicleClassJoin('f') . "
             LEFT JOIN fuel_trip_links l ON l.fillup_id = f.id
             LEFT JOIN curse_dispecer c ON c.id = l.trip_id
             " . $where['where'] . "
@@ -2538,7 +2950,14 @@ class FuelModel extends BaseModel
             return [];
         }
 
+        return $this->memoRead('odo_rows', $filters, fn (): array => $this->computeOdometerConsumptionRows($filters));
+    }
+
+    private function computeOdometerConsumptionRows(array $filters): array
+    {
         $where = $this->buildFillupWhere($filters, 'odo', false);
+        // previous_odometer_km (citirea motorina precedenta a aceluiasi vehicul) se completeaza
+        // din attachPreviousOdometer(): aceeasi valoare ca vechea subinterogare corelata.
         $stmt = $this->db->prepare("
             SELECT
                 f.id,
@@ -2547,20 +2966,7 @@ class FuelModel extends BaseModel
                 DATE(f.fillup_datetime) AS day_key,
                 f.quantity_liters,
                 f.odometer_km,
-                (
-                    SELECT fp.odometer_km
-                    FROM fuel_fillups fp
-                    WHERE REPLACE(UPPER(fp.vehicle_registration), ' ', '') = REPLACE(UPPER(f.vehicle_registration), ' ', '')
-                      AND fp.fuel_type = 'motorina'
-                      AND fp.odometer_km IS NOT NULL
-                      AND fp.odometer_km > 0
-                      AND (
-                          fp.fillup_datetime < f.fillup_datetime
-                          OR (fp.fillup_datetime = f.fillup_datetime AND fp.id < f.id)
-                      )
-                    ORDER BY fp.fillup_datetime DESC, fp.id DESC
-                    LIMIT 1
-                ) AS previous_odometer_km
+                " . $this->odometerKeyExpr('f') . " AS _odo_key
             FROM fuel_fillups f
             " . $where['where'] . "
               AND f.fuel_type = 'motorina'
@@ -2570,6 +2976,7 @@ class FuelModel extends BaseModel
         ");
         $this->bindParams($stmt, $where['params']);
         $stmt->execute();
+        $fetchedRows = $this->attachPreviousOdometer($stmt->fetchAll());
 
         // Parcurgere secventiala per vehicul, cu baza de km resetata dupa orice
         // citire respinsa. Vechiul cod folosea orbeste citirea precedenta:
@@ -2578,7 +2985,7 @@ class FuelModel extends BaseModel
         // care iesea +90.000 km si distrugea media flotei.
         $rows = [];
         $baselines = [];
-        foreach ($stmt->fetchAll() as $row) {
+        foreach ($fetchedRows as $row) {
             $vehicleKey = str_replace(' ', '', strtoupper((string) ($row['vehicle_registration'] ?? '')));
             $currentKm = (float) ($row['odometer_km'] ?? 0);
 
@@ -3153,10 +3560,20 @@ class FuelModel extends BaseModel
         // (2) cursa cu marginea cea mai apropiata, (3) intervalul mai scurt.
         // boundary_distance = 0 cand alimentarea e in interval, altfel
         // distanta in secunde pana la cea mai apropiata margine.
+        // Niciun vehicul cu acest numar = join-ul de mai jos nu ar gasi nimic.
+        $vehicleIds = $this->vehicleIdsForRegistration($registration);
+        if ($vehicleIds === []) {
+            return null;
+        }
+        $vehiclePlaceholders = [];
+        foreach (array_keys($vehicleIds) as $i) {
+            $vehiclePlaceholders[] = ':vid' . $i;
+        }
+
         $startExpr = $this->tripIntervalStartExpr('c');
         $endExpr = $this->tripIntervalEndExpr('c');
         $toleranceHours = self::TRIP_MATCH_TOLERANCE_HOURS;
-        $stmt = $this->db->prepare("
+        $stmt = $this->matchStatement('trip', "
             SELECT
                 c.id,
                 CASE
@@ -3171,13 +3588,17 @@ class FuelModel extends BaseModel
                 TIMESTAMPDIFF(SECOND, {$startExpr}, {$endExpr}) AS interval_seconds
             FROM curse_dispecer c
             INNER JOIN vehicule v ON v.id = c.vehicle_id
-            WHERE REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = REPLACE(UPPER(:registration), ' ', '')
+            WHERE c.vehicle_id IN (" . implode(', ', $vehiclePlaceholders) . ")
+              AND REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = REPLACE(UPPER(:registration), ' ', '')
               AND " . $this->activeRaceCondition('c') . "
               AND :fillup_datetime BETWEEN DATE_SUB({$startExpr}, INTERVAL {$toleranceHours} HOUR)
                                        AND DATE_ADD({$endExpr}, INTERVAL {$toleranceHours} HOUR)
             ORDER BY boundary_distance ASC, interval_seconds ASC, c.id DESC
             LIMIT 1
         ");
+        foreach ($vehicleIds as $i => $vehicleId) {
+            $stmt->bindValue(':vid' . $i, $vehicleId, PDO::PARAM_INT);
+        }
         $stmt->bindValue(':registration', $registration);
         $stmt->bindValue(':fillup_datetime', $datetime);
         $stmt->bindValue(':fd_conf', $datetime);
@@ -3185,6 +3606,7 @@ class FuelModel extends BaseModel
         $stmt->bindValue(':fd_after', $datetime);
         $stmt->execute();
         $row = $stmt->fetch();
+        $stmt->closeCursor();
 
         return $row ?: null;
     }
@@ -3206,10 +3628,14 @@ class FuelModel extends BaseModel
             return null;
         }
 
+        if ($this->vehicleIdsForRegistration($registration) === []) {
+            return null;
+        }
+
         $startExpr = $this->serviceKmIntervalStartExpr('sk');
         $endExpr = $this->serviceKmIntervalEndExpr('sk');
         $toleranceHours = self::TRIP_MATCH_TOLERANCE_HOURS;
-        $stmt = $this->db->prepare("
+        $stmt = $this->matchStatement('service_km', "
             SELECT
                 sk.id,
                 CASE
@@ -3237,6 +3663,7 @@ class FuelModel extends BaseModel
         $stmt->bindValue(':fd_after', $datetime);
         $stmt->execute();
         $row = $stmt->fetch();
+        $stmt->closeCursor();
 
         return $row ?: null;
     }
@@ -3589,6 +4016,7 @@ class FuelModel extends BaseModel
         ?int $userId = null,
         ?string $note = null
     ): array {
+        $this->invalidateReadCache();
         $validation = $this->validateT0Candidate($fillupId, $vehicle, $monthStart);
         if (!$validation['ok']) {
             return ['ok' => false, 'message' => implode(' ', $validation['errors']), 'warnings' => []];
@@ -3656,6 +4084,7 @@ class FuelModel extends BaseModel
     public function clearManualT0(string $vehicle, DateTimeImmutable $monthStart): bool
     {
         $this->ensureSchema();
+        $this->invalidateReadCache();
 
         $stmt = $this->db->prepare('
             DELETE FROM fuel_month_t0
@@ -3735,6 +4164,23 @@ class FuelModel extends BaseModel
             WHERE lv.tip_vehicul IN ('autovehicul', 'autoturism', 'autoutilitara')
               AND REPLACE(UPPER(lv.nr_inmatriculare), ' ', '') = REPLACE(UPPER({$alias}.vehicle_registration), ' ', '')
         )";
+    }
+
+    /**
+     * Join cu categoria fiecarui numar distinct din fuel_fillups (vc.is_light, vc.is_registered):
+     * aceleasi EXISTS ca lightVehicleExpr / registeredVehicleExpr, evaluate o data per numar (~50)
+     * in loc de per alimentare. Join-ul e pe coloana bruta, in colatia ei, deci fiecare alimentare
+     * are exact un rand pereche, iar numerele egale la colatie dau acelasi rezultat EXISTS.
+     */
+    private function vehicleClassJoin(string $alias): string
+    {
+        return "INNER JOIN (
+                SELECT
+                    dr.vehicle_registration,
+                    " . $this->lightVehicleExpr('dr') . " AS is_light,
+                    " . $this->registeredVehicleExpr('dr') . " AS is_registered
+                FROM (SELECT DISTINCT vehicle_registration FROM fuel_fillups) dr
+            ) vc ON vc.vehicle_registration = {$alias}.vehicle_registration";
     }
 
     /**
@@ -4354,6 +4800,35 @@ class FuelModel extends BaseModel
         }
 
         return $this->raceSoftDeleteAvailable ? $alias . '.deleted_at IS NULL' : '1=1';
+    }
+
+    /**
+     * Id-urile vehiculelor cu acest numar, dupa EXACT predicatul din findMatchingTrip /
+     * findMatchingServiceKm (REPLACE(UPPER(...)) cu colatia coloanei), deci filtrul pe id-uri nu
+     * schimba ce se potriveste, doar permite indexul pe vehicle_id.
+     *
+     * @return list<int>
+     */
+    private function vehicleIdsForRegistration(string $registration): array
+    {
+        if (isset($this->vehicleIdsByRegistration[$registration])) {
+            return $this->vehicleIdsByRegistration[$registration];
+        }
+        $stmt = $this->matchStatement('vehicle_ids', "
+            SELECT v.id FROM vehicule v
+            WHERE REPLACE(UPPER(v.nr_inmatriculare), ' ', '') = REPLACE(UPPER(:registration), ' ', '')
+        ");
+        $stmt->bindValue(':registration', $registration);
+        $stmt->execute();
+        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        $stmt->closeCursor();
+
+        return $this->vehicleIdsByRegistration[$registration] = $ids;
+    }
+
+    private function matchStatement(string $key, string $sql): PDOStatement
+    {
+        return $this->matchStatements[$key . ':' . md5($sql)] ??= $this->db->prepare($sql);
     }
 
     private function normalizeRegistration(string $registration): string

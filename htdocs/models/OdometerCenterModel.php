@@ -150,13 +150,21 @@ class OdometerCenterModel extends BaseModel
         foreach ($statements as $sql) {
             $this->db->exec($sql);
         }
-        // T0 poate avea si o referinta manuala (tabelul exista dinainte cu ENUM('sas','cardoil')).
-        $column = $this->db->query(
-            "SELECT COLUMN_TYPE FROM information_schema.COLUMNS
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vehicle_odometer_baselines' AND COLUMN_NAME = 'provider_code'"
-        )->fetchColumn();
-        if ($column !== false && !str_contains((string) $column, "'manual'")) {
-            $this->db->exec("ALTER TABLE vehicle_odometer_baselines MODIFY provider_code ENUM('sas','cardoil','manual') NOT NULL");
+        // Tabelele exista dinainte cu ENUM('sas','cardoil'): T0 poate avea si referinta manuala,
+        // iar odometrul CAN (raportul web SAS, din 2026-11-02) e o sursa separata peste tot.
+        $providers = [
+            'vehicle_odometer_sources' => "ENUM('sas','cardoil','can')",
+            'vehicle_odometer_readings' => "ENUM('sas','cardoil','can')",
+            'vehicle_odometer_baselines' => "ENUM('sas','cardoil','manual','can')",
+        ];
+        foreach ($providers as $table => $enum) {
+            $column = $this->db->query(
+                "SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{$table}' AND COLUMN_NAME = 'provider_code'"
+            )->fetchColumn();
+            if ($column !== false && !str_contains((string) $column, "'can'")) {
+                $this->db->exec("ALTER TABLE {$table} MODIFY provider_code {$enum} NOT NULL");
+            }
         }
         $this->ensureVehicleCapacityCategorySchema();
         $this->schemaEnsured = true;
@@ -712,7 +720,7 @@ class OdometerCenterModel extends BaseModel
                     ':ov' => $reading !== null ? (float) ($reading['original_value'] ?? $reading['km']) : null,
                     ':ou' => $reading !== null ? 'km' : null,
                     ':type' => $reading !== null
-                        ? (['sas' => 'gps_km_index', 'manual' => 'manual_odometer'][$provider] ?? 'pump_odometer') : null,
+                        ? (['sas' => 'gps_km_index', 'can' => 'can_odometer', 'manual' => 'manual_odometer'][$provider] ?? 'pump_odometer') : null,
                     ':sid' => $reading['id'] ?? null,
                     ':st' => (string) ($result['status'] ?? OdometerCalculator::STATUS_UNAVAILABLE),
                     ':note' => isset($result['note']) ? mb_substr((string) $result['note'], 0, 255) : null,

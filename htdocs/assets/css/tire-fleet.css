@@ -1,0 +1,281 @@
+/* Pagina Anvelope (Mentenanta > Stoc anvelope): vederea pe vehicule cu schema anvelopelor.
+   Logica in assets/js/tire-fleet.js, marcajul in views/module/tire_stock/_fleet_overview.php. */
+:root {
+    --ft-bg: #f3f6fa;
+    --ft-card: #ffffff;
+    --ft-border: #e3e8ef;
+    --ft-border-strong: #d0d8e3;
+    --ft-text: #101828;
+    --ft-muted: #5d6b7e;
+    --ft-blue: #1570ef;
+    --ft-blue-soft: #e9f2ff;
+    --ft-blue-line: #b8d3ff;
+    --ft-ok: #23a455;
+    --ft-ok-dark: #157a3d;
+    --ft-ok-soft: #e7f7ee;
+    --ft-warn: #f2a900;
+    --ft-warn-dark: #9a6400;
+    --ft-warn-soft: #fff6dd;
+    --ft-crit: #e5383b;
+    --ft-crit-dark: #b4161b;
+    --ft-crit-soft: #ffeceb;
+    --ft-none: #8a97a8;
+    --ft-none-soft: #f1f4f8;
+    --ft-shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 2px 8px rgba(16, 24, 40, .06);
+}
+
+.ft-title { display: flex; align-items: baseline; gap: .5rem; margin: 0; font-weight: 700; color: var(--ft-text); }
+.ft-title-sub { font-weight: 400; color: var(--ft-muted); font-size: .8em; }
+.ft-mode-switch { display: inline-flex; padding: 3px; border: 1px solid var(--ft-border); border-radius: 10px; background: #fff; }
+.ft-mode-switch button { border: 0; background: transparent; border-radius: 8px; padding: .35rem .85rem; font-weight: 600; font-size: .875rem; color: var(--ft-muted); }
+.ft-mode-switch button.is-active { background: var(--ft-blue); color: #fff; }
+.ft-mode-switch button:focus-visible { outline: 2px solid var(--ft-blue); outline-offset: 2px; }
+
+/* KPI */
+.ft-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 1rem; align-items: stretch; margin-bottom: 1rem; }
+.ft-kpi { display: flex; align-items: center; gap: 1.1rem; background: var(--ft-card); border: 1px solid var(--ft-border); border-radius: 10px; padding: .8rem 1.25rem; box-shadow: var(--ft-shadow); min-height: 74px; }
+.ft-kpi-icon { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 52px; font-size: 1.55rem; }
+.ft-kpi-icon svg { width: 30px; height: 30px; }
+.ft-kpi-blue .ft-kpi-icon { background: #e7f0ff; color: var(--ft-blue); }
+.ft-kpi-green .ft-kpi-icon { background: var(--ft-ok-soft); color: var(--ft-ok); }
+.ft-kpi-yellow .ft-kpi-icon { background: var(--ft-warn-soft); color: var(--ft-warn); }
+.ft-kpi-red .ft-kpi-icon { background: var(--ft-crit-soft); color: var(--ft-crit); }
+.ft-kpi-main { display: flex; align-items: baseline; gap: .5rem; line-height: 1.1; }
+.ft-kpi-value { font-size: 1.65rem; font-weight: 800; color: var(--ft-text); font-variant-numeric: tabular-nums; }
+.ft-kpi-label { font-size: 1.15rem; font-weight: 700; color: var(--ft-text); }
+.ft-kpi-sub { font-size: .9rem; color: #344054; margin-top: .1rem; }
+.ft-add-btn { align-self: center; display: inline-flex; align-items: center; gap: .6rem; padding: .8rem 1.5rem; border-radius: 9px; font-size: 1.05rem; font-weight: 600; white-space: nowrap; background: var(--ft-blue); border-color: var(--ft-blue); box-shadow: 0 2px 6px rgba(21, 112, 239, .25); }
+.ft-add-btn i { font-size: 1.3rem; }
+
+/* Bara de filtre */
+.ft-toolbar { display: flex; align-items: flex-end; gap: .75rem; flex-wrap: wrap; margin-bottom: .9rem; }
+.ft-search { position: relative; flex: 1 1 300px; max-width: 400px; }
+.ft-search > .bi-search { position: absolute; left: .85rem; top: 50%; transform: translateY(-50%); color: #667085; pointer-events: none; }
+.ft-search input { height: 42px; padding-left: 2.4rem; padding-right: 2.2rem; border-radius: 9px; border-color: var(--ft-border-strong); font-size: .95rem; box-shadow: var(--ft-shadow); }
+.ft-search input::-webkit-search-cancel-button { display: none; }
+.ft-search-clear { position: absolute; right: .35rem; top: 50%; transform: translateY(-50%); border: 0; background: transparent; width: 30px; height: 30px; border-radius: 6px; color: #667085; display: grid; place-items: center; }
+.ft-search-clear:hover { background: #f2f4f7; color: var(--ft-text); }
+.ft-chips { display: flex; gap: .55rem; flex-wrap: wrap; }
+.ft-chip { height: 42px; display: inline-flex; align-items: center; gap: .45rem; padding: 0 .95rem; border: 1px solid var(--ft-border-strong); border-radius: 9px; background: #fff; font-size: .95rem; font-weight: 500; color: var(--ft-text); box-shadow: var(--ft-shadow); white-space: nowrap; }
+.ft-chip:hover { border-color: #98a9bf; }
+.ft-chip.is-active { background: var(--ft-blue-soft); border-color: var(--ft-blue-line); color: #1849a9; font-weight: 600; }
+.ft-chip-dot { width: 13px; height: 13px; border-radius: 50%; display: inline-block; }
+.ft-chip-dot.is-ok { background: var(--ft-ok); }
+.ft-chip-dot.is-warn { background: var(--ft-warn); }
+.ft-chip-dot.is-crit { background: var(--ft-crit); }
+.ft-field { display: flex; flex-direction: column; gap: .15rem; min-width: 180px; }
+.ft-field label { font-size: .78rem; color: #344054; font-weight: 500; padding-left: .1rem; }
+.ft-field .form-select { height: 42px; border-radius: 9px; border-color: var(--ft-border-strong); box-shadow: var(--ft-shadow); }
+.ft-reset { height: 42px; display: inline-flex; align-items: center; gap: .45rem; border-radius: 9px; border-color: var(--ft-border-strong); background: #fff; color: var(--ft-text); box-shadow: var(--ft-shadow); }
+.ft-reset:disabled { opacity: .55; }
+.ft-view-toggle { display: inline-flex; margin-left: auto; border: 1px solid var(--ft-border-strong); border-radius: 9px; overflow: hidden; box-shadow: var(--ft-shadow); }
+.ft-view-toggle button { width: 52px; height: 40px; border: 0; background: #fff; color: #344054; font-size: 1.25rem; display: grid; place-items: center; }
+.ft-view-toggle button + button { border-left: 1px solid var(--ft-border); }
+.ft-view-toggle button.is-active { background: var(--ft-blue); color: #fff; }
+
+/* Lista vehiculelor */
+.ft-board { background: var(--ft-card); border: 1px solid var(--ft-border); border-radius: 12px; box-shadow: var(--ft-shadow); padding: .35rem .5rem .25rem; }
+.ft-grid-cols { display: grid; grid-template-columns: 44px minmax(210px, 1.15fr) 110px minmax(420px, 2.9fr) 140px 110px 140px 150px; align-items: center; column-gap: .75rem; }
+.ft-head { padding: .7rem .5rem .55rem; font-weight: 600; font-size: .95rem; color: var(--ft-text); border-bottom: 1px solid var(--ft-border); }
+.ft-head > div { text-align: center; }
+.ft-head > div:nth-child(2) { text-align: left; padding-left: 1.4rem; }
+.ft-unit { border: 1px solid transparent; border-radius: 10px; margin: .4rem 0; transition: background-color .15s, border-color .15s; }
+.ft-unit + .ft-unit { border-top-color: var(--ft-border); }
+.ft-unit:hover { background: #fafcff; }
+.ft-unit.is-open { background: #f6f9fe; border-color: #d8e4f5; }
+.ft-unit.is-open + .ft-unit { border-top-color: transparent; }
+.ft-unit-row { padding: .45rem .5rem; min-height: 96px; }
+.ft-chevron { width: 36px; height: 36px; border: 0; background: transparent; border-radius: 8px; color: var(--ft-text); font-size: 1.15rem; display: grid; place-items: center; }
+.ft-chevron:hover { background: #eef2f7; }
+.ft-chevron i { transition: transform .2s ease; }
+.ft-unit.is-open .ft-chevron i { transform: rotate(90deg); }
+.ft-vehicle { display: flex; align-items: center; gap: .95rem; min-width: 0; }
+.ft-vehicle-icon { flex: 0 0 64px; width: 64px; height: 40px; color: #0f2a5c; }
+.ft-vehicle-icon svg { width: 100%; height: 100%; }
+.ft-plate { font-weight: 800; font-size: 1.12rem; color: var(--ft-text); white-space: nowrap; letter-spacing: .01em; }
+.ft-plate-partner { font-weight: 600; font-size: .85rem; color: var(--ft-muted); margin-left: .25rem; }
+.ft-sub { font-size: .9rem; color: #344054; line-height: 1.3; }
+.ft-sub strong { font-weight: 600; }
+.ft-config { text-align: center; }
+.ft-config-badge { display: inline-block; padding: .35rem .95rem; border-radius: 999px; background: #e8f0fb; color: #22385a; font-weight: 700; font-size: .98rem; white-space: nowrap; }
+.ft-schema { width: 100%; min-width: 0; }
+.ft-schema svg { display: block; width: 100%; height: auto; overflow: visible; }
+.ft-count { text-align: center; }
+.ft-count-pill { display: inline-flex; align-items: center; gap: .55rem; padding: .4rem 1.1rem; border-radius: 999px; background: var(--ft-ok-soft); color: var(--ft-text); font-weight: 700; font-size: 1.05rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ft-count-pill svg { width: 20px; height: 20px; color: #475467; }
+.ft-count-pill.is-partial { background: var(--ft-warn-soft); }
+.ft-count-pill.is-none { background: var(--ft-none-soft); }
+.ft-wear { text-align: center; font-weight: 800; font-size: 1.15rem; color: var(--ft-text); font-variant-numeric: tabular-nums; }
+.ft-wear .ft-muted { font-weight: 500; font-size: .95rem; color: var(--ft-muted); }
+.ft-status-cell { text-align: center; }
+.ft-status { display: inline-flex; align-items: center; gap: .45rem; padding: .4rem .95rem; border-radius: 8px; font-weight: 600; font-size: .98rem; white-space: nowrap; border: 1px solid transparent; }
+.ft-status i { font-size: 1.05rem; }
+.ft-status-ok { background: var(--ft-ok-soft); color: #0f5c2e; }
+.ft-status-ok i { color: var(--ft-ok); }
+.ft-status-warn { background: #fff4d6; color: #7a4f00; border-color: #ffe39a; }
+.ft-status-warn i { color: #e09600; }
+.ft-status-crit { background: var(--ft-crit-soft); color: #9b1215; }
+.ft-status-crit i { color: var(--ft-crit); }
+.ft-status-none, .ft-status-empty { background: var(--ft-none-soft); color: #475467; }
+.ft-actions { display: flex; justify-content: center; gap: .5rem; }
+.ft-icon-btn { width: 40px; height: 38px; border-radius: 9px; border: 1px solid var(--ft-border-strong); background: #fff; color: var(--ft-text); display: inline-grid; place-items: center; font-size: 1.1rem; box-shadow: var(--ft-shadow); text-decoration: none; }
+.ft-icon-btn:hover { background: #f6f8fb; color: var(--ft-text); border-color: #98a9bf; }
+.ft-icon-btn:focus-visible, .ft-chevron:focus-visible, .ft-chip:focus-visible { outline: 2px solid var(--ft-blue); outline-offset: 2px; }
+.ft-empty-state { padding: 2.5rem 1rem; text-align: center; color: var(--ft-muted); }
+.ft-empty-state i { font-size: 2rem; display: block; margin-bottom: .5rem; color: #98a2b3; }
+.ft-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .85rem .75rem .6rem; border-top: 1px solid var(--ft-border); margin-top: .25rem; }
+.ft-footer-info { font-size: .95rem; color: #344054; }
+.ft-pager { display: flex; align-items: center; gap: .5rem; }
+.ft-pager .form-select { width: auto; height: 40px; border-radius: 9px; min-width: 140px; }
+.ft-page-btn { min-width: 40px; height: 40px; border-radius: 9px; border: 1px solid transparent; background: transparent; font-weight: 600; color: var(--ft-text); display: grid; place-items: center; }
+.ft-page-btn:hover:not(:disabled) { background: #f2f4f7; }
+.ft-page-btn.is-active { background: var(--ft-blue); color: #fff; }
+.ft-page-btn:disabled { opacity: .4; }
+
+/* Schema: anvelope si etichete */
+.ft-svg .ft-tire { cursor: pointer; outline: none; }
+.ft-svg .ft-tire rect.ft-tire-body { transition: filter .12s, stroke-width .12s; }
+.ft-svg .ft-tire:hover rect.ft-tire-body, .ft-svg .ft-tire:focus-visible rect.ft-tire-body { filter: brightness(1.12); stroke: #0b4fd6; stroke-width: 2; }
+.ft-svg .ft-tire.is-selected rect.ft-tire-body { stroke: #0b4fd6; stroke-width: 2.6; }
+.ft-svg .ft-tire.is-selected .ft-tire-halo { opacity: 1; }
+.ft-svg .ft-tire-halo { opacity: 0; fill: none; stroke: rgba(21, 112, 239, .35); stroke-width: 5; transition: opacity .15s; pointer-events: none; }
+.ft-svg .ft-pill { cursor: pointer; }
+.ft-svg .ft-pill:hover rect { stroke-width: 1.8; }
+.ft-svg .ft-pill.is-selected rect { stroke: #0b4fd6; stroke-width: 2; }
+.ft-svg text { font-family: inherit; }
+
+/* Detalii (randul extins) */
+.ft-detail { padding: 0 .75rem .9rem 3.4rem; }
+.ft-detail[hidden] { display: none; }
+.ft-detail-loading, .ft-detail-error { padding: 1.25rem; color: var(--ft-muted); display: flex; align-items: center; gap: .6rem; }
+.ft-detail-error { color: var(--ft-crit-dark); }
+.ft-tabs { display: flex; gap: .55rem; flex-wrap: wrap; margin: .1rem 0 .7rem; }
+.ft-tab { display: inline-flex; align-items: center; gap: .55rem; height: 40px; padding: 0 1.15rem; border: 1px solid var(--ft-border-strong); border-radius: 8px; background: #fff; font-weight: 500; font-size: .95rem; color: var(--ft-text); box-shadow: var(--ft-shadow); }
+.ft-tab i { font-size: 1.1rem; }
+.ft-tab:hover { border-color: #98a9bf; }
+.ft-tab.is-active { background: var(--ft-blue); border-color: var(--ft-blue); color: #fff; }
+.ft-panel { background: #fff; border: 1px solid var(--ft-border); border-radius: 10px; }
+.ft-panel[hidden] { display: none; }
+.ft-panel-pad { padding: 1rem 1.1rem; }
+.ft-tire-table { margin: 0; font-size: .86rem; color: var(--ft-text); }
+.ft-tire-table thead th { font-size: .8rem; font-weight: 500; color: #344054; background: #fff; border-bottom: 1px solid var(--ft-border); padding: .55rem .5rem; white-space: nowrap; }
+.ft-tire-table td { padding: .28rem .5rem; border-color: #eef1f5; vertical-align: middle; white-space: nowrap; }
+.ft-tire-table tbody tr.ft-tire-row { transition: background-color .15s; cursor: pointer; }
+.ft-tire-table tbody tr.ft-tire-row:hover > td { background: #f7faff; }
+.ft-tire-table tbody tr.ft-tire-row.is-selected > td { background: #e8f1ff; }
+.ft-tire-table tbody tr.ft-tire-row.is-selected > td:first-child { box-shadow: inset 3px 0 0 var(--ft-blue); }
+.ft-tire-table tbody tr.ft-tire-row.is-flash > td { animation: ftFlash 1.2s ease-out; }
+@keyframes ftFlash { 0% { background: #c9defe; } 100% { background: #e8f1ff; } }
+.ft-tire-table .ft-pos { font-weight: 800; }
+.ft-tire-table .ft-member-row td { background: #f8fafc; font-weight: 700; font-size: .85rem; color: #1d2939; padding-top: .45rem; padding-bottom: .45rem; }
+.ft-tire-table .ft-axle-row td { background: #fcfdfe; font-size: .8rem; color: #475467; padding-top: .3rem; padding-bottom: .3rem; }
+.ft-axle-toggle { border: 0; background: transparent; padding: 0 .25rem 0 0; color: #475467; font-weight: 600; }
+.ft-axle-toggle i { display: inline-block; transition: transform .15s; }
+.ft-axle-toggle[aria-expanded="false"] i { transform: rotate(-90deg); }
+.ft-tire-dot { width: 20px; height: 20px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; }
+.ft-tire-dot svg { width: 20px; height: 20px; }
+.ft-tire-dot.is-ok { color: var(--ft-ok); }
+.ft-tire-dot.is-warn { color: #f39c12; }
+.ft-tire-dot.is-crit { color: var(--ft-crit); }
+.ft-tire-dot.is-empty { color: #b2bccb; }
+.ft-num-ok { color: var(--ft-ok-dark); font-weight: 700; }
+.ft-num-warn { color: #d97706; font-weight: 700; }
+.ft-num-crit { color: var(--ft-crit); font-weight: 700; }
+.ft-wear-cell { display: flex; align-items: center; gap: .6rem; min-width: 150px; }
+.ft-wear-cell > span:first-child { width: 2.6rem; text-align: right; font-variant-numeric: tabular-nums; }
+.ft-bar { flex: 1 1 auto; height: 7px; border-radius: 999px; background: #e7ecf3; overflow: hidden; min-width: 80px; }
+.ft-bar > span { display: block; height: 100%; border-radius: 999px; }
+.ft-bar .is-ok { background: var(--ft-ok); }
+.ft-bar .is-warn { background: #f59e0b; }
+.ft-bar .is-crit { background: var(--ft-crit); }
+.ft-badge { display: inline-flex; align-items: center; gap: .3rem; padding: .12rem .55rem; border-radius: 6px; font-size: .8rem; font-weight: 600; white-space: nowrap; }
+.ft-badge-ok { background: var(--ft-ok-soft); color: #0f5c2e; }
+.ft-badge-warn { background: #fff4d6; color: #7a4f00; border: 1px solid #ffe39a; }
+.ft-badge-crit { background: var(--ft-crit-soft); color: #9b1215; }
+.ft-badge-empty { background: var(--ft-none-soft); color: #475467; }
+.ft-row-actions { display: inline-flex; align-items: center; gap: .25rem; }
+.ft-row-actions .tire-action-btn, .ft-row-btn { width: 30px; height: 26px; padding: 0; display: inline-grid; place-items: center; border-radius: 6px; border: 1px solid var(--ft-border-strong); background: #fff; color: var(--ft-text); font-size: .9rem; }
+.ft-row-actions .tire-action-btn:hover, .ft-row-btn:hover { background: #f2f5f9; }
+.ft-row-actions .dropdown { display: inline-block; }
+.ft-row-actions .modal { text-align: left; white-space: normal; }
+
+/* Anvelopa selectata */
+.ft-selected { margin: 0 0 .7rem; background: #fff; border: 1px solid var(--ft-blue-line); border-radius: 10px; padding: .85rem 1rem; box-shadow: 0 0 0 3px rgba(21, 112, 239, .07); }
+.ft-selected[hidden] { display: none; }
+.ft-selected-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.ft-selected-title { font-weight: 700; font-size: 1rem; }
+.ft-selected-title small { font-weight: 500; color: var(--ft-muted); margin-left: .35rem; }
+.ft-selected-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+.ft-selected-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .55rem 1rem; }
+.ft-selected-grid > div > span { display: block; font-size: .75rem; color: var(--ft-muted); }
+.ft-selected-grid > div > strong { display: block; font-weight: 600; font-size: .9rem; }
+.ft-selected-history { margin-top: .7rem; border-top: 1px dashed var(--ft-border); padding-top: .55rem; font-size: .82rem; }
+.ft-selected-history ul { margin: .25rem 0 0; padding-left: 1.1rem; }
+.ft-info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: .65rem 1.2rem; }
+.ft-info-grid > div > span { display: block; font-size: .75rem; color: var(--ft-muted); }
+.ft-info-grid strong { font-weight: 600; }
+.ft-member-block + .ft-member-block { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--ft-border); }
+.ft-link-list { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .75rem; }
+
+/* Vederea grila */
+.ft-list.is-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: .75rem; padding: .35rem; }
+.ft-board.is-grid .ft-head { display: none; }
+.ft-list.is-grid .ft-unit { margin: 0; border: 1px solid var(--ft-border); background: #fff; }
+.ft-list.is-grid .ft-unit.is-open { grid-column: 1 / -1; background: #f6f9fe; }
+.ft-list.is-grid .ft-unit-row { grid-template-columns: 36px minmax(0, 1fr) auto auto; grid-template-areas: "chev vehicle vehicle config" "schema schema schema schema" "count count wear status" "actions actions actions actions"; row-gap: .5rem; }
+.ft-list.is-grid .ft-plate { white-space: normal; }
+.ft-list.is-grid .ft-vehicle-icon { flex-basis: 48px; width: 48px; }
+.ft-list.is-grid .ft-unit-row > :nth-child(1) { grid-area: chev; }
+.ft-list.is-grid .ft-unit-row > :nth-child(2) { grid-area: vehicle; }
+.ft-list.is-grid .ft-unit-row > :nth-child(3) { grid-area: config; }
+.ft-list.is-grid .ft-unit-row > :nth-child(4) { grid-area: schema; }
+.ft-list.is-grid .ft-unit-row > :nth-child(5) { grid-area: count; text-align: left; }
+.ft-list.is-grid .ft-unit-row > :nth-child(6) { grid-area: wear; }
+.ft-list.is-grid .ft-unit-row > :nth-child(7) { grid-area: status; text-align: right; }
+.ft-list.is-grid .ft-unit-row > :nth-child(8) { grid-area: actions; justify-content: flex-end; }
+.ft-list.is-grid .ft-detail { padding-left: .75rem; }
+
+/* Bara de actiuni in masa (comuna ambelor vederi): ramane vizibila jos cat timp ai selectie. */
+#tireBulkForm.tire-bulk-bar { position: sticky; bottom: .75rem; z-index: 25; margin: .75rem 0; border: 1px solid #c9dbf6; border-radius: 10px; box-shadow: 0 6px 20px rgba(16, 24, 40, .14); }
+
+/* Comutare Vehicule / Inventar */
+[data-ft-pane][hidden] { display: none !important; }
+
+@media (max-width: 1500px) {
+    .ft-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ft-add-btn { grid-column: 1 / -1; justify-self: end; }
+}
+@media (max-width: 1250px) {
+    .ft-board:not(.is-grid) { overflow-x: auto; }
+    .ft-board:not(.is-grid) .ft-head, .ft-board:not(.is-grid) .ft-list { min-width: 1180px; }
+    .ft-view-toggle { margin-left: 0; }
+}
+@media (max-width: 700px) {
+    .ft-kpis { grid-template-columns: 1fr; }
+    .ft-add-btn { justify-self: stretch; justify-content: center; }
+    .ft-search { max-width: none; flex-basis: 100%; }
+    .ft-field { flex: 1 1 100%; }
+    .ft-list.is-grid { grid-template-columns: minmax(0, 1fr); }
+    .ft-list.is-grid .ft-unit, .ft-detail { min-width: 0; }
+    .ft-list.is-grid .ft-unit-row { min-width: 0; }
+    .ft-list.is-grid .ft-vehicle-icon { display: none; }
+    .ft-detail { padding-left: .5rem; padding-right: .5rem; }
+    .ft-footer { flex-direction: column; align-items: stretch; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .ft-chevron i, .ft-unit, .ft-tire-table tbody tr.ft-tire-row.is-flash > td { transition: none; animation: none; }
+}
+
+/* Antetul aplicatiei e lipit sus: derularea la rand / anvelopa lasa loc sub el. */
+.ft-unit, .ft-selected, .ft-tire-table tr.ft-tire-row { scroll-margin-top: 130px; }
+
+/* Punctele componentelor in schema randului: ascunse, apar la trecerea peste rand. */
+.ft-svg .ft-hot { cursor: pointer; }
+.ft-svg .ft-hot-dot { fill: #fff; stroke: #1570ef; stroke-width: 1.6; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.ft-svg .ft-hot-dot.has-records { fill: #1570ef; stroke: #fff; }
+.ft-unit:hover .ft-svg .ft-hot-dot, .ft-unit:focus-within .ft-svg .ft-hot-dot { opacity: .9; pointer-events: auto; }
+.ft-svg .ft-hot:hover .ft-hot-dot { stroke-width: 2.6; opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .ft-svg .ft-hot-dot { transition: none; } }
+/* Ultima inspectie a locului: atentie / necesita inlocuire (din vehicule_componente_inspectii). */
+.ft-svg .ft-hot-dot.is-state-atentie { fill: #f59e0b; stroke: #fff; }
+.ft-svg .ft-hot-dot.is-state-inlocuire { fill: #e5383b; stroke: #fff; }

@@ -2909,6 +2909,8 @@ class DispecerCurseController
      *  - faza existenta: km-ii se ADAUGA la ai fazei; intervalul se extinde peste perioada aleasa
      *    doar daca asa nu se suprapune cu alta faza a cursei (altfel raman doar km-ii);
      *  - cursa fara faze: la fel, pe cursa, in campul de km reali dupa tipul de transport.
+     *  - kmp_close=1 (din "Km in desfasurare"): cursa / faza deschisa se INCHIDE - km-ii GPS de la
+     *    inceputul ei INLOCUIESC km-ii trecuti, iar sfarsitul devine kmp_to (si cand e aceeasi zi).
      * Cursele facturate nu se precompleteaza. Intoarce ce s-a aplicat, pentru mesajul din fisa.
      *
      * @param array<string, mixed> $formData
@@ -2951,9 +2953,11 @@ class DispecerCurseController
             return ['mode' => 'noua', 'km' => $km, 'total' => $km, 'from' => $from->format('Y-m-d H:i'), 'to' => $to->format('Y-m-d H:i'), 'extended' => true];
         }
 
+        $close = ($_GET['kmp_close'] ?? '') === '1';
         $kmField = $this->raceRealKmField((string) ($race['tip_transport'] ?? ''));
         $current = $phaseMode === 'editare' ? (float) ($phaseSegment['km'] ?? 0) : (float) ($race[$kmField] ?? 0);
-        $total = (int) round($current + $km);
+        // Inchidere: km-ii GPS sunt toti km-ii fazei / cursei deschise, nu un adaos.
+        $total = $close ? $km : (int) round($current + $km);
         if ($phaseMode === 'editare') {
             $formData['km_cursa'] = $formData['km_totali'] = $formData['km_dislocare'] = (string) $total;
         } else {
@@ -2966,7 +2970,8 @@ class DispecerCurseController
         $endTime = trim((string) ($formData['ora_sfarsit'] ?? ''));
         $ownEnd = $this->parseInsightsDateTime($this->insightsDateTime($formData['data_sfarsit'] ?? '', $endTime !== '' ? $endTime : '23:59'));
         $moveStart = $ownStart === null || $from < $ownStart;
-        $moveEnd = $ownEnd === null || $to > $ownEnd;
+        // O cursa / faza fara ora de sfarsit se inchide la kmp_to chiar daca e in aceeasi zi.
+        $moveEnd = $ownEnd === null || $to > $ownEnd || ($close && $endTime === '');
         $newStart = $moveStart ? $from : $ownStart;
         $newEnd = $moveEnd ? $to : $ownEnd;
         $extended = true;
@@ -2994,6 +2999,7 @@ class DispecerCurseController
 
         return [
             'mode' => $phaseMode === 'editare' ? 'editare' : 'cursa',
+            'close' => $close,
             'km' => $km,
             'previous' => round($current, 1),
             'total' => $total,
@@ -9947,11 +9953,15 @@ class DispecerCurseController
 
     private function insightsFuelAction(): void
     {
+        // Doar citeste sesiunea (drepturi, utilizator): restul paginii nu asteapta lacatul ei.
+        $this->releaseSessionLock();
         try {
             $model = new FuelModel($this->db);
             $dateTo = date('Y-m-d');
             $dateFrom = date('Y-m-d', strtotime('-' . self::INSIGHTS_FUEL_DAYS . ' days'));
-            $model->refreshAutomaticAssociations($dateFrom, $dateTo);
+            // Ca la pagina Carburanti: recalculeaza asocierile automate doar daca s-a schimbat ceva
+            // din ce citeste potrivirea (alimentari, asocieri, curse, vehicule, Km service).
+            $model->refreshAutomaticAssociationsIfStale($dateFrom, $dateTo);
             $rows = $model->getUnassociatedFillups(['date_from' => $dateFrom, 'date_to' => $dateTo], 500);
 
             $vehicleIds = [];
@@ -10108,10 +10118,19 @@ class DispecerCurseController
         return $type === 'compresor' ? 'km_dislocare' : 'km_cursa';
     }
 
+    /** Endpointurile JSON care doar citesc sesiunea o inchid devreme (cererile paralele nu se mai serializeaza). */
+    private function releaseSessionLock(): void
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+    }
+
     /** De ce a ramas alimentarea neasociata + cursele / Km service la care se poate lega manual. */
     private function insightsFuelDetailAction(): void
     {
         $fillupId = (int) ($_GET['fillup_id'] ?? 0);
+        $this->releaseSessionLock();
         try {
             $model = new FuelModel($this->db);
             $diagnosis = $model->getUnassociatedDiagnosis($fillupId);

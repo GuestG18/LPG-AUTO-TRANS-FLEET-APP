@@ -15,6 +15,9 @@ $xmasTopbar = !$embedMode && ($xmasMonth >= 11 || ($xmasMonth === 1 && (int) dat
 // Meniul lateral porneste ascuns (off-canvas) si apare cand mouse-ul ajunge la
 // marginea din stanga. Butonul din bara de sus il poate fixa deschis.
 $bodyClasses = $embedMode ? ['is-embedded'] : ['sidebar-collapsed'];
+if ($xmasTopbar) {
+    $bodyClasses[] = 'xmas-active';   // pagini care aleg alta varianta de animatie cat timp scena ruleaza (dispatcher-live.css)
+}
 $showGlobalApprovalDrawer = false;
 $globalApprovalDrawerMode = 'user';
 $canReviewInactiveApprovals = false;
@@ -149,6 +152,7 @@ $navAttrs = static fn(string $key, ?string $group = null): string => function_ex
                 <?php if ($can('monitorizare_flota')): ?><a<?= $navAttrs('monitorizare_flota') ?> class="nav-link <?= $currentPage === 'monitorizare_flota' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'monitorizare_flota'])) ?>"><i class="bi bi-globe-europe-africa" aria-hidden="true"></i><span>Monitorizare flotă</span></a><?php endif; ?>
                 <?php if ($can('dispecer_sandbox')): ?><a<?= $navAttrs('dispecer_sandbox') ?> class="nav-link <?= $currentPage === 'dispecer_sandbox' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'dispecer_sandbox'])) ?>"><i class="bi bi-broadcast" aria-hidden="true"></i><span>Sandbox GPS curse</span></a><?php endif; ?>
                 <?php if ($can('sas_dashboard_sandbox')): ?><a<?= $navAttrs('sas_dashboard_sandbox') ?> class="nav-link <?= $currentPage === 'sas_dashboard_sandbox' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'sas_dashboard_sandbox'])) ?>"><i class="bi bi-activity" aria-hidden="true"></i><span>Sandbox Dashboard Flota</span></a><?php endif; ?>
+                <?php if ($can('sas_can_sandbox')): ?><a<?= $navAttrs('sas_can_sandbox') ?> class="nav-link <?= $currentPage === 'sas_can_sandbox' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'sas_can_sandbox'])) ?>"><i class="bi bi-cpu" aria-hidden="true"></i><span>Sandbox Km CAN</span></a><?php endif; ?>
                 <?php if ($can('centru_kilometraj')): ?><a<?= $navAttrs('centru_kilometraj') ?> class="nav-link <?= $currentPage === 'centru_kilometraj' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'centru_kilometraj'])) ?>"><i class="bi bi-speedometer2" aria-hidden="true"></i><span>Centru Kilometraj</span></a><?php endif; ?>
                 <?php if ($can('km_pierduti')): ?><a<?= $navAttrs('km_pierduti') ?> class="nav-link <?= $currentPage === 'km_pierduti' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'km_pierduti'])) ?>"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i><span>Km pierduți</span></a><?php endif; ?>
                 <?php if ($can('carburanti')): ?><a<?= $navAttrs('carburanti') ?> class="nav-link <?= $currentPage === 'carburanti' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'carburanti'])) ?>"><i class="bi bi-fuel-pump" aria-hidden="true"></i><span>Carburan&#539;i</span></a><?php endif; ?>
@@ -251,6 +255,7 @@ $navAttrs = static fn(string $key, ?string $group = null): string => function_ex
                 <?php if ($can('contabilitate_personal')): ?><a<?= $navAttrs('contabilitate_personal') ?> class="nav-link <?= $currentPage === 'contabilitate_personal' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'contabilitate_personal'])) ?>"><i class="bi bi-person-badge" aria-hidden="true"></i><span>Contabilitate Personal</span></a><?php endif; ?>
                 <?php if ($can('cheltuieli')): ?><a<?= $navAttrs('cheltuieli') ?> class="nav-link <?= $currentPage === 'cheltuieli' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'cheltuieli'])) ?>"><i class="bi bi-wallet2" aria-hidden="true"></i><span>Cheltuieli</span></a><?php endif; ?>
                 <?php if ($can('facturi')): ?><a<?= $navAttrs('facturi') ?> class="nav-link <?= $currentPage === 'facturi' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'facturi'])) ?>"><i class="bi bi-receipt" aria-hidden="true"></i><span>Facturi</span></a><?php endif; ?>
+                <?php if ($can('etoll')): ?><a<?= $navAttrs('etoll') ?> class="nav-link <?= $currentPage === 'etoll' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'etoll'])) ?>"><i class="bi bi-signpost-split" aria-hidden="true"></i><span>Situație eToll</span></a><?php endif; ?>
                 <?php // Registrul de piese (facturi scanate cu subiect piese / service / reparatii / revizie); ruta e doar pentru admin. ?>
                 <?php if (function_exists('is_admin') && is_admin()): ?><a<?= $navAttrs('ocr_piese') ?> class="nav-link <?= $currentPage === 'ocr_piese' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'ocr_piese'])) ?>"><i class="bi bi-receipt-cutoff" aria-hidden="true"></i><span>Registru piese</span></a><?php endif; ?>
                 <?php /* Cazarea se vede in Facturi (tip=cazare); intrarea veche ramane doar pentru cine nu are Facturi. */ ?>

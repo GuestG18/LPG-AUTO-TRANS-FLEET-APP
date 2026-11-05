@@ -13,6 +13,8 @@ declare(strict_types=1);
  *   GET /api/invoices?page=&size=          facturile, cele mai noi intai
  *   GET /api/invoices/{id}                 detaliu, cu sessionIds[]
  *   GET /api/invoices/{id}/pdf             PDF-ul (vine cu content-type gresit: application/json)
+ *   GET /api/invoices/{id}/annex/{annexId}/pdf      anexa facturii (TA_10)
+ *   GET /api/sessions/sessions/{sessionId}/breakdown desfasuratorul sesiunii (pagina Servicii)
  *
  * Toate cererile sunt rarite la cel mult una pe secunda si plafonate pe rulare.
  */
@@ -113,12 +115,41 @@ class EtollApiClient
         return $this->getJson('invoices/' . rawurlencode($invoiceId));
     }
 
-    /** Continutul PDF-ului facturii. */
+    /** Contul de taxare per km; price.totalPrice = soldul curent al portofelului. */
+    public function account(): array
+    {
+        return $this->getJson('tolls/' . rawurlencode($this->tollId));
+    }
+
+    /** Detaliul sesiunii (pagina "Servicii"): startDate, endDate, adrese, km, totalPrice. */
+    public function sessionDetails(string $sessionId): array
+    {
+        return $this->getJson('sessions/' . rawurlencode($this->tollId) . '/sessionForUser?' . http_build_query(['sessionId' => $sessionId]));
+    }
+
+    /** Continutul PDF-ului facturii (pagina "Plăți"). */
     public function invoicePdf(string $invoiceId): string
     {
-        [$status, $body] = $this->get('invoices/' . rawurlencode($invoiceId) . '/pdf', 'application/pdf, */*');
+        return $this->pdf('invoices/' . rawurlencode($invoiceId) . '/pdf', 'facturii ' . $invoiceId);
+    }
+
+    /** Anexa facturii (TA_10, pagina "Plăți"): nr. auto, serie sasiu, km si tarif pe categorii de drum. */
+    public function annexPdf(string $invoiceId, string $annexId): string
+    {
+        return $this->pdf('invoices/' . rawurlencode($invoiceId) . '/annex/' . rawurlencode($annexId) . '/pdf', 'anexei facturii ' . $invoiceId);
+    }
+
+    /** Desfasuratorul sesiunii (pagina "Servicii"): ora de inceput / final, origine, destinatie, km. */
+    public function sessionBreakdownPdf(string $sessionId): string
+    {
+        return $this->pdf('sessions/sessions/' . rawurlencode($sessionId) . '/breakdown', 'desfasuratorului sesiunii ' . $sessionId);
+    }
+
+    private function pdf(string $path, string $what): string
+    {
+        [$status, $body] = $this->get($path, 'application/pdf, */*');
         if ($status !== 200 || !str_starts_with($body, '%PDF')) {
-            throw new RuntimeException('eToll: PDF-ul facturii ' . $invoiceId . ' nu a venit (HTTP ' . $status . ').');
+            throw new RuntimeException('eToll: PDF-ul ' . $what . ' nu a venit (HTTP ' . $status . ').');
         }
 
         return $body;

@@ -396,9 +396,17 @@ final class OdometerCalculator
      *
      * @return array{km:?float, source:?string, reason:?string}
      */
-    public static function officialDistance(string $policy, ?float $sasKm, ?float $cardOilKm): array
+    public static function officialDistance(string $policy, ?float $sasKm, ?float $cardOilKm, ?float $canKm = null): array
     {
         return match ($policy) {
+            'can' => $canKm !== null
+                ? ['km' => $canKm, 'source' => 'can', 'reason' => null]
+                : ['km' => null, 'source' => null, 'reason' => 'Fără distanță CAN validă de la T0.'],
+            'can_sas' => $canKm !== null
+                ? ['km' => $canKm, 'source' => 'can', 'reason' => null]
+                : ($sasKm !== null
+                    ? ['km' => $sasKm, 'source' => 'sas', 'reason' => null]
+                    : ['km' => null, 'source' => null, 'reason' => 'Nici CAN, nici SAS nu au distanță validă de la T0.']),
             'sas' => $sasKm !== null
                 ? ['km' => $sasKm, 'source' => 'sas', 'reason' => null]
                 : ['km' => null, 'source' => null, 'reason' => 'Fără distanță SAS validă de la T0.'],

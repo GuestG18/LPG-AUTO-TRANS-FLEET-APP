@@ -114,8 +114,9 @@ $periodLabel = $periodStartObj->format('j') === '1'
                     <th class="text-end kmp-sort" data-sort="efect" role="button" title="Km rulați pe curse: Km efectuați (Km totali când e completat, altfel Km efectuați / Km cursă)">Km efectuați</th>
                     <th class="text-end kmp-sort" data-sort="cursa" role="button" title="Km agreați / facturați (câmpul Km cursă)">Km agreați</th>
                     <th class="text-end kmp-sort" data-sort="service" role="button" title="Km la / de la service (Dispecer curse → Km service)">Km service</th>
-                    <th class="text-end kmp-sort" data-sort="lostc" role="button" title="Km GPS − Km efectuați − Km service">Km pierduți</th>
-                    <th class="text-end kmp-sort" data-sort="lostt" role="button" title="Km GPS − Km agreați (facturați) − Km service">GPS − agreați</th>
+                    <th class="text-end kmp-sort" data-sort="open" role="button" title="Km GPS rulați pe cursele încă deschise (fără ora de sfârșit): nu sunt pierduți, se socotesc la închiderea cursei">Km în desfășurare</th>
+                    <th class="text-end kmp-sort" data-sort="lostc" role="button" title="Km GPS − Km efectuați − Km service − Km în desfășurare">Km pierduți</th>
+                    <th class="text-end kmp-sort" data-sort="lostt" role="button" title="Km GPS − Km agreați (facturați) − Km service − Km în desfășurare">GPS − agreați</th>
                 </tr>
             </thead>
             <tbody id="kmp-rows"></tbody>
@@ -123,7 +124,7 @@ $periodLabel = $periodStartObj->format('j') === '1'
     </div>
     <div class="card-footer bg-white text-muted small">
         <i class="bi bi-info-circle me-1"></i>Click pe valoarea din „Km pierduți” arată de unde vin: deplasările GPS din SAS puse pe cursele și drumurile la service din Dispecer.
-        Km pierduți =Km GPS reali − Km efectuați pe curse (Km totali / „Km efectuați” când e completat, altfel Km cursă) − Km service (drumuri la reparat, din Dispecer curse → Km service). „GPS − agreați” compară cu km facturați. O cursă intră în perioada în care s-a închis (data de sfârșit), ca în Dashboard Analitic V2. Valorile negative (curse înregistrate cu mai mulți km decât s-au rulat) pot apărea când o cursă închisă în interval a fost rulată parțial în perioada anterioară.
+        Km pierduți = Km GPS reali − Km efectuați pe curse închise (Km totali / „Km efectuați” când e completat, altfel Km cursă) − Km service (drumuri la reparat, din Dispecer curse → Km service) − Km în desfășurare (km GPS rulați pe cursele încă deschise, fără ora de sfârșit; o cursă uitată deschisă se oprește la următoarea cursă / service a vehiculului). „GPS − agreați” compară cu km facturați. O cursă intră în perioada în care s-a închis (data de sfârșit), ca în Dashboard Analitic V2. Valorile negative (curse înregistrate cu mai mulți km decât s-au rulat) pot apărea când o cursă închisă în interval a fost rulată parțial în perioada anterioară.
     </div>
 </div>
 
@@ -191,7 +192,7 @@ $periodLabel = $periodStartObj->format('j') === '1'
 
     function $(id) { return document.getElementById(id); }
     function esc(v) { var d = document.createElement('div'); d.textContent = v == null ? '' : String(v); return d.innerHTML; }
-    function fmt(n) { return n == null ? '–' : NF.format(Math.round(n)); }
+    function fmt(n) { return n == null ? '–' : NF.format(Math.round(n) || 0); }
 
     // Fiecare vehicul: gps null = neincarcat inca; are_gps false = fara carId (nu e pe SAS).
     VEHICLES.forEach(function (v) {
@@ -199,13 +200,15 @@ $periodLabel = $periodStartObj->format('j') === '1'
         v.has_gps = (v.sas_vehicle_id || 0) > 0;
         v.lostc = null;
         v.lostt = null;
+        v.open_km = 0;
     });
 
     function computeLost(v) {
         if (v.gps == null) { v.lostc = null; v.lostt = null; return; }
         // Pierdut = km GPS neacoperiti de km efectuati pe curse; al doilea: fata de km agreati (facturati).
-        v.lostc = v.gps - (v.km_efectuati || 0) - (v.km_service || 0);
-        v.lostt = v.gps - (v.km_cursa || 0) - (v.km_service || 0);
+        // Km rulati pe cursele inca deschise nu sunt pierduti: se socotesc cand se inchide cursa.
+        v.lostc = v.gps - (v.km_efectuati || 0) - (v.km_service || 0) - (v.open_km || 0);
+        v.lostt = v.gps - (v.km_cursa || 0) - (v.km_service || 0) - (v.open_km || 0);
     }
 
     function lostCell(value, pending) {
@@ -246,6 +249,18 @@ $periodLabel = $periodStartObj->format('j') === '1'
         return '<span title="' + esc(title) + '"><i class="bi bi-tools text-warning me-1"></i>' + fmt(v.km_service) + '</span>';
     }
 
+    // Km in desfasurare: cursele deschise ale vehiculului apar in tooltip.
+    function openCell(v, pending) {
+        if (pending) { return '<span class="kmp-pending">…</span>'; }
+        var trips = v.curse_deschise || [];
+        if (!trips.length) { return '<span class="kmp-pending">-</span>'; }
+        var title = trips.map(function (t) {
+            return 'cursa #' + t.id + (t.beneficiar ? ' (' + t.beneficiar + ')' : '') + ' deschisă din ' + t.from.replace(/^(\d{4})-(\d{2})-(\d{2})/, '$3.$2.$1')
+                + (t.ongoing ? ', în desfășurare' : ', până la următoarea cursă (' + t.to.replace(/^(\d{4})-(\d{2})-(\d{2})/, '$3.$2.$1') + ')');
+        }).join('\n');
+        return '<span class="text-success" title="' + esc(title) + '"><i class="bi bi-hourglass-split me-1"></i>' + fmt(v.open_km) + '</span>';
+    }
+
     function matches(v) {
         if (state.search === '') { return true; }
         return ((v.plate || '') + ' ' + (v.label || '')).toLowerCase().indexOf(state.search) !== -1;
@@ -259,6 +274,7 @@ $periodLabel = $periodStartObj->format('j') === '1'
             case 'cursa': return v.km_cursa || 0;
             case 'efect': return v.km_efectuati || 0;
             case 'service': return v.km_service || 0;
+            case 'open': return v.open_km || 0;
             case 'lostc': return v.lostc == null ? -Infinity : v.lostc;
             case 'lostt': return v.lostt == null ? -Infinity : v.lostt;
             default: return 0;
@@ -287,6 +303,7 @@ $periodLabel = $periodStartObj->format('j') === '1'
                 + '<td class="text-end">' + fmt(v.km_efectuati) + '</td>'
                 + '<td class="text-end text-muted">' + fmt(v.km_cursa) + '</td>'
                 + '<td class="text-end">' + serviceCell(v) + '</td>'
+                + '<td class="text-end">' + openCell(v, pending) + '</td>'
                 + '<td class="text-end">' + lostDetailCell(v, pending) + '</td>'
                 + '<td class="text-end">' + lostCell(v.lostt, pending) + '</td>'
                 + '</tr>';
@@ -294,14 +311,14 @@ $periodLabel = $periodStartObj->format('j') === '1'
     }
 
     function renderKpis() {
-        var gps = 0, cursa = 0, loaded = 0, tracked = 0;
+        var gps = 0, cursa = 0, open = 0, loaded = 0, tracked = 0;
         VEHICLES.forEach(function (v) {
             if (!v.has_gps) { return; }
             tracked++;
             cursa += (v.km_efectuati || 0) + (v.km_service || 0);
-            if (v.gps != null) { gps += v.gps; loaded++; }
+            if (v.gps != null) { gps += v.gps; open += v.open_km || 0; loaded++; }
         });
-        var lost = gps - cursa;
+        var lost = gps - cursa - open;
         $('kmp-kpi-gps').textContent = fmt(gps);
         $('kmp-kpi-cursa').textContent = fmt(cursa);
         $('kmp-kpi-lost').textContent = fmt(lost);
@@ -321,10 +338,11 @@ $periodLabel = $periodStartObj->format('j') === '1'
             .catch(function () { return {}; })
             .then(function (batch) {
                 var cached = (batch && batch.cached) || {};
+                var openKm = (batch && batch.open) || {};
                 var missing = [];
                 tracked.forEach(function (v) {
                     var value = cached[String(v.sas_vehicle_id)];
-                    if (value !== undefined) { v.gps = typeof value === 'number' ? value : 0; computeLost(v); } else { missing.push(v); }
+                    if (value !== undefined) { v.gps = typeof value === 'number' ? value : 0; v.open_km = Number(openKm[String(v.sas_vehicle_id)]) || 0; computeLost(v); } else { missing.push(v); }
                 });
                 render();
                 renderKpis();
@@ -337,7 +355,7 @@ $periodLabel = $periodStartObj->format('j') === '1'
             if (!v) { return; }
             fetch(GPS_URL + '&car_id=' + v.sas_vehicle_id, { headers: { 'Accept': 'application/json' } })
                 .then(function (r) { return r.json(); })
-                .then(function (data) { v.gps = (data && typeof data.total_km === 'number') ? data.total_km : 0; })
+                .then(function (data) { v.gps = (data && typeof data.total_km === 'number') ? data.total_km : 0; v.open_km = Number(data && data.open_km) || 0; })
                 .catch(function () { v.gps = 0; })
                 .finally(function () { computeLost(v); render(); renderKpis(); worker(); });
         }
@@ -503,6 +521,10 @@ $periodLabel = $periodStartObj->format('j') === '1'
             + '<div class="col-6 col-md-3"><div class="border rounded py-2 border-danger"><div class="h5 mb-0 text-danger">' + km1(d.lost_km) + '</div><div class="small text-muted">Km pierduți</div></div></div>'
             + '</div>';
 
+        if (d.open_km > 0.05) {
+            html += '<div class="alert alert-success py-2 small"><i class="bi bi-hourglass-split me-1"></i><strong>' + km1(d.open_km) + ' km</strong> rulați pe cursele încă deschise (fără ora de sfârșit) — '
+                + 'apar la „Km în desfășurare”, nu la Km pierduți. Se socotesc când se închide cursa.</div>';
+        }
         html += '<div class="kmp-split mb-2">' + parts.map(function (p) {
             return p.km > 0 ? '<span class="' + p.cls + '" style="width:' + (p.km / positive * 100).toFixed(2) + '%" title="' + esc(p.label + ': ' + km1(p.km) + ' km') + '"></span>' : '';
         }).join('') + '</div>';

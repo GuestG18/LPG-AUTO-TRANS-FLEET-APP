@@ -108,7 +108,12 @@ class FuelController
 
         try {
             $this->model->ensureSchema();
-            $this->model->refreshAutomaticAssociations((string) $filters['date_from'], (string) $filters['date_to']);
+            // Recalculeaza asocierile automate doar daca s-a schimbat ceva din ce citeste potrivirea
+            // (alimentari, asocieri, curse, vehicule, Km service) — altfel ar rescrie aceleasi randuri.
+            $this->model->refreshAutomaticAssociationsIfStale((string) $filters['date_from'], (string) $filters['date_to']);
+            // De aici cererea doar citeste: aceleasi agregate (KPI perioada curenta/precedenta,
+            // randurile de odometru) se calculeaza o singura data.
+            $this->model->enableRequestReadCache();
             $data = $this->model->getDashboardData($filters);
             $data['comparison'] = $this->model->getComparisonData($compare['filters_a'], $compare['filters_b']);
             $data['vehicle_comparison'] = $this->model->getConsumptionByVehicle($filters);
@@ -176,6 +181,18 @@ class FuelController
             'canManageFull' => $this->canManageFull(),
             'excludedVehicles' => $this->safeExcludedVehicles(),
         ]);
+    }
+
+    /**
+     * Endpoint JSON doar-citire: autentificarea si drepturile au fost verificate in index.php,
+     * iar $_SESSION ramane lizibil. Fara blocajul de sesiune, un apel lent (SAS) nu mai tine pe loc
+     * celelalte cereri ale aceluiasi utilizator (navigare, alte taburi).
+     */
+    private function releaseSessionLock(): void
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
     }
 
     /** @return array<string,string> */
@@ -257,8 +274,36 @@ class FuelController
      * cardul „Consum normat”. Primeste from[] / to[] in aceeasi ordine si
      * intoarce km[] (null = fara date GPS pe acel interval).
      */
+    /** Km GPS (SAS) pe un interval incheiat: recitit cel mult la 6 ore (date SAS sosite tarziu). */
+    private const GPS_KM_CLOSED_TTL = 21600;
+    /** Km GPS pe un interval care include ziua de azi: recitit dupa 10 minute. */
+    private const GPS_KM_OPEN_TTL = 600;
+
+    private function gpsKmCacheFile(int $carId, string $from, string $to): string
+    {
+        $dir = dirname(BASE_PATH) . '/storage/cache';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+
+        return $dir . '/fuel_gps_km_' . $carId . '_' . md5($from . '|' . $to) . '.json';
+    }
+
+    /** @return array{km: ?float, fetched_at: int}|null */
+    private function readGpsKmCache(string $file): ?array
+    {
+        $raw = is_file($file) ? @file_get_contents($file) : false;
+        $data = is_string($raw) ? json_decode($raw, true) : null;
+        if (!is_array($data) || !isset($data['fetched_at']) || !array_key_exists('km', $data)) {
+            return null;
+        }
+
+        return ['km' => is_numeric($data['km']) ? (float) $data['km'] : null, 'fetched_at' => (int) $data['fetched_at']];
+    }
+
     private function normativeGpsKmAction(): void
     {
+        $this->releaseSessionLock();
         header('Content-Type: application/json; charset=UTF-8');
         header('Cache-Control: no-store');
 
@@ -290,20 +335,42 @@ class FuelController
             }
 
             $km = [];
+            $stale = [];
             foreach ($from as $index => $start) {
                 $start = (string) $start;
                 $end = (string) $to[$index];
+                if (strtotime($start) === false || strtotime($end) === false) {
+                    $km[] = null;
+                    $stale[] = false;
+                    continue;
+                }
+                // Cache pe disc per vehicul + interval exact: km GPS ai unui interval incheiat nu se
+                // mai schimba (TTL lung, pentru date SAS incarcate cu intarziere); intervalul care
+                // atinge ziua de azi se reciteste des. La eroare SAS se intoarce ultima valoare
+                // cunoscuta, marcata stale (UI-ul o arata ca posibil neactualizata).
+                $cacheFile = $this->gpsKmCacheFile($carId, $start, $end);
+                $cached = $this->readGpsKmCache($cacheFile);
+                $ttl = strtotime($end) < strtotime('today') ? self::GPS_KM_CLOSED_TTL : self::GPS_KM_OPEN_TTL;
+                if ($cached !== null && (time() - $cached['fetched_at']) < $ttl) {
+                    $km[] = $cached['km'];
+                    $stale[] = false;
+                    continue;
+                }
                 try {
-                    $km[] = strtotime($start) !== false && strtotime($end) !== false
-                        ? $service->getGpsDistance($carId, $start, $end)
-                        : null;
+                    $value = $service->getGpsDistance($carId, $start, $end);
+                    $km[] = $value;
+                    $stale[] = false;
+                    if ($value !== null) {
+                        @file_put_contents($cacheFile, json_encode(['km' => $value, 'fetched_at' => time()]), LOCK_EX);
+                    }
                 } catch (Throwable $exception) {
                     error_log('[FuelController][normative_gps_km] ' . $exception->getMessage());
-                    $km[] = null;
+                    $km[] = $cached['km'] ?? null;
+                    $stale[] = $cached !== null;
                 }
             }
 
-            echo json_encode(['ok' => true, 'km' => $km]);
+            echo json_encode(['ok' => true, 'km' => $km, 'stale' => $stale]);
         } catch (Throwable $exception) {
             error_log('[FuelController][normative_gps_km] ' . $exception->getMessage());
             echo json_encode(['ok' => false, 'error' => 'Datele SAS nu au putut fi citite.']);
@@ -317,6 +384,7 @@ class FuelController
      */
     private function kmCheckFetchAction(): void
     {
+        $this->releaseSessionLock();
         header('Content-Type: application/json; charset=UTF-8');
         header('Cache-Control: no-store');
 
@@ -375,6 +443,7 @@ class FuelController
     /** JSON: ultima cursa cu alimentare asociata + motivul pentru care alimentarea e neasociata. */
     private function unassociatedDiagnosisAction(): void
     {
+        $this->releaseSessionLock();
         header('Content-Type: application/json; charset=UTF-8');
         header('Cache-Control: no-store');
 
@@ -397,6 +466,7 @@ class FuelController
     /** JSON: cursele + Km service ale vehiculului alimentarii, pentru asocierea manuala. */
     private function linkOptionsAction(): void
     {
+        $this->releaseSessionLock();
         header('Content-Type: application/json; charset=UTF-8');
         header('Cache-Control: no-store');
 
@@ -492,6 +562,7 @@ class FuelController
     /** JSON: ce s-ar sterge pentru vehiculele excluse, de la date_from. */
     private function purgePreviewAction(): void
     {
+        $this->releaseSessionLock();
         header('Content-Type: application/json; charset=UTF-8');
         header('Cache-Control: no-store');
         if (!$this->canManageFull()) {

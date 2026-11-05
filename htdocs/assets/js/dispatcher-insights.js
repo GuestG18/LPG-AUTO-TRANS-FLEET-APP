@@ -3,6 +3,8 @@
  * formularului Adauga cursa. Click pe card = cardul se extinde (morph) intr-un panou de lucru:
  *  - Km pierduti: vehiculele cu km GPS neacoperiti; perioadele rulate fara cursa se aloca pe
  *    Km service (formularul de pe pagina, precompletat) sau pe o cursa noua (Adauga cursa precompletat).
+ *  - Km in desfasurare: km GPS rulati pe cursele inca deschise (fara ora de sfarsit). Nu intra in Km
+ *    pierduti; se socotesc cand dispecerul inchide cursa.
  *  - Alimentari: de ce a ramas neasociata (acelasi diagnostic ca in Carburanti) + asociere manuala.
  * Doar citire, cu exceptia asocierii manuale a alimentarii (POST insights_fuel_link).
  */
@@ -20,7 +22,7 @@
     var FUEL_LABELS = { motorina: 'Motorină', adblue: 'AdBlue', benzina: 'Benzină', gpl: 'GPL' };
 
     function esc(v) { var d = document.createElement('div'); d.textContent = v == null ? '' : String(v); return d.innerHTML; }
-    function km(n) { return n == null ? '–' : NF.format(Math.round(n)); }
+    function km(n) { return n == null ? '–' : NF.format(Math.round(n) || 0); }
     function km1(n) { return n == null ? '–' : NF1.format(n); }
     function roDate(ymd) { var p = String(ymd || '').split('-'); return p.length === 3 ? p[2] + '.' + p[1] + '.' + p[0] : String(ymd || ''); }
     function roDt(value) { var p = String(value || '').split(' '); return roDate(p[0]) + (p[1] ? ' ' + p[1].slice(0, 5) : ''); }
@@ -30,6 +32,42 @@
     }
     function tripHref(id) {
         return cfg.dispatcherUrl + '&ids=' + id + '&ids_label=' + encodeURIComponent('cursa #' + id);
+    }
+
+    // ---------------------------------------------------------------- memorie in tab (L1)
+    // Ultimul rezultat complet al fiecarui card, in sessionStorage (doar tabul curent, cheie pe
+    // utilizator): la revenirea pe pagina cardurile apar imediat, marcate "din memorie", si se
+    // reimprospateaza in fundal. Expira dupa SNAPSHOT_MAX_MS si la schimbarea zilei.
+    var SNAPSHOT_KEY = 'fleet.dispatcher.insights.snapshot.v1';
+    var SNAPSHOT_MAX_MS = 30 * 60 * 1000;
+    function todayKey() { var d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
+    function readSnapshot(part) {
+        if (!cfg.cacheUser) { return null; }
+        try {
+            var all = JSON.parse(sessionStorage.getItem(SNAPSHOT_KEY) || 'null');
+            var s = all && all.user === cfg.cacheUser && all.day === todayKey() ? all[part] : null;
+            return s && Date.now() - s.ts < SNAPSHOT_MAX_MS ? s : null;
+        } catch (e) { return null; }
+    }
+    function writeSnapshot(part, data) {
+        if (!cfg.cacheUser) { return; }
+        try {
+            var all = JSON.parse(sessionStorage.getItem(SNAPSHOT_KEY) || 'null');
+            if (!all || all.user !== cfg.cacheUser || all.day !== todayKey()) { all = { user: cfg.cacheUser, day: todayKey() }; }
+            data.ts = Date.now();
+            all[part] = data;
+            sessionStorage.setItem(SNAPSHOT_KEY, JSON.stringify(all));
+        } catch (e) { /* stocare plina / indisponibila: cardurile merg si fara */ }
+    }
+    function ageLabel(ts) {
+        var min = Math.max(0, Math.round((Date.now() - ts) / 60000));
+        return min < 1 ? 'acum câteva secunde' : 'acum ' + min + ' min';
+    }
+    // innerHTML doar cand continutul chiar s-a schimbat (fara reconstruirea inutila a cardului).
+    function setHtml(el, html) {
+        if (el.__dinsHtml === html) { return; }
+        el.__dinsHtml = html;
+        el.innerHTML = html;
     }
 
     // ---------------------------------------------------------------- filtre garaj / categorie
@@ -238,10 +276,23 @@
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && morph) { closeMorph(); } });
 
     // ---------------------------------------------------------------- Km pierduti
-    var kmState = { vehicles: [], loaded: 0, total: 0, start: '', end: '', error: '', ready: false, selected: null, details: {} };
+    // snapshotTs: datele aratate vin din memoria tabului (inca nu din server); refreshing: GPS-ul
+    // unor vehicule e din cache-ul expirat al serverului si se cere din nou in fundal.
+    var kmState = { vehicles: [], loaded: 0, total: 0, start: '', end: '', error: '', ready: false, selected: null, details: {}, snapshotTs: 0, refreshing: 0, failed: 0, staleFailed: 0, refreshError: false };
     var kmBody = root.querySelector('[data-dins-body="km"]');
+    // Intr-o rafala de raspunsuri GPS cardul se redeseneaza o data pe cadru, nu la fiecare raspuns.
+    // Cadrul nu vine cat timp tabul e ascuns: un temporizator scurt asigura randarea si atunci.
+    var kmRenderPending = false;
+    function scheduleKmRender() {
+        if (kmRenderPending) { return; }
+        kmRenderPending = true;
+        var run = function () { if (!kmRenderPending) { return; } kmRenderPending = false; renderKmCard(); };
+        requestAnimationFrame(run);
+        setTimeout(run, 100);
+    }
 
-    function kmLost(v) { return v.gps == null ? null : v.gps - (v.km_efectuati || 0) - (v.km_service || 0); }
+    // Km rulati pe cursele inca deschise sunt "in desfasurare", nu pierduti.
+    function kmLost(v) { return v.gps == null ? null : v.gps - (v.km_efectuati || 0) - (v.km_service || 0) - (v.open_km || 0); }
     function kmRanked() {
         return kmState.vehicles.filter(function (v) { return v.gps != null && kmLost(v) >= MIN_SEGMENT_KM && matchesFilter(v, filters.km); })
             .sort(function (a, b) { return kmLost(b) - kmLost(a); });
@@ -249,15 +300,30 @@
     function kmListed() { return sortItems(kmRanked(), filters.km.sort); }
     function renderKmCard() {
         if (!cfg.canKm) { return; }
-        if (kmState.error) { kmBody.innerHTML = '<span class="dins-muted">' + esc(kmState.error) + '</span>'; return; }
+        if (kmState.error) { setHtml(kmBody, '<span class="dins-muted">' + esc(kmState.error) + '</span>'); renderOpenCard(); return; }
         if (!kmState.ready) { return; }
         var ranked = kmRanked();
         var total = ranked.reduce(function (s, v) { return s + kmLost(v); }, 0);
         var pct = kmState.total ? Math.round(kmState.loaded / kmState.total * 100) : 100;
         var max = ranked.length ? kmLost(ranked[0]) : 1;
+        // Starea datelor, spusa explicit: din memoria tabului / GPS in actualizare / erori SAS.
+        var status = '';
+        if (kmState.snapshotTs) {
+            status = '<span class="dins-sub dins-cache-note' + (kmState.refreshError ? ' text-danger' : '') + '"><i class="bi bi-clock-history me-1"></i>Din memorie, ' + ageLabel(kmState.snapshotTs)
+                + (kmState.refreshError ? ' · actualizarea din SAS a eșuat' : ' · se actualizează…') + '</span>';
+        } else if (kmState.refreshing > 0) {
+            status = '<span class="dins-sub dins-cache-note"><i class="bi bi-arrow-repeat me-1"></i>GPS azi se actualizează: ' + kmState.refreshing + ' vehicule cu valori de acum ≥10 min</span>';
+        }
+        if (kmState.staleFailed > 0) {
+            status += '<span class="dins-sub text-warning-emphasis"><i class="bi bi-exclamation-triangle me-1"></i>' + kmState.staleFailed + ' vehicule cu GPS de acum ≥10 min (SAS nu a răspuns)</span>';
+        }
+        if (kmState.failed > 0) {
+            status += '<span class="dins-sub text-danger"><i class="bi bi-exclamation-triangle me-1"></i>' + kmState.failed + ' vehicule fără răspuns SAS (necalculate)</span>';
+        }
         var html = '<span class="dins-big">' + km(total) + ' <small>km fără cursă</small></span>'
             + '<span class="dins-sub">' + ranked.length + ' vehicule · ' + roDate(kmState.start) + ' – ' + roDate(kmState.end)
             + (pct < 100 ? ' · GPS ' + kmState.loaded + '/' + kmState.total : '') + '</span>'
+            + status
             + filterNote('km')
             + (pct < 100 ? '<span class="dins-progress"><span style="width:' + pct + '%"></span></span>' : '');
         // Pana la 6 randuri; CSS-ul arata cate incap in inaltimea cardului (data-dins-rows).
@@ -266,50 +332,120 @@
                 + Math.max(4, kmLost(v) / max * 100).toFixed(1) + '%"></span></span><b>' + km(kmLost(v)) + '</b></li>';
         }).join('') + '</ul>';
         html += '<span class="dins-hint"><i class="bi bi-hand-index me-1"></i>Click pentru detaliere și alocare pe cursă sau Km service</span>';
-        kmBody.innerHTML = html;
+        setHtml(kmBody, html);
         if (morph && morph.kind === 'km') { renderKmList(); }
+        renderOpenCard();
+    }
+
+    // Vehiculele fara nicio valoare se cer cate CONCURRENCY deodata (cardul asteapta dupa ele); cele
+    // cu valoare veche (cache expirat) se reimprospateaza in fundal cate una, ca pe un server cu un
+    // singur proces (php -S) sa nu tina la coada restul cererilor paginii.
+    var BACKGROUND_CONCURRENCY = 1;
+
+    function showKmSnapshot() {
+        var snap = cfg.canKm ? readSnapshot('km') : null;
+        if (!snap || !snap.vehicles) { return; }
+        kmState.start = snap.start;
+        kmState.end = snap.end;
+        kmState.vehicles = snap.vehicles;
+        kmState.total = snap.vehicles.filter(function (v) { return (v.sas_vehicle_id || 0) > 0; }).length;
+        kmState.loaded = kmState.total;
+        kmState.ready = true;
+        kmState.snapshotTs = snap.ts;
+        renderKmCard();
     }
 
     function loadKm() {
         if (!cfg.canKm) { return; }
         getJson(cfg.kmUrl + '&action=vehicles').then(function (data) {
             if (!data || !data.success) { throw new Error(data && data.error ? data.error : 'Datele SAS nu au putut fi încărcate.'); }
-            kmState.start = data.start;
-            kmState.end = data.end;
-            kmState.vehicles = (data.vehicles || []).map(function (v) { v.gps = null; return v; });
-            var tracked = kmState.vehicles.filter(function (v) { return (v.sas_vehicle_id || 0) > 0; });
-            kmState.total = tracked.length;
-            kmState.ready = true;
-            if (morph && morph.kind === 'km') { renderFilterBar('km', kmState.vehicles); }
-            renderKmCard();
+            var vehicles = (data.vehicles || []).map(function (v) { v.gps = null; return v; });
+            var tracked = vehicles.filter(function (v) { return (v.sas_vehicle_id || 0) > 0; });
             var period = '&start=' + data.start + '&end=' + data.end;
-            // Intai tot ce serverul are deja pe disc (o cerere, fara SAS); din SAS doar ce lipseste.
-            getJson(cfg.kmUrl + '&action=gps_cached' + period + '&car_ids=' + tracked.map(function (v) { return v.sas_vehicle_id; }).join(','))
-                .catch(function () { return { cached: {}, missing: null }; })
+            // Valorile din memoria tabului (aceeasi perioada) tin locul celor care lipsesc pe server
+            // pana sosesc cele noi, ca totalul cardului sa nu scada si sa urce la loc.
+            var previous = {};
+            if (kmState.snapshotTs && kmState.start === data.start && kmState.end === data.end) {
+                kmState.vehicles.forEach(function (v) { if (v.gps != null) { previous[String(v.sas_vehicle_id)] = v.gps; } });
+            }
+            // Intai tot ce serverul are deja pe disc (o cerere, fara SAS), inclusiv ziua de azi expirata
+            // (`stale`); din SAS doar ce lipseste sau e expirat.
+            return getJson(cfg.kmUrl + '&action=gps_cached&allow_stale=1' + period + '&car_ids=' + tracked.map(function (v) { return v.sas_vehicle_id; }).join(','))
+                .catch(function () { return { cached: {}, missing: null, stale: {} }; })
                 .then(function (batch) {
                     var cached = (batch && batch.cached) || {};
-                    var queue = [];
+                    var openKm = (batch && batch.open) || {};
+                    var stale = (batch && batch.stale) || {};
+                    var urgent = [], background = [], loaded = 0;
                     tracked.forEach(function (v) {
-                        var value = cached[String(v.sas_vehicle_id)];
-                        if (value !== undefined) { v.gps = typeof value === 'number' ? value : 0; kmState.loaded++; } else { queue.push(v); }
+                        var id = String(v.sas_vehicle_id);
+                        var value = cached[id];
+                        if (value !== undefined) { v.open_km = Number(openKm[id]) || 0; }
+                        if (value !== undefined && stale[id] === undefined) { v.gps = typeof value === 'number' ? value : 0; loaded++; return; }
+                        if (value !== undefined) { v.gps = typeof value === 'number' ? value : 0; v.gpsStale = true; background.push(v); return; }
+                        if (previous[id] !== undefined) { v.gps = previous[id]; v.gpsStale = true; }
+                        urgent.push(v);
                     });
-                    kmState.fromCache = kmState.loaded;
+                    // Datele noi inlocuiesc dintr-o data ce era pe card (fara golire intre timp).
+                    kmState.start = data.start;
+                    kmState.end = data.end;
+                    kmState.vehicles = vehicles;
+                    kmState.total = tracked.length;
+                    kmState.loaded = loaded;
+                    kmState.ready = true;
+                    kmState.error = '';
+                    kmState.snapshotTs = 0;
+                    kmState.details = {};
+                    kmState.refreshing = urgent.concat(background).filter(function (v) { return v.gpsStale; }).length;
+                    kmState.failed = 0;
+                    kmState.staleFailed = 0;
+                    if (morph && morph.kind === 'km') { renderFilterBar('km', kmState.vehicles); }
                     renderKmCard();
-                    var gpsUrl = cfg.kmUrl + '&action=gps' + period + '&car_id=';
-                    function worker() {
-                        var v = queue.shift();
-                        if (!v) { return; }
-                        getJson(gpsUrl + v.sas_vehicle_id)
-                            .then(function (d) { v.gps = d && typeof d.total_km === 'number' ? d.total_km : 0; })
-                            .catch(function () { v.gps = 0; })
-                            .finally(function () { kmState.loaded++; renderKmCard(); worker(); });
-                    }
-                    for (var i = 0; i < CONCURRENCY; i++) { worker(); }
+                    fetchKmGps(period, urgent, background);
                 });
         }).catch(function (err) {
-            kmState.error = err.message || 'Datele SAS nu au putut fi încărcate.';
+            // O eroare la reimprospatare nu sterge datele deja aratate din memorie.
+            if (kmState.snapshotTs) { kmState.refreshError = true; }
+            else { kmState.error = err.message || 'Datele SAS nu au putut fi încărcate.'; }
             renderKmCard();
         });
+    }
+
+    function fetchKmGps(period, urgent, background) {
+        var gpsUrl = cfg.kmUrl + '&action=gps' + period + '&car_id=';
+        var active = 0;
+        function done() {
+            if (active || urgent.length || background.length) { return; }
+            if (!kmState.failed && !kmState.staleFailed) {
+                writeSnapshot('km', { start: kmState.start, end: kmState.end, vehicles: kmState.vehicles });
+            }
+        }
+        function fetchOne(v) {
+            active++;
+            getJson(gpsUrl + v.sas_vehicle_id)
+                .then(function (d) {
+                    if (!d || d.error) { throw new Error(d && d.error ? d.error : 'SAS'); }
+                    v.gps = typeof d.total_km === 'number' ? d.total_km : 0;
+                    v.open_km = Number(d.open_km) || 0;
+                    if (v.gpsStale) { v.gpsStale = false; kmState.refreshing--; }
+                })
+                .catch(function () {
+                    // Fara raspuns SAS: valoarea veche ramane (marcata), altfel vehiculul nu se calculeaza.
+                    if (v.gpsStale) { kmState.staleFailed++; kmState.refreshing--; v.gpsStale = false; } else { v.gps = null; kmState.failed++; }
+                })
+                .finally(function () { active--; kmState.loaded++; scheduleKmRender(); pump(); done(); });
+        }
+        function pump() {
+            for (;;) {
+                var limit = urgent.length ? CONCURRENCY : BACKGROUND_CONCURRENCY;
+                if (active >= limit) { return; }
+                var v = urgent.shift() || background.shift();
+                if (!v) { return; }
+                fetchOne(v);
+            }
+        }
+        pump();
+        done();
     }
 
     function renderKmList() {
@@ -327,7 +463,7 @@
                 if (g !== null && g !== lastGroup) { lastGroup = g; head = '<div class="dins-group"><span>' + esc(g) + '</span><b>' + km(totals[g]) + ' km</b></div>'; }
                 return head + '<button type="button" class="dins-list-item' + (kmState.selected === v.sas_vehicle_id ? ' is-active' : '') + '" data-km-vehicle="' + v.sas_vehicle_id + '">'
                     + plateHtml(v) + '<b class="dins-lost">' + km(kmLost(v)) + ' km</b>'
-                    + '<span class="dins-li-meta">GPS ' + km(v.gps) + ' · curse ' + km(v.km_efectuati) + ' · service ' + km(v.km_service) + '</span>'
+                    + '<span class="dins-li-meta">GPS ' + km(v.gps) + (v.gpsStale ? ' <i class="bi bi-arrow-repeat" title="Valoare de acum ≥10 min, se actualizează"></i>' : '') + ' · curse ' + km(v.km_efectuati) + ' · service ' + km(v.km_service) + '</span>'
                     + tagsHtml(v) + '</button>';
             }).join('') : '<div class="dins-empty">' + (pending > 0 ? 'Se încarcă…' : (filters.km.garage || filters.km.category ? 'Niciun vehicul cu km neacoperiți pentru filtrul ales.' : 'Niciun vehicul cu km neacoperiți.')) + '</div>');
         var sum = morph.panel.querySelector('[data-dins-filter-sum]');
@@ -371,6 +507,10 @@
             + '<div class="dins-kpis mb-3"><div><b>' + km1(d.gps_km) + '</b><span>Km GPS</span></div><div><b>' + km1(d.declared_trips_km) + '</b><span>Km pe curse</span></div>'
             + '<div><b>' + km1(d.declared_service_km) + '</b><span>Km service</span></div><div><b class="dins-lost">' + km1(d.lost_km) + '</b><span>Km pierduți</span></div></div>';
 
+        if (d.open_km > 0.05) {
+            html += '<div class="alert alert-success py-2 small mb-3"><i class="bi bi-hourglass-split me-1"></i><b>' + km1(d.open_km) + ' km</b> rulați pe cursele încă deschise — '
+                + 'sunt în „Km în desfășurare”, nu în Km pierduți. Se socotesc când închizi cursa.</div>';
+        }
         html += '<h6><i class="bi bi-exclamation-circle text-danger me-1"></i>Perioade rulate fără cursă — alocă-le</h6>';
         var allGaps = (d.gaps || []).map(function (g) { return Object.assign({}, g, { segments: consolidateSegments(g.segments || []) }); });
         var gaps = allGaps.filter(function (g) { return Number(g.km) >= MIN_SEGMENT_KM; }).sort(function (a, b) { return b.km - a.km; });
@@ -666,8 +806,172 @@
         if (first) { selectKmVehicle(first.sas_vehicle_id); }
     }
 
+    // ---------------------------------------------------------------- Km in desfasurare
+    // Vehiculele din Km pierduti (acelasi filtru garaj / categorie) care au curse deschise in perioada.
+    // open_km (km GPS rulati in fereastra cursei deschise) vine odata cu GPS-ul: gps_cached / gps.
+    // O cursa uitata deschisa se opreste la urmatoarea cursa / service a vehiculului (calculat pe server).
+    var openBody = root.querySelector('[data-dins-body="open"]');
+    var openTotalEl = root.querySelector('[data-dins-open-total]');
+    var openState = { selected: null };
+    var OLD_OPEN_DAYS = 3;
+
+    function openDays(t) { return Math.max(0, Math.floor((Date.now() - dtMs(t.from)) / 86400000)); }
+    function openRanked() {
+        return kmState.vehicles.filter(function (v) { return (v.curse_deschise || []).length && matchesFilter(v, filters.km); })
+            .sort(function (a, b) { return ((b.open_km || 0) - (a.open_km || 0)) || String(a.plate).localeCompare(String(b.plate), 'ro', { numeric: true }); });
+    }
+    function openKmLabel(v) {
+        if ((v.sas_vehicle_id || 0) <= 0) { return 'fără GPS'; }
+        return v.gps == null ? '…' : km(v.open_km || 0) + ' km';
+    }
+    function renderOpenCard() {
+        if (!openBody || !cfg.canKm) { return; }
+        if (kmState.error) { setHtml(openBody, '<span class="dins-muted">' + esc(kmState.error) + '</span>'); setHtml(openTotalEl, ''); return; }
+        if (!kmState.ready) { return; }
+        var list = openRanked();
+        var trips = list.reduce(function (s, v) { return s + v.curse_deschise.length; }, 0);
+        var total = list.reduce(function (s, v) { return s + (v.gps != null ? (v.open_km || 0) : 0); }, 0);
+        var pending = list.some(function (v) { return v.gps == null && (v.sas_vehicle_id || 0) > 0; });
+        var old = list.reduce(function (s, v) { return s + v.curse_deschise.filter(function (t) { return openDays(t) >= OLD_OPEN_DAYS; }).length; }, 0);
+        setHtml(openTotalEl, km(total) + ' <small>km</small>');
+        if (!list.length) {
+            setHtml(openBody, '<span class="dins-open-line">Nicio cursă deschisă în ' + roDate(kmState.start) + ' – ' + roDate(kmState.end) + '.</span>' + filterNote('km'));
+        } else {
+            var top = list.filter(function (v) { return (v.open_km || 0) >= 1; }).slice(0, 3)
+                .map(function (v) { return '<b>' + esc(v.plate) + '</b> ' + km(v.open_km); }).join(' · ');
+            setHtml(openBody, '<span class="dins-open-line">' + trips + (trips === 1 ? ' cursă deschisă' : ' curse deschise') + ' · ' + list.length + ' vehicule'
+                + (pending ? ' · GPS se încarcă…' : '')
+                + (old ? ' · <span class="dins-open-old"><i class="bi bi-exclamation-triangle"></i> ' + old + ' de ≥' + OLD_OPEN_DAYS + ' zile</span>' : '') + '</span>'
+                + '<span class="dins-open-line">' + (top || 'Fără km GPS pe cursele deschise') + '</span>');
+        }
+        if (morph && morph.kind === 'open') { renderOpenList(); }
+    }
+
+    function renderOpenList() {
+        var list = morph.panel.querySelector('.dins-list');
+        if (!list) { return; }
+        var items = openRanked();
+        list.innerHTML = items.length ? items.map(function (v) {
+            var oldest = v.curse_deschise.reduce(function (m, t) { return Math.max(m, openDays(t)); }, 0);
+            var n = v.curse_deschise.length;
+            return '<button type="button" class="dins-list-item' + (openState.selected === String(v.vehicle_id) ? ' is-active' : '') + '" data-open-vehicle="' + v.vehicle_id + '">'
+                + plateHtml(v) + '<b class="text-success">' + openKmLabel(v) + '</b>'
+                + '<span class="dins-li-meta">' + n + (n === 1 ? ' cursă deschisă' : ' curse deschise')
+                + ' · <span class="' + (oldest >= OLD_OPEN_DAYS ? 'dins-open-old' : '') + '">de ' + oldest + (oldest === 1 ? ' zi' : ' zile') + '</span></span>'
+                + tagsHtml(v) + '</button>';
+        }).join('') : '<div class="dins-empty">' + (filters.km.garage || filters.km.category ? 'Nicio cursă deschisă pentru filtrul ales.' : 'Nicio cursă deschisă.') + '</div>';
+    }
+
+    function selectOpenVehicle(id) {
+        var v = kmState.vehicles.filter(function (x) { return String(x.vehicle_id) === String(id); })[0];
+        if (!v || !morph) { return; }
+        openState.selected = String(id);
+        renderOpenList();
+        var pane = morph.panel.querySelector('.dins-pane');
+        var html = '<div class="d-flex align-items-center justify-content-between gap-2 mb-2"><h5 class="mb-0">' + esc(v.plate) + '</h5>'
+            + '<a class="small" href="' + esc(cfg.kmUrl + '&start=' + kmState.start + '&end=' + kmState.end) + '" target="_blank" rel="noopener">Raport Km pierduți <i class="bi bi-box-arrow-up-right"></i></a></div>'
+            + '<div class="dins-kpis mb-3"><div><b class="text-success">' + openKmLabel(v) + '</b><span>Km GPS pe curse deschise</span></div>'
+            + '<div><b>' + v.curse_deschise.length + '</b><span>Curse deschise</span></div>'
+            + '<div><b>' + km(v.gps) + '</b><span>Km GPS în perioadă</span></div>'
+            + '<div><b class="dins-lost">' + km(kmLost(v)) + '</b><span>Km pierduți</span></div></div>';
+        html += '<div class="table-responsive"><table class="table table-sm align-middle dins-open-table mb-2"><thead class="table-light"><tr>'
+            + '<th>Cursă</th><th>De la</th><th>Până la</th><th class="text-end">Deschisă de</th><th></th></tr></thead><tbody>'
+            + v.curse_deschise.map(function (t) {
+                var days = openDays(t);
+                return '<tr><td><a href="' + esc(tripHref(t.id)) + '" target="_blank" rel="noopener">#' + t.id + '</a>'
+                    + (t.beneficiar ? ' <span class="small">' + esc(t.beneficiar) + '</span>' : '') + '</td>'
+                    + '<td class="text-nowrap">' + esc(roDt(t.from)) + '</td>'
+                    + '<td class="text-nowrap">' + (t.ongoing ? '<span class="text-success">acum (în desfășurare)</span>'
+                        : esc(roDt(t.to)) + '<div class="dins-muted small">vehiculul a pornit altă cursă / service</div>') + '</td>'
+                    + '<td class="text-end ' + (days >= OLD_OPEN_DAYS ? 'dins-open-old fw-semibold' : '') + '">' + days + (days === 1 ? ' zi' : ' zile') + '</td>'
+                    + '<td class="text-end">' + (cfg.canPhase && cfg.kmTripsUrl
+                        ? '<button type="button" class="btn btn-sm btn-success text-nowrap" data-open-close="' + t.id + '"><i class="bi bi-flag me-1"></i>Închide cu km GPS</button>'
+                        : (cfg.tripEditUrl ? '<a class="btn btn-sm btn-outline-success text-nowrap" href="' + esc(cfg.tripEditUrl + '&id=' + t.id) + '" target="_blank" rel="noopener"><i class="bi bi-flag me-1"></i>Închide cursa</a>' : '')) + '</td></tr>';
+            }).join('') + '</tbody></table></div>';
+        html += '<div class="dins-muted small mb-2"><i class="bi bi-flag me-1"></i>„Închide cu km GPS” calculează km-ii GPS de la începutul cursei (sau al fazei deschise) și deschide fișa precompletată cu ei și cu ora de sfârșit; la o cursă cu faze, km-ii merg pe faza deschisă. Nimic nu se salvează până nu apeși Salvează.</div>';
+        html += '<div class="dins-muted small"><i class="bi bi-info-circle me-1"></i>O cursă e deschisă cât timp nu are completată „Data și ora sfârșit”. Km GPS rulați de la începutul ei (în perioada '
+            + roDate(kmState.start) + ' – ' + roDate(kmState.end) + ') apar aici, nu în Km pierduți; după ce închizi cursa, km-ii ei efectuați acoperă GPS-ul ca la orice cursă. '
+            + 'Dacă vehiculul a pornit între timp altă cursă sau un drum la service, fereastra cursei uitate deschise se oprește acolo.</div>';
+        pane.innerHTML = html;
+    }
+
+    // Inchiderea unei curse deschise: km GPS de la inceputul ei (action=open_trip, din SAS) + cursa cu
+    // fazele ei (insights_km_trips). Fisa se deschide precompletata (kmp_close=1): la o cursa cu faze,
+    // km-ii si sfarsitul merg pe faza deschisa (ultima); fara faze, pe cursa. Nimic nu se salveaza aici.
+    function closeHref(trip, faza, info) {
+        var params = { kmp_from: String(info.from).slice(0, 16), kmp_to: String(info.to).slice(0, 16), kmp_km: String(Math.round(info.km)), kmp_close: '1' };
+        if (faza) { params.faza = String(faza); }
+        return trip.edit_url + '&' + new URLSearchParams(params).toString() + '#race-form';
+    }
+    function openCloseTrip(tripId) {
+        if (!morph) { return; }
+        closePhasePicker();
+        var picker = document.createElement('div');
+        picker.className = 'dins-phase-picker';
+        picker.setAttribute('role', 'dialog');
+        picker.setAttribute('aria-label', 'Închide cursa deschisă');
+        picker.innerHTML = '<div class="dins-phase-card"><div class="dins-phase-head"><div><b>Închide cursa #' + tripId + ' cu km GPS</b>'
+            + '<span>km rulați de la începutul cursei, din SAS</span></div>'
+            + '<button type="button" class="btn-close" data-km-phase-close aria-label="Închide"></button></div>'
+            + '<div class="dins-phase-body"><div class="dins-empty"><span class="spinner-border spinner-border-sm me-2"></span>Se calculează km GPS de la începutul cursei…</div></div></div>';
+        morph.panel.querySelector('.dins-morph-content').appendChild(picker);
+        var body = picker.querySelector('.dins-phase-body');
+        Promise.all([
+            getJson(cfg.kmUrl + '&action=open_trip&trip_id=' + tripId),
+            getJson(cfg.kmTripsUrl + '&ids=' + tripId)
+        ]).then(function (res) {
+            var info = res[0], trips = res[1];
+            if (!info || !info.success) { throw new Error(info && info.error ? info.error : 'Km GPS nu au putut fi calculați.'); }
+            if (!trips || !trips.success || !trips.trips.length) { throw new Error(trips && trips.error ? trips.error : 'Cursa nu mai există.'); }
+            var t = trips.trips[0];
+            var head = '<div class="dins-phase-trip"><div class="dins-phase-trip-head"><div><a href="' + esc(tripHref(t.id)) + '" target="_blank" rel="noopener" class="fw-semibold">#' + t.id + '</a> '
+                + esc(t.beneficiar) + ' · ' + esc(t.tip_label)
+                + '<div class="dins-muted small">' + esc(roDt(info.from)) + ' → ' + (info.ongoing ? 'acum' : esc(roDt(info.to)) + ' (vehiculul a pornit altă cursă / service)')
+                + ' · <b class="text-success">' + (info.km == null ? '–' : km1(info.km) + ' km GPS') + '</b>'
+                + (info.partial ? ' <span class="badge text-bg-warning">doar ultimele 92 de zile</span>' : '') + '</div></div></div>';
+            var html = head;
+            if (t.billed) {
+                html += '<div class="dins-muted small">Cursa e facturată: nu se mai poate modifica de aici.</div>';
+            } else if (info.km == null || info.km < 1) {
+                html += '<div class="dins-muted small mb-2">' + esc(info.error || 'GPS-ul nu arată km rulați de la începutul cursei.') + ' Închide-o manual din fișă.</div>'
+                    + '<a class="btn btn-sm btn-outline-success" href="' + esc(t.edit_url) + '#race-form"><i class="bi bi-pencil me-1"></i>Deschide fișa cursei</a>';
+            } else if (t.phases.length) {
+                var last = t.phases[t.phases.length - 1];
+                html += '<div class="dins-phase-list">' + t.phases.map(function (p) {
+                    var isOpen = p.id === last.id;
+                    return '<div class="dins-phase-row"><span><b>Faza ' + p.nr + '</b> · ' + esc(roDt(p.from)) + ' → ' + (isOpen ? '<span class="text-success">deschisă</span>' : esc(roDt(p.to)))
+                        + ' · ' + km1(p.km) + ' km' + (p.plate ? ' · ' + esc(p.plate) : '') + '</span>'
+                        + (isOpen
+                            ? '<a class="btn btn-sm btn-success" href="' + esc(closeHref(t, p.id, info)) + '"><i class="bi bi-flag me-1"></i>' + km(info.km) + ' km pe faza ' + p.nr + ' și închide</a>'
+                            : '<span class="dins-muted small">închisă</span>')
+                        + '</div>';
+                }).join('') + '</div>';
+            } else {
+                html += '<div class="dins-phase-list"><div class="dins-phase-row"><span>Km efectuați pe cursă: ' + km1(t.km) + ' → <b>' + km(info.km) + ' km</b> (GPS), sfârșit ' + esc(roDt(info.to)) + '.</span>'
+                    + '<a class="btn btn-sm btn-success" href="' + esc(closeHref(t, '', info)) + '"><i class="bi bi-flag me-1"></i>Pune km și închide</a></div></div>';
+            }
+            body.innerHTML = html + '<div class="dins-muted small mt-2"><i class="bi bi-info-circle me-1"></i>Se deschide fișa cursei precompletată cu km-ii GPS și ora de sfârșit; nimic nu se salvează până nu apeși Salvează.</div>';
+        }).catch(function (err) {
+            body.innerHTML = '<div class="alert alert-danger m-0">' + esc(err.message) + '</div>';
+        });
+    }
+
+
+    function openOpenTrips(card) {
+        if (!cfg.canKm || kmState.error || !kmState.ready) { return; }
+        openMorph(card, 'Km în desfășurare', 'Km GPS (SAS) rulați pe cursele fără ora de sfârșit · ' + roDate(kmState.start) + ' – ' + roDate(kmState.end), 'dins-card--open', function (content) {
+            content.innerHTML = '<div class="dins-split"><div class="dins-side-col">' + (filterNote('km') ? '<div class="px-3 pt-2">' + filterNote('km') + '</div>' : '')
+                + '<div class="dins-list"></div></div><div class="dins-pane"><div class="dins-empty">Alege un vehicul din stânga.</div></div></div>';
+        });
+        morph.kind = 'open';
+        renderOpenList();
+        var first = openRanked()[0];
+        if (first) { selectOpenVehicle(first.vehicle_id); }
+    }
+
+
     // ---------------------------------------------------------------- Alimentari neasociate
-    var fuelState = { items: [], loaded: false, error: '', canLink: false, selected: null };
+    var fuelState = { items: [], loaded: false, error: '', canLink: false, selected: null, snapshotTs: 0, refreshError: false };
     var fuelBody = root.querySelector('[data-dins-body="fuel"]');
 
     function fuelFiltered() { return fuelState.items.filter(function (i) { return matchesFilter(i, filters.fuel); }); }
@@ -678,13 +982,20 @@
         });
     }
 
+    function fuelStatusNote() {
+        if (!fuelState.snapshotTs) { return ''; }
+        return '<span class="dins-sub dins-cache-note' + (fuelState.refreshError ? ' text-danger' : '') + '"><i class="bi bi-clock-history me-1"></i>Din memorie, ' + ageLabel(fuelState.snapshotTs)
+            + (fuelState.refreshError ? ' · actualizarea a eșuat' : ' · se actualizează…') + '</span>';
+    }
+
     function renderFuelCard() {
-        if (fuelState.error) { fuelBody.innerHTML = '<span class="dins-muted">' + esc(fuelState.error) + '</span>'; return; }
+        if (fuelState.error) { setHtml(fuelBody, '<span class="dins-muted">' + esc(fuelState.error) + '</span>'); return; }
+        if (!fuelState.loaded) { return; }
         var items = fuelFiltered();
         if (!items.length) {
-            fuelBody.innerHTML = '<span class="dins-big">0</span><span class="dins-sub">' + (fuelState.items.length
+            setHtml(fuelBody, '<span class="dins-big">0</span><span class="dins-sub">' + (fuelState.items.length
                 ? 'Nicio alimentare neasociată pentru filtrul ales (' + fuelState.items.length + ' în total).'
-                : 'Toate alimentările CardOil din ultimele 30 de zile au cursă sau Km service.') + '</span>' + filterNote('fuel');
+                : 'Toate alimentările CardOil din ultimele 30 de zile au cursă sau Km service.') + '</span>' + fuelStatusNote() + filterNote('fuel'));
             return;
         }
         var liters = items.reduce(function (s, i) { return s + (i.fuel_type === 'adblue' ? 0 : i.liters); }, 0);
@@ -693,13 +1004,24 @@
         items.forEach(function (i) { byPlate[i.plate] = (byPlate[i.plate] || 0) + 1; });
         var plates = Object.keys(byPlate).sort(function (a, b) { return byPlate[b] - byPlate[a]; });
         var max = byPlate[plates[0]];
-        fuelBody.innerHTML = '<span class="dins-big">' + items.length + ' <small>alimentări fără cursă</small></span>'
+        setHtml(fuelBody, '<span class="dins-big">' + items.length + ' <small>alimentări fără cursă</small></span>'
             + '<span class="dins-sub">' + km(liters) + ' L carburant · ' + NF.format(Math.round(value)) + ' lei · ' + plates.length + ' vehicule</span>'
+            + fuelStatusNote()
             + filterNote('fuel')
             + '<ul class="dins-top">' + plates.slice(0, 6).map(function (p) {
                 return '<li><span class="text-truncate fw-semibold">' + esc(p) + '</span><span class="dins-bar"><span style="width:' + (byPlate[p] / max * 100).toFixed(1) + '%"></span></span><b>' + byPlate[p] + '</b></li>';
             }).join('') + '</ul>'
-            + '<span class="dins-hint"><i class="bi bi-hand-index me-1"></i>Click pentru motiv și asociere cu o cursă / Km service</span>';
+            + '<span class="dins-hint"><i class="bi bi-hand-index me-1"></i>Click pentru motiv și asociere cu o cursă / Km service</span>');
+    }
+
+    function showFuelSnapshot() {
+        var snap = readSnapshot('fuel');
+        if (!snap || !snap.items) { return; }
+        fuelState.items = snap.items;
+        fuelState.canLink = !!snap.canLink;
+        fuelState.loaded = true;
+        fuelState.snapshotTs = snap.ts;
+        renderFuelCard();
     }
 
     function loadFuel() {
@@ -708,9 +1030,22 @@
             fuelState.items = data.items || [];
             fuelState.canLink = !!data.can_link;
             fuelState.loaded = true;
+            fuelState.snapshotTs = 0;
+            fuelState.refreshError = false;
+            writeSnapshot('fuel', { items: fuelState.items, canLink: fuelState.canLink });
             renderFuelCard();
-            if (morph && morph.kind === 'fuel') { renderFilterBar('fuel', fuelState.items); renderFuelList(); }
-        }).catch(function (err) { fuelState.error = err.message; renderFuelCard(); });
+            if (morph && morph.kind === 'fuel') {
+                renderFilterBar('fuel', fuelState.items);
+                renderFuelList();
+                // Panoul era deschis pe date din memorie: alimentarea aleasa poate sa fi fost asociata intre timp.
+                var current = fuelListed();
+                if (current.length && !current.some(function (i) { return i.id === fuelState.selected; })) { selectFuel(current[0].id); }
+            }
+        }).catch(function (err) {
+            // Datele din memorie raman pe card, marcate ca vechi; altfel eroarea ia locul cardului.
+            if (fuelState.snapshotTs) { fuelState.refreshError = true; } else { fuelState.error = err.message; }
+            renderFuelCard();
+        });
     }
 
     function renderFuelList() {
@@ -803,6 +1138,8 @@
             .then(function (d) {
                 if (!d || !d.success) { throw new Error(d && d.error ? d.error : 'Asocierea a eșuat.'); }
                 fuelState.items = fuelState.items.filter(function (i) { return i.id !== id; });
+                // Memoria tabului urmeaza asocierea, ca la revenire alimentarea sa nu mai apara.
+                if (!fuelState.snapshotTs) { writeSnapshot('fuel', { items: fuelState.items, canLink: fuelState.canLink }); }
                 renderFuelCard();
                 renderFuelList();
                 pane.innerHTML = '<div class="dins-empty text-success"><i class="bi bi-check-circle fs-3 d-block mb-2"></i>' + esc(d.message) + '</div>';
@@ -832,11 +1169,14 @@
     root.addEventListener('click', function (e) {
         var card = e.target.closest('[data-dins-card]');
         if (!card) { return; }
-        if (card.getAttribute('data-dins-card') === 'km') { openKm(card); } else { openFuel(card); }
+        var which = card.getAttribute('data-dins-card');
+        if (which === 'km') { openKm(card); } else if (which === 'open') { openOpenTrips(card); } else { openFuel(card); }
     });
     document.addEventListener('click', function (e) {
         if (!morph || !morph.panel.contains(e.target)) { return; }
         var t;
+        if ((t = e.target.closest('[data-open-close]'))) { openCloseTrip(+t.getAttribute('data-open-close')); return; }
+        if ((t = e.target.closest('[data-open-vehicle]'))) { selectOpenVehicle(t.getAttribute('data-open-vehicle')); return; }
         if ((t = e.target.closest('[data-km-vehicle]'))) { selectKmVehicle(t.getAttribute('data-km-vehicle')); return; }
         if ((t = e.target.closest('[data-fuel-id]'))) { selectFuel(parseInt(t.getAttribute('data-fuel-id'), 10)); return; }
         if ((t = e.target.closest('[data-fuel-link]'))) { linkFuel(t); return; }
@@ -893,8 +1233,13 @@
         }
     });
 
-    // Datele vin dupa randarea paginii, ca Desfasuratorul sa nu astepte SAS / CardOil.
-    function start() { setTimeout(function () { loadFuel(); loadKm(); }, 600); }
+    // Memoria tabului se arata imediat (fara retea); datele noi vin dupa randarea paginii, ca
+    // Desfasuratorul sa nu astepte SAS / CardOil. Cele doua carduri se incarca independent.
+    function start() {
+        showFuelSnapshot();
+        showKmSnapshot();
+        setTimeout(function () { loadFuel(); loadKm(); }, 600);
+    }
     if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', start); } else { start(); }
 })();
 
@@ -955,10 +1300,13 @@
 
     // ---------------------------------------------------------------- impartire verticala carduri
     var topRatio = load(KEY_TOP);
+    var openCard = stack.querySelector('.dins-card--open');
     function rowBounds() {
         var avail = stack.clientHeight - (rowSplit ? rowSplit.offsetHeight : 0);
         var min = avail > 0 ? cssPx('--dins-card-min') / avail : 0.5;
-        return { avail: avail, min: Math.min(0.5, min), max: Math.max(0.5, 1 - min) };
+        // Sus stau Km pierduti + cardul compact Km in desfasurare: minimul include si inaltimea lui.
+        var minTop = avail > 0 ? (cssPx('--dins-card-min') + (openCard ? openCard.offsetHeight + 10 : 0)) / avail : 0.5;
+        return { avail: avail, min: Math.min(0.5, minTop), max: Math.max(0.5, 1 - min) };
     }
     function applyRow(save) {
         if (!rowSplit) { return; }
@@ -977,7 +1325,7 @@
         rowSplit.setAttribute('aria-valuemin', String(Math.round(b.min * 100)));
         rowSplit.setAttribute('aria-valuemax', String(Math.round(b.max * 100)));
         rowSplit.setAttribute('aria-valuenow', String(pct));
-        rowSplit.setAttribute('aria-valuetext', 'Km pierduți ' + pct + '%, Alimentări ' + (100 - pct) + '%');
+        rowSplit.setAttribute('aria-valuetext', 'Km pierduți și în desfășurare ' + pct + '%, Alimentări ' + (100 - pct) + '%');
     }
 
     // ---------------------------------------------------------------- tragere (pointer events)

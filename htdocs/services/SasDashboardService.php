@@ -87,10 +87,10 @@ class SasDashboardService
      * pierduti", incarcat esalonat per vehicul). Refoloseste getVehicleRange
      * (cache pe disc), returnand doar campurile relevante.
      */
-    public function getVehicleKm(int $carId, ?string $startDate = null, ?string $endDate = null): array
+    public function getVehicleKm(int $carId, ?string $startDate = null, ?string $endDate = null, array $openWindows = []): array
     {
         $range = $this->getVehicleRangeIncremental($carId, (string) $startDate, (string) $endDate);
-        return $this->kmSummary($carId, (array) $range);
+        return $this->kmSummary($carId, (array) $range, $openWindows);
     }
 
     /**
@@ -98,20 +98,99 @@ class SasDashboardService
      * Raportul / cardul Km pierduti cer intai tot ce e deja pe disc intr-o singura cerere,
      * apoi aduc din SAS doar vehiculele care lipsesc.
      */
-    public function getCachedVehicleKm(int $carId, string $startDate, string $endDate): ?array
+    public function getCachedVehicleKm(int $carId, string $startDate, string $endDate, array $openWindows = []): ?array
     {
         $range = $this->getVehicleRangeIncremental($carId, $startDate, $endDate, true);
-        return $range === null ? null : $this->kmSummary($carId, $range);
+        return $range === null ? null : $this->kmSummary($carId, $range, $openWindows);
     }
 
-    private function kmSummary(int $carId, array $range): array
+    /**
+     * Ultima valoare de pe disc chiar daca ziua de AZI a depasit TODAY_TTL_SECONDS (zilele inchise
+     * trebuie sa fie tot proaspete). Cardul o arata imediat, marcata ca in actualizare, si cere apoi
+     * valoarea noua prin getVehicleKm. Fara niciun apel SAS; null daca lipseste ceva.
+     *
+     * @return array{km: array<string, mixed>, today_age: int|null}|null
+     */
+    public function getStaleCachedVehicleKm(int $carId, string $startDate, string $endDate, array $openWindows = []): ?array
     {
-        return [
+        [$start, $end] = $this->validateRange($startDate, $endDate);
+        $today = new DateTimeImmutable('today');
+        if ($end < $today) {
+            return null;
+        }
+        $closed = null;
+        if ($start < $today) {
+            $closed = $this->closedRange($carId, $start, $today->modify('-1 day'), true);
+            if ($closed === null) {
+                return null;
+            }
+        }
+        $cache = $this->readJson($this->rangeCacheFile($carId, $today, $today));
+        if ($cache === null || !is_array($cache['day'] ?? null)) {
+            return null;
+        }
+        $range = $closed === null ? $cache['day'] : $this->mergeRanges($closed, $cache['day']);
+
+        return ['km' => $this->kmSummary($carId, $range, $openWindows), 'today_age' => time() - (int) ($cache['fetched_at_ts'] ?? 0)];
+    }
+
+    /**
+     * @param array<int, array{from_ts: int, to_ts: int}> $openWindows ferestrele curselor inca deschise
+     *        (fara ora de sfarsit): km GPS rulati in ele ies separat in open_km ("Km in desfasurare").
+     */
+    private function kmSummary(int $carId, array $range, array $openWindows = []): array
+    {
+        $summary = [
             'sas_vehicle_id' => $carId,
             'total_km' => $range['total_km'] ?? null,
             'can_fuel_l' => $range['can_fuel_l'] ?? null,
             'odometer_km' => $range['odometer_km'] ?? null,
         ];
+        if ($openWindows !== []) {
+            $summary['open_km'] = round(self::kmInsideWindows((array) ($range['segments'] ?? []), $openWindows), 1);
+        }
+
+        return $summary;
+    }
+
+    /**
+     * Km GPS din segmentele travelsheet-ului care cad in ferestre; un segment care trece granita
+     * unei ferestre se imparte proportional cu timpul (ca in raportul Km pierduti).
+     *
+     * @param array<int, array<string, mixed>> $segments
+     * @param array<int, array{from_ts: int, to_ts: int}> $windows
+     */
+    public static function kmInsideWindows(array $segments, array $windows): float
+    {
+        $total = 0.0;
+        foreach ($segments as $segment) {
+            $km = (float) ($segment['distance_km'] ?? 0);
+            $start = strtotime((string) ($segment['start_time'] ?? ''));
+            if ($km <= 0 || $start === false) {
+                continue;
+            }
+            $end = strtotime((string) ($segment['end_time'] ?? ''));
+            if ($end === false || $end < $start) {
+                $end = $start;
+            }
+            foreach ($windows as $window) {
+                $from = (int) $window['from_ts'];
+                $to = (int) $window['to_ts'];
+                if ($end <= $start) {
+                    if ($start >= $from && $start <= $to) {
+                        $total += $km;
+                        break;
+                    }
+                    continue;
+                }
+                $overlap = min($end, $to) - max($start, $from);
+                if ($overlap > 0) {
+                    $total += $km * $overlap / ($end - $start);
+                }
+            }
+        }
+
+        return $total;
     }
 
     /**

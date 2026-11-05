@@ -355,88 +355,22 @@ class MaintenanceController
 
     private function findAutoStockPart(array $partIndex, string $categoryName, string $componentName): ?array
     {
-        $nameKey = $this->autoLookupKey($componentName);
-        if ($nameKey === '') {
-            return null;
-        }
-
-        $categoryKey = $this->autoLookupKey($categoryName);
-        if ($categoryKey !== '' && isset($partIndex['by_category_name'][$categoryKey . '|' . $nameKey])) {
-            return $partIndex['by_category_name'][$categoryKey . '|' . $nameKey];
-        }
-
-        return $partIndex['by_name'][$nameKey] ?? null;
+        return AutoComponentStateService::findStockPart($partIndex, $categoryName, $componentName);
     }
 
     private function calculateAutoWearPercent(array $component, int $vehicleKm, array $usageByPart): ?int
     {
-        if (empty($component['configured'])) {
-            return null;
-        }
-
-        $interval = $this->autoNumericValue($component['interval'] ?? null);
-        if ($interval <= 0) {
-            return null;
-        }
-
-        $unit = trim((string) ($component['unit'] ?? 'km'));
-        $stockPartId = (int) ($component['stock_part_id'] ?? 0);
-        $usage = $stockPartId > 0 && isset($usageByPart[$stockPartId]) && is_array($usageByPart[$stockPartId])
-            ? $usageByPart[$stockPartId]
-            : [];
-
-        if ($unit === 'km') {
-            if ($vehicleKm <= 0) {
-                return null;
-            }
-
-            $mountedKm = isset($usage['km_montare']) && $usage['km_montare'] !== null
-                ? (int) $usage['km_montare']
-                : 0;
-            $usedKm = $mountedKm > 0 && $vehicleKm >= $mountedKm ? $vehicleKm - $mountedKm : $vehicleKm;
-
-            return max(0, min(100, (int) round(($usedKm / $interval) * 100)));
-        }
-
-        if ($unit === 'luni') {
-            $start = trim((string) ($usage['data_montare'] ?? ''));
-            if ($start === '') {
-                $start = trim((string) ($component['config_created_at'] ?? ''));
-            }
-            if ($start === '') {
-                return null;
-            }
-
-            try {
-                $startDate = new DateTimeImmutable($start);
-                $days = max(0, (int) $startDate->diff(new DateTimeImmutable('today'))->format('%a'));
-                $months = $days / 30.4375;
-                return max(0, min(100, (int) round(($months / $interval) * 100)));
-            } catch (Throwable) {
-                return null;
-            }
-        }
-
-        return null;
+        return AutoComponentStateService::wearPercent($component, $vehicleKm, $usageByPart);
     }
 
     private function autoNumericValue(mixed $value): float
     {
-        $raw = trim((string) $value);
-        if ($raw === '') {
-            return 0.0;
-        }
-
-        $normalized = str_replace([' ', '.'], '', $raw);
-        $normalized = str_replace(',', '.', $normalized);
-
-        return is_numeric($normalized) ? (float) $normalized : 0.0;
+        return AutoComponentStateService::numericValue($value);
     }
 
     private function autoLookupKey(string $value): string
     {
-        $value = mb_strtolower(trim($value), 'UTF-8');
-        return preg_replace('/[^a-z0-9]+/iu', '', $value) ?? '';
+        return AutoComponentStateService::lookupKey($value);
     }
 
     private function autoPartImageUrl(string $stored): string
@@ -447,6 +381,77 @@ class MaintenanceController
         }
 
         return url('uploads/mentenanta_piese/' . rawurlencode($stored));
+    }
+
+    /**
+     * Selectorul din „Adaugă piesă” (Stoc Piese): aceeași cale ca în Reparații Auto
+     * (tip vehicul → vehicul → categorie principală → subcategorie → componentă),
+     * fiecare componentă legată de piesa ei din stoc.
+     */
+    private function getStockCatalogPicker(array $vehicles): array
+    {
+        $categories = $this->loadAutoCategoriesFromExcel();
+        $this->model->syncAutoComponentsToStock($categories);
+        $partIndex = $this->model->getAutoComponentPartIndex();
+
+        $pickerCategories = [];
+        foreach ($categories as $categoryId => $category) {
+            $components = [];
+            foreach ((array) ($category['components'] ?? []) as $component) {
+                $part = $this->findAutoStockPart($partIndex, (string) $category['name'], (string) $component['name']);
+                $components[] = [
+                    'key' => (string) ($component['id'] ?? ''),
+                    'name' => (string) ($component['name'] ?? ''),
+                    'code' => (string) ($part['cod_piesa'] ?? ($component['code'] ?? '')),
+                    'description' => (string) ($part['descriere'] ?? ($component['description'] ?? '')),
+                    'part' => $part === null ? null : [
+                        'id' => (int) $part['id'],
+                        'stoc_curent' => (float) ($part['stoc_curent'] ?? 0),
+                        'stoc_minim' => (float) ($part['stoc_minim'] ?? 0),
+                        'pret_achizitie' => (float) ($part['pret_achizitie'] ?? 0),
+                        'unitate_masura' => (string) ($part['unitate_masura'] ?? 'buc'),
+                        'producator' => (string) ($part['producator'] ?? ''),
+                        'cod_oem' => (string) ($part['cod_oem'] ?? ''),
+                        'furnizor' => (string) ($part['furnizor'] ?? ''),
+                        'locatie_depozit' => (string) ($part['locatie_depozit'] ?? ''),
+                        'garantie_piesa' => (string) ($part['garantie_piesa'] ?? ''),
+                        'garantie_manopera' => (string) ($part['garantie_manopera'] ?? ''),
+                        'interval_km' => $part['interval_km'] ?? null,
+                        'interval_luni' => $part['interval_luni'] ?? null,
+                        'avertizare_km' => $part['avertizare_km'] ?? null,
+                        'avertizare_zile' => $part['avertizare_zile'] ?? null,
+                    ],
+                ];
+            }
+            $pickerCategories[(int) $categoryId] = [
+                'id' => (int) $categoryId,
+                'name' => (string) $category['name'],
+                'components' => $components,
+            ];
+        }
+
+        $pickerVehicles = [];
+        foreach ($vehicles as $vehicleRow) {
+            $autoType = $this->normalizeAutoVehicleType((string) ($vehicleRow['tip_vehicul'] ?? ''));
+            if ($autoType === '') {
+                continue;
+            }
+            $pickerVehicles[] = [
+                'id' => (int) $vehicleRow['id'],
+                'type' => $autoType,
+                'label' => trim((string) ($vehicleRow['nr_inmatriculare'] ?? '') . ' - ' . (string) ($vehicleRow['marca'] ?? '') . ' ' . (string) ($vehicleRow['model'] ?? '')),
+                'km' => (int) ($vehicleRow['km_bord'] ?? 0),
+            ];
+        }
+
+        return [
+            'vehicle_types' => ['camion' => 'Camion', 'cap_tractor' => 'Cap tractor', 'semiremorca' => 'Semiremorca', 'ansamblu' => 'Ansamblu'],
+            'vehicles' => $pickerVehicles,
+            'primary_labels' => AutoComponentCatalogService::PRIMARY_LABELS,
+            'subcategory_labels' => AutoComponentCatalogService::SUBCATEGORY_LABELS,
+            'category_groups' => AutoComponentCatalogService::CATEGORY_GROUPS,
+            'categories' => $pickerCategories,
+        ];
     }
 
     private function normalizeAutoVehicleType(string $type): string
@@ -483,6 +488,7 @@ class MaintenanceController
         $parts = [];
         $stockKpis = [];
         $stockFilterOptions = ['categories' => [], 'suppliers' => []];
+        $stockCatalogPicker = null;
         $technicalFormOptions = ['categories' => [], 'componentsByCategory' => []];
         if (class_exists('TechnicalHealthModel')) {
             try {
@@ -509,6 +515,11 @@ class MaintenanceController
             $stockKpis = $this->model->getStockKpis();
             $stockFilterOptions = $this->model->getStockFilterOptions();
             $scheduledInterventions = $this->model->getScheduledInterventions();
+            try {
+                $stockCatalogPicker = $this->getStockCatalogPicker($vehicles);
+            } catch (Throwable $exception) {
+                error_log('[MaintenanceController][stock_catalog_picker] ' . $exception->getMessage());
+            }
         }
 
         $editRecord = null;
@@ -569,6 +580,7 @@ class MaintenanceController
             'availableStockParts' => $this->model->getStockParts(['stock_status' => 'in_stock', 'include_tires' => false]),
             'stockKpis' => $stockKpis,
             'stockFilterOptions' => $stockFilterOptions,
+            'stockCatalogPicker' => $stockCatalogPicker,
             'technicalFormOptions' => $technicalFormOptions,
             'editRecord' => $editRecord,
             'viewRecord' => $viewRecord,
@@ -1271,6 +1283,8 @@ class MaintenanceController
         return in_array($action, [
             'tire_stock', 'add_tire_stock', 'bulk_tire_stock', 'update_tire_stock', 'delete_tire_stock', 'bulk_delete_tire_stock', 'bulk_unmount_tire_stock',
             'bulk_mount_tire_stock', 'tire_mount_vehicles', 'tire_mount_layout', 'tire_stock_children', 'tire_stock_selection',
+            'tire_fleet_unit', 'tire_position_candidates', 'tire_fleet_component', 'tire_fleet_component_inspector',
+            'component_mount', 'component_unmount', 'component_inspect', 'axle_attributes_save',
             'axis_config', 'update_tire_layout', 'mount_tire', 'unmount_tire', 'move_tire', 'change_tire_status',
             'create', 'store', 'edit', 'update', 'delete', 'show', 'preview',
         ], true);

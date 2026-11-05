@@ -99,7 +99,18 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
 <?php endif; ?>
 <?php if ($isDocumentCostOverrideList): ?><div class="doc-cost-page"><?php endif; ?>
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3<?= $isDocumentCostOverrideList ? ' document-cost-header' : '' ?>">
+    <?php if ($isMaintenanceTireStockPage): ?>
+        <?php $tireFleetMode = (string) ($_GET['mode'] ?? '') === 'inventar' ? 'inventar' : 'vehicule'; ?>
+        <div class="d-flex flex-wrap align-items-center gap-3">
+            <h2 class="h4 ft-title"><?= e(FLEET_STOCK_PAGE_TITLE) ?> <span class="ft-title-sub">— Fleet Management</span></h2>
+            <div class="ft-mode-switch" role="tablist" aria-label="Vedere">
+                <button type="button" role="tab" data-ft-mode="vehicule" class="<?= $tireFleetMode === 'vehicule' ? 'is-active' : '' ?>" aria-selected="<?= $tireFleetMode === 'vehicule' ? 'true' : 'false' ?>"><i class="bi bi-truck me-1" aria-hidden="true"></i>Vehicule</button>
+                <button type="button" role="tab" data-ft-mode="inventar" class="<?= $tireFleetMode === 'inventar' ? 'is-active' : '' ?>" aria-selected="<?= $tireFleetMode === 'inventar' ? 'true' : 'false' ?>"><i class="bi bi-boxes me-1" aria-hidden="true"></i>Inventar anvelope</button>
+            </div>
+        </div>
+    <?php else: ?>
     <h2 class="h4 mb-0"><?= e($module['title']) ?></h2>
+    <?php endif; ?>
     <div class="d-flex gap-2<?= $isDocumentCostOverrideList ? ' document-cost-actions' : '' ?>">
         <?php if ($isDocumentCostOverrideList): ?>
             <div class="document-cost-action-group document-cost-action-tabs">
@@ -770,6 +781,9 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
     $tireStockFormOptions = $maintenanceTireStockContext;
     include __DIR__ . '/tire_stock/_row_context.php';
     $filterBase = ['page' => 'mentenanta', 'action' => 'tire_stock'];
+    if ($tireFleetMode === 'inventar') {
+        $filterBase['mode'] = 'inventar';
+    }
     foreach (['q','vehicle_type','axle_config','tire_type','status','condition','location','mounted','view','per_page'] as $filterKey) {
         if (isset($tireFilters[$filterKey]) && (string) $tireFilters[$filterKey] !== '') {
             $filterBase[$filterKey] = (string) $tireFilters[$filterKey];
@@ -1036,36 +1050,42 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
     });
     </script>
 
-    <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
-        <div>
-            <h3 class="h4 mb-1">Anvelope</h3>
-            <div class="text-muted">Vizualizeaza si gestioneaza anvelopele din flota.</div>
+    <?php
+    // Vederea pe vehicule (implicita): indicatori + randuri cu schema. Inventarul grupat de mai jos
+    // ramane neschimbat, ca a doua vedere; bara de actiuni in masa e comuna ambelor.
+    $fleetTireOverview = is_array($fleetTireOverview ?? null) ? $fleetTireOverview : null;
+    include __DIR__ . '/tire_stock/_fleet_overview.php';
+    ?>
+    <form method="post" id="tireBulkForm" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'bulk_delete_tire_stock'])) ?>" class="d-none tire-bulk-bar" data-tire-bulk-bar aria-label="Actiuni pentru anvelopele selectate">
+        <?= csrf_field() ?>
+        <input type="hidden" name="return_query" value="<?= e((string) ($_SERVER['QUERY_STRING'] ?? '')) ?>">
+        <div data-tire-bulk-hidden-inputs hidden></div>
+        <div class="tire-bulk-main">
+            <span class="tire-bulk-count"><i class="bi bi-check2-square me-1" aria-hidden="true"></i><strong data-tire-bulk-count>0</strong> anvelope selectate</span>
+            <span class="tire-bulk-scope" data-tire-bulk-scope></span>
+            <div class="dropdown d-inline-block" data-tire-hidden-review hidden>
+                <button type="button" class="btn btn-link btn-sm px-1" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">Revizuieste ascunse</button>
+                <div class="dropdown-menu tire-hidden-menu" data-tire-hidden-list></div>
+            </div>
+            <button type="button" class="btn btn-link btn-sm px-1" data-tire-select-results hidden>Selecteaza toate cele <span data-tire-results-total>0</span> rezultate</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-tire-bulk-clear>Deselecteaza tot</button>
         </div>
-        <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#addTireModal">
-            <i class="bi bi-plus-lg me-1"></i> Adauga anvelopa
-        </button>
-    </div>
+        <div class="tire-bulk-actions">
+            <input type="date" class="form-control form-control-sm w-auto" name="unmount_date" value="<?= e(date('Y-m-d')) ?>" aria-label="Data demontaj" title="Data demontaj">
+            <select class="form-select form-select-sm w-auto" name="status_end" aria-label="Status dupa demontare" title="Status dupa demontare">
+                <option value="spare" selected>Rezerva</option>
+                <option value="in_stock">In stoc</option>
+                <option value="damaged">Deteriorata</option>
+                <option value="removed">Scoasa din uz</option>
+            </select>
+            <button type="submit" class="btn btn-sm btn-outline-danger" formaction="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'bulk_unmount_tire_stock'])) ?>" data-tire-bulk-unmount><i class="bi bi-box-arrow-down me-1"></i>Demonteaza (<span data-tire-bulk-mounted>0</span>)</button>
+            <button type="submit" class="btn btn-sm btn-outline-danger" data-tire-bulk-delete><i class="bi bi-trash me-1"></i>Sterge (<span data-tire-bulk-free>0</span>)</button>
+            <button type="button" class="btn btn-sm btn-primary" data-tire-bulk-mount title="Monteaza anvelopele nemontate din selectie, fiecare pe pozitia ei"><i class="bi bi-truck me-1"></i>Monteaza selectate (<span data-tire-bulk-mountable>0</span>)</button>
+        </div>
+        <div class="tire-bulk-note" data-tire-bulk-note hidden></div>
+    </form>
 
-    <div class="tire-kpi-grid">
-        <div class="tire-kpi-card">
-            <div class="tire-kpi-icon tire-kpi-blue"><i class="bi bi-stack"></i></div>
-            <div><div class="small text-muted">Total anvelope</div><div class="h3 mb-0"><?= e((string) ((int) ($stockTotals['total_tires'] ?? 0))) ?></div><div class="small text-muted">Toate vehiculele</div></div>
-        </div>
-        <div class="tire-kpi-card">
-            <div class="tire-kpi-icon tire-kpi-green"><i class="bi bi-check-circle"></i></div>
-            <div><div class="small text-muted">Montate</div><div class="h3 mb-0"><?= e((string) ((int) ($stockTotals['mounted_tires'] ?? 0))) ?></div><div class="small text-muted"><?= (int) ($stockTotals['total_tires'] ?? 0) > 0 ? e(number_format(((int) ($stockTotals['mounted_tires'] ?? 0) / max(1, (int) ($stockTotals['total_tires'] ?? 0))) * 100, 1, ',', '.')) . '% din total' : '0% din total' ?></div></div>
-        </div>
-        <div class="tire-kpi-card">
-            <div class="tire-kpi-icon tire-kpi-yellow"><i class="bi bi-exclamation-triangle"></i></div>
-            <div><div class="small text-muted">Lipsa / Necesare</div><div class="h3 mb-0"><?= e((string) ((int) ($stockTotals['missing_tires'] ?? 0))) ?></div><div class="small text-muted">Pozitii neacoperite</div></div>
-        </div>
-        <div class="tire-kpi-card">
-            <div class="tire-kpi-icon tire-kpi-red"><i class="bi bi-exclamation-octagon"></i></div>
-            <div><div class="small text-muted">Inlocuire necesara</div><div class="h3 mb-0"><?= e((string) ((int) ($stockTotals['replacement_required'] ?? 0))) ?></div><div class="small text-muted">Uzura / deteriorare</div></div>
-        </div>
-    </div>
-
-    <div class="tire-inventory-wrap">
+    <div class="tire-inventory-wrap" data-ft-pane="inventar"<?= $tireFleetMode === 'inventar' ? '' : ' hidden' ?>>
         <div class="tire-work-card">
             <?php
             $tireViewTabs = ['all' => 'Toate', 'spare' => 'In stoc / Rezerva', 'mounted' => 'Montate'];
@@ -1141,34 +1161,6 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
             <div class="tire-live-progress" data-tire-live-progress aria-hidden="true"></div>
             <div class="visually-hidden" aria-live="polite" data-tire-live-status></div>
 
-            <form method="post" id="tireBulkForm" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'bulk_delete_tire_stock'])) ?>" class="d-none tire-bulk-bar" data-tire-bulk-bar aria-label="Actiuni pentru anvelopele selectate">
-                <?= csrf_field() ?>
-                <input type="hidden" name="return_query" value="<?= e((string) ($_SERVER['QUERY_STRING'] ?? '')) ?>">
-                <div data-tire-bulk-hidden-inputs hidden></div>
-                <div class="tire-bulk-main">
-                    <span class="tire-bulk-count"><i class="bi bi-check2-square me-1" aria-hidden="true"></i><strong data-tire-bulk-count>0</strong> anvelope selectate</span>
-                    <span class="tire-bulk-scope" data-tire-bulk-scope></span>
-                    <div class="dropdown d-inline-block" data-tire-hidden-review hidden>
-                        <button type="button" class="btn btn-link btn-sm px-1" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">Revizuieste ascunse</button>
-                        <div class="dropdown-menu tire-hidden-menu" data-tire-hidden-list></div>
-                    </div>
-                    <button type="button" class="btn btn-link btn-sm px-1" data-tire-select-results hidden>Selecteaza toate cele <span data-tire-results-total>0</span> rezultate</button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" data-tire-bulk-clear>Deselecteaza tot</button>
-                </div>
-                <div class="tire-bulk-actions">
-                    <input type="date" class="form-control form-control-sm w-auto" name="unmount_date" value="<?= e(date('Y-m-d')) ?>" aria-label="Data demontaj" title="Data demontaj">
-                    <select class="form-select form-select-sm w-auto" name="status_end" aria-label="Status dupa demontare" title="Status dupa demontare">
-                        <option value="spare" selected>Rezerva</option>
-                        <option value="in_stock">In stoc</option>
-                        <option value="damaged">Deteriorata</option>
-                        <option value="removed">Scoasa din uz</option>
-                    </select>
-                    <button type="submit" class="btn btn-sm btn-outline-danger" formaction="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'bulk_unmount_tire_stock'])) ?>" data-tire-bulk-unmount><i class="bi bi-box-arrow-down me-1"></i>Demonteaza (<span data-tire-bulk-mounted>0</span>)</button>
-                    <button type="submit" class="btn btn-sm btn-outline-danger" data-tire-bulk-delete><i class="bi bi-trash me-1"></i>Sterge (<span data-tire-bulk-free>0</span>)</button>
-                    <button type="button" class="btn btn-sm btn-primary" data-tire-bulk-mount title="Monteaza anvelopele nemontate din selectie, fiecare pe pozitia ei"><i class="bi bi-truck me-1"></i>Monteaza selectate (<span data-tire-bulk-mountable>0</span>)</button>
-                </div>
-                <div class="tire-bulk-note" data-tire-bulk-note hidden></div>
-            </form>
             <style>
                 .tire-table td:has(> [data-tire-bulk-item]) { cursor: pointer; }
                 body.tire-bulk-dragging, body.tire-bulk-dragging * { user-select: none; cursor: pointer !important; }
@@ -1228,10 +1220,15 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                         }
                         return groupBox._tireMembers;
                     };
+                    // Aceeasi anvelopa poate avea doua casute (inventar + vederea pe vehicule): casuta
+                    // schimbata fata de selectie decide, apoi toate copiile ei se aliniaza.
                     var syncFromDom = function () {
                         allBoxes().forEach(function (box) {
-                            if (box.checked) { store.set(String(box.value), Object.assign({}, store.get(String(box.value)) || {}, describe(box))); } else { store.delete(String(box.value)); }
+                            var id = String(box.value);
+                            if (box.checked === store.has(id)) { return; }
+                            if (box.checked) { store.set(id, Object.assign({}, store.get(id) || {}, describe(box))); } else { store.delete(id); }
                         });
+                        allBoxes().forEach(function (box) { box.checked = store.has(String(box.value)); });
                     };
                     var applyToDom = function () {
                         allBoxes().forEach(function (box) { box.checked = store.has(String(box.value)); });

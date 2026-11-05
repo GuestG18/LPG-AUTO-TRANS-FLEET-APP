@@ -85,12 +85,50 @@
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background: var(--dl-green);
     flex: none;
+    position: relative;
+}
+
+/* The ring is a scaled, fading disc behind the dot. It looks like the old box-shadow pulse
+   (0 → 7px spread, alpha .4 → 0), but transform/opacity run on the compositor; animating
+   box-shadow repainted the whole Dispecer page (~55k nodes) on every frame. */
+.dispatcher-live-pulse::before,
+.dispatcher-live-pulse::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: var(--dl-green);
+}
+
+.dispatcher-live-pulse::before {
+    background: rgb(22, 163, 74);
+    opacity: 0;
     animation: dispatcher-live-pulse 2.4s infinite;
 }
 
 @keyframes dispatcher-live-pulse {
+    0% { transform: scale(1); opacity: .4; }
+    70% { transform: scale(2.1667); opacity: 0; }   /* (12px + 2 × 7px) / 12px */
+    100% { transform: scale(1); opacity: 0; }
+}
+
+/* While the Christmas topbar runs (body.xmas-active, Nov 1 – Jan 7) the page is re-layerized on
+   every frame anyway, and a composited layer in the middle of the content made each of those
+   passes ~2.5x more expensive (measured: 57 → 40–49 fps). In that season the old box-shadow
+   pulse is the cheaper option, so it comes back; it looks the same. */
+.xmas-active .dispatcher-live-pulse::before,
+.xmas-active .dispatcher-live-pulse::after {
+    display: none;
+}
+
+.xmas-active .dispatcher-live-pulse {
+    position: static;
+    background: var(--dl-green);
+    animation: dispatcher-live-pulse-shadow 2.4s infinite;
+}
+
+@keyframes dispatcher-live-pulse-shadow {
     0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, .4); }
     70% { box-shadow: 0 0 0 7px rgba(22, 163, 74, 0); }
     100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }

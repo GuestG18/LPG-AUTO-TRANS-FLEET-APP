@@ -25,19 +25,6 @@ $refPagination = (array) ($refacturari['pagination'] ?? []);
 $generatedAt = (string) ($report['generated_at'] ?? date('Y-m-d H:i:s'));
 $mode = (string) ($filters['tip_activitate'] ?? '');
 
-/*
- * Tipul raportului. "detaliat" (implicit) are toate panourile, rutele, vehiculele
- * si refacturarile pe curse; "scurt" pastreaza doar cardurile si totalurile pe
- * tipuri de transport (curse, km, tone, valoare). Exportul Excel urmeaza alegerea.
- * Este strict o optiune de afisare, deci se citeste direct din query string.
- */
-$tableView = ($_GET['view'] ?? '') === 'scurt' ? 'scurt' : 'detaliat';
-$isShort = $tableView === 'scurt';
-if ($isShort) {
-    foreach (['distribution', 'primary_routes', 'distribution_matrix', 'vehicle_detail'] as $detailPanel) {
-        $visibility[$detailPanel] = false;
-    }
-}
 
 $filterValue = static fn (string $key): string => trim((string) ($filters[$key] ?? ''));
 $fmt = static function (float|int|string|null $value, int $decimals = 2): string {
@@ -69,10 +56,9 @@ $listFilters = [
     'vehicle_id' => array_map('strval', (array) ($filters['vehicle_ids'] ?? [])),
 ];
 
-$queryFor = static function (array $overrides = []) use ($filters, $tableView, $listFilters): string {
+$queryFor = static function (array $overrides = []) use ($filters, $listFilters): string {
     $base = [
         'page' => 'centralizator_facturare',
-        'view' => $tableView,
         'month' => (string) ($filters['month'] ?? ''),
     ] + $listFilters + [
         'vehicle_sort' => (string) ($filters['vehicle_sort'] ?? 'capacity_asc'),
@@ -878,7 +864,9 @@ $optionsOf = static function (array $items, string $valueKey, string $labelKey, 
 $capacityGroupsDescending = $filterValue('vehicle_sort') === 'capacity_desc';
 
 $gridMode = $mode !== '' ? 'mode-' . str_replace('_', '-', $mode) : 'mode-all';
-$exportUrl = $queryFor(['action' => 'export', 'p' => null]);
+/* Pagina arata mereu raportul detaliat; scurt / detaliat se alege doar la export. */
+$exportUrl = $queryFor(['action' => 'export', 'p' => null, 'view' => null]);
+$exportShortUrl = $queryFor(['action' => 'export', 'p' => null, 'view' => 'scurt']);
 $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
 ?>
 
@@ -1219,12 +1207,6 @@ $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
         "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
         "refTable refTable refTable refTable refTable refTable refTable";
 }
-/* Raportul scurt randeaza doar cardurile si rezumatul pe tipuri, indiferent de mod. */
-.cf-main-grid.is-short {
-    grid-template-areas:
-        "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3 ref"
-        "activity activity activity activity activity activity activity";
-}
 .cf-card,
 .cf-panel {
     border: 1px solid var(--cf-border);
@@ -1318,8 +1300,8 @@ $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
 .cf-ref-title { color: #f04416; }
 /*
  * A doua fata: acelasi colt de pornire ca sumarul, dar poate creste in jos peste
- * continutul de dedesubt (pluteste), deci grila nu se misca la hover. Ramane deschisa
- * cat timp mouse-ul e pe ea sau focusul e inauntru (ex. dupa click pe o trecere).
+ * continutul de dedesubt (pluteste), deci grila nu se misca. Se deschide doar la click
+ * pe card (.is-open) si se inchide din X, cu Escape sau la click in afara cardului.
  */
 .cf-ref-details {
     position: absolute;
@@ -1340,14 +1322,14 @@ $resetUrl = build_query_url(['page' => 'centralizator_facturare']);
     transform: translateY(4px);
     transition: opacity .2s ease, transform .2s ease, visibility .2s;
 }
-.cf-ref-card.has-breakdown:hover:not(.is-dismissed) .cf-ref-details,
-.cf-ref-card.has-breakdown:focus-within:not(.is-dismissed) .cf-ref-details {
+.cf-ref-card.has-breakdown { cursor: pointer; }
+.cf-ref-card.has-breakdown.is-open { cursor: default; }
+.cf-ref-card.has-breakdown.is-open .cf-ref-details {
     opacity: 1;
     visibility: visible;
     transform: translateY(0);
 }
-.cf-ref-card.has-breakdown:hover:not(.is-dismissed) > .cf-ref-head,
-.cf-ref-card.has-breakdown:focus-within:not(.is-dismissed) > .cf-ref-head {
+.cf-ref-card.has-breakdown.is-open > .cf-ref-head {
     opacity: 0;
     transform: translateY(-4px);
 }
@@ -2037,30 +2019,36 @@ a.cf-calc-warn.is-link:focus-visible {
     font-weight: 700;
 }
 .cf-vehicle-parent.is-expanded > td { background: #eef5ff; }
-.cf-view-switch {
-    display: inline-flex;
-    padding: 3px;
+.cf-export-menu { position: relative; }
+.cf-export-menu > summary { list-style: none; cursor: pointer; }
+.cf-export-menu > summary::-webkit-details-marker { display: none; }
+.cf-export-menu > summary .bi-chevron-down { color: #51617f; font-size: 12px; }
+.cf-export-list {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 40;
+    min-width: 250px;
+    padding: 6px;
     border: 1px solid var(--cf-border);
-    border-radius: 7px;
-    background: #f4f7fc;
-}
-.cf-view-switch a {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 13px;
-    border-radius: 5px;
-    color: #51617f;
-    text-decoration: none;
-    font-size: 12px;
-    font-weight: 800;
-    white-space: nowrap;
-}
-.cf-view-switch a.is-active {
+    border-radius: 8px;
     background: #fff;
-    color: #0e204a;
-    box-shadow: 0 1px 3px rgba(15, 23, 42, .12);
+    box-shadow: 0 12px 28px rgba(15, 23, 42, .14);
 }
+.cf-export-list a {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 8px 10px;
+    border-radius: 6px;
+    color: #10224b;
+    text-decoration: none;
+}
+.cf-export-list a:hover,
+.cf-export-list a:focus-visible { background: #f4f7fc; }
+.cf-export-list i { color: #079b63; font-size: 16px; margin-top: 1px; }
+.cf-export-list strong { display: block; font-size: 13px; font-weight: 800; }
+.cf-export-list small { display: block; color: #51617f; font-size: 12px; font-weight: 600; }
 /* ---- Grupare pe capacitate: randul de grup si randurile de vehicul ---- */
 .cf-cap-body[hidden] { display: none; }
 .cf-cap-group {
@@ -2447,12 +2435,6 @@ a.cf-calc-warn.is-link:focus-visible {
             "vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail vehicleDetail"
             "refTable refTable refTable refTable refTable refTable";
     }
-    .cf-main-grid.is-short {
-        grid-template-areas:
-            "kpi1 kpi1 kpi2 kpi2 kpi3 kpi3"
-            "ref ref ref ref ref ref"
-            "activity activity activity activity activity activity";
-    }
 }
 
 /*
@@ -2468,8 +2450,7 @@ a.cf-calc-warn.is-link:focus-visible {
     .cf-main-grid.mode-primar-tona,
     .cf-main-grid.mode-distributie,
     .cf-main-grid.mode-primar-distributie,
-    .cf-main-grid.mode-compresor,
-    .cf-main-grid.is-short {
+    .cf-main-grid.mode-compresor {
         grid-template-columns: repeat(6, minmax(0, 1fr));
         grid-template-areas: none;
     }
@@ -2596,7 +2577,7 @@ a.cf-calc-warn.is-link:focus-visible {
 }
 </style>
 
-<div class="cf-page <?= $isShort ? 'is-short' : 'is-detailed' ?>">
+<div class="cf-page is-detailed">
     <div class="cf-shell">
         <header class="cf-header">
             <div class="cf-title">
@@ -2607,17 +2588,18 @@ a.cf-calc-warn.is-link:focus-visible {
                 </div>
             </div>
             <div class="cf-header-actions">
-                <div class="cf-view-switch" role="group" aria-label="Tip raport">
-                    <a class="<?= $isShort ? 'is-active' : '' ?>" href="<?= e($queryFor(['view' => 'scurt', 'p' => null])) ?>" aria-current="<?= $isShort ? 'true' : 'false' ?>"><i class="bi bi-list-ul" aria-hidden="true"></i> Raport scurt</a>
-                    <a class="<?= $isShort ? '' : 'is-active' ?>" href="<?= e($queryFor(['view' => 'detaliat'])) ?>" aria-current="<?= $isShort ? 'false' : 'true' ?>"><i class="bi bi-list-nested" aria-hidden="true"></i> Raport detaliat</a>
-                </div>
-                <a class="cf-export" href="<?= e($exportUrl) ?>"><i class="bi bi-file-earmark-excel-fill" aria-hidden="true"></i> Export Excel</a>
+                <details class="cf-export-menu" data-export-menu>
+                    <summary class="cf-export"><i class="bi bi-file-earmark-excel-fill" aria-hidden="true"></i> Export Excel <i class="bi bi-chevron-down" aria-hidden="true"></i></summary>
+                    <div class="cf-export-list">
+                        <a href="<?= e($exportShortUrl) ?>"><i class="bi bi-list-ul" aria-hidden="true"></i><span><strong>Raport scurt</strong><small>Cardurile și totalurile pe tipuri de transport</small></span></a>
+                        <a href="<?= e($exportUrl) ?>"><i class="bi bi-list-nested" aria-hidden="true"></i><span><strong>Raport detaliat</strong><small>Rute, vehicule, curse și refacturări</small></span></a>
+                    </div>
+                </details>
             </div>
         </header>
 
         <form class="cf-filters" method="get" data-auto-filter-form>
             <input type="hidden" name="page" value="centralizator_facturare">
-            <input type="hidden" name="view" value="<?= e($tableView) ?>">
             <div class="cf-field is-required">
                 <label for="cf_month">Lună</label>
                 <select id="cf_month" name="month">
@@ -2663,7 +2645,7 @@ a.cf-calc-warn.is-link:focus-visible {
             </div>
         </div>
 
-        <main class="cf-main-grid <?= e($gridMode) ?><?= $isShort ? ' is-short' : '' ?>">
+        <main class="cf-main-grid <?= e($gridMode) ?>">
             <?php foreach (array_values($kpiCards) as $index => $card): ?>
                 <?php
                 $cardUnit = (string) ($card['unit'] ?? '');
@@ -2697,7 +2679,7 @@ a.cf-calc-warn.is-link:focus-visible {
                 </article>
             <?php endforeach; ?>
 
-            <article class="cf-card cf-ref-card<?= $refGroups !== [] ? ' has-breakdown' : '' ?>" data-ref-card<?= $refGroups !== [] ? ' tabindex="0"' : '' ?>>
+            <article class="cf-card cf-ref-card<?= $refGroups !== [] ? ' has-breakdown' : '' ?>" data-ref-card<?= $refGroups !== [] ? ' tabindex="0" aria-expanded="false"' : '' ?>>
                 <div class="cf-ref-head">
                     <div class="cf-ref-icon" aria-hidden="true"><i class="bi bi-receipt-cutoff"></i></div>
                     <div>
@@ -2708,7 +2690,7 @@ a.cf-calc-warn.is-link:focus-visible {
                 </div>
                 <?php
                 /*
-                 * A doua fata a cardului: la hover / focus cardul se transforma intr-un panou
+                 * A doua fata a cardului: la click cardul se transforma intr-un panou
                  * care pluteste peste continutul de dedesubt (grila nu se misca). Fiecare
                  * trecere se desface in bucatile cumparate la fiecare pret unitar.
                  */
@@ -2806,7 +2788,7 @@ a.cf-calc-warn.is-link:focus-visible {
                             </table>
                         </div>
                     </div>
-                    <a class="cf-ref-all" href="<?= e($isShort ? $queryFor(['view' => 'detaliat']) . '#cf_ref_table' : '#cf_ref_table') ?>">Vezi toate refacturările <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></a>
+                    <a class="cf-ref-all" href="#cf_ref_table">Vezi toate refacturările <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></a>
                 </div>
             </article>
 
@@ -2822,11 +2804,11 @@ a.cf-calc-warn.is-link:focus-visible {
                     : $activityRows;
                 ?>
                 <section class="cf-panel cf-activity-summary">
-                    <h2><?= $isShort ? 'Rezumat pe tipuri de transport' : 'Activități pe tipuri de transport' ?> <i class="bi bi-info-circle" aria-hidden="true"></i></h2>
-                    <?php $activityCols = $isShort ? 7 : 6; ?>
+                    <h2>Activități pe tipuri de transport <i class="bi bi-info-circle" aria-hidden="true"></i></h2>
+                    <?php $activityCols = 6; ?>
                     <div class="cf-table-wrap">
                         <table class="cf-table">
-                            <thead><tr><th class="cf-expand-th"></th><th>Tip transport</th><th class="is-number">Curse</th><th class="is-number">Km</th><th class="is-number">Tone/Activ.</th><?php if ($isShort): ?><th class="is-number">Valoare (RON)</th><?php endif; ?><th class="is-number">% din total curse</th></tr></thead>
+                            <thead><tr><th class="cf-expand-th"></th><th>Tip transport</th><th class="is-number">Curse</th><th class="is-number">Km</th><th class="is-number">Tone/Activ.</th><th class="is-number">% din total curse</th></tr></thead>
                             <tbody>
                             <?php if ($activityVisibleRows === []): ?>
                                 <tr><td colspan="<?= e((string) $activityCols) ?>"><div class="cf-empty">Nu există curse pentru filtrul curent.</div></td></tr>
@@ -2838,7 +2820,7 @@ a.cf-calc-warn.is-link:focus-visible {
                                 $typeRoutes = (array) ($row['routes'] ?? []);
                                 $typeLeftoverRefunds = (array) ($row['refund_leftovers'] ?? []);
                                 /* Un tip fara curse in luna dar cu refacturari pe curse din alte luni ramane desfasurabil. */
-                                $typeExpandable = !$isShort && ($typeRoutes !== [] || $typeLeftoverRefunds !== []);
+                                $typeExpandable = $typeRoutes !== [] || $typeLeftoverRefunds !== [];
                                 $typeDetailId = 'cf_type_routes_' . preg_replace('/[^A-Za-z0-9_-]+/', '_', $typeKey);
                                 ?>
                                 <tr<?= $typeExpandable ? ' class="cf-vehicle-parent" data-vehicle-row' : '' ?>>
@@ -2851,7 +2833,6 @@ a.cf-calc-warn.is-link:focus-visible {
                                     <td class="is-number"><?= e($fmtSmart($row['trips'] ?? 0, 0)) ?></td>
                                     <td class="is-number"><?= e($fmtKm($row['km'] ?? 0)) ?></td>
                                     <td class="is-number"><?= e($metricTone) ?></td>
-                                    <?php if ($isShort): ?><td class="is-number"><?= e($fmtMoney($row['value'] ?? 0)) ?></td><?php endif; ?>
                                     <td class="is-number"><?= $renderShare($row['share_percent'] ?? 0, (string) ($row['color'] ?? '#2f7df4')) ?></td>
                                 </tr>
                                 <?php if ($typeExpandable): ?>
@@ -2866,17 +2847,12 @@ a.cf-calc-warn.is-link:focus-visible {
                                 <td class="is-number"><?= e($fmtSmart($activityTotals['trips'] ?? 0, 0)) ?></td>
                                 <td class="is-number"><?= e($fmtKm($activityTotals['km'] ?? 0)) ?></td>
                                 <td class="is-number"><?= e($fmtTone($activityTotals['tone'] ?? 0)) ?></td>
-                                <?php if ($isShort): ?><td class="is-number"><?= e($fmtMoney($activityTotals['value'] ?? array_sum(array_map(static fn (array $row): float => (float) ($row['value'] ?? 0), $activityVisibleRows)))) ?></td><?php endif; ?>
                                 <td class="is-number"><?= (int) ($activityTotals['trips'] ?? 0) > 0 ? '100%' : '0%' ?></td>
                             </tr>
                             </tbody>
                         </table>
                     </div>
-                    <?php if ($isShort): ?>
-                    <p class="cf-note">Raport scurt: doar totalurile. Pentru rute, vehicule, curse și refacturări pe curse deschide <a href="<?= e($queryFor(['view' => 'detaliat'])) ?>">Raportul detaliat</a>.</p>
-                    <?php else: ?>
                     <p class="cf-note">Deschide un tip de transport pentru rutele facturate (cantitate × preț), apoi o rută pentru cursele ei sau rândul de refacturări pentru fiecare refacturare.</p>
-                    <?php endif; ?>
                 </section>
             <?php endif; ?>
 
@@ -3241,7 +3217,6 @@ a.cf-calc-warn.is-link:focus-visible {
                 </section>
             <?php endif; ?>
 
-            <?php if (!$isShort): ?>
             <section class="cf-panel cf-refact-table" id="cf_ref_table">
                 <h2>Refacturări - sumar pe curse</h2>
                 <?php $refCols = 10; $canOpenRefTrips = can_route('dispecer_curse'); ?>
@@ -3277,12 +3252,10 @@ a.cf-calc-warn.is-link:focus-visible {
                 </div>
                 <?php if (($refacturari['warnings'] ?? []) !== []): ?><p class="cf-warning"><?= e((string) reset($refacturari['warnings'])) ?></p><?php endif; ?>
             </section>
-            <?php endif; ?>
         </main>
 
         <footer class="cf-footer">
             <span>Ultima actualizare: <?= e($fmtDate($generatedAt)) ?></span>
-            <?php if (!$isShort): ?>
             <div class="cf-pagination">
                 <form method="get">
                     <input type="hidden" name="page" value="centralizator_facturare">
@@ -3304,7 +3277,6 @@ a.cf-calc-warn.is-link:focus-visible {
                 <a class="cf-page-link <?= $currentPageNo <= 1 ? 'is-disabled' : '' ?>" href="<?= e($queryFor(['p' => (string) max(1, $currentPageNo - 1)])) ?>" aria-label="Pagina anterioară"><i class="bi bi-chevron-left" aria-hidden="true"></i></a>
                 <a class="cf-page-link <?= $currentPageNo >= $totalPages ? 'is-disabled' : '' ?>" href="<?= e($queryFor(['p' => (string) min($totalPages, $currentPageNo + 1)])) ?>" aria-label="Pagina următoare"><i class="bi bi-chevron-right" aria-hidden="true"></i></a>
             </div>
-            <?php endif; ?>
         </footer>
     </div>
 </div>
@@ -3645,21 +3617,61 @@ a.cf-calc-warn.is-link:focus-visible {
         }
     });
 
+    /* Meniul Export Excel (scurt / detaliat) se inchide la click in afara lui sau cu Escape. */
+    var exportMenu = document.querySelector('[data-export-menu]');
+    if (exportMenu) {
+        document.addEventListener('click', function (event) {
+            if (exportMenu.open && (!exportMenu.contains(event.target) || event.target.closest('.cf-export-list a'))) {
+                exportMenu.open = false;
+            }
+        });
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && exportMenu.open) {
+                exportMenu.open = false;
+            }
+        });
+    }
+
     var card = document.querySelector('[data-ref-card]');
     if (!card) {
         return;
     }
-    /* Inchide panoul pana cand mouse-ul paraseste cardul (altfel hover-ul l-ar tine deschis). */
+    /* Panoul se deschide doar la click (fara previzualizare la hover). */
+    var setRefOpen = function (open) {
+        if (!card.classList.contains('has-breakdown')) {
+            return;
+        }
+        card.classList.toggle('is-open', open);
+        card.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    card.addEventListener('click', function (event) {
+        if (!card.classList.contains('is-open') && !event.target.closest('[data-ref-close]')) {
+            setRefOpen(true);
+        }
+    });
+    card.addEventListener('keydown', function (event) {
+        if (event.target === card && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            setRefOpen(!card.classList.contains('is-open'));
+        }
+    });
     card.querySelectorAll('[data-ref-close]').forEach(function (button) {
-        button.addEventListener('click', function () {
-            card.classList.add('is-dismissed');
-            if (document.activeElement && card.contains(document.activeElement)) {
-                document.activeElement.blur();
-            }
+        button.addEventListener('click', function (event) {
+            event.stopPropagation();
+            setRefOpen(false);
+            card.focus();
         });
     });
-    card.addEventListener('mouseleave', function () {
-        card.classList.remove('is-dismissed');
+    document.addEventListener('click', function (event) {
+        if (card.classList.contains('is-open') && !card.contains(event.target)) {
+            setRefOpen(false);
+        }
+    });
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && card.classList.contains('is-open')) {
+            setRefOpen(false);
+            card.focus();
+        }
     });
     /* Fiecare trecere se desface in bucatile cumparate la fiecare pret unitar. */
     card.querySelectorAll('[data-ref-row]').forEach(function (button) {

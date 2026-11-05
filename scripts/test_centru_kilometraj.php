@@ -106,6 +106,31 @@ final class FakeCardOil implements CardOilOdometerSource
     }
 }
 
+/** CAN simulat: tronsoane in formatul SasCanKmService (carId -> lista). */
+final class FakeCan implements CanOdometerSource
+{
+    /** @var array<int, list<array<string, mixed>>> */
+    public array $segments = [];
+    public int $calls = 0;
+
+    public function fetchCanReadings(int $carId, string $from, string $to): array
+    {
+        $this->calls++;
+        $inWindow = array_values(array_filter(
+            $this->segments[$carId] ?? [],
+            static fn (array $s): bool => $s['end'] >= $from && $s['start'] <= $to
+        ));
+
+        return SasFleetOdometerSource::parseCanReport($carId, ['segments' => $inWindow]);
+    }
+}
+
+function canSeg(string $start, string $end, ?float $canKm, ?float $canIndexEnd, float $gpsKm = 0.0): array
+{
+    return ['start' => $start, 'end' => $end, 'gps_km' => $gpsKm, 'can_km' => $canKm,
+        'can_index_start_km' => $canIndexEnd !== null && $canKm !== null ? $canIndexEnd - $canKm : null, 'can_index_end_km' => $canIndexEnd];
+}
+
 function seg(string $start, string $end, float $km, ?float $kmIndex): array
 {
     return ['dateStart' => str_replace(' ', 'T', $start), 'dateEnd' => str_replace(' ', 'T', $end), 'distance' => $km, 'kmIndex' => $kmIndex];
@@ -196,6 +221,41 @@ $parsed = SasFleetOdometerSource::parseTravelSheet(77, ['segments' => [
 ]]);
 check('SAS parse: doar segmentele cu kmIndex devin citiri; toate deplasarile raman',
     count($parsed['readings']) === 1 && count($parsed['movements']) === 2 && $parsed['readings'][0]['source_reading_id'] === '77@2026-10-01 06:00:00', $parsed);
+
+// --- Odometrul CAN: raportul web SAS (HTML) -> date
+$canHtml = '<html><head><title>Foaie de parcurs in format tabelar pentru autovehiculul B 105 NET (marca/model: DAF/XF) pentru datele x</title></head><body>'
+    . '<table id="tblReport"><tr><th>Tronson</th><th>Afiseaza pe harta</th><th>Ora pornire</th><th>Locatie pornire</th><th>Ora oprire</th><th>Locatie oprire</th>'
+    . '<th>Viteza med (km/h)</th><th>Distanta parcursa (km)</th><th>Index GPS oprire (km)</th><th>Index CAN pornire (km)</th><th>Index CAN oprire (km)</th>'
+    . '<th>Distanta CAN (km)</th><th>Durata functionare motor (min)</th><th>Durata stationare cu motor pornit (min)</th><th>Durata stationare dupa oprire (min)</th><th>Observatii</th></tr>'
+    . '<tr><td>1</td><td><a>Afiseaza</a></td><td>30 oct. 2026 10:21:01</td><td> <span>Cantar OMV Brazi/-/Prahova (RO)</span> </td><td>30 oct. 2026 12:10:14</td><td>BGR Contesti</td>'
+    . '<td>29</td><td>53,6</td><td>1.513.737,5</td><td>1.495.946,8</td><td>1.495.999,0</td><td>52,2</td><td>109</td><td>38</td><td>3.509</td><td>&nbsp;</td></tr>'
+    . '<tr><td>2</td><td></td><td>2 sept. 2026 07:00:00</td><td>X</td><td>2 sept. 2026 08:00:00</td><td>Y</td>'
+    . '<td>40</td><td>40,0</td><td>1.513.777,5</td><td>-</td><td>-</td><td>-</td><td>60</td><td>0</td><td>0</td><td></td></tr></table>'
+    . '<span id="lblTotalDistance"><b>Total distanta parcursa: 93,6 km</b></span><span id="lblTotalDistanceCan"><b>Total distanta CAN: 52,2 km</b></span>'
+    . '<span id="lblByCANTotalFuelConsumption"><b>Consum realizat citit: 45,05 l/100km</b></span></body></html>';
+$parsedCan = SasCanKmService::parseRecordSheetCan($canHtml);
+$row = $parsedCan['segments'][0];
+check('CAN raport: numar + model din titlu', $parsedCan['plate'] === 'B 105 NET' && $parsedCan['model'] === 'DAF/XF', [$parsedCan['plate'], $parsedCan['model']]);
+check('CAN raport: numere ro-RO (1.495.999,0) si data „30 oct. 2026”', $row['can_index_end_km'] === 1495999.0 && $row['can_km'] === 52.2
+    && $row['start'] === '2026-10-30 10:21:01' && $row['parked_after_minutes'] === 3509 && $row['start_location'] === 'Cantar OMV Brazi/-/Prahova (RO)', $row);
+check('CAN raport: „-” = fara CAN (null), „sept.” = luna 9', $parsedCan['segments'][1]['can_index_end_km'] === null && $parsedCan['segments'][1]['end'] === '2026-09-02 08:00:00', $parsedCan['segments'][1]);
+check('CAN raport: totaluri (l/100km nu e citit ca 100)', $parsedCan['totals']['can_km'] === 52.2 && $parsedCan['totals']['gps_km'] === 93.6
+    && $parsedCan['totals']['fuel_l_per_100km'] === 45.05 && $parsedCan['totals']['can_index_end_km'] === 1495999.0, $parsedCan['totals']);
+$errorPage = false;
+try {
+    SasCanKmService::parseRecordSheetCan('<html><title>Error converting data type nvarchar to uniqueidentifier.</title></html>');
+} catch (RuntimeException) {
+    $errorPage = true;
+}
+check('CAN raport: pagina de eroare SAS -> exceptie, nu raport gol', $errorPage);
+$canParsed = SasFleetOdometerSource::parseCanReport(9118, $parsedCan);
+check('CAN citiri: doar tronsoanele cu Index CAN, id stabil, tip can_odometer', count($canParsed['readings']) === 1
+    && $canParsed['readings'][0]['source_reading_id'] === 'can:9118@2026-10-30 12:10:14' && $canParsed['readings'][0]['measurement_type'] === 'can_odometer'
+    && count($canParsed['movements']) === 2, $canParsed);
+check('Politica CAN, altfel SAS: CAN cand exista, SAS cand CAN lipseste',
+    OdometerCalculator::officialDistance('can_sas', 400.0, 390.0, 380.0)['source'] === 'can'
+    && OdometerCalculator::officialDistance('can_sas', 400.0, 390.0, null)['km'] === 400.0
+    && OdometerCalculator::officialDistance('can', 400.0, 390.0, null)['km'] === null);
 
 // =====================================================================
 echo "\n2. Flux pe baza de date (furnizori simulati)\n";
@@ -459,6 +519,51 @@ try {
         $rejected = true;
     }
     check('T0 in viitor respins', $rejected);
+
+    // --- Odometrul CAN: sursa separata, cu acelasi carId ca SAS
+    $canTruck = $vehicle('KMCTEST-K1', 'camion', 9.5, $categoryId);
+    $noCanTruck = $vehicle('KMCTEST-K2', 'camion', 9.5, $categoryId);
+    $sas->cars[] = ['sas_vehicle_id' => 990003, 'registration' => 'KMCTEST-K1', 'local_vehicle_id' => $canTruck, 'disabled' => false];
+    $sas->cars[] = ['sas_vehicle_id' => 990004, 'registration' => 'KMCTEST-K2', 'local_vehicle_id' => $noCanTruck, 'disabled' => false];
+    $sas->segments[990003] = [seg('2026-10-01 05:00:00', '2026-10-01 06:00:00', 60, 700060), seg('2026-10-06 09:00:00', '2026-10-06 11:00:00', 110, 700170)];
+    $sas->segments[990004] = [seg('2026-09-30 05:00:00', '2026-09-30 06:00:00', 10, 20000), seg('2026-10-06 09:00:00', '2026-10-06 11:00:00', 30, 20030)];
+    $fakeCan = new FakeCan();
+    $fakeCan->segments[990003] = [
+        canSeg('2026-10-01 05:00:00', '2026-10-01 06:00:00', 55.0, 650055.0, 60),
+        canSeg('2026-10-06 09:00:00', '2026-10-06 11:00:00', 100.0, 650155.0, 110),
+    ];
+    $fakeCan->segments[990004] = [canSeg('2026-10-06 09:00:00', '2026-10-06 11:00:00', null, null, 30)];
+    $canIds = [$canTruck, $noCanTruck];
+    $canService = new OdometerCenterService($db, $sas, $card, null, $nowTs, $fakeCan);
+
+    $canSync = $canService->syncSas(50, 0, $canIds);
+    $canSync2 = $canService->syncSas(50, 0, $canIds);
+    $canRows = (int) $db->query("SELECT COUNT(*) FROM vehicle_odometer_readings WHERE vehicle_id = {$canTruck} AND provider_code = 'can'")->fetchColumn();
+    check('CAN sync: mapare pe acelasi carId, citiri salvate separat de SAS, o singura data', $canRows === 2 && $canSync2['new_readings'] === 0
+        && $db->query("SELECT external_provider_vehicle_id FROM vehicle_odometer_sources WHERE vehicle_id = {$canTruck} AND provider_code = 'can'")->fetchColumn() === '990003', [$canSync, $canSync2, $canRows]);
+    $canDash = $canService->buildDashboard();
+    [$k1] = $findUnit($canDash, $canTruck)['components'];
+    [$k2] = $findUnit($canDash, $noCanTruck)['components'];
+    check('CAN card: odometrul de bord separat de cel GPS (nu se amesteca)', $k1['odometers'] === ['can', 'sas', 'cardoil']
+        && $k1['sources']['can']['current']['km'] === 650155.0 && $k1['sources']['sas']['current']['km'] === 700170.0, [$k1['sources']['can']['current'], $k1['sources']['sas']['current']]);
+    check('CAN card: vehicul fara CAN -> fara citire inventata, cu motiv', $k2['sources']['can']['available'] && $k2['sources']['can']['current'] === null
+        && str_contains((string) $k2['sources']['can']['reason'], 'CAN'), $k2['sources']['can']);
+
+    $canLookup = $canService->lookupT0($canIds, '2026-10-01 08:00');
+    check('CAN T0: citirea de la 06:00 (parcat pana la T0), independent de SAS', $canLookup[$canTruck]['can']['status'] === 'ok'
+        && $canLookup[$canTruck]['can']['reading']['km'] === 650055.0 && $canLookup[$canTruck]['sas']['reading']['km'] === 700060.0, $canLookup[$canTruck]);
+    check('CAN T0: vehicul fara CAN -> fara sursa (nu se salveaza)', $canLookup[$noCanTruck]['can']['status'] === 'fara_sursa', $canLookup[$noCanTruck]['can']);
+    $canService->saveT0($canIds, '2026-10-01 08:00', null, 'test CAN');
+    $model->saveSetting('politica_total', 'can_sas', null);
+    $canDash = $canService->buildDashboard();
+    [$k1] = $findUnit($canDash, $canTruck)['components'];
+    [$k2] = $findUnit($canDash, $noCanTruck)['components'];
+    check('CAN km de la T0 = 100 (CAN), SAS separat = 110', $k1['sources']['can']['distance']['km'] === 100.0 && $k1['sources']['sas']['distance']['km'] === 110.0, [$k1['sources']['can']['distance'], $k1['sources']['sas']['distance']]);
+    check('Politica „CAN, altfel SAS”: CAN unde exista, SAS la vehiculul fara CAN', $k1['official']['source'] === 'can' && $k1['official']['km'] === 100.0
+        && $k2['official']['source'] === 'sas', [$k1['official'], $k2['official']]);
+    check('KPI: total CAN separat de total SAS', $canDash['kpis']['per_source_km']['can'] >= 100.0 && isset($canDash['kpis']['per_source_count']['can']), $canDash['kpis']['per_source_km']);
+    $history = $canService->vehicleHistory($canTruck, 400, false);
+    check('Istoric: seria CAN separata de SAS', count($history['can']) === 2 && $history['can'][0]['km'] === 650155.0, $history['can']);
 
     // --- ACL
     $registry = permission_registry();

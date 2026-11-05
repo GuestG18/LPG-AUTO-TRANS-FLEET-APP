@@ -5,7 +5,9 @@
         "dompdf/dompdf": "^3.1",
         "lbuchs/webauthn": "^2.2",
         "anthropic-ai/sdk": "^0.54.0",
-        "guzzlehttp/guzzle": "^8.2"
+        "guzzlehttp/guzzle": "^8.2",
+        "setasign/fpdi": "^2.6",
+        "setasign/fpdf": "^1.8"
     },
     "config": {
         "platform": {

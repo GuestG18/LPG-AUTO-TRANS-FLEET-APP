@@ -49,6 +49,9 @@
         Object.keys(values).forEach(function (key) { params.set(key, values[key]); });
         var perPage = currentParams().get('per_page');
         if (perPage) { params.set('per_page', perPage); }
+        // Vederea paginii Anvelope (Vehicule / Inventar) ramane cea curenta.
+        var mode = currentParams().get('mode');
+        if (mode) { params.set('mode', mode); }
         if (page && page > 1) { params.set('p', String(page)); }
         return window.location.pathname + '?' + params.toString();
     }

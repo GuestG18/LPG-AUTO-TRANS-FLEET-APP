@@ -111,7 +111,7 @@
 .xt-cab svg { position: absolute; left: 50%; bottom: -55%; width: 105%; transform: translateX(-50%); }
 
 /* walking santa */
-.xt-santa { position: absolute; width: 46px; z-index: 25; display: none; }
+.xt-santa { position: absolute; width: 46px; z-index: 25; display: none; transform-origin: 50% 100%; }
 .xt-santa svg { display: block; width: 100%; overflow: visible; }
 
 @keyframes xt-spin { to { transform: rotate(360deg) } }
@@ -136,4 +136,6 @@
   position: absolute;
   top: -1rem;                  /* sticky stops inside the sidebar's 1rem top padding: reach back over it */
   right: -1rem;                /* sits in the sidebar's right padding, next to the scrollbar */
+  /* its own compositor layer: each twinkle re-uploads this thin strip instead of repainting the whole menu */
+  will-change: transform;
 }

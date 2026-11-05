@@ -574,9 +574,41 @@
             }
         }, true);
 
+        // Interventie noua precompletata din alta pagina (inspectorul din Stoc Anvelope):
+        // ?nou=1&vehicle_id=&component_key=&pozitie=&operatiune=&tip=&motiv=revizie. Totul ramane editabil.
+        var preset = new URLSearchParams(window.location.search);
+        var idField = form.elements.id;
+        if (preset.get('nou') === '1' && !(idField && idField.value)) {
+            if (preset.get('vehicle_id') && vehicleSelect.querySelector('option[value="' + Number(preset.get('vehicle_id')) + '"]')) {
+                vehicleSelect.value = String(Number(preset.get('vehicle_id')));
+                syncVehicle();
+            }
+            var presetKey = preset.get('component_key') || '';
+            var presetFound = presetKey ? picker.findComponent(presetKey) : null;
+            if (presetFound) {
+                var primary = presetFound.category.id >= 11 ? 'rezervor' : 'sasiu';
+                picker.selected.set(primary + ':' + presetKey, { key: presetKey, primary: primary, position: preset.get('pozitie') || '', operation: preset.get('operatiune') || 'verificare' });
+                picker.render();
+                hidden.value = JSON.stringify(picker.value());
+            }
+            if (preset.get('tip') && form.elements.tip_interventie) { form.elements.tip_interventie.value = preset.get('tip'); }
+            if (presetFound && form.elements.descriere && !form.elements.descriere.value) {
+                form.elements.descriere.value = (preset.get('motiv') === 'revizie' ? 'Revizie programată: ' : 'Intervenție solicitată: ') + presetFound.component.name
+                    + (preset.get('pozitie') ? ' (' + preset.get('pozitie') + ')' : '') + '.';
+            }
+            // bootstrap se incarca in footer, dupa acest script: modalul se deschide dupa incarcare.
+            window.addEventListener('load', function () {
+                var presetModal = document.getElementById('maintenanceScheduleModal');
+                if (presetModal && window.bootstrap && window.bootstrap.Modal) { window.bootstrap.Modal.getOrCreateInstance(presetModal).show(); }
+            });
+        }
+
         var modalElement = document.getElementById('maintenanceScheduleModal');
         if (modalElement) {
             modalElement.addEventListener('hidden.bs.modal', function () {
+                var cleaned = new URL(window.location.href);
+                ['nou', 'component_key', 'pozitie', 'operatiune', 'tip', 'motiv'].forEach(function (key) { cleaned.searchParams.delete(key); });
+                window.history.replaceState(null, '', cleaned.toString());
                 // Formularul de editare deschis din URL: la inchidere, URL-ul revine la lista.
                 var url = new URL(window.location.href);
                 if (url.searchParams.has('edit_intervention_id')) {
@@ -1745,7 +1777,7 @@
             + field('piesa_montata', 'Piesă montată (denumire / cod)', text('piesa_montata', value.piesa_montata, ' maxlength="190"'))
             + field('piesa_demontata', 'Piesă demontată', text('piesa_demontata', value.piesa_demontata, ' maxlength="190"'))
             + field('data_montare', 'Data montării', text('data_montare', value.data_montare, ' type="date"'), 'col-md-4')
-            + field('km_montare', 'Km la montare', text('km_montare', value.km_montare, ' type="number" min="0" step="1" placeholder="' + esc(it.km_bord || '') + '"'), 'col-md-4')
+            + field('km_montare', 'Km la montare', text('km_montare', value.km_montare, ' type="number" min="0" step="1" placeholder="' + esc((value.vehicle_id && value.vehicul_componenta_km !== null && value.vehicul_componenta_km !== undefined ? value.vehicul_componenta_km : it.km_bord) || '') + '"'), 'col-md-4')
             + field('garantie_luni', 'Garanție (luni)', text('garantie_luni', value.garantie_luni, ' type="number" min="0" max="600"'), 'col-md-2')
             + field('garantie_pana_la', 'Garanție până la', text('garantie_pana_la', value.garantie_pana_la, ' type="date"'), 'col-md-2')
             + '</div><div class="form-text">Înlocuirea intră în istoricul componentei (și resetează uzura) doar la finalizarea intervenției, după confirmare.</div></fieldset>';

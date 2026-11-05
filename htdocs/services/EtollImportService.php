@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/EtollApiClient.php';
+require_once __DIR__ . '/EtollPdfMerger.php';
 require_once __DIR__ . '/EtollTripMatcher.php';
 require_once __DIR__ . '/InvoiceStorageService.php';
 require_once __DIR__ . '/InvoiceTripMatcher.php';
@@ -16,8 +17,10 @@ require_once __DIR__ . '/InvoiceTripMatcher.php';
  *   2. Facturi eToll: la inchiderea sesiunii eToll emite un document CC-P (total 0, platit din
  *      portofel). Detaliul lui are sessionIds[], deci il legam de sesiune. Documentele fara
  *      numar inca (primele minute) se iau la rularea urmatoare.
- *   3. Pentru fiecare sesiune cu document: PDF-ul se salveaza ca orice factura
- *      (InvoiceStorageService) si se creeaza randul in facturi:
+ *   3. Pentru fiecare sesiune cu document: un singur PDF cu factura CC-P, anexa TA_10 (ambele
+ *      din pagina "Plăți" a portalului) si desfasuratorul sesiunii (pagina "Servicii": ore,
+ *      origine, destinatie, km) se salveaza ca orice factura (InvoiceStorageService) si se
+ *      creeaza randul in facturi:
  *        tip Toll, valoare cu TVA = suma sesiunii (PDF-ul arata 0, fiind stornat din avans),
  *        data = ziua inchiderii, nr. auto = camionul, sursa_key = 'etoll:<session_id>'.
  *      InvoiceModel::create() ruleaza asocierea (EtollTripMatcher) si, la potrivire, randul
@@ -32,6 +35,8 @@ class EtollImportService
     private const PENDING_LOOKBACK_DAYS = 35;
     /** Pagini de 50 de documente citite pe rulare (~25 documente pe zi). */
     private const MAX_DOCUMENT_PAGES = 40;
+    /** Cat asteapta o sesiune dupa anexa / desfasurator inainte ca factura sa se creeze fara ele. */
+    private const EXTRA_PDF_WAIT_HOURS = 24;
 
     private PDO $db;
     private EtollApiClient $client;
@@ -63,6 +68,7 @@ class EtollImportService
                 inchisa_la DATETIME NOT NULL,
                 suma DECIMAL(12,2) NOT NULL,
                 invoice_id VARCHAR(64) NULL,
+                annex_id VARCHAR(64) NULL,
                 numar_document VARCHAR(60) NULL,
                 cota_tva DECIMAL(5,2) NULL,
                 factura_id INT UNSIGNED NULL,
@@ -76,6 +82,15 @@ class EtollImportService
                 CONSTRAINT fk_etoll_sesiuni_factura FOREIGN KEY (factura_id) REFERENCES facturi(id) ON DELETE SET NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
+
+        // Tabelele create inainte de anexa TA_10.
+        $hasAnnex = $db->query("
+            SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'etoll_sesiuni' AND COLUMN_NAME = 'annex_id'
+        ")->fetchColumn();
+        if ((int) $hasAnnex === 0) {
+            $db->exec('ALTER TABLE etoll_sesiuni ADD COLUMN annex_id VARCHAR(64) NULL AFTER invoice_id');
+        }
     }
 
     /**
@@ -164,7 +179,7 @@ class EtollImportService
 
         $update = $this->db->prepare("
             UPDATE etoll_sesiuni
-            SET invoice_id = :invoice_id, numar_document = :numar_document, cota_tva = :cota_tva, eroare = NULL, updated_at = :updated_at
+            SET invoice_id = :invoice_id, annex_id = :annex_id, numar_document = :numar_document, cota_tva = :cota_tva, eroare = NULL, updated_at = :updated_at
             WHERE session_id = :session_id AND invoice_id IS NULL
         ");
 
@@ -189,6 +204,7 @@ class EtollImportService
                 $known[$id] = true;
                 $number = trim(($detail['externalSeries'] ?? $invoice['externalSeries'] ?? '') . ' ' . ($detail['externalNumber'] ?? $invoice['externalNumber'] ?? ''));
                 $vat = $detail['tolls'][0]['price']['vatPercentage'] ?? null;
+                $annexId = self::annexIdOf($detail);
 
                 foreach (is_array($detail['sessionIds'] ?? null) ? $detail['sessionIds'] : [] as $sessionId) {
                     $sessionId = (string) $sessionId;
@@ -196,6 +212,7 @@ class EtollImportService
                         continue;
                     }
                     $update->bindValue(':invoice_id', $id, PDO::PARAM_STR);
+                    $update->bindValue(':annex_id', $annexId, $annexId === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
                     $update->bindValue(':numar_document', mb_substr($number, 0, 60), PDO::PARAM_STR);
                     $update->bindValue(':cota_tva', $vat === null ? null : number_format((float) $vat, 2, '.', ''), $vat === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
                     $update->bindValue(':updated_at', date('Y-m-d H:i:s'), PDO::PARAM_STR);
@@ -244,9 +261,8 @@ class EtollImportService
                     continue;
                 }
 
-                $invoiceId = (string) $session['invoice_id'];
-                $pdfs[$invoiceId] ??= $this->client->invoicePdf($invoiceId);
-                $document = $this->storePdf($pdfs[$invoiceId], $session);
+                [$content, $missing] = $this->documentFor($session, $pdfs);
+                $document = $this->storePdf($content, $session);
 
                 $amount = (float) $session['suma'];
                 $vat = $session['cota_tva'] !== null ? (float) $session['cota_tva'] : 21.0;
@@ -267,7 +283,7 @@ class EtollImportService
                     'document_mime' => $document['document_mime'],
                     'document_size' => $document['document_size'],
                     'document_sha256' => $document['document_sha256'],
-                    'observatii' => $this->notes($session),
+                    'observatii' => $this->notes($session, $missing),
                 ]);
                 $this->setInvoiceOf((string) $session['session_id'], $id, null);
                 $created++;
@@ -300,6 +316,73 @@ class EtollImportService
         return [$created, $associated, $errors];
     }
 
+    /**
+     * Documentul facturii: un singur PDF cu factura CC-P si anexa TA_10 (pagina "Plăți") plus
+     * desfasuratorul sesiunii (pagina "Servicii"). Anexa sau desfasuratorul care lipsesc fac
+     * sesiunea sa astepte EXTRA_PDF_WAIT_HOURS; dupa aceea factura se creeaza fara ele (notat).
+     *
+     * @param array<string, string> $cache PDF-urile deja descarcate in rulare (factura si anexa sunt pe document)
+     * @return array{0: string, 1: array<int, string>} [continut PDF, ce lipseste]
+     */
+    private function documentFor(array $session, array &$cache): array
+    {
+        $invoiceId = (string) $session['invoice_id'];
+        $cache['factura:' . $invoiceId] ??= $this->client->invoicePdf($invoiceId);
+        $parts = [$cache['factura:' . $invoiceId]];
+        $missing = [];
+        $recent = strtotime((string) $session['inchisa_la']) > time() - self::EXTRA_PDF_WAIT_HOURS * 3600;
+
+        $extras = [
+            'anexa TA_10' => function () use ($session, $invoiceId, &$cache): string {
+                $annexId = (string) ($session['annex_id'] ?? '');
+                if ($annexId === '') {
+                    // Sesiuni legate inainte de anexe: id-ul anexei e in detaliul documentului.
+                    $annexId = (string) self::annexIdOf($this->client->invoice($invoiceId));
+                    if ($annexId === '') {
+                        throw new RuntimeException('documentul nu are anexa.');
+                    }
+                    $this->db->prepare('UPDATE etoll_sesiuni SET annex_id = :annex_id WHERE invoice_id = :invoice_id')
+                        ->execute([':annex_id' => $annexId, ':invoice_id' => $invoiceId]);
+                }
+
+                return $cache['anexa:' . $invoiceId] ??= $this->client->annexPdf($invoiceId, $annexId);
+            },
+            'desfasuratorul sesiunii' => fn(): string => $this->client->sessionBreakdownPdf((string) $session['session_id']),
+        ];
+        foreach ($extras as $label => $download) {
+            try {
+                $parts[] = $download();
+            } catch (Throwable $exception) {
+                // Plafonul de cereri sau o sesiune proaspata: se reia la rularea urmatoare.
+                if ($recent || $this->client->budgetLeft() <= 0) {
+                    throw $exception;
+                }
+                $missing[] = $label;
+                ($this->log)('Sesiunea ' . $session['session_id'] . ': fara ' . $label . ' (' . $exception->getMessage() . ')');
+            }
+        }
+
+        try {
+            return [EtollPdfMerger::merge($parts), $missing];
+        } catch (Throwable $exception) {
+            ($this->log)('Sesiunea ' . $session['session_id'] . ': PDF-urile nu au putut fi lipite (' . $exception->getMessage() . '); se pastreaza doar factura.');
+
+            return [$parts[0], ['anexa TA_10 si desfasuratorul (nu s-au putut lipi)']];
+        }
+    }
+
+    /** Id-ul anexei TA_10 (taxare per km) din detaliul documentului. */
+    private static function annexIdOf(array $detail): ?string
+    {
+        foreach (is_array($detail['annexes'] ?? null) ? $detail['annexes'] : [] as $annex) {
+            if (!empty($annex['annexId']) && ($annex['type'] ?? 'PAY_PER_DISTANCE') === 'PAY_PER_DISTANCE') {
+                return (string) $annex['annexId'];
+            }
+        }
+
+        return null;
+    }
+
     /** @return array{document_path: string, document_original_name: string, document_mime: string, document_size: int, document_sha256: string} */
     private function storePdf(string $content, array $session): array
     {
@@ -326,7 +409,8 @@ class EtollImportService
         return $document;
     }
 
-    private function notes(array $session): string
+    /** @param array<int, string> $missing documentele eToll care nu au intrat in PDF */
+    private function notes(array $session, array $missing = []): string
     {
         $parts = [
             'Sesiune eToll ' . $session['session_id'],
@@ -336,8 +420,12 @@ class EtollImportService
             $parts[] = 'remorca ' . $session['remorci'];
         }
         $parts[] = 'documentul CC-P arata total 0 (platit din avansul eToll); valoarea e suma sesiunii';
+        $note = implode(', ', $parts) . '. PDF: factura CC-P + anexa TA_10 (Plăți) + desfășurătorul sesiunii (Servicii).';
+        if ($missing !== []) {
+            $note .= ' Lipsesc din eToll: ' . implode(', ', $missing) . '.';
+        }
 
-        return implode(', ', $parts) . '.';
+        return $note;
     }
 
     private function setInvoiceOf(string $sessionId, ?int $invoiceId, ?string $error): void

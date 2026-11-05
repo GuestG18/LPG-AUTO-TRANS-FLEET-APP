@@ -26,6 +26,7 @@ return [
     'endpoints'   => [
         'data'        => 'view',
         'sync'        => 'view',
+        'can_km'      => 'view',
         'history'     => 'history',
         't0_lookup'   => 't0',
         't0_save'     => 't0',

@@ -7,6 +7,8 @@
     --kmc-blue-50: #eef5ff;
     --kmc-purple: #8b3fd9;
     --kmc-purple-50: #f6effd;
+    --kmc-teal: #0f766e;
+    --kmc-teal-50: #ecfbf8;
     --kmc-green: #16a34a;
     --kmc-green-50: #ecfdf3;
     --kmc-amber: #f59e0b;
@@ -232,9 +234,11 @@
     display: flex; flex-direction: column; gap: 5px;
 }
 .kmc-odo--cardoil { background: #faf5ff; border-color: #eadcfb; }
+.kmc-odo--can { background: #f0fbf9; border-color: #c8ece6; }
 .kmc-odo--off { background: #f8fafc; border-style: dashed; border-color: #d5dce6; }
 .kmc-odo__label { display: flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; color: var(--kmc-blue); white-space: nowrap; }
 .kmc-odo--cardoil .kmc-odo__label { color: var(--kmc-purple); }
+.kmc-odo--can .kmc-odo__label { color: var(--kmc-teal); }
 .kmc-odo--off .kmc-odo__label { color: var(--kmc-muted); }
 .kmc-odo__label i { font-size: 13px; }
 .kmc-odo__label .kmc-odo__flag { margin-left: auto; color: var(--kmc-purple); font-size: 12px; }
@@ -245,6 +249,7 @@
 .kmc-odo__src { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--kmc-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kmc-odo__src i { color: var(--kmc-blue); }
 .kmc-odo--cardoil .kmc-odo__src i { color: var(--kmc-purple); }
+.kmc-odo--can .kmc-odo__src i { color: var(--kmc-teal); }
 .kmc-odo__na { font-size: 11.5px; color: var(--kmc-muted); line-height: 1.35; }
 
 /* semiremorca: un singur odometru, introdus manual */
@@ -288,6 +293,8 @@
 .kmc-odo.is-updated { animation: kmc-flash 1.6s ease-out; }
 @keyframes kmc-flash { 0% { box-shadow: 0 0 0 0 rgba(26, 115, 232, .45); } 100% { box-shadow: 0 0 0 10px rgba(26, 115, 232, 0); } }
 .kmc-odo--cardoil.is-updated { animation-name: kmc-flash-purple; }
+.kmc-odo--can.is-updated { animation-name: kmc-flash-teal; }
+@keyframes kmc-flash-teal { 0% { box-shadow: 0 0 0 0 rgba(15, 118, 110, .45); } 100% { box-shadow: 0 0 0 10px rgba(15, 118, 110, 0); } }
 @keyframes kmc-flash-purple { 0% { box-shadow: 0 0 0 0 rgba(139, 63, 217, .45); } 100% { box-shadow: 0 0 0 10px rgba(139, 63, 217, 0); } }
 
 @media (prefers-reduced-motion: reduce) {
@@ -328,6 +335,7 @@
 .kmc-table .kmc-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .kmc-table .kmc-sas { color: var(--kmc-blue); font-weight: 700; }
 .kmc-table .kmc-card-oil { color: var(--kmc-purple); font-weight: 700; }
+.kmc-table .kmc-can { color: var(--kmc-teal); font-weight: 700; }
 .kmc-table small { display: block; color: var(--kmc-muted); font-size: 11px; font-weight: 400; }
 .kmc-group__body--list { display: block; padding: 0; }
 
@@ -352,6 +360,7 @@
 .kmc-srcchip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; margin: 3px 4px 0 0; }
 .kmc-srcchip--sas { background: var(--kmc-blue-50); color: var(--kmc-blue); }
 .kmc-srcchip--cardoil { background: var(--kmc-purple-50); color: var(--kmc-purple); }
+.kmc-srcchip--can { background: var(--kmc-teal-50); color: var(--kmc-teal); }
 .kmc-srcchip--off { background: #f1f4f8; color: var(--kmc-muted); text-decoration: line-through; }
 .kmc-step { font-weight: 700; font-size: 13px; margin: 0 0 8px; }
 .kmc-dt { display: grid; grid-template-columns: 1fr 140px; gap: 10px; margin-bottom: 14px; }
@@ -367,6 +376,7 @@
 .kmc-hit { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 8px; background: #fff; border: 1px solid var(--kmc-line); border-radius: 8px; padding: 8px; font-size: 12px; }
 .kmc-hit__icon { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 16px; background: var(--kmc-blue-50); color: var(--kmc-blue); }
 .kmc-hit--cardoil .kmc-hit__icon { background: var(--kmc-purple-50); color: var(--kmc-purple); }
+.kmc-hit--can .kmc-hit__icon { background: var(--kmc-teal-50); color: var(--kmc-teal); }
 .kmc-hit b { display: block; font-size: 12px; }
 .kmc-hit .kmc-hit__km { font-weight: 700; color: var(--kmc-ink); }
 .kmc-hit .kmc-hit__note { color: var(--kmc-muted); font-size: 11px; margin-top: 3px; }

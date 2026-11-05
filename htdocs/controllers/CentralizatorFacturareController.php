@@ -157,7 +157,7 @@ class CentralizatorFacturareController
         $report = $this->centralizerService->getExportData($this->collectReportFilters());
         $filters = $report['filters'] ?? [];
         $fileMonth = preg_replace('/[^0-9\-]/', '', (string) ($filters['month'] ?? date('Y-m')));
-        /* Exportul urmeaza tipul de raport ales in pagina (Raport scurt / Raport detaliat). */
+        /* Tipul raportului se alege din meniul Export Excel (Raport scurt / Raport detaliat). */
         $short = ($_GET['view'] ?? '') === 'scurt';
 
         /* Excel formatat ca pagina; CSV-ul plat ramane doar ca rezerva fara extensia zip. */

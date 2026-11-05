@@ -3,6 +3,7 @@
  * Cardurile din dreapta formularului "Adauga cursa": doua semnale pentru dispecer, fiecare
  * se extinde (morph) intr-un panou de lucru.
  *  - Km pierduti (SAS): km GPS rulati fara cursa / service, cu alocare pe cursa noua sau Km service.
+ *  - Km in desfasurare (SAS): km GPS rulati pe cursele inca deschise (fara ora de sfarsit); nu intra in Km pierduti.
  *  - Alimentari neasociate (CardOil): alimentarile din API fara cursa, cu motivul si asociere manuala.
  * Datele se incarca din frontend (assets/js/dispatcher-insights.js), dupa randarea paginii.
  */
@@ -14,6 +15,7 @@ $insightsConfig = [
     'fuelLinkUrl' => build_query_url(['page' => 'dispecer_curse', 'action' => 'insights_fuel_link']),
     'dispatcherUrl' => build_query_url(['page' => 'dispecer_curse']),
     'tripUrl' => build_query_url(['page' => 'dispecer_curse', 'action' => 'view']),
+    'tripEditUrl' => build_query_url(['page' => 'dispecer_curse', 'action' => 'edit']),
     'csrf' => csrf_token(),
     'canKm' => $insightsCanKm,
     'canRace' => !function_exists('can') || can('dispecer_curse', 'create'),
@@ -21,9 +23,12 @@ $insightsConfig = [
     // Km pierduti -> faza noua / km adaugati la o faza (sau cursa) existenta.
     'canPhase' => !function_exists('can') || can('dispecer_curse', 'edit'),
     'kmTripsUrl' => build_query_url(['page' => 'dispecer_curse', 'action' => 'insights_km_trips']),
+    // Cheia memoriei din browser (sessionStorage): datele unui utilizator nu se arata altuia in acelasi tab.
+    'cacheUser' => (int) ((function_exists('current_user') ? current_user() : null)['id'] ?? 0),
 ];
 ?>
 <div class="dins-stack" data-dins='<?= e((string) json_encode($insightsConfig, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)) ?>'>
+    <div class="dins-km-group">
     <button type="button" class="dins-card dins-card--km" data-dins-card="km" aria-haspopup="dialog">
         <span class="dins-card-head">
             <span class="dins-chip"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i></span>
@@ -38,6 +43,23 @@ $insightsConfig = [
             <?php endif; ?>
         </span>
     </button>
+
+    <button type="button" class="dins-card dins-card--open" data-dins-card="open" aria-haspopup="dialog">
+        <span class="dins-card-head">
+            <span class="dins-chip"><i class="bi bi-hourglass-split" aria-hidden="true"></i></span>
+            <span class="dins-card-title">Km în desfășurare <small>curse deschise · GPS SAS</small></span>
+            <span class="dins-open-total" data-dins-open-total></span>
+            <i class="bi bi-arrows-angle-expand dins-card-expand" aria-hidden="true"></i>
+        </span>
+        <span class="dins-card-body" data-dins-body="open">
+            <?php if ($insightsCanKm): ?>
+                <span class="dins-muted"><span class="spinner-border spinner-border-sm me-1"></span>Se încarcă…</span>
+            <?php else: ?>
+                <span class="dins-muted">Nu ai acces la raportul Km pierduți.</span>
+            <?php endif; ?>
+        </span>
+    </button>
+    </div>
 
     <div class="dins-splitter dins-splitter--row" data-dins-split="row" role="separator" tabindex="0"
          aria-orientation="horizontal" aria-label="Înălțimea cardurilor (săgeți sus/jos, dublu-click pentru implicit)"

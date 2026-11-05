@@ -1,8 +1,12 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/../services/TrailerSasKmService.php';
+
 class DispecerCurseModel extends BaseModel
 {
+    /** Cache pe durata unei cereri pentru sincronizarea km pe vehicule (ex. data comutarii semiremorcilor pe SAS). */
+    private array $kmSyncCache = [];
     private const DISTRIBUTION_ROUTE_SCOPE_DISTRIBUTIE = 'distributie';
     private const DISTRIBUTION_ROUTE_SCOPE_PRIMAR_DISTRIBUTIE = 'primar_distributie';
     private const DISTRIBUTION_ROUTE_TARIFF_MODE_BOTH = 'tona_km';
@@ -6315,6 +6319,36 @@ class DispecerCurseModel extends BaseModel
             }
         }
 
+        return $this->withoutSasTrailers($distribution, $race);
+    }
+
+    /**
+     * De la comutarea din Centru Kilometraj (km_center_setari.semiremorci_sas_de_la),
+     * semiremorcile primesc km din SAS-ul capului tractor (TrailerSasKmService), nu din
+     * curse. Cursele datate inainte de comutare raman pe regula veche.
+     */
+    private function withoutSasTrailers(array $distribution, array $race): array
+    {
+        if ($distribution === []) {
+            return $distribution;
+        }
+        if (!array_key_exists('sas_cutover', $this->kmSyncCache)) {
+            $this->kmSyncCache['sas_cutover'] = TrailerSasKmService::cutover($this->db);
+        }
+        $cutover = $this->kmSyncCache['sas_cutover'];
+        $raceDate = (string) ($race['data_inceput'] ?? '') !== '' ? (string) $race['data_inceput'] : (string) ($race['data_cursa'] ?? '');
+        if ($cutover === null || $raceDate === '' || $raceDate < substr($cutover, 0, 10)) {
+            return $distribution;
+        }
+        $ids = array_map('intval', array_keys($distribution));
+        $stmt = $this->db->prepare(
+            "SELECT id FROM vehicule WHERE tip_vehicul LIKE 'semiremorca%' AND id IN (" . implode(',', $ids) . ')'
+        );
+        $stmt->execute();
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $trailerId) {
+            unset($distribution[(int) $trailerId]);
+        }
+
         return $distribution;
     }
 
@@ -9910,8 +9944,10 @@ class DispecerCurseModel extends BaseModel
             $params[':data_start'] = (string) $filters['data_start'];
         }
 
+        // Ambele capete ale intervalului filtreaza pe data de inceput a cursei
+        // (curse incepute intre "Data inceput de la" si "Data inceput pana la").
         if (($filters['data_end'] ?? '') !== '') {
-            $where[] = "c.data_sfarsit <= :data_end";
+            $where[] = "c.data_inceput <= :data_end";
             $params[':data_end'] = (string) $filters['data_end'];
         }
 

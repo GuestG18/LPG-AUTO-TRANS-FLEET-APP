@@ -29,6 +29,9 @@ define('APP_NAME', 'Fleet Management MVP');
 define('APP_DEBUG', filter_var((string) (getenv('APP_DEBUG') ?: 'false'), FILTER_VALIDATE_BOOLEAN));
 define('APP_ENV', $appEnvRaw);
 define('ITEMS_PER_PAGE', 10);
+// Numele paginii de stoc din Mentenanta (vederea pe vehicule + exploratorul de componente);
+// se poate schimba din .env (ex. „Stoc Piese”) fara alte modificari.
+define('FLEET_STOCK_PAGE_TITLE', (string) (getenv('FLEET_STOCK_PAGE_TITLE') ?: 'Stoc Anvelope'));
 define('AUTH_REQUIRE_EMAIL_VERIFICATION', filter_var((string) (getenv('AUTH_REQUIRE_EMAIL_VERIFICATION') ?: 'true'), FILTER_VALIDATE_BOOLEAN));
 define('AUTH_VERIFY_RESEND_COOLDOWN_SECONDS', max(15, (int) (getenv('AUTH_VERIFY_RESEND_COOLDOWN_SECONDS') ?: 30)));
 define('AUTH_SHOW_LOGIN_CODE_ON_EMAIL_FAILURE', filter_var((string) (getenv('AUTH_SHOW_LOGIN_CODE_ON_EMAIL_FAILURE') ?: 'false'), FILTER_VALIDATE_BOOLEAN));

@@ -52,6 +52,7 @@ class SimpleXlsxWriter
         'warn' => 35,
         'small_num2' => 36,
         'text_l3' => 37,
+        'link' => 38,
     ];
 
     /** @var array<int, array{name: string, rows: array<int, array>, widths: array<int, float>, merges: string[], freeze: ?string}> */
@@ -344,6 +345,10 @@ class SimpleXlsxWriter
         $styleAttr = $style > 0 ? ' s="' . $style . '"' : '';
 
         if ($formula !== null) {
+            // Rezultat text (ex. eticheta unui HYPERLINK): afisat si de programele care nu recalculeaza la deschidere.
+            if (is_string($value) && $value !== '') {
+                return '<c r="' . $ref . '"' . $styleAttr . ' t="str"><f>' . self::xml(ltrim($formula, '=')) . '</f><v>' . self::xml($value) . '</v></c>';
+            }
             $cached = is_int($value) || is_float($value) ? '<v>' . (is_finite((float) $value) ? rtrim(rtrim(sprintf('%.6F', (float) $value), '0'), '.') : '0') . '</v>' : '';
 
             return '<c r="' . $ref . '"' . $styleAttr . '><f>' . self::xml(ltrim($formula, '=')) . '</f>' . $cached . '</c>';
@@ -374,7 +379,7 @@ class SimpleXlsxWriter
             165 => '#,##0.00',
             166 => '0.00"%"',
         ];
-        /* 0 Calibri 11, 1 bold, 2 titlu, 3 gri, 4 alb bold, 5 gri mic, 6 albastru bold, 7 bold 12, 8 portocaliu */
+        /* 0 Calibri 11, 1 bold, 2 titlu, 3 gri, 4 alb bold, 5 gri mic, 6 albastru bold, 7 bold 12, 8 portocaliu, 9 link */
         $fonts = [
             '<font><sz val="10"/><color rgb="FF1F2937"/><name val="Calibri"/><family val="2"/></font>',
             '<font><b/><sz val="10"/><color rgb="FF0F172A"/><name val="Calibri"/><family val="2"/></font>',
@@ -385,6 +390,7 @@ class SimpleXlsxWriter
             '<font><b/><sz val="9"/><color rgb="FF1D4ED8"/><name val="Calibri"/><family val="2"/></font>',
             '<font><b/><sz val="14"/><color rgb="FF0F172A"/><name val="Calibri"/><family val="2"/></font>',
             '<font><i/><sz val="9"/><color rgb="FFB45309"/><name val="Calibri"/><family val="2"/></font>',
+            '<font><u/><sz val="10"/><color rgb="FF0563C1"/><name val="Calibri"/><family val="2"/></font>',
         ];
         /* 0/1 obligatorii, 2 sectiune (albastru inchis), 3 antet gri, 4 grup albastru deschis, 5 total, 6 sub-antet, 7 detaliu, 8 cod ruta */
         $fills = [
@@ -458,6 +464,7 @@ class SimpleXlsxWriter
             $xf(8, 0, 0, 0, 'left', 0, true),      // warn
             $xf(5, 7, 1, 165, 'right'),            // small_num2
             $xf(5, 7, 1, 0, 'left', 5),            // text_l3
+            $xf(9, 0, 1, 0, 'left'),               // link (HYPERLINK)
         ];
 
         /* Stilurile numerice cu unitate, adaugate la rulare (numberStyle), dupa cele fixe. */

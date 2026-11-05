@@ -17,6 +17,8 @@ declare(strict_types=1);
  *   action=manual_check POST: reface verificarea citirii manuale cu km SAS ai capului tractor
  *   action=manual_tolerance POST: pragul (km) peste care diferenta semiremorca/cap tractor e problema
  *   action=audit        JSON: jurnalul de audit al modulului
+ *   action=can_km       JSON: km din CAN (odometrul de bord) din raportul web SAS, pe tronsoane
+ *                       GET vehicle_id (local) sau car_id (SAS), from, to (Y-m-d [H:i]), max 31 zile
  * Toate actiunile sunt verificate si in router (permissions/modules/centru_kilometraj.php).
  */
 class OdometerCenterController
@@ -27,9 +29,11 @@ class OdometerCenterController
     private const WEB_SYNC_SECONDS = 20;
 
     private OdometerCenterService $service;
+    private PDO $db;
 
     public function __construct(PDO $db)
     {
+        $this->db = $db;
         $this->service = new OdometerCenterService($db);
     }
 
@@ -49,6 +53,7 @@ class OdometerCenterController
             'manual_check' => $this->manualCheckAction(),
             'manual_tolerance' => $this->manualToleranceAction(),
             'audit' => $this->auditAction(),
+            'can_km' => $this->canKmAction(),
             default => $this->indexAction(),
         };
     }
@@ -74,6 +79,13 @@ class OdometerCenterController
         // Sesiunea nu e necesara cat timp ruleaza apelurile SAS: o eliberam ca restul paginii sa nu astepte.
         session_write_close();
         $stats = $this->service->syncSas(self::WEB_SYNC_CALLS, self::WEB_SYNC_SECONDS);
+        // Km semiremorcilor din SAS-ul capului tractor: doar zilele inchise neaplicate inca
+        // (in afara primei rulari din zi, nu face nicio cerere).
+        try {
+            $stats['trailers'] = (new TrailerSasKmService($this->db))->run(self::WEB_SYNC_CALLS);
+        } catch (Throwable $exception) {
+            error_log('[SemiremorciKmSas] ' . $exception->getMessage());
+        }
         $this->json(['ok' => !$stats['aborted'] && !$stats['locked'], 'stats' => $stats]);
     }
 
@@ -120,6 +132,31 @@ class OdometerCenterController
             $this->json(['ok' => false, 'message' => $exception->getMessage()], 404);
         }
         $this->json(['ok' => true, 'history' => $history]);
+    }
+
+    private function canKmAction(): void
+    {
+        $carId = (int) ($_GET['car_id'] ?? 0);
+        $vehicleId = (int) ($_GET['vehicle_id'] ?? 0);
+        if ($carId <= 0 && $vehicleId > 0) {
+            $carId = (int) ($this->service->sasCarId($vehicleId) ?? 0);
+        }
+        if ($carId <= 0) {
+            $this->json(['ok' => false, 'message' => 'Vehiculul nu are corespondent în SAS Fleet.'], 404);
+        }
+        $from = (string) ($_GET['from'] ?? date('Y-m-d'));
+        $to = (string) ($_GET['to'] ?? $from);
+
+        session_write_close();
+        try {
+            $report = (new SasCanKmService())->travelSheet($carId, $from, $to);
+        } catch (InvalidArgumentException $exception) {
+            $this->json(['ok' => false, 'message' => $exception->getMessage()], 422);
+        } catch (Throwable $exception) {
+            error_log('[SasCanKm] ' . $exception->getMessage());
+            $this->json(['ok' => false, 'message' => 'Raportul CAN din SAS nu este disponibil acum.'], 502);
+        }
+        $this->json(['ok' => true, 'vehicle_id' => $vehicleId > 0 ? $vehicleId : null, 'report' => $report]);
     }
 
     private function savePolicyAction(): void

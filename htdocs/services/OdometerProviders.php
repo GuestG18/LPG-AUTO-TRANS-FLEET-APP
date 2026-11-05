@@ -8,6 +8,9 @@ declare(strict_types=1);
  *   original_value, original_unit, odometer_km (normalizat), measurement_type.
  * Credentialele raman pe server (SasFleetClient citeste .env); nimic nu ajunge in JS.
  */
+
+require_once __DIR__ . '/SasCanKmService.php';
+
 interface SasOdometerSource
 {
     public function credentialsAvailable(): bool;
@@ -22,6 +25,16 @@ interface SasOdometerSource
      * @return array{readings: list<array<string, mixed>>, movements: list<array{start:string, end:string, km:float}>}
      */
     public function fetchReadings(int $carId, string $from, string $to): array;
+}
+
+/**
+ * Odometrul CAN (de bord) din raportul web SAS „Foaie de parcurs cu distanțe din CAN”.
+ * Acelasi carId ca SAS; vehiculele fara CAN nu au citiri.
+ */
+interface CanOdometerSource
+{
+    /** @return array{readings: list<array<string, mixed>>, movements: list<array{start:string, end:string, km:float}>} */
+    public function fetchCanReadings(int $carId, string $from, string $to): array;
 }
 
 interface CardOilOdometerSource
@@ -44,7 +57,7 @@ interface CardOilOdometerSource
  * Limitele segmentelor depind si ele de fereastra (un segment taiat de inceputul
  * ferestrei vine scurtat), iar kmIndex variaza cu fractiuni de metru intre cereri.
  */
-final class SasFleetOdometerSource implements SasOdometerSource
+final class SasFleetOdometerSource implements SasOdometerSource, CanOdometerSource
 {
     /** Pauza intre cereri: SAS limiteaza la ~60 cereri/minut (ca la Revizii). */
     private const PAUSE_MICROSECONDS = 650000;
@@ -97,6 +110,74 @@ final class SasFleetOdometerSource implements SasOdometerSource
         $this->persistSession();
 
         return self::parseTravelSheet($carId, $sheet);
+    }
+
+    /**
+     * Raportul CAN accepta maxim SasCanKmService::MAX_DAYS pe cerere: fereastra se imparte.
+     */
+    public function fetchCanReadings(int $carId, string $from, string $to): array
+    {
+        $this->restoreSession();
+        $service = new SasCanKmService($this->client);
+        $readings = [];
+        $movements = [];
+        $chunkStart = (int) strtotime($from);
+        $endTs = (int) strtotime($to);
+        while ($chunkStart < $endTs) {
+            $chunkEnd = min($endTs, $chunkStart + (SasCanKmService::MAX_DAYS - 1) * 86400);
+            $report = $this->callWithRetry(fn (): array => $service->travelSheet(
+                $carId,
+                date('Y-m-d H:i:s', $chunkStart),
+                date('Y-m-d H:i:s', $chunkEnd)
+            ));
+            $parsed = self::parseCanReport($carId, $report);
+            array_push($readings, ...$parsed['readings']);
+            array_push($movements, ...$parsed['movements']);
+            $chunkStart = $chunkEnd + 1;
+        }
+        $this->persistSession();
+
+        return ['readings' => $readings, 'movements' => $movements];
+    }
+
+    /**
+     * Tronsoanele raportului CAN -> citiri normalizate: Index CAN oprire la sfarsitul tronsonului.
+     * Deplasarile (distanta > 0, CAN sau GPS) se intorc separat, ca la SAS.
+     *
+     * @return array{readings: list<array<string, mixed>>, movements: list<array{start:string, end:string, km:float}>}
+     */
+    public static function parseCanReport(int $carId, array $report): array
+    {
+        $readings = [];
+        $movements = [];
+        foreach ((array) ($report['segments'] ?? []) as $segment) {
+            $end = $segment['end'] ?? null;
+            if (!is_string($end)) {
+                continue;
+            }
+            $start = is_string($segment['start'] ?? null) ? $segment['start'] : $end;
+            $km = $segment['can_km'] ?? $segment['gps_km'] ?? null;
+            if ($km !== null && (float) $km > 0.05) {
+                $movements[] = ['start' => $start, 'end' => $end, 'km' => round((float) $km, 1)];
+            }
+            $value = $segment['can_index_end_km'] ?? null;
+            if ($value === null || (float) $value <= 0) {
+                continue;
+            }
+            $readings[] = [
+                'source_reading_id' => 'can:' . $carId . '@' . $end,
+                'segment_started_at' => $start,
+                'measured_at' => $end,
+                'original_value' => (float) $value,
+                'original_unit' => 'km',
+                'odometer_km' => round((float) $value, 1),
+                'measurement_type' => 'can_odometer',
+            ];
+        }
+        usort($readings, static fn (array $a, array $b): int => strcmp($a['measured_at'], $b['measured_at']));
+        usort($movements, static fn (array $a, array $b): int => strcmp($a['start'], $b['start']));
+
+        return ['readings' => $readings, 'movements' => $movements];
     }
 
     /**

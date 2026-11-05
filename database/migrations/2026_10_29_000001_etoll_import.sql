@@ -4,7 +4,7 @@
 --
 --   facturi.sursa      + 'etoll' (sursa_key = 'etoll:<session_id>')
 --   etoll_sesiuni      o sesiune inchisa: camion, remorci, ora inchiderii (ora Romaniei),
---                      suma cu TVA, documentul CC-P din eToll si factura creata
+--                      suma cu TVA, documentul CC-P din eToll (+ anexa TA_10) si factura creata
 SET NAMES utf8mb4;
 
 ALTER TABLE facturi
@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS etoll_sesiuni (
     inchisa_la DATETIME NOT NULL,
     suma DECIMAL(12,2) NOT NULL,
     invoice_id VARCHAR(64) NULL,
+    annex_id VARCHAR(64) NULL,
     numar_document VARCHAR(60) NULL,
     cota_tva DECIMAL(5,2) NULL,
     factura_id INT UNSIGNED NULL,

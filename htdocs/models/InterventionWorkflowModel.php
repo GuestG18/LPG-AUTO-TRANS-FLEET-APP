@@ -690,11 +690,20 @@ class InterventionWorkflowModel extends BaseModel
         ];
     }
 
+    private function vehicleKmBord(int $vehicleId): ?int
+    {
+        $stmt = $this->db->prepare('SELECT km_bord FROM vehicule WHERE id = :id');
+        $stmt->execute([':id' => $vehicleId]);
+        $value = $stmt->fetchColumn();
+
+        return $value !== false && $value !== null ? (int) $value : null;
+    }
+
     public function items(int $interventionId): array
     {
         $stmt = $this->db->prepare(
             'SELECT l.*, c.nume AS component_nume, c.cod AS component_cod, c.category_id, c.activ AS component_activ,
-                    lv.nr_inmatriculare AS component_vehicul, lv.tip_vehicul AS component_vehicul_tip
+                    lv.nr_inmatriculare AS component_vehicul, lv.tip_vehicul AS component_vehicul_tip, lv.km_bord AS component_vehicul_km
              FROM mentenanta_interventii_lucrari l
              LEFT JOIN mentenanta_auto_componente c ON c.component_key = l.component_key
              LEFT JOIN vehicule lv ON lv.id = l.vehicle_id
@@ -739,6 +748,8 @@ class InterventionWorkflowModel extends BaseModel
                 'vehicle_id' => $row['vehicle_id'] !== null ? (int) $row['vehicle_id'] : null,
                 'vehicul_componenta' => $row['vehicle_id'] !== null ? (string) $row['component_vehicul'] : '',
                 'vehicul_componenta_tip' => $row['vehicle_id'] !== null ? self::vehicleTypeLabel((string) $row['component_vehicul_tip']) : '',
+                // Km bord ai vehiculului componentei (ex. semiremorca cuplata), nu ai vehiculului interventiei.
+                'vehicul_componenta_km' => $row['vehicle_id'] !== null && $row['component_vehicul_km'] !== null ? (int) $row['component_vehicul_km'] : null,
                 'origine' => (string) ($row['origine'] ?? ''),
                 'dispecer_editabila' => self::isDispatcherEditable($row),
             ];
@@ -1812,7 +1823,11 @@ class InterventionWorkflowModel extends BaseModel
                 }
                 if ($isReplacement) {
                     $update['data_montare'] = $item['data_montare'] ?: $executionDate;
-                    $update['km_montare'] = $item['km_montare'] ?? $executionKm;
+                    // Km executiei sunt ai vehiculului interventiei; o componenta de pe semiremorca
+                    // cuplata ia km semiremorcii (contorul ei, din SAS-ul capului tractor).
+                    $update['km_montare'] = $item['km_montare'] ?? (!empty($item['vehicle_id']) && (int) $item['vehicle_id'] !== (int) $intervention['vehicle_id']
+                        ? $this->vehicleKmBord((int) $item['vehicle_id'])
+                        : $executionKm);
                     $item = array_merge($item, $update);
                     $replacements[] = $itemId;
                 }

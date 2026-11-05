@@ -31,6 +31,249 @@
             input.addEventListener('change', syncPartDestination);
         });
         syncPartDestination();
+        initPartCatalogPicker();
+
+        // „Adaugă piesă”: componenta se alege pe aceeași cale ca în Reparații Auto și se leagă de piesa ei din stoc.
+        function initPartCatalogPicker() {
+            var section = document.querySelector('[data-part-catalog]');
+            var jsonNode = section ? section.querySelector('[data-catalog-json]') : null;
+            if (!section || !jsonNode) {
+                return;
+            }
+            var data;
+            try {
+                data = JSON.parse(jsonNode.textContent || '{}');
+            } catch (error) {
+                return;
+            }
+            var form = section.closest('form');
+            var typeSelect = section.querySelector('[data-catalog-vehicle-type]');
+            var vehicleSelect = section.querySelector('[data-catalog-vehicle]');
+            var primarySelect = section.querySelector('[data-catalog-primary]');
+            var subSelect = section.querySelector('[data-catalog-subcategory]');
+            var componentSelect = section.querySelector('[data-catalog-component]');
+            var partIdInput = section.querySelector('[data-catalog-part-id]');
+            var stockInfo = section.querySelector('[data-catalog-stock-info]');
+            var catalogFields = section.querySelector('[data-catalog-fields]');
+            var qtyLabel = form.querySelector('[data-stock-qty-label]');
+            var qtyInput = form.querySelector('[name="stoc_initial"]');
+            var mountKm = form.querySelector('[name="mount_km"]');
+            var lockedNames = ['cod_piesa', 'denumire', 'categorie'];
+            var filledNames = ['cod_piesa', 'denumire', 'categorie', 'descriere', 'producator', 'cod_oem', 'stoc_minim',
+                'pret_achizitie', 'furnizor', 'locatie_depozit', 'garantie_piesa', 'garantie_manopera',
+                'interval_km', 'interval_luni', 'avertizare_km', 'avertizare_zile'];
+
+            function field(name) {
+                return form.querySelector('[name="' + name + '"]');
+            }
+
+            function fillOptions(select, options, selected) {
+                select.innerHTML = '';
+                options.forEach(function (option) {
+                    var node = document.createElement('option');
+                    node.value = option.value;
+                    node.textContent = option.label;
+                    select.appendChild(node);
+                });
+                if (selected !== undefined && options.some(function (option) { return option.value === selected; })) {
+                    select.value = selected;
+                }
+            }
+
+            function isCatalog() {
+                var checked = form.querySelector('input[name="part_source"]:checked');
+                return !checked || checked.value === 'catalog';
+            }
+
+            function isDirect() {
+                var checked = form.querySelector('input[name="usage_destination"]:checked');
+                return !!checked && checked.value === 'direct';
+            }
+
+            function renderVehicles() {
+                var type = typeSelect.value;
+                var vehicles = (data.vehicles || []).filter(function (vehicle) {
+                    return type === 'ansamblu' ? (vehicle.type === 'cap_tractor' || vehicle.type === 'semiremorca') : vehicle.type === type;
+                });
+                fillOptions(vehicleSelect, [{ value: '', label: vehicles.length ? 'Selectează vehiculul' : 'Niciun vehicul de acest tip' }]
+                    .concat(vehicles.map(function (vehicle) { return { value: String(vehicle.id), label: vehicle.label }; })), vehicleSelect.value);
+                var primaries = type === 'cap_tractor' ? ['sasiu'] : ['sasiu', 'rezervor'];
+                fillOptions(primarySelect, primaries.map(function (key) {
+                    return { value: key, label: (data.primary_labels || {})[key] || key };
+                }), primarySelect.value || (type === 'cap_tractor' ? 'sasiu' : 'rezervor'));
+                renderSubcategories();
+            }
+
+            function renderSubcategories() {
+                var primary = primarySelect.value;
+                var subs = primary === 'sasiu' ? ['sasiu', 'hidraulic'] : ['sasiu', 'hidraulic', 'livrare_gaz'];
+                fillOptions(subSelect, subs.map(function (key) {
+                    return { value: key, label: (data.subcategory_labels || {})[key] || key };
+                }), subSelect.value || (primary === 'sasiu' ? 'sasiu' : 'livrare_gaz'));
+                renderComponents();
+            }
+
+            function renderComponents() {
+                var previous = componentSelect.value;
+                componentSelect.innerHTML = '<option value="">Selectează componenta</option>';
+                ((data.category_groups || {})[subSelect.value] || []).forEach(function (categoryId) {
+                    var category = (data.categories || {})[categoryId];
+                    if (!category || !category.components.length) {
+                        return;
+                    }
+                    var group = document.createElement('optgroup');
+                    group.label = category.name;
+                    category.components.forEach(function (component) {
+                        var node = document.createElement('option');
+                        node.value = component.key;
+                        node.textContent = component.name + (component.code ? ' · ' + component.code : '');
+                        group.appendChild(node);
+                    });
+                    componentSelect.appendChild(group);
+                });
+                componentSelect.value = previous;
+                applyComponent();
+            }
+
+            function findComponent(key) {
+                var found = null;
+                Object.keys(data.categories || {}).some(function (categoryId) {
+                    var category = data.categories[categoryId];
+                    return category.components.some(function (component) {
+                        if (component.key === key) {
+                            found = { category: category, component: component };
+                            return true;
+                        }
+                        return false;
+                    });
+                });
+                return found;
+            }
+
+            function setValue(name, value) {
+                var input = field(name);
+                if (!input) {
+                    return;
+                }
+                var text = value === null || value === undefined ? '' : String(value);
+                if (input.tagName === 'SELECT' && text !== '' && !Array.prototype.some.call(input.options, function (option) { return option.value === text; })) {
+                    var option = document.createElement('option');
+                    option.value = text;
+                    option.textContent = text;
+                    input.appendChild(option);
+                }
+                input.value = text;
+            }
+
+            function setLocked(locked) {
+                lockedNames.forEach(function (name) {
+                    var input = field(name);
+                    if (!input) {
+                        return;
+                    }
+                    if (input.tagName === 'SELECT') {
+                        input.classList.toggle('pe-none', locked);
+                        input.tabIndex = locked ? -1 : 0;
+                    } else {
+                        input.readOnly = locked;
+                    }
+                    input.classList.toggle('bg-body-tertiary', locked);
+                });
+            }
+
+            function applyComponent() {
+                var match = componentSelect.value ? findComponent(componentSelect.value) : null;
+                var part = match ? match.component.part : null;
+                partIdInput.value = part ? String(part.id) : '';
+                if (!match) {
+                    filledNames.forEach(function (name) { setValue(name, ''); });
+                    stockInfo.textContent = '';
+                    return;
+                }
+                setValue('cod_piesa', match.component.code);
+                setValue('denumire', match.component.name);
+                setValue('categorie', match.category.name);
+                setValue('descriere', match.component.description);
+                ['producator', 'cod_oem', 'furnizor', 'locatie_depozit', 'garantie_piesa', 'garantie_manopera',
+                    'interval_km', 'interval_luni', 'avertizare_km', 'avertizare_zile'].forEach(function (name) {
+                    setValue(name, part ? part[name] : '');
+                });
+                setValue('stoc_minim', part && part.stoc_minim > 0 ? part.stoc_minim : '');
+                setValue('pret_achizitie', part && part.pret_achizitie > 0 ? part.pret_achizitie : '');
+                if (part && part.unitate_masura) {
+                    setValue('unitate_masura', part.unitate_masura);
+                }
+                var maintenance = field('pentru_mentenanta');
+                if (maintenance) {
+                    maintenance.checked = true;
+                }
+                stockInfo.textContent = part
+                    ? 'În stoc acum: ' + Number(part.stoc_curent || 0).toLocaleString('ro-RO') + ' ' + (part.unitate_masura || 'buc')
+                    : 'Componenta nu are încă piesă în stoc — va fi creată.';
+            }
+
+            function syncVehicle() {
+                var mountVehicle = field('mount_vehicle_id');
+                if (!mountVehicle || !vehicleSelect.value) {
+                    return;
+                }
+                mountVehicle.value = vehicleSelect.value;
+                var vehicle = (data.vehicles || []).filter(function (item) { return String(item.id) === vehicleSelect.value; })[0];
+                if (mountKm && vehicle && vehicle.km > 0) {
+                    mountKm.value = vehicle.km;
+                }
+            }
+
+            function syncSource() {
+                var catalog = isCatalog();
+                catalogFields.classList.toggle('d-none', !catalog);
+                componentSelect.required = catalog;
+                setLocked(catalog);
+                if (catalog) {
+                    applyComponent();
+                } else {
+                    partIdInput.value = '';
+                    filledNames.forEach(function (name) { setValue(name, ''); });
+                }
+                syncQuantity();
+            }
+
+            function syncQuantity() {
+                var addsToExisting = isCatalog() && !isDirect();
+                if (qtyLabel) {
+                    qtyLabel.innerHTML = addsToExisting ? 'Cantitate adăugată <span>*</span>' : 'Stoc inițial';
+                }
+                if (qtyInput) {
+                    qtyInput.required = addsToExisting;
+                    qtyInput.min = addsToExisting ? '0.01' : '0';
+                }
+            }
+
+            typeSelect.addEventListener('change', function () {
+                primarySelect.value = '';
+                subSelect.value = '';
+                renderVehicles();
+            });
+            vehicleSelect.addEventListener('change', syncVehicle);
+            primarySelect.addEventListener('change', function () {
+                subSelect.value = '';
+                renderSubcategories();
+            });
+            subSelect.addEventListener('change', renderComponents);
+            componentSelect.addEventListener('change', applyComponent);
+            form.querySelectorAll('input[name="part_source"]').forEach(function (input) {
+                input.addEventListener('change', syncSource);
+            });
+            destinationInputs.forEach(function (input) {
+                input.addEventListener('change', function () {
+                    syncQuantity();
+                    syncVehicle();
+                });
+            });
+
+            renderVehicles();
+            syncSource();
+        }
 
         function syncCostCenterSelect(vehicleSelect) {
             var form = vehicleSelect.closest('form') || document;

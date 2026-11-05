@@ -346,6 +346,7 @@ require_once __DIR__ . '/models/StaffAccountancyModel.php';
 require_once __DIR__ . '/models/PayrollModel.php';
 require_once __DIR__ . '/models/ExpenseModel.php';
 require_once __DIR__ . '/models/MaintenanceModel.php';
+require_once __DIR__ . '/models/VehicleComponentModel.php';
 require_once __DIR__ . '/models/InterventionWorkflowModel.php';
 require_once __DIR__ . '/models/TechnicalHealthModel.php';
 require_once __DIR__ . '/models/DriverActivityHistoryModel.php';
@@ -373,6 +374,8 @@ require_once __DIR__ . '/services/SasTripPrefillService.php';
 require_once __DIR__ . '/services/SasDashboardService.php';
 require_once __DIR__ . '/models/OdometerCenterModel.php';
 require_once __DIR__ . '/services/OdometerCenterService.php';
+require_once __DIR__ . '/services/TrailerSasKmService.php';
+require_once __DIR__ . '/services/SasCanKmService.php';
 require_once __DIR__ . '/services/RaceMonthSplitService.php';
 require_once __DIR__ . '/services/WebAuthnService.php';
 require_once __DIR__ . '/services/UserAvatarService.php';
@@ -394,6 +397,9 @@ require_once __DIR__ . '/services/OcrPartsLineExtractor.php';
 require_once __DIR__ . '/services/InvoiceOcrService.php';
 require_once __DIR__ . '/services/PartsInvoiceOcrService.php';
 require_once __DIR__ . '/services/AutoComponentCatalogService.php';
+require_once __DIR__ . '/services/AutoComponentStateService.php';
+require_once __DIR__ . '/services/VehicleComponentRegistry.php';
+require_once __DIR__ . '/services/VehicleComponentPanelService.php';
 require_once __DIR__ . '/services/OcrPartsMaintenanceSyncService.php';
 require_once __DIR__ . '/models/OcrPartsModel.php';
 
@@ -415,6 +421,7 @@ require_once __DIR__ . '/controllers/FleetMapController.php';
 require_once __DIR__ . '/controllers/FleetMonitoringController.php';
 require_once __DIR__ . '/controllers/DispecerSasSandboxController.php';
 require_once __DIR__ . '/controllers/SasDashboardSandboxController.php';
+require_once __DIR__ . '/controllers/SasCanSandboxController.php';
 require_once __DIR__ . '/controllers/KmPierdutiController.php';
 require_once __DIR__ . '/controllers/OdometerCenterController.php';
 require_once __DIR__ . '/controllers/ReviziiController.php';
@@ -426,6 +433,7 @@ require_once __DIR__ . '/controllers/StaffAccountancyController.php';
 require_once __DIR__ . '/controllers/ExpenseController.php';
 require_once __DIR__ . '/controllers/AccommodationExpenseController.php';
 require_once __DIR__ . '/controllers/InvoiceController.php';
+require_once __DIR__ . '/controllers/EtollStatementController.php';
 require_once __DIR__ . '/controllers/MaintenanceController.php';
 require_once __DIR__ . '/controllers/TechnicalHealthController.php';
 require_once __DIR__ . '/controllers/DriverActivityHistoryController.php';
@@ -699,6 +707,11 @@ try {
             (new SasDashboardSandboxController($db))->handle($action);
             break;
 
+        case 'sas_can_sandbox':
+            require_auth();
+            (new SasCanSandboxController())->handle($action);
+            break;
+
         case 'km_pierduti':
             require_auth();
             (new KmPierdutiController($db))->handle($action);
@@ -802,6 +815,11 @@ try {
         case 'facturi':
             require_auth();
             (new InvoiceController($db))->handle($action);
+            break;
+
+        case 'etoll':
+            require_auth();
+            (new EtollStatementController($db))->handle($action);
             break;
 
         case 'cost_operational':

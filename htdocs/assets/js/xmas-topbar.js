@@ -145,14 +145,19 @@
     var cabSanta = parts(document.getElementById("xtCabSanta"));
     var walkSanta = parts(document.getElementById("xtWalkSanta"));
 
+    // write an SVG attribute only when it changes: every setAttribute invalidates the SVG
+    // and makes the browser lay it out and repaint it again
+    function setAttr(el, v) { if (el._xv !== v) { el._xv = v; el.setAttribute("transform", v); } }
+    function setStyle(el, prop, v) { var k = "_xs" + prop; if (el[k] !== v) { el[k] = v; el.style[prop] = v; } }
+
     function poseSanta(p, o, t) {
       var wave = -150 + Math.sin(t * 9) * 22;
-      p.armR.setAttribute("transform", o.wave ? "rotate(" + wave + " 43 45)" : (o.carry ? "rotate(28 43 45)" : ""));
-      p.armL.setAttribute("transform", o.carry ? "rotate(-28 17 45)" : "");
-      p.gift.style.display = o.carry ? "" : "none";
+      setAttr(p.armR, o.wave ? "rotate(" + wave.toFixed(1) + " 43 45)" : (o.carry ? "rotate(28 43 45)" : ""));
+      setAttr(p.armL, o.carry ? "rotate(-28 17 45)" : "");
+      setStyle(p.gift, "display", o.carry ? "" : "none");
       var s = o.walk ? Math.sin(t * 11) : 0;
-      p.legL.setAttribute("transform", "translate(0 " + (-Math.max(0, s) * 3.5) + ")");
-      p.legR.setAttribute("transform", "translate(0 " + (-Math.max(0, -s) * 3.5) + ")");
+      setAttr(p.legL, "translate(0 " + (-Math.max(0, s) * 3.5).toFixed(2) + ")");
+      setAttr(p.legR, "translate(0 " + (-Math.max(0, -s) * 3.5).toFixed(2) + ")");
     }
 
     /* ---------- wheels ---------- */
@@ -285,11 +290,27 @@
       buildString(document.getElementById("xtFarLights"), -20, treeCenter - 90, 96, 120, 11, 9, false, 0);
       buildString(document.getElementById("xtNearLights"), -20, SW + 40, 110, 211, 7, 7, true, 2);
 
-      // canvases (sharp on retina, but capped at 2x to keep them cheap)
+      // canvases (sharp on retina, but capped at 2x to keep them cheap).
+      // The stars and the two light strings only cover a thin band of the scene, so each of
+      // those canvases is cut to its band: same drawing, a fraction of the pixels to upload per frame.
       var k = Math.min(2, (window.devicePixelRatio || 1) * scale);
-      [skyCv, farCv, nearCv, snow.cv].forEach(function (c) { sizeCanvas(c, SW, STAGE_H, k); });
+      sizeCanvas(skyCv, SW, STAGE_H, k, 0, 103);                 // stars: y 0..102
+      sizeCanvas(farCv, SW, STAGE_H, k, bandOf(false));
+      sizeCanvas(nearCv, SW, STAGE_H, k, bandOf(true));
+      sizeCanvas(snow.cv, SW, STAGE_H, k);
       sizeCanvas(treeCv, 132, 176, k);
       snow.resize(SW, STAGE_H);
+      farCv._dark = nearCv._dark = false;                         // force one redraw after a rebuild
+    }
+
+    // vertical extent of what drawBulbs paints for one string: socket (y-3) to the glow (y+5±14)
+    function bandOf(near) {
+      var lo = STAGE_H, hi = 0;
+      for (var i = 0; i < bulbs.length; i++) {
+        if (bulbs[i].near !== near) continue;
+        lo = Math.min(lo, bulbs[i].y - 10); hi = Math.max(hi, bulbs[i].y + 20);
+      }
+      return hi > lo ? [Math.max(0, lo - 1), Math.min(STAGE_H, hi + 1)] : [0, 1];
     }
 
     function buildString(layer, x0, x1, gap, topY, sag, step, near, colorShift) {
@@ -354,11 +375,17 @@
     var nearCv = document.getElementById("xtNearCanvas"), treeCv = document.getElementById("xtTreeCanvas");
     var stars = [], twinkle = true, skyTick = 0;
 
-    function sizeCanvas(c, w, h, k) {
-      c.width = Math.round(w * k); c.height = Math.round(h * k);
-      c.style.width = w + "px"; c.style.height = h + "px";
-      c.getContext("2d").setTransform(k, 0, 0, k, 0, 0);
-      c._w = w; c._h = h;
+    // band = [top, bottom] in stage px (or top, bottom as two numbers); omitted = the full height.
+    // The band's top is snapped to the canvas pixel grid so the crop resamples exactly like the full canvas.
+    function sizeCanvas(c, w, h, k, band, bottom) {
+      if (typeof band === "number") band = [band, bottom];
+      var y0 = band ? Math.floor(band[0] * k) / k : 0;
+      var y1 = band ? Math.min(h, Math.ceil(band[1] * k) / k) : h;
+      c.width = Math.round(w * k); c.height = Math.max(1, Math.round((y1 - y0) * k));
+      c.style.width = w + "px"; c.style.height = (c.height / k) + "px";
+      c.style.top = y0 + "px";
+      c.getContext("2d").setTransform(k, 0, 0, k, 0, -y0 * k);   // keep drawing in stage coordinates
+      c._w = w; c._h = h; c._y0 = y0;
     }
 
     // one pre-rendered soft glow per colour, stamped with drawImage (much cheaper than shadows)
@@ -377,26 +404,58 @@
     function wave(t, w, ph) { return twinkle ? Math.sin(t * w + ph) : 1; }
 
     function drawBulbs(c, near, t) {
+      // a string that is completely dark doesn't change from frame to frame: draw it once and leave it
+      var lit = false;
+      for (var j = 0; j < bulbs.length; j++) if (bulbs[j].near === near && bulbs[j].lvl > 0) { lit = true; break; }
+      if (!lit && c._dark) return;
+      c._dark = !lit;
       var ctx = c.getContext("2d");
-      ctx.clearRect(0, 0, c._w, c._h);
+      ctx.clearRect(0, c._y0, c._w, c._h);
+      // sockets + unlit glass never change: blit them from a buffer drawn once per size
+      var base = darkBase(c, near);
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(base, 0, 0); ctx.restore();
+      if (!lit) return;
+      var i, b, full = [[], [], [], [], []];
+      for (i = 0; i < bulbs.length; i++) {
+        b = bulbs[i];
+        if (b.near !== near || b.lvl <= 0) continue;
+        ctx.globalAlpha = b.lvl * (0.8 + 0.2 * wave(t, 3.93, b.ph));     // ~1.6s twinkle
+        ctx.drawImage(glows[b.c], b.x - 14, b.y + 5 - 14, 28, 28);
+        if (b.lvl >= 1) { full[b.c].push(b); continue; }                 // fully lit: filled together below
+        ctx.globalAlpha = b.lvl;                                          // fading in/out: on its own
+        ctx.fillStyle = LIGHT_COLORS[b.c][0];
+        ctx.beginPath(); ctx.ellipse(b.x, b.y + 5, 3.5, 5, 0, 0, 6.2832); ctx.fill();
+      }
+      // fully lit glass: one path per colour instead of one fill per bulb (the bulbs never overlap)
+      ctx.globalAlpha = 1;
+      for (var ci = 0; ci < full.length; ci++) {
+        if (!full[ci].length) continue;
+        ctx.fillStyle = LIGHT_COLORS[ci][0];
+        ctx.beginPath();
+        for (i = 0; i < full[ci].length; i++) {
+          b = full[ci][i];
+          ctx.moveTo(b.x + 3.5, b.y + 5);
+          ctx.ellipse(b.x, b.y + 5, 3.5, 5, 0, 0, 6.2832);
+        }
+        ctx.fill();
+      }
+    }
+
+    function darkBase(c, near) {
+      if (c._base && c._base.width === c.width && c._base.height === c.height && c._baseFor === bulbs) return c._base;
+      var d = c._base || document.createElement("canvas"), x = d.getContext("2d");
+      d.width = c.width; d.height = c.height;
+      x.setTransform(c.getContext("2d").getTransform());
       for (var i = 0; i < bulbs.length; i++) {
         var b = bulbs[i];
         if (b.near !== near) continue;
-        var cy = b.y + 5;
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = "#2a2d36";
-        ctx.fillRect(b.x - 2, b.y - 3, 4, 4);
-        ctx.fillStyle = "#3b3f52";
-        ctx.beginPath(); ctx.ellipse(b.x, cy, 3.5, 5, 0, 0, 6.2832); ctx.fill();
-        if (b.lvl > 0) {
-          ctx.globalAlpha = b.lvl * (0.8 + 0.2 * wave(t, 3.93, b.ph));   // ~1.6s twinkle
-          ctx.drawImage(glows[b.c], b.x - 14, cy - 14, 28, 28);
-          ctx.globalAlpha = b.lvl;
-          ctx.fillStyle = LIGHT_COLORS[b.c][0];
-          ctx.beginPath(); ctx.ellipse(b.x, cy, 3.5, 5, 0, 0, 6.2832); ctx.fill();
-        }
+        x.fillStyle = "#2a2d36";
+        x.fillRect(b.x - 2, b.y - 3, 4, 4);
+        x.fillStyle = "#3b3f52";
+        x.beginPath(); x.ellipse(b.x, b.y + 5, 3.5, 5, 0, 0, 6.2832); x.fill();
       }
-      ctx.globalAlpha = 1;
+      c._base = d; c._baseFor = bulbs;
+      return d;
     }
 
     function drawTree(t) {
@@ -414,7 +473,7 @@
 
     function drawSky(t) {
       var ctx = skyCv.getContext("2d");
-      ctx.clearRect(0, 0, skyCv._w, skyCv._h);
+      ctx.clearRect(0, 0, skyCv._w, 103);
       ctx.fillStyle = "#fff";
       for (var i = 0; i < stars.length; i++) {
         ctx.globalAlpha = 0.625 + 0.275 * wave(t, 2.09, stars[i].ph); // ~3s twinkle
@@ -432,7 +491,7 @@
       drawBulbs(farCv, false, t);
       drawBulbs(nearCv, true, t);
       drawTree(t);
-      if (dt === undefined || ++skyTick % 2 === 0) drawSky(t);    // stars twinkle slowly: every other frame is plenty
+      if (dt === undefined || ++skyTick % 2 === 0) drawSky(t);    // stars twinkle slowly (3s): 15fps is plenty
     }
 
     /* ---------- helpers ---------- */
@@ -478,13 +537,14 @@
       // --- turnaround at the tree: squash to nothing, swap facing, grow back (cab now points home)
       var tu = seg(t, T.turnStart, T.turnEnd);
       var flipped = tu >= 0.5 && t < T.end;
-      if (flipped !== truck.classList.contains("flip")) truck.classList.toggle("flip", flipped);
+      if (flipped !== isFlipped) { isFlipped = flipped; truck.classList.toggle("flip", flipped); }
       var squash = Math.max(0.03, Math.abs(Math.cos(Math.PI * tu)));
       var lift = Math.sin(Math.PI * tu) * 6;
-      truck.style.transform = "translate3d(" + tx.toFixed(2) + "px," + (ROAD_Y - TRUCK_H * 428 / 453 + bounce - lift).toFixed(2) + "px,0) scaleX(" + squash.toFixed(3) + ")";
+      // transforms only (composited layers); unchanged values are not rewritten while the truck is parked
+      setStyle(truck, "transform", "translate3d(" + tx.toFixed(2) + "px," + (ROAD_Y - TRUCK_H * 428 / 453 + bounce - lift).toFixed(2) + "px,0) scaleX(" + squash.toFixed(3) + ")");
       var ang = (tx / wheelRadiusPx) * 180 / Math.PI * (flipped ? -1 : 1);   // mirrored wheels spin the other way
       var spinCss = "rotate(" + ang.toFixed(1) + "deg)";
-      for (var wi = 0; wi < spokeGroups.length; wi++) spokeGroups[wi].style.transform = spinCss;
+      for (var wi = 0; wi < spokeGroups.length; wi++) setStyle(spokeGroups[wi], "transform", spinCss);
 
       // --- road lights wake up as the truck gets close
       for (var i = 0; i < bulbs.length; i++) {
@@ -503,14 +563,14 @@
 
       // --- Santa in the cab (waves while driving)
       var inCab = t < T.exitCab || t >= T.backAtTruck;
-      cab.style.opacity = inCab ? 1 : 0;
+      setStyle(cab, "opacity", inCab ? "1" : "0");
       var waving = (t < T.arrive + 0.4) || (t > T.backAtTruck + 0.3);
       if (inCab) poseSanta(cabSanta, { wave: waving }, t);
 
       // --- Santa on foot
       var doorX = stopX + TRUCK_W * 0.12, doorY = 224;   // cab is on the left once the truck has turned
       if (!inCab) {
-        santaEl.style.display = "block";
+        setStyle(santaEl, "display", "block");
         var sx, sy, o = {}, lean = 0;
         if (t < T.reachTree) {
           var u = easeInOut(seg(t, T.exitCab, T.reachTree));
@@ -536,11 +596,10 @@
           if (!bulbs[j].on && Math.abs(bulbs[j].x - sx) < 90) bulbs[j].on = true;
         }
         var hop = o.walk ? Math.abs(Math.sin(t * 11)) * 2 : 0;
-        santaEl.style.transform = "translate(" + (sx - 23).toFixed(1) + "px," + (sy - 70 - hop).toFixed(1) + "px) rotate(" + lean + "deg)";
-        santaEl.style.transformOrigin = "50% 100%";
+        setStyle(santaEl, "transform", "translate(" + (sx - 23).toFixed(1) + "px," + (sy - 70 - hop).toFixed(1) + "px) rotate(" + lean.toFixed(2) + "deg)");
         poseSanta(walkSanta, o, t);
       } else {
-        santaEl.style.display = "none";
+        setStyle(santaEl, "display", "none");
       }
 
       // --- reset for the next loop: lights go out, star dims, new gift fades
@@ -555,10 +614,19 @@
 
       if (t >= T.end && LOOP) { time = 0; fired = {}; }
 
-      drawLights(now / 1000, dt);
-      snow.step(dt, now / 1000);
+      // The canvases (twinkle, fades, slow snow) are redrawn at ~30fps whatever the display rate;
+      // only the truck, wheels and Santa above move every frame. Each canvas redraw has to be
+      // re-uploaded to the compositor, which is what made the scene expensive on heavy pages.
+      canvasDt += dt;
+      if (now - lastCanvas >= CANVAS_MS || lastCanvas === 0) {
+        lastCanvas = now;
+        drawLights(now / 1000, canvasDt);
+        snow.step(canvasDt, now / 1000);
+        canvasDt = 0;
+      }
       rafId = running ? requestAnimationFrame(frame) : 0;
     }
+    var CANVAS_MS = 1000 / 30 - 4, lastCanvas = 0, canvasDt = 0, isFlipped = false;
 
     /* ---------- static scene for reduced-motion users ---------- */
     function staticScene() {

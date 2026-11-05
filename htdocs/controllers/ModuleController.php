@@ -123,6 +123,24 @@ class ModuleController
             case 'tire_stock_selection':
                 $this->tireStockSelectionAction($moduleKey);
                 return;
+            case 'tire_fleet_unit':
+                $this->tireFleetUnitAction($moduleKey);
+                return;
+            case 'tire_position_candidates':
+                $this->tirePositionCandidatesAction($moduleKey);
+                return;
+            case 'tire_fleet_component':
+                $this->tireFleetComponentAction($moduleKey);
+                return;
+            case 'tire_fleet_component_inspector':
+                $this->tireFleetComponentInspectorAction($moduleKey);
+                return;
+            case 'component_mount':
+            case 'component_unmount':
+            case 'component_inspect':
+            case 'axle_attributes_save':
+                $this->tireFleetComponentWriteAction($moduleKey, $action);
+                return;
             case 'add_document_type_config':
                 $this->addDocumentTypeConfigAction($moduleKey, $module);
                 return;
@@ -682,11 +700,19 @@ class ModuleController
             flash_set('warning', 'Modulul de stoc anvelope necesita actualizare baza de date. Ruleaza scripturile database/update_tire_stock_target_type.sql si database/update_tire_maintenance_link.sql.');
         }
 
+        $fleetOverview = null;
+        try {
+            $fleetOverview = $this->buildFleetTireOverview();
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][mentenanta][tire-fleet-overview] ' . $exception->getMessage());
+        }
+
         $stockModule = $module;
-        $stockModule['title'] = 'Anvelope';
+        $stockModule['title'] = FLEET_STOCK_PAGE_TITLE;
 
         render('module/list.php', [
-            'pageTitle' => 'Anvelope',
+            'fleetTireOverview' => $fleetOverview,
+            'pageTitle' => FLEET_STOCK_PAGE_TITLE,
             'currentPage' => $this->resolveCurrentPage($moduleKey, $module),
             'moduleKey' => $moduleKey,
             'module' => $stockModule,
@@ -3282,6 +3308,299 @@ class ModuleController
             error_log('[tire_stock_selection] ' . $exception->getMessage());
             $this->tireMountJson(['ok' => false, 'error' => 'Selectia nu a putut fi citita.'], 500);
         }
+    }
+
+    /** Vederea pe vehicule din pagina Anvelope; ansamblurile vin din cuplajele active existente. */
+    private function buildFleetTireOverview(): array
+    {
+        $vehicles = $this->tireModel->getFleetTireVehicles();
+        $couplings = $this->vehicleCouplingModel->getActiveAssemblyStatusByVehicleIds(array_map(static fn (array $vehicle): int => (int) $vehicle['id'], $vehicles));
+
+        $overview = $this->tireModel->buildFleetTireOverview($vehicles, $couplings);
+        $overview['client_units'] = array_map([$this->tireModel, 'fleetUnitClientData'], $overview['units']);
+
+        // Exploratorul de componente: locurile fiecarei categorii, din axele reale ale vehiculului.
+        try {
+            $catalog = (new AutoComponentCatalogService($this->db))->components();
+            $catalogMap = VehicleComponentRegistry::catalogByCategory($catalog);
+            $overview['client_categories'] = VehicleComponentRegistry::clientCategories($catalogMap, $catalog);
+            $vehicleIds = array_map(static fn (array $vehicle): int => (int) $vehicle['id'], $vehicles);
+            $records = (new VehicleComponentRegistry($this->db))->componentKeysWithRecords($vehicleIds, $catalog);
+            $componentModel = new VehicleComponentModel($this->db);
+            $axleAttributes = $componentModel->axleAttributes($vehicleIds);
+            $inspections = $componentModel->latestInspections($vehicleIds);
+            foreach ($overview['client_units'] as &$clientUnit) {
+                foreach ($clientUnit['members'] as &$clientMember) {
+                    $memberId = (int) $clientMember['vehicle_id'];
+                    $clientMember['axle_attrs'] = (object) ($axleAttributes[$memberId] ?? []);
+                    $clientMember['slots'] = VehicleComponentRegistry::memberSlots($clientMember, $records[$memberId] ?? [], $catalogMap);
+                    // Starea unui loc = rezultatul ultimei inspectii inregistrate (nimic calculat).
+                    foreach ($clientMember['slots'] as &$slot) {
+                        $inspection = $inspections[$memberId][$slot['category'] . '|' . $slot['location']] ?? null;
+                        $slot['state'] = $inspection['rezultat'] ?? null;
+                        $slot['records'] = $slot['records'] || $inspection !== null;
+                    }
+                    unset($slot);
+                }
+                unset($clientMember);
+            }
+            unset($clientUnit);
+        } catch (Throwable $exception) {
+            // Fara catalog: exploratorul arata doar anvelopele.
+            error_log('[ModuleController][tire-fleet-components] ' . $exception->getMessage());
+        }
+
+        return $overview;
+    }
+
+    /**
+     * Panoul unei categorii de componente pe un vehicul din exploratorul Stoc Anvelope (HTML,
+     * incarcat in randul extins). Doar citire: actiunile duc la fluxurile existente.
+     */
+    /**
+     * Inspectorul unei componente (HTML, in dreapta exploratorului): o piesa din catalog pe un loc al
+     * vehiculului, cu stare, durata de viata, mentenanta, istoric, documente si piese asociate.
+     */
+    private function tireFleetComponentInspectorAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'mentenanta') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Modul invalid.'], 404);
+        }
+
+        $vehicleId = (int) ($_GET['vehicle_id'] ?? 0);
+        $category = (string) ($_GET['category'] ?? '');
+        $location = mb_substr(trim((string) ($_GET['location'] ?? '')), 0, 30);
+        $componentKey = (string) ($_GET['component_key'] ?? '');
+        if (!isset(VehicleComponentRegistry::CATEGORIES[$category]) || $category === 'anvelope' || $vehicleId <= 0 || preg_match('/^\d+-\d+$/', $componentKey) !== 1) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Componentă invalidă.'], 422);
+        }
+
+        try {
+            $stmt = $this->db->prepare('SELECT id, nr_inmatriculare, marca, model, tip_vehicul, formula_axelor, km_bord FROM vehicule WHERE id = :id AND status = "activ" LIMIT 1');
+            $stmt->execute([':id' => $vehicleId]);
+            $vehicle = $stmt->fetch();
+            if (!$vehicle) {
+                $this->tireMountJson(['ok' => false, 'error' => 'Vehiculul nu există sau nu este activ.'], 404);
+            }
+            $catalog = (new AutoComponentCatalogService($this->db))->components();
+            $inspector = (new VehicleComponentPanelService($this->db, new MaintenanceModel($this->db), new VehicleComponentModel($this->db)))
+                ->inspector($vehicle, $category, $location, $componentKey, $catalog);
+            if ($inspector === null) {
+                $this->tireMountJson(['ok' => false, 'error' => 'Componenta nu aparține acestei categorii.'], 404);
+            }
+            $html = $this->renderTireStockPartial('_fleet_component_inspector.php', [
+                'inspector' => $inspector,
+                'vehicle' => $vehicle,
+                'canManage' => can('mentenanta', 'components_manage'),
+                'canInterventions' => can('mentenanta', 'interventions'),
+            ]);
+            $this->tireMountJson(['ok' => true, 'html' => $html, 'status' => $inspector['status']]);
+        } catch (Throwable $exception) {
+            error_log('[tire_fleet_component_inspector] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Datele componentei nu au putut fi încărcate.'], 500);
+        }
+    }
+
+    private function tireFleetComponentAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'mentenanta') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Modul invalid.'], 404);
+        }
+
+        $vehicleId = (int) ($_GET['vehicle_id'] ?? 0);
+        $category = (string) ($_GET['category'] ?? '');
+        $location = mb_substr(trim((string) ($_GET['location'] ?? '')), 0, 30);
+        if (!isset(VehicleComponentRegistry::CATEGORIES[$category]) || $category === 'anvelope' || $vehicleId <= 0) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Componentă invalidă.'], 422);
+        }
+
+        try {
+            $stmt = $this->db->prepare('SELECT id, nr_inmatriculare, marca, model, tip_vehicul, formula_axelor, km_bord FROM vehicule WHERE id = :id AND status = "activ" LIMIT 1');
+            $stmt->execute([':id' => $vehicleId]);
+            $vehicle = $stmt->fetch();
+            if (!$vehicle) {
+                $this->tireMountJson(['ok' => false, 'error' => 'Vehiculul nu există sau nu este activ.'], 404);
+            }
+            $catalog = (new AutoComponentCatalogService($this->db))->components();
+            $panel = (new VehicleComponentPanelService($this->db, new MaintenanceModel($this->db), new VehicleComponentModel($this->db)))->build($vehicle, $category, $location, $catalog);
+            $html = $this->renderTireStockPartial('_fleet_component_panel.php', [
+                'panel' => $panel,
+                'vehicle' => $vehicle,
+                'slotLabel' => mb_substr(trim((string) ($_GET['label'] ?? '')), 0, 120),
+                'canManage' => can('mentenanta', 'components_manage'),
+                // Subcomponenta aleasa la detalierea ansamblului (randul ei e evidentiat).
+                'focusKey' => preg_match('/^\d+-\d+$/', (string) ($_GET['component_key'] ?? '')) === 1 ? (string) $_GET['component_key'] : '',
+            ]);
+            $this->tireMountJson(['ok' => true, 'html' => $html]);
+        } catch (Throwable $exception) {
+            error_log('[tire_fleet_component] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Datele componentei nu au putut fi încărcate.'], 500);
+        }
+    }
+
+    /**
+     * JSON: detaliile unui rand din vederea pe vehicule (tab-uri, tabelul anvelopelor cu actiunile
+     * existente, istoricul montarilor). Se incarca la extinderea randului, ca grupurile din inventar.
+     */
+    private function tireFleetUnitAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'mentenanta') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Modul invalid.'], 404);
+        }
+
+        $key = trim((string) ($_GET['key'] ?? ''));
+        if (preg_match('/^\d+(-\d+)?$/', $key) !== 1) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Vehicul invalid.'], 422);
+        }
+
+        try {
+            $overview = $this->buildFleetTireOverview();
+            $unit = null;
+            foreach ($overview['units'] as $candidate) {
+                if ($candidate['key'] === $key) {
+                    $unit = $candidate;
+                    break;
+                }
+            }
+            if ($unit === null) {
+                $this->tireMountJson(['ok' => false, 'error' => 'Vehiculul nu mai este in lista (inactiv sau cuplaj schimbat). Reincarca pagina.'], 404);
+            }
+
+            $vehicleIds = array_map(static fn (array $member): int => (int) $member['vehicle_id'], $unit['members']);
+            $tireIds = [];
+            foreach ($unit['members'] as $member) {
+                foreach ($member['positions'] as $position) {
+                    if ($position['tire_row'] !== null) {
+                        $tireIds[] = (int) $position['tire_row']['id'];
+                    }
+                }
+                foreach ($member['orphan_tires'] as $row) {
+                    $tireIds[] = (int) $row['id'];
+                }
+            }
+
+            $html = $this->renderTireStockPartial('_fleet_unit_detail.php', [
+                'unit' => $unit,
+                'history' => $this->tireModel->getFleetAllocationHistory($vehicleIds, $tireIds),
+                'tireModelSelectionMeta' => [$this->tireModel, 'tireSelectionMeta'],
+                'tireStockFormOptions' => $this->tireModel->getTireRowFormOptions(),
+                'tireStockPickerPrefix' => 'fleetTirePicker' . bin2hex(random_bytes(3)),
+            ]);
+            $this->tireMountJson(['ok' => true, 'html' => $html, 'unit' => $this->tireModel->fleetUnitClientData($unit)]);
+        } catch (Throwable $exception) {
+            error_log('[tire_fleet_unit] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Detaliile vehiculului nu au putut fi incarcate.'], 500);
+        }
+    }
+
+    /**
+     * Scrierile din panoul unei componente (POST, raspuns JSON): montare / inlocuire, demontare,
+     * inspectie pe un loc al vehiculului si atributele unei axe. Logica e in VehicleComponentModel.
+     */
+    private function tireFleetComponentWriteAction(string $moduleKey, string $operation): void
+    {
+        if ($moduleKey !== 'mentenanta' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Cerere invalidă.'], 405);
+        }
+        if (!verify_csrf_token($_POST['_token'] ?? null)) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Sesiunea a expirat. Reîncarcă pagina.'], 419);
+        }
+
+        $vehicleId = (int) ($_POST['vehicle_id'] ?? 0);
+        $stmt = $this->db->prepare('SELECT id, nr_inmatriculare, km_bord FROM vehicule WHERE id = :id AND status = "activ" LIMIT 1');
+        $stmt->execute([':id' => $vehicleId]);
+        if (!$stmt->fetch()) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Vehiculul nu există sau nu este activ.'], 404);
+        }
+        $readKm = static function (string $field): ?int {
+            $raw = preg_replace('/\D+/', '', (string) ($_POST[$field] ?? '')) ?? '';
+            return $raw === '' ? null : (int) $raw;
+        };
+
+        try {
+            $model = new VehicleComponentModel($this->db);
+            $userId = $this->currentUserId();
+
+            if ($operation === 'axle_attributes_save') {
+                $model->saveAxleAttributes($vehicleId, (int) ($_POST['axle_no'] ?? 0), $_POST, $userId);
+                $this->tireMountJson(['ok' => true, 'message' => 'Atributele axei au fost salvate.', 'axle_attrs' => $model->axleAttributes([$vehicleId])[$vehicleId] ?? []]);
+            }
+
+            if ($operation === 'component_unmount') {
+                $model->unmount((int) ($_POST['usage_id'] ?? 0), $vehicleId, (string) ($_POST['date'] ?? ''), $readKm('km'), (string) ($_POST['reason'] ?? ''), (string) ($_POST['notes'] ?? ''));
+                $this->tireMountJson(['ok' => true, 'message' => 'Componenta a fost demontată.']);
+            }
+
+            $category = (string) ($_POST['category'] ?? '');
+            $location = (string) ($_POST['location'] ?? '');
+            if (!isset(VehicleComponentRegistry::CATEGORIES[$category]) || $category === 'anvelope'
+                || preg_match('/^(A(\d{1,2})(?:-([LR]))?|vehicul|caseta|fata|spate)$/', $location, $locationMatch) !== 1) {
+                $this->tireMountJson(['ok' => false, 'error' => 'Componentă sau poziție invalidă.'], 422);
+            }
+            $catalog = (new AutoComponentCatalogService($this->db))->components();
+            $categoryKeys = VehicleComponentRegistry::catalogByCategory($catalog)[$category] ?? [];
+            $componentKey = (string) ($_POST['component_key'] ?? '');
+            if ($componentKey !== '' && !in_array($componentKey, $categoryKeys, true)) {
+                $this->tireMountJson(['ok' => false, 'error' => 'Componenta nu aparține acestei categorii.'], 422);
+            }
+
+            if ($operation === 'component_inspect') {
+                $model->inspect($vehicleId, $category, $location, $componentKey !== '' ? $componentKey : null, (string) ($_POST['date'] ?? ''), $readKm('km'), (string) ($_POST['result'] ?? ''), (string) ($_POST['notes'] ?? ''), $userId);
+                $this->tireMountJson(['ok' => true, 'message' => 'Inspecția a fost înregistrată.']);
+            }
+
+            // component_mount (cu replace_usage_id = inlocuire)
+            if ($componentKey === '') {
+                $this->tireMountJson(['ok' => false, 'error' => 'Alege componenta de montat.'], 422);
+            }
+            $component = $catalog[$componentKey];
+            $part = AutoComponentStateService::findStockPart((new MaintenanceModel($this->db))->getAutoComponentPartIndex(), (string) $component['category'], (string) $component['name']);
+            $replaceId = (int) ($_POST['replace_usage_id'] ?? 0);
+            $user = current_user();
+            $newId = $model->mount([
+                'vehicle_id' => $vehicleId,
+                'part_id' => (int) ($part['id'] ?? 0),
+                'component_key' => $componentKey,
+                'location' => $location,
+                'axle' => isset($locationMatch[2]) && $locationMatch[2] !== '' ? (int) $locationMatch[2] : null,
+                'side' => isset($locationMatch[3]) && $locationMatch[3] !== '' ? $locationMatch[3] : null,
+                'source' => ($_POST['source'] ?? '') === 'stoc' ? 'stoc' : 'direct',
+                'quantity' => (float) str_replace(',', '.', (string) ($_POST['quantity'] ?? '1')),
+                'date' => (string) ($_POST['date'] ?? ''),
+                'km' => $readKm('km'),
+                'notes' => (string) ($_POST['notes'] ?? ''),
+            ], $replaceId > 0 ? $replaceId : null, $userId, (string) ($user['nume'] ?? ''));
+            $this->tireMountJson(['ok' => true, 'id' => $newId, 'message' => $replaceId > 0 ? 'Componenta a fost înlocuită.' : 'Componenta a fost montată.']);
+        } catch (PDOException $exception) {
+            // PDOException e tot RuntimeException: mesajul bazei de date nu ajunge la utilizator.
+            error_log('[component_write][' . $operation . '] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Operația nu a putut fi salvată.'], 500);
+        } catch (InvalidArgumentException | RuntimeException $exception) {
+            $this->tireMountJson(['ok' => false, 'error' => $exception->getMessage()], 422);
+        } catch (Throwable $exception) {
+            error_log('[component_write][' . $operation . '] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Operația nu a putut fi salvată.'], 500);
+        }
+    }
+
+    /** JSON: anvelopele din stoc compatibile cu o pozitie libera (pentru montajul din schema). */
+    private function tirePositionCandidatesAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'mentenanta') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Modul invalid.'], 404);
+        }
+
+        try {
+            $result = $this->tireModel->getMountCandidatesForPosition((int) ($_GET['position_id'] ?? 0));
+        } catch (Throwable $exception) {
+            error_log('[tire_position_candidates] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Anvelopele disponibile nu au putut fi citite.'], 500);
+        }
+        if ($result === null) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Pozitia nu exista sau nu mai este activa.'], 404);
+        }
+
+        $this->tireMountJson(['ok' => true] + $result);
     }
 
     private function renderTireStockPartial(string $partial, array $vars): string

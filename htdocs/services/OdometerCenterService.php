@@ -33,7 +33,12 @@ final class OdometerCenterService
         'sas' => 'SAS Fleet',
         'cardoil' => 'CardOil Refill',
         'sas_cardoil' => 'SAS Fleet, altfel CardOil',
+        'can' => 'CAN (bord)',
+        'can_sas' => 'CAN (bord), altfel SAS Fleet',
     ];
+
+    /** Sursele „telemetrie” (citiri salvate in vehicle_odometer_readings, sincronizate din SAS). */
+    private const TELEMETRY_PROVIDERS = ['can', 'sas'];
 
     /** Dupa atatea erori SAS consecutive (API cazut) sincronizarea se opreste. */
     private const MAX_CONSECUTIVE_ERRORS = 3;
@@ -47,6 +52,8 @@ final class OdometerCenterService
     private PDO $db;
     private OdometerCenterModel $model;
     private SasOdometerSource $sas;
+    /** null = fara odometru CAN (testele cu SAS simulat nu ajung la raportul web real). */
+    private ?CanOdometerSource $can;
     private CardOilOdometerSource $cardOil;
     private string $cacheDir;
     /** @var callable|null */
@@ -61,12 +68,14 @@ final class OdometerCenterService
         ?SasOdometerSource $sas = null,
         ?CardOilOdometerSource $cardOil = null,
         ?callable $logger = null,
-        ?int $nowTs = null
+        ?int $nowTs = null,
+        ?CanOdometerSource $can = null
     ) {
         $this->db = $db;
         $this->model = new OdometerCenterModel($db);
         $this->model->ensureSchema();
         $this->sas = $sas ?? new SasFleetOdometerSource($db);
+        $this->can = $can ?? ($sas === null && $this->sas instanceof CanOdometerSource ? $this->sas : null);
         $this->cardOil = $cardOil ?? new FuelFillupOdometerSource($this->model);
         $this->cacheDir = dirname(BASE_PATH) . '/storage/cache';
         $this->logger = $logger;
@@ -104,6 +113,7 @@ final class OdometerCenterService
         $sources = $this->model->getSources();
         $baselines = $this->model->getActiveBaselines();
         $sasReadings = $this->model->getRecentReadingsByVehicle('sas', 80);
+        $canReadings = $this->model->getRecentReadingsByVehicle('can', 80);
         $fillups = $this->cardOil->fillupsByPlate();
         $cardOilSync = $this->cardOil->lastSync();
         $manualReadings = $this->model->getManualReadings();
@@ -120,7 +130,8 @@ final class OdometerCenterService
                 $sasReadings[$id] ?? [],
                 $fillups[self::plateKey((string) $vehicle['nr_inmatriculare'])] ?? [],
                 $cardOilSync,
-                $manualReadings[$id] ?? []
+                $manualReadings[$id] ?? [],
+                $canReadings[$id] ?? []
             );
         }
 
@@ -165,7 +176,8 @@ final class OdometerCenterService
         array $sasRows,
         array $fillups,
         ?array $cardOilSync,
-        array $manualRows = []
+        array $manualRows = [],
+        array $canRows = []
     ): array {
         $id = (int) $vehicle['id'];
         $type = (string) $vehicle['tip_vehicul'];
@@ -176,12 +188,13 @@ final class OdometerCenterService
         $capacity = is_numeric($vehicle['capacitate_transport'] ?? null) && (float) $vehicle['capacitate_transport'] > 0
             ? (float) $vehicle['capacitate_transport'] : null;
 
-        $sas = $this->buildSasSource($sources['sas'] ?? null, $baselines['sas'] ?? null, $sasRows, $settings);
+        $sas = $this->buildTelemetrySource('sas', $sources['sas'] ?? null, $baselines['sas'] ?? null, $sasRows, $settings);
+        $can = $this->buildTelemetrySource('can', $sources['can'] ?? null, $baselines['can'] ?? null, $canRows, $settings);
         $cardOil = $this->buildCardOilSource($fillups, $baselines['cardoil'] ?? null, $cardOilSync, $settings, $type);
 
         $sasKm = $sas['distance']['km'] ?? null;
         $cardKm = $cardOil['distance']['km'] ?? null;
-        $official = OdometerCalculator::officialDistance((string) $settings['politica_total'], $sasKm, $cardKm);
+        $official = OdometerCalculator::officialDistance((string) $settings['politica_total'], $sasKm, $cardKm, $can['distance']['km'] ?? null);
         // Semiremorca are un singur odometru (manual): el e km oficiali, oricare ar fi politica SAS/CardOil.
         if ($manual !== null) {
             $official = $manual['distance']['km'] !== null
@@ -202,11 +215,12 @@ final class OdometerCenterService
         // O sursa conteaza doar daca are cel putin o citire reala (maparea singura nu ajunge).
         $availableCount = $manual !== null
             ? (int) ($manual['current'] !== null)
-            : (int) ($sas['available'] && $sas['current'] !== null) + (int) ($cardOil['available'] && $cardOil['current'] !== null);
+            : (int) ($sas['available'] && $sas['current'] !== null) + (int) ($cardOil['available'] && $cardOil['current'] !== null)
+                + (int) ($can['available'] && $can['current'] !== null);
 
         $comparison = $this->compareSources($id, $sas, $cardOil, $sources['sas'] ?? null, $settings);
 
-        $anomalies = array_merge($sas['anomalies'], $cardOil['anomalies'], $manual['anomalies'] ?? []);
+        $anomalies = array_merge($can['anomalies'], $sas['anomalies'], $cardOil['anomalies'], $manual['anomalies'] ?? []);
         if ($comparison['alert']) {
             $anomalies[] = ['source' => 'diferenta', 'at' => null, 'note' => sprintf(
                 'Diferență SAS − CardOil de %s km (%s%%) pe aceeași fereastră.',
@@ -229,9 +243,9 @@ final class OdometerCenterService
             'capacity_confirmed' => (int) ($vehicle['capacitate_transport_confirmata'] ?? 0) === 1,
             'category_id' => $vehicle['categorie_capacitate_id'] !== null ? (int) $vehicle['categorie_capacitate_id'] : null,
             'photo' => $thumb,
-            'sources' => ['sas' => $sas, 'cardoil' => $cardOil] + ($manual !== null ? ['manual' => $manual] : []),
+            'sources' => ['can' => $can, 'sas' => $sas, 'cardoil' => $cardOil] + ($manual !== null ? ['manual' => $manual] : []),
             // Odometrele afisate (card, T0, istoric): semiremorca are unul singur, cel manual.
-            'odometers' => $manual !== null ? ['manual'] : ['sas', 'cardoil'],
+            'odometers' => $manual !== null ? ['manual'] : ['can', 'sas', 'cardoil'],
             't0' => [
                 'requested_at' => $requested,
                 'version' => $version,
@@ -245,9 +259,10 @@ final class OdometerCenterService
         ];
     }
 
-    private function buildSasSource(?array $source, ?array $baseline, array $rows, array $settings): array
+    /** SAS (odometru GPS) si CAN (odometrul de bord): aceleasi reguli, citiri salvate separat. */
+    private function buildTelemetrySource(string $provider, ?array $source, ?array $baseline, array $rows, array $settings): array
     {
-        $result = $this->emptySource('sas', $baseline);
+        $result = $this->emptySource($provider, $baseline);
         if ($source === null || (int) $source['enabled'] !== 1) {
             $result['reason'] = $source === null
                 ? 'Vehiculul nu este în flota SAS Fleet (fără mapare pe numărul de înmatriculare).'
@@ -284,12 +299,14 @@ final class OdometerCenterService
         if ($current === null) {
             $result['reason'] = $source['last_checked_at'] === null
                 ? 'Încă nesincronizat din SAS Fleet.'
-                : 'SAS Fleet nu raportează odometru (kmIndex) pentru acest vehicul.';
+                : ($provider === 'can'
+                    ? 'Vehiculul nu are citire CAN în SAS Fleet (fără odometru de bord în raport).'
+                    : 'SAS Fleet nu raportează odometru (kmIndex) pentru acest vehicul.');
         }
-        $result['anomalies'] = $this->recentAnomalies('sas', $series);
+        $result['anomalies'] = $this->recentAnomalies($provider, $series);
         $result['distance'] = $this->distanceFor($result['current'], $result['baseline']);
         if ($result['distance']['anomaly'] !== null) {
-            $result['anomalies'][] = ['source' => 'sas', 'at' => null, 'note' => $result['distance']['anomaly']];
+            $result['anomalies'][] = ['source' => $provider, 'at' => null, 'note' => $result['distance']['anomaly']];
         }
 
         return $result;
@@ -543,8 +560,8 @@ final class OdometerCenterService
         $official = 0.0;
         $officialCount = 0;
         $excluded = 0;
-        $perSource = ['sas' => 0.0, 'cardoil' => 0.0];
-        $perSourceCount = ['sas' => 0, 'cardoil' => 0];
+        $perSource = ['can' => 0.0, 'sas' => 0.0, 'cardoil' => 0.0];
+        $perSourceCount = ['can' => 0, 'sas' => 0, 'cardoil' => 0];
         $stale = 0;
         $oldestStaleTs = null;
         $anomalies = 0;
@@ -555,7 +572,7 @@ final class OdometerCenterService
             } elseif ($component['t0']['configured']) {
                 $excluded++;
             }
-            foreach (['sas', 'cardoil'] as $provider) {
+            foreach (['can', 'sas', 'cardoil'] as $provider) {
                 $km = $component['sources'][$provider]['distance']['km'];
                 if ($km !== null) {
                     $perSource[$provider] += (float) $km;
@@ -563,7 +580,7 @@ final class OdometerCenterService
                 }
             }
             $isStale = false;
-            foreach (['sas', 'cardoil'] as $provider) {
+            foreach (['can', 'sas', 'cardoil'] as $provider) {
                 $source = $component['sources'][$provider];
                 if ($source['available'] && $source['current'] !== null
                     && in_array($source['freshness'], ['neactualizat', 'eroare', 'nesincronizat'], true)) {
@@ -705,7 +722,9 @@ final class OdometerCenterService
                         $stats['message'] = 'SAS Fleet nu răspunde (' . $exception->getMessage() . '). Ultimele citiri au fost păstrate.';
                         break;
                     }
+                    continue;
                 }
+                $this->syncCanVehicle($vehicleId, $carId, $historyDays, $stats);
             }
             if ($stats['message'] === '') {
                 $stats['message'] = $queue === []
@@ -743,11 +762,18 @@ final class OdometerCenterService
                 if ($car['local_vehicle_id'] !== null && $car['local_vehicle_id'] > 0 && $car['sas_vehicle_id'] > 0 && !$car['disabled']
                     && ($only === null || isset($only[$car['local_vehicle_id']]))) {
                     $this->model->upsertSource($car['local_vehicle_id'], 'sas', (string) $car['sas_vehicle_id']);
+                    // CAN = acelasi carId; un vehicul fara CAN ramane mapat, dar fara citiri.
+                    if ($this->can !== null) {
+                        $this->model->upsertSource($car['local_vehicle_id'], 'can', (string) $car['sas_vehicle_id']);
+                    }
                     $kept[] = $car['local_vehicle_id'];
                 }
             }
             if ($kept !== [] && $only === null) {
                 $this->model->disableMissingSources('sas', $kept);
+                if ($this->can !== null) {
+                    $this->model->disableMissingSources('can', $kept);
+                }
             }
         }
 
@@ -762,10 +788,43 @@ final class OdometerCenterService
         }
     }
 
-    /** Recalculeaza anomaliile pe seria SAS salvata (o corectie de date poate anula o anomalie). */
-    private function revalidateStored(int $vehicleId): void
+    /**
+     * Odometrul CAN al aceluiasi vehicul, imediat dupa SAS (aceeasi coada, acelasi lacat).
+     * O eroare CAN marcheaza doar sursa CAN: nu opreste sincronizarea SAS.
+     */
+    private function syncCanVehicle(int $vehicleId, int $carId, int $historyDays, array &$stats): void
     {
-        $rows = $this->model->getReadings($vehicleId, 'sas', null, null, 400);
+        $source = $this->can !== null ? ($this->model->getSources()[$vehicleId]['can'] ?? null) : null;
+        if ($source === null || (int) $source['enabled'] !== 1) {
+            return;
+        }
+        $to = $this->nowSql();
+        $earliest = date('Y-m-d H:i:s', $this->now() - $historyDays * 86400);
+        $from = $source['last_checked_at'] !== null
+            ? max($earliest, date('Y-m-d H:i:s', OdometerCalculator::ts((string) $source['last_checked_at']) - 7200))
+            : $earliest;
+
+        $stats['calls']++;
+        try {
+            $data = $this->can->fetchCanReadings($carId, $from, $to);
+            $inserted = $this->model->storeReadings($vehicleId, 'can', $data['readings']);
+            $this->revalidateStored($vehicleId, 'can');
+            $this->model->markSourceChecked($vehicleId, 'can', 'ok', null, $to);
+            $stats['new_readings'] += $inserted;
+            if ($inserted > 0 && !in_array($vehicleId, $stats['changed'], true)) {
+                $stats['changed'][] = $vehicleId;
+            }
+        } catch (Throwable $exception) {
+            $this->model->markSourceChecked($vehicleId, 'can', 'eroare', $exception->getMessage());
+            $stats['errors']++;
+            $this->log('CAN carId=' . $carId . ': ' . $exception->getMessage());
+        }
+    }
+
+    /** Recalculeaza anomaliile pe seria salvata (o corectie de date poate anula o anomalie). */
+    private function revalidateStored(int $vehicleId, string $provider = 'sas'): void
+    {
+        $rows = $this->model->getReadings($vehicleId, $provider, null, null, 400);
         $series = OdometerCalculator::flagAnomalies(array_map(static fn (array $row): array => [
             'id' => (string) $row['source_reading_id'],
             'measured_at' => (string) $row['measured_at'],
@@ -774,7 +833,7 @@ final class OdometerCenterService
         ], $rows));
         foreach ($series as $reading) {
             if ($reading['anomaly'] !== $reading['stored_note']) {
-                $this->model->setReadingValidation($vehicleId, 'sas', $reading['id'], $reading['anomaly']);
+                $this->model->setReadingValidation($vehicleId, $provider, $reading['id'], $reading['anomaly']);
             }
         }
     }
@@ -807,6 +866,7 @@ final class OdometerCenterService
             $results[$vehicleId] = self::acceptsManual($type)
                 ? ['manual' => $this->lookupManualT0($vehicleId, $t0, $settings)]
                 : [
+                    'can' => $this->lookupSasT0($vehicleId, $sources[$vehicleId]['can'] ?? null, $t0, $settings, 'can'),
                     'sas' => $this->lookupSasT0($vehicleId, $sources[$vehicleId]['sas'] ?? null, $t0, $settings),
                     'cardoil' => $this->lookupCardOilT0($plateKey, $type, $t0, $settings),
                 ];
@@ -816,8 +876,13 @@ final class OdometerCenterService
         return $results;
     }
 
-    private function lookupSasT0(int $vehicleId, ?array $source, string $t0, array $settings): array
+    /** T0 pe odometrul GPS ($provider = 'sas') sau CAN ('can'): aceleasi reguli de precizie. */
+    private function lookupSasT0(int $vehicleId, ?array $source, string $t0, array $settings, string $provider = 'sas'): array
     {
+        if ($provider === 'can' && $this->can === null) {
+            return ['status' => OdometerCalculator::STATUS_NO_SOURCE, 'reading' => null, 'precision' => null,
+                'note' => 'Date indisponibile pentru această sursă: odometrul CAN nu este activ.'];
+        }
         if ($source === null || (int) $source['enabled'] !== 1) {
             return ['status' => OdometerCalculator::STATUS_NO_SOURCE, 'reading' => null, 'precision' => null,
                 'note' => 'Date indisponibile pentru această sursă: vehiculul nu este în SAS Fleet.'];
@@ -829,14 +894,21 @@ final class OdometerCenterService
         $t0Ts = OdometerCalculator::ts($t0);
         $from = date('Y-m-d H:i:s', $t0Ts - max(1, (int) $settings['sas_istoric_zile']) * 86400);
         $to = date('Y-m-d H:i:s', min($this->now(), $t0Ts + 86400));
+        $carId = (int) $source['external_provider_vehicle_id'];
         try {
-            $data = $this->sas->fetchReadings((int) $source['external_provider_vehicle_id'], $from, $to);
+            $data = $provider === 'can'
+                ? $this->can->fetchCanReadings($carId, $from, $to)
+                : $this->sas->fetchReadings($carId, $from, $to);
         } catch (Throwable $exception) {
-            $this->log('T0 carId=' . $source['external_provider_vehicle_id'] . ': ' . $exception->getMessage());
+            $this->log('T0 ' . $provider . ' carId=' . $carId . ': ' . $exception->getMessage());
             return ['status' => OdometerCalculator::STATUS_UNAVAILABLE, 'reading' => null, 'precision' => null,
                 'note' => 'SAS Fleet nu a răspuns: ' . $exception->getMessage()];
         }
-        $this->model->storeReadings($vehicleId, 'sas', $data['readings']);
+        if ($provider === 'can' && $data['readings'] === []) {
+            return ['status' => OdometerCalculator::STATUS_NO_SOURCE, 'reading' => null, 'precision' => null,
+                'note' => 'Date indisponibile pentru această sursă: vehiculul nu are citire CAN în SAS Fleet.'];
+        }
+        $this->model->storeReadings($vehicleId, $provider, $data['readings']);
 
         $readings = array_map(static fn (array $r): array => [
             'id' => (string) $r['source_reading_id'],
@@ -1202,6 +1274,18 @@ final class OdometerCenterService
 
     // ================================================================ detalii
 
+    /** carId-ul SAS al vehiculului, din maparea salvata (null daca nu e mapat sau e dezactivat). */
+    public function sasCarId(int $vehicleId): ?int
+    {
+        $source = $this->model->getSources()[$vehicleId]['sas'] ?? null;
+        if ($source === null || !(int) $source['enabled']) {
+            return null;
+        }
+        $carId = (int) $source['external_provider_vehicle_id'];
+
+        return $carId > 0 ? $carId : null;
+    }
+
     /**
      * Istoricul unui vehicul: citirile SAS (ultimele $days zile) si CardOil (toate
      * alimentarile cu odometru), fiecare cu anomaliile ei, versiunile T0 si auditul.
@@ -1217,12 +1301,14 @@ final class OdometerCenterService
         $vehicle = $vehicles[$vehicleId];
         $from = date('Y-m-d H:i:s', $this->now() - max(1, $days) * 86400);
 
-        $sas = OdometerCalculator::flagAnomalies(array_map(static fn (array $row): array => [
+        $series = fn (string $provider): array => OdometerCalculator::flagAnomalies(array_map(static fn (array $row): array => [
             'id' => (string) $row['source_reading_id'],
             'measured_at' => (string) $row['measured_at'],
             'received_at' => (string) $row['received_at'],
             'km' => (float) $row['odometer_km'],
-        ], $this->model->getReadings($vehicleId, 'sas', $from)));
+        ], $this->model->getReadings($vehicleId, $provider, $from)));
+        $sas = $series('sas');
+        $can = $series('can');
 
         $plateKey = self::plateKey((string) $vehicle['nr_inmatriculare']);
         $cardOil = OdometerCalculator::flagAnomalies($this->cardOil->fillupsByPlate([$plateKey])[$plateKey] ?? []);
@@ -1249,6 +1335,7 @@ final class OdometerCenterService
             'vehicle_id' => $vehicleId,
             'plate' => (string) $vehicle['nr_inmatriculare'],
             'days' => $days,
+            'can' => array_values(array_reverse($can)),
             'sas' => array_values(array_reverse($sas)),
             'cardoil' => array_values(array_reverse($cardOil)),
             'baselines' => $this->model->getBaselineHistory($vehicleId),
