@@ -11,7 +11,8 @@ declare(strict_types=1);
  *
  * La actualizare se scriu DOAR coloanele primite: un proprietar care nu trimite,
  * de exemplu, `locatie` nu calca peste ce a completat operatorul in Dispecer curse.
- * Partea de refacturare (refacturare_*) nu e atinsa niciodata.
+ * Partea de refacturare (refacturare_*) se scrie doar cand proprietarul o trimite
+ * (ex. taxele eToll, care se refactureaza); marcajul "facturata" nu e atins niciodata.
  */
 class TripExpenseMirrorService
 {
@@ -28,6 +29,17 @@ class TripExpenseMirrorService
         'data_cheltuiala' => PDO::PARAM_STR,
         'observatii' => PDO::PARAM_STR,
         'added_by' => PDO::PARAM_INT,
+        'refacturare_tip_cheltuiala' => PDO::PARAM_STR,
+        'refacturare_locatie' => PDO::PARAM_STR,
+        'refacturare_bucati' => PDO::PARAM_STR,
+        'refacturare_pret_unitar' => PDO::PARAM_STR,
+        'refacturare_suma' => PDO::PARAM_STR,
+        'refacturare_data' => PDO::PARAM_STR,
+        'refacturare_observatii' => PDO::PARAM_STR,
+        'refacturare_document_path' => PDO::PARAM_STR,
+        'refacturare_document_original_name' => PDO::PARAM_STR,
+        'refacturare_document_mime_type' => PDO::PARAM_STR,
+        'refacturare_document_file_size' => PDO::PARAM_INT,
     ];
 
     /** Obligatorii la insert (NOT NULL fara default in curse_cheltuieli). */

@@ -17,6 +17,9 @@ class EtollStatementController
     private EtollStatementModel $model;
     private string $root;
 
+    /** @var array<string, array<string, mixed>> filteredData() memorat pe perioada */
+    private array $dataMemo = [];
+
     public function __construct(private PDO $db)
     {
         $this->model = new EtollStatementModel($db);
@@ -49,6 +52,10 @@ class EtollStatementController
                 $this->requireExport();
                 $this->exportZipAction();
                 break;
+            case 'export_selected':
+                $this->requireExport();
+                $this->exportSelectedAction();
+                break;
             default:
                 $this->indexAction();
         }
@@ -57,16 +64,25 @@ class EtollStatementController
     private function indexAction(): void
     {
         $period = EtollStatementModel::period($_GET);
-        $plate = $this->plateFilter();
+        $data = $this->filteredData($period);
 
         render('etoll/index.php', [
             'pageTitle' => 'Situație eToll',
             'currentPage' => 'etoll',
             'period' => $period,
-            'plate' => $plate,
-            'plates' => $this->model->plates($period['de_la'], $period['pana_la']),
+            'filters' => $data['filters'],
+            'selectedPlates' => $data['filters']['nr'],
+            'vehicles' => $data['vehicles'],
+            'beneficiaries' => $this->model->beneficiaries(array_merge($data['all_sessions'], $data['all_open'])),
             'summary' => $this->model->summary($period['de_la'], $period['pana_la']),
-            'sessions' => $this->model->sessions($period['de_la'], $period['pana_la'], $plate),
+            'sessions' => $data['sessions'],
+            'openSessions' => $data['open'],
+            'totals' => EtollStatementModel::sessionTotals($data['sessions']),
+            // Subsolul tabelului: filtrate = ce arata tabelul; toate = toata perioada, fara celelalte filtre.
+            'tableTotals' => [
+                'filtrate' => EtollStatementModel::tabTotals($data['sessions'], $data['open']),
+                'toate' => EtollStatementModel::tabTotals($data['all_sessions'], $data['all_open']),
+            ],
             'topups' => $this->model->topups($period['de_la'], $period['pana_la']),
             'balance' => $this->model->latestBalance(),
             'quietBalance' => $this->model->latestQuietBalance(),
@@ -180,7 +196,7 @@ class EtollStatementController
 
             return $final;
         };
-        foreach ($this->model->sessions($period['de_la'], $period['pana_la'], $this->plateFilter()) as $row) {
+        foreach ($this->filteredData($period)['sessions'] as $row) {
             $row['session_id'] = (string) $row['session_id'];
             foreach (EtollStatementModel::documentKinds() as $kind => [, $folder]) {
                 $links['sesiune'][$row['session_id']][$kind] = $reserve($row[$kind . '_path'], $folder . '/' . $this->sessionFileName($row, $kind));
@@ -229,9 +245,10 @@ class EtollStatementController
         require_once __DIR__ . '/../services/SimpleXlsxWriter.php';
 
         $period = EtollStatementModel::period($_GET);
-        $plate = $this->plateFilter();
+        $data = $this->filteredData($period);
+        $plates = $data['filters']['nr'];
         $summary = $this->model->summary($period['de_la'], $period['pana_la']);
-        $sessions = $this->model->sessions($period['de_la'], $period['pana_la'], $plate);
+        $sessions = $data['sessions'];
         $topups = $this->model->topups($period['de_la'], $period['pana_la']);
         $balance = $this->model->latestBalance();
         $quiet = $this->model->latestQuietBalance();
@@ -268,7 +285,10 @@ class EtollStatementController
         // Rezumat
         $sheet = $xlsx->addSheet('Rezumat');
         $xlsx->setColumnWidths($sheet, [44, 18, 18]);
-        $xlsx->addRow($sheet, [['v' => 'Situație eToll — ' . $period['eticheta'] . ($plate !== '' ? ' — ' . $plate : ''), 's' => 'title']]);
+        $xlsx->addRow($sheet, [['v' => 'Situație eToll — ' . $period['eticheta'] . ($plates !== [] ? ' — ' . implode(', ', $plates) : ''), 's' => 'title']]);
+        if ($this->filterDescription($data['filters']) !== '') {
+            $xlsx->addRow($sheet, [['v' => 'Filtre: ' . $this->filterDescription($data['filters']), 's' => 'muted']]);
+        }
         $xlsx->addRow($sheet, [['v' => 'Generat ' . date('d.m.Y H:i') . '; date sincronizate ' . $at($this->model->lastSyncAt()), 's' => 'muted']]);
         $xlsx->addRow($sheet, [['v' => $zipLinks !== null
             ? 'Link-urile din foile Sesiuni și Alimentari deschid PDF-urile din folderele de lângă acest fișier: dezarhivați întâi arhiva.'
@@ -279,6 +299,10 @@ class EtollStatementController
         $xlsx->addRow($sheet, ['+ Alimentări', ['v' => $summary['alimentari']['n'], 's' => 'int'], $money($summary['alimentari']['suma'])]);
         $xlsx->addRow($sheet, ['− Consum (sesiuni închise)', ['v' => $summary['consum']['n'], 's' => 'int'], $money($summary['consum']['suma'])]);
         $xlsx->addRow($sheet, [['v' => '= Sold la final', 's' => 'total'], ['v' => '', 's' => 'total'], ['v' => $summary['sold_final'], 's' => 'total_money']]);
+        $xlsx->addRow($sheet, []);
+        $xlsx->addRow($sheet, [['v' => 'TVA (din documentele eToll)', 's' => 'th'], ['v' => 'Fără TVA', 's' => 'th_num'], ['v' => 'TVA', 's' => 'th_num']]);
+        $xlsx->addRow($sheet, ['Alimentări', $money($summary['alimentari_fara_tva']), $money($summary['alimentari_tva'])]);
+        $xlsx->addRow($sheet, ['Consum' . ($summary['consum_fara_tva_lipsa'] > 0 ? ' (fără ' . $summary['consum_fara_tva_lipsa'] . ' sesiuni cu TVA încă necitit)' : ''), $money($summary['consum_fara_tva']), $money($summary['consum_tva'])]);
         $xlsx->addRow($sheet, []);
         $xlsx->addRow($sheet, [['v' => 'Verificări', 's' => 'th'], ['v' => '', 's' => 'th'], ['v' => '', 's' => 'th']]);
         $xlsx->addRow($sheet, ['Facturi de alimentare', ['v' => $summary['facturi_alimentare']['n'], 's' => 'int'], $money($summary['facturi_alimentare']['suma'])]);
@@ -306,16 +330,19 @@ class EtollStatementController
         // Sesiuni
         $sheet = $xlsx->addSheet('Sesiuni');
         $headers = array_merge(
-            ['Închisă la', 'Nr. auto', 'Remorcă', 'Început', 'Sfârșit', 'Origine', 'Destinație', 'Km tarifabili', 'Sumă (lei)', 'Total document', 'Document CC-P'],
+            ['Închisă la', 'Nr. auto', 'Remorcă', 'Început', 'Sfârșit', 'Origine', 'Destinație', 'Km tarifabili', 'Fără TVA (lei)', 'TVA (lei)', 'Cotă TVA %', 'Cu TVA (lei)', 'Total document', 'Document CC-P', 'Beneficiar', 'Cursă'],
             array_column($kinds, 0),
             ['Verificare', 'ID sesiune']
         );
-        $xlsx->setColumnWidths($sheet, array_merge([17, 11, 11, 17, 17, 34, 34, 12, 12, 13, 18], array_fill(0, count($kinds), 13), [30, 34]));
-        $header = $xlsx->addRow($sheet, array_map(static fn(string $h): array => ['v' => $h, 's' => in_array($h, ['Km tarifabili', 'Sumă (lei)', 'Total document'], true) ? 'th_num' : 'th'], $headers));
+        $numeric = ['Km tarifabili', 'Fără TVA (lei)', 'TVA (lei)', 'Cotă TVA %', 'Cu TVA (lei)', 'Total document'];
+        $xlsx->setColumnWidths($sheet, array_merge([17, 11, 11, 17, 17, 34, 34, 12, 13, 11, 10, 12, 13, 18, 22, 9], array_fill(0, count($kinds), 13), [30, 34]));
+        $header = $xlsx->addRow($sheet, array_map(static fn(string $h): array => ['v' => $h, 's' => in_array($h, $numeric, true) ? 'th_num' : 'th'], $headers));
         $xlsx->freezeRows($sheet, $header);
-        $total = 0.0;
+        $total = $totalNet = $totalVat = 0.0;
         foreach ($sessions as $row) {
             $total += (float) $row['suma'];
+            $totalNet += (float) ($row['fara_tva'] ?? 0);
+            $totalVat += (float) ($row['tva'] ?? 0);
             $documents = [];
             foreach ($kinds as $kind => [$label]) {
                 $documents[] = $sessionLink($row, $kind, $label);
@@ -324,22 +351,30 @@ class EtollStatementController
                 $at($row['inchisa_la']), (string) $row['nr_inmatriculare'], (string) ($row['remorci'] ?? ''), $at($row['inceput']), $at($row['sfarsit']),
                 (string) ($row['origine'] ?? ''), (string) ($row['destinatie'] ?? ''),
                 ['v' => $row['km_tarifabil'] === null ? '' : (float) $row['km_tarifabil'], 's' => 'money'],
+                $money($row['fara_tva']), $money($row['tva']), ['v' => $row['cota_tva'] === null ? '' : (float) $row['cota_tva'], 's' => 'int'],
                 $money($row['suma']), $money($row['total_etoll']), (string) ($row['numar_document'] ?? ''),
+                $row['cursa_id'] !== null ? ((string) ($row['beneficiar'] ?? '') ?: 'Fără beneficiar') : 'neasociată',
+                $row['cursa_id'] !== null ? ['v' => (int) $row['cursa_id'], 's' => 'int'] : '',
             ], $documents, [$row['verificare']['text'], (string) $row['session_id']]));
         }
-        $last = $xlsx->addRow($sheet, [['v' => 'Total ' . count($sessions) . ' sesiuni', 's' => 'total'], '', '', '', '', '', '', '', ['v' => round($total, 2), 's' => 'total_money']]);
+        $last = $xlsx->addRow($sheet, [
+            ['v' => 'Total ' . count($sessions) . ' sesiuni', 's' => 'total'], '', '', '', '', '', '', '',
+            ['v' => round($totalNet, 2), 's' => 'total_money'], ['v' => round($totalVat, 2), 's' => 'total_money'], '',
+            ['v' => round($total, 2), 's' => 'total_money'],
+        ]);
         $xlsx->setAutoFilter($sheet, 'A' . $header . ':' . SimpleXlsxWriter::columnLetter(count($headers)) . max($header, $last - 1));
 
         // Alimentari
         $sheet = $xlsx->addSheet('Alimentari');
-        $xlsx->setColumnWidths($sheet, [17, 12, 20, 17, 12, 10, 26]);
-        $header = $xlsx->addRow($sheet, [['v' => 'Data plății', 's' => 'th'], ['v' => 'Sumă (lei)', 's' => 'th_num'], ['v' => 'Factură', 's' => 'th'], ['v' => 'Data facturii', 's' => 'th'], ['v' => 'Total factură', 's' => 'th_num'], ['v' => 'PDF', 's' => 'th'], ['v' => 'Verificare', 's' => 'th']]);
+        $xlsx->setColumnWidths($sheet, [17, 12, 20, 17, 12, 12, 11, 10, 26]);
+        $header = $xlsx->addRow($sheet, [['v' => 'Data plății', 's' => 'th'], ['v' => 'Sumă (lei)', 's' => 'th_num'], ['v' => 'Factură', 's' => 'th'], ['v' => 'Data facturii', 's' => 'th'], ['v' => 'Total factură', 's' => 'th_num'], ['v' => 'Fără TVA (lei)', 's' => 'th_num'], ['v' => 'TVA (lei)', 's' => 'th_num'], ['v' => 'PDF', 's' => 'th'], ['v' => 'Verificare', 's' => 'th']]);
         $xlsx->freezeRows($sheet, $header);
         foreach ($topups as $row) {
             $invoice = $row['factura'];
             $xlsx->addRow($sheet, [
                 $at($row['tx_id'] !== null ? $row['data'] : null), $money($row['suma']),
                 (string) ($invoice['numar_document'] ?? ''), $at($invoice['data'] ?? null), $money($invoice['total'] ?? null),
+                $money($invoice['fara_tva'] ?? null), $money($invoice['tva'] ?? null),
                 $topupLink($invoice),
                 $row['tx_id'] === null ? 'Factură fără alimentare în registru' : ($invoice === null ? 'Lipsește factura' : 'OK'),
             ]);
@@ -358,14 +393,209 @@ class EtollStatementController
             'interval' => $period['de_la'] . '_' . $period['pana_la'],
             default => $period['luna'],
         };
-        $plate = $this->plateFilter();
+        $filters = $this->filters();
+        $plates = $filters['nr'];
+        $other = array_filter(array_diff_key($filters, ['nr' => true]));
 
-        return 'Situatie_eToll_' . $suffix . ($plate !== '' ? '_' . $plate : '');
+        return 'Situatie_eToll_' . $suffix . match (count($plates)) {
+            0 => '',
+            1 => '_' . $plates[0],
+            default => '_' . count($plates) . '_camioane',
+        } . ($other !== [] ? '_filtrat' : '');
     }
 
-    private function plateFilter(): string
+    /**
+     * Arhiva cu documentele sesiunilor bifate in tabel (POST: id-urile sunt lungi si pot fi multe).
+     * Doar PDF-urile documentelor active (ETOLL_SITUATIE_DOCUMENTE), cu aceleasi nume ca in exportul ZIP.
+     */
+    private function exportSelectedAction(): void
     {
-        return preg_replace('/[^A-Z0-9]+/', '', strtoupper((string) ($_GET['nr'] ?? ''))) ?? '';
+        $back = build_query_url(['page' => 'etoll']);
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST' || !verify_csrf_token($_POST['_token'] ?? null)) {
+            flash_set('danger', 'Token CSRF invalid. Reîncearcă descărcarea.');
+            redirect($back);
+        }
+        if (!class_exists(ZipArchive::class)) {
+            flash_set('danger', 'Extensia PHP zip lipsește pe server: arhiva nu poate fi creată.');
+            redirect($back);
+        }
+        $ids = [];
+        foreach ((array) ($_POST['sesiuni'] ?? []) as $value) {
+            $id = preg_replace('/[^A-Za-z0-9_-]/', '', (string) $value) ?? '';
+            if ($id !== '') {
+                $ids[$id] = $id;
+            }
+        }
+        @set_time_limit(600);
+        $files = [];
+        foreach ($this->model->documents(array_slice(array_values($ids), 0, 5000)) as $row) {
+            foreach (EtollStatementModel::documentKinds() as $kind => [, $folder]) {
+                $path = EtollStatementSyncService::resolvePath($this->root, $row[$kind . '_path'] ?? null);
+                if ($path === null) {
+                    continue;
+                }
+                $name = $folder . '/' . $this->sessionFileName($row, $kind);
+                $final = $name;
+                for ($i = 2; isset($files[$final]); $i++) {
+                    $final = preg_replace('/\.pdf$/', '_' . $i . '.pdf', $name);
+                }
+                $files[$final] = $path;
+            }
+        }
+        if ($files === []) {
+            flash_set('warning', 'Sesiunile selectate nu au încă documente descărcate.');
+            redirect($back);
+        }
+
+        $zipPath = (string) tempnam(sys_get_temp_dir(), 'ets');
+        $zip = new ZipArchive();
+        try {
+            if ($zip->open($zipPath, ZipArchive::OVERWRITE) !== true) {
+                throw new RuntimeException('Arhiva nu a putut fi creată.');
+            }
+            foreach ($files as $name => $path) {
+                $zip->addFile($path, $name);
+                $zip->setCompressionName($name, ZipArchive::CM_STORE);
+            }
+            $zip->close();
+            header('Content-Type: application/zip');
+            header('Content-Disposition: attachment; filename="Situatie_eToll_documente_' . count($ids) . '_sesiuni_' . date('Y-m-d_His') . '.zip"');
+            header('Content-Length: ' . (string) filesize($zipPath));
+            readfile($zipPath);
+        } finally {
+            @unlink($zipPath);
+        }
+        exit;
+    }
+
+    /**
+     * Sesiunile perioadei (inchise si in curs) cu filtrele paginii aplicate: aceeasi selectie
+     * pentru pagina, Excel si ZIP. Memorata pe request (ZIP-ul construieste si Excel-ul).
+     *
+     * @return array{filters: array<string, array<int, string>>, vehicles: array<int, array<string, mixed>>, all_sessions: array<int, array<string, mixed>>, all_open: array<int, array<string, mixed>>, sessions: array<int, array<string, mixed>>, open: array<int, array<string, mixed>>}
+     */
+    private function filteredData(array $period): array
+    {
+        $key = $period['de_la'] . '|' . $period['pana_la'];
+        if (isset($this->dataMemo[$key])) {
+            return $this->dataMemo[$key];
+        }
+        $filters = $this->filters();
+        $vehicles = $this->model->vehicles($period['de_la'], $period['pana_la']);
+        $byPlate = array_column($vehicles, null, 'etoll_plate');
+        $all = $this->model->sessions($period['de_la'], $period['pana_la']);
+        $open = $this->model->openSessions($period['de_la'], $period['pana_la']);
+
+        return $this->dataMemo[$key] = [
+            'filters' => $filters,
+            'vehicles' => $vehicles,
+            'all_sessions' => $all,
+            'all_open' => $open,
+            'sessions' => EtollStatementModel::applyFilters($all, $filters, $byPlate),
+            'open' => EtollStatementModel::applyFilters($open, $filters, $byPlate),
+        ];
+    }
+
+    /**
+     * Filtrele din URL: nr[] (nr. auto eToll), cap[] (capacitate reala "18.00"), cat[] (id categorie
+     * capacitate), ben[] (id beneficiar), tip[] (tip transport), status[]; "0" = fara (beneficiar...).
+     *
+     * @return array<string, array<int, string>>
+     */
+    private function filters(): array
+    {
+        $list = static function (string $name, string $pattern): array {
+            $raw = $_GET[$name] ?? [];
+            $values = [];
+            foreach (is_array($raw) ? $raw : [$raw] as $value) {
+                $value = trim((string) $value);
+                if ($value !== '' && preg_match($pattern, $value) === 1) {
+                    $values[$value] = $value;
+                }
+            }
+
+            return array_values($values);
+        };
+
+        return [
+            'nr' => $this->plateFilter(),
+            'cap' => $list('cap', '/^\d{1,4}(\.\d{1,2})?$/'),
+            'cat' => $list('cat', '/^\d{1,10}$/'),
+            'ben' => $list('ben', '/^\d{1,10}$/'),
+            'tip' => array_values(array_filter($list('tip', '/^[a-z_0]{1,30}$/'), static fn(string $v): bool => $v === EtollStatementModel::NONE || isset(EtollStatementModel::TRANSPORT_TYPES[$v]))),
+            'status' => array_values(array_filter($list('status', '/^[a-z_]{1,20}$/'), static fn(string $v): bool => isset(EtollStatementModel::STATUSES[$v]))),
+        ] + $this->closedAtFilter();
+    }
+
+    /**
+     * "Închisă la" de la / pana la (inchisa_de / inchisa_pana, din <input type="datetime-local">:
+     * 2026-11-05T14:00), in interiorul perioadei. Capetele sunt incluse: pana la 14:00 = pana la 14:00:59.
+     *
+     * @return array{inchisa_de: array<int, string>, inchisa_pana: array<int, string>}
+     */
+    private function closedAtFilter(): array
+    {
+        $parse = static function (string $name): ?DateTimeImmutable {
+            $value = trim((string) ($_GET[$name] ?? ''));
+            $date = preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}$/', $value) === 1
+                ? DateTimeImmutable::createFromFormat('!Y-m-d H:i', str_replace('T', ' ', $value))
+                : false;
+
+            return $date !== false ? $date : null;
+        };
+        $from = $parse('inchisa_de');
+        $to = $parse('inchisa_pana');
+        if ($from !== null && $to !== null && $to < $from) {
+            [$from, $to] = [$to, $from];
+        }
+
+        return [
+            'inchisa_de' => $from !== null ? [$from->format('Y-m-d H:i:00')] : [],
+            'inchisa_pana' => $to !== null ? [$to->format('Y-m-d H:i:59')] : [],
+        ];
+    }
+
+    /** Filtrele in afara de vehicule, pe scurt (randul de sub titlu in Excel). */
+    private function filterDescription(array $filters): string
+    {
+        $parts = [];
+        if ($filters['cap'] !== []) {
+            $parts[] = 'capacitate ' . implode(', ', array_map(static fn(string $v): string => $v === EtollStatementModel::NONE ? 'necunoscută' : rtrim(rtrim(number_format((float) $v, 2, ',', ''), '0'), ',') . ' t', $filters['cap']));
+        }
+        if ($filters['cat'] !== []) {
+            $parts[] = count($filters['cat']) . ' categorii de capacitate';
+        }
+        if ($filters['ben'] !== []) {
+            $names = $this->model->beneficiaries();
+            $parts[] = 'beneficiari ' . implode(', ', array_map(static fn(string $v): string => $v === EtollStatementModel::NONE ? 'fără' : ($names[$v] ?? '#' . $v), $filters['ben']));
+        }
+        if ($filters['tip'] !== []) {
+            $parts[] = 'transport ' . implode(', ', array_map(static fn(string $v): string => EtollStatementModel::TRANSPORT_TYPES[$v] ?? 'fără cursă', $filters['tip']));
+        }
+        if ($filters['status'] !== []) {
+            $parts[] = 'status ' . implode(', ', array_map(static fn(string $v): string => EtollStatementModel::STATUSES[$v], $filters['status']));
+        }
+        if ($filters['inchisa_de'] !== [] || $filters['inchisa_pana'] !== []) {
+            $parts[] = 'închisă ' . ($filters['inchisa_de'] !== [] ? 'de la ' . date('d.m.Y H:i', strtotime($filters['inchisa_de'][0])) : '')
+                . ($filters['inchisa_pana'] !== [] ? ' până la ' . date('d.m.Y H:i', strtotime($filters['inchisa_pana'][0])) : '');
+        }
+
+        return implode('; ', $parts);
+    }
+
+    /** @return array<int, string> nr. auto alese in filtru (nr[]=B652NET&nr[]=...), normalizate; gol = toate */
+    private function plateFilter(): array
+    {
+        $raw = $_GET['nr'] ?? [];
+        $plates = [];
+        foreach (is_array($raw) ? $raw : [$raw] as $value) {
+            $plate = preg_replace('/[^A-Z0-9]+/', '', strtoupper((string) $value)) ?? '';
+            if ($plate !== '') {
+                $plates[$plate] = $plate;
+            }
+        }
+
+        return array_values($plates);
     }
 
     private function requireExport(): void

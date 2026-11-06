@@ -553,7 +553,7 @@ $rangeEnd = min($totalRows, $currentPageIndex * $perPage);
                                 $metadataLine = implode(' • ', $metadataParts);
                                 $historyDocPath = trim((string) ($historyRow['refacturare_document_path'] ?? ''));
                                 $historyDocName = trim((string) ($historyRow['refacturare_document_original_name'] ?? ''));
-                                $historyDocUrl = $historyDocPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($historyDocPath)) : null;
+                                $historyDocUrl = $historyDocPath !== '' ? trip_expense_document_url($historyDocPath) : null;
                             ?>
                             <tr data-bulk-row>
                                 <td class="refacturare-select-cell">

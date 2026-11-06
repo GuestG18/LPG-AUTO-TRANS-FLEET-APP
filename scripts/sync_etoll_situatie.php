@@ -44,6 +44,14 @@ foreach (array_slice($argv, 1) as $argument) {
 
 $log = static fn(string $message) => print('[' . date('Y-m-d H:i:s') . '] ' . $message . "\n");
 
+// O singura rulare odata, si intre o rulare manuala si cron (flock-ul din run_sync_etoll_situatie.sh
+// le prinde doar pe cele din cron). Alt fisier decat al wrapper-ului, ca sa nu se blocheze singur.
+$runLock = fopen(sys_get_temp_dir() . '/etoll_situatie_run.lock', 'c');
+if ($runLock === false || !flock($runLock, LOCK_EX | LOCK_NB)) {
+    $log('Alta sincronizare a situatiei eToll este in curs; ies.');
+    exit(0);
+}
+
 try {
     $db = get_pdo();
     // etoll_sesiuni (legatura sesiune -> document CC-P) e tabela importului; o cream daca lipseste.

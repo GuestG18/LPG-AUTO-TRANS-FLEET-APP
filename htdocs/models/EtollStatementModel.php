@@ -44,6 +44,26 @@ class EtollStatementModel
         return $kinds !== [] ? $kinds : array_intersect_key(self::DOCUMENTS, array_flip(['factura', 'anexa']));
     }
 
+    /** Tipurile de transport ale cursei (curse_dispecer.tip_transport), cu etichetele din Dispecer. */
+    public const TRANSPORT_TYPES = [
+        'primar' => 'Primar km',
+        'primar_tona' => 'Primar tone',
+        'distributie' => 'Distributie',
+        'primar_distributie' => 'Primar+Distributie',
+        'compresor' => 'Compresor',
+    ];
+
+    /** Starea unei sesiuni: codurile din sessionCheck() + sesiunile inca pornite. */
+    public const STATUSES = [
+        'ok' => 'Complete (verificate)',
+        'lipsa' => 'Documente lipsă',
+        'diferenta' => 'Sumă diferită în document',
+        'in_curs' => 'Sesiuni în curs',
+    ];
+
+    /** Valoarea de filtru pentru "fara" (fara beneficiar, fara categorie, fara cursa...). */
+    public const NONE = '0';
+
     public function __construct(private PDO $db)
     {
     }
@@ -54,13 +74,24 @@ class EtollStatementModel
             $db->exec($sql);
         }
 
-        // Tabelele create inainte de factura CC-P pe sesiune.
-        $hasInvoice = $db->query("
+        // Coloanele adaugate dupa prima versiune a tabelelor.
+        $added = [
+            ['etoll_documente', 'factura_path', 'VARCHAR(255) NULL AFTER total_etoll'],
+            ['etoll_documente', 'fara_tva', 'DECIMAL(12,2) NULL AFTER total_etoll'],
+            ['etoll_documente', 'tva', 'DECIMAL(12,2) NULL AFTER fara_tva'],
+            ['etoll_documente', 'cota_tva', 'DECIMAL(5,2) NULL AFTER tva'],
+            ['etoll_alimentari_facturi', 'fara_tva', 'DECIMAL(12,2) NULL AFTER total'],
+            ['etoll_alimentari_facturi', 'tva', 'DECIMAL(12,2) NULL AFTER fara_tva'],
+        ];
+        $check = $db->prepare('
             SELECT COUNT(*) FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'etoll_documente' AND COLUMN_NAME = 'factura_path'
-        ")->fetchColumn();
-        if ((int) $hasInvoice === 0) {
-            $db->exec('ALTER TABLE etoll_documente ADD COLUMN factura_path VARCHAR(255) NULL AFTER total_etoll');
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c
+        ');
+        foreach ($added as [$table, $column, $definition]) {
+            $check->execute([':t' => $table, ':c' => $column]);
+            if ((int) $check->fetchColumn() === 0) {
+                $db->exec("ALTER TABLE $table ADD COLUMN $column $definition");
+            }
         }
     }
 
@@ -95,6 +126,9 @@ class EtollStatementModel
                 destinatie VARCHAR(255) NULL,
                 km_tarifabil DECIMAL(10,2) NULL,
                 total_etoll DECIMAL(12,2) NULL,
+                fara_tva DECIMAL(12,2) NULL,
+                tva DECIMAL(12,2) NULL,
+                cota_tva DECIMAL(5,2) NULL,
                 factura_path VARCHAR(255) NULL,
                 anexa_path VARCHAR(255) NULL,
                 desfasurator_path VARCHAR(255) NULL,
@@ -108,6 +142,8 @@ class EtollStatementModel
                 numar_document VARCHAR(60) NULL,
                 data DATETIME NOT NULL,
                 total DECIMAL(12,2) NOT NULL,
+                fara_tva DECIMAL(12,2) NULL,
+                tva DECIMAL(12,2) NULL,
                 pdf_path VARCHAR(255) NULL,
                 created_at DATETIME NOT NULL,
                 KEY idx_etoll_alimentari_facturi_data (data)
@@ -197,6 +233,9 @@ class EtollStatementModel
         $topups = $sum("SELECT COUNT(*) n, SUM(suma) suma FROM etoll_tranzactii WHERE tip = 'alimentare' AND data >= :s AND data < :e", [':s' => $start, ':e' => $end]);
         $usage = $sum("SELECT COUNT(*) n, SUM(suma) suma FROM etoll_tranzactii WHERE tip = 'sesiune' AND in_curs = 0 AND data >= :s AND data < :e", [':s' => $start, ':e' => $end]);
         $topupInvoices = $sum('SELECT COUNT(*) n, SUM(total) suma FROM etoll_alimentari_facturi WHERE data >= :s AND data < :e', [':s' => $start, ':e' => $end]);
+        $topupVat = $this->db->prepare('SELECT SUM(fara_tva) fara_tva, SUM(tva) tva FROM etoll_alimentari_facturi WHERE data >= :s AND data < :e');
+        $topupVat->execute([':s' => $start, ':e' => $end]);
+        $topupVatRow = $topupVat->fetch(PDO::FETCH_ASSOC) ?: [];
 
         $docs = $this->db->prepare("
             SELECT
@@ -204,7 +243,10 @@ class EtollStatementModel
                 SUM(d.factura_path IS NULL) fara_factura,
                 SUM(d.anexa_path IS NULL) fara_anexa,
                 SUM(d.desfasurator_path IS NULL) fara_desfasurator,
-                SUM(d.total_etoll IS NOT NULL AND ABS(d.total_etoll - t.suma) > :tol) suma_diferita
+                SUM(d.total_etoll IS NOT NULL AND ABS(d.total_etoll - t.suma) > :tol) suma_diferita,
+                SUM(d.fara_tva) fara_tva,
+                SUM(d.tva) tva,
+                SUM(d.fara_tva IS NULL) fara_tva_lipsa
             FROM etoll_tranzactii t
             LEFT JOIN etoll_documente d ON d.session_id = t.session_id
             WHERE t.tip = 'sesiune' AND t.in_curs = 0 AND t.data >= :s AND t.data < :e
@@ -228,6 +270,12 @@ class EtollStatementModel
             'fara_anexa' => (int) ($docRow['fara_anexa'] ?? 0),
             'fara_desfasurator' => (int) ($docRow['fara_desfasurator'] ?? 0),
             'suma_diferita' => (int) ($docRow['suma_diferita'] ?? 0),
+            // TVA din documentele eToll (consumul: doar sesiunile al caror document CC-P a fost citit).
+            'consum_fara_tva' => round((float) ($docRow['fara_tva'] ?? 0), 2),
+            'consum_tva' => round((float) ($docRow['tva'] ?? 0), 2),
+            'consum_fara_tva_lipsa' => (int) ($docRow['fara_tva_lipsa'] ?? 0),
+            'alimentari_fara_tva' => round((float) ($topupVatRow['fara_tva'] ?? 0), 2),
+            'alimentari_tva' => round((float) ($topupVatRow['tva'] ?? 0), 2),
             'date_din' => $coverage !== false && $coverage !== null ? (string) $coverage : null,
         ];
     }
@@ -274,20 +322,31 @@ class EtollStatementModel
      *
      * @return array<int, array<string, mixed>>
      */
-    public function sessions(string $from, string $to, string $plate = ''): array
+    /** @param array<int, string> $plates nr. auto normalizate (B652NET); gol = toate */
+    public function sessions(string $from, string $to, array $plates = []): array
     {
         $sql = "
             SELECT t.tx_id, t.session_id, t.suma, t.data AS inchisa_la, t.nr_inmatriculare, t.remorci,
                    d.numar_document, d.inceput, d.sfarsit, d.origine, d.destinatie, d.km_tarifabil,
-                   d.total_etoll, d.factura_path, d.anexa_path, d.desfasurator_path, d.eroare
+                   d.total_etoll, d.fara_tva, d.tva, d.cota_tva, d.factura_path, d.anexa_path, d.desfasurator_path, d.eroare,
+                   c.id AS cursa_id, c.beneficiar_id, c.tip_transport, bt.nume AS beneficiar
             FROM etoll_tranzactii t
             LEFT JOIN etoll_documente d ON d.session_id = t.session_id
+            -- Cursa si beneficiarul: dupa ce importul eToll -> Facturi a asociat sesiunea unei curse.
+            LEFT JOIN facturi f ON f.sursa_key = CONCAT('etoll:', t.session_id)
+                AND f.deleted_at IS NULL AND f.status IN ('asociata_auto', 'asociata_manual')
+            LEFT JOIN curse_dispecer c ON c.id = f.cursa_id AND c.deleted_at IS NULL
+            LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
             WHERE t.tip = 'sesiune' AND t.in_curs = 0 AND t.data >= :s AND t.data < :e
         ";
         $params = [':s' => $from . ' 00:00:00', ':e' => date('Y-m-d', strtotime($to . ' +1 day')) . ' 00:00:00'];
-        if ($plate !== '') {
-            $sql .= ' AND t.nr_inmatriculare = :plate';
-            $params[':plate'] = $plate;
+        if ($plates !== []) {
+            $placeholders = [];
+            foreach (array_values($plates) as $i => $plate) {
+                $placeholders[] = ':plate' . $i;
+                $params[':plate' . $i] = $plate;
+            }
+            $sql .= ' AND t.nr_inmatriculare IN (' . implode(', ', $placeholders) . ')';
         }
         $stmt = $this->db->prepare($sql . ' ORDER BY t.data ASC, t.tx_id ASC');
         $stmt->execute($params);
@@ -361,13 +420,248 @@ class EtollStatementModel
         return $rows;
     }
 
-    /** @return array<int, string> nr. auto cu sesiuni in perioada (filtrul paginii) */
-    public function plates(string $from, string $to): array
+    /**
+     * Camioanele cu sesiuni in perioada, pentru filtrul grupat pe categoria de capacitate
+     * (aceeasi regula ca la Carburanti: capul tractor ia categoria semiremorcii cuplate).
+     * Valoarea de filtrare este nr. auto din eToll (B652NET); un camion necunoscut in flota
+     * ajunge in grupa "Fara categorie".
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function vehicles(string $from, string $to): array
     {
-        $stmt = $this->db->prepare("SELECT DISTINCT nr_inmatriculare FROM etoll_tranzactii WHERE tip = 'sesiune' AND nr_inmatriculare IS NOT NULL AND data >= :s AND data < :e ORDER BY nr_inmatriculare");
+        $stmt = $this->db->prepare("
+            SELECT
+                p.nr AS etoll_plate,
+                MAX(veh.nr_inmatriculare) AS nr_inmatriculare,
+                MAX(CASE WHEN COALESCE(veh.capacitate_transport, 0) > 0 THEN veh.capacitate_transport ELSE semi.capacitate_transport END) AS capacitate_transport,
+                MAX(CASE WHEN veh.tip_vehicul = 'cap_tractor' THEN COALESCE(semi.categorie_capacitate_id, veh.categorie_capacitate_id) ELSE veh.categorie_capacitate_id END) AS categorie_capacitate_id,
+                MAX(cc.nume) AS categorie_capacitate,
+                MAX(cc.ordine_afisare) AS categorie_capacitate_ordine,
+                MAX(veh.marca) AS marca,
+                MAX(veh.model) AS model
+            FROM (
+                SELECT DISTINCT nr_inmatriculare AS nr FROM etoll_tranzactii
+                WHERE tip = 'sesiune' AND nr_inmatriculare IS NOT NULL AND data >= :s AND data < :e
+            ) p
+            LEFT JOIN vehicule veh ON REPLACE(UPPER(veh.nr_inmatriculare), ' ', '') = p.nr
+            LEFT JOIN vehicule_cuplaje cuplaj ON cuplaj.tractor_id = veh.id AND cuplaj.activ = 1
+            LEFT JOIN vehicule semi ON semi.id = cuplaj.semiremorca_id
+            LEFT JOIN vehicule_categorii_capacitate cc ON cc.id = CASE
+                WHEN veh.tip_vehicul = 'cap_tractor' THEN COALESCE(semi.categorie_capacitate_id, veh.categorie_capacitate_id)
+                ELSE veh.categorie_capacitate_id
+            END
+            GROUP BY p.nr
+            ORDER BY p.nr
+        ");
         $stmt->execute([':s' => $from . ' 00:00:00', ':e' => date('Y-m-d', strtotime($to . ' +1 day')) . ' 00:00:00']);
 
-        return array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * Sesiunile inca pornite (in_curs = 1) din perioada: eToll le arata in registru inainte sa le inchida,
+     * fara documente. Suma lor e consumul de pana acum.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function openSessions(string $from, string $to): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT t.tx_id, t.session_id, t.suma, t.data, t.nr_inmatriculare, t.remorci,
+                   d.numar_document, d.inceput, d.sfarsit, d.origine, d.destinatie, d.km_tarifabil,
+                   c.id AS cursa_id, c.beneficiar_id, c.tip_transport, bt.nume AS beneficiar
+            FROM etoll_tranzactii t
+            LEFT JOIN etoll_documente d ON d.session_id = t.session_id
+            LEFT JOIN facturi f ON f.sursa_key = CONCAT('etoll:', t.session_id)
+                AND f.deleted_at IS NULL AND f.status IN ('asociata_auto', 'asociata_manual')
+            LEFT JOIN curse_dispecer c ON c.id = f.cursa_id AND c.deleted_at IS NULL
+            LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+            WHERE t.tip = 'sesiune' AND t.in_curs = 1 AND t.data >= :s AND t.data < :e
+            ORDER BY t.data ASC, t.tx_id ASC
+        ");
+        $stmt->execute([':s' => $from . ' 00:00:00', ':e' => date('Y-m-d', strtotime($to . ' +1 day')) . ' 00:00:00']);
+        $rows = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $row['verificare'] = ['cod' => 'in_curs', 'text' => 'În curs'];
+            $rows[] = $row;
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Beneficiarii pentru filtru: cei activi + cei care apar in sesiunile date (si daca sunt inactivi).
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<string, string> id => nume
+     */
+    public function beneficiaries(array $rows = []): array
+    {
+        $present = [];
+        foreach ($rows as $row) {
+            if (!empty($row['beneficiar_id'])) {
+                $present[(string) $row['beneficiar_id']] = true;
+            }
+        }
+        $options = [];
+        foreach ($this->db->query('SELECT id, nume, activ FROM configurare_beneficiari_transport ORDER BY nume')->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            if ((int) $row['activ'] === 1 || isset($present[(string) $row['id']])) {
+                $options[(string) $row['id']] = (string) $row['nume'];
+            }
+        }
+
+        return $options;
+    }
+
+    /**
+     * Filtrele paginii pe sesiuni (inchise sau in curs). In acelasi camp valorile se leaga cu SAU,
+     * intre campuri cu SI; un camp gol nu filtreaza. Capacitatea si categoria vin din flota
+     * (vehicles(): capul tractor ia capacitatea/categoria semiremorcii cuplate), dupa nr. auto eToll.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<string, array<int, string>> $filters nr / cap / cat / ben / tip / status, plus
+     *        inchisa_de / inchisa_pana (["2026-11-05 14:00:00"]): ora inchiderii sesiunii, capete incluse.
+     *        Cu un capat ales, sesiunile in curs (fara ora de inchidere) nu trec.
+     * @param array<string, array<string, mixed>> $vehiclesByPlate vehicles() indexat pe etoll_plate
+     * @return array<int, array<string, mixed>>
+     */
+    public static function applyFilters(array $rows, array $filters, array $vehiclesByPlate): array
+    {
+        $closedFrom = (string) (($filters['inchisa_de'] ?? [])[0] ?? '');
+        $closedTo = (string) (($filters['inchisa_pana'] ?? [])[0] ?? '');
+        unset($filters['inchisa_de'], $filters['inchisa_pana']);
+        $sets = array_map(static fn(array $values): array => array_flip(array_map('strval', $values)), $filters);
+        $wants = static fn(string $key, string $value): bool => empty($sets[$key]) || isset($sets[$key][$value]);
+
+        return array_values(array_filter($rows, static function (array $row) use ($wants, $vehiclesByPlate, $closedFrom, $closedTo): bool {
+            $plate = (string) ($row['nr_inmatriculare'] ?? '');
+            $vehicle = $vehiclesByPlate[$plate] ?? [];
+            if ($closedFrom !== '' || $closedTo !== '') {
+                $closedAt = (string) ($row['inchisa_la'] ?? '');
+                if ($closedAt === '' || ($closedFrom !== '' && $closedAt < $closedFrom) || ($closedTo !== '' && $closedAt > $closedTo)) {
+                    return false;
+                }
+            }
+
+            return $wants('nr', $plate)
+                && $wants('cap', self::capacityKey($vehicle['capacitate_transport'] ?? null))
+                && $wants('cat', ((string) ($vehicle['categorie_capacitate_id'] ?? '')) ?: self::NONE)
+                && $wants('ben', ((string) ($row['beneficiar_id'] ?? '')) ?: self::NONE)
+                && $wants('tip', ((string) ($row['tip_transport'] ?? '')) ?: self::NONE)
+                && $wants('status', (string) ($row['verificare']['cod'] ?? ''));
+        }));
+    }
+
+    /** Cheia capacitatii reale in filtru: "18.00"; necunoscuta = NONE. */
+    public static function capacityKey(mixed $capacity): string
+    {
+        return $capacity !== null && $capacity !== '' && (float) $capacity > 0 ? number_format((float) $capacity, 2, '.', '') : self::NONE;
+    }
+
+    /**
+     * Totalurile si verificarile documentelor pentru sesiunile inchise date: aceleasi reguli ca
+     * in summary() (care le calculeaza in SQL pe toata perioada), aplicate pe sesiunile filtrate.
+     *
+     * @param array<int, array<string, mixed>> $rows sessions()
+     * @return array<string, mixed>
+     */
+    /**
+     * Totalurile pentru subsolul tabelului, pe tab: inchise, in curs, fara documente.
+     * "Cu TVA" = toate sesiunile (suma din registrul eToll); "Fara TVA" / "TVA" = doar sesiunile cu
+     * documentul CC-P citit (fara_tva / tva NULL nu se aduna ca 0 documentat: se numara separat).
+     *
+     * @param array<int, array<string, mixed>> $closed sessions()
+     * @param array<int, array<string, mixed>> $open openSessions()
+     * @return array<string, array{n: int, documentate: int, fara_tva: float, tva: float, suma: float}>
+     */
+    public static function tabTotals(array $closed, array $open): array
+    {
+        $sum = static function (array $rows): array {
+            $totals = ['n' => count($rows), 'documentate' => 0, 'fara_tva' => 0.0, 'tva' => 0.0, 'suma' => 0.0];
+            foreach ($rows as $row) {
+                $totals['suma'] += (float) $row['suma'];
+                if (($row['fara_tva'] ?? null) !== null) {
+                    $totals['documentate']++;
+                    $totals['fara_tva'] += (float) $row['fara_tva'];
+                    $totals['tva'] += (float) ($row['tva'] ?? 0);
+                }
+            }
+            foreach (['fara_tva', 'tva', 'suma'] as $key) {
+                $totals[$key] = round($totals[$key], 2);
+            }
+
+            return $totals;
+        };
+
+        return [
+            'closed' => $sum($closed),
+            'open' => $sum($open),
+            'missing' => $sum(array_values(array_filter($closed, static fn(array $row): bool => ($row['verificare']['cod'] ?? '') === 'lipsa'))),
+        ];
+    }
+
+    public static function sessionTotals(array $rows): array
+    {
+        $active = array_keys(self::documentKinds());
+        $totals = ['n' => count($rows), 'suma' => 0.0, 'fara_tva' => 0.0, 'tva' => 0.0, 'fara_tva_lipsa' => 0, 'documente_complete' => 0, 'suma_diferita' => 0];
+        foreach (array_keys(self::DOCUMENTS) as $kind) {
+            $totals['fara_' . $kind] = 0;
+        }
+        $plates = [];
+        foreach ($rows as $row) {
+            $totals['suma'] += (float) $row['suma'];
+            if ($row['fara_tva'] === null) {
+                $totals['fara_tva_lipsa']++;
+            } else {
+                $totals['fara_tva'] += (float) $row['fara_tva'];
+            }
+            $totals['tva'] += (float) ($row['tva'] ?? 0);
+            $complete = true;
+            foreach (array_keys(self::DOCUMENTS) as $kind) {
+                if (empty($row[$kind . '_path'])) {
+                    $totals['fara_' . $kind]++;
+                    if (in_array($kind, $active, true)) {
+                        $complete = false;
+                    }
+                }
+            }
+            $totals['documente_complete'] += $complete ? 1 : 0;
+            if ($row['total_etoll'] !== null && abs((float) $row['total_etoll'] - (float) $row['suma']) > self::TOLERANCE) {
+                $totals['suma_diferita']++;
+            }
+            $plates[(string) $row['nr_inmatriculare']] = true;
+        }
+        foreach (['suma', 'fara_tva', 'tva'] as $key) {
+            $totals[$key] = round($totals[$key], 2);
+        }
+        $totals['vehicule'] = count($plates);
+
+        return $totals;
+    }
+
+    /**
+     * Documentele mai multor sesiuni (descarcarea celor selectate in pagina).
+     *
+     * @param array<int, string> $sessionIds
+     * @return array<int, array<string, mixed>>
+     */
+    public function documents(array $sessionIds): array
+    {
+        $sessionIds = array_values(array_unique(array_filter(array_map('strval', $sessionIds))));
+        if ($sessionIds === []) {
+            return [];
+        }
+        $params = [];
+        foreach ($sessionIds as $i => $id) {
+            $params[':id' . $i] = $id;
+        }
+        $stmt = $this->db->prepare("SELECT d.*, t.nr_inmatriculare, t.data AS inchisa_la FROM etoll_documente d
+            LEFT JOIN etoll_tranzactii t ON t.session_id = d.session_id AND t.tip = 'sesiune'
+            WHERE d.session_id IN (" . implode(', ', array_keys($params)) . ') ORDER BY t.data ASC');
+        $stmt->execute($params);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
     }
 
     /** @return array<string, mixed>|null */

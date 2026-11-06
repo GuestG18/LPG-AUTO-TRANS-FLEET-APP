@@ -107,6 +107,7 @@ class EtollImportService
         [$stats['facturi_create'], $created, $errors] = $this->createInvoices();
         $stats['erori'] += $errors;
         [$stats['reverificate'], $rematched] = $this->rematchPending();
+        $this->convertToReinvoices();
         $stats['asociate'] = $created + $rematched;
         $stats['cereri'] = $this->client->requestCount();
 
@@ -447,6 +448,25 @@ class EtollImportService
     // -------------------------------------------------------------------------
 
     /** @return array{0: int, 1: int} [reverificate, asociate] */
+    /**
+     * Taxele eToll deja puse pe curse ca cheltuiala (inainte sa devina refacturari) se rescriu
+     * ca refacturare: InvoiceModel::syncMirror face asta pentru sursa 'etoll'.
+     */
+    private function convertToReinvoices(): void
+    {
+        $ids = $this->db->query("
+            SELECT f.id FROM facturi f
+            JOIN curse_cheltuieli c ON c.id = f.curse_cheltuiala_id
+            WHERE f.sursa = 'etoll' AND f.deleted_at IS NULL AND c.refacturare_suma IS NULL
+        ")->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        foreach ($ids as $id) {
+            $this->invoices->syncMirror((int) $id);
+        }
+        if ($ids !== []) {
+            ($this->log)('Taxe eToll mutate din cheltuieli in refacturari: ' . count($ids) . '.');
+        }
+    }
+
     private function rematchPending(): array
     {
         $ids = $this->db->query("

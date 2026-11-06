@@ -22,5 +22,6 @@ return [
     'endpoints'   => [
         'export_xlsx' => 'export',
         'export_zip'  => 'export',
+        'export_selected' => 'export',
     ],
 ];

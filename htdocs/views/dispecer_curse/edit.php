@@ -178,7 +178,7 @@ $existingExpenseDocName = is_array($expenseBeingEdited) ? (string) ($expenseBein
 $existingExpenseDocUrl = trip_expense_document_url($existingExpenseDoc);
 $existingRefacturareDoc = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['refacturare_document_path'] ?? '') : '';
 $existingRefacturareDocName = is_array($expenseBeingEdited) ? (string) ($expenseBeingEdited['refacturare_document_original_name'] ?? '') : '';
-$existingRefacturareDocUrl = $existingRefacturareDoc !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($existingRefacturareDoc)) : null;
+$existingRefacturareDocUrl = $existingRefacturareDoc !== '' ? trip_expense_document_url($existingRefacturareDoc) : null;
 $expenseRefacturareEnabled = (string) ($expenseFormData['refacturare_enabled'] ?? '0') === '1';
 $expenseIsPureRefacturare = is_array($expenseBeingEdited)
     && trim((string) ($expenseBeingEdited['refacturare_tip_cheltuiala'] ?? '')) !== ''
@@ -1660,7 +1660,7 @@ if ($phaseCompact) {
                                 $docUrl = trip_expense_document_url($docPath);
                                 $refacturareDocPath = (string) ($expense['refacturare_document_path'] ?? '');
                                 $refacturareDocName = (string) ($expense['refacturare_document_original_name'] ?? '');
-                                $refacturareDocUrl = $refacturareDocPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($refacturareDocPath)) : null;
+                                $refacturareDocUrl = $refacturareDocPath !== '' ? trip_expense_document_url($refacturareDocPath) : null;
                                 $refacturareIsInvoiced = (int) ($expense['refacturare_facturata'] ?? 0) === 1;
                                 $expenseTypeLabel = trim((string) ($expense['categorie_nume'] ?? ''));
                                 if ($expenseTypeLabel === '') {

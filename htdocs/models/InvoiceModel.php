@@ -1775,7 +1775,29 @@ class InvoiceModel extends BaseModel
         }
 
         $documents = [];
-        if (trim((string) ($row['document_path'] ?? '')) !== '') {
+        if ((string) $row['sursa'] === 'etoll') {
+            // Taxa eToll se refactureaza clientului, ca taxele de acces / trecere introduse in
+            // Dispecer: cheltuiala 0, suma pe partea de refacturare, cu PDF-ul ca document al
+            // refacturarii. Marcajul "facturata" ramane al fluxului de facturare.
+            $hasDocument = trim((string) ($row['document_path'] ?? '')) !== '';
+            $fields = array_merge($fields, [
+                'suma' => '0.00',
+                'locatie' => null,
+                'bucati' => null,
+                'pret_unitar' => null,
+                'refacturare_tip_cheltuiala' => $legacyType,
+                'refacturare_locatie' => mb_substr(trim((string) ($row['furnizor'] ?? '')), 0, 190) ?: null,
+                'refacturare_bucati' => '1.00',
+                'refacturare_pret_unitar' => $amount,
+                'refacturare_suma' => $amount,
+                'refacturare_data' => (string) $row['data_document'],
+                'refacturare_observatii' => $fields['observatii'],
+                'refacturare_document_path' => $hasDocument ? 'facturi:' . $id : null,
+                'refacturare_document_original_name' => $hasDocument ? (string) ($row['document_original_name'] ?: ('factura_' . $id)) : null,
+                'refacturare_document_mime_type' => $hasDocument ? ($row['document_mime'] ?? null) : null,
+                'refacturare_document_file_size' => $hasDocument ? (int) ($row['document_size'] ?? 0) : null,
+            ]);
+        } elseif (trim((string) ($row['document_path'] ?? '')) !== '') {
             $documents[] = [
                 // Fisierul sta in storage/invoices (in afara web root-ului): Dispecer curse
                 // il deschide prin ruta autentificata, vezi trip_expense_document_url().

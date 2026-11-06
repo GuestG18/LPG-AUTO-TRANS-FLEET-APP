@@ -313,7 +313,7 @@ $phaseStatusDots = is_array($raceStatusDot['phases'] ?? null) ? $raceStatusDot['
                         }
                         $refacturareDocPath = (string) ($expense['refacturare_document_path'] ?? '');
                         $refacturareDocName = (string) ($expense['refacturare_document_original_name'] ?? '');
-                        $refacturareDocUrl = $refacturareDocPath !== '' ? url('uploads/curse_cheltuieli/' . rawurlencode($refacturareDocPath)) : null;
+                        $refacturareDocUrl = $refacturareDocPath !== '' ? trip_expense_document_url($refacturareDocPath) : null;
                         ?>
                         <tr>
                             <td class="ps-3"><?= e(format_date_ro((string) ($expense['data_cheltuiala'] ?? ''))) ?></td>

@@ -117,12 +117,16 @@ class EtollStatementSyncService
     private function syncTopupInvoices(int $days): array
     {
         $known = array_fill_keys(array_map('strval', $this->db->query('SELECT invoice_id FROM etoll_alimentari_facturi')->fetchAll(PDO::FETCH_COLUMN) ?: []), true);
-        // Prima rulare: tot istoricul. Apoi doar fereastra rularii (lista vine cele mai noi intai).
-        $oldest = $known === [] ? null : (new DateTimeImmutable('now'))->modify('-' . (max(1, $days) + 1) . ' days');
+        // Facturile salvate inainte de coloanele de TVA: valorile vin din aceeasi lista, fara cereri in plus.
+        $withoutVat = array_fill_keys(array_map('strval', $this->db->query('SELECT invoice_id FROM etoll_alimentari_facturi WHERE fara_tva IS NULL')->fetchAll(PDO::FETCH_COLUMN) ?: []), true);
+        // Prima rulare (sau TVA de completat): tot istoricul. Apoi doar fereastra rularii (lista vine cele mai noi intai).
+        $oldest = $known === [] || $withoutVat !== [] ? null : (new DateTimeImmutable('now'))->modify('-' . (max(1, $days) + 1) . ' days');
         $insert = $this->db->prepare('
-            INSERT IGNORE INTO etoll_alimentari_facturi (invoice_id, numar_document, data, total, pdf_path, created_at)
-            VALUES (:id, :nr, :data, :total, :pdf, :created_at)
+            INSERT IGNORE INTO etoll_alimentari_facturi (invoice_id, numar_document, data, total, fara_tva, tva, pdf_path, created_at)
+            VALUES (:id, :nr, :data, :total, :fara_tva, :tva, :pdf, :created_at)
         ');
+        $fillVat = $this->db->prepare('UPDATE etoll_alimentari_facturi SET fara_tva = :fara_tva, tva = :tva WHERE invoice_id = :id');
+        $amount = static fn(mixed $value): ?string => is_numeric($value) ? number_format((float) $value, 2, '.', '') : null;
         $local = new DateTimeZone(date_default_timezone_get());
 
         $new = 0;
@@ -137,6 +141,10 @@ class EtollStatementSyncService
                     break;
                 }
                 $id = (string) ($invoice['id'] ?? '');
+                if (isset($withoutVat[$id])) {
+                    $fillVat->execute([':fara_tva' => $amount($invoice['total']['priceWithoutVat'] ?? null), ':tva' => $amount($invoice['total']['vat'] ?? null), ':id' => $id]);
+                    unset($withoutVat[$id]);
+                }
                 if ($id === '' || isset($known[$id]) || ($invoice['paymentMethod'] ?? null) === null) {
                     continue;
                 }
@@ -156,6 +164,8 @@ class EtollStatementSyncService
                     ':nr' => $number !== '' ? mb_substr($number, 0, 60) : null,
                     ':data' => $issuedAt->setTimezone($local)->format('Y-m-d H:i:s'),
                     ':total' => number_format((float) ($invoice['total']['totalPrice'] ?? 0), 2, '.', ''),
+                    ':fara_tva' => $amount($invoice['total']['priceWithoutVat'] ?? null),
+                    ':tva' => $amount($invoice['total']['vat'] ?? null),
                     ':pdf' => $path,
                     ':created_at' => date('Y-m-d H:i:s'),
                 ]);
@@ -179,13 +189,14 @@ class EtollStatementSyncService
     private function syncSessionDocuments(): array
     {
         $pending = $this->db->prepare("
-            SELECT t.session_id, t.data, t.nr_inmatriculare, s.invoice_id, s.annex_id, s.numar_document,
-                   d.session_id AS doc_exista, d.inceput, d.factura_path, d.anexa_path, d.desfasurator_path, d.annex_id AS doc_annex_id
+            SELECT t.session_id, t.data, t.suma, t.nr_inmatriculare, s.invoice_id, s.annex_id, s.numar_document,
+                   d.session_id AS doc_exista, d.inceput, d.fara_tva, d.factura_path, d.anexa_path, d.desfasurator_path, d.annex_id AS doc_annex_id
             FROM etoll_tranzactii t
             LEFT JOIN etoll_documente d ON d.session_id = t.session_id
             LEFT JOIN etoll_sesiuni s ON s.session_id = t.session_id
             WHERE t.tip = 'sesiune' AND t.in_curs = 0 AND t.session_id IS NOT NULL
-              AND (d.session_id IS NULL OR d.inceput IS NULL OR d.factura_path IS NULL OR d.anexa_path IS NULL OR d.desfasurator_path IS NULL)
+              AND (d.session_id IS NULL OR d.inceput IS NULL OR d.factura_path IS NULL OR d.anexa_path IS NULL OR d.desfasurator_path IS NULL
+                   OR (d.fara_tva IS NULL AND s.invoice_id IS NOT NULL))
               AND (d.incercari IS NULL OR d.incercari < :max)
             ORDER BY t.data DESC
         ");
@@ -195,7 +206,7 @@ class EtollStatementSyncService
         $completed = 0;
         $errors = 0;
         foreach ($rows as $row) {
-            // Detaliu + desfasurator + factura + anexa (+ eventual detaliul documentului CC-P pentru id-ul anexei).
+            // Detaliu sesiune + desfasurator + detaliu document CC-P (TVA, anexa) + factura + anexa.
             if ($this->client->budgetLeft() < 5 + self::RESERVED_REQUESTS) {
                 ($this->log)('Plafonul de cereri: ' . (count($rows) - $completed) . ' sesiuni raman pentru rularea urmatoare.');
                 break;
@@ -230,6 +241,18 @@ class EtollStatementSyncService
             }
 
             $invoiceId = (string) ($row['invoice_id'] ?? '');
+            // Detaliul documentului CC-P, citit cel mult o data: imparteala TVA si id-ul anexei.
+            $invoiceDetail = null;
+            $detailOf = function () use ($invoiceId, &$invoiceDetail): array {
+                return $invoiceDetail ??= $this->client->invoice($invoiceId);
+            };
+            if ($row['fara_tva'] === null && $invoiceId !== '') {
+                try {
+                    $fields += self::vatOf($detailOf(), (float) $row['suma']);
+                } catch (Throwable $exception) {
+                    $problems[] = 'TVA: ' . $exception->getMessage();
+                }
+            }
             if ($row['factura_path'] === null && $invoiceId !== '') {
                 try {
                     $fields['factura_path'] = $this->storeFile($this->client->invoicePdf($invoiceId), $folder . self::safeName($sessionId) . '_factura.pdf');
@@ -241,7 +264,7 @@ class EtollStatementSyncService
                 try {
                     $annexId = (string) (($row['doc_annex_id'] ?? '') ?: ($row['annex_id'] ?? ''));
                     if ($annexId === '') {
-                        $annexId = (string) self::annexIdOf($this->client->invoice($invoiceId));
+                        $annexId = (string) self::annexIdOf($detailOf());
                     }
                     if ($annexId === '') {
                         throw new RuntimeException('documentul CC-P nu are anexa.');
@@ -279,7 +302,7 @@ class EtollStatementSyncService
     private function saveDocument(string $sessionId, array $fields, array $problems): void
     {
         $now = date('Y-m-d H:i:s');
-        $columns = ['invoice_id', 'annex_id', 'numar_document', 'inceput', 'sfarsit', 'origine', 'destinatie', 'km_tarifabil', 'total_etoll', 'factura_path', 'anexa_path', 'desfasurator_path'];
+        $columns = ['invoice_id', 'annex_id', 'numar_document', 'inceput', 'sfarsit', 'origine', 'destinatie', 'km_tarifabil', 'total_etoll', 'fara_tva', 'tva', 'cota_tva', 'factura_path', 'anexa_path', 'desfasurator_path'];
         $fields = array_intersect_key($fields, array_flip($columns));
 
         $this->db->prepare('INSERT IGNORE INTO etoll_documente (session_id, created_at, updated_at) VALUES (:id, :now, :now2)')
@@ -300,6 +323,34 @@ class EtollStatementSyncService
             $params[":$column"] = $value;
         }
         $this->db->prepare('UPDATE etoll_documente SET ' . implode(', ', $sets) . ' WHERE session_id = :id')->execute($params);
+    }
+
+    /**
+     * Valoarea fara TVA, TVA-ul si cota din detaliul documentului CC-P (tolls[0].price), exact cum le
+     * tipareste anexa. Un document cu mai multe sesiuni are suma lor: atunci se imparte suma sesiunii
+     * dupa cota documentului.
+     *
+     * @return array{fara_tva: string, tva: string, cota_tva: ?string}
+     */
+    private static function vatOf(array $detail, float $sessionAmount): array
+    {
+        $price = is_array($detail['tolls'][0]['price'] ?? null) ? $detail['tolls'][0]['price'] : [];
+        $rate = is_numeric($price['vatPercentage'] ?? null) ? (float) $price['vatPercentage'] : null;
+        $sessions = is_array($detail['sessionIds'] ?? null) ? count($detail['sessionIds']) : 0;
+
+        if ($sessions <= 1 && is_numeric($price['priceWithoutVat'] ?? null) && is_numeric($price['vat'] ?? null)) {
+            $net = (float) $price['priceWithoutVat'];
+            $vat = (float) $price['vat'];
+        } else {
+            $net = round($sessionAmount / (1 + ($rate ?? 21.0) / 100), 2);
+            $vat = $sessionAmount - $net;
+        }
+
+        return [
+            'fara_tva' => number_format($net, 2, '.', ''),
+            'tva' => number_format($vat, 2, '.', ''),
+            'cota_tva' => $rate === null ? null : number_format($rate, 2, '.', ''),
+        ];
     }
 
     private static function annexIdOf(array $detail): ?string
