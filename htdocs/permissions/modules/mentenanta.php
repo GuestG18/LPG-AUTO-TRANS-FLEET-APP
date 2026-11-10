@@ -80,6 +80,7 @@ return [
         'tire_stock_selection'       => 'tire_stock',
         'tire_fleet_unit'            => 'tire_stock',
         'tire_km_sas_sync'           => 'tire_stock',
+        'edit_tire_mount'            => 'tire_stock',
         'tire_position_candidates'   => 'tire_stock',
         'tire_fleet_component'       => 'view',
         'tire_fleet_component_inspector' => 'view',

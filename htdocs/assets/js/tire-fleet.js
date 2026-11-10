@@ -771,6 +771,7 @@
                 + '<button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#ftTireDetails' + tire.id + '"><i class="bi bi-eye me-1"></i>Detalii</button>'
                 + '<button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#ftTireEdit' + tire.id + '"><i class="bi bi-pencil me-1"></i>Editează</button>'
                 + '<button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#ftTireMove' + tire.id + '"><i class="bi bi-arrow-left-right me-1"></i>Schimbă poziția / mută</button>'
+                + (document.getElementById('ftTireMountDate' + tire.id) ? '<button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#ftTireMountDate' + tire.id + '"><i class="bi bi-calendar-event me-1"></i>Modifică data montării</button>' : '')
                 + '<button type="button" class="btn btn-sm btn-outline-danger" data-ft-unmount="' + tire.id + '"><i class="bi bi-box-arrow-down me-1"></i>Demontează</button>'
                 + '<button type="button" class="btn btn-sm btn-outline-secondary" data-ft-clear aria-label="Închide"><i class="bi bi-x-lg"></i></button>'
                 + '</div></div>'

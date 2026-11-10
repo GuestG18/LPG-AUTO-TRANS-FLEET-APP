@@ -84,6 +84,9 @@ class ModuleController
             case 'unmount_tire':
                 $this->unmountVehicleTireAction($moduleKey, $module);
                 return;
+            case 'edit_tire_mount':
+                $this->editTireMountAction($moduleKey);
+                return;
             case 'move_tire':
                 $this->moveMaintenanceTireAction($moduleKey, $module);
                 return;
@@ -2415,6 +2418,41 @@ class ModuleController
         redirect($redirectUrl);
     }
 
+    /** Corecteaza data si ora montarii unei anvelope montate; km se renumara din SAS de la noua ora. */
+    private function editTireMountAction(string $moduleKey): void
+    {
+        $redirectUrl = $this->maintenanceTireStockUrl();
+        if ($moduleKey !== 'mentenanta' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($redirectUrl);
+        }
+        ensure_csrf_or_redirect($redirectUrl);
+
+        $allocationId = (int) ($_POST['allocation_id'] ?? 0);
+        $mountDate = trim((string) ($_POST['mount_date'] ?? ''));
+        if ($allocationId <= 0) {
+            flash_set('danger', 'Montarea selectata nu este valida.');
+            redirect($redirectUrl);
+        }
+        if (!$this->isValidDate($mountDate)) {
+            flash_set('danger', 'Data montarii nu este valida.');
+            redirect($redirectUrl);
+        }
+        $mountMoment = $this->tireMomentFromPost($mountDate, 'mount_time');
+        if ($mountMoment === null) {
+            flash_set('danger', 'Ora montarii nu este valida.');
+            redirect($redirectUrl);
+        }
+
+        try {
+            $this->tireModel->updateMountMoment($allocationId, $mountMoment, $this->currentUserId(), date('Y-m-d H:i:s'));
+            flash_set('success', 'Data montarii a fost modificata. Km anvelopei se renumara din SAS de la ' . date('d.m.Y H:i', (int) strtotime($mountMoment) + 60) . '.');
+        } catch (Throwable $exception) {
+            flash_set('danger', $exception->getMessage());
+        }
+
+        redirect($redirectUrl);
+    }
+
     private function moveMaintenanceTireAction(string $moduleKey, array $module): void
     {
         $fallbackUrl = $moduleKey === 'vehicule'
@@ -3173,11 +3211,37 @@ class ModuleController
             $updateData['location_photo_path'] = $locationPhotoUpload['location_photo_path'] ?? null;
         }
 
+        // Anvelopa montata: "Data si ora montarii" schimbata corecteaza montarea activa (km se renumara din SAS).
+        // Se aplica inainte de restul datelor: daca e refuzata (suprapunere, viitor), nimic nu se salveaza.
+        $mountMessage = '';
+        $activeAllocationId = (int) ($tire['active_allocation_id'] ?? 0);
+        if ($activeAllocationId > 0 && isset($_POST['stock_edit_mount_time'])) {
+            $newMoment = $this->tireMomentFromPost($mountDate, 'stock_edit_mount_time');
+            if ($newMoment === null) {
+                flash_set('danger', 'Ora montarii nu este valida.');
+                redirect($stockRedirectUrl);
+            }
+            $currentMoment = !empty($tire['active_sas_de_la'])
+                ? date('Y-m-d H:i', (int) strtotime((string) $tire['active_sas_de_la']) - 60)
+                : (string) ($tire['active_data_start'] ?? '');
+            if ($newMoment !== $currentMoment) {
+                try {
+                    $this->tireModel->updateMountMoment($activeAllocationId, $newMoment, $this->currentUserId(), date('Y-m-d H:i:s'));
+                    $mountMessage = ' Data montarii a fost modificata; km se renumara din SAS de la ' . date('d.m.Y H:i', (int) strtotime($newMoment) + 60) . '.';
+                } catch (Throwable $exception) {
+                    flash_set('danger', $exception->getMessage() . ' Modificarile nu au fost salvate.');
+                    redirect($stockRedirectUrl);
+                }
+            }
+        } elseif ($activeAllocationId > 0) {
+            $updateData['mount_date'] = $tire['mount_date'] ?? $mountDate;
+        }
+
         try {
             $this->tireModel->updateStockTire($tireId, $updateData);
             $this->tireModel->syncTireMaintenanceEntries([$tireId]);
 
-            flash_set('success', 'Datele anvelopei din stoc au fost actualizate.');
+            flash_set('success', 'Datele anvelopei din stoc au fost actualizate.' . $mountMessage);
         } catch (PDOException $exception) {
             flash_set('danger', $this->buildPersistenceErrorMessage('vehicule', $exception, 'actualizare'));
         } catch (Throwable $exception) {

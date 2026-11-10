@@ -4,10 +4,12 @@
  * "Adauga cursa" (assets/js/datetime-picker-field.js). Trimite doua campuri ascunse: data (Y-m-d)
  * si ora (HH:MM); din minutul urmator acestei ore se numara km SAS ai anvelopei.
  *
- * Intrari: $dtpLabel, $dtpDateName, $dtpTimeName; optional $dtpId, $dtpSmall (bara de demontare).
+ * Intrari: $dtpLabel, $dtpDateName, $dtpTimeName; optional $dtpId, $dtpSmall (bara de demontare),
+ *          $dtpValue (Y-m-d H:i, valoarea de pornire; implicit acum).
  */
 $dtpId = (string) ($dtpId ?? ('dtp' . bin2hex(random_bytes(4))));
 $dtpSmall = !empty($dtpSmall);
+$dtpTs = isset($dtpValue) && strtotime((string) $dtpValue) !== false ? (int) strtotime((string) $dtpValue) : time();
 ?>
 <?php if (!$dtpSmall): ?><label class="form-label" for="<?= e($dtpId) ?>"><?= e($dtpLabel) ?></label><?php endif; ?>
 <div class="dispatcher-datetime-field" data-datetime-picker>
@@ -18,7 +20,7 @@ $dtpSmall = !empty($dtpSmall);
         </button>
     </div>
     <div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>
-    <input type="hidden" name="<?= e($dtpDateName) ?>" value="<?= e(date('Y-m-d')) ?>" data-dtp-date>
-    <input type="hidden" name="<?= e($dtpTimeName) ?>" value="<?= e(date('H:i')) ?>" data-dtp-time>
+    <input type="hidden" name="<?= e($dtpDateName) ?>" value="<?= e(date('Y-m-d', $dtpTs)) ?>" data-dtp-date>
+    <input type="hidden" name="<?= e($dtpTimeName) ?>" value="<?= e(date('H:i', $dtpTs)) ?>" data-dtp-time>
 </div>
-<?php unset($dtpId, $dtpSmall); ?>
+<?php unset($dtpId, $dtpSmall, $dtpValue, $dtpTs); ?>

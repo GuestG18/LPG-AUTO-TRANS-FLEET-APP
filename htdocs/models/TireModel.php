@@ -2023,7 +2023,9 @@ class TireModel extends BaseModel
             'SELECT
                 t.*,
                 active_alloc.id AS active_allocation_id,
-                active_alloc.vehicle_id AS active_vehicle_id
+                active_alloc.vehicle_id AS active_vehicle_id,
+                active_alloc.sas_de_la AS active_sas_de_la,
+                active_alloc.data_start AS active_data_start
              FROM anvelope t
              LEFT JOIN anvelope_alocari active_alloc
                 ON active_alloc.tire_id = t.id
@@ -3960,6 +3962,73 @@ class TireModel extends BaseModel
                 $this->db->rollBack();
             }
 
+            throw $exception;
+        }
+    }
+
+    /**
+     * Corecteaza data si ora montarii unei anvelope inca montate. Km se renumara din SAS de la minutul
+     * urmator noii ore (TireSasKmService citeste din nou vehiculul la urmatoarea deschidere a paginii);
+     * km numarati inainte de trecerea la SAS (km_inainte_sas) se renunta, montarea devine integral SAS.
+     */
+    public function updateMountMoment(int $allocationId, string $mountMoment, ?int $userId, string $updatedAt): void
+    {
+        $this->ensureLifecycleSchema();
+
+        $stmt = $this->db->prepare('SELECT * FROM anvelope_alocari WHERE id = :id AND data_end IS NULL LIMIT 1');
+        $stmt->execute([':id' => $allocationId]);
+        $allocation = $stmt->fetch();
+        if (!$allocation) {
+            throw new RuntimeException('Anvelopa nu mai este montata; data montarii nu se mai poate modifica.');
+        }
+
+        [$mountDate, $moment] = self::splitMoment($mountMoment, $updatedAt);
+        if (strtotime($moment) > strtotime($updatedAt)) {
+            throw new RuntimeException('Data si ora montarii nu pot fi in viitor.');
+        }
+        $tireId = (int) $allocation['tire_id'];
+        $positionId = (int) $allocation['position_id'];
+        $oldMoment = $allocation['sas_de_la'] !== null
+            ? date('d.m.Y H:i', (int) strtotime((string) $allocation['sas_de_la']) - 60)
+            : date('d.m.Y', (int) strtotime((string) $allocation['data_start']));
+
+        $this->db->beginTransaction();
+        try {
+            $this->assertMountMomentFree($tireId, $positionId, $moment);
+
+            $this->db->prepare(
+                'UPDATE anvelope_alocari
+                 SET data_start = :data_start, sas_de_la = :sas_de_la, km_inainte_sas = 0, km_sas = 0, km_sas_final = 0, updated_at = :updated_at
+                 WHERE id = :id'
+            )->execute([
+                ':data_start' => $mountDate,
+                ':sas_de_la' => date('Y-m-d H:i:00', (int) strtotime($moment) + 60),
+                ':updated_at' => $updatedAt,
+                ':id' => $allocationId,
+            ]);
+            $this->db->prepare('UPDATE anvelope SET mount_date = :mount_date, updated_at = :updated_at WHERE id = :id')
+                ->execute([':mount_date' => $mountDate, ':updated_at' => $updatedAt, ':id' => $tireId]);
+
+            $position = $this->getPositionContext($positionId);
+            $tire = $this->getTireById($tireId);
+            $status = $tire !== null ? (string) ($tire['status'] ?? self::STATUS_ACTIVE) : self::STATUS_ACTIVE;
+            $this->recordTireHistory(
+                $tireId,
+                $position,
+                $position,
+                $status,
+                $status,
+                'Modificare data montarii',
+                'Din ' . $oldMoment . ' in ' . date('d.m.Y H:i', (int) strtotime($moment)) . '; km se renumara din SAS.',
+                $userId,
+                $updatedAt
+            );
+
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             throw $exception;
         }
     }

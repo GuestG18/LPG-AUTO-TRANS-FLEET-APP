@@ -15,6 +15,11 @@ $tireId = (int) ($tireRow['id'] ?? 0);
 $detailsModalId = $tireModalPrefix . 'Details' . $tireId;
 $editModalId = $tireModalPrefix . 'Edit' . $tireId;
 $moveModalId = $tireModalPrefix . 'Move' . $tireId;
+$mountDateModalId = $tireModalPrefix . 'MountDate' . $tireId;
+$activeAllocationId = !empty($tireRow['is_mounted']) ? (int) ($tireRow['active_allocation_id'] ?? 0) : 0;
+$activeMountMoment = trim((string) ($tireRow['active_sas_de_la'] ?? '')) !== ''
+    ? date('Y-m-d H:i', (int) strtotime((string) $tireRow['active_sas_de_la']) - 60)
+    : trim((string) ($tireRow['active_data_start'] ?? ''));
 $purchasePriceDisplay = ($tireRow['purchase_price'] ?? null) !== null && $tireRow['purchase_price'] !== ''
     ? number_format((float) $tireRow['purchase_price'], 2, ',', '.') . ' lei'
     : '-';
@@ -35,6 +40,9 @@ $locationPhotoUrl = $locationPhotoPath !== '' ? url('uploads/anvelope_locatii/' 
         <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#<?= e($editModalId) ?>"><i class="bi bi-pencil me-2"></i>Editeaza</button></li>
         <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#<?= e($moveModalId) ?>"><i class="bi bi-truck me-2"></i>Monteaza pe vehicul</button></li>
         <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#<?= e($moveModalId) ?>"><i class="bi bi-arrow-left-right me-2"></i>Muta intre axe</button></li>
+        <?php if ($activeAllocationId > 0): ?>
+            <li><button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#<?= e($mountDateModalId) ?>"><i class="bi bi-calendar-event me-2"></i>Modifica data montarii</button></li>
+        <?php endif; ?>
         <?php foreach (['spare' => 'Muta in rezerva', 'damaged' => 'Marcheaza deteriorata', 'missing' => 'Marcheaza lipsa', 'removed' => 'Scoate din uz'] as $statusValue => $statusLabel): ?>
             <li>
                 <form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'change_tire_status']) . $tireActionAnchor) ?>">
@@ -164,6 +172,9 @@ $locationPhotoUrl = $locationPhotoPath !== '' ? url('uploads/anvelope_locatii/' 
                 <div class="col-md-4"><label class="form-label">Formula axelor</label><select class="form-select" name="stock_edit_target_axle_config" data-tire-axle-config data-current="<?= e($currentTargetAxleConfig) ?>"></select></div>
                 <div class="col-md-4"><label class="form-label">Status</label><select class="form-select" name="stock_edit_status"><?php foreach ($tireStatusOptions as $value => $label): ?><option value="<?= e((string) $value) ?>" <?= (string) ($tireRow['status'] ?? '') === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option><?php endforeach; ?></select></div>
                 <div class="col-md-4"><label class="form-label">Conditie</label><select class="form-select" name="stock_edit_initial_condition"><?php foreach ($initialConditionOptions as $value => $label): ?><option value="<?= e((string) $value) ?>" <?= (string) ($tireRow['initial_condition'] ?? 'new') === (string) $value ? 'selected' : '' ?>><?= e((string) $label) ?></option><?php endforeach; ?></select></div>
+                <?php if ($activeAllocationId > 0): ?>
+                    <div class="col-md-4"><?php $dtpLabel = 'Data si ora montarii'; $dtpDateName = 'stock_edit_mount_date'; $dtpTimeName = 'stock_edit_mount_time'; $dtpValue = $activeMountMoment; include __DIR__ . '/_datetime_field.php'; ?><div class="form-text">Km se renumara din SAS de la minutul urmator.</div></div>
+                <?php endif; ?>
                 <div class="col-md-4"><label class="form-label">DOT</label><input class="form-control" name="stock_edit_dot_code" value="<?= e((string) ($tireRow['dot_code'] ?? '')) ?>"></div>
                 <div class="col-md-4"><label class="form-label">Km curent</label><input type="number" class="form-control" name="stock_edit_current_mileage" value="<?= e((string) ((int) ($tireRow['current_mileage'] ?? 0))) ?>"></div>
                 <div class="col-md-4"><label class="form-label">Km ramasi</label><input type="number" class="form-control" name="stock_edit_estimated_remaining_km" value="<?= e((string) ($tireRow['estimated_remaining_km'] ?? '')) ?>"></div>
@@ -179,3 +190,26 @@ $locationPhotoUrl = $locationPhotoPath !== '' ? url('uploads/anvelope_locatii/' 
         </form>
     </div></div>
 </div>
+
+<?php if ($activeAllocationId > 0): ?>
+<div class="modal fade text-start" id="<?= e($mountDateModalId) ?>" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog"><div class="modal-content">
+        <form method="post" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'edit_tire_mount']) . $tireActionAnchor) ?>">
+            <?= csrf_field() ?>
+            <input type="hidden" name="allocation_id" value="<?= e((string) $activeAllocationId) ?>">
+            <div class="modal-header">
+                <div>
+                    <h5 class="modal-title">Modifica data montarii</h5>
+                    <div class="small text-muted"><?= e(implode(' · ', array_filter([trim((string) ($tireRow['nr_inmatriculare'] ?? '')), trim((string) ($tireRow['position_code'] ?? ''))], 'strlen'))) ?></div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Inchide"></button>
+            </div>
+            <div class="modal-body">
+                <?php $dtpLabel = 'Data si ora montarii'; $dtpDateName = 'mount_date'; $dtpTimeName = 'mount_time'; $dtpValue = $activeMountMoment; include __DIR__ . '/_datetime_field.php'; ?>
+                <div class="form-text">Km anvelopei se renumara din SAS de la minutul urmator acestei ore, pana acum. Ora nu poate fi in viitor si nici peste o montare anterioara a anvelopei sau a pozitiei.</div>
+            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuleaza</button><button type="submit" class="btn btn-primary">Salveaza data</button></div>
+        </form>
+    </div></div>
+</div>
+<?php endif; ?>
