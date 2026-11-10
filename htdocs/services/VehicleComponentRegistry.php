@@ -222,8 +222,10 @@ final class VehicleComponentRegistry
      * @param array $member un membru din TireModel::fleetUnitClientData (type, axles, positions)
      * @param array<string,true> $recordKeys componentKeysWithRecords()[vehicul]
      * @param array<string,list<string>> $catalogMap catalogByCategory()
+     * @param array{systems:array<string,true>,components:array<string,?array>}|null $configured
+     *        VehicleStructureService::schemeFilter: doar ce e configurat ajunge pe schema; null = toate
      */
-    public static function memberSlots(array $member, array $recordKeys, array $catalogMap): array
+    public static function memberSlots(array $member, array $recordKeys, array $catalogMap, ?array $configured = null): array
     {
         $role = self::roleForVehicleType((string) ($member['type'] ?? ''));
         $axles = [];
@@ -258,30 +260,72 @@ final class VehicleComponentRegistry
             if (!in_array($role, $definition['roles'], true) || $category === 'anvelope') {
                 continue;
             }
-            if (!empty($definition['optional']) && !$hasRecords($category)) {
+            if ($configured !== null && !isset($configured['systems'][$category])) {
+                continue;
+            }
+            if ($configured === null && !empty($definition['optional']) && !$hasRecords($category)) {
                 continue;
             }
             $label = $definition['label'];
+            // Componentele sistemului prezente pe vehicul si axele pe care se aplica fiecare.
+            $present = [];
+            if ($configured !== null) {
+                foreach ($catalogMap[$category] ?? [] as $key) {
+                    if (array_key_exists($key, $configured['components'])) {
+                        $present[$key] = $configured['components'][$key];
+                    }
+                }
+            }
+            // Un sistem fara limitari (sau inca fara componente) sta pe toate axele.
+            $onAxle = static function (int $axleNo) use ($configured, $present): bool {
+                if ($configured === null || $present === []) {
+                    return true;
+                }
+                foreach ($present as $allowed) {
+                    if ($allowed === null || in_array($axleNo, $allowed, true)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            $extraFor = static function (?int $axleNo) use ($configured, $present): array {
+                if ($configured === null) {
+                    return [];
+                }
+                $keys = [];
+                foreach ($present as $key => $allowed) {
+                    if ($axleNo === null || $allowed === null || in_array($axleNo, $allowed, true)) {
+                        $keys[] = $key;
+                    }
+                }
+                return ['components' => $keys];
+            };
+            $slotCountBefore = count($slots);
             switch ($category) {
                 case 'franare':
                 case 'rulare':
                     foreach ($axles as $axle) {
+                        if (!$onAxle($axle['no'])) {
+                            continue;
+                        }
                         foreach (['L' => 'stânga', 'R' => 'dreapta'] as $side => $sideLabel) {
-                            $add($category, 'A' . $axle['no'] . '-' . $side, 'wheel_end', $label . ' · Axa ' . $axle['no'] . ' ' . $sideLabel, ['axle' => $axle['no'], 'side' => $side]);
+                            $add($category, 'A' . $axle['no'] . '-' . $side, 'wheel_end', $label . ' · Axa ' . $axle['no'] . ' ' . $sideLabel, ['axle' => $axle['no'], 'side' => $side] + $extraFor($axle['no']));
                         }
                     }
                     break;
                 case 'suspensie':
                 case 'plastice':
                     foreach ($axles as $axle) {
-                        $add($category, 'A' . $axle['no'], $category === 'plastice' ? 'fender' : 'axle_center', $label . ' · Axa ' . $axle['no'], ['axle' => $axle['no']]);
+                        if ($onAxle($axle['no'])) {
+                            $add($category, 'A' . $axle['no'], $category === 'plastice' ? 'fender' : 'axle_center', $label . ' · Axa ' . $axle['no'], ['axle' => $axle['no']] + $extraFor($axle['no']));
+                        }
                     }
                     break;
                 case 'diferential':
                     // Doar axele motoare ale unui vehicul cu motor.
                     foreach ($axles as $axle) {
-                        if ($axle['type'] === TireModel::AXLE_TRACTION) {
-                            $add($category, 'A' . $axle['no'], 'differential', $label . ' · Axa ' . $axle['no'], ['axle' => $axle['no']]);
+                        if ($axle['type'] === TireModel::AXLE_TRACTION && $onAxle($axle['no'])) {
+                            $add($category, 'A' . $axle['no'], 'differential', $label . ' · Axa ' . $axle['no'], ['axle' => $axle['no']] + $extraFor($axle['no']));
                         }
                     }
                     break;
@@ -307,6 +351,12 @@ final class VehicleComponentRegistry
                         'kingpin' => 'kingpin', 'blocare' => 'fifth_wheel_lock', 'alte' => 'body',
                     ];
                     $add($category, 'vehicul', $zones[$category] ?? 'body', $label);
+            }
+            // Locurile fara axa primesc toate componentele prezente ale sistemului.
+            if ($configured !== null) {
+                for ($index = $slotCountBefore, $total = count($slots); $index < $total; $index++) {
+                    $slots[$index] += $extraFor(null);
+                }
             }
         }
 

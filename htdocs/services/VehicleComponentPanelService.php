@@ -52,6 +52,7 @@ final class VehicleComponentPanelService
             }
             $state = [
                 'configured' => is_array($config),
+                'inherited' => !empty($config['inherited']),
                 'interval' => $config['interval_value'] ?? null,
                 'unit' => (string) ($config['unit'] ?? 'km'),
                 'stock_part_id' => $stockPartId,

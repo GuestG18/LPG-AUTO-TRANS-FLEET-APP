@@ -48,6 +48,9 @@
 .ft-add-btn i { font-size: 1.3rem; }
 
 /* Bara de filtre */
+.ft-sas-status { margin: 0 0 .75rem; font-size: .8rem; color: #64748b; }
+.ft-sas-status.is-warning { color: #b45309; }
+.ft-sas-reload { margin-left: .5rem; padding: 0; border: 0; background: none; color: #1d4ed8; font: inherit; text-decoration: underline; cursor: pointer; }
 .ft-toolbar { display: flex; align-items: flex-end; gap: .75rem; flex-wrap: wrap; margin-bottom: .9rem; }
 .ft-search { position: relative; flex: 1 1 300px; max-width: 400px; }
 .ft-search > .bi-search { position: absolute; left: .85rem; top: 50%; transform: translateY(-50%); color: #667085; pointer-events: none; }
@@ -269,13 +272,3 @@
 /* Antetul aplicatiei e lipit sus: derularea la rand / anvelopa lasa loc sub el. */
 .ft-unit, .ft-selected, .ft-tire-table tr.ft-tire-row { scroll-margin-top: 130px; }
 
-/* Punctele componentelor in schema randului: ascunse, apar la trecerea peste rand. */
-.ft-svg .ft-hot { cursor: pointer; }
-.ft-svg .ft-hot-dot { fill: #fff; stroke: #1570ef; stroke-width: 1.6; opacity: 0; pointer-events: none; transition: opacity .2s; }
-.ft-svg .ft-hot-dot.has-records { fill: #1570ef; stroke: #fff; }
-.ft-unit:hover .ft-svg .ft-hot-dot, .ft-unit:focus-within .ft-svg .ft-hot-dot { opacity: .9; pointer-events: auto; }
-.ft-svg .ft-hot:hover .ft-hot-dot { stroke-width: 2.6; opacity: 1; }
-@media (prefers-reduced-motion: reduce) { .ft-svg .ft-hot-dot { transition: none; } }
-/* Ultima inspectie a locului: atentie / necesita inlocuire (din vehicule_componente_inspectii). */
-.ft-svg .ft-hot-dot.is-state-atentie { fill: #f59e0b; stroke: #fff; }
-.ft-svg .ft-hot-dot.is-state-inlocuire { fill: #e5383b; stroke: #fff; }

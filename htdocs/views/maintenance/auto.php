@@ -14,11 +14,12 @@ $vehicleOptions = is_array($catalog['vehicle_types'] ?? null) ? $catalog['vehicl
     'semiremorca' => 'Semiremorca',
     'ansamblu' => 'Ansamblu',
 ];
-$categoryGroups += [
-    'sasiu' => [1, 2, 3, 4, 5, 6, 7, 8, 9],
-    'hidraulic' => [10],
-    'livrare_gaz' => [11, 12, 13, 14, 15, 16, 17],
-];
+$taxonomy = is_array($catalog['taxonomy'] ?? null) ? $catalog['taxonomy'] : AutoComponentCatalogService::taxonomy();
+$structure = is_array($catalog['structure'] ?? null) ? $catalog['structure'] : AutoComponentCatalogService::structurePayload();
+if ($categoryGroups === []) {
+    $categoryGroups = AutoComponentCatalogService::categoryGroups();
+}
+$itemTypes = AutoComponentCatalogService::ITEM_TYPES;
 
 $vehicle = (string) ($_GET['vehicle_type'] ?? ($activePath['vehicle'] ?? 'camion'));
 if (!array_key_exists($vehicle, $vehicleOptions)) {
@@ -39,27 +40,34 @@ if (is_array($selectedVehicle)) {
     $vehicleId = (int) ($selectedVehicle['id'] ?? $vehicleId);
 }
 
-$primaryOptions = $vehicle === 'cap_tractor'
-    ? ['sasiu' => 'Sasiu']
-    : ['rezervor' => 'Rezervor', 'sasiu' => 'Sasiu'];
+// Ramurile si subcategoriile din arborele administrat (Catalog componente → Gestionează categorii).
+$allowedPrimaryKeys = AutoComponentCatalogService::primariesForVehicleType($vehicle);
+$primaryOptions = [];
+foreach ($allowedPrimaryKeys as $primaryKey) {
+    $primaryOptions[$primaryKey] = (string) ($taxonomy['primaries'][$primaryKey]['label'] ?? $primaryKey);
+}
+$allPrimaryOptions = AutoComponentCatalogService::primaryLabels();
 $primary = (string) ($_GET['primary_category'] ?? ($activePath['primary'] ?? 'rezervor'));
 if (!array_key_exists($primary, $primaryOptions)) {
     $primary = array_key_first($primaryOptions) ?: 'sasiu';
 }
 
-$subcategoryOptions = $primary === 'sasiu'
-    ? ['sasiu' => 'Sasiu', 'hidraulic' => 'Hidraulic']
-    : ['sasiu' => 'Sasiu', 'hidraulic' => 'Hidraulic', 'livrare_gaz' => 'Livrare Gaz'];
+$subcategoryOptions = [];
+foreach ((array) ($taxonomy['primaries'][$primary]['subcategories'] ?? []) as $subKey) {
+    if (!empty($taxonomy['subcategories'][$subKey]['active'])) {
+        $subcategoryOptions[$subKey] = (string) $taxonomy['subcategories'][$subKey]['label'];
+    }
+}
 $subcategory = (string) ($_GET['subcategory'] ?? ($activePath['subcategory'] ?? 'livrare_gaz'));
 if (!array_key_exists($subcategory, $subcategoryOptions)) {
     $subcategory = array_key_first($subcategoryOptions) ?: 'sasiu';
 }
 
-$currentCategoryIds = array_values(array_filter((array) ($categoryGroups[$subcategory] ?? $categoryGroups['livrare_gaz']), static fn ($id): bool => isset($categories[(int) $id])));
+$currentCategoryIds = array_values(array_filter((array) ($categoryGroups[$subcategory] ?? []), static fn ($id): bool => isset($categories[(int) $id])));
 $componentPage = (($_GET['view'] ?? '') === 'components') || isset($_GET['category_id']);
-$selectedCategoryId = (int) ($_GET['category_id'] ?? ($activePath['category_id'] ?? ($currentCategoryIds[0] ?? 11)));
+$selectedCategoryId = (int) ($_GET['category_id'] ?? ($activePath['category_id'] ?? ($currentCategoryIds[0] ?? 0)));
 if (!in_array($selectedCategoryId, $currentCategoryIds, true)) {
-    $selectedCategoryId = (int) ($currentCategoryIds[0] ?? 11);
+    $selectedCategoryId = (int) ($currentCategoryIds[0] ?? 0);
 }
 $selectedCategory = is_array($categories[$selectedCategoryId] ?? null) ? $categories[$selectedCategoryId] : [];
 $canManageComponents = !empty($catalog['can_manage_components']);
@@ -79,24 +87,13 @@ $selectedVehicleLabel = is_array($selectedVehicle)
     ? trim((string) ($selectedVehicle['nr_inmatriculare'] ?? '') . ' - ' . (string) ($selectedVehicle['marca'] ?? '') . ' ' . (string) ($selectedVehicle['model'] ?? ''))
     : 'Selecteaza vehicul';
 $selectedVehicleKm = is_array($selectedVehicle) ? (int) ($selectedVehicle['km_bord'] ?? 0) : 0;
-$primaryLabel = (string) ($primaryOptions[$primary] ?? 'Rezervor');
-$subcategoryLabel = (string) ($subcategoryOptions[$subcategory] ?? 'Livrare Gaz');
+$primaryLabel = (string) ($primaryOptions[$primary] ?? '');
+$subcategoryLabel = (string) ($subcategoryOptions[$subcategory] ?? '');
 $searchValue = (string) ($_GET['search'] ?? '');
 $monitoringMethodsDefault = ['Kilometri'];
 
 $categoryIdListForNode = static function (array $node): string {
-    $meta = (string) ($node['meta'] ?? '');
-    if (str_contains($meta, '11-17')) {
-        return '11,12,13,14,15,16,17';
-    }
-    if (str_contains($meta, 'Categorie 10')) {
-        return '10';
-    }
-    if (str_contains($meta, '1-9')) {
-        return '1,2,3,4,5,6,7,8,9';
-    }
-
-    return '';
+    return (string) ($node['category_ids'] ?? '');
 };
 
 $treeRouteForIds = static function (string $ids): array {
@@ -161,6 +158,7 @@ $buildAutoUrl = static function (array $extra = []) use ($vehicle, $vehicleId, $
     return build_query_url(array_merge([
         'page' => 'mentenanta',
         'action' => 'auto',
+        'view' => 'catalog',
         'vehicle_type' => $vehicle,
         'vehicle_id' => $vehicleId > 0 ? $vehicleId : null,
         'primary_category' => $primary,
@@ -286,6 +284,7 @@ $warrantyClass = static function (string $status): string {
 $breadcrumbItems = [
     ['label' => 'Reparatii', 'url' => build_query_url(['page' => 'mentenanta', 'action' => 'repairs'])],
     ['label' => 'Auto', 'url' => build_query_url(['page' => 'mentenanta', 'action' => 'auto'])],
+    ['label' => 'Catalog componente', 'url' => build_query_url(['page' => 'mentenanta', 'action' => 'auto', 'view' => 'catalog'])],
     ['label' => $vehicleLabel, 'url' => $buildAutoUrl(['primary_category' => null, 'subcategory' => null])],
     ['label' => $primaryLabel, 'url' => $buildAutoUrl(['subcategory' => null])],
 ];
@@ -312,6 +311,7 @@ if ($componentPage && $selectedCategory !== []) {
     <form class="repair-auto-filterbar" method="get" data-repair-auto-filter>
         <input type="hidden" name="page" value="mentenanta">
         <input type="hidden" name="action" value="auto">
+        <input type="hidden" name="view" value="catalog">
         <label class="repair-auto-filter-field">
             <span>Tip vehicul</span>
             <i class="bi bi-truck"></i>
@@ -339,8 +339,8 @@ if ($componentPage && $selectedCategory !== []) {
             <span>Categorie principala</span>
             <i class="bi bi-hdd-network"></i>
             <select name="primary_category" data-repair-primary>
-                <?php foreach (['rezervor' => 'Rezervor', 'sasiu' => 'Sasiu'] as $value => $label): ?>
-                    <option value="<?= e((string) $value) ?>"<?= $primary === $value ? ' selected' : '' ?><?= $vehicle === 'cap_tractor' && $value === 'rezervor' ? ' disabled' : '' ?>><?= e((string) $label) ?></option>
+                <?php foreach ($allPrimaryOptions as $value => $label): ?>
+                    <option value="<?= e((string) $value) ?>"<?= $primary === $value ? ' selected' : '' ?><?= !isset($primaryOptions[$value]) ? ' disabled' : '' ?>><?= e((string) $label) ?></option>
                 <?php endforeach; ?>
             </select>
         </label>
@@ -362,7 +362,13 @@ if ($componentPage && $selectedCategory !== []) {
 
     <main class="repair-auto-layout <?= $componentPage ? 'is-component-page' : 'is-category-overview' ?>">
         <section class="repair-auto-panel repair-auto-tree-panel">
-            <div class="repair-auto-panel-title">STRUCTURA VEHICUL</div>
+            <div class="repair-auto-panel-title repair-auto-panel-title-actions"><span>STRUCTURA VEHICUL</span>
+                <?php if ($canManageComponents): ?>
+                    <button type="button" class="repair-auto-taxonomy-btn" data-bs-toggle="modal" data-bs-target="#autoTaxonomyModal" title="Adaugă / editează categorii principale, subcategorii și categorii">
+                        <i class="bi bi-diagram-3" aria-hidden="true"></i> Gestionează categorii
+                    </button>
+                <?php endif; ?>
+            </div>
             <?php $renderTree($tree); ?>
         </section>
 
@@ -449,6 +455,12 @@ if ($componentPage && $selectedCategory !== []) {
                         <input type="hidden" name="component_key" value="">
                         <input type="hidden" name="name" value="">
                     </form>
+                    <form class="d-none" method="post" data-comp-type-form
+                          action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'auto_component_type'])) ?>">
+                        <?= $componentFormFields() ?>
+                        <input type="hidden" name="component_key" value="">
+                        <input type="hidden" name="item_type" value="">
+                    </form>
                     <form class="d-none" method="post" data-comp-remove-form
                           action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'auto_component_remove'])) ?>">
                         <?= $componentFormFields() ?>
@@ -460,7 +472,7 @@ if ($componentPage && $selectedCategory !== []) {
                     <div class="repair-auto-component-row is-header">
                         <span>Nr.</span>
                         <span>Nume componenta</span>
-                        <span>Tip monitorizare</span>
+                        <span>Monitorizare / tip articol</span>
                         <span>Stare</span>
                         <span>Uzura</span>
                         <span>Actiuni</span>
@@ -510,7 +522,19 @@ if ($componentPage && $selectedCategory !== []) {
                         >
                             <span><i class="repair-auto-row-radio"></i><?= e((string) ($index + 1)) ?></span>
                             <strong><?= e((string) ($payload['name'] ?? '')) ?></strong>
-                            <span><em class="repair-auto-monitor-pill"><?= e((string) ($payload['type'] ?? 'Kilometri')) ?></em></span>
+                            <span class="repair-auto-type-cell">
+                                <em class="repair-auto-monitor-pill"><?= e((string) ($payload['type'] ?? 'Kilometri')) ?></em>
+                                <?php $rowItemType = (string) ($component['item_type'] ?? 'componenta'); ?>
+                                <?php if ($canManageComponents): ?>
+                                    <select class="repair-auto-item-type is-<?= e($rowItemType) ?>" data-comp-item-type data-key="<?= e((string) ($payload['id'] ?? '')) ?>" title="Tip articol (independent de categorie)" aria-label="Tip articol">
+                                        <?php foreach (AutoComponentCatalogService::ITEM_TYPES_SHORT as $typeKey => $typeLabel): ?>
+                                            <option value="<?= e($typeKey) ?>" title="<?= e($itemTypes[$typeKey]) ?>"<?= $rowItemType === $typeKey ? ' selected' : '' ?>><?= e($typeLabel) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                <?php else: ?>
+                                    <small class="repair-auto-item-type is-<?= e($rowItemType) ?>"><?= e($itemTypes[$rowItemType] ?? $rowItemType) ?></small>
+                                <?php endif; ?>
+                            </span>
                             <span><em class="repair-auto-config-pill <?= !empty($payload['configured']) ? 'is-configured' : 'is-missing' ?>"><?= !empty($payload['configured']) ? 'Configurat' : 'Neconfigurat' ?></em></span>
                             <span>
                                 <em class="repair-auto-wear <?= e($wearTone) ?>" style="--wear: <?= e((string) ($wear === null ? 0 : max(0, min(100, $wear)))) ?>"><?= $wear === null ? '-' : e((string) $wear) . '%' ?></em>
@@ -721,6 +745,205 @@ if ($componentPage && $selectedCategory !== []) {
     </main>
 </div>
 
+<?php if ($canManageComponents): ?>
+<?php
+$taxonomyReturn = static function () use ($vehicle, $vehicleId, $primary, $subcategory): string {
+    return csrf_field()
+        . '<input type="hidden" name="vehicle_type" value="' . e($vehicle) . '">'
+        . '<input type="hidden" name="vehicle_id" value="' . e((string) $vehicleId) . '">'
+        . '<input type="hidden" name="primary_category" value="' . e($primary) . '">'
+        . '<input type="hidden" name="subcategory" value="' . e($subcategory) . '">';
+};
+$taxonomyAction = e(build_query_url(['page' => 'mentenanta', 'action' => 'auto_taxonomy_manage']));
+$iconChoices = AutoComponentCatalogService::ICON_CHOICES;
+$vehicleTypeChoices = AutoComponentCatalogService::VEHICLE_TYPES;
+$iconSelect = static function (string $current) use ($iconChoices): string {
+    $html = '<select name="icon" class="form-select form-select-sm">';
+    $choices = in_array($current, $iconChoices, true) ? $iconChoices : array_merge([$current], $iconChoices);
+    foreach ($choices as $icon) {
+        $html .= '<option value="' . e($icon) . '"' . ($icon === $current ? ' selected' : '') . '>' . e(str_replace('bi-', '', $icon)) . '</option>';
+    }
+
+    return $html . '</select>';
+};
+?>
+<div class="modal fade" id="autoTaxonomyModal" tabindex="-1" aria-labelledby="autoTaxonomyTitle" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable modal-dialog-centered">
+        <div class="modal-content repair-auto-taxonomy">
+            <div class="modal-header">
+                <div>
+                    <h2 class="modal-title fs-5" id="autoTaxonomyTitle">Categorii catalog componente</h2>
+                    <p class="mb-0 text-muted small">Categorie principală → subcategorie → categorie (card). Elementele inițiale (Sasiu, Rezervor, categoriile 1-17) se pot redenumi, dar nu dezactiva.</p>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Închide"></button>
+            </div>
+            <div class="modal-body">
+                <section class="repair-auto-taxonomy-section">
+                    <h3><i class="bi bi-hdd-network"></i> Categorii principale</h3>
+                    <?php foreach ($taxonomy['primaries'] as $node): ?>
+                        <details class="repair-auto-taxonomy-node<?= $node['active'] ? '' : ' is-inactive' ?>">
+                            <summary>
+                                <i class="bi <?= e((string) $node['icon']) ?>"></i>
+                                <strong><?= e((string) $node['label']) ?></strong>
+                                <small><?= e(implode(', ', array_map(static fn ($t) => $vehicleTypeChoices[$t] ?? $t, $node['vehicle_types']))) ?> · <?= e((string) count($node['subcategories'])) ?> subcategorii</small>
+                                <?php if ($node['system']): ?><em>inițial</em><?php endif; ?>
+                                <?php if (!$node['active']): ?><em class="is-off">dezactivat</em><?php endif; ?>
+                            </summary>
+                            <form method="post" action="<?= $taxonomyAction ?>" class="repair-auto-taxonomy-form">
+                                <?= $taxonomyReturn() ?>
+                                <input type="hidden" name="op" value="update"><input type="hidden" name="level" value="primary"><input type="hidden" name="key" value="<?= e((string) $node['key']) ?>">
+                                <label>Nume<input class="form-control form-control-sm" name="name" maxlength="100" required value="<?= e((string) $node['label']) ?>"></label>
+                                <label>Iconiță<?= $iconSelect((string) $node['icon']) ?></label>
+                                <fieldset><legend>Tipuri vehicul</legend>
+                                    <?php foreach ($vehicleTypeChoices as $typeKey => $typeLabel): ?>
+                                        <label class="form-check-inline"><input type="checkbox" name="vehicle_types[]" value="<?= e($typeKey) ?>"<?= in_array($typeKey, $node['vehicle_types'], true) ? ' checked' : '' ?>> <?= e($typeLabel) ?></label>
+                                    <?php endforeach; ?>
+                                </fieldset>
+                                <button class="btn btn-sm btn-primary" type="submit">Salvează</button>
+                            </form>
+                            <?php if (!$node['system']): ?>
+                                <form method="post" action="<?= $taxonomyAction ?>" class="repair-auto-taxonomy-toggle">
+                                    <?= $taxonomyReturn() ?>
+                                    <input type="hidden" name="op" value="<?= $node['active'] ? 'deactivate' : 'activate' ?>"><input type="hidden" name="level" value="primary"><input type="hidden" name="key" value="<?= e((string) $node['key']) ?>">
+                                    <button class="btn btn-sm btn-outline-secondary" type="submit"><?= $node['active'] ? 'Dezactivează' : 'Reactivează' ?></button>
+                                </form>
+                            <?php endif; ?>
+                        </details>
+                    <?php endforeach; ?>
+                    <details class="repair-auto-taxonomy-node is-new">
+                        <summary><i class="bi bi-plus-lg"></i> <strong>Categorie principală nouă</strong></summary>
+                        <form method="post" action="<?= $taxonomyAction ?>" class="repair-auto-taxonomy-form">
+                            <?= $taxonomyReturn() ?>
+                            <input type="hidden" name="op" value="add_primary">
+                            <label>Nume<input class="form-control form-control-sm" name="name" maxlength="100" required placeholder="ex. Echipamente ADR"></label>
+                            <label>Iconiță<?= $iconSelect('bi-circle') ?></label>
+                            <fieldset><legend>Tipuri vehicul</legend>
+                                <?php foreach ($vehicleTypeChoices as $typeKey => $typeLabel): ?>
+                                    <label class="form-check-inline"><input type="checkbox" name="vehicle_types[]" value="<?= e($typeKey) ?>" checked> <?= e($typeLabel) ?></label>
+                                <?php endforeach; ?>
+                            </fieldset>
+                            <button class="btn btn-sm btn-primary" type="submit">Adaugă</button>
+                        </form>
+                    </details>
+                </section>
+
+                <section class="repair-auto-taxonomy-section">
+                    <h3><i class="bi bi-diagram-2"></i> Subcategorii</h3>
+                    <?php foreach ($taxonomy['subcategories'] as $node): ?>
+                        <?php $linked = array_keys(array_filter($taxonomy['primaries'], static fn ($p) => in_array($node['key'], $p['subcategories'], true))); ?>
+                        <details class="repair-auto-taxonomy-node<?= $node['active'] ? '' : ' is-inactive' ?>">
+                            <summary>
+                                <i class="bi <?= e((string) $node['icon']) ?>"></i>
+                                <strong><?= e((string) $node['label']) ?></strong>
+                                <small>sub <?= e(implode(', ', array_map(static fn ($k) => (string) ($taxonomy['primaries'][$k]['label'] ?? $k), $linked)) ?: '—') ?> · <?= e((string) count($node['categories'])) ?> categorii</small>
+                                <?php if ($node['system']): ?><em>inițial</em><?php endif; ?>
+                                <?php if (!$node['active']): ?><em class="is-off">dezactivat</em><?php endif; ?>
+                            </summary>
+                            <form method="post" action="<?= $taxonomyAction ?>" class="repair-auto-taxonomy-form">
+                                <?= $taxonomyReturn() ?>
+                                <input type="hidden" name="op" value="update"><input type="hidden" name="level" value="subcategory"><input type="hidden" name="key" value="<?= e((string) $node['key']) ?>">
+                                <label>Nume<input class="form-control form-control-sm" name="name" maxlength="100" required value="<?= e((string) $node['label']) ?>"></label>
+                                <label>Iconiță<?= $iconSelect((string) $node['icon']) ?></label>
+                                <fieldset><legend>Apare sub</legend>
+                                    <?php foreach ($taxonomy['primaries'] as $pKey => $pNode): ?>
+                                        <label class="form-check-inline"><input type="checkbox" name="primaries[]" value="<?= e((string) $pKey) ?>"<?= in_array($pKey, $linked, true) ? ' checked' : '' ?>> <?= e((string) $pNode['label']) ?></label>
+                                    <?php endforeach; ?>
+                                </fieldset>
+                                <button class="btn btn-sm btn-primary" type="submit">Salvează</button>
+                            </form>
+                            <?php if (!$node['system']): ?>
+                                <form method="post" action="<?= $taxonomyAction ?>" class="repair-auto-taxonomy-toggle">
+                                    <?= $taxonomyReturn() ?>
+                                    <input type="hidden" name="op" value="<?= $node['active'] ? 'deactivate' : 'activate' ?>"><input type="hidden" name="level" value="subcategory"><input type="hidden" name="key" value="<?= e((string) $node['key']) ?>">
+                                    <button class="btn btn-sm btn-outline-secondary" type="submit"><?= $node['active'] ? 'Dezactivează' : 'Reactivează' ?></button>
+                                </form>
+                            <?php endif; ?>
+                        </details>
+                    <?php endforeach; ?>
+                    <details class="repair-auto-taxonomy-node is-new">
+                        <summary><i class="bi bi-plus-lg"></i> <strong>Subcategorie nouă</strong></summary>
+                        <form method="post" action="<?= $taxonomyAction ?>" class="repair-auto-taxonomy-form">
+                            <?= $taxonomyReturn() ?>
+                            <input type="hidden" name="op" value="add_subcategory">
+                            <label>Nume<input class="form-control form-control-sm" name="name" maxlength="100" required placeholder="ex. Lichide de frână"></label>
+                            <label>Iconiță<?= $iconSelect('bi-circle') ?></label>
+                            <fieldset><legend>Apare sub</legend>
+                                <?php foreach ($taxonomy['primaries'] as $pKey => $pNode): ?>
+                                    <?php if (!$pNode['active']) { continue; } ?>
+                                    <label class="form-check-inline"><input type="checkbox" name="primaries[]" value="<?= e((string) $pKey) ?>"<?= $pKey === $primary ? ' checked' : '' ?>> <?= e((string) $pNode['label']) ?></label>
+                                <?php endforeach; ?>
+                            </fieldset>
+                            <button class="btn btn-sm btn-primary" type="submit">Adaugă</button>
+                        </form>
+                    </details>
+                </section>
+
+                <section class="repair-auto-taxonomy-section">
+                    <h3><i class="bi bi-grid-3x3-gap"></i> Categorii (carduri)</h3>
+                    <?php foreach ($taxonomy['categories'] as $node): ?>
+                        <details class="repair-auto-taxonomy-node<?= $node['active'] ? '' : ' is-inactive' ?>">
+                            <summary>
+                                <span class="repair-auto-taxonomy-nr"><?= e((string) $node['id']) ?></span>
+                                <i class="bi <?= e((string) $node['icon']) ?>"></i>
+                                <strong><?= e((string) $node['name']) ?></strong>
+                                <small><?= e((string) ($taxonomy['subcategories'][$node['subcategory']]['label'] ?? $node['subcategory'])) ?> · implicit: <?= e($itemTypes[$node['item_type']] ?? $node['item_type']) ?></small>
+                                <?php if ($node['system']): ?><em>inițial</em><?php endif; ?>
+                                <?php if (!$node['active']): ?><em class="is-off">dezactivat</em><?php endif; ?>
+                            </summary>
+                            <form method="post" action="<?= $taxonomyAction ?>" class="repair-auto-taxonomy-form">
+                                <?= $taxonomyReturn() ?>
+                                <input type="hidden" name="op" value="update"><input type="hidden" name="level" value="category"><input type="hidden" name="key" value="<?= e((string) $node['id']) ?>">
+                                <label>Nume<input class="form-control form-control-sm" name="name" maxlength="100" required value="<?= e((string) $node['name']) ?>"></label>
+                                <label>Iconiță<?= $iconSelect((string) $node['icon']) ?></label>
+                                <label>Tip articol implicit (componente noi)
+                                    <select name="item_type" class="form-select form-select-sm">
+                                        <?php foreach ($itemTypes as $typeKey => $typeLabel): ?>
+                                            <option value="<?= e($typeKey) ?>"<?= $node['item_type'] === $typeKey ? ' selected' : '' ?>><?= e($typeLabel) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </label>
+                                <button class="btn btn-sm btn-primary" type="submit">Salvează</button>
+                            </form>
+                            <?php if (!$node['system']): ?>
+                                <form method="post" action="<?= $taxonomyAction ?>" class="repair-auto-taxonomy-toggle">
+                                    <?= $taxonomyReturn() ?>
+                                    <input type="hidden" name="op" value="<?= $node['active'] ? 'deactivate' : 'activate' ?>"><input type="hidden" name="level" value="category"><input type="hidden" name="key" value="<?= e((string) $node['id']) ?>">
+                                    <button class="btn btn-sm btn-outline-secondary" type="submit"><?= $node['active'] ? 'Dezactivează' : 'Reactivează' ?></button>
+                                </form>
+                            <?php endif; ?>
+                        </details>
+                    <?php endforeach; ?>
+                    <details class="repair-auto-taxonomy-node is-new">
+                        <summary><i class="bi bi-plus-lg"></i> <strong>Categorie nouă</strong></summary>
+                        <form method="post" action="<?= $taxonomyAction ?>" class="repair-auto-taxonomy-form">
+                            <?= $taxonomyReturn() ?>
+                            <input type="hidden" name="op" value="add_category">
+                            <label>Nume<input class="form-control form-control-sm" name="name" maxlength="100" required placeholder="ex. Ulei motor"></label>
+                            <label>Subcategorie
+                                <select name="subcategory_key" class="form-select form-select-sm" required>
+                                    <?php foreach ($taxonomy['subcategories'] as $sKey => $sNode): ?>
+                                        <?php if (!$sNode['active']) { continue; } ?>
+                                        <option value="<?= e((string) $sKey) ?>"<?= $sKey === $subcategory ? ' selected' : '' ?>><?= e((string) $sNode['label']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </label>
+                            <label>Iconiță<?= $iconSelect('bi-circle') ?></label>
+                            <label>Tip articol implicit
+                                <select name="item_type" class="form-select form-select-sm">
+                                    <?php foreach ($itemTypes as $typeKey => $typeLabel): ?>
+                                        <option value="<?= e($typeKey) ?>"><?= e($typeLabel) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </label>
+                            <button class="btn btn-sm btn-primary" type="submit">Adaugă</button>
+                        </form>
+                    </details>
+                </section>
+            </div>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 <style>
     .repair-auto-comp-add-btn { margin-left: .6rem; border: 1px solid #0d6efd; color: #0d6efd; background: #fff; border-radius: .4rem; padding: .15rem .55rem; font-size: .78rem; font-weight: 600; }
     .repair-auto-comp-add-btn:hover { background: #0d6efd; color: #fff; }
@@ -738,6 +961,32 @@ if ($componentPage && $selectedCategory !== []) {
     .repair-auto-comp-removed form { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .3rem 0; border-bottom: 1px solid #f1f3f5; }
     .repair-auto-comp-removed em { color: #6c757d; font-style: normal; font-size: .75rem; margin-left: .3rem; }
     .repair-auto-comp-removed button { border: 1px solid #ced4da; background: #fff; border-radius: .3rem; padding: .1rem .5rem; font-size: .78rem; }
+    .repair-auto-panel-title-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+    .repair-auto-taxonomy-btn { border: 1px solid #cfdcec; background: #fff; color: #1d5fc4; border-radius: 6px; font-size: 10px; font-weight: 700; padding: 2px 7px; letter-spacing: 0; }
+    .repair-auto-taxonomy-btn:hover { background: #eef5ff; }
+    .repair-auto-type-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+    .repair-auto-item-type { max-width: 100%; border: 1px solid #dbe4ef; border-radius: 999px; background: #f6f8fb; color: #44566d; font-size: 10px; font-weight: 700; padding: 1px 6px; line-height: 1.4; }
+    select.repair-auto-item-type { cursor: pointer; }
+    .repair-auto-item-type.is-consumabil { background: #fff6e8; border-color: #f2d3a2; color: #8a5300; }
+    .repair-auto-item-type.is-fluid { background: #e9f4ff; border-color: #b7d6f5; color: #0b5cad; }
+    .repair-auto-item-type.is-uzura { background: #fdeeee; border-color: #f1c4c4; color: #9b2c2c; }
+    .repair-auto-item-type.is-ansamblu { background: #eef0fd; border-color: #c9cff3; color: #3b45a8; }
+    .repair-auto-taxonomy-section { margin-bottom: 1.2rem; }
+    .repair-auto-taxonomy-section h3 { font-size: .9rem; font-weight: 800; color: #172943; margin-bottom: .5rem; }
+    .repair-auto-taxonomy-node { border: 1px solid #e4ebf4; border-radius: 8px; padding: .4rem .7rem; margin-bottom: .35rem; background: #fff; }
+    .repair-auto-taxonomy-node.is-inactive { opacity: .6; }
+    .repair-auto-taxonomy-node.is-new { border-style: dashed; }
+    .repair-auto-taxonomy-node summary { display: flex; align-items: center; gap: .5rem; cursor: pointer; list-style: none; font-size: .85rem; flex-wrap: wrap; }
+    .repair-auto-taxonomy-node summary small { color: #6c7a8d; }
+    .repair-auto-taxonomy-node summary em { font-style: normal; font-size: .7rem; border-radius: 999px; padding: 0 .45rem; background: #eef2f7; color: #53657c; }
+    .repair-auto-taxonomy-node summary em.is-off { background: #fdeeee; color: #9b2c2c; }
+    .repair-auto-taxonomy-nr { display: inline-grid; place-items: center; min-width: 1.6rem; height: 1.3rem; border-radius: 999px; background: #e9f2ff; color: #1d5fc4; font-size: .7rem; font-weight: 800; }
+    .repair-auto-taxonomy-form { display: flex; flex-wrap: wrap; gap: .6rem; align-items: flex-end; padding: .6rem 0 .2rem; }
+    .repair-auto-taxonomy-form label { display: flex; flex-direction: column; font-size: .75rem; font-weight: 700; color: #53657c; gap: .15rem; min-width: 180px; }
+    .repair-auto-taxonomy-form label.form-check-inline { flex-direction: row; align-items: center; gap: .3rem; min-width: 0; font-weight: 600; }
+    .repair-auto-taxonomy-form fieldset { display: flex; flex-wrap: wrap; gap: .2rem .4rem; align-items: center; }
+    .repair-auto-taxonomy-form legend { font-size: .75rem; font-weight: 700; color: #53657c; margin: 0 .4rem 0 0; float: none; width: auto; }
+    .repair-auto-taxonomy-toggle { padding-bottom: .3rem; }
 </style>
 <script>
 // Gestionarea componentelor (adaugare / redenumire / eliminare). Butoanele stau pe randul
@@ -750,6 +999,19 @@ if ($componentPage && $selectedCategory !== []) {
             if (!addForm) { return; }
             addForm.classList.toggle('d-none');
             if (!addForm.classList.contains('d-none')) { addForm.querySelector('input[name="name"]').focus(); }
+        });
+    });
+
+    var typeForm = document.querySelector('[data-comp-type-form]');
+    document.querySelectorAll('[data-comp-item-type]').forEach(function (select) {
+        ['click', 'keydown'].forEach(function (type) {
+            select.addEventListener(type, function (e) { e.stopPropagation(); });
+        });
+        select.addEventListener('change', function () {
+            if (!typeForm) { return; }
+            typeForm.querySelector('input[name="component_key"]').value = select.dataset.key;
+            typeForm.querySelector('input[name="item_type"]').value = select.value;
+            typeForm.submit();
         });
     });
 
@@ -818,6 +1080,7 @@ if ($componentPage && $selectedCategory !== []) {
         return;
     }
 
+    const AUTO_STRUCTURE = <?= json_encode($structure, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
     const filter = page.querySelector('[data-repair-auto-filter]');
     const vehicleSelect = page.querySelector('[data-repair-vehicle]');
     const vehicleIdSelect = page.querySelector('[data-repair-vehicle-id]');
@@ -872,13 +1135,23 @@ if ($componentPage && $selectedCategory !== []) {
             }
         }
 
+        // Ramurile permise pe tipul de vehicul si subcategoriile lor vin din arborele administrat.
+        const branchTypes = vehicle === 'ansamblu' ? ['cap_tractor', 'semiremorca'] : [vehicle];
+        const allowedBranches = {};
+        branchTypes.forEach((type) => {
+            ((AUTO_STRUCTURE.branches || {})[type] || []).forEach((branch) => {
+                allowedBranches[branch.primary] = branch;
+            });
+        });
         if (primarySelect) {
-            const rezervorOption = primarySelect.querySelector('option[value="rezervor"]');
-            if (rezervorOption) {
-                rezervorOption.disabled = capTractor;
-            }
-            if (capTractor) {
-                primarySelect.value = 'sasiu';
+            Array.from(primarySelect.options).forEach((option) => {
+                option.disabled = !allowedBranches[option.value];
+            });
+            if (!allowedBranches[primarySelect.value]) {
+                const first = Array.from(primarySelect.options).find((option) => !option.disabled);
+                if (first) {
+                    primarySelect.value = first.value;
+                }
             }
         }
 
@@ -886,24 +1159,16 @@ if ($componentPage && $selectedCategory !== []) {
             return;
         }
 
-        const currentPrimary = primarySelect ? primarySelect.value : 'rezervor';
+        const currentPrimary = primarySelect ? primarySelect.value : '';
         const currentValue = subcategorySelect.value;
+        const subs = (allowedBranches[currentPrimary] || { subs: [] }).subs;
         subcategorySelect.innerHTML = '';
-        if (currentPrimary === 'sasiu') {
-            [['sasiu', 'Sasiu'], ['hidraulic', 'Hidraulic']].forEach(([value, label]) => {
-                subcategorySelect.append(new Option(label, value, currentValue === value, currentValue === value));
-            });
-            if (!subcategorySelect.value) {
-                subcategorySelect.value = 'sasiu';
-            }
-            return;
-        }
-
-        [['sasiu', 'Sasiu'], ['hidraulic', 'Hidraulic'], ['livrare_gaz', 'Livrare Gaz']].forEach(([value, label]) => {
+        subs.forEach((value) => {
+            const label = (AUTO_STRUCTURE.subcategory_labels || {})[value] || value;
             subcategorySelect.append(new Option(label, value, currentValue === value, currentValue === value));
         });
-        if (!subcategorySelect.value) {
-            subcategorySelect.value = 'livrare_gaz';
+        if (!subs.includes(currentValue)) {
+            subcategorySelect.value = subs.includes('livrare_gaz') ? 'livrare_gaz' : (subs[0] || '');
         }
     }
 
@@ -911,6 +1176,7 @@ if ($componentPage && $selectedCategory !== []) {
         const params = new URLSearchParams();
         params.set('page', 'mentenanta');
         params.set('action', 'auto');
+        params.set('view', 'catalog');
         params.set('vehicle_type', vehicleSelect ? vehicleSelect.value : 'camion');
         if (vehicleIdSelect && vehicleIdSelect.value) {
             params.set('vehicle_id', vehicleIdSelect.value);

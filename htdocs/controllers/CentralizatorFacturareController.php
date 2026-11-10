@@ -154,15 +154,23 @@ class CentralizatorFacturareController
 
     private function exportAction(): void
     {
+        /* Raportul scurt: tabel filtrabil, din aceleasi filtre validate ca pagina. */
+        if (($_GET['view'] ?? '') === 'scurt' && class_exists(ZipArchive::class)) {
+            require_once __DIR__ . '/../services/CentralizatorFacturareShortExport.php';
+            $shortReport = $this->centralizerService->getShortExportData($this->collectReportFilters());
+            $shortMonth = preg_replace('/[^0-9\-]/', '', (string) ($shortReport['filters']['month'] ?? date('Y-m')));
+            $this->streamXlsx(new CentralizatorFacturareShortExport($shortReport), 'centralizator_facturare_scurt_' . $shortMonth . '_' . date('Ymd_His') . '.xlsx');
+            return;
+        }
+
         $report = $this->centralizerService->getExportData($this->collectReportFilters());
         $filters = $report['filters'] ?? [];
         $fileMonth = preg_replace('/[^0-9\-]/', '', (string) ($filters['month'] ?? date('Y-m')));
-        /* Tipul raportului se alege din meniul Export Excel (Raport scurt / Raport detaliat). */
-        $short = ($_GET['view'] ?? '') === 'scurt';
 
         /* Excel formatat ca pagina; CSV-ul plat ramane doar ca rezerva fara extensia zip. */
         if (class_exists(ZipArchive::class)) {
-            $this->exportExcel($report, 'centralizator_facturare_' . ($short ? 'scurt_' : '') . $fileMonth . '_' . date('Ymd_His') . '.xlsx', $short);
+            require_once __DIR__ . '/../services/CentralizatorFacturareExcelExport.php';
+            $this->streamXlsx(new CentralizatorFacturareExcelExport($report), 'centralizator_facturare_' . $fileMonth . '_' . date('Ymd_His') . '.xlsx');
             return;
         }
 
@@ -313,10 +321,8 @@ class CentralizatorFacturareController
         exit;
     }
 
-    private function exportExcel(array $report, string $filename, bool $short = false): void
+    private function streamXlsx(object $export, string $filename): void
     {
-        require_once __DIR__ . '/../services/CentralizatorFacturareExcelExport.php';
-
         $path = tempnam(sys_get_temp_dir(), 'cfx');
         if ($path === false) {
             http_response_code(500);
@@ -324,7 +330,7 @@ class CentralizatorFacturareController
         }
 
         try {
-            (new CentralizatorFacturareExcelExport($report, $short))->save($path);
+            $export->save($path);
 
             header_remove('Content-Type');
             header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

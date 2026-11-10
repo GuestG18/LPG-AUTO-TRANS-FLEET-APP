@@ -1088,7 +1088,7 @@ class MaintenanceModel extends BaseModel
             $configs[(string) ($row['component_key'] ?? '')] = $row;
         }
 
-        return $configs;
+        return (new VehicleStructureService($this->db))->mergeInheritedConfigs($vehicleId, $configs);
     }
 
     public function getAutoPartUsageForVehicle(int $vehicleId): array
@@ -1800,8 +1800,16 @@ class MaintenanceModel extends BaseModel
         if ($categoryId === 10 || ($categoryId >= 11 && $categoryId <= 17)) {
             return ['camion', 'semiremorca'];
         }
+        // Categoriile noi (18+): tipurile de vehicul ale ramurilor in care apare subcategoria lor.
+        $subcategory = AutoComponentCatalogService::subcategoryFor($categoryId);
+        $types = [];
+        foreach (AutoComponentCatalogService::taxonomy($this->db)['primaries'] as $primary) {
+            if ($subcategory !== null && $primary['active'] && in_array($subcategory, $primary['subcategories'], true)) {
+                $types = array_merge($types, $primary['vehicle_types']);
+            }
+        }
 
-        return ['camion'];
+        return $types !== [] ? array_values(array_unique($types)) : ['camion'];
     }
 
     private function normalizeAutoMonitoringMethods(mixed $methods): array

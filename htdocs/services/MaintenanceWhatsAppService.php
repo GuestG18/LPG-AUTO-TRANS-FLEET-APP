@@ -2543,7 +2543,7 @@ class MaintenanceWhatsAppService
         }
         $choices = [];
         foreach (array_keys($tree) as $sub) {
-            $choices[] = [$sub, AutoComponentCatalogService::SUBCATEGORY_LABELS[$sub] ?? $sub];
+            $choices[] = [$sub, AutoComponentCatalogService::subcategoryLabels()[$sub] ?? $sub];
         }
         $choices[] = ['cancel', '❌ Anulează'];
         $this->ask($actor, 'coord', 'add_sub', $data, 'Registru componente — alegeți ramura:', $choices);
@@ -2565,7 +2565,7 @@ class MaintenanceWhatsAppService
             $choices[] = ['k' . $category['id'], $category['name'] . ' (' . count($category['components']) . ')'];
         }
         $choices[] = ['back', '↩️ Înapoi'];
-        $this->ask($actor, 'coord', 'add_cat', $data, (AutoComponentCatalogService::SUBCATEGORY_LABELS[$data['add']['sub']] ?? '') . ' — alegeți categoria:', $choices);
+        $this->ask($actor, 'coord', 'add_cat', $data, (AutoComponentCatalogService::subcategoryLabels()[$data['add']['sub']] ?? '') . ' — alegeți categoria:', $choices);
 
         return ['outcome' => 'asked_category'];
     }
@@ -2611,7 +2611,7 @@ class MaintenanceWhatsAppService
                 }
                 break;
             case 'add_sub':
-                if ($choice !== null && isset(AutoComponentCatalogService::SUBCATEGORY_LABELS[$choice])) {
+                if ($choice !== null && isset(AutoComponentCatalogService::subcategoryLabels()[$choice])) {
                     $data['add']['sub'] = $choice;
                     return $this->askCategory($actor, $data);
                 }
@@ -2782,6 +2782,8 @@ class MaintenanceWhatsAppService
         } catch (PDOException $exception) {
             $config = null; // tabela exista doar dupa prima configurare din Reparatii Auto
         }
+        // Fara valori proprii pe vehicul: cele din configuratia lui generala.
+        $config ??= (new VehicleStructureService($this->db))->mergeInheritedConfigs($vehicleId, [])[$componentKey] ?? null;
         if ($config === null) {
             $lines[] = 'Configurare: *Neconfigurat* pe acest vehicul (Reparații Auto).';
         } else {

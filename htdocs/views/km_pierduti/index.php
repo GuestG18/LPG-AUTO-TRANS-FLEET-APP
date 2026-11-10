@@ -207,8 +207,9 @@ $periodLabel = $periodStartObj->format('j') === '1'
         if (v.gps == null) { v.lostc = null; v.lostt = null; return; }
         // Pierdut = km GPS neacoperiti de km efectuati pe curse; al doilea: fata de km agreati (facturati).
         // Km rulati pe cursele inca deschise nu sunt pierduti: se socotesc cand se inchide cursa.
-        v.lostc = v.gps - (v.km_efectuati || 0) - (v.km_service || 0) - (v.open_km || 0);
-        v.lostt = v.gps - (v.km_cursa || 0) - (v.km_service || 0) - (v.open_km || 0);
+        // La fel deplasarile de cel mult 3 km de pe ele (short_km), asociate ultimei curse inchise.
+        v.lostc = v.gps - (v.km_efectuati || 0) - (v.km_service || 0) - (v.open_km || 0) - (v.short_km || 0);
+        v.lostt = v.gps - (v.km_cursa || 0) - (v.km_service || 0) - (v.open_km || 0) - (v.short_km || 0);
     }
 
     function lostCell(value, pending) {
@@ -339,10 +340,11 @@ $periodLabel = $periodStartObj->format('j') === '1'
             .then(function (batch) {
                 var cached = (batch && batch.cached) || {};
                 var openKm = (batch && batch.open) || {};
+                var shortKm = (batch && batch.short) || {};
                 var missing = [];
                 tracked.forEach(function (v) {
                     var value = cached[String(v.sas_vehicle_id)];
-                    if (value !== undefined) { v.gps = typeof value === 'number' ? value : 0; v.open_km = Number(openKm[String(v.sas_vehicle_id)]) || 0; computeLost(v); } else { missing.push(v); }
+                    if (value !== undefined) { v.gps = typeof value === 'number' ? value : 0; v.open_km = Number(openKm[String(v.sas_vehicle_id)]) || 0; v.short_km = Number(shortKm[String(v.sas_vehicle_id)]) || 0; computeLost(v); } else { missing.push(v); }
                 });
                 render();
                 renderKpis();
@@ -355,7 +357,7 @@ $periodLabel = $periodStartObj->format('j') === '1'
             if (!v) { return; }
             fetch(GPS_URL + '&car_id=' + v.sas_vehicle_id, { headers: { 'Accept': 'application/json' } })
                 .then(function (r) { return r.json(); })
-                .then(function (data) { v.gps = (data && typeof data.total_km === 'number') ? data.total_km : 0; v.open_km = Number(data && data.open_km) || 0; })
+                .then(function (data) { v.gps = (data && typeof data.total_km === 'number') ? data.total_km : 0; v.open_km = Number(data && data.open_km) || 0; v.short_km = Number(data && data.short_km) || 0; })
                 .catch(function () { v.gps = 0; })
                 .finally(function () { computeLost(v); render(); renderKpis(); worker(); });
         }

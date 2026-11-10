@@ -427,6 +427,14 @@
             if (self.popover.hidden) { self.open(); } else { self.close(); }
         });
         this.popover.addEventListener('click', function (event) { self.handleClick(event); });
+        // Intr-un modal, Escape cu calendarul deschis inchide doar calendarul, nu si modalul.
+        this.container.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && !self.popover.hidden) {
+                event.stopPropagation();
+                self.close();
+                self.toggle.focus();
+            }
+        });
     };
 
     document.addEventListener('click', function (event) {
@@ -465,6 +473,9 @@
             });
         }
     };
+
+    // Formularele de anvelope incarcate ulterior (randul extins, modale): se pornesc la deschidere.
+    document.addEventListener('show.bs.modal', function (event) { init(event.target); });
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function () { init(); });

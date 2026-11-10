@@ -17,6 +17,7 @@ class NotificationRuleController
         'equipment' => 'Dotare / Inventar',
         'approval' => 'Solicitare aprobare',
         'revizie' => 'Revizie (km)',
+        'consumabil' => 'Consumabile & fluide',
     ];
 
     /**
@@ -56,6 +57,14 @@ class NotificationRuleController
         'revizie_placute_frana' => 'Plăcuțe frână',
         'revizie_anvelope' => 'Anvelope (revizie km)',
         'revizie_raport_saptamanal' => 'Raport saptamanal revizii (email)',
+        'consumabil_completare' => 'Consumabil sub nivelul minim',
+        'consumabil_verificare' => 'Verificare nivel necesară',
+        'consumabil_revizie_apropiata' => 'Revizie fluid apropiată',
+        'consumabil_revizie_depasita' => 'Revizie fluid depășită',
+        'consumabil_consum_anormal' => 'Consum anormal / pierdere',
+        'consumabil_stoc_insuficient' => 'Stoc insuficient pentru intervenție',
+        'consumabil_recipient_minim' => 'Recipient la stoc minim',
+        'consumabil_date_indisponibile' => 'Date SAS / CardOil învechite',
     ];
 
     private const EVENT_ENTITY = [
@@ -74,6 +83,14 @@ class NotificationRuleController
         'revizie_placute_frana' => 'revizie',
         'revizie_anvelope' => 'revizie',
         'revizie_raport_saptamanal' => 'revizie',
+        'consumabil_completare' => 'consumabil',
+        'consumabil_verificare' => 'consumabil',
+        'consumabil_revizie_apropiata' => 'consumabil',
+        'consumabil_revizie_depasita' => 'consumabil',
+        'consumabil_consum_anormal' => 'consumabil',
+        'consumabil_stoc_insuficient' => 'consumabil',
+        'consumabil_recipient_minim' => 'consumabil',
+        'consumabil_date_indisponibile' => 'consumabil',
     ];
 
     /**
@@ -98,6 +115,15 @@ class NotificationRuleController
         'revizie_anvelope' => ['revizie' => true],
         // Raportul saptamanal: il trimite scripts/revizii_raport_saptamanal.php (cron), doar pe email.
         'revizie_raport_saptamanal' => ['revizie' => true, 'report' => true],
+        // Consumabile & fluide: conditiile si pragurile vin din modul (alerte deschise / rezolvate).
+        'consumabil_completare' => [],
+        'consumabil_verificare' => [],
+        'consumabil_revizie_apropiata' => [],
+        'consumabil_revizie_depasita' => [],
+        'consumabil_consum_anormal' => [],
+        'consumabil_stoc_insuficient' => [],
+        'consumabil_recipient_minim' => [],
+        'consumabil_date_indisponibile' => [],
     ];
 
     private const EVENT_HINTS = [
@@ -116,6 +142,14 @@ class NotificationRuleController
         'revizie_placute_frana' => 'Km rămași până la plăcuțe',
         'revizie_anvelope' => 'Km rămași până la anvelope',
         'revizie_raport_saptamanal' => 'Email săptămânal cu situația reviziilor',
+        'consumabil_completare' => 'Nivel sub minim confirmat la verificare',
+        'consumabil_verificare' => 'Verificarea periodică a nivelului e scadentă',
+        'consumabil_revizie_apropiata' => 'Intervalul de schimb atinge pragul de avertizare',
+        'consumabil_revizie_depasita' => 'Intervalul de schimb a fost depășit',
+        'consumabil_consum_anormal' => 'Pierdere suspectată sau AdBlue în afara istoricului',
+        'consumabil_stoc_insuficient' => 'Stocul produsului nu acoperă completarea / schimbul',
+        'consumabil_recipient_minim' => 'Recipient sub pragul minim configurat',
+        'consumabil_date_indisponibile' => 'Telemetrie sau alimentări care nu mai sosesc',
     ];
 
     /** Evenimente / destinatari pe care worker-ul nu ii trateaza: apar doar daca o regula veche ii foloseste. */

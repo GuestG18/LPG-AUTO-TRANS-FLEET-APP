@@ -25,25 +25,7 @@ $fleetStatusMeta = [
 ];
 $fleetUnitData = is_array($fleetTireOverview['client_units'] ?? null) ? $fleetTireOverview['client_units'] : [];
 $fleetTireIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="currentColor"/><circle cx="12" cy="12" r="6.2" fill="#fff" opacity=".9"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/><g stroke="#fff" stroke-width="1.2" opacity=".75"><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></g></svg>';
-// Pictograme laterale mici (doar decor; tipul e scris si in text).
-// Roata conturata (icon-urile noi): anvelopa albă cu contur navy, butuc plin.
-$fleetIconWheel = static fn (float $x, float $r): string => '<circle cx="' . $x . '" cy="' . (35.6 - $r) . '" r="' . $r . '" fill="#fff"/><circle cx="' . $x . '" cy="' . (35.6 - $r) . '" r="' . round($r * 0.38, 2) . '" fill="currentColor" stroke="none"/>';
-// Cap tractor fără semiremorcă: cabină, șasiu scurt, toba verticală, șaua de cuplare (placă în
-// perspectivă cu fanta în V spre spate și locașul pivotului), axa de direcție + axa motoare.
-$fleetTractorIcon = '<svg viewBox="0 0 64 40" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="22" y="24" width="38" height="3.6" rx="1" fill="#fff"/><path d="M27 8.5V24" stroke-width="2.1"/><path d="M4 29V14.2c0-1.8 1-3.4 2.7-4.1L15.5 6.5H24V29z" fill="#fff"/><path d="M6.8 14.6l2.9-5.4H21v5.4z" fill="currentColor" stroke="none"/><path d="M2.8 26.4H7.6" stroke-width="2.2"/><path d="M37.6 21.6l1.5 2.4M49.4 21.6l-1.5 2.4"/><ellipse cx="43.5" cy="20.9" rx="9.6" ry="3.4" fill="#fff"/><ellipse cx="43.5" cy="19.4" rx="9.6" ry="3.4" fill="#b7d0ff"/><path d="M53.1 18.2L45 19.1v.6l8.1.9" fill="#fff"/><circle cx="44.6" cy="19.4" r="1.3" fill="currentColor" stroke="none"/>' . $fleetIconWheel(14, 5.2) . $fleetIconWheel(45.5, 5.2) . '</svg>';
-// Semiremorcă singură: caroserie, pivotul (kingpin) cu placa lui în față, picioarele de sprijin, 3 axe.
-$fleetTrailerIcon = '<svg viewBox="0 0 64 40" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="3" y="6.5" width="58" height="16.5" rx="1.6" fill="#fff"/><path d="M17 9.5v10.5M31 9.5v10.5M45 9.5v10.5" opacity=".35"/><rect x="3" y="23" width="58" height="3" rx="1" fill="#fff"/><rect x="5.5" y="26" width="10" height="1.8" rx=".7" fill="#cfe0ff"/><path d="M10.5 27.8v2.8" stroke-width="2.4"/><path d="M23 26v6.8M20.6 32.8h4.8"/>' . $fleetIconWheel(41.5, 3.9) . $fleetIconWheel(49.5, 3.9) . $fleetIconWheel(57.5, 3.9) . '</svg>';
-$fleetVehicleIcon = static function (string $kind) use ($fleetIconWheel, $fleetTractorIcon, $fleetTrailerIcon): string {
-    $wheel = static fn (float $x): string => '<circle cx="' . $x . '" cy="33" r="4.6" fill="#1f2937"/><circle cx="' . $x . '" cy="33" r="1.9" fill="#d0d5dd"/>';
-    return match ($kind) {
-        // Cap tractor / semiremorcă / ansamblu: contur navy (currentColor), șaua de cuplare în albastru deschis.
-        'ansamblu' => '<svg viewBox="0 0 64 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="14" y="6" width="48" height="15.5" rx="1.4" fill="#fff"/><path d="M26 8.8v9.8M38 8.8v9.8M50 8.8v9.8" opacity=".35"/><rect x="14" y="21.5" width="48" height="2.6" rx=".9" fill="#fff"/><path d="M33.5 24.1v5.2M31.6 29.3h3.8"/><rect x="15" y="25.4" width="16" height="2.8" rx=".8" fill="#fff"/><ellipse cx="22.5" cy="24.6" rx="5.6" ry="1.4" fill="#cfe0ff"/><path d="M2.5 29V16c0-1.5.8-2.8 2.2-3.4L10.5 10H15v19z" fill="#fff"/><path d="M4.6 16.3l2.3-4.4H13v4.4z" fill="currentColor" stroke="none"/>' . $fleetIconWheel(8.5, 3.9) . $fleetIconWheel(24.5, 3.9) . $fleetIconWheel(44, 3.4) . $fleetIconWheel(51, 3.4) . $fleetIconWheel(58, 3.4) . '</svg>',
-        'cap_tractor' => $fleetTractorIcon,
-        'semiremorca' => $fleetTrailerIcon,
-        'camion' => '<svg viewBox="0 0 64 40" aria-hidden="true"><rect x="22" y="6" width="39" height="22" rx="1.5" fill="#f9fafb" stroke="#475467" stroke-width="1.4"/><path d="M3 29V15c0-1.7 1-3.3 2.7-3.9L12 9h7.5v20z" fill="#fff" stroke="#344054" stroke-width="1.4"/><path d="M5.3 15l2.7-3.3h8v5.6H5.3z" fill="#344054"/><rect x="3" y="27.5" width="58" height="2.5" fill="#344054"/>' . $wheel(11) . $wheel(46) . $wheel(54) . '</svg>',
-        default => '<svg viewBox="0 0 64 40" aria-hidden="true"><path d="M5 29v-7.5c0-1.4.8-2.6 2.1-3.1L16 15l7-6h21c1.6 0 3 .8 3.8 2.2L52 18l5 1.2c1.2.3 2 1.4 2 2.6V29z" fill="#fff" stroke="#344054" stroke-width="1.4"/><path d="M19 15.5l5.4-4.7h8.2v4.7zM35 10.8h8.4c.9 0 1.7.5 2.1 1.2l2 3.5H35z" fill="#344054"/>' . $wheel(15) . $wheel(48) . '</svg>',
-    };
-};
+include __DIR__ . '/_fleet_icons.php';
 $fleetFormatPercent = static fn ($value): string => $value === null ? '' : number_format((float) $value, 0, ',', '.') . '%';
 ?>
 <link rel="stylesheet" href="<?= e(url('assets/css/tire-fleet.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/tire-fleet.css'))) ?>">
@@ -67,6 +49,11 @@ $fleetFormatPercent = static fn ($value): string => $value === null ? '' : numbe
     </div>
     <button class="btn btn-primary ft-add-btn" type="button" data-bs-toggle="modal" data-bs-target="#addTireModal"><i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă anvelopă</button>
 </div>
+
+<p class="ft-sas-status" data-ft-sas-status role="status"
+   data-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_km_sas_sync'])) ?>"
+   data-csrf="<?= e(csrf_token()) ?>">Se verifică km din SAS…</p>
+<script src="<?= e(url('assets/js/tire-km-sas.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/tire-km-sas.js'))) ?>" defer></script>
 
 <div data-ft-pane="vehicule"<?= $tireFleetMode === 'vehicule' ? '' : ' hidden' ?>>
 <?php if ($fleetTireOverview === null): ?>
@@ -215,10 +202,10 @@ $fleetFormatPercent = static fn ($value): string => $value === null ? '' : numbe
                             <div class="form-text" data-ft-mount-hint>Doar anvelopele compatibile cu această poziție (tip vehicul, axă, formulă).</div>
                         </div>
                         <div class="row g-3">
-                            <div class="col-sm-5"><label class="form-label" for="ftMountDate">Data montaj</label><input type="date" class="form-control" id="ftMountDate" name="mount_date" value="<?= e(date('Y-m-d')) ?>" required></div>
+                            <div class="col-sm-5"><?php $dtpLabel = 'Data si ora montarii'; $dtpId = 'ftMountDateTime'; $dtpDateName = 'mount_date'; $dtpTimeName = 'mount_time'; include __DIR__ . '/_datetime_field.php'; ?></div>
                             <div class="col-sm-7"><label class="form-label" for="ftMountObs">Observație</label><input type="text" class="form-control" id="ftMountObs" name="observation" maxlength="500"></div>
                         </div>
-                        <div class="small text-muted mt-3">Km-ul de start se ia din kilometrajul de bord al vehiculului, ca la orice montaj; anvelopa își păstrează km parcurși anterior.</div>
+                        <div class="small text-muted mt-3">Km anvelopei se numără din SAS de la minutul următor orei de montaj; anvelopa își păstrează km parcurși anterior.</div>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>
@@ -235,15 +222,5 @@ $fleetFormatPercent = static fn ($value): string => $value === null ? '' : numbe
 <div hidden data-ft-config
      data-unit-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_fleet_unit'])) ?>"
      data-candidates-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_position_candidates'])) ?>"
-     data-mount-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'mount_tire'])) ?>"
-     data-component-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'tire_fleet_component'])) ?>"
-     data-component-write-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'component_mount'])) ?>"
-     data-can-manage="<?= can('mentenanta', 'components_manage') ? '1' : '0' ?>"
-     data-csrf="<?= e(csrf_token()) ?>"></div>
-<script type="application/json" id="fxUnitIcons"><?= json_encode(['tractor' => $fleetTractorIcon, 'trailer' => $fleetTrailerIcon, 'assembly' => $fleetVehicleIcon('ansamblu')], JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>
-<script type="application/json" id="fxCategories"><?= json_encode($fleetTireOverview['client_categories'] ?? VehicleComponentRegistry::clientCategories(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>
-<link rel="stylesheet" href="<?= e(url('assets/css/vehicle-xray.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/vehicle-xray.css'))) ?>">
+     data-mount-url="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'mount_tire'])) ?>"></div>
 <script src="<?= e(url('assets/js/tire-fleet.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/tire-fleet.js'))) ?>"></script>
-<script src="<?= e(url('assets/js/vehicle-xray-engine.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/vehicle-xray-engine.js'))) ?>"></script>
-<script src="<?= e(url('assets/js/vehicle-xray-art.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/vehicle-xray-art.js'))) ?>"></script>
-<script src="<?= e(url('assets/js/vehicle-xray.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/vehicle-xray.js'))) ?>"></script>

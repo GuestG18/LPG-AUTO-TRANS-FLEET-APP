@@ -95,7 +95,27 @@ class MaintenanceController
             case 'auto_component_rename':
             case 'auto_component_remove':
             case 'auto_component_restore':
+            case 'auto_component_type':
                 $this->manageAutoComponent($action);
+                return;
+            case 'auto_taxonomy_manage':
+                $this->manageAutoTaxonomy();
+                return;
+            case 'consumabile_op':
+            case 'consumabile_container_save':
+            case 'consumabile_product_save':
+            case 'consumabile_compat_save':
+            case 'consumabile_system_save':
+            case 'consumabile_system_event':
+            case 'consumabile_event_cancel':
+            case 'consumabile_adblue_sync':
+            case 'consumabile_alert_close':
+                (new ConsumabileController($this->db))->handle($action);
+                return;
+            case 'consumabile_system_history':
+                (new ConsumabileController($this->db))->systemHistory();
+            case 'auto_structure_manage':
+                $this->manageAutoStructure();
                 return;
             case 'export':
             case 'export_v2':
@@ -112,11 +132,142 @@ class MaintenanceController
 
     private function showAutoCatalog(): void
     {
-        render('maintenance/auto.php', [
-            'pageTitle' => 'Reparatii Auto',
+        // Catalogul de componente (adaugare, redenumire, foto, garantie) ramane ecran separat.
+        if (in_array((string) ($_GET['view'] ?? ''), ['catalog', 'components'], true) || isset($_GET['category_id'])) {
+            render('maintenance/auto.php', [
+                'pageTitle' => 'Catalog componente',
+                'currentPage' => 'mentenanta',
+                'catalog' => $this->getAutoCatalogData(),
+            ]);
+            return;
+        }
+
+        $data = $this->getAutoStructureData();
+        render('maintenance/auto_structure.php', [
+            'pageTitle' => 'Configurație vehicule',
             'currentPage' => 'mentenanta',
-            'catalog' => $this->getAutoCatalogData(),
+            'structurePage' => $data,
+            'vehicleExplorer' => $data['explorer'],
         ]);
+    }
+
+    /** Pagina Auto: schema + configuratia unei configuratii generale sau a unui vehicul. */
+    private function getAutoStructureData(): array
+    {
+        $service = new VehicleStructureService($this->db);
+        $service->prepare();
+        $structures = $service->structures();
+
+        $typeOrder = array_flip(array_keys(VehicleStructureService::VEHICLE_TYPES));
+        $vehicles = [];
+        foreach ($this->model->getVehicles() as $row) {
+            $type = VehicleStructureService::normalizeType((string) ($row['tip_vehicul'] ?? ''));
+            if ($type === '' || $service->profile((int) $row['id']) === null) {
+                continue;
+            }
+            $vehicles[(int) $row['id']] = [
+                'id' => (int) $row['id'],
+                'type' => $type,
+                'label' => trim((string) $row['nr_inmatriculare'] . ' - ' . (string) ($row['marca'] ?? '') . ' ' . (string) ($row['model'] ?? '')),
+                'plate' => (string) $row['nr_inmatriculare'],
+            ];
+        }
+        uasort($vehicles, static fn (array $a, array $b): int => [$typeOrder[$a['type']], $a['plate']] <=> [$typeOrder[$b['type']], $b['plate']]);
+
+        $requestedVehicle = max(0, (int) ($_GET['vehicle_id'] ?? 0));
+        $selectedVehicle = $vehicles[$requestedVehicle] ?? null;
+        $page = [
+            'structures' => $structures,
+            'vehicles' => array_values($vehicles),
+            'can_manage' => function_exists('can') && can('mentenanta', 'auto_catalog'),
+            'vehicle' => null,
+            'structure' => null,
+            'explorer' => null,
+            'removed' => [],
+            'compatible' => [],
+            'partner' => null,
+            'open' => (string) ($_GET['deschide'] ?? ''),
+        ];
+
+        if ($selectedVehicle !== null) {
+            $effective = $service->effective($selectedVehicle['id']);
+            if ($effective === null) {
+                $selectedVehicle = null;
+            }
+        }
+
+        if ($selectedVehicle !== null) {
+            $profile = $service->profile($selectedVehicle['id']);
+            $sections = $service->sections($profile['type'], $effective['systems'], $effective['components']);
+            $page['vehicle'] = $selectedVehicle + ['axles' => $profile['axles'], 'assigned' => !empty($effective['structure']['assigned'])];
+            $page['structure'] = $effective['structure'];
+            $page['axle_columns'] = $service->axleColumns($profile['type'], $effective['axle_kinds'], true);
+            $page['removed'] = $service->removedItems($effective);
+            $page['compatible'] = array_values(array_filter($structures, static fn (array $item): bool => $item['type'] === $profile['type'] && $item['axles'] === $profile['axles']));
+            $page['explorer'] = $this->legacyController->fleetExplorerData($selectedVehicle['id']);
+            foreach ($page['explorer']['unit']['members'] ?? [] as $member) {
+                if ((int) $member['vehicle_id'] !== $selectedVehicle['id']) {
+                    $page['partner'] = ['id' => (int) $member['vehicle_id'], 'plate' => (string) $member['plate'], 'label' => (string) $member['role_label']];
+                }
+            }
+        } else {
+            $requested = (int) ($_GET['structura'] ?? 0);
+            $ids = array_column($structures, 'id');
+            if (!in_array($requested, $ids, true)) {
+                $mostUsed = $structures;
+                usort($mostUsed, static fn (array $a, array $b): int => $b['vehicles'] <=> $a['vehicles']);
+                $requested = (int) ($mostUsed[0]['id'] ?? 0);
+            }
+            $structure = $requested > 0 ? $service->structure($requested) : null;
+            if ($structure === null) {
+                return $page + ['sections' => [], 'addable' => [], 'axle_columns' => []];
+            }
+            foreach ($structures as $item) {
+                if ($item['id'] === $structure['id']) {
+                    $structure['vehicles'] = $item['vehicles'];
+                }
+            }
+            $components = array_map(static fn (array $component): array => $component + ['origin' => 'general'], $structure['components']);
+            $sections = $service->sections($structure['type'], $structure['systems'], $components);
+            $page['structure'] = $structure;
+            $page['axle_columns'] = $service->axleColumns($structure['type'], $structure['axle_kinds'], false);
+            $catalog = $service->catalog();
+            $catalogMap = $service->catalogMap();
+            $page['explorer'] = [
+                'unit' => $service->templateUnit($structure),
+                'categories' => VehicleComponentRegistry::clientCategories($catalogMap, $catalog),
+            ];
+        }
+
+        return $page + $sections;
+    }
+
+    /** Modificarile din pagina Auto (configuratii generale si diferentele unui vehicul). */
+    private function manageAutoStructure(): void
+    {
+        $this->requirePostAndCsrf('auto');
+        $target = [];
+        $service = new VehicleStructureService($this->db);
+        try {
+            $target = $service->apply($_POST);
+            flash_set('success', $target['message']);
+        } catch (InvalidArgumentException $exception) {
+            flash_set('danger', $exception->getMessage());
+            $target = ['structura' => (int) ($_POST['structura'] ?? 0), 'vehicle_id' => (int) ($_POST['vehicle_id'] ?? 0)];
+        } catch (Throwable $exception) {
+            error_log('[MaintenanceController][auto_structure_manage] ' . $exception->getMessage());
+            flash_set('danger', 'Modificarea nu a putut fi salvată.');
+            $target = ['structura' => (int) ($_POST['structura'] ?? 0), 'vehicle_id' => (int) ($_POST['vehicle_id'] ?? 0)];
+        }
+
+        $url = build_query_url([
+            'page' => 'mentenanta',
+            'action' => 'auto',
+            'vehicle_id' => ($target['vehicle_id'] ?? 0) ?: null,
+            'structura' => ($target['structura'] ?? 0) ?: null,
+            'deschide' => ($target['open'] ?? '') ?: null,
+        ]);
+        redirect($url . (!empty($target['anchor']) ? '#' . $target['anchor'] : ''));
     }
 
     private function getAutoCatalogData(): array
@@ -135,19 +286,22 @@ class MaintenanceController
         if (!isset($vehicleOptions[$requestedVehicleType])) {
             $requestedVehicleType = 'camion';
         }
-        $requestedPrimary = (string) ($_GET['primary_category'] ?? ($requestedVehicleType === 'cap_tractor' ? 'sasiu' : 'rezervor'));
-        if ($requestedVehicleType === 'cap_tractor') {
-            $requestedPrimary = 'sasiu';
+        // Ramurile / subcategoriile vin din arborele administrat (mentenanta_auto_ramuri ...).
+        $allowedPrimaries = AutoComponentCatalogService::primariesForVehicleType($requestedVehicleType);
+        $taxonomy = AutoComponentCatalogService::taxonomy($this->db);
+        $defaultPrimary = in_array('rezervor', $allowedPrimaries, true) ? 'rezervor' : ($allowedPrimaries[0] ?? 'sasiu');
+        $requestedPrimary = (string) ($_GET['primary_category'] ?? $defaultPrimary);
+        if (!in_array($requestedPrimary, $allowedPrimaries, true)) {
+            $requestedPrimary = $defaultPrimary;
         }
-        if (!in_array($requestedPrimary, ['rezervor', 'sasiu'], true)) {
-            $requestedPrimary = 'rezervor';
-        }
-        $requestedSubcategory = (string) ($_GET['subcategory'] ?? ($requestedPrimary === 'sasiu' ? 'sasiu' : 'livrare_gaz'));
-        if (!in_array($requestedSubcategory, ['sasiu', 'hidraulic', 'livrare_gaz'], true)) {
-            $requestedSubcategory = $requestedPrimary === 'sasiu' ? 'sasiu' : 'livrare_gaz';
-        }
-        if ($requestedPrimary === 'sasiu' && $requestedSubcategory === 'livrare_gaz') {
-            $requestedSubcategory = 'sasiu';
+        $primarySubs = array_values(array_filter(
+            (array) ($taxonomy['primaries'][$requestedPrimary]['subcategories'] ?? []),
+            static fn (string $sub): bool => !empty($taxonomy['subcategories'][$sub]['active'])
+        ));
+        $defaultSub = in_array('livrare_gaz', $primarySubs, true) ? 'livrare_gaz' : ($primarySubs[0] ?? 'sasiu');
+        $requestedSubcategory = (string) ($_GET['subcategory'] ?? $defaultSub);
+        if (!in_array($requestedSubcategory, $primarySubs, true)) {
+            $requestedSubcategory = $defaultSub;
         }
         $vehicles = array_map(function (array $vehicleRow): array {
             $vehicleRow['auto_type'] = $this->normalizeAutoVehicleType((string) ($vehicleRow['tip_vehicul'] ?? ''));
@@ -201,6 +355,7 @@ class MaintenanceController
                 $config = $autoConfigs[(string) ($component['id'] ?? '')] ?? null;
                 if (is_array($config)) {
                     $component['configured'] = true;
+                    $component['inherited'] = !empty($config['inherited']);
                     $component['config_id'] = (int) ($config['id'] ?? 0);
                     $component['stock_part_id'] = (int) ($config['stock_part_id'] ?? ($component['stock_part_id'] ?? 0));
                     $component['code'] = trim((string) ($config['component_code'] ?? '')) !== ''
@@ -235,20 +390,14 @@ class MaintenanceController
                 'vehicle_id' => $selectedVehicleId,
                 'primary' => $requestedPrimary,
                 'subcategory' => $requestedSubcategory,
-                'category_id' => match ($requestedSubcategory) {
-                    'sasiu' => 1,
-                    'hidraulic' => 10,
-                    default => 11,
-                },
+                'category_id' => (int) ((AutoComponentCatalogService::categoryGroups()[$requestedSubcategory] ?? [])[0] ?? 0),
             ],
             'vehicle_types' => $vehicleOptions,
             'vehicles' => $selectableVehicles,
             'selected_vehicle' => $selectedVehicle,
-            'category_groups' => [
-                'sasiu' => [1, 2, 3, 4, 5, 6, 7, 8, 9],
-                'hidraulic' => [10],
-                'livrare_gaz' => [11, 12, 13, 14, 15, 16, 17],
-            ],
+            'category_groups' => AutoComponentCatalogService::categoryGroups(),
+            'structure' => AutoComponentCatalogService::structurePayload(),
+            'taxonomy' => $taxonomy,
             'categories' => $categories,
             'tree' => $this->getAutoVehicleTree($requestedVehicleType, $requestedPrimary, $requestedSubcategory),
             // Gestionarea componentelor (adaugare / redenumire / eliminare) cere dreptul auto_catalog.
@@ -260,91 +409,75 @@ class MaintenanceController
         ];
     }
 
+    /**
+     * Arborele „Structura vehicul”: tip vehicul → ramuri (din arborele administrat) → subcategorii.
+     * Ansamblu = cap tractor + semiremorca.
+     */
     private function getAutoVehicleTree(string $vehicleType, string $primary, string $subcategory): array
     {
         $vehicleType = in_array($vehicleType, ['camion', 'cap_tractor', 'semiremorca', 'ansamblu'], true) ? $vehicleType : 'camion';
-        $buildSasiuBranch = function (string $keyPrefix) use ($primary, $subcategory): array {
-            return [
-                'key' => $keyPrefix . '_sasiu',
-                'label' => 'Sasiu',
-                'icon' => 'bi-truck-front',
-                'expanded' => $primary === 'sasiu',
-                'selected' => $primary === 'sasiu',
-                'children' => [
-                    [
-                        'key' => $keyPrefix . '_sasiu_categorii',
-                        'label' => 'Sasiu',
-                        'icon' => 'bi-truck-front',
-                        'meta' => 'Categorii 1-9',
-                        'primary' => 'sasiu',
-                        'subcategory' => 'sasiu',
-                        'active' => $primary === 'sasiu' && $subcategory === 'sasiu',
-                    ],
-                    [
-                        'key' => $keyPrefix . '_sasiu_hidraulic',
-                        'label' => 'Hidraulic',
-                        'icon' => 'bi-droplet',
-                        'meta' => 'Categorie 10',
-                        'primary' => 'sasiu',
-                        'subcategory' => 'hidraulic',
-                        'active' => $primary === 'sasiu' && $subcategory === 'hidraulic',
-                    ],
-                ],
-            ];
+        $taxonomy = AutoComponentCatalogService::taxonomy($this->db);
+        $branches = AutoComponentCatalogService::branchesByVehicleType();
+        $categoryMeta = static function (array $ids): string {
+            $ids = array_values(array_map('intval', $ids));
+            if ($ids === []) {
+                return 'Fără categorii';
+            }
+            if (count($ids) === 1) {
+                return 'Categorie ' . $ids[0];
+            }
+            sort($ids);
+            $contiguous = $ids === range($ids[0], $ids[count($ids) - 1]);
+
+            return $contiguous ? 'Categorii ' . $ids[0] . '-' . $ids[count($ids) - 1] : count($ids) . ' categorii';
         };
-        $buildReservor = function (string $keyPrefix) use ($primary, $subcategory): array {
-            return [
-                'key' => $keyPrefix . '_rezervor',
-                'label' => 'Rezervor',
-                'icon' => 'bi-droplet-half',
-                'expanded' => $primary === 'rezervor',
-                'selected' => $primary === 'rezervor',
-                'children' => [
-                    ['key' => $keyPrefix . '_rezervor_sasiu', 'label' => 'Sasiu', 'icon' => 'bi-truck-front', 'meta' => 'Categorii 1-9', 'primary' => 'rezervor', 'subcategory' => 'sasiu', 'active' => $primary === 'rezervor' && $subcategory === 'sasiu'],
-                    ['key' => $keyPrefix . '_rezervor_hidraulic', 'label' => 'Hidraulic', 'icon' => 'bi-droplet', 'meta' => 'Categorie 10', 'primary' => 'rezervor', 'subcategory' => 'hidraulic', 'active' => $primary === 'rezervor' && $subcategory === 'hidraulic'],
-                    ['key' => $keyPrefix . '_livrare_gaz', 'label' => 'Livrare Gaz', 'icon' => 'bi-fire', 'meta' => 'Categorii 11-17', 'primary' => 'rezervor', 'subcategory' => 'livrare_gaz', 'active' => $primary === 'rezervor' && $subcategory === 'livrare_gaz'],
-                ],
-            ];
+        $buildVehicle = function (string $key, string $type, string $label, string $icon) use ($branches, $taxonomy, $primary, $subcategory, $categoryMeta): array {
+            $children = [];
+            foreach ($branches[$type] ?? [] as $branch) {
+                $subs = [];
+                foreach ($branch['subs'] as $sub) {
+                    $node = $taxonomy['subcategories'][$sub] ?? null;
+                    if ($node === null) {
+                        continue;
+                    }
+                    $subs[] = [
+                        'key' => $key . '_' . $branch['primary'] . '_' . $sub,
+                        'label' => (string) $node['label'],
+                        'icon' => (string) $node['icon'],
+                        'meta' => $categoryMeta((array) $node['categories']),
+                        'primary' => $branch['primary'],
+                        'subcategory' => $sub,
+                        'category_ids' => implode(',', array_map('intval', (array) $node['categories'])),
+                        'active' => $primary === $branch['primary'] && $subcategory === $sub,
+                    ];
+                }
+                $children[] = [
+                    'key' => $key . '_' . $branch['primary'],
+                    'label' => $branch['label'],
+                    'icon' => $branch['icon'],
+                    'expanded' => $primary === $branch['primary'],
+                    'selected' => $primary === $branch['primary'],
+                    'children' => $subs,
+                ];
+            }
+
+            return ['key' => $key, 'label' => $label, 'icon' => $icon, 'expanded' => true, 'children' => $children];
         };
-        $buildVehicleWithReservor = function (string $key, string $label, string $icon) use ($buildReservor, $buildSasiuBranch): array {
-            return [
-                'key' => $key,
-                'label' => $label,
-                'icon' => $icon,
-                'expanded' => true,
-                'children' => [
-                    $buildSasiuBranch($key),
-                    $buildReservor($key),
-                ],
-            ];
-        };
-        $buildCapTractor = function (string $key) use ($buildSasiuBranch): array {
-            return [
-                'key' => $key,
-                'label' => 'Cap tractor',
-                'icon' => 'bi-truck-front',
-                'expanded' => true,
-                'children' => [
-                    $buildSasiuBranch($key),
-                ],
-            ];
-        };
-        $buildSemiremorca = fn (string $key): array => $buildVehicleWithReservor($key, 'Semiremorca', 'bi-truck-flatbed');
 
         return match ($vehicleType) {
-            'cap_tractor' => [$buildCapTractor('cap_tractor')],
-            'semiremorca' => [$buildSemiremorca('semiremorca')],
+            'cap_tractor' => [$buildVehicle('cap_tractor', 'cap_tractor', 'Cap tractor', 'bi-truck-front')],
+            'semiremorca' => [$buildVehicle('semiremorca', 'semiremorca', 'Semiremorca', 'bi-truck-flatbed')],
             'ansamblu' => [[
                 'key' => 'ansamblu',
                 'label' => 'Ansamblu',
                 'icon' => 'bi-diagram-3',
                 'expanded' => true,
                 'children' => [
-                    $buildCapTractor('ansamblu_cap_tractor'),
-                    $buildSemiremorca('ansamblu_semiremorca'),
+                    $buildVehicle('ansamblu_cap_tractor', 'cap_tractor', 'Cap tractor', 'bi-truck-front'),
+                    $buildVehicle('ansamblu_semiremorca', 'semiremorca', 'Semiremorca', 'bi-truck-flatbed'),
                 ],
             ]],
-            default => [$buildVehicleWithReservor('camion', 'Camion', 'bi-truck')],
+            default => [$buildVehicle('camion', 'camion', 'Camion', 'bi-truck')],
         };
     }
 
@@ -447,11 +580,8 @@ class MaintenanceController
         return [
             'vehicle_types' => ['camion' => 'Camion', 'cap_tractor' => 'Cap tractor', 'semiremorca' => 'Semiremorca', 'ansamblu' => 'Ansamblu'],
             'vehicles' => $pickerVehicles,
-            'primary_labels' => AutoComponentCatalogService::PRIMARY_LABELS,
-            'subcategory_labels' => AutoComponentCatalogService::SUBCATEGORY_LABELS,
-            'category_groups' => AutoComponentCatalogService::CATEGORY_GROUPS,
             'categories' => $pickerCategories,
-        ];
+        ] + AutoComponentCatalogService::structurePayload();
     }
 
     private function normalizeAutoVehicleType(string $type): string
@@ -489,6 +619,9 @@ class MaintenanceController
         $stockKpis = [];
         $stockFilterOptions = ['categories' => [], 'suppliers' => []];
         $stockCatalogPicker = null;
+        // Stoc Piese → tab Consumabile: datele pieselor nu se mai incarca (alt continut).
+        $stockTab = $section === 'stock' && (string) ($_GET['tab'] ?? '') === 'consumabile' ? 'consumabile' : 'piese';
+        $consumabile = null;
         $technicalFormOptions = ['categories' => [], 'componentsByCategory' => []];
         if (class_exists('TechnicalHealthModel')) {
             try {
@@ -506,6 +639,8 @@ class MaintenanceController
         } elseif ($section === 'repairs') {
             $repairInvoices = $this->model->getCorrectiveInvoices($filters);
             $repairInvoiceDetails = $this->model->getCorrectiveInvoiceDetails(array_column($repairInvoices, 'id'));
+        } elseif ($section === 'stock' && $stockTab === 'consumabile') {
+            $consumabile = (new ConsumabileController($this->db))->viewData();
         } elseif ($section === 'stock') {
             $parts = array_map(function (array $part): array {
                 $part['image_url'] = $this->autoPartImageUrl((string) ($part['imagine_stocata'] ?? ''));
@@ -577,7 +712,9 @@ class MaintenanceController
             'repairInvoiceDetails' => $repairInvoiceDetails,
             'scheduledInterventions' => $scheduledInterventions,
             'parts' => $parts,
-            'availableStockParts' => $this->model->getStockParts(['stock_status' => 'in_stock', 'include_tires' => false]),
+            'availableStockParts' => $stockTab === 'consumabile' ? [] : $this->model->getStockParts(['stock_status' => 'in_stock', 'include_tires' => false]),
+            'stockTab' => $stockTab,
+            'consumabile' => $consumabile,
             'stockKpis' => $stockKpis,
             'stockFilterOptions' => $stockFilterOptions,
             'stockCatalogPicker' => $stockCatalogPicker,
@@ -1112,6 +1249,11 @@ class MaintenanceController
                     $catalog->setActive($key, true);
                     flash_set('success', 'Componenta a fost restaurată.');
                     break;
+                case 'auto_component_type':
+                    $catalog->setItemType($key, trim((string) ($_POST['item_type'] ?? '')));
+                    audit_log_write($this->db, 'mentenanta_auto_componente', 0, 'update', 'Tip articol ' . $key . ' → ' . (string) ($_POST['item_type'] ?? ''), null, null, $this->userId());
+                    flash_set('success', 'Tipul articolului a fost actualizat.');
+                    break;
             }
         } catch (InvalidArgumentException $exception) {
             flash_set('danger', $exception->getMessage());
@@ -1130,6 +1272,71 @@ class MaintenanceController
             'view' => 'components',
             'category_id' => $categoryId,
             'component_id' => $selectComponent !== '' ? $selectComponent : null,
+        ]));
+    }
+
+    /** Gestionarea arborelui (ramuri / subcategorii / categorii) din Catalog componente. */
+    private function manageAutoTaxonomy(): void
+    {
+        $this->requirePostAndCsrf('auto');
+        $catalog = new AutoComponentCatalogService($this->db);
+        $op = (string) ($_POST['op'] ?? '');
+        $level = (string) ($_POST['level'] ?? '');
+        $key = trim((string) ($_POST['key'] ?? ''));
+        $primary = trim((string) ($_POST['primary_category'] ?? ''));
+        $subcategory = trim((string) ($_POST['subcategory'] ?? ''));
+        try {
+            switch ($op) {
+                case 'add_primary':
+                    $primary = $catalog->addPrimary((string) ($_POST['name'] ?? ''), (string) ($_POST['icon'] ?? ''), (array) ($_POST['vehicle_types'] ?? []));
+                    $subcategory = '';
+                    flash_set('success', 'Categoria principală a fost adăugată. Adaugă acum subcategoriile ei.');
+                    break;
+                case 'add_subcategory':
+                    $subcategory = $catalog->addSubcategory((string) ($_POST['name'] ?? ''), (string) ($_POST['icon'] ?? ''), (array) ($_POST['primaries'] ?? []));
+                    $wanted = (array) ($_POST['primaries'] ?? []);
+                    if (!in_array($primary, $wanted, true)) {
+                        $primary = (string) ($wanted[0] ?? $primary);
+                    }
+                    flash_set('success', 'Subcategoria a fost adăugată.');
+                    break;
+                case 'add_category':
+                    $subcategory = trim((string) ($_POST['subcategory_key'] ?? ''));
+                    $id = $catalog->addCategory((string) ($_POST['name'] ?? ''), $subcategory, (string) ($_POST['icon'] ?? ''), (string) ($_POST['item_type'] ?? 'componenta'));
+                    $placement = AutoComponentCatalogService::defaultPlacement($id);
+                    if ($placement !== null && !AutoComponentCatalogService::isValidPlacement($primary, $subcategory)) {
+                        $primary = $placement[0];
+                    }
+                    flash_set('success', 'Categoria ' . $id . ' a fost adăugată.');
+                    break;
+                case 'update':
+                    $catalog->updateNode($level, $key, $_POST);
+                    flash_set('success', 'Modificarea a fost salvată.');
+                    break;
+                case 'deactivate':
+                case 'activate':
+                    $catalog->setNodeActive($level, $key, $op === 'activate');
+                    flash_set('success', $op === 'activate' ? 'Elementul a fost reactivat.' : 'Elementul a fost dezactivat (istoricul rămâne).');
+                    break;
+                default:
+                    throw new InvalidArgumentException('Operație necunoscută.');
+            }
+            audit_log_write($this->db, 'mentenanta_auto_categorii', 0, 'update', 'Arbore catalog: ' . $op . ' ' . $level . ' ' . $key . ' ' . trim((string) ($_POST['name'] ?? '')), null, null, $this->userId());
+        } catch (InvalidArgumentException $exception) {
+            flash_set('danger', $exception->getMessage());
+        } catch (Throwable $exception) {
+            error_log('[MaintenanceController][auto_taxonomy_manage] ' . $exception->getMessage());
+            flash_set('danger', 'Modificarea categoriilor nu a putut fi salvată.');
+        }
+
+        redirect(build_query_url([
+            'page' => 'mentenanta',
+            'action' => 'auto',
+            'view' => 'catalog',
+            'vehicle_type' => $this->normalizeAutoVehicleType((string) ($_POST['vehicle_type'] ?? 'camion')) ?: 'camion',
+            'vehicle_id' => max(0, (int) ($_POST['vehicle_id'] ?? 0)) ?: null,
+            'primary_category' => $primary !== '' ? $primary : null,
+            'subcategory' => $subcategory !== '' ? $subcategory : null,
         ]));
     }
 
@@ -1283,7 +1490,7 @@ class MaintenanceController
         return in_array($action, [
             'tire_stock', 'add_tire_stock', 'bulk_tire_stock', 'update_tire_stock', 'delete_tire_stock', 'bulk_delete_tire_stock', 'bulk_unmount_tire_stock',
             'bulk_mount_tire_stock', 'tire_mount_vehicles', 'tire_mount_layout', 'tire_stock_children', 'tire_stock_selection',
-            'tire_fleet_unit', 'tire_position_candidates', 'tire_fleet_component', 'tire_fleet_component_inspector',
+            'tire_fleet_unit', 'tire_km_sas_sync', 'tire_position_candidates', 'tire_fleet_component', 'tire_fleet_component_inspector',
             'component_mount', 'component_unmount', 'component_inspect', 'axle_attributes_save',
             'axis_config', 'update_tire_layout', 'mount_tire', 'unmount_tire', 'move_tire', 'change_tire_status',
             'create', 'store', 'edit', 'update', 'delete', 'show', 'preview',

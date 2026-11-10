@@ -106,6 +106,9 @@ $ruleThreshold = static function (array $rule): string {
         $reportConfig = ReviziiWeeklyReportService::normalizeConfig(is_array($ruleMetadata['report'] ?? null) ? $ruleMetadata['report'] : []);
         return 'Săptămânal: ' . ReviziiWeeklyReportService::scheduleLabel($reportConfig);
     }
+    if (str_starts_with($event, 'consumabil_')) {
+        return 'Alertă din Consumabile';
+    }
     if (str_starts_with($event, 'revizie_')) {
         return (string) ($rule['document_type'] ?? '') === 'necesita' ? 'Depășit (Revizii)' : 'Prag din Revizii';
     }
@@ -612,12 +615,13 @@ $deliveryRecipient = static function (array $row): string {
     $currentRecipientMode = (string) ($formData['recipient_mode'] ?? 'admins');
 
     // Doar afisare: ordinea si etichetele cu diacritice din macheta. Valorile salvate raman cele din controller.
-    $categoryOrder = ['vehicle', 'driver', 'tire', 'revizie', 'leave', 'equipment', 'approval'];
+    $categoryOrder = ['vehicle', 'driver', 'tire', 'revizie', 'consumabil', 'leave', 'equipment', 'approval'];
     $categoryDisplay = [
         'vehicle' => ['label' => 'Vehicul', 'icon' => 'bi-truck', 'events' => 'Evenimente vehicul'],
         'driver' => ['label' => 'Șofer', 'icon' => 'bi-person', 'events' => 'Evenimente șofer'],
         'tire' => ['label' => 'Anvelopă', 'icon' => 'bi-life-preserver', 'events' => 'Evenimente anvelopă'],
         'revizie' => ['label' => 'Revizii', 'icon' => 'bi-wrench-adjustable', 'events' => 'Evenimente revizii (km)'],
+        'consumabil' => ['label' => 'Consumabile & fluide', 'icon' => 'bi-droplet', 'events' => 'Evenimente consumabile & fluide'],
         'leave' => ['label' => 'Concediu', 'icon' => 'bi-calendar-week', 'events' => 'Evenimente concediu'],
         'equipment' => ['label' => 'Dotare / Inventar', 'icon' => 'bi-box-seam', 'events' => 'Evenimente dotare / inventar'],
         'approval' => ['label' => 'Solicitare aprobare', 'icon' => 'bi-file-earmark-text', 'events' => 'Evenimente solicitare aprobare'],
@@ -638,6 +642,14 @@ $deliveryRecipient = static function (array $row): string {
         'revizie_placute_frana' => 'Plăcuțe frână',
         'revizie_anvelope' => 'Anvelope (revizie km)',
         'revizie_raport_saptamanal' => 'Raport săptămânal (email)',
+        'consumabil_completare' => 'Consumabil sub nivelul minim',
+        'consumabil_verificare' => 'Verificare nivel necesară',
+        'consumabil_revizie_apropiata' => 'Revizie fluid apropiată',
+        'consumabil_revizie_depasita' => 'Revizie fluid depășită',
+        'consumabil_consum_anormal' => 'Consum anormal / pierdere',
+        'consumabil_stoc_insuficient' => 'Stoc insuficient pentru intervenție',
+        'consumabil_recipient_minim' => 'Recipient la stoc minim',
+        'consumabil_date_indisponibile' => 'Date SAS / CardOil învechite',
     ];
 
     // Evenimentele pe categorii (evenimentele ascunse apar doar daca regula editata le foloseste).

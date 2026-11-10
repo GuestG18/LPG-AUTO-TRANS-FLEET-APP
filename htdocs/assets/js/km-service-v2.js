@@ -63,6 +63,15 @@
     /** Ca in Reparatii Auto: cap tractor = doar Sasiu; restul Sasiu + Rezervor (Livrare Gaz doar pe Rezervor). */
     function branches(type) {
         var groups = catalog.groups || {};
+        // Arborele administrat (Catalog componente): ramurile tipului de vehicul cu categoriile subcategoriilor lor.
+        if (catalog.branches && catalog.branches[autoType(type)]) {
+            return catalog.branches[autoType(type)].map(function (branch) {
+                return {
+                    primary: branch.primary,
+                    categories: branch.subs.reduce(function (all, sub) { return all.concat(groups[sub] || []); }, [])
+                };
+            });
+        }
         var sasiu = { primary: 'sasiu', categories: (groups.sasiu || []).concat(groups.hidraulic || []) };
         var rezervor = { primary: 'rezervor', categories: (groups.sasiu || []).concat(groups.hidraulic || [], groups.livrare_gaz || []) };
         return autoType(type) === 'cap_tractor' ? [sasiu] : [sasiu, rezervor];

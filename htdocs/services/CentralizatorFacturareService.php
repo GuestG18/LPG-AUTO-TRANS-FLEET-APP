@@ -150,6 +150,28 @@ class CentralizatorFacturareService
         ]));
     }
 
+    /*
+     * Datele raportului scurt: acelasi buildCore si aceleasi filtre ca pagina, fara luna
+     * anterioara (care serveste doar comparatiilor de pe carduri).
+     */
+    public function getShortExportData(array $input): array
+    {
+        $filters = $this->normalizeFilters(array_merge($input, ['page_no' => 1, 'per_page' => 100000]));
+        $core = $this->buildCore($filters);
+
+        return [
+            'filters' => $filters,
+            'scope' => $this->buildScope($filters, $this->buildLookups($filters)),
+            'rows' => $this->buildShortReportRows($core),
+            'control' => [
+                'trips' => (int) $core['trip_count'],
+                'activity' => (float) $core['total_value'],
+                'refunds' => (float) ($core['refacturari']['total_amount'] ?? 0),
+            ],
+            'generated_at' => date('Y-m-d H:i:s'),
+        ];
+    }
+
     public function normalizeFilters(array $input): array
     {
         $month = $this->normalizeMonth((string) ($input['month'] ?? ''));
@@ -520,6 +542,14 @@ class CentralizatorFacturareService
                 'trip_id' => $tripId,
                 'vehicle_id' => (int) ($row['vehicle_id'] ?? 0),
                 'price_class' => $priceClass,
+                /* Ce arata raportul scurt pe cursa: aceiasi km si tone ca in sumarul pe tipuri. */
+                'report_route' => ($this->routeGarages($row) !== ['', ''] ? $this->billingRouteLabel($row) : $this->routeLabel($row)) . ($fromPd ? self::PD_ROUTE_SUFFIX : ''),
+                'report_km' => match ($type) {
+                    'primar', 'distributie' => $this->rowKm($row),
+                    'compresor' => max(0.0, (float) ($row['km_dislocare'] ?? 0)),
+                    default => 0.0,
+                },
+                'report_tone' => in_array($type, ['primar_tona', 'distributie', 'compresor'], true) ? $this->normalizedBilledTons($row) : 0.0,
                 'tone' => $type === 'distributie' ? $this->normalizedBilledTons($row) : 0.0,
                 'km' => $type === 'distributie' ? $this->rowKm($row) : 0.0,
                 /* Refacturarile cursei se leaga de partea care o numara (la P+D: tonele). */
@@ -2815,6 +2845,7 @@ class CentralizatorFacturareService
             'trip_type' => (string) ($expense['tip_transport'] ?? ''),
             'race_no' => $this->formatRaceNumber($tripId, $tripDate),
             'vehicle_label' => trim((string) ($expense['nr_inmatriculare'] ?? '')) !== '' ? (string) $expense['nr_inmatriculare'] : 'Vehicul nealocat',
+            'route_label' => $this->routeAuditLabel($expense),
             'sort_date' => $date,
             'date_label' => $this->formatDateLabel($date),
         ];
@@ -2871,6 +2902,127 @@ class CentralizatorFacturareService
         $typeLabel = $this->expenseTypeLabel($type);
 
         return [$line($typeLabel, $description, 1.0, $amount)];
+    }
+
+    /*
+     * Randurile plate ale raportului scurt. Cursele aceluiasi vehicul, tip si ruta stau pe
+     * un rand doar daca au aceiasi km, tone, tarife si valoare pe cursa, deci nimic nu e
+     * mediat. Valoarea activitatii si numarul de curse apar o singura data: cand randul are
+     * mai multe cheltuieli, randurile in plus au doar identificarea si cheltuiala. O cursa
+     * P+D se numara pe partea care o numara si in pagina. Refacturarile merg pe cursa lor;
+     * cele ale unor curse din alte luni (refund_leftovers) au rand fara activitate.
+     */
+    private function buildShortReportRows(array $core): array
+    {
+        $typeOrder = array_flip(array_keys(self::TRANSPORT_TYPES));
+        $vehicleTrips = [];
+        $groups = [];
+        $number = static fn (float $value): string => number_format($value, 4, '.', '');
+        $addLines = static function (array &$group, array $lines): void {
+            foreach ($lines as $line) {
+                $label = in_array((string) $line['type_label'], self::ROAD_TAX_LABELS, true) ? (string) $line['label'] : (string) $line['type_label'];
+                $unit = round((float) $line['unit_price'], 4);
+                $key = $label . '|' . number_format($unit, 4, '.', '');
+                $group['expenses'][$key] ??= ['label' => $label, 'quantity' => 0.0, 'unit_price' => $unit, 'amount' => 0.0];
+                $group['expenses'][$key]['quantity'] += (float) $line['quantity'];
+                $group['expenses'][$key]['amount'] += (float) $line['amount'];
+            }
+        };
+
+        foreach ((array) ($core['activity']['by_type'] ?? []) as $type => $typeRow) {
+            $typeLabel = (string) ($typeRow['label'] ?? $type);
+            foreach ((array) ($typeRow['routes'] ?? []) as $route) {
+                $linesByTrip = [];
+                foreach ((array) ($route['refunds'] ?? []) as $line) {
+                    $linesByTrip[(int) $line['cursa_id']][] = $line;
+                }
+                foreach ((array) ($route['trip_rows'] ?? []) as $trip) {
+                    $vehicle = (string) $trip['vehicle_label'];
+                    $counts = (bool) ($trip['counts_trip'] ?? true);
+                    $vehicleTrips[$vehicle] = ($vehicleTrips[$vehicle] ?? 0) + ($counts ? 1 : 0);
+                    $km = round((float) $trip['report_km'], 4);
+                    $tone = round((float) $trip['report_tone'], 4);
+                    $rateKm = $this->shortReportRate($trip, 'km');
+                    $rateTon = $this->shortReportRate($trip, 't');
+                    $value = round((float) $trip['value'], 2);
+                    $key = implode('|', [$vehicle, $type, (string) $trip['report_route'], $number($km), $number($tone), $number($rateKm ?? -1.0), $number($rateTon ?? -1.0), $number($value)]);
+                    $groups[$key] ??= [
+                        'vehicle' => $vehicle, 'type' => (string) $type, 'type_label' => $typeLabel, 'route' => (string) $trip['report_route'],
+                        'km' => $km, 'tone' => $tone, 'rate_km' => $rateKm, 'rate_ton' => $rateTon, 'value_per_trip' => $value,
+                        'trips' => 0, 'activity_value' => 0.0, 'has_activity' => true, 'expenses' => [],
+                    ];
+                    $groups[$key]['trips'] += $counts ? 1 : 0;
+                    $groups[$key]['activity_value'] += $value;
+                    if ($counts && isset($linesByTrip[(int) $trip['trip_id']])) {
+                        $addLines($groups[$key], $linesByTrip[(int) $trip['trip_id']]);
+                        unset($linesByTrip[(int) $trip['trip_id']]);
+                    }
+                }
+            }
+            foreach ((array) ($typeRow['refund_leftovers'] ?? []) as $line) {
+                $key = implode('|', [(string) $line['vehicle_label'], $type, (string) $line['route_label'], 'alta-luna']);
+                $groups[$key] ??= [
+                    'vehicle' => (string) $line['vehicle_label'], 'type' => (string) $type, 'type_label' => $typeLabel, 'route' => (string) $line['route_label'],
+                    'km' => 0.0, 'tone' => 0.0, 'rate_km' => null, 'rate_ton' => null, 'value_per_trip' => 0.0,
+                    'trips' => 0, 'activity_value' => 0.0, 'has_activity' => false, 'expenses' => [],
+                ];
+                $addLines($groups[$key], [$line]);
+            }
+        }
+
+        $groups = array_values($groups);
+        usort($groups, static fn (array $a, array $b): int => strnatcasecmp($a['vehicle'], $b['vehicle'])
+            ?: (($typeOrder[$a['type']] ?? 99) <=> ($typeOrder[$b['type']] ?? 99))
+            ?: strnatcasecmp($a['route'], $b['route'])
+            ?: ($a['km'] <=> $b['km']) ?: ($a['tone'] <=> $b['tone']) ?: ($a['value_per_trip'] <=> $b['value_per_trip']));
+
+        $rows = [];
+        foreach ($groups as $group) {
+            $expenses = array_values($group['expenses']);
+            usort($expenses, static fn (array $a, array $b): int => strnatcasecmp($a['label'], $b['label']) ?: ($a['unit_price'] <=> $b['unit_price']));
+            foreach ($expenses !== [] ? $expenses : [null] as $index => $expense) {
+                $carriesActivity = $index === 0 && $group['has_activity'];
+                $rows[] = [
+                    'vehicle' => $group['vehicle'],
+                    'vehicle_trips' => $vehicleTrips[$group['vehicle']] ?? 0,
+                    'route' => $group['route'],
+                    'type_label' => $group['type_label'],
+                    'carries_activity' => $carriesActivity,
+                    'trips' => $carriesActivity ? $group['trips'] : null,
+                    'km' => $carriesActivity && $group['km'] > 0 ? $group['km'] : null,
+                    'tone' => $carriesActivity && $group['tone'] > 0 ? $group['tone'] : null,
+                    'rate_km' => $carriesActivity ? $group['rate_km'] : null,
+                    'rate_ton' => $carriesActivity ? $group['rate_ton'] : null,
+                    'value_per_trip' => $carriesActivity ? $group['value_per_trip'] : null,
+                    'activity_value' => $carriesActivity ? round($group['activity_value'], 2) : null,
+                    'expense_label' => $expense['label'] ?? null,
+                    'expense_quantity' => $expense !== null ? round($expense['quantity'], 4) : null,
+                    'expense_unit_price' => $expense['unit_price'] ?? null,
+                    /* Refacturarile sunt introduse cu TVA. */
+                    'expense_amount_vat' => $expense !== null ? round($expense['amount'], 2) : null,
+                ];
+            }
+        }
+
+        return $rows;
+    }
+
+    /* Tariful unei curse pe unitatea data, din calculul afisat in pagina; mai multe parti pe aceeasi unitate: media ponderata. */
+    private function shortReportRate(array $trip, string $unit): ?float
+    {
+        $parts = array_values(array_filter((array) ($trip['components'] ?? []), static fn (array $part): bool => (string) ($part['quantity_unit'] ?? '') === $unit));
+        if ($parts !== []) {
+            $quantity = array_sum(array_column($parts, 'quantity'));
+
+            return count($parts) === 1 || $quantity <= 0
+                ? round((float) $parts[0]['rate'], 4)
+                : round(array_sum(array_column($parts, 'amount')) / $quantity, 4);
+        }
+        if ((array) ($trip['components'] ?? []) === [] && (string) ($trip['unit'] ?? '') === $unit && ($trip['rate'] ?? null) !== null) {
+            return round((float) $trip['rate'], 4);
+        }
+
+        return null;
     }
 
     private function accumulateRefacturareTypeGroups(array &$groups, array $expense, float $amount): void

@@ -592,7 +592,7 @@ if ($searchMode) {
     var STOC_TAB = 'stoc';
     // Categoriile / componentele din Reparatii Auto (Livrare Gaz exista doar sub Rezervor).
     var COMPONENT_CATALOG = <?= json_encode($componentCatalog ?? [], JSON_UNESCAPED_UNICODE) ?>;
-    var SUBCATEGORY_LABELS = { sasiu: 'Sasiu', hidraulic: 'Hidraulic', livrare_gaz: 'Livrare Gaz' };
+    var SUBCATEGORY_LABELS = <?= json_encode(AutoComponentCatalogService::subcategoryLabels(true), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG) ?>;
     var COMPONENTS_BY_KEY = {};
     COMPONENT_CATALOG.forEach(function (category) {
         category.components.forEach(function (component) {

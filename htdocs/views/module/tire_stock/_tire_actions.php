@@ -129,8 +129,8 @@ $locationPhotoUrl = $locationPhotoPath !== '' ? url('uploads/anvelope_locatii/' 
                         <input type="hidden" name="target_vehicle_id" value="" data-picker-vehicle-input>
                         <input type="hidden" name="target_position_id" value="" data-picker-position-input>
                     </div>
-                    <div class="col-md-4"><label class="form-label">Data</label><input type="date" class="form-control" name="move_date" value="<?= e(date('Y-m-d')) ?>" required></div>
-                    <div class="col-md-8"><label class="form-label">Motiv</label><input type="text" class="form-control" name="move_reason" value="Mutare anvelopa"></div>
+                    <div class="col-md-5"><?php $dtpLabel = 'Data si ora montarii'; $dtpDateName = 'move_date'; $dtpTimeName = 'move_time'; include __DIR__ . '/_datetime_field.php'; ?></div>
+                    <div class="col-md-7"><label class="form-label">Motiv</label><input type="text" class="form-control" name="move_reason" value="Mutare anvelopa"></div>
                     <div class="col-12"><label class="form-label">Observatie</label><textarea class="form-control" name="move_observation" rows="2"></textarea></div>
                     <div class="col-12"><label class="form-check"><input class="form-check-input" type="checkbox" name="allow_swap" value="1" data-picker-swap> <span class="form-check-label">Schimba pozitiile daca tinta este ocupata</span></label></div>
                 </div>

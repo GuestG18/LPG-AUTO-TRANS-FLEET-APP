@@ -126,6 +126,9 @@ class ModuleController
             case 'tire_fleet_unit':
                 $this->tireFleetUnitAction($moduleKey);
                 return;
+            case 'tire_km_sas_sync':
+                $this->tireKmSasSyncAction($moduleKey);
+                return;
             case 'tire_position_candidates':
                 $this->tirePositionCandidatesAction($moduleKey);
                 return;
@@ -799,6 +802,7 @@ class ModuleController
         }
 
         render('module/axis_config.php', [
+            'axleKinds' => $this->vehicleAxleKindLabels(),
             'pageTitle' => 'Configuratie Axe',
             'currentPage' => $this->resolveCurrentPage($moduleKey, $module),
             'moduleKey' => $moduleKey,
@@ -1243,6 +1247,7 @@ class ModuleController
             'driverDocumentCustomFieldErrors' => $driverDocumentCustomFieldErrors,
             'vehicleMountedTires' => 0,
             'vehicleLayoutOptionsByType' => $moduleKey === 'vehicule' ? $this->buildVehicleLayoutOptionsByType() : [],
+            'vehicleAxleForm' => $moduleKey === 'vehicule' ? $this->vehicleAxleFormData($formData) : [],
         ]);
     }
 
@@ -1283,6 +1288,7 @@ class ModuleController
         $module = $this->applyDynamicDocumentTypeOptions($moduleKey, $module, $_POST, null);
         $module = $this->applyDynamicDocumentExpiryRequirement($moduleKey, $module, $_POST, null);
         [$data, $errors] = $this->validateAndPrepareData($module, $_POST, $_FILES, 'create', null);
+        $this->validateVehicleAxleKinds($moduleKey, 0, $data, [], $errors);
         $driverVehicleIds = [];
         if ($moduleKey === 'soferi') {
             $driverVehicleIds = $this->prepareDriverVehicleAssignmentsData($data, $errors, $_POST);
@@ -1349,7 +1355,7 @@ class ModuleController
         }
 
         if ($errors !== []) {
-            set_form_flash($this->sanitizeOldInput($module, $_POST), $errors);
+            set_form_flash($this->oldInputWithAxleKinds($module, $_POST), $errors);
             $createRoute = ['page' => $routePage, 'action' => 'create'];
             if ($moduleKey === 'documente' && $keepDocumentVehicleContext && $documentVehicleId > 0) {
                 $createRoute['vehicle_id'] = $documentVehicleId;
@@ -1402,6 +1408,7 @@ class ModuleController
                 if ($savedVehicle !== null) {
                     $currentRecordForStatus = $savedVehicle;
                     $this->syncVehicleTireLayoutSafe($savedVehicle);
+                    $this->saveVehicleAxleKinds($recordId, $savedVehicle);
                 }
             }
 
@@ -1432,7 +1439,7 @@ class ModuleController
 
             flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'salvare'));
 
-            set_form_flash($this->sanitizeOldInput($module, $_POST), []);
+            set_form_flash($this->oldInputWithAxleKinds($module, $_POST), []);
             $createRoute = ['page' => $routePage, 'action' => 'create'];
             if ($moduleKey === 'documente' && $keepDocumentVehicleContext && $documentVehicleId > 0) {
                 $createRoute['vehicle_id'] = $documentVehicleId;
@@ -1650,6 +1657,7 @@ class ModuleController
             'driverDocumentCustomFieldErrors' => $driverDocumentCustomFieldErrors,
             'vehicleMountedTires' => $moduleKey === 'vehicule' ? $this->getVehicleMountedTireCountSafe($id) : 0,
             'vehicleLayoutOptionsByType' => $moduleKey === 'vehicule' ? $this->buildVehicleLayoutOptionsByType() : [],
+            'vehicleAxleForm' => $moduleKey === 'vehicule' ? $this->vehicleAxleFormData($formData) : [],
         ]);
     }
 
@@ -1707,6 +1715,7 @@ class ModuleController
         $module = $this->applyDynamicDocumentTypeOptions($moduleKey, $module, $_POST, $id);
         $module = $this->applyDynamicDocumentExpiryRequirement($moduleKey, $module, $_POST, $id);
         [$data, $errors] = $this->validateAndPrepareData($module, $_POST, $_FILES, 'edit', $id);
+        $this->validateVehicleAxleKinds($moduleKey, $id, $data, $existing, $errors);
         $driverVehicleIds = [];
         if ($moduleKey === 'soferi') {
             $driverVehicleIds = $this->prepareDriverVehicleAssignmentsData($data, $errors, $_POST);
@@ -1810,7 +1819,7 @@ class ModuleController
                 }
             }
 
-            set_form_flash($this->sanitizeOldInput($module, $_POST), $errors);
+            set_form_flash($this->oldInputWithAxleKinds($module, $_POST), $errors);
             redirect(build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => $id]));
         }
 
@@ -1818,6 +1827,9 @@ class ModuleController
 
         try {
             $this->moduleModel->updateRecord($module['table'], $id, $data);
+            if ($moduleKey === 'vehicule') {
+                $this->saveVehicleAxleKinds($id, $data + $existing);
+            }
             if ($moduleKey === 'soferi') {
                 $this->moduleModel->syncDriverVehicleAssignments($id, $driverVehicleIds);
             }
@@ -1886,7 +1898,7 @@ class ModuleController
 
             flash_set('danger', $this->buildPersistenceErrorMessage($moduleKey, $exception, 'actualizare'));
 
-            set_form_flash($this->sanitizeOldInput($module, $_POST), []);
+            set_form_flash($this->oldInputWithAxleKinds($module, $_POST), []);
             redirect(build_query_url(['page' => $routePage, 'action' => 'edit', 'id' => $id]));
         }
 
@@ -2295,6 +2307,11 @@ class ModuleController
             flash_set('danger', 'Data montaj nu este valida (format YYYY-MM-DD).');
             redirect($redirectUrl);
         }
+        $mountMoment = $this->tireMomentFromPost($mountDate, 'mount_time');
+        if ($mountMoment === null) {
+            flash_set('danger', 'Ora montajului nu este valida.');
+            redirect($redirectUrl);
+        }
 
         $tire = $this->tireModel->getTireById($tireId);
         if ($tire === null) {
@@ -2313,7 +2330,7 @@ class ModuleController
                 $vehicleId,
                 $positionId,
                 max(0, (int) ($vehicle['km_bord'] ?? 0)),
-                $mountDate,
+                $mountMoment,
                 date('Y-m-d H:i:s'),
                 $this->currentUserId(),
                 $allowSwap,
@@ -2364,6 +2381,11 @@ class ModuleController
             flash_set('danger', 'Data demontaj nu este valida (format YYYY-MM-DD).');
             redirect($redirectUrl);
         }
+        $unmountDate = $this->tireMomentFromPost($unmountDate, 'unmount_time');
+        if ($unmountDate === null) {
+            flash_set('danger', 'Ora demontajului nu este valida.');
+            redirect($redirectUrl);
+        }
 
         if (!in_array($statusEnd, [TireModel::STATUS_IN_STOCK, TireModel::STATUS_SPARE, TireModel::STATUS_REMOVED, TireModel::STATUS_DAMAGED, TireModel::STATUS_MISSING, TireModel::STATUS_SCRAPPED], true)) {
             $statusEnd = TireModel::STATUS_SPARE;
@@ -2373,7 +2395,6 @@ class ModuleController
             $updated = $this->tireModel->unmountTire(
                 $allocationId,
                 $vehicleId,
-                max(0, (int) ($vehicle['km_bord'] ?? 0)),
                 $unmountDate,
                 $statusEnd,
                 date('Y-m-d H:i:s'),
@@ -2451,6 +2472,11 @@ class ModuleController
 
         if (!$this->isValidDate($moveDate)) {
             flash_set('danger', 'Data mutarii nu este valida (format YYYY-MM-DD).');
+            redirect($redirectUrl);
+        }
+        $moveDate = $this->tireMomentFromPost($moveDate, 'move_time');
+        if ($moveDate === null) {
+            flash_set('danger', 'Ora mutarii nu este valida.');
             redirect($redirectUrl);
         }
 
@@ -3244,6 +3270,39 @@ class ModuleController
         redirect($stockRedirectUrl);
     }
 
+    /**
+     * Ziua din formular + ora (campul $timeKey, HH:MM): de la acest minut se numara km SAS ai
+     * anvelopei. Fara camp (butoane rapide), ora curenta. Null daca ora trimisa nu e valida.
+     */
+    private function tireMomentFromPost(string $date, string $timeKey): ?string
+    {
+        $time = trim((string) ($_POST[$timeKey] ?? ''));
+        if ($time === '') {
+            return $date . ' ' . date('H:i');
+        }
+
+        return preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $time) === 1 ? $date . ' ' . $time : null;
+    }
+
+    /** Pagina Anvelope cere km din SAS cate cateva vehicule o data (SAS limiteaza cererile). */
+    private function tireKmSasSyncAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'mentenanta' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->tireMountJson(['ok' => false, 'error' => 'Cerere invalida.'], 405);
+        }
+        if (!verify_csrf_token($_POST['_token'] ?? null)) {
+            $this->tireMountJson(['ok' => false, 'error' => 'Token CSRF invalid.'], 419);
+        }
+        session_write_close();
+
+        try {
+            $this->tireMountJson(['ok' => true] + (new TireSasKmService($this->db))->run());
+        } catch (Throwable $exception) {
+            error_log('[tire_km_sas_sync] ' . $exception->getMessage());
+            $this->tireMountJson(['ok' => false, 'error' => 'Km din SAS nu au putut fi actualizati.'], 500);
+        }
+    }
+
     private function tireMountJson(array $payload, int $status = 200): void
     {
         http_response_code($status);
@@ -3311,13 +3370,44 @@ class ModuleController
     }
 
     /** Vederea pe vehicule din pagina Anvelope; ansamblurile vin din cuplajele active existente. */
-    private function buildFleetTireOverview(): array
+    /**
+     * Schema vehiculului din Reparatii Auto: unitatea care contine vehiculul (cu partenerul cuplat)
+     * si categoriile exploratorului. Null daca vehiculul nu e activ sau datele nu pot fi citite.
+     */
+    public function fleetExplorerData(int $vehicleId): ?array
+    {
+        try {
+            $overview = $this->buildFleetTireOverview($vehicleId);
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][auto-vehicle-explorer] ' . $exception->getMessage());
+            return null;
+        }
+        foreach ($overview['client_units'] as $unit) {
+            foreach ($unit['members'] as $member) {
+                if ((int) $member['vehicle_id'] === $vehicleId) {
+                    return ['unit' => $unit, 'categories' => $overview['client_categories'] ?? null];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function buildFleetTireOverview(?int $onlyVehicleId = null): array
     {
         $vehicles = $this->tireModel->getFleetTireVehicles();
         $couplings = $this->vehicleCouplingModel->getActiveAssemblyStatusByVehicleIds(array_map(static fn (array $vehicle): int => (int) $vehicle['id'], $vehicles));
+        if ($onlyVehicleId !== null) {
+            $coupling = $couplings[$onlyVehicleId] ?? null;
+            $keep = array_filter([$onlyVehicleId, (int) ($coupling['tractor_id'] ?? 0), (int) ($coupling['semiremorca_id'] ?? 0)]);
+            $vehicles = array_values(array_filter($vehicles, static fn (array $vehicle): bool => in_array((int) $vehicle['id'], $keep, true)));
+        }
 
         $overview = $this->tireModel->buildFleetTireOverview($vehicles, $couplings);
         $overview['client_units'] = array_map([$this->tireModel, 'fleetUnitClientData'], $overview['units']);
+        if ($onlyVehicleId === null) {
+            return $overview; // Stoc Anvelope: doar anvelopele; componentele sunt in schema din Reparatii Auto.
+        }
 
         // Exploratorul de componente: locurile fiecarei categorii, din axele reale ale vehiculului.
         try {
@@ -3329,11 +3419,14 @@ class ModuleController
             $componentModel = new VehicleComponentModel($this->db);
             $axleAttributes = $componentModel->axleAttributes($vehicleIds);
             $inspections = $componentModel->latestInspections($vehicleIds);
+            $structureService = new VehicleStructureService($this->db);
             foreach ($overview['client_units'] as &$clientUnit) {
                 foreach ($clientUnit['members'] as &$clientMember) {
                     $memberId = (int) $clientMember['vehicle_id'];
                     $clientMember['axle_attrs'] = (object) ($axleAttributes[$memberId] ?? []);
-                    $clientMember['slots'] = VehicleComponentRegistry::memberSlots($clientMember, $records[$memberId] ?? [], $catalogMap);
+                    $clientMember['axle_kinds'] = (object) $structureService->axleKinds($memberId);
+                    // Schema arata doar ce are vehiculul in configuratia lui (pagina Auto).
+                    $clientMember['slots'] = VehicleComponentRegistry::memberSlots($clientMember, $records[$memberId] ?? [], $catalogMap, $structureService->schemeFilter($memberId));
                     // Starea unui loc = rezultatul ultimei inspectii inregistrate (nimic calculat).
                     foreach ($clientMember['slots'] as &$slot) {
                         $inspection = $inspections[$memberId][$slot['category'] . '|' . $slot['location']] ?? null;
@@ -3666,6 +3759,10 @@ class ModuleController
         if (!$this->isValidDate($mountDate)) {
             $this->tireMountJson(['ok' => false, 'general' => ['Data montarii nu este valida.']], 422);
         }
+        $mountDate = $this->tireMomentFromPost($mountDate, 'mount_time');
+        if ($mountDate === null) {
+            $this->tireMountJson(['ok' => false, 'general' => ['Ora montarii nu este valida.']], 422);
+        }
 
         $assignments = [];
         foreach ((array) ($_POST['assignments'] ?? []) as $assignment) {
@@ -3729,6 +3826,11 @@ class ModuleController
             flash_set('danger', 'Data demontaj nu este valida (format YYYY-MM-DD).');
             redirect($stockRedirectUrl);
         }
+        $unmountDate = $this->tireMomentFromPost($unmountDate, 'unmount_time');
+        if ($unmountDate === null) {
+            flash_set('danger', 'Ora demontajului nu este valida.');
+            redirect($stockRedirectUrl);
+        }
 
         $statusEnd = strtolower(trim((string) ($_POST['status_end'] ?? TireModel::STATUS_SPARE)));
         if (!in_array($statusEnd, [TireModel::STATUS_IN_STOCK, TireModel::STATUS_SPARE, TireModel::STATUS_REMOVED, TireModel::STATUS_DAMAGED, TireModel::STATUS_MISSING, TireModel::STATUS_SCRAPPED], true)) {
@@ -3762,7 +3864,6 @@ class ModuleController
                 if ($this->tireModel->unmountTire(
                     $allocationId,
                     $vehicleId,
-                    max(0, (int) ($vehicle['km_bord'] ?? 0)),
                     $unmountDate,
                     $statusEnd,
                     $updatedAt,
@@ -4826,7 +4927,7 @@ class ModuleController
         ];
 
         try {
-            $context = $this->tireModel->buildVehicleTireContext($vehicleId, $vehicleKmBord, $vehicleType, $normalizedLayout);
+            $context = $this->tireModel->buildVehicleTireContext($vehicleId, $vehicleType, $normalizedLayout);
         } catch (Throwable $exception) {
             error_log('[ModuleController][tires][context] ' . $exception->getMessage());
             flash_set('warning', 'Modulul de anvelope necesita actualizare baza de date. Ruleaza scriptul database/update_vehicle_tire_management.sql.');
@@ -5042,6 +5143,7 @@ class ModuleController
             $viewData['statusContext'] = $this->entityStatusService->evaluateDriverStatus($id);
         }
 
+        $viewData['axleKinds'] = $moduleKey === 'vehicule' ? $this->vehicleAxleKindLabels() : [];
         render('module/show.php', $viewData);
     }
 
@@ -7218,5 +7320,75 @@ class ModuleController
             'semiremorca_primar' => $this->tireModel->getLayoutOptionsByVehicleType('semiremorca'),
             'semiremorca_distributie' => $this->tireModel->getLayoutOptionsByVehicleType('semiremorca'),
         ];
+    }
+
+    /* ------------------------------------------------------------------ tipul axelor (fisa vehiculului) */
+
+    /** Axele fiecarei formule + alegerile vehiculului, pentru formularul Adauga / Editeaza. */
+    private function vehicleAxleFormData(array $formData): array
+    {
+        try {
+            $service = new VehicleAxleTypeService($this->db, $this->tireModel);
+            $saved = is_array($formData['tip_axa'] ?? null) ? $formData['tip_axa'] : $service->savedKinds((int) ($formData['id'] ?? 0));
+            return ['layouts' => $service->layoutMap(), 'kinds' => VehicleAxleTypeService::KINDS, 'saved' => (object) $saved];
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][axle-kinds] ' . $exception->getMessage());
+            return [];
+        }
+    }
+
+    private function vehicleAxleKindLabels(): array
+    {
+        try {
+            return (new VehicleAxleTypeService($this->db, $this->tireModel))->labels();
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][axle-kinds] ' . $exception->getMessage());
+            return [];
+        }
+    }
+
+    private function validateVehicleAxleKinds(string $moduleKey, int $vehicleId, array $data, array $existing, array &$errors): void
+    {
+        if ($moduleKey !== 'vehicule' || isset($errors['formula_axelor'])) {
+            return;
+        }
+        $error = (new VehicleAxleTypeService($this->db, $this->tireModel))->validate(
+            $vehicleId,
+            (string) ($data['tip_vehicul'] ?? ($existing['tip_vehicul'] ?? '')),
+            (string) ($data['formula_axelor'] ?? ($existing['formula_axelor'] ?? '')),
+            $_POST
+        );
+        if ($error !== null) {
+            $errors['formula_axelor'] = $error;
+        }
+    }
+
+    /** Vehiculul e deja salvat: o problema aici nu trebuie sa anuleze salvarea, doar sa fie semnalata. */
+    private function saveVehicleAxleKinds(int $vehicleId, array $vehicle): void
+    {
+        try {
+            $userId = (int) ($_SESSION['auth_user']['id'] ?? 0);
+            (new VehicleAxleTypeService($this->db, $this->tireModel))->save(
+                $vehicleId,
+                (string) ($vehicle['tip_vehicul'] ?? ''),
+                (string) ($vehicle['formula_axelor'] ?? ''),
+                $_POST,
+                $userId > 0 ? $userId : null
+            );
+        } catch (Throwable $exception) {
+            error_log('[ModuleController][axle-kinds] ' . $exception->getMessage());
+            flash_set('warning', 'Vehiculul a fost salvat, dar tipul axelor nu a putut fi actualizat.');
+        }
+    }
+
+    /** Valorile formularului la o eroare, inclusiv tipul axelor (camp in afara definitiei modulului). */
+    private function oldInputWithAxleKinds(array $module, array $input): array
+    {
+        $old = $this->sanitizeOldInput($module, $input);
+        if (($module['table'] ?? '') === 'vehicule' && is_array($input['tip_axa'] ?? null)) {
+            $old['tip_axa'] = array_map(static fn ($value): string => (string) $value, array_filter($input['tip_axa'], 'is_scalar'));
+        }
+
+        return $old;
     }
 }

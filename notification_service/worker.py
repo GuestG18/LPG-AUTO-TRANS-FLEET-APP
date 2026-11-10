@@ -337,6 +337,8 @@ def fetch_matches_for_rule(conn, rule: dict[str, Any]) -> list[dict[str, Any]]:
         return fetch_driver_birthday_matches(conn, rule)
     if event_type in REVIZIE_EVENT_CATEGORY:
         return fetch_revizie_matches(rule)
+    if event_type in CONSUMABIL_EVENTS:
+        return fetch_consumabil_matches(rule)
     if event_type == APPROVAL_EVENT:
         # Emailul de aprobare il trimite approval_flow.py; aici doar SMS-ul.
         return fetch_approval_sms_matches(conn, rule)
@@ -513,6 +515,120 @@ def fetch_revizie_matches(rule: dict[str, Any]) -> list[dict[str, Any]]:
             "context_suffix": f"{alert.get('baseline_at') or ''}:{status}",
         })
     return rows[:200]
+
+
+# Consumabile & Fluide Tehnice: alertele sunt deschise / inchise de PHP (ConsumabileAlertService,
+# tabela consumabile_alerte). O alerta = un id; cat timp ramane deschisa nu se retrimite (decat
+# cu „repeta pana la rezolvare”, la intervalul din regula); rezolvata = nu mai apare aici.
+CONSUMABIL_EVENTS = {
+    "consumabil_completare",
+    "consumabil_verificare",
+    "consumabil_revizie_apropiata",
+    "consumabil_revizie_depasita",
+    "consumabil_consum_anormal",
+    "consumabil_stoc_insuficient",
+    "consumabil_recipient_minim",
+    "consumabil_date_indisponibile",
+}
+
+# Reamintire implicita pentru alertele de consumabile cu „repeta pana la rezolvare” (zile).
+CONSUMABIL_REPEAT_DAYS = 3
+
+_consumabil_alerts_cache: list[dict[str, Any]] | None = None
+
+
+def load_consumabil_alerts() -> list[dict[str, Any]]:
+    """Alertele deschise, recalculate o singura data per rulare (scripts/consumabile_alerts.php)."""
+    global _consumabil_alerts_cache
+    if _consumabil_alerts_cache is not None:
+        return _consumabil_alerts_cache
+
+    import subprocess
+
+    script = PROJECT_ROOT / "scripts" / "consumabile_alerts.php"
+    result = subprocess.run(
+        [php_binary(), str(script)],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=240,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("consumabile_alerts.php a esuat: " + (result.stderr or result.stdout).strip()[:500])
+    payload = json.loads(result.stdout.strip() or "{}")
+    _consumabil_alerts_cache = list(payload.get("alerts") or [])
+    return _consumabil_alerts_cache
+
+
+def consumabil_matches(rule: dict[str, Any], alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Alertele care corespund regulii (pur, testabil fara PHP)."""
+    event_type = str(rule.get("event_type") or "")
+    repeat_days = int(rule_metadata(rule).get("repeat_days") or CONSUMABIL_REPEAT_DAYS)
+    epoch_day = int(datetime.now().timestamp() // 86400)
+    rows: list[dict[str, Any]] = []
+    for alert in alerts:
+        if str(alert.get("tip") or "") != event_type:
+            continue
+        rows.append({
+            # Id-ul alertei: o alerta redeschisa (problema reaparuta) = notificare noua.
+            "entity_id": int(alert["id"]),
+            "entity_type": "consumabil",
+            "tip_document": str(alert.get("titlu") or "Consumabile"),
+            "owner_id": int(alert.get("vehicle_id") or 0),
+            "owner_name": str(alert.get("subiect") or alert.get("nr") or ""),
+            "owner_details": str(alert.get("detalii") or ""),
+            "notification_title": str(alert.get("titlu") or "Consumabile"),
+            "consumabil_recomandare": str(alert.get("recomandare") or ""),
+            "consumabil_link_sub": str(alert.get("link_sub") or "vehicule"),
+            "consumabil_severitate": str(alert.get("severitate") or ""),
+            "repeat_bucket": f"r{epoch_day // max(1, repeat_days)}",
+        })
+    return rows[:200]
+
+
+def fetch_consumabil_matches(rule: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        alerts = load_consumabil_alerts()
+    except Exception as exc:
+        # O eroare la Consumabile nu trebuie sa opreasca celelalte reguli.
+        sys.stderr.write(f"Consumabile: {normalize_error(exc)}\n")
+        return []
+    return consumabil_matches(rule, alerts)
+
+
+def build_consumabil_email(config: MailConfig, match: dict[str, Any], recipient_name: str) -> tuple[str, str]:
+    title = str(match.get("notification_title") or "Consumabile")
+    subject_line = str(match.get("owner_name") or "")
+    url = absolute_app_url("index.php", {
+        "page": "mentenanta",
+        "action": "stock",
+        "tab": "consumabile",
+        "sub": str(match.get("consumabil_link_sub") or "vehicule"),
+    })
+    subject = f"[{config.app_name}] {title}: {subject_line}"
+    lines = [
+        f"Salut, {recipient_name},",
+        "",
+        "Exista o alerta Consumabile & Fluide Tehnice in aplicatia de flota.",
+        "",
+        f"Alerta: {title}",
+        f"Pentru: {subject_line}",
+    ]
+    if match.get("owner_details"):
+        lines.append(f"Detalii: {match['owner_details']}")
+    if match.get("consumabil_recomandare"):
+        lines.append(f"Actiune recomandata: {match['consumabil_recomandare']}")
+    lines.extend([
+        "",
+        "Alerta se inchide automat cand problema nu mai apare la recalculare (ex. nivel remasurat, stoc reumplut).",
+        "",
+        "Deschide in aplicatie:",
+        url,
+        "",
+        config.app_name,
+    ])
+    return subject, "\n".join(lines)
 
 
 def fetch_vehicle_document_matches(conn, rule: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1024,6 +1140,8 @@ def build_notification_email(
 
     if entity_type == "revizie":
         return build_revizie_email(config, match, recipient_name, status, document_type, owner_name, owner_details)
+    if entity_type == "consumabil":
+        return build_consumabil_email(config, match, recipient_name)
 
     page = "documente"
     target_id = int(match.get("document_id") or match.get("entity_id") or 0)
@@ -1120,6 +1238,10 @@ def build_sms_text(config: MailConfig, rule: dict[str, Any], match: dict[str, An
             text += f" (interval {interval} km)"
         if not match.get("revizie_complet", True):
             text += ". Date GPS incomplete"
+    elif entity_type == "consumabil":
+        text = f"{title or component}: {owner}"
+        if match.get("consumabil_recomandare"):
+            text += f". {match['consumabil_recomandare']}"
     elif entity_type == "approval":
         text = f"Cerere aprobare in asteptare: {owner} - {component}"
         if match.get("owner_details"):

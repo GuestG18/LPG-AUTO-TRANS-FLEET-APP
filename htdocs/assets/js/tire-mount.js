@@ -456,6 +456,11 @@
     var footerProgress = modalEl.querySelector('[data-bulk-footer-progress]');
     var bulk = null;
 
+    function nowTime() {
+        var now = new Date();
+        return String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+    }
+
     function todayIso() {
         var now = new Date();
         return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
@@ -661,8 +666,14 @@
                     '<div class="col-lg-5"><label class="form-label" for="' + sharedId + '">Vehicul destinatie</label>' +
                         '<div class="d-flex gap-2"><div class="flex-grow-1" data-shared-combo></div>' +
                         '<button type="button" class="btn btn-outline-primary text-nowrap" data-apply-all title="Aplica vehiculul tuturor anvelopelor">Aplica tuturor</button></div></div>' +
-                    '<div class="col-sm-4 col-lg-2"><label class="form-label" for="tmBulkDate">Data montarii</label><input type="date" class="form-control" id="tmBulkDate" data-bulk-date value="' + esc(bulk.date) + '" required></div>' +
-                    '<div class="col-sm-8 col-lg-5"><label class="form-label" for="tmBulkReason">Motiv</label><input type="text" class="form-control" id="tmBulkReason" data-bulk-reason maxlength="255" value="' + esc(bulk.reason) + '"></div>' +
+                    '<div class="col-sm-6 col-lg-3"><label class="form-label" for="tmBulkDateTime">Data si ora montarii</label>' +
+                        '<div class="dispatcher-datetime-field" data-datetime-picker data-bulk-datetime>' +
+                            '<div class="input-group dispatcher-datetime-input-group"><input type="text" class="form-control" id="tmBulkDateTime" placeholder="dd/mm/yyyy HH:mm" inputmode="numeric" autocomplete="off" maxlength="16" title="Km din SAS se numără de la minutul următor" data-dtp-display>' +
+                            '<button type="button" class="btn btn-outline-secondary" aria-label="Deschide calendarul si ora" aria-expanded="false" data-dtp-toggle><i class="bi bi-calendar3" aria-hidden="true"></i></button></div>' +
+                            '<div class="dispatcher-datetime-popover" hidden data-dtp-popover></div>' +
+                            '<input type="hidden" value="' + esc(bulk.date) + '" data-dtp-date><input type="hidden" value="' + esc(bulk.time) + '" data-dtp-time>' +
+                        '</div></div>' +
+                    '<div class="col-sm-6 col-lg-4"><label class="form-label" for="tmBulkReason">Motiv</label><input type="text" class="form-control" id="tmBulkReason" data-bulk-reason maxlength="255" value="' + esc(bulk.reason) + '"></div>' +
                     '<div class="col-12"><label class="form-label" for="tmBulkObs">Observatii</label><textarea class="form-control" id="tmBulkObs" rows="1" data-bulk-observation maxlength="1000" placeholder="Se aplica tuturor anvelopelor; poti adauga observatii individuale pe fiecare rand.">' + esc(bulk.observation) + '</textarea></div>' +
                 '</div>' +
                 '<div class="tm-apply-confirm mt-3" data-apply-confirm hidden>' +
@@ -697,7 +708,13 @@
         body.querySelector('[data-apply-empty]').addEventListener('click', function () { applySharedToAll(false); });
         body.querySelector('[data-apply-cancel]').addEventListener('click', hideApplyConfirm);
         body.querySelector('[data-auto-assign]').addEventListener('click', autoAssign);
-        body.querySelector('[data-bulk-date]').addEventListener('input', function (event) { bulk.date = event.target.value; refreshAll(); });
+        var bulkDateTime = body.querySelector('[data-bulk-datetime]');
+        if (window.FleetDateTimePicker) { window.FleetDateTimePicker.init(bulkDateTime.parentNode); }
+        bulkDateTime.addEventListener('change', function () {
+            bulk.date = bulkDateTime.querySelector('[data-dtp-date]').value;
+            bulk.time = bulkDateTime.querySelector('[data-dtp-time]').value;
+            refreshAll();
+        });
         body.querySelector('[data-bulk-reason]').addEventListener('input', function (event) { bulk.reason = event.target.value; });
         body.querySelector('[data-bulk-observation]').addEventListener('input', function (event) { bulk.observation = event.target.value; });
         body.querySelector('[data-diagram]').addEventListener('click', onDiagramClick);
@@ -972,7 +989,7 @@
             body.querySelector('[data-rows]').innerHTML = '<div class="text-muted small py-3">Nu a mai ramas nicio anvelopa in operatiune.</div>';
         }
         footerProgress.textContent = c.total > 0 ? c.complete + ' din ' + c.total + ' pozitionate' : '';
-        var dateOk = /^\d{4}-\d{2}-\d{2}$/.test(bulk.date || '');
+        var dateOk = /^\d{4}-\d{2}-\d{2}$/.test(bulk.date || '') && /^\d{2}:\d{2}$/.test(bulk.time || '');
         saveBtn.disabled = c.total === 0 || c.complete !== c.total || !dateOk || bulk.saving;
         saveBtn.innerHTML = '<i class="bi bi-check2 me-1"></i>Salveaza montarea';
         backBtn.hidden = true;
@@ -999,7 +1016,7 @@
         summary.className = 'tm-confirm';
         summary.innerHTML =
             '<div class="alert alert-primary py-2 small"><i class="bi bi-clipboard-check me-1"></i>Verifica montarea. Se salveaza totul intr-o singura operatiune: ori se monteaza toate anvelopele, ori niciuna.</div>' +
-            '<div class="d-flex flex-wrap gap-3 small mb-3"><span><strong>' + bulk.rows.length + '</strong> anvelope</span><span><strong>' + order.length + '</strong> ' + (order.length === 1 ? 'vehicul' : 'vehicule') + '</span><span>Data: <strong>' + esc(bulk.date) + '</strong></span>' +
+            '<div class="d-flex flex-wrap gap-3 small mb-3"><span><strong>' + bulk.rows.length + '</strong> anvelope</span><span><strong>' + order.length + '</strong> ' + (order.length === 1 ? 'vehicul' : 'vehicule') + '</span><span>Data: <strong>' + esc(bulk.date) + ' ' + esc(bulk.time) + '</strong></span>' +
             (bulk.reason.trim() ? '<span>Motiv: <strong>' + esc(bulk.reason.trim()) + '</strong></span>' : '') + '</div>' +
             order.map(function (vehicleId) {
                 var group = byVehicle[vehicleId];
@@ -1036,6 +1053,7 @@
         var data = new URLSearchParams();
         data.append('_token', cfg.csrf);
         data.append('mount_date', bulk.date);
+        data.append('mount_time', bulk.time);
         data.append('reason', bulk.reason.trim());
         data.append('observation', bulk.observation.trim());
         bulk.rows.forEach(function (row, index) {
@@ -1118,6 +1136,7 @@
             layoutRequests: {},
             activeIndex: 0,
             date: todayIso(),
+            time: nowTime(),
             reason: 'Montaj anvelope',
             observation: '',
             step: 'edit',

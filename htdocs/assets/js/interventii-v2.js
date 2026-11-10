@@ -310,6 +310,14 @@
     ComponentPicker.prototype.branches = function () {
         var type = this.vehicle ? autoVehicleType(this.vehicle.type) : '';
         var groups = this.catalog.groups || {};
+        if (this.catalog.branches && this.catalog.branches[type]) {
+            return this.catalog.branches[type].map(function (branch) {
+                return {
+                    primary: branch.primary,
+                    subs: branch.subs.map(function (sub) { return { key: sub, categories: groups[sub] || [] }; })
+                };
+            });
+        }
         var sasiu = { primary: 'sasiu', subs: ['sasiu', 'hidraulic'] };
         var rezervor = { primary: 'rezervor', subs: ['sasiu', 'hidraulic', 'livrare_gaz'] };
         var list = type === 'cap_tractor' ? [sasiu] : [sasiu, rezervor];

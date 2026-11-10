@@ -1071,7 +1071,7 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
             <button type="button" class="btn btn-sm btn-outline-secondary" data-tire-bulk-clear>Deselecteaza tot</button>
         </div>
         <div class="tire-bulk-actions">
-            <input type="date" class="form-control form-control-sm w-auto" name="unmount_date" value="<?= e(date('Y-m-d')) ?>" aria-label="Data demontaj" title="Data demontaj">
+            <div class="tire-bulk-datetime"><?php $dtpLabel = 'Data si ora demontarii'; $dtpDateName = 'unmount_date'; $dtpTimeName = 'unmount_time'; $dtpSmall = true; include __DIR__ . '/tire_stock/_datetime_field.php'; ?></div>
             <select class="form-select form-select-sm w-auto" name="status_end" aria-label="Status dupa demontare" title="Status dupa demontare">
                 <option value="spare" selected>Rezerva</option>
                 <option value="in_stock">In stoc</option>

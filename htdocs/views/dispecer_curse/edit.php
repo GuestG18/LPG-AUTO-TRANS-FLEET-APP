@@ -580,7 +580,7 @@ if ($phaseCompact) {
             <?php else: ?>
                 <div class="alert alert-info py-2 small" data-kmp-prefill>
                     <i class="bi bi-graph-down-arrow me-1" aria-hidden="true"></i>
-                    Precompletat din <strong><?= !empty($kmpPrefill['close']) ? 'Km în desfășurare' : 'Km pierduți' ?></strong> (<?= e($kmpDt($kmpPrefill['from'])) ?> → <?= e($kmpDt($kmpPrefill['to'])) ?>):
+                    Precompletat din <strong><?= !empty($kmpPrefill['close']) || !empty($kmpPrefill['open']) ? 'Km în desfășurare' : 'Km pierduți' ?></strong> (<?= e($kmpDt($kmpPrefill['from'])) ?> → <?= e($kmpDt($kmpPrefill['to'])) ?>):
                     <?php if (!empty($kmpPrefill['close'])): ?>
                         închiderea <?= $kmpPrefill['mode'] === 'editare' ? 'fazei deschise' : 'cursei deschise' ?> din <strong>Km în desfășurare</strong>:
                         km GPS rulați de la început <strong><?= e((string) $kmpPrefill['total']) ?> km</strong>
@@ -590,6 +590,11 @@ if ($phaseCompact) {
                             : 'sfârșitul nu a fost completat: s-ar fi suprapus cu altă fază.' ?>
                     <?php elseif ($kmpPrefill['mode'] === 'noua'): ?>
                         faza nouă cu <strong><?= e((string) $kmpPrefill['km']) ?> km</strong> și intervalul ales.
+                        <?= !empty($kmpPrefill['open']) ? 'Fiind ultima fază, cursa se închide odată cu ea.' : '' ?>
+                    <?php elseif (!empty($kmpPrefill['open'])): ?>
+                        <strong>+<?= e((string) $kmpPrefill['km']) ?> km</strong> la <?= $kmpPrefill['mode'] === 'editare' ? 'faza deschisă' : 'cursa deschisă' ?>
+                        (<?= e(number_format((float) $kmpPrefill['previous'], 1, ',', '.')) ?> → <strong><?= e((string) $kmpPrefill['total']) ?> km</strong>).
+                        <?= $kmpPrefill['mode'] === 'editare' ? 'Faza rămâne deschisă' : 'Cursa rămâne deschisă' ?>, fără oră de sfârșit.
                     <?php else: ?>
                         <strong>+<?= e((string) $kmpPrefill['km']) ?> km</strong> la <?= $kmpPrefill['mode'] === 'editare' ? 'această fază' : 'cursă' ?>
                         (<?= e(number_format((float) $kmpPrefill['previous'], 1, ',', '.')) ?> → <strong><?= e((string) $kmpPrefill['total']) ?> km</strong>).

@@ -29,7 +29,11 @@ $expectedTires = (int) ($tireLayout['expected_tires'] ?? count($tirePositions));
 $unmountedPositions = (int) ($tireLayout['unmounted_positions'] ?? max(0, $expectedTires - $mountedTires));
 $wearDefaultLimitKm = 80000;
 
-$resolveAxleRole = static function (string $vehicleTypeValue, string $layoutValue, int $axleNo): string {
+$axleKinds = is_array($axleKinds ?? null) ? $axleKinds : [];
+$resolveAxleRole = static function (string $vehicleTypeValue, string $layoutValue, int $axleNo, int $vehicleId = 0) use ($axleKinds): string {
+    if (isset($axleKinds[$vehicleId][$axleNo])) {
+        return $axleKinds[$vehicleId][$axleNo]; // tipul ales in fisa vehiculului
+    }
     $layoutValue = strtolower(trim($layoutValue));
 
     if ($vehicleTypeValue === 'camion') {
@@ -41,14 +45,14 @@ $resolveAxleRole = static function (string $vehicleTypeValue, string $layoutValu
             return 'Stanga / Dreapta';
         }
 
-        if ($layoutValue === '8x2' && in_array($axleNo, [2, 3], true)) {
+        if ($layoutValue === '8x2' && in_array($axleNo, [2, 4], true)) {
             return 'Stanga / Dreapta';
         }
 
         if (
             ($layoutValue === '4x2' && $axleNo === 2)
             || ($layoutValue === '6x2' && $axleNo === 2)
-            || ($layoutValue === '8x2' && $axleNo === 4)
+            || ($layoutValue === '8x2' && $axleNo === 3)
         ) {
             return 'Tractiune';
         }
@@ -59,7 +63,7 @@ $resolveAxleRole = static function (string $vehicleTypeValue, string $layoutValu
     }
 
     if (function_exists('is_trailer_vehicle_type') && is_trailer_vehicle_type($vehicleTypeValue)) {
-        return 'Semiremorca';
+        return VehicleAxleTypeService::trailerAxleLabel($layoutValue, $axleNo);
     }
 
     if (in_array($vehicleTypeValue, ['autovehicul', 'autoutilitara'], true)) {
@@ -176,7 +180,7 @@ foreach ($tirePositions as $position) {
     if (!isset($axleGroups[$axleNo])) {
         $axleGroups[$axleNo] = [
             'axle_no' => $axleNo,
-            'role' => $resolveAxleRole($vehicleType, $layoutCurrentValue, $axleNo),
+            'role' => $resolveAxleRole($vehicleType, $layoutCurrentValue, $axleNo, (int) ($record['id'] ?? 0)),
             'positions' => [],
         ];
     }
@@ -217,7 +221,7 @@ $buildVehicleAxisDisplayData = static function (array $vehicleRecord, array $con
         if (!isset($displayGroups[$axleNo])) {
             $displayGroups[$axleNo] = [
                 'axle_no' => $axleNo,
-                'role' => $resolveAxleRole($displayVehicleType, $displayLayoutValue, $axleNo),
+                'role' => $resolveAxleRole($displayVehicleType, $displayLayoutValue, $axleNo, (int) ($vehicleRecord['id'] ?? 0)),
                 'positions' => [],
             ];
         }
@@ -1043,7 +1047,7 @@ $showVehicleColumnInPositions = $axisVehicleView === 'ansamblu';
                                         $rowVehicleId = (int) ($positionRow['vehicle_id'] ?? ((int) ($record['id'] ?? 0)));
                                         $rowVehicleRole = (string) ($positionRow['vehicle_role'] ?? '');
                                         $rowVehicleLabel = (string) ($positionRow['vehicle_label'] ?? '');
-                                        $axleRole = $resolveAxleRole($rowVehicleType, $rowLayoutCurrentValue, $axleNo);
+                                        $axleRole = $resolveAxleRole($rowVehicleType, $rowLayoutCurrentValue, $axleNo, $rowVehicleId);
                                         $axleLabel = 'Axa ' . $axleNo . ($axleRole !== '' ? ' (' . $axleRole . ')' : '');
                                         ?>
                                         <tr>
@@ -1234,9 +1238,10 @@ $showVehicleColumnInPositions = $axisVehicleView === 'ansamblu';
                     </div>
 
                     <div class="col-12 col-md-6">
-                        <label class="form-label" for="mount_date">Data montaj</label>
-                        <input type="date" class="form-control" id="mount_date" name="mount_date" value="<?= e($todayDate) ?>" required>
+                        <?php $dtpLabel = 'Data si ora montarii'; $dtpId = 'mount_datetime'; $dtpDateName = 'mount_date'; $dtpTimeName = 'mount_time'; include __DIR__ . '/tire_stock/_datetime_field.php'; ?>
+                        <div class="form-text">Km din SAS se numără de la minutul următor.</div>
                     </div>
+                    <script src="<?= e(url('assets/js/datetime-picker-field.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/datetime-picker-field.js'))) ?>"></script>
 
                     <div class="col-12">
                         <button type="submit" class="btn btn-primary" <?= $availableTires === [] ? 'disabled' : '' ?>>Monteaza anvelopa</button>

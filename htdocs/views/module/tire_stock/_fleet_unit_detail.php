@@ -112,10 +112,6 @@ $renderTireRow = static function (array $member, ?array $position, ?array $tireR
     <?php
 };
 ?>
-<?php /* Exploratorul de componente (assets/js/vehicle-xray.js) si panoul componentei alese; anvelopele raman in zona de mai jos. */ ?>
-<div class="fx-explorer" data-fx-explorer></div>
-<div class="fx-panel" data-fx-panel hidden aria-live="polite"></div>
-<div class="fx-tire-area" data-fx-tire-area>
 <div class="ft-tabs" role="tablist" aria-label="Detalii <?= e((string) $unit['plate']) ?>">
     <button type="button" class="ft-tab is-active" role="tab" aria-selected="true" data-ft-tab="tires"><i class="bi bi-life-preserver" aria-hidden="true"></i>Detalii anvelope</button>
     <button type="button" class="ft-tab" role="tab" aria-selected="false" data-ft-tab="vehicle"><i class="bi bi-truck" aria-hidden="true"></i>Detalii vehicul</button>
@@ -265,8 +261,6 @@ $renderTireRow = static function (array $member, ?array $position, ?array $tireR
             <a class="btn btn-sm btn-outline-primary" href="<?= e(build_query_url(['page' => 'documente', 'vehicle_id' => (int) $member['vehicle_id']])) ?>"><i class="bi bi-file-earmark-text me-1"></i>Documente <?= e((string) $member['plate']) ?></a>
         <?php endforeach; ?>
     </div>
-</div>
-
 </div>
 
 <script type="application/json" data-ft-history><?= json_encode($historyClient, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>

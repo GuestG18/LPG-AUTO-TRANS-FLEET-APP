@@ -43,6 +43,10 @@
         var match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || ''));
         return match && match[1] !== '0000' ? match[3] + '.' + match[2] + '.' + match[1] : '—';
     };
+    var formatDateTime = function (value) {
+        var time = /\s(\d{2}:\d{2})/.exec(String(value || ''));
+        return formatDate(value) + (time ? ' ' + time[1] : '');
+    };
     var storage = {
         get: function (key) { try { return window.localStorage.getItem(key); } catch (error) { return null; } },
         set: function (key, value) { try { window.localStorage.setItem(key, value); } catch (error) { /* fara stocare */ } }
@@ -93,7 +97,7 @@
         }
         var rear = axles.filter(function (axle) { return front.indexOf(axle) === -1; });
         var lastFront = 1.45;
-        front.forEach(function (axle, index) { axle.x = 1.45 + index * 1.9; lastFront = axle.x; });
+        front.forEach(function (axle, index) { axle.x = 1.45 + index * 1.9; axle.front = true; lastFront = axle.x; });
 
         if (type === 'semiremorca') {
             geometry.halfWidth = 1.275;
@@ -173,8 +177,10 @@
         var hw = geo.halfWidth;
         var parts = {};
         var driven = geo.axles.filter(function (axle) { return axle.type === 'traction'; });
-        var firstRear = geo.axles.filter(function (axle) { return axle.x > 2.6; })[0];
+        var firstRear = geo.axles.filter(function (axle) { return !axle.front && axle.x > 2.6; })[0];
         var sideEnd = firstRear ? firstRear.x - 0.75 : geo.length - 0.6;
+        // Rezervoarele laterale stau dupa ultima axa din fata (doua axe de directie le imping spre spate).
+        var sideStart = geo.axles.reduce(function (start, axle) { return axle.front ? Math.max(start, axle.x + 0.85) : start; }, 2.5);
         if (geo.type === 'semiremorca') {
             // Relativ la prima axa: aceleasi locuri si pe semiremorca reala, si pe cea comprimata din explorator.
             var fa = geo.axles.length ? geo.axles[0].x : geo.length - 4;
@@ -200,12 +206,12 @@
             parts.gearbox = { x0: 1.74, x1: 2.52, y0: -0.32, y1: 0.32 };
             parts.steering = { x0: 0.98, x1: 1.34, y0: 0.6, y1: 0.98 };
             // Pe lateralele sasiului, intre cabina si prima axa din spate (stanga = jos, dreapta = sus).
-            var span = Math.max(1.2, sideEnd - 2.5);
-            parts.fuel_tank = { x0: 2.5, x1: 2.5 + span * 0.62, y0: 0.6, y1: 1.12 };
-            parts.battery = { x0: 2.56 + span * 0.62, x1: sideEnd, y0: 0.62, y1: 1.06 };
-            parts.exhaust = { x0: 2.5, x1: 2.5 + span * 0.52, y0: -1.12, y1: -0.62 };
-            parts.air_tanks = { x0: 2.56 + span * 0.52, x1: 2.5 + span * 0.82, y0: -1.08, y1: -0.62 };
-            parts.hydraulic_tank = { x0: 2.56 + span * 0.82, x1: sideEnd, y0: -1.06, y1: -0.64 };
+            var span = Math.max(1.2, sideEnd - sideStart);
+            parts.fuel_tank = { x0: sideStart, x1: sideStart + span * 0.62, y0: 0.6, y1: 1.12 };
+            parts.battery = { x0: sideStart + 0.06 + span * 0.62, x1: sideEnd, y0: 0.62, y1: 1.06 };
+            parts.exhaust = { x0: sideStart, x1: sideStart + span * 0.52, y0: -1.12, y1: -0.62 };
+            parts.air_tanks = { x0: sideStart + 0.06 + span * 0.52, x1: sideStart + span * 0.82, y0: -1.08, y1: -0.62 };
+            parts.hydraulic_tank = { x0: sideStart + 0.06 + span * 0.82, x1: sideEnd, y0: -1.06, y1: -0.64 };
             if (driven.length) { parts.driveshaft = { x0: 2.52, x1: driven[0].x - 0.36, y0: -0.07, y1: 0.07 }; }
             if (geo.type === 'cap_tractor') {
                 parts.fifth_wheel = { cx: geo.fifthWheel, cy: 0, r: 0.7 };
@@ -415,20 +421,6 @@
         });
 
         Object.keys(pillRows).forEach(function (rowKey) { drawPillRow(pillsLayer, pillRows[rowKey]); });
-
-        // Punctele componentelor (registrul de componente): ascunse, apar la trecerea peste rand;
-        // click = randul se extinde cu exploratorul pe componenta aleasa.
-        var hotLayer = el('g', { class: 'ft-hotspots' }, svg);
-        members.forEach(function (member) {
-            // In schema randului doar componentele la nivel de vehicul (cele de pe axe apar in explorator).
-            (member.data.slots || []).filter(function (slot) { return ['wheel_end', 'axle_center', 'fender'].indexOf(slot.zone) === -1; }).forEach(function (slot) {
-                var anchor = slotAnchor(slot, member.geo);
-                var hot = el('g', { class: 'ft-hot', 'data-ft-slot': slot.id, 'data-ft-member': String(member.data.vehicle_id) }, hotLayer);
-                var hotTitle = el('title', {}, hot);
-                hotTitle.textContent = member.data.plate + ' · ' + slot.label;
-                el('circle', { cx: X(member.offset + anchor.x).toFixed(1), cy: Y(anchor.y).toFixed(1), r: 4.2, class: 'ft-hot-dot' + (slot.records ? ' has-records' : '') + (slot.state ? ' is-state-' + slot.state : '') }, hot);
-            });
-        });
 
         container.innerHTML = '';
         container.appendChild(svg);
@@ -699,23 +691,8 @@
                 detail.innerHTML = data.html;
                 detail.dataset.loaded = '1';
                 if (data.unit) {
-                    // Locurile componentelor si atributele axelor raman cele din pagina (datele randului nu le trimit).
-                    var previous = units[data.unit.key];
-                    if (previous) {
-                        data.unit.members.forEach(function (member) {
-                            var old = previous.members.filter(function (item) { return item.vehicle_id === member.vehicle_id; })[0];
-                            if (old && old.slots && !member.slots) { member.slots = old.slots; }
-                            if (old && old.axle_attrs && !member.axle_attrs) { member.axle_attrs = old.axle_attrs; }
-                        });
-                    }
                     units[data.unit.key] = data.unit;
                     drawUnit(unitEl);
-                }
-                if (window.FleetXray && units[unitEl.dataset.ftUnit]) {
-                    window.FleetXray.mount(detail, units[unitEl.dataset.ftUnit], {
-                        onTire: function (positionId) { selectPosition(unitEl, positionId, { scroll: false }); },
-                        onLeaveTires: function () { if (selection.unit === unitEl.dataset.ftUnit) { clearSelection(); } }
-                    });
                 }
                 if (typeof window.fleetTireInitRows === 'function') { window.fleetTireInitRows(detail); }
                 if (window.fleetTireSelection) { window.fleetTireSelection.rowsReplaced(); }
@@ -809,6 +786,7 @@
                     ['Km parcurși', formatKm(tire.used_km)],
                     ['Km rămași', formatKm(tire.remaining_km)],
                     ['Montată la', formatDate(tire.mounted_at)],
+                    ['Km SAS de la', formatDateTime(tire.km_sas_from)],
                     ['Profil', tire.tread !== null ? String(tire.tread).replace('.', ',') + ' mm' : '—']
                 ].map(function (item) { return '<div><span>' + item[0] + '</span><strong>' + item[1] + '</strong></div>'; }).join('')
                 + '</div>'
@@ -833,8 +811,6 @@
                 var detail = unitEl.querySelector('[data-ft-detail]');
                 if (detail) {
                     renderSelectedPanel(unitEl, detail, null);
-                    var explorer = window.FleetXray ? window.FleetXray.get(detail) : null;
-                    if (explorer) { explorer.markTire(null); }
                 }
             }
         }
@@ -868,8 +844,6 @@
                 }
             });
             renderSelectedPanel(unitEl, detail, found);
-            var explorer = window.FleetXray ? window.FleetXray.get(detail) : null;
-            if (explorer) { explorer.markTire(String(positionId)); }
             if (options.scroll && !options.keepSchemaInView) {
                 var panel = detail.querySelector('[data-ft-selected]');
                 if (panel && !panel.hidden) { panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
@@ -889,15 +863,6 @@
             if (!unitEl) { return; }
             var detail = unitEl.querySelector('[data-ft-detail]');
 
-            // Punct de componenta din schema randului: randul se extinde cu exploratorul pe acea componenta.
-            var hotNode = event.target.closest('.ft-svg .ft-hot');
-            if (hotNode) {
-                setOpen(unitEl, true).then(function (loaded) {
-                    var explorer = window.FleetXray ? window.FleetXray.get(loaded) : null;
-                    if (explorer) { explorer.selectSlot(hotNode.getAttribute('data-ft-slot'), Number(hotNode.getAttribute('data-ft-member'))); }
-                }).catch(function () {});
-                return;
-            }
             var tireNode = event.target.closest('.ft-svg .ft-tire, .ft-svg .ft-pill');
             if (tireNode) {
                 selectPosition(unitEl, tireNode.getAttribute('data-ft-pos'), { scroll: true, keepSchemaInView: false });

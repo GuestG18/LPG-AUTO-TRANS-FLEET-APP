@@ -147,10 +147,31 @@ class SasDashboardService
             'odometer_km' => $range['odometer_km'] ?? null,
         ];
         if ($openWindows !== []) {
-            $summary['open_km'] = round(self::kmInsideWindows((array) ($range['segments'] ?? []), $openWindows), 1);
+            $open = 0.0;
+            $short = 0.0;
+            foreach (self::windowParts((array) ($range['segments'] ?? []), $openWindows) as [$window, $km]) {
+                if (self::isShortOpenMove($km, $window)) {
+                    $short += $km;
+                } else {
+                    $open += $km;
+                }
+            }
+            $summary['open_km'] = round($open, 1);
+            $summary['short_km'] = round($short, 1);
         }
 
         return $summary;
+    }
+
+    /**
+     * O deplasare de pe o cursa deschisa, de cel mult 3 km, se asociaza (doar la calcul) ultimei
+     * curse inchise a vehiculului; fara o astfel de cursa ramane la "Km in desfasurare".
+     *
+     * @param array<string, mixed> $window
+     */
+    public static function isShortOpenMove(float $km, array $window): bool
+    {
+        return !empty($window['closed_trip']) && round($km, 1) <= self::OPEN_SHORT_MOVE_KM;
     }
 
     /**
@@ -163,6 +184,22 @@ class SasDashboardService
     public static function kmInsideWindows(array $segments, array $windows): float
     {
         $total = 0.0;
+        foreach (self::windowParts($segments, $windows) as [, $km]) {
+            $total += $km;
+        }
+
+        return $total;
+    }
+
+    /**
+     * Bucatile segmentelor care cad in ferestre.
+     *
+     * @param array<int, array<string, mixed>> $segments
+     * @param array<int, array<string, mixed>> $windows
+     * @return Generator<int, array{0: array<string, mixed>, 1: float}> [fereastra, km]
+     */
+    private static function windowParts(array $segments, array $windows): Generator
+    {
         foreach ($segments as $segment) {
             $km = (float) ($segment['distance_km'] ?? 0);
             $start = strtotime((string) ($segment['start_time'] ?? ''));
@@ -178,19 +215,17 @@ class SasDashboardService
                 $to = (int) $window['to_ts'];
                 if ($end <= $start) {
                     if ($start >= $from && $start <= $to) {
-                        $total += $km;
+                        yield [$window, $km];
                         break;
                     }
                     continue;
                 }
                 $overlap = min($end, $to) - max($start, $from);
                 if ($overlap > 0) {
-                    $total += $km * $overlap / ($end - $start);
+                    yield [$window, $km * $overlap / ($end - $start)];
                 }
             }
         }
-
-        return $total;
     }
 
     /**
@@ -487,6 +522,8 @@ class SasDashboardService
      * Cu $cacheOnly = true nu face niciun apel SAS: intoarce null daca lipseste ceva.
      */
     public const TODAY_TTL_SECONDS = 600;
+    /** Pana la aceasta valoare (km, rotunjit la o zecimala), o deplasare de pe o cursa deschisa merge la ultima cursa inchisa. */
+    public const OPEN_SHORT_MOVE_KM = 3.0;
     // Ieri se mai poate completa (GPS-uri care trimit cu intarziere): se reciteste dupa 6 ore.
     private const YESTERDAY_TTL_SECONDS = 21600;
     private const CLOSED_TTL_SECONDS = 5184000;

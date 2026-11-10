@@ -80,6 +80,22 @@
                 }
             }
 
+            // Ramurile si subcategoriile pe tip de vehicul vin din arborele administrat (data.branches).
+            function branchesFor(type) {
+                var types = type === 'ansamblu' ? ['cap_tractor', 'semiremorca'] : [type];
+                var seen = {};
+                var result = [];
+                types.forEach(function (item) {
+                    ((data.branches || {})[item] || []).forEach(function (branch) {
+                        if (!seen[branch.primary]) {
+                            seen[branch.primary] = true;
+                            result.push(branch);
+                        }
+                    });
+                });
+                return result;
+            }
+
             function isCatalog() {
                 var checked = form.querySelector('input[name="part_source"]:checked');
                 return !checked || checked.value === 'catalog';
@@ -97,7 +113,7 @@
                 });
                 fillOptions(vehicleSelect, [{ value: '', label: vehicles.length ? 'Selectează vehiculul' : 'Niciun vehicul de acest tip' }]
                     .concat(vehicles.map(function (vehicle) { return { value: String(vehicle.id), label: vehicle.label }; })), vehicleSelect.value);
-                var primaries = type === 'cap_tractor' ? ['sasiu'] : ['sasiu', 'rezervor'];
+                var primaries = branchesFor(type).map(function (branch) { return branch.primary; });
                 fillOptions(primarySelect, primaries.map(function (key) {
                     return { value: key, label: (data.primary_labels || {})[key] || key };
                 }), primarySelect.value || (type === 'cap_tractor' ? 'sasiu' : 'rezervor'));
@@ -106,7 +122,8 @@
 
             function renderSubcategories() {
                 var primary = primarySelect.value;
-                var subs = primary === 'sasiu' ? ['sasiu', 'hidraulic'] : ['sasiu', 'hidraulic', 'livrare_gaz'];
+                var branch = branchesFor(typeSelect.value).filter(function (item) { return item.primary === primary; })[0];
+                var subs = branch ? branch.subs : [];
                 fillOptions(subSelect, subs.map(function (key) {
                     return { value: key, label: (data.subcategory_labels || {})[key] || key };
                 }), subSelect.value || (primary === 'sasiu' ? 'sasiu' : 'livrare_gaz'));

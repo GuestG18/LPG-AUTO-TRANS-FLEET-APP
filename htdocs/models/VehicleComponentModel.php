@@ -55,6 +55,13 @@ class VehicleComponentModel extends BaseModel
                 $this->db->exec($statement);
             }
         }
+        $hasAxleKind = (int) $this->db->query(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'vehicule_axe_atribute' AND COLUMN_NAME = 'tip_axa'"
+        )->fetchColumn() > 0;
+        if (!$hasAxleKind) {
+            $this->db->exec('ALTER TABLE vehicule_axe_atribute ADD COLUMN tip_axa VARCHAR(12) NULL AFTER axle_no');
+        }
         self::$schemaReady = true;
     }
 
@@ -85,22 +92,18 @@ class VehicleComponentModel extends BaseModel
         if ((int) $exists->fetchColumn() === 0) {
             throw new InvalidArgumentException('Axa nu există în configurația vehiculului.');
         }
-        $flag = static function ($value): ?int {
-            return $value === '' || $value === null ? null : ((string) $value === '1' ? 1 : 0);
-        };
+        // Ridicabila / Portanta vin din tipul axei, ales in fisa vehiculului (VehicleAxleTypeService).
         $suspension = (string) ($data['tip_suspensie'] ?? '');
         $brakes = (string) ($data['tip_franare'] ?? '');
         $now = date('Y-m-d H:i:s');
         $this->db->prepare(
-            'INSERT INTO vehicule_axe_atribute (vehicle_id, axle_no, ridicabila, portanta, tip_suspensie, tip_franare, observatii, updated_by, created_at, updated_at)
-             VALUES (:vehicle_id, :axle_no, :ridicabila, :portanta, :tip_suspensie, :tip_franare, :observatii, :updated_by, :created_at, :updated_at)
-             ON DUPLICATE KEY UPDATE ridicabila = VALUES(ridicabila), portanta = VALUES(portanta), tip_suspensie = VALUES(tip_suspensie),
+            'INSERT INTO vehicule_axe_atribute (vehicle_id, axle_no, tip_suspensie, tip_franare, observatii, updated_by, created_at, updated_at)
+             VALUES (:vehicle_id, :axle_no, :tip_suspensie, :tip_franare, :observatii, :updated_by, :created_at, :updated_at)
+             ON DUPLICATE KEY UPDATE tip_suspensie = VALUES(tip_suspensie),
                 tip_franare = VALUES(tip_franare), observatii = VALUES(observatii), updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)'
         )->execute([
             ':vehicle_id' => $vehicleId,
             ':axle_no' => $axleNo,
-            ':ridicabila' => $flag($data['ridicabila'] ?? null),
-            ':portanta' => $flag($data['portanta'] ?? null),
             ':tip_suspensie' => isset(self::SUSPENSION_TYPES[$suspension]) ? $suspension : null,
             ':tip_franare' => isset(self::BRAKE_TYPES[$brakes]) ? $brakes : null,
             ':observatii' => mb_substr(trim((string) ($data['observatii'] ?? '')), 0, 255) ?: null,

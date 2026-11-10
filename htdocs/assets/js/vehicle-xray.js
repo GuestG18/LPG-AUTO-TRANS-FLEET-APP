@@ -48,6 +48,11 @@
     var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     var STATUS_TEXT = { ok: 'OK', warn: 'Atenție', crit: 'Critic', empty: 'Poziție liberă' };
     var AXLE_TYPE_TEXT = { steering: 'Direcție', traction: 'Tracțiune', trailer: 'Remorcă', universal_balloon: 'Universală / balon' };
+    // Tipul ales in fisa vehiculului are prioritate fata de tipul dedus din formula.
+    var AXLE_KIND_TEXT = { directie: 'Direcție', tractiune: 'Tracțiune', portanta: 'Portantă', trailer: 'Trailer' };
+    var axleTypeText = function (member, axleNo, fallback) {
+        return AXLE_KIND_TEXT[(member.axle_kinds || {})[axleNo]] || fallback;
+    };
     var MEMBER_TEXT = { cap_tractor: 'Cap tractor', camion: 'Camion', semiremorca: 'Semiremorcă', autovehicul: 'Autovehicul' };
     var KIND_TEXT = { ansamblu: 'Ansamblu (cap + semiremorcă)', cap_tractor: 'Cap tractor', camion: 'Camion', semiremorca: 'Semiremorcă', autovehicul: 'Autovehicul' };
     // Markerii cu forma „patrata” din macheta (ansambluri compacte); restul sunt rotunzi.
@@ -691,6 +696,10 @@
         var slot = hot._slot;
         var category = categoryByKey[slot.category];
         var components = (category && category.components) || [];
+        // Doar componentele din configuratia vehiculului, pe locul ales.
+        if (slot.components) {
+            components = components.filter(function (component) { return slot.components.indexOf(component.key) !== -1; });
+        }
         var box = this.assemblyBox(hot);
         this.clearCallouts();
         this.drill = { box: box, color: category ? category.color : '#1d6ff2' };
@@ -700,7 +709,7 @@
             if (self.slotId !== slot.id) { return; }
             var holder = self.stage.querySelector('[data-fx-callouts]');
             if (!components.length) {
-                holder.innerHTML = '<div class="fx-callout fx-callout-note" style="left:50%;top:12%">Catalogul Reparații Auto nu are subcomponente pentru „' + escapeHtml(category.label) + '”.</div>';
+                holder.innerHTML = '<div class="fx-callout fx-callout-note" style="left:50%;top:12%">' + (slot.components ? 'Nicio componentă configurată pentru „' : 'Catalogul Reparații Auto nu are subcomponente pentru „') + escapeHtml(category.label) + '”.</div>';
                 return;
             }
             var left = components.slice(0, Math.ceil(components.length / 2));
@@ -809,14 +818,17 @@
             var titleLabel = selection.type === 'slot' ? '' : 'Axă selectată: ';
             cards = '<span class="fx-card is-strong"><i class="bi ' + (selection.type === 'slot' ? escapeHtml(categoryByKey[selection.slot.category].icon) + '" style="color:' + categoryByKey[selection.slot.category].color : 'bi-info-circle-fill fx-ic-blue') + '" aria-hidden="true"></i>' + titleLabel + escapeHtml(title) + '</span>';
             if (axleNo) {
-                cards += '<span class="fx-card"><i class="bi bi-sign-turn-right" aria-hidden="true"></i>Tip: ' + escapeHtml(AXLE_TYPE_TEXT[type] || 'nedefinit') + (dual ? ' · roți duble' : '') + '</span>'
+                cards += '<span class="fx-card"><i class="bi bi-sign-turn-right" aria-hidden="true"></i>Tip: ' + escapeHtml(axleTypeText(member, axleNo, AXLE_TYPE_TEXT[type] || 'nedefinit')) + (dual ? ' · roți duble' : '') + '</span>'
                     + '<span class="fx-card"><i class="bi bi-gear" aria-hidden="true"></i>Funcții: ' + escapeHtml(functions.join(', ') || '—') + '</span>';
                 var flags = axleFlagsText((member.axle_attrs || {})[axleNo]);
                 if (flags) { cards += '<span class="fx-card"><i class="bi bi-sliders" aria-hidden="true"></i>' + escapeHtml(flags) + '</span>'; }
-                if (canManage) { cards += '<button type="button" class="fx-card is-button" data-fx-axle-edit="' + member.vehicle_id + ':' + axleNo + '"><i class="bi bi-pencil" aria-hidden="true"></i>Atributele axei</button>'; }
+                if (canManage && !unit.template) { cards += '<button type="button" class="fx-card is-button" data-fx-axle-edit="' + member.vehicle_id + ':' + axleNo + '"><i class="bi bi-pencil" aria-hidden="true"></i>Atributele axei</button>'; }
             } else if (selection.type === 'slot') {
                 cards += selection.slot.records ? '<span class="fx-card"><span class="fx-dot-records"></span>Are înregistrări în mentenanță</span>' : '<span class="fx-card is-muted">Fără înregistrări încă</span>';
             }
+        }
+        if (selection && selection.type === 'tire' && this.hooks.tireLink) {
+            cards += '<a class="fx-card is-button" href="' + escapeHtml(this.hooks.tireLink(selection.positionId)) + '"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>Deschide în Stoc Anvelope</a>';
         }
         this.footer.innerHTML = '<div class="fx-foot-left">' + cards + '</div><span class="fx-foot-sep" aria-hidden="true"></span>'
             + '<span class="fx-card fx-card-vehicle"><i class="bi bi-truck" aria-hidden="true"></i><strong>Vehicul:</strong>&nbsp;' + escapeHtml(vehicleInfo(owner)) + '</span>'
@@ -842,8 +854,8 @@
         var slots = (member.slots || []).filter(function (slot) { return slot.axle === axleNo; });
         var attrs = (member.axle_attrs || {})[axleNo];
         var html = '<div class="fx-panel-head"><div class="fx-panel-title"><span class="fx-panel-icon" style="--fx-accent:#1570ef"><i class="bi bi-diagram-2" aria-hidden="true"></i></span><div>'
-            + '<div class="fx-panel-name">Componentele axei ' + axleNo + '</div><div class="small text-muted">' + escapeHtml(member.plate + ' · ' + (positions[0] ? positions[0].axle_label : '') + (positions.some(function (p) { return p.dual; }) ? ' · roți duble' : '') + (axleFlagsText(attrs) ? ' · ' + axleFlagsText(attrs) : '')) + '</div></div></div>'
-            + '<div class="d-flex flex-wrap gap-2">' + (canManage ? '<button type="button" class="btn btn-sm btn-outline-primary" data-fx-axle-edit="' + member.vehicle_id + ':' + axleNo + '"><i class="bi bi-pencil me-1" aria-hidden="true"></i>Atributele axei</button>' : '')
+            + '<div class="fx-panel-name">Componentele axei ' + axleNo + '</div><div class="small text-muted">' + escapeHtml(member.plate + ' · ' + axleTypeText(member, axleNo, positions[0] ? positions[0].axle_label : '') + (positions.some(function (p) { return p.dual; }) ? ' · roți duble' : '') + (axleFlagsText(attrs) ? ' · ' + axleFlagsText(attrs) : '')) + '</div></div></div>'
+            + '<div class="d-flex flex-wrap gap-2">' + (canManage && !this.unit.template ? '<button type="button" class="btn btn-sm btn-outline-primary" data-fx-axle-edit="' + member.vehicle_id + ':' + axleNo + '"><i class="bi bi-pencil me-1" aria-hidden="true"></i>Atributele axei</button>' : '')
             + '<button type="button" class="btn btn-sm btn-light border" data-fx-back><i class="bi bi-arrow-left me-1" aria-hidden="true"></i>Înapoi la vehicul</button></div></div>'
             + '<div class="fx-axle-grid"><section><h3 class="fx-section-title"><i class="bi bi-life-preserver" aria-hidden="true"></i>Anvelope</h3><div class="fx-tiles">'
             + positions.map(function (position) {
@@ -872,11 +884,6 @@
         var member = this.unit.members.filter(function (item) { return item.vehicle_id === memberId; })[0];
         if (!member) { return; }
         var attrs = (member.axle_attrs || {})[axleNo] || {};
-        var flag = function (name, value, label) {
-            var current = value === null || value === undefined ? '' : (value ? '1' : '0');
-            return '<div class="col-sm-6 col-lg-2"><label class="form-label">' + label + '</label><select class="form-select form-select-sm" name="' + name + '">'
-                + [['', 'Nedefinit'], ['1', 'Da'], ['0', 'Nu']].map(function (option) { return '<option value="' + option[0] + '"' + (current === option[0] ? ' selected' : '') + '>' + option[1] + '</option>'; }).join('') + '</select></div>';
-        };
         var select = function (name, map, value, label) {
             return '<div class="col-sm-6 col-lg-2"><label class="form-label">' + label + '</label><select class="form-select form-select-sm" name="' + name + '"><option value="">Nedefinit</option>'
                 + Object.keys(map).map(function (key) { return '<option value="' + key + '"' + (value === key ? ' selected' : '') + '>' + map[key] + '</option>'; }).join('') + '</select></div>';
@@ -892,10 +899,9 @@
         holder.hidden = false;
         holder.innerHTML = '<div class="fx-form-title">Atributele axei ' + axleNo + ' · ' + escapeHtml(member.plate) + '</div>'
             + '<input type="hidden" name="vehicle_id" value="' + memberId + '"><input type="hidden" name="axle_no" value="' + axleNo + '">'
-            + '<div class="row g-2">' + flag('ridicabila', attrs.liftable, 'Ridicabilă') + flag('portanta', attrs.load_bearing, 'Portantă')
-            + select('tip_suspensie', SUSPENSION_TEXT, attrs.suspension, 'Suspensie') + select('tip_franare', BRAKE_TEXT, attrs.brakes, 'Frâne')
+            + '<div class="row g-2">' + select('tip_suspensie', SUSPENSION_TEXT, attrs.suspension, 'Suspensie') + select('tip_franare', BRAKE_TEXT, attrs.brakes, 'Frâne')
             + '<div class="col-lg-4"><label class="form-label">Observații</label><input type="text" class="form-control form-control-sm" name="observatii" maxlength="255" value="' + escapeHtml(attrs.notes || '') + '"></div></div>'
-            + '<div class="small text-muted mt-1">Direcția, tracțiunea și roțile duble vin din configurația axelor (Configurație Axe).</div>'
+            + '<div class="small text-muted mt-1">Tipul axei se alege din fișa vehiculului (Adaugă / Editează vehicul).</div>'
             + '<div class="fx-form-actions"><button type="button" class="btn btn-sm btn-light border" data-fx-close-form>Anulează</button><button type="submit" class="btn btn-sm btn-primary" data-fx-submit>Salvează atributele</button></div>';
         holder.onsubmit = function (event) {
             event.preventDefault();
@@ -925,6 +931,7 @@
         if (memberId && this.canIsolate && !this.isVisibleMember(memberId)) { this.setViewMode(this.modeForMember(memberId)); }
         var hot = this.findHot(slotId, memberId);
         if (!hot) { return; }
+        if (this.hooks.onSlot) { this.hooks.onSlot(hot._slot); return; }
         if (this.slotId !== slotId || !this.selection || this.selection.memberId !== Number(hot.dataset.fxMember)) { this.closeInspector(); }
         var axleForm = this.root.querySelector('[data-fx-axle-form]');
         if (axleForm) { axleForm.hidden = true; }
@@ -1342,8 +1349,6 @@
     var axleFlagsText = function (attrs) {
         var flags = [];
         if (attrs) {
-            if (attrs.liftable !== null && attrs.liftable !== undefined) { flags.push('Ridicabilă: ' + (attrs.liftable ? 'da' : 'nu')); }
-            if (attrs.load_bearing !== null && attrs.load_bearing !== undefined) { flags.push('Portantă: ' + (attrs.load_bearing ? 'da' : 'nu')); }
             if (attrs.suspension) { flags.push('Suspensie: ' + (SUSPENSION_TEXT[attrs.suspension] || attrs.suspension)); }
             if (attrs.brakes) { flags.push('Frâne: ' + (BRAKE_TEXT[attrs.brakes] || attrs.brakes)); }
         }

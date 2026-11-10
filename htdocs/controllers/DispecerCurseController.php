@@ -2911,6 +2911,8 @@ class DispecerCurseController
      *  - cursa fara faze: la fel, pe cursa, in campul de km reali dupa tipul de transport.
      *  - kmp_close=1 (din "Km in desfasurare"): cursa / faza deschisa se INCHIDE - km-ii GPS de la
      *    inceputul ei INLOCUIESC km-ii trecuti, iar sfarsitul devine kmp_to (si cand e aceeasi zi).
+     *  - kmp_open=1 (deplasari bifate in "Km in desfasurare"): km-ii se adauga, dar cursa / faza
+     *    deschisa ramane deschisa (fara ora de sfarsit).
      * Cursele facturate nu se precompleteaza. Intoarce ce s-a aplicat, pentru mesajul din fisa.
      *
      * @param array<string, mixed> $formData
@@ -2934,6 +2936,7 @@ class DispecerCurseController
             // Cursa are faze: km-ii se pun pe o faza, nu pe totalul cursei (care e suma fazelor).
             return null;
         }
+        $fromOpenTrip = ($_GET['kmp_open'] ?? '') === '1';
 
         $setInterval = static function (array &$data, DateTimeImmutable $start, DateTimeImmutable $end): void {
             $data['data_inceput'] = $start->format('Y-m-d');
@@ -2950,10 +2953,11 @@ class DispecerCurseController
                 $formData['vehicle_id'] = (string) $vehicleId;
             }
 
-            return ['mode' => 'noua', 'km' => $km, 'total' => $km, 'from' => $from->format('Y-m-d H:i'), 'to' => $to->format('Y-m-d H:i'), 'extended' => true];
+            return ['mode' => 'noua', 'open' => $fromOpenTrip, 'km' => $km, 'total' => $km, 'from' => $from->format('Y-m-d H:i'), 'to' => $to->format('Y-m-d H:i'), 'extended' => true];
         }
 
         $close = ($_GET['kmp_close'] ?? '') === '1';
+        $keepOpen = $fromOpenTrip && !$close;
         $kmField = $this->raceRealKmField((string) ($race['tip_transport'] ?? ''));
         $current = $phaseMode === 'editare' ? (float) ($phaseSegment['km'] ?? 0) : (float) ($race[$kmField] ?? 0);
         // Inchidere: km-ii GPS sunt toti km-ii fazei / cursei deschise, nu un adaos.
@@ -2971,9 +2975,9 @@ class DispecerCurseController
         $ownEnd = $this->parseInsightsDateTime($this->insightsDateTime($formData['data_sfarsit'] ?? '', $endTime !== '' ? $endTime : '23:59'));
         $moveStart = $ownStart === null || $from < $ownStart;
         // O cursa / faza fara ora de sfarsit se inchide la kmp_to chiar daca e in aceeasi zi.
-        $moveEnd = $ownEnd === null || $to > $ownEnd || ($close && $endTime === '');
+        $moveEnd = ($ownEnd === null || $to > $ownEnd || ($close && $endTime === '')) && !($keepOpen && $endTime === '');
         $newStart = $moveStart ? $from : $ownStart;
-        $newEnd = $moveEnd ? $to : $ownEnd;
+        $newEnd = $moveEnd ? $to : ($ownEnd ?? $to);
         $extended = true;
         foreach ($segments as $segment) {
             if ($phaseMode !== 'editare' || (int) $segment['id'] === (int) ($phaseSegment['id'] ?? 0)) {
@@ -3000,6 +3004,7 @@ class DispecerCurseController
         return [
             'mode' => $phaseMode === 'editare' ? 'editare' : 'cursa',
             'close' => $close,
+            'open' => $keepOpen,
             'km' => $km,
             'previous' => round($current, 1),
             'total' => $total,

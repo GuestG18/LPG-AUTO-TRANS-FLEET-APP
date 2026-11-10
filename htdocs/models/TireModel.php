@@ -29,6 +29,8 @@ class TireModel extends BaseModel
     public const AXLE_STEERING = 'steering';
     public const AXLE_TRACTION = 'traction';
     public const AXLE_TRAILER = 'trailer';
+    /** Tipul ales in fisa vehiculului -> tipul pozitiei (decide ce anvelope se pot monta). */
+    public const AXLE_KIND_TYPES = ['directie' => self::AXLE_STEERING, 'tractiune' => self::AXLE_TRACTION, 'portanta' => self::AXLE_TRAILER, 'trailer' => self::AXLE_TRAILER];
     public const AXLE_UNIVERSAL_BALLOON = 'universal_balloon';
 
     private bool $lifecycleSchemaEnsured = false;
@@ -40,6 +42,8 @@ class TireModel extends BaseModel
         }
 
         $this->lifecycleSchemaEnsured = true;
+
+        $this->ensureSasKmSchema();
 
         $statusType = $this->columnType('anvelope', 'status');
         if ($statusType === null || !str_contains($statusType, "'in_stock'") || !str_contains($statusType, "'scrapped'")) {
@@ -139,6 +143,47 @@ class TireModel extends BaseModel
         );
 
         $this->seedDefaultCompatibilityRules();
+    }
+
+    /**
+     * Km din SAS (TireSasKmService). Montarile active care nu au inca sas_de_la raman cu km numarati
+     * pana acum si continua din SAS de acum; o montare noua primeste sas_de_la la inserare.
+     */
+    public function ensureSasKmSchema(): void
+    {
+        $this->addColumnIfMissing('anvelope_alocari', 'sas_de_la', 'DATETIME NULL AFTER km_end');
+        $this->addColumnIfMissing('anvelope_alocari', 'demontat_la', 'DATETIME NULL AFTER sas_de_la');
+        $this->addColumnIfMissing('anvelope_alocari', 'km_inainte_sas', 'INT UNSIGNED NOT NULL DEFAULT 0 AFTER demontat_la');
+        $this->addColumnIfMissing('anvelope_alocari', 'km_sas', 'DECIMAL(10,1) NOT NULL DEFAULT 0 AFTER km_inainte_sas');
+        $this->addColumnIfMissing('anvelope_alocari', 'km_sas_final', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER km_sas');
+        $this->db->exec(
+            'CREATE TABLE IF NOT EXISTS anvelope_sas_miscari (
+                vehicle_id INT UNSIGNED NOT NULL,
+                start_at DATETIME NOT NULL,
+                end_at DATETIME NOT NULL,
+                km DECIMAL(8,1) NOT NULL,
+                PRIMARY KEY (vehicle_id, start_at, end_at),
+                CONSTRAINT fk_anvelope_sas_miscari_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+        );
+        $this->db->exec(
+            'CREATE TABLE IF NOT EXISTS anvelope_sas_stare (
+                vehicle_id INT UNSIGNED NOT NULL PRIMARY KEY,
+                acoperit_de_la DATETIME NULL,
+                synced_until DATETIME NULL,
+                last_status VARCHAR(20) NULL,
+                last_note VARCHAR(500) NULL,
+                updated_at DATETIME NOT NULL,
+                CONSTRAINT fk_anvelope_sas_stare_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicule(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+        );
+        $this->db->exec(
+            'UPDATE anvelope_alocari a
+             INNER JOIN vehicule v ON v.id = a.vehicle_id
+             SET a.km_inainte_sas = GREATEST(0, COALESCE(v.km_bord, 0) - COALESCE(a.km_start, COALESCE(v.km_bord, 0))),
+                 a.sas_de_la = NOW()
+             WHERE a.data_end IS NULL AND a.sas_de_la IS NULL'
+        );
     }
 
     private function addColumnIfMissing(string $table, string $column, string $definition): void
@@ -991,33 +1036,14 @@ class TireModel extends BaseModel
         return null;
     }
 
-    private function getVehicleKmBordForTireSync(int $vehicleId): int
-    {
-        $stmt = $this->db->prepare('SELECT km_bord FROM vehicule WHERE id = :id LIMIT 1');
-        $stmt->execute([':id' => $vehicleId]);
-        $rawKm = (string) ($stmt->fetchColumn() ?: '');
-
-        if (is_numeric($rawKm)) {
-            return max(0, (int) $rawKm);
-        }
-
-        $normalizedKm = preg_replace('/[^\d-]+/', '', $rawKm) ?? '';
-        if ($normalizedKm !== '' && is_numeric($normalizedKm)) {
-            return max(0, (int) $normalizedKm);
-        }
-
-        return 0;
-    }
-
     private function closeActiveAllocationsForObsoletePosition(
         int $positionId,
         int $vehicleId,
-        int $vehicleKmBord,
         string $dataEnd,
         string $updatedAt
     ): void {
         $stmt = $this->db->prepare(
-            'SELECT id, tire_id
+            'SELECT *
              FROM anvelope_alocari
              WHERE position_id = :position_id
                AND vehicle_id = :vehicle_id
@@ -1033,14 +1059,6 @@ class TireModel extends BaseModel
             return;
         }
 
-        $close = $this->db->prepare(
-            'UPDATE anvelope_alocari
-             SET data_end = :data_end,
-                 km_end = :km_end,
-                 status_end = :status_end,
-                 updated_at = :updated_at
-             WHERE id = :id'
-        );
         $updateTire = $this->db->prepare(
             'UPDATE anvelope
              SET status = :status,
@@ -1049,13 +1067,7 @@ class TireModel extends BaseModel
         );
 
         foreach ($allocations as $allocation) {
-            $close->execute([
-                ':data_end' => $dataEnd,
-                ':km_end' => $vehicleKmBord,
-                ':status_end' => self::STATUS_SPARE,
-                ':updated_at' => $updatedAt,
-                ':id' => (int) ($allocation['id'] ?? 0),
-            ]);
+            $this->closeAllocation($allocation, $dataEnd, self::STATUS_SPARE, $updatedAt);
 
             $updateTire->execute([
                 ':status' => self::STATUS_SPARE,
@@ -1092,8 +1104,9 @@ class TireModel extends BaseModel
                 $axleCount = 4;
                 $this->appendSingleAxlePositions($positions, 1, $positionOrder);
                 $this->appendSingleAxlePositions($positions, 2, $positionOrder);
-                $this->appendSingleAxlePositions($positions, 3, $positionOrder);
-                $this->appendDualAxlePositions($positions, 4, $positionOrder);
+                // Puntea motoare (roti duble) e axa 3; axa 4 e simpla, in spatele ei.
+                $this->appendDualAxlePositions($positions, 3, $positionOrder);
+                $this->appendSingleAxlePositions($positions, 4, $positionOrder);
             } else {
                 $axleCount = 2;
                 $this->appendSingleAxlePositions($positions, 1, $positionOrder);
@@ -1145,12 +1158,34 @@ class TireModel extends BaseModel
         ];
     }
 
+    /** @return array<int,string> axa -> tip ales; gol pe o instalare fara coloana tip_axa */
+    private function axleKindOverrides(int $vehicleId): array
+    {
+        try {
+            $stmt = $this->db->prepare('SELECT axle_no, tip_axa FROM vehicule_axe_atribute WHERE vehicle_id = :vehicle_id AND tip_axa IS NOT NULL');
+            $stmt->execute([':vehicle_id' => $vehicleId]);
+            return array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'tip_axa', 'axle_no');
+        } catch (PDOException) {
+            return [];
+        }
+    }
+
     public function syncVehiclePositions(int $vehicleId, string $vehicleType, ?string $layout): array
     {
         $this->ensureLifecycleSchema();
 
         $descriptor = $this->describeVehicleLayout($vehicleType, $layout);
         $positions = $descriptor['positions'];
+
+        // Tipul ales pe fisa vehiculului are prioritate fata de regula formulei.
+        $axleKinds = $this->axleKindOverrides($vehicleId);
+        foreach ($positions as &$overriddenPosition) {
+            $kind = $axleKinds[(int) $overriddenPosition['axle_no']] ?? '';
+            if (isset(self::AXLE_KIND_TYPES[$kind])) {
+                $overriddenPosition['axle_type'] = self::AXLE_KIND_TYPES[$kind];
+            }
+        }
+        unset($overriddenPosition);
 
         $stmt = $this->db->prepare('SELECT id, position_code FROM vehicule_anvelope_pozitii WHERE vehicle_id = :vehicle_id');
         $stmt->execute([':vehicle_id' => $vehicleId]);
@@ -1164,7 +1199,6 @@ class TireModel extends BaseModel
         $now = date('Y-m-d H:i:s');
         $today = date('Y-m-d');
         $activeCodes = [];
-        $vehicleKmBord = null;
 
         foreach ($positions as $position) {
             $code = (string) $position['position_code'];
@@ -1258,15 +1292,11 @@ class TireModel extends BaseModel
                 }
 
                 if ($hasActiveAllocation) {
-                    if ($vehicleKmBord === null) {
-                        $vehicleKmBord = $this->getVehicleKmBordForTireSync($vehicleId);
-                    }
 
                     // Obsolete position codes must not stay active after a layout change.
                     $this->closeActiveAllocationsForObsoletePosition(
                         $positionId,
                         $vehicleId,
-                        $vehicleKmBord,
                         $today,
                         $now
                     );
@@ -1319,7 +1349,7 @@ class TireModel extends BaseModel
             }
 
             if ($layout === '8x2') {
-                return $axleNo < 4 ? self::AXLE_STEERING : self::AXLE_TRACTION;
+                return $axleNo === 3 ? self::AXLE_TRACTION : self::AXLE_STEERING;
             }
 
             return $axleNo <= 1 ? self::AXLE_STEERING : self::AXLE_TRACTION;
@@ -2382,9 +2412,7 @@ class TireModel extends BaseModel
         $estimatedLife = is_numeric((string) ($row['estimated_life_km'] ?? null)) ? (int) $row['estimated_life_km'] : null;
         $storedRemaining = is_numeric((string) ($row['estimated_remaining_km'] ?? null)) ? (int) $row['estimated_remaining_km'] : null;
         $currentMileage = max(0, (int) ($row['current_mileage'] ?? $row['km_initial'] ?? 0));
-        $vehicleKm = is_numeric((string) ($row['vehicle_km_bord'] ?? null)) ? (int) $row['vehicle_km_bord'] : 0;
-        $allocationKmStart = is_numeric((string) ($row['active_km_start'] ?? null)) ? (int) $row['active_km_start'] : $vehicleKm;
-        $currentSegmentKm = $isMounted ? max(0, $vehicleKm - $allocationKmStart) : 0;
+        $currentSegmentKm = $isMounted ? (int) ($row['active_km_inainte_sas'] ?? 0) + (int) round((float) ($row['active_km_sas'] ?? 0)) : 0;
         // Montarile anterioare (inchise) se aduna, ca dupa o remontare contorul sa continue.
         $pastMountedKm = max(0, (int) ($row['past_mounted_km'] ?? 0));
         $usedKm = $currentMileage + $pastMountedKm + $currentSegmentKm;
@@ -2487,14 +2515,15 @@ class TireModel extends BaseModel
                 a.id AS active_allocation_id,
                 a.vehicle_id AS active_vehicle_id,
                 a.position_id AS active_position_id,
-                a.km_start AS active_km_start,
+                a.km_inainte_sas AS active_km_inainte_sas,
+                a.km_sas AS active_km_sas,
+                a.sas_de_la AS active_sas_de_la,
                 a.data_start AS active_data_start,
                 v.nr_inmatriculare,
                 v.marca AS vehicle_marca,
                 v.model AS vehicle_model,
                 v.tip_vehicul AS vehicle_type,
                 v.formula_axelor AS vehicle_layout,
-                v.km_bord AS vehicle_km_bord,
                 COALESCE(h.km_past, 0) AS past_mounted_km,
                 p.position_code,
                 p.position_label,
@@ -2931,7 +2960,6 @@ class TireModel extends BaseModel
             'SELECT COUNT(*)
              FROM anvelope t
              LEFT JOIN anvelope_alocari a ON a.tire_id = t.id AND a.data_end IS NULL
-             LEFT JOIN vehicule v ON v.id = a.vehicle_id
              LEFT JOIN (' . self::PAST_MOUNTED_KM_SQL . ') h ON h.tire_id = t.id
              WHERE t.status IN ("damaged", "missing", "scrapped")
                 OR COALESCE(t.condition_status, "good") IN ("high_wear", "critical", "missing")
@@ -2940,10 +2968,7 @@ class TireModel extends BaseModel
                     AND (
                         COALESCE(t.current_mileage, 0)
                         + COALESCE(h.km_past, 0)
-                        + CASE
-                            WHEN a.id IS NOT NULL THEN GREATEST(0, COALESCE(v.km_bord, 0) - COALESCE(a.km_start, COALESCE(v.km_bord, 0)))
-                            ELSE 0
-                          END
+                        + COALESCE(a.km_inainte_sas, 0) + ROUND(COALESCE(a.km_sas, 0))
                     ) >= ROUND(COALESCE(t.estimated_life_km, 0) * 0.81)
                 )'
         );
@@ -3111,11 +3136,65 @@ class TireModel extends BaseModel
         return $row ?: null;
     }
 
-    private function closeAllocation(array $allocation, int $kmEnd, string $dateEnd, string $statusEnd, string $updatedAt): void
+    /**
+     * Data unei montari / demontari vine din formular ca 'Y-m-d' sau 'Y-m-d H:i' (ora aleasa).
+     * Intoarce [ziua, momentul exact]; fara ora, momentul e ziua aleasa la ora inregistrarii.
+     */
+    private static function splitMoment(string $value, string $dateTime): array
     {
+        $date = substr($value, 0, 10);
+        $time = trim(substr($value, 10));
+
+        return [$date, $date . ' ' . ($time !== '' ? substr($time . ':00', 0, 8) : substr($dateTime, 11, 8))];
+    }
+
+    /**
+     * Km SAS se numara pe intervalul fiecarei montari, deci doua montari nu se pot suprapune in timp:
+     * nici ale aceleiasi anvelope, nici pe aceeasi pozitie. Altfel aceiasi km s-ar aduna de doua ori.
+     * $closing = montarile active care se inchid la acest moment (mutare / schimb / demontare).
+     *
+     * @param array<string, mixed>|null ...$closing
+     */
+    private function assertMountMomentFree(int $tireId, int $positionId, string $moment, ?array ...$closing): void
+    {
+        $format = static fn (string $value): string => date('d.m.Y H:i', (int) strtotime($value));
+        foreach ($closing as $allocation) {
+            if ($allocation !== null && $allocation['sas_de_la'] !== null && strtotime((string) $allocation['sas_de_la']) - 60 > strtotime($moment)) {
+                throw new RuntimeException('Montarea care se inchide a inceput la ' . $format(date('Y-m-d H:i:s', (int) strtotime((string) $allocation['sas_de_la']) - 60)) . '. Data si ora trebuie sa fie dupa aceasta ora.');
+            }
+        }
+        if ($positionId <= 0) {
+            return;
+        }
+
+        $stmt = $this->db->prepare(
+            'SELECT MAX(CASE WHEN tire_id = :tire_id THEN demontat_la END) AS tire_end,
+                    MAX(CASE WHEN position_id = :position_id THEN demontat_la END) AS position_end
+             FROM anvelope_alocari
+             WHERE data_end IS NOT NULL AND demontat_la > :moment AND (tire_id = :tire_filter OR position_id = :position_filter)'
+        );
+        $stmt->execute([':tire_id' => $tireId, ':position_id' => $positionId, ':moment' => $moment, ':tire_filter' => $tireId, ':position_filter' => $positionId]);
+        $row = $stmt->fetch() ?: [];
+        if (!empty($row['tire_end'])) {
+            throw new RuntimeException('Anvelopa a fost montata pana la ' . $format((string) $row['tire_end']) . '. Alege o data si ora de montare dupa aceasta, altfel km s-ar numara de doua ori.');
+        }
+        if (!empty($row['position_end'])) {
+            throw new RuntimeException('Pe aceasta pozitie a fost alta anvelopa pana la ' . $format((string) $row['position_end']) . '. Alege o data si ora de montare dupa aceasta.');
+        }
+    }
+
+    /**
+     * km_end ramane pe scara lui km_start: km_end - km_start = km parcursi in montare. Pana la
+     * urmatoarea citire SAS e o valoare provizorie (km_sas_final = 0, TireSasKmService o corecteaza).
+     */
+    private function closeAllocation(array $allocation, string $dateEnd, string $statusEnd, string $updatedAt): void
+    {
+        [$dateEnd, $moment] = self::splitMoment($dateEnd, $updatedAt);
+        $kmEnd = (int) ($allocation['km_start'] ?? 0) + (int) ($allocation['km_inainte_sas'] ?? 0) + (int) round((float) ($allocation['km_sas'] ?? 0));
         $stmt = $this->db->prepare(
             'UPDATE anvelope_alocari
              SET data_end = :data_end,
+                 demontat_la = :demontat_la,
                  km_end = :km_end,
                  status_end = :status_end,
                  updated_at = :updated_at
@@ -3123,6 +3202,7 @@ class TireModel extends BaseModel
         );
         $stmt->execute([
             ':data_end' => $dateEnd,
+            ':demontat_la' => $moment,
             ':km_end' => $kmEnd,
             ':status_end' => $statusEnd,
             ':updated_at' => $updatedAt,
@@ -3132,11 +3212,12 @@ class TireModel extends BaseModel
 
     private function insertAllocation(int $tireId, int $vehicleId, int $positionId, int $kmStart, string $dateStart, string $createdAt, ?int $userId): void
     {
+        [$dateStart, $moment] = self::splitMoment($dateStart, $createdAt);
         $stmt = $this->db->prepare(
             'INSERT INTO anvelope_alocari
-                (tire_id, vehicle_id, position_id, data_start, km_start, created_by, created_at, updated_at)
+                (tire_id, vehicle_id, position_id, data_start, km_start, sas_de_la, created_by, created_at, updated_at)
              VALUES
-                (:tire_id, :vehicle_id, :position_id, :data_start, :km_start, :created_by, :created_at, :updated_at)'
+                (:tire_id, :vehicle_id, :position_id, :data_start, :km_start, :sas_de_la, :created_by, :created_at, :updated_at)'
         );
         $stmt->execute([
             ':tire_id' => $tireId,
@@ -3144,6 +3225,8 @@ class TireModel extends BaseModel
             ':position_id' => $positionId,
             ':data_start' => $dateStart,
             ':km_start' => $kmStart,
+            // SAS numara din minutul urmator montarii (montata la 17:16 -> de la 17:17).
+            ':sas_de_la' => date('Y-m-d H:i:00', (int) strtotime($moment) + 60),
             ':created_by' => $userId,
             ':created_at' => $createdAt,
             ':updated_at' => $createdAt,
@@ -3234,8 +3317,7 @@ class TireModel extends BaseModel
             if ($activeAllocation !== null) {
                 $oldPosition = $this->getPositionContext((int) ($activeAllocation['position_id'] ?? 0));
                 if ($newStatus !== self::STATUS_ACTIVE) {
-                    $kmEnd = $oldPosition !== null ? max(0, (int) ($oldPosition['km_bord'] ?? 0)) : 0;
-                    $this->closeAllocation($activeAllocation, $kmEnd, $today, $newStatus, $now);
+                    $this->closeAllocation($activeAllocation, $today, $newStatus, $now);
                 }
             }
 
@@ -3376,6 +3458,9 @@ class TireModel extends BaseModel
             }
         }
 
+        $moment = self::splitMoment($mountDate, $mountDateTime)[1];
+        $this->assertMountMomentFree($tireId, $positionId, $moment, $existingTireAllocation, $allowSwap ? $existingPositionAllocation : null);
+
         if (is_array($existingPositionAllocation) && (int) ($existingPositionAllocation['tire_id'] ?? 0) !== $tireId) {
             if (!$allowSwap) {
                 throw new RuntimeException('Pozitia aleasa este ocupata. Bifeaza optiunea Schimba pozitiile pentru a face schimbul.');
@@ -3397,18 +3482,18 @@ class TireModel extends BaseModel
                 throw new RuntimeException('Schimbul nu se poate face: anvelopa de pe pozitia tinta nu este compatibila cu pozitia curenta.');
             }
 
-            $sourceKmEnd = max(0, (int) ($sourcePosition['km_bord'] ?? $vehicleKmBord));
-            $this->closeAllocation($existingTireAllocation, $sourceKmEnd, $mountDate, 'moved', $mountDateTime);
-            $this->closeAllocation($existingPositionAllocation, $vehicleKmBord, $mountDate, 'moved', $mountDateTime);
+            $sourceVehicleKm = max(0, (int) ($sourcePosition['km_bord'] ?? $vehicleKmBord));
+            $this->closeAllocation($existingTireAllocation, $mountDate, 'moved', $mountDateTime);
+            $this->closeAllocation($existingPositionAllocation, $mountDate, 'moved', $mountDateTime);
 
             $this->insertAllocation($tireId, $vehicleId, $positionId, $vehicleKmBord, $mountDate, $mountDateTime, $userId);
-            $this->insertAllocation($targetTireId, (int) ($sourcePosition['vehicle_id'] ?? 0), (int) ($sourcePosition['id'] ?? 0), $sourceKmEnd, $mountDate, $mountDateTime, $userId);
+            $this->insertAllocation($targetTireId, (int) ($sourcePosition['vehicle_id'] ?? 0), (int) ($sourcePosition['id'] ?? 0), $sourceVehicleKm, $mountDate, $mountDateTime, $userId);
 
             $updateTire = $this->db->prepare('UPDATE anvelope SET status = :status, mount_date = :mount_date, updated_at = :updated_at WHERE id = :id');
             foreach ([$tireId, $targetTireId] as $swapTireId) {
                 $updateTire->execute([
                     ':status' => self::STATUS_ACTIVE,
-                    ':mount_date' => $mountDate,
+                    ':mount_date' => substr($mountDate, 0, 10),
                     ':updated_at' => $mountDateTime,
                     ':id' => $swapTireId,
                 ]);
@@ -3423,11 +3508,7 @@ class TireModel extends BaseModel
         $oldPosition = null;
         if (is_array($existingTireAllocation)) {
             $oldPosition = $this->getPositionContext((int) ($existingTireAllocation['position_id'] ?? 0));
-            $kmEnd = $vehicleKmBord;
-            if ($oldPosition !== null) {
-                $kmEnd = max(0, (int) ($oldPosition['km_bord'] ?? $vehicleKmBord));
-            }
-            $this->closeAllocation($existingTireAllocation, $kmEnd, $mountDate, 'moved', $mountDateTime);
+            $this->closeAllocation($existingTireAllocation, $mountDate, 'moved', $mountDateTime);
         }
 
         $this->insertAllocation($tireId, $vehicleId, $positionId, $vehicleKmBord, $mountDate, $mountDateTime, $userId);
@@ -3441,7 +3522,7 @@ class TireModel extends BaseModel
         );
         $updateTire->execute([
             ':status' => self::STATUS_ACTIVE,
-            ':mount_date' => $mountDate,
+            ':mount_date' => substr($mountDate, 0, 10),
             ':updated_at' => $mountDateTime,
             ':id' => $tireId,
         ]);
@@ -3816,7 +3897,6 @@ class TireModel extends BaseModel
     public function unmountTire(
         int $allocationId,
         int $vehicleId,
-        int $vehicleKmBord,
         string $unmountDate,
         string $statusEnd,
         string $updatedAt,
@@ -3851,21 +3931,8 @@ class TireModel extends BaseModel
             $tire = $this->getTireById($tireId);
             $oldPosition = $this->getPositionContext((int) ($allocation['position_id'] ?? 0));
 
-            $close = $this->db->prepare(
-                'UPDATE anvelope_alocari
-                 SET data_end = :data_end,
-                     km_end = :km_end,
-                     status_end = :status_end,
-                     updated_at = :updated_at
-                 WHERE id = :id'
-            );
-            $close->execute([
-                ':data_end' => $unmountDate,
-                ':km_end' => $vehicleKmBord,
-                ':status_end' => $statusEnd,
-                ':updated_at' => $updatedAt,
-                ':id' => $allocationId,
-            ]);
+            $this->assertMountMomentFree($tireId, 0, self::splitMoment($unmountDate, $updatedAt)[1], $allocation);
+            $this->closeAllocation($allocation, $unmountDate, $statusEnd, $updatedAt);
 
             $updateTire = $this->db->prepare('UPDATE anvelope SET status = :status, updated_at = :updated_at WHERE id = :id');
             $updateTire->execute([
@@ -3998,7 +4065,7 @@ class TireModel extends BaseModel
         return $date;
     }
 
-    public function buildVehicleTireContext(int $vehicleId, int $vehicleKmBord, string $vehicleType, ?string $layout): array
+    public function buildVehicleTireContext(int $vehicleId, string $vehicleType, ?string $layout): array
     {
         $this->ensureLifecycleSchema();
 
@@ -4016,7 +4083,8 @@ class TireModel extends BaseModel
                 p.position_order,
                 a.id AS allocation_id,
                 a.data_start AS allocation_start_date,
-                a.km_start AS allocation_km_start,
+                a.km_inainte_sas AS allocation_km_inainte_sas,
+                a.km_sas AS allocation_km_sas,
                 t.id AS tire_id,
                 t.brand,
                 t.model,
@@ -4081,8 +4149,7 @@ class TireModel extends BaseModel
 
                 $kmInitial = max(0, (int) ($row['km_initial'] ?? 0));
                 $kmPast = max(0, (int) ($pastUsageByTire[$tireId] ?? 0));
-                $kmStart = is_numeric((string) ($row['allocation_km_start'] ?? null)) ? (int) $row['allocation_km_start'] : $vehicleKmBord;
-                $kmCurrentSegment = max(0, $vehicleKmBord - $kmStart);
+                $kmCurrentSegment = (int) ($row['allocation_km_inainte_sas'] ?? 0) + (int) round((float) ($row['allocation_km_sas'] ?? 0));
                 $firstAllocationStart = array_key_exists($tireId, $firstAllocationStartByTire)
                     ? (int) $firstAllocationStartByTire[$tireId]
                     : null;
@@ -4571,6 +4638,7 @@ class TireModel extends BaseModel
             'remaining_km' => $row['remaining_km'] !== null ? (int) $row['remaining_km'] : null,
             'tread' => is_numeric((string) ($row['tread_depth_mm'] ?? null)) ? (float) $row['tread_depth_mm'] : null,
             'mounted_at' => (string) ($row['active_data_start'] ?? ''),
+            'km_sas_from' => (string) ($row['active_sas_de_la'] ?? ''),
             'allocation_id' => (int) ($row['active_allocation_id'] ?? 0),
         ];
     }

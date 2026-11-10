@@ -6,6 +6,7 @@ $formAction = $isEdit
     : build_query_url(['page' => $routePage, 'action' => 'store']);
 $hasFileField = false;
 $vehicleLayoutOptionsByType = is_array($vehicleLayoutOptionsByType ?? null) ? $vehicleLayoutOptionsByType : [];
+$vehicleAxleForm = is_array($vehicleAxleForm ?? null) ? $vehicleAxleForm : [];
 $documentTypeOptionsByVehicleType = is_array($documentTypeOptionsByVehicleType ?? null) ? $documentTypeOptionsByVehicleType : [];
 $documentVehicleTypeByVehicleId = is_array($documentVehicleTypeByVehicleId ?? null) ? $documentVehicleTypeByVehicleId : [];
 $documentTypeOptionsByVehicleId = is_array($documentTypeOptionsByVehicleId ?? null) ? $documentTypeOptionsByVehicleId : [];
@@ -163,8 +164,50 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    vehicleTypeEl.addEventListener('change', refreshAxleFormula);
+    // Tipul fiecarei axe: lista urmeaza tipul vehiculului si formula alese.
+    const axleForm = <?= json_encode($vehicleAxleForm, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) ?>;
+    const axleBox = document.querySelector('[data-axle-kinds]');
+    const axleList = axleBox ? axleBox.querySelector('[data-axle-kinds-list]') : null;
+    let axleSavedFor = '';
+    const renderAxleKinds = function () {
+        if (!axleBox || !axleList || !axleForm.layouts) {
+            return;
+        }
+        const selection = vehicleTypeEl.value + '|' + axleFormulaEl.value;
+        const axles = (axleForm.layouts[vehicleTypeEl.value] || {})[axleFormulaEl.value] || [];
+        const useSaved = selection === axleSavedFor;
+        axleList.replaceChildren();
+        axleBox.hidden = axles.length === 0;
+        axles.forEach(function (axle) {
+            const row = document.createElement('label');
+            row.className = 'd-flex align-items-center gap-2 mb-1';
+            const name = document.createElement('span');
+            name.className = 'small text-nowrap';
+            name.style.minWidth = '7.5rem';
+            name.textContent = 'Axa ' + axle.no + (axle.dual ? ' · roți duble' : '');
+            const select = document.createElement('select');
+            select.className = 'form-select form-select-sm';
+            select.name = 'tip_axa[' + axle.no + ']';
+            select.disabled = axle.locked;
+            const saved = useSaved ? axleForm.saved[axle.no] : '';
+            axle.options.forEach(function (kind) {
+                const option = new Option(axleForm.kinds[kind], kind);
+                option.selected = kind === (axle.options.includes(saved) ? saved : axle.default);
+                select.appendChild(option);
+            });
+            row.append(name, select);
+            axleList.appendChild(row);
+        });
+    };
+
+    vehicleTypeEl.addEventListener('change', function () {
+        refreshAxleFormula();
+        renderAxleKinds();
+    });
+    axleFormulaEl.addEventListener('change', renderAxleKinds);
     refreshAxleFormula();
+    axleSavedFor = vehicleTypeEl.value + '|' + axleFormulaEl.value;
+    renderAxleKinds();
 });
 </script>
 <?php endif; ?>
@@ -1093,6 +1136,11 @@ document.addEventListener('DOMContentLoaded', function () {
                                     </option>
                                 <?php endif; ?>
                             </select>
+                            <div class="border rounded p-2 mt-2" data-axle-kinds hidden>
+                                <div class="small fw-semibold mb-1">Tip axă</div>
+                                <div data-axle-kinds-list></div>
+                                <div class="form-text mt-1">Axa 1 a unui vehicul cu motor este mereu de direcție. Tipul decide ce anvelope se pot monta pe axă.</div>
+                            </div>
 
                         <?php elseif ($type === 'textarea'): ?>
                             <textarea

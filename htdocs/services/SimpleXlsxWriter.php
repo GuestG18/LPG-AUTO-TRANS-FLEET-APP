@@ -65,6 +65,25 @@ class SimpleXlsxWriter
      */
     private array $customStyles = [];
 
+    /**
+     * Stiluri complete (font, fundal, chenar, format), adaugate dupa $customStyles: nume => definitie.
+     * @var array<string, array<string, mixed>>
+     */
+    private array $definedStyles = [];
+
+    /*
+     * Un stil complet, pentru rapoarte cu aspect propriu. Chei: color, fill, border (RGB fara #),
+     * bold, size, format (cod de format numeric), align, wrap. Numele intors se foloseste ca 's'.
+     */
+    public function defineStyle(array $definition): string
+    {
+        ksort($definition);
+        $name = 'def:' . md5((string) json_encode($definition));
+        $this->definedStyles[$name] = $definition;
+
+        return $name;
+    }
+
     /*
      * Un stil numeric cu formatul dat; numele intors se foloseste ca 's' in celula.
      * Valoarea ramane numar (se poate aduna / folosi in formule), doar afisarea are unitatea.
@@ -87,7 +106,7 @@ class SimpleXlsxWriter
     {
         /* Excel: max 31 caractere, fara : \ / ? * [ ] */
         $clean = mb_substr(preg_replace('/[:\\\\\/\?\*\[\]]/u', ' ', $name) ?? 'Foaie', 0, 31);
-        $this->sheets[] = ['name' => $clean, 'rows' => [], 'widths' => [], 'merges' => [], 'freeze' => null, 'autofilter' => null];
+        $this->sheets[] = ['name' => $clean, 'rows' => [], 'widths' => [], 'merges' => [], 'freeze' => null, 'autofilter' => null, 'table' => null];
 
         return count($this->sheets) - 1;
     }
@@ -96,6 +115,22 @@ class SimpleXlsxWriter
     public function setAutoFilter(int $sheet, string $range): void
     {
         $this->sheets[$sheet]['autofilter'] = $range;
+    }
+
+    /* Celule unite pe un domeniu oarecare (ex. "H6:L6"), in afara unui tabel Excel. */
+    public function mergeRange(int $sheet, string $range): void
+    {
+        $this->sheets[$sheet]['merges'][] = $range;
+    }
+
+    /**
+     * Tabel Excel nativ (cu filtru pe fiecare coloana) peste un domeniu antet + date; cel mult
+     * unul pe foaie. Antetul din foaie trebuie sa aiba exact textele din $columns.
+     * @param string[] $columns
+     */
+    public function addTable(int $sheet, string $name, string $range, array $columns, string $style = 'TableStyleMedium2'): void
+    {
+        $this->sheets[$sheet]['table'] = ['name' => $name, 'range' => $range, 'columns' => array_values($columns), 'style' => $style];
     }
 
     /** @param array<int, float> $widths coloana (1-based) => latime */
@@ -166,6 +201,13 @@ class SimpleXlsxWriter
         $zip->addFromString('xl/styles.xml', $this->stylesXml());
         foreach ($this->sheets as $index => $sheet) {
             $zip->addFromString('xl/worksheets/sheet' . ($index + 1) . '.xml', $this->sheetXml($sheet));
+            if (($sheet['table'] ?? null) !== null) {
+                $zip->addFromString('xl/worksheets/_rels/sheet' . ($index + 1) . '.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                    . '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    . '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table' . ($index + 1) . '.xml"/>'
+                    . '</Relationships>');
+                $zip->addFromString('xl/tables/table' . ($index + 1) . '.xml', $this->tableXml($sheet['table'], $index + 1));
+            }
         }
         $zip->close();
     }
@@ -200,6 +242,9 @@ class SimpleXlsxWriter
             . '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>';
         foreach (array_keys($this->sheets) as $index) {
             $xml .= '<Override PartName="/xl/worksheets/sheet' . ($index + 1) . '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>';
+            if (($this->sheets[$index]['table'] ?? null) !== null) {
+                $xml .= '<Override PartName="/xl/tables/table' . ($index + 1) . '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>';
+            }
         }
 
         return $xml . '</Types>';
@@ -314,7 +359,26 @@ class SimpleXlsxWriter
         $xml .= '<pageMargins left="0.5" right="0.5" top="0.6" bottom="0.6" header="0.3" footer="0.3"/>'
             . '<pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0" paperSize="9"/>';
 
+        if (($sheet['table'] ?? null) !== null) {
+            $xml .= '<tableParts count="1"><tablePart r:id="rId1"/></tableParts>';
+        }
+
         return $xml . '</worksheet>';
+    }
+
+    private function tableXml(array $table, int $id): string
+    {
+        $range = self::xml((string) $table['range']);
+        $name = self::xml((string) $table['name']);
+        $xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            . '<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="' . $id . '" name="' . $name . '" displayName="' . $name . '" ref="' . $range . '" totalsRowShown="0">'
+            . '<autoFilter ref="' . $range . '"/>'
+            . '<tableColumns count="' . count($table['columns']) . '">';
+        foreach ($table['columns'] as $index => $column) {
+            $xml .= '<tableColumn id="' . ($index + 1) . '" name="' . self::xml((string) $column) . '"/>';
+        }
+
+        return $xml . '</tableColumns><tableStyleInfo name="' . self::xml((string) $table['style']) . '" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>';
     }
 
     private function styleIndex(string $name): int
@@ -323,8 +387,12 @@ class SimpleXlsxWriter
             return self::STYLES[$name];
         }
         $position = array_search($name, array_keys($this->customStyles), true);
+        if ($position !== false) {
+            return count(self::STYLES) + (int) $position;
+        }
+        $position = array_search($name, array_keys($this->definedStyles), true);
 
-        return $position === false ? 0 : count(self::STYLES) + (int) $position;
+        return $position === false ? 0 : count(self::STYLES) + count($this->customStyles) + (int) $position;
     }
 
     /*
@@ -480,6 +548,34 @@ class SimpleXlsxWriter
                 'total' => $xf(1, 5, 2, $customFmtIds[$code], 'right'),
                 default => $xf(0, 0, 1, $customFmtIds[$code], 'right'),
             };
+        }
+
+        /* Stilurile complete (defineStyle): fonturile, fundalurile si chenarele lor se adauga la liste. */
+        foreach ($this->definedStyles as $definition) {
+            $fonts[] = '<font>' . (!empty($definition['bold']) ? '<b/>' : '') . '<sz val="' . (float) ($definition['size'] ?? 11) . '"/>'
+                . '<color rgb="FF' . self::xml((string) ($definition['color'] ?? '1F2937')) . '"/><name val="Calibri"/><family val="2"/></font>';
+            $fontId = count($fonts) - 1;
+            $fillId = 0;
+            if (!empty($definition['fill'])) {
+                $fills[] = '<fill><patternFill patternType="solid"><fgColor rgb="FF' . self::xml((string) $definition['fill']) . '"/><bgColor indexed="64"/></patternFill></fill>';
+                $fillId = count($fills) - 1;
+            }
+            $borderId = 0;
+            if (!empty($definition['border'])) {
+                $side = ' style="thin"><color rgb="FF' . self::xml((string) $definition['border']) . '"/>';
+                $borders[] = '<border><left' . $side . '</left><right' . $side . '</right><top' . $side . '</top><bottom' . $side . '</bottom><diagonal/></border>';
+                $borderId = count($borders) - 1;
+            }
+            $fmtId = 0;
+            if (!empty($definition['format'])) {
+                $code = (string) $definition['format'];
+                if (!isset($customFmtIds[$code])) {
+                    $customFmtIds[$code] = 170 + count($customFmtIds);
+                    $numFmts[$customFmtIds[$code]] = $code;
+                }
+                $fmtId = $customFmtIds[$code];
+            }
+            $cellXfs[] = $xf($fontId, $fillId, $borderId, $fmtId, (string) ($definition['align'] ?? 'left'), 0, !empty($definition['wrap']));
         }
 
         $xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'

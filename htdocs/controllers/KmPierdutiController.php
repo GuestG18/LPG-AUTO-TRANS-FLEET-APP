@@ -353,23 +353,34 @@ class KmPierdutiController
             }
 
             foreach ($this->splitSegment($segStart, $segEnd, $km, $windows) as [$windowIndex, $partKm, $partFrom, $partTo]) {
+                $movement = [
+                    'start' => date('Y-m-d H:i', $partFrom),
+                    'end' => date('Y-m-d H:i', $partTo),
+                    'from' => $segment['from'] ?? null,
+                    'to' => $segment['to'] ?? null,
+                    'km' => round($partKm, 1),
+                    'partial' => $partKm < $km - 0.05,
+                ];
                 if ($windowIndex !== null) {
                     $windows[$windowIndex]['gps_km'] += $partKm;
                     $windows[$windowIndex]['gps_segments']++;
+                    // Deplasarile curselor deschise se pot aloca din cardul "Km in desfasurare".
+                    // Cele de cel mult 3 km se asociaza ultimei curse inchise si nu se mai listeaza.
+                    if ($windows[$windowIndex]['kind'] === 'trip' && $windows[$windowIndex]['open']) {
+                        if (SasDashboardService::isShortOpenMove($partKm, $windows[$windowIndex])) {
+                            $windows[$windowIndex]['short_km'] += $partKm;
+                            $windows[$windowIndex]['short_count']++;
+                        } else {
+                            $windows[$windowIndex]['segments'][] = $movement;
+                        }
+                    }
                     continue;
                 }
                 $mid = intdiv($partFrom + $partTo, 2);
                 foreach ($gaps as $gapIndex => $gap) {
                     if ($mid >= $gap['from_ts'] && $mid <= $gap['to_ts']) {
                         $gaps[$gapIndex]['km'] += $partKm;
-                        $gaps[$gapIndex]['segments'][] = [
-                            'start' => date('Y-m-d H:i', $partFrom),
-                            'end' => date('Y-m-d H:i', $partTo),
-                            'from' => $segment['from'] ?? null,
-                            'to' => $segment['to'] ?? null,
-                            'km' => round($partKm, 1),
-                            'partial' => $partKm < $km - 0.05,
-                        ];
+                        $gaps[$gapIndex]['segments'][] = $movement;
                         continue 2;
                     }
                 }
@@ -410,6 +421,8 @@ class KmPierdutiController
         $tripRows = [];
         $serviceRows = [];
         $openKm = 0.0;
+        $shortKm = 0.0;
+        $openTrips = [];
         $tripsOverKm = 0.0;
         $serviceOverKm = 0.0;
         foreach ($windows as $window) {
@@ -432,7 +445,18 @@ class KmPierdutiController
                 $tripRows[] = $row;
                 if ($window['open']) {
                     // Cursa in desfasurare: km GPS ai ei nu sunt pierduti, apar separat (open_km).
-                    $openKm += $window['gps_km'];
+                    $openKm += $window['gps_km'] - $window['short_km'];
+                    $shortKm += $window['short_km'];
+                    $openTrips[] = [
+                        'id' => $window['id'],
+                        'beneficiar' => $window['beneficiar'],
+                        'km' => round($window['gps_km'] - $window['short_km'], 1),
+                        'short_km' => round($window['short_km'], 1),
+                        'short_count' => $window['short_count'],
+                        'closed_trip' => $window['closed_trip'],
+                        'starts_before' => $row['starts_before'],
+                        'segments' => $window['segments'] ?? [],
+                    ];
                     continue;
                 }
                 // O cursa inceputa inainte de perioada are km declarati si pentru zilele
@@ -458,7 +482,7 @@ class KmPierdutiController
             ? (float) ((new VehicleServiceKmModel($this->db))->kmByVehicleId($start, $end)[$vehicleId]['km'] ?? 0)
             : 0.0;
         $gpsTotal = (float) ($range['total_km'] ?? 0);
-        $lost = $gpsTotal - (float) $declared - $serviceDeclared - $openKm;
+        $lost = $gpsTotal - (float) $declared - $serviceDeclared - $openKm - $shortKm;
 
         $this->sendJson([
             'period' => ['start' => $start, 'end' => $end],
@@ -466,6 +490,7 @@ class KmPierdutiController
             'declared_trips_km' => round((float) $declared, 1),
             'declared_service_km' => round($serviceDeclared, 1),
             'open_km' => round($openKm, 1),
+            'short_km' => round($shortKm, 1),
             'lost_km' => round($lost, 1),
             'breakdown' => [
                 'outside_km' => round($outsideKm, 1),
@@ -474,6 +499,7 @@ class KmPierdutiController
                 'other_km' => round($lost - $outsideKm - $tripsOverKm - $serviceOverKm, 1),
             ],
             'gaps' => $gapRows,
+            'open_trips' => $openTrips,
             'trips' => $tripRows,
             'services' => $serviceRows,
         ]);
@@ -565,6 +591,9 @@ class KmPierdutiController
                 'to_ts' => $toTs,
                 'declared_km' => $open ? 0.0 : (float) $row['declared_km'],
                 'open' => $open,
+                'closed_trip' => $open ? $openWindow['closed_trip'] : null,
+                'short_km' => 0.0,
+                'short_count' => 0,
                 // Ca in tabel: cursa intra in perioada in care s-a incheiat (cea deschisa nu s-a incheiat).
                 'counted' => !$open && $row['d_closed'] >= $start && $row['d_closed'] <= $end,
                 'gps_km' => 0.0,
@@ -685,14 +714,25 @@ class KmPierdutiController
         $startsSql = $segments
             ? "SELECT COALESCE(s.vehicle_id, c.vehicle_id) AS vehicle_id, c.id AS cursa_id,
                       COALESCE(s.data_inceput, c.data_inceput, c.data_cursa) AS d,
-                      CASE WHEN s.id IS NULL THEN c.ora_inceput ELSE s.ora_inceput END AS t
+                      CASE WHEN s.id IS NULL THEN c.ora_inceput ELSE s.ora_inceput END AS t,
+                      COALESCE(c.data_sfarsit, c.data_inceput, c.data_cursa) AS d_end, c.ora_sfarsit AS t_end, bt.nume AS beneficiar
                  FROM curse_dispecer c
                  LEFT JOIN curse_segmente s ON s.cursa_id = c.id AND s.deleted_at IS NULL
+                 LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
                 WHERE c.deleted_at IS NULL AND COALESCE(s.vehicle_id, c.vehicle_id) IN ({$ids})"
-            : "SELECT vehicle_id, id AS cursa_id, COALESCE(data_inceput, data_cursa) AS d, ora_inceput AS t
-                 FROM curse_dispecer WHERE deleted_at IS NULL AND vehicle_id IN ({$ids})";
+            : "SELECT c.vehicle_id, c.id AS cursa_id, COALESCE(c.data_inceput, c.data_cursa) AS d, c.ora_inceput AS t,
+                      COALESCE(c.data_sfarsit, c.data_inceput, c.data_cursa) AS d_end, c.ora_sfarsit AS t_end, bt.nume AS beneficiar
+                 FROM curse_dispecer c
+                 LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+                WHERE c.deleted_at IS NULL AND c.vehicle_id IN ({$ids})";
         foreach ($this->db->query($startsSql)->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $starts[(int) $row['vehicle_id']][] = [(int) $row['cursa_id'], (int) strtotime($row['d'] . ' ' . ($row['t'] ?: '00:00:00'))];
+            $starts[(int) $row['vehicle_id']][] = [
+                (int) $row['cursa_id'],
+                (int) strtotime($row['d'] . ' ' . ($row['t'] ?: '00:00:00')),
+                // Doar cursele inchise au moment de inchidere: din ele se alege ultima cursa inchisa.
+                $row['t_end'] !== null ? (int) strtotime($row['d_end'] . ' ' . $row['t_end']) : null,
+                $row['beneficiar'] !== null ? (string) $row['beneficiar'] : null,
+            ];
         }
         try {
             $serviceSql = "SELECT vehicle_id, data_plecare AS d, ora_plecare AS t FROM vehicule_service_km WHERE vehicle_id IN ({$ids})";
@@ -705,12 +745,21 @@ class KmPierdutiController
 
         foreach ($open as $trip) {
             $toTs = $now;
-            foreach ($starts[$trip['vehicle_id']] ?? [] as [$tripId, $ts]) {
+            $closedTrip = null;
+            $closedAt = 0;
+            foreach ($starts[$trip['vehicle_id']] ?? [] as $start) {
+                [$tripId, $ts] = $start;
                 if ($tripId !== $trip['id'] && $ts > $trip['from_ts'] && $ts < $toTs) {
                     $toTs = $ts;
                 }
+                // Ultima cursa inchisa, dintre cele incepute inaintea cursei deschise.
+                $endTs = $start[2] ?? null;
+                if ($endTs !== null && $tripId !== $trip['id'] && $ts <= $trip['from_ts'] && $endTs > $closedAt) {
+                    $closedAt = $endTs;
+                    $closedTrip = ['id' => $tripId, 'beneficiar' => $start[3]];
+                }
             }
-            $this->openWindows[$trip['vehicle_id']][] = $trip + ['to_ts' => $toTs, 'ongoing' => $toTs === $now];
+            $this->openWindows[$trip['vehicle_id']][] = $trip + ['to_ts' => $toTs, 'ongoing' => $toTs === $now, 'closed_trip' => $closedTrip];
         }
 
         return $this->openWindows;
@@ -910,6 +959,7 @@ class KmPierdutiController
         $allowStale = ($_GET['allow_stale'] ?? '') === '1';
         $cached = [];
         $open = [];
+        $short = [];
         $missing = [];
         $stale = [];
         foreach (array_unique(array_map('intval', explode(',', (string) ($_GET['car_ids'] ?? '')))) as $carId) {
@@ -935,11 +985,13 @@ class KmPierdutiController
                 $cached[(string) $carId] = $km['total_km'];
                 if (isset($km['open_km'])) {
                     $open[(string) $carId] = $km['open_km'];
+                    $short[(string) $carId] = $km['short_km'];
                 }
             }
         }
         // open: km GPS rulati pe cursele inca deschise ("Km in desfasurare"), doar vehiculele care au asa ceva.
-        $payload = ['cached' => (object) $cached, 'open' => (object) $open, 'missing' => $missing, 'today_ttl' => SasDashboardService::TODAY_TTL_SECONDS];
+        // short: deplasarile de cel mult 3 km de pe aceste curse, asociate ultimei curse inchise.
+        $payload = ['cached' => (object) $cached, 'open' => (object) $open, 'short' => (object) $short, 'missing' => $missing, 'today_ttl' => SasDashboardService::TODAY_TTL_SECONDS];
         if ($allowStale) {
             $payload['stale'] = (object) $stale;
         }

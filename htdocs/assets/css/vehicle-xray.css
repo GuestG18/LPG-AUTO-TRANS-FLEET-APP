@@ -461,3 +461,11 @@
 }
 .fx-explorer.is-zoomed .fx-member { pointer-events: none; }
 .fx-member.is-switch { pointer-events: auto; }
+
+/* Schema vehiculului pe pagina Reparatii Auto */
+.repair-auto-xray { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.repair-auto-xray-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.repair-auto-xray-toggle { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid #d0dbec; border-radius: 9px; background: #fff; color: #142a52; font-size: .85rem; font-weight: 600; }
+.repair-auto-xray-toggle:hover { border-color: #9fb5d6; }
+.repair-auto-xray-empty { margin: 0; padding: 12px; border: 1px dashed #c9d3e0; border-radius: 10px; background: #fafbfd; color: #5b6d8c; }
+a.fx-card.is-button { text-decoration: none; color: inherit; }

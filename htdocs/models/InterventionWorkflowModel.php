@@ -543,9 +543,10 @@ class InterventionWorkflowModel extends BaseModel
         }
 
         return [
-            'primary' => AutoComponentCatalogService::PRIMARY_LABELS,
-            'subcategories' => AutoComponentCatalogService::SUBCATEGORY_LABELS,
-            'groups' => AutoComponentCatalogService::CATEGORY_GROUPS,
+            'primary' => AutoComponentCatalogService::primaryLabels(),
+            'subcategories' => AutoComponentCatalogService::subcategoryLabels(true),
+            'groups' => AutoComponentCatalogService::categoryGroups(),
+            'branches' => AutoComponentCatalogService::branchesByVehicleType(),
             'categories' => $categories,
         ];
     }
@@ -558,9 +559,14 @@ class InterventionWorkflowModel extends BaseModel
         }
         $stmt = $this->db->prepare('SELECT component_key, primary_category FROM mentenanta_auto_configurari WHERE vehicle_id = :v');
         $stmt->execute([':v' => $vehicleId]);
-        $result = [];
+        $rows = [];
         foreach ($stmt->fetchAll() as $row) {
-            $result[(string) $row['component_key']] = (string) $row['primary_category'];
+            $rows[(string) $row['component_key']] = $row;
+        }
+        // Include si componentele mostenite din configuratia generala a vehiculului.
+        $result = [];
+        foreach ((new VehicleStructureService($this->db))->mergeInheritedConfigs($vehicleId, $rows) as $key => $row) {
+            $result[(string) $key] = (string) ($row['primary_category'] ?? 'sasiu');
         }
         return $result;
     }
@@ -721,11 +727,11 @@ class InterventionWorkflowModel extends BaseModel
                 'nume' => (string) ($row['component_nume'] ?? $row['denumire_libera'] ?? 'Lucrare'),
                 'cod' => (string) ($row['component_cod'] ?? ''),
                 'denumire_libera' => (string) ($row['denumire_libera'] ?? ''),
-                'categorie' => $categoryId !== null ? (AutoComponentCatalogService::CATEGORY_NAMES[$categoryId] ?? '') : '',
+                'categorie' => $categoryId !== null ? (AutoComponentCatalogService::categoryNames(true)[$categoryId] ?? '') : '',
                 'category_id' => $categoryId,
                 'ramura' => (string) ($row['ramura_principala'] ?? ''),
-                'ramura_label' => AutoComponentCatalogService::PRIMARY_LABELS[(string) ($row['ramura_principala'] ?? '')] ?? '',
-                'subcategorie' => $subcategory !== null ? (AutoComponentCatalogService::SUBCATEGORY_LABELS[$subcategory] ?? '') : '',
+                'ramura_label' => AutoComponentCatalogService::primaryLabels()[(string) ($row['ramura_principala'] ?? '')] ?? '',
+                'subcategorie' => $subcategory !== null ? (AutoComponentCatalogService::subcategoryLabels(true)[$subcategory] ?? '') : '',
                 'componenta_eliminata' => $row['component_activ'] !== null && (int) $row['component_activ'] === 0,
                 'pozitie' => (string) ($row['pozitie'] ?? ''),
                 'stare_evaluare' => (string) $row['stare_evaluare'],
@@ -779,7 +785,10 @@ class InterventionWorkflowModel extends BaseModel
     /** Ramurile din Reparatii Auto posibile pe un tip de vehicul (cap tractor = doar Sasiu). */
     public static function allowedPrimaries(string $vehicleType): array
     {
-        return $vehicleType === 'cap_tractor' ? ['sasiu'] : ['sasiu', 'rezervor'];
+        // Din arborele administrat (Catalog componente): cap tractor = fara Rezervor.
+        $primaries = AutoComponentCatalogService::primariesForVehicleType($vehicleType !== '' ? $vehicleType : 'camion');
+
+        return $primaries !== [] ? $primaries : ($vehicleType === 'cap_tractor' ? ['sasiu'] : ['sasiu', 'rezervor']);
     }
 
     /** Tipul auto (camion / cap_tractor / semiremorca / '') ca in Reparatii Auto. */
@@ -864,7 +873,8 @@ class InterventionWorkflowModel extends BaseModel
             $targetType = self::autoVehicleType((string) (($targetId === $vehicleId ? $vehicle['type'] ?? '' : $vehicle['trailer']['type'] ?? '')));
             $primary = (string) ($row['primary'] ?? 'sasiu');
             $allowed = self::allowedPrimaries($targetType);
-            if (!in_array($primary, $allowed, true) || ($primary === 'sasiu' && AutoComponentCatalogService::subcategoryFor((int) $component['category_id']) === 'livrare_gaz')) {
+            $componentSub = AutoComponentCatalogService::subcategoryFor((int) $component['category_id']);
+            if (!in_array($primary, $allowed, true) || ($componentSub !== null && !AutoComponentCatalogService::isValidPlacement($primary, $componentSub))) {
                 throw new InvalidArgumentException('„' . $component['name'] . '” (' . $component['category'] . ') nu se aplică vehiculului ' . ($targetId === $vehicleId ? ($vehicle['plate'] ?? '') : ($vehicle['trailer']['plate'] ?? '')) . '.');
             }
             $operation = (string) ($row['operation'] ?? 'verificare');
@@ -1661,7 +1671,7 @@ class InterventionWorkflowModel extends BaseModel
 
         return [
             'component_key' => $key !== '' ? mb_substr($key, 0, 10) : null,
-            'ramura_principala' => isset(AutoComponentCatalogService::PRIMARY_LABELS[$primary]) ? $primary : null,
+            'ramura_principala' => isset(AutoComponentCatalogService::primaryLabels()[$primary]) ? $primary : null,
             'denumire_libera' => $this->nullIfEmpty((string) ($pick('denumire_libera', '') ?? ''), 190),
             'pozitie' => $this->nullIfEmpty((string) ($pick('pozitie', '') ?? ''), 80),
             'stare_evaluare' => isset(self::ASSESSMENT_LABELS[$assessment]) ? $assessment : 'suspectata',

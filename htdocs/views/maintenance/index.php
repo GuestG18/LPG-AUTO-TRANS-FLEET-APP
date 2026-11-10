@@ -24,6 +24,8 @@ $technicalComponentsByCategory = is_array($technicalFormOptions['componentsByCat
 $editRecord = is_array($editRecord ?? null) ? $editRecord : null;
 $viewRecord = is_array($viewRecord ?? null) ? $viewRecord : null;
 $editIntervention = is_array($editIntervention ?? null) ? $editIntervention : null;
+$stockTab = (string) ($stockTab ?? 'piese');
+$isConsumabileTab = $section === 'stock' && $stockTab === 'consumabile';
 
 $sectionUrl = static fn (string $target): string => build_query_url([
     'page' => 'mentenanta',
@@ -174,7 +176,18 @@ $pageSubtitle = match ($section) {
             <?php endif; ?>
         </div>
         <div class="d-flex gap-2 align-items-center">
-            <?php if ($section === 'repairs'): ?>
+            <?php if ($isConsumabileTab): ?>
+                <?php if (!empty($consumabile['can_manage'])): ?>
+                    <button class="btn btn-outline-secondary maintenance-secondary-button" type="button" data-cons-container-new-header>
+                        <i class="bi bi-plus-lg me-1"></i>Adaugă recipient
+                    </button>
+                <?php endif; ?>
+                <?php if (!empty($consumabile['can_operate'])): ?>
+                    <button class="btn btn-primary maintenance-primary-button" type="button" data-cons-open-op-header="intrare">
+                        <i class="bi bi-box-arrow-in-down me-1"></i>Intrare în stoc
+                    </button>
+                <?php endif; ?>
+            <?php elseif ($section === 'repairs'): ?>
                 <button class="btn btn-primary maintenance-primary-button" type="button" data-bs-toggle="modal" data-bs-target="#maintenanceRecordModal">
                     <i class="bi bi-plus-lg me-1"></i>Adaugă reparație / factură
                 </button>
@@ -183,7 +196,8 @@ $pageSubtitle = match ($section) {
                     <i class="bi bi-download me-1"></i><?= $section === 'stock' ? 'Exportă' : 'Export CSV' ?>
                 </a>
             <?php endif; ?>
-            <?php if ($section === 'stock'): ?>
+            <?php if ($isConsumabileTab): ?>
+            <?php elseif ($section === 'stock'): ?>
                 <button class="btn btn-primary maintenance-primary-button" type="button" data-bs-toggle="modal" data-bs-target="#maintenancePartModal">
                     <i class="bi bi-plus-lg me-1"></i>Adaugă piesă
                 </button>
@@ -579,6 +593,19 @@ $pageSubtitle = match ($section) {
     <?php endif; ?>
 
     <?php if ($section === 'stock'): ?>
+        <nav class="stock-tabs" aria-label="Stoc piese">
+            <a class="stock-tab<?= !$isConsumabileTab ? ' is-active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'stock'])) ?>"><i class="bi bi-gear"></i> Piese</a>
+            <?php if (can('mentenanta', 'consumabile_view')): ?>
+                <a class="stock-tab<?= $isConsumabileTab ? ' is-active' : '' ?>" href="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'stock', 'tab' => 'consumabile'])) ?>"><i class="bi bi-droplet"></i> Consumabile</a>
+            <?php endif; ?>
+        </nav>
+    <?php endif; ?>
+
+    <?php if ($isConsumabileTab): ?>
+        <?php require __DIR__ . '/_consumabile.php'; ?>
+    <?php endif; ?>
+
+    <?php if ($section === 'stock' && !$isConsumabileTab): ?>
         <div class="maintenance-kpi-grid maintenance-stock-kpis">
             <?php foreach ([
                 ['icon' => 'bi-cash-stack', 'tone' => 'green', 'title' => 'Valoare totală stoc', 'value' => $currency((float) ($stockKpis['valoare_totala'] ?? 0)), 'note' => 'valoare de achiziție'],
@@ -668,7 +695,7 @@ $pageSubtitle = match ($section) {
 </div>
 <?php endif; ?>
 
-<?php if ($section === 'stock'): ?>
+<?php if ($section === 'stock' && !$isConsumabileTab): ?>
 <div class="modal fade" id="maintenancePartModal" tabindex="-1"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content maintenance-modal"><form method="post" enctype="multipart/form-data" action="<?= e(build_query_url(['page' => 'mentenanta', 'action' => 'save_part'])) ?>">
     <?= csrf_field() ?>
     <div class="modal-header"><div><h2 class="modal-title fs-5">Adaugă piesă</h2><p>Adaugă în stoc sau montează direct pe vehicul.</p></div><button class="btn-close" type="button" data-bs-dismiss="modal"></button></div>
@@ -716,7 +743,32 @@ $pageSubtitle = match ($section) {
 <?php endif; ?>
 
 <?php $maintenanceScriptVersion = (string) @filemtime(BASE_PATH . '/assets/js/maintenance.js'); ?>
-<?php if ($section === 'stock'): ?>
+<?php if ($isConsumabileTab): ?>
+<link rel="stylesheet" href="<?= e(url('assets/css/consumabile.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/consumabile.css'))) ?>">
+<script src="<?= e(url('assets/js/consumabile.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/consumabile.js'))) ?>"></script>
+<script>
+// Butoanele din antet (in afara sectiunii) deschid aceleasi panouri.
+document.addEventListener('click', (event) => {
+    const op = event.target.closest('[data-cons-open-op-header]');
+    const box = event.target.closest('[data-cons-container-new-header]');
+    if (!op && !box) {
+        return;
+    }
+    const proxy = document.createElement('button');
+    proxy.type = 'button';
+    proxy.hidden = true;
+    if (op) {
+        proxy.dataset.consOpenOp = op.dataset.consOpenOpHeader;
+    } else {
+        proxy.dataset.consContainerNew = '1';
+    }
+    document.querySelector('[data-cons-module]').appendChild(proxy);
+    proxy.click();
+    proxy.remove();
+});
+</script>
+<?php endif; ?>
+<?php if ($section === 'stock' && !$isConsumabileTab): ?>
 <script>
 (() => {
     // Cautare live in Stoc Piese: fiecare cuvant tastat trebuie sa apara undeva in rand

@@ -129,7 +129,7 @@ final class TrailerSasKmService
             return $stats;
         }
 
-        $carIds = $this->tractorCarIds();
+        $carIds = self::sasCarIds($this->db);
         $states = $this->db->query('SELECT * FROM semiremorci_km_sas')->fetchAll(PDO::FETCH_UNIQUE | PDO::FETCH_ASSOC);
         $trailers = $this->db->query("SELECT id, nr_inmatriculare, tip_vehicul FROM vehicule WHERE tip_vehicul LIKE 'semiremorca%' ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
 
@@ -314,19 +314,19 @@ final class TrailerSasKmService
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    /** tractor_id => carId SAS: maparea din Centru Kilometraj, altfel cea din Revizii. */
-    private function tractorCarIds(): array
+    /** vehicul => carId SAS: maparea din Centru Kilometraj, altfel cea din Revizii. */
+    public static function sasCarIds(PDO $db): array
     {
         $map = [];
         try {
-            foreach ($this->db->query('SELECT vehicle_id, sas_car_id FROM revizii_sas_vehicule')->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            foreach ($db->query('SELECT vehicle_id, sas_car_id FROM revizii_sas_vehicule')->fetchAll(PDO::FETCH_ASSOC) as $row) {
                 $map[(int) $row['vehicle_id']] = (int) $row['sas_car_id'];
             }
         } catch (Throwable) {
             // tabelul Revizii poate lipsi
         }
         try {
-            $rows = $this->db->query("SELECT vehicle_id, external_provider_vehicle_id FROM vehicle_odometer_sources WHERE provider_code = 'sas' AND enabled = 1")->fetchAll(PDO::FETCH_ASSOC);
+            $rows = $db->query("SELECT vehicle_id, external_provider_vehicle_id FROM vehicle_odometer_sources WHERE provider_code = 'sas' AND enabled = 1")->fetchAll(PDO::FETCH_ASSOC);
             foreach ($rows as $row) {
                 $map[(int) $row['vehicle_id']] = (int) $row['external_provider_vehicle_id'];
             }

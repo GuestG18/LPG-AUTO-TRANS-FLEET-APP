@@ -674,7 +674,11 @@ $renderVehicleBillingGroups = static function (array $groups, string $idBase, ar
 
         return '<tr class="cf-group-total">' . $cells . '</tr>';
     };
-    $html = '<div class="cf-breakdown cf-vehicle-billing"><div class="cf-type-routes"><table class="cf-table"><tbody>';
+    /* Acelasi antet ca la desfasurarea unui tip de transport. */
+    $onlyPriceGroups = $groups !== [] && array_filter($groups, static fn (array $group): bool => ($group['group_by'] ?? 'route') !== 'price') === [];
+    $html = '<div class="cf-breakdown cf-vehicle-billing"><div class="cf-type-routes"><table class="cf-table">'
+        . '<thead><tr><th class="cf-expand-th"></th><th>Calcul facturare</th><th>' . ($onlyPriceGroups ? 'Tarif / rute' : 'Rută') . '</th>'
+        . '<th class="is-number">Curse</th><th class="is-number">Valoare RON</th><th class="cf-expand-th"></th></tr></thead><tbody>';
     foreach ($groups as $group) {
         $label = (string) ($group['label'] ?? '-');
         /* Id stabil din cheia grupului (tip + ruta / tarif), nu din pozitia lui. */
@@ -704,7 +708,29 @@ $renderVehicleBillingGroups = static function (array $groups, string $idBase, ar
         }
     }
 
-    return $html . '</tbody></table></div></div>';
+    /*
+     * Totalul vehiculului, sub toate grupurile lui: o singura ruta -> numele ei, altfel
+     * "vehicul". Km si tonele sunt adunate din curse, ca in totalul fiecarui grup;
+     * refacturarile nu intra, ca si in randurile de mai sus.
+     */
+    $routeLabels = array_unique(array_map(static fn (array $group): string => ($group['group_by'] ?? 'route') === 'price' ? '' : (string) ($group['label'] ?? ''), $groups));
+    $totalContext = count($routeLabels) === 1 && reset($routeLabels) !== '' ? ' — ' . e((string) reset($routeLabels)) : ' vehicul';
+    $sumDetail = static fn (string $key): float => array_sum(array_map(static fn (array $trip): float => (float) ($trip[$key] ?? 0), $detailRows));
+    /* compressor_activity e completat si pe alte tipuri de curse; aici conteaza doar compresorul. */
+    $compressorTrips = array_values(array_filter($detailRows, static fn (array $trip): bool => (string) ($trip['type'] ?? '') === 'compresor'));
+    $compressorActivity = array_sum(array_map(static fn (array $trip): float => (float) ($trip['compressor_activity'] ?? 0), $compressorTrips));
+    $totalMetrics = array_filter([
+        $sumDetail('km') > 0 ? $fmtKm($sumDetail('km')) : '',
+        $sumDetail('tone') > 0 ? $fmtTone($sumDetail('tone')) : '',
+        $compressorActivity > 0 ? $fmtSmart($compressorActivity, 2) . ' ' . (string) ($compressorTrips[0]['compressor_unit'] ?? '') : '',
+    ], static fn (string $metric): bool => $metric !== '');
+
+    return $html . '</tbody><tfoot><tr class="cf-group-total">'
+        . '<td colspan="2"><span class="cf-group-total-label">TOTAL</span>' . $totalContext . '</td>'
+        . '<td class="is-number">' . e(implode(' · ', $totalMetrics)) . '</td>'
+        . '<td class="is-number">' . e($fmtSmart(array_sum(array_column($groups, 'trips')), 0)) . '</td>'
+        . '<td class="is-number">' . e($fmtMoney(array_sum(array_column($groups, 'value')))) . '</td>'
+        . '<td></td></tr></tfoot></table></div></div>';
 };
 
 /*
@@ -1860,7 +1886,7 @@ a.cf-calc-warn.is-link:focus-visible {
 }
 /*
  * Grupurile de facturare ale unui vehicul (Activitate pe vehicule - Detaliat): randuri
- * compacte direct sub vehicul, fara antet si fara card propriu, legate de vehicul
+ * compacte direct sub vehicul, cu antet si total, fara card propriu, legate de vehicul
  * printr-o linie fina in stanga.
  */
 .cf-trip-detail-cell > .cf-breakdown.cf-vehicle-billing {
@@ -1880,7 +1906,8 @@ a.cf-calc-warn.is-link:focus-visible {
 .cf-vehicle-billing > .cf-type-routes > .cf-table > tbody > tr.cf-vehicle-parent,
 .cf-vehicle-billing .cf-trip-table { text-align: left; }
 /* Totalul unui grup: randul <tfoot> al tabelului de curse, fundal discret. */
-.cf-trip-table tr.cf-group-total > td {
+.cf-trip-table tr.cf-group-total > td,
+.cf-vehicle-billing > .cf-type-routes > .cf-table > tfoot > tr.cf-group-total > td {
     background: #f4f8fe;
     border-top: 1px solid #cfdff3;
     border-bottom: 0;
@@ -2591,7 +2618,7 @@ a.cf-calc-warn.is-link:focus-visible {
                 <details class="cf-export-menu" data-export-menu>
                     <summary class="cf-export"><i class="bi bi-file-earmark-excel-fill" aria-hidden="true"></i> Export Excel <i class="bi bi-chevron-down" aria-hidden="true"></i></summary>
                     <div class="cf-export-list">
-                        <a href="<?= e($exportShortUrl) ?>"><i class="bi bi-list-ul" aria-hidden="true"></i><span><strong>Raport scurt</strong><small>Cardurile și totalurile pe tipuri de transport</small></span></a>
+                        <a href="<?= e($exportShortUrl) ?>"><i class="bi bi-list-ul" aria-hidden="true"></i><span><strong>Raport scurt</strong><small>Tabel filtrabil pe vehicule și rute, cu refacturări și TVA</small></span></a>
                         <a href="<?= e($exportUrl) ?>"><i class="bi bi-list-nested" aria-hidden="true"></i><span><strong>Raport detaliat</strong><small>Rute, vehicule, curse și refacturări</small></span></a>
                     </div>
                 </details>

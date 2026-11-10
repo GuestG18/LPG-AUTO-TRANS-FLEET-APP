@@ -77,6 +77,12 @@ final class AutoComponentStateService
             ? $usageByPart[$stockPartId]
             : [];
 
+        // Intervalul mostenit din configuratia generala nu spune cand a fost montata piesa: fara o
+        // montare reala nu exista uzura (altfel toata flota ar aparea uzata la 100%).
+        if (!empty($component['inherited']) && $usage === []) {
+            return null;
+        }
+
         if ($unit === 'km') {
             if ($vehicleKm <= 0) {
                 return null;
