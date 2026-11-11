@@ -66,7 +66,10 @@ $sections = [
         'Data cursei' => $viewDateTime($race['data_cursa'] ?? ''),
         'Data încărcării' => $viewDateTime($race['data_incarcare'] ?? ''),
         'Început' => $viewDateTime($race['data_inceput'] ?? '', $race['ora_inceput'] ?? ''),
-        'Sfârșit' => $viewDateTime($race['data_sfarsit'] ?? '', $race['ora_sfarsit'] ?? ''),
+        'Sfârșit' => trim((string) ($race['ora_sfarsit'] ?? '')) === ''
+            && (string) ($race['data_sfarsit'] ?? '') === (string) ($race['data_inceput'] ?? '')
+            ? 'în desfășurare'
+            : $viewDateTime($race['data_sfarsit'] ?? '', $race['ora_sfarsit'] ?? ''),
         'Durată' => $durationText,
     ],
     'Traseu' => [

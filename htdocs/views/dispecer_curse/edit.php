@@ -839,7 +839,13 @@ if ($phaseCompact) {
                 <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-end-datetime"<?= $phaseKeep ?>>
                     <label class="form-label" for="edit_race_end_datetime">Data si ora sfarsit</label>
                     <?php
-                        $endDateDisplayValue = $formatRaceDateInput($raceFormData['data_sfarsit'] ?? ($raceFormData['data_cursa'] ?? ''));
+                        // Cursa in desfasurare (fara ora de sfarsit): data de sfarsit din BD e doar
+                        // un inlocuitor (= data de inceput), deci campul ramane gol.
+                        $endDateIsPlaceholder = $formEndTimeValue === ''
+                            && (string) ($raceFormData['data_sfarsit'] ?? '') === (string) ($raceFormData['data_inceput'] ?? '');
+                        $endDateDisplayValue = $endDateIsPlaceholder
+                            ? ''
+                            : $formatRaceDateInput($raceFormData['data_sfarsit'] ?? ($raceFormData['data_cursa'] ?? ''));
                         $endDateTimeDisplayValue = trim($endDateDisplayValue . ($formEndTimeValue !== '' ? ' ' . $formEndTimeValue : ''));
                         $endDateTimeHasError = isset($raceFormErrors['data_sfarsit']) || isset($raceFormErrors['ora_sfarsit']);
                     ?>

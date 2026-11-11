@@ -215,7 +215,11 @@ if (!isset($formatRaceDateForDisplay) || !is_callable($formatRaceDateForDisplay)
                         <div class="col-12 col-md-6 dispatcher-schedule-field" data-role="field-end-datetime">
                             <label class="form-label" for="<?= e($fieldPrefix) ?>_end_datetime">Data si ora sfarsit</label>
                             <?php
-                                $endDateValue = (string) ($formData['data_sfarsit'] ?? ($formData['data_cursa'] ?? ''));
+                                // Fara ora de sfarsit cursa e in desfasurare: data de sfarsit ramane goala.
+                                $endDateValue = $formEndTimeValue === ''
+                                    && (string) ($formData['data_sfarsit'] ?? '') === (string) ($formData['data_inceput'] ?? '')
+                                    ? ''
+                                    : (string) ($formData['data_sfarsit'] ?? ($formData['data_cursa'] ?? ''));
                                 $endDateDisplayValue = $formatRaceDateForDisplay($endDateValue);
                                 $endDateTimeDisplayValue = trim($endDateDisplayValue . ($formEndTimeValue !== '' ? ' ' . $formEndTimeValue : ''));
                                 $endDateTimeHasError = isset($formErrors['data_sfarsit']) || isset($formErrors['ora_sfarsit']);

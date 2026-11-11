@@ -816,7 +816,14 @@ ob_start();
                         $oraInceput = $oraInceputRaw !== '' ? substr($oraInceputRaw, 0, 5) : '-';
                         $oraSfarsit = $oraSfarsitRaw !== '' ? substr($oraSfarsitRaw, 0, 5) : '-';
                         $intervalStartLabel = format_date_ro($dataInceput) . ($oraInceput !== '-' ? (' ' . $oraInceput) : '');
-                        $intervalEndLabel = format_date_ro($dataSfarsit) . ($oraSfarsit !== '-' ? (' ' . $oraSfarsit) : '');
+                        // Cursa in desfasurare (fara ora de sfarsit): sfarsitul nu se afiseaza.
+                        if ($oraSfarsit !== '-') {
+                            $intervalEndLabel = format_date_ro($dataSfarsit) . ' ' . $oraSfarsit;
+                        } elseif ($dataSfarsit !== $dataInceput) {
+                            $intervalEndLabel = format_date_ro($dataSfarsit);
+                        } else {
+                            $intervalEndLabel = 'in desfasurare';
+                        }
                         $intervalLabel = $intervalStartLabel . ' - ' . $intervalEndLabel;
                         $intervalParts = [
                             ['label' => 'Start', 'value' => $intervalStartLabel],
