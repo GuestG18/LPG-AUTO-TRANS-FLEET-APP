@@ -62,6 +62,17 @@
 .as-section-head h2 { font-size: .98rem; }
 .as-count { color: #5b6d8c; font-size: .8rem; }
 .as-section-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+/* Sistemul deschis din schema: sta temporar sub schema (auto-vehicle-explorer.js). */
+/* Cu schema vizibila (configuratie generala) se vede doar schema: lista sistemelor si tabelul pe tipuri
+   de axa se deschid de pe schema / din butonul lor. Cautarea le arata din nou. */
+.as-page.is-schema-focus:not(.is-schema-searching) > .as-sections,
+.as-page.is-schema-focus:not(.is-schema-searching) > .as-matrix { display: none; }
+.repair-auto-xray-matrix-btn { margin-left: auto; }
+.repair-auto-xray-matrix-btn[aria-pressed="true"] { border-color: #1570ef; background: #eef4ff; color: #1570ef; }
+.repair-auto-xray-dock { margin-top: 12px; scroll-margin-top: 90px; }
+.repair-auto-xray-dock > .as-section { box-shadow: 0 6px 18px rgba(16, 24, 40, .08); }
+.as-section-actions + .repair-auto-xray-dock-close { margin-left: 4px; }
+.as-section-head > .repair-auto-xray-dock-close:not(.as-section-actions + *) { margin-left: auto; }
 .as-section-empty { margin: 0; padding: 10px 14px 14px; color: #5b6d8c; font-size: .86rem; }
 
 .as-add { display: flex; flex-direction: column; gap: 10px; margin: 0 14px 12px; padding: 12px; border: 1px dashed #b9c8de; border-radius: 10px; background: #f8fafd; }

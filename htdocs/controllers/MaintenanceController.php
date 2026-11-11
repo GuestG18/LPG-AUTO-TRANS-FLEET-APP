@@ -104,8 +104,11 @@ class MaintenanceController
             case 'consumabile_op':
             case 'consumabile_container_save':
             case 'consumabile_product_save':
+            case 'consumabile_container_delete':
+            case 'consumabile_product_delete':
             case 'consumabile_compat_save':
             case 'consumabile_system_save':
+            case 'consumabile_system_remove':
             case 'consumabile_system_event':
             case 'consumabile_event_cancel':
             case 'consumabile_adblue_sync':

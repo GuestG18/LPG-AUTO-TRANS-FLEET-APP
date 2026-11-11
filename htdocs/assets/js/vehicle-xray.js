@@ -948,6 +948,8 @@
         this.renderFooter();
         this.drillDown(hot);
         this.loadPanel(slot, member, focusKey || '');
+        // Pagina gazda poate arata ceva in plus pentru punctul ales (pagina Auto: sistemul lui).
+        if (this.hooks.afterSlot) { this.hooks.afterSlot(slot, slotId); }
     };
 
     // Subcomponenta aleasa in detalierea ansamblului: panoul se reincarca, cu randul ei evidentiat.

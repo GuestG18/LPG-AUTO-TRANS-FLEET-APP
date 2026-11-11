@@ -102,6 +102,7 @@ $vehicleTypeChoices = AutoComponentCatalogService::VEHICLE_TYPES;
             <label class="cons-field"><span>Observații</span><textarea class="form-control" name="observatii" rows="2" maxlength="2000"></textarea></label>
             <div class="cons-op-error d-none" data-cons-error role="alert"></div>
             <div class="cons-panel-actions">
+                <button type="button" class="btn btn-outline-danger me-auto d-none" data-cons-container-delete title="Doar pentru recipiente fără nicio operațiune"><i class="bi bi-trash me-1"></i>Șterge</button>
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">Anulează</button>
                 <button type="submit" class="btn btn-primary"><i class="bi bi-check2 me-1"></i>Salvează</button>
             </div>
@@ -133,11 +134,12 @@ $vehicleTypeChoices = AutoComponentCatalogService::VEHICLE_TYPES;
                 <label class="cons-field"><span>Specificație</span><input class="form-control" name="specificatie" maxlength="255" placeholder="ex. API CI-4 / ACEA E7"></label>
             </div>
             <label class="cons-field"><span>Aprobări tehnice</span><textarea class="form-control" name="aprobari" rows="2" placeholder="ex. MAN M3275-1, Volvo VDS-3, MB 228.3"></textarea></label>
-            <div class="cons-field-row">
-                <label class="cons-field"><span>Sistem mecanic asociat</span><input class="form-control" name="sistem_mecanic" maxlength="80" placeholder="ex. Motor"></label>
-                <label class="cons-field"><span>Componentă din Catalog componente</span><select class="form-select" name="component_key"><option value="">— fără legătură —</option><?php foreach ((array) ($cons['components'] ?? []) as $key => $component): ?><option value="<?= e((string) $key) ?>"><?= e((string) $component['name'] . ' · ' . $component['category']) ?></option><?php endforeach; ?></select>
-                    <small class="text-muted">Lista conține componentele marcate „Consumabil” sau „Fluid tehnic” în catalog.</small></label>
-            </div>
+            <fieldset class="cons-field"><legend>Se folosește la piesele</legend>
+                <small class="text-muted d-block mb-1" data-cons-parts-hint>Alege întâi tipul fluidului; lista arată piesele din Catalog componente potrivite.</small>
+                <input class="form-control form-control-sm mb-1" type="search" placeholder="Caută piesa…" data-cons-parts-search>
+                <div class="cons-parts-list" data-cons-parts></div>
+                <label class="form-check-label mt-1"><input type="checkbox" data-cons-parts-all> Arată toate piesele din catalog</label>
+            </fieldset>
             <fieldset class="cons-field"><legend>Compatibil cu vehiculele</legend>
                 <?php foreach ($vehicleTypeChoices as $k => $l): ?><label class="form-check-inline"><input type="checkbox" name="tipuri_vehicul[]" value="<?= e($k) ?>"> <?= e($l) ?></label><?php endforeach; ?>
                 <small class="text-muted d-block">Nimic bifat = fără restricție pe tip de vehicul.</small>
@@ -166,6 +168,7 @@ $vehicleTypeChoices = AutoComponentCatalogService::VEHICLE_TYPES;
             </fieldset>
             <div class="cons-op-error d-none" data-cons-error role="alert"></div>
             <div class="cons-panel-actions">
+                <button type="button" class="btn btn-outline-danger me-auto d-none" data-cons-product-delete title="Doar pentru produse nefolosite"><i class="bi bi-trash me-1"></i>Șterge</button>
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">Anulează</button>
                 <button type="submit" class="btn btn-primary"><i class="bi bi-check2 me-1"></i>Salvează produsul</button>
             </div>
@@ -233,6 +236,7 @@ $vehicleTypeChoices = AutoComponentCatalogService::VEHICLE_TYPES;
                 <small class="text-muted">Referința (data / km ultimului schimb) nu se copiază. Vehiculele care au deja sistemul sunt sărite.</small></label>
             <div class="cons-op-error d-none" data-cons-error role="alert"></div>
             <div class="cons-panel-actions">
+                <button type="button" class="btn btn-outline-danger me-auto d-none" data-cons-system-remove title="Fără înregistrări se șterge; cu istoric doar dispare din situație"><i class="bi bi-trash me-1"></i>Elimină sistemul</button>
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">Anulează</button>
                 <button type="submit" class="btn btn-primary"><i class="bi bi-check2 me-1"></i>Salvează sistemul</button>
             </div>

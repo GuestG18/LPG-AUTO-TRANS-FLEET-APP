@@ -31,12 +31,17 @@ $vehicleLabel = static fn (array $v): string => trim((string) ($v['nr_inmatricul
 $fmtDate = static fn (?string $value, bool $time = false): string => $value ? date($time ? 'd.m.Y H:i' : 'd.m.Y', (int) strtotime($value)) : '—';
 
 $boot = [
+    'parts' => (array) ($cons['vehicle_parts'] ?? []),
+    'fluidPartCategories' => ConsumabileStockService::FLUID_PART_CATEGORIES,
     'endpoints' => [
         'op' => build_query_url(['page' => 'mentenanta', 'action' => 'consumabile_op']),
         'container' => build_query_url(['page' => 'mentenanta', 'action' => 'consumabile_container_save']),
         'product' => build_query_url(['page' => 'mentenanta', 'action' => 'consumabile_product_save']),
+        'containerDelete' => build_query_url(['page' => 'mentenanta', 'action' => 'consumabile_container_delete']),
+        'productDelete' => build_query_url(['page' => 'mentenanta', 'action' => 'consumabile_product_delete']),
         'compat' => build_query_url(['page' => 'mentenanta', 'action' => 'consumabile_compat_save']),
         'system' => build_query_url(['page' => 'mentenanta', 'action' => 'consumabile_system_save']),
+        'systemRemove' => build_query_url(['page' => 'mentenanta', 'action' => 'consumabile_system_remove']),
         'event' => build_query_url(['page' => 'mentenanta', 'action' => 'consumabile_system_event']),
         'event_cancel' => build_query_url(['page' => 'mentenanta', 'action' => 'consumabile_event_cancel']),
         'adblue_sync' => build_query_url(['page' => 'mentenanta', 'action' => 'consumabile_adblue_sync']),
@@ -54,7 +59,7 @@ $boot = [
         'id' => (int) $p['id'], 'denumire' => (string) $p['denumire'], 'um' => (string) $p['um'], 'tip_articol' => (string) $p['tip_articol'],
         'tip_fluid' => (string) ($p['tip_fluid'] ?? ''), 'producator' => (string) ($p['producator'] ?? ''), 'cod_produs' => (string) ($p['cod_produs'] ?? ''),
         'vascozitate' => (string) ($p['vascozitate'] ?? ''), 'specificatie' => (string) ($p['specificatie'] ?? ''), 'aprobari' => (string) ($p['aprobari'] ?? ''),
-        'sistem_mecanic' => (string) ($p['sistem_mecanic'] ?? ''), 'tipuri_vehicul' => $p['tipuri_vehicul_list'], 'compatibilitate_note' => (string) ($p['compatibilitate_note'] ?? ''),
+        'sisteme' => $p['sisteme_list'], 'piese' => $p['piese_list'], 'tipuri_vehicul' => $p['tipuri_vehicul_list'], 'compatibilitate_note' => (string) ($p['compatibilitate_note'] ?? ''),
         'interval_km' => $p['interval_km'], 'interval_luni' => $p['interval_luni'], 'interval_ore' => $p['interval_ore'],
         'sursa_monitorizare' => array_values(array_filter(explode(',', (string) ($p['sursa_monitorizare'] ?? '')))),
         'prag_alerta' => $p['prag_alerta'], 'critic' => (int) $p['critic'], 'circuit_inchis' => (int) $p['circuit_inchis'],
@@ -296,7 +301,7 @@ $boot = [
                     <td><?= e($fluidTypes[(string) $p['tip_fluid']] ?? ConsumabileStockService::PRODUCT_KINDS[(string) $p['tip_articol']] ?? '') ?><?php if ((int) $p['critic'] === 1): ?> <span class="cons-pill is-low">critic</span><?php endif; ?></td>
                     <td><?= e((string) ($p['vascozitate'] ?? '') ?: '—') ?><small class="d-block text-muted"><?= e((string) ($p['specificatie'] ?? '')) ?></small></td>
                     <td><?= e((string) $p['um']) ?></td>
-                    <td><?= e((string) ($p['sistem_mecanic'] ?? '') ?: '—') ?></td>
+                    <td><?= e((string) ($p['sistem_label'] ?? '') ?: '—') ?><?php if (!empty($p['piese_nume'])): ?><small class="d-block text-muted"><?= e(implode(', ', $p['piese_nume'])) ?></small><?php endif; ?></td>
                     <td><?= $p['component'] !== null ? e((string) $p['component']['name'] . ' (' . $p['component']['category'] . ')') : '<span class="text-muted">—</span>' ?></td>
                     <td><?php $names = array_map(static fn (int $id): string => (string) ($products[$id]['denumire'] ?? ''), $p['compatibile']); ?><?= $names !== [] ? e(implode(', ', $names)) : '<span class="text-muted">doar același produs</span>' ?></td>
                     <td><?= e($qty($p['stoc_total'], (string) $p['um'])) ?><small class="d-block text-muted"><?= e((string) $p['recipiente']) ?> recipiente</small></td>

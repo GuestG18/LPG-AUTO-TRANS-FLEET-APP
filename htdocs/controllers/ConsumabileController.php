@@ -45,6 +45,10 @@ final class ConsumabileController
             'products' => $this->service->products(),
             'containers' => $this->service->containers(['include_inactive' => $sub === 'stocuri' && !empty($_GET['inactive'])]),
             'vehicles' => $this->service->vehicles(),
+            'vehicle_parts' => array_values(array_map(
+                static fn (array $c): array => ['key' => $c['key'], 'name' => $c['name'], 'category' => $c['category']],
+                array_filter($this->service->catalogComponents(), static fn (array $c): bool => $c['active'] && $c['item_type'] === 'componenta')
+            )),
             'components' => array_filter(
                 $this->service->catalogComponents(),
                 static fn (array $component): bool => $component['active'] && in_array($component['item_type'], ['consumabil', 'fluid'], true)
@@ -134,6 +138,16 @@ final class ConsumabileController
                     audit_log_write($this->db, 'consumabile_produse', $savedId, $id > 0 ? 'update' : 'create',
                         'Produs ' . trim((string) ($_POST['denumire'] ?? '')), $before, $this->service->product($savedId), $this->userId());
                     $this->json(['ok' => true, 'id' => $savedId, 'message' => $id > 0 ? 'Produsul a fost actualizat.' : 'Produsul a fost adăugat în catalog.']);
+                case 'consumabile_container_delete':
+                    $deleted = $this->service->deleteContainer((int) ($_POST['id'] ?? 0));
+                    audit_log_write($this->db, 'consumabile_recipiente', (int) $deleted['id'], 'delete',
+                        'Recipient șters ' . (string) $deleted['cod'], $deleted, null, $this->userId());
+                    $this->json(['ok' => true, 'message' => 'Recipientul a fost șters.']);
+                case 'consumabile_product_delete':
+                    $deleted = $this->service->deleteProduct((int) ($_POST['id'] ?? 0));
+                    audit_log_write($this->db, 'consumabile_produse', (int) $deleted['id'], 'delete',
+                        'Produs șters ' . (string) $deleted['denumire'], $deleted, null, $this->userId());
+                    $this->json(['ok' => true, 'message' => 'Produsul a fost șters din catalog.']);
                 case 'consumabile_system_save':
                     $id = (int) ($_POST['id'] ?? 0);
                     $before = $id > 0 ? $this->fluids->system($id) : null;
@@ -145,6 +159,15 @@ final class ConsumabileController
                         . ($saved['copied'] > 0 ? ' și copiat pe încă ' . $saved['copied'] . ' vehicule' : '')
                         . ($saved['skipped'] > 0 ? ' (' . $saved['skipped'] . ' vehicule aveau deja sistemul)' : '') . '.';
                     $this->json(['ok' => true, 'id' => $saved['id'], 'message' => $message]);
+                case 'consumabile_system_remove':
+                    $removed = $this->fluids->removeSystem((int) ($_POST['id'] ?? 0));
+                    $sys = $removed['system'];
+                    audit_log_write($this->db, 'vehicule_sisteme_fluide', (int) $sys['id'], $removed['deleted'] ? 'delete' : 'update',
+                        ($removed['deleted'] ? 'Sistem fluid șters ' : 'Sistem fluid dezactivat ') . (string) $sys['denumire'] . ' vehicul ' . (int) $sys['vehicle_id'],
+                        $sys, null, $this->userId());
+                    $this->json(['ok' => true, 'message' => $removed['deleted']
+                        ? 'Sistemul a fost șters.'
+                        : 'Sistemul a fost eliminat din situație; istoricul lui rămâne. Reconfigurarea îl reactivează.']);
                 case 'consumabile_system_event':
                     $result = $this->fluids->recordEvent($_POST, $this->userId());
                     if (!$result['duplicate']) {

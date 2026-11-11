@@ -359,6 +359,7 @@
         productSelect.disabled = !!(c && c.cantitate > 0);
         containerForm.querySelector('[data-cons-product-lock]').classList.toggle('d-none', !(c && c.cantitate > 0));
         containerForm.querySelector('[data-cons-initial]').classList.toggle('d-none', !!c);
+        containerForm.querySelector('[data-cons-container-delete]').classList.toggle('d-none', !c);
         document.getElementById('consContainerTitle').textContent = c ? 'Recipient ' + c.cod : 'Recipient nou';
         syncContainerUnit();
         panel.api.show();
@@ -401,7 +402,7 @@
         showError(productForm, '');
         productForm.querySelector('[name="id"]').value = p ? p.id : '';
         if (p) {
-            ['denumire', 'producator', 'cod_produs', 'tip_articol', 'tip_fluid', 'um', 'vascozitate', 'specificatie', 'aprobari', 'sistem_mecanic',
+            ['denumire', 'producator', 'cod_produs', 'tip_articol', 'tip_fluid', 'um', 'vascozitate', 'specificatie', 'aprobari',
                 'component_key', 'compatibilitate_note', 'interval_km', 'interval_luni', 'interval_ore', 'prag_alerta'].forEach(function (name) {
                 var input = productForm.querySelector('[name="' + name + '"]');
                 if (input) { input.value = p[name] == null ? '' : p[name]; }
@@ -419,10 +420,51 @@
             return '<label class="form-check-inline"><input type="checkbox" data-compat-id="' + other.id + '"' + (originalCompat.indexOf(other.id) !== -1 ? ' checked' : '') + '> '
                 + esc(other.denumire) + (other.vascozitate ? ' <small class="text-muted">' + esc(other.vascozitate) + '</small>' : '') + '</label>';
         }).join('') || '<small class="text-muted">Niciun alt produs cu aceeași unitate de măsură.</small>' : '';
+        productForm.querySelector('[data-cons-product-delete]').classList.toggle('d-none', !p);
+        partsSelected = p ? (p.piese || []).slice() : [];
+        productForm.querySelector('[data-cons-parts-all]').checked = false;
+        productForm.querySelector('[data-cons-parts-search]').value = '';
+        renderParts();
         document.getElementById('consProductTitle').textContent = p ? p.denumire : 'Produs nou';
         panel.api.show();
     }
+    // Piesele din Catalog componente pe care se foloseste produsul, filtrate dupa tipul fluidului.
+    var parts = boot.parts || [];
+    var partsSelected = [];
+    function plain(text) { return String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
+    function renderParts() {
+        var box = productForm.querySelector('[data-cons-parts]');
+        if (!box) { return; }
+        var fluid = productForm.querySelector('[name="tip_fluid"]').value;
+        var categories = (boot.fluidPartCategories || {})[fluid] || null;
+        var showAll = productForm.querySelector('[data-cons-parts-all]').checked || !categories;
+        var term = plain(productForm.querySelector('[data-cons-parts-search]').value.trim());
+        var list = parts.filter(function (part) {
+            var match = showAll || categories.indexOf(plain(part.category)) !== -1;
+            return (match || partsSelected.indexOf(part.key) !== -1) && (term === '' || plain(part.name + ' ' + part.category).indexOf(term) !== -1);
+        });
+        var html = '';
+        var group = null;
+        list.slice().sort(function (a, b) { return a.category.localeCompare(b.category) || a.name.localeCompare(b.name); }).forEach(function (part) {
+            if (part.category !== group) { group = part.category; html += '<div class="cons-parts-group">' + esc(group) + '</div>'; }
+            html += '<label><input type="checkbox" name="componente_vehicul[]" value="' + esc(part.key) + '"'
+                + (partsSelected.indexOf(part.key) !== -1 ? ' checked' : '') + '> ' + esc(part.name) + '</label>';
+        });
+        box.innerHTML = html || '<div class="cons-parts-empty">Nicio piesă potrivită. Bifează „Arată toate piesele din catalog”.</div>';
+        productForm.querySelector('[data-cons-parts-hint]').textContent = !fluid
+            ? 'Alege întâi tipul fluidului; lista arată piesele din Catalog componente potrivite.'
+            : (categories ? 'Piese din categoriile potrivite pentru acest fluid (' + categories.join(', ') + ').' : 'Pentru acest tip de fluid se arată toate piesele.');
+    }
     if (productForm) {
+        productForm.addEventListener('change', function (event) {
+            if (event.target.name === 'componente_vehicul[]') {
+                var key = event.target.value;
+                partsSelected = partsSelected.filter(function (k) { return k !== key; });
+                if (event.target.checked) { partsSelected.push(key); }
+            }
+            if (event.target.name === 'tip_fluid' || event.target.hasAttribute('data-cons-parts-all')) { renderParts(); }
+        });
+        productForm.querySelector('[data-cons-parts-search]').addEventListener('input', renderParts);
         productForm.addEventListener('submit', function (event) {
             event.preventDefault();
             event.stopPropagation();
@@ -454,6 +496,36 @@
             });
         });
     }
+    // Stergere definitiva: serverul refuza daca exista istoric (atunci se dezactiveaza).
+    function wireDelete(form, selector, endpoint, label) {
+        var button = form && form.querySelector(selector);
+        if (!button) { return; }
+        button.addEventListener('click', function () {
+            var id = form.querySelector('[name="id"]').value;
+            if (!id || !window.confirm('Ștergi definitiv ' + label + '? Operațiunea nu se poate anula.')) { return; }
+            var data = new FormData();
+            data.set('_token', form.querySelector('[name="_token"]').value);
+            data.set('id', id);
+            button.disabled = true;
+            showError(form, '');
+            fetch(endpoint, { method: 'POST', body: data, credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                .then(function (r) { return r.json().catch(function () { return { ok: false, message: 'Răspuns neașteptat de la server (' + r.status + ').' }; }); })
+                .then(function (result) {
+                    if (result.ok) { toastAndReload(result.message); return; }
+                    showError(form, result.message);
+                    button.disabled = false;
+                })
+                .catch(function () {
+                    showError(form, 'Conexiune întreruptă. Reîncearcă.');
+                    button.disabled = false;
+                });
+        });
+    }
+    wireDelete(containerForm, '[data-cons-container-delete]', boot.endpoints.containerDelete, 'recipientul');
+    wireDelete(productForm, '[data-cons-product-delete]', boot.endpoints.productDelete, 'produsul');
+    wireDelete(document.querySelector('[data-cons-system-form]'), '[data-cons-system-remove]', boot.endpoints.systemRemove,
+        'sistemul de pe vehicul (dacă are înregistrări, istoricul rămâne și sistemul doar dispare din situație)');
+
     root.addEventListener('click', function (event) {
         var create = event.target.closest('[data-cons-product-new]');
         var edit = event.target.closest('[data-cons-product-edit]');
@@ -505,6 +577,15 @@
         systemForm.querySelector('[name="critic"]').checked = Number(preset.critic) === 1;
         systemForm.querySelector('[name="circuit_inchis"]').checked = Number(preset.circuit_inchis) === 1;
     }
+    // Produsele bifate pentru sistemul ales apar primele (ordinea alfabetica se pastreaza in fiecare grup).
+    function fillSystemProducts(systemKey, sys, selected) {
+        var select = systemForm.querySelector('[name="produs_id"]');
+        var presetFluid = presets[systemKey] ? presets[systemKey].tip_fluid : '';
+        var forSystem = function (p) { return (presetFluid && p.tip_fluid === presetFluid) || (p.sisteme || []).indexOf(systemKey) !== -1; };
+        var list = products.filter(function (p) { return p.activ || (sys && p.id === sys.produs_id); });
+        list = list.filter(forSystem).concat(list.filter(function (p) { return !forSystem(p); }));
+        fill(select, list, function (p) { return p.denumire + ' (' + p.um + ')' + (forSystem(p) ? ' ✓ pentru acest sistem' : ''); }, '— fără produs —', selected);
+    }
     function openSystem(id, vehicleId) {
         var panel = offcanvas('consSystemPanel');
         if (!panel || !systemForm) { return; }
@@ -513,8 +594,7 @@
         showError(systemForm, '');
         systemForm.querySelector('[name="id"]').value = sys ? sys.id : '';
         fill(systemForm.querySelector('[name="vehicle_id"]'), vehicles, function (v) { return v.label; }, 'Alege vehiculul', sys ? sys.vehicle_id : (vehicleId || ''));
-        fill(systemForm.querySelector('[name="produs_id"]'), products.filter(function (p) { return p.activ || (sys && p.id === sys.produs_id); }),
-            function (p) { return p.denumire + ' (' + p.um + ')'; }, '— fără produs —', sys ? sys.produs_id || '' : '');
+        fillSystemProducts(sys ? sys.sistem : systemForm.querySelector('[name="sistem"]').value, sys, sys ? sys.produs_id || '' : '');
         systemForm.querySelector('[name="vehicle_id"]').disabled = !!sys;
         systemForm.querySelector('[name="sistem"]').disabled = !!sys;
         if (sys) {
@@ -532,12 +612,13 @@
         }
         systemForm.querySelector('[data-cons-copy]').classList.toggle('d-none', !!sys);
         if (!sys) { buildCopyList(vehicleId); }
+        systemForm.querySelector('[data-cons-system-remove]').classList.toggle('d-none', !sys);
         document.getElementById('consSystemTitle').textContent = sys ? sys.denumire : 'Sistem fluid nou';
         panel.api.show();
     }
     if (systemForm) {
         systemForm.addEventListener('change', function (event) {
-            if (event.target.name === 'sistem') { applyPreset(event.target.value, true); }
+            if (event.target.name === 'sistem') { applyPreset(event.target.value, true); fillSystemProducts(event.target.value, null, systemForm.querySelector('[name="produs_id"]').value); }
             if (event.target.name === 'vehicle_id' && !systemForm.querySelector('[name="id"]').value) { buildCopyList(event.target.value); }
             if (event.target.name === 'produs_id') {
                 var product = byId(products, event.target.value);

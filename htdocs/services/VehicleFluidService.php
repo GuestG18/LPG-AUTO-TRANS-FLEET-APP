@@ -351,6 +351,39 @@ final class VehicleFluidService
     }
 
     /** Anularea unei inregistrari manuale (cele din stoc se anuleaza prin stornarea miscarii). */
+    /**
+     * Eliminarea unui sistem de pe vehicul. Fara nicio inregistrare (nici anulata) se sterge definitiv;
+     * altfel se dezactiveaza (dispare din situatie si alerte, istoricul ramane; reconfigurarea il reactiveaza).
+     *
+     * @return array{deleted: bool, system: array<string, mixed>}
+     */
+    public function removeSystem(int $id): array
+    {
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM vehicule_sisteme_fluide WHERE id = :id FOR UPDATE');
+            $stmt->execute([':id' => $id]);
+            $system = $stmt->fetch(PDO::FETCH_ASSOC) ?: throw new InvalidArgumentException('Sistemul nu există.');
+
+            $count = $this->db->prepare('SELECT COUNT(*) FROM vehicule_fluide_evenimente WHERE sistem_id = :id');
+            $count->execute([':id' => $id]);
+            $deleted = (int) $count->fetchColumn() === 0;
+            if ($deleted) {
+                $this->db->prepare('DELETE FROM vehicule_sisteme_fluide WHERE id = :id')->execute([':id' => $id]);
+            } else {
+                $this->db->prepare('UPDATE vehicule_sisteme_fluide SET activ = 0, updated_at = NOW() WHERE id = :id')->execute([':id' => $id]);
+            }
+            $this->db->commit();
+
+            return ['deleted' => $deleted, 'system' => $system];
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+    }
+
     public function cancelEvent(int $id, string $reason, ?int $userId): void
     {
         $reason = trim($reason);

@@ -52,6 +52,22 @@ final class ConsumabileStockService
         'altul' => 'Alt produs',
     ];
 
+    /**
+     * Categoriile din Catalog componente (nume fara diacritice, litere mici) in care se cauta piesele
+     * pentru un tip de fluid. Tipurile lipsa (ulei transmisie, alt produs) arata toate piesele.
+     */
+    public const FLUID_PART_CATEGORIES = [
+        'ulei_motor' => ['motor'],
+        'ulei_diferential' => ['rulare'],
+        'ulei_servodirectie' => ['directie'],
+        'ulei_hidraulic' => ['hidraulic'],
+        'antigel' => ['racire'],
+        'adblue' => ['evacuare'],
+        'lichid_frana' => ['franare'],
+        'lichid_parbriz' => ['comfort'],
+        'vaselina' => ['suspensie', 'rulare', 'directie'],
+    ];
+
     public const MONITORING_SOURCES = [
         'km_can' => 'KM CAN',
         'km_gps' => 'KM GPS',
@@ -106,6 +122,11 @@ final class ConsumabileStockService
                 $this->db->exec($sql);
             }
         }
+        // 2026_11_11_000002: piesele pe care se foloseste produsul.
+        $column = $this->db->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'consumabile_produse' AND COLUMN_NAME = 'componente_vehicul'");
+        if ((int) $column->fetchColumn() === 0 && !$this->db->inTransaction()) {
+            $this->db->exec('ALTER TABLE consumabile_produse ADD COLUMN componente_vehicul TEXT NULL AFTER sistem_mecanic');
+        }
         self::$schemaReady = true;
     }
 
@@ -126,6 +147,7 @@ final class ConsumabileStockService
                 aprobari TEXT NULL,
                 um VARCHAR(10) NOT NULL DEFAULT 'L',
                 sistem_mecanic VARCHAR(80) NULL,
+                componente_vehicul TEXT NULL,
                 tipuri_vehicul VARCHAR(120) NULL,
                 compatibilitate_note TEXT NULL,
                 interval_km INT UNSIGNED NULL,
@@ -304,6 +326,10 @@ final class ConsumabileStockService
             $row['id'] = (int) $row['id'];
             $row['component'] = $row['component_key'] !== null ? ($components[(string) $row['component_key']] ?? null) : null;
             $row['tipuri_vehicul_list'] = self::csv((string) ($row['tipuri_vehicul'] ?? ''));
+            $row['sisteme_list'] = self::productSystemKeys($row['sistem_mecanic'] ?? null);
+            $row['sistem_label'] = self::productSystemLabel($row['sistem_mecanic'] ?? null);
+            $row['piese_list'] = self::csv((string) ($row['componente_vehicul'] ?? ''));
+            $row['piese_nume'] = array_values(array_filter(array_map(static fn (string $key): string => (string) ($components[$key]["name"] ?? ""), $row["piese_list"])));
             $row['compatibile'] = [];
             $result[$row['id']] = $row;
         }
@@ -350,7 +376,10 @@ final class ConsumabileStockService
         $fluidType = isset(self::FLUID_TYPES[$fluidType]) ? $fluidType : null;
         $componentKey = trim((string) ($data['component_key'] ?? ''));
         $componentKey = $componentKey !== '' ? $componentKey : null;
-        if ($componentKey !== null) {
+        if (!array_key_exists('component_key', $data) && $id !== null) {
+            // Campul nu mai e in formular: legatura veche (identitate de catalog) ramane neatinsa.
+            $componentKey = ($this->product($id)['component_key'] ?? null) ?: null;
+        } elseif ($componentKey !== null) {
             $components = $this->catalogComponents();
             if (!isset($components[$componentKey])) {
                 throw new InvalidArgumentException('Componenta aleasă nu există în Catalog componente.');
@@ -361,6 +390,9 @@ final class ConsumabileStockService
                 throw new InvalidArgumentException('Componenta e deja legată de alt produs (o singură identitate de catalog per produs).');
             }
         }
+        $allParts = (new AutoComponentCatalogService($this->db))->components();
+        $parts = array_values(array_unique(array_filter(array_map('strval', (array) ($data['componente_vehicul'] ?? [])),
+            static fn (string $key): bool => isset($allParts[$key]))));
         $vehicleTypes = array_values(array_intersect(['camion', 'cap_tractor', 'semiremorca'], array_map('strval', (array) ($data['tipuri_vehicul'] ?? []))));
         $sources = array_values(array_intersect(array_keys(self::MONITORING_SOURCES), array_map('strval', (array) ($data['sursa_monitorizare'] ?? []))));
 
@@ -389,7 +421,8 @@ final class ConsumabileStockService
             ':specificatie' => $this->text($data['specificatie'] ?? '', 255),
             ':aprobari' => $this->text($data['aprobari'] ?? '', 4000),
             ':um' => $unit,
-            ':sistem' => $this->text($data['sistem_mecanic'] ?? '', 80),
+            ':sistem' => self::systemForFluid($fluidType),
+            ':piese' => $parts !== [] ? implode(',', $parts) : null,
             ':tipuri' => $vehicleTypes !== [] ? implode(',', $vehicleTypes) : null,
             ':compat_note' => $this->text($data['compatibilitate_note'] ?? '', 4000),
             ':interval_km' => $this->positiveInt($data['interval_km'] ?? null),
@@ -407,10 +440,10 @@ final class ConsumabileStockService
             $this->db->prepare(
                 'INSERT INTO consumabile_produse
                     (component_key, denumire, producator, cod_produs, tip_articol, tip_fluid, vascozitate, specificatie, aprobari, um,
-                     sistem_mecanic, tipuri_vehicul, compatibilitate_note, interval_km, interval_luni, interval_ore, sursa_monitorizare,
+                     sistem_mecanic, componente_vehicul, tipuri_vehicul, compatibilitate_note, interval_km, interval_luni, interval_ore, sursa_monitorizare,
                      prag_alerta, critic, circuit_inchis, permite_retur, activ, created_by, created_at, updated_at)
                  VALUES (:component, :denumire, :producator, :cod, :tip_articol, :tip_fluid, :vascozitate, :specificatie, :aprobari, :um,
-                     :sistem, :tipuri, :compat_note, :interval_km, :interval_luni, :interval_ore, :sursa,
+                     :sistem, :piese, :tipuri, :compat_note, :interval_km, :interval_luni, :interval_ore, :sursa,
                      :prag, :critic, :circuit, :retur, :activ, :user, :now, :now2)'
             )->execute($values + [':user' => $userId, ':now2' => $values[':now']]);
 
@@ -419,7 +452,7 @@ final class ConsumabileStockService
         $this->db->prepare(
             'UPDATE consumabile_produse SET component_key = :component, denumire = :denumire, producator = :producator, cod_produs = :cod,
                 tip_articol = :tip_articol, tip_fluid = :tip_fluid, vascozitate = :vascozitate, specificatie = :specificatie,
-                aprobari = :aprobari, um = :um, sistem_mecanic = :sistem, tipuri_vehicul = :tipuri, compatibilitate_note = :compat_note,
+                aprobari = :aprobari, um = :um, sistem_mecanic = :sistem, componente_vehicul = :piese, tipuri_vehicul = :tipuri, compatibilitate_note = :compat_note,
                 interval_km = :interval_km, interval_luni = :interval_luni, interval_ore = :interval_ore, sursa_monitorizare = :sursa,
                 prag_alerta = :prag, critic = :critic, circuit_inchis = :circuit, permite_retur = :retur, activ = :activ, updated_at = :now
              WHERE id = :id'
@@ -429,6 +462,89 @@ final class ConsumabileStockService
         }
 
         return $id;
+    }
+
+    /**
+     * Stergere definitiva a unui produs NEFOLOSIT. Istoricul miscarilor e imuabil si trimite la produs,
+     * deci un produs cu miscari, recipiente sau sisteme de vehicul legate nu se sterge (se dezactiveaza).
+     *
+     * @return array<string, mixed> randul sters (pentru audit)
+     */
+    public function deleteProduct(int $id): array
+    {
+        $this->ensureSchema();
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM consumabile_produse WHERE id = :id FOR UPDATE');
+            $stmt->execute([':id' => $id]);
+            $product = $stmt->fetch(PDO::FETCH_ASSOC) ?: throw new InvalidArgumentException('Produsul nu există.');
+
+            $count = function (string $sql) use ($id): int {
+                $q = $this->db->prepare($sql);
+                $q->execute([':id' => $id]);
+
+                return (int) $q->fetchColumn();
+            };
+            $blockers = [];
+            if (($n = $count('SELECT COUNT(*) FROM consumabile_miscari WHERE produs_id = :id')) > 0) {
+                $blockers[] = $n . ' operațiuni în istoric';
+            }
+            if (($n = $count('SELECT COUNT(*) FROM consumabile_recipiente WHERE produs_id = :id')) > 0) {
+                $blockers[] = $n . ' recipiente (și cele inactive)';
+            }
+            if (($n = $count('SELECT COUNT(*) FROM vehicule_sisteme_fluide WHERE produs_id = :id')) > 0) {
+                $blockers[] = $n . ' sisteme de vehicul';
+            }
+            if ($blockers !== []) {
+                throw new InvalidArgumentException('Produsul nu se poate șterge: e folosit în ' . implode(', ', $blockers)
+                    . '. Debifează „Activ” ca să-l scoți din liste.');
+            }
+
+            $this->db->prepare('DELETE FROM consumabile_compatibilitate WHERE produs_a = :a OR produs_b = :b')->execute([':a' => $id, ':b' => $id]);
+            $this->db->prepare('DELETE FROM consumabile_produse WHERE id = :id')->execute([':id' => $id]);
+            $this->db->commit();
+
+            return $product;
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+    }
+
+    /**
+     * Stergere definitiva a unui recipient care n-a avut nicio miscare (nici cantitate initiala).
+     *
+     * @return array<string, mixed> randul sters (pentru audit)
+     */
+    public function deleteContainer(int $id): array
+    {
+        $this->ensureSchema();
+        $this->db->beginTransaction();
+        try {
+            $stmt = $this->db->prepare('SELECT * FROM consumabile_recipiente WHERE id = :id FOR UPDATE');
+            $stmt->execute([':id' => $id]);
+            $container = $stmt->fetch(PDO::FETCH_ASSOC) ?: throw new InvalidArgumentException('Recipientul nu există.');
+
+            $q = $this->db->prepare('SELECT COUNT(*) FROM consumabile_miscari WHERE recipient_sursa_id = :s OR recipient_dest_id = :d');
+            $q->execute([':s' => $id, ':d' => $id]);
+            $moves = (int) $q->fetchColumn();
+            if ($moves > 0 || (float) $container['cantitate'] > 0) {
+                throw new InvalidArgumentException('Recipientul nu se poate șterge: are ' . $moves
+                    . ' operațiuni în istoric. Pune statusul „Inactiv” ca să-l scoți din liste.');
+            }
+
+            $this->db->prepare('DELETE FROM consumabile_recipiente WHERE id = :id')->execute([':id' => $id]);
+            $this->db->commit();
+
+            return $container;
+        } catch (Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
     }
 
     /** Compatibilitate declarata explicit (amestec permis in acelasi recipient). */
@@ -789,7 +905,7 @@ final class ConsumabileStockService
             'tip' => $type, 'produs_id' => (int) $product['id'], 'cantitate' => $quantity, 'um' => (string) $product['um'],
             'recipient_sursa_id' => $sourceId, 'sursa_inainte' => $before, 'sursa_dupa' => $after,
             'vehicul_id' => $vehicleId, 'km_vehicul' => $this->positiveInt($data['km_vehicul'] ?? null),
-            'sistem' => $system['denumire'] ?? ($data['sistem'] ?? ($product['sistem_mecanic'] ?? null)), 'cantitate_scoasa' => $drained,
+            'sistem' => $system['denumire'] ?? ($data['sistem'] ?? (self::productSystemLabel($product['sistem_mecanic'] ?? null) ?: null)), 'cantitate_scoasa' => $drained,
             'lot' => $source['lot'], 'data_expirare' => $source['data_expirare'],
         ]);
         if ($system !== null) {
@@ -1099,7 +1215,7 @@ final class ConsumabileStockService
         }
         $stmt = $this->db->prepare(
             "SELECT m.vehicul_id, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul, m.produs_id, p.denumire AS produs, p.tip_fluid, m.um,
-                    COALESCE(MAX(m.sistem), p.sistem_mecanic) AS sistem,
+                    MAX(m.sistem) AS sistem, p.sistem_mecanic AS sistem_produs,
                     SUM(CASE WHEN m.tip IN ('completare', 'schimb_complet') THEN m.cantitate ELSE -m.cantitate END) AS cantitate_neta,
                     SUM(m.tip = 'completare') AS completari,
                     SUM(m.tip = 'schimb_complet') AS schimburi,
@@ -1122,6 +1238,7 @@ final class ConsumabileStockService
         foreach ($rows as &$row) {
             $last->execute([':v' => (int) $row['vehicul_id'], ':p' => (int) $row['produs_id']]);
             $lastRow = $last->fetch(PDO::FETCH_ASSOC) ?: [];
+            $row['sistem'] = ($row['sistem'] ?? null) ?: (self::productSystemLabel($row['sistem_produs'] ?? null) ?: null);
             $row['ultima_tip'] = (string) ($lastRow['tip'] ?? '');
             $row['ultima_cantitate'] = (string) ($lastRow['cantitate'] ?? '0');
             $row['status'] = 'date_insuficiente';
@@ -1616,6 +1733,54 @@ final class ConsumabileStockService
     }
 
     /** @return string[] */
+    /**
+     * Sistemele de vehicul pentru care e destinat produsul (chei din VehicleFluidService::SYSTEM_PRESETS,
+     * fara „altul”). Valorile vechi scrise liber („Motor”) se potrivesc pe cheie / inceputul etichetei.
+     *
+     * @return list<string>
+     */
+    public static function productSystemKeys(?string $value): array
+    {
+        $presets = VehicleFluidService::SYSTEM_PRESETS;
+        unset($presets['altul']);
+        $keys = [];
+        foreach (self::csv((string) $value) as $part) {
+            $needle = mb_strtolower($part);
+            foreach ($presets as $key => $preset) {
+                $label = mb_strtolower((string) $preset[0]);
+                if ($needle === $key || $needle === $label || str_starts_with($label, $needle . ' ') || str_starts_with($label, $needle . ' (')) {
+                    $keys[$key] = true;
+                    break;
+                }
+            }
+        }
+
+        return array_values(array_intersect(array_keys($presets), array_keys($keys)));
+    }
+
+    /** Sistemul de vehicul care foloseste tipul de fluid (cheie din SYSTEM_PRESETS) sau null. */
+    public static function systemForFluid(?string $fluidType): ?string
+    {
+        foreach (VehicleFluidService::SYSTEM_PRESETS as $key => $preset) {
+            if ($fluidType !== null && $fluidType !== '' && (string) $preset[1] === $fluidType) {
+                return $key;
+            }
+        }
+
+        return null;
+    }
+
+    /** Eticheta afisata; textul vechi nepotrivit ramane cum a fost scris. */
+    public static function productSystemLabel(?string $value): string
+    {
+        $keys = self::productSystemKeys($value);
+        if ($keys === []) {
+            return trim((string) $value);
+        }
+
+        return implode(', ', array_map(static fn (string $key): string => (string) VehicleFluidService::SYSTEM_PRESETS[$key][0], $keys));
+    }
+
     private static function csv(string $value): array
     {
         return array_values(array_filter(array_map('trim', explode(',', $value)), static fn (string $v): bool => $v !== ''));
