@@ -186,9 +186,9 @@
                 state.body.innerHTML = ''
                     + '<div class="race-view-loading">'
                     + '  <i class="bi bi-exclamation-triangle fs-2 text-warning" aria-hidden="true"></i>'
-                    + '  <div>Fișa cursei nu a putut fi încărcată.</div>'
+                    + '  <div>Fișa nu a putut fi încărcată.</div>'
                     + '  <div class="d-flex gap-2">'
-                    + '    <a class="btn btn-sm btn-outline-primary" href="' + state.url.replace(/"/g, '&quot;') + '">Deschide pagina cursei</a>'
+                    + '    <a class="btn btn-sm btn-outline-primary" href="' + state.url.replace(/"/g, '&quot;') + '">Deschide pagina completă</a>'
                     + '    <button type="button" class="btn btn-sm btn-outline-secondary" data-race-view-close>Închide</button>'
                     + '  </div>'
                     + '</div>';
@@ -487,6 +487,10 @@
     window.RaceViewOverlay = {
         open: function (raceId, originEl) {
             open(raceViewUrl(raceId), originEl, raceId);
+        },
+        // Alte fise in acelasi panou (ex. Km service): URL-ul fisei, fara marcajul "vazuta" al cursei.
+        openUrl: function (url, originEl) {
+            open(url, originEl, '');
         }
     };
 

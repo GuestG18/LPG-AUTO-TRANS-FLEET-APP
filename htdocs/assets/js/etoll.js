@@ -557,7 +557,9 @@
         const isSelected = selected.has(row.id);
         const ben = row.cursaId
             ? `${esc(row.ben || 'Fără beneficiar')} <a class="etoll-trip" href="${esc(row.cursaUrl)}" target="_blank" rel="noopener" title="Deschide cursa în Dispecer">#${row.cursaId}</a>`
-            : '<span class="etoll-muted" title="Sesiunea nu e încă asociată unei curse">—</span>';
+            : (row.serviceKmId
+                ? `<span class="etoll-service-km" title="${esc(row.serviceKmTitle)}"><i class="bi bi-tools" aria-hidden="true"></i> Km service</span> <a class="etoll-trip" href="${esc(row.serviceKmUrl)}" target="_blank" rel="noopener" title="Deschide fișa Km service în Dispecer">#${row.serviceKmId}</a>`
+                : '<span class="etoll-muted" title="Sesiunea nu e încă asociată unei curse sau unei perioade Km service">—</span>');
         const vatPending = row.net === null && !row.open ? ' title="TVA-ul se citește din documentul eToll la următoarea sincronizare"' : '';
         return `<tr class="${isSelected ? 'is-selected' : ''}" data-id="${esc(row.id)}">
             <td class="t-center"><input type="checkbox" class="form-check-input" aria-label="Selectează sesiunea ${esc(row.plate)} ${esc(row.closed)}" data-row-check ${isSelected ? 'checked' : ''}></td>
@@ -824,7 +826,7 @@
         };
         const lines = [['Închisă la', 'Nr. auto', 'Remorcă', 'Beneficiar', 'Cursă', 'Început → sfârșit', 'Traseu', 'Km', 'Fără TVA', 'TVA', 'Cu TVA', 'Document', 'Verificare', 'ID sesiune']];
         currentRows().forEach((row) => lines.push([
-            row.closed, row.plate, row.trailer, row.cursaId ? (row.ben || 'Fără beneficiar') : '', row.cursaId ?? '', row.spanTitle || row.span,
+            row.closed, row.plate, row.trailer, row.cursaId ? (row.ben || 'Fără beneficiar') : (row.serviceKmId ? `Km service #${row.serviceKmId}` : ''), row.cursaId ?? '', row.spanTitle || row.span,
             row.routeFull || row.route, num(row.km, 0), num(row.net, 2), num(row.vat, 2), num(row.gross, 2), row.doc, row.checkText, row.id,
         ]));
         const blob = new Blob(['﻿' + lines.map((line) => line.map(cell).join(';')).join('\r\n')], { type: 'text/csv;charset=utf-8' });

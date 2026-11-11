@@ -330,6 +330,15 @@ class DispecerCurseController
             case 'service_km_vehicle_info':
                 $this->serviceKmVehicleInfoAction();
                 return;
+            case 'service_km_view':
+                $this->serviceKmViewAction();
+                return;
+            case 'service_km_expense_store':
+                $this->storeServiceKmExpenseAction();
+                return;
+            case 'service_km_expense_delete':
+                $this->deleteServiceKmExpenseAction();
+                return;
             case 'trip_gps_km':
                 $this->tripGpsKmAction();
                 return;
@@ -2102,9 +2111,12 @@ class DispecerCurseController
                     $requestNote = ' Componentele nu au putut fi trimise intervenției; adaugă-le din Mentenanță → Intervenții.';
                 }
             }
+            // Taxele eToll ale vehiculului care cad acum in perioada de service (sau nu mai cad)
+            // se reasociaza pe loc; la mutarea pe alt vehicul se verifica si vehiculul vechi.
+            $etollNote = $this->rematchEtollAfterServiceKmChange(array_unique(array_filter([$vehicleId, (int) ($previous['vehicle_id'] ?? 0)])));
             flash_set($requestNote !== '' && str_contains($requestNote, 'nu au putut') ? 'warning' : 'success',
                 ($id > 0 ? 'Intrarea de service a fost actualizată.' : 'Km service au fost adăugați.')
-                . ($interventionId > 0 ? ' Intervenția asociată: #' . $interventionId . '.' : '') . $requestNote);
+                . ($interventionId > 0 ? ' Intervenția asociată: #' . $interventionId . '.' : '') . $requestNote . $etollNote);
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][service_km_store] ' . $exception->getMessage());
             flash_set('danger', 'Km service nu au putut fi salvați.');
@@ -2162,24 +2174,236 @@ class DispecerCurseController
             $serviceKmId = (int) ($_POST['id'] ?? 0);
             $serviceKmModel = new VehicleServiceKmModel($this->db);
             $before = $serviceKmModel->find($serviceKmId);
+            // Cheltuielile pleaca prin CASCADE; fisierele incarcate manual le stergem noi.
+            $manualDocuments = array_filter(
+                $before !== null ? $serviceKmModel->getExpenses($serviceKmId) : [],
+                static fn (array $expense): bool => $expense['factura_id'] === null && trim((string) ($expense['document_path'] ?? '')) !== ''
+            );
             $deleted = $serviceKmModel->delete($serviceKmId);
             if ($deleted) {
                 audit_log_write($this->db, 'vehicule_service_km', $serviceKmId, 'delete', 'Km service #' . $serviceKmId . ' șters', $before, null, $this->currentUserId());
+                foreach ($manualDocuments as $expense) {
+                    $this->deleteExpensePhysicalFile((string) $expense['document_path']);
+                }
             }
+            $etollNote = '';
             if ($deleted) {
                 try {
                     (new MaintenanceModel($this->db))->detachServiceKm($serviceKmId);
                 } catch (Throwable $exception) {
                     error_log('[DispecerCurseController][service_km_delete][mentenanta] ' . $exception->getMessage());
                 }
+                // Facturile de pe intrare au ramas fara asociere (FK SET NULL): se reverifica acum.
+                $etollNote = $this->rematchEtollAfterServiceKmChange([(int) ($before['vehicle_id'] ?? 0)]);
             }
-            flash_set($deleted ? 'success' : 'warning', $deleted ? 'Intrarea de service a fost ștearsă.' : 'Intrarea de service nu mai există.');
+            flash_set($deleted ? 'success' : 'warning', $deleted ? 'Intrarea de service a fost ștearsă.' . $etollNote : 'Intrarea de service nu mai există.');
         } catch (PDOException $exception) {
             error_log('[DispecerCurseController][service_km_delete] ' . $exception->getMessage());
             flash_set('danger', 'Intrarea de service nu a putut fi ștearsă.');
         }
 
         redirect($listUrl);
+    }
+
+    /**
+     * Facturile (eToll) ale vehiculelor se reasociaza dupa o schimbare in Km service: sesiunile
+     * din perioada de service ajung pe ea, cele care nu mai cad in ea revin la neasociate.
+     *
+     * @param int[] $vehicleIds
+     * @return string nota pentru mesajul de succes ('' daca nu s-a asociat nimic)
+     */
+    private function rematchEtollAfterServiceKmChange(array $vehicleIds): string
+    {
+        $associated = 0;
+        try {
+            $invoices = new InvoiceModel($this->db);
+            $invoices->ensureFacturiSchema();
+            foreach (array_filter(array_map('intval', $vehicleIds)) as $vehicleId) {
+                $associated += $invoices->rematchEtollForVehicle($vehicleId);
+            }
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][service_km][etoll_rematch] ' . $exception->getMessage());
+            return '';
+        }
+
+        return $associated > 0 ? ' Taxe eToll puse pe perioada de service: ' . $associated . '.' : '';
+    }
+
+    /** URL-ul care redeschide fisa unei intrari Km service peste lista (dupa o actiune din fisa). */
+    private function serviceKmViewReturnUrl(int $serviceKmId): string
+    {
+        return build_query_url(['page' => 'dispecer_curse', 'service_km_view' => $serviceKmId]) . '#service-km-panel';
+    }
+
+    /**
+     * Fisa unei intrari Km service (doar citire + cheltuielile ei), ca fisa cursei: din lista se
+     * deschide in panoul peste pagina (partial=1), altfel ca pagina completa.
+     */
+    private function serviceKmViewAction(): void
+    {
+        $serviceKmId = (int) ($_GET['id'] ?? 0);
+        $partial = (string) ($_GET['partial'] ?? '') === '1';
+        $model = new VehicleServiceKmModel($this->db);
+        $entry = $serviceKmId > 0 ? $model->findDetailed($serviceKmId) : null;
+        if ($entry === null) {
+            if ($partial) {
+                http_response_code(404);
+                exit;
+            }
+            flash_set('warning', 'Intrarea Km service nu a fost găsită.');
+            redirect(build_query_url(['page' => 'dispecer_curse']) . '#service-km-panel');
+        }
+
+        try {
+            new MaintenanceModel($this->db);
+            $entry['interventie'] = (new InterventionWorkflowModel($this->db))->serviceKmSummaries([$serviceKmId])[$serviceKmId] ?? null;
+        } catch (Throwable $exception) {
+            error_log('[DispecerCurseController][service_km_view][interventie] ' . $exception->getMessage());
+            $entry['interventie'] = null;
+        }
+
+        $expenseFlash = $this->consumeFormFlash('service_km_expense_' . $serviceKmId);
+        $viewData = [
+            'pageTitle' => 'Km service #' . $serviceKmId,
+            'currentPage' => 'dispecer_curse',
+            'entry' => $entry,
+            'expenses' => $model->getExpenses($serviceKmId),
+            'fillups' => $model->getFuelFillups($serviceKmId),
+            'expenseTypes' => VehicleServiceKmModel::EXPENSE_TYPES,
+            'expenseOld' => (array) ($expenseFlash['old'] ?? []),
+            'expenseErrors' => (array) ($expenseFlash['errors'] ?? []),
+            'viewPartial' => $partial,
+        ];
+
+        if ($partial) {
+            header('Content-Type: text/html; charset=UTF-8');
+            (static function (array $__data): void {
+                extract($__data, EXTR_SKIP);
+                require BASE_PATH . '/views/dispecer_curse/service_km_view.php';
+            })($viewData);
+            exit;
+        }
+
+        render('dispecer_curse/service_km_view.php', $viewData);
+    }
+
+    /**
+     * "Adauga cheltuiala" pe o intrare Km service: tip, data (in perioada de service), suma,
+     * document optional. Se intoarce in fisa intrarii, peste lista.
+     */
+    private function storeServiceKmExpenseAction(): void
+    {
+        $serviceKmId = (int) ($_POST['service_km_id'] ?? 0);
+        $returnUrl = $this->serviceKmViewReturnUrl($serviceKmId);
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($returnUrl);
+        }
+        ensure_csrf_or_redirect($returnUrl);
+
+        $model = new VehicleServiceKmModel($this->db);
+        $entry = $serviceKmId > 0 ? $model->find($serviceKmId) : null;
+        if ($entry === null) {
+            flash_set('warning', 'Intrarea Km service nu mai există.');
+            redirect(build_query_url(['page' => 'dispecer_curse']) . '#service-km-panel');
+        }
+
+        $type = trim((string) ($_POST['tip'] ?? ''));
+        $date = trim((string) ($_POST['data_cheltuiala'] ?? ''));
+        $amountRaw = str_replace([' ', ','], ['', '.'], trim((string) ($_POST['suma'] ?? '')));
+        $location = mb_substr(trim((string) ($_POST['locatie'] ?? '')), 0, 190);
+        $notes = mb_substr(trim((string) ($_POST['observatii'] ?? '')), 0, 2000);
+
+        // Data cheltuielii: in perioada de service, cu o zi de toleranta la capete (plecarea
+        // din ajun, factura emisa a doua zi). Intrarea deschisa = pana azi.
+        $minDate = date('Y-m-d', (int) strtotime((string) $entry['data_plecare'] . ' -1 day'));
+        $maxDate = date('Y-m-d', (int) strtotime(((string) ($entry['data_intoarcere'] ?? '') ?: date('Y-m-d')) . ' +1 day'));
+
+        $errors = [];
+        if (!isset(VehicleServiceKmModel::EXPENSE_TYPES[$type])) {
+            $errors['tip'] = 'Alege tipul cheltuielii.';
+        }
+        $parsedDate = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+        if ($parsedDate === false || $parsedDate->format('Y-m-d') !== $date) {
+            $errors['data_cheltuiala'] = 'Data cheltuielii lipsește sau nu este validă.';
+        } elseif ($date < $minDate || $date > $maxDate) {
+            $errors['data_cheltuiala'] = 'Data trebuie să fie în perioada de service (' . format_date_ro($minDate) . ' – ' . format_date_ro($maxDate) . ').';
+        }
+        if (!is_numeric($amountRaw) || (float) $amountRaw <= 0 || (float) $amountRaw > 10000000) {
+            $errors['suma'] = 'Suma trebuie să fie un număr mai mare decât 0.';
+        }
+
+        $document = null;
+        if ($errors === []) {
+            [$document, $uploadError] = $this->storeUploadedExpenseDocument($_FILES['document'] ?? null);
+            if ($uploadError !== null) {
+                $errors['document'] = $uploadError;
+            }
+        }
+
+        if ($errors !== []) {
+            $this->setFormFlash('service_km_expense_' . $serviceKmId, array_intersect_key($_POST, array_flip(['tip', 'data_cheltuiala', 'suma', 'locatie', 'observatii'])), $errors);
+            flash_set('danger', 'Cheltuiala nu a fost salvată: ' . implode(' ', $errors));
+            redirect($returnUrl);
+        }
+
+        try {
+            $expenseId = $model->addExpense($serviceKmId, [
+                'tip' => $type,
+                'suma' => number_format(round((float) $amountRaw, 2), 2, '.', ''),
+                'data_cheltuiala' => $date,
+                'locatie' => $location !== '' ? $location : null,
+                'observatii' => $notes !== '' ? $notes : null,
+            ], $document, $this->currentUserId());
+            audit_log_write($this->db, 'service_km_cheltuieli', $expenseId, 'create',
+                'Cheltuială adăugată pe Km service #' . $serviceKmId, null, $model->findExpense($expenseId), $this->currentUserId());
+            flash_set('success', 'Cheltuiala a fost adăugată pe Km service #' . $serviceKmId . '.');
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseController][service_km_expense_store] ' . $exception->getMessage());
+            if ($document !== null) {
+                $this->deleteExpensePhysicalFile((string) $document['file_path']);
+            }
+            flash_set('danger', 'Cheltuiala nu a putut fi salvată.');
+        }
+
+        redirect($returnUrl);
+    }
+
+    /** Sterge o cheltuiala adaugata manual pe Km service (cele din facturi se scot din Facturi). */
+    private function deleteServiceKmExpenseAction(): void
+    {
+        $expenseId = (int) ($_POST['expense_id'] ?? 0);
+        $model = new VehicleServiceKmModel($this->db);
+        $expense = $expenseId > 0 ? $model->findExpense($expenseId) : null;
+        $returnUrl = $expense !== null
+            ? $this->serviceKmViewReturnUrl((int) $expense['service_km_id'])
+            : build_query_url(['page' => 'dispecer_curse']) . '#service-km-panel';
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            redirect($returnUrl);
+        }
+        ensure_csrf_or_redirect($returnUrl);
+
+        if ($expense === null) {
+            flash_set('warning', 'Cheltuiala nu mai există.');
+            redirect($returnUrl);
+        }
+        if ($expense['factura_id'] !== null) {
+            flash_set('warning', 'Cheltuiala vine din factura #' . (int) $expense['factura_id'] . '; dezasociaz-o din pagina Facturi.');
+            redirect($returnUrl);
+        }
+
+        try {
+            if ($model->deleteExpense($expenseId)) {
+                $this->deleteExpensePhysicalFile((string) ($expense['document_path'] ?? ''));
+                audit_log_write($this->db, 'service_km_cheltuieli', $expenseId, 'delete',
+                    'Cheltuială ștearsă de pe Km service #' . (int) $expense['service_km_id'], $expense, null, $this->currentUserId());
+            }
+            flash_set('success', 'Cheltuiala a fost ștearsă.');
+        } catch (PDOException $exception) {
+            error_log('[DispecerCurseController][service_km_expense_delete] ' . $exception->getMessage());
+            flash_set('danger', 'Cheltuiala nu a putut fi ștearsă.');
+        }
+
+        redirect($returnUrl);
     }
 
     /**

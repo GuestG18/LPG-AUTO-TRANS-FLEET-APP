@@ -1491,7 +1491,7 @@ class MaintenanceController
             'tire_stock', 'add_tire_stock', 'bulk_tire_stock', 'update_tire_stock', 'delete_tire_stock', 'bulk_delete_tire_stock', 'bulk_unmount_tire_stock',
             'bulk_mount_tire_stock', 'tire_mount_vehicles', 'tire_mount_layout', 'tire_stock_children', 'tire_stock_selection',
             'tire_fleet_unit', 'tire_km_sas_sync', 'tire_position_candidates', 'tire_fleet_component', 'tire_fleet_component_inspector',
-            'component_mount', 'component_unmount', 'component_inspect', 'axle_attributes_save',
+            'component_mount', 'component_unmount', 'component_inspect', 'axle_attributes_save', 'component_km_at',
             'axis_config', 'update_tire_layout', 'mount_tire', 'unmount_tire', 'edit_tire_mount', 'move_tire', 'change_tire_status',
             'create', 'store', 'edit', 'update', 'delete', 'show', 'preview',
         ], true);

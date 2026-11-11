@@ -126,10 +126,11 @@ $historyLink = static function (array $event): ?string {
                     <input type="hidden" name="replace_usage_id" value="<?= e((string) ($inspector['active_here']['id'] ?? '')) ?>">
                     <div class="fx-form-title"><?= $inspector['active_here'] !== null ? 'Înlocuiește ' . e($component['name']) . ' (montarea actuală se închide cu motivul „înlocuire”)' : 'Montează ' . e($component['name']) . ' · ' . e($locationLabel) ?></div>
                     <div class="row g-2">
-                        <div class="col-sm-5"><label class="form-label">Sursă</label><select class="form-select form-select-sm" name="source"><option value="stoc">Din stoc (scade stocul)</option><option value="direct">Montaj direct (piesă adusă de service)</option></select></div>
+                        <div class="col-sm-4"><label class="form-label">Sursă</label><select class="form-select form-select-sm" name="source"><option value="stoc">Din stoc (scade stocul)</option><option value="direct">Montaj direct (piesă adusă de service)</option></select></div>
                         <div class="col-sm-2"><label class="form-label">Cantitate</label><input type="number" class="form-control form-control-sm" name="quantity" value="1" min="0.01" step="0.01" required></div>
-                        <div class="col-sm-2"><label class="form-label">Data</label><input type="date" class="form-control form-control-sm" name="date" value="<?= e($today) ?>" max="<?= e($today) ?>" min="<?= e((string) ($inspector['active_here']['data_montare'] ?? '')) ?>" required></div>
-                        <div class="col-sm-3"><label class="form-label">Km bord</label><input type="number" class="form-control form-control-sm" name="km" value="<?= e((string) ($vehicleKm ?? '')) ?>" min="0"></div>
+                        <div class="col-sm-4" data-km-lookup><?php $dtpLabel = 'Data & ora montării'; $dtpDateName = 'date'; $dtpTimeName = 'time'; include __DIR__ . '/_datetime_field.php'; ?></div>
+                        <div class="col-sm-2"><label class="form-label">Km bord</label><input type="number" class="form-control form-control-sm" name="km" value="<?= e((string) ($vehicleKm ?? '')) ?>" min="0"></div>
+                        <div class="col-12 small text-muted" data-km-lookup-hint></div>
                         <div class="col-12"><label class="form-label">Observații</label><input type="text" class="form-control form-control-sm" name="notes" maxlength="500"></div>
                     </div>
                     <div class="small text-muted mt-1"><?= $stock !== null ? 'În stoc: ' . e(rtrim(rtrim(number_format($stock['quantity'], 2, ',', '.'), '0'), ',') . ' ' . $stock['unit']) . '.' : 'Componenta nu are piesă în stoc; folosește montajul direct.' ?></div>

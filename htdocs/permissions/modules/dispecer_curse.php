@@ -52,6 +52,10 @@ return [
         'service_km_delete'            => 'service_km',
         'service_km_gps'               => 'service_km',
         'service_km_vehicle_info'      => 'service_km',
+        // Fisa unei intrari Km service (doar citire) si cheltuielile ei (ca "Adauga cheltuiala" pe cursa).
+        'service_km_view'              => 'view',
+        'service_km_expense_store'     => 'service_km',
+        'service_km_expense_delete'    => 'service_km',
         // Doar citire (km GPS SAS pe intervalul cursei), folosit de formularele de creare si editare.
         'trip_gps_km'                  => 'view',
         // "Deschide cursa noua" din banda GPS live: ora primei deplasari dupa ultima cursa (doar citire SAS).

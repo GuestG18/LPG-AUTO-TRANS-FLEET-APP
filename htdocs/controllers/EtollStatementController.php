@@ -32,6 +32,8 @@ class EtollStatementController
 
         try {
             EtollStatementModel::ensureSchema($this->db);
+            // facturi.service_km_id (asocierea sesiunilor cu Km service) e citita in sesiuni.
+            (new InvoiceModel($this->db))->ensureFacturiSchema();
         } catch (Throwable $exception) {
             error_log('[EtollStatementController][schema] ' . $exception->getMessage());
             flash_set('danger', 'Situația eToll necesită actualizarea bazei de date. Rulează database/migrations/2026_11_05_000001_etoll_situatie.sql.');
@@ -353,7 +355,7 @@ class EtollStatementController
                 ['v' => $row['km_tarifabil'] === null ? '' : (float) $row['km_tarifabil'], 's' => 'money'],
                 $money($row['fara_tva']), $money($row['tva']), ['v' => $row['cota_tva'] === null ? '' : (float) $row['cota_tva'], 's' => 'int'],
                 $money($row['suma']), $money($row['total_etoll']), (string) ($row['numar_document'] ?? ''),
-                $row['cursa_id'] !== null ? ((string) ($row['beneficiar'] ?? '') ?: 'Fără beneficiar') : 'neasociată',
+                $row['cursa_id'] !== null ? ((string) ($row['beneficiar'] ?? '') ?: 'Fără beneficiar') : (!empty($row['service_km_id']) ? 'Km service #' . (int) $row['service_km_id'] : 'neasociată'),
                 $row['cursa_id'] !== null ? ['v' => (int) $row['cursa_id'], 's' => 'int'] : '',
             ], $documents, [$row['verificare']['text'], (string) $row['session_id']]));
         }

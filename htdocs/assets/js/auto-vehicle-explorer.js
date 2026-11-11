@@ -26,17 +26,14 @@
         explorer = window.FleetXray.mount(holder, unit, {
             onTire: unit.template ? null : function (positionId) { explorer.markTire(String(positionId)); },
             tireLink: tireUrl && !unit.template ? function (positionId) { return tireUrl + '#anvelopa-p' + positionId; } : null,
-            // Configuratia generala nu are un vehicul real: punctul mareste ansamblul si arata pe schema
-            // componentele lui; eticheta unei componente duce la randul ei din tabelul sistemului.
-            onSlot: unit.template ? function () {} : null,
-            onSubcomponent: unit.template ? function (slot, componentKey) {
+            // Configuratia generala nu are un vehicul real: punctul duce la sistemul lui din pagina.
+            onSlot: unit.template ? function (slot) {
                 var section = document.getElementById('sistem-' + slot.category);
                 if (!section) { return; }
-                var target = section.querySelector('[data-as-row][data-component-key="' + componentKey + '"]') || section;
-                target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-                target.classList.remove('is-flash');
-                void target.offsetWidth;
-                target.classList.add('is-flash');
+                section.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                section.classList.remove('is-flash');
+                void section.offsetWidth;
+                section.classList.add('is-flash');
             } : null
         });
     };

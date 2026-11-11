@@ -15,8 +15,13 @@ declare(strict_types=1);
  * Rezultat:
  *   1 cursa care contine momentul             -> asociata_auto
  *   2+ curse care contin momentul             -> de_verificat (candidatii)
- *   0, dar curse ale camionului in acea zi    -> de_verificat (ora iese din orele cursei)
+ *   0 curse, 1 Km service care il contine     -> asociata_auto pe Km service (service_km_id)
+ *   0, dar curse / Km service in acea zi      -> de_verificat (ora iese din orele lor)
  *   nimic                                     -> neasociata (se reincearca la rematch)
+ *
+ * Km service (vehicule_service_km): drumul camionului la / de la service. Plecare data+ora,
+ * intoarcere data+ora (ora lipsa = 00:00 / 23:59:59; intoarcere lipsa = inca in service, deschis).
+ * Cursa are prioritate: o sesiune din intervalul unei curse ramane pe cursa.
  *
  * Nucleul (decide) e pur, testat in scripts/test_etoll_matcher.php.
  */
@@ -31,7 +36,7 @@ class EtollTripMatcher
 
     /**
      * @param array<string, mixed> $invoice randul din facturi (InvoiceModel::getById)
-     * @return array{status: string, cursa_id: ?int, candidates: array<int, array<string, mixed>>, reason: string, vehicle_id: ?int, driver_id: ?int}
+     * @return array{status: string, cursa_id: ?int, service_km_id: ?int, candidates: array<int, array<string, mixed>>, reason: string, vehicle_id: ?int, driver_id: ?int}
      */
     public function match(array $invoice): array
     {
@@ -49,7 +54,8 @@ class EtollTripMatcher
         }
 
         $moment = (string) $session['inchisa_la'];
-        $result = self::decide($moment, $this->loadTripsOfVehicle($vehicleId, substr($moment, 0, 10)));
+        $day = substr($moment, 0, 10);
+        $result = self::decide($moment, $this->loadTripsOfVehicle($vehicleId, $day), $this->loadServiceKmOfVehicle($vehicleId, $day));
         $result['vehicle_id'] = $vehicleId;
 
         return $result;
@@ -58,29 +64,21 @@ class EtollTripMatcher
     /**
      * @param string $moment 'Y-m-d H:i:s' (ora Romaniei)
      * @param array<int, array<string, mixed>> $trips cursele camionului care cuprind ziua momentului
-     * @return array{status: string, cursa_id: ?int, candidates: array<int, array<string, mixed>>, reason: string, driver_id: ?int}
+     * @param array<int, array<string, mixed>> $services perioadele Km service ale camionului care cuprind ziua
+     * @return array{status: string, cursa_id: ?int, service_km_id: ?int, candidates: array<int, array<string, mixed>>, reason: string, driver_id: ?int}
      */
-    public static function decide(string $moment, array $trips): array
+    public static function decide(string $moment, array $trips, array $services = []): array
     {
         $at = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $moment);
         if ($at === false) {
-            return ['status' => 'de_verificat', 'cursa_id' => null, 'candidates' => [], 'reason' => 'Momentul sesiunii eToll lipseste.', 'driver_id' => null];
+            return ['status' => 'de_verificat', 'cursa_id' => null, 'service_km_id' => null, 'candidates' => [], 'reason' => 'Momentul sesiunii eToll lipseste.', 'driver_id' => null];
         }
         $label = $at->format('d.m.Y H:i');
 
-        $inside = [];
-        $sameDay = [];
-        foreach ($trips as $trip) {
-            [$start, $end] = self::interval($trip);
-            if ($start === null || $end === null) {
-                continue;
-            }
-            if ($at >= $start && $at <= $end) {
-                $inside[] = $trip;
-            } elseif ($at->format('Y-m-d') >= $start->format('Y-m-d') && $at->format('Y-m-d') <= $end->format('Y-m-d')) {
-                $sameDay[] = $trip;
-            }
-        }
+        [$inside, $sameDay] = self::split($at, $trips, [self::class, 'interval']);
+        [$serviceInside, $serviceSameDay] = self::split($at, $services, [self::class, 'serviceInterval']);
+        $tripCandidates = static fn(array $rows, string $basis): array => array_map(static fn(array $row): array => self::candidate($row, $basis), $rows);
+        $serviceCandidates = static fn(array $rows, string $basis): array => array_map(static fn(array $row): array => self::serviceCandidate($row, $basis), $rows);
 
         if (count($inside) === 1) {
             $trip = $inside[0];
@@ -88,6 +86,7 @@ class EtollTripMatcher
             return [
                 'status' => 'asociata_auto',
                 'cursa_id' => (int) $trip['id'],
+                'service_km_id' => null,
                 'candidates' => [self::candidate($trip, 'nr_auto+ora')],
                 'reason' => 'eToll: sesiunea inchisa la ' . $label . ' e in intervalul cursei #' . (int) $trip['id'] . '.',
                 'driver_id' => (int) ($trip['driver_id'] ?? 0) ?: null,
@@ -97,17 +96,44 @@ class EtollTripMatcher
             return [
                 'status' => 'de_verificat',
                 'cursa_id' => null,
-                'candidates' => array_map(static fn(array $trip): array => self::candidate($trip, 'nr_auto+ora'), $inside),
+                'service_km_id' => null,
+                'candidates' => array_merge($tripCandidates($inside, 'nr_auto+ora'), $serviceCandidates($serviceInside, 'nr_auto+ora')),
                 'reason' => 'eToll: ' . count($inside) . ' curse ale camionului cuprind ' . $label . '. Alege cursa.',
                 'driver_id' => null,
             ];
         }
-        if ($sameDay !== []) {
+        // Nicio cursa nu cuprinde momentul: drumul la / de la service.
+        if (count($serviceInside) === 1) {
+            $service = $serviceInside[0];
+
+            return [
+                'status' => 'asociata_auto',
+                'cursa_id' => null,
+                'service_km_id' => (int) $service['id'],
+                'candidates' => [self::serviceCandidate($service, 'nr_auto+ora')],
+                'reason' => 'eToll: sesiunea inchisa la ' . $label . ' e in perioada Km service #' . (int) $service['id'] . ' (drum la / de la service).',
+                'driver_id' => (int) ($service['driver_id'] ?? 0) ?: null,
+            ];
+        }
+        if (count($serviceInside) > 1) {
             return [
                 'status' => 'de_verificat',
                 'cursa_id' => null,
-                'candidates' => array_map(static fn(array $trip): array => self::candidate($trip, 'nr_auto (alta ora)'), $sameDay),
-                'reason' => 'eToll: sesiunea inchisa la ' . $label . ' iese din orele curselor camionului din acea zi.',
+                'service_km_id' => null,
+                'candidates' => $serviceCandidates($serviceInside, 'nr_auto+ora'),
+                'reason' => 'eToll: ' . count($serviceInside) . ' perioade Km service ale camionului cuprind ' . $label . '. Alege una.',
+                'driver_id' => null,
+            ];
+        }
+        if ($sameDay !== [] || $serviceSameDay !== []) {
+            $what = $sameDay !== [] && $serviceSameDay !== [] ? 'curselor si Km service' : ($sameDay !== [] ? 'curselor' : 'perioadei Km service');
+
+            return [
+                'status' => 'de_verificat',
+                'cursa_id' => null,
+                'service_km_id' => null,
+                'candidates' => array_merge($tripCandidates($sameDay, 'nr_auto (alta ora)'), $serviceCandidates($serviceSameDay, 'nr_auto (alta ora)')),
+                'reason' => 'eToll: sesiunea inchisa la ' . $label . ' iese din orele ' . $what . ' camionului din acea zi.',
                 'driver_id' => null,
             ];
         }
@@ -115,9 +141,72 @@ class EtollTripMatcher
         return [
             'status' => 'neasociata',
             'cursa_id' => null,
+            'service_km_id' => null,
             'candidates' => [],
-            'reason' => 'eToll: nicio cursa a camionului la ' . $label . '. Se reincearca automat dupa ce se adauga cursa.',
+            'reason' => 'eToll: nicio cursa si niciun Km service al camionului la ' . $label . '. Se reincearca automat dupa ce se adauga cursa.',
             'driver_id' => null,
+        ];
+    }
+
+    /**
+     * Imparte randurile in: intervalul lor contine momentul / doar ziua momentului e in interval.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @return array{0: array<int, array<string, mixed>>, 1: array<int, array<string, mixed>>}
+     */
+    private static function split(DateTimeImmutable $at, array $rows, callable $intervalOf): array
+    {
+        $inside = [];
+        $sameDay = [];
+        foreach ($rows as $row) {
+            [$start, $end] = $intervalOf($row);
+            if ($start === null || $end === null) {
+                continue;
+            }
+            if ($at >= $start && $at <= $end) {
+                $inside[] = $row;
+            } elseif ($at->format('Y-m-d') >= $start->format('Y-m-d') && $at->format('Y-m-d') <= $end->format('Y-m-d')) {
+                $sameDay[] = $row;
+            }
+        }
+
+        return [$inside, $sameDay];
+    }
+
+    /**
+     * Perioada Km service: plecare -> intoarcere. Ora lipsa = 00:00 / 23:59:59; intoarcerea
+     * lipsa = vehiculul e inca in service, deci intervalul ramane deschis.
+     *
+     * @return array{0: ?DateTimeImmutable, 1: ?DateTimeImmutable}
+     */
+    private static function serviceInterval(array $row): array
+    {
+        $startDate = substr(trim((string) ($row['data_plecare'] ?? '')), 0, 10);
+        $endDate = substr(trim((string) ($row['data_intoarcere'] ?? '')), 0, 10);
+        $startTime = trim((string) ($row['ora_plecare'] ?? '')) ?: '00:00:00';
+        $endTime = $endDate !== '' ? (trim((string) ($row['ora_intoarcere'] ?? '')) ?: '23:59:59') : '23:59:59';
+        $endDate = $endDate !== '' ? $endDate : '9999-12-31';
+
+        $start = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $startDate . ' ' . substr($startTime . ':00', 0, 8));
+        $end = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $endDate . ' ' . substr($endTime . ':00', 0, 8));
+
+        return [$start ?: null, $end ?: null];
+    }
+
+    /** Candidat Km service, in acelasi format ca o cursa, marcat cu tip = service_km. */
+    private static function serviceCandidate(array $row, string $basis): array
+    {
+        $hours = trim(substr((string) ($row['ora_plecare'] ?? ''), 0, 5) . '-' . substr((string) ($row['ora_intoarcere'] ?? ''), 0, 5), '-');
+
+        return [
+            'tip' => 'service_km',
+            'id' => (int) $row['id'],
+            'data_inceput' => (string) $row['data_plecare'],
+            'data_sfarsit' => (string) ($row['data_intoarcere'] ?? ''),
+            'nr_inmatriculare' => (string) ($row['nr_inmatriculare'] ?? ''),
+            'sofer' => (string) ($row['sofer_nume'] ?? ''),
+            'service' => (string) ($row['service_nume'] ?? ''),
+            'motiv' => 'Km service, ' . $basis . ($hours !== '' ? ' (ore ' . $hours . ')' : ''),
         ];
     }
 
@@ -209,9 +298,39 @@ class EtollTripMatcher
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
     }
 
-    /** @return array{status: string, cursa_id: null, candidates: array<int, mixed>, reason: string, vehicle_id: ?int, driver_id: null} */
+    /**
+     * Perioadele Km service ale camionului care cuprind ziua (si cele inca deschise).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function loadServiceKmOfVehicle(int $vehicleId, string $date): array
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT sk.id, sk.data_plecare, sk.ora_plecare, sk.data_intoarcere, sk.ora_intoarcere,
+                       sk.driver_id, sk.service_nume, v.nr_inmatriculare, s.nume AS sofer_nume
+                FROM vehicule_service_km sk
+                LEFT JOIN vehicule v ON v.id = sk.vehicle_id
+                LEFT JOIN soferi s ON s.id = sk.driver_id
+                WHERE sk.vehicle_id = :vehicle_id
+                  AND sk.data_plecare <= :data_max
+                  AND (sk.data_intoarcere IS NULL OR sk.data_intoarcere >= :data_min)
+                ORDER BY sk.data_plecare ASC, sk.id ASC
+            ");
+            $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+            $stmt->bindValue(':data_max', $date, PDO::PARAM_STR);
+            $stmt->bindValue(':data_min', $date, PDO::PARAM_STR);
+            $stmt->execute();
+        } catch (PDOException) {
+            return []; // tabela Km service inca necreata
+        }
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /** @return array{status: string, cursa_id: null, service_km_id: null, candidates: array<int, mixed>, reason: string, vehicle_id: ?int, driver_id: null} */
     private function result(string $status, array $candidates, string $reason, ?int $vehicleId): array
     {
-        return ['status' => $status, 'cursa_id' => null, 'candidates' => $candidates, 'reason' => $reason, 'vehicle_id' => $vehicleId, 'driver_id' => null];
+        return ['status' => $status, 'cursa_id' => null, 'service_km_id' => null, 'candidates' => $candidates, 'reason' => $reason, 'vehicle_id' => $vehicleId, 'driver_id' => null];
     }
 }

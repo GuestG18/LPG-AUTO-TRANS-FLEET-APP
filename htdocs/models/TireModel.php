@@ -54,7 +54,11 @@ class TireModel extends BaseModel
 
         $this->ensureTargetVehicleTypeSchema();
         $this->addColumnIfMissing('anvelope', 'target_vehicle_types', 'TEXT NULL AFTER target_vehicle_type');
-        $this->addColumnIfMissing('anvelope', 'target_axle_config', 'VARCHAR(20) NULL AFTER target_vehicle_type');
+        $this->addColumnIfMissing('anvelope', 'target_axle_config', 'VARCHAR(120) NULL AFTER target_vehicle_type');
+        // Lista de formule compatibile ("2 axe,3 axe"), nu o singura formula.
+        if ((int) $this->db->query("SELECT COALESCE(MAX(CHARACTER_MAXIMUM_LENGTH), 0) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'anvelope' AND COLUMN_NAME = 'target_axle_config'")->fetchColumn() < 120) {
+            $this->db->exec('ALTER TABLE anvelope MODIFY COLUMN target_axle_config VARCHAR(120) NULL');
+        }
         $this->addColumnIfMissing('anvelope', 'axle_type', 'VARCHAR(40) NULL AFTER target_axle_config');
         $this->addColumnIfMissing('anvelope', 'tire_type', "ENUM('direction','traction','trailer','balloon','balloon_directional') NOT NULL DEFAULT 'trailer' AFTER axle_type");
         $this->db->exec(
@@ -710,6 +714,50 @@ class TireModel extends BaseModel
         }
 
         return $this->normalizeLayoutForType($targetType, $layout);
+    }
+
+    /**
+     * Formulele de axe cu care e compatibila anvelopa, salvate ca lista ("2 axe,3 axe"). Null = orice formula:
+     * nimic bifat, toate bifate sau doar tipuri universale. Se pastreaza doar formulele tipurilor compatibile.
+     */
+    public function normalizeTargetAxleConfigList(array $targetTypes, mixed $raw): ?string
+    {
+        $allowed = [];
+        foreach ($this->normalizeTargetVehicleTypes($targetTypes) as $type) {
+            if ($type === 'universal') {
+                continue;
+            }
+            foreach (array_keys($this->getLayoutOptionsByVehicleType($type)) as $layout) {
+                $allowed[(string) $layout] = true;
+            }
+        }
+        $selected = [];
+        foreach (self::axleConfigList($raw) as $value) {
+            if (isset($allowed[$value])) {
+                $selected[$value] = true;
+            }
+        }
+        if ($selected === [] || count($selected) === count($allowed)) {
+            return null;
+        }
+
+        return implode(',', array_keys($selected));
+    }
+
+    /** @return list<string> tipurile de vehicul compatibile salvate pe anvelopa */
+    private function storedTargetVehicleTypes(int $tireId): array
+    {
+        $tire = $this->getTireById($tireId);
+
+        return $this->normalizeTargetVehicleTypes($tire['target_vehicle_types'] ?? null, (string) ($tire['target_vehicle_type'] ?? 'universal'));
+    }
+
+    /** @return list<string> formulele dintr-o valoare salvata ("2 axe,3 axe") sau dintr-un camp multiplu */
+    public static function axleConfigList(mixed $value): array
+    {
+        $values = is_array($value) ? $value : explode(',', (string) ($value ?? ''));
+
+        return array_values(array_unique(array_filter(array_map(static fn ($item): string => trim((string) $item), $values), static fn (string $item): bool => $item !== '')));
     }
 
     public function getTargetLayoutOptionsByType(): array
@@ -1392,7 +1440,7 @@ class TireModel extends BaseModel
 
             $targetLayout = $layout !== null ? $this->normalizeTargetAxleConfig($vehicleType, $layout) : null;
             if ($targetLayout !== null && $targetLayout !== '') {
-                $sql .= ' AND (COALESCE(t.target_axle_config, "") = "" OR COALESCE(t.target_axle_config, "") = :target_axle_config)';
+                $sql .= ' AND (COALESCE(t.target_axle_config, "") = "" OR FIND_IN_SET(:target_axle_config, t.target_axle_config) > 0)';
                 $params[':target_axle_config'] = $targetLayout;
             }
         }
@@ -1438,10 +1486,7 @@ class TireModel extends BaseModel
             (string) ($data['target_vehicle_type'] ?? 'universal')
         );
         $targetVehicleType = $this->firstTargetVehicleType($targetVehicleTypes);
-        $targetAxleConfigRaw = $data['target_axle_config'] ?? null;
-        $targetAxleConfig = $targetAxleConfigRaw !== null && trim((string) $targetAxleConfigRaw) !== ''
-            ? $this->normalizeTargetAxleConfig($targetVehicleType, $targetAxleConfigRaw)
-            : null;
+        $targetAxleConfig = $this->normalizeTargetAxleConfigList($targetVehicleTypes, $data['target_axle_config'] ?? null);
         $tireType = $this->normalizeTireType((string) ($data['tire_type'] ?? self::TIRE_TYPE_TRAILER));
         $axleType = $this->normalizeAxleType($data['axle_type'] ?? null);
         if ($axleType === '') {
@@ -1537,10 +1582,7 @@ class TireModel extends BaseModel
             (string) ($data['target_vehicle_type'] ?? 'universal')
         );
         $targetVehicleType = $this->firstTargetVehicleType($targetVehicleTypes);
-        $targetAxleConfigRaw = $data['target_axle_config'] ?? null;
-        $targetAxleConfig = $targetAxleConfigRaw !== null && trim((string) $targetAxleConfigRaw) !== ''
-            ? $this->normalizeTargetAxleConfig($targetVehicleType, $targetAxleConfigRaw)
-            : null;
+        $targetAxleConfig = $this->normalizeTargetAxleConfigList($targetVehicleTypes, $data['target_axle_config'] ?? null);
         $tireType = $this->normalizeTireType((string) ($data['tire_type'] ?? self::TIRE_TYPE_TRAILER));
         $axleType = $this->normalizeAxleType($data['axle_type'] ?? null);
         if ($axleType === '') {
@@ -1793,7 +1835,7 @@ class TireModel extends BaseModel
         $targetLabel = $this->targetVehicleTypesLabelForRow($row);
         $lines[] = 'Compatibil: ' . ($targetLabel !== '' ? $targetLabel : 'Universal');
 
-        $targetLayout = trim((string) ($row['target_axle_config'] ?? ''));
+        $targetLayout = implode(', ', self::axleConfigList($row['target_axle_config'] ?? ''));
         if ($targetLayout !== '') {
             $lines[] = 'Formula axelor: ' . $targetLayout;
         }
@@ -2132,11 +2174,10 @@ class TireModel extends BaseModel
             $params[':' . $column] = match ($column) {
                 'target_vehicle_type' => $this->normalizeTargetVehicleType((string) $data[$column]),
                 'target_vehicle_types' => $this->encodeTargetVehicleTypes($targetVehicleTypesForUpdate ?? $this->normalizeTargetVehicleTypes($data[$column])),
-                'target_axle_config' => $targetVehicleTypeForAxle !== null
-                    ? (($data[$column] ?? null) !== null && trim((string) $data[$column]) !== ''
-                        ? $this->normalizeTargetAxleConfig($targetVehicleTypeForAxle, $data[$column] ?? null)
-                        : null)
-                    : ($data[$column] !== null && trim((string) $data[$column]) !== '' ? trim((string) $data[$column]) : null),
+                'target_axle_config' => $this->normalizeTargetAxleConfigList(
+                    $targetVehicleTypesForUpdate ?? ($targetVehicleTypeForAxle !== null ? [$targetVehicleTypeForAxle] : $this->storedTargetVehicleTypes($tireId)),
+                    $data[$column] ?? null
+                ),
                 'axle_type' => $axleTypeForValidation !== null && $axleTypeForValidation !== ''
                     ? $axleTypeForValidation
                     : $this->normalizeAxleType($data[$column] ?? null),
@@ -2336,7 +2377,7 @@ class TireModel extends BaseModel
 
         $axleConfig = trim((string) ($filters['axle_config'] ?? ''));
         if ($axleConfig !== '' && $axleConfig !== 'all') {
-            $conditions[] = '(COALESCE(v.formula_axelor, "") = :axle_config_vehicle OR (a.id IS NULL AND COALESCE(t.target_axle_config, "") = :axle_config_tire))';
+            $conditions[] = '(COALESCE(v.formula_axelor, "") = :axle_config_vehicle OR (a.id IS NULL AND FIND_IN_SET(:axle_config_tire, COALESCE(t.target_axle_config, "")) > 0))';
             $params[':axle_config_vehicle'] = $axleConfig;
             $params[':axle_config_tire'] = $axleConfig;
         }
@@ -2393,7 +2434,7 @@ class TireModel extends BaseModel
         if ($targetLabel === '') {
             $targetLabel = 'Universal';
         }
-        $targetLayout = trim((string) ($row['target_axle_config'] ?? ''));
+        $targetLayout = implode(', ', self::axleConfigList($row['target_axle_config'] ?? ''));
         $targetLabelWithLayout = $targetLayout !== '' ? $targetLabel . ' / ' . $targetLayout : $targetLabel;
 
         return match ($type) {
@@ -2472,7 +2513,7 @@ class TireModel extends BaseModel
             'tire_axle_type_label' => $this->axleTypeLabel($tireAxleType),
             'target_vehicle_types_values' => $this->targetVehicleTypesForRow($row),
             'target_vehicle_type_label' => $this->targetVehicleTypesLabelForRow($row),
-            'target_axle_config_label' => trim((string) ($row['target_axle_config'] ?? '')),
+            'target_axle_config_label' => implode(', ', self::axleConfigList($row['target_axle_config'] ?? '')),
             'condition_meta' => $conditionMeta,
             'condition_value' => $conditionMeta['value'],
             'initial_condition' => $this->normalizeInitialCondition((string) ($row['initial_condition'] ?? 'new')),
@@ -3009,8 +3050,7 @@ class TireModel extends BaseModel
              ORDER BY layout_value ASC'
         );
         $axleConfigOptions = [];
-        foreach ($layoutStmt->fetchAll(PDO::FETCH_COLUMN) as $layoutValue) {
-            $layoutLabel = trim((string) $layoutValue);
+        foreach (self::axleConfigList($layoutStmt->fetchAll(PDO::FETCH_COLUMN)) as $layoutLabel) {
             if ($layoutLabel !== '') {
                 $axleConfigOptions[$layoutLabel] = $layoutLabel;
             }
@@ -3060,10 +3100,10 @@ class TireModel extends BaseModel
 
         $tireType = $this->normalizeTireType((string) ($tire['tire_type'] ?? self::TIRE_TYPE_TRAILER));
         $vehicleType = $this->normalizeVehicleType((string) ($vehicle['tip_vehicul'] ?? 'autovehicul'));
-        $targetLayout = trim((string) ($tire['target_axle_config'] ?? ''));
-        if ($targetLayout !== '') {
+        $targetLayouts = self::axleConfigList($tire['target_axle_config'] ?? '');
+        if ($targetLayouts !== []) {
             $vehicleLayout = $this->normalizeLayoutForType($vehicleType, (string) ($vehicle['formula_axelor'] ?? ''));
-            if ($targetLayout !== $vehicleLayout) {
+            if (!in_array($vehicleLayout, $targetLayouts, true)) {
                 return false;
             }
         }

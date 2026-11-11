@@ -982,47 +982,69 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
                 }
             });
 
-            if (!(axleConfigEl instanceof HTMLSelectElement) || (!(vehicleTypeEl instanceof HTMLSelectElement) && !(vehiclePickerEl instanceof HTMLElement))) {
+            if (!(axleConfigEl instanceof HTMLElement) || (!(vehicleTypeEl instanceof HTMLSelectElement) && !(vehiclePickerEl instanceof HTMLElement))) {
                 return;
             }
 
-            const currentVehicleType = function () {
+            // Formula axelor: casute pentru formulele tuturor tipurilor de vehicul bifate; nimic bifat = toate.
+            const axleMenuEl = axleConfigEl.querySelector('[data-tire-axle-config-menu]');
+            const axleLabelEl = axleConfigEl.querySelector('[data-tire-axle-config-label]');
+            const axleFieldName = axleConfigEl.dataset.name || 'stock_edit_target_axle_config[]';
+            const initialAxleValues = function () {
+                return String(axleConfigEl.dataset.current || '').split(',').map(function (v) { return v.trim(); }).filter(Boolean);
+            };
+            const checkedAxleValues = function () {
+                return Array.from(axleMenuEl.querySelectorAll('input:checked')).map(function (inputEl) { return inputEl.value; });
+            };
+            const selectedVehicleTypes = function () {
                 if (vehicleTypeEl instanceof HTMLSelectElement) {
-                    return vehicleTypeEl.value || 'autovehicul';
+                    return [vehicleTypeEl.value || 'autovehicul'];
                 }
-
-                if (vehiclePickerEl instanceof HTMLElement) {
-                    const selectedOption = pickerSelectedOptions(vehiclePickerEl)[0] || null;
-                    return selectedOption ? selectedOption.value : 'autovehicul';
-                }
-
-                return 'autovehicul';
+                return pickerSelectedOptions(vehiclePickerEl).map(function (inputEl) { return inputEl.value; });
+            };
+            const refreshAxleLabel = function () {
+                const total = axleMenuEl.querySelectorAll('input').length;
+                const checked = checkedAxleValues();
+                axleLabelEl.textContent = total === 0
+                    ? 'Orice formula'
+                    : (checked.length === 0 || checked.length === total ? 'Toate formulele' : checked.join(', '));
+                axleConfigEl.querySelector('.tire-vehicle-picker-toggle').title = axleLabelEl.textContent;
             };
 
             const refreshAxleOptions = function (preferExisting) {
-                const selectedType = currentVehicleType();
-                const typedOptions = layoutOptionsByType[selectedType] && typeof layoutOptionsByType[selectedType] === 'object'
-                    ? layoutOptionsByType[selectedType]
-                    : {};
-                const previousValue = preferExisting ? (axleConfigEl.value || axleConfigEl.dataset.current || '') : '';
-                const defaultValue = defaultsByType[selectedType] || '';
-                const optionValues = Object.keys(typedOptions);
-                const selectedValue = previousValue !== '' && optionValues.includes(previousValue)
-                    ? previousValue
-                    : (defaultValue !== '' && optionValues.includes(defaultValue) ? defaultValue : (optionValues[0] || ''));
-
-                axleConfigEl.innerHTML = '';
-                optionValues.forEach(function (optionValue) {
-                    const optionEl = document.createElement('option');
-                    optionEl.value = optionValue;
-                    optionEl.textContent = String(typedOptions[optionValue]);
-                    if (optionValue === selectedValue) {
-                        optionEl.selected = true;
-                    }
-                    axleConfigEl.appendChild(optionEl);
+                const keep = preferExisting ? initialAxleValues() : checkedAxleValues();
+                const options = {};
+                selectedVehicleTypes().forEach(function (type) {
+                    const typed = layoutOptionsByType[type] && typeof layoutOptionsByType[type] === 'object' ? layoutOptionsByType[type] : {};
+                    Object.keys(typed).forEach(function (value) {
+                        if (!(value in options)) { options[value] = String(typed[value]); }
+                    });
                 });
-                axleConfigEl.disabled = optionValues.length === 0;
-                axleConfigEl.dataset.current = selectedValue;
+
+                axleMenuEl.innerHTML = '';
+                Object.keys(options).forEach(function (value) {
+                    const labelEl = document.createElement('label');
+                    labelEl.className = 'dropdown-item tire-vehicle-picker-option';
+                    const inputEl = document.createElement('input');
+                    inputEl.type = 'checkbox';
+                    inputEl.className = 'form-check-input';
+                    inputEl.name = axleFieldName;
+                    inputEl.value = value;
+                    inputEl.checked = keep.includes(value);
+                    inputEl.addEventListener('change', refreshAxleLabel);
+                    const textEl = document.createElement('span');
+                    textEl.textContent = options[value];
+                    labelEl.appendChild(inputEl);
+                    labelEl.appendChild(textEl);
+                    axleMenuEl.appendChild(labelEl);
+                });
+                if (Object.keys(options).length === 0) {
+                    const emptyEl = document.createElement('div');
+                    emptyEl.className = 'dropdown-item-text small text-muted';
+                    emptyEl.textContent = 'Alege intai compatibilitatea vehiculului.';
+                    axleMenuEl.appendChild(emptyEl);
+                }
+                refreshAxleLabel();
             };
 
             const handleVehicleTypeChange = function () {

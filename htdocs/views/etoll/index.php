@@ -99,7 +99,7 @@ uksort($capacityOptions, static fn($a, $b): int => ((string) $a === $none ? PHP_
 uasort($categoryOptions, static fn(array $a, array $b): int => ($a['order'] <=> $b['order']) ?: strnatcasecmp($a['label'], $b['label']));
 $categoryOptions = array_map(static fn(array $c): string => $c['label'], $categoryOptions);
 $beneficiaryOptions = $beneficiaries + [$none => 'Fără beneficiar (neasociată)'];
-$transportOptions = EtollStatementModel::TRANSPORT_TYPES + [$none => 'Fără cursă asociată'];
+$transportOptions = EtollStatementModel::TRANSPORT_TYPES + [$none => 'Fără cursă / Km service asociat'];
 $statusOptions = EtollStatementModel::STATUSES;
 
 /**
@@ -171,7 +171,7 @@ foreach ($vehicleGroups as $capacityGroup) {
 
 // ---- Randurile tabelului (JSON pentru assets/js/etoll.js) ----
 $checkClass = ['ok' => 'is-ok', 'lipsa' => 'is-warn', 'diferenta' => 'is-danger', 'in_curs' => 'is-info'];
-$tableRow = static function (array $row, bool $open) use ($at, $span, $place, $kinds, $kindTitles, $docUrl, $checkClass): array {
+$tableRow = static function (array $row, bool $open) use ($at, $span, $place, $kinds, $kindTitles, $docUrl, $checkClass, $fmtDate): array {
     $documents = [];
     foreach ($kinds as $kind => [$label]) {
         $documents[] = [
@@ -197,6 +197,16 @@ $tableRow = static function (array $row, bool $open) use ($at, $span, $place, $k
         'ben' => $row['cursa_id'] !== null ? (string) ($row['beneficiar'] ?? '') : '',
         'cursaId' => $row['cursa_id'] !== null ? (int) $row['cursa_id'] : null,
         'cursaUrl' => $row['cursa_id'] !== null ? build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => (int) $row['cursa_id']]) : null,
+        // Sesiune pe drumul la / de la service: link spre fisa intrarii Km service din Dispecer.
+        'serviceKmId' => $row['cursa_id'] === null && !empty($row['service_km_id']) ? (int) $row['service_km_id'] : null,
+        'serviceKmUrl' => $row['cursa_id'] === null && !empty($row['service_km_id'])
+            ? build_query_url(['page' => 'dispecer_curse', 'service_km_view' => (int) $row['service_km_id']]) . '#service-km-panel'
+            : null,
+        'serviceKmTitle' => $row['cursa_id'] === null && !empty($row['service_km_id'])
+            ? trim('Km service ' . $fmtDate((string) $row['service_km_plecare']) . ' → '
+                . (!empty($row['service_km_intoarcere']) ? $fmtDate((string) $row['service_km_intoarcere']) : 'încă în service')
+                . (!empty($row['service_km_nume']) ? ' · ' . $row['service_km_nume'] : ''))
+            : '',
         ...(static function (array $s): array {
             return ['span' => $s['text'], 'spanDays' => $s['days'], 'spanTitle' => $s['title']];
         })($open ? $span($start, $row['sfarsit'] ?? null) : $span($row['inceput'] ?? null, $row['sfarsit'] ?? null)),

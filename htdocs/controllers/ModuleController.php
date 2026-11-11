@@ -141,6 +141,9 @@ class ModuleController
             case 'tire_fleet_component_inspector':
                 $this->tireFleetComponentInspectorAction($moduleKey);
                 return;
+            case 'component_km_at':
+                $this->componentKmAtAction($moduleKey);
+                return;
             case 'component_mount':
             case 'component_unmount':
             case 'component_inspect':
@@ -2643,7 +2646,7 @@ class ModuleController
         $dotCode = strtoupper(trim((string) ($_POST['stock_dot_code'] ?? '')));
         $serialPrefix = trim((string) ($_POST['stock_serial_prefix'] ?? 'STOC'));
         $targetVehicleTypesRaw = $_POST['stock_target_vehicle_types'] ?? ($_POST['stock_target_vehicle_type'] ?? []);
-        $targetAxleConfigRaw = trim((string) ($_POST['stock_target_axle_config'] ?? ''));
+        $targetAxleConfigRaw = $_POST['stock_target_axle_config'] ?? [];
         $requiresVehicleCompatibility = (string) ($_POST['stock_require_vehicle_compatibility'] ?? '') === '1';
         $mountDate = trim((string) ($_POST['stock_mount_date'] ?? date('Y-m-d')));
         $quantityRaw = trim((string) ($_POST['stock_quantity'] ?? '1'));
@@ -2783,9 +2786,7 @@ class ModuleController
             redirect($stockRedirectUrl);
         }
 
-        $targetAxleConfig = $targetAxleConfigRaw !== ''
-            ? $this->tireModel->normalizeTargetAxleConfig($targetVehicleType, $targetAxleConfigRaw)
-            : null;
+        $targetAxleConfig = $this->tireModel->normalizeTargetAxleConfigList($targetVehicleTypes, $targetAxleConfigRaw);
         [$invoiceUpload, $invoiceUploadError] = $this->storeUploadedTireInvoice($_FILES['stock_invoice_upload'] ?? null);
         if ($invoiceUploadError !== null) {
             flash_set('danger', $invoiceUploadError);
@@ -3043,7 +3044,8 @@ class ModuleController
         $tireSize = trim((string) ($_POST['stock_edit_tire_size'] ?? ''));
         $dotCode = strtoupper(trim((string) ($_POST['stock_edit_dot_code'] ?? '')));
         $targetTypesRaw = $_POST['stock_edit_target_vehicle_types'] ?? ($_POST['stock_edit_target_vehicle_type'] ?? ($tire['target_vehicle_types'] ?? ($tire['target_vehicle_type'] ?? 'universal')));
-        $targetAxleConfigRaw = trim((string) ($_POST['stock_edit_target_axle_config'] ?? ($tire['target_axle_config'] ?? '')));
+        // Formula axelor: casute bifate (nicio bifa = orice formula); fara campul din formular ramane cea salvata.
+        $targetAxleConfigRaw = $_POST['stock_edit_target_axle_config'] ?? (isset($_POST['stock_edit_target_axle_config_present']) ? [] : ($tire['target_axle_config'] ?? ''));
         $statusRaw = strtolower(trim((string) ($_POST['stock_edit_status'] ?? ($tire['status'] ?? TireModel::STATUS_IN_STOCK))));
         $axleTypeRaw = trim((string) ($_POST['stock_edit_axle_type'] ?? ($tire['axle_type'] ?? '')));
         $tireTypeRaw = trim((string) ($_POST['stock_edit_tire_type'] ?? ($tire['tire_type'] ?? TireModel::TIRE_TYPE_TRAILER)));
@@ -3134,9 +3136,7 @@ class ModuleController
         $status = in_array($statusRaw, $allowedStatuses, true) ? $statusRaw : $this->tireModel->normalizeTireStatus((string) ($tire['status'] ?? TireModel::STATUS_IN_STOCK));
         $targetVehicleTypes = $this->tireModel->normalizeTargetVehicleTypes($targetTypesRaw, (string) ($tire['target_vehicle_type'] ?? 'universal'));
         $targetVehicleType = (string) ($targetVehicleTypes[0] ?? 'universal');
-        $targetAxleConfig = $targetAxleConfigRaw !== ''
-            ? $this->tireModel->normalizeTargetAxleConfig($targetVehicleType, $targetAxleConfigRaw)
-            : null;
+        $targetAxleConfig = $this->tireModel->normalizeTargetAxleConfigList($targetVehicleTypes, $targetAxleConfigRaw);
         if ($tireTypeRaw === '' || !array_key_exists($tireTypeRaw, $this->tireModel->getTireTypeOptions())) {
             flash_set('danger', 'Tipul anvelopei este obligatoriu.');
             redirect($stockRedirectUrl);
@@ -3714,20 +3714,40 @@ class ModuleController
             $part = AutoComponentStateService::findStockPart((new MaintenanceModel($this->db))->getAutoComponentPartIndex(), (string) $component['category'], (string) $component['name']);
             $replaceId = (int) ($_POST['replace_usage_id'] ?? 0);
             $user = current_user();
-            $newId = $model->mount([
+            $target = static function (string $loc, array $match, int|string|null $replace): array {
+                return [
+                    'location' => $loc,
+                    'axle' => isset($match[2]) && $match[2] !== '' ? (int) $match[2] : null,
+                    'side' => isset($match[3]) && $match[3] !== '' ? $match[3] : null,
+                    'replace' => $replace,
+                ];
+            };
+            $targets = [$target($location, $locationMatch, $replaceId > 0 ? $replaceId : null)];
+            // Montare in lot: aceeasi piesa si pe alte pozitii (ex. farurile fata + spate). Pe o pozitie
+            // unde piesa e deja montata, montarea activa se inlocuieste.
+            foreach (array_unique(array_map('strval', (array) ($_POST['extra_locations'] ?? []))) as $extra) {
+                if ($extra === $location) {
+                    continue;
+                }
+                if (preg_match('/^(A(\d{1,2})(?:-([LR]))?|vehicul|caseta|fata|spate)$/', $extra, $extraMatch) !== 1) {
+                    $this->tireMountJson(['ok' => false, 'error' => 'Poziție invalidă: ' . $extra . '.'], 422);
+                }
+                $targets[] = $target($extra, $extraMatch, 'auto');
+            }
+            $ids = $model->mountMany([
                 'vehicle_id' => $vehicleId,
                 'part_id' => (int) ($part['id'] ?? 0),
                 'component_key' => $componentKey,
-                'location' => $location,
-                'axle' => isset($locationMatch[2]) && $locationMatch[2] !== '' ? (int) $locationMatch[2] : null,
-                'side' => isset($locationMatch[3]) && $locationMatch[3] !== '' ? $locationMatch[3] : null,
                 'source' => ($_POST['source'] ?? '') === 'stoc' ? 'stoc' : 'direct',
                 'quantity' => (float) str_replace(',', '.', (string) ($_POST['quantity'] ?? '1')),
                 'date' => (string) ($_POST['date'] ?? ''),
                 'km' => $readKm('km'),
                 'notes' => (string) ($_POST['notes'] ?? ''),
-            ], $replaceId > 0 ? $replaceId : null, $userId, (string) ($user['nume'] ?? ''));
-            $this->tireMountJson(['ok' => true, 'id' => $newId, 'message' => $replaceId > 0 ? 'Componenta a fost înlocuită.' : 'Componenta a fost montată.']);
+            ], $targets, $userId, (string) ($user['nume'] ?? ''));
+            $message = count($targets) > 1
+                ? 'Componenta a fost montată pe ' . count($targets) . ' poziții.'
+                : ($replaceId > 0 ? 'Componenta a fost înlocuită.' : 'Componenta a fost montată.');
+            $this->tireMountJson(['ok' => true, 'id' => $ids[0], 'ids' => $ids, 'message' => $message]);
         } catch (PDOException $exception) {
             // PDOException e tot RuntimeException: mesajul bazei de date nu ajunge la utilizator.
             error_log('[component_write][' . $operation . '] ' . $exception->getMessage());
@@ -3738,6 +3758,26 @@ class ModuleController
             error_log('[component_write][' . $operation . '] ' . $exception->getMessage());
             $this->tireMountJson(['ok' => false, 'error' => 'Operația nu a putut fi salvată.'], 500);
         }
+    }
+
+    /** JSON: km bord al vehiculului la momentul montarii (SAS: odometru CAN, altfel index GPS). */
+    private function componentKmAtAction(string $moduleKey): void
+    {
+        if ($moduleKey !== 'mentenanta') {
+            $this->tireMountJson(['ok' => false, 'message' => 'Modul invalid.'], 404);
+        }
+        $moment = trim((string) ($_GET['date'] ?? '')) . ' ' . trim((string) ($_GET['time'] ?? ''));
+        // Raportul SAS dureaza cateva secunde: sesiunea nu blocheaza restul paginii intre timp.
+        session_write_close();
+        try {
+            $result = (new ComponentSasKmService($this->db))->kmAt((int) ($_GET['vehicle_id'] ?? 0), $moment);
+        } catch (InvalidArgumentException $exception) {
+            $result = ['ok' => false, 'message' => $exception->getMessage()];
+        } catch (Throwable $exception) {
+            error_log('[component_km_at] ' . $exception->getMessage());
+            $result = ['ok' => false, 'message' => 'SAS nu răspunde acum: completează km manual.'];
+        }
+        $this->tireMountJson($result);
     }
 
     /** JSON: anvelopele din stoc compatibile cu o pozitie libera (pentru montajul din schema). */

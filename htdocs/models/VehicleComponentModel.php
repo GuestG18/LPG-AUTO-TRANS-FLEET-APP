@@ -202,12 +202,33 @@ class VehicleComponentModel extends BaseModel
      */
     public function mount(array $data, ?int $replaceUsageId, ?int $userId, string $mountedBy): int
     {
+        $target = ['location' => (string) $data['location'], 'axle' => $data['axle'], 'side' => $data['side'], 'replace' => $replaceUsageId];
+
+        return $this->mountMany($data, [$target], $userId, $mountedBy)[0];
+    }
+
+    /**
+     * Aceeasi piesa montata deodata pe mai multe pozitii ale vehiculului (ex. farurile fata + spate).
+     * O singura tranzactie: ori se salveaza toate, ori niciuna. Cantitatea e per pozitie; din stoc se
+     * scade cantitatea x numarul de pozitii.
+     *
+     * @param list<array{location:string,axle:?int,side:?string,replace:int|string|null}> $targets
+     *        replace: id-ul montarii inlocuite, null = montare noua, 'auto' = inlocuieste montarea activa
+     *        a aceleiasi componente pe pozitie, daca exista
+     * @return list<int> id-urile montarilor noi, in ordinea pozitiilor
+     */
+    public function mountMany(array $data, array $targets, ?int $userId, string $mountedBy): array
+    {
         $this->assertDate((string) $data['date'], 'Data montării');
         $quantity = (float) $data['quantity'];
         if ($quantity <= 0) {
             throw new InvalidArgumentException('Cantitatea trebuie să fie mai mare decât 0.');
         }
+        if ($targets === []) {
+            throw new InvalidArgumentException('Alege cel puțin o poziție.');
+        }
         $fromStock = $data['source'] === 'stoc';
+        $totalQuantity = $quantity * count($targets);
 
         $this->db->beginTransaction();
         try {
@@ -221,64 +242,77 @@ class VehicleComponentModel extends BaseModel
                 if ((string) ($part['mod_utilizare'] ?? 'stoc') !== 'stoc' || (string) ($part['status_piesa'] ?? 'activa') !== 'activa') {
                     throw new RuntimeException('Piesa nu este activă în stoc; folosește montajul direct.');
                 }
-                if ((float) $part['stoc_curent'] < $quantity) {
-                    throw new RuntimeException('Stoc insuficient: în stoc sunt ' . rtrim(rtrim(number_format((float) $part['stoc_curent'], 2, ',', '.'), '0'), ',') . ' ' . (string) ($part['unitate_masura'] ?? 'buc') . '.');
+                if ((float) $part['stoc_curent'] < $totalQuantity) {
+                    throw new RuntimeException('Stoc insuficient: ' . (count($targets) > 1 ? 'pentru ' . count($targets) . ' poziții trebuie ' . rtrim(rtrim(number_format($totalQuantity, 2, ',', '.'), '0'), ',') . ', ' : '') . 'în stoc sunt ' . rtrim(rtrim(number_format((float) $part['stoc_curent'], 2, ',', '.'), '0'), ',') . ' ' . (string) ($part['unitate_masura'] ?? 'buc') . '.');
                 }
             }
 
-            $old = null;
-            if ($replaceUsageId !== null) {
-                $oldStmt = $this->db->prepare('SELECT * FROM mentenanta_piese_utilizari WHERE id = :id FOR UPDATE');
-                $oldStmt->execute([':id' => $replaceUsageId]);
-                $old = $oldStmt->fetch();
-                if (!$old || (int) $old['vehicle_id'] !== (int) $data['vehicle_id'] || $old['demontat_la'] !== null || (string) $old['locatie'] !== (string) $data['location']) {
-                    throw new RuntimeException('Montarea de înlocuit nu mai este activă pe această poziție. Reîncarcă panoul.');
+            $ids = [];
+            foreach ($targets as $target) {
+                $location = (string) $target['location'];
+                $old = null;
+                if ($target['replace'] === 'auto') {
+                    $activeStmt = $this->db->prepare(
+                        'SELECT * FROM mentenanta_piese_utilizari
+                         WHERE vehicle_id = :vehicle_id AND locatie = :locatie AND component_key = :component_key AND demontat_la IS NULL
+                         ORDER BY id DESC LIMIT 1 FOR UPDATE'
+                    );
+                    $activeStmt->execute([':vehicle_id' => (int) $data['vehicle_id'], ':locatie' => $location, ':component_key' => (string) $data['component_key']]);
+                    $old = $activeStmt->fetch() ?: null;
+                } elseif ($target['replace'] !== null) {
+                    $oldStmt = $this->db->prepare('SELECT * FROM mentenanta_piese_utilizari WHERE id = :id FOR UPDATE');
+                    $oldStmt->execute([':id' => (int) $target['replace']]);
+                    $old = $oldStmt->fetch();
+                    if (!$old || (int) $old['vehicle_id'] !== (int) $data['vehicle_id'] || $old['demontat_la'] !== null || (string) $old['locatie'] !== $location) {
+                        throw new RuntimeException('Montarea de înlocuit nu mai este activă pe această poziție. Reîncarcă panoul.');
+                    }
                 }
-                if ((string) $data['date'] < (string) $old['data_montare']) {
+                if ($old !== null && (string) $data['date'] < (string) $old['data_montare']) {
                     throw new InvalidArgumentException('Data înlocuirii nu poate fi înaintea montării anterioare (' . date('d.m.Y', strtotime((string) $old['data_montare'])) . ').');
                 }
-            }
 
-            if ($fromStock) {
-                $this->db->prepare('UPDATE mentenanta_piese SET stoc_curent = stoc_curent - :quantity, updated_at = :updated_at WHERE id = :id')
-                    ->execute([':quantity' => $quantity, ':updated_at' => date('Y-m-d H:i:s'), ':id' => (int) $part['id']]);
-            }
-            $this->db->prepare(
-                'INSERT INTO mentenanta_piese_utilizari
-                    (part_id, vehicle_id, cantitate, cost_unitar, data_montare, km_montare, montata_de, observatii, direct_mount,
-                     component_key, locatie, axle_no, parte, created_by, created_at)
-                 VALUES
-                    (:part_id, :vehicle_id, :cantitate, :cost_unitar, :data_montare, :km_montare, :montata_de, :observatii, :direct_mount,
-                     :component_key, :locatie, :axle_no, :parte, :created_by, :created_at)'
-            )->execute([
-                ':part_id' => (int) $part['id'],
-                ':vehicle_id' => (int) $data['vehicle_id'],
-                ':cantitate' => $quantity,
-                ':cost_unitar' => $fromStock ? max(0, (float) ($part['pret_achizitie'] ?? 0)) : 0,
-                ':data_montare' => (string) $data['date'],
-                ':km_montare' => $data['km'],
-                ':montata_de' => $mountedBy !== '' ? $mountedBy : null,
-                ':observatii' => trim((string) $data['notes']) !== '' ? trim((string) $data['notes']) : null,
-                ':direct_mount' => $fromStock ? 0 : 1,
-                ':component_key' => (string) $data['component_key'],
-                ':locatie' => (string) $data['location'],
-                ':axle_no' => $data['axle'],
-                ':parte' => $data['side'],
-                ':created_by' => $userId,
-                ':created_at' => date('Y-m-d H:i:s'),
-            ]);
-            $newId = (int) $this->db->lastInsertId();
-
-            if ($old !== null) {
+                if ($fromStock) {
+                    $this->db->prepare('UPDATE mentenanta_piese SET stoc_curent = stoc_curent - :quantity, updated_at = :updated_at WHERE id = :id')
+                        ->execute([':quantity' => $quantity, ':updated_at' => date('Y-m-d H:i:s'), ':id' => (int) $part['id']]);
+                }
                 $this->db->prepare(
-                    'UPDATE mentenanta_piese_utilizari
-                     SET demontat_la = :data, km_demontare = :km, motiv_demontare = "inlocuire", inlocuita_de_id = :new_id
-                     WHERE id = :id'
-                )->execute([':data' => (string) $data['date'], ':km' => $data['km'], ':new_id' => $newId, ':id' => (int) $old['id']]);
+                    'INSERT INTO mentenanta_piese_utilizari
+                        (part_id, vehicle_id, cantitate, cost_unitar, data_montare, km_montare, montata_de, observatii, direct_mount,
+                         component_key, locatie, axle_no, parte, created_by, created_at)
+                     VALUES
+                        (:part_id, :vehicle_id, :cantitate, :cost_unitar, :data_montare, :km_montare, :montata_de, :observatii, :direct_mount,
+                         :component_key, :locatie, :axle_no, :parte, :created_by, :created_at)'
+                )->execute([
+                    ':part_id' => (int) $part['id'],
+                    ':vehicle_id' => (int) $data['vehicle_id'],
+                    ':cantitate' => $quantity,
+                    ':cost_unitar' => $fromStock ? max(0, (float) ($part['pret_achizitie'] ?? 0)) : 0,
+                    ':data_montare' => (string) $data['date'],
+                    ':km_montare' => $data['km'],
+                    ':montata_de' => $mountedBy !== '' ? $mountedBy : null,
+                    ':observatii' => trim((string) $data['notes']) !== '' ? trim((string) $data['notes']) : null,
+                    ':direct_mount' => $fromStock ? 0 : 1,
+                    ':component_key' => (string) $data['component_key'],
+                    ':locatie' => $location,
+                    ':axle_no' => $target['axle'],
+                    ':parte' => $target['side'],
+                    ':created_by' => $userId,
+                    ':created_at' => date('Y-m-d H:i:s'),
+                ]);
+                $newId = (int) $this->db->lastInsertId();
+                $ids[] = $newId;
+
+                if ($old !== null) {
+                    $this->db->prepare(
+                        'UPDATE mentenanta_piese_utilizari
+                         SET demontat_la = :data, km_demontare = :km, motiv_demontare = "inlocuire", inlocuita_de_id = :new_id
+                         WHERE id = :id'
+                    )->execute([':data' => (string) $data['date'], ':km' => $data['km'], ':new_id' => $newId, ':id' => (int) $old['id']]);
+                }
             }
 
             $this->db->commit();
-            return $newId;
+            return $ids;
         } catch (Throwable $exception) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();

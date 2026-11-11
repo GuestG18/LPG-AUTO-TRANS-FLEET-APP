@@ -469,3 +469,14 @@
 .repair-auto-xray-toggle:hover { border-color: #9fb5d6; }
 .repair-auto-xray-empty { margin: 0; padding: 12px; border: 1px dashed #c9d3e0; border-radius: 10px; background: #fafbfd; color: #5b6d8c; }
 a.fx-card.is-button { text-decoration: none; color: inherit; }
+
+/* Km bord completat din SAS la montare (vehicle-xray.js lookupKm). */
+.fx-km-filled { animation: fx-km-filled 1.4s ease-out; }
+@keyframes fx-km-filled { 0%, 40% { box-shadow: 0 0 0 3px rgba(21, 112, 239, .35); background: #eef4ff; } 100% { box-shadow: none; background: #fff; } }
+@media (prefers-reduced-motion: reduce) { .fx-km-filled { animation: none; } }
+
+/* „Data & ora montării” (selectorul din Adauga cursa) in formularele de montare: butonul ramane langa
+   camp, iar calendarul iese peste panoul cu derulare (pozitie fixa, setata in vehicle-xray.js). */
+.fx-form .dispatcher-datetime-input-group { flex-wrap: nowrap; }
+.fx-form .dispatcher-datetime-input-group > .form-control { width: 1%; min-width: 0; font-size: .875rem; }
+.fx-form .dispatcher-datetime-popover.is-floating { position: fixed; z-index: 1090; }

@@ -564,3 +564,7 @@
 .etoll-total__switch button.is-active { background: var(--et-blue); color: #fff; }
 .etoll-total__switch button:disabled { opacity: .45; cursor: not-allowed; }
 .etoll-total__switch button:focus-visible { outline: 2px solid var(--et-blue); outline-offset: 1px; }
+
+/* Sesiune pe drumul la / de la service (facturi.service_km_id), in coloana Beneficiar. */
+.etoll-service-km { white-space: nowrap; }
+.etoll-service-km .bi { opacity: .7; }

@@ -6,6 +6,7 @@ require_once __DIR__ . '/../services/InvoiceTripMatcher.php';
 require_once __DIR__ . '/../services/EtollTripMatcher.php';
 require_once __DIR__ . '/../services/InvoiceStorageService.php';
 require_once __DIR__ . '/AccommodationExpenseModel.php';
+require_once __DIR__ . '/VehicleServiceKmModel.php';
 
 /**
  * Model pentru pagina globala "Facturi".
@@ -25,6 +26,11 @@ require_once __DIR__ . '/AccommodationExpenseModel.php';
  * Cand o factura are cursa, ii corespunde UN rand in curse_cheltuieli (doar partea
  * de cheltuiala; refacturarea o completeaza operatorul), legat prin
  * facturi.curse_cheltuiala_id.
+ *
+ * In locul cursei, o factura poate fi asociata unei perioade Km service (facturi.service_km_id,
+ * ex. taxa eToll pe drumul la service). Atunci ii corespunde un rand in service_km_cheltuieli
+ * (legat prin service_km_cheltuieli.factura_id), nu in curse_cheltuieli: la o factura asociata
+ * e setata exact una dintre cursa_id / service_km_id.
  */
 class InvoiceModel extends BaseModel
 {
@@ -151,6 +157,9 @@ class InvoiceModel extends BaseModel
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
+        // Tabelele Km service (service_km_cheltuieli) inaintea oricarei tranzactii: syncMirror le
+        // foloseste, iar DDL-ul in mijlocul unei tranzactii ar face COMMIT implicit.
+        new VehicleServiceKmModel($this->db);
         $this->ensureColumns();
         $this->ensureCategories();
 
@@ -210,6 +219,18 @@ class InvoiceModel extends BaseModel
         ")->fetchColumn();
         if ($sourceType !== '' && !str_contains($sourceType, "'etoll'")) {
             $this->db->exec("ALTER TABLE facturi MODIFY COLUMN sursa ENUM('scan', 'manual', 'legacy_cazare', 'etoll') NOT NULL");
+        }
+
+        // Asocierea la o perioada Km service (in locul cursei). Tabela Km service se creeaza
+        // inainte (FK); stergerea intrarii lasa factura fara asociere (o reia rematch-ul).
+        if (!in_array('service_km_id', $columns, true)) {
+            new VehicleServiceKmModel($this->db);
+            $this->db->exec('
+                ALTER TABLE facturi
+                    ADD COLUMN service_km_id BIGINT UNSIGNED NULL AFTER curse_cheltuiala_id,
+                    ADD INDEX idx_facturi_service_km (service_km_id),
+                    ADD CONSTRAINT fk_facturi_service_km FOREIGN KEY (service_km_id) REFERENCES vehicule_service_km(id) ON DELETE SET NULL
+            ');
         }
     }
 
@@ -455,11 +476,16 @@ class InvoiceModel extends BaseModel
                 s.nume AS sofer_nume,
                 c.data_inceput,
                 c.data_sfarsit,
-                c.deleted_at AS cursa_deleted_at
+                c.deleted_at AS cursa_deleted_at,
+                sk.id AS service_km_row_id,
+                sk.data_plecare AS service_km_plecare,
+                sk.data_intoarcere AS service_km_intoarcere,
+                sk.service_nume AS service_km_nume
             FROM facturi f
             LEFT JOIN vehicule v ON v.id = f.vehicle_id
             LEFT JOIN soferi s ON s.id = f.driver_id
             LEFT JOIN curse_dispecer c ON c.id = f.cursa_id
+            LEFT JOIN vehicule_service_km sk ON sk.id = f.service_km_id
             WHERE f.id = :id
             LIMIT 1
         ");
@@ -589,6 +615,7 @@ class InvoiceModel extends BaseModel
               AND (
                     f.status IN ('neasociata', 'de_verificat')
                  OR (f.status IN ('asociata_auto', 'asociata_manual')
+                     AND f.service_km_id IS NULL
                      AND (f.cursa_id IS NULL OR c.id IS NULL OR c.deleted_at IS NOT NULL OR f.curse_cheltuiala_id IS NULL))
               )
             ORDER BY f.updated_at ASC, f.id ASC
@@ -628,11 +655,14 @@ class InvoiceModel extends BaseModel
             s.nume AS sofer_nume,
             c.data_inceput,
             c.data_sfarsit,
+            sk.data_plecare AS service_km_plecare,
+            sk.data_intoarcere AS service_km_intoarcere,
             u.nume AS creat_de
         FROM facturi f
         LEFT JOIN vehicule v ON v.id = f.vehicle_id
         LEFT JOIN soferi s ON s.id = f.driver_id
         LEFT JOIN curse_dispecer c ON c.id = f.cursa_id AND c.deleted_at IS NULL
+        LEFT JOIN vehicule_service_km sk ON sk.id = f.service_km_id
         LEFT JOIN utilizatori u ON u.id = f.created_by
     ";
 
@@ -880,7 +910,8 @@ class InvoiceModel extends BaseModel
             return $unchanged;
         }
 
-        if ((string) $row['status'] === 'asociata_manual' && $row['cursa_id'] !== null && $this->raceIsActive((int) $row['cursa_id'])) {
+        if ((string) $row['status'] === 'asociata_manual'
+            && (($row['cursa_id'] !== null && $this->raceIsActive((int) $row['cursa_id'])) || $row['service_km_row_id'] !== null)) {
             $this->syncMirror($id);
 
             return $unchanged;
@@ -901,6 +932,7 @@ class InvoiceModel extends BaseModel
 
         $status = $result['status'];
         $raceId = $result['cursa_id'];
+        $serviceKmId = $result['service_km_id'] ?? null; // doar eToll: drumul la / de la service
         $reason = $result['reason'];
 
         // Cursa e clara, dar randul de cheltuiala nu se poate scrie corect: ramane de verificat.
@@ -908,6 +940,7 @@ class InvoiceModel extends BaseModel
         if ($status === 'asociata_auto' && $blocker !== null) {
             $status = 'de_verificat';
             $raceId = null;
+            $serviceKmId = null;
             $reason = $blocker . ' ' . $reason;
         }
 
@@ -917,6 +950,7 @@ class InvoiceModel extends BaseModel
         if ($duplicate !== null) {
             $status = 'de_verificat';
             $raceId = null;
+            $serviceKmId = null;
             $reason = 'Posibil duplicat al facturii #' . (int) $duplicate['id']
                 . ' (' . (self::SOURCES[(string) $duplicate['sursa']] ?? $duplicate['sursa']) . ', aceeasi data si suma).'
                 . ' Respinge-o daca e dublura sau asociaz-o manual daca e alta cheltuiala.'
@@ -934,9 +968,10 @@ class InvoiceModel extends BaseModel
             }
         }
 
-        $this->applyAssociation($id, $status, $raceId, $result['candidates'], $reason, $result['vehicle_id'], $result['driver_id'], false);
+        $serviceKmId = $status === 'asociata_auto' ? $serviceKmId : null;
+        $this->applyAssociation($id, $status, $raceId, $result['candidates'], $reason, $result['vehicle_id'], $result['driver_id'], false, $serviceKmId);
 
-        return ['status' => $status, 'cursa_id' => $raceId, 'reason' => $reason];
+        return ['status' => $status, 'cursa_id' => $raceId, 'service_km_id' => $serviceKmId, 'reason' => $reason];
     }
 
     /**
@@ -1062,6 +1097,82 @@ class InvoiceModel extends BaseModel
         );
 
         return null;
+    }
+
+    /**
+     * Asociere aleasa de operator cu o perioada Km service (drum la / de la service, in locul
+     * unei curse). Doar pentru facturile proprii (nu cazarile importate). Intoarce eroarea sau null.
+     */
+    public function linkServiceKmManually(int $id, int $serviceKmId): ?string
+    {
+        $row = $this->getById($id);
+        if ($row === null || $row['deleted_at'] !== null) {
+            return 'Factura nu exista.';
+        }
+        if ((string) $row['sursa'] === 'legacy_cazare') {
+            return 'Cazarile importate se asociaza doar cu o cursa.';
+        }
+        $service = $this->serviceKm()->find($serviceKmId);
+        if ($service === null) {
+            return 'Perioada Km service aleasa nu exista.';
+        }
+        if ($row['vehicle_id'] !== null && (int) $row['vehicle_id'] !== (int) $service['vehicle_id']) {
+            return 'Perioada Km service e a altui vehicul decat cel de pe factura.';
+        }
+        $blocker = $this->mirrorBlocker($row);
+        if ($blocker !== null) {
+            return $blocker;
+        }
+
+        $this->applyAssociation(
+            $id,
+            'asociata_manual',
+            null,
+            $this->decodeCandidates($row['match_candidates'] ?? null),
+            'Asociata manual la Km service #' . $serviceKmId . '.',
+            (int) $service['vehicle_id'],
+            $row['driver_id'] !== null ? (int) $row['driver_id'] : ($service['driver_id'] !== null ? (int) $service['driver_id'] : null),
+            false,
+            $serviceKmId
+        );
+
+        return null;
+    }
+
+    /**
+     * Dupa ce o perioada Km service a fost adaugata / modificata / stearsa: facturile eToll ale
+     * vehiculului care asteapta o asociere sau sunt puse automat pe o perioada Km service se
+     * reverifica imediat, fara sa astepte importul eToll. Asocierile manuale si cele automate pe
+     * curse raman cum sunt.
+     *
+     * @return int cate facturi sunt acum pe o perioada Km service
+     */
+    public function rematchEtollForVehicle(int $vehicleId): int
+    {
+        // eToll: cele neasociate + cele puse automat pe Km service; orice sursa: asocierile ramase
+        // fara cursa si fara Km service (intrarea a fost stearsa, FK SET NULL).
+        $stmt = $this->db->prepare("
+            SELECT id FROM facturi
+            WHERE deleted_at IS NULL AND fara_asociere_auto = 0 AND vehicle_id = :vehicle_id AND sursa <> 'legacy_cazare'
+              AND (
+                    (sursa = 'etoll' AND (status IN ('neasociata', 'de_verificat') OR (status = 'asociata_auto' AND cursa_id IS NULL)))
+                 OR (status IN ('asociata_auto', 'asociata_manual') AND cursa_id IS NULL AND service_km_id IS NULL)
+              )
+            ORDER BY id ASC
+            LIMIT 500
+        ");
+        $stmt->bindValue(':vehicle_id', $vehicleId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $associated = 0;
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) ?: [] as $invoiceId) {
+            $result = $this->runMatching((int) $invoiceId);
+            if (($result['service_km_id'] ?? null) !== null) {
+                $associated++;
+            }
+        }
+
+        return $associated;
     }
 
     /**
@@ -1374,6 +1485,7 @@ class InvoiceModel extends BaseModel
                     $this->setMirrorPointer((int) $target['id'], null);
                     $mirror->delete((int) $target['curse_cheltuiala_id']);
                 }
+                $this->serviceKm()->deleteInvoiceExpense((int) $target['id']);
                 $delete = $this->db->prepare('DELETE FROM facturi WHERE id = :id');
                 $delete->bindValue(':id', (int) $target['id'], PDO::PARAM_INT);
                 $delete->execute();
@@ -1403,12 +1515,13 @@ class InvoiceModel extends BaseModel
     /**
      * @param array<int, array<string, mixed>> $candidates
      */
-    private function applyAssociation(int $id, string $status, ?int $raceId, array $candidates, string $reason, ?int $vehicleId, ?int $driverId, bool $noAutoMatch): void
+    private function applyAssociation(int $id, string $status, ?int $raceId, array $candidates, string $reason, ?int $vehicleId, ?int $driverId, bool $noAutoMatch, ?int $serviceKmId = null): void
     {
         $stmt = $this->db->prepare("
             UPDATE facturi
             SET status = :status,
                 cursa_id = :cursa_id,
+                service_km_id = :service_km_id,
                 match_candidates = :match_candidates,
                 match_reason = :match_reason,
                 vehicle_id = :vehicle_id,
@@ -1419,6 +1532,7 @@ class InvoiceModel extends BaseModel
         ");
         $stmt->bindValue(':status', $status, PDO::PARAM_STR);
         $this->bindNullable($stmt, ':cursa_id', $raceId, PDO::PARAM_INT);
+        $this->bindNullable($stmt, ':service_km_id', $raceId === null ? $serviceKmId : null, PDO::PARAM_INT);
         $this->bindNullable($stmt, ':match_candidates', $candidates === [] ? null : json_encode($candidates, JSON_UNESCAPED_UNICODE), PDO::PARAM_STR);
         $stmt->bindValue(':match_reason', mb_substr($reason, 0, 255), PDO::PARAM_STR);
         $this->bindNullable($stmt, ':vehicle_id', $vehicleId, PDO::PARAM_INT);
@@ -1737,11 +1851,17 @@ class InvoiceModel extends BaseModel
 
         $mirror = new TripExpenseMirrorService($this->db);
         $existingId = $row['curse_cheltuiala_id'] !== null ? (int) $row['curse_cheltuiala_id'] : null;
-        $associated = $row['deleted_at'] === null
+        $isLinked = $row['deleted_at'] === null
             && in_array((string) $row['status'], ['asociata_auto', 'asociata_manual'], true)
-            && $row['cursa_id'] !== null
-            && $row['cursa_deleted_at'] === null
             && $this->mirrorBlocker($row) === null;
+        $associated = $isLinked && $row['cursa_id'] !== null && $row['cursa_deleted_at'] === null;
+
+        // Pe Km service: cheltuiala sta in service_km_cheltuieli (nu pe o cursa).
+        if ($isLinked && $row['cursa_id'] === null && $row['service_km_row_id'] !== null) {
+            $this->syncServiceKmMirror($row);
+        } else {
+            $this->serviceKm()->deleteInvoiceExpense($id);
+        }
 
         if (!$associated) {
             if ($existingId !== null) {
@@ -1813,6 +1933,35 @@ class InvoiceModel extends BaseModel
         if ($expenseId !== $existingId) {
             $this->setMirrorPointer($id, $expenseId);
         }
+    }
+
+    /**
+     * Randul din service_km_cheltuieli al unei facturi asociate unei perioade Km service.
+     * Pe service nu exista refacturare (nu e un client): suma intreaga e cheltuiala firmei.
+     */
+    private function syncServiceKmMirror(array $row): void
+    {
+        $id = (int) $row['id'];
+        $hasDocument = trim((string) ($row['document_path'] ?? '')) !== '';
+        $this->serviceKm()->upsertInvoiceExpense($id, (int) $row['service_km_row_id'], [
+            'tip' => isset(VehicleServiceKmModel::EXPENSE_TYPES[(string) $row['tip']]) ? (string) $row['tip'] : 'alte',
+            'suma' => number_format(round((float) $row['valoare_cu_tva'], 2), 2, '.', ''),
+            'data_cheltuiala' => (string) $row['data_document'],
+            'locatie' => mb_substr(trim((string) ($row['furnizor'] ?? '')), 0, 190) ?: null,
+            'observatii' => $this->buildMirrorNotes($row),
+            'document_path' => $hasDocument ? 'facturi:' . $id : null,
+            'document_original_name' => $hasDocument ? (string) ($row['document_original_name'] ?: ('factura_' . $id)) : null,
+            'document_mime' => $hasDocument ? ($row['document_mime'] ?? null) : null,
+            'document_size' => $hasDocument ? (int) ($row['document_size'] ?? 0) : null,
+            'added_by' => $row['created_by'] !== null ? (int) $row['created_by'] : null,
+        ]);
+    }
+
+    private ?VehicleServiceKmModel $serviceKmModel = null;
+
+    private function serviceKm(): VehicleServiceKmModel
+    {
+        return $this->serviceKmModel ??= new VehicleServiceKmModel($this->db);
     }
 
     /** Motivul pentru care factura nu poate deveni cheltuiala de cursa, sau null. */

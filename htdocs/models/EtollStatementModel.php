@@ -51,7 +51,12 @@ class EtollStatementModel
         'distributie' => 'Distributie',
         'primar_distributie' => 'Primar+Distributie',
         'compresor' => 'Compresor',
+        // Nu e o cursa: sesiunea e pe o perioada Km service (facturi.service_km_id).
+        self::SERVICE_KM => 'Km service (drum la service)',
     ];
+
+    /** Valoarea filtrului "Tip transport" pentru sesiunile asociate unei perioade Km service. */
+    public const SERVICE_KM = 'service_km';
 
     /** Starea unei sesiuni: codurile din sessionCheck() + sesiunile inca pornite. */
     public const STATUSES = [
@@ -329,7 +334,8 @@ class EtollStatementModel
             SELECT t.tx_id, t.session_id, t.suma, t.data AS inchisa_la, t.nr_inmatriculare, t.remorci,
                    d.numar_document, d.inceput, d.sfarsit, d.origine, d.destinatie, d.km_tarifabil,
                    d.total_etoll, d.fara_tva, d.tva, d.cota_tva, d.factura_path, d.anexa_path, d.desfasurator_path, d.eroare,
-                   c.id AS cursa_id, c.beneficiar_id, c.tip_transport, bt.nume AS beneficiar
+                   c.id AS cursa_id, c.beneficiar_id, c.tip_transport, bt.nume AS beneficiar,
+                   f.service_km_id, sk.data_plecare AS service_km_plecare, sk.data_intoarcere AS service_km_intoarcere, sk.service_nume AS service_km_nume
             FROM etoll_tranzactii t
             LEFT JOIN etoll_documente d ON d.session_id = t.session_id
             -- Cursa si beneficiarul: dupa ce importul eToll -> Facturi a asociat sesiunea unei curse.
@@ -337,6 +343,8 @@ class EtollStatementModel
                 AND f.deleted_at IS NULL AND f.status IN ('asociata_auto', 'asociata_manual')
             LEFT JOIN curse_dispecer c ON c.id = f.cursa_id AND c.deleted_at IS NULL
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+            -- Sau perioada Km service (drumul la / de la service), cand sesiunea nu e pe o cursa.
+            LEFT JOIN vehicule_service_km sk ON sk.id = f.service_km_id
             WHERE t.tip = 'sesiune' AND t.in_curs = 0 AND t.data >= :s AND t.data < :e
         ";
         $params = [':s' => $from . ' 00:00:00', ':e' => date('Y-m-d', strtotime($to . ' +1 day')) . ' 00:00:00'];
@@ -470,13 +478,16 @@ class EtollStatementModel
         $stmt = $this->db->prepare("
             SELECT t.tx_id, t.session_id, t.suma, t.data, t.nr_inmatriculare, t.remorci,
                    d.numar_document, d.inceput, d.sfarsit, d.origine, d.destinatie, d.km_tarifabil,
-                   c.id AS cursa_id, c.beneficiar_id, c.tip_transport, bt.nume AS beneficiar
+                   c.id AS cursa_id, c.beneficiar_id, c.tip_transport, bt.nume AS beneficiar,
+                   f.service_km_id, sk.data_plecare AS service_km_plecare, sk.data_intoarcere AS service_km_intoarcere, sk.service_nume AS service_km_nume
             FROM etoll_tranzactii t
             LEFT JOIN etoll_documente d ON d.session_id = t.session_id
             LEFT JOIN facturi f ON f.sursa_key = CONCAT('etoll:', t.session_id)
                 AND f.deleted_at IS NULL AND f.status IN ('asociata_auto', 'asociata_manual')
             LEFT JOIN curse_dispecer c ON c.id = f.cursa_id AND c.deleted_at IS NULL
             LEFT JOIN configurare_beneficiari_transport bt ON bt.id = c.beneficiar_id
+            -- Sau perioada Km service (drumul la / de la service), cand sesiunea nu e pe o cursa.
+            LEFT JOIN vehicule_service_km sk ON sk.id = f.service_km_id
             WHERE t.tip = 'sesiune' AND t.in_curs = 1 AND t.data >= :s AND t.data < :e
             ORDER BY t.data ASC, t.tx_id ASC
         ");
@@ -548,7 +559,7 @@ class EtollStatementModel
                 && $wants('cap', self::capacityKey($vehicle['capacitate_transport'] ?? null))
                 && $wants('cat', ((string) ($vehicle['categorie_capacitate_id'] ?? '')) ?: self::NONE)
                 && $wants('ben', ((string) ($row['beneficiar_id'] ?? '')) ?: self::NONE)
-                && $wants('tip', ((string) ($row['tip_transport'] ?? '')) ?: self::NONE)
+                && $wants('tip', ((string) ($row['tip_transport'] ?? '')) ?: (!empty($row['service_km_id']) ? self::SERVICE_KM : self::NONE))
                 && $wants('status', (string) ($row['verificare']['cod'] ?? ''));
         }));
     }

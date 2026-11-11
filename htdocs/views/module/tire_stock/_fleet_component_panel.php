@@ -157,9 +157,10 @@ $configured = array_values(array_filter($panel['components'], static fn (array $
                         <select class="form-select form-select-sm" name="source"><option value="stoc">Din stoc (scade stocul)</option><option value="direct">Montaj direct (piesă adusă de service)</option></select>
                     </div>
                     <div class="col-md-2"><label class="form-label">Cantitate</label><input type="number" class="form-control form-control-sm" name="quantity" value="1" min="0.01" step="0.01" required></div>
-                    <div class="col-md-2"><label class="form-label">Data</label><input type="date" class="form-control form-control-sm" name="date" value="<?= e($today) ?>" max="<?= e($today) ?>" required></div>
+                    <div class="col-md-4" data-km-lookup><?php $dtpLabel = 'Data & ora montării'; $dtpDateName = 'date'; $dtpTimeName = 'time'; include __DIR__ . '/_datetime_field.php'; ?></div>
                     <div class="col-md-3"><label class="form-label">Km bord la montare</label><input type="number" class="form-control form-control-sm" name="km" value="<?= e((string) ($vehicleKm ?? '')) ?>" min="0"></div>
-                    <div class="col-md-9"><label class="form-label">Observații</label><input type="text" class="form-control form-control-sm" name="notes" maxlength="500"></div>
+                    <div class="col-md-5"><label class="form-label">Observații</label><input type="text" class="form-control form-control-sm" name="notes" maxlength="500"></div>
+                    <div class="col-12 small text-muted" data-km-lookup-hint></div>
                 </div>
                 <div class="fx-form-hint small text-muted" data-fx-stock-hint></div>
                 <div class="fx-form-actions"><button type="button" class="btn btn-sm btn-light border" data-fx-close-form>Anulează</button><button type="submit" class="btn btn-sm btn-primary" data-fx-submit>Salvează montarea</button></div>

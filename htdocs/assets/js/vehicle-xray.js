@@ -931,6 +931,7 @@
         if (memberId && this.canIsolate && !this.isVisibleMember(memberId)) { this.setViewMode(this.modeForMember(memberId)); }
         var hot = this.findHot(slotId, memberId);
         if (!hot) { return; }
+        if (this.hooks.onSlot) { this.hooks.onSlot(hot._slot); return; }
         if (this.slotId !== slotId || !this.selection || this.selection.memberId !== Number(hot.dataset.fxMember)) { this.closeInspector(); }
         var axleForm = this.root.querySelector('[data-fx-axle-form]');
         if (axleForm) { axleForm.hidden = true; }
@@ -946,21 +947,12 @@
         if (this.hooks.onLeaveTires) { this.hooks.onLeaveTires(); }
         this.renderFooter();
         this.drillDown(hot);
-        // Configuratia generala (fara vehicul real): schema arata componentele, panoul nu se incarca.
-        if (this.hooks.onSlot) { this.hooks.onSlot(slot); return; }
         this.loadPanel(slot, member, focusKey || '');
     };
 
     // Subcomponenta aleasa in detalierea ansamblului: panoul se reincarca, cu randul ei evidentiat.
     Explorer.prototype.selectSubcomponent = function (componentKey) {
         if (!this.selection || this.selection.type !== 'slot') { return; }
-        if (this.hooks.onSubcomponent) {
-            this.subKey = componentKey;
-            this.stage.querySelectorAll('[data-fx-sub]').forEach(function (node) { node.classList.toggle('is-selected', node.dataset.fxSub === componentKey); });
-            this.drawCalloutLines();
-            this.hooks.onSubcomponent(this.selection.slot, componentKey);
-            return;
-        }
         this.openInspector(componentKey);
     };
 
@@ -1223,6 +1215,13 @@
                         if (result) { hot.classList.add('fx-state-' + STATE_CLASS[result]); }
                     }
                 }
+                // Montarea in lot: punctele celorlalte pozitii au acum si ele inregistrari.
+                if (hot && hot._slot) {
+                    form.querySelectorAll('[name="extra_locations[]"]:checked').forEach(function (box) {
+                        var other = self.root.querySelector('.fx-hot[data-fx-slot="' + hot._slot.category + ':' + box.value + '"][data-fx-member="' + hot.dataset.fxMember + '"]');
+                        if (other && other._slot) { other._slot.records = true; other.classList.add('has-records'); }
+                    });
+                }
                 self.inspectorFlash = data.message;
                 self.openInspector(self.subKey, self.inspectorTab);
                 // Panoul categoriei de sub rand arata aceleasi date: se reincarca si el.
@@ -1280,6 +1279,7 @@
             self.inspector.innerHTML = data.html;
             self.inspector.classList.remove('is-updating');
             self.inspector.querySelector('.fi').insertAdjacentHTML('afterbegin', '<button type="button" class="fi-narrow-toggle" data-fi-narrow-diagram><i class="bi bi-diagram-3" aria-hidden="true"></i>Vezi schema</button>');
+            self.addBatchPositions(slot, member, componentKey);
             self.showInspectorTab(tab || 'details');
             if (self.inspectorFlash) {
                 var body = self.inspector.querySelector('.fi-body');
@@ -1293,6 +1293,43 @@
             self.inspector.classList.remove('is-updating');
             self.inspector.innerHTML = '<div class="fi-loading text-danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> ' + escapeHtml(error.message)
                 + ' <button type="button" class="btn btn-sm btn-light border ms-2" data-fi-close>Închide</button></div>';
+        });
+    };
+
+    // Montare in lot: cand aceeasi piesa exista si pe alte pozitii ale vehiculului (ex. farurile fata +
+    // spate, frana pe fiecare roata), formularul de montare primeste bife pentru ele. Pe o pozitie unde
+    // piesa e deja montata, serverul inlocuieste montarea activa.
+    Explorer.prototype.addBatchPositions = function (slot, member, componentKey) {
+        var form = this.inspector.querySelector('[data-fi-form="mount"]');
+        if (!form || !member) { return; }
+        var others = (member.slots || []).filter(function (item) {
+            return item.category === slot.category && item.location !== slot.location
+                && (!item.components || item.components.indexOf(componentKey) !== -1);
+        });
+        if (!others.length) { return; }
+        var html = '<div class="col-12" data-fi-batch><label class="form-label">Montează și pe</label>'
+            + '<div class="d-flex flex-wrap gap-3 align-items-center">'
+            + others.map(function (item) {
+                return '<label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="extra_locations[]" value="' + escapeHtml(item.location) + '"> '
+                    + escapeHtml(item.label.replace(/^[^·]*·\s*/, '')) + '</label>';
+            }).join('')
+            + '<button type="button" class="btn btn-sm btn-link p-0" data-fi-batch-all>Toate pozițiile</button></div>'
+            + '<div class="small text-muted" data-fi-batch-hint>Cantitatea e per poziție. Unde piesa e deja montată, montarea veche se închide cu motivul „înlocuire”.</div></div>';
+        var notes = form.querySelector('[name="notes"]');
+        var notesCol = notes ? notes.closest('.col-12') : null;
+        if (notesCol) { notesCol.insertAdjacentHTML('beforebegin', html); } else { form.querySelector('.row').insertAdjacentHTML('beforeend', html); }
+        var submit = form.querySelector('[data-fi-submit]');
+        var baseLabel = submit ? submit.textContent : '';
+        var refresh = function () {
+            var count = form.querySelectorAll('[name="extra_locations[]"]:checked').length;
+            if (submit) { submit.textContent = count ? baseLabel + ' (' + (count + 1) + ' poziții)' : baseLabel; }
+        };
+        form.addEventListener('change', function (event) { if (event.target.name === 'extra_locations[]') { refresh(); } });
+        form.querySelector('[data-fi-batch-all]').addEventListener('click', function () {
+            var boxes = form.querySelectorAll('[name="extra_locations[]"]');
+            var all = Array.prototype.every.call(boxes, function (box) { return box.checked; });
+            boxes.forEach(function (box) { box.checked = !all; });
+            refresh();
         });
     };
 
@@ -1390,6 +1427,90 @@
             hint.textContent = 'Montaj direct: stocul nu se modifică (piesa vine de la service / furnizor).';
         }
     };
+
+    /* ---------------------------------------------------------------- km bord din SAS la montare */
+
+    // Formularele de montare (inspector + panoul de sub schema) au „Data & ora montării” (selectorul din
+    // Adauga cursa, datetime-picker-field.js): la deschidere si la orice schimbare, „Km bord” se
+    // completeaza cu odometrul din SAS la acel moment (CAN, altfel GPS).
+    var kmLookupUrl = componentUrl ? componentUrl.replace('tire_fleet_component', 'component_km_at') : '';
+    var lookupKm = function (form) {
+        var picker = form.querySelector('[data-km-lookup]');
+        var timeInput = picker && picker.querySelector('[data-dtp-time]');
+        var dateInput = picker && picker.querySelector('[data-dtp-date]');
+        var kmInput = form.querySelector('[name="km"]');
+        var vehicleInput = form.querySelector('[name="vehicle_id"]');
+        var hint = form.querySelector('[data-km-lookup-hint]');
+        if (!kmLookupUrl || !timeInput || !dateInput || !kmInput || !vehicleInput || !dateInput.value || !timeInput.value) { return; }
+        var token = (form._kmLookup || 0) + 1;
+        form._kmLookup = token;
+        if (hint) { hint.innerHTML = '<span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Se citește km din SAS...'; }
+        var url = kmLookupUrl + (kmLookupUrl.indexOf('?') === -1 ? '?' : '&') + 'vehicle_id=' + encodeURIComponent(vehicleInput.value)
+            + '&date=' + encodeURIComponent(dateInput.value) + '&time=' + encodeURIComponent(timeInput.value);
+        window.fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (form._kmLookup !== token || !hint) { return; }
+                if (!data.ok) {
+                    hint.innerHTML = '<i class="bi bi-info-circle" aria-hidden="true"></i> ' + escapeHtml(data.message || 'Km nu au putut fi citiți din SAS.');
+                    return;
+                }
+                kmInput.value = data.km;
+                kmInput.classList.remove('fx-km-filled');
+                void kmInput.offsetWidth;
+                kmInput.classList.add('fx-km-filled');
+                hint.innerHTML = '<i class="bi bi-broadcast" aria-hidden="true"></i> ' + escapeHtml(data.source_label + ': ' + Number(data.km).toLocaleString('ro-RO') + ' km la ' + dateInput.value.split('-').reverse().join('.') + ' ' + timeInput.value + '. ' + (data.note || ''));
+            })
+            .catch(function () {
+                if (form._kmLookup === token && hint) { hint.textContent = 'SAS nu răspunde acum: completează km manual.'; }
+            });
+    };
+    // Calendarul din formularele de montare sta intr-un panou cu derulare (.fi-body, overflow:auto), care
+    // l-ar taia: deschis, primeste pozitie fixa langa camp (sub el sau deasupra, cat incape).
+    var placePopover = function (picker) {
+        var popover = picker.querySelector('[data-dtp-popover]');
+        var anchor = picker.querySelector('.dispatcher-datetime-input-group');
+        if (!popover || !anchor || popover.hidden) { return; }
+        popover.classList.add('is-floating');
+        var box = anchor.getBoundingClientRect();
+        var width = popover.offsetWidth;
+        var height = popover.offsetHeight;
+        var top = box.bottom + 6;
+        if (top + height > window.innerHeight - 8 && box.top - height - 6 > 8) { top = box.top - height - 6; }
+        popover.style.top = Math.max(8, top) + 'px';
+        popover.style.left = Math.max(8, Math.min(box.left, window.innerWidth - width - 8)) + 'px';
+    };
+    var floatingPicker = null;
+    document.addEventListener('click', function (event) {
+        var picker = event.target.closest && event.target.closest('[data-km-lookup]');
+        window.setTimeout(function () {
+            if (picker && !picker.querySelector('[data-dtp-popover]').hidden) { floatingPicker = picker; placePopover(picker); }
+        }, 0);
+    }, true); // capturare: selectorul opreste propagarea click-ului pe butonul lui
+    var followPopover = function () {
+        if (floatingPicker && !floatingPicker.querySelector('[data-dtp-popover]').hidden) { placePopover(floatingPicker); }
+    };
+    window.addEventListener('scroll', followPopover, true);
+    window.addEventListener('resize', followPopover);
+
+    // Selectorul scrie data/ora in campurile ascunse si emite „change” pe data.
+    document.addEventListener('change', function (event) {
+        var picker = event.target.closest && event.target.closest('[data-km-lookup]');
+        var form = picker && picker.closest('form');
+        if (form) { lookupKm(form); }
+    });
+    // Formularul abia deschis (vine din fetch, butoanele lui au alte handlere): selectorul porneste si
+    // km se citesc dupa ce formularul devine vizibil.
+    document.addEventListener('click', function (event) {
+        if (!event.target.closest('[data-fi-open-form="mount"], [data-fx-open-form="mount"]')) { return; }
+        window.setTimeout(function () {
+            document.querySelectorAll('form[data-fi-form="mount"], form[data-fx-form="mount"]').forEach(function (form) {
+                if (form.hidden || !form.querySelector('[data-km-lookup]')) { return; }
+                if (window.FleetDateTimePicker) { window.FleetDateTimePicker.init(form); }
+                if (!form._kmLookup) { lookupKm(form); }
+            });
+        }, 0);
+    });
 
     window.FleetXray = {
         mount: function (detail, unit, hooks) {

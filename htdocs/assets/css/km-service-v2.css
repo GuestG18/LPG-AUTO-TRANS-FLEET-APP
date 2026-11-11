@@ -239,3 +239,7 @@
     .ksv2-row-lock { grid-row: 1; grid-column: 3; }
     .ksv2-actions { flex-direction: column; }
 }
+
+/* Lista Km service: randul deschide fisa intrarii (cheltuieli, alimentari, eToll). */
+.service-km-row { cursor: pointer; }
+.service-km-row:hover > td { background-color: rgba(13, 110, 253, 0.04); }

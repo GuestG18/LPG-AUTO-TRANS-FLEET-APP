@@ -51,7 +51,7 @@ $serviceKmComponents = static function (?array $intervention): array {
 ?>
 <link rel="stylesheet" href="<?= e(url('assets/css/interventii-v2.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/interventii-v2.css'))) ?>">
 <link rel="stylesheet" href="<?= e(url('assets/css/km-service-v2.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/km-service-v2.css'))) ?>">
-<div class="card border-0 shadow-sm <?= e((string) ($serviceKmCardSpacing ?? 'mt-3')) ?> service-km-card" id="service-km-panel" data-service-km-panel data-driver-map="<?= e((string) json_encode($serviceKmDriversByVehicle)) ?>" data-gps-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'service_km_gps'])) ?>">
+<div class="card border-0 shadow-sm <?= e((string) ($serviceKmCardSpacing ?? 'mt-3')) ?> service-km-card" id="service-km-panel" data-service-km-panel data-view-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'service_km_view'])) ?>" data-driver-map="<?= e((string) json_encode($serviceKmDriversByVehicle)) ?>" data-gps-url="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'service_km_gps'])) ?>">
     <div class="card-header bg-white d-flex justify-content-between align-items-center gap-2 flex-wrap">
         <h3 class="h6 mb-0 d-flex align-items-center gap-2">
             <i class="bi bi-tools" aria-hidden="true"></i>
@@ -303,6 +303,7 @@ $serviceKmComponents = static function (?array $intervention): array {
                         <th scope="col" class="text-end" title="Zile în care vehiculul a fost inactiv (inclusiv ziua plecării și a întoarcerii)">Zile inactiv</th>
                         <th scope="col" class="text-end">Km service</th>
                         <th scope="col" class="text-end" title="Alimentări CardOil asociate în Carburanți cu această perioadă (aceeași regulă ca la curse: între plecare și întoarcere, ±12 h)">Alimentări</th>
+                        <th scope="col" class="text-end" title="Cheltuielile perioadei de service: adăugate din fișă + facturi asociate (ex. taxe eToll pe drumul la service)">Cheltuieli</th>
                         <th scope="col">Service / motiv</th>
                         <th scope="col" title="Componente suspectate trimise intervenției (fără cele excluse de coordonator)">Componente</th>
                         <th scope="col" title="Intervenția din Mentenanță → Intervenții (statusul tehnic, separat de întoarcerea din service)">Intervenție</th>
@@ -334,7 +335,7 @@ $serviceKmComponents = static function (?array $intervention): array {
                         ], JSON_UNESCAPED_UNICODE);
                         $entryIntervention = is_array($entry['interventie'] ?? null) ? $entry['interventie'] : null;
                         ?>
-                        <tr class="<?= !empty($entry['in_service']) ? 'table-warning' : '' ?>">
+                        <tr class="service-km-row<?= !empty($entry['in_service']) ? ' table-warning' : '' ?>" data-service-km-view="<?= e((string) $entry['id']) ?>" title="Clic pentru fișa Km service #<?= e((string) $entry['id']) ?> (cheltuieli, alimentări, intervenție)">
                             <td>
                                 <?php if (!empty($entry['in_service'])): ?>
                                     <span class="badge text-bg-warning"><i class="bi bi-wrench-adjustable" aria-hidden="true"></i> În service</span>
@@ -359,6 +360,14 @@ $serviceKmComponents = static function (?array $intervention): array {
                                         <?= e(format_number_ro((float) $entry['alimentari']['litri'], 0)) ?> L
                                     </a>
                                     <div class="text-muted small"><?= (int) $entry['alimentari']['nr'] ?> alim.</div>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td class="text-end text-nowrap">
+                                <?php if (!empty($entry['cheltuieli'])): ?>
+                                    <?= e(format_number_ro((float) $entry['cheltuieli']['suma'], 2)) ?> lei
+                                    <div class="text-muted small"><?= (int) $entry['cheltuieli']['nr'] ?> chelt.</div>
                                 <?php else: ?>
                                     <span class="text-muted">—</span>
                                 <?php endif; ?>
@@ -406,6 +415,7 @@ $serviceKmComponents = static function (?array $intervention): array {
             </table>
         </div>
         <div class="card-footer bg-white text-muted small">
+            Clic pe un rând deschide fișa perioadei: cheltuieli (+ Adaugă cheltuială), alimentări și taxe eToll asociate.
             Se afișează vehiculele aflate acum în service și perioadele încheiate în ultimele 90 de zile.
             Km service apar separat și în raportul Km pierduți, ca justificare a km GPS rulați fără cursă.
         </div>
@@ -448,8 +458,62 @@ $serviceKmComponents = static function (?array $intervention): array {
     openFromHash();
     window.addEventListener('hashchange', openFromHash);
 
+    // Fisa unei intrari (cheltuieli, alimentari, eToll) in panoul peste pagina, ca fisa cursei.
+    // race-view-overlay.js se incarca dupa acest script: il folosim doar la click / dupa load.
+    function openServiceKmView(id, originEl) {
+        var url = panel.getAttribute('data-view-url') + '&id=' + encodeURIComponent(id);
+        if (window.RaceViewOverlay && typeof window.RaceViewOverlay.openUrl === 'function') {
+            window.RaceViewOverlay.openUrl(url, originEl || null);
+        } else {
+            window.location.href = url;
+        }
+    }
+    panel.addEventListener('click', function (event) {
+        var row = event.target instanceof Element ? event.target.closest('tr[data-service-km-view]') : null;
+        if (!row || event.defaultPrevented || event.button !== 0
+            || event.target.closest('a, button, input, select, textarea, label, form')) {
+            return;
+        }
+        var selection = window.getSelection ? window.getSelection() : null;
+        if (selection && !selection.isCollapsed && row.contains(selection.anchorNode)) {
+            return;
+        }
+        var id = row.getAttribute('data-service-km-view');
+        if (event.ctrlKey || event.metaKey) {
+            window.open(panel.getAttribute('data-view-url') + '&id=' + encodeURIComponent(id), '_blank', 'noopener');
+            return;
+        }
+        openServiceKmView(id, row);
+    });
+    // ?service_km_view=N (link din eToll / Facturi, revenirea dupa "Adauga cheltuiala"): fisa se redeschide.
+    var viewQuery = new URLSearchParams(window.location.search);
+    var viewId = viewQuery.get('service_km_view');
+    if (viewId && /^\d+$/.test(viewId)) {
+        viewQuery.delete('service_km_view');
+        if (window.history && window.history.replaceState) {
+            var rest = viewQuery.toString();
+            window.history.replaceState(null, '', window.location.pathname + (rest ? '?' + rest : '') + window.location.hash);
+        }
+        window.addEventListener('load', function () {
+            setListOpen(true);
+            var row = panel.querySelector('tr[data-service-km-view="' + viewId + '"]');
+            if (row) { row.scrollIntoView({ block: 'center' }); }
+            openServiceKmView(viewId, row || panel);
+        });
+    }
+
     var form = panel.querySelector('[data-service-km-form]');
     if (!form) { return; }
+
+    // "Editeaza" din fisa: panoul se inchide, apoi se deschide formularul pe intrarea respectiva.
+    document.addEventListener('click', function (event) {
+        var trigger = event.target instanceof Element ? event.target.closest('[data-service-km-edit-id]') : null;
+        if (!trigger) { return; }
+        var editButton = panel.querySelector('tr[data-service-km-view="' + trigger.getAttribute('data-service-km-edit-id') + '"] [data-service-km-edit]');
+        if (editButton) {
+            window.setTimeout(function () { editButton.click(); }, 520);
+        }
+    });
 
     var driverMap = {};
     try { driverMap = JSON.parse(panel.getAttribute('data-driver-map') || '{}') || {}; } catch (e) { driverMap = {}; }

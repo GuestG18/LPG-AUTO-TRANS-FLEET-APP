@@ -377,6 +377,7 @@ require_once __DIR__ . '/services/OdometerCenterService.php';
 require_once __DIR__ . '/services/TrailerSasKmService.php';
 require_once __DIR__ . '/services/TireSasKmService.php';
 require_once __DIR__ . '/services/SasCanKmService.php';
+require_once __DIR__ . '/services/ComponentSasKmService.php';
 require_once __DIR__ . '/services/RaceMonthSplitService.php';
 require_once __DIR__ . '/services/WebAuthnService.php';
 require_once __DIR__ . '/services/UserAvatarService.php';

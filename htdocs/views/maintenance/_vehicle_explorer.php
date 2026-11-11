@@ -46,6 +46,7 @@ $explorerAsset = static fn (string $path): string => url($path . '?v=' . (string
         <script type="application/json" id="fxCategories"><?= json_encode($vehicleExplorer['categories'] ?? VehicleComponentRegistry::clientCategories(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>
         <link rel="stylesheet" href="<?= e($explorerAsset('assets/css/vehicle-xray.css')) ?>">
         <script src="<?= e($explorerAsset('assets/js/tire-fleet.js')) ?>"></script>
+        <script src="<?= e($explorerAsset('assets/js/datetime-picker-field.js')) ?>"></script>
         <script src="<?= e($explorerAsset('assets/js/vehicle-xray-engine.js')) ?>"></script>
         <script src="<?= e($explorerAsset('assets/js/vehicle-xray-art.js')) ?>"></script>
         <script src="<?= e($explorerAsset('assets/js/vehicle-xray.js')) ?>"></script>

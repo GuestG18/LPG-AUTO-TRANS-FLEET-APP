@@ -172,6 +172,16 @@ class InvoiceController
             }
         }
 
+        // Perioadele Km service ale vehiculului facturii (drum la / de la service), ca alternativa la cursa.
+        $serviceKmOptions = [];
+        if ($row['data_document'] !== null && $row['vehicle_id'] !== null && (string) $row['sursa'] !== 'legacy_cazare' && can('facturi', 'link')) {
+            try {
+                $serviceKmOptions = (new VehicleServiceKmModel($this->db))->entriesAround((int) $row['vehicle_id'], (string) $row['data_document'], InvoiceTripMatcher::MANUAL_PICK_WINDOW_DAYS);
+            } catch (Throwable $exception) {
+                error_log('[InvoiceController][service_km_options] ' . $exception->getMessage());
+            }
+        }
+
         $hasDocument = $this->storage->resolveReadablePath($row['document_path'] ?? null) !== null;
 
         // Cazarile importate: datele se editeaza in Cazare; asocierea se poate face si
@@ -187,6 +197,7 @@ class InvoiceController
             'invoice' => $row,
             'candidates' => $this->model->decodeCandidates($row['match_candidates'] ?? null),
             'tripOptions' => $tripOptions,
+            'serviceKmOptions' => $serviceKmOptions,
             'vehicles' => $this->model->getVehicles(),
             'drivers' => $this->model->getDrivers(),
             'hasDocument' => $hasDocument,
@@ -321,7 +332,24 @@ class InvoiceController
         ensure_csrf_or_redirect($viewUrl);
         $this->requireLegacyLinkRight($id);
 
-        $raceId = (int) ($_POST['cursa_id'] ?? 0);
+        // "service:<id>" (din lista "Alege alta cursa") sau service_km_id (candidat) = perioada Km service.
+        $choice = (string) ($_POST['cursa_id'] ?? '');
+        $serviceKmId = (int) ($_POST['service_km_id'] ?? 0);
+        if (preg_match('/^service:(\d+)$/', $choice, $match) === 1) {
+            $serviceKmId = (int) $match[1];
+        }
+        if ($serviceKmId > 0) {
+            try {
+                $error = $this->model->linkServiceKmManually($id, $serviceKmId);
+                flash_set($error === null ? 'success' : 'warning', $error ?? ('Factura a fost asociata perioadei Km service #' . $serviceKmId . '. Cheltuiala apare in fisa Km service din Dispecer curse.'));
+            } catch (Throwable $exception) {
+                error_log('[InvoiceController][link_service_km] ' . $exception->getMessage());
+                flash_set('danger', 'Nu s-a putut face asocierea.');
+            }
+            redirect($viewUrl);
+        }
+
+        $raceId = (int) $choice;
         if ($raceId <= 0) {
             flash_set('warning', 'Alege o cursa.');
             redirect($viewUrl);

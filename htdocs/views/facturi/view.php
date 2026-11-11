@@ -6,6 +6,7 @@
 $invoice = is_array($invoice ?? null) ? $invoice : [];
 $candidates = is_array($candidates ?? null) ? $candidates : [];
 $tripOptions = is_array($tripOptions ?? null) ? $tripOptions : [];
+$serviceKmOptions = is_array($serviceKmOptions ?? null) ? $serviceKmOptions : [];
 $vehicles = is_array($vehicles ?? null) ? $vehicles : [];
 $drivers = is_array($drivers ?? null) ? $drivers : [];
 $hasDocument = (bool) ($hasDocument ?? false);
@@ -27,6 +28,12 @@ $previewUrl = $documentUrl . ($firstPage > 1 ? '#page=' . $firstPage : '');
 $id = (int) $invoice['id'];
 $status = (string) $invoice['status'];
 $isAssociated = in_array($status, ['asociata_auto', 'asociata_manual'], true) && $invoice['cursa_id'] !== null;
+// In locul cursei: perioada Km service a vehiculului (drumul la / de la service).
+$linkedServiceKmId = in_array($status, ['asociata_auto', 'asociata_manual'], true) && $invoice['cursa_id'] === null && !empty($invoice['service_km_row_id'])
+    ? (int) $invoice['service_km_row_id']
+    : 0;
+$serviceKmUrl = static fn(int $serviceKmId): string => build_query_url(['page' => 'dispecer_curse', 'service_km_view' => $serviceKmId]) . '#service-km-panel';
+$hasPickOptions = $tripOptions !== [] || $serviceKmOptions !== [];
 $isLegacy = (string) $invoice['sursa'] === 'legacy_cazare';
 $typeConfig = InvoiceModel::TYPES[(string) $invoice['tip']] ?? null;
 $isImage = str_starts_with((string) ($invoice['document_mime'] ?? ''), 'image/');
@@ -138,8 +145,27 @@ require __DIR__ . '/_status.php';
 
     <div class="col-12 col-xl-5">
         <div class="card mb-3">
-            <div class="card-header py-2 fw-semibold">Asociere cursă</div>
+            <div class="card-header py-2 fw-semibold">Asociere cursă / Km service</div>
             <div class="card-body">
+                <?php if ($linkedServiceKmId > 0): ?>
+                    <div class="d-flex justify-content-between align-items-start gap-2">
+                        <div>
+                            <a class="fw-semibold text-decoration-none" href="<?= e($serviceKmUrl($linkedServiceKmId)) ?>"><i class="bi bi-tools" aria-hidden="true"></i> Km service #<?= $linkedServiceKmId ?></a>
+                            <div class="small text-secondary">
+                                <?= e(format_date_ro((string) $invoice['service_km_plecare'])) ?> - <?= !empty($invoice['service_km_intoarcere']) ? e(format_date_ro((string) $invoice['service_km_intoarcere'])) : 'încă în service' ?>
+                                <?php if (trim((string) ($invoice['service_km_nume'] ?? '')) !== ''): ?> · <?= e((string) $invoice['service_km_nume']) ?><?php endif; ?>
+                            </div>
+                            <div class="small text-success"><i class="bi bi-check2-circle" aria-hidden="true"></i> Cheltuiala e în fișa Km service (drum la / de la service), nu pe o cursă.</div>
+                        </div>
+                        <?php if ($canLink): ?>
+                            <form method="post" action="<?= e(build_query_url(['page' => 'facturi', 'action' => 'unlink'])) ?>">
+                                <?= csrf_field() ?>
+                                <input type="hidden" name="id" value="<?= $id ?>">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary" title="Scoate cheltuiala din fișa Km service"><i class="bi bi-scissors" aria-hidden="true"></i> Dezasociază</button>
+                            </form>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
                 <?php if ($isAssociated): ?>
                     <div class="d-flex justify-content-between align-items-start gap-2">
                         <div>
@@ -162,7 +188,7 @@ require __DIR__ . '/_status.php';
                 <?php endif; ?>
 
                 <?php if (trim((string) ($invoice['match_reason'] ?? '')) !== ''): ?>
-                    <div class="small mt-2 <?= $isAssociated ? 'text-secondary' : 'text-warning-emphasis' ?>">
+                    <div class="small mt-2 <?= $isAssociated || $linkedServiceKmId > 0 ? 'text-secondary' : 'text-warning-emphasis' ?>">
                         <i class="bi bi-info-circle" aria-hidden="true"></i>
                         <?php // "duplicat al facturii #23" devine link catre factura respectiva (textul e escapat inainte). ?>
                         <?= preg_replace_callback(
@@ -177,23 +203,31 @@ require __DIR__ . '/_status.php';
                     <div class="small fw-semibold mt-3 mb-1">Curse candidate</div>
                     <div class="list-group list-group-flush facturi-candidates">
                         <?php foreach ($candidates as $candidate): ?>
-                            <?php $candidateId = (int) ($candidate['id'] ?? 0); ?>
+                            <?php
+                            $candidateId = (int) ($candidate['id'] ?? 0);
+                            $candidateIsService = (string) ($candidate['tip'] ?? '') === 'service_km';
+                            $candidateChosen = $candidateIsService ? $linkedServiceKmId === $candidateId : ($isAssociated && (int) $invoice['cursa_id'] === $candidateId);
+                            ?>
                             <div class="list-group-item px-0 d-flex justify-content-between align-items-center gap-2">
                                 <div class="small">
-                                    <a class="fw-semibold text-decoration-none" href="<?= e($tripUrl($candidateId)) ?>" target="_blank" rel="noopener">#<?= $candidateId ?></a>
-                                    <?= e(format_date_ro((string) ($candidate['data_inceput'] ?? ''))) ?> - <?= e(format_date_ro((string) ($candidate['data_sfarsit'] ?? ''))) ?>
+                                    <?php if ($candidateIsService): ?>
+                                        <a class="fw-semibold text-decoration-none" href="<?= e($serviceKmUrl($candidateId)) ?>" target="_blank" rel="noopener"><i class="bi bi-tools" aria-hidden="true"></i> Km service #<?= $candidateId ?></a>
+                                    <?php else: ?>
+                                        <a class="fw-semibold text-decoration-none" href="<?= e($tripUrl($candidateId)) ?>" target="_blank" rel="noopener">#<?= $candidateId ?></a>
+                                    <?php endif; ?>
+                                    <?= e(format_date_ro((string) ($candidate['data_inceput'] ?? ''))) ?> - <?= trim((string) ($candidate['data_sfarsit'] ?? '')) !== '' ? e(format_date_ro((string) $candidate['data_sfarsit'])) : 'în service' ?>
                                     <?php if (trim((string) ($candidate['nr_inmatriculare'] ?? '')) !== ''): ?> · <?= e((string) $candidate['nr_inmatriculare']) ?><?php endif; ?>
                                     <?php if (trim((string) ($candidate['sofer'] ?? '')) !== ''): ?> · <?= e((string) $candidate['sofer']) ?><?php endif; ?>
                                     <div class="text-secondary"><?= e((string) ($candidate['motiv'] ?? '')) ?></div>
                                 </div>
-                                <?php if ($canLink && !($isAssociated && (int) $invoice['cursa_id'] === $candidateId) && $status !== 'respinsa'): ?>
+                                <?php if ($canLink && !$candidateChosen && $status !== 'respinsa' && !($candidateIsService && $isLegacy)): ?>
                                     <form method="post" action="<?= e(build_query_url(['page' => 'facturi', 'action' => 'confirm'])) ?>">
                                         <?= csrf_field() ?>
                                         <input type="hidden" name="id" value="<?= $id ?>">
-                                        <input type="hidden" name="cursa_id" value="<?= $candidateId ?>">
+                                        <input type="hidden" name="<?= $candidateIsService ? 'service_km_id' : 'cursa_id' ?>" value="<?= $candidateId ?>">
                                         <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap"><i class="bi bi-check-lg" aria-hidden="true"></i> Confirmă</button>
                                     </form>
-                                <?php elseif ($isAssociated && (int) $invoice['cursa_id'] === $candidateId): ?>
+                                <?php elseif ($candidateChosen): ?>
                                     <span class="badge bg-success-subtle text-success-emphasis">aleasă</span>
                                 <?php endif; ?>
                             </div>
@@ -207,14 +241,22 @@ require __DIR__ . '/_status.php';
                         <input type="hidden" name="id" value="<?= $id ?>">
                         <label class="form-label small fw-semibold mb-1" for="facturaAltaCursa">Alege altă cursă (±<?= InvoiceTripMatcher::MANUAL_PICK_WINDOW_DAYS ?> zile de la data facturii)</label>
                         <div class="d-flex gap-1">
-                            <select class="form-select form-select-sm" id="facturaAltaCursa" name="cursa_id" required <?= $tripOptions === [] ? 'disabled' : '' ?>>
-                                <option value=""><?= $tripOptions === [] ? ($invoice['data_document'] === null ? 'Completează data facturii' : 'Nicio cursă în interval') : 'Alege cursa…' ?></option>
+                            <select class="form-select form-select-sm" id="facturaAltaCursa" name="cursa_id" required <?= !$hasPickOptions ? 'disabled' : '' ?>>
+                                <option value=""><?= !$hasPickOptions ? ($invoice['data_document'] === null ? 'Completează data facturii' : 'Nicio cursă în interval') : 'Alege cursa…' ?></option>
                                 <?php foreach ($tripOptions as $trip): ?>
                                     <?php if ($isAssociated && (int) $invoice['cursa_id'] === (int) $trip['id']) { continue; } ?>
                                     <option value="<?= (int) $trip['id'] ?>"><?= e($tripLabel($trip)) ?><?= in_array((int) $trip['id'], $candidateIds, true) ? ' ★' : '' ?></option>
                                 <?php endforeach; ?>
+                                <?php if ($serviceKmOptions !== []): ?>
+                                    <optgroup label="Km service (drum la / de la service)">
+                                        <?php foreach ($serviceKmOptions as $serviceOption): ?>
+                                            <?php if ($linkedServiceKmId === (int) $serviceOption['id']) { continue; } ?>
+                                            <option value="service:<?= (int) $serviceOption['id'] ?>"><?= e(VehicleServiceKmModel::label($serviceOption)) ?></option>
+                                        <?php endforeach; ?>
+                                    </optgroup>
+                                <?php endif; ?>
                             </select>
-                            <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap" <?= $tripOptions === [] ? 'disabled' : '' ?>>Asociază</button>
+                            <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap" <?= !$hasPickOptions ? 'disabled' : '' ?>>Asociază</button>
                         </div>
                     </form>
 

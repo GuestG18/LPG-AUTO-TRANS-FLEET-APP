@@ -425,8 +425,10 @@ $associationLabel = static function (array $row): string {
         $title = 'Km service ' . $period . (!empty($row['service_km_nume']) ? ' · ' . (string) $row['service_km_nume'] : '')
             . ($matchType === 'manual' ? ' · asociere manuală' : ' · asociere automată');
 
-        return '<span class="fuel-pill ' . ($matchType === 'manual' ? 'fuel-pill-manual' : 'fuel-pill-auto') . '" title="' . e($title) . '">'
-            . '<i class="bi bi-tools" aria-hidden="true"></i> Km service #' . e((string) $serviceKmId) . '</span>';
+        // Link spre fisa intrarii din Dispecer (cheltuieli, alimentari, taxe eToll).
+        return '<a class="fuel-pill text-decoration-none ' . ($matchType === 'manual' ? 'fuel-pill-manual' : 'fuel-pill-auto') . '" title="' . e($title . ' · deschide fișa Km service') . '"'
+            . ' href="' . e(build_query_url(['page' => 'dispecer_curse', 'service_km_view' => $serviceKmId]) . '#service-km-panel') . '" target="_blank" rel="noopener">'
+            . '<i class="bi bi-tools" aria-hidden="true"></i> Km service #' . e((string) $serviceKmId) . '</a>';
     }
     if ($tripId <= 0 && !empty($row['is_unregistered_vehicle'])) {
         return '<span class="fuel-pill fuel-pill-partial" title="Card fără număr sau număr care nu există în Vehicule: nu are curse, alimentarea nu se asociază">Neînregistrat</span>';
@@ -2694,12 +2696,12 @@ $t0Candidates = is_array($t0ModalMonth['candidates'] ?? null) ? $t0ModalMonth['c
             </div>
             <div class="modal-body">
                 <p class="fuel-modal-subtitle" id="fuelLinkFillupLabel">Alimentare neasociată</p>
-                <label class="form-label" for="fuelLinkTripId">Cursă</label>
+                <label class="form-label" for="fuelLinkTripId">Cursă sau Km service</label>
                 <select class="form-select" id="fuelLinkTripId" name="trip_id" required
                         data-endpoint="<?= e(build_query_url(['page' => 'carburanti', 'action' => 'link_options'])) ?>">
                     <option value="">Selectează cursa</option>
                 </select>
-                <div class="form-text" id="fuelLinkTripHint">Doar cursele vehiculului alimentării, ±10 zile; cele mai apropiate de alimentare sunt primele.</div>
+                <div class="form-text" id="fuelLinkTripHint">Doar cursele și perioadele Km service ale vehiculului alimentării, ±10 zile; cele mai apropiate de alimentare sunt primele.</div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anulează</button>

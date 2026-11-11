@@ -85,6 +85,7 @@ return [
         'tire_fleet_component'       => 'view',
         'tire_fleet_component_inspector' => 'view',
         'component_mount'            => 'components_manage',
+        'component_km_at'            => 'components_manage',
         'component_unmount'          => 'components_manage',
         'component_inspect'          => 'components_manage',
         'axle_attributes_save'       => 'components_manage',

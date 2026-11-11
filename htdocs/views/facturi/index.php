@@ -329,6 +329,9 @@ require __DIR__ . '/_status.php';
                         <?php if ($row['cursa_id'] !== null && $row['data_inceput'] !== null): ?>
                             <a class="text-decoration-none" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'action' => 'edit', 'id' => (int) $row['cursa_id']])) ?>">#<?= (int) $row['cursa_id'] ?></a>
                             <div class="small text-secondary"><?= e(format_date_ro((string) $row['data_inceput'])) ?> - <?= e(format_date_ro((string) $row['data_sfarsit'])) ?></div>
+                        <?php elseif ($row['cursa_id'] === null && !empty($row['service_km_id']) && in_array($status, ['asociata_auto', 'asociata_manual'], true)): ?>
+                            <a class="text-decoration-none" href="<?= e(build_query_url(['page' => 'dispecer_curse', 'service_km_view' => (int) $row['service_km_id']]) . '#service-km-panel') ?>" title="Km service (drum la / de la service)"><i class="bi bi-tools" aria-hidden="true"></i> S#<?= (int) $row['service_km_id'] ?></a>
+                            <?php if (!empty($row['service_km_plecare'])): ?><div class="small text-secondary"><?= e(format_date_ro((string) $row['service_km_plecare'])) ?></div><?php endif; ?>
                         <?php elseif ($status === 'de_verificat' && $row['match_candidates'] !== null): ?>
                             <span class="small text-secondary"><?= count(json_decode((string) $row['match_candidates'], true) ?: []) ?> curse posibile</span>
                         <?php else: ?>
