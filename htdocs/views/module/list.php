@@ -100,12 +100,19 @@ $buildPaginationWindow = static function (int $currentPage, int $totalPages): ar
 <?php if ($isDocumentCostOverrideList): ?><div class="doc-cost-page"><?php endif; ?>
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3<?= $isDocumentCostOverrideList ? ' document-cost-header' : '' ?>">
     <?php if ($isMaintenanceTireStockPage): ?>
-        <?php $tireFleetMode = (string) ($_GET['mode'] ?? '') === 'inventar' ? 'inventar' : 'vehicule'; ?>
+        <?php
+        // Vederea pe vehicule are doua tab-uri (grele / usoare) peste acelasi panou; inventarul e al treilea.
+        $tireFleetModeParam = (string) ($_GET['mode'] ?? '');
+        $tireFleetMode = $tireFleetModeParam === 'inventar' ? 'inventar' : 'vehicule';
+        $tireFleetClass = $tireFleetModeParam === 'usoare' ? 'usoare' : 'grele';
+        $tireFleetTab = $tireFleetMode === 'inventar' ? 'inventar' : $tireFleetClass;
+        ?>
         <div class="d-flex flex-wrap align-items-center gap-3">
             <h2 class="h4 ft-title"><?= e(FLEET_STOCK_PAGE_TITLE) ?> <span class="ft-title-sub">— Fleet Management</span></h2>
             <div class="ft-mode-switch" role="tablist" aria-label="Vedere">
-                <button type="button" role="tab" data-ft-mode="vehicule" class="<?= $tireFleetMode === 'vehicule' ? 'is-active' : '' ?>" aria-selected="<?= $tireFleetMode === 'vehicule' ? 'true' : 'false' ?>"><i class="bi bi-truck me-1" aria-hidden="true"></i>Vehicule</button>
-                <button type="button" role="tab" data-ft-mode="inventar" class="<?= $tireFleetMode === 'inventar' ? 'is-active' : '' ?>" aria-selected="<?= $tireFleetMode === 'inventar' ? 'true' : 'false' ?>"><i class="bi bi-boxes me-1" aria-hidden="true"></i>Inventar anvelope</button>
+                <button type="button" role="tab" data-ft-mode="grele" class="<?= $tireFleetTab === 'grele' ? 'is-active' : '' ?>" aria-selected="<?= $tireFleetTab === 'grele' ? 'true' : 'false' ?>"><i class="bi bi-truck me-1" aria-hidden="true"></i>Vehicule grele</button>
+                <button type="button" role="tab" data-ft-mode="usoare" class="<?= $tireFleetTab === 'usoare' ? 'is-active' : '' ?>" aria-selected="<?= $tireFleetTab === 'usoare' ? 'true' : 'false' ?>"><i class="bi bi-car-front me-1" aria-hidden="true"></i>Vehicule ușoare</button>
+                <button type="button" role="tab" data-ft-mode="inventar" class="<?= $tireFleetTab === 'inventar' ? 'is-active' : '' ?>" aria-selected="<?= $tireFleetTab === 'inventar' ? 'true' : 'false' ?>"><i class="bi bi-boxes me-1" aria-hidden="true"></i>Inventar anvelope</button>
             </div>
         </div>
     <?php else: ?>

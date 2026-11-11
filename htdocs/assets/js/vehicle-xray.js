@@ -931,7 +931,6 @@
         if (memberId && this.canIsolate && !this.isVisibleMember(memberId)) { this.setViewMode(this.modeForMember(memberId)); }
         var hot = this.findHot(slotId, memberId);
         if (!hot) { return; }
-        if (this.hooks.onSlot) { this.hooks.onSlot(hot._slot); return; }
         if (this.slotId !== slotId || !this.selection || this.selection.memberId !== Number(hot.dataset.fxMember)) { this.closeInspector(); }
         var axleForm = this.root.querySelector('[data-fx-axle-form]');
         if (axleForm) { axleForm.hidden = true; }
@@ -947,12 +946,21 @@
         if (this.hooks.onLeaveTires) { this.hooks.onLeaveTires(); }
         this.renderFooter();
         this.drillDown(hot);
+        // Configuratia generala (fara vehicul real): schema arata componentele, panoul nu se incarca.
+        if (this.hooks.onSlot) { this.hooks.onSlot(slot); return; }
         this.loadPanel(slot, member, focusKey || '');
     };
 
     // Subcomponenta aleasa in detalierea ansamblului: panoul se reincarca, cu randul ei evidentiat.
     Explorer.prototype.selectSubcomponent = function (componentKey) {
         if (!this.selection || this.selection.type !== 'slot') { return; }
+        if (this.hooks.onSubcomponent) {
+            this.subKey = componentKey;
+            this.stage.querySelectorAll('[data-fx-sub]').forEach(function (node) { node.classList.toggle('is-selected', node.dataset.fxSub === componentKey); });
+            this.drawCalloutLines();
+            this.hooks.onSubcomponent(this.selection.slot, componentKey);
+            return;
+        }
         this.openInspector(componentKey);
     };
 

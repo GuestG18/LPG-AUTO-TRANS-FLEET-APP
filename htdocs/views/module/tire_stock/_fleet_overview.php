@@ -10,8 +10,17 @@
 $fleetUnits = is_array($fleetTireOverview['units'] ?? null) ? $fleetTireOverview['units'] : [];
 $fleetKpi = is_array($fleetTireOverview['kpi'] ?? null) ? $fleetTireOverview['kpi'] : [];
 $fleetKindOptions = is_array($fleetTireOverview['kind_options'] ?? null) ? $fleetTireOverview['kind_options'] : [];
+// Tab-ul activ (Vehicule grele / ușoare) filtrează rândurile; numărătorile pornesc pe tab-ul curent.
+$fleetActiveClass = isset($tireFleetClass) && $tireFleetClass === 'usoare' ? 'usoare' : 'grele';
 $fleetStatusCounts = ['ok' => 0, 'warn' => 0, 'crit' => 0, 'none' => 0];
+$fleetClassCount = 0;
+$fleetKindClass = [];
 foreach ($fleetUnits as $fleetUnit) {
+    $fleetKindClass[$fleetUnit['kind']] = $fleetUnit['vehicle_class'];
+    if ($fleetUnit['vehicle_class'] !== $fleetActiveClass) {
+        continue;
+    }
+    $fleetClassCount++;
     $fleetStatusCounts[$fleetUnit['status']] = ($fleetStatusCounts[$fleetUnit['status']] ?? 0) + 1;
 }
 $fleetTotalTires = (int) ($fleetKpi['total_tires'] ?? 0);
@@ -67,7 +76,7 @@ $fleetFormatPercent = static fn ($value): string => $value === null ? '' : numbe
             <button type="button" class="ft-search-clear" data-ft-search-clear aria-label="Șterge căutarea" hidden><i class="bi bi-x-lg"></i></button>
         </div>
         <div class="ft-chips" role="group" aria-label="Status vehicul">
-            <button type="button" class="ft-chip is-active" data-ft-status="" aria-pressed="true"><span>Toate (<span data-ft-count="all"><?= e((string) count($fleetUnits)) ?></span>)</span></button>
+            <button type="button" class="ft-chip is-active" data-ft-status="" aria-pressed="true"><span>Toate (<span data-ft-count="all"><?= e((string) $fleetClassCount) ?></span>)</span></button>
             <button type="button" class="ft-chip" data-ft-status="ok" aria-pressed="false"><span class="ft-chip-dot is-ok"></span><span>OK (<span data-ft-count="ok"><?= e((string) $fleetStatusCounts['ok']) ?></span>)</span></button>
             <button type="button" class="ft-chip" data-ft-status="warn" aria-pressed="false"><span class="ft-chip-dot is-warn"></span><span>Atenție (<span data-ft-count="warn"><?= e((string) $fleetStatusCounts['warn']) ?></span>)</span></button>
             <button type="button" class="ft-chip" data-ft-status="crit" aria-pressed="false"><span class="ft-chip-dot is-crit"></span><span>Critic (<span data-ft-count="crit"><?= e((string) $fleetStatusCounts['crit']) ?></span>)</span></button>
@@ -77,7 +86,8 @@ $fleetFormatPercent = static fn ($value): string => $value === null ? '' : numbe
             <select class="form-select" id="ftKind" data-ft-kind>
                 <option value="">Toate</option>
                 <?php foreach ($fleetKindOptions as $kindValue => $kindLabel): ?>
-                    <option value="<?= e((string) $kindValue) ?>"><?= e((string) $kindLabel) ?></option>
+                    <?php $kindClass = $fleetKindClass[$kindValue] ?? 'grele'; ?>
+                    <option value="<?= e((string) $kindValue) ?>" data-class="<?= e($kindClass) ?>"<?= $kindClass !== $fleetActiveClass ? ' hidden disabled' : '' ?>><?= e((string) $kindLabel) ?></option>
                 <?php endforeach; ?>
             </select>
         </div>
@@ -102,7 +112,7 @@ $fleetFormatPercent = static fn ($value): string => $value === null ? '' : numbe
             <div></div>
             <div>Vehicul</div>
             <div>Configurație</div>
-            <div>Schema anvelope (cap tractor + semiremorcă)</div>
+            <div data-ft-schema-head><?= $fleetActiveClass === 'usoare' ? 'Schema anvelope' : 'Schema anvelope (cap tractor + semiremorcă)' ?></div>
             <div>Montate / Total</div>
             <div>Uzură medie</div>
             <div>Status</div>
@@ -123,7 +133,7 @@ $fleetFormatPercent = static fn ($value): string => $value === null ? '' : numbe
                     : build_query_url(['page' => 'vehicule', 'action' => 'show', 'id' => $mainVehicleId]);
                 $detailId = 'ftDetail' . str_replace('-', '_', $unitKey);
                 ?>
-                <article class="ft-unit" id="vehicul-<?= e($unitKey) ?>" data-ft-unit="<?= e($unitKey) ?>" data-kind="<?= e((string) $fleetUnit['kind']) ?>" data-status="<?= e($unitStatus) ?>" data-fill="<?= e($unitFill) ?>" data-search="<?= e((string) $fleetUnit['search']) ?>">
+                <article class="ft-unit" id="vehicul-<?= e($unitKey) ?>" data-ft-unit="<?= e($unitKey) ?>" data-kind="<?= e((string) $fleetUnit['kind']) ?>" data-class="<?= e((string) $fleetUnit['vehicle_class']) ?>" data-status="<?= e($unitStatus) ?>" data-fill="<?= e($unitFill) ?>" data-search="<?= e((string) $fleetUnit['search']) ?>">
                     <div class="ft-unit-row ft-grid-cols">
                         <button type="button" class="ft-chevron" data-ft-toggle aria-expanded="false" aria-controls="<?= e($detailId) ?>" aria-label="Detalii anvelope <?= e((string) $fleetUnit['plate']) ?>"><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
                         <div class="ft-vehicle">

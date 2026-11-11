@@ -4637,6 +4637,9 @@ class TireModel extends BaseModel
             'key' => implode('-', array_map(static fn (array $member): string => (string) $member['vehicle_id'], $members)),
             'kind' => $kind,
             'kind_label' => self::FLEET_KIND_LABELS[$kind] ?? 'Vehicul',
+            // Tab-urile „Vehicule grele / ușoare”: ușoare = autoturisme / autoutilitare (autovehicul),
+            // ca în Documente obligatorii (DocumentModel::VEHICLE_DOCUMENT_CATEGORIES).
+            'vehicle_class' => $kind === 'autovehicul' ? 'usoare' : 'grele',
             'plate' => $first['plate'],
             'make' => $first['make'],
             'config_label' => $configLabel,

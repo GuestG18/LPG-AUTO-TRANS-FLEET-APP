@@ -312,7 +312,7 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
                                 $editId = $section['key'] . '-' . $row['key'];
                                 $money = static fn (string $value, string $unit): string => $value === '' ? '—' : $value . ' ' . $unit;
                                 ?>
-                                <div class="as-row" role="row" data-as-row data-name="<?= e(mb_strtolower($row['name'], 'UTF-8')) ?>">
+                                <div class="as-row" role="row" data-as-row data-component-key="<?= e($row['key']) ?>" data-name="<?= e(mb_strtolower($row['name'], 'UTF-8')) ?>">
                                     <span role="cell" class="as-name"><strong><?= e($row['name']) ?></strong><?php if ($row['code'] !== ''): ?><small><?= e($row['code']) ?></small><?php endif; ?></span>
                                     <span role="cell" data-label="Axe"><?= $section['axle_scoped'] ? e($axleText($row['kinds'])) : '—' ?></span>
                                     <span role="cell" data-label="Interval"><?= e($money($row['interval'], $row['unit'])) ?></span>

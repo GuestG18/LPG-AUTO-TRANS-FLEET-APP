@@ -506,6 +506,8 @@
     var emptyEl = document.querySelector('[data-ft-empty]');
     var params = new URLSearchParams(window.location.search);
     var state = {
+        // Tab-ul Vehicule grele / Vehicule ușoare (?mode=usoare); inventarul nu schimbă clasa.
+        vclass: params.get('mode') === 'usoare' ? 'usoare' : 'grele',
         q: params.get('vq') || '',
         status: params.get('vst') || '',
         kind: params.get('vtip') || '',
@@ -534,6 +536,7 @@
 
     var matches = function (unitEl, ignoreStatus) {
         var tokens = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+        if ((unitEl.dataset.class || 'grele') !== state.vclass) { return false; }
         var haystack = unitEl.dataset.search || '';
         if (!tokens.every(function (token) { return haystack.indexOf(token) !== -1; })) { return false; }
         if (state.kind && unitEl.dataset.kind !== state.kind) { return false; }
@@ -574,7 +577,12 @@
         var start = (state.page - 1) * perPage;
         var shown = visible.slice(start, start + perPage);
         unitEls.forEach(function (unitEl) { unitEl.hidden = shown.indexOf(unitEl) === -1; });
-        if (emptyEl && unitEls.length > 0) { emptyEl.hidden = visible.length > 0; }
+        if (emptyEl && unitEls.length > 0) {
+            emptyEl.hidden = visible.length > 0;
+            var classHasUnits = unitEls.some(function (unitEl) { return (unitEl.dataset.class || 'grele') === state.vclass; });
+            emptyEl.lastChild.textContent = classHasUnits ? 'Niciun vehicul nu corespunde filtrelor.'
+                : (state.vclass === 'usoare' ? 'Nu există vehicule ușoare active.' : 'Nu există vehicule grele active.');
+        }
         if (rangeEl) {
             rangeEl.textContent = visible.length === 0 ? 'Niciun vehicul afișat'
                 : 'Afișare ' + (start + 1) + '–' + (start + shown.length) + ' din ' + visible.length + (visible.length === 1 ? ' vehicul' : ' vehicule');
@@ -656,19 +664,48 @@
 
     /* ------------------------------------------------------------------ Vehicule / Inventar */
 
+    // Clasa activa: randurile, optiunile din „Tip vehicul” si antetul schemei.
+    var setVehicleClass = function (vclass) {
+        var changed = state.vclass !== vclass;
+        state.vclass = vclass;
+        if (kindSelect) {
+            Array.prototype.forEach.call(kindSelect.options, function (option) {
+                if (!option.value) { return; }
+                var other = (option.dataset.class || 'grele') !== vclass;
+                option.hidden = other;
+                option.disabled = other;
+            });
+            if (kindSelect.value && kindSelect.selectedOptions[0] && kindSelect.selectedOptions[0].disabled) {
+                kindSelect.value = '';
+                state.kind = '';
+            }
+        }
+        var schemaHead = document.querySelector('[data-ft-schema-head]');
+        if (schemaHead) { schemaHead.textContent = vclass === 'usoare' ? 'Schema anvelope' : 'Schema anvelope (cap tractor + semiremorcă)'; }
+        if (changed) {
+            unitEls.forEach(function (unitEl) { if (unitEl.classList.contains('is-open')) { setOpen(unitEl, false); } });
+        }
+    };
+
     document.querySelectorAll('[data-ft-mode]').forEach(function (button) {
         button.addEventListener('click', function () {
             var mode = button.dataset.ftMode;
+            var pane = mode === 'inventar' ? 'inventar' : 'vehicule';
             document.querySelectorAll('[data-ft-mode]').forEach(function (other) {
                 var active = other === button;
                 other.classList.toggle('is-active', active);
                 other.setAttribute('aria-selected', active ? 'true' : 'false');
             });
-            document.querySelectorAll('[data-ft-pane]').forEach(function (pane) { pane.hidden = pane.dataset.ftPane !== mode; });
+            document.querySelectorAll('[data-ft-pane]').forEach(function (paneEl) { paneEl.hidden = paneEl.dataset.ftPane !== pane; });
             var url = new URLSearchParams(window.location.search);
-            if (mode === 'inventar') { url.set('mode', 'inventar'); } else { url.delete('mode'); }
-            window.history.replaceState(null, '', window.location.pathname + '?' + url.toString());
-            syncReturnQueries();
+            if (mode === 'grele') { url.delete('mode'); } else { url.set('mode', mode); }
+            window.history.replaceState(null, '', window.location.pathname + '?' + url.toString() + window.location.hash);
+            if (pane === 'vehicule') {
+                setVehicleClass(mode);
+                apply(false);
+            } else {
+                syncReturnQueries();
+            }
         });
     });
 
@@ -989,12 +1026,18 @@
         }
         var unitEl = targetKey ? findUnitEl(targetKey) : null;
         if (!unitEl) { return; }
+        // Vehiculul e pe celalalt tab (grele / usoare): se comuta tab-ul.
+        var unitClass = unitEl.dataset.class || 'grele';
+        if (unitClass !== state.vclass) {
+            var tabButton = document.querySelector('[data-ft-mode="' + unitClass + '"]');
+            if (tabButton) { tabButton.click(); }
+        }
         if (unitEl.hidden) {
             state.q = ''; state.status = ''; state.kind = ''; state.fill = '';
             if (searchInput) { searchInput.value = ''; }
             if (kindSelect) { kindSelect.value = ''; }
             if (fillSelect) { fillSelect.value = ''; }
-            var visibleIndex = unitEls.indexOf(unitEl);
+            var visibleIndex = unitEls.filter(function (el) { return (el.dataset.class || 'grele') === state.vclass; }).indexOf(unitEl);
             state.page = state.perPage > 0 ? Math.floor(visibleIndex / state.perPage) + 1 : 1;
             apply(true);
         }
