@@ -421,10 +421,21 @@
                 + esc(other.denumire) + (other.vascozitate ? ' <small class="text-muted">' + esc(other.vascozitate) + '</small>' : '') + '</label>';
         }).join('') || '<small class="text-muted">Niciun alt produs cu aceeași unitate de măsură.</small>' : '';
         productForm.querySelector('[data-cons-product-delete]').classList.toggle('d-none', !p);
-        partsSelected = p ? (p.piese || []).slice() : [];
+        // Se alege doar categoria; piesele bifate individual (salvări vechi) apar ca bifă pe categoria lor.
+        partsSelected = [];
+        (p ? p.piese || [] : []).forEach(function (key) {
+            var part = key.indexOf('cat:') === 0 ? null : parts.filter(function (x) { return x.key === key; })[0];
+            var cat = part ? 'cat:' + part.category : (key.indexOf('cat:') === 0 ? key : null);
+            if (cat && partsSelected.indexOf(cat) === -1) { partsSelected.push(cat); }
+        });
         productForm.querySelector('[data-cons-parts-all]').checked = false;
         productForm.querySelector('[data-cons-parts-search]').value = '';
         renderParts();
+        platesSelected = p ? (p.vehicule || []).slice() : [];
+        productForm.querySelector('[name="compat_mode"][value="' + (platesSelected.length ? 'vehicule' : 'tipuri') + '"]').checked = true;
+        productForm.querySelector('[data-cons-plates-search]').value = '';
+        syncCompatMode();
+        renderPlates();
         document.getElementById('consProductTitle').textContent = p ? p.denumire : 'Produs nou';
         panel.api.show();
     }
@@ -439,23 +450,91 @@
         var categories = (boot.fluidPartCategories || {})[fluid] || null;
         var showAll = productForm.querySelector('[data-cons-parts-all]').checked || !categories;
         var term = plain(productForm.querySelector('[data-cons-parts-search]').value.trim());
-        var list = parts.filter(function (part) {
-            var match = showAll || categories.indexOf(plain(part.category)) !== -1;
-            return (match || partsSelected.indexOf(part.key) !== -1) && (term === '' || plain(part.name + ' ' + part.category).indexOf(term) !== -1);
-        });
+        // Doar categoriile principale: „cat:Motor” = toate piesele din Motor (și cele adăugate ulterior în ea).
+        var names = [];
+        parts.forEach(function (part) { if (part.category && names.indexOf(part.category) === -1) { names.push(part.category); } });
         var html = '';
-        var group = null;
-        list.slice().sort(function (a, b) { return a.category.localeCompare(b.category) || a.name.localeCompare(b.name); }).forEach(function (part) {
-            if (part.category !== group) { group = part.category; html += '<div class="cons-parts-group">' + esc(group) + '</div>'; }
-            html += '<label><input type="checkbox" name="componente_vehicul[]" value="' + esc(part.key) + '"'
-                + (partsSelected.indexOf(part.key) !== -1 ? ' checked' : '') + '> ' + esc(part.name) + '</label>';
+        names.sort(function (a, b) { return a.localeCompare(b); }).forEach(function (name) {
+            var picked = partsSelected.indexOf('cat:' + name) !== -1;
+            var match = showAll || categories.indexOf(plain(name)) !== -1;
+            if (!(match || picked) || (term !== '' && plain(name).indexOf(term) === -1)) { return; }
+            html += '<label><input type="checkbox" name="componente_vehicul[]" value="' + esc('cat:' + name) + '"'
+                + (picked ? ' checked' : '') + '> ' + esc(name) + '</label>';
         });
-        box.innerHTML = html || '<div class="cons-parts-empty">Nicio piesă potrivită. Bifează „Arată toate piesele din catalog”.</div>';
+        box.innerHTML = html || '<div class="cons-parts-empty">Nicio categorie potrivită. Bifează „Arată toate categoriile din catalog”.</div>';
         productForm.querySelector('[data-cons-parts-hint]').textContent = !fluid
-            ? 'Alege întâi tipul fluidului; lista arată piesele din Catalog componente potrivite.'
-            : (categories ? 'Piese din categoriile potrivite pentru acest fluid (' + categories.join(', ') + ').' : 'Pentru acest tip de fluid se arată toate piesele.');
+            ? 'Alege întâi tipul fluidului; lista arată categoriile din Catalog componente potrivite.'
+            : (categories ? 'Categoriile potrivite pentru acest fluid (' + categories.join(', ') + ').' : 'Pentru acest tip de fluid se arată toate categoriile.');
+    }
+    // Compatibilitate pe numere de inmatriculare, grupate pe categoria de capacitate (ca build_vehicle_capacity_groups()).
+    var platesSelected = [];
+    var plateGroups = (function () {
+        var map = {};
+        vehicles.forEach(function (v) {
+            var key = v.cat_id > 0 ? 'cat_' + v.cat_id : 'fara';
+            if (!map[key]) { map[key] = { key: key, label: v.cat_id > 0 && v.cat ? v.cat : 'Fără categorie', order: v.cat_id > 0 ? v.cat_order : Infinity, items: [] }; }
+            map[key].items.push(v);
+        });
+        return Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) {
+            return (a.order === b.order ? 0 : (a.order < b.order ? -1 : 1)) || a.label.localeCompare(b.label);
+        });
+    })();
+    var typeLabels = { camion: 'Camion', cap_tractor: 'Cap tractor', semiremorca: 'Semiremorcă' };
+    function syncCompatMode() {
+        var plates = productForm.querySelector('[name="compat_mode"]:checked').value === 'vehicule';
+        productForm.querySelector('[data-cons-compat-types]').classList.toggle('d-none', plates);
+        productForm.querySelector('[data-cons-compat-plates]').classList.toggle('d-none', !plates);
+    }
+    function renderPlates() {
+        var box = productForm.querySelector('[data-cons-plates]');
+        var term = plain(productForm.querySelector('[data-cons-plates-search]').value.trim());
+        var html = '';
+        plateGroups.forEach(function (group) {
+            var items = group.items.filter(function (v) { return term === '' || plain(v.label + ' ' + group.label).indexOf(term) !== -1; });
+            if (!items.length) { return; }
+            var picked = group.items.filter(function (v) { return platesSelected.indexOf(v.id) !== -1; }).length;
+            var open = term !== '' || picked > 0;
+            html += '<div class="cons-plates-group' + (open ? '' : ' is-collapsed') + '">'
+                + '<div class="cons-plates-head"><input type="checkbox" data-plates-group-toggle="' + esc(group.key) + '"'
+                + (picked === group.items.length ? ' checked' : '') + (picked > 0 && picked < group.items.length ? ' data-indeterminate="1"' : '')
+                + ' aria-label="Selectează toată categoria ' + esc(group.label) + '"><span data-plates-expand>' + esc(group.label)
+                + '</span><span class="cons-plates-badge">' + picked + '/' + group.items.length + '</span><i class="bi bi-chevron-down" data-plates-expand></i></div>';
+            items.forEach(function (v) {
+                var detail = v.label.indexOf(' - ') !== -1 ? v.label.slice(v.label.indexOf(' - ') + 3).trim() : '';
+                html += '<label class="cons-plates-item"><input type="checkbox" name="vehicule_ids[]" value="' + v.id + '"'
+                    + (platesSelected.indexOf(v.id) !== -1 ? ' checked' : '') + '> <strong>' + esc(v.plate || v.label) + '</strong> <small class="text-muted">'
+                    + esc(detail) + (typeLabels[v.type] ? ' · ' + esc(typeLabels[v.type]) : '') + '</small></label>';
+            });
+            html += '</div>';
+        });
+        box.innerHTML = html || '<div class="cons-parts-empty">Niciun vehicul găsit.</div>';
+        box.querySelectorAll('[data-indeterminate]').forEach(function (el) { el.indeterminate = true; });
+        // Vehiculele bifate dar ascunse de cautare se trimit oricum.
+        box.insertAdjacentHTML('beforeend', platesSelected.filter(function (id) {
+            return !box.querySelector('[name="vehicule_ids[]"][value="' + id + '"]');
+        }).map(function (id) { return '<input type="hidden" name="vehicule_ids[]" value="' + id + '">'; }).join(''));
+        productForm.querySelector('[data-cons-plates-count]').textContent = platesSelected.length + (platesSelected.length === 1 ? ' selectat' : ' selectate');
     }
     if (productForm) {
+        productForm.querySelectorAll('[name="compat_mode"]').forEach(function (r) { r.addEventListener('change', syncCompatMode); });
+        productForm.querySelector('[data-cons-plates-search]').addEventListener('input', renderPlates);
+        productForm.querySelector('[data-cons-plates]').addEventListener('click', function (event) {
+            if (event.target.closest('[data-plates-expand]')) { event.target.closest('.cons-plates-group').classList.toggle('is-collapsed'); }
+        });
+        productForm.querySelector('[data-cons-plates]').addEventListener('change', function (event) {
+            var t = event.target;
+            if (t.name === 'vehicule_ids[]') {
+                var id = Number(t.value);
+                platesSelected = platesSelected.filter(function (x) { return x !== id; });
+                if (t.checked) { platesSelected.push(id); }
+            } else if (t.dataset.platesGroupToggle) {
+                var group = plateGroups.filter(function (g) { return g.key === t.dataset.platesGroupToggle; })[0];
+                var ids = group ? group.items.map(function (v) { return v.id; }) : [];
+                platesSelected = platesSelected.filter(function (x) { return ids.indexOf(x) === -1; });
+                if (t.checked) { platesSelected = platesSelected.concat(ids); }
+            } else { return; }
+            renderPlates();
+        });
         productForm.addEventListener('change', function (event) {
             if (event.target.name === 'componente_vehicul[]') {
                 var key = event.target.value;

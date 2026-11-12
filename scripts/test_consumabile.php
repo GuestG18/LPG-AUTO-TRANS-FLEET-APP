@@ -23,6 +23,7 @@ require_once $root . '/htdocs/config/database.php';
 require_once $root . '/htdocs/includes/helpers.php';
 require_once $root . '/htdocs/services/AutoComponentCatalogService.php';
 require_once $root . '/htdocs/services/ConsumabileStockService.php';
+require_once $root . '/htdocs/services/VehicleFluidService.php';
 
 // --- proces lucrator pentru testul de concurenta --------------------------------------
 if (($argv[1] ?? '') === '--worker') {
@@ -207,6 +208,20 @@ try {
     $totalOil = $db->prepare("SELECT COUNT(*) FROM consumabile_produse WHERE denumire = 'TEST Ulei motor 15W-40'");
     $totalOil->execute();
     check('un singur rând de catalog pentru produs', (int) $totalOil->fetchColumn() === 1);
+
+    echo "\n[Compatibilitate pe numere de înmatriculare]\n";
+    $platesOnly = $service->saveProduct(['denumire' => 'TEST Ulei doar ' . $vehicleA, 'um' => 'L', 'compat_mode' => 'vehicule',
+        'tipuri_vehicul' => ['camion'], 'vehicule_ids' => [(string) $vehicleA, '999999999', '0']], null, null);
+    $platesRow = $service->products()[$platesOnly];
+    check('se salvează doar vehiculele existente, tipurile se golesc', $platesRow['vehicule_list'] === [$vehicleA] && $platesRow['tipuri_vehicul_list'] === []);
+    $platesCan = $service->saveContainer(['cod' => 'TEST-BID-NR', 'tip' => 'bidon', 'capacitate' => '20', 'produs_id' => $platesOnly, 'cantitate_initiala' => '10', 'idempotency_key' => $key()], null, null);
+    check('completare blocată pe un vehicul nebifat', expectError(fn () => $service->operate('completare', ['recipient_sursa_id' => $platesCan, 'vehicul_id' => $vehicleB, 'cantitate' => '1', 'idempotency_key' => $key()], null), 'compatibil cu vehiculul') === 'ok');
+    $service->operate('completare', ['recipient_sursa_id' => $platesCan, 'vehicul_id' => $vehicleA, 'cantitate' => '1', 'idempotency_key' => $key()], null);
+    check('completare permisă pe vehiculul bifat', $q($platesCan) === '9.000');
+    $service->saveProduct(['denumire' => 'TEST Ulei doar ' . $vehicleA, 'um' => 'L', 'compat_mode' => 'tipuri', 'vehicule_ids' => [(string) $vehicleA]], $platesOnly, null);
+    check('modul „pe tip” șterge lista de numere', $service->products()[$platesOnly]['vehicule_list'] === []);
+    $withCategory = array_filter($service->vehicles(), static fn ($v) => (int) ($v['categorie_capacitate_id'] ?? 0) > 0);
+    check('vehiculele au categoria de capacitate pentru grupare', $withCategory !== []);
 
     echo "\n[Recipient]\n";
     check('capacitatea nu poate scădea sub cantitate', expectError(fn () => $service->saveContainer(['tip' => 'bidon', 'capacitate' => '10', 'produs_id' => $oil], $can, null), 'Capacitatea') === 'ok');

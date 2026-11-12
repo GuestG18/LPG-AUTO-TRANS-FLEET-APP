@@ -838,7 +838,39 @@ $iconSelect = static function (string $current) use ($iconChoices): string {
                                 <small>sub <?= e(implode(', ', array_map(static fn ($k) => (string) ($taxonomy['primaries'][$k]['label'] ?? $k), $linked)) ?: '—') ?> · <?= e((string) count($node['categories'])) ?> categorii</small>
                                 <?php if ($node['system']): ?><em>inițial</em><?php endif; ?>
                                 <?php if (!$node['active']): ?><em class="is-off">dezactivat</em><?php endif; ?>
+                                <?php if ($node['active']): ?>
+                                    <button type="button" class="repair-auto-card-add-btn" data-card-add title="Adaugă un card nou în subcategoria <?= e((string) $node['label']) ?>"><i class="bi bi-plus-lg"></i> Card nou</button>
+                                <?php endif; ?>
                             </summary>
+                            <?php if ($node['categories'] !== []): ?>
+                                <div class="repair-auto-card-list">
+                                    <?php foreach ($node['categories'] as $catId): ?>
+                                        <?php $cat = $taxonomy['categories'][$catId] ?? null; if ($cat === null) { continue; } ?>
+                                        <span><span class="repair-auto-taxonomy-nr"><?= e((string) $catId) ?></span> <i class="bi <?= e((string) $cat['icon']) ?>"></i> <?= e((string) $cat['name']) ?></span>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                            <?php if ($node['active']): ?>
+                                <details class="repair-auto-card-add" data-card-add-panel>
+                                    <summary><i class="bi bi-plus-lg"></i> Card nou în <?= e((string) $node['label']) ?></summary>
+                                    <form method="post" action="<?= $taxonomyAction ?>" class="repair-auto-taxonomy-form">
+                                        <?= $taxonomyReturn() ?>
+                                        <input type="hidden" name="op" value="add_category">
+                                        <input type="hidden" name="subcategory_key" value="<?= e((string) $node['key']) ?>">
+                                        <label>Nume card<input class="form-control form-control-sm" name="name" maxlength="100" required placeholder="ex. Ulei motor"></label>
+                                        <label>Iconiță<?= $iconSelect('bi-circle') ?></label>
+                                        <label>Tip articol implicit
+                                            <select name="item_type" class="form-select form-select-sm">
+                                                <?php foreach ($itemTypes as $typeKey => $typeLabel): ?>
+                                                    <option value="<?= e($typeKey) ?>"><?= e($typeLabel) ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </label>
+                                        <button class="btn btn-sm btn-primary" type="submit">Adaugă card</button>
+                                    </form>
+                                    <p class="repair-auto-card-hint">Numărul cardului se alocă automat (următorul liber din tot catalogul).</p>
+                                </details>
+                            <?php endif; ?>
                             <form method="post" action="<?= $taxonomyAction ?>" class="repair-auto-taxonomy-form">
                                 <?= $taxonomyReturn() ?>
                                 <input type="hidden" name="op" value="update"><input type="hidden" name="level" value="subcategory"><input type="hidden" name="key" value="<?= e((string) $node['key']) ?>">
@@ -987,7 +1019,30 @@ $iconSelect = static function (string $current) use ($iconChoices): string {
     .repair-auto-taxonomy-form fieldset { display: flex; flex-wrap: wrap; gap: .2rem .4rem; align-items: center; }
     .repair-auto-taxonomy-form legend { font-size: .75rem; font-weight: 700; color: #53657c; margin: 0 .4rem 0 0; float: none; width: auto; }
     .repair-auto-taxonomy-toggle { padding-bottom: .3rem; }
+    .repair-auto-card-add-btn { margin-left: auto; border: 1px solid #0d6efd; color: #0d6efd; background: #fff; border-radius: 6px; font-size: .72rem; font-weight: 700; padding: .05rem .5rem; }
+    .repair-auto-card-add-btn:hover { background: #0d6efd; color: #fff; }
+    .repair-auto-card-list { display: flex; flex-wrap: wrap; gap: .3rem .8rem; padding: .5rem 0 .2rem; font-size: .78rem; color: #172943; }
+    .repair-auto-card-list > span { display: inline-flex; align-items: center; gap: .3rem; }
+    .repair-auto-card-add { margin: .4rem 0; padding: .3rem .6rem; border: 1px dashed #9ec5fe; border-radius: 8px; background: #f5f9ff; }
+    .repair-auto-card-add > summary { cursor: pointer; font-size: .8rem; font-weight: 700; color: #1d5fc4; list-style: none; }
+    .repair-auto-card-hint { margin: 0 0 .2rem; font-size: .72rem; color: #6c7a8d; }
 </style>
+<script>
+// „+ Card nou” din antetul unei subcategorii: deschide subcategoria și formularul de card.
+document.addEventListener('click', function (event) {
+    var btn = event.target.closest('[data-card-add]');
+    if (!btn) { return; }
+    event.preventDefault();
+    event.stopPropagation();
+    var node = btn.closest('details.repair-auto-taxonomy-node');
+    var panel = node && node.querySelector('[data-card-add-panel]');
+    if (!panel) { return; }
+    node.open = true;
+    panel.open = true;
+    var input = panel.querySelector('input[name="name"]');
+    if (input) { input.focus(); }
+});
+</script>
 <script>
 // Gestionarea componentelor (adaugare / redenumire / eliminare). Butoanele stau pe randul
 // clicabil al componentei: oprim propagarea ca sa nu selecteze randul.

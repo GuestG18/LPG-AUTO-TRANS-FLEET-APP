@@ -127,6 +127,11 @@ final class ConsumabileStockService
         if ((int) $column->fetchColumn() === 0 && !$this->db->inTransaction()) {
             $this->db->exec('ALTER TABLE consumabile_produse ADD COLUMN componente_vehicul TEXT NULL AFTER sistem_mecanic');
         }
+        // 2026_11_12_000001: compatibilitate pe numere de inmatriculare (id-uri de vehicul), alternativa la tipuri_vehicul.
+        $column = $this->db->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'consumabile_produse' AND COLUMN_NAME = 'vehicule_ids'");
+        if ((int) $column->fetchColumn() === 0 && !$this->db->inTransaction()) {
+            $this->db->exec('ALTER TABLE consumabile_produse ADD COLUMN vehicule_ids TEXT NULL AFTER tipuri_vehicul');
+        }
         self::$schemaReady = true;
     }
 
@@ -149,6 +154,7 @@ final class ConsumabileStockService
                 sistem_mecanic VARCHAR(80) NULL,
                 componente_vehicul TEXT NULL,
                 tipuri_vehicul VARCHAR(120) NULL,
+                vehicule_ids TEXT NULL,
                 compatibilitate_note TEXT NULL,
                 interval_km INT UNSIGNED NULL,
                 interval_luni SMALLINT UNSIGNED NULL,
@@ -326,10 +332,13 @@ final class ConsumabileStockService
             $row['id'] = (int) $row['id'];
             $row['component'] = $row['component_key'] !== null ? ($components[(string) $row['component_key']] ?? null) : null;
             $row['tipuri_vehicul_list'] = self::csv((string) ($row['tipuri_vehicul'] ?? ''));
+            $row['vehicule_list'] = array_map('intval', self::csv((string) ($row['vehicule_ids'] ?? '')));
             $row['sisteme_list'] = self::productSystemKeys($row['sistem_mecanic'] ?? null);
             $row['sistem_label'] = self::productSystemLabel($row['sistem_mecanic'] ?? null);
             $row['piese_list'] = self::csv((string) ($row['componente_vehicul'] ?? ''));
-            $row['piese_nume'] = array_values(array_filter(array_map(static fn (string $key): string => (string) ($components[$key]["name"] ?? ""), $row["piese_list"])));
+            $row['piese_nume'] = array_values(array_filter(array_map(static fn (string $key): string => str_starts_with($key, 'cat:')
+                ? substr($key, 4) . ' (toată categoria)'
+                : (string) ($components[$key]['name'] ?? ''), $row['piese_list'])));
             $row['compatibile'] = [];
             $result[$row['id']] = $row;
         }
@@ -391,9 +400,29 @@ final class ConsumabileStockService
             }
         }
         $allParts = (new AutoComponentCatalogService($this->db))->components();
+        // O intrare e fie o piesa (cheia din catalog), fie o categorie intreaga ("cat:Motor" = toate piesele din Motor,
+        // inclusiv cele adaugate ulterior); piesele dintr-o categorie bifata intreaga nu se mai pastreaza separat.
+        $allCategories = [];
+        foreach ($allParts as $component) {
+            $allCategories[(string) ($component['category'] ?? '')] = true;
+        }
         $parts = array_values(array_unique(array_filter(array_map('strval', (array) ($data['componente_vehicul'] ?? [])),
-            static fn (string $key): bool => isset($allParts[$key]))));
+            static fn (string $key): bool => str_starts_with($key, 'cat:') ? isset($allCategories[substr($key, 4)]) : isset($allParts[$key]))));
+        $wholeCategories = array_map(static fn (string $key): string => substr($key, 4), array_filter($parts, static fn (string $key): bool => str_starts_with($key, 'cat:')));
+        $parts = array_values(array_filter($parts, static fn (string $key): bool => str_starts_with($key, 'cat:')
+            || !in_array((string) ($allParts[$key]['category'] ?? ''), $wholeCategories, true)));
         $vehicleTypes = array_values(array_intersect(['camion', 'cap_tractor', 'semiremorca'], array_map('strval', (array) ($data['tipuri_vehicul'] ?? []))));
+        // Compatibilitatea e fie pe tip de vehicul, fie pe numere de inmatriculare (alese direct sau pe categoria de capacitate).
+        $vehicleIds = [];
+        if ((string) ($data['compat_mode'] ?? '') === 'vehicule') {
+            $vehicleTypes = [];
+            $wanted = array_values(array_unique(array_filter(array_map('intval', (array) ($data['vehicule_ids'] ?? [])), static fn (int $v): bool => $v > 0)));
+            if ($wanted !== []) {
+                $known = array_map('intval', $this->db->query('SELECT id FROM vehicule WHERE id IN (' . implode(',', $wanted) . ')')->fetchAll(PDO::FETCH_COLUMN) ?: []);
+                $vehicleIds = array_values(array_intersect($wanted, $known));
+                sort($vehicleIds);
+            }
+        }
         $sources = array_values(array_intersect(array_keys(self::MONITORING_SOURCES), array_map('strval', (array) ($data['sursa_monitorizare'] ?? []))));
 
         if ($id !== null) {
@@ -424,6 +453,7 @@ final class ConsumabileStockService
             ':sistem' => self::systemForFluid($fluidType),
             ':piese' => $parts !== [] ? implode(',', $parts) : null,
             ':tipuri' => $vehicleTypes !== [] ? implode(',', $vehicleTypes) : null,
+            ':vehicule_ids' => $vehicleIds !== [] ? implode(',', $vehicleIds) : null,
             ':compat_note' => $this->text($data['compatibilitate_note'] ?? '', 4000),
             ':interval_km' => $this->positiveInt($data['interval_km'] ?? null),
             ':interval_luni' => $this->positiveInt($data['interval_luni'] ?? null),
@@ -440,10 +470,10 @@ final class ConsumabileStockService
             $this->db->prepare(
                 'INSERT INTO consumabile_produse
                     (component_key, denumire, producator, cod_produs, tip_articol, tip_fluid, vascozitate, specificatie, aprobari, um,
-                     sistem_mecanic, componente_vehicul, tipuri_vehicul, compatibilitate_note, interval_km, interval_luni, interval_ore, sursa_monitorizare,
+                     sistem_mecanic, componente_vehicul, tipuri_vehicul, vehicule_ids, compatibilitate_note, interval_km, interval_luni, interval_ore, sursa_monitorizare,
                      prag_alerta, critic, circuit_inchis, permite_retur, activ, created_by, created_at, updated_at)
                  VALUES (:component, :denumire, :producator, :cod, :tip_articol, :tip_fluid, :vascozitate, :specificatie, :aprobari, :um,
-                     :sistem, :piese, :tipuri, :compat_note, :interval_km, :interval_luni, :interval_ore, :sursa,
+                     :sistem, :piese, :tipuri, :vehicule_ids, :compat_note, :interval_km, :interval_luni, :interval_ore, :sursa,
                      :prag, :critic, :circuit, :retur, :activ, :user, :now, :now2)'
             )->execute($values + [':user' => $userId, ':now2' => $values[':now']]);
 
@@ -452,7 +482,7 @@ final class ConsumabileStockService
         $this->db->prepare(
             'UPDATE consumabile_produse SET component_key = :component, denumire = :denumire, producator = :producator, cod_produs = :cod,
                 tip_articol = :tip_articol, tip_fluid = :tip_fluid, vascozitate = :vascozitate, specificatie = :specificatie,
-                aprobari = :aprobari, um = :um, sistem_mecanic = :sistem, componente_vehicul = :piese, tipuri_vehicul = :tipuri, compatibilitate_note = :compat_note,
+                aprobari = :aprobari, um = :um, sistem_mecanic = :sistem, componente_vehicul = :piese, tipuri_vehicul = :tipuri, vehicule_ids = :vehicule_ids, compatibilitate_note = :compat_note,
                 interval_km = :interval_km, interval_luni = :interval_luni, interval_ore = :interval_ore, sursa_monitorizare = :sursa,
                 prag_alerta = :prag, critic = :critic, circuit_inchis = :circuit, permite_retur = :retur, activ = :activ, updated_at = :now
              WHERE id = :id'
@@ -884,6 +914,10 @@ final class ConsumabileStockService
         $product = $this->containerProduct($source);
         $vehicleType = $this->autoVehicleType((string) ($vehicle['tip_vehicul'] ?? ''));
         $allowedTypes = self::csv((string) ($product['tipuri_vehicul'] ?? ''));
+        $allowedVehicles = array_map('intval', self::csv((string) ($product['vehicule_ids'] ?? '')));
+        if ($allowedVehicles !== [] && !in_array($vehicleId, $allowedVehicles, true)) {
+            throw new InvalidArgumentException('„' . $product['denumire'] . '” nu este marcat compatibil cu vehiculul ' . $vehicle['nr_inmatriculare'] . '.');
+        }
         if ($allowedTypes !== [] && $vehicleType !== '' && !in_array($vehicleType, $allowedTypes, true)) {
             throw new InvalidArgumentException('„' . $product['denumire'] . '” nu este marcat compatibil cu tipul vehiculului ' . $vehicle['nr_inmatriculare'] . '.');
         }
@@ -1252,8 +1286,19 @@ final class ConsumabileStockService
     public function vehicles(): array
     {
         return $this->db->query(
-            "SELECT id, nr_inmatriculare, marca, model, tip_vehicul, km_bord FROM vehicule
-             WHERE status = 'activ' AND nr_inmatriculare <> 'STOC-ANVELOPE' ORDER BY nr_inmatriculare"
+            // Categoria de capacitate ca in Dispecer / Configurare transport: capul tractor ia categoria semiremorcii cuplate activ.
+            "SELECT v.id, v.nr_inmatriculare, v.marca, v.model, v.tip_vehicul, v.km_bord,
+                    cc.id AS categorie_capacitate_id, cc.nume AS categorie_capacitate, cc.ordine_afisare AS categorie_capacitate_ordine
+             FROM vehicule v
+             LEFT JOIN (
+                SELECT vc1.tractor_id, vc1.semiremorca_id FROM vehicule_cuplaje vc1
+                INNER JOIN (SELECT tractor_id, MAX(id) AS max_id FROM vehicule_cuplaje WHERE activ = 1 GROUP BY tractor_id) latest ON latest.max_id = vc1.id
+             ) vc ON vc.tractor_id = v.id
+             LEFT JOIN vehicule s ON s.id = vc.semiremorca_id
+             LEFT JOIN vehicule_categorii_capacitate cc ON cc.id = CASE
+                    WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(s.categorie_capacitate_id, v.categorie_capacitate_id)
+                    ELSE v.categorie_capacitate_id END
+             WHERE v.status = 'activ' AND v.nr_inmatriculare <> 'STOC-ANVELOPE' ORDER BY v.nr_inmatriculare"
         )->fetchAll(PDO::FETCH_ASSOC) ?: [];
     }
 

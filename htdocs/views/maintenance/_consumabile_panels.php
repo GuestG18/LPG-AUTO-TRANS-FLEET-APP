@@ -134,15 +134,31 @@ $vehicleTypeChoices = AutoComponentCatalogService::VEHICLE_TYPES;
                 <label class="cons-field"><span>Specificație</span><input class="form-control" name="specificatie" maxlength="255" placeholder="ex. API CI-4 / ACEA E7"></label>
             </div>
             <label class="cons-field"><span>Aprobări tehnice</span><textarea class="form-control" name="aprobari" rows="2" placeholder="ex. MAN M3275-1, Volvo VDS-3, MB 228.3"></textarea></label>
-            <fieldset class="cons-field"><legend>Se folosește la piesele</legend>
-                <small class="text-muted d-block mb-1" data-cons-parts-hint>Alege întâi tipul fluidului; lista arată piesele din Catalog componente potrivite.</small>
-                <input class="form-control form-control-sm mb-1" type="search" placeholder="Caută piesa…" data-cons-parts-search>
+            <fieldset class="cons-field"><legend>Se folosește la categoriile de piese</legend>
+                <small class="text-muted d-block mb-1" data-cons-parts-hint>Alege întâi tipul fluidului; lista arată categoriile din Catalog componente potrivite.</small>
+                <input class="form-control form-control-sm mb-1" type="search" placeholder="Caută categoria…" data-cons-parts-search>
                 <div class="cons-parts-list" data-cons-parts></div>
-                <label class="form-check-label mt-1"><input type="checkbox" data-cons-parts-all> Arată toate piesele din catalog</label>
+                <label class="form-check-label mt-1"><input type="checkbox" data-cons-parts-all> Arată toate categoriile din catalog</label>
             </fieldset>
             <fieldset class="cons-field"><legend>Compatibil cu vehiculele</legend>
-                <?php foreach ($vehicleTypeChoices as $k => $l): ?><label class="form-check-inline"><input type="checkbox" name="tipuri_vehicul[]" value="<?= e($k) ?>"> <?= e($l) ?></label><?php endforeach; ?>
-                <small class="text-muted d-block">Nimic bifat = fără restricție pe tip de vehicul.</small>
+                <div class="btn-group btn-group-sm cons-compat-mode mb-2" role="radiogroup" aria-label="Mod compatibilitate">
+                    <input type="radio" class="btn-check" name="compat_mode" id="consCompatTypes" value="tipuri" checked>
+                    <label class="btn btn-outline-primary" for="consCompatTypes">Pe tip de vehicul</label>
+                    <input type="radio" class="btn-check" name="compat_mode" id="consCompatPlates" value="vehicule">
+                    <label class="btn btn-outline-primary" for="consCompatPlates">Pe numere de înmatriculare</label>
+                </div>
+                <div data-cons-compat-types>
+                    <?php foreach ($vehicleTypeChoices as $k => $l): ?><label class="form-check-inline"><input type="checkbox" name="tipuri_vehicul[]" value="<?= e($k) ?>"> <?= e($l) ?></label><?php endforeach; ?>
+                    <small class="text-muted d-block">Nimic bifat = fără restricție pe tip de vehicul.</small>
+                </div>
+                <div class="d-none" data-cons-compat-plates>
+                    <div class="cons-plates-tools">
+                        <input class="form-control form-control-sm" type="search" placeholder="Caută număr, marcă sau categorie…" data-cons-plates-search>
+                        <span class="cons-plates-count" data-cons-plates-count>0 selectate</span>
+                    </div>
+                    <div class="cons-plates-list" data-cons-plates></div>
+                    <small class="text-muted d-block mt-1">Grupate pe categoria de capacitate (ca în Configurare transport); bifa de pe grupă selectează toată categoria. Nimic bifat = fără restricție.</small>
+                </div>
             </fieldset>
             <label class="cons-field"><span>Note compatibilitate / echipamente</span><textarea class="form-control" name="compatibilitate_note" rows="2"></textarea></label>
             <div class="cons-field-row">

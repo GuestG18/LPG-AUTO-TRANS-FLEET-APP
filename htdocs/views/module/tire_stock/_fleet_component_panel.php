@@ -9,7 +9,7 @@
  *          $focusKey (optional: subcomponenta aleasa in detalierea ansamblului).
  */
 $category = (string) $panel['category'];
-$definition = VehicleComponentRegistry::CATEGORIES[$category];
+$definition = VehicleComponentRegistry::categories()[$category];
 $vehicleId = (int) $vehicle['id'];
 $vehicleType = (string) ($vehicle['tip_vehicul'] ?? '');
 $autoVehicleType = $vehicleType === 'cap_tractor' ? 'cap_tractor' : (str_starts_with($vehicleType, 'semiremorca') ? 'semiremorca' : 'camion');

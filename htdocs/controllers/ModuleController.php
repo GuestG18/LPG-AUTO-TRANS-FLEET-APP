@@ -3490,9 +3490,12 @@ class ModuleController
                     $clientMember['axle_attrs'] = (object) ($axleAttributes[$memberId] ?? []);
                     $clientMember['axle_kinds'] = (object) $structureService->axleKinds($memberId);
                     // Schema arata doar ce are vehiculul in configuratia lui (pagina Auto).
-                    $clientMember['slots'] = VehicleComponentRegistry::memberSlots($clientMember, $records[$memberId] ?? [], $catalogMap, $structureService->schemeFilter($memberId));
+                    $clientMember['slots'] = VehicleComponentRegistry::memberSlots($clientMember, $records[$memberId] ?? [], $catalogMap, $structureService->schemeFilter($memberId), $structureService->vehiclePinnedParts($memberId));
+                    // Punctele mutate pe schema configuratiei generale a vehiculului (editorul schemei).
+                    $slotPositions = $structureService->vehicleSlotPositions($memberId);
                     // Starea unui loc = rezultatul ultimei inspectii inregistrate (nimic calculat).
                     foreach ($clientMember['slots'] as &$slot) {
+                        $slot['pos'] = $slotPositions[$slot['id']] ?? null;
                         $inspection = $inspections[$memberId][$slot['category'] . '|' . $slot['location']] ?? null;
                         $slot['state'] = $inspection['rezultat'] ?? null;
                         $slot['records'] = $slot['records'] || $inspection !== null;
@@ -3528,7 +3531,7 @@ class ModuleController
         $category = (string) ($_GET['category'] ?? '');
         $location = mb_substr(trim((string) ($_GET['location'] ?? '')), 0, 30);
         $componentKey = (string) ($_GET['component_key'] ?? '');
-        if (!isset(VehicleComponentRegistry::CATEGORIES[$category]) || $category === 'anvelope' || $vehicleId <= 0 || preg_match('/^\d+-\d+$/', $componentKey) !== 1) {
+        if (!isset(VehicleComponentRegistry::categories()[$category]) || $category === 'anvelope' || $vehicleId <= 0 || preg_match('/^\d+-\d+$/', $componentKey) !== 1) {
             $this->tireMountJson(['ok' => false, 'error' => 'Componentă invalidă.'], 422);
         }
 
@@ -3567,7 +3570,7 @@ class ModuleController
         $vehicleId = (int) ($_GET['vehicle_id'] ?? 0);
         $category = (string) ($_GET['category'] ?? '');
         $location = mb_substr(trim((string) ($_GET['location'] ?? '')), 0, 30);
-        if (!isset(VehicleComponentRegistry::CATEGORIES[$category]) || $category === 'anvelope' || $vehicleId <= 0) {
+        if (!isset(VehicleComponentRegistry::categories()[$category]) || $category === 'anvelope' || $vehicleId <= 0) {
             $this->tireMountJson(['ok' => false, 'error' => 'Componentă invalidă.'], 422);
         }
 
@@ -3690,8 +3693,8 @@ class ModuleController
 
             $category = (string) ($_POST['category'] ?? '');
             $location = (string) ($_POST['location'] ?? '');
-            if (!isset(VehicleComponentRegistry::CATEGORIES[$category]) || $category === 'anvelope'
-                || preg_match('/^(A(\d{1,2})(?:-([LR]))?|vehicul|caseta|fata|spate)$/', $location, $locationMatch) !== 1) {
+            if (!isset(VehicleComponentRegistry::categories()[$category]) || $category === 'anvelope'
+                || preg_match('/^(A(\d{1,2})(?:-([LR]))?|vehicul|caseta|fata|spate|p\d{1,4}-\d{1,5})$/', $location, $locationMatch) !== 1) {
                 $this->tireMountJson(['ok' => false, 'error' => 'Componentă sau poziție invalidă.'], 422);
             }
             $catalog = (new AutoComponentCatalogService($this->db))->components();

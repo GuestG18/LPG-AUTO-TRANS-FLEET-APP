@@ -195,6 +195,9 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
         <?php endif; ?>
 
         <?php include __DIR__ . '/_vehicle_explorer.php'; ?>
+        <?php if ($canManage): ?>
+            <?php include __DIR__ . '/_scheme_editor.php'; ?>
+        <?php endif; ?>
 
         <?php if ($axleMatrix !== [] && $axleColumns !== []): ?>
             <details class="as-card as-matrix" id="piese-pe-tip-axa" open>
@@ -263,6 +266,9 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
                             <div class="as-section-actions">
                                 <?php if ($section['available'] !== []): ?>
                                     <button type="button" class="as-btn is-small" data-as-toggle="add-<?= e($section['key']) ?>" aria-expanded="<?= $isOpen ? 'true' : 'false' ?>"><i class="bi bi-plus-lg" aria-hidden="true"></i> Adaugă</button>
+                                <?php endif; ?>
+                                <?php if (!empty($section['custom'])): ?>
+                                    <button type="button" class="as-icon-btn" title="Editează sistemul propriu" aria-label="Editează sistemul <?= e($section['label']) ?>" data-scheme-custom-edit="<?= e($section['key']) ?>"><i class="bi bi-pencil" aria-hidden="true"></i></button>
                                 <?php endif; ?>
                                 <button type="button" class="as-icon-btn" title="Scoate sistemul de pe schemă" aria-label="Scoate sistemul <?= e($section['label']) ?> de pe schemă" data-as-op="system_remove" data-category="<?= e($section['key']) ?>" data-as-confirm="Apasă din nou pentru a scoate sistemul"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
                             </div>
@@ -370,13 +376,14 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
             <p class="as-card as-empty" data-as-no-results hidden>Nicio componentă nu se potrivește căutării.</p>
         </div>
 
-        <?php if ($canManage && $addable !== []): ?>
+        <?php if ($canManage): ?>
             <section class="as-more">
                 <h2>Adaugă un sistem pe schemă</h2>
                 <div class="as-more-list">
                     <?php foreach ($addable as $system): ?>
                         <button type="button" class="as-system-add" style="--as-accent: <?= e($system['color']) ?>" data-as-op="system_add" data-category="<?= e($system['key']) ?>"><i class="bi <?= e($system['icon']) ?>" aria-hidden="true"></i> <?= e($system['label']) ?></button>
                     <?php endforeach; ?>
+                    <button type="button" class="as-system-add is-new" data-scheme-custom-new><i class="bi bi-plus-circle-dotted" aria-hidden="true"></i> Sistem nou…</button>
                 </div>
             </section>
         <?php endif; ?>
@@ -410,3 +417,4 @@ $assetVersion = static fn (string $path): string => url($path . '?v=' . (string)
 </div>
 
 <script src="<?= e($assetVersion('assets/js/auto-structure.js')) ?>"></script>
+<script src="<?= e($assetVersion('assets/js/auto-scheme-editor.js')) ?>"></script>

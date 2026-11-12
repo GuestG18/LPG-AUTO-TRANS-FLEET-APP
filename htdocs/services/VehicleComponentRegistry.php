@@ -54,6 +54,24 @@ final class VehicleComponentRegistry
     /** Randurile fixe ale legendei (ca in macheta); restul categoriilor prezente se deschid la cerere. */
     public const LEGEND = ['anvelope', 'suspensie', 'franare', 'rulare', 'directie', 'motor', 'electrica', 'racire'];
 
+    /** Pictogramele permise pentru sistemele proprii (Bootstrap Icons). */
+    public const CUSTOM_ICONS = [
+        'bi-gear', 'bi-tools', 'bi-wrench', 'bi-nut', 'bi-box', 'bi-box-seam', 'bi-boxes', 'bi-cpu', 'bi-plug', 'bi-battery-half',
+        'bi-lightning-charge', 'bi-lightbulb', 'bi-droplet', 'bi-droplet-half', 'bi-fire', 'bi-snow', 'bi-thermometer-half', 'bi-wind',
+        'bi-fan', 'bi-fuel-pump', 'bi-speedometer2', 'bi-shield', 'bi-shield-lock', 'bi-lock', 'bi-key', 'bi-camera-video',
+        'bi-broadcast', 'bi-wifi', 'bi-geo-alt', 'bi-recycle', 'bi-funnel', 'bi-bucket', 'bi-hammer',
+        'bi-magnet', 'bi-hexagon', 'bi-diamond', 'bi-star', 'bi-flag', 'bi-pin-angle', 'bi-circle', 'bi-square',
+    ];
+
+    /** Unde se pune un sistem propriu: un singur punct, cate unul pe axa, sau pe fiecare capat de axa. */
+    public const CUSTOM_SCOPES = ['vehicle' => 'Un punct pe vehicul', 'axle' => 'Câte unul pe fiecare axă', 'wheel_end' => 'Pe fiecare roată (stânga / dreapta)'];
+
+    /** @var array<string,array>|null sistemele proprii din baza de date (cache pe cerere) */
+    private static ?array $custom = null;
+
+    /** @var array<string,list<string>> componenta -> sisteme alese explicit (piesele puse pe schema) */
+    private static array $extraMap = [];
+
     private PDO $db;
 
     public function __construct(PDO $db)
@@ -61,9 +79,87 @@ final class VehicleComponentRegistry
         $this->db = $db;
     }
 
+    /**
+     * Toate categoriile: cele din cod (CATEGORIES) + sistemele proprii adaugate din pagina Auto
+     * (mentenanta_auto_sisteme_custom). Fara tabel (instalare veche) raman doar cele din cod.
+     *
+     * @return array<string,array>
+     */
+    public static function categories(): array
+    {
+        return self::CATEGORIES + self::custom();
+    }
+
+    public static function isCustom(string $category): bool
+    {
+        return !isset(self::CATEGORIES[$category]) && isset(self::custom()[$category]);
+    }
+
+    /** @return array<string,array> */
+    public static function custom(): array
+    {
+        if (self::$custom !== null) {
+            return self::$custom;
+        }
+        self::$custom = [];
+        self::$extraMap = [];
+        if (!function_exists('get_pdo')) {
+            return self::$custom;
+        }
+        try {
+            $db = get_pdo();
+            $exists = (int) $db->query(
+                "SELECT COUNT(*) FROM information_schema.TABLES
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mentenanta_auto_sisteme_custom'"
+            )->fetchColumn();
+            if ($exists === 0) {
+                return self::$custom;
+            }
+            // Piesele puse pe schema intr-un sistem in care regulile catalogului nu le-ar pune.
+            try {
+                foreach ($db->query('SELECT component_key, category FROM mentenanta_auto_componente_sistem')->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    self::$extraMap[(string) $row['component_key']][] = (string) $row['category'];
+                }
+            } catch (PDOException $exception) {
+                self::$extraMap = []; // tabel inca necreat
+            }
+            $components = [];
+            foreach ($db->query('SELECT cheie, component_key FROM mentenanta_auto_sisteme_custom_componente ORDER BY component_key')->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $components[(string) $row['cheie']][] = (string) $row['component_key'];
+            }
+            foreach ($db->query('SELECT * FROM mentenanta_auto_sisteme_custom ORDER BY nume')->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $key = (string) $row['cheie'];
+                if (isset(self::CATEGORIES[$key])) {
+                    continue;
+                }
+                self::$custom[$key] = [
+                    'label' => (string) $row['nume'],
+                    'short' => (string) $row['nume'],
+                    'icon' => in_array((string) $row['icon'], self::CUSTOM_ICONS, true) ? (string) $row['icon'] : 'bi-gear',
+                    'color' => preg_match('/^#[0-9a-fA-F]{6}$/', (string) $row['culoare']) === 1 ? (string) $row['culoare'] : '#6366f1',
+                    'scope' => isset(self::CUSTOM_SCOPES[(string) $row['scope']]) ? (string) $row['scope'] : 'vehicle',
+                    'roles' => array_values(array_filter(explode(',', (string) $row['tipuri']))),
+                    'catalog' => [],
+                    'components' => $components[$key] ?? [],
+                    'custom' => true,
+                ];
+            }
+        } catch (PDOException $exception) {
+            error_log('[VehicleComponentRegistry] ' . $exception->getMessage());
+        }
+
+        return self::$custom;
+    }
+
+    /** Dupa o modificare a sistemelor proprii: urmatoarea citire le ia din nou din baza de date. */
+    public static function forgetCustom(): void
+    {
+        self::$custom = null;
+    }
+
     public static function label(string $category): string
     {
-        return (string) (self::CATEGORIES[$category]['label'] ?? $category);
+        return (string) (self::categories()[$category]['label'] ?? $category);
     }
 
     /**
@@ -76,7 +172,7 @@ final class VehicleComponentRegistry
     public static function clientCategories(array $catalogMap = [], array $catalog = []): array
     {
         $result = [];
-        foreach (self::CATEGORIES as $key => $category) {
+        foreach (self::categories() as $key => $category) {
             $components = [];
             foreach ($catalogMap[$key] ?? [] as $componentKey) {
                 if (isset($catalog[$componentKey])) {
@@ -91,7 +187,9 @@ final class VehicleComponentRegistry
                 'color' => $category['color'],
                 'scope' => $category['scope'],
                 'toolbar' => in_array($key, self::TOOLBAR, true),
-                'legend' => in_array($key, self::LEGEND, true),
+                // Sistemele proprii stau mereu in legenda: le-a adaugat utilizatorul, trebuie sa se vada.
+                'legend' => in_array($key, self::LEGEND, true) || !empty($category['custom']),
+                'custom' => !empty($category['custom']),
                 'components' => $components,
             ];
         }
@@ -118,11 +216,31 @@ final class VehicleComponentRegistry
      */
     public static function catalogByCategory(array $components): array
     {
-        $result = array_fill_keys(array_keys(self::CATEGORIES), []);
+        $categories = self::categories();
+        $result = array_fill_keys(array_keys($categories), []);
+        // Sistemele proprii au componentele alese explicit (o componenta ramane si in sistemul ei standard).
+        $customOf = [];
+        foreach ($categories as $categoryKey => $category) {
+            foreach ($category['components'] ?? [] as $componentKey) {
+                $customOf[$componentKey][] = $categoryKey;
+            }
+        }
+        self::custom(); // incarca si $extraMap
+        foreach (self::$extraMap as $componentKey => $extraCategories) {
+            foreach ($extraCategories as $categoryKey) {
+                if (isset($categories[$categoryKey]) && !in_array($categoryKey, $customOf[$componentKey] ?? [], true)) {
+                    $customOf[$componentKey][] = $categoryKey;
+                }
+            }
+        }
         foreach ($components as $component) {
             $nameKey = AutoComponentStateService::lookupKey((string) $component['name']);
             $matched = false;
-            foreach (self::CATEGORIES as $categoryKey => $category) {
+            foreach ($customOf[(string) $component['key']] ?? [] as $categoryKey) {
+                $result[$categoryKey][] = (string) $component['key'];
+                $matched = true;
+            }
+            foreach ($categories as $categoryKey => $category) {
                 foreach ($category['catalog'] as [$catalogCategory, $keywords]) {
                     if ((int) $component['category_id'] !== $catalogCategory) {
                         continue;
@@ -225,7 +343,7 @@ final class VehicleComponentRegistry
      * @param array{systems:array<string,true>,components:array<string,?array>}|null $configured
      *        VehicleStructureService::schemeFilter: doar ce e configurat ajunge pe schema; null = toate
      */
-    public static function memberSlots(array $member, array $recordKeys, array $catalogMap, ?array $configured = null): array
+    public static function memberSlots(array $member, array $recordKeys, array $catalogMap, ?array $configured = null, array $pinned = []): array
     {
         $role = self::roleForVehicleType((string) ($member['type'] ?? ''));
         $axles = [];
@@ -256,7 +374,7 @@ final class VehicleComponentRegistry
             ] + $extra;
         };
 
-        foreach (self::CATEGORIES as $category => $definition) {
+        foreach (self::categories() as $category => $definition) {
             if (!in_array($role, $definition['roles'], true) || $category === 'anvelope') {
                 continue;
             }
@@ -301,7 +419,29 @@ final class VehicleComponentRegistry
                 return ['components' => $keys];
             };
             $slotCountBefore = count($slots);
-            switch ($category) {
+            // Sistemele proprii: dupa locul ales la creare (un punct, pe axe sau pe roti).
+            $switchKey = !empty($definition['custom']) ? 'custom_' . ($definition['scope'] ?? 'vehicle') : $category;
+            switch ($switchKey) {
+                case 'custom_wheel_end':
+                    foreach ($axles as $axle) {
+                        if (!$onAxle($axle['no'])) {
+                            continue;
+                        }
+                        foreach (['L' => 'stânga', 'R' => 'dreapta'] as $side => $sideLabel) {
+                            $add($category, 'A' . $axle['no'] . '-' . $side, 'wheel_end', $label . ' · Axa ' . $axle['no'] . ' ' . $sideLabel, ['axle' => $axle['no'], 'side' => $side] + $extraFor($axle['no']));
+                        }
+                    }
+                    break;
+                case 'custom_axle':
+                    foreach ($axles as $axle) {
+                        if ($onAxle($axle['no'])) {
+                            $add($category, 'A' . $axle['no'], 'custom_axle', $label . ' · Axa ' . $axle['no'], ['axle' => $axle['no']] + $extraFor($axle['no']));
+                        }
+                    }
+                    break;
+                case 'custom_vehicle':
+                    $add($category, 'vehicul', 'custom', $label);
+                    break;
                 case 'franare':
                 case 'rulare':
                     foreach ($axles as $axle) {
@@ -358,6 +498,32 @@ final class VehicleComponentRegistry
                     $slots[$index] += $extraFor(null);
                 }
             }
+        }
+
+        // Piesele puse individual pe schema (editorul schemei): un punct al lor, in culoarea sistemului.
+        // Apar doar daca sistemul e pe schema si piesa e in configuratia vehiculului.
+        $systemsOnScheme = [];
+        foreach ($slots as $slot) {
+            $systemsOnScheme[$slot['category']] = true;
+        }
+        foreach ($pinned as $componentKey => $part) {
+            $category = (string) $part['category'];
+            if (!isset($systemsOnScheme[$category]) || !in_array($componentKey, $catalogMap[$category] ?? [], true)) {
+                continue;
+            }
+            if ($configured !== null && !array_key_exists($componentKey, $configured['components'])) {
+                continue;
+            }
+            $slots[] = [
+                'id' => $category . ':p' . $componentKey,
+                'category' => $category,
+                'location' => 'p' . $componentKey,
+                'zone' => 'part',
+                'label' => (string) $part['name'],
+                'records' => isset($recordKeys[$componentKey]),
+                'part' => (string) $componentKey,
+                'components' => [(string) $componentKey],
+            ];
         }
 
         return $slots;

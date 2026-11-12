@@ -1107,7 +1107,7 @@
                 key: 'tone',
                 metric: 'tone',
                 icon: 'bi-box-seam',
-                name: 'Tone livrate',
+                name: 'Tone transportate',
                 value: fmt(f.tone_livrate, 'tone'),
                 note: 'Primar ' + fmt(f.tone_primar, 'tone') + ' · Distribuție ' + fmt(f.tone_distributie, 'tone'),
                 detail: {

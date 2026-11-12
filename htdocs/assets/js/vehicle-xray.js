@@ -123,6 +123,26 @@
 
     /* ---------------------------------------------------------------- explorator */
 
+    // Punctul unui loc pe schema: pozitia mutata in editorul schemei (metri, salvata pe configuratia
+    // generala) sau locul implicit din geometrie.
+    var slotPoint = function (slot, geo, slots) {
+        if (slot.pos && slot.pos.length === 2 && isFinite(slot.pos[0]) && isFinite(slot.pos[1])) {
+            return { x: Number(slot.pos[0]), y: Number(slot.pos[1]) };
+        }
+        return defaultPoint(slot, geo, slots);
+    };
+
+    // Locul implicit; o piesa pusa individual porneste langa punctul sistemului ei, in evantai.
+    var defaultPoint = function (slot, geo, slots) {
+        if (!slot.part) { return Geometry.slotAnchor(slot, geo); }
+        var siblings = (slots || []).filter(function (item) { return item.category === slot.category; });
+        var base = siblings.filter(function (item) { return !item.part; })[0];
+        var point = base ? slotPoint(base, geo, slots) : { x: geo.length / 2, y: 0 };
+        var index = siblings.filter(function (item) { return item.part; }).indexOf(slot);
+        var angle = -Math.PI / 3 + index * 0.9;
+        return { x: point.x + Math.cos(angle) * 0.55, y: point.y + Math.sin(angle) * 0.45 };
+    };
+
     var Explorer = function (detail, unit, hooks) {
         this.detail = detail;
         this.unit = unit;
@@ -392,7 +412,14 @@
                 return;
             }
             var hot = event.target.closest('.fx-hot');
-            if (hot) { self.selectSlot(hot.dataset.fxSlot, Number(hot.dataset.fxMember)); return; }
+            if (hot) {
+                if (self.editing) { return; } // in editorul schemei punctele se trag, nu se deschid
+                var part = hot._slot && hot._slot.part;
+                self.selectSlot(hot.dataset.fxSlot, Number(hot.dataset.fxMember), part || undefined);
+                // O piesa pusa pe schema deschide direct inspectorul ei (la vehicul real).
+                if (part && self.selection && self.selection.type === 'slot') { self.selectSubcomponent(part); }
+                return;
+            }
             var callout = event.target.closest('[data-fx-sub]');
             if (callout) { self.selectSubcomponent(callout.dataset.fxSub); return; }
             var chip = event.target.closest('[data-fx-slot-chip]');
@@ -405,6 +432,16 @@
             if (axle) { self.selectAxle(Number(axle.dataset.fxMember), Number(axle.dataset.fxAxle)); }
         });
         this.root.addEventListener('keydown', function (event) {
+            if (self.editing && event.target.classList && event.target.classList.contains('fx-hot')) {
+                var steps = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+                if (steps) {
+                    event.preventDefault();
+                    var size = event.shiftKey ? 0.25 : 0.05;
+                    self.nudgeMarker(event.target, steps[0] * size, steps[1] * size);
+                    return;
+                }
+                if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); self.resetMarker(event.target); return; }
+            }
             var tire = event.target.closest && event.target.closest('.fx-tire');
             if (tire && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); self.pickTire(tire.dataset.fxPos); }
             if (event.key === 'Escape') {
@@ -430,6 +467,7 @@
         this.stage.addEventListener('focusin', function (event) { showTip(event.target); });
         this.stage.addEventListener('mouseleave', function () { self.tip.hidden = true; });
         this.stage.addEventListener('focusout', function () { self.tip.hidden = true; });
+        this.bindEditing();
         this.detail.addEventListener('click', function (event) {
             if (event.target.closest('[data-fx-back]')) { self.overview(); return; }
             var axleEdit = event.target.closest('[data-fx-axle-edit]');
@@ -536,11 +574,12 @@
             (member.data.slots || []).forEach(function (slot) {
                 var category = categoryByKey[slot.category];
                 if (!category) { return; }
-                var anchor = Geometry.slotAnchor(slot, member.geo);
+                var anchor = slotPoint(slot, member.geo, member.data.slots);
                 var button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'fx-hot fx-hot-' + slot.category + (SQUARE_MARKERS.indexOf(slot.category) !== -1 ? ' is-square' : '') + (slot.records ? ' has-records' : '')
                     + (FILTER_ONLY.indexOf(slot.category) !== -1 ? ' is-filter-only' : '') + (slot.state ? ' fx-state-' + STATE_CLASS[slot.state] : '');
+                if (slot.pos) { button.classList.add('is-moved'); }
                 button.dataset.fxSlot = slot.id;
                 button.dataset.fxCat = slot.category;
                 button.dataset.fxMember = String(member.data.vehicle_id);
@@ -548,11 +587,17 @@
                 button.style.setProperty('--fx-accent', category.color);
                 button.setAttribute('aria-label', member.data.plate + ': ' + slot.label + (slot.records ? ' (are înregistrări)' : ''));
                 button.dataset.fxTip = slot.label + (slot.records ? ' · are înregistrări' : '');
-                button.innerHTML = '<i class="bi ' + escapeHtml(category.icon) + '" aria-hidden="true"></i>';
+                button.innerHTML = '<i class="bi ' + escapeHtml(category.icon) + '" aria-hidden="true"></i>'
+                    + (slot.part ? '<span class="fx-hot-label">' + escapeHtml(slot.label) + '</span>' : '');
+                if (slot.part) {
+                    button.classList.add('is-part');
+                    button.classList.remove('is-square');
+                    button.dataset.fxTip = category.label + ' · ' + slot.label + (slot.records ? ' · are înregistrări' : '');
+                }
                 button._slot = slot;
                 button._member = member.data;
                 hots.appendChild(button);
-                self.anchors.push({ node: button, x: art.X(member.offset + anchor.x), y: art.Y(anchor.y) });
+                self.anchors.push({ node: button, x: art.X(member.offset + anchor.x), y: art.Y(anchor.y), owner: member });
             });
             // Numele vehiculului, sub el (albastru = cu motor, violet = semiremorca).
             var trailer = member.geo.type === 'semiremorca';
@@ -759,7 +804,7 @@
         this.root.classList.toggle('is-tires', category === 'anvelope');
         this.root.querySelectorAll('[data-fx-cat]').forEach(function (node) {
             if (node.classList.contains('fx-hot')) {
-                var visible = category === '' ? !node.classList.contains('is-filter-only') : node.dataset.fxCat === category;
+                var visible = category === '' ? (self.editing || !node.classList.contains('is-filter-only')) : node.dataset.fxCat === category;
                 node.classList.toggle('is-hidden', !visible);
                 node.tabIndex = visible ? 0 : -1;
                 node.classList.toggle('is-selected', node.dataset.fxSlot === self.slotId && self.selection && self.selection.memberId === Number(node.dataset.fxMember));
@@ -1513,6 +1558,142 @@
             });
         }, 0);
     });
+
+    /* ---------------------------------------------------------------- editorul schemei (pagina Auto) */
+
+    // Modul de editare: punctele se trag cu mouse-ul / degetul (sau sagetile), dublu-click / Delete =
+    // locul implicit. Pozitiile se tin in metri pe vehicul, deci raman corecte la orice zoom / latime.
+    Explorer.prototype.setEditing = function (on, onChange) {
+        var self = this;
+        on = !!on;
+        if (on && !this.editing) {
+            this.overview();
+            this.setCategory('');
+            this.edits = {};
+            this.editOriginal = {};
+            this.unit.members.forEach(function (member) {
+                (member.slots || []).forEach(function (slot) { self.editOriginal[member.vehicle_id + '|' + slot.id] = slot.pos ? slot.pos.slice() : null; });
+            });
+        }
+        this.editing = on;
+        this.onEditChange = on ? (onChange || null) : null;
+        this.root.classList.toggle('is-editing', on);
+        this.applyFilter();
+    };
+
+    // Renunta: punctele revin unde erau la deschiderea editorului.
+    Explorer.prototype.discardEdits = function () {
+        var self = this;
+        this.unit.members.forEach(function (member) {
+            (member.slots || []).forEach(function (slot) {
+                var key = member.vehicle_id + '|' + slot.id;
+                if (self.editOriginal && Object.prototype.hasOwnProperty.call(self.editOriginal, key)) { slot.pos = self.editOriginal[key]; }
+            });
+        });
+        this.edits = {};
+        this.drawStage();
+        this.applyFilter();
+    };
+
+    Explorer.prototype.editCount = function () { return Object.keys(this.edits || {}).length; };
+    Explorer.prototype.getEdits = function () { return JSON.parse(JSON.stringify(this.edits || {})); };
+
+    Explorer.prototype.anchorOf = function (node) {
+        return this.anchors.filter(function (item) { return item.node === node && item.owner; })[0] || null;
+    };
+
+    // Coordonatele desenului (viewBox) -> metri pe vehicul si invers.
+    Explorer.prototype.toMeters = function (anchor) {
+        var art = this.art;
+        var ux = art.X(1) - art.X(0);
+        var uy = art.Y(1) - art.Y(0);
+        return { x: (anchor.x - art.X(0)) / ux - anchor.owner.offset, y: (anchor.y - art.Y(0)) / uy };
+    };
+
+    Explorer.prototype.recordEdit = function (anchor, point) {
+        var slot = anchor.node._slot;
+        slot.pos = point ? [Math.round(point.x * 1000) / 1000, Math.round(point.y * 1000) / 1000] : null;
+        this.edits[slot.id] = slot.pos;
+        anchor.node.classList.toggle('is-moved', !!slot.pos);
+        if (this.onEditChange) { this.onEditChange(this.editCount()); }
+    };
+
+    Explorer.prototype.nudgeMarker = function (node, dx, dy) {
+        var anchor = this.anchorOf(node);
+        if (!anchor) { return; }
+        var point = this.toMeters(anchor);
+        point.x += dx;
+        point.y += dy;
+        anchor.x = this.art.X(anchor.owner.offset + point.x);
+        anchor.y = this.art.Y(point.y);
+        this.placeOverlay();
+        this.recordEdit(anchor, point);
+    };
+
+    Explorer.prototype.resetMarker = function (node) {
+        var anchor = this.anchorOf(node);
+        if (!anchor) { return; }
+        var slot = node._slot;
+        slot.pos = null;
+        var point = defaultPoint(slot, anchor.owner.geo, anchor.owner.data.slots);
+        anchor.x = this.art.X(anchor.owner.offset + point.x);
+        anchor.y = this.art.Y(point.y);
+        this.placeOverlay();
+        this.recordEdit(anchor, null);
+    };
+
+    // Toate punctele revin la locul implicit (se salveaza abia la „Salveaza”).
+    Explorer.prototype.resetAllMarkers = function () {
+        var self = this;
+        this.anchors.forEach(function (anchor) {
+            if (anchor.owner && anchor.node._slot && anchor.node._slot.pos) { self.resetMarker(anchor.node); }
+        });
+    };
+
+    Explorer.prototype.bindEditing = function () {
+        var self = this;
+        this.stage.addEventListener('pointerdown', function (event) {
+            if (!self.editing || event.button > 0) { return; }
+            var hot = event.target.closest('.fx-hot');
+            var anchor = hot ? self.anchorOf(hot) : null;
+            if (!anchor) { return; }
+            event.preventDefault();
+            hot.focus({ preventScroll: true });
+            try { hot.setPointerCapture(event.pointerId); } catch (error) { /* capturare indisponibila */ }
+            var rect = self.stage.getBoundingClientRect();
+            var view = self.shown || self.view;
+            var grabX = event.clientX;
+            var grabY = event.clientY;
+            var moved = false;
+            self.tip.hidden = true;
+            hot.classList.add('is-dragging');
+            var move = function (moveEvent) {
+                if (!moved && Math.abs(moveEvent.clientX - grabX) + Math.abs(moveEvent.clientY - grabY) < 3) { return; }
+                moved = true;
+                var px = Math.max(0.01, Math.min(0.99, (moveEvent.clientX - rect.left) / rect.width));
+                var py = Math.max(0.01, Math.min(0.99, (moveEvent.clientY - rect.top) / rect.height));
+                anchor.x = view.x + px * view.w;
+                anchor.y = view.y + py * view.h;
+                hot.style.left = (px * 100).toFixed(3) + '%';
+                hot.style.top = (py * 100).toFixed(3) + '%';
+            };
+            var end = function () {
+                hot.removeEventListener('pointermove', move);
+                hot.removeEventListener('pointerup', end);
+                hot.removeEventListener('pointercancel', end);
+                hot.classList.remove('is-dragging');
+                if (moved) { self.recordEdit(anchor, self.toMeters(anchor)); }
+            };
+            hot.addEventListener('pointermove', move);
+            hot.addEventListener('pointerup', end);
+            hot.addEventListener('pointercancel', end);
+        });
+        this.stage.addEventListener('dblclick', function (event) {
+            if (!self.editing) { return; }
+            var hot = event.target.closest('.fx-hot');
+            if (hot) { event.preventDefault(); self.resetMarker(hot); }
+        });
+    };
 
     window.FleetXray = {
         mount: function (detail, unit, hooks) {

@@ -199,6 +199,20 @@ fieldset.cons-field label { font-size: 13px; margin-right: 10px; }
 .cons-resolved ul { list-style: none; padding: 6px 0 0; margin: 0; display: grid; gap: 4px; }
 .cons-alerts { max-height: 520px; overflow-y: auto; }
 .cons-parts-list { max-height: 220px; overflow: auto; border: 1px solid var(--cons-line, #dbe3ee); border-radius: 8px; padding: 6px 10px; }
-.cons-parts-list .cons-parts-group { font-size: 11px; font-weight: 800; color: #53657c; text-transform: uppercase; margin: 6px 0 2px; }
 .cons-parts-list label { display: block; font-size: 14px; }
 .cons-parts-list .cons-parts-empty { color: var(--cons-muted, #6b7a90); font-size: 13px; }
+
+/* Compatibilitate pe numere de inmatriculare, grupate pe categoria de capacitate */
+.cons-plates-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.cons-plates-tools input { flex: 1; }
+.cons-plates-count { font-size: 12px; color: var(--cons-muted, #6b7a90); white-space: nowrap; }
+.cons-plates-list { max-height: 280px; overflow: auto; border: 1px solid var(--cons-line, #dbe3ee); border-radius: 8px; padding: 4px 8px; }
+.cons-plates-group + .cons-plates-group { border-top: 1px solid var(--cons-line, #dbe3ee); }
+.cons-plates-head { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-weight: 600; font-size: 14px; }
+.cons-plates-head [data-plates-expand] { cursor: pointer; }
+.cons-plates-head span[data-plates-expand] { flex: 1; }
+.cons-plates-badge { font-size: 11px; font-weight: 600; color: var(--cons-muted, #6b7a90); background: rgba(13, 110, 253, .08); border-radius: 10px; padding: 1px 7px; }
+.cons-plates-head .bi { transition: transform .15s; }
+.cons-plates-group.is-collapsed .cons-plates-head .bi { transform: rotate(-90deg); }
+.cons-plates-group.is-collapsed .cons-plates-item { display: none; }
+.cons-plates-item { display: block; font-size: 14px; padding: 2px 0 2px 24px; }

@@ -9,7 +9,7 @@
  *          $canManage (mentenanta.components_manage), $canInterventions (mentenanta.interventions).
  */
 $category = (string) $inspector['category'];
-$definition = VehicleComponentRegistry::CATEGORIES[$category];
+$definition = VehicleComponentRegistry::categories()[$category];
 $component = $inspector['component'];
 $stock = $component['stock'];
 $vehicleId = (int) $vehicle['id'];

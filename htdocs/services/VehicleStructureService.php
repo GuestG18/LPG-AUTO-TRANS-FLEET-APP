@@ -178,6 +178,8 @@ final class VehicleStructureService
             self::$installed = true;
         }
 
+        $this->ensureSchemeTables();
+
         $column = $this->db->query(
             "SELECT COUNT(*) FROM information_schema.COLUMNS
              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mentenanta_auto_configurari' AND COLUMN_NAME = 'axle_kinds'"
@@ -185,6 +187,169 @@ final class VehicleStructureService
         if ((int) $column === 0) {
             $this->db->exec('ALTER TABLE mentenanta_auto_configurari ADD COLUMN axle_kinds VARCHAR(60) NULL AFTER category_id');
         }
+    }
+
+    /**
+     * Editarea schemei: sistemele proprii (categorii noi, cu componentele lor din catalog) si pozitiile
+     * punctelor pe schema, salvate pe configuratia generala (vehiculele o urmeaza).
+     * Migrare: database/migrations/2026_11_12_000002_schema_editabila.sql.
+     */
+    private function ensureSchemeTables(): void
+    {
+        $options = 'ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
+        $partsTable = (int) $this->db->query(
+            "SELECT COUNT(*) FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mentenanta_auto_structuri_piese'"
+        )->fetchColumn();
+        if ($partsTable === 0) {
+            // Piesele puse individual pe schema + sistemul ales pentru ele (cand regulile catalogului nu il dau).
+            $this->db->exec(
+                "CREATE TABLE IF NOT EXISTS mentenanta_auto_structuri_piese (
+                    structura_id INT UNSIGNED NOT NULL,
+                    component_key VARCHAR(80) NOT NULL,
+                    category VARCHAR(40) NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    PRIMARY KEY (structura_id, component_key),
+                    CONSTRAINT fk_structuri_piese FOREIGN KEY (structura_id) REFERENCES mentenanta_auto_structuri (id) ON DELETE CASCADE
+                ) $options"
+            );
+            $this->db->exec(
+                "CREATE TABLE IF NOT EXISTS mentenanta_auto_componente_sistem (
+                    component_key VARCHAR(80) NOT NULL,
+                    category VARCHAR(40) NOT NULL,
+                    PRIMARY KEY (component_key, category)
+                ) $options"
+            );
+        }
+        $exists = (int) $this->db->query(
+            "SELECT COUNT(*) FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'mentenanta_auto_structuri_pozitii'"
+        )->fetchColumn();
+        if ($exists > 0) {
+            return;
+        }
+        $this->db->exec(
+            "CREATE TABLE IF NOT EXISTS mentenanta_auto_sisteme_custom (
+                cheie VARCHAR(40) NOT NULL PRIMARY KEY,
+                nume VARCHAR(60) NOT NULL,
+                icon VARCHAR(40) NOT NULL,
+                culoare CHAR(7) NOT NULL,
+                tipuri VARCHAR(60) NOT NULL,
+                scope VARCHAR(12) NOT NULL DEFAULT 'vehicle',
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                UNIQUE KEY uk_sisteme_custom_nume (nume)
+            ) $options"
+        );
+        $this->db->exec(
+            "CREATE TABLE IF NOT EXISTS mentenanta_auto_sisteme_custom_componente (
+                cheie VARCHAR(40) NOT NULL,
+                component_key VARCHAR(80) NOT NULL,
+                PRIMARY KEY (cheie, component_key),
+                CONSTRAINT fk_sisteme_custom_componente FOREIGN KEY (cheie) REFERENCES mentenanta_auto_sisteme_custom (cheie) ON DELETE CASCADE
+            ) $options"
+        );
+        $this->db->exec(
+            "CREATE TABLE IF NOT EXISTS mentenanta_auto_structuri_pozitii (
+                structura_id INT UNSIGNED NOT NULL,
+                slot_id VARCHAR(80) NOT NULL,
+                x DECIMAL(7,3) NOT NULL,
+                y DECIMAL(7,3) NOT NULL,
+                updated_at DATETIME NOT NULL,
+                PRIMARY KEY (structura_id, slot_id),
+                CONSTRAINT fk_structuri_pozitii FOREIGN KEY (structura_id) REFERENCES mentenanta_auto_structuri (id) ON DELETE CASCADE
+            ) $options"
+        );
+        VehicleComponentRegistry::forgetCustom();
+    }
+
+    /**
+     * Pozitiile mutate pe schema unei configuratii generale: loc (categorie:loc) -> [x, y] in metri,
+     * in sistemul vehiculului (x de la bara fata spre spate, y de la axul longitudinal).
+     *
+     * @return array<string,array{0:float,1:float}>
+     */
+    public function slotPositions(int $structureId): array
+    {
+        if ($structureId <= 0) {
+            return [];
+        }
+        try {
+            $stmt = $this->db->prepare('SELECT slot_id, x, y FROM mentenanta_auto_structuri_pozitii WHERE structura_id = :s');
+            $stmt->execute([':s' => $structureId]);
+        } catch (PDOException $exception) {
+            return []; // tabel inca necreat (pagina Auto nedeschisa dupa actualizare)
+        }
+        $result = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $result[(string) $row['slot_id']] = [round((float) $row['x'], 3), round((float) $row['y'], 3)];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Piesele puse individual pe schema unei configuratii generale: cheie -> [category, name].
+     *
+     * @return array<string,array{category:string,name:string}>
+     */
+    public function pinnedParts(int $structureId): array
+    {
+        if ($structureId <= 0) {
+            return [];
+        }
+        try {
+            $stmt = $this->db->prepare('SELECT component_key, category FROM mentenanta_auto_structuri_piese WHERE structura_id = :s ORDER BY created_at');
+            $stmt->execute([':s' => $structureId]);
+        } catch (PDOException $exception) {
+            return [];
+        }
+        $catalog = $this->catalog();
+        $result = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $key = (string) $row['component_key'];
+            if (isset($catalog[$key])) {
+                $result[$key] = ['category' => (string) $row['category'], 'name' => (string) $catalog[$key]['name']];
+            }
+        }
+
+        return $result;
+    }
+
+    public function vehiclePinnedParts(int $vehicleId): array
+    {
+        $profile = $this->profile($vehicleId);
+        $structure = $profile !== null ? $this->resolve($profile) : null;
+
+        return $structure !== null ? $this->pinnedParts((int) $structure['id']) : [];
+    }
+
+    /** Pozitiile de pe schema pe care le urmeaza un vehicul: cele ale configuratiei lui generale. */
+    public function vehicleSlotPositions(int $vehicleId): array
+    {
+        $profile = $this->profile($vehicleId);
+        $structure = $profile !== null ? $this->resolve($profile) : null;
+
+        return $structure !== null ? $this->slotPositions((int) $structure['id']) : [];
+    }
+
+    /** Configuratia generala urmata de un vehicul (id + nume), pentru legatura „editeaza schema”. */
+    public function vehicleStructureRef(int $vehicleId): ?array
+    {
+        $profile = $this->profile($vehicleId);
+        $structure = $profile !== null ? $this->resolve($profile) : null;
+
+        return $structure !== null ? ['id' => (int) $structure['id'], 'name' => (string) $structure['name']] : null;
+    }
+
+    public static function isAxleScoped(string $category): bool
+    {
+        if (in_array($category, self::AXLE_SCOPED, true)) {
+            return true;
+        }
+        $definition = VehicleComponentRegistry::custom()[$category] ?? null;
+
+        return $definition !== null && in_array($definition['scope'], ['axle', 'wheel_end'], true);
     }
 
     private function ensureDefaults(): void
@@ -606,8 +771,8 @@ final class VehicleStructureService
     private function categoryAllowed(string $category, string $role): bool
     {
         return $category !== 'anvelope'
-            && isset(VehicleComponentRegistry::CATEGORIES[$category])
-            && in_array($role, VehicleComponentRegistry::CATEGORIES[$category]['roles'], true);
+            && isset(VehicleComponentRegistry::categories()[$category])
+            && in_array($role, VehicleComponentRegistry::categories()[$category]['roles'], true);
     }
 
     /**
@@ -724,8 +889,8 @@ final class VehicleStructureService
             if (!$this->categoryAllowed($category, $role)) {
                 continue;
             }
-            $definition = VehicleComponentRegistry::CATEGORIES[$category];
-            $meta = ['key' => $category, 'label' => $definition['label'], 'icon' => $definition['icon'], 'color' => $definition['color']];
+            $definition = VehicleComponentRegistry::categories()[$category];
+            $meta = ['key' => $category, 'label' => $definition['label'], 'icon' => $definition['icon'], 'color' => $definition['color'], 'custom' => !empty($definition['custom'])];
             if (!isset($systems[$category])) {
                 $addable[] = $meta;
                 continue;
@@ -752,7 +917,7 @@ final class VehicleStructureService
                     'unit' => (self::MONITORING_TYPES[$type] ?? self::MONITORING_TYPES['Kilometri'])['unit'],
                 ] + $component['values'];
             }
-            $sections[] = $meta + ['axle_scoped' => in_array($category, self::AXLE_SCOPED, true), 'components' => $rows, 'available' => $available];
+            $sections[] = $meta + ['axle_scoped' => self::isAxleScoped($category), 'components' => $rows, 'available' => $available];
         }
 
         return ['sections' => $sections, 'addable' => $addable];
@@ -821,9 +986,10 @@ final class VehicleStructureService
             'axle_kinds' => (object) $structure['axle_kinds'],
         ];
         $filter = $this->filterFrom($structure['systems'], $structure['components'], $structure['axle_kinds']);
+        $positions = $this->slotPositions((int) $structure['id']);
         $member['slots'] = array_map(
-            static fn (array $slot): array => $slot + ['state' => null],
-            VehicleComponentRegistry::memberSlots($member, [], $this->catalogMap(), $filter)
+            static fn (array $slot): array => $slot + ['state' => null, 'pos' => $positions[$slot['id']] ?? null],
+            VehicleComponentRegistry::memberSlots($member, [], $this->catalogMap(), $filter, $this->pinnedParts((int) $structure['id']))
         );
 
         return ['key' => 'structura-' . $structure['id'], 'kind' => $structure['type'], 'template' => true, 'members' => [$member]];
@@ -849,8 +1015,20 @@ final class VehicleStructureService
                 'set_default' => $this->opSetDefault($post),
                 'assign' => $this->opAssign($post),
                 'system_add', 'system_remove', 'component_add', 'component_remove', 'component_save', 'component_reset', 'restore', 'axle_kinds_save' => $this->opItem($op, $post),
+                'positions_save' => $this->opPositions($post),
+                'part_pin' => $this->opPartPin($post),
+                'part_unpin' => $this->opPartUnpin($post),
+                'custom_system_save' => $this->opCustomSystemSave($post),
+                'custom_system_delete' => $this->opCustomSystemDelete($post),
                 default => throw new InvalidArgumentException('Operație necunoscută.'),
             };
+            // Din editorul schemei: pozitiile nesalvate inca pleaca impreuna cu sistemul adaugat.
+            if ($op !== 'positions_save' && (int) ($post['structura'] ?? 0) > 0 && trim((string) ($post['positions'] ?? '')) !== '') {
+                $this->savePositions((int) $post['structura'], (string) $post['positions']);
+            }
+            if (!empty($post['scheme_edit'])) {
+                $result['anchor'] = 'schema-editare';
+            }
             $this->db->commit();
         } catch (Throwable $exception) {
             $this->db->rollBack();
@@ -858,6 +1036,258 @@ final class VehicleStructureService
         }
 
         return $result;
+    }
+
+    /* ------------------------------------------------------------------ editorul schemei */
+
+    private function opPositions(array $post): array
+    {
+        $structure = $this->requireStructure($post);
+        $changed = $this->savePositions($structure['id'], (string) ($post['positions'] ?? ''));
+
+        return ['structura' => $structure['id'], 'message' => $changed === 0 ? 'Nu a fost nimic de modificat pe schemă.' : 'Pozițiile de pe schemă au fost salvate (' . $changed . ').'];
+    }
+
+    /**
+     * positions = JSON {loc: [x, y] | null}; null = punctul revine la locul lui implicit.
+     */
+    private function savePositions(int $structureId, string $json): int
+    {
+        $data = json_decode($json, true);
+        if (!is_array($data)) {
+            throw new InvalidArgumentException('Pozițiile trimise nu sunt valide.');
+        }
+        $upsert = $this->db->prepare(
+            'INSERT INTO mentenanta_auto_structuri_pozitii (structura_id, slot_id, x, y, updated_at) VALUES (:s, :slot, :x, :y, :u)
+             ON DUPLICATE KEY UPDATE x = VALUES(x), y = VALUES(y), updated_at = VALUES(updated_at)'
+        );
+        $delete = $this->db->prepare('DELETE FROM mentenanta_auto_structuri_pozitii WHERE structura_id = :s AND slot_id = :slot');
+        $changed = 0;
+        foreach ($data as $slotId => $point) {
+            $slotId = (string) $slotId;
+            if (preg_match('/^[a-z0-9_]{1,40}:[A-Za-z0-9-]{1,20}$/', $slotId) !== 1) {
+                continue;
+            }
+            if ($point === null) {
+                $delete->execute([':s' => $structureId, ':slot' => $slotId]);
+                $changed++;
+                continue;
+            }
+            if (!is_array($point) || count($point) !== 2 || !is_numeric($point[0] ?? null) || !is_numeric($point[1] ?? null)) {
+                continue;
+            }
+            // Metri pe vehicul: lungimea maxima a unui vehicul desenat ~20 m, latimea ~3 m.
+            $x = max(-4.0, min(30.0, (float) $point[0]));
+            $y = max(-4.0, min(4.0, (float) $point[1]));
+            $upsert->execute([':s' => $structureId, ':slot' => $slotId, ':x' => round($x, 3), ':y' => round($y, 3), ':u' => date('Y-m-d H:i:s')]);
+            $changed++;
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Un sistem propriu (categorie noua pe schema), nou sau editat. Nou din contextul unei configuratii
+     * sau al unui vehicul: e pus direct pe schema lui, cu componentele alese.
+     */
+    private function opCustomSystemSave(array $post): array
+    {
+        $key = (string) ($post['custom_key'] ?? '');
+        $name = trim(preg_replace('/\s+/u', ' ', (string) ($post['custom_name'] ?? '')) ?? '');
+        if ($name === '' || mb_strlen($name) > 60) {
+            throw new InvalidArgumentException('Numele sistemului este obligatoriu (maximum 60 de caractere).');
+        }
+        $icon = (string) ($post['custom_icon'] ?? '');
+        if (!in_array($icon, VehicleComponentRegistry::CUSTOM_ICONS, true)) {
+            $icon = 'bi-gear';
+        }
+        $color = (string) ($post['custom_color'] ?? '');
+        if (preg_match('/^#[0-9a-fA-F]{6}$/', $color) !== 1) {
+            $color = '#6366f1';
+        }
+        $scope = (string) ($post['custom_scope'] ?? 'vehicle');
+        if (!isset(VehicleComponentRegistry::CUSTOM_SCOPES[$scope])) {
+            $scope = 'vehicle';
+        }
+        $roleMap = ['camion' => 'truck', 'cap_tractor' => 'tractor', 'semiremorca' => 'trailer'];
+        $roles = [];
+        foreach ((array) ($post['custom_types'] ?? []) as $type) {
+            if (isset($roleMap[(string) $type])) {
+                $roles[] = $roleMap[(string) $type];
+            }
+        }
+        if ($roles === []) {
+            throw new InvalidArgumentException('Alege cel puțin un tip de vehicul pentru sistem.');
+        }
+        $catalog = $this->catalog();
+        $components = array_values(array_unique(array_filter(
+            array_map('strval', (array) ($post['custom_components'] ?? [])),
+            static fn (string $candidate): bool => isset($catalog[$candidate])
+        )));
+
+        $duplicate = $this->db->prepare('SELECT cheie FROM mentenanta_auto_sisteme_custom WHERE nume = :n AND cheie <> :k');
+        $duplicate->execute([':n' => $name, ':k' => $key]);
+        $builtInNames = array_map(static fn (array $category): string => mb_strtolower($category['label']), VehicleComponentRegistry::CATEGORIES);
+        if ($duplicate->fetchColumn() || in_array(mb_strtolower($name), $builtInNames, true)) {
+            throw new InvalidArgumentException('Există deja un sistem cu acest nume.');
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $isNew = $key === '';
+        if ($isNew) {
+            $key = $this->customKey($name);
+            $this->db->prepare(
+                'INSERT INTO mentenanta_auto_sisteme_custom (cheie, nume, icon, culoare, tipuri, scope, created_at, updated_at)
+                 VALUES (:k, :n, :i, :c, :t, :s, :now, :now2)'
+            )->execute([':k' => $key, ':n' => $name, ':i' => $icon, ':c' => $color, ':t' => implode(',', $roles), ':s' => $scope, ':now' => $now, ':now2' => $now]);
+        } else {
+            if (!VehicleComponentRegistry::isCustom($key)) {
+                throw new InvalidArgumentException('Sistemul nu poate fi modificat (este un sistem standard).');
+            }
+            $this->db->prepare('UPDATE mentenanta_auto_sisteme_custom SET nume = :n, icon = :i, culoare = :c, tipuri = :t, scope = :s, updated_at = :now WHERE cheie = :k')
+                ->execute([':k' => $key, ':n' => $name, ':i' => $icon, ':c' => $color, ':t' => implode(',', $roles), ':s' => $scope, ':now' => $now]);
+            $this->db->prepare('DELETE FROM mentenanta_auto_sisteme_custom_componente WHERE cheie = :k')->execute([':k' => $key]);
+        }
+        $insert = $this->db->prepare('INSERT INTO mentenanta_auto_sisteme_custom_componente (cheie, component_key) VALUES (:k, :c)');
+        foreach ($components as $componentKey) {
+            $insert->execute([':k' => $key, ':c' => $componentKey]);
+        }
+        VehicleComponentRegistry::forgetCustom();
+        $this->catalogMap = null;
+
+        $vehicleId = (int) ($post['vehicle_id'] ?? 0);
+        $structureId = (int) ($post['structura'] ?? 0);
+        $scopeTarget = $vehicleId > 0 ? ['vehicle_id' => $vehicleId] : ($structureId > 0 ? ['structura' => $structureId] : []);
+        if (!$isNew) {
+            return $scopeTarget + ['anchor' => 'sistem-' . $key, 'message' => 'Sistemul „' . $name . '” a fost salvat.'];
+        }
+
+        // Nou: direct pe schema configuratiei (sau a vehiculului) din care a fost creat, cu componentele lui.
+        if ($vehicleId > 0) {
+            $profile = $this->profile($vehicleId);
+            $structure = $profile !== null ? $this->resolve($profile) : null;
+            if ($profile !== null && $structure !== null && in_array(VehicleComponentRegistry::roleForVehicleType($profile['type']), $roles, true)) {
+                $this->addDifference($vehicleId, 'sistem', $key, false);
+                foreach ($components as $componentKey) {
+                    $this->addDifference($vehicleId, 'componenta', $componentKey, isset($structure['components'][$componentKey]));
+                }
+            }
+        } elseif ($structureId > 0) {
+            $structure = $this->structure($structureId);
+            if ($structure !== null && in_array(VehicleComponentRegistry::roleForVehicleType($structure['type']), $roles, true)) {
+                $this->insertSystem($structureId, $key);
+                foreach ($components as $componentKey) {
+                    $this->insertComponent($structureId, $componentKey);
+                }
+            }
+        }
+
+        return $scopeTarget + ['anchor' => 'sistem-' . $key, 'message' => 'Sistemul „' . $name . '” a fost creat și pus pe schemă. Trage-l unde vrei.'];
+    }
+
+    /**
+     * O piesa pusa pe schema configuratiei: din catalog sau noua (adaugata atunci in catalogul
+     * Reparatii Auto). Sistemul ei intra pe schema, piesa intra in configuratie si primeste punctul ei.
+     */
+    private function opPartPin(array $post): array
+    {
+        $structure = $this->requireStructure($post);
+        $role = VehicleComponentRegistry::roleForVehicleType($structure['type']);
+        $category = (string) ($post['part_system'] ?? '');
+        if (!$this->categoryAllowed($category, $role)) {
+            throw new InvalidArgumentException('Alege sistemul piesei (unul care se aplică acestui tip de vehicul).');
+        }
+        $key = (string) ($post['part_key'] ?? '');
+        if (($post['part_mode'] ?? '') === 'new') {
+            $catalogService = new AutoComponentCatalogService($this->db);
+            $created = $catalogService->addComponent((int) ($post['part_catalog_category'] ?? 0), (string) ($post['part_name'] ?? ''));
+            $key = $created['key'];
+            $this->catalog = null;
+            $this->catalogMap = null;
+        }
+        $catalog = $this->catalog();
+        if (!isset($catalog[$key])) {
+            throw new InvalidArgumentException('Alege piesa din catalog sau scrie numele piesei noi.');
+        }
+        if (!in_array($key, $this->catalogMap()[$category] ?? [], true)) {
+            $this->db->prepare('INSERT IGNORE INTO mentenanta_auto_componente_sistem (component_key, category) VALUES (:k, :c)')
+                ->execute([':k' => $key, ':c' => $category]);
+            VehicleComponentRegistry::forgetCustom();
+            $this->catalogMap = null;
+        }
+        $this->insertSystem($structure['id'], $category);
+        $this->insertComponent($structure['id'], $key);
+        $this->db->prepare(
+            'INSERT INTO mentenanta_auto_structuri_piese (structura_id, component_key, category, created_at) VALUES (:s, :k, :c, :now)
+             ON DUPLICATE KEY UPDATE category = VALUES(category)'
+        )->execute([':s' => $structure['id'], ':k' => $key, ':c' => $category, ':now' => date('Y-m-d H:i:s')]);
+
+        return ['structura' => $structure['id'], 'anchor' => 'schema-editare', 'message' => 'Piesa „' . $catalog[$key]['name'] . '” a fost pusă pe schemă. Trage-o unde vrei.'];
+    }
+
+    /** Scoate punctul piesei de pe schema; piesa ramane in configuratie si in catalog. */
+    private function opPartUnpin(array $post): array
+    {
+        $structure = $this->requireStructure($post);
+        $key = (string) ($post['part_key'] ?? '');
+        $stmt = $this->db->prepare('SELECT category FROM mentenanta_auto_structuri_piese WHERE structura_id = :s AND component_key = :k');
+        $stmt->execute([':s' => $structure['id'], ':k' => $key]);
+        $category = $stmt->fetchColumn();
+        if ($category === false) {
+            throw new InvalidArgumentException('Piesa nu mai este pe schemă.');
+        }
+        $this->db->prepare('DELETE FROM mentenanta_auto_structuri_piese WHERE structura_id = :s AND component_key = :k')
+            ->execute([':s' => $structure['id'], ':k' => $key]);
+        $this->db->prepare('DELETE FROM mentenanta_auto_structuri_pozitii WHERE structura_id = :s AND slot_id = :slot')
+            ->execute([':s' => $structure['id'], ':slot' => $category . ':p' . $key]);
+
+        return ['structura' => $structure['id'], 'anchor' => 'schema-editare', 'message' => 'Punctul piesei a fost scos de pe schemă (piesa rămâne în configurație).'];
+    }
+
+    private function customKey(string $name): string
+    {
+        $base = strtolower(trim((string) preg_replace('/[^a-z0-9]+/i', '_', (string) (function_exists('iconv') ? @iconv('UTF-8', 'ASCII//TRANSLIT', $name) : $name)), '_'));
+        $base = 'c_' . substr($base !== '' ? $base : 'sistem', 0, 30);
+        $key = $base;
+        $exists = $this->db->prepare('SELECT COUNT(*) FROM mentenanta_auto_sisteme_custom WHERE cheie = :k');
+        for ($index = 2; ; $index++) {
+            $exists->execute([':k' => $key]);
+            if ((int) $exists->fetchColumn() === 0 && !isset(VehicleComponentRegistry::CATEGORIES[$key])) {
+                return $key;
+            }
+            $key = $base . '_' . $index;
+        }
+    }
+
+    /** Sterge un sistem propriu de peste tot: definitie, configuratii, diferente pe vehicule, pozitii. */
+    private function opCustomSystemDelete(array $post): array
+    {
+        $key = (string) ($post['custom_key'] ?? '');
+        if (!VehicleComponentRegistry::isCustom($key)) {
+            throw new InvalidArgumentException('Sistemul nu există sau este un sistem standard.');
+        }
+        $name = VehicleComponentRegistry::label($key);
+        // Componentele ramase doar in acest sistem ies si ele din configuratii (ca la „Scoate sistemul”).
+        $stmt = $this->db->prepare('SELECT structura_id FROM mentenanta_auto_structuri_sisteme WHERE category = :k');
+        $stmt->execute([':k' => $key]);
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $structureId) {
+            $structure = $this->structure((int) $structureId);
+            if ($structure !== null) {
+                $this->removeSystemFromStructure($structure, $key, VehicleComponentRegistry::roleForVehicleType($structure['type']));
+            }
+        }
+        $this->db->prepare("DELETE FROM vehicule_structura_diferente WHERE tip = 'sistem' AND element = :k")->execute([':k' => $key]);
+        $this->db->prepare('DELETE FROM mentenanta_auto_structuri_pozitii WHERE slot_id LIKE :k')->execute([':k' => $key . ':%']);
+        $this->db->prepare('DELETE FROM mentenanta_auto_structuri_piese WHERE category = :k')->execute([':k' => $key]);
+        $this->db->prepare('DELETE FROM mentenanta_auto_componente_sistem WHERE category = :k')->execute([':k' => $key]);
+        $this->db->prepare('DELETE FROM mentenanta_auto_sisteme_custom WHERE cheie = :k')->execute([':k' => $key]);
+        VehicleComponentRegistry::forgetCustom();
+        $this->catalogMap = null;
+        $vehicleId = (int) ($post['vehicle_id'] ?? 0);
+        $structureId = (int) ($post['structura'] ?? 0);
+
+        return ($vehicleId > 0 ? ['vehicle_id' => $vehicleId] : ($structureId > 0 ? ['structura' => $structureId] : []))
+            + ['message' => 'Sistemul „' . $name . '” a fost șters (componentele rămân în catalog).'];
     }
 
     private function requireStructure(array $post): array
@@ -906,7 +1336,8 @@ final class VehicleStructureService
         $role = VehicleComponentRegistry::roleForVehicleType($type);
         $catalog = $this->catalog();
         foreach ($this->catalogMap() as $category => $keys) {
-            if (!$this->categoryAllowed($category, $role) || !empty(VehicleComponentRegistry::CATEGORIES[$category]['optional'])) {
+            $definition = VehicleComponentRegistry::categories()[$category];
+            if (!$this->categoryAllowed($category, $role) || !empty($definition['optional']) || !empty($definition['custom'])) {
                 continue;
             }
             $this->insertSystem($id, $category);

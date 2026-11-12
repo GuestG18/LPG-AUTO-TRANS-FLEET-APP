@@ -59,7 +59,7 @@ $boot = [
         'id' => (int) $p['id'], 'denumire' => (string) $p['denumire'], 'um' => (string) $p['um'], 'tip_articol' => (string) $p['tip_articol'],
         'tip_fluid' => (string) ($p['tip_fluid'] ?? ''), 'producator' => (string) ($p['producator'] ?? ''), 'cod_produs' => (string) ($p['cod_produs'] ?? ''),
         'vascozitate' => (string) ($p['vascozitate'] ?? ''), 'specificatie' => (string) ($p['specificatie'] ?? ''), 'aprobari' => (string) ($p['aprobari'] ?? ''),
-        'sisteme' => $p['sisteme_list'], 'piese' => $p['piese_list'], 'tipuri_vehicul' => $p['tipuri_vehicul_list'], 'compatibilitate_note' => (string) ($p['compatibilitate_note'] ?? ''),
+        'sisteme' => $p['sisteme_list'], 'piese' => $p['piese_list'], 'tipuri_vehicul' => $p['tipuri_vehicul_list'], 'vehicule' => $p['vehicule_list'], 'compatibilitate_note' => (string) ($p['compatibilitate_note'] ?? ''),
         'interval_km' => $p['interval_km'], 'interval_luni' => $p['interval_luni'], 'interval_ore' => $p['interval_ore'],
         'sursa_monitorizare' => array_values(array_filter(explode(',', (string) ($p['sursa_monitorizare'] ?? '')))),
         'prag_alerta' => $p['prag_alerta'], 'critic' => (int) $p['critic'], 'circuit_inchis' => (int) $p['circuit_inchis'],
@@ -68,7 +68,9 @@ $boot = [
     ], $products)),
     'vehicles' => array_map(static fn (array $v): array => [
         'id' => (int) $v['id'], 'label' => trim((string) $v['nr_inmatriculare'] . ' - ' . (string) ($v['marca'] ?? '') . ' ' . (string) ($v['model'] ?? '')),
-        'type' => (string) $v['tip_vehicul'],
+        'type' => (string) $v['tip_vehicul'], 'plate' => (string) $v['nr_inmatriculare'],
+        'cat_id' => (int) ($v['categorie_capacitate_id'] ?? 0), 'cat' => (string) ($v['categorie_capacitate'] ?? ''),
+        'cat_order' => (int) ($v['categorie_capacitate_ordine'] ?? 0),
     ], $consVehicles),
     'dispenses' => array_map(static fn (array $m): array => [
         'id' => (int) $m['id'], 'label' => date('d.m.Y', (int) strtotime((string) $m['efectuat_la'])) . ' · ' . ($m['nr_inmatriculare'] ?? '') . ' · '

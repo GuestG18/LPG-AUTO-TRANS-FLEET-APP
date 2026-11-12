@@ -242,6 +242,40 @@ class MaintenanceController
             ];
         }
 
+        // Editorul schemei: sistemele proprii (pentru editare) si catalogul pe categorii (alegerea componentelor).
+        $page['custom_systems'] = VehicleComponentRegistry::custom();
+        $page['catalog_groups'] = [];
+        foreach ($service->catalog() as $key => $component) {
+            $page['catalog_groups'][(string) $component['category']][] = ['key' => (string) $key, 'name' => (string) $component['name']];
+        }
+        $page['scheme_structure'] = $selectedVehicle !== null ? $service->vehicleStructureRef($selectedVehicle['id']) : null;
+        // „Adauga piesa” pe schema: sistemele tipului de vehicul, categoriile catalogului, piesele deja puse.
+        $page['part_systems'] = [];
+        $page['pinned_parts'] = [];
+        $page['catalog_categories'] = [];
+        if ($selectedVehicle === null && is_array($page['structure'] ?? null)) {
+            $role = VehicleComponentRegistry::roleForVehicleType((string) $page['structure']['type']);
+            foreach (VehicleComponentRegistry::categories() as $key => $definition) {
+                if ($key !== 'anvelope' && in_array($role, $definition['roles'], true)) {
+                    $page['part_systems'][$key] = ['label' => $definition['label'], 'color' => $definition['color'], 'icon' => $definition['icon'], 'on_scheme' => isset($page['structure']['systems'][$key])];
+                }
+            }
+            $page['pinned_parts'] = $service->pinnedParts((int) $page['structure']['id']);
+            // Sistemul propus la alegerea unei piese din catalog (primul in care o pune catalogul).
+            $page['part_default_system'] = [];
+            foreach ($service->catalogMap() as $key => $componentKeys) {
+                if (!isset($page['part_systems'][$key]) || $key === 'alte') {
+                    continue;
+                }
+                foreach ($componentKeys as $componentKey) {
+                    $page['part_default_system'][$componentKey] ??= $key;
+                }
+            }
+            foreach ((new AutoComponentCatalogService($this->db))->categories() as $id => $category) {
+                $page['catalog_categories'][$id] = (string) $category['name'];
+            }
+        }
+
         return $page + $sections;
     }
 
