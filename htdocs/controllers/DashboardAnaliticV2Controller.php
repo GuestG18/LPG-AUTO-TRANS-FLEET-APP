@@ -92,7 +92,7 @@ class DashboardAnaliticV2Controller
     // ------------------------------------------- cardurile KPI ale utilizatorului
 
     /** Cheile cardurilor KPI, in ordinea implicita (aceleasi ca in kpiCards() din JS). */
-    private const CARD_KEYS = ['curse', 'facturare', 'cheltuieli', 'profit', 'km', 'tone', 'incarcare', 'folosinta', 'medii'];
+    private const CARD_KEYS = ['curse', 'facturare', 'cheltuieli', 'profit', 'km', 'tone', 'incarcare', 'folosinta', 'medii', 'venit_km', 'clienti'];
 
     /**
      * Ce carduri vede utilizatorul curent si in ce ordine: {order: [chei], hidden: [chei]}.

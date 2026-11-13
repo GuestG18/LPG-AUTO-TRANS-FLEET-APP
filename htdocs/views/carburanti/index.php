@@ -1277,52 +1277,134 @@ $donutStyle = static function (array $items): string {
             <?php endif; ?>
         </div>
     <?php else: ?>
-    <div class="fuel-kpi-grid">
-        <article class="fuel-kpi-card fuel-accent-green">
-            <div>
-                <span>Motorină consumată</span>
-                <strong><?= e($formatLiters((float) ($kpis['motorina_liters'] ?? 0))) ?></strong>
-                <small>Cost total: <?= e($formatCurrency((float) ($kpis['total_value'] ?? 0))) ?></small>
-                <?= $changeBadge($kpis['changes']['motorina_liters'] ?? null) ?>
-            </div>
-            <i class="bi bi-fuel-pump" aria-hidden="true"></i>
-        </article>
-        <article class="fuel-kpi-card fuel-accent-blue">
-            <div>
-                <span>AdBlue consumat</span>
-                <strong><?= e($formatLiters((float) ($kpis['adblue_liters'] ?? 0))) ?></strong>
-                <small>Raportat pe perioada selectată</small>
-                <?= $changeBadge($kpis['changes']['adblue_liters'] ?? null) ?>
-            </div>
-            <i class="bi bi-bag-fill" aria-hidden="true"></i>
-        </article>
-        <article class="fuel-kpi-card fuel-accent-amber">
-            <div>
-                <span>Consum mediu Motorină</span>
-                <strong><?= e(format_number_ro((float) ($kpis['motorina_avg_l100'] ?? 0), 2)) ?> L/100 km</strong>
-                <small><?= e($consumptionDetail !== '' ? $consumptionDetail : 'Pe perioada selectata') ?></small>
-                <?= $changeBadge($kpis['changes']['motorina_avg_l100'] ?? null) ?>
-            </div>
-            <i class="bi bi-graph-up-arrow" aria-hidden="true"></i>
-        </article>
-        <article class="fuel-kpi-card fuel-accent-cyan">
-            <div>
-                <span>Consum mediu AdBlue</span>
-                <strong><?= e($formatPercent((float) ($kpis['adblue_percent'] ?? 0))) ?></strong>
-                <small>Raportat la motorină</small>
-                <?= $changeBadge($kpis['changes']['adblue_percent'] ?? null) ?>
-            </div>
-            <i class="bi bi-droplet-fill" aria-hidden="true"></i>
-        </article>
-        <article class="fuel-kpi-card fuel-accent-purple">
-            <div>
-                <span>Cost total carburant</span>
-                <strong><?= e($formatCurrency((float) ($kpis['total_value'] ?? 0))) ?></strong>
-                <small>Motorină + AdBlue</small>
-                <?= $changeBadge($kpis['changes']['total_value'] ?? null) ?>
-            </div>
-            <i class="bi bi-cash-coin" aria-hidden="true"></i>
-        </article>
+    <?php
+    // -----------------------------------------------------------------
+    // Cardurile KPI morph (assets/js/fuel-kpi-morph.js): starea compacta e randata aici, din
+    // aceleasi $kpis ca pana acum; analiza extinsa se incarca lenes (action=kpi_card_data).
+    // -----------------------------------------------------------------
+    $fkmSparkData = is_array($fuelData['kpi_sparklines'] ?? null) ? $fuelData['kpi_sparklines'] : [];
+    $fkmSparkSvg = static function (string $field) use ($fkmSparkData): string {
+        $values = array_map(static fn (array $bucket): ?float => isset($bucket[$field]) && $bucket[$field] !== null ? (float) $bucket[$field] : null, $fkmSparkData);
+        $points = [];
+        foreach ($values as $index => $value) {
+            if ($value !== null) {
+                $points[] = [$index, $value];
+            }
+        }
+        if (count($points) < 2) {
+            return '';
+        }
+        $numbers = array_column($points, 1);
+        $min = min($numbers);
+        $max = max($numbers);
+        $span = $max - $min;
+        $last = max(1, count($values) - 1);
+        $coords = [];
+        foreach ($points as [$index, $value]) {
+            $x = round($index / $last * 120, 2);
+            $y = $span > 0 ? round(30 - ($value - $min) / $span * 26, 2) : 17.0;
+            $coords[] = $x . ',' . $y;
+        }
+        $line = 'M' . implode(' L', $coords);
+        $area = $line . ' L' . explode(',', end($coords))[0] . ',32 L' . explode(',', $coords[0])[0] . ',32 Z';
+
+        return '<svg viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true" focusable="false">'
+            . '<path class="fkm-spark-area" d="' . $area . '"/>'
+            . '<path class="fkm-spark-line" d="' . $line . '"/></svg>';
+    };
+    // Aceeasi regula ca $changeBadge: scaderea e „buna" (verde), cresterea „rea" (rosu).
+    $fkmChange = static function (?float $value): string {
+        if ($value === null) {
+            return '<span class="fkm-change is-muted" data-fkm-shared="change" title="Fără date în perioada precedentă"><i class="bi bi-dash-lg" aria-hidden="true"></i> fără comparație</span>';
+        }
+        $isGood = $value <= 0;
+
+        return '<span class="fkm-change ' . ($isGood ? 'is-good' : 'is-bad') . '" data-fkm-shared="change" title="Față de perioada precedentă de aceeași lungime">'
+            . '<i class="bi ' . ($isGood ? 'bi-arrow-down' : 'bi-arrow-up') . '" aria-hidden="true"></i> '
+            . e(format_number_ro(abs($value), 1)) . '%</span>';
+    };
+    $fkmCards = [
+        ['key' => 'motorina', 'title' => 'Motorină consumată', 'icon' => 'bi-fuel-pump', 'accent' => 'green',
+         'value' => $formatLiters((float) ($kpis['motorina_liters'] ?? 0)),
+         'sub' => 'Cost total: ' . $formatCurrency((float) ($kpis['total_value'] ?? 0)),
+         'change' => $kpis['changes']['motorina_liters'] ?? null, 'spark' => 'motorina_liters'],
+        ['key' => 'adblue', 'title' => 'AdBlue consumat', 'icon' => 'bi-bag-fill', 'accent' => 'blue',
+         'value' => $formatLiters((float) ($kpis['adblue_liters'] ?? 0)),
+         'sub' => 'Raportat pe perioada selectată',
+         'change' => $kpis['changes']['adblue_liters'] ?? null, 'spark' => 'adblue_liters'],
+        ['key' => 'consum', 'title' => 'Consum mediu Motorină', 'icon' => 'bi-graph-up-arrow', 'accent' => 'amber',
+         'value' => format_number_ro((float) ($kpis['motorina_avg_l100'] ?? 0), 2) . ' L/100 km',
+         'sub' => $consumptionDetail !== '' ? $consumptionDetail : 'Pe perioada selectata',
+         'change' => $kpis['changes']['motorina_avg_l100'] ?? null, 'spark' => 'l100'],
+        ['key' => 'adblue_pct', 'title' => 'Consum mediu AdBlue', 'icon' => 'bi-droplet-fill', 'accent' => 'cyan',
+         'value' => $formatPercent((float) ($kpis['adblue_percent'] ?? 0)),
+         'sub' => 'Raportat la motorină',
+         'change' => $kpis['changes']['adblue_percent'] ?? null, 'spark' => 'adblue_pct'],
+        ['key' => 'cost', 'title' => 'Cost total carburant', 'icon' => 'bi-cash-coin', 'accent' => 'purple',
+         'value' => $formatCurrency((float) ($kpis['total_value'] ?? 0)),
+         'sub' => 'Toate tipurile de carburant',
+         'change' => $kpis['changes']['total_value'] ?? null, 'spark' => 'value'],
+    ];
+    $fkmVehicleList = [];
+    foreach (($fuelVehicleGroups ?? []) as $fkmGroup) {
+        foreach ($fkmGroup['vehicles'] as $fkmVehicle) {
+            $fkmPlate = trim((string) ($fkmVehicle['vehicle_registration'] ?? ''));
+            if ($fkmPlate !== '') {
+                $fkmVehicleList[] = [
+                    'plate' => $fkmPlate,
+                    'label' => trim(trim((string) ($fkmVehicle['marca'] ?? '')) . ' ' . trim((string) ($fkmVehicle['model'] ?? ''))),
+                    'group' => (string) $fkmGroup['label'],
+                ];
+            }
+        }
+    }
+    $fkmConfig = [
+        'endpoint' => url('index.php') . '?page=carburanti&action=kpi_card_data',
+        'pageUrl' => url('index.php'),
+        'global' => [
+            'date_from' => (string) ($filters['date_from'] ?? ''),
+            'date_to' => (string) ($filters['date_to'] ?? ''),
+            'vehicles' => $selectedVehicles,
+            'transport_group' => (string) ($filters['transport_group'] ?? ''),
+            'fuel_type' => (string) ($filters['fuel_type'] ?? ''),
+            'brand' => (string) ($filters['brand'] ?? ''),
+            'vehicle_class' => (string) ($filters['vehicle_class'] ?? ''),
+            'period_label' => $periodLabel,
+        ],
+        'vehicles' => $fkmVehicleList,
+        'transportLabels' => ['primar' => 'Primar', 'distributie' => 'Distribuție', 'compresor' => 'Compresor', 'primar_distributie' => 'Primar + Distribuție', 'neasociat' => 'Neasociat'],
+    ];
+    ?>
+    <link rel="stylesheet" href="<?= e(url('assets/css/fuel-kpi-morph.css?v=' . (string) @filemtime(BASE_PATH . '/assets/css/fuel-kpi-morph.css'))) ?>">
+    <div class="fkm-grid" data-fkm-root aria-label="Indicatori carburant — deschide un card pentru analiză detaliată">
+        <script type="application/json" data-fkm-config><?= json_encode($fkmConfig, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?></script>
+        <?php foreach ($fkmCards as $fkmCard): ?>
+            <article class="fkm-card fkm-accent-<?= e($fkmCard['accent']) ?>" data-fkm-card="<?= e($fkmCard['key']) ?>">
+                <div class="fkm-inner" data-fkm-inner>
+                    <header class="fkm-head">
+                        <span class="fkm-icon" data-fkm-shared="icon"><i class="bi <?= e($fkmCard['icon']) ?>" aria-hidden="true"></i></span>
+                        <div class="fkm-heading">
+                            <h3 class="fkm-title" data-fkm-shared="title" id="fkm-title-<?= e($fkmCard['key']) ?>">
+                                <button type="button" class="fkm-expand" data-fkm-expand aria-expanded="false" aria-controls="fkm-panel-<?= e($fkmCard['key']) ?>"><?= e($fkmCard['title']) ?></button>
+                                <span class="fkm-context" data-fkm-context hidden></span>
+                                <button type="button" class="fkm-info" data-fkm-info aria-label="Cum se calculează <?= e(mb_strtolower($fkmCard['title'])) ?>"><i class="bi bi-info-circle" aria-hidden="true"></i></button>
+                            </h3>
+                            <div class="fkm-value-row">
+                                <strong class="fkm-value" data-fkm-shared="value" data-fkm-value><?= e($fkmCard['value']) ?></strong>
+                                <span class="fkm-change-wrap" data-fkm-change-wrap><?= $fkmChange($fkmCard['change'] !== null ? (float) $fkmCard['change'] : null) ?><span class="fkm-change-note">față de perioada precedentă</span></span>
+                            </div>
+                            <small class="fkm-sub" data-fkm-shared="sub" data-fkm-sub title="<?= e($fkmCard['sub']) ?>"><?= e($fkmCard['sub']) ?></small>
+                        </div>
+                        <div class="fkm-tools">
+                            <button type="button" class="fkm-tool" data-fkm-menu aria-haspopup="menu" aria-expanded="false" aria-label="Opțiuni <?= e(mb_strtolower($fkmCard['title'])) ?>"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
+                            <button type="button" class="fkm-tool fkm-collapse" data-fkm-collapse aria-label="Restrânge analiza" title="Restrânge (Esc)"><i class="bi bi-arrows-angle-contract" aria-hidden="true"></i></button>
+                        </div>
+                    </header>
+                    <div class="fkm-spark" data-fkm-spark><?= $fkmSparkSvg($fkmCard['spark']) ?></div>
+                    <div class="fkm-panel" id="fkm-panel-<?= e($fkmCard['key']) ?>" data-fkm-panel role="region" aria-labelledby="fkm-title-<?= e($fkmCard['key']) ?>" hidden></div>
+                </div>
+            </article>
+        <?php endforeach; ?>
     </div>
     <?php
     // Cifrele cardurilor ignora filtrul de categorie (vezi getDashboardData),
@@ -3746,6 +3828,7 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="<?= e(url('assets/js/fuel-kpi-morph.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/fuel-kpi-morph.js'))) ?>"></script>
 <script src="<?= e(url('assets/js/carburanti-compare.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/carburanti-compare.js'))) ?>"></script>
 <script src="<?= e(url('assets/js/fuel-km-check.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/fuel-km-check.js'))) ?>"></script>
 <script src="<?= e(url('assets/js/table-column-filter.js?v=' . (string) @filemtime(BASE_PATH . '/assets/js/table-column-filter.js'))) ?>"></script>

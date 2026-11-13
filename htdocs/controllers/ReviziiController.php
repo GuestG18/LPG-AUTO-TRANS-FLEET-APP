@@ -37,6 +37,11 @@ class ReviziiController
             return;
         }
 
+        // Revizii & Mentenanta V2 (pagina unica): actiunile v2_* au controller propriu.
+        if (str_starts_with($action, 'v2_') && $this->v2()->handle($action)) {
+            return;
+        }
+
         match ($action) {
             'save_config' => $this->saveConfigAction(),
             'record' => $this->recordAction(),
@@ -121,7 +126,8 @@ class ReviziiController
 
     private function pageUrl(string $tab): string
     {
-        return build_query_url($tab === ReviziiModel::TIP_SCHIMB_ULEI ? ['page' => self::PAGE] : ['page' => self::PAGE, 'tip' => $tab]);
+        // Din Revizii V2 ?page=revizii este spatiul de lucru unic; ecranele vechi au mereu ?tip=.
+        return build_query_url(['page' => self::PAGE, 'tip' => $tab]);
     }
 
     /**
@@ -157,13 +163,28 @@ class ReviziiController
         ]);
     }
 
+    /** Revizii & Mentenanță V2 — spațiul de lucru unic (?page=revizii fără tip). */
+    private function v2(): ReviziiV2Controller
+    {
+        require_once __DIR__ . '/ReviziiV2Controller.php';
+
+        return new ReviziiV2Controller($this->db);
+    }
+
     private function index(): void
     {
-        if (($_GET['tip'] ?? '') === 'prezentare') {
+        $tip = (string) ($_GET['tip'] ?? '');
+        // Fara ?tip= (sau ?tip necunoscut): pagina unica V2. Ecranele detaliate existente raman
+        // accesibile (legaturi vechi / din detaliul vehiculului), fara bara de tab-uri.
+        if ($tip === '' || ($tip !== 'prezentare' && $tip !== 'istoric' && !isset(ReviziiModel::TABS[$tip]))) {
+            $this->v2()->index();
+            return;
+        }
+        if ($tip === 'prezentare') {
             $this->overview();
             return;
         }
-        if (($_GET['tip'] ?? '') === 'istoric') {
+        if ($tip === 'istoric') {
             $this->istoric()->index();
             return;
         }

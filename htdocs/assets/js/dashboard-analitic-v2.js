@@ -706,6 +706,37 @@
         });
     });
 
+    // filtrele din carduri (Clienți, Km salvați): bifa redeseneaza cardul, cautarea doar ascunde optiuni
+    document.addEventListener('change', function (event) {
+        var input = event.target.closest && event.target.closest('[data-card-filter]');
+        if (!input) {
+            return;
+        }
+        var cardEl = input.closest('[data-kpi-flip]');
+        var list = cardFilterState(input.getAttribute('data-card-filter'))[input.getAttribute('data-facet')];
+        var index = list.indexOf(input.value);
+        if (input.checked && index === -1) {
+            list.push(input.value);
+        } else if (!input.checked && index !== -1) {
+            list.splice(index, 1);
+        }
+        if (cardEl) {
+            redrawFlipCard(cardEl.getAttribute('data-kpi-flip'), false);
+        }
+    });
+
+    document.addEventListener('input', function (event) {
+        var search = event.target.closest && event.target.closest('[data-card-filter-search]');
+        if (!search) {
+            return;
+        }
+        var text = search.value.trim().toLowerCase();
+        cardFilterState(search.getAttribute('data-card-filter-search')).search = search.value.trim();
+        $$('[data-cf-text]', search.parentNode).forEach(function (label) {
+            label.hidden = !!text && label.getAttribute('data-cf-text').indexOf(text) === -1;
+        });
+    });
+
     document.addEventListener('click', function (event) {
         var wrap = $('#da2-period');
         if (!$('#da2-period-panel').hidden && !wrap.contains(event.target) && document.body.contains(event.target)) {
@@ -1076,11 +1107,19 @@
                 value: fmt(f.km_totali, 'km'),
                 note: 'Facturați ' + fmt(f.km_facturati, 'km') + ' · Nefacturați ' + fmt(f.km_nefacturati, 'km') +
                     ' (' + fmt(f.km_nefacturati_percent, 'pct') + ')',
+                // fata "Km salvați", cu filtrele ei in stanga; eticheta de pe rezumat o deschide direct
+                extraFaces: [KM_SAVED_FACE],
+                badge: { face: 'salvati', icon: 'bi-piggy-bank', text: 'Km salvați: ' + fmt(f.km_salvati, 'km') },
                 detail: {
-                    intro: 'Km efectiv parcurși. Se iau km totali ai cursei, iar când aceștia lipsesc se folosesc km rutei tarifate.',
+                    intro: 'Km efectiv parcurși. Se iau km totali ai cursei, iar când aceștia lipsesc se folosesc km rutei tarifate. Fața „Km salvați” arată km economisiți pe cursele primar (ruta tarifată mai lungă decât km parcurși), pe beneficiar sau pe categorie de capacitate, până la mașină, cu filtre proprii.',
                     formula: 'km_totali, cu revenire pe km_cursa când km_totali lipsește sau este 0',
                     stats: [
                         { label: 'Km facturați', value: fmt(f.km_facturati, 'km') },
+                        {
+                            label: 'Km salvați',
+                            value: fmt(f.km_salvati, 'km'),
+                            hint: 'pe cursele primar: km rută tarifată − km parcurși, unde ruta a fost mai lungă; detaliat pe fața „Km salvați”'
+                        },
                         { label: 'Km nefacturați', value: fmt(f.km_nefacturati, 'km') + ' (' + fmt(f.km_nefacturati_percent, 'pct') + ')' },
                         { label: kmRouteBalance(f).label + ' față de rută', value: fmt(kmRouteBalance(f).value, 'km') },
                         {
@@ -1180,34 +1219,763 @@
                     ]
                 }
             },
+            mediiCard(f),
             {
-                key: 'medii',
-                icon: 'bi-rulers',
-                name: 'Medii pe cursă',
-                value: fmt(f.km_per_cursa, 'num') + ' km',
-                note: fmt(f.tone_per_cursa, 'num') + ' tone / cursă · ' + fmt(f.km_tona, 'num') + ' km / tonă',
+                key: 'venit_km',
+                icon: 'bi-speedometer2',
+                name: 'Venit / km',
+                value: fmt(f.venit_km, 'lei3'),
+                note: fmt(f.facturare, 'lei') + ' facturat ÷ ' + fmt(f.km_totali, 'km') + ' parcurși',
                 detail: {
-                    intro: 'Cât înseamnă o cursă medie în perioada și filtrele curente. Aceleași medii, dar pe client și pe tip de transport, sunt în tabul Raport sumar.',
-                    formula: 'Km / cursă = km totali ÷ curse · Tone / cursă = tone livrate ÷ curse',
+                    intro: 'Cât s-a facturat, în medie, pe fiecare km parcurs. Apasă pe un beneficiar ca să vezi venitul / km pe fiecare tip de transport făcut pentru el. Se raportează la km parcurși (nu la km facturați), pentru că și costurile se produc pe toți kilometrii; Dashboard Analitic V1 împarte la km facturați.',
+                    formula: 'Venit / km = Facturare ÷ km parcurși (pe flotă, pe beneficiar și pe beneficiar × tip de transport)',
                     stats: [
-                        { label: 'Km / cursă', value: fmt(f.km_per_cursa, 'num') },
-                        { label: 'Tone / cursă', value: fmt(f.tone_per_cursa, 'num') },
-                        { label: 'Km / tonă', value: fmt(f.km_tona, 'num') },
-                        { label: 'Tone / km', value: fmt(f.tona_km, 'num') },
-                        { label: 'Km / punct client', value: fmt(f.km_per_punct, 'num') }
+                        { label: 'Facturare', value: fmt(f.facturare, 'lei') },
+                        { label: 'Km parcurși', value: fmt(f.km_totali, 'km') },
+                        { label: 'Venit / km', value: fmt(f.venit_km, 'lei3') },
+                        {
+                            label: 'Venit / km facturat',
+                            value: fmt(num(f.km_facturati) > 0 ? num(f.facturare) / num(f.km_facturati) : 0, 'lei3'),
+                            hint: 'facturare ÷ km facturați: calculul din Dashboard Analitic V1'
+                        },
+                        { label: 'Cost / km', value: fmt(f.cost_km, 'lei3') },
+                        { label: 'Profit / km', value: fmt(f.profit_km, 'lei3') },
+                        { label: 'Venit / tonă', value: fmt(f.venit_tona, 'lei') }
                     ],
-                    breakdownTitle: 'Km / cursă pe tip de transport',
-                    breakdown: bucketRows('km_per_cursa', 'num'),
+                    breakdownTitle: 'Venit / km pe beneficiar',
+                    breakdown: clientVenitKmRows(),
+                    breakdownNote: 'Apasă pe un beneficiar pentru venitul / km pe fiecare tip de transport.',
                     actions: [
-                        { type: 'tab', tab: 'raport', label: 'Deschide raportul sumar' }
+                        { type: 'tab', tab: 'beneficiari', dimension: 'beneficiaries', sort: 'venit_km', label: 'Vezi beneficiarii după venit / km' },
+                        { type: 'rank', metric: 'venit_km', label: 'Clasament după venit / km' }
                     ]
                 }
-            }
+            },
+            clientPointsCard(f)
         ];
+    }
+
+    // --------------------- carduri pe randuri plate: categorie x beneficiar x tip x vehicul
+
+    function beneficiariWord(count) {
+        return fmt(count, 'int') + (count === 1 ? ' beneficiar' : ' beneficiari');
+    }
+
+    function perTrip(value, trips) {
+        return num(trips) > 0 ? num(value) / num(trips) : 0;
+    }
+
+    /*
+     * Seturile de date ale cardurilor cu filtre proprii. Fiecare rand plat are aceleasi
+     * chei (flatCardRow in model) + indicatorii lui. Cardul filtreaza si grupeaza in
+     * browser, fara alta cerere; filtrele se aplica peste filtrele paginii.
+     */
+    var CARD_DATASETS = {
+        clienti: {
+            source: 'client_points',
+            fields: ['clienti', 'curse_cu_clienti', 'km', 'tone'],
+            field: 'clienti'
+        },
+        km_salvati: {
+            source: 'km_saved',
+            fields: ['km_salvati', 'curse_cu_economie', 'km_ruta', 'km_parcursi'],
+            field: 'km_salvati'
+        },
+        // Medie km / distribuție: numaratorile din filtre arata cursele
+        medii: {
+            source: 'km_trips',
+            fields: ['km', 'curse'],
+            field: 'curse'
+        }
+    };
+
+    // filtrele din coloana din stanga a fetei intinse; gol = toate
+    var CARD_FACETS = [
+        { key: 'cat', label: 'Categorie capacitate', icon: 'bi-boxes', value: 'categorie_key', text: 'categorie', order: 'categorie_ordine' },
+        { key: 'ben', label: 'Beneficiar', icon: 'bi-building', value: 'beneficiar_id', text: 'beneficiar' },
+        { key: 'tip', label: 'Tip transport', icon: 'bi-signpost-split', value: 'tip_transport', text: 'tip_label' },
+        { key: 'veh', label: 'Vehicul', icon: 'bi-truck-front', value: 'vehicle_id', text: 'vehicul', search: true }
+    ];
+
+    function datasetRows(id) {
+        return (state.data.summary || {})[CARD_DATASETS[id].source] || [];
+    }
+
+    /** Alegerile din filtrele unui set de date; aceleasi pe toate cardurile care il folosesc. */
+    function cardFilterState(id) {
+        state.cardFilters = state.cardFilters || {};
+        if (!state.cardFilters[id]) {
+            state.cardFilters[id] = { cat: [], ben: [], tip: [], veh: [], search: '' };
+        }
+        return state.cardFilters[id];
+    }
+
+    function resetCardFilters(id) {
+        var sel = cardFilterState(id);
+        CARD_FACETS.forEach(function (facet) { sel[facet.key] = []; });
+        sel.search = '';
+    }
+
+    /** Randurile care trec de filtre; `exceptFacet` lasa deoparte un filtru (pentru numaratorile lui). */
+    function filterCardRows(id, exceptFacet) {
+        var sel = cardFilterState(id);
+        return datasetRows(id).filter(function (row) {
+            return CARD_FACETS.every(function (facet) {
+                var chosen = sel[facet.key];
+                return facet.key === exceptFacet || !chosen.length || chosen.indexOf(String(row[facet.value])) !== -1;
+            });
+        });
+    }
+
+    function cardFiltersActive(id) {
+        var sel = cardFilterState(id);
+        return CARD_FACETS.some(function (facet) { return sel[facet.key].length > 0; });
+    }
+
+    function sumCardRows(id, rows) {
+        var t = { vehicles: {}, beneficiari: {} };
+        CARD_DATASETS[id].fields.forEach(function (field) { t[field] = 0; });
+        rows.forEach(function (row) {
+            CARD_DATASETS[id].fields.forEach(function (field) { t[field] += num(row[field]); });
+            t.vehicles[row.vehicle_id] = true;
+            t.beneficiari[row.beneficiar_id] = true;
+        });
+        t.nr_vehicule = Object.keys(t.vehicles).length;
+        t.nr_beneficiari = Object.keys(t.beneficiari).length;
+        return t;
+    }
+
+    /** Randurile plate -> beneficiar -> tip de transport -> vehicule, sortate dupa indicatorul setului. */
+    function cardTree(id, rows) {
+        var fields = CARD_DATASETS[id].fields;
+        var sortField = CARD_DATASETS[id].field;
+        var clients = {};
+        rows.forEach(function (row) {
+            var ck = 'b' + row.beneficiar_id;
+            var client = clients[ck] = clients[ck] || { key: ck, nume: row.beneficiar, types: {}, vehicles: {} };
+            var type = client.types[row.tip_transport] = client.types[row.tip_transport] ||
+                { key: row.tip_transport, label: row.tip_label, vehicles: {} };
+            var vehicle = type.vehicles[row.vehicle_id] = type.vehicles[row.vehicle_id] ||
+                { vehicle_id: row.vehicle_id, vehicul: row.vehicul };
+            [client, type, vehicle].forEach(function (node) {
+                fields.forEach(function (field) { node[field] = num(node[field]) + num(row[field]); });
+            });
+            client.vehicles[row.vehicle_id] = true;
+        });
+
+        function bySort(a, b) { return b[sortField] - a[sortField]; }
+        return Object.keys(clients).map(function (ck) {
+            var client = clients[ck];
+            client.types = Object.keys(client.types).map(function (tk) {
+                var type = client.types[tk];
+                type.vehicles = Object.keys(type.vehicles).map(function (vk) { return type.vehicles[vk]; }).sort(bySort);
+                type.nr_vehicule = type.vehicles.length;
+                return type;
+            }).sort(bySort);
+            client.nr_vehicule = Object.keys(client.vehicles).length;
+            return client;
+        }).sort(bySort);
+    }
+
+    /** Coloana de filtre: categorii, beneficiari, tipuri, vehicule — cu valoarea fiecarei optiuni. */
+    function cardFiltersHtml(id) {
+        var all = datasetRows(id);
+        var sel = cardFilterState(id);
+        var field = CARD_DATASETS[id].field;
+
+        var groups = CARD_FACETS.map(function (facet) {
+            // optiunile vin din toate randurile, ca nicio optiune sa nu dispara;
+            // numaratoarea tine cont de celelalte filtre (nu si de acesta)
+            var counts = {};
+            filterCardRows(id, facet.key).forEach(function (row) {
+                var value = String(row[facet.value]);
+                counts[value] = (counts[value] || 0) + num(row[field]);
+            });
+            var options = {};
+            all.forEach(function (row) {
+                var value = String(row[facet.value]);
+                if (!options[value]) {
+                    options[value] = { value: value, text: row[facet.text], order: facet.order ? num(row[facet.order]) : 0 };
+                }
+            });
+            var list = Object.keys(options).map(function (value) {
+                var option = options[value];
+                option.count = counts[value] || 0;
+                return option;
+            }).sort(function (a, b) {
+                return (facet.order ? a.order - b.order : b.count - a.count) ||
+                    String(a.text).localeCompare(String(b.text), 'ro', { numeric: true });
+            });
+            if (!list.length) {
+                return '';
+            }
+
+            var chosen = sel[facet.key];
+            var search = facet.search ? sel.search : '';
+            return '<section class="da2-cf-group">' +
+                '<h5><i class="bi ' + facet.icon + '"></i>' + escapeHtml(facet.label) +
+                    (chosen.length ? '<span class="da2-cf-badge">' + chosen.length + '</span>' : '') + '</h5>' +
+                (facet.search && list.length > 8
+                    ? '<input type="search" class="da2-cf-search" data-card-filter-search="' + id + '" placeholder="Caută număr…" value="' + escapeHtml(search) + '">'
+                    : '') +
+                '<div class="da2-cf-options' + (facet.search ? ' is-long' : '') + '">' + list.map(function (option) {
+                    var checked = chosen.indexOf(option.value) !== -1;
+                    var hidden = search && String(option.text).toLowerCase().indexOf(search.toLowerCase()) === -1;
+                    return '<label class="da2-cf-option' + (checked ? ' is-checked' : '') + (option.count ? '' : ' is-empty') + '"' +
+                        (hidden ? ' hidden' : '') + ' data-cf-text="' + escapeHtml(String(option.text).toLowerCase()) + '">' +
+                        '<input type="checkbox" data-card-filter="' + id + '" data-facet="' + facet.key + '" value="' + escapeHtml(option.value) + '"' + (checked ? ' checked' : '') + '>' +
+                        '<span class="da2-cf-text" title="' + escapeHtml(option.text) + '">' + escapeHtml(option.text) + '</span>' +
+                        '<span class="da2-cf-count">' + escapeHtml(fmt(option.count, 'int')) + '</span>' +
+                    '</label>';
+                }).join('') + '</div>' +
+            '</section>';
+        }).join('');
+
+        return '<aside class="da2-cf-side" aria-label="Filtre card">' +
+            '<header class="da2-cf-head"><span><i class="bi bi-funnel"></i>Filtre card</span>' +
+                (cardFiltersActive(id) ? '<button type="button" class="da2-face-link" data-card-filter-reset="' + id + '">Resetează</button>' : '') +
+            '</header>' +
+            (groups || '<p class="da2-cf-note">Nimic de filtrat în perioada aleasă.</p>') +
+            '<p class="da2-cf-note">Se aplică doar pe acest card, peste filtrele paginii.</p>' +
+        '</aside>';
+    }
+
+    /** Randurile pe beneficiar ale unui arbore; `spec` spune ce indicator arata si cum se deschide randul. */
+    function treeRows(tree, spec) {
+        return (tree || []).map(function (client) {
+            return {
+                label: client.nume,
+                value: num(client[spec.field]),
+                text: fmt(client[spec.field], spec.kind),
+                kind: spec.kind,
+                sublabel: fmt(client[spec.tripsField], 'int') + ' curse',
+                tree: client,
+                treeSpec: spec
+            };
+        });
+    }
+
+    // cum arata randurile si placutele pentru Km salvați
+    var KM_SAVED_SPEC = {
+        dataset: 'km_salvati',
+        field: 'km_salvati',
+        kind: 'km',
+        tripsField: 'curse_cu_economie',
+        unit: 'km salvați',
+        heading: 'Pe tip de transport și mașină',
+        meta: function (c) {
+            return [
+                ['bi-truck', fmt(c.curse_cu_economie, 'int') + ' curse cu km salvați'],
+                ['bi-truck-front', fmt(c.nr_vehicule, 'int') + ' vehicule'],
+                ['bi-signpost-2', 'rută ' + fmt(c.km_ruta, 'km') + ' → parcurși ' + fmt(c.km_parcursi, 'km')],
+                ['bi-percent', fmt(perTrip(c.km_salvati, c.km_ruta) * 100, 'pct') + ' din rută']
+            ];
+        },
+        typeMeta: function (type) {
+            return [
+                fmt(type.curse_cu_economie, 'int') + ' curse · ' + fmt(type.nr_vehicule, 'int') + ' vehicule',
+                'rută ' + fmt(type.km_ruta, 'int') + ' → ' + fmt(type.km_parcursi, 'int') + ' km'
+            ];
+        },
+        carTitle: function (v) {
+            return v.vehicul + ': ' + fmt(v.curse_cu_economie, 'int') + ' curse cu km salvați · rută ' +
+                fmt(v.km_ruta, 'km') + ', parcurși ' + fmt(v.km_parcursi, 'km');
+        }
+    };
+
+    // cum arata randurile si placutele pentru Clienți / Beneficiar
+    var CLIENT_POINTS_SPEC = {
+        dataset: 'clienti',
+        field: 'clienti',
+        kind: 'int',
+        tripsField: 'curse_cu_clienti',
+        unit: 'clienți',
+        heading: 'Clienți pe tip de transport și mașină',
+        meta: function (c) {
+            return [
+                ['bi-truck', fmt(c.curse_cu_clienti, 'int') + ' curse cu clienți'],
+                ['bi-truck-front', fmt(c.nr_vehicule, 'int') + ' vehicule'],
+                ['bi-geo-alt', fmt(perTrip(c.clienti, c.curse_cu_clienti), 'num') + ' clienți / cursă'],
+                ['bi-signpost-2', fmt(perTrip(c.km, c.clienti), 'num') + ' km / client'],
+                ['bi-box-seam', fmt(perTrip(c.tone, c.clienti), 'num') + ' t / client']
+            ];
+        },
+        typeMeta: function (type) {
+            return [
+                fmt(type.curse_cu_clienti, 'int') + ' curse · ' + fmt(type.nr_vehicule, 'int') + ' vehicule',
+                fmt(perTrip(type.clienti, type.curse_cu_clienti), 'num') + ' clienți / cursă'
+            ];
+        },
+        carTitle: function (v) {
+            return v.vehicul + ': ' + fmt(v.clienti, 'int') + ' clienți în ' + fmt(v.curse_cu_clienti, 'int') + ' curse · ' +
+                fmt(perTrip(v.clienti, v.curse_cu_clienti), 'num') + ' clienți / cursă';
+        }
+    };
+
+    /*
+     * Fata "Km salvați" din cardul Km parcurși (fostul card Km salvați, mutat aici):
+     * banda de rezumat, apoi pe beneficiar (-> tip de transport -> masini) sau pe
+     * categorie de capacitate (-> beneficiari -> tipuri -> masini), cu filtrele in stanga.
+     */
+    var KM_SAVED_VIEWS = [
+        { key: 'beneficiar', icon: 'bi-building', label: 'Pe beneficiar' },
+        { key: 'capacitate', icon: 'bi-boxes', label: 'Pe categorie de capacitate' }
+    ];
+
+    var KM_SAVED_FACE = {
+        key: 'salvati',
+        icon: 'bi-piggy-bank',
+        title: 'Km salvați',
+        label: 'Km salvați',
+        filterSet: 'km_salvati',
+        layout: 'defalcare',
+        html: function (card, fs) {
+            var f = state.data.fleet || {};
+            var rows = filterCardRows('km_salvati');
+            var t = sumCardRows('km_salvati', rows);
+            var view = fs.subview === 'capacitate' ? 'capacitate' : 'beneficiar';
+            var tile = function (label, value, hint) {
+                return '<div' + (hint ? ' title="' + escapeHtml(hint) + '"' : '') + '><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></div>';
+            };
+            var strip = '<div class="da2-cf-strip">' +
+                tile('Km salvați' + (cardFiltersActive('km_salvati') ? ' (filtrat)' : ''), fmt(t.km_salvati, 'km')) +
+                tile('din km parcurși', fmt(perTrip(t.km_salvati, f.km_totali) * 100, 'pct')) +
+                tile('Economie față de rută', fmt(perTrip(t.km_salvati, t.km_ruta) * 100, 'pct'),
+                    'km rută ' + fmt(t.km_ruta, 'km') + ' → parcurși ' + fmt(t.km_parcursi, 'km') + ' pe cursele cu km salvați') +
+                tile('Curse cu km salvați', fmt(t.curse_cu_economie, 'int')) +
+                tile('Vehicule', fmt(t.nr_vehicule, 'int')) +
+                tile('Beneficiari', fmt(t.nr_beneficiari, 'int')) +
+                tile('Km în exces (flotă)', fmt(f.km_exces, 'km'), 'cursele primar pe care s-au parcurs mai mulți km decât ruta; pe toată flota, fără filtrele din card') +
+                tile('Sold salvați − exces (flotă)', fmt(num(f.km_salvati) - num(f.km_exces), 'km')) +
+            '</div>';
+            var switcher = '<div class="da2-cf-switch" role="group" aria-label="Km salvați: grupare">' + KM_SAVED_VIEWS.map(function (item) {
+                var active = item.key === view;
+                return '<button type="button" class="' + (active ? 'is-active' : '') + '" data-kpi-subview="' + item.key + '" aria-pressed="' + active + '">' +
+                    '<i class="bi ' + item.icon + '"></i>' + escapeHtml(item.label) + '</button>';
+            }).join('') + '</div>';
+
+            var content;
+            if (!rows.length) {
+                content = '<p class="da2-empty">Nu există km salvați pentru filtrele alese.</p>';
+            } else if (view === 'capacitate') {
+                content = datasetCapacityHtml(KM_SAVED_SPEC, fs);
+            } else {
+                content = flipDefalcareHtml({ detail: {
+                    breakdown: treeRows(cardTree('km_salvati', rows), KM_SAVED_SPEC),
+                    breakdownNote: 'Km salvați = km rută tarifată − km parcurși, pe cursele primar unde ruta a fost mai lungă. Apasă pe un beneficiar pentru tipurile de transport și mașinile care au salvat km.'
+                } }, fs);
+            }
+            return strip + switcher + content;
+        }
+    };
+
+    // ------------------------------ cardul Medie km / distribuție (media km pe cursa)
+
+    /*
+     * Media km pe cursa la orice nivel: km ÷ curse, din randurile plate summary.km_trips
+     * (categorie x beneficiar x tip x vehicul). Media unui grup se face din sume, nu ca
+     * medie a mediilor, deci totalul ramane exact km / cursa al flotei.
+     */
+    function avgKm(km, curse) {
+        return num(curse) > 0 ? num(km) / num(curse) : 0;
+    }
+
+    var KM_GROUPINGS = {
+        ben: {
+            key: function (row) { return 'b' + row.beneficiar_id; },
+            label: function (row) { return row.beneficiar; },
+            plural: 'beneficiari'
+        },
+        cat: {
+            key: function (row) { return row.categorie_key; },
+            label: function (row) { return row.categorie; },
+            order: function (row) { return num(row.categorie_ordine); },
+            plural: 'categorii'
+        },
+        tip: {
+            key: function (row) { return row.tip_transport; },
+            label: function (row) { return row.tip_label; },
+            plural: 'tipuri de transport'
+        }
+    };
+
+    function groupKm(rows, grouping) {
+        var spec = KM_GROUPINGS[grouping];
+        var groups = {};
+        rows.forEach(function (row) {
+            var key = spec.key(row);
+            var g = groups[key] = groups[key] || {
+                key: key, label: spec.label(row), order: spec.order ? spec.order(row) : 0,
+                km: 0, curse: 0, rows: [], vehicles: {}
+            };
+            g.km += num(row.km);
+            g.curse += num(row.curse);
+            g.rows.push(row);
+            g.vehicles[row.vehicle_id] = true;
+        });
+        return Object.keys(groups).map(function (key) {
+            var g = groups[key];
+            g.avg = avgKm(g.km, g.curse);
+            g.nr_vehicule = Object.keys(g.vehicles).length;
+            return g;
+        }).sort(function (a, b) {
+            if (grouping === 'cat') {
+                return a.order - b.order || a.label.localeCompare(b.label, 'ro', { numeric: true });
+            }
+            // cele fara curse (doar km dintr-o cursa inceputa luna trecuta) la final
+            return (b.curse > 0) - (a.curse > 0) || b.avg - a.avg || a.label.localeCompare(b.label, 'ro');
+        });
+    }
+
+    /** Culoarea fiecarei categorii de capacitate, stabila oricum ai filtra. */
+    function kmCategoryColors() {
+        var index = {};
+        datasetRows('medii').slice().sort(function (a, b) { return a.categorie_ordine - b.categorie_ordine; }).forEach(function (row) {
+            if (index[row.categorie_key] === undefined) {
+                index[row.categorie_key] = Object.keys(index).length;
+            }
+        });
+        return function (key) { return CAPACITY_COLORS[(index[key] || 0) % CAPACITY_COLORS.length]; };
+    }
+
+    function kmGroupLook(grouping, key, colorOf) {
+        if (grouping === 'tip') {
+            return bucketLook(key);
+        }
+        if (grouping === 'cat') {
+            return { icon: 'bi-boxes', color: colorOf(key) };
+        }
+        return { icon: 'bi-building', color: '' };
+    }
+
+    function kmAvgText(g) {
+        return g.curse > 0 ? fmt(g.avg, 'num') + ' km' : '–';
+    }
+
+    /** Randurile unei fete: grupare -> (deschis) placute pe subgrupare, fiecare cu linii pe a treia grupare. */
+    function kmAvgRows(rows, grouping, subGrouping, lineGrouping) {
+        var colorOf = kmCategoryColors();
+        var totalTrips = rows.reduce(function (sum, row) { return sum + num(row.curse); }, 0);
+        return groupKm(rows, grouping).map(function (g) {
+            return {
+                id: 'km:' + grouping + ':' + g.key,
+                label: g.label,
+                value: g.avg,
+                text: kmAvgText(g),
+                kind: 'num',
+                sublabel: fmt(g.curse, 'int') + ' curse',
+                shareText: totalTrips > 0 ? fmt((g.curse / totalTrips) * 100, 'num') + '% din curse' : '',
+                look: kmGroupLook(grouping, g.key, colorOf),
+                drill: function () { return kmAvgDrillHtml(g, subGrouping, lineGrouping, colorOf); }
+            };
+        });
+    }
+
+    function kmAvgDrillHtml(g, subGrouping, lineGrouping, colorOf) {
+        var subs = groupKm(g.rows, subGrouping);
+        var max = subs.reduce(function (m, sub) { return Math.max(m, sub.avg); }, 0) || 1;
+        var spread = subs.filter(function (sub) { return sub.curse > 0; });
+        var low = spread.length ? spread[spread.length - 1] : null;
+
+        return '<div class="da2-ft-more">' +
+            '<div class="da2-ft-meta">' +
+                '<span><i class="bi bi-truck"></i> ' + escapeHtml(fmt(g.curse, 'int')) + ' curse</span>' +
+                '<span><i class="bi bi-signpost-2"></i> ' + escapeHtml(fmt(g.km, 'km')) + ' parcurși</span>' +
+                '<span><i class="bi bi-rulers"></i> ' + escapeHtml(kmAvgText(g)) + ' / cursă</span>' +
+                '<span><i class="bi bi-truck-front"></i> ' + escapeHtml(fmt(g.nr_vehicule, 'int')) + ' vehicule</span>' +
+                (spread.length > 1 && subGrouping !== 'cat'
+                    ? '<span><i class="bi bi-arrows-expand"></i> ' + escapeHtml(fmt(spread[0].avg, 'int') + ' – ' + fmt(low.avg, 'int')) + ' km / cursă</span>'
+                    : '') +
+            '</div>' +
+            '<div class="da2-ft-types da2-km-tiles">' +
+                '<h4><i class="bi bi-diagram-3"></i>Media km / cursă pe ' + escapeHtml(KM_GROUPINGS[subGrouping].plural) + '</h4>' +
+                subs.map(function (sub) {
+                    var look = kmGroupLook(subGrouping, sub.key, colorOf);
+                    var lines = groupKm(sub.rows, lineGrouping);
+                    return '<div class="da2-ft-type" style="--rc:' + (look.color || 'var(--kc)') + '">' +
+                        '<div class="da2-ft-type-head">' +
+                            '<span class="da2-ft-label"><span class="da2-ft-icon"><i class="bi ' + look.icon + '"></i></span>' + escapeHtml(sub.label) + '</span>' +
+                            '<strong class="da2-ft-value">' + escapeHtml(kmAvgText(sub)) + '</strong>' +
+                        '</div>' +
+                        '<span class="da2-ft-bar"><span style="width:' + Math.min(100, (sub.avg / max) * 100).toFixed(1) + '%"></span></span>' +
+                        '<div class="da2-ft-type-meta"><span>' + escapeHtml(fmt(sub.km, 'km') + ' ÷ ' + fmt(sub.curse, 'int') + ' curse') + '</span>' +
+                            '<span>' + escapeHtml(fmt(sub.nr_vehicule, 'int')) + ' veh.</span></div>' +
+                        (lines.length > 1 || lineGrouping !== 'tip'
+                            ? '<ul class="da2-ft-list da2-km-lines">' + lines.map(function (line) {
+                                var lineLook = kmGroupLook(lineGrouping, line.key, colorOf);
+                                return '<li' + (lineLook.color ? ' style="--rc:' + lineLook.color + '"' : '') + '><span><i class="bi ' + lineLook.icon + '"></i>' + escapeHtml(line.label) +
+                                    ' <small>' + escapeHtml(fmt(line.curse, 'int')) + ' curse</small></span><strong>' + escapeHtml(kmAvgText(line)) + '</strong></li>';
+                            }).join('') + '</ul>'
+                            : '<p class="da2-km-only">' + escapeHtml('Doar ' + lines[0].label) + '</p>') +
+                    '</div>';
+                }).join('') +
+            '</div>' +
+            '</div>';
+    }
+
+    function kmAvgFaceHtml(grouping, subGrouping, lineGrouping, fs, note) {
+        var rows = filterCardRows('medii');
+        if (!rows.length) {
+            return '<p class="da2-empty">Nu există curse pentru filtrele alese.</p>';
+        }
+        return flipDefalcareHtml({ detail: { breakdown: kmAvgRows(rows, grouping, subGrouping, lineGrouping), breakdownNote: note } }, fs);
+    }
+
+    // fata "Pe tip de transport": tip -> categorii de capacitate (cu beneficiarii lor)
+    var KM_TYPE_FACE = {
+        key: 'tip',
+        icon: 'bi-diagram-3',
+        title: 'Pe tip',
+        label: 'Pe tip de transport',
+        layout: 'defalcare',
+        html: function (card, fs) {
+            return kmAvgFaceHtml('tip', 'cat', 'ben', fs,
+                'Media km / cursă pe fiecare tip de transport cu activitate în perioadă. Apasă pe un tip pentru categoriile de capacitate și beneficiarii lui.');
+        }
+    };
+
+    function mediiCard(f) {
+        var rows = filterCardRows('medii');
+        var t = groupKm(rows, 'tip').reduce(function (acc, g) {
+            acc.km += g.km;
+            acc.curse += g.curse;
+            return acc;
+        }, { km: 0, curse: 0 });
+        var byType = groupKm(datasetRows('medii'), 'tip').filter(function (g) { return g.curse > 0; });
+        var filteredTypes = groupKm(rows, 'tip').filter(function (g) { return g.curse > 0; });
+
+        return {
+            key: 'medii',
+            icon: 'bi-rulers',
+            name: 'Medie km / distribuție',
+            value: fmt(f.km_per_cursa, 'num') + ' km',
+            detailValue: fmt(avgKm(t.km, t.curse), 'num') + ' km / cursă' + (cardFiltersActive('medii') ? ' (filtrat)' : ''),
+            note: byType.length
+                ? byType.map(function (g) { return g.label + ' ' + fmt(g.avg, 'int') + ' km'; }).join(' · ')
+                : 'Nicio cursă în perioadă',
+            filterSet: 'medii',
+            extraFaces: [KM_TYPE_FACE],
+            capacityHtml: function (card, fs) {
+                return kmAvgFaceHtml('cat', 'ben', 'tip', fs,
+                    'Media km / cursă pe categoria de capacitate a vehiculului (capul tractor ia categoria semiremorcii cuplate). Apasă pe o categorie pentru beneficiarii ei.');
+            },
+            detail: {
+                intro: 'Câți km face, în medie, o cursă: km parcurși ÷ curse, pe fiecare tip de transport cu activitate în perioadă. Cardul se deschide pe beneficiari; apasă pe un beneficiar ca să vezi media pe fiecare categorie de capacitate, defalcată pe tip de transport. Filtrele din stânga se aplică doar pe acest card.',
+                formula: 'Media km / cursă = SUM(km parcurși) ÷ SUM(curse), la fiecare nivel (beneficiar, categorie, tip) · nu medie a mediilor · o cursă împărțită între luni aduce km în perioadă, dar se numără doar în luna ei',
+                breakdownFace: { icon: 'bi-building', title: 'Pe beneficiar' },
+                stats: [
+                    { label: 'Km / cursă', value: fmt(avgKm(t.km, t.curse), 'num') }
+                ].concat(filteredTypes.map(function (g) {
+                    return { label: 'Km / cursă ' + g.label, value: fmt(g.avg, 'num'), hint: fmt(g.km, 'km') + ' ÷ ' + fmt(g.curse, 'int') + ' curse' };
+                })).concat([
+                    { label: 'Curse', value: fmt(t.curse, 'int') },
+                    { label: 'Km parcurși', value: fmt(t.km, 'km') },
+                    { label: 'Tone / cursă (flotă)', value: fmt(f.tone_per_cursa, 'num') },
+                    { label: 'Km / tonă (flotă)', value: fmt(f.km_tona, 'num') },
+                    { label: 'Km / punct client (flotă)', value: fmt(f.km_per_punct, 'num') }
+                ]),
+                breakdownTitle: 'Media km / cursă pe beneficiar',
+                breakdown: kmAvgRows(rows, 'ben', 'cat', 'tip'),
+                breakdownNote: 'Apasă pe un beneficiar pentru media km / cursă pe fiecare categorie de capacitate, defalcată pe tip de transport.',
+                actions: [
+                    { type: 'tab', tab: 'raport', label: 'Deschide raportul sumar' }
+                ]
+            }
+        };
+    }
+
+    function clientPointsCard(f) {
+        var rows = filterCardRows('clienti');
+        var t = sumCardRows('clienti', rows);
+        var whole = sumCardRows('clienti', datasetRows('clienti'));
+        return {
+            key: 'clienti',
+            icon: 'bi-shop',
+            name: 'Clienți / Beneficiar',
+            value: fmt(f.puncte_client, 'int') + ' clienți',
+            // pe fata intinsa: totalul dupa filtrele din card
+            detailValue: fmt(t.clienti, 'int') + ' clienți' + (cardFiltersActive('clienti') ? ' (filtrat)' : ''),
+            note: fmt(perTrip(whole.clienti, whole.nr_beneficiari), 'num') + ' / beneficiar · ' +
+                fmt(perTrip(whole.clienti, whole.curse_cu_clienti), 'num') + ' / cursă · ' +
+                beneficiariWord(whole.nr_beneficiari),
+            defaultFace: 'capacitate',
+            capacityFirst: true,
+            filterSet: 'clienti',
+            capacityHtml: function (card, fs) { return datasetCapacityHtml(CLIENT_POINTS_SPEC, fs); },
+            detail: {
+                intro: 'Câți clienți (puncte de livrare) au fost deserviți, după numărul de clienți trecut pe fiecare cursă în Dispecer. Cardul se deschide pe categoriile de capacitate: apasă pe o categorie ca să vezi beneficiarii, tipurile de transport și mașinile ei. Filtrele din stânga se aplică doar pe acest card, peste filtrele paginii.',
+                formula: 'SUM(nr. clienți de pe cursă) · Se adună pe categorie de capacitate → beneficiar → tip de transport → vehicul · Cursele fără număr de clienți completat nu intră',
+                stats: [
+                    { label: 'Clienți deserviți', value: fmt(t.clienti, 'int') },
+                    { label: 'Beneficiari cu clienți', value: fmt(t.nr_beneficiari, 'int') },
+                    { label: 'Clienți / beneficiar', value: fmt(perTrip(t.clienti, t.nr_beneficiari), 'num') },
+                    { label: 'Curse cu clienți', value: fmt(t.curse_cu_clienti, 'int') },
+                    { label: 'Clienți / cursă', value: fmt(perTrip(t.clienti, t.curse_cu_clienti), 'num'), hint: 'doar cursele cu număr de clienți completat' },
+                    { label: 'Vehicule', value: fmt(t.nr_vehicule, 'int') },
+                    { label: 'Km / client', value: fmt(perTrip(t.km, t.clienti), 'num'), hint: 'km parcurși pe cursele cu clienți ÷ clienți' },
+                    { label: 'Tone / client', value: fmt(perTrip(t.tone, t.clienti), 'num') }
+                ],
+                breakdownTitle: 'Clienți pe beneficiar',
+                breakdown: treeRows(cardTree('clienti', rows), CLIENT_POINTS_SPEC),
+                breakdownNote: 'Apasă pe un beneficiar pentru clienții pe tip de transport și pe mașini.',
+                actions: [
+                    { type: 'rank', metric: 'km_per_punct', label: 'Clasament după km / client' }
+                ]
+            }
+        };
+    }
+
+    /** Fata "Pe capacitate" a unui set de date: categorie -> beneficiari -> tipuri de transport -> masini. */
+    function datasetCapacityHtml(spec, fs) {
+        var id = spec.dataset;
+        var all = datasetRows(id);
+        var rows = filterCardRows(id);
+
+        // culoarea categoriei ramane aceeasi oricum ai filtra
+        var colorIndex = {};
+        all.slice().sort(function (a, b) { return a.categorie_ordine - b.categorie_ordine; }).forEach(function (row) {
+            if (colorIndex[row.categorie_key] === undefined) {
+                colorIndex[row.categorie_key] = Object.keys(colorIndex).length;
+            }
+        });
+
+        var groups = {};
+        rows.forEach(function (row) {
+            var g = groups[row.categorie_key] = groups[row.categorie_key] ||
+                { key: row.categorie_key, label: row.categorie, order: row.categorie_ordine, rows: [] };
+            g.rows.push(row);
+        });
+        var categories = Object.keys(groups).map(function (key) {
+            var g = groups[key];
+            g.t = sumCardRows(id, g.rows);
+            return g;
+        }).sort(function (a, b) { return a.order - b.order || a.label.localeCompare(b.label, 'ro', { numeric: true }); });
+
+        if (!categories.length) {
+            return '<p class="da2-empty">Nu există date pentru filtrele alese.</p>';
+        }
+        var max = categories.reduce(function (m, g) { return Math.max(m, g.t[spec.field]); }, 0) || 1;
+        var total = categories.reduce(function (sum, g) { return sum + g.t[spec.field]; }, 0) || 1;
+
+        return categories.map(function (g) {
+            var id2 = 'cap:' + g.key;
+            var isOpen = fs.open === id2;
+            var color = CAPACITY_COLORS[colorIndex[g.key] % CAPACITY_COLORS.length];
+            return '<div class="da2-ft-row' + (isOpen ? ' is-open' : '') + '" style="--rc:' + color + '">' +
+                '<button type="button" class="da2-ft-head" data-kpi-row="' + escapeHtml(id2) + '" aria-expanded="' + isOpen + '">' +
+                    '<span class="da2-ft-label" title="' + escapeHtml(g.label) + '"><span class="da2-ft-icon"><i class="bi bi-boxes"></i></span>' +
+                        escapeHtml(g.label) + '<small class="da2-ft-sublabel">' + escapeHtml(fmt(g.t.nr_vehicule, 'int')) + ' veh.</small></span>' +
+                    '<strong class="da2-ft-value">' + escapeHtml(fmt(g.t[spec.field], spec.kind)) + '</strong>' +
+                    '<i class="bi bi-chevron-down da2-ft-caret"></i>' +
+                    '<span class="da2-ft-bar"><span style="width:' + Math.min(100, (g.t[spec.field] / max) * 100).toFixed(1) + '%"></span></span>' +
+                    '<span class="da2-ft-share">' + escapeHtml(fmt((g.t[spec.field] / total) * 100, 'num')) + '%</span>' +
+                '</button>' +
+                (isOpen ? categoryDrillHtml(g, spec) : '') +
+            '</div>';
+        }).join('') +
+        '<p class="da2-ft-note">Categoria de capacitate a vehiculului din Configurare (capul tractor ia categoria semiremorcii cuplate), ca la filtrul „Categorie capacitate”.</p>';
+    }
+
+    function categoryDrillHtml(group, spec) {
+        return '<div class="da2-ft-more">' +
+            '<div class="da2-ft-meta">' +
+                spec.meta(group.t).map(function (item) {
+                    return '<span><i class="bi ' + item[0] + '"></i> ' + escapeHtml(item[1]) + '</span>';
+                }).join('') +
+                '<span><i class="bi bi-building"></i> ' + escapeHtml(beneficiariWord(group.t.nr_beneficiari)) + '</span>' +
+            '</div>' +
+            '<div class="da2-cf-clients">' + cardTree(spec.dataset, group.rows).map(function (client) {
+                return '<section class="da2-cf-client">' +
+                    '<header class="da2-cf-client-head">' +
+                        '<span class="da2-ft-label"><span class="da2-ft-icon"><i class="bi bi-building"></i></span>' + escapeHtml(client.nume) +
+                            '<small class="da2-ft-sublabel">' + escapeHtml(fmt(client[spec.tripsField], 'int')) + ' curse</small></span>' +
+                        '<strong class="da2-ft-value">' + escapeHtml(fmt(client[spec.field], spec.kind)) +
+                            (spec.kind === 'km' ? '' : ' ' + escapeHtml(spec.unit)) + '</strong>' +
+                    '</header>' +
+                    '<div class="da2-ft-types da2-ft-types-wide">' + typeTilesHtml(client.types, spec) + '</div>' +
+                '</section>';
+            }).join('') + '</div>' +
+            '</div>';
+    }
+
+    /** Placutele pe tip de transport, fiecare cu masinile ei (butoane catre fisa vehiculului). */
+    function typeTilesHtml(types, spec) {
+        var max = types.reduce(function (m, type) { return Math.max(m, num(type[spec.field])); }, 0) || 1;
+        return types.map(function (type) {
+            // Primar km / Primar tone iau aspectul tipului Primar
+            var look = bucketLook(BUCKET_LOOK[type.key] ? type.key : (/^primar/.test(type.key) ? 'primar' : type.key));
+            var typeMeta = spec.typeMeta(type);
+            return '<div class="da2-ft-type" style="--rc:' + look.color + '">' +
+                '<div class="da2-ft-type-head">' +
+                    '<span class="da2-ft-label"><span class="da2-ft-icon"><i class="bi ' + look.icon + '"></i></span>' + escapeHtml(type.label) + '</span>' +
+                    '<strong class="da2-ft-value">' + escapeHtml(fmt(type[spec.field], spec.kind)) + '</strong>' +
+                '</div>' +
+                '<span class="da2-ft-bar"><span style="width:' + Math.min(100, (num(type[spec.field]) / max) * 100).toFixed(1) + '%"></span></span>' +
+                '<div class="da2-ft-type-meta"><span>' + escapeHtml(typeMeta[0]) + '</span><span>' + escapeHtml(typeMeta[1]) + '</span></div>' +
+                '<div class="da2-ft-cars">' + (type.vehicles || []).map(function (vehicle) {
+                    var trips = num(vehicle[spec.tripsField]);
+                    return '<button type="button" class="da2-ft-car" data-kpi-entity="' + escapeHtml(vehicle.vehicul) + '" data-dimension="vehicles"' +
+                        ' title="' + escapeHtml(spec.carTitle(vehicle) + ' · apasă pentru fișa vehiculului') + '">' +
+                        '<span><i class="bi bi-truck-front"></i>' + escapeHtml(vehicle.vehicul) +
+                            (trips > 1 ? '<small>×' + escapeHtml(fmt(trips, 'int')) + '</small>' : '') + '</span>' +
+                        '<strong>' + escapeHtml(fmt(vehicle[spec.field], spec.kind)) + '</strong>' +
+                    '</button>';
+                }).join('') + '</div>' +
+            '</div>';
+        }).join('');
+    }
+
+    /** Beneficiarul deschis dintr-un arbore: o placuta pe tip de transport, cu masinile lui. */
+    function treeDrillHtml(row) {
+        var client = row.tree;
+        var spec = row.treeSpec;
+        var hasEntity = rowsFor('beneficiaries').some(function (entity) { return entity.nume === client.nume; });
+
+        return '<div class="da2-ft-more">' +
+            '<div class="da2-ft-meta">' + spec.meta(client).map(function (item) {
+                return '<span><i class="bi ' + item[0] + '"></i> ' + escapeHtml(item[1]) + '</span>';
+            }).join('') +
+                (hasEntity
+                    ? '<button type="button" class="da2-face-link" data-kpi-entity="' + escapeHtml(client.nume) + '" data-dimension="beneficiaries">' +
+                        'Deschide fișa<i class="bi bi-arrow-right-short"></i></button>'
+                    : '') +
+            '</div>' +
+            '<div class="da2-ft-types da2-ft-types-wide">' +
+                '<h4><i class="bi bi-diagram-3"></i>' + escapeHtml(spec.heading) + '</h4>' +
+                typeTilesHtml(client.types || [], spec) +
+            '</div>' +
+            '</div>';
+    }
+
+    function venitKm(facturare, km) {
+        return num(km) > 0 ? num(facturare) / num(km) : 0;
+    }
+
+    /** Venit / km pe fiecare beneficiar (din sumar), cele mai bine platite primele. */
+    function clientVenitKmRows() {
+        return ((state.data.summary || {}).clients || []).filter(function (client) {
+            return num((client.total || {}).curse) > 0;
+        }).map(function (client) {
+            var t = client.total || {};
+            var hasKm = num(t.km) > 0;
+            var value = venitKm(t.facturare, t.km);
+            return {
+                label: client.nume,
+                value: value,
+                text: hasKm ? fmt(value, 'lei3') : '–',
+                kind: 'lei3',
+                sublabel: fmt(t.km, 'int') + ' km',
+                client: client,
+                sortValue: hasKm ? value : -Infinity
+            };
+        }).sort(function (a, b) {
+            return b.sortValue - a.sortValue || a.label.localeCompare(b.label, 'ro');
+        });
     }
 
     function renderKpis() {
         var grid = document.getElementById('da2-kpis');
+        pinsState();
         if (!state.cardLayout) {
             state.cardLayout = normalizeCardLayout(config.cardLayout);
         }
@@ -1224,17 +1992,18 @@
         grid.classList.toggle('is-editing', editing);
         grid.innerHTML = visible.length
             ? visible.map(function (card) {
-                return editing ? editableCardHtml(card) : flipCardHtml(card);
+                return editing ? editableCardHtml(card) : isPinned(card.key) ? pinnedCellHtml(card) : flipCardHtml(card);
             }).join('')
             : '<p class="da2-kpis-empty"><i class="bi bi-eye-slash"></i>Toate cardurile sunt ascunse. ' +
                 '<button type="button" class="da2-face-link" data-kpis-edit>Alege ce carduri vezi</button></p>';
         renderCardsBar();
+        renderPins();
     }
 
     // ------------------------------------- alegerea si ordinea cardurilor (per utilizator)
 
     // aceleasi chei si aceeasi ordine implicita ca in kpiCards() si in DashboardAnaliticV2Controller::CARD_KEYS
-    var KPI_CARD_KEYS = ['curse', 'facturare', 'cheltuieli', 'profit', 'km', 'tone', 'incarcare', 'folosinta', 'medii'];
+    var KPI_CARD_KEYS = ['curse', 'facturare', 'cheltuieli', 'profit', 'km', 'tone', 'incarcare', 'folosinta', 'medii', 'venit_km', 'clienti'];
 
     function defaultCardKeys() {
         return KPI_CARD_KEYS.slice();
@@ -1302,6 +2071,9 @@
         if (editing) {
             // cardurile intinse revin la rezumat: in editare se muta, nu se intorc
             Object.keys(state.kpiFaces).forEach(function (key) {
+                if (isPinned(key)) {
+                    return;
+                }
                 state.kpiFaces[key].face = 'summary';
             });
         }
@@ -1473,14 +2245,28 @@
     function flipFaces(card) {
         // fara randuri (ex. nicio cheltuiala), defalcarea ramane cea pe tip de transport
         var byBucket = !card.detail.breakdown.some(function (row) { return row.entity; });
-        return [
-            byBucket
+        var byClient = card.detail.breakdown.some(function (row) { return row.client || row.tree; });
+        var faces = [
+            card.detail.breakdownFace
+                ? { key: 'defalcare', icon: card.detail.breakdownFace.icon, title: card.detail.breakdownFace.title, label: card.detail.breakdownTitle }
+                : byClient
+                ? { key: 'defalcare', icon: 'bi-building', title: 'Pe beneficiar', label: card.detail.breakdownTitle }
+                : byBucket
                 ? { key: 'defalcare', icon: 'bi-diagram-3', title: 'Pe tip', label: card.detail.breakdownTitle }
                 : { key: 'defalcare', icon: 'bi-trophy', title: 'Top', label: card.detail.breakdownTitle },
             { key: 'capacitate', icon: 'bi-boxes', title: 'Pe capacitate', label: 'Pe categorie de capacitate' },
             { key: 'compunere', icon: 'bi-grid-3x2-gap', title: 'Compunere', label: 'Din ce se compune' },
             { key: 'despre', icon: 'bi-info-circle', title: 'Ce arată', label: 'Ce arată și cum se calculează' }
-        ];
+        ].filter(function (face) {
+            return !(card.noCapacity && face.key === 'capacitate');
+        }).sort(function (a, b) {
+            // cardurile cu `capacityFirst` arata intai fata "Pe capacitate"
+            return card.capacityFirst ? (b.key === 'capacitate') - (a.key === 'capacitate') : 0;
+        });
+        if (card.extraFaces) {
+            Array.prototype.splice.apply(faces, [1, 0].concat(card.extraFaces));
+        }
+        return faces;
     }
 
     function flipState(key) {
@@ -1573,6 +2359,89 @@
             '</div>';
     }
 
+    /**
+     * Pentru un beneficiar de pe cardul Venit / km: venitul / km pe fiecare tip de transport
+     * facut pentru el, alaturi de media flotei pe acelasi tip.
+     */
+    function clientDrillHtml(row) {
+        var client = row.client;
+        var t = client.total || {};
+        var summary = state.data.summary || {};
+        var labels = summary.bucket_labels || {};
+        var fleetByBucket = {};
+        var order = [];
+        (summary.transport || []).forEach(function (bucket) {
+            fleetByBucket[bucket.key] = bucket;
+            order.push(bucket.key);
+        });
+        Object.keys(client.buckets || {}).forEach(function (key) {
+            if (order.indexOf(key) === -1) {
+                order.push(key);
+            }
+        });
+
+        var buckets = order.filter(function (key) {
+            return client.buckets && client.buckets[key] && num(client.buckets[key].curse) > 0;
+        }).map(function (key) {
+            var b = client.buckets[key];
+            var fleet = fleetByBucket[key];
+            return {
+                key: key,
+                label: labels[key] || (fleet && fleet.label) || key,
+                b: b,
+                value: venitKm(b.facturare, b.km),
+                fleetValue: fleet ? venitKm(fleet.facturare, fleet.km) : null
+            };
+        });
+        var max = buckets.reduce(function (m, item) { return Math.max(m, item.value); }, 0) || 1;
+
+        var hasEntity = rowsFor('beneficiaries').some(function (entity) { return entity.nume === client.nume; });
+
+        return '<div class="da2-ft-more">' +
+            '<div class="da2-ft-meta"><span><i class="bi bi-truck"></i> ' + escapeHtml(fmt(t.curse, 'int')) + ' curse</span>' +
+                '<span><i class="bi bi-signpost-2"></i> ' + escapeHtml(fmt(t.km, 'int')) + ' km</span>' +
+                '<span><i class="bi bi-cash-coin"></i> ' + escapeHtml(fmt(t.facturare, 'lei')) + '</span>' +
+                '<span><i class="bi bi-graph-up-arrow"></i> ' + escapeHtml(fmt(venitKm(t.profit, t.km), 'lei3')) + ' profit / km</span>' +
+                (hasEntity
+                    ? '<button type="button" class="da2-face-link" data-kpi-entity="' + escapeHtml(client.nume) + '" data-dimension="beneficiaries">' +
+                        'Deschide fișa<i class="bi bi-arrow-right-short"></i></button>'
+                    : '') +
+            '</div>' +
+            '<div class="da2-ft-types">' +
+                '<h4><i class="bi bi-diagram-3"></i>Venit / km pe tip de transport</h4>' +
+                (buckets.length
+                    ? buckets.map(function (item) {
+                        var look = bucketLook(item.key);
+                        var hasKm = num(item.b.km) > 0;
+                        var diff = item.fleetValue !== null && hasKm && item.fleetValue > 0
+                            ? ((item.value - item.fleetValue) / item.fleetValue) * 100
+                            : null;
+                        return '<div class="da2-ft-type" style="--rc:' + look.color + '">' +
+                            '<div class="da2-ft-type-head">' +
+                                '<span class="da2-ft-label"><span class="da2-ft-icon"><i class="bi ' + look.icon + '"></i></span>' + escapeHtml(item.label) + '</span>' +
+                                '<strong class="da2-ft-value">' + escapeHtml(hasKm ? fmt(item.value, 'lei3') : '–') + '</strong>' +
+                            '</div>' +
+                            '<span class="da2-ft-bar"><span style="width:' + Math.min(100, (item.value / max) * 100).toFixed(1) + '%"></span></span>' +
+                            '<div class="da2-ft-type-meta">' +
+                                '<span>' + escapeHtml(fmt(item.b.facturare, 'lei')) + ' ÷ ' + escapeHtml(fmt(item.b.km, 'km')) + ' · ' + escapeHtml(fmt(item.b.curse, 'int')) + ' curse</span>' +
+                                (item.fleetValue !== null && num((fleetByBucket[item.key] || {}).nr_clienti) <= 1
+                                    ? '<span title="Niciun alt beneficiar nu are curse pe acest tip în perioadă, deci nu există comparație">singurul beneficiar</span>'
+                                    : item.fleetValue !== null
+                                    ? '<span title="Venitul / km al întregii flote pe acest tip de transport, în aceeași perioadă și cu aceleași filtre">flotă ' +
+                                        escapeHtml(fmt(item.fleetValue, 'lei3')) +
+                                        (diff !== null
+                                            ? ' <b class="' + (diff >= 0 ? 'da2-pos' : 'da2-neg') + '">' + (diff >= 0 ? '+' : '') + escapeHtml(fmt(diff, 'num')) + '%</b>'
+                                            : '') +
+                                        '</span>'
+                                    : '') +
+                            '</div>' +
+                        '</div>';
+                    }).join('')
+                    : '<p class="da2-empty">Fără curse pe tipuri de transport.</p>') +
+            '</div>' +
+            '</div>';
+    }
+
     /** Pentru un vehicul / sofer / beneficiar din clasament: indicatorii lui si fisa completa. */
     function entityDrillHtml(row) {
         var e = row.entity;
@@ -1616,20 +2485,33 @@
         var total = rows.reduce(function (sum, row) { return sum + row.value; }, 0) || 1;
 
         return rows.map(function (row) {
-            var id = row.bucket ? row.bucket.key : 'e:' + row.label;
-            var expandable = !!(row.bucket || row.entity);
+            var id = row.id ? row.id
+                : row.bucket ? row.bucket.key
+                : row.client ? 'c:' + row.client.id + ':' + row.label
+                : row.tree ? 't:' + row.treeSpec.field + ':' + row.tree.key
+                : 'e:' + row.label;
+            var expandable = !!(row.drill || row.bucket || row.entity || row.client || row.tree);
             var isOpen = expandable && fs.open === id;
-            var look = row.bucket ? bucketLook(row.bucket.key) : { icon: ENTITY_ICONS[row.dimension] || 'bi-dot', color: '' };
+            var look = row.look ? row.look
+                : row.bucket ? bucketLook(row.bucket.key)
+                : (row.client || row.tree) ? { icon: 'bi-building', color: '' }
+                : { icon: ENTITY_ICONS[row.dimension] || 'bi-dot', color: '' };
             return '<div class="da2-ft-row' + (isOpen ? ' is-open' : '') + '"' + (look.color ? ' style="--rc:' + look.color + '"' : '') + '>' +
                 '<button type="button" class="da2-ft-head' + (row.value < 0 ? ' is-negative' : '') + '"' +
                     (expandable ? ' data-kpi-row="' + escapeHtml(id) + '" aria-expanded="' + isOpen + '"' : ' disabled') + '>' +
-                    '<span class="da2-ft-label" title="' + escapeHtml(row.label) + '"><span class="da2-ft-icon"><i class="bi ' + look.icon + '"></i></span>' + escapeHtml(row.label) + '</span>' +
+                    '<span class="da2-ft-label" title="' + escapeHtml(row.label) + '"><span class="da2-ft-icon"><i class="bi ' + look.icon + '"></i></span>' + escapeHtml(row.label) +
+                        (row.sublabel ? '<small class="da2-ft-sublabel">' + escapeHtml(row.sublabel) + '</small>' : '') + '</span>' +
                     '<strong class="da2-ft-value">' + escapeHtml(row.text) + '</strong>' +
                     (expandable ? '<i class="bi bi-chevron-down da2-ft-caret"></i>' : '<span></span>') +
                     '<span class="da2-ft-bar"><span style="width:' + Math.min(100, (Math.abs(row.value) / max) * 100).toFixed(1) + '%"></span></span>' +
-                    '<span class="da2-ft-share">' + (additive ? escapeHtml(fmt((row.value / total) * 100, 'num')) + '%' : '') + '</span>' +
+                    '<span class="da2-ft-share">' + (row.shareText ? escapeHtml(row.shareText)
+                        : additive ? escapeHtml(fmt((row.value / total) * 100, 'num')) + '%' : '') + '</span>' +
                 '</button>' +
-                (isOpen ? (row.bucket ? bucketDrillHtml(row) : entityDrillHtml(row)) : '') +
+                (isOpen ? (row.drill ? row.drill()
+                    : row.bucket ? bucketDrillHtml(row)
+                    : row.client ? clientDrillHtml(row)
+                    : row.tree ? treeDrillHtml(row)
+                    : entityDrillHtml(row)) : '') +
             '</div>';
         }).join('') +
         (card.detail.breakdownNote ? '<p class="da2-ft-note">' + escapeHtml(card.detail.breakdownNote) + '</p>' : '');
@@ -1648,7 +2530,8 @@
         tone: { field: 'tone', kind: 'tone' },
         incarcare: { field: 'grad_incarcare', kind: 'pct' },
         folosinta: { field: 'grad_folosinta', kind: 'pct' },
-        medii: { field: 'km_per_cursa', kind: 'num' }
+        medii: { field: 'km_per_cursa', kind: 'num' },
+        venit_km: { field: 'venit_km', kind: 'lei3' }
     };
 
     var CAPACITY_COLORS = ['#2563eb', '#0d9488', '#d97706', '#7c3aed', '#db2777', '#0891b2', '#65a30d', '#e11d48'];
@@ -1669,6 +2552,7 @@
         t.profit = t.facturare - t.cheltuieli;
         t.grad_incarcare = t.capacitate_grad > 0 ? (t.tone_grad / t.capacitate_grad) * 100 : 0;
         t.km_per_cursa = t.curse > 0 ? t.km / t.curse : 0;
+        t.venit_km = t.km > 0 ? t.facturare / t.km : 0;
 
         // zile-vehicul active / disponibile ale vehiculelor din grup (aceeasi formula ca pe card)
         var active = 0;
@@ -1773,28 +2657,228 @@
             '<h4><i class="bi bi-calculator"></i>Cum se calculează</h4><code class="da2-ft-formula">' + escapeHtml(card.detail.formula) + '</code>';
     }
 
+    // ------------------------------------------------ carduri fixate (deschise separat)
+
+    /*
+     * Un card fixat iese din grila si sta deschis in zona "Carduri fixate" de sub ea,
+     * cu fetele, filtrele si randurile lui. Se pot fixa oricate; fiecare isi pastreaza
+     * starea, iar celelalte carduri se deschid in continuare normal, peste grila.
+     * In grila ramane rezumatul, marcat, care duce la panoul lui.
+     * Alegerea (carduri, fata, inaltime, asezare) se tine in browser.
+     */
+    var PIN_STORE = 'da2.v2.pinnedCards';
+
+    function loadPins() {
+        var pins = { keys: [], layout: 'side', faces: {}, heights: {} };
+        try {
+            var raw = JSON.parse(window.localStorage.getItem(PIN_STORE) || 'null');
+            if (raw && Array.isArray(raw.keys)) {
+                pins.keys = raw.keys.filter(function (key, index, list) {
+                    return typeof key === 'string' && list.indexOf(key) === index;
+                });
+                pins.layout = raw.layout === 'stack' ? 'stack' : 'side';
+                pins.faces = raw.faces && typeof raw.faces === 'object' ? raw.faces : {};
+                pins.heights = raw.heights && typeof raw.heights === 'object' ? raw.heights : {};
+            }
+        } catch (error) {
+            // fara stocare (navigare privata etc.): pornim fara carduri fixate
+        }
+        pins.keys.forEach(function (key) {
+            state.kpiFaces[key] = { face: typeof pins.faces[key] === 'string' ? pins.faces[key] : 'defalcare', open: null };
+        });
+        return pins;
+    }
+
+    function pinsState() {
+        if (!state.pins) {
+            state.pins = loadPins();
+        }
+        return state.pins;
+    }
+
+    function isPinned(key) {
+        return pinsState().keys.indexOf(key) !== -1;
+    }
+
+    function rememberPinHeights() {
+        var pins = pinsState();
+        $$('#da2-pins [data-kpi-flip]').forEach(function (panel) {
+            if (panel.style.height) {
+                pins.heights[panel.getAttribute('data-kpi-flip')] = panel.style.height;
+            }
+        });
+    }
+
+    function savePins() {
+        var pins = pinsState();
+        rememberPinHeights();
+        pins.faces = {};
+        pins.keys.forEach(function (key) { pins.faces[key] = flipState(key).face; });
+        try {
+            window.localStorage.setItem(PIN_STORE, JSON.stringify(pins));
+        } catch (error) {
+            // stocare indisponibila: cardurile raman fixate doar pana la reincarcare
+        }
+    }
+
+    /** Rezumatul din grila al unui card fixat: duce la panoul lui (eticheta, la fata ei). */
+    function pinnedCellHtml(card) {
+        var tone = ' da2-kpi-k-' + card.key + (card.tone ? ' da2-kpi-' + card.tone : '');
+        return '<div class="da2-kpi is-pinned-cell' + tone + '" data-kpi-cell="' + escapeHtml(card.key) + '">' +
+            summaryFaceHtml(card, 'data-kpi-goto-pin="' + escapeHtml(card.key) + '"',
+                '<i class="bi bi-pin-angle-fill da2-kpi-caret da2-kpi-pinmark" title="Fixat: deschis mai jos, în Carduri fixate"></i>') +
+        '</div>';
+    }
+
+    function renderPins() {
+        var host = document.getElementById('da2-pins');
+        if (!host || !state.data) {
+            return;
+        }
+        var pins = pinsState();
+        rememberPinHeights();
+        var byKey = {};
+        kpiCards().forEach(function (card) { byKey[card.key] = card; });
+        var cards = pins.keys.map(function (key) { return byKey[key]; }).filter(Boolean);
+
+        host.hidden = !cards.length;
+        host.classList.toggle('is-stacked', pins.layout === 'stack');
+        if (!cards.length) {
+            host.innerHTML = '';
+            return;
+        }
+
+        var layoutButton = function (key, icon, label) {
+            var active = pins.layout === key;
+            return '<button type="button" class="' + (active ? 'is-active' : '') + '" data-pins-layout="' + key + '" aria-pressed="' + active + '">' +
+                '<i class="bi ' + icon + '"></i>' + escapeHtml(label) + '</button>';
+        };
+        host.innerHTML = '<div class="da2-pins-bar">' +
+                '<span class="da2-pins-title"><i class="bi bi-pin-angle-fill"></i>Carduri fixate <b>' + cards.length + '</b></span>' +
+                '<span class="da2-pins-hint">Rămân deschise împreună. Trage de colțul din dreapta-jos ca să schimbi înălțimea.</span>' +
+                '<div class="da2-pins-actions">' +
+                    '<div class="da2-cf-switch" role="group" aria-label="Așezare">' +
+                        layoutButton('side', 'bi-layout-split', 'Alăturate') +
+                        layoutButton('stack', 'bi-view-stacked', 'Una sub alta') +
+                    '</div>' +
+                    '<button type="button" class="da2-btn da2-pins-clear" data-pins-clear><i class="bi bi-x-lg"></i>Închide toate</button>' +
+                '</div>' +
+            '</div>' +
+            '<div class="da2-pins-grid">' + cards.map(flipCardHtml).join('') + '</div>';
+
+        $$('[data-kpi-flip]', host).forEach(function (panel) {
+            var height = pins.heights[panel.getAttribute('data-kpi-flip')];
+            if (height) {
+                panel.style.height = height;
+            }
+        });
+    }
+
+    function pinCard(key) {
+        var pins = pinsState();
+        if (isPinned(key)) {
+            return;
+        }
+        var fs = flipState(key);
+        if (fs.face === 'summary') {
+            var card = kpiCards().filter(function (item) { return item.key === key; })[0];
+            fs.face = (card && card.defaultFace) || 'defalcare';
+        }
+        pins.keys.push(key);
+        savePins();
+        renderKpis();
+        var panel = $('#da2-pins [data-kpi-flip="' + key + '"]');
+        if (panel) {
+            panel.classList.add('is-pin-new');
+            window.setTimeout(function () { panel.classList.remove('is-pin-new'); }, 900);
+            panel.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'nearest' });
+        }
+    }
+
+    function unpinCard(key) {
+        var pins = pinsState();
+        var panel = $('#da2-pins [data-kpi-flip="' + key + '"]');
+        var finished = false;
+        var finish = function () {
+            if (finished) {
+                return;
+            }
+            finished = true;
+            rememberPinHeights();
+            pins.keys = pins.keys.filter(function (item) { return item !== key; });
+            delete pins.heights[key];
+            var fs = flipState(key);
+            fs.face = 'summary';
+            fs.open = null;
+            savePins();
+            renderKpis();
+        };
+        if (panel && panel.animate && !reducedMotion()) {
+            panel.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(.97)' }],
+                { duration: 200, easing: 'ease-in', fill: 'forwards' }).onfinish = finish;
+            // inchiderea nu asteapta animatia daca browserul o tine pe loc (tab in fundal)
+            window.setTimeout(finish, 260);
+        } else {
+            finish();
+        }
+    }
+
+    /** Duce la panoul unui card fixat (si, din eticheta, direct la fata ei). */
+    function gotoPin(key, face) {
+        if (face) {
+            setFlipFace(key, face);
+        }
+        var panel = $('#da2-pins [data-kpi-flip="' + key + '"]');
+        if (panel) {
+            panel.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'nearest' });
+            panel.classList.remove('is-pin-new');
+            void panel.offsetWidth;
+            panel.classList.add('is-pin-new');
+            window.setTimeout(function () { panel.classList.remove('is-pin-new'); }, 900);
+        }
+    }
+
+    /** Fata de rezumat (butonul cardului); `attrs` spune ce face un click pe ea. */
+    function summaryFaceHtml(card, attrs, caret) {
+        return '<button type="button" class="da2-face da2-face-summary" ' + attrs + ' aria-label="' + escapeHtml(card.name + ': detalii') + '">' +
+            '<i class="bi ' + card.icon + ' da2-kpi-watermark" aria-hidden="true"></i>' +
+            '<span class="da2-kpi-head"><span class="da2-kpi-icon"><i class="bi ' + card.icon + '"></i></span>' + escapeHtml(card.name) +
+            (caret || '<i class="bi bi-arrow-repeat da2-kpi-caret" title="Întoarce cardul"></i>') + '</span>' +
+            (card.badge
+                ? '<span class="da2-kpi-valuerow"><span class="da2-kpi-value">' + escapeHtml(card.value) + '</span>' +
+                    '<span class="da2-kpi-badge" data-kpi-face="' + card.badge.face + '" title="Deschide ' + escapeHtml(card.badge.text.split(':')[0]) + '">' +
+                    '<i class="bi ' + card.badge.icon + '"></i>' + escapeHtml(card.badge.text) + '</span></span>'
+                : '<span class="da2-kpi-value">' + escapeHtml(card.value) + '</span>') +
+            (card.meter !== undefined ? meterHtml(card.meter, toneForPercent(card.meter)) : '') +
+            '<span class="da2-kpi-note">' + escapeHtml(card.note) + '</span>' +
+        '</button>';
+    }
+
     function flipCardHtml(card) {
         var fs = flipState(card.key);
         var tone = ' da2-kpi-k-' + card.key + (card.tone ? ' da2-kpi-' + card.tone : '');
+        var pinned = isPinned(card.key);
+        if (pinned && fs.face === 'summary') {
+            fs.face = card.defaultFace || 'defalcare';
+        }
 
         if (fs.face === 'summary') {
             return '<div class="da2-kpi' + tone + '" data-kpi-flip="' + escapeHtml(card.key) + '">' +
-                '<button type="button" class="da2-face da2-face-summary" data-kpi-face="defalcare" aria-label="' + escapeHtml(card.name + ': detalii') + '">' +
-                    '<i class="bi ' + card.icon + ' da2-kpi-watermark" aria-hidden="true"></i>' +
-                    '<span class="da2-kpi-head"><span class="da2-kpi-icon"><i class="bi ' + card.icon + '"></i></span>' + escapeHtml(card.name) +
-                    '<i class="bi bi-arrow-repeat da2-kpi-caret" title="Întoarce cardul"></i></span>' +
-                    '<span class="da2-kpi-value">' + escapeHtml(card.value) + '</span>' +
-                    (card.meter !== undefined ? meterHtml(card.meter, toneForPercent(card.meter)) : '') +
-                    '<span class="da2-kpi-note">' + escapeHtml(card.note) + '</span>' +
-                '</button></div>';
+                summaryFaceHtml(card, 'data-kpi-face="' + (card.defaultFace || 'defalcare') + '"') + '</div>';
         }
 
         var faces = flipFaces(card);
         var current = faces.filter(function (face) { return face.key === fs.face; })[0] || faces[0];
-        var body = current.key === 'compunere' ? flipCompunereHtml(card)
+        var body = current.html ? current.html(card, fs)
+            : current.key === 'compunere' ? flipCompunereHtml(card)
             : current.key === 'despre' ? flipDespreHtml(card)
-            : current.key === 'capacitate' ? flipCapacitateHtml(card, fs)
+            : current.key === 'capacitate' ? (card.capacityHtml ? card.capacityHtml(card, fs) : flipCapacitateHtml(card, fs))
             : flipDefalcareHtml(card, fs);
+
+        // o fata proprie (ex. Km salvați) isi aduce filtrele, aspectul si nu are actiunile cardului
+        var filterSet = current.filterSet || card.filterSet;
+        var layout = current.layout || current.key;
+        var actions = current.html ? '' : flipActionsHtml(card);
 
         var tabs = faces.map(function (face) {
             var active = face.key === current.key;
@@ -1803,16 +2887,25 @@
                 '<i class="bi ' + face.icon + '"></i></button>';
         }).join('');
 
-        return '<div class="da2-kpi is-flipped' + tone + '" data-kpi-flip="' + escapeHtml(card.key) + '">' +
+        return '<div class="da2-kpi is-flipped' + (pinned ? ' is-pinned' : '') + tone + '" data-kpi-flip="' + escapeHtml(card.key) + '">' +
             '<div class="da2-face da2-face-detail" data-face-name="' + current.key + '">' +
                 '<header class="da2-face-head">' +
-                    '<button type="button" class="da2-face-back" data-kpi-face="summary" aria-label="Înapoi la rezumat"><i class="bi bi-arrow-left"></i></button>' +
-                    '<span class="da2-face-title" title="' + escapeHtml(card.name + ' · ' + current.label) + '">' + escapeHtml(current.title) + '</span>' +
+                    (pinned
+                        ? '<button type="button" class="da2-face-back" data-kpi-unpin aria-label="Închide cardul fixat" title="Închide cardul fixat"><i class="bi bi-x-lg"></i></button>'
+                        : '<button type="button" class="da2-face-back" data-kpi-face="summary" aria-label="Înapoi la rezumat"><i class="bi bi-arrow-left"></i></button>') +
+                    '<span class="da2-face-title" title="' + escapeHtml(card.name + ' · ' + current.label) + '">' + escapeHtml(pinned ? card.name : current.title) + '</span>' +
                     '<nav class="da2-face-tabs">' + tabs + '</nav>' +
+                    (pinned
+                        ? '<button type="button" class="da2-face-pin is-on" data-kpi-unpin title="Desprinde: cardul revine în grilă" aria-label="Desprinde cardul"><i class="bi bi-pin-angle-fill"></i></button>'
+                        : '<button type="button" class="da2-face-pin" data-kpi-pin title="Fixează: cardul rămâne deschis separat, sub grilă, și poți deschide și alte carduri" aria-label="Fixează cardul"><i class="bi bi-pin-angle"></i></button>') +
                 '</header>' +
                 '<div class="da2-face-sub"><span title="' + escapeHtml(current.label) + '"><i class="bi ' + card.icon + '"></i>' + escapeHtml(card.name) + '</span>' +
-                    '<strong class="da2-face-count">' + escapeHtml(card.value) + '</strong></div>' +
-                '<div class="da2-face-body is-' + current.key + '">' + body + flipActionsHtml(card) + '</div>' +
+                    '<strong class="da2-face-count">' + escapeHtml(card.detailValue || card.value) + '</strong></div>' +
+                (filterSet
+                    // filtrele cardului / fetei stau in stanga, continutul fetei curge in dreapta
+                    ? '<div class="da2-face-body has-card-filters">' + cardFiltersHtml(filterSet) +
+                        '<div class="da2-cf-main is-' + layout + '">' + body + actions + '</div></div>'
+                    : '<div class="da2-face-body is-' + layout + '">' + body + actions + '</div>') +
             '</div></div>';
     }
 
@@ -1823,17 +2916,26 @@
         if (!el || !card) {
             return;
         }
-        var scroll = $('.da2-face-body', el);
+        var scroll = $('.da2-cf-main', el) || $('.da2-face-body', el);
         var scrollTop = scroll && !turn ? scroll.scrollTop : 0;
+        var side = $('.da2-cf-side', el);
+        var sideTop = side ? side.scrollTop : 0;
 
         var holder = document.createElement('div');
         holder.innerHTML = flipCardHtml(card);
         var fresh = holder.firstChild;
+        if (el.style.height) {
+            fresh.style.height = el.style.height;
+        }
         el.parentNode.replaceChild(fresh, el);
 
-        var freshScroll = $('.da2-face-body', fresh);
+        var freshScroll = $('.da2-cf-main', fresh) || $('.da2-face-body', fresh);
         if (freshScroll) {
             freshScroll.scrollTop = scrollTop;
+        }
+        var freshSide = $('.da2-cf-side', fresh);
+        if (freshSide) {
+            freshSide.scrollTop = sideTop;
         }
         if (turn && !reducedMotion()) {
             fresh.classList.add('is-turning');
@@ -1869,6 +2971,17 @@
         }
         var el = $('[data-kpi-flip="' + key + '"]');
 
+        if (isPinned(key)) {
+            if (face === 'summary') {
+                unpinCard(key);
+                return;
+            }
+            fs.face = face;
+            redrawFlipCard(key, true, false);
+            savePins();
+            return;
+        }
+
         // inapoi la rezumat: fata se strange in celula cardului, apoi cardul revine la rezumat
         if (face === 'summary') {
             var expanded = el && $('.da2-face-detail', el);
@@ -1896,7 +3009,7 @@
         if (opening) {
             // un singur card intins odata: celelalte revin la rezumat, fara animatie (sunt acoperite)
             Object.keys(state.kpiFaces).forEach(function (other) {
-                if (other !== key && state.kpiFaces[other].face !== 'summary') {
+                if (other !== key && !isPinned(other) && state.kpiFaces[other].face !== 'summary') {
                     state.kpiFaces[other].face = 'summary';
                     redrawFlipCard(other, false);
                 }
@@ -1936,7 +3049,7 @@
         fs.open = fs.open === id ? null : id;
         var fresh = redrawFlipCard(key, false);
         var row = fresh && $$('[data-kpi-row]', fresh).filter(function (el) { return el.getAttribute('data-kpi-row') === id; })[0];
-        var body = fresh && $('.da2-face-body', fresh);
+        var body = fresh && ($('.da2-cf-main', fresh) || $('.da2-face-body', fresh));
         if (row && body && fs.open) {
             // randul deschis urca in capul fetei, ca detaliul sa fie vizibil in card
             body.scrollTop = Math.max(0, row.parentNode.offsetTop - 4);
@@ -4771,13 +5884,56 @@
             return;
         }
 
+        var pinsLayout = event.target.closest('[data-pins-layout]');
+        if (pinsLayout) {
+            pinsState().layout = pinsLayout.getAttribute('data-pins-layout') === 'stack' ? 'stack' : 'side';
+            savePins();
+            renderPins();
+            return;
+        }
+        if (event.target.closest('[data-pins-clear]')) {
+            rememberPinHeights();
+            pinsState().keys.forEach(function (key) {
+                flipState(key).face = 'summary';
+                flipState(key).open = null;
+            });
+            pinsState().keys = [];
+            savePins();
+            renderKpis();
+            return;
+        }
+        var goto = event.target.closest('[data-kpi-goto-pin]');
+        if (goto) {
+            var badgeFace = event.target.closest('[data-kpi-face]');
+            gotoPin(goto.getAttribute('data-kpi-goto-pin'), badgeFace ? badgeFace.getAttribute('data-kpi-face') : null);
+            return;
+        }
+
         var flipCard = event.target.closest('[data-kpi-flip]');
+        if (flipCard && event.target.closest('[data-kpi-pin]')) {
+            pinCard(flipCard.getAttribute('data-kpi-flip'));
+            return;
+        }
+        if (flipCard && event.target.closest('[data-kpi-unpin]')) {
+            unpinCard(flipCard.getAttribute('data-kpi-flip'));
+            return;
+        }
         if (flipCard) {
             var flipKey = flipCard.getAttribute('data-kpi-flip');
             var faceButton = event.target.closest('[data-kpi-face]');
             var rowButton = event.target.closest('[data-kpi-row]');
             var entityButton = event.target.closest('[data-kpi-entity]');
-            if (faceButton) {
+            var filterReset = event.target.closest('[data-card-filter-reset]');
+            var subview = event.target.closest('[data-kpi-subview]');
+            if (subview) {
+                flipState(flipKey).subview = subview.getAttribute('data-kpi-subview');
+                flipState(flipKey).open = null;
+                redrawFlipCard(flipKey, false);
+            } else if (filterReset) {
+                resetCardFilters(filterReset.getAttribute('data-card-filter-reset'));
+                flipState(flipKey).open = null;
+                redrawFlipCard(flipKey, false);
+            } else if (faceButton) {
                 setFlipFace(flipKey, faceButton.getAttribute('data-kpi-face'));
             } else if (rowButton) {
                 toggleFlipRow(flipKey, rowButton.getAttribute('data-kpi-row'));
@@ -5171,7 +6327,7 @@
                 setCardsEditing(false);
                 return;
             }
-            var turned = document.activeElement && document.activeElement.closest('[data-kpi-flip].is-flipped');
+            var turned = document.activeElement && document.activeElement.closest('[data-kpi-flip].is-flipped:not(.is-pinned)');
             if (turned) {
                 setFlipFace(turned.getAttribute('data-kpi-flip'), 'summary');
                 return;

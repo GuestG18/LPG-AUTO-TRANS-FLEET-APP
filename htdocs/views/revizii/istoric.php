@@ -34,7 +34,7 @@ $pageJson = json_encode([
         'base' => build_query_url(['page' => 'revizii']),
         'page' => build_query_url(['page' => 'revizii', 'tip' => 'istoric']),
         'categorie' => [
-            'schimb_ulei' => build_query_url(['page' => 'revizii']),
+            'schimb_ulei' => build_query_url(['page' => 'revizii', 'tip' => 'schimb_ulei']),
             'placute_frana' => build_query_url(['page' => 'revizii', 'tip' => 'placute_frana']),
             'anvelope' => build_query_url(['page' => 'revizii', 'tip' => 'anvelope']),
         ],

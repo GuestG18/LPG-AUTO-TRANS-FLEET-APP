@@ -1463,6 +1463,8 @@
 .da2-kpi-k-incarcare { --kc: #7c3aed; }
 .da2-kpi-k-folosinta { --kc: #0891b2; }
 .da2-kpi-k-medii { --kc: #db2777; }
+.da2-kpi-k-venit_km { --kc: #65a30d; }
+.da2-kpi-k-clienti { --kc: #c2410c; }
 .da2-kpi.da2-kpi-good { --kc: var(--da2-good); }
 .da2-kpi.da2-kpi-bad { --kc: var(--da2-bad); }
 
@@ -1862,6 +1864,650 @@
 
 .da2-kpi.is-flipped .da2-face-link {
     font-size: 0.78rem;
+}
+
+/* cardul Venit / km: beneficiarul deschis arata cate o placuta pe tip de transport */
+.da2-kpi.is-flipped .da2-ft-more > .da2-ft-types {
+    grid-column: 1 / -1;
+}
+
+.da2-ft-types {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.da2-ft-types > h4,
+.da2-ft-types > .da2-empty {
+    grid-column: 1 / -1;
+    margin: 0;
+}
+
+.da2-ft-type {
+    display: grid;
+    gap: 5px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--rc) 22%, var(--da2-border));
+    border-radius: var(--da2-radius-sm);
+    background: linear-gradient(160deg, color-mix(in srgb, var(--rc) 9%, #fff), #fff 75%);
+    animation: da2-face-in .3s cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.da2-ft-type:nth-of-type(2) { animation-delay: .04s; }
+.da2-ft-type:nth-of-type(3) { animation-delay: .08s; }
+.da2-ft-type:nth-of-type(4) { animation-delay: .12s; }
+
+.da2-ft-type-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.da2-ft-type-head .da2-ft-value {
+    color: color-mix(in srgb, var(--rc) 70%, #000);
+}
+
+.da2-ft-type-meta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px 10px;
+    color: var(--da2-muted);
+    font-size: 0.7rem;
+}
+
+.da2-ft-type-meta .da2-pos { color: var(--da2-good); }
+.da2-ft-type-meta .da2-neg { color: var(--da2-bad); }
+
+/*
+ * Card cu filtre proprii (Clienți / Beneficiar): filtrele pe verticala in stanga,
+ * continutul fetei in dreapta; fiecare coloana se deruleaza separat.
+ */
+.da2-face-body.has-card-filters {
+    display: flex;
+    gap: 14px;
+    overflow: hidden;
+    padding-bottom: 0;
+}
+
+.da2-cf-side {
+    flex: 0 0 220px;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 2px 10px 12px 0;
+    border-right: 1px solid color-mix(in srgb, var(--kc) 18%, var(--da2-border));
+    scrollbar-width: thin;
+}
+
+.da2-cf-main {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 14px;
+    scrollbar-width: thin;
+}
+
+.da2-cf-main.is-defalcare,
+.da2-cf-main.is-capacitate {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    align-content: start;
+    gap: 6px 12px;
+}
+
+.da2-cf-main.is-defalcare > :not(.da2-ft-row),
+.da2-cf-main.is-defalcare > .da2-ft-row.is-open,
+.da2-cf-main.is-capacitate > :not(.da2-ft-row),
+.da2-cf-main.is-capacitate > .da2-ft-row.is-open {
+    grid-column: 1 / -1;
+}
+
+.da2-cf-main .da2-ft-row + .da2-ft-row {
+    margin-top: 0;
+}
+
+.da2-cf-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 2px 0 6px;
+    background: #fff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: color-mix(in srgb, var(--kc) 80%, #000);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.da2-cf-head i {
+    margin-right: 5px;
+}
+
+.da2-cf-head .da2-face-link {
+    padding: 0 4px;
+    font-size: 0.68rem;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.da2-cf-group {
+    padding: 6px 0 8px;
+    border-top: 1px dashed var(--da2-border);
+}
+
+.da2-cf-group h5 {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin: 0 0 5px;
+    color: var(--da2-muted);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+.da2-cf-group h5 i {
+    color: var(--kc);
+}
+
+.da2-cf-badge {
+    margin-left: auto;
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--kc);
+    color: #fff;
+    font-size: 0.62rem;
+    text-align: center;
+}
+
+.da2-cf-search {
+    width: 100%;
+    margin-bottom: 5px;
+    padding: 4px 8px;
+    border: 1px solid var(--da2-border);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 0.72rem;
+}
+
+.da2-cf-search:focus {
+    outline: none;
+    border-color: var(--kc);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--kc) 18%, transparent);
+}
+
+.da2-cf-options {
+    display: grid;
+    gap: 2px;
+}
+
+.da2-cf-options.is-long {
+    max-height: 230px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+.da2-cf-option {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    border-radius: 6px;
+    font-size: 0.74rem;
+    cursor: pointer;
+    transition: background .15s;
+}
+
+.da2-cf-option[hidden] {
+    display: none;
+}
+
+.da2-cf-option:hover {
+    background: color-mix(in srgb, var(--kc) 8%, #fff);
+}
+
+.da2-cf-option.is-checked {
+    background: color-mix(in srgb, var(--kc) 13%, #fff);
+    font-weight: 600;
+}
+
+.da2-cf-option.is-empty {
+    opacity: .5;
+}
+
+.da2-cf-option input {
+    margin: 0;
+    accent-color: var(--kc);
+}
+
+.da2-cf-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.da2-cf-count {
+    color: var(--da2-muted);
+    font-size: 0.66rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.da2-cf-note {
+    margin: 4px 0 0;
+    color: var(--da2-faint);
+    font-size: 0.64rem;
+    line-height: 1.4;
+}
+
+/* ------------------------------------------------- carduri fixate (deschise separat) */
+
+/* butonul de fixare din antetul fetei intinse */
+.da2-face-pin {
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    margin-left: 4px;
+    border: 1px solid color-mix(in srgb, var(--kc) 25%, var(--da2-border));
+    border-radius: 50%;
+    background: #fff;
+    color: color-mix(in srgb, var(--kc) 80%, #000);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background .15s, transform .2s, box-shadow .15s;
+}
+
+.da2-face-pin:hover {
+    background: color-mix(in srgb, var(--kc) 12%, #fff);
+    transform: rotate(-15deg);
+}
+
+.da2-face-pin.is-on {
+    background: var(--kc);
+    border-color: var(--kc);
+    color: #fff;
+    box-shadow: 0 4px 12px -6px var(--kc);
+}
+
+/* rezumatul din grila al unui card fixat */
+.da2-kpi.is-pinned-cell {
+    border-style: dashed;
+    border-left-style: solid;
+}
+
+.da2-kpi.is-pinned-cell .da2-face-summary {
+    background: repeating-linear-gradient(135deg, transparent 0 12px, color-mix(in srgb, var(--kc) 4%, transparent) 12px 24px);
+}
+
+.da2-kpi-pinmark {
+    color: var(--kc) !important;
+    font-size: 0.85rem !important;
+    transform: rotate(-15deg);
+}
+
+.da2-face-summary:hover .da2-kpi-pinmark {
+    transform: rotate(-15deg) translateY(2px) !important;
+}
+
+/* zona cardurilor fixate, sub grila */
+.da2-pins {
+    margin-top: 14px;
+    scroll-margin-top: 90px;
+}
+
+.da2-pins[hidden] {
+    display: none;
+}
+
+.da2-pins-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    margin-bottom: 10px;
+}
+
+.da2-pins-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+
+.da2-pins-title i {
+    color: var(--da2-accent);
+    transform: rotate(-15deg);
+}
+
+.da2-pins-title b {
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--da2-accent);
+    color: #fff;
+    font-size: 0.72rem;
+    text-align: center;
+}
+
+.da2-pins-hint {
+    color: var(--da2-faint);
+    font-size: 0.72rem;
+}
+
+.da2-pins-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.da2-pins .da2-cf-switch {
+    --kc: var(--da2-accent);
+    margin: 0;
+}
+
+.da2-pins-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr));
+    gap: 12px;
+    align-items: start;
+}
+
+.da2-pins.is-stacked .da2-pins-grid {
+    grid-template-columns: 1fr;
+}
+
+/* un panou fixat: fata intinsa, dar in panoul lui (nu peste grila) si cu inaltime reglabila */
+.da2-pins .da2-kpi.is-flipped {
+    position: relative;
+    height: 560px;
+    min-height: 320px;
+    max-height: 92vh;
+    overflow: hidden;
+    resize: vertical;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.da2-pins .da2-kpi.is-flipped .da2-face-detail {
+    z-index: 1;
+}
+
+.da2-pins .da2-kpi.is-pin-new .da2-face-detail {
+    animation: da2-pin-in .55s cubic-bezier(.22, 1, .36, 1) both;
+}
+
+@keyframes da2-pin-in {
+    0% { transform: translateY(14px) scale(.98); opacity: .2; box-shadow: 0 0 0 0 var(--kc); }
+    60% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--kc) 25%, transparent); }
+    100% { transform: none; opacity: 1; }
+}
+
+/* intr-un panou pe jumatate de latime, doar fata activa isi arata numele */
+.da2-pins:not(.is-stacked) .da2-kpi.is-pinned .da2-face-tab:not(.is-active)::after {
+    content: none;
+}
+
+@media (max-width: 700px) {
+    .da2-pins-actions {
+        margin-left: 0;
+    }
+
+    .da2-pins .da2-kpi.is-flipped {
+        height: 80vh;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .da2-pins .da2-kpi.is-pin-new .da2-face-detail {
+        animation: none;
+    }
+}
+
+/* rezumatul cardului Km parcurși: valoarea + eticheta „Km salvați” care deschide fata ei */
+.da2-kpi-valuerow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 10px;
+}
+
+.da2-kpi-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border: 1px solid color-mix(in srgb, var(--da2-good) 35%, #fff);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--da2-good) 12%, #fff);
+    color: color-mix(in srgb, var(--da2-good) 80%, #000);
+    font-size: 0.72rem;
+    font-weight: 700;
+    white-space: nowrap;
+    transition: background .15s, transform .15s, box-shadow .15s;
+}
+
+.da2-kpi-badge:hover {
+    background: color-mix(in srgb, var(--da2-good) 22%, #fff);
+    box-shadow: 0 4px 12px -6px var(--da2-good);
+    transform: translateY(-1px);
+}
+
+/* fata Km salvați: Pe beneficiar / Pe categorie de capacitate */
+.da2-cf-switch {
+    display: inline-flex;
+    justify-self: start;
+    gap: 2px;
+    margin: 4px 0 2px;
+    padding: 3px;
+    border: 1px solid color-mix(in srgb, var(--kc) 18%, var(--da2-border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--kc) 5%, #fff);
+}
+
+.da2-cf-switch button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--da2-muted);
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+
+.da2-cf-switch button:hover {
+    color: var(--kc);
+}
+
+.da2-cf-switch button.is-active {
+    background: var(--kc);
+    color: #fff;
+    box-shadow: 0 4px 10px -6px var(--kc);
+}
+
+/* fata Km salvați din cardul Km parcurși: rezumatul de deasupra randurilor */
+.da2-cf-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.da2-cf-strip > div {
+    display: grid;
+    gap: 2px;
+    padding: 8px 12px;
+    border: 1px solid color-mix(in srgb, var(--kc) 18%, var(--da2-border));
+    border-radius: var(--da2-radius-sm);
+    background: linear-gradient(160deg, color-mix(in srgb, var(--kc) 8%, #fff), #fff);
+}
+
+.da2-cf-strip span {
+    color: var(--da2-muted);
+    font-size: 0.68rem;
+}
+
+.da2-cf-strip strong {
+    color: color-mix(in srgb, var(--kc) 75%, #000);
+    font-size: 1rem;
+}
+
+/* categoria deschisa: un bloc pe beneficiar, cu placutele lui pe tip de transport */
+.da2-cf-clients {
+    display: grid;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.da2-cf-client {
+    padding: 8px 10px;
+    border: 1px solid var(--da2-border);
+    border-radius: var(--da2-radius-sm);
+    background: #fff;
+}
+
+.da2-cf-client-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.da2-kpi.is-flipped .da2-ft-more > .da2-cf-clients {
+    grid-column: 1 / -1;
+}
+
+@media (max-width: 700px) {
+    .da2-face-body.has-card-filters {
+        flex-direction: column;
+        overflow-y: auto;
+    }
+
+    .da2-cf-side {
+        flex: none;
+        overflow: visible;
+        padding-right: 0;
+        border-right: 0;
+        border-bottom: 1px solid var(--da2-border);
+    }
+
+    .da2-cf-main {
+        overflow: visible;
+    }
+}
+
+/* cardul Medie km / distribuție: placute pe subgrupare, cu liniile celei de-a treia grupari */
+.da2-km-tiles {
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.da2-km-lines {
+    margin-top: 2px;
+}
+
+.da2-km-lines li small {
+    color: var(--da2-faint);
+    font-size: 0.62rem;
+}
+
+.da2-km-only {
+    margin: 0;
+    color: var(--da2-faint);
+    font-size: 0.68rem;
+}
+
+/* cardul Km salvați: o placuta pe rand, ca masinile sa aiba loc pe latime */
+.da2-ft-types-wide {
+    grid-template-columns: 1fr;
+}
+
+/* cardul Km salvați: masinile din placuta tipului de transport */
+.da2-ft-cars {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 4px;
+    margin-top: 2px;
+}
+
+.da2-ft-car {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 4px 8px;
+    border: 1px solid color-mix(in srgb, var(--rc) 20%, var(--da2-border));
+    border-radius: 6px;
+    background: var(--da2-surface, #fff);
+    font: inherit;
+    font-size: 0.72rem;
+    color: inherit;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, transform .15s;
+}
+
+.da2-ft-car:hover {
+    background: color-mix(in srgb, var(--rc) 10%, #fff);
+    border-color: var(--rc);
+    transform: translateY(-1px);
+}
+
+.da2-ft-car span {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.da2-ft-car i {
+    color: var(--rc);
+    font-size: 0.65rem;
+}
+
+.da2-ft-car small {
+    color: var(--da2-muted);
+    font-size: 0.6rem;
+    font-weight: 600;
+}
+
+.da2-ft-car strong {
+    color: color-mix(in srgb, var(--rc) 70%, #000);
+    white-space: nowrap;
+}
+
+.da2-ft-meta .da2-face-link {
+    margin-left: auto;
+    padding: 0 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .da2-ft-type {
+        animation: none;
+    }
 }
 
 @media (max-width: 700px) {

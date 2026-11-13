@@ -308,6 +308,8 @@ $pageConfig = [
     </div>
 
     <section class="da2-kpis" id="da2-kpis" aria-label="Indicatori principali"></section>
+    <!-- cardurile fixate: deschise separat, unul langa altul (dashboard-analitic-v2.js, renderPins) -->
+    <section class="da2-pins" id="da2-pins" aria-label="Carduri fixate" hidden></section>
 
     <nav class="da2-tabs" id="da2-tabs" role="tablist">
         <button type="button" class="da2-tab is-active" data-tab="general" role="tab"><i class="bi bi-grid-1x2" aria-hidden="true"></i>Prezentare generală</button>

@@ -91,6 +91,9 @@ class FuelController
             case 'km_calibration_delete':
                 $this->kmCalibrationDeleteAction();
                 return;
+            case 'kpi_card_data':
+                $this->kpiCardDataAction();
+                return;
             default:
                 http_response_code(404);
                 render('errors/404.php', [
@@ -119,6 +122,13 @@ class FuelController
             $data['vehicle_comparison'] = $this->model->getConsumptionByVehicle($filters);
             $data['vehicle_daily_charts'] = $this->model->getVehicleDailyCharts($filters);
             $data['price_evolution'] = $this->model->getPriceEvolution($filters);
+            // Sparkline-urile cardurilor KPI; o eroare aici nu goleste pagina.
+            try {
+                $data['kpi_sparklines'] = $this->model->getKpiSparklines($filters);
+            } catch (Throwable $sparkException) {
+                error_log('[FuelController][kpi_sparklines] ' . $sparkException->getMessage());
+                $data['kpi_sparklines'] = [];
+            }
         } catch (Throwable $exception) {
             error_log('[FuelController][index] ' . $exception->getMessage());
             flash_set('danger', 'Nu s-au putut incarca datele pentru carburanti.');
@@ -193,6 +203,115 @@ class FuelController
         if (session_status() === PHP_SESSION_ACTIVE) {
             session_write_close();
         }
+    }
+
+    /**
+     * Datele unui card KPI extins (doar citire, aceeasi permisiune „view" ca pagina).
+     * Filtrele vin din contextul local al cardului (initializat din filtrele globale) si trec
+     * prin acelasi collectFilters, deci nu pot ocoli regulile paginii.
+     *   part=main     analiza completa (serii, vehicule, categorii, transport, perioada precedenta)
+     *   part=fillups  alimentarile dintr-un interval (detaliu din grafic)
+     *   part=can      consum CAN vs alimentari din telemetria deja salvata (fara apeluri SAS)
+     */
+    private function kpiCardDataAction(): void
+    {
+        $this->releaseSessionLock();
+        header('Content-Type: application/json; charset=UTF-8');
+        header('Cache-Control: private, no-store');
+
+        $filters = $this->collectFilters($_GET);
+        // Plafon: cel mult 2 ani pe o cerere (seriile zilnice raman rezonabile).
+        $from = new DateTimeImmutable((string) $filters['date_from']);
+        $to = new DateTimeImmutable((string) $filters['date_to']);
+        $notice = null;
+        if ((int) $from->diff($to)->format('%a') > 730) {
+            $filters['date_from'] = $to->modify('-730 days')->format('Y-m-d');
+            $filters['period'] = (new DateTimeImmutable($filters['date_from']))->format('d.m.Y') . ' - ' . $to->format('d.m.Y');
+            $notice = 'Perioada a fost limitată la ultimii 2 ani.';
+        }
+        $part = (string) ($_GET['part'] ?? 'main');
+
+        try {
+            $this->model->ensureSchema();
+            $this->model->enableRequestReadCache();
+            $payload = ['ok' => true, 'part' => $part, 'notice' => $notice];
+            switch ($part) {
+                case 'fillups':
+                    $payload['fillups'] = $this->model->getKpiCardFillups($filters, 300);
+                    break;
+                case 'can':
+                    $payload['can'] = $this->canSummaryByVehicle($filters);
+                    break;
+                default:
+                    $grouping = (string) ($_GET['grouping'] ?? 'day');
+                    $payload['part'] = 'main';
+                    $payload['data'] = $this->model->getKpiCardAnalytics($filters, $grouping);
+                    break;
+            }
+            echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
+        } catch (Throwable $exception) {
+            error_log('[FuelController][kpi_card_data] ' . $exception->getMessage());
+            http_response_code(500);
+            echo json_encode(['ok' => false, 'error' => 'Nu s-au putut încărca datele cardului.']);
+        }
+        exit;
+    }
+
+    /**
+     * Consum CAN (SAS) vs consum din alimentari, pe vehicul, din telemetria DEJA salvata de
+     * tabul „Verificare km (GPS/CAN)". Doar intervalele cu CAN plauzibil (can_l100 != null, aceeasi
+     * garda 4–120 L/100 km); fara cereri noi catre SAS.
+     */
+    private function canSummaryByVehicle(array $filters): array
+    {
+        $rows = (new FuelKmCheckModel($this->db))->getRows(
+            (string) $filters['date_from'],
+            (string) $filters['date_to'],
+            (array) ($filters['vehicles'] ?? [])
+        );
+        $byVehicle = [];
+        foreach ($rows as $row) {
+            $key = strtoupper(str_replace(' ', '', (string) $row['vehicle']));
+            $byVehicle[$key] ??= [
+                'vehicle' => (string) $row['vehicle'], 'intervals' => 0, 'with_telemetry' => 0,
+                'with_can' => 0, 'pending' => 0, 'can_fuel_l' => 0.0, 'can_gps_km' => 0.0, 'fuel_liters' => 0.0,
+            ];
+            $item = &$byVehicle[$key];
+            $item['intervals']++;
+            if (($row['status'] ?? '') === 'ok') {
+                $item['with_telemetry']++;
+            }
+            if (!empty($row['needs_fetch'])) {
+                $item['pending']++;
+            }
+            if ($row['can_l100'] !== null && $row['can_fuel_l'] !== null && $row['gps_km'] !== null) {
+                $item['with_can']++;
+                $item['can_fuel_l'] += (float) $row['can_fuel_l'];
+                $item['can_gps_km'] += (float) $row['gps_km'];
+                $item['fuel_liters'] += (float) $row['liters'];
+            }
+            unset($item);
+        }
+
+        $vehicles = [];
+        $total = ['intervals' => 0, 'with_can' => 0, 'pending' => 0, 'can_fuel_l' => 0.0, 'can_gps_km' => 0.0];
+        foreach ($byVehicle as $key => $item) {
+            $item['vehicle_key'] = $key;
+            $item['can_l100'] = $item['can_gps_km'] > 0 ? round($item['can_fuel_l'] / $item['can_gps_km'] * 100, 2) : null;
+            $item['can_fuel_l'] = round($item['can_fuel_l'], 2);
+            $item['can_gps_km'] = round($item['can_gps_km'], 1);
+            $item['fuel_liters'] = round($item['fuel_liters'], 2);
+            foreach (['intervals', 'with_can', 'pending'] as $field) {
+                $total[$field] += $item[$field];
+            }
+            $total['can_fuel_l'] += $item['can_fuel_l'];
+            $total['can_gps_km'] += $item['can_gps_km'];
+            $vehicles[] = $item;
+        }
+        $total['can_l100'] = $total['can_gps_km'] > 0 ? round($total['can_fuel_l'] / $total['can_gps_km'] * 100, 2) : null;
+        usort($vehicles, static fn (array $a, array $b): int => $b['with_can'] <=> $a['with_can']);
+
+        return ['vehicles' => $vehicles, 'total' => $total];
     }
 
     /** @return array<string,string> */

@@ -1,0 +1,893 @@
+/* ==========================================================================
+   Carburanți — carduri KPI morph (assets/js/fuel-kpi-morph.js)
+   Stările: A compact · B preview (hover/focus) · C extins · D tranziție internă.
+   Doar cele 5 carduri KPI; cardurile „Vehicule grele / ușoare / Neînregistrate"
+   (.fuel-split) NU sunt atinse de acest fișier.
+   ========================================================================== */
+
+.fkm-grid {
+    --fkm-radius: 16px;
+    --fkm-ease: cubic-bezier(.2, .8, .2, 1);
+    --fkm-ink: #0f172a;
+    --fkm-ink-2: #334155;
+    --fkm-muted: #64748b;
+    --fkm-line: #e2e8f0;
+    --fkm-good: #16a34a;
+    --fkm-bad: #dc2626;
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-auto-flow: row dense;
+    /* start: in timpul animatiei de inaltime randurile nu se intind (FLIP masoara layout-ul final). */
+    align-content: start;
+    gap: 1rem;
+    margin-bottom: .85rem;
+}
+
+.fkm-accent-green  { --fkm-accent: #16a34a; --fkm-accent-strong: #15803d; --fkm-soft: #dcfce7; --fkm-tint: #f0fdf4; --fkm-rgb: 22, 163, 74; }
+.fkm-accent-blue   { --fkm-accent: #2563eb; --fkm-accent-strong: #1d4ed8; --fkm-soft: #dbeafe; --fkm-tint: #eff6ff; --fkm-rgb: 37, 99, 235; }
+.fkm-accent-amber  { --fkm-accent: #d97706; --fkm-accent-strong: #b45309; --fkm-soft: #fef3c7; --fkm-tint: #fffbeb; --fkm-rgb: 217, 119, 6; }
+.fkm-accent-cyan   { --fkm-accent: #0891b2; --fkm-accent-strong: #0e7490; --fkm-soft: #cffafe; --fkm-tint: #ecfeff; --fkm-rgb: 8, 145, 178; }
+.fkm-accent-purple { --fkm-accent: #9333ea; --fkm-accent-strong: #7e22ce; --fkm-soft: #f3e8ff; --fkm-tint: #faf5ff; --fkm-rgb: 147, 51, 234; }
+
+/* ---------------------------------------------------------------- card */
+.fkm-card {
+    position: relative;
+    min-width: 0;
+    border-radius: var(--fkm-radius);
+    background: linear-gradient(180deg, #ffffff 0%, #ffffff 55%, var(--fkm-tint) 100%);
+    border: 1px solid #e3e9f2;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 10px 24px rgba(15, 23, 42, .06);
+    overflow: hidden;
+    transform-origin: 0 0;
+    transition: transform .18s var(--fkm-ease), box-shadow .18s var(--fkm-ease), border-color .18s var(--fkm-ease);
+}
+
+.fkm-inner {
+    position: relative;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 1rem 1.05rem .75rem;
+    transform-origin: 0 0;
+}
+
+/* STATE B — preview (doar pe dispozitive cu pointer fin) / focus tastatură */
+@media (hover: hover) and (pointer: fine) {
+    .fkm-grid:not(.is-morphing) .fkm-card:not(.is-expanded):hover {
+        transform: translateY(-3px);
+        border-color: rgba(var(--fkm-rgb), .45);
+        box-shadow: 0 0 0 3px rgba(var(--fkm-rgb), .10), 0 16px 32px rgba(var(--fkm-rgb), .16);
+    }
+}
+.fkm-card:not(.is-expanded):focus-within {
+    border-color: rgba(var(--fkm-rgb), .55);
+    box-shadow: 0 0 0 3px rgba(var(--fkm-rgb), .16), 0 16px 32px rgba(var(--fkm-rgb), .14);
+}
+
+/* ---------------------------------------------------------------- head */
+.fkm-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+        "icon . tools"
+        "text text text";
+    align-items: start;
+    row-gap: .7rem;
+}
+
+.fkm-icon {
+    grid-area: icon;
+    width: 40px;
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    background: var(--fkm-soft);
+    color: var(--fkm-accent);
+    font-size: 1.2rem;
+    transform-origin: 0 0;
+}
+
+.fkm-heading {
+    grid-area: text;
+    min-width: 0;
+    display: grid;
+    gap: .3rem;
+}
+
+.fkm-title {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    min-width: 0;
+    margin: 0;
+    font-size: .86rem;
+    font-weight: 750;
+    line-height: 1.25;
+    color: var(--fkm-ink-2);
+    transform-origin: 0 0;
+}
+
+/* Bara de titlu e butonul de extindere; ::after o întinde peste tot cardul (stretched button). */
+.fkm-expand {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.fkm-expand::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: var(--fkm-radius);
+}
+.fkm-expand:focus-visible {
+    outline: none;
+}
+.fkm-expand:focus-visible::after {
+    box-shadow: inset 0 0 0 2px var(--fkm-accent);
+}
+
+.fkm-value-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: .2rem .65rem;
+    min-width: 0;
+}
+
+.fkm-value {
+    display: inline-block;
+    color: var(--fkm-ink);
+    font-size: 1.42rem;
+    font-weight: 850;
+    line-height: 1.1;
+    letter-spacing: -.01em;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    transform-origin: 0 0;
+}
+
+.fkm-change-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: .45rem;
+}
+.fkm-change {
+    display: inline-flex;
+    align-items: center;
+    gap: .15rem;
+    font-size: .8rem;
+    font-weight: 800;
+    white-space: nowrap;
+}
+.fkm-change.is-good  { color: var(--fkm-good); }
+.fkm-change.is-bad   { color: var(--fkm-bad); }
+.fkm-change.is-muted { color: #94a3b8; font-weight: 650; }
+.fkm-change-note { display: none; color: var(--fkm-muted); font-size: .76rem; }
+
+.fkm-sub {
+    display: block;
+    overflow: hidden;
+    color: var(--fkm-muted);
+    font-size: .76rem;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.fkm-tools {
+    grid-area: tools;
+    position: relative;
+    z-index: 2;
+    display: inline-flex;
+    gap: .25rem;
+}
+.fkm-tool,
+.fkm-info {
+    position: relative;
+    z-index: 2;
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: #64748b;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color .15s ease, color .15s ease;
+}
+.fkm-tool:hover,
+.fkm-info:hover,
+.fkm-tool[aria-expanded="true"] {
+    background: rgba(var(--fkm-rgb), .1);
+    color: var(--fkm-accent-strong);
+}
+.fkm-tool:focus-visible,
+.fkm-info:focus-visible {
+    outline: 2px solid var(--fkm-accent);
+    outline-offset: 1px;
+}
+.fkm-info { display: none; width: 24px; height: 24px; font-size: .85rem; }
+.fkm-collapse { display: none; }
+
+.fkm-context {
+    position: relative;
+    z-index: 2;
+    padding: .1rem .45rem;
+    border-radius: 999px;
+    background: var(--fkm-soft);
+    color: var(--fkm-accent-strong);
+    font-size: .64rem;
+    font-weight: 850;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- sparkline */
+/* Sparkline-ul ocupa spatiul ramas cand cardul compact e intins de grila (langa cardul extins). */
+.fkm-spark {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: flex-end;
+    min-height: 44px;
+    max-height: 104px;
+    padding-top: .55rem;
+}
+.fkm-spark svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 36px;
+    overflow: visible;
+}
+.fkm-spark-line {
+    fill: none;
+    stroke: var(--fkm-accent);
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+.fkm-spark-area {
+    fill: rgba(var(--fkm-rgb), .10);
+    stroke: none;
+}
+
+/* ==========================================================================
+   STATE C — extins
+   ========================================================================== */
+.fkm-grid.has-expanded {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+.fkm-card.is-expanded {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    border: 1.5px solid rgba(var(--fkm-rgb), .55);
+    background:
+        radial-gradient(120% 70% at 0% 0%, rgba(var(--fkm-rgb), .14) 0%, rgba(var(--fkm-rgb), 0) 60%),
+        linear-gradient(180deg, var(--fkm-tint) 0%, #ffffff 42%);
+    box-shadow: 0 0 0 4px rgba(var(--fkm-rgb), .08), 0 22px 44px rgba(var(--fkm-rgb), .16), 0 2px 6px rgba(15, 23, 42, .06);
+}
+.fkm-card.is-expanded .fkm-inner { padding: 1.05rem 1.15rem .95rem; }
+.fkm-card.is-expanded .fkm-head {
+    grid-template-areas: "icon text tools";
+    column-gap: .85rem;
+}
+.fkm-card.is-expanded .fkm-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
+    font-size: 1.45rem;
+    background: var(--fkm-accent);
+    color: #ffffff;
+    box-shadow: 0 8px 18px rgba(var(--fkm-rgb), .32);
+}
+.fkm-card.is-expanded .fkm-heading { gap: .2rem; }
+.fkm-card.is-expanded .fkm-title { font-size: .95rem; color: var(--fkm-ink); }
+.fkm-card.is-expanded .fkm-value { font-size: 2rem; }
+.fkm-card.is-expanded .fkm-change {
+    padding: .2rem .55rem;
+    border-radius: 999px;
+    background: rgba(22, 163, 74, .1);
+}
+.fkm-card.is-expanded .fkm-change.is-bad { background: rgba(220, 38, 38, .09); }
+.fkm-card.is-expanded .fkm-change.is-muted { background: #f1f5f9; }
+.fkm-card.is-expanded .fkm-change-note { display: inline; }
+.fkm-card.is-expanded .fkm-info { display: inline-flex; }
+.fkm-card.is-expanded .fkm-collapse { display: inline-flex; }
+.fkm-card.is-expanded .fkm-expand { cursor: default; }
+.fkm-card.is-expanded .fkm-expand::after { display: none; }
+.fkm-card.is-expanded .fkm-spark { display: none; }
+
+/* În timpul animatiilor: fara tranzitii CSS pe transform (le controlează WAAPI). */
+.fkm-grid.is-morphing .fkm-card { transition: none; will-change: transform; }
+.fkm-grid.is-morphing .fkm-inner { will-change: transform; }
+
+/* ---------------------------------------------------------------- panel */
+.fkm-panel {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: .7rem;
+    min-width: 0;
+    margin-top: .9rem;
+}
+.fkm-panel[hidden] { display: none; }
+
+.fkm-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem;
+    padding: .3rem;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .78);
+    border: 1px solid #e6edf5;
+}
+
+.fkm-tabs {
+    display: flex;
+    flex: 1 1 auto;
+    gap: .15rem;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.fkm-tab {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    padding: .45rem .75rem;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: #475569;
+    font-size: .8rem;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color .15s ease, color .15s ease;
+}
+.fkm-tab:hover { background: #f1f5f9; color: var(--fkm-ink); }
+.fkm-tab[aria-selected="true"] {
+    background: #ffffff;
+    color: var(--fkm-accent-strong);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, .1), inset 0 -2px 0 var(--fkm-accent);
+}
+.fkm-tab:focus-visible { outline: 2px solid var(--fkm-accent); outline-offset: -2px; }
+
+.fkm-filterbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .4rem;
+}
+
+.fkm-seg {
+    display: inline-flex;
+    padding: 2px;
+    border-radius: 9px;
+    background: #eef2f7;
+}
+.fkm-seg button {
+    padding: .25rem .6rem;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #475569;
+    font-size: .74rem;
+    font-weight: 750;
+    cursor: pointer;
+}
+.fkm-seg button[aria-pressed="true"] {
+    background: #ffffff;
+    color: var(--fkm-accent-strong);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .12);
+}
+.fkm-seg button:focus-visible { outline: 2px solid var(--fkm-accent); outline-offset: 0; }
+
+.fkm-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    max-width: 230px;
+    padding: .3rem .6rem;
+    border: 1px solid #d9e2ee;
+    border-radius: 999px;
+    background: #ffffff;
+    color: var(--fkm-ink-2);
+    font-size: .75rem;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: border-color .15s ease, background-color .15s ease;
+}
+.fkm-chip > span { overflow: hidden; text-overflow: ellipsis; }
+.fkm-chip:hover { border-color: rgba(var(--fkm-rgb), .5); }
+.fkm-chip.is-local {
+    border-color: rgba(var(--fkm-rgb), .55);
+    background: var(--fkm-tint);
+    color: var(--fkm-accent-strong);
+}
+.fkm-chip:focus-visible { outline: 2px solid var(--fkm-accent); outline-offset: 1px; }
+.fkm-chip[disabled] { opacity: .45; cursor: default; }
+
+.fkm-toolbar-actions {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: .15rem;
+    margin-left: auto;
+}
+
+.fkm-link {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    padding: .25rem .45rem;
+    border: 0;
+    border-radius: 7px;
+    background: none;
+    color: var(--fkm-accent-strong);
+    font-size: .75rem;
+    font-weight: 750;
+    cursor: pointer;
+}
+.fkm-link:hover { background: rgba(var(--fkm-rgb), .08); }
+.fkm-link[disabled] { color: #94a3b8; cursor: default; background: none; }
+.fkm-link:focus-visible { outline: 2px solid var(--fkm-accent); outline-offset: 0; }
+
+.fkm-notice {
+    padding: .4rem .65rem;
+    border-radius: 9px;
+    background: #fff7ed;
+    color: #9a3412;
+    font-size: .75rem;
+}
+
+/* ---------------------------------------------------------------- stage (STATE D) */
+.fkm-stage {
+    position: relative;
+    min-height: 236px;
+}
+.fkm-pane[hidden] { display: none; }
+.fkm-pane.is-busy { opacity: .55; transition: opacity .15s ease; }
+
+.fkm-evo {
+    display: grid;
+    grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+    gap: .8rem;
+}
+.fkm-box {
+    min-width: 0;
+    padding: .7rem .8rem;
+    border-radius: 12px;
+    background: #ffffff;
+    border: 1px solid #e6edf5;
+}
+.fkm-box-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: .4rem;
+    margin-bottom: .35rem;
+}
+.fkm-box-title {
+    margin: 0;
+    color: var(--fkm-ink);
+    font-size: .8rem;
+    font-weight: 800;
+}
+.fkm-chart-wrap {
+    position: relative;
+    height: 178px;
+}
+.fkm-chart-wrap canvas { cursor: pointer; }
+
+.fkm-point {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .35rem .9rem;
+    margin-top: .45rem;
+    padding: .45rem .6rem;
+    border-radius: 9px;
+    background: var(--fkm-tint);
+    color: var(--fkm-ink-2);
+    font-size: .75rem;
+}
+.fkm-point strong { color: var(--fkm-ink); }
+.fkm-point[hidden] { display: none; }
+.fkm-point .fkm-link { margin-left: auto; }
+
+.fkm-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .2rem .8rem;
+    color: var(--fkm-muted);
+    font-size: .7rem;
+}
+.fkm-legend i {
+    display: inline-block;
+    width: 14px;
+    height: 0;
+    margin-right: .3rem;
+    vertical-align: middle;
+    border-top: 2px solid var(--fkm-accent);
+}
+.fkm-legend i.is-prev { border-top: 2px dashed #94a3b8; }
+.fkm-legend i.is-alt { border-top-color: #94a3b8; }
+
+/* Bare orizontale (Defalcare, Tip transport, Tip carburant) */
+.fkm-bars { display: grid; gap: .25rem; }
+.fkm-bar {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: .2rem .6rem;
+    width: 100%;
+    padding: .4rem .5rem;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--fkm-ink-2);
+    font-size: .76rem;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color .15s ease, border-color .15s ease, opacity .15s ease;
+}
+.fkm-bar:hover { background: #f8fafc; }
+.fkm-bar:focus-visible { outline: 2px solid var(--fkm-accent); outline-offset: 0; }
+.fkm-bar.is-selected { border-color: rgba(var(--fkm-rgb), .5); background: var(--fkm-tint); }
+.fkm-bars.has-selection .fkm-bar:not(.is-selected) { opacity: .55; }
+.fkm-bar .bi { color: var(--fkm-accent); }
+.fkm-bar-label { overflow: hidden; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
+.fkm-bar-value { font-weight: 750; color: var(--fkm-ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fkm-bar-pct { min-width: 3.4em; color: var(--fkm-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.fkm-bar-track {
+    grid-column: 1 / -1;
+    height: 6px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #eef2f7;
+}
+.fkm-bar-track span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--fkm-accent);
+    transform-origin: 0 50%;
+}
+.fkm-bar-meta { grid-column: 1 / -1; color: var(--fkm-muted); font-size: .7rem; }
+
+/* Lista de vehicule */
+.fkm-list-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .45rem;
+    margin-bottom: .45rem;
+}
+.fkm-search {
+    flex: 1 1 160px;
+    min-width: 0;
+    height: 32px;
+    padding: 0 .65rem;
+    border: 1px solid #d9e2ee;
+    border-radius: 9px;
+    font-size: .8rem;
+}
+.fkm-search:focus { outline: 2px solid rgba(var(--fkm-rgb), .45); border-color: var(--fkm-accent); }
+.fkm-select {
+    height: 32px;
+    padding: 0 1.8rem 0 .55rem;
+    border: 1px solid #d9e2ee;
+    border-radius: 9px;
+    background-color: #ffffff;
+    font-size: .76rem;
+}
+.fkm-table-wrap {
+    max-height: 262px;
+    overflow: auto;
+    border: 1px solid #e6edf5;
+    border-radius: 10px;
+    background: #ffffff;
+}
+.fkm-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: .76rem;
+}
+.fkm-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: .45rem .55rem;
+    background: #f8fafc;
+    color: #475569;
+    font-size: .7rem;
+    font-weight: 800;
+    text-align: right;
+    white-space: nowrap;
+    border-bottom: 1px solid #e6edf5;
+}
+.fkm-table th:first-child,
+.fkm-table th:nth-child(2),
+.fkm-table td:first-child,
+.fkm-table td:nth-child(2) { text-align: left; }
+.fkm-table th button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+.fkm-table th button[aria-sort="descending"]::after { content: " ↓"; color: var(--fkm-accent); }
+.fkm-table th button[aria-sort="ascending"]::after { content: " ↑"; color: var(--fkm-accent); }
+.fkm-table td {
+    padding: .4rem .55rem;
+    border-bottom: 1px solid #f1f5f9;
+    color: var(--fkm-ink-2);
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.fkm-table tr:last-child td { border-bottom: 0; }
+.fkm-table tbody tr { transition: background-color .12s ease; }
+.fkm-table tbody tr:hover { background: #f8fafc; }
+.fkm-table tbody tr.is-selected { background: var(--fkm-tint); }
+.fkm-table td:first-child { width: 28px; }
+.fkm-plate {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--fkm-accent-strong);
+    font-weight: 800;
+    cursor: pointer;
+}
+.fkm-plate:hover { text-decoration: underline; }
+.fkm-tag {
+    display: inline-block;
+    margin-left: .3rem;
+    padding: 0 .35rem;
+    border-radius: 6px;
+    background: #f1f5f9;
+    color: var(--fkm-muted);
+    font-size: .64rem;
+    font-weight: 750;
+}
+.fkm-tag.is-warn { background: #fff7ed; color: #c2410c; }
+.fkm-na { color: #94a3b8; }
+
+/* Sub-metrice + acțiuni */
+.fkm-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: .5rem;
+}
+/* Metricile au nevoie de ~560px; cand nu incap langa actiuni, actiunile trec pe randul urmator. */
+.fkm-metrics {
+    display: grid;
+    flex: 1 1 560px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: .4rem;
+}
+.fkm-pane-note {
+    margin: 0 0 .45rem;
+    color: var(--fkm-muted);
+    font-size: .76rem;
+    line-height: 1.45;
+}
+.fkm-pane-note strong { color: var(--fkm-ink); }
+.fkm-metric {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    min-width: 0;
+    padding: .45rem .55rem;
+    border: 1px solid #e6edf5;
+    border-radius: 10px;
+    background: #ffffff;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .15s ease, transform .15s ease, box-shadow .15s ease;
+}
+.fkm-metric:hover { border-color: rgba(var(--fkm-rgb), .5); box-shadow: 0 4px 12px rgba(var(--fkm-rgb), .12); }
+.fkm-metric:focus-visible { outline: 2px solid var(--fkm-accent); outline-offset: 1px; }
+.fkm-metric[disabled] { cursor: default; box-shadow: none; border-color: #e6edf5; }
+.fkm-metric > i {
+    flex: 0 0 26px;
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    background: var(--fkm-soft);
+    color: var(--fkm-accent);
+    font-size: .8rem;
+}
+.fkm-metric span { display: grid; min-width: 0; }
+.fkm-metric strong {
+    overflow: hidden;
+    color: var(--fkm-ink);
+    font-size: .8rem;
+    font-weight: 850;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+}
+.fkm-metric small {
+    overflow: hidden;
+    color: var(--fkm-muted);
+    font-size: .67rem;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.fkm-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: flex-end;
+    gap: .4rem;
+    margin-left: auto;
+}
+.fkm-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    height: 36px;
+    padding: 0 .8rem;
+    border: 1px solid rgba(var(--fkm-rgb), .45);
+    border-radius: 9px;
+    background: #ffffff;
+    color: var(--fkm-accent-strong);
+    font-size: .77rem;
+    font-weight: 800;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color .15s ease, box-shadow .15s ease;
+}
+.fkm-btn:hover { background: var(--fkm-tint); }
+.fkm-btn.is-primary {
+    border-color: transparent;
+    background: var(--fkm-accent);
+    color: #ffffff;
+    box-shadow: 0 6px 14px rgba(var(--fkm-rgb), .28);
+}
+.fkm-btn.is-primary:hover { background: var(--fkm-accent-strong); }
+.fkm-btn:focus-visible { outline: 2px solid var(--fkm-accent); outline-offset: 2px; }
+
+/* Stări goale / încărcare / eroare */
+.fkm-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: .4rem;
+    min-height: 150px;
+    padding: 1rem;
+    color: var(--fkm-muted);
+    font-size: .8rem;
+    text-align: center;
+}
+.fkm-state .bi { font-size: 1.4rem; color: #94a3b8; }
+.fkm-state.is-error .bi { color: var(--fkm-bad); }
+.fkm-skeleton {
+    border-radius: 10px;
+    background: linear-gradient(90deg, #f1f5f9 0%, #e8eef5 50%, #f1f5f9 100%);
+    background-size: 200% 100%;
+    animation: fkm-shimmer 1.2s linear infinite;
+}
+@keyframes fkm-shimmer { to { background-position: -200% 0; } }
+
+/* ---------------------------------------------------------------- popovers */
+.fkm-pop {
+    position: absolute;
+    z-index: 1075;
+    min-width: 220px;
+    max-width: min(320px, calc(100vw - 32px));
+    padding: .45rem;
+    border: 1px solid #dfe7f2;
+    border-radius: 12px;
+    background: #ffffff;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, .16);
+    font-size: .8rem;
+}
+.fkm-pop[hidden] { display: none; }
+.fkm-pop-item {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    width: 100%;
+    padding: .45rem .55rem;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--fkm-ink-2, #334155);
+    font-size: .8rem;
+    font-weight: 650;
+    text-align: left;
+    cursor: pointer;
+}
+.fkm-pop-item:hover,
+.fkm-pop-item:focus-visible { background: #f1f5f9; outline: none; }
+.fkm-pop-item.is-active { color: var(--fkm-accent-strong); background: var(--fkm-tint); }
+.fkm-pop-sep { height: 1px; margin: .3rem 0; background: #eef2f7; }
+.fkm-pop-text { padding: .35rem .5rem; color: #475569; font-size: .78rem; line-height: 1.45; }
+.fkm-pop-text p { margin: 0 0 .4rem; }
+.fkm-pop-text p:last-child { margin: 0; }
+.fkm-pop-list { max-height: 240px; overflow: auto; }
+.fkm-pop-group { padding: .35rem .5rem .15rem; color: #94a3b8; font-size: .66rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.fkm-pop-check { display: flex; align-items: center; gap: .45rem; padding: .3rem .5rem; border-radius: 7px; cursor: pointer; }
+.fkm-pop-check:hover { background: #f8fafc; }
+.fkm-pop-check small { margin-left: auto; color: #94a3b8; }
+.fkm-pop-row { display: flex; gap: .4rem; align-items: center; padding: .3rem .25rem; }
+.fkm-pop-row input[type="date"] { flex: 1 1 0; min-width: 0; height: 32px; padding: 0 .4rem; border: 1px solid #d9e2ee; border-radius: 8px; font-size: .78rem; }
+.fkm-pop-actions { display: flex; justify-content: flex-end; gap: .35rem; padding: .35rem .25rem .1rem; }
+
+.fkm-sr {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+    clip: rect(0 0 0 0) !important;
+    white-space: nowrap !important;
+}
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+@media (max-width: 1399.98px) {
+    .fkm-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .fkm-grid.has-expanded { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .fkm-card.is-expanded { grid-column: 1 / -1; grid-row: 1; }
+}
+
+@media (max-width: 991.98px) {
+    .fkm-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .fkm-grid.has-expanded { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .fkm-evo { grid-template-columns: 1fr; }
+    .fkm-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 767.98px) {
+    .fkm-grid,
+    .fkm-grid.has-expanded { grid-template-columns: minmax(0, 1fr); }
+    /* Pe telefon cardul se extinde pe loc, fără să sară în capul listei. */
+    .fkm-card.is-expanded { grid-column: 1; grid-row: auto; }
+    .fkm-card.is-expanded .fkm-value { font-size: 1.6rem; }
+    .fkm-card.is-expanded .fkm-change-note { display: none; }
+    .fkm-actions { flex: 1 1 100%; }
+    .fkm-actions .fkm-btn { flex: 1 1 0; justify-content: center; }
+    .fkm-tab { padding: .45rem .6rem; }
+    .fkm-chip { max-width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fkm-card,
+    .fkm-tab,
+    .fkm-bar,
+    .fkm-metric,
+    .fkm-chip { transition: none !important; }
+    .fkm-grid .fkm-card:not(.is-expanded):hover { transform: none !important; }
+    .fkm-skeleton { animation: none; }
+}

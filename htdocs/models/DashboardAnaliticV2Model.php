@@ -171,6 +171,9 @@ class DashboardAnaliticV2Model extends BaseModel
 
         $summary = $this->buildSummary($transportRows, $matrixRows);
         $summary['capacity'] = $this->buildCapacityBreakdown($this->fetchCapacityCategoryRows($from, $whereData, $expr));
+        $summary['km_saved'] = $this->fetchKmSavedRows($from, $whereData, $expr);
+        $summary['client_points'] = $this->fetchClientPointsRows($from, $whereData, $expr);
+        $summary['km_trips'] = $this->fetchTripKmRows($from, $whereData, $expr);
         $distribution = $this->buildDistribution($from, $whereData, $expr, $this->kmThresholds($filters));
         $alerts = $this->buildAlerts($vehicles, $drivers, $beneficiaries, $fleet, $filters);
 
@@ -1460,6 +1463,84 @@ class DashboardAnaliticV2Model extends BaseModel
                 COALESCE(SUM(" . $e['tone_pentru_grad'] . "), 0) AS tone_grad,
                 COALESCE(SUM(" . $e['capacitate_aplicabila'] . "), 0) AS capacitate_grad
             {$from}
+            " . $this->capacityCategoryJoinSql() . "
+            {$whereData['where']}
+            GROUP BY cap_cc.id, cap_cc.nume, cap_cc.ordine_afisare, c.vehicle_id, vehicul, beneficiar
+        ", $whereData['params']);
+    }
+
+    /**
+     * Km salvati (km rutei tarifate peste km parcursi, doar pe cursele primar) pe
+     * categorie de capacitate x beneficiar x tip de transport x vehicul, pentru cardul
+     * "Km salvați" si fata "Km salvați" a cardului Km parcurși. Randuri plate: cardul le
+     * filtreaza si le grupeaza singur (filtrele din card). O cursa cade intr-un singur rand.
+     * Aceeasi expresie `km_saved` ca totalul flotei, deci randurile se aduna exact la el.
+     * Intra doar combinatiile care au salvat ceva.
+     */
+    private function fetchKmSavedRows(string $from, array $whereData, array $e): array
+    {
+        $saved = '(' . $e['km_saved'] . ')';
+
+        $rows = $this->fetchAll("
+            SELECT
+                cap_cc.id AS categorie_id,
+                cap_cc.nume AS categorie,
+                cap_cc.ordine_afisare AS categorie_ordine,
+                c.beneficiar_id,
+                COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fara beneficiar') AS beneficiar,
+                COALESCE(NULLIF(TRIM(c.tip_transport), ''), 'necunoscut') AS tip_transport,
+                c.vehicle_id,
+                COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut') AS vehicul,
+                COUNT(DISTINCT CASE WHEN {$saved} > 0 THEN c.id END) AS curse_cu_economie,
+                COALESCE(SUM({$saved}), 0) AS km_salvati,
+                COALESCE(SUM(CASE WHEN {$saved} > 0 THEN c.km_cursa ELSE 0 END), 0) AS km_ruta,
+                COALESCE(SUM(CASE WHEN {$saved} > 0 THEN c.km_totali ELSE 0 END), 0) AS km_parcursi
+            {$from}
+            " . $this->capacityCategoryJoinSql() . "
+            {$whereData['where']}
+            GROUP BY cap_cc.id, cap_cc.nume, cap_cc.ordine_afisare, c.beneficiar_id, beneficiar, tip_transport, c.vehicle_id, vehicul
+            HAVING km_salvati > 0
+        ", $whereData['params']);
+
+        $labels = self::TRANSPORT_TYPE_LABELS + ['primar_km' => 'Primar km'];
+
+        return array_map(fn (array $row): array => $this->flatCardRow($row, $labels) + [
+            'curse_cu_economie' => (int) $row['curse_cu_economie'],
+            'km_salvati' => round(max(0.0, (float) $row['km_salvati']), 2),
+            'km_ruta' => round(max(0.0, (float) $row['km_ruta']), 2),
+            'km_parcursi' => round(max(0.0, (float) $row['km_parcursi']), 2),
+        ], $rows);
+    }
+
+    /**
+     * Cheile comune ale randurilor plate de card (categorie, beneficiar, tip, vehicul),
+     * pe care le folosesc filtrele din card in JS (CARD_FACETS).
+     */
+    private function flatCardRow(array $row, array $typeLabels): array
+    {
+        $categoryId = $row['categorie_id'] === null ? 0 : (int) $row['categorie_id'];
+        $type = (string) $row['tip_transport'];
+
+        return [
+            'categorie_key' => $categoryId > 0 ? 'cat_' . $categoryId : 'fara_categorie',
+            'categorie' => $categoryId > 0 ? (string) $row['categorie'] : 'Fără categorie',
+            'categorie_ordine' => $categoryId > 0 ? (int) ($row['categorie_ordine'] ?? 0) : PHP_INT_MAX,
+            'beneficiar_id' => (int) ($row['beneficiar_id'] ?? 0),
+            'beneficiar' => (string) $row['beneficiar'],
+            'tip_transport' => $type,
+            'tip_label' => $typeLabels[$type] ?? ucfirst(str_replace('_', ' ', $type)),
+            'vehicle_id' => (int) ($row['vehicle_id'] ?? 0),
+            'vehicul' => (string) $row['vehicul'],
+        ];
+    }
+
+    /**
+     * Categoria de capacitate a vehiculului cursei (alias `cap_cc`), ca filtrul
+     * "Categorie capacitate": capul tractor ia categoria semiremorcii cuplate.
+     */
+    private function capacityCategoryJoinSql(): string
+    {
+        return "
             LEFT JOIN (
                 SELECT vc1.tractor_id, vc1.semiremorca_id
                 FROM vehicule_cuplaje vc1
@@ -1476,9 +1557,82 @@ class DashboardAnaliticV2Model extends BaseModel
                         WHEN v.tip_vehicul = 'cap_tractor' THEN COALESCE(cap_sr.categorie_capacitate_id, v.categorie_capacitate_id)
                         ELSE v.categorie_capacitate_id
                       END
+        ";
+    }
+
+    /**
+     * Numarul de clienti (puncte de livrare, `nr_clienti` de pe cursa) pe categorie de
+     * capacitate x beneficiar x tip de transport (bucket) x vehicul, pentru cardul
+     * "Clienți / Beneficiar". Randuri plate: cardul le filtreaza si le grupeaza singur
+     * (filtrele din card), fara alta cerere. O cursa cade intr-un singur rand, deci
+     * `curse_cu_clienti` se poate aduna intre randuri.
+     * Aceeasi expresie `puncte_client` ca totalul flotei. Intra doar combinatiile cu clienti.
+     */
+    private function fetchClientPointsRows(string $from, array $whereData, array $e): array
+    {
+        $points = '(' . $e['puncte_client'] . ')';
+
+        $rows = $this->fetchAll("
+            SELECT
+                cap_cc.id AS categorie_id,
+                cap_cc.nume AS categorie,
+                cap_cc.ordine_afisare AS categorie_ordine,
+                c.beneficiar_id,
+                COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fara beneficiar') AS beneficiar,
+                " . $e['bucket'] . " AS tip_transport,
+                c.vehicle_id,
+                COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut') AS vehicul,
+                COUNT(DISTINCT CASE WHEN {$points} > 0 THEN c.id END) AS curse_cu_clienti,
+                COALESCE(SUM({$points}), 0) AS clienti,
+                COALESCE(SUM(CASE WHEN {$points} > 0 THEN " . $e['km_effective'] . " ELSE 0 END), 0) AS km,
+                COALESCE(SUM(CASE WHEN {$points} > 0 THEN " . $e['tons_delivered'] . " ELSE 0 END), 0) AS tone
+            {$from}
+            " . $this->capacityCategoryJoinSql() . "
             {$whereData['where']}
-            GROUP BY cap_cc.id, cap_cc.nume, cap_cc.ordine_afisare, c.vehicle_id, vehicul, beneficiar
+            GROUP BY cap_cc.id, cap_cc.nume, cap_cc.ordine_afisare, c.beneficiar_id, beneficiar, tip_transport, c.vehicle_id, vehicul
+            HAVING clienti > 0
         ", $whereData['params']);
+
+        return array_map(fn (array $row): array => $this->flatCardRow($row, self::TRANSPORT_BUCKETS) + [
+            'curse_cu_clienti' => (int) $row['curse_cu_clienti'],
+            // fractionar pe cursele impartite intre luni: rotunjit pe rand, totalul nu s-ar mai potrivi
+            'clienti' => round((float) $row['clienti'], 2),
+            'km' => round(max(0.0, (float) $row['km']), 2),
+            'tone' => round(max(0.0, (float) $row['tone']), 2),
+        ], $rows);
+    }
+
+    /**
+     * Km si curse pe categorie de capacitate x beneficiar x tip de transport (bucket) x
+     * vehicul, pentru cardul "Medie km / distribuție" (media km pe cursa, la orice nivel:
+     * km ÷ curse). Aceleasi expresii ca flota (`km_effective`, `SUM(billing_counts)`), deci
+     * randurile se aduna exact la km parcursi si la curse, iar media totala = km / cursa.
+     * O cursa impartita intre luni aduce km in perioada, dar se numara doar in luna ei.
+     */
+    private function fetchTripKmRows(string $from, array $whereData, array $e): array
+    {
+        $rows = $this->fetchAll("
+            SELECT
+                cap_cc.id AS categorie_id,
+                cap_cc.nume AS categorie,
+                cap_cc.ordine_afisare AS categorie_ordine,
+                c.beneficiar_id,
+                COALESCE(NULLIF(TRIM(bt.nume), ''), 'Fara beneficiar') AS beneficiar,
+                " . $e['bucket'] . " AS tip_transport,
+                c.vehicle_id,
+                COALESCE(NULLIF(TRIM(v.nr_inmatriculare), ''), 'Necunoscut') AS vehicul,
+                SUM(c.billing_counts) AS curse,
+                COALESCE(SUM(" . $e['km_effective'] . "), 0) AS km
+            {$from}
+            " . $this->capacityCategoryJoinSql() . "
+            {$whereData['where']}
+            GROUP BY cap_cc.id, cap_cc.nume, cap_cc.ordine_afisare, c.beneficiar_id, beneficiar, tip_transport, c.vehicle_id, vehicul
+        ", $whereData['params']);
+
+        return array_map(fn (array $row): array => $this->flatCardRow($row, self::TRANSPORT_BUCKETS) + [
+            'curse' => (int) $row['curse'],
+            'km' => round(max(0.0, (float) $row['km']), 2),
+        ], $rows);
     }
 
     /**
@@ -1870,6 +2024,12 @@ class DashboardAnaliticV2Model extends BaseModel
             'bucket_labels' => self::TRANSPORT_BUCKETS,
             // completata in getData() (fetchCapacityCategoryRows); goala in payload-ul de eroare
             'capacity' => [],
+            // completata in getData() (fetchKmSavedRows); goala in payload-ul de eroare
+            'km_saved' => [],
+            // completata in getData() (fetchClientPointsRows); goala in payload-ul de eroare
+            'client_points' => [],
+            // completata in getData() (fetchTripKmRows); goala in payload-ul de eroare
+            'km_trips' => [],
         ];
     }
 

@@ -2101,16 +2101,37 @@ class FuelModel extends BaseModel
             $filters['vehicles'] = [];
         }
 
-        $where = $this->buildFillupWhere($filters, 'veh_cmp', false);
+        return $this->buildVehicleRows($filters, false);
+    }
+
+    /**
+     * Randurile pe vehicul (litri, cost, km, consum). $includeTransport = true aplica si filtrul
+     * de tip transport + cursele sterse exact ca getKpiSummary (LEFT JOIN pe asocieri), ca suma
+     * randurilor sa dea cifrele cardurilor KPI; false = comportamentul istoric al tabelului de comparatie.
+     */
+    private function buildVehicleRows(array $filters, bool $includeTransport): array
+    {
+        return $this->memoRead('veh_rows', [$filters, $includeTransport], fn (): array => $this->computeVehicleRows($filters, $includeTransport));
+    }
+
+    private function computeVehicleRows(array $filters, bool $includeTransport): array
+    {
+        $where = $this->buildFillupWhere($filters, 'veh_cmp', $includeTransport);
         $stmt = $this->db->prepare("
             SELECT
                 REPLACE(UPPER(f.vehicle_registration), ' ', '') AS vehicle_key,
                 MAX(f.vehicle_registration) AS vehicle_registration,
                 COUNT(*) AS fillup_count,
+                COALESCE(SUM(CASE WHEN f.fuel_type = 'motorina' THEN 1 ELSE 0 END), 0) AS motorina_fillups,
+                COALESCE(SUM(CASE WHEN f.fuel_type = 'adblue' THEN 1 ELSE 0 END), 0) AS adblue_fillups,
                 COALESCE(SUM(CASE WHEN f.fuel_type = 'motorina' THEN f.quantity_liters ELSE 0 END), 0) AS motorina,
                 COALESCE(SUM(CASE WHEN f.fuel_type = 'adblue' THEN f.quantity_liters ELSE 0 END), 0) AS adblue,
+                COALESCE(SUM(CASE WHEN f.fuel_type = 'motorina' THEN f.total_value ELSE 0 END), 0) AS motorina_value,
+                COALESCE(SUM(CASE WHEN f.fuel_type = 'adblue' THEN f.total_value ELSE 0 END), 0) AS adblue_value,
+                COALESCE(SUM(f.quantity_liters), 0) AS total_liters,
                 COALESCE(SUM(f.total_value), 0) AS total_value
             FROM fuel_fillups f
+            " . ($includeTransport ? 'LEFT JOIN fuel_trip_links l ON l.fillup_id = f.id LEFT JOIN curse_dispecer c ON c.id = l.trip_id' : '') . "
             " . $where['where'] . "
             GROUP BY vehicle_key
         ");
@@ -2180,11 +2201,17 @@ class FuelModel extends BaseModel
             $rows[] = [
                 'vehicle_registration' => (string) ($vehicle['vehicle_registration'] ?? ''),
                 'fillup_count' => (int) ($vehicle['fillup_count'] ?? 0),
+                'motorina_fillups' => (int) ($vehicle['motorina_fillups'] ?? 0),
+                'adblue_fillups' => (int) ($vehicle['adblue_fillups'] ?? 0),
                 'motorina' => round($motorina, 2),
                 'adblue' => round($adblue, 2),
+                'motorina_value' => round((float) ($vehicle['motorina_value'] ?? 0), 2),
+                'adblue_value' => round((float) ($vehicle['adblue_value'] ?? 0), 2),
+                'total_liters' => round((float) ($vehicle['total_liters'] ?? 0), 2),
                 'total_value' => round($totalValue, 2),
                 'km' => round($km, 2),
                 'km_source' => $kmSource,
+                'liters_for_average' => $km > 0 ? round($litersForAverage, 2) : 0.0,
                 'consum_motorina' => $km > 0 && $litersForAverage > 0 ? round(($litersForAverage / $km) * 100, 2) : 0.0,
                 'consum_adblue' => $motorina > 0 ? round(($adblue / $motorina) * 100, 2) : 0.0,
                 'cost_per_km' => $km > 0 ? round($totalValue / $km, 2) : 0.0,
@@ -2206,6 +2233,351 @@ class FuelModel extends BaseModel
         });
 
         return $rows;
+    }
+
+    /**
+     * Sparkline-urile cardurilor KPI (Carburanti): seria zilnica a perioadei filtrate, cu
+     * aceleasi reguli ca getKpiSummary / graficul zilnic (refoloseste memo-ul cererii).
+     */
+    public function getKpiSparklines(array $filters): array
+    {
+        $this->ensureSchema();
+        $summary = $this->getKpiSummary($filters);
+
+        return $this->cardSeries($filters, 'day', (float) ($summary['motorina_avg_l100'] ?? 0))['buckets'];
+    }
+
+    /**
+     * Analiza unui card KPI extins (Carburanti → carduri morph). Cifrele folosesc EXACT regulile
+     * cardurilor: getKpiSummary (litri, cost, consum din odometru sau din km dispecer, AdBlue %),
+     * perioada precedenta de aceeasi lungime, randurile pe vehicul cu acelasi filtru de transport.
+     * Nimic nu se estimeaza: unde lipseste numitorul, valoarea e null.
+     *
+     * @param 'day'|'week'|'month' $grouping
+     */
+    public function getKpiCardAnalytics(array $filters, string $grouping): array
+    {
+        $this->ensureSchema();
+        $grouping = in_array($grouping, ['day', 'week', 'month'], true) ? $grouping : 'day';
+
+        $summary = $this->getKpiSummary($filters);
+        $previousFilters = $this->previousPeriodFilters($filters);
+        $previous = $this->getKpiSummary($previousFilters);
+
+        $series = $this->cardSeries($filters, $grouping, (float) $summary['motorina_avg_l100']);
+        $previousSeries = $this->cardSeries($previousFilters, $grouping, (float) $previous['motorina_avg_l100']);
+
+        // Randurile pe vehicul + raportul AdBlue din perioada precedenta (pentru variatii).
+        $vehicles = $this->buildVehicleRows($filters, true);
+        $previousRatios = $this->vehicleFuelTotals($previousFilters);
+        $types = $this->vehicleTypeByKey();
+        foreach ($vehicles as &$vehicle) {
+            $key = $this->vehicleKey((string) $vehicle['vehicle_registration']);
+            $vehicle['vehicle_key'] = $key;
+            $category = $this->vehicleCategory($types[$key] ?? null);
+            $vehicle['category_key'] = $category[0];
+            $vehicle['category_label'] = $category[1];
+            $prev = $previousRatios[$key] ?? null;
+            $vehicle['motorina_prev'] = $prev !== null ? round($prev['motorina'], 2) : 0.0;
+            $vehicle['adblue_prev'] = $prev !== null ? round($prev['adblue'], 2) : 0.0;
+            $vehicle['consum_adblue_prev'] = $prev !== null && $prev['motorina'] > 0
+                ? round(($prev['adblue'] / $prev['motorina']) * 100, 2)
+                : null;
+        }
+        unset($vehicle);
+
+        // Categorii de vehicul (tip din fisa vehiculului; numerele fara fisa = Neînregistrate).
+        $categories = [];
+        foreach ($vehicles as $vehicle) {
+            $key = (string) $vehicle['category_key'];
+            if (!isset($categories[$key])) {
+                $categories[$key] = [
+                    'key' => $key,
+                    'label' => (string) $vehicle['category_label'],
+                    'motorina' => 0.0, 'adblue' => 0.0, 'total_value' => 0.0, 'total_liters' => 0.0,
+                    'fillups' => 0, 'km' => 0.0, 'liters_for_average' => 0.0, 'km_sources' => [], 'vehicles' => [],
+                ];
+            }
+            $categories[$key]['motorina'] += (float) $vehicle['motorina'];
+            $categories[$key]['adblue'] += (float) $vehicle['adblue'];
+            $categories[$key]['total_value'] += (float) $vehicle['total_value'];
+            $categories[$key]['total_liters'] += (float) $vehicle['total_liters'];
+            $categories[$key]['fillups'] += (int) $vehicle['fillup_count'];
+            if ((float) $vehicle['km'] > 0 && (float) $vehicle['liters_for_average'] > 0) {
+                $categories[$key]['km'] += (float) $vehicle['km'];
+                $categories[$key]['liters_for_average'] += (float) $vehicle['liters_for_average'];
+                $categories[$key]['km_sources'][(string) $vehicle['km_source']] = true;
+            }
+            $categories[$key]['vehicles'][] = (string) $vehicle['vehicle_registration'];
+        }
+        foreach ($categories as &$category) {
+            $category['consum_motorina'] = $category['km'] > 0 ? round($category['liters_for_average'] / $category['km'] * 100, 2) : null;
+            $category['consum_adblue'] = $category['motorina'] > 0 ? round($category['adblue'] / $category['motorina'] * 100, 2) : null;
+            $category['km_sources'] = array_keys($category['km_sources']);
+            foreach (['motorina', 'adblue', 'total_value', 'total_liters', 'km', 'liters_for_average'] as $field) {
+                $category[$field] = round((float) $category[$field], 2);
+            }
+        }
+        unset($category);
+        $categories = array_values($categories);
+        usort($categories, static fn (array $a, array $b): int => $b['total_liters'] <=> $a['total_liters']);
+
+        // Tip transport: doar alimentarile asociate unei curse (ca tabul „Consum pe tip transport").
+        $transport = [];
+        foreach ($this->getConsumptionByTransport($filters) as $row) {
+            $transport[] = [
+                'key' => (string) ($row['transport_group'] ?? 'neasociat'),
+                'label' => (string) ($row['label'] ?? ''),
+                'motorina' => round((float) ($row['motorina'] ?? 0), 2),
+                'adblue' => round((float) ($row['adblue'] ?? 0), 2),
+                'total_value' => round((float) ($row['total_value'] ?? 0), 2),
+                'km' => round((float) ($row['km'] ?? 0), 2),
+                'consum_motorina' => (float) ($row['km'] ?? 0) > 0 ? (float) $row['consum_motorina'] : null,
+                'consum_adblue' => (float) ($row['motorina'] ?? 0) > 0 ? (float) $row['consum_adblue'] : null,
+            ];
+        }
+
+        $fillupCount = 0;
+        foreach ($series['fuel_types'] as $type) {
+            $fillupCount += (int) $type['fillups'];
+        }
+
+        $pick = static fn (array $s): array => [
+            'motorina_liters' => (float) $s['motorina_liters'],
+            'adblue_liters' => (float) $s['adblue_liters'],
+            'motorina_avg_l100' => (float) $s['motorina_avg_l100'],
+            'adblue_percent' => (float) $s['adblue_percent'],
+            'total_value' => (float) $s['total_value'],
+            'linked_km' => (float) $s['linked_km'],
+            'consumption_liters' => (float) $s['consumption_liters'],
+            'consumption_km_source' => (string) $s['consumption_km_source'],
+            'total_fillups' => (int) ($s['heavy_fillups'] + $s['light_fillups'] + $s['unregistered_fillups']),
+        ];
+
+        return [
+            'grouping' => $grouping,
+            'range' => ['from' => $filters['date_from'], 'to' => $filters['date_to']],
+            'previous_range' => ['from' => $previousFilters['date_from'], 'to' => $previousFilters['date_to']],
+            'summary' => $pick($summary) + ['fillups_by_type' => $fillupCount],
+            'previous' => $pick($previous),
+            'changes' => [
+                'motorina_liters' => $this->percentageChange($summary['motorina_liters'], $previous['motorina_liters']),
+                'adblue_liters' => $this->percentageChange($summary['adblue_liters'], $previous['adblue_liters']),
+                'motorina_avg_l100' => $this->percentageChange($summary['motorina_avg_l100'], $previous['motorina_avg_l100']),
+                'adblue_percent' => $this->percentageChange($summary['adblue_percent'], $previous['adblue_percent']),
+                'total_value' => $this->percentageChange($summary['total_value'], $previous['total_value']),
+            ],
+            'series' => $series['buckets'],
+            'previous_series' => $previousSeries['buckets'],
+            'fuel_types' => $series['fuel_types'],
+            'previous_fuel_types' => $previousSeries['fuel_types'],
+            'vehicles' => $vehicles,
+            'categories' => $categories,
+            'transport' => $transport,
+            'adblue_deviation' => class_exists('AdBlueService') ? AdBlueService::DEVIATION : 0.40,
+        ];
+    }
+
+    /**
+     * Alimentarile dintr-un interval (detaliu din graficul unui card), cu filtrele cardului.
+     */
+    public function getKpiCardFillups(array $filters, int $limit = 300): array
+    {
+        $this->ensureSchema();
+        $rows = [];
+        foreach ($this->getFillups($filters, $limit) as $row) {
+            $rows[] = [
+                'id' => (int) ($row['id'] ?? 0),
+                'datetime' => (string) ($row['fillup_datetime'] ?? ''),
+                'vehicle' => (string) ($row['vehicle_registration'] ?? ''),
+                'fuel_type' => (string) ($row['fuel_type'] ?? ''),
+                'liters' => round((float) ($row['quantity_liters'] ?? 0), 2),
+                'value' => round((float) ($row['total_value'] ?? 0), 2),
+                'unit_price' => isset($row['unit_price']) && $row['unit_price'] !== null ? round((float) $row['unit_price'], 3) : null,
+                'station' => (string) ($row['station_name'] ?? ''),
+                'driver' => trim((string) ($row['driver_name'] ?? '')),
+                'source' => (string) ($row['source_type'] ?? ''),
+                'trip_id' => (int) ($row['trip_id'] ?? 0),
+                'transport' => (string) ($row['tip_transport'] ?? ''),
+                'is_full' => !empty($row['is_full']),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Seriile cardurilor pe zi / saptamana ISO / luna, din aceleasi alimentari ca getKpiSummary
+     * (LEFT JOIN pe asocieri, filtrul de transport aplicat identic). Consumul L/100 km vine din
+     * punctele zilnice ale graficului existent (odometru sau km dispecer), insumate pe interval.
+     *
+     * @return array{buckets: list<array<string,mixed>>, fuel_types: list<array<string,mixed>>}
+     */
+    private function cardSeries(array $filters, string $grouping, float $periodAverage): array
+    {
+        return $this->memoRead('card_series', [$filters, $grouping], function () use ($filters, $grouping, $periodAverage): array {
+            $where = $this->buildFillupWhere($filters, 'card_series', true);
+            $stmt = $this->db->prepare("
+                SELECT
+                    DATE(f.fillup_datetime) AS day_key,
+                    f.fuel_type,
+                    COALESCE(SUM(f.quantity_liters), 0) AS liters,
+                    COALESCE(SUM(f.total_value), 0) AS value,
+                    COUNT(*) AS fillups
+                FROM fuel_fillups f
+                LEFT JOIN fuel_trip_links l ON l.fillup_id = f.id
+                LEFT JOIN curse_dispecer c ON c.id = l.trip_id
+                " . $where['where'] . "
+                GROUP BY DATE(f.fillup_datetime), f.fuel_type
+            ");
+            $this->bindParams($stmt, $where['params']);
+            $stmt->execute();
+
+            $byDay = [];
+            $typeTotals = [];
+            foreach ($stmt->fetchAll() as $row) {
+                $day = (string) $row['day_key'];
+                $type = (string) ($row['fuel_type'] ?? '') ?: 'necunoscut';
+                $byDay[$day][$type] = [(float) $row['liters'], (float) $row['value'], (int) $row['fillups']];
+                $typeTotals[$type] ??= ['liters' => 0.0, 'value' => 0.0, 'fillups' => 0];
+                $typeTotals[$type]['liters'] += (float) $row['liters'];
+                $typeTotals[$type]['value'] += (float) $row['value'];
+                $typeTotals[$type]['fillups'] += (int) $row['fillups'];
+            }
+
+            $consumptionByDay = [];
+            foreach (($this->getDailyConsumptionChart($filters, $periodAverage)['points'] ?? []) as $point) {
+                $consumptionByDay[(string) $point['date']] = [(float) ($point['liters'] ?? 0), (float) ($point['km'] ?? 0)];
+            }
+
+            $months = [1 => 'ian', 'feb', 'mar', 'apr', 'mai', 'iun', 'iul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+            $buckets = [];
+            foreach ($this->dateKeys((string) $filters['date_from'], (string) $filters['date_to']) as $day) {
+                $date = new DateTimeImmutable($day);
+                if ($grouping === 'week') {
+                    $key = $date->format('o-\WW');
+                    $label = 'S' . $date->format('W');
+                } elseif ($grouping === 'month') {
+                    $key = $date->format('Y-m');
+                    $label = ucfirst($months[(int) $date->format('n')]) . ' ' . $date->format('Y');
+                } else {
+                    $key = $day;
+                    $label = $date->format('d') . ' ' . $months[(int) $date->format('n')];
+                }
+                if (!isset($buckets[$key])) {
+                    $buckets[$key] = [
+                        'key' => $key, 'label' => $label, 'from' => $day, 'to' => $day,
+                        'motorina_liters' => 0.0, 'adblue_liters' => 0.0, 'other_liters' => 0.0,
+                        'motorina_value' => 0.0, 'adblue_value' => 0.0, 'other_value' => 0.0,
+                        'value' => 0.0, 'fillups' => 0, 'l100_liters' => 0.0, 'l100_km' => 0.0,
+                    ];
+                }
+                $bucket = &$buckets[$key];
+                $bucket['to'] = $day;
+                foreach ($byDay[$day] ?? [] as $type => [$liters, $value, $count]) {
+                    $slot = in_array($type, ['motorina', 'adblue'], true) ? $type : 'other';
+                    $bucket[$slot . '_liters'] += $liters;
+                    $bucket[$slot . '_value'] += $value;
+                    $bucket['value'] += $value;
+                    $bucket['fillups'] += $count;
+                }
+                if (isset($consumptionByDay[$day])) {
+                    $bucket['l100_liters'] += $consumptionByDay[$day][0];
+                    $bucket['l100_km'] += $consumptionByDay[$day][1];
+                }
+                unset($bucket);
+            }
+
+            foreach ($buckets as &$bucket) {
+                $bucket['l100'] = $bucket['l100_km'] > 0 && $bucket['l100_liters'] > 0
+                    ? round($bucket['l100_liters'] / $bucket['l100_km'] * 100, 2) : null;
+                $bucket['adblue_pct'] = $bucket['motorina_liters'] > 0
+                    ? round($bucket['adblue_liters'] / $bucket['motorina_liters'] * 100, 2) : null;
+                $bucket['motorina_price'] = $bucket['motorina_liters'] > 0 && $bucket['motorina_value'] > 0
+                    ? round($bucket['motorina_value'] / $bucket['motorina_liters'], 3) : null;
+                foreach (['motorina_liters', 'adblue_liters', 'other_liters', 'motorina_value', 'adblue_value', 'other_value', 'value', 'l100_liters', 'l100_km'] as $field) {
+                    $bucket[$field] = round((float) $bucket[$field], 2);
+                }
+            }
+            unset($bucket);
+
+            $fuelLabels = ['motorina' => 'Motorină', 'adblue' => 'AdBlue', 'benzina' => 'Benzină', 'gpl' => 'GPL'];
+            $fuelTypes = [];
+            foreach ($typeTotals as $type => $totals) {
+                $fuelTypes[] = [
+                    'key' => $type,
+                    'label' => $fuelLabels[$type] ?? ucfirst($type),
+                    'liters' => round($totals['liters'], 2),
+                    'value' => round($totals['value'], 2),
+                    'fillups' => $totals['fillups'],
+                    'price' => $totals['liters'] > 0 && $totals['value'] > 0 ? round($totals['value'] / $totals['liters'], 3) : null,
+                ];
+            }
+            usort($fuelTypes, static fn (array $a, array $b): int => $b['value'] <=> $a['value']);
+
+            return ['buckets' => array_values($buckets), 'fuel_types' => $fuelTypes];
+        });
+    }
+
+    /** Litri motorina / AdBlue pe vehicul (cheie normalizata), cu filtrele KPI. */
+    private function vehicleFuelTotals(array $filters): array
+    {
+        $where = $this->buildFillupWhere($filters, 'veh_totals', true);
+        $stmt = $this->db->prepare("
+            SELECT
+                MAX(f.vehicle_registration) AS vehicle_registration,
+                COALESCE(SUM(CASE WHEN f.fuel_type = 'motorina' THEN f.quantity_liters ELSE 0 END), 0) AS motorina,
+                COALESCE(SUM(CASE WHEN f.fuel_type = 'adblue' THEN f.quantity_liters ELSE 0 END), 0) AS adblue
+            FROM fuel_fillups f
+            LEFT JOIN fuel_trip_links l ON l.fillup_id = f.id
+            LEFT JOIN curse_dispecer c ON c.id = l.trip_id
+            " . $where['where'] . "
+            GROUP BY REPLACE(UPPER(f.vehicle_registration), ' ', '')
+        ");
+        $this->bindParams($stmt, $where['params']);
+        $stmt->execute();
+        $totals = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $totals[$this->vehicleKey((string) $row['vehicle_registration'])] = [
+                'motorina' => (float) $row['motorina'],
+                'adblue' => (float) $row['adblue'],
+            ];
+        }
+
+        return $totals;
+    }
+
+    /** Tipul vehiculului din fisa (cheie de numar normalizata). */
+    private function vehicleTypeByKey(): array
+    {
+        return $this->memoRead('veh_type', [], function (): array {
+            $map = [];
+            foreach ($this->db->query('SELECT nr_inmatriculare, tip_vehicul FROM vehicule')->fetchAll(PDO::FETCH_NUM) as [$plate, $type]) {
+                $key = $this->vehicleKey((string) $plate);
+                if ($key !== '' && !isset($map[$key])) {
+                    $map[$key] = strtolower(trim((string) $type));
+                }
+            }
+
+            return $map;
+        });
+    }
+
+    /** @return array{0:string,1:string} cheia si eticheta categoriei din tabul „Defalcare". */
+    private function vehicleCategory(?string $type): array
+    {
+        if ($type === null) {
+            return ['neinregistrate', 'Neînregistrate'];
+        }
+
+        return match ($type) {
+            'camion' => ['camion', 'Camioane'],
+            'cap_tractor' => ['cap_tractor', 'Capete tractor'],
+            'autoturism', 'autovehicul' => ['autoturism', 'Autoturisme'],
+            'autoutilitara' => ['autoutilitara', 'Autoutilitare'],
+            'semiremorca', 'semiremorca_primar', 'semiremorca_distributie' => ['semiremorca', 'Semiremorci'],
+            default => ['altele', 'Alte vehicule'],
+        };
     }
 
     public function getVehicleDailyCharts(array $filters, int $maxVehicles = 6): array

@@ -30,7 +30,7 @@ $defaultInterval = $tab === ReviziiModel::TIP_SCHIMB_ULEI ? (int) ($settings['in
 $defaultWarn = (int) ($settings['prag_avertizare_km'] ?? 1500);
 $hourSources = ReviziiModel::HOUR_SOURCES;
 $recordVerb = $tab === ReviziiModel::TIP_SCHIMB_ULEI ? 'Înregistrează revizie' : 'Înregistrează înlocuire';
-$tabUrl = static fn (string $key): string => build_query_url($key === ReviziiModel::TIP_SCHIMB_ULEI ? ['page' => 'revizii'] : ['page' => 'revizii', 'tip' => $key]);
+$tabUrl = static fn (string $key): string => build_query_url(['page' => 'revizii', 'tip' => $key]);
 
 $fmtKm = static fn (?float $value): string => $value === null ? '—' : number_format($value, 0, ',', '.');
 $fmtDec = static fn (?float $value, int $decimals = 1): string => $value === null ? '—' : number_format($value, $decimals, ',', '.');
@@ -137,14 +137,32 @@ $statusCell = static function (array $items) use ($statusBadge, $subPrefix): str
     return $html;
 };
 
-$progressBar = static function (?array $component) use ($statusMeta): string {
-    if ($component === null || $component['calc'] === null) {
-        return '<div class="rv-progress-line"><div class="rv-progress"><span style="width:0"></span></div><span class="rv-progress-pct">—</span></div>';
-    }
-    $pct = (float) $component['calc']['progres'];
-    $class = $statusMeta[$component['status']]['class'] ?? 'none';
+/**
+ * Culoarea indicatorului de urgență: verde (0%) → galben (50%) → roșu (100%+), interpolare continuă.
+ * Oglinda PHP a getMaintenanceProgressColor() — tabelul e randat pe server.
+ */
+$maintenanceProgressColor = static function (float $progress): string {
+    $p = max(0.0, min(100.0, $progress));
+    $green = [34, 197, 94];
+    $yellow = [234, 179, 8];
+    $red = [220, 38, 38];
+    [$start, $end, $factor] = $p <= 50 ? [$green, $yellow, $p / 50] : [$yellow, $red, ($p - 50) / 50];
+    $rgb = array_map(static fn (int $from, int $to): int => (int) round($from + ($to - $from) * $factor), $start, $end);
 
-    return '<div class="rv-progress-line"><div class="rv-progress"><span class="rv-bar-' . $class . '" style="width:' . max(0, min(100, $pct)) . '%"></span></div><span class="rv-progress-pct">' . number_format($pct, 0) . '%</span></div>';
+    return 'rgb(' . implode(',', $rgb) . ')';
+};
+
+// Coloana Progres (toate taburile): bară pe toată lățimea, colorată uniform după procentul consumat din interval.
+$progressBar = static function (?array $component) use ($maintenanceProgressColor): string {
+    $raw = $component['calc']['progres'] ?? null;
+    if ($component === null || $component['calc'] === null || !is_numeric($raw) || !is_finite((float) $raw)) {
+        return '<div class="rv-mprog"><div class="rv-mprog-bar rv-mprog-empty"></div><span class="rv-mprog-pct">—</span></div>';
+    }
+    $pct = (float) $raw;
+
+    return '<div class="rv-mprog" title="' . e(number_format($pct, 1, ',', '.')) . '% din interval consumat">'
+        . '<div class="rv-mprog-bar" style="background-color:' . $maintenanceProgressColor($pct) . '"></div>'
+        . '<span class="rv-mprog-pct">' . number_format($pct, 0) . '%</span></div>';
 };
 
 // Datele pentru modalele de configurare / revizie / simulare.

@@ -138,6 +138,18 @@ if (!isset($formatRaceDateForDisplay) || !is_callable($formatRaceDateForDisplay)
                                     $driverOptions = $selectedVehicleForDriver > 0
                                         ? (array) ($driversByVehicle[$selectedVehicleForDriver] ?? [])
                                         : [];
+                                    // Sofer ales cu "Alt sofer" (neasignat vehiculului): la reafisarea
+                                    // formularului (confirmare informatii lipsa, eroare) ramane selectat.
+                                    if ($selectedVehicleForDriver > 0 && (int) $selectedDriverId > 0
+                                        && !in_array((int) $selectedDriverId, array_map(static fn ($row): int => (int) ($row['id'] ?? 0), $driverOptions), true)
+                                    ) {
+                                        foreach ((array) ($allActiveDrivers ?? []) as $extraDriver) {
+                                            if ((int) ($extraDriver['id'] ?? 0) === (int) $selectedDriverId) {
+                                                $driverOptions[] = $extraDriver;
+                                                break;
+                                            }
+                                        }
+                                    }
                                 ?>
                                 <?php foreach ($driverOptions as $driver): ?>
                                     <?php $driverId = (int) ($driver['id'] ?? 0); ?>

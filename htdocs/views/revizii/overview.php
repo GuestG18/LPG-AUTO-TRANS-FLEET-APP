@@ -24,7 +24,7 @@ $defaultWarn = (int) ($settings['prag_avertizare_km'] ?? 1500);
 $fmtKm = static fn (float $value): string => number_format($value, 0, ',', '.');
 $fmtDate = static fn (?string $value, string $format = 'd.m.Y H:i'): string => $value ? date($format, (int) strtotime($value)) : '—';
 $categoryUrl = static fn (string $tab, array $extra = []): string => build_query_url(
-    ($tab === ReviziiModel::TIP_SCHIMB_ULEI ? ['page' => 'revizii'] : ['page' => 'revizii', 'tip' => $tab]) + $extra
+    ['page' => 'revizii', 'tip' => $tab] + $extra
 );
 $truckSvg = '<svg viewBox="0 0 64 32" aria-hidden="true"><rect x="2" y="6" width="38" height="18" rx="2" fill="#e9edf3" stroke="#8a96a8"/><path d="M42 11h10l7 7v6H42z" fill="#2f5db8"/><rect x="46" y="13" width="6" height="5" rx="1" fill="#cfe0ff"/><circle cx="12" cy="26" r="4" fill="#38404d"/><circle cx="30" cy="26" r="4" fill="#38404d"/><circle cx="52" cy="26" r="4" fill="#38404d"/></svg>';
 $oilSvg = '<svg viewBox="0 0 32 20" aria-hidden="true"><path d="M3 7h6l2-2h6l3 2 9-3-7 10H8L5 11H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M29 12c0 1.4-1 2.5-2 2.5s-2-1.1-2-2.5 2-3.5 2-3.5 2 2.1 2 3.5z" fill="currentColor"/></svg>';

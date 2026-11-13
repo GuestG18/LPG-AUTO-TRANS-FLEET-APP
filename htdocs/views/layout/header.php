@@ -294,38 +294,9 @@ $navAttrs = static fn(string $key, ?string $group = null): string => function_ex
                     </div>
                 </div>
                 <?php endif; ?>
-                <?php if ($can('revizii')):
-                    $isReviziiModule = $currentPage === 'revizii';
-                    $reviziiTab = $isReviziiModule ? (string) ($_GET['tip'] ?? 'schimb_ulei') : '';
-                    $reviziiLinks = [
-                        'prezentare' => ['Prezentare general&#259;', ['page' => 'revizii', 'tip' => 'prezentare']],
-                        'schimb_ulei' => ['Schimb ulei', ['page' => 'revizii']],
-                        'placute_frana' => ['Pl&#259;cu&#539;e fr&acirc;n&#259;', ['page' => 'revizii', 'tip' => 'placute_frana']],
-                        'anvelope' => ['Anvelope', ['page' => 'revizii', 'tip' => 'anvelope']],
-                        'istoric' => ['Istoric revizii', ['page' => 'revizii', 'tip' => 'istoric']],
-                    ];
-                    ?>
-                <div class="sidebar-nav-group"<?= $navAttrs('grp_revizii') ?>>
-                    <button
-                        class="nav-link sidebar-parent-link <?= $isReviziiModule ? 'active' : '' ?>"
-                        type="button"
-                        data-bs-toggle="collapse"
-                        data-bs-target="#reviziiSidebarMenu"
-                        aria-expanded="<?= $isReviziiModule ? 'true' : 'false' ?>"
-                        aria-controls="reviziiSidebarMenu"
-                    >
-                        <i class="bi bi-wrench" aria-hidden="true"></i>
-                        <span>Revizii</span>
-                        <i class="bi bi-chevron-down sidebar-chevron" aria-hidden="true"></i>
-                    </button>
-                    <div class="collapse <?= $isReviziiModule ? 'show' : '' ?>" id="reviziiSidebarMenu">
-                        <div class="sidebar-submenu">
-                            <?php foreach ($reviziiLinks as $reviziiKey => [$reviziiLabel, $reviziiParams]): ?>
-                                <a<?= $navAttrs('revizii:' . $reviziiKey, 'grp_revizii') ?> class="nav-link <?= $reviziiTab === $reviziiKey ? 'active' : '' ?>" href="<?= e(build_query_url($reviziiParams)) ?>"><?= $reviziiLabel ?></a>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                </div>
+                <?php if ($can('revizii')): ?>
+                <?php /* Revizii & Mentenanta V2: pagina unica (fara sub-meniu de tab-uri); cheia grp_revizii pastreaza ordinea salvata. */ ?>
+                <a<?= $navAttrs('grp_revizii') ?> class="nav-link <?= $currentPage === 'revizii' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'revizii'])) ?>"><i class="bi bi-wrench" aria-hidden="true"></i><span>Revizii</span></a>
                 <?php endif; ?>
                 <?php if ($can('configurare_costuri_documente_vehicule_override')): ?><a<?= $navAttrs('configurare_costuri_documente_vehicule_override') ?> class="nav-link <?= $currentPage === 'configurare_costuri_documente_vehicule_override' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'configurare_costuri_documente_vehicule_override'])) ?>"><i class="bi bi-gear" aria-hidden="true"></i><span>Configurare Costuri</span></a><?php endif; ?>
                 <?php if ($can('notificari')): ?><a<?= $navAttrs('notificari') ?> class="nav-link <?= $currentPage === 'notificari' ? 'active' : '' ?>" href="<?= e(build_query_url(['page' => 'notificari'])) ?>"><i class="bi bi-bell" aria-hidden="true"></i><span>Notific&#259;ri</span></a><?php endif; ?>

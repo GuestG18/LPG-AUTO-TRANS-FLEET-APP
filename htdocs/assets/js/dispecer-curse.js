@@ -558,6 +558,24 @@
         var driverListVehicleId = '';
         // Ultimul sofer real ales; la extinderea listei selectia revine la el, nu ramane pe "Alt sofer".
         var lastRealDriverValue = driverField instanceof HTMLSelectElement ? String(driverField.value || '').trim() : '';
+        // Formular reafisat de server (confirmare informatii lipsa, eroare) cu un sofer ales
+        // din "Alt sofer": lista porneste extinsa, altfel soferul s-ar pierde la salvare.
+        (function () {
+            var initialVehicleId = String(vehicleField ? (vehicleField.value || '') : '').trim();
+            if (initialVehicleId === '' || lastRealDriverValue === '') {
+                return;
+            }
+            var isAssigned = getDriverOptionsForVehicle(initialVehicleId).some(function (option) {
+                return String(option.value) === lastRealDriverValue;
+            });
+            var isActive = allDrivers.some(function (driver) {
+                return driver && String(driver.id || '') === lastRealDriverValue;
+            });
+            if (!isAssigned && isActive) {
+                driverListExpanded = true;
+                driverListVehicleId = initialVehicleId;
+            }
+        })();
 
         // Sandbox: optiunea "Alt vehicul" — vehicule neconfigurate pe ruta, cu decizie admin.
         var SHOW_ALL_VEHICLES_VALUE = '__show_all_vehicles__';

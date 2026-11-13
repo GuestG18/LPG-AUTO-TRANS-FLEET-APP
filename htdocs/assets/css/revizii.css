@@ -279,6 +279,13 @@ a.rv-tab:hover { color: var(--rv-blue); }
 .rv-bar-nodata, .rv-bar-none { background: #94a3b8; }
 .rv-progress-pct { width: 36px; text-align: right; font-size: 0.75rem; color: #334155; }
 
+/* Schimb ulei: indicator de urgență pe toată lățimea, o singură culoare după procent. */
+.rv-mprog { display: flex; align-items: center; gap: 10px; width: 100%; }
+.rv-mprog + .rv-mprog { margin-top: 0.3rem; }
+.rv-mprog-bar { flex: 1; min-width: 0; height: 12px; border-radius: 999px; transition: background-color 350ms ease; }
+.rv-mprog-empty { background-color: #e2e8f0; }
+.rv-mprog-pct { min-width: 38px; text-align: right; font-size: 0.75rem; font-weight: 600; font-variant-numeric: tabular-nums; color: #334155; }
+
 .rv-actions { display: flex; align-items: center; gap: 0.4rem; }
 .rv-record { white-space: nowrap; font-size: 0.78rem; padding: 0.4rem 0.7rem; }
 .rv-kebab { padding: 0.25rem 0.45rem; border-color: var(--rv-border); }
@@ -630,3 +637,8 @@ a.rv-tab:hover { color: var(--rv-blue); }
     .rv-hist-reset { justify-self: stretch; justify-content: center; }
     .rv-hist .rv-heading-actions { width: 100%; }
 }
+
+/* Revizii V2: ecranele detaliate nu mai au bara de tab-uri, doar legatura inapoi la pagina unica. */
+.rv-legacy-crumb { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 1rem; font-size: 0.85rem; color: #64748b; }
+.rv-legacy-crumb a { color: var(--rv-blue, #1d4ed8); font-weight: 600; text-decoration: none; }
+.rv-legacy-crumb a:hover { text-decoration: underline; }
